@@ -506,6 +506,90 @@ describe('retiring a sub-chat when it delivers', () => {
       expect(rounds.openRound(child.tab)).toBeNull();
     });
 
+    describe('the parent is TOLD — the other half of the quiet channel', () => {
+      // Measured on a live cockpit before this existed: 0 of 176 panes and 0
+      // of 172 tabs carried an unread mark after fourteen hours of uptime,
+      // because 54 of the 68 tabs active that day were delivered sub-chats and
+      // every one was suppressed by design. The child going quiet was wired;
+      // the parent going bold was not, so a worker finishing moved nothing in
+      // the sidebar at all.
+      it('bolds the parent when a worker DELIVERS', () => {
+        const parent = chat('parent');
+        const child = chat('child', parent.tab);
+        expect(tabs.isUnread(parent.tab)).toBe(false);
+
+        expect(retireChat(deps, child.tab, 'delivered')).toBe(true);
+        expect(tabs.isUnread(parent.tab)).toBe(true);
+        // …and the child itself stays clear. Both halves, one door.
+        expect(tabs.isUnread(child.tab)).toBe(false);
+      });
+
+      it('bolds the parent when a worker DIES', () => {
+        // Stopping without reporting is news too — arguably more of it.
+        const parent = chat('parent');
+        const child = chat('child', parent.tab);
+        expect(retireChat(deps, child.tab, 'died')).toBe(true);
+        expect(tabs.isUnread(parent.tab)).toBe(true);
+      });
+
+      it('does NOT bold the parent when the USER archives the child', () => {
+        // Their own hand on the row. Bolding the parent for it is the app
+        // arguing with something the user just did.
+        const parent = chat('parent');
+        const child = chat('child', parent.tab);
+        retireChat(deps, child.tab, 'archived');
+        expect(tabs.isUnread(parent.tab)).toBe(false);
+      });
+
+      it('leaves a parent that is itself DONE alone', () => {
+        // Same reasoning as `chatHasLeftTheLiveList` at the turn-end door: a
+        // mark on a row nobody will open again is never cleared by anything.
+        const parent = chat('parent');
+        const child = chat('child', parent.tab);
+        tabs.retire(parent.tab, 'archived');
+        expect(isDone(parent.tab)).toBe(true);
+
+        retireChat(deps, child.tab, 'delivered');
+        expect(tabs.isUnread(parent.tab)).toBe(false);
+      });
+
+      it('says nothing for a ROOT chat retiring', () => {
+        const root = chat('root');
+        expect(root).toBeDefined();
+        // No parent to tell, and no crash looking for one.
+        expect(() => retireChat(deps, root.tab, 'delivered')).not.toThrow();
+      });
+
+      it('survives a parent whose row is gone', () => {
+        // `spawned_by` is not a foreign key, so a dangling parent is real.
+        const orphan = chat('orphan', 't_no_such_parent');
+        expect(() => retireChat(deps, orphan.tab, 'delivered')).not.toThrow();
+      });
+
+      it('announces the parent on the bus, not just in the database', () => {
+        // A mark no client hears about waits out a poll that is stopped for a
+        // hidden document and a collapsed workspace — i.e. most devices.
+        const parent = chat('parent');
+        const child = chat('child', parent.tab);
+        const seen: string[] = [];
+        events.subscribe((e) => {
+          if (e.type === 'tab.updated' && e.tab.id === parent.tab) seen.push(e.tab.id);
+        });
+        retireChat(deps, child.tab, 'delivered');
+        expect(seen).toEqual([parent.tab]);
+      });
+
+      it('reports nothing moved when the parent is ALREADY bold', () => {
+        // Retirement is idempotent and gets re-run; re-marking an already-set
+        // flag is not a change and must not report as one.
+        const parent = chat('parent');
+        const child = chat('child', parent.tab);
+        tabs.setUnread(parent.tab, true);
+        retireChat(deps, child.tab, 'delivered');
+        expect(retireChat(deps, child.tab, 'delivered')).toBe(false);
+      });
+    });
+
     it('stamps the round with the RETIREMENT instant, not the second call', () => {
       // `retire` is idempotent and keeps the original stamp, so a later pass
       // must not re-date the round either — the card sorts on it.

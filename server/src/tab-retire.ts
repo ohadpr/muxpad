@@ -77,7 +77,7 @@ import { AgentQueueStore } from './store/AgentQueueStore.js';
 import { PaneStore } from './store/PaneStore.js';
 import { SpawnRoundStore } from './store/SpawnRoundStore.js';
 import { type RetireReason, TabStore } from './store/TabStore.js';
-import { clockIndex, isSubChat, reviveChat } from './tab-clock.js';
+import { clockIndex, isSubChat, reviveChat, tabLifecycle } from './tab-clock.js';
 
 export interface RetireDeps {
   db: Database.Database;
@@ -207,6 +207,56 @@ export function clearReadyMarks(deps: RetireDeps, tabId: string): boolean {
  * chat can perfectly well be re-marked unread after it retired, and a second
  * pass is the cheapest way to be right about that.
  */
+/**
+ * TELL THE PARENT ITS WORKER IS FINISHED — the half of the quiet channel that
+ * was never wired.
+ *
+ * Retirement clears the sub-chat's own marks (`clearReadyMarks`) on the
+ * reasoning that the result already went to the parent, and the comment above
+ * calls the card landing in the parent's log a signal in its own right. It is
+ * — but only to somebody already reading that log. From the SIDEBAR, which is
+ * the surface the marks exist for, a worker finishing produced nothing at all:
+ * the child's row went quiet and the parent's row never moved.
+ *
+ * Measured on a live cockpit before this existed: 0 of 176 panes and 0 of 172
+ * tabs carried a mark, after fourteen hours of uptime. Not a stuck flag — 54
+ * of the 68 tabs active in the previous day were `done`, almost all of them
+ * delivered sub-chats, and every one of them was suppressed by design. The
+ * bold channel was not intermittent. It was empty, which is exactly how it was
+ * reported: tabs with activity are not marked in a consistent way.
+ *
+ * WHY THE TAB FLAG AND NOT A PANE FLAG. The pane-level mark means "this pane's
+ * agent finished a turn", and the parent's agent did not — somebody else's
+ * did. The tab flag is the right altitude: it is the same bit "mark as unread"
+ * sets by hand, it rolls up through `decorateTab` as `manualUnread`, and
+ * `markTabSeen` clears it when the parent is opened. No new state, no new
+ * clearing path to forget.
+ *
+ * THREE DOORS, TWO OF THEM THIS ONE. `delivered` and `died` are both news the
+ * parent wants: the worker reported, or it stopped without reporting. An
+ * `archived` retirement is the user's own hand on the row, and bolding a
+ * parent because they tidied a child would be the app arguing with them.
+ *
+ * A parent that is itself `done` is left alone, for the reason
+ * `chatHasLeftTheLiveList` already gives at the turn-end door: a mark written
+ * to a row nobody will open again is never cleared by anything.
+ */
+function markParentUnread(deps: RetireDeps, tabId: string, reason: RetireReason): boolean {
+  if (reason === 'archived') return false;
+  const tabs = new TabStore(deps.db);
+  const parentId = tabs.clockRow(tabId)?.spawned_by;
+  // No parent (a root chat retiring), or a parent whose row is gone: nobody to
+  // tell. `spawned_by` is not a foreign key, so the second case is real.
+  if (!parentId || !tabs.clockRow(parentId)) return false;
+  if (tabLifecycle(deps.db, parentId, Date.now()).done) return false;
+  if (tabs.isUnread(parentId)) return false; // already bold — nothing moved
+  tabs.setUnread(parentId, true);
+  const fresh = tabs.getById(parentId);
+  if (fresh)
+    deps.events.emit({ type: 'tab.updated', tab: decorateTab(deps.cache, deps.db, fresh) });
+  return true;
+}
+
 export function retireChat(deps: RetireDeps, tabId: string, reason: RetireReason): boolean {
   const tabs = new TabStore(deps.db);
   const retired = tabs.retire(tabId, reason);
@@ -220,7 +270,12 @@ export function retireChat(deps: RetireDeps, tabId: string, reason: RetireReason
     tabs.clockRow(tabId)?.retired_at ?? Date.now(),
   );
   const cleared = clearReadyMarks(deps, tabId);
-  if (!retired && !cleared && !closed) return false;
+  // The child goes quiet and the parent goes bold, in that order and at the
+  // same door — so a retirement reason added later cannot wire one and forget
+  // the other. Emits its own `tab.updated` for the PARENT; the one below is
+  // this tab's and says nothing about it.
+  const told = markParentUnread(deps, tabId, reason);
+  if (!retired && !cleared && !closed && !told) return false;
   const fresh = tabs.getById(tabId);
   if (fresh)
     deps.events.emit({ type: 'tab.updated', tab: decorateTab(deps.cache, deps.db, fresh) });
