@@ -100,11 +100,21 @@ export const VIEWER_HTML = String.raw`<!doctype html>
 
      Everything else is unchanged and still load-bearing: full opacity and a real
      40x40 box (opacity:0, 1x1 and z-index:-1 each read as invisible and got the
-     keyboard refused outright), hidden by having no ink rather than no substance,
-     and no pointer events so it never swallows a tap meant for the page. */
+     keyboard refused outright), and hidden by having no ink rather than no
+     substance. */
+  /* AND IT CAN BE TOUCHED. pointer-events:none was the last property of this
+     input never to have been questioned, and it is a plain statement that the
+     element is not interactive — which is a strange thing to say about the one
+     element the keyboard is for. Everything else had been eliminated by then: the
+     log showed the sink focused, inside the visual viewport with the keyboard
+     open (at y=342 of 417), and then blurred 32ms later with focus falling to the
+     body.
+     Being touchable means it can now intercept a tap meant for the page, so it
+     carries the same pointer handlers as the stream and a tap landing on it is
+     treated as a tap on the page underneath — see the handlers below. */
   #sink{position:fixed;left:0;top:0;width:40px;height:40px;opacity:1;border:0;padding:0;
         margin:0;font-size:16px;resize:none;overflow:hidden;background:transparent;
-        color:transparent;caret-color:transparent;pointer-events:none}
+        color:transparent;caret-color:transparent}
   #login{position:fixed;inset:0;background:#000d;display:grid;place-items:center;padding:20px;z-index:20}
   #login[hidden]{display:none}
   #loginForm{width:min(420px,100%);background:#17171f;border:1px solid #33333f;border-radius:12px;padding:16px;display:grid;gap:10px}
@@ -330,7 +340,7 @@ const send = (o) => {
 }
 
 let buttons = 0
-img.addEventListener('pointerdown', (e) => {
+const onPointerDown = (e) => {
   e.preventDefault()
   // FOCUS INSIDE THE GESTURE. iOS raises a keyboard only for a focus() that
   // happens during a real user event — one issued later, when the page tells us
@@ -382,17 +392,36 @@ img.addEventListener('pointerdown', (e) => {
   buttons = 1
   img.setPointerCapture?.(e.pointerId)
   const p = pt(e); if (p) send({ t:'mouse', type:'mousePressed', ...p, buttons:1, clickCount:e.detail||1, modifiers:mods(e) })
-})
-img.addEventListener('pointermove', (e) => {
+}
+
+/**
+ * THE SAME HANDLERS ON THE SINK.
+ *
+ * The sink is touchable now, so it can land under a finger aimed at the page —
+ * a 40x40 patch sitting wherever the last tap was. Rather than trying to keep it
+ * out of the way, it behaves exactly like the stream: the coordinates come from
+ * the pointer event and the stream's own rectangle, so which element received the
+ * event makes no difference to where the tap is sent.
+ */
+for (const el of [img, sink]) {
+  el.addEventListener('pointerdown', onPointerDown)
+}
+
+const onPointerMove = (e) => {
   const p = pt(e); if (p) send({ t:'mouse', type:'mouseMoved', ...p, buttons, modifiers:mods(e) })
-})
+}
+for (const el of [img, sink]) {
+  el.addEventListener('pointermove', onPointerMove)
+}
 const release = (e) => {
   if (!buttons) return
   buttons = 0
   const p = pt(e); if (p) send({ t:'mouse', type:'mouseReleased', ...p, buttons:0, clickCount:1, modifiers:mods(e) })
 }
-img.addEventListener('pointerup', release)
-img.addEventListener('pointercancel', release)
+for (const el of [img, sink]) {
+  el.addEventListener('pointerup', release)
+  el.addEventListener('pointercancel', release)
+}
 img.addEventListener('wheel', (e) => {
   e.preventDefault()
   const p = pt(e); if (p) send({ t:'mouse', type:'mouseWheel', ...p, deltaX:e.deltaX, deltaY:e.deltaY, modifiers:mods(e) })
@@ -464,6 +493,10 @@ let kbSticky = false
 // document that cannot look where the field lives.
 let kbFromTap = false
 const setKb = (on) => {
+  // LOGGED, because "who blurred it" has been the open question for five rounds.
+  // Every blur so far has shown focus falling to the body, which looks identical
+  // whether this line did it or iOS did. Now the log says which.
+  note('setKb', { on })
   kbBtn.setAttribute('aria-pressed', String(on))
   if (on) sink.focus({ preventScroll: true }); else sink.blur()
 }

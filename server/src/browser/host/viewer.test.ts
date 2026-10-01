@@ -1059,8 +1059,28 @@ describe('the text sink is visible to WebKit, invisible to a person', () => {
     expect(sinkCss()).not.toContain('z-index:-');
   });
 
-  it('never swallows a tap meant for the page', () => {
-    expect(sinkCss()).toContain('pointer-events:none');
+  it('is touchable, because an untouchable input is not one a keyboard is for', () => {
+    // The last property of this input never to have been questioned, and the one
+    // left standing when everything else had been eliminated: the log showed the
+    // sink focused, inside the visual viewport with the keyboard open, blurred
+    // 32ms later with focus falling to the body.
+    expect(sinkCss()).not.toContain('pointer-events:none');
+  });
+
+  it('handles a tap on itself exactly like a tap on the stream', () => {
+    // Being touchable means it can land under a finger aimed at the page — a
+    // 40x40 patch wherever the last tap was. It shares the stream's handlers, so
+    // which element received the event makes no difference to where the tap goes.
+    const h = ready(run());
+    h.el('sink').fire('pointerdown', { clientX: 10, clientY: 10, button: 0 });
+    expect(h.sent.some((m) => m.t === 'mouse' && m.type === 'mousePressed')).toBe(true);
+  });
+
+  it('a drag that starts on the sink still releases', () => {
+    const h = ready(run());
+    h.el('sink').fire('pointerdown', { clientX: 10, clientY: 10, button: 0 });
+    h.el('sink').fire('pointerup', { clientX: 20, clientY: 20, button: 0 });
+    expect(h.sent.some((m) => m.t === 'mouse' && m.type === 'mouseReleased')).toBe(true);
   });
 });
 
