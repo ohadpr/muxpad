@@ -1067,6 +1067,18 @@ export interface Directive {
 }
 
 /**
+ * A leading mention the user PICKED whose chat is not in the corpus — deleted,
+ * merged away, or not loaded yet. The caller must refuse the send and keep the
+ * draft: neither another chat with the same name nor this chat is what was
+ * chosen.
+ */
+export interface UnresolvedDirective {
+  target: null;
+  missing: MentionPick;
+  body: string;
+}
+
+/**
  * Read `text` as a direction to another chat, or null.
  *
  * Only a LEADING mention directs work. A mention in the middle of a sentence is
@@ -1082,6 +1094,10 @@ export interface Directive {
  * a mention typed by hand or restored from a draft written before the pick was
  * recorded; it is not a second opinion about a choice already made.
  *
+ * That includes a choice whose chat has since left the corpus: the result is an
+ * `UnresolvedDirective` (target null), never a name match. Absence of the
+ * picked row is not evidence that the user picked a different one.
+ *
  * `text` should be passed UNTRIMMED: a pick's anchor is an offset into the
  * draft, and trimming it first shifts every offset by the leading whitespace.
  * The body is trimmed here either way, so nothing else changes.
@@ -1090,7 +1106,7 @@ export function parseDirective(
   text: string,
   corpus: readonly MentionChat[],
   picks: readonly MentionPick[] = [],
-): Directive | null {
+): Directive | UnresolvedDirective | null {
   const lead = text.length - text.trimStart().length;
   const trimmed = text.slice(lead);
   if (!trimmed.startsWith('@')) return null;
@@ -1101,6 +1117,10 @@ export function parseDirective(
     (p) => p.start === lead && p.name && tokenAt(lower, 0, p.name.toLowerCase()),
   );
   const chosen = picked ? corpus.find((c) => c.tabId === picked.tabId) : undefined;
+  if (picked && !chosen) {
+    const body = trimmed.slice(1 + picked.name.length).trim();
+    return body ? { target: null, missing: picked, body } : null;
+  }
   const target =
     chosen ??
     byNameLength(corpus).find((c) => c.tabName && tokenAt(lower, 0, c.tabName.toLowerCase()));

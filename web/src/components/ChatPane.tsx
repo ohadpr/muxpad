@@ -3352,6 +3352,16 @@ export function ChatPane({
     // the trim would shift every one of them by the leading whitespace.
     // `parseDirective` trims for itself.
     const directive = parseDirective(input, corpus, livePicks);
+    if (directive && !directive.target) {
+      // The chat the user PICKED is gone from the corpus. Do not guess another
+      // one with the same name, and do not send it here either — keep the draft
+      // and say why, so they can pick again.
+      setNotice({
+        text: `@${directive.missing.name} isn't available any more — pick the chat again.`,
+        tone: 'info',
+      });
+      return;
+    }
     if (directive) {
       directWork(
         directive.target,
