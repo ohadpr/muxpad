@@ -603,10 +603,6 @@
    Rows with an empty rail are deliberately excluded: their pin and archive are
    zero-width, and a margin on a zero-width item is still space (the trap that
    put this misalignment back twice already). */
-.navtree-tab-row:has(.navtree-cron) > .navtree-tab-rail > * + *,
-.navtree-tab-row:has(.navtree-pin.is-pinned) > .navtree-tab-rail > * + * {
-  margin-left: 2px;
-}
 
 /* Everything else keeps the gap only while the controls are actually out. */
 .navtree-tab-row:hover > .navtree-tab-rail > * + *,
@@ -1211,21 +1207,23 @@
    thing that must never move, and it does not: the name is the 1fr track, so it
    absorbs the whole swap and the mark keeps its line.
 
-   THE CLOCK GLYPH SURVIVES, and only the time goes. Losing the whole cell made
-   the row under your pointer the one row that stopped saying it has a schedule
-   at all — an 11px glyph is not what was crowding anything, and it is the part
-   that answers "is this thing on a timer?" at a glance. It keeps its own
-   `title`, so pointing AT the glyph still opens the full "which cron, next at
-   —" tooltip; the row's own tooltip no longer shadows it, because the innermost
-   titled element wins.
+   THE WHOLE CLOCK STEPS ASIDE, glyph included. It used to survive the hover on
+   the argument that the row under your pointer should not stop saying it has a
+   schedule — true, and outweighed once the pin and the archive are both out
+   beside it: three icons and a state slot is a third of the row's width, which
+   is the complaint this rail keeps coming back to. A schedule is a STANDING
+   PROPERTY and the buttons are ACTIONS; the row shows one kind at a time, which
+   is the rule this file already states two blocks down and had stopped keeping.
+   Nothing is lost — move the pointer off and the clock is back, with its own
+   `title` carrying which cron and when.
 
    `display: none` rather than a width transition: the hidden parts stop being
    laid out entirely, so the cell shrinks to the glyph and the gutter accounting
    is the same one the rest of this grid does with `:empty`. */
-.navtree-tab-row:hover > .navtree-tab-rail .navtree-cron-time,
-.navtree-tab-row:has(:focus-visible) > .navtree-tab-rail .navtree-cron-time,
-.navtree-tab-row:hover > .navtree-tab-rail .navtree-tab-ws,
-.navtree-tab-row:has(:focus-visible) > .navtree-tab-rail .navtree-tab-ws {
+.navtree-tab-row:hover > .navtree-tab-rail > .navtree-cron,
+.navtree-tab-row:has(:focus-visible) > .navtree-tab-rail > .navtree-cron,
+.navtree-tab-row:hover > .navtree-tab-rail > .navtree-tab-ws,
+.navtree-tab-row:has(:focus-visible) > .navtree-tab-rail > .navtree-tab-ws {
   display: none;
 }
 
@@ -1407,30 +1405,22 @@
    Reserved only where it shows: a row with nothing trailing keeps the full
    width for its name, and a row with ANY indicator lines up with every other
    row that has one. */
-.navtree-tab-row:has(.navtree-tab-rail > *) {
-  grid-template-columns: var(--nt-col-icon) minmax(0, 1fr) auto calc(var(--nt-gutter) + 10px);
-}
 
-/* THE PIN ITSELF, VISIBLE AT REST ON A PINNED ROW.
-   `.navtree-pin` is a `.navtree-close`, and those collapse to `width: 0;
-   opacity: 0` until the row is hovered. So "a pinned tab keeps its pin lit —
-   that is the only 'this is pinned' signal in the rail, by design" (NavTree.tsx)
-   described something that has never once been on screen: the only rule for
-   `.is-pinned` set a COLOUR, on hover, on a box with no width.
-   Pinning is a state the user chose and expects to see, so the glyph holds its
-   square and its accent without being asked, and goes to full on hover with
-   every other control. */
+/* THE PIN IS NOT AN INDICATOR ANY MORE — IT IS AN ACTION, LIKE THE ARCHIVE.
+   It was made permanent because the pinned block had NO visible designation at
+   all: the seam between it and the rest was `height: 10px` and nothing else, so
+   a comment claimed position said "pinned" while the stylesheet drew no line.
+   The seam is a real 1px rule now, and with it drawn, position genuinely is the
+   designation — which is what the original design said and could not deliver.
+   A lit pin on every pinned row says a second time what the row's place in the
+   list already says, and it says it in the scarcest space on the row: reported
+   as four icons eating a third of the width.
+   So it goes back to hover-only. You can still unpin from the row — point at
+   it and the button is there, beside the archive, which is exactly the company
+   it belongs in. Its accent colour stays, because a LIT pin and an unlit one
+   are different things when both are revealed: lit means "clicking unpins". */
 .navtree-tab-row > .navtree-tab-rail > .navtree-pin.is-pinned {
-  flex: 0 0 18px;
-  width: 18px;
-  opacity: 0.75;
-  visibility: visible;
   color: var(--accent);
-}
-
-.navtree-tab-row:hover > .navtree-tab-rail > .navtree-pin.is-pinned,
-.navtree-tab-row > .navtree-tab-rail > .navtree-pin.is-pinned:focus-visible {
-  opacity: 1;
 }
 
 /* ─── Sheet pane list (mobile: tab row expands into its panes) ───────── */
@@ -1869,25 +1859,17 @@
   width: 18px;
 }
 
-/* Same rule for a CHAT row, and only where it can bite: the archive is the last
-   thing in the rail, so revealing it moves a pin or a clock sitting to its
-   left. A row with an empty rail has nothing to shove and keeps the width for
-   its name. */
-.navtree-tab-row:has(.navtree-pin.is-pinned) > .navtree-tab-rail > .navtree-archive,
-.navtree-tab-row:has(.navtree-cron) > .navtree-tab-rail > .navtree-archive {
-  flex: 0 0 18px;
-  width: 18px;
-}
+/* Chat rows need no reservation at all now. Nothing in their rail is permanent
+   except the clock, and the clock LEAVES when the buttons arrive — so there is
+   never a persistent item for a revealed one to displace. The reservations that
+   used to live here, and the state-track reservation that went with them, were
+   all paying for a pin that no longer sits there. */
 
 /* And the UNPINNED pin, on a row that has a clock. Revealing it is correct —
    that button is how you pin — but it is 18px appearing to the clock's right,
    which slid the clock 22px left on hover. Reserved only on scheduled rows,
    which are few: on every other row the pin has nothing to displace and the
    name keeps the width. */
-.navtree-tab-row:has(.navtree-cron) > .navtree-tab-rail > .navtree-pin:not(.is-pinned) {
-  flex: 0 0 18px;
-  width: 18px;
-}
 
 /* THE WORKSPACE'S "+", on its header row, beside the × it is the opposite of.
    `.navtree-close` gives it the 18px inset square and the hover surface every
