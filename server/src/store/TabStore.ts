@@ -496,6 +496,33 @@ export class TabStore {
   }
 
   /**
+   * "The user looked at this" — `last_user_at` ALONE.
+   *
+   * Deliberately not `resetClock`, which writes `clock_started_at` in the same
+   * statement. Opening a chat must not restart its decay: clicking down a
+   * sidebar would otherwise un-archive everything you glanced at, and the
+   * archive clock is supposed to measure neglect, not attention.
+   *
+   * It exists because the sidebar's order moved onto `userTouchAt` (see
+   * shared/tab-order), and the two routes that mean "I am looking at this" —
+   * POST /tabs/:id/seen on desktop, POST /panes/:id/seen on mobile — were
+   * stamping `last_activity_at`, which the sort had just stopped reading.
+   * Without this, opening a cold chat promoted it for exactly as long as it
+   * took the next poll to disagree.
+   *
+   * MONOTONIC. A chat whose last real user message is newer than this glance
+   * keeps the newer stamp — looking at something is weaker evidence than
+   * sending to it, and the column is one number.
+   */
+  noteUserTouch(tabId: string, at: number = Date.now()): void {
+    this.db
+      .prepare(
+        'UPDATE tabs SET last_user_at = ? WHERE id = ? AND (last_user_at IS NULL OR last_user_at < ?)',
+      )
+      .run(at, tabId, at);
+  }
+
+  /**
    * Restart this tab's decay clock. The raw write; the revival it is half of
    * lives in tab-clock.ts (`reviveChat`, which also clears any retirement —
    * a chat handed back onto an expired clock would be done again on the next

@@ -1201,6 +1201,10 @@ export function panesScopedRoutes(deps: {
     // same bounded-fan-out reason given on the tab route (`canReorder`
     // suppresses the emit for a row that is already the most recent).
     deps.tabActivity?.touchTab(pane.tab_id, { force: true });
+    // …and the column the sidebar actually SORTS on. See TabStore.noteUserTouch:
+    // `touchTab` above writes `last_activity_at`, which machine output also
+    // writes and which the order stopped reading.
+    tabs.noteUserTouch(pane.tab_id);
     // Viewing clears both read-state flags: the "done, unreviewed" bold
     // (persisted) and the BEL red dot (ptyd runtime). Emit pane.updated so the
     // bold drops immediately instead of waiting for the next nav poll.

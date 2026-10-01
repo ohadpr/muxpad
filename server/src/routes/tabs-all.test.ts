@@ -106,9 +106,21 @@ describe('GET /api/tabs/all — the cross-workspace search corpus', () => {
     const a = await makeChat(ws.id, 'A');
     const b = await makeChat(ws.id, 'B');
     const c = await makeChat(ws.id, 'C');
-    db.prepare('UPDATE tabs SET last_activity_at = ? WHERE id = ?').run(1, a.id);
-    db.prepare('UPDATE tabs SET last_activity_at = ? WHERE id = ?').run(9999, b.id);
-    db.prepare('UPDATE tabs SET last_activity_at = ? WHERE id = ?').run(500, c.id);
+    db.prepare('UPDATE tabs SET last_activity_at = ?, last_user_at = ? WHERE id = ?').run(
+      1,
+      1,
+      a.id,
+    );
+    db.prepare('UPDATE tabs SET last_activity_at = ?, last_user_at = ? WHERE id = ?').run(
+      9999,
+      9999,
+      b.id,
+    );
+    db.prepare('UPDATE tabs SET last_activity_at = ?, last_user_at = ? WHERE id = ?').run(
+      500,
+      500,
+      c.id,
+    );
     // Three ages, so the comparison is over rows that are genuinely at
     // different points in their lives rather than three copies of "fresh".
     new TabStore(db).resetClock(a.id, Date.now() - 2 * DAY_MS);
@@ -135,7 +147,17 @@ describe('GET /api/tabs/all — the cross-workspace search corpus', () => {
       // two renderings of one server-owned order, and a disagreement between
       // them is a result row that jumps when you land on it.
       expect(grouped).toEqual(perWorkspace);
-      expect(grouped.map((t) => t.name)).toEqual(['C', 'B', 'A']);
+      expect(grouped.map((t) => t.name)).toEqual([
+        'C', // pinned — pins lead, whatever their age
+        // Then by USER TOUCH, which `resetClock` writes: A was reset to two
+        // days ago, B to nearly a full decay window ago, so A is the more
+        // recently touched of the two. The `last_activity_at` values set above
+        // say the opposite (B=9999, A=1) and no longer decide anything — which
+        // is the whole point of the change, and why this fixture now reads as
+        // two conflicting claims with the honest one winning.
+        'A',
+        'B',
+      ]);
 
       // …and byte-identical INCLUDING KEY ORDER, which `toEqual` does not see.
       //
