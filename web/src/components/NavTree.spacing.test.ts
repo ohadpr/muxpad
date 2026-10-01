@@ -884,6 +884,49 @@ describe('the row’s × archives, and never reads as delete', () => {
  * noticing. (The third — the cron's nine-character `Thu 11:08` shape — is a
  * label, and lives in next-cron-label.test.)
  */
+describe('the trailing rail is ONE column, not three', () => {
+  // Reported as horizontal "balagan": a pin at x=550 and a clock at x=597 down
+  // the same list. The cause was structural — the row spent THREE grid tracks
+  // on its right-hand side (hover controls, schedule, state mark), so two
+  // indicators in different cells could not share an edge however they were
+  // styled. One flex rail, right-aligned, fixed order, and the state mark alone
+  // keeping its own track as the scan line.
+  // Measured after: every pin and every clock ends at x=226, marks at 246.
+  it('puts every indicator in ONE cell', () => {
+    const row = ruleBody(NAV_CSS, '.navtree-tab-row');
+    // Four tracks now, not five: icon | name | rail | state.
+    const cols = decl(row, 'grid-template-columns').split(/\s+(?![^(]*\))/);
+    expect(cols).toHaveLength(4);
+    // And the retired cells are gone from the tab row entirely.
+    const all = rules(NAV_CSS).flatMap((r) => r.selectors);
+    expect(all.filter((s) => s.startsWith('.navtree-tab-row') && s.includes('tab-meta'))).toEqual(
+      [],
+    );
+    expect(
+      all.filter((s) => s.startsWith('.navtree-tab-row') && s.includes('tab-controls')),
+    ).toEqual([]);
+  });
+
+  it('charges NOTHING between rail items — the 6px that kept coming back', () => {
+    // Twice: once as a flex `gap`, once as a `margin-left` on the item after
+    // the clock. Both land on the zero-width archive button, and space given to
+    // a zero-width item is still space — it pushed every clock 6px left of
+    // every pin, which is the same defect one order of magnitude smaller.
+    const rail = ruleBody(NAV_CSS, '.navtree-tab-row > .navtree-tab-rail');
+    expect(Number.parseFloat(decl(rail, 'gap'))).toBe(0);
+    expect(rail).toMatch(/justify-content:\s*flex-end/);
+  });
+
+  it('reserves the state track whenever the rail shows anything', () => {
+    // RowMark renders no element when idle, so its track is 0 wide — which is
+    // right for a bare row and wrong the moment something sits to its left: the
+    // rail's right edge landed 18px further right on a quiet row (244) than on
+    // a working one (226).
+    const body = ruleBody(NAV_CSS, '.navtree-tab-row:has(.navtree-tab-rail > *)');
+    expect(decl(body, 'grid-template-columns')).toMatch(/calc\(var\(--nt-gutter\) \+ 10px\)/);
+  });
+});
+
 describe('the row’s right-hand side holds one thing at a time', () => {
   // `:focus-within` is true on the ACTIVE row for as long as you are in that
   // chat, because clicking its link leaves focus there. So the row you were
@@ -910,7 +953,7 @@ describe('the row’s right-hand side holds one thing at a time', () => {
   });
 
   it('hides the schedule’s TIME while the controls are out — never both', () => {
-    const body = ruleBody(NAV_CSS, '.navtree-tab-row:hover > .navtree-tab-meta .navtree-cron-time');
+    const body = ruleBody(NAV_CSS, '.navtree-tab-row:hover > .navtree-tab-rail .navtree-cron-time');
     expect(decl(body, 'display')).toBe('none');
     // The keyboard arm has to be on the same rule, or tabbing to a row shows
     // the controls ON TOP of the time and the fix is half-applied.
@@ -919,7 +962,7 @@ describe('the row’s right-hand side holds one thing at a time', () => {
         (r) =>
           r.atRules.length === 0 &&
           r.selectors.includes(
-            '.navtree-tab-row:has(:focus-visible) > .navtree-tab-meta .navtree-cron-time',
+            '.navtree-tab-row:has(:focus-visible) > .navtree-tab-rail .navtree-cron-time',
           ) &&
           /(?:^|;)\s*display:\s*none/.test(r.body),
       ),
@@ -943,7 +986,7 @@ describe('the row’s right-hand side holds one thing at a time', () => {
     // Nothing may hide the glyph, and nothing may hide the whole meta cell on a
     // row that HAS one (the empty-cell arm is explicitly scoped away from it).
     expect(hoverArms.some((s) => s.includes('.navtree-cron-glyph'))).toBe(false);
-    expect(hoverArms).not.toContain('.navtree-tab-row:hover > .navtree-tab-meta');
+    expect(hoverArms).not.toContain('.navtree-tab-row:hover > .navtree-tab-rail');
   });
 
   it('leaves the state mark alone — it is in neither cell and must not move', () => {
@@ -952,8 +995,8 @@ describe('the row’s right-hand side holds one thing at a time', () => {
     // a width on the meta cell that the mark had to share, would put the one
     // thing you scan down the rail onto a different x for the row you happen to
     // be pointing at.
-    const hoverMeta = ruleBody(NAV_CSS, '.navtree-tab-row:hover > .navtree-tab-meta');
-    expect(hoverMeta).not.toMatch(/navtree-mark/);
+    const hoverRail = ruleBody(NAV_CSS, '.navtree-tab-row:hover > .navtree-tab-rail');
+    expect(hoverRail).not.toMatch(/navtree-mark/);
     expect(decl(ruleBody(NAV_CSS, '.navtree-tab-row'), 'grid-template-columns')).toContain(
       'minmax(0, 1fr)',
     );

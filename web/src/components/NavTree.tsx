@@ -2800,29 +2800,39 @@ function TabRow({
                 one glance; the sentence is a hover away. */}
         </Link>
       )}
-      {/* Hover-revealed controls — DESKTOP ONLY, and deliberately placed
-            BEFORE both the meta cell and the status mark. Two separate
-            reasons, and the second one is a hard constraint:
-            (a) they expand from zero width on hover, and
-            anything that grows to the RIGHT of the rail drags the mark off the
-            scan line for exactly the row you happen to be pointing at. In
-            their own cell (which swallows its grid gap while collapsed) the
-            status column stays the last, fixed track in the grid, so the marks
-            hold their line under every condition — hover, focus, drag,
-            whatever;
-            (b) DOM order among grid children with explicit `grid-column`
-            must be ASCENDING by track. Grid's placement cursor only moves
-            forward, so an item pinned to a track BEHIND the cursor starts a
-            new implicit ROW. This block sits in track 3 and meta in track 4;
-            emitting meta first put the controls and the status mark on a
-            second line underneath the name — measured, and invisible to an
-            x-only alignment check, since every row broke identically.
-            Touch renders none of this: the sheet's pin, mark-unread and close
-            live under the row, behind a left swipe. */}
-      {affords.pinButton || affords.closeButton ? (
-        <span className="navtree-tab-controls">
-          {/* A pinned tab keeps its pin lit — that is the only "this is
-                pinned" signal in the rail, by design (no extra badges). */}
+      {/* ─── THE TRAILING RAIL — ONE CELL, ONE COLUMN ──────────────────────
+          Everything a row says on its right, in one flex box, right-aligned,
+          in a fixed order. It used to be TWO grid tracks — hover controls in
+          one, the schedule in another — which meant the pin and the clock could
+          not land on the same x no matter what: different tracks, different
+          edges. Reported as horizontal "balagan", and it is exactly that: a pin
+          at 550 and a clock at 597 down the same list.
+
+          ORDER, left to right, never varies:
+            workspace label · schedule · pin · archive
+          Each is absent when it does not apply, and the box is right-aligned,
+          so whatever a row does show ends flush against the state mark's track.
+          Two rows showing different things still agree about where the rail
+          begins on the right.
+
+          WHY THE PIN AND THE ARCHIVE SIT TOGETHER NOW: they are both buttons on
+          the same row, and the only thing that ever separated them was which
+          grid track they happened to be in. What distinguishes them is not
+          position but PERSISTENCE — a pin is a state you set and keeps its
+          width always; an archive is a control you reach for and has none until
+          you do. That rule is in the CSS, where it belongs, instead of being
+          smuggled in as a layout fact.
+
+          Touch renders no buttons: the sheet's pin, mark-unread and close live
+          under the row, behind a left swipe. */}
+      {!isEditing ? (
+        <span className="navtree-tab-rail">
+          {workspaceLabel ? (
+            <span className="navtree-tab-ws" dir="auto" aria-hidden="true">
+              {workspaceLabel}
+            </span>
+          ) : null}
+          {tab.crons ? <CronMark tab={tab} /> : null}
           {affords.pinButton ? (
             <button
               type="button"
@@ -2839,13 +2849,6 @@ function TabRow({
               <SvgPin size={12} filled={tab.pinned === true} />
             </button>
           ) : null}
-          {/* ARCHIVE, not close. The glyph changed with the meaning and had to:
-                a × means "destroy this" in every rail anyone has ever used, so
-                leaving the × and quietly making it safe would have taught the
-                user nothing — they had already learned not to touch it. An
-                arrow going down into a tray says "put this away", which is
-                exactly what it now does, and the down-stroke reads at 13px
-                where a box-with-a-lid does not. */}
           {affords.closeButton ? (
             <button
               type="button"
@@ -2857,28 +2860,6 @@ function TabRow({
               <SvgArchive size={13} />
             </button>
           ) : null}
-        </span>
-      ) : null}
-      {/* META — the third grid track. Holds the schedule and nothing else.
-            The subagent count used to ride here (as an absolutely-positioned
-            chip hanging off the status mark) and is gone: it moved the mark
-            off the scan line, and "6 agents" is a number you act on inside
-            the chat, not from the rail. */}
-      {/* …and, in the flat 'recent' view, WHERE THE ROW GOES. It belongs in
-            this cell rather than in a track of its own: the grid's tracks are
-            pinned by `grid-column` and a fifth one would have to be threaded
-            through every row kind, while meta is already the slot between the
-            name and the rail, already sized to its contents, and already
-            swallows its gap when empty — which is every row in the grouped
-            view, where a workspace header above the row says this instead. */}
-      {!isEditing ? (
-        <span className="navtree-tab-meta">
-          {workspaceLabel ? (
-            <span className="navtree-tab-ws" dir="auto" aria-hidden="true">
-              {workspaceLabel}
-            </span>
-          ) : null}
-          {tab.crons ? <CronMark tab={tab} /> : null}
         </span>
       ) : null}
       {/* The state mark — the LAST track, so nothing in front of it can push

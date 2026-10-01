@@ -533,17 +533,42 @@
    unpinned one then ended 26px apart — the exact misalignment the meta column
    exists to prevent. Controls now expand into the NAME (which is elastic and
    already ellipsises) instead of into the times (which are a column). */
-.navtree-tab-row > .navtree-tab-meta {
+/* ONE trailing track for the whole rail — see NavTree.tsx. The row used to
+   spend two (hover controls, then schedule), which is why a pin and a clock on
+   adjacent rows sat 47px apart: different tracks have different edges. */
+.navtree-tab-row > .navtree-tab-rail {
   grid-column: -3 / -2;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  /* NO `gap`, for the reason the retired controls cell already knew: a gap is
+     charged between flex items even when one of them is ZERO WIDTH. The archive
+     button is zero-width until hover and is always last, so a 6px gap pushed
+     every pinned row's pin 6px left of every scheduled row's clock — the same
+     misalignment this rail exists to end, one order of magnitude smaller.
+     Spacing is a margin on the items that have width instead. */
+  gap: 0;
+  min-width: 0;
+}
+
+/* NO margin between rail items either, and for the same reason the gap went:
+   it would land on the element AFTER the clock, which is the zero-width pin or
+   archive, and a margin on a zero-width item still takes space — measured, it
+   pushed the clock 6px left of the pin and put the misalignment straight back.
+   The buttons are 18px boxes around 12–13px glyphs, so they carry their own
+   separation; nothing else in the rail needs any. */
+
+/* Declines its gutter while it is empty, which is most rows — the name takes
+   the width instead. Same accounting the grid already does elsewhere. */
+.navtree-tab-row > .navtree-tab-rail:not(:empty) {
+  margin-left: var(--nt-gutter);
 }
 /* Tab rows put the controls in front of the meta cell (track 3 of 5); the
    WORKSPACE row has no meta cell but does have an auto-placed count chip that
    lands in track 3, so its controls go one further along. Pinning both to the
    same line collided the controls with the chip and pushed the mark onto a
    second grid row whenever a workspace was collapsed. */
-.navtree-tab-row > .navtree-tab-controls {
-  grid-column: -4 / -3;
-}
+
 .navtree-ws-row > .navtree-tab-controls {
   grid-column: -3 / -2;
 }
@@ -564,14 +589,14 @@
   margin-left: 0;
 }
 /* …and the spacing between them is charged only once they have width. */
-.navtree-tab-row:hover > .navtree-tab-controls > * + *,
-.navtree-tab-row:has(:focus-visible) > .navtree-tab-controls > * + *,
+.navtree-tab-row:hover > .navtree-tab-rail > * + *,
+.navtree-tab-row:has(:focus-visible) > .navtree-tab-rail > * + *,
 .navtree-ws-row:hover > .navtree-tab-controls > * + *,
 .navtree-ws-row:has(:focus-visible) > .navtree-tab-controls > * + * {
   margin-left: 2px;
 }
-.navtree-tab-row:hover > .navtree-tab-controls,
-.navtree-tab-row:has(:focus-visible) > .navtree-tab-controls,
+.navtree-tab-row:hover > .navtree-tab-rail,
+.navtree-tab-row:has(:focus-visible) > .navtree-tab-rail,
 .navtree-ws-row:hover > .navtree-tab-controls,
 .navtree-ws-row:has(:focus-visible) > .navtree-tab-controls {
   margin-left: var(--nt-gutter);
@@ -621,7 +646,7 @@
 .navtree-tab-row {
   position: relative;
   display: grid;
-  grid-template-columns: var(--nt-col-icon) minmax(0, 1fr) auto auto auto;
+  grid-template-columns: var(--nt-col-icon) minmax(0, 1fr) auto auto;
   align-items: center;
   /* The gutter is an item MARGIN, not `column-gap`. A gap is charged between
      every pair of adjacent tracks whether or not the track between them has
@@ -978,13 +1003,13 @@
    The schedule, and nothing else. Right-aligned against the status rail so the
    times form their own column. Collapses to nothing — gutter included — on the
    rows that have no schedule, which is most of them. */
-.navtree-tab-meta {
+.navtree-tab-rail {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   min-width: 0;
 }
-.navtree-tab-meta:not(:empty) {
+.navtree-tab-rail:not(:empty) {
   min-width: var(--nt-col-meta);
   margin-left: var(--nt-gutter);
 }
@@ -995,11 +1020,11 @@
    time's last digit would, and nothing aligns to the cell's LEFT edge. Measured:
    46px reserved for an 13px glyph, all of it taken off the name. Most schedules
    are not due today, so this is most scheduled rows. */
-.navtree-tab-meta:not(:has(.navtree-cron-time)):not(:has(.navtree-tab-ws)) {
+.navtree-tab-rail:not(:has(.navtree-cron-time)):not(:has(.navtree-tab-ws)) {
   min-width: 0;
 }
 /* No schedule: no width AND no gutter. Most rows are this one. */
-.navtree-tab-meta:empty {
+.navtree-tab-rail:empty {
   margin-left: 0;
 }
 
@@ -1173,25 +1198,25 @@
    `display: none` rather than a width transition: the hidden parts stop being
    laid out entirely, so the cell shrinks to the glyph and the gutter accounting
    is the same one the rest of this grid does with `:empty`. */
-.navtree-tab-row:hover > .navtree-tab-meta .navtree-cron-time,
-.navtree-tab-row:has(:focus-visible) > .navtree-tab-meta .navtree-cron-time,
-.navtree-tab-row:hover > .navtree-tab-meta .navtree-tab-ws,
-.navtree-tab-row:has(:focus-visible) > .navtree-tab-meta .navtree-tab-ws {
+.navtree-tab-row:hover > .navtree-tab-rail .navtree-cron-time,
+.navtree-tab-row:has(:focus-visible) > .navtree-tab-rail .navtree-cron-time,
+.navtree-tab-row:hover > .navtree-tab-rail .navtree-tab-ws,
+.navtree-tab-row:has(:focus-visible) > .navtree-tab-rail .navtree-tab-ws {
   display: none;
 }
 
 /* …and the cell stops claiming a column's worth of width once its text is
    gone, or a scheduled row would hold a `--nt-col-meta` gap open for an 11px
    glyph and the controls would gain nothing. */
-.navtree-tab-row:hover > .navtree-tab-meta,
-.navtree-tab-row:has(:focus-visible) > .navtree-tab-meta {
+.navtree-tab-row:hover > .navtree-tab-rail,
+.navtree-tab-row:has(:focus-visible) > .navtree-tab-rail {
   min-width: 0;
 }
 
 /* An EMPTY meta cell on a hovered row — every row with no schedule — collapses
    completely, gutter and all, so the controls start where the name ends. */
-.navtree-tab-row:hover > .navtree-tab-meta:not(:has(.navtree-cron)),
-.navtree-tab-row:has(:focus-visible) > .navtree-tab-meta:not(:has(.navtree-cron)) {
+.navtree-tab-row:hover > .navtree-tab-rail:not(:has(.navtree-cron)),
+.navtree-tab-row:has(:focus-visible) > .navtree-tab-rail:not(:has(.navtree-cron)) {
   display: none;
 }
 
@@ -1348,8 +1373,18 @@
    So the reservation is scoped to exactly the rows that need it. A pinned row
    holds the track open whether or not it has a mark; every other row keeps the
    original bargain untouched, and pinned rows are few by construction. */
-.navtree-tab-row:has(.navtree-pin.is-pinned) {
-  grid-template-columns: var(--nt-col-icon) minmax(0, 1fr) auto auto calc(var(--nt-gutter) + 10px);
+/* THE STATE TRACK IS RESERVED WHENEVER THE RAIL HAS ANYTHING IN IT.
+   RowMark renders no element when a row is idle, so its track is 0 wide — fine
+   for a bare row, and the reason the name gets that width back. But it means
+   the rail's right edge lands 18px further right on a quiet row than on one
+   with a spinner, so a clock and a pin on adjacent rows do not agree about
+   where the column is. Measured: rail right edge 244 on a quiet row, 226 on a
+   working one.
+   Reserved only where it shows: a row with nothing trailing keeps the full
+   width for its name, and a row with ANY indicator lines up with every other
+   row that has one. */
+.navtree-tab-row:has(.navtree-tab-rail > *) {
+  grid-template-columns: var(--nt-col-icon) minmax(0, 1fr) auto calc(var(--nt-gutter) + 10px);
 }
 
 /* THE PIN ITSELF, VISIBLE AT REST ON A PINNED ROW.
@@ -1361,15 +1396,15 @@
    Pinning is a state the user chose and expects to see, so the glyph holds its
    square and its accent without being asked, and goes to full on hover with
    every other control. */
-.navtree-tab-row > .navtree-tab-controls > .navtree-pin.is-pinned {
+.navtree-tab-row > .navtree-tab-rail > .navtree-pin.is-pinned {
   flex: 0 0 18px;
   width: 18px;
   opacity: 0.75;
   color: var(--accent);
 }
 
-.navtree-tab-row:hover > .navtree-tab-controls > .navtree-pin.is-pinned,
-.navtree-tab-row > .navtree-tab-controls > .navtree-pin.is-pinned:focus-visible {
+.navtree-tab-row:hover > .navtree-tab-rail > .navtree-pin.is-pinned,
+.navtree-tab-row > .navtree-tab-rail > .navtree-pin.is-pinned:focus-visible {
   opacity: 1;
 }
 
