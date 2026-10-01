@@ -193,3 +193,21 @@ describe('after attaching', () => {
     expect(socket.closed).toBe(true);
   });
 });
+
+it('binds a handoff to page B while page A still exists', async () => {
+  const { conn } = connection();
+  await conn.connect();
+  const socket = FakeSocket.last as FakeSocket;
+  const attaching = conn.attachToPage('p2');
+  await vi.waitFor(() => expect(socket.sent).toHaveLength(1));
+  socket.reply(socket.sent[0]!.id as number, {
+    targetInfos: [
+      ...TARGETS.targetInfos,
+      { targetId: 'p2', type: 'page', url: 'https://example.com/login' },
+    ],
+  });
+  await vi.waitFor(() => expect(socket.sent).toHaveLength(2));
+  expect(socket.sent[1]).toMatchObject({ params: { targetId: 'p2' } });
+  socket.reply(socket.sent[1]!.id as number, { sessionId: 'S2' });
+  await expect(attaching).resolves.toMatchObject({ targetId: 'p2' });
+});

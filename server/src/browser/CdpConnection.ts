@@ -90,15 +90,20 @@ export class CdpConnection implements CdpTransport {
   }
 
   /**
-   * Attaches a flat session to the first real page target.
+   * Attaches a flat session to an explicit handoff target, or the first real page.
    *
    * `devtools://` targets are skipped: an open DevTools window is itself a page
    * target, and attaching to it would stream a picture of the debugger.
    */
-  async attachToPage(): Promise<PageTarget> {
-    const page = targetToAttach(null, await this.listTargets());
+  async attachToPage(targetId?: string): Promise<PageTarget> {
+    const targets = await this.listTargets();
+    const page = targetId
+      ? targets.find(
+          (t) => t.targetId === targetId && t.type === 'page' && !t.url.startsWith('devtools://'),
+        )
+      : targetToAttach(null, targets);
     if (!page) throw new Error(`no page target at ${this.opts.endpoint}`);
-    await this.attachTo(page.targetId);
+    if (page.targetId !== this.attachedTargetId) await this.attachTo(page.targetId);
     return { targetId: page.targetId, url: page.url };
   }
 
@@ -121,7 +126,7 @@ export class CdpConnection implements CdpTransport {
     return { targetId: page.targetId, url: page.url };
   }
 
-  private async listTargets(): Promise<TargetInfo[]> {
+  async listTargets(): Promise<TargetInfo[]> {
     const { targetInfos } = (await this.sendOn(null, 'Target.getTargets')) as unknown as {
       targetInfos: TargetInfo[];
     };
@@ -133,8 +138,11 @@ export class CdpConnection implements CdpTransport {
       targetId,
       flatten: true,
     })) as unknown as { sessionId: string };
+    const previous = this.sessionId;
     this.sessionId = attached.sessionId;
     this.attachedTargetId = targetId;
+    if (previous)
+      void this.sendOn(null, 'Target.detachFromTarget', { sessionId: previous }).catch(() => {});
   }
 
   /** Sends to the attached page session. */
@@ -175,6 +183,7 @@ export class CdpConnection implements CdpTransport {
     let message: {
       id?: number;
       method?: string;
+      sessionId?: string;
       params?: unknown;
       result?: Record<string, unknown>;
       error?: { message: string };
@@ -198,6 +207,7 @@ export class CdpConnection implements CdpTransport {
       return;
     }
 
+    if (message.sessionId && message.sessionId !== this.sessionId) return;
     if (message.method) {
       for (const handler of this.handlers.get(message.method) ?? []) {
         (handler as (p: unknown) => void)(message.params);

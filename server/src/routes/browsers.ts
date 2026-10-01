@@ -97,6 +97,7 @@ const EnsureSchema = z.object({
 
 /** What the agent is stuck on, in words a person can act on. */
 const NeedsYouSchema = z.object({
+  targetId: z.string().min(1).max(200).optional(),
   reason: z.string().min(1).max(400),
   tabId: z.string().min(1).max(64).optional(),
   /** What needs them, so the viewer can arrive pointing at it. */
@@ -388,13 +389,11 @@ export function browsersRoutes(deps: {
    * until the first tool call — at which point it fetches `/json/version`. So
    * the wrapper registers the row without launching anything and hands
    * playwright THIS url. The first tool call lands here, the browser starts,
-   * and the reply carries Chrome's own `webSocketDebuggerUrl`, which points at
-   * loopback — so playwright talks to Chrome directly from then on and nothing
-   * proxies the actual session.
+   * and the reply points at the host's lease-enforcing CDP bridge. Every agent
+   * command continues through that bridge, including after human takeover.
    *
-   * A catch-all rather than just `/json/version`, because what a client pokes
-   * at a CDP endpoint is playwright's business and a 404 here reads as a broken
-   * browser.
+   * Only version discovery is exposed over HTTP. Mutating endpoints such as
+   * /json/new and raw page socket discovery must not bypass the command gate.
    */
   /**
    * The still for one moment, by its timestamp.
@@ -447,6 +446,8 @@ export function browsersRoutes(deps: {
   app.get('/:profile/cdp/*', async (c) => {
     const profile = profileParam(c.req.param('profile'));
     if (!profile) return c.json({ error: 'invalid profile name' }, 400);
+    if (!wheel.canDrive(profile, 'agent'))
+      return c.json({ error: 'a human has the wheel — wait, do not retry' }, 409);
     // chromeFor, not deps.chromePath: the dependency is optional and falls back
     // to discovery, which is how the POST route finds one. Reading the raw dep
     // here made this the only route that could not find a browser the rest of
@@ -473,13 +474,19 @@ export function browsersRoutes(deps: {
     // of to /json/version. Anchored on the actual prefix instead.
     const prefix = `/api/browsers/${c.req.param('profile')}/cdp`;
     const path = new URL(c.req.url).pathname.slice(prefix.length) || '/';
+    if (path.replace(/\/$/, '') !== '/json/version')
+      return c.json({ error: 'use the guarded CDP socket' }, 404);
     const upstream = `${state.cdpUrl}${path}`;
     const deadline = Date.now() + 30_000;
     for (;;) {
       try {
         const res = await fetch(upstream);
         if (res.ok) {
-          return new Response(await res.text(), {
+          // Never expose Chrome's unguarded socket to the MCP client.
+          const payload = (await res.json()) as Record<string, unknown>;
+          if (typeof payload.webSocketDebuggerUrl === 'string')
+            payload.webSocketDebuggerUrl = state.viewerUrl.replace(/^http/, 'ws') + '/agent-cdp';
+          return new Response(JSON.stringify(payload), {
             status: 200,
             headers: { 'content-type': res.headers.get('content-type') ?? 'application/json' },
           });
@@ -538,8 +545,8 @@ export function browsersRoutes(deps: {
   });
 
   /**
-   * A PERSON takes the wheel. Always granted — that is the whole point; a human
-   * outranks any agent, and an agent holding it is not a reason to refuse.
+   * A PERSON takes precedence over any agent. Acknowledge readiness only
+   * after the host drains commands forwarded before that precedence changed.
    */
   app.post('/:profile/wheel/take', async (c) => {
     const profile = profileParam(c.req.param('profile'));
@@ -551,6 +558,18 @@ export function browsersRoutes(deps: {
     if (!parsed.success) return c.json({ error: 'by is required' }, 400);
 
     wheel.take(profile, takeRequest(parsed.data, 'human'));
+    // Fence old permission checks and drain commands already forwarded before
+    // telling a person they can type. Failure leaves the protective lease held.
+    try {
+      const stopped = await fetch(`${state.viewerUrl}/agent-quiesce`, {
+        method: 'POST',
+        signal: AbortSignal.timeout(6000),
+      });
+      if (!stopped.ok)
+        return c.json({ error: 'agent command still running; takeover not ready' }, 503);
+    } catch {
+      return c.json({ error: 'browser unavailable; takeover not ready' }, 503);
+    }
     // Arriving IS the acknowledgement, so the card stops SHOUTING here — but it
     // does not disappear here. While you hold the wheel that card is your way
     // back to the browser: navigate away on a phone and, without it, there is
@@ -590,6 +609,22 @@ export function browsersRoutes(deps: {
     const parsed = NeedsYouSchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) return c.json({ error: 'reason is required' }, 400);
 
+    if (!wheel.canDrive(profile, 'agent'))
+      return c.json({ error: 'a human has the wheel — wait, do not retry' }, 409);
+
+    // Bind BEFORE taking the screenshot or notifying the person. Ambiguous
+    // multi-tab handoffs must name a target, never silently show another page.
+    try {
+      const bound = await fetch(`${state.viewerUrl}/handoff`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ targetId: parsed.data.targetId }),
+        signal: AbortSignal.timeout(6000),
+      });
+      if (!bound.ok) return c.json({ error: 'could not bind handoff page; supply targetId' }, 409);
+    } catch {
+      return c.json({ error: 'browser unavailable for handoff' }, 503);
+    }
     attention.raise(profile, parsed.data.reason, parsed.data.selector);
     // THE MOMENT MOST WORTH A PICTURE. "Amazon needs a login" is a claim you
     // have to take on trust and a tap to check; the same card showing the
