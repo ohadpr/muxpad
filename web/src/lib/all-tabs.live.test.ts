@@ -1,5 +1,5 @@
 import type { MuxpadEvent, Tab } from '@muxpad/shared';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkspaceTabs } from './nav-search';
 
 /**
@@ -35,9 +35,8 @@ vi.mock('../events', () => ({
   subscribeResync: () => () => {},
 }));
 
-const { cachedAllTabs, loadAllTabs, resetAllTabsCache, subscribeAllTabs } = await import(
-  './all-tabs'
-);
+const { cachedAllTabs, loadAllTabs, refreshCorpusForTab, resetAllTabsCache, subscribeAllTabs } =
+  await import('./all-tabs');
 
 const tab = (id: string, over: Partial<Tab> = {}): Tab =>
   ({ id, slug: id, name: id, layout: 'p', created_at: 1, updated_at: 1, ...over }) as Tab;
@@ -172,5 +171,99 @@ describe('a server push reaches every holder of the corpus', () => {
       expect(seen).toHaveLength(1);
       expect(seen[0]?.flatMap((g) => g.tabs).map((t) => t.id)).toEqual(['t1', 't2', 't3']);
     });
+  });
+});
+
+/**
+ * AN OLDER ANSWER MUST NOT OVERWRITE A NEWER PUSH.
+ *
+ * A `/tabs/all` request issued before a push can land after it, carrying the
+ * pre-push row. Publishing it — and calling the corpus fresh — put the old name
+ * (or a retired chat back to `working`) on every chip and card, with nothing
+ * left to heal it: no poll, and a status-edge fetch that fired meanwhile had
+ * simply JOINED the stale request.
+ */
+describe('a response that predates a push', () => {
+  /** Hand-resolved `listAllTabs` answers, so a test controls landing order. */
+  const pending: Array<(v: { workspaces: WorkspaceTabs[] }) => void> = [];
+  const hold = () =>
+    listAllTabs.mockImplementationOnce(
+      () => new Promise<{ workspaces: WorkspaceTabs[] }>((r) => pending.push(r)),
+    );
+  const snapshot = () => structuredClone(SERVER);
+  const settle = () => new Promise((r) => setTimeout(r, 0));
+
+  beforeEach(() => {
+    pending.length = 0;
+    vi.useFakeTimers({ toFake: ['Date'] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    listAllTabs.mockImplementation(async () => ({ workspaces: SERVER }));
+  });
+
+  it('is not published over the push, and a fresh fetch follows', async () => {
+    await loadAllTabs();
+    vi.advanceTimersByTime(10_000); // past FRESH_MS
+    listAllTabs.mockClear();
+
+    hold();
+    const old = snapshot();
+    void loadAllTabs();
+    // The rename happens on the server and is pushed while the request travels.
+    SERVER = SERVER.map((g) => ({
+      ...g,
+      tabs: g.tabs.map((t) => (t.id === 't2' ? { ...t, name: 'renamed' } : t)),
+    }));
+    emit({ type: 'tab.updated', tab: tab('t2', { name: 'renamed' }) } as MuxpadEvent);
+    expect(row('t2')?.name).toBe('renamed');
+
+    pending.shift()?.({ workspaces: old });
+    await settle();
+    await settle();
+    expect(row('t2')?.name).toBe('renamed');
+    // …and it went back for an answer that is at least as new as the push.
+    expect(listAllTabs).toHaveBeenCalledTimes(2);
+  });
+
+  it('applies on the FIRST fetch too, when the push had no corpus to patch', async () => {
+    hold();
+    const old = snapshot();
+    void loadAllTabs();
+    SERVER = SERVER.map((g) => ({
+      ...g,
+      tabs: g.tabs.map((t) => (t.id === 't2' ? { ...t, done: true } : t)),
+    }));
+    emit({ type: 'tab.updated', tab: tab('t2', { done: true }) } as MuxpadEvent);
+
+    pending.shift()?.({ workspaces: old });
+    await settle();
+    await settle();
+    expect(row('t2')?.done).toBe(true);
+    expect(listAllTabs).toHaveBeenCalledTimes(2);
+  });
+
+  it('a status edge during the request does not just join it', async () => {
+    await loadAllTabs();
+    subscribeAllTabs(() => {});
+    vi.advanceTimersByTime(10_000);
+    listAllTabs.mockClear();
+
+    hold();
+    const old = snapshot();
+    void loadAllTabs();
+    SERVER = SERVER.map((g) => ({
+      ...g,
+      tabs: g.tabs.map((t) => (t.id === 't3' ? { ...t, status: 'idle' } : t)),
+    }));
+    // No tab.updated on a status edge — only this nudge.
+    vi.useRealTimers();
+    refreshCorpusForTab('t3');
+    await new Promise((r) => setTimeout(r, 300));
+
+    pending.shift()?.({ workspaces: old });
+    await settle();
+    await settle();
+    expect(row('t3')?.status).toBe('idle');
   });
 });
