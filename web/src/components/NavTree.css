@@ -1144,7 +1144,13 @@
      the close button, so the accident would have been silent. `visibility`
      removes it from hit-testing and keeps the box. */
   visibility: hidden;
-  transition: opacity 80ms ease, width 80ms ease, flex-basis 80ms ease, margin-left 80ms ease;
+  /* OPACITY ONLY. `width`, `flex-basis` and `margin-left` were animated too, so
+     the controls slid open horizontally — and because the row's name is the
+     flexible track, every one of those 80ms also pushed the NAME. Dragging the
+     cursor down the list set a wave of text reflowing behind it, one row at a
+     time. A control appearing is not a journey; it is either there or it is
+     not, and the fade is enough to say which. */
+  transition: opacity 80ms ease;
   /* Kill iOS's double-tap zoom delay so taps register instantly. */
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;

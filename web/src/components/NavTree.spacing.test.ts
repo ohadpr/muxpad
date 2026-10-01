@@ -884,6 +884,22 @@ describe('the row’s × archives, and never reads as delete', () => {
  * noticing. (The third — the cron's nine-character `Thu 11:08` shape — is a
  * label, and lives in next-cron-label.test.)
  */
+describe('nothing in the rail animates sideways', () => {
+  it('transitions OPACITY and nothing with a width in it', () => {
+    // `width`, `flex-basis` and `margin-left` were all animated, so a control
+    // slid open horizontally — and the row's name is the flexible track, so
+    // every one of those 80ms pushed the NAME too. Running the cursor down the
+    // list left a wave of text reflowing behind it, one row at a time.
+    // A control appearing is not a journey: it is there or it is not.
+    const body = ruleBody(NAV_CSS, '.navtree-close');
+    const t = decl(body, 'transition');
+    expect(t).toMatch(/opacity/);
+    for (const prop of ['width', 'flex-basis', 'margin-left', 'all']) {
+      expect(t).not.toMatch(new RegExp(prop));
+    }
+  });
+});
+
 describe('a revealed control never moves one that was already there', () => {
   // THE REPORT: you move the pointer towards the workspace's "+", the row lights
   // up, and the button now under your cursor is the × that deletes the workspace
