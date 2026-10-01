@@ -19,6 +19,7 @@ import {
   DEFAULT_AGENT_MODE,
   coerceAgentMode,
   messageIsFromCron,
+  parseCronMarker,
   renderCronMarker,
 } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
@@ -130,7 +131,8 @@ export class CronScheduler {
   private ticking = false;
   /**
    * Panes with an in-flight turn this scheduler started, keyed by pane id →
-   * cron id. Two jobs: the `overlap=skip` check (a turn we started is still
+   * cron id — whether submitSend ran it at once or the queue drained it later
+   * (see `onTurnStarted`). Two jobs: the `overlap=skip` check (a turn we started is still
    * outstanding) and `close_when_done` (this turn is the one whose end closes
    * the tab). Rebuilt from nothing after a restart, deliberately: the DURABLE
    * half of overlap detection is the queue scan, and the worst case here is
@@ -160,6 +162,7 @@ export class CronScheduler {
       if (e.type === 'agent_turn' && (e.phase === 'done' || e.phase === 'fatal')) {
         void this.onTurnEnded(e.pane_id, e.phase);
       }
+      if (e.type === 'agent_turn' && e.phase === 'start') this.onTurnStarted(e.pane_id);
       // A pane going away takes its in-flight bookkeeping with it; the cron
       // row itself is handled on the next tick (disable + push), because
       // "your job's target is gone" deserves a notification, not a silent drop.
@@ -567,6 +570,28 @@ export class CronScheduler {
   }
 
   // ── Turn lifecycle ───────────────────────────────────────────────────────
+
+  /**
+   * A fire that was QUEUED (submitSend said `queued`) becomes in-flight here,
+   * at the moment the queue hands it to the runner. Without this the overlap
+   * check lost it the instant it was drained: the row is gone from the queue,
+   * and `inflight` was only ever set for fires that returned `sent`.
+   *
+   * The agent_turn event carries no text, so the drained message is read off
+   * the queue HEAD: ws's drainQueue emits its optimistic turn-start
+   * synchronously BEFORE removing the row it just relayed, and only ever
+   * relays the head. Any other `start` (the runner's own echo, a reconnect
+   * mid-turn) finds either an `inflight` entry already set or a head that is
+   * still queued — and a queued fire is outstanding by the queue scan anyway,
+   * so marking it early cannot skip anything that would not have been skipped.
+   * `onTurnEnded` clears it, as for a `sent` fire.
+   */
+  private onTurnStarted(paneId: string): void {
+    if (this.inflight.has(paneId)) return;
+    const head = this.queue.peek(paneId);
+    const cronId = head ? parseCronMarker(head.text)?.marker.id : undefined;
+    if (cronId) this.inflight.set(paneId, cronId);
+  }
 
   private async onTurnEnded(paneId: string, phase: 'done' | 'fatal'): Promise<void> {
     this.inflight.delete(paneId);
