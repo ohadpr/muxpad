@@ -336,6 +336,10 @@ export function tabsRoutes(deps: {
     // recent one, and `canReorder` suppresses the emit for a row that is
     // already maximal. So the repeats cost one UPDATE and wake nobody.
     deps.tabActivity?.touchTab(id, { force: true });
+    // …and the column the sidebar actually SORTS on. See TabStore.noteUserTouch:
+    // `touchTab` above writes `last_activity_at`, which machine output also
+    // writes and which the order stopped reading.
+    tabs.noteUserTouch(id);
     // Viewing the tab clears the read-state flags — seeing it is the read
     // action: the manual tab "unread" mark AND every pane's "done, unreviewed"
     // bold. Synchronous DB writes, independent of ptyd.

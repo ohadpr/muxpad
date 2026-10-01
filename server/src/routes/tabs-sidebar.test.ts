@@ -49,9 +49,25 @@ describe('living sidebar — tab ordering + pinning', () => {
   const list = async () =>
     (await (await test.app.request(`/api/tabs?workspaceId=${wsId}`)).json()) as Tab[];
   const names = async () => (await list()).map((t) => t.name);
-  /** Write last_activity_at directly — the ordering input, whatever produced it. */
+  /**
+   * Write the ordering input directly.
+   *
+   * BOTH COLUMNS. The sort reads `userTouchAt` — `last_user_at`, falling back to
+   * `last_activity_at` only for a row an older server published. These fixtures
+   * used to set `last_activity_at` alone, which stopped expressing "this tab is
+   * more recent" the moment the sort started asking when the USER last touched
+   * a chat rather than when something last printed in it: every tab here is
+   * created in the same millisecond, so they all shared one `last_user_at` and
+   * the order collapsed onto the id tiebreak.
+   *
+   * That column swap is the fix for `a long-idle chat` — four days untouched and
+   * near archival — outranking `Health`, used that morning, because an agent
+   * had emitted a line in it nine minutes earlier.
+   */
   const setActivity = (id: string, at: number | null) =>
-    db.prepare('UPDATE tabs SET last_activity_at = ? WHERE id = ?').run(at, id);
+    db
+      .prepare('UPDATE tabs SET last_activity_at = ?, last_user_at = ? WHERE id = ?')
+      .run(at, at, id);
 
   it('exposes pinned + last_activity_at on every listed tab', async () => {
     const t = await makeTab('A');

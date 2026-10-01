@@ -82,11 +82,23 @@ export function compareUnpinnedTabs(
 ): number {
   const attn = Number(tabWantsYou(b)) - Number(tabWantsYou(a));
   if (attn !== 0) return attn;
+  // USER TOUCH, not machine activity — see `userTouchAt` for the measurement.
+  // This read `last_activity_at` until a screenshot settled the argument the
+  // docstring above had hedged on ("inside ONE workspace that is tolerable"):
+  // `a long-idle chat`, four days since the user last touched it and days from
+  // being archived for inactivity, sat ABOVE `Health`, used the same morning —
+  // because something had printed a line in it nine minutes earlier. Inside one
+  // workspace the consequence turns out to be identical to the cross-workspace
+  // one it was already rejected for.
+  //
+  // `userTouchAt` was written for the global list, documented at length, and
+  // then left with no callers at all when the flat view was deleted. It is the
+  // rule this file already believed in.
+  //
   // Nulls last: -Infinity is smaller than any real timestamp, and we sort
-  // descending, so a never-active tab lands at the bottom of its partition.
+  // descending, so a never-touched tab lands at the bottom of its partition.
   const at =
-    (b.last_activity_at ?? Number.NEGATIVE_INFINITY) -
-    (a.last_activity_at ?? Number.NEGATIVE_INFINITY);
+    (userTouchAt(b) ?? Number.NEGATIVE_INFINITY) - (userTouchAt(a) ?? Number.NEGATIVE_INFINITY);
   // NaN guard: (-Inf) - (-Inf) is NaN, which would make the comparator
   // inconsistent and the sort implementation-defined.
   if (at !== 0 && !Number.isNaN(at)) return at < 0 ? -1 : 1;

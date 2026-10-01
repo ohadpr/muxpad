@@ -552,6 +552,11 @@ describe('tabs routes', () => {
 
         const after = tabs.getById(id)?.last_activity_at ?? 0;
         expect(after).toBeGreaterThan(cold);
+        // AND the column the sidebar sorts on. Stamping only `last_activity_at`
+        // made this fix invisible the moment the order moved to `userTouchAt`:
+        // machine output writes that column too, which is the bug that moved it.
+        const touched = tabs.getById(id)?.last_user_at ?? 0;
+        expect(touched).toBeGreaterThan(cold);
         // And it is NOW, not some throttled approximation — the view is a
         // discrete user moment, so it is a forced write.
         expect(Date.now() - after).toBeLessThan(5_000);
