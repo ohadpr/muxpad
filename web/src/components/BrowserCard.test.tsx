@@ -246,3 +246,50 @@ describe('the picture on the card', () => {
     expect(shot('/api/browsers/s-abc/shot/2').textContent).toContain('Amazon needs a login');
   });
 });
+
+describe('Done pressed inside the viewer closes the modal around it', () => {
+  /**
+   * The viewer has its own Done — it is the only one a phone gets, since there is
+   * no dialog around it there. On a desktop it released the wheel and could do
+   * nothing else, because it is in a frame: "I clicked done then had to close."
+   * Two close buttons, one of which only half worked.
+   */
+  const lease = () => ({ holder: 'human' as const, by: 'pane-7', takenAt: 0, expiresAt: 9e12 });
+  const open = (onClose: () => void) =>
+    mount(
+      <BrowserModal
+        data={{ ...base, wheel: lease() }}
+        by="pane-7"
+        onClose={onClose}
+        onRenew={() => {}}
+        now={() => 1_000_000}
+      />,
+    );
+  const say = (data: unknown, origin = window.location.origin) =>
+    act(() => {
+      window.dispatchEvent(new MessageEvent('message', { data, origin }));
+    });
+
+  it('closes when the viewer asks', () => {
+    const onClose = vi.fn();
+    open(onClose);
+    say({ muxpad: 'handback' });
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('ignores a message from anywhere else', () => {
+    // A listener on the window accepts messages from any frame on the page by
+    // default, and this one closes things.
+    const onClose = vi.fn();
+    open(onClose);
+    say({ muxpad: 'handback' }, 'https://evil.example');
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('ignores messages that are not about handing back', () => {
+    const onClose = vi.fn();
+    open(onClose);
+    say({ other: 'thing' });
+    expect(onClose).not.toHaveBeenCalled();
+  });
+});

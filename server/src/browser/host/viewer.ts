@@ -65,6 +65,9 @@ export const VIEWER_HTML = String.raw`<!doctype html>
   #url{flex:1 0 100%;order:2;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left;color:#9a9aab;font-size:11px}
   #msg{order:3;flex:1 0 100%;font-size:11px}
   #msg{color:#e9a}
+  /* For the one line that is a THING TO DO rather than a note. "Not clear what to
+     do or expect" was the report, about an 11px line in the corner of a bar. */
+  #msg.loud{color:#cdebd4;background:#24402e;border:1px solid #3d6b4a;border-radius:6px;padding:5px 8px;font-size:12.5px}
   /* PINCH AND PAN. The stream is a 1280px page; on a phone, fitted to the
      viewport it is unreadable, and touch-action: none made it unzoomable
      besides. pinch-zoom keeps two-finger gestures for the browser — zoom and
@@ -249,6 +252,7 @@ const connect = () => {
     // the moment the connection succeeded, and a person tapping fields that did
     // nothing had nothing on screen to tell them why.
     msg.textContent = ''
+    msg.classList.remove('loud')
     if (watching) msg.textContent = 'watching — press Take over to type'
     for (const fn of onEachOpen) { try { fn() } catch { /* one hook must not stop the rest */ } }
   }
@@ -677,9 +681,16 @@ handback.addEventListener('click', async () => {
     // finished with the page — so it goes back to muxpad, which is where the
     // conversation you came from is.
     // Only when this IS the page. In the desktop modal the viewer is framed, and
-    // navigating in there would load muxpad inside its own dialog; the modal
-    // already has a way to close.
-    if (window.top === window) location.href = '/'
+    // navigating in there would load muxpad inside its own dialog.
+    if (window.top === window) {
+      location.href = '/'
+    } else {
+      // FRAMED: ASK THE MODAL TO CLOSE. It has its own close button, and the one
+      // in here could not reach it — so on a desktop Done handed the wheel back
+      // and left somebody sitting in a dialog around a browser they had finished
+      // with, having to find the other close button. Reported exactly that way.
+      try { window.parent.postMessage({ muxpad: 'handback' }, location.origin) } catch { /* not ours to close */ }
+    }
   } catch { msg.textContent = 'could not reach muxpad' }
 })
 
@@ -780,7 +791,8 @@ function noticeSignIn(present) {
   if (present) { sawLoginForm = true; return }
   if (!sawLoginForm || watching) return
   sawLoginForm = false
-  msg.textContent = 'looks like you are signed in — press Done when you have finished'
+  msg.textContent = 'signed in — press Done to give the browser back'
+  msg.classList.add('loud')
   handback.classList.add('ready')
 }
 
