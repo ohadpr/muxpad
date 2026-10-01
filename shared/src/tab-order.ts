@@ -109,38 +109,29 @@ export function compareUnpinnedTabs(
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 
-/**
- * The GLOBAL list's order — the same shape as {@link compareUnpinnedTabs} with
- * the recency key swapped for {@link userTouchAt}.
+/* `compareByUserTouch` USED TO LIVE HERE, and deleting it is the point.
  *
- * Deliberately a SECOND comparator rather than a change to the first. The two
- * lists answer different questions and the codebase already has the bug class
- * where one value gets two meanings:
+ * It was the GLOBAL list's comparator: same shape as `compareUnpinnedTabs`
+ * with the recency key swapped for `userTouchAt`, kept deliberately separate
+ * on the argument that the two lists answer different questions ("what is
+ * going on in here" vs "what was I doing") and that collapsing them would be
+ * the one-value-two-meanings bug this codebase keeps finding.
  *
- *   per workspace  "what is going on in here" — you chose the workspace, so
- *                  the machine's activity is signal. Unchanged, and every
- *                  surface that reads the server's published order (the tree,
- *                  the sheet's picked list, quick-switch numbering, the search
- *                  ranking) keeps exactly the order it has today.
- *   globally       "what was I doing" — you chose nothing, so only YOUR acts
- *                  can rank 58 chats across three workspaces.
+ * Both halves of that argument expired, from opposite ends:
  *
- * The attention partition is IDENTICAL and is kept on purpose: `blocked` is the
- * one bit the mobile rail still draws per row, and a global list that buried a
- * chat waiting on you would be a regression in the surface's one loud signal.
- * Only the recency key below it moves.
- */
-export function compareByUserTouch(a: SortableTab, b: SortableTab): number {
-  const attn = Number(tabWantsYou(b)) - Number(tabWantsYou(a));
-  if (attn !== 0) return attn;
-  // Nulls last, NaN-guarded — the same reasoning as compareUnpinnedTabs, and
-  // for the same reason: (-Inf) - (-Inf) is NaN, which makes a comparator
-  // inconsistent and its sort implementation-defined.
-  const at =
-    (userTouchAt(b) ?? Number.NEGATIVE_INFINITY) - (userTouchAt(a) ?? Number.NEGATIVE_INFINITY);
-  if (at !== 0 && !Number.isNaN(at)) return at < 0 ? -1 : 1;
-  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-}
+ *   · the per-workspace list moved onto `userTouchAt` too (see the comment
+ *     inside `compareUnpinnedTabs`: a chat four days cold outranked one used
+ *     that morning because something printed a line in it). The two functions
+ *     were left byte-for-byte identical — same partition, same key, same null
+ *     and NaN guards, same id tiebreak — while this docstring went on saying
+ *     they differed, which is a worse failure than the duplication;
+ *   · the global flat view that called it was deleted, so it had no
+ *     production caller at all. Its only consumer was a test asserting the
+ *     divergence that no longer existed, and that test duly failed.
+ *
+ * Two identical functions are not two policies. If the surfaces genuinely
+ * diverge again, the honest move is a named key passed INTO one comparator,
+ * not a second copy that can drift silently. */
 
 /**
  * The published sidebar order for one workspace's tabs: the pinned block in its

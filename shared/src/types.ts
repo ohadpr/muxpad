@@ -691,6 +691,26 @@ export const TabRemovedEventSchema = z.object({
   workspace_id: z.string(),
   tab_id: z.string(),
 });
+
+// Tabs in one workspace were re-ordered by hand — a COARSE event, carrying no
+// rows at all, because a per-row `tab.updated` provably cannot carry this:
+// `Tab` has no `position`, and the client's `applyTabRow` re-sorts using its
+// CURRENT index as the tiebreak, so a row-shaped event would faithfully
+// reproduce the order the client already holds.
+//
+// It is not merely a tiebreak either. The PINNED block is ordered purely by
+// `position` (`orderedForWorkspace` partitions a position-sorted read and
+// `sortSidebarTabs` leaves that slice alone), so a drag inside it is a pure
+// position change with a fully visible result — which, before this event,
+// no other client ever saw. The poll did not cover it: it is stopped for a
+// hidden document and a collapsed workspace, i.e. every second device.
+//
+// The handler's job is to re-fetch the workspace's tabs. That makes the event
+// idempotent and impossible to drift from the store.
+export const TabsReorderedEventSchema = z.object({
+  type: z.literal('tabs.reordered'),
+  workspace_id: z.string(),
+});
 export const WorkspaceAddedEventSchema = z.object({
   type: z.literal('workspace.added'),
   workspace: WorkspaceSchema,
@@ -755,6 +775,7 @@ export const MuxpadEventSchema = z.discriminatedUnion('type', [
   TabAddedEventSchema,
   TabUpdatedEventSchema,
   TabRemovedEventSchema,
+  TabsReorderedEventSchema,
   WorkspaceAddedEventSchema,
   WorkspaceUpdatedEventSchema,
   WorkspaceRemovedEventSchema,

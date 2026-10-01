@@ -208,6 +208,13 @@ subscribe((e) => {
       // WorkspaceLayout's empty-state UI gates on it.
       void refreshWorkspaces();
       return;
+    case 'tabs.reordered':
+      // Re-fetch, don't patch: the event carries no rows precisely because a
+      // row-shaped one could not express a position change (see
+      // TabsReorderedEventSchema). No `refreshWorkspaces` — a reorder moves
+      // tabs WITHIN a workspace, so no count and no rollup can have changed.
+      void refreshTabs(e.workspace_id);
+      return;
     case 'tab.updated':
       // The ROW itself is not this router's job: tabs.ts subscribes to
       // tab.updated directly and splices the (already decorated) tab into
