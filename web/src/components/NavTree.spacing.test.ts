@@ -915,14 +915,15 @@ describe('a revealed control never moves one that was already there', () => {
     // (three classes) beat `.navtree-tab-row:hover` (two) — and the archive
     // stayed hidden on the row you were pointing at. Size and visibility are
     // separate rules now: the reservations set width only.
-    for (const sel of [
-      '.navtree-tab-row:has(.navtree-pin.is-pinned) > .navtree-tab-rail > .navtree-archive',
-      '.navtree-tab-row:has(.navtree-cron) > .navtree-tab-rail > .navtree-pin:not(.is-pinned)',
-    ]) {
-      const body = ruleBody(NAV_CSS, sel);
-      expect(Number.parseFloat(decl(body, 'width'))).toBe(18);
-      expect(body).not.toMatch(/visibility/);
-    }
+    // Chat rows need no reservation at all now — nothing in their rail is
+    // permanent, because the clock LEAVES when the buttons arrive. The one
+    // reservation left is the workspace header's ×, and it still sets size only.
+    const body = ruleBody(
+      NAV_CSS,
+      '.navtree-ws-row > .navtree-tab-controls > .navtree-close:not(.navtree-ws-add)',
+    );
+    expect(Number.parseFloat(decl(body, 'width'))).toBe(18);
+    expect(body).not.toMatch(/visibility/);
   });
 
   it('never hides the rail itself — the buttons live in it', () => {
@@ -972,13 +973,14 @@ describe('the trailing rail is ONE column, not three', () => {
     expect(rail).toMatch(/justify-content:\s*flex-end/);
   });
 
-  it('reserves the state track whenever the rail shows anything', () => {
-    // RowMark renders no element when idle, so its track is 0 wide — which is
-    // right for a bare row and wrong the moment something sits to its left: the
-    // rail's right edge landed 18px further right on a quiet row (244) than on
-    // a working one (226).
-    const body = ruleBody(NAV_CSS, '.navtree-tab-row:has(.navtree-tab-rail > *)');
-    expect(decl(body, 'grid-template-columns')).toMatch(/calc\(var\(--nt-gutter\) \+ 10px\)/);
+  it('needs NO state-track reservation, because nothing in the rail is permanent', () => {
+    // It existed so a clock and a pin on adjacent rows agreed about where the
+    // column was while the state mark's own track flickered between 0 and 18px.
+    // With the pin hover-only and the clock stepping aside for the buttons, a
+    // row shows at most ONE rail item at a time and there is nothing left to
+    // keep in line — so the width goes back to the name.
+    const all = rules(NAV_CSS).flatMap((r) => r.selectors);
+    expect(all.filter((s) => s.includes(':has(.navtree-tab-rail > *)'))).toEqual([]);
   });
 });
 
@@ -1007,41 +1009,45 @@ describe('the row’s right-hand side holds one thing at a time', () => {
     ).toEqual([]);
   });
 
-  it('hides the schedule’s TIME while the controls are out — never both', () => {
-    const body = ruleBody(NAV_CSS, '.navtree-tab-row:hover > .navtree-tab-rail .navtree-cron-time');
+  it('steps the WHOLE schedule aside while the controls are out', () => {
+    // This asserted the opposite twice, in two directions, and both were right
+    // at the time. First the whole cell hid, which made the row under your
+    // pointer the only row not saying it had a schedule. Then the glyph was
+    // kept and only the time hidden. Then the pin became permanent too, and
+    // three icons plus a state slot ate a third of the row — reported as such.
+    // A schedule is a standing PROPERTY and the buttons are ACTIONS; the rail
+    // shows one kind at a time, which is this block's own title.
+    const body = ruleBody(NAV_CSS, '.navtree-tab-row:hover > .navtree-tab-rail > .navtree-cron');
     expect(decl(body, 'display')).toBe('none');
-    // The keyboard arm has to be on the same rule, or tabbing to a row shows
-    // the controls ON TOP of the time and the fix is half-applied.
     expect(
       rules(NAV_CSS).some(
         (r) =>
           r.atRules.length === 0 &&
           r.selectors.includes(
-            '.navtree-tab-row:has(:focus-visible) > .navtree-tab-rail .navtree-cron-time',
+            '.navtree-tab-row:has(:focus-visible) > .navtree-tab-rail > .navtree-cron',
           ) &&
           /(?:^|;)\s*display:\s*none/.test(r.body),
       ),
     ).toBe(true);
   });
 
-  it('KEEPS the clock glyph on the hovered row — only the time goes', () => {
-    // Hiding the whole cell made the row under the pointer the one row that
-    // stopped saying it has a schedule at all. The glyph is 11px and is the
-    // part that answers "is this on a timer?"; the time is the part that was
-    // costing 90px.
-    const hidden = rules(NAV_CSS).filter(
-      // `decl` throws on a rule that never sets the property, and most rules
-      // here do not — this is a scan over the whole sheet, not a lookup.
-      (r) => r.atRules.length === 0 && /(?:^|;)\s*display:\s*none/.test(r.body),
+  it('shows the PIN only on hover — position is what says "pinned"', () => {
+    // The pin was made permanent when the pinned seam was `height: 10px` and
+    // nothing else, so position claimed to say "pinned" and drew no line. The
+    // seam is a real rule now (see the selection suite), so the icon was saying
+    // a second time what the row's place already said — in the scarcest space
+    // on the row. It is an action again, revealed beside the archive.
+    const all = rules(NAV_CSS).flatMap((r) => r.selectors);
+    const permanent = all.filter(
+      (sel) =>
+        sel.includes('.navtree-pin.is-pinned') && !sel.includes(':hover') && !sel.includes('focus'),
     );
-    const hoverArms = hidden
-      .flatMap((r) => r.selectors)
-      .filter((sel) => sel.startsWith('.navtree-tab-row:hover'));
-    expect(hoverArms.some((s) => s.includes('.navtree-cron-time'))).toBe(true);
-    // Nothing may hide the glyph, and nothing may hide the whole meta cell on a
-    // row that HAS one (the empty-cell arm is explicitly scoped away from it).
-    expect(hoverArms.some((s) => s.includes('.navtree-cron-glyph'))).toBe(false);
-    expect(hoverArms).not.toContain('.navtree-tab-row:hover > .navtree-tab-rail');
+    // Any rule left for a resting pinned pin may set COLOUR and nothing that
+    // gives it a box.
+    for (const sel of permanent) {
+      const body = ruleBody(NAV_CSS, sel);
+      expect(body).not.toMatch(/width|flex|visibility/);
+    }
   });
 
   it('leaves the state mark alone — it is in neither cell and must not move', () => {
