@@ -234,6 +234,7 @@ describe('a card drawn from a moment', () => {
     kind: 'opened' as const,
     at: 100,
     shotUrl: null,
+    answered: false,
     profile: 'shopping',
     browser: base,
     ...over,
@@ -287,6 +288,7 @@ describe('placing moments in a conversation', () => {
     kind: 'opened',
     at,
     shotUrl: null,
+    answered: false,
     profile: 'shopping',
     browser: base,
   });
@@ -346,6 +348,7 @@ describe('what the card says, in as few words as possible', () => {
     kind: 'opened',
     at: 1,
     shotUrl: null,
+    answered: false,
     profile: 's-01m3hwabcdef',
     browser: base,
     ...over,
@@ -394,6 +397,7 @@ describe('what the card shows, and what it leaves out', () => {
     kind: 'opened',
     at: 1,
     shotUrl: null,
+    answered: false,
     profile: 's-abc',
     browser: base,
     ...over,
@@ -426,6 +430,7 @@ describe('a card that is only telling you something', () => {
     kind: 'opened',
     at: 1,
     shotUrl: null,
+    answered: false,
     profile: 's-abc',
     browser: base,
     ...over,
@@ -484,9 +489,11 @@ describe('there are exactly two kinds of browser card', () => {
     expect(moments.map((m) => m.kind)).toEqual(['opened', 'needs-you']);
   });
 
-  it('DROPS a summons once it has been answered', () => {
-    // "Handled" was a third kind of card explaining a state nobody asked about.
-    // The asking is over; the record of it is the agent's reply, not a row.
+  it('KEEPS a summons once it has been answered — it stops asking, it does not vanish', () => {
+    // It used to be dropped: the asking is over, and the record is the agent's
+    // reply. Sound on its own, and wrong next to the rule that suppresses
+    // `opened` once a summons exists. Two rules that each remove one card, which
+    // between them removed the last one.
     const moments = browserMoments(
       [
         {
@@ -497,12 +504,24 @@ describe('there are exactly two kinds of browser card', () => {
       ],
       'tab-1',
     );
-    expect(moments.map((m) => m.kind)).toEqual(['opened']);
+    expect(moments.map((m) => m.kind)).toEqual(['opened', 'needs-you']);
   });
 
-  it('keeps a LATER summons when an earlier one was answered', () => {
-    // Resolution is per-moment, not per-browser: answering the first must not
-    // silence the second.
+  it('leaves a way back into the browser when `opened` was never recorded', () => {
+    // The real shape of the bug: the host suppresses `opened` when a summons has
+    // already said the same thing, so the summons IS the only card. Dropping it
+    // left a conversation with a browser in it and nothing to tap.
+    const moments = browserMoments(
+      [{ ...base, needsYou: null, events: [ev('needs-you', 500), ev('resolved', 900)] }],
+      'tab-1',
+    );
+    expect(moments).toHaveLength(1);
+  });
+
+  it('keeps BOTH summonses, and only the later one is still asking', () => {
+    // Two errands in one session, the first dealt with. Both are moments that
+    // happened, so both stay in the log — but only the live one is loud, which
+    // is browserMomentView's job and not this one's.
     const moments = browserMoments(
       [
         {
@@ -513,8 +532,9 @@ describe('there are exactly two kinds of browser card', () => {
       ],
       'tab-1',
     );
-    expect(moments).toHaveLength(1);
-    expect(moments[0]?.at).toBe(1200);
+    expect(moments.map((m) => m.at)).toEqual([500, 1200]);
+    expect(browserMomentView(moments[1] as BrowserMoment).urgent).toBe(true);
+    expect(browserMomentView(moments[0] as BrowserMoment).urgent).toBe(false);
   });
 });
 
@@ -523,6 +543,7 @@ describe('what opening a card is meant to do', () => {
     kind: 'opened',
     at: 1,
     shotUrl: null,
+    answered: false,
     profile: 's-abc',
     browser: base,
     ...over,
@@ -593,14 +614,18 @@ describe('finding the way back to a browser you are driving', () => {
     expect(browserOpenIntent(moments[1] as BrowserMoment)).toBe('drive');
   });
 
-  it('and it goes once you hand the browser back', () => {
+  it('and it stops asking once you hand the browser back, without disappearing', () => {
+    // The card is also the way back INTO the browser. Removing it on hand-back
+    // left the conversation with no way to reach a browser that is still there.
     const b = held('log in');
     const done: BrowserCardData = {
       ...b,
       wheel: null,
       events: [...(b.events ?? []), { kind: 'resolved', at: 3, tabId: 'tab-1' }],
     };
-    expect(browserMoments([done], 'tab-1').map((m) => m.kind)).toEqual(['opened']);
+    const moments = browserMoments([done], 'tab-1');
+    expect(moments.map((m) => m.kind)).toEqual(['opened', 'needs-you']);
+    expect(browserMomentView(moments[1] as BrowserMoment).urgent).toBe(false);
   });
 });
 
