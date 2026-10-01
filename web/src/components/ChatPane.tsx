@@ -328,7 +328,11 @@ function HighlightedText({ text, hl }: { text: string; hl?: readonly string[] | 
 /** Camera glyph for the photo/attach button (matches the TUI composer). */
 function SvgAttach() {
   return (
-    <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" fill="none">
+    /* 22, matched to the mic beside it — see VoiceControl's SvgMic. The two sit
+       in identical 36px circles, so any difference between the GLYPHS is the
+       only thing the eye has to go on, and it read as two mismatched icons
+       rattling around in their boxes. */
+    <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true" fill="none">
       {/* A paperclip, not a camera. The button takes any file muxpad can
           render — pdf, csv, json, zip, the lot — and a camera glyph promised
           photos only, which is also what the input's accept was enforcing. */}
@@ -5070,7 +5074,9 @@ export function ChatPane({
               // child's own FINAL MESSAGE — its answer, with the path or url it
               // names in it — and not the story of how it worked, which is what
               // the whole final turn turned out to be.
-              onToggleExpanded={canExpand ? () => toggleReport(kid, anchorId, x.card.round) : undefined}
+              onToggleExpanded={
+                canExpand ? () => toggleReport(kid, anchorId, x.card.round) : undefined
+              }
               onOpen={() => openChat(kid)}
             />
           );

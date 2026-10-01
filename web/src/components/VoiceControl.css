@@ -2,7 +2,13 @@
    kebab-case blocks, `-modifier` / `is-state` classes, color-mix tints over
    the --chat-* tokens, 36px round ghost buttons. */
 
+/* Pulled 4px toward the paperclip. The composer's 8px gap is right between
+   DIFFERENT things — a button and the input — and wrong between these two,
+   which are one cluster: two 36px circles 8px apart put their 22px glyphs 24px
+   from each other, so the pair read as two lone buttons rather than a pair.
+   4px closes it to 20 without touching the gap before the input. */
 .voice-btn {
+  margin-left: -4px;
   width: 36px;
   height: 36px;
   flex: 0 0 auto;
