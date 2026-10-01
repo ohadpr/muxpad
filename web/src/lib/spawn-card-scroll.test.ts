@@ -40,7 +40,7 @@
 import { describe, expect, it } from 'vitest';
 import type { SpawnRound } from '../../../shared/src/types';
 import type { MentionChat, SpawnCard } from './chat-mention';
-import { spawnCards } from './chat-mention';
+import { canExpandSpawn, resolveSpawnAnchor, spawnCards, spawnState } from './chat-mention';
 import { ChatScrollController } from './chat-scroll-controller';
 import type { SimRow } from './chat-scroll-sim';
 import { SimScroller } from './chat-scroll-sim';
@@ -113,6 +113,48 @@ function logOf(cards: SpawnCard[]): { rows: SimRow[]; cardTop: number[] } {
 }
 
 describe('a card per round gets an id per round', () => {
+  it('keeps the round verdict and artifacts when the child moves on', () => {
+    const history = rounds(2);
+    const first = history.get('kid')![0]!;
+    first.artifacts = ['https://example.test/A'];
+    const kid = { ...KID, status: 'working' as const, report: { text: 'B', state: 'crashed' as const, at: 9000 }, artifacts: ['B'] };
+    const card = spawnCards([kid], 'parent', 12, history).find((c) => c.kind === 'completion')!;
+    expect(spawnState(spawnCards([kid], 'parent', 12, history)[0]!.chat)).toBe('delivered');
+    expect(spawnState(card.chat)).toBe('delivered');
+    expect(canExpandSpawn(card.chat)).toBe(true);
+    expect(card.chat.artifacts).toEqual(first.artifacts);
+    first.report_state = null;
+    first.report = null;
+    const missing = spawnCards([kid], 'parent', 12, history).find((c) => c.kind === 'completion')!;
+    expect(missing.chat.report).toBeUndefined();
+    expect(canExpandSpawn(missing.chat)).toBe(false);
+  });
+
+  it('maps legacy launch and completion anchors to distinct historical rows', () => {
+    const history = rounds(3);
+    const cards = spawnCards([KID], 'parent', 12, history);
+    const launch = resolveSpawnAnchor('spawn-kid', history);
+    const completion = resolveSpawnAnchor('done-kid', history);
+    expect(launch).toBe(cards[0]?.anchorId);
+    expect(completion).toBe(cards.at(-1)?.anchorId);
+    expect(resolveSpawnAnchor(launch, history)).toBe(launch);
+  });
+
+  it('keeps the live offset when fallback rows acquire round identities', () => {
+    const sim = new SimScroller([{ id: 'before', height: 1000 },
+      { id: 'spawn-kid', height: 100 }, { id: 'after', height: 2000 }]);
+    const c = new ChatScrollController(sim);
+    c.dispatch({ t: 'shown', mem: { anchorId: 'spawn-kid', anchorOffset: -20, caughtUp: false, sid: 's1' } });
+    const to = resolveSpawnAnchor('spawn-kid', rounds(1));
+    sim.rows[1]!.id = to;
+    c.dispatch({ t: 'anchor-renamed', from: 'spawn-kid', to });
+    sim.resizeRow('before', 1300);
+    c.place();
+    expect(sim.rowOffset(to)).toBe(-20);
+    expect(c.wantsOlder(true)).toBe(false);
+    expect(c.record('s1')?.anchorId).toBe(to);
+  });
+
   it('draws six DISTINCT rows for three rounds', () => {
     // The direct statement of the invariant. Pre-fix this was six entries under
     // two ids: `spawn-kid` three times and `done-kid` three times.

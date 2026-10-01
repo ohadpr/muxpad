@@ -177,14 +177,19 @@ describe('opening', () => {
       }),
     ]);
     const { host } = await mount(
-      <BrowserCards by="pane-7" tabId="tab-1" fetchImpl={impl} pollMs={100000} viewportWidth={1440} />,
+      <BrowserCards
+        by="pane-7"
+        tabId="tab-1"
+        fetchImpl={impl}
+        pollMs={100000}
+        viewportWidth={1440}
+      />,
     );
     await click(buttons(host)[0]);
     const take = calls.find((c) => c.url.includes('/wheel/take'));
     expect(take?.method).toBe('POST');
     expect(take?.body).toMatchObject({ by: 'pane-7', reason: 'Amazon needs a login' });
   });
-
 
   it('opens a modal on a desktop', async () => {
     const { impl } = fakeFetch(() => [browser()]);
@@ -216,7 +221,9 @@ describe('opening', () => {
     );
     await click(host.querySelector('[data-testid="browser-card"]') ?? undefined);
     // Watching, so the intent rides the url for the tab too.
-    expect(openTab).toHaveBeenCalledWith('https://host.ts.net/browser/shopping/?mode=watch');
+    expect(openTab).toHaveBeenCalledWith(
+      'https://host.ts.net/browser/shopping/?mode=watch&by=pane-7',
+    );
     expect(document.querySelector('[data-testid="browser-modal"]')).toBeNull();
   });
 });
@@ -243,4 +250,28 @@ describe('closing', () => {
     expect(release?.body).toMatchObject({ by: 'pane-7' });
     expect(document.querySelector('[data-testid="browser-modal"]')).toBeNull();
   });
+});
+
+it('shares the iframe claimant and updates the modal after takeover without reloading it', async () => {
+  const { impl, calls } = fakeFetch(() => [browser()]);
+  const { host } = await mount(
+    <BrowserCards by="pane-7" tabId="tab-1" fetchImpl={impl} viewportWidth={1200} />,
+  );
+  await click(host.querySelector('[data-testid="browser-card"]') ?? undefined);
+  const frame = host.querySelector('iframe')!;
+  expect(new URL(frame.src).searchParams.get('by')).toBe('pane-7');
+  const src = frame.src;
+  await act(async () => {
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        origin: window.location.origin,
+        source: frame.contentWindow,
+        data: { muxpad: 'takeover', by: 'pane-7' },
+      }),
+    );
+  });
+  expect(host.textContent).toContain('you have the wheel');
+  expect(frame.src).toBe(src);
+  await click(buttons(host).find((b) => b.textContent === 'Done'));
+  expect(calls.find((c) => c.method === 'DELETE')?.body).toEqual({ by: 'pane-7' });
 });

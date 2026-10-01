@@ -38,6 +38,23 @@ const ENGINES = [
   { name: 'engine pays nothing (iOS 26 and earlier)', paysAnchoring: false },
 ] as const;
 
+it('keeps the resume gate shut on a measurable surface until shown', () => {
+  const sim = new SimScroller(simRows(40));
+  const c = new ChatScrollController(sim);
+  c.dispatch({ t: 'shown', mem: PARKED('m15', -60) });
+  drainScroll(sim, c);
+  c.dispatch({ t: 'hidden' });
+  expect(c.hasPlaced()).toBe(false);
+  // A commit/observer can run in the gap before the queued show transition.
+  c.place();
+  expect(c.hasPlaced()).toBe(false);
+  sim.iosResumeZeroesScroll();
+  expect(drainScroll(sim, c)).toBe(0);
+  expect(c.record('s1')).toEqual(PARKED('m15', -60));
+  c.dispatch({ t: 'shown', mem: PARKED('m15', -60) });
+  expect(sim.scrollTop).toBe(3060);
+});
+
 describe('FOLLOWING', () => {
   let sim: SimScroller;
   let c: ChatScrollController;
@@ -46,6 +63,27 @@ describe('FOLLOWING', () => {
     c = new ChatScrollController(sim);
     c.dispatch({ t: 'mounted' });
     c.dispatch({ t: 'shown', mem: RETIRED });
+  });
+
+  it('keeps an upward gesture when a commit precedes its scroll event', () => {
+    drainScroll(sim, c);
+    sim.readerScrollsBy(-25);
+    const top = sim.scrollTop;
+    sim.append(simRows(1, 200, 'new'));
+    c.place();
+    expect(sim.scrollTop).toBe(top);
+    expect(c.phase(true)).toBe('ANCHORED');
+    expect(drainScroll(sim, c)).toBe(1);
+  });
+
+  it('clearing an absent or already-dismissed search preserves a nudge', () => {
+    drainScroll(sim, c);
+    sim.readerScrollsBy(-25);
+    drainScroll(sim, c);
+    const top = sim.scrollTop;
+    c.dispatch({ t: 'search-cleared', here: c.anchorHere(), atEnd: true });
+    expect(sim.scrollTop).toBe(top);
+    expect(c.phase(true)).toBe('ANCHORED');
   });
 
   it('opens at the end', () => {

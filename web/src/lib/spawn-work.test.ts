@@ -95,6 +95,19 @@ describe('fetchSpawnWork', () => {
   const jsonl = (...events: Array<Record<string, unknown>>) =>
     `${events.map((e) => JSON.stringify(e)).join('\n')}\n`;
 
+  it('selects the requested round instead of the newest answer', async () => {
+    vi.stubGlobal('fetch', async () => ({ ok: true, text: async () => jsonl(
+      { kind: 'user', ts: 100, text: 'A' },
+      { kind: 'assistant', ts: 150, text: 'A answer' },
+      { kind: 'user', ts: 300, text: 'B' },
+      { kind: 'assistant', ts: 350, text: 'B answer' },
+    ) }) as Response);
+    expect(await fetchSpawnWork(['p'], { started_at: 100, ended_at: 200 })).toEqual({
+      kind: 'work', text: 'A answer', truncated: false,
+    });
+    expect((await fetchSpawnWork(['p'], { started_at: 1, ended_at: 50 })).kind).toBe('gone');
+  });
+
   it('reads the work off the first pane that answers', async () => {
     const fetchMock = vi.fn(async (url: string) =>
       url.includes('p-term')

@@ -69,6 +69,7 @@ import {
   type MentionRun,
   type MentionSearchState,
   NO_MENTION_SEARCH,
+  type SpawnCard,
   type SpawnRoundsByChild,
   applyMention,
   canExpandSpawn,
@@ -76,6 +77,7 @@ import {
   directTo,
   hitsFor,
   interleaveSpawnCards,
+  resolveSpawnAnchor,
   nextMentionRun,
   nextSearchLimit,
   parseDirectMarker,
@@ -2378,10 +2380,11 @@ export function ChatPane({
     // chats — and the corpus is how that is known, which is also why it belongs
     // in the dependency list: a round starting or ending moves the child's tab
     // row, so the corpus patch that lands for it is exactly the moment these go
-    // stale. The fetch is coalesced and freshness-capped (lib/spawn-rounds).
+    // stale. Invalidate even a fresh or in-flight read; the loader coalesces
+    // changes during a read into a trailing refresh (lib/spawn-rounds).
     if (!corpus.some((c) => c.parentId === myTabId)) return;
     let live = true;
-    void loadSpawnRounds(myTabId).then((r) => {
+    void loadSpawnRounds(myTabId, true).then((r) => {
       if (live) setSpawnRounds(r);
     });
     return () => {
@@ -2392,6 +2395,22 @@ export function ChatPane({
     () => spawnCards(corpus, myChat?.tabId, MAX_SPAWN_CARDS, spawnRounds),
     [corpus, myChat, spawnRounds],
   );
+
+  useLayoutEffect(() => {
+    // The DOM now has per-round rows. Migrate both memories before the general
+    // placement effect can seek a fallback id that no transcript page contains.
+    const mem = recallChatScroll(paneId);
+    if (mem?.anchorId) {
+      const id = resolveSpawnAnchor(mem.anchorId, spawnRounds);
+      if (id !== mem.anchorId) rememberChatScroll(paneId, { ...mem, anchorId: id });
+    }
+    const c = scroll.current;
+    const intent = c?.intent();
+    if (intent?.at === 'row') {
+      const id = resolveSpawnAnchor(intent.id, spawnRounds);
+      if (id !== intent.id) c?.dispatch({ t: 'anchor-renamed', from: intent.id, to: id });
+    }
+  }, [paneId, spawnRounds]);
 
   /**
    * WHO SENT THE MESSAGES IN THIS CHAT — the mirror of the spawn cards above.
@@ -2482,18 +2501,18 @@ export function ChatPane({
   //     completion entry per round and this set is what says which one you
   //     opened. Keyed by tab id — which is what it was, correctly, while a child
   //     had exactly one — a single tap opened every round's card at once. The
-  //     WORK CACHE below stays keyed by tab id: one child, one transcript.
+  //     WORK CACHE uses the same entry key: each round has its own answer.
   //   · Not an index (the log grows), not a memo identity (the transcript memo
   //     rebuilds on every corpus patch), not an event id (a card has none).
   //   · Held HERE rather than inside the card, for the reason `expandedGroups` is:
   //     the element tree is rebuilt whenever the transcript or the corpus changes,
   //     and state inside the card would collapse every open report when it did.
   const [expandedReports, setExpandedReports] = useState<ReadonlySet<string>>(EMPTY_EXPANDED);
-  // The fetched work, cached per child so collapse→re-expand costs nothing.
+  // The fetched work, cached per entry so later rounds never reuse an old answer.
   // `undefined` = never asked, `null` = in flight.
   const [reportWork, setReportWork] = useState<ReadonlyMap<string, SpawnWork | null>>(EMPTY_WORK);
   const toggleReport = useCallback(
-    (chat: MentionChat, anchorId: string) => {
+    (chat: MentionChat, anchorId: string, round?: SpawnCard['round']) => {
       // The height change is READER-CAUSED and in the middle of the document, so
       // it is an INPUT rather than something to detect afterwards: hold this row
       // where it is, measured before the commit that changes its height. Without
@@ -2515,11 +2534,11 @@ export function ChatPane({
         // Asked once. A `gone` answer is cached too — re-requesting a pruned
         // transcript on every toggle would be a request per click with one
         // possible answer.
-        if (prev.has(chat.tabId)) return prev;
+        if (prev.has(anchorId)) return prev;
         const next = new Map(prev);
-        next.set(chat.tabId, null);
-        void fetchSpawnWork(chat.paneIds).then((work) => {
-          setReportWork((cur) => new Map(cur).set(chat.tabId, work));
+        next.set(anchorId, null);
+        void fetchSpawnWork(chat.paneIds, round).then((work) => {
+          setReportWork((cur) => new Map(cur).set(anchorId, work));
         });
         return next;
       });
@@ -4052,7 +4071,7 @@ export function ChatPane({
   // Coming back from a browser-tab switch / app background / bfcache restore
   // is a show transition too — the pane's `active` never moved, but its
   // layout (and, on some engines, its scrollTop) may have. Bumping this
-  // re-runs the restore + settling loop above.
+  // re-runs the restore transition above.
   useEffect(() => {
     const onVisible = () => {
       if (document.visibilityState !== 'visible') return;
@@ -4060,9 +4079,9 @@ export function ChatPane({
       // for — and the native `scroll` event from that reset can run in this same
       // turn, while the layout effect reacting to the bump is still queued behind
       // a render. Nothing has to be armed for it: the controller believes no
-      // scroll event until it has placed something since becoming visible, which
-      // is a causal gate rather than a 250ms window, and `hidden` is what opened
-      // it. This used to be a wall-clock deadline stamped here AND re-stamped in
+      // scroll event until `shown` permits placement again, which is a causal
+      // gate rather than a 250ms window. `hidden` keeps it shut even while the
+      // DOM is already measurable. This used to be a wall-clock deadline stamped here AND re-stamped in
       // the effect, because a state update cannot cover the half-frame in
       // between.
       scroll.current?.dispatch({ t: 'hidden' });
@@ -4920,10 +4939,7 @@ export function ChatPane({
           // live-patched from the server's own `tab.updated` (lib/all-tabs), so
           // nothing here polls and nothing caches a state.
           const state = spawnState(kid);
-          // ONE state resolution shared by both entries, read off the corpus
-          // every render — which is what keeps it honest after either card has
-          // scrolled up. The corpus is live-patched from the server's own
-          // `tab.updated` (lib/all-tabs), so nothing here polls.
+          // Launches read the live child; completions carry a round snapshot.
           if (x.card.kind === 'launch') {
             // THE LAUNCH. "you started this, and it is running." Nothing else:
             // at a launch there is nothing to summarise, and once the work is
@@ -4985,9 +5001,8 @@ export function ChatPane({
           // The disclosure is per ENTRY — see `toggleReport`. Keyed by the child
           // it opened every round's card at once.
           const expanded = canExpand && expandedReports.has(anchorId);
-          // …but the WORK behind it is fetched per child (one transcript), so
-          // that cache stays keyed by the tab.
-          const work = expanded ? reportWork.get(kid.tabId) : undefined;
+          // The work is bounded to this round and cached under this entry.
+          const work = expanded ? reportWork.get(anchorId) : undefined;
           return (
             <ChatMentionCard
               key={anchorId}
@@ -5029,7 +5044,7 @@ export function ChatPane({
               // child's own FINAL MESSAGE — its answer, with the path or url it
               // names in it — and not the story of how it worked, which is what
               // the whole final turn turned out to be.
-              onToggleExpanded={canExpand ? () => toggleReport(kid, anchorId) : undefined}
+              onToggleExpanded={canExpand ? () => toggleReport(kid, anchorId, x.card.round) : undefined}
               onOpen={() => openChat(kid)}
             />
           );

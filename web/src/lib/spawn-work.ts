@@ -1,4 +1,4 @@
-import type { ChatEvent } from '@muxpad/shared';
+import type { ChatEvent, SpawnRound } from '@muxpad/shared';
 
 /**
  * THE WORK ITSELF — what the spawn report's summary is an index TO.
@@ -125,8 +125,13 @@ export function parseTranscriptJsonl(body: string): ChatEvent[] {
  * Deliberately a bare `fetch` and not `req`: the response is JSONL, and `req`
  * parses JSON.
  */
-export async function fetchSpawnWork(paneIds: readonly string[]): Promise<SpawnWork> {
-  let lastReason = 'this worker has no transcript on this machine any more';
+export async function fetchSpawnWork(
+  paneIds: readonly string[],
+  round?: Pick<SpawnRound, 'started_at' | 'ended_at'>,
+): Promise<SpawnWork> {
+  let lastReason = round
+    ? 'this round is outside the available transcript window'
+    : 'this worker has no transcript on this machine any more';
   for (const paneId of paneIds) {
     let body: string;
     try {
@@ -139,7 +144,12 @@ export async function fetchSpawnWork(paneIds: readonly string[]): Promise<SpawnW
       lastReason = "couldn't reach the server for this worker's transcript";
       continue;
     }
-    const { text, truncated } = finalAnswer(parseTranscriptJsonl(body));
+    const events = parseTranscriptJsonl(body);
+    // A pane endpoint serves the current session's tail. Never substitute a
+    // later job when this round has aged out of that tail or the session rotated.
+    const within = round ? events.filter((e) => round.ended_at !== null && e.ts !== null &&
+      e.ts >= round.started_at && e.ts <= round.ended_at) : events;
+    const { text, truncated } = finalAnswer(within);
     if (!text) continue;
     return { kind: 'work', text, truncated };
   }
