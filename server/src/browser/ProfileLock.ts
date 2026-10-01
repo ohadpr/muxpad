@@ -1,4 +1,4 @@
-import { existsSync, rmSync } from 'node:fs';
+import { lstatSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
@@ -45,7 +45,9 @@ export function clearStaleProfileLock(profileDir: string): string[] {
       // all three as cleared on every clean start — a return value describing
       // work that never happened. Nothing reads it today; the next thing to
       // read it would have been told a story.
-      if (!existsSync(file)) continue;
+      // Inspect the entry, not its target: Chrome's crashed-pid symlink
+      // is normally dangling, so existsSync would skip the lock we need to clear.
+      lstatSync(file);
       rmSync(file, { force: true });
       cleared.push(file);
     } catch {

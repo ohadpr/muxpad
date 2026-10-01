@@ -352,7 +352,7 @@ const mods = (e) => (e.altKey?1:0) | (e.ctrlKey?2:0) | (e.metaKey?4:0) | (e.shif
 // leaves this tab. The wheel is not held and not requested; the stream is a
 // picture until somebody says otherwise.
 let watching = new URLSearchParams(location.search).get('mode') === 'watch'
-const INPUT = new Set(['mouse', 'key', 'text', 'nav', 'emulate'])
+const INPUT = new Set(['mouse', 'key', 'text', 'nav', 'emulate', 'fillLogin'])
 const send = (o) => {
   if (watching && INPUT.has(o.t)) return
   if (ws && ws.readyState === 1) ws.send(JSON.stringify(o))
@@ -608,9 +608,12 @@ sink.addEventListener('input', () => {
   sink.value = ''
   if (text) send({ t:'text', text })
 })
-// Keys that produce no text still have to travel.
+// Editing shortcuts and keys that produce no text still have to travel.
+// Leave clipboard shortcuts local: paste reaches us as the sink's input text,
+// not a key asking remote Chrome to use its unrelated clipboard.
 sink.addEventListener('keydown', (e) => {
-  if (['Backspace','Enter','Tab','ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Escape'].includes(e.key)) {
+  const editing = (e.metaKey || e.ctrlKey) && ['a', 'z', 'y'].includes(e.key.toLowerCase())
+  if (editing || ['Backspace','Delete','Home','End','PageUp','PageDown','Enter','Tab','ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Escape'].includes(e.key)) {
     e.preventDefault()
     send({ t:'key', key:e.key, modifiers:mods(e) })
   }
@@ -622,6 +625,7 @@ sink.addEventListener('keydown', (e) => {
 const takeover = document.getElementById('takeover')
 const handback = document.getElementById('handback')
 const profileFromPath = () => location.pathname.split('/').filter(Boolean)[1]
+const claimant = () => new URLSearchParams(location.search).get('by') || ('viewer-' + profileFromPath())
 const applyWatching = () => {
   document.body.classList.toggle('watching', watching)
   takeover.hidden = !watching
@@ -633,21 +637,7 @@ const applyWatching = () => {
   handback.hidden = watching
   msg.textContent = watching ? 'watching — press Take over to type' : ''
 }
-takeover.addEventListener('click', async () => {
-  const profile = profileFromPath()
-  if (!profile) return
-  try {
-    const r = await fetch('/api/browsers/' + profile + '/wheel/take', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ by: 'viewer-' + profile }),
-    })
-    if (!r.ok) { msg.textContent = 'could not take the wheel'; return }
-    watching = false
-    applyWatching()
-    announceMode()
-  } catch { msg.textContent = 'could not reach muxpad' }
-})
+takeover.addEventListener('click', () => takeTheWheel())
 
 // The page opens in whatever mode the link asked for, before anyone clicks.
 applyWatching()
@@ -706,23 +696,32 @@ handback.addEventListener('click', async () => {
  * told why, with the keyboard up, beats a keyboard that appears and vanishes,
  * which is the exact failure this whole area has been fighting.
  */
+// One grant in flight; HTTP completion order must never choose the field.
+let takingWheel = false
+let pendingTap = null
 async function takeTheWheel(at) {
+  if (at) pendingTap = at
+  if (takingWheel) return
   const profile = profileFromPath()
   if (!profile) return
+  takingWheel = true
   try {
     const r = await fetch('/api/browsers/' + profile + '/wheel/take', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ by: 'viewer-' + profile }),
+      body: JSON.stringify({ by: claimant() }),
     })
     if (!r.ok) { msg.textContent = 'could not take the wheel — press Take over'; return }
     watching = false
     applyWatching()
     announceMode()
     msg.textContent = 'you are driving now'
-    send({ t: 'mouse', type: 'mousePressed', ...at, buttons: 1, clickCount: 1, modifiers: 0 })
-    send({ t: 'mouse', type: 'mouseReleased', ...at, buttons: 0, clickCount: 1, modifiers: 0 })
-  } catch { msg.textContent = 'could not reach muxpad' }
+    if (window.top !== window) window.parent.postMessage({ muxpad: 'takeover', by: claimant() }, location.origin)
+    if (pendingTap) {
+      send({ t: 'mouse', type: 'mousePressed', ...pendingTap, buttons: 1, clickCount: 1, modifiers: 0 })
+      send({ t: 'mouse', type: 'mouseReleased', ...pendingTap, buttons: 0, clickCount: 1, modifiers: 0 })
+    }
+  } catch { msg.textContent = 'could not reach muxpad' } finally { takingWheel = false; pendingTap = null }
 }
 
 /**
@@ -924,8 +923,12 @@ const showLogin = (on) => {
 }
 loginBtn.addEventListener('click', () => showLogin(true))
 document.getElementById('loginCancel').addEventListener('click', () => showLogin(false))
-document.getElementById('loginForm').addEventListener('submit', (e) => {
+document.getElementById('loginForm').addEventListener('submit', async (e) => {
   e.preventDefault()
+  // Filling credentials changes the remote page just as typing does. A watch
+  // viewer must acquire the wheel first, and keep the form local on refusal.
+  if (watching) await takeTheWheel()
+  if (watching) return
   const user = document.getElementById('loginUser')
   const pass = document.getElementById('loginPass')
   send({ t: 'fillLogin', username: user.value, password: pass.value })

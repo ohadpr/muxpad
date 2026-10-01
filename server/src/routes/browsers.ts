@@ -1,11 +1,13 @@
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { type BrowserAppState, ensureBrowserApp, listBrowserApps } from '../browser/BrowserApps.js';
 import { type BrowserEvent, BrowserEvents } from '../browser/BrowserEvents.js';
 import { BrowserOwner } from '../browser/BrowserOwner.js';
-import { normalizeProfileName } from '../browser/BrowserProfile.js';
+import { browserJarPath, normalizeProfileName } from '../browser/BrowserProfile.js';
 import { browserViewerLink, parseBrowserProxyPath } from '../browser/BrowserProxy.js';
 import { browserShotPath, saveBrowserShot } from '../browser/BrowserShots.js';
 import {
@@ -14,6 +16,7 @@ import {
   type NeedsYou,
   type WheelLease,
 } from '../browser/BrowserWheel.js';
+import { type StorageState, mergeCookieChanges } from '../browser/CookieJar.js';
 import {
   agentPaneForTab,
   nudgeForHandback,
@@ -491,6 +494,42 @@ export function browsersRoutes(deps: {
     }
   });
 
+  // ONE writer for the shared jar: browser hosts submit deltas here instead of
+  // racing full snapshots on disk. No await between read and atomic rename, so
+  // requests in this server cannot interleave their read/modify/write.
+  app.post('/:profile/cookies', async (c) => {
+    const profile = profileParam(c.req.param('profile'));
+    if (!profile || !find(profile)) return c.json({ error: 'no such browser' }, 404);
+    const cookie = z.object({
+      name: z.string(),
+      value: z.string(),
+      domain: z.string(),
+      path: z.string(),
+      expires: z.number(),
+      httpOnly: z.boolean(),
+      secure: z.boolean(),
+      sameSite: z.enum(['Strict', 'Lax', 'None']),
+    });
+    const state = z.object({ cookies: z.array(cookie), origins: z.array(z.unknown()) });
+    const parsed = z
+      .object({ seed: state, current: state })
+      .safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ error: 'invalid cookie export' }, 400);
+    const path = browserJarPath(deps.dataDir);
+    let jar: StorageState = { cookies: [], origins: [] };
+    try {
+      jar = JSON.parse(readFileSync(path, 'utf8'));
+    } catch (err) {
+      // Do not overwrite a jar we could not read, except on the ordinary first run.
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    }
+    const merged = mergeCookieChanges(jar, parsed.data.seed, parsed.data.current);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path + '.tmp', JSON.stringify(merged));
+    renameSync(path + '.tmp', path);
+    return c.json({ ok: true });
+  });
+
   app.get('/:profile', (c) => {
     const profile = profileParam(c.req.param('profile'));
     if (!profile) return c.json({ error: 'invalid profile name' }, 400);
@@ -607,7 +646,7 @@ export function browsersRoutes(deps: {
     const held = wheel.holder(profile);
     // BEFORE the `resolved` below, which is the thing that closes it.
     const waiting = outstandingSummons(events.list(profile));
-    wheel.release(profile, parsed.data.by);
+    const released = wheel.release(profile, parsed.data.by);
     // Handed back: the errand is over, so the card retires. Only for the person
     // who actually held it — a failed release must not retire somebody's card.
     if (held?.by === parsed.data.by && held.holder === 'human') {
@@ -630,7 +669,7 @@ export function browsersRoutes(deps: {
     // a LOGIN has just happened. Harvest it into the shared jar now, so the next
     // session starts warm — otherwise the login only ever reaches whoever
     // happens to call /storage-state later, which is nobody.
-    void harvestJar(state.viewerUrl).catch(() => {});
+    if (released && held?.holder === 'human') void harvestJar(state.viewerUrl).catch(() => {});
     return c.json(view(state));
   });
 

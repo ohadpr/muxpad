@@ -992,14 +992,15 @@ describe('every control is wired at the TOP LEVEL of the script', () => {
     expect(depthOf(needle)).toBe(0);
   });
 
-  it('the takeover handler still puts the page into driving mode', () => {
+  it('the takeover handler still puts the page into driving mode', async () => {
     // Twice a splice ate this line while cutting the handler in half, and the
     // button then changed a variable and nothing else.
     const src = script();
-    const handler = src.slice(src.indexOf('takeover.addEventListener'));
-    const body = handler.slice(0, handler.indexOf('\n})'));
-    expect(body).toContain('watching = false');
-    expect(body).toContain('applyWatching()');
+    expect(src).toContain("takeover.addEventListener('click', () => takeTheWheel())");
+    const h = run({ search: '?mode=watch' });
+    h.el('takeover').fire('click');
+    await h.settle();
+    expect(h.el('handback').hidden).toBe(false);
   });
 });
 
@@ -1467,4 +1468,86 @@ describe('the touchable sink never covers a control', () => {
   it('and the sink claims no layer of its own to compete with it', () => {
     expect(css('#sink')).not.toContain('z-index');
   });
+});
+
+describe('takeover ordering', () => {
+  it('coalesces taps while the grant is pending and replays only the latest', async () => {
+    const h = ready(run({ search: '?mode=watch' }));
+    h.receive({ t: 'fields', rects: [[0, 0, 390, 844]] });
+    h.el('screen').fire('pointerdown', { clientX: 100, clientY: 125 });
+    h.el('screen').fire('pointerdown', { clientX: 100, clientY: 225 });
+    await h.settle();
+    expect(h.fetches.filter((f) => f.url.endsWith('/wheel/take'))).toHaveLength(1);
+    expect(h.sent.filter((m) => m.t === 'mouse' && m.type === 'mousePressed')).toEqual([
+      expect.objectContaining({ y: 225 }),
+    ]);
+  });
+});
+
+it('claims with the parent identity and reports successful takeover', async () => {
+  const h = run({ search: '?mode=watch&by=pane-7', framed: true });
+  h.el('takeover').fire('click');
+  await h.settle();
+  expect(JSON.parse(h.fetches.find((f) => f.url.endsWith('/wheel/take'))!.body!)).toEqual({
+    by: 'pane-7',
+  });
+  expect(h.posted).toContainEqual({ muxpad: 'takeover', by: 'pane-7' });
+});
+
+describe('desktop editing through the text sink', () => {
+  it.each([
+    { key: 'a', metaKey: true, modifiers: 4 },
+    { key: 'a', ctrlKey: true, modifiers: 2 },
+    { key: 'z', metaKey: true, modifiers: 4 },
+    { key: 'Delete', modifiers: 0 },
+  ])('forwards $key with its modifiers', (event) => {
+    const h = ready(run({ width: 1200 }));
+    h.el('screen').fire('pointerdown', { clientX: 50, clientY: 50 });
+    let prevented = false;
+    h.el('sink').fire('keydown', {
+      ...event,
+      preventDefault() {
+        prevented = true;
+      },
+    });
+    expect(h.sent).toContainEqual({ t: 'key', key: event.key, modifiers: event.modifiers });
+    expect(prevented).toBe(true);
+  });
+
+  it('leaves the paste shortcut local so input carries the clipboard text', () => {
+    const h = run();
+    let prevented = false;
+    h.el('sink').fire('keydown', {
+      key: 'v',
+      metaKey: true,
+      preventDefault() {
+        prevented = true;
+      },
+    });
+    h.el('sink').value = 'pasted text';
+    h.el('sink').fire('input');
+    expect(prevented).toBe(false);
+    expect(h.sent.filter((m) => m.t === 'key')).toEqual([]);
+    expect(h.sent).toContainEqual({ t: 'text', text: 'pasted text' });
+  });
+});
+
+it('takes the wheel before filling a login from watch mode', async () => {
+  const h = run({ search: '?mode=watch' });
+  h.el('loginUser').value = 'person';
+  h.el('loginPass').value = 'secret';
+  h.el('loginForm').fire('submit');
+  expect(h.sent.some((m) => m.t === 'fillLogin')).toBe(false);
+  await h.settle();
+  expect(h.fetches.some((f) => f.url.endsWith('/wheel/take'))).toBe(true);
+  expect(h.sent).toContainEqual({ t: 'fillLogin', username: 'person', password: 'secret' });
+});
+
+it('keeps a refused watch-mode login local', async () => {
+  const h = run({ search: '?mode=watch', fetchOk: false });
+  h.el('loginPass').value = 'secret';
+  h.el('loginForm').fire('submit');
+  await h.settle();
+  expect(h.sent.some((m) => m.t === 'fillLogin')).toBe(false);
+  expect(h.el('loginPass').value).toBe('secret');
 });

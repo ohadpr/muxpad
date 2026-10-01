@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -709,4 +709,74 @@ describe('handing the browser back wakes the agent that asked', () => {
     expect(res.status).toBe(200);
     expect(resumed).toEqual([]);
   });
+});
+
+describe('cookie exports from independently seeded browsers', () => {
+  const cookie = (name: string, value = 'login') => ({
+    name,
+    value,
+    domain: 'example.com',
+    path: '/',
+    expires: -1,
+    httpOnly: true,
+    secure: true,
+    sameSite: 'Lax',
+  });
+  const state = (cookies: unknown[]) => ({ cookies, origins: [] });
+  it('preserves another session login when an older empty snapshot arrives', async () => {
+    await ensure();
+    const exportState = (seed: unknown[], current: unknown[]) =>
+      post('/api/browsers/shopping/cookies', {
+        seed: state(seed),
+        current: state(current),
+      });
+    expect((await exportState([], [cookie('new-login')])).status).toBe(200);
+    expect((await exportState([], [])).status).toBe(200);
+    const jar = JSON.parse(
+      readFileSync(join(tempDataDir, 'browser-profiles/shared.cookies.json'), 'utf8'),
+    );
+    expect(jar.cookies).toEqual([cookie('new-login')]);
+    // An unchanged stale cookie must not roll back a refreshed login either.
+    await exportState([cookie('new-login')], [cookie('new-login', 'fresh')]);
+    await exportState([cookie('new-login')], [cookie('new-login')]);
+    expect(
+      JSON.parse(readFileSync(join(tempDataDir, 'browser-profiles/shared.cookies.json'), 'utf8'))
+        .cookies,
+    ).toEqual([cookie('new-login', 'fresh')]);
+    // Logging out of the stale session cannot delete that refreshed login.
+    await exportState([cookie('new-login')], []);
+    expect(
+      JSON.parse(readFileSync(join(tempDataDir, 'browser-profiles/shared.cookies.json'), 'utf8'))
+        .cookies,
+    ).toEqual([cookie('new-login', 'fresh')]);
+    // A logout of the current session does remove its own unchanged login.
+    await exportState([cookie('new-login', 'fresh')], []);
+    expect(
+      JSON.parse(readFileSync(join(tempDataDir, 'browser-profiles/shared.cookies.json'), 'utf8'))
+        .cookies,
+    ).toEqual([]);
+  });
+
+  it('does not harvest a watch-only close or a rejected release', async () => {
+    await ensure();
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{}'));
+    try {
+      await del('/api/browsers/shopping/wheel', { by: 'watcher' });
+      await post('/api/browsers/shopping/wheel/take', { by: 'holder' });
+      await del('/api/browsers/shopping/wheel', { by: 'watcher' });
+      expect(fetcher.mock.calls.some(([url]) => String(url).endsWith('/storage-state'))).toBe(
+        false,
+      );
+    } finally {
+      fetcher.mockRestore();
+    }
+  });
+});
+
+it('refuses an agent claim even when the human took the wheel under the same pane ID', async () => {
+  await ensure();
+  await post('/api/browsers/shopping/wheel/take', { by: 'pane-7' });
+  const claim = await post('/api/browsers/shopping/wheel/claim', { by: 'pane-7' });
+  expect(claim.status).toBe(409);
+  expect((await claim.json()).wheel.holder).toBe('human');
 });
