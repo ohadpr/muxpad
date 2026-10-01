@@ -741,7 +741,7 @@ export function attachWsServer(deps: {
    * idempotent for every consumer (a waiter is already waiting, the Archiver
    * dedupes by sid), so a duplicate is strictly better than a gap.
    */
-  const emitOptimisticTurnStart = (paneId: string): void => {
+  const emitOptimisticTurnStart = (paneId: string, queueId?: string): void => {
     const conn = agentRunners.get(paneId);
     if (!conn) return;
     // Mirror the optimism into the PERSISTED turn state too. The runner's real
@@ -758,6 +758,7 @@ export function attachWsServer(deps: {
       phase: 'start',
       sid: conn.sid,
       backend: conn.backend,
+      ...(queueId ? { queue_id: queueId } : {}),
     });
   };
   const sendToRunner = (paneId: string, frame: ServerFrame): boolean => {
@@ -1138,7 +1139,7 @@ export function attachWsServer(deps: {
       conn.pendingSendText = next.text;
       if (isHumanMessage(next.text)) conn.lastHumanSendAt = conn.lastSendAt;
       deps.cache.setAgentBusy(paneId, true);
-      emitOptimisticTurnStart(paneId);
+      emitOptimisticTurnStart(paneId, next.id);
       queue.remove(next.id, paneId);
       broadcastQueue(paneId);
     }
