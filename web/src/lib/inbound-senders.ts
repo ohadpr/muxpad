@@ -33,6 +33,7 @@ interface Entry {
 
 const cache = new Map<string, Entry>();
 const inFlight = new Map<string, Promise<InboundSender[]>>();
+const dirty = new Set<string>();
 /** True once the route has 404ed — an older server with no provenance table. */
 let unsupported = false;
 
@@ -47,26 +48,38 @@ const NO_MATCHES: ReadonlyMap<string, string> = new Map();
  * Resolves to the previous answer — or an empty list — on any failure rather
  * than rejecting. An unattributed message renders exactly as it did before this
  * feature existed, which is the correct degradation.
+ *
+ * `changed` says a new user message has ARRIVED since the last ask — the one
+ * event that makes the list stale, so it bypasses the freshness window. If it
+ * lands while a read is in flight, that read may predate the new row, so every
+ * caller awaits a trailing read as well (the same shape as lib/spawn-rounds).
+ * Without this, a brief delivered within FRESH_MS of the previous fetch got the
+ * old list back and stayed unattributed until some unrelated message arrived.
  */
-export async function loadInboundSenders(tabId: string): Promise<InboundSender[]> {
+export async function loadInboundSenders(tabId: string, changed = false): Promise<InboundSender[]> {
   if (unsupported) return NO_SENDERS;
-  const hit = cache.get(tabId);
-  if (hit && Date.now() - hit.at < FRESH_MS) return hit.senders;
   const running = inFlight.get(tabId);
+  if (changed && running) dirty.add(tabId);
   if (running) return running;
-  const p = req<SendersResponse>(`/api/tabs/${encodeURIComponent(tabId)}/inbound-senders`)
-    .then((res) => {
-      const senders = res.senders ?? [];
-      cache.set(tabId, { at: Date.now(), senders });
-      return senders;
-    })
-    .catch((err: unknown) => {
-      if ((err as { status?: number } | null)?.status === 404) unsupported = true;
-      return cache.get(tabId)?.senders ?? NO_SENDERS;
-    })
-    .finally(() => {
-      inFlight.delete(tabId);
-    });
+  const hit = cache.get(tabId);
+  if (!changed && hit && Date.now() - hit.at < FRESH_MS) return hit.senders;
+  const p = (async () => {
+    let senders = hit?.senders ?? NO_SENDERS;
+    do {
+      dirty.delete(tabId);
+      try {
+        const res = await req<SendersResponse>(`/api/tabs/${encodeURIComponent(tabId)}/inbound-senders`);
+        senders = res.senders ?? [];
+        cache.set(tabId, { at: Date.now(), senders });
+      } catch (err: unknown) {
+        if ((err as { status?: number } | null)?.status === 404) unsupported = true;
+      }
+    } while (!unsupported && dirty.has(tabId));
+    return senders;
+  })().finally(() => {
+    inFlight.delete(tabId);
+    dirty.delete(tabId);
+  });
   inFlight.set(tabId, p);
   return p;
 }
@@ -126,6 +139,7 @@ export function matchInboundSenders(
 /** Test seam — drops the module cache and the older-server latch. */
 export function resetInboundSendersCache(): void {
   cache.clear();
+  dirty.clear();
   inFlight.clear();
   unsupported = false;
 }

@@ -2439,10 +2439,16 @@ export function ChatPane({
     }
     return null;
   }, [events]);
+  /** The newest user id the last fetch was asked for. A DIFFERENT one on the
+   *  same tab is a delivery, which is staleness the 4s cache cannot see. */
+  const askedForUserId = useRef<{ tab: string; id: string } | null>(null);
   useEffect(() => {
     if (!myTabId || !newestUserId) return;
+    const prev = askedForUserId.current;
+    const arrived = prev !== null && prev.tab === myTabId && prev.id !== newestUserId;
+    askedForUserId.current = { tab: myTabId, id: newestUserId };
     let live = true;
-    void loadInboundSenders(myTabId).then((s) => {
+    void loadInboundSenders(myTabId, arrived).then((s) => {
       if (live) setInboundSenders(s);
     });
     return () => {

@@ -1,7 +1,12 @@
 import type { ChatEvent, InboundSender } from '@muxpad/shared';
 import { inboundTextKey } from '@muxpad/shared';
-import { describe, expect, it } from 'vitest';
-import { NO_SENDERS, matchInboundSenders } from './inbound-senders';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  NO_SENDERS,
+  loadInboundSenders,
+  matchInboundSenders,
+  resetInboundSendersCache,
+} from './inbound-senders';
 
 const user = (id: string, text: string, ts: number | null = 1): ChatEvent =>
   ({ kind: 'user', id, ts, text }) as ChatEvent;
@@ -88,5 +93,58 @@ describe('matchInboundSenders', () => {
     // The common case by far — a chat nobody has ever sent into. The map is the
     // shared empty one, so every memo downstream holds.
     expect(matchInboundSenders([], NO_SENDERS).size).toBe(0);
+  });
+});
+
+/**
+ * The fetch is keyed on "a new user message arrived" — so that arrival is
+ * evidence the cached list is stale, whatever the TTL says. Without that, a
+ * brief landing within four seconds of the last fetch got the old list back and
+ * stayed unattributed until some unrelated user message re-ran the effect.
+ */
+describe('loadInboundSenders', () => {
+  const ok = (senders: InboundSender[]) =>
+    ({ ok: true, status: 200, json: async () => ({ senders }) }) as Response;
+
+  beforeEach(() => {
+    resetInboundSendersCache();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('reuses a fresh answer when nothing has arrived', async () => {
+    const f = vi.fn(async () => ok([]));
+    vi.stubGlobal('fetch', f);
+    await loadInboundSenders('t');
+    await loadInboundSenders('t');
+    expect(f).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-asks inside the freshness window when a new message arrived', async () => {
+    const f = vi
+      .fn()
+      .mockResolvedValueOnce(ok([]))
+      .mockResolvedValueOnce(ok([row('the brief', 't-boss')]));
+    vi.stubGlobal('fetch', f);
+    expect(await loadInboundSenders('t')).toEqual([]);
+    const got = await loadInboundSenders('t', true);
+    expect(got.map((s) => s.from_tab_id)).toEqual(['t-boss']);
+  });
+
+  it('re-asks after a read that was already in flight when the message arrived', async () => {
+    let finish!: (response: Response) => void;
+    const f = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise<Response>((r) => { finish = r; }))
+      .mockResolvedValueOnce(ok([row('the brief', 't-boss')]));
+    vi.stubGlobal('fetch', f);
+    const first = loadInboundSenders('t');
+    const changed = loadInboundSenders('t', true);
+    finish(ok([]));
+    await first;
+    expect((await changed).map((s) => s.from_tab_id)).toEqual(['t-boss']);
+    expect(f).toHaveBeenCalledTimes(2);
   });
 });
