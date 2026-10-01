@@ -483,23 +483,23 @@ export function tabsRoutes(deps: {
   app.post('/reorder', async (c) => {
     const body = z.object({ ids: z.array(z.string()) }).parse(await c.req.json());
     tabs.reorder(body.ids);
-    // TODO(events): STILL SILENT, and the reason is worth being precise about
-    // because the old note ("the poll covers this") was wrong twice over.
+    // ANNOUNCE IT. This was silent, and the old note excusing that ("the poll
+    // covers this") was wrong twice over: the poll is stopped for a hidden
+    // document and a collapsed workspace — every second device — and the drag
+    // is not merely a tiebreak, because the pinned block is ordered purely by
+    // `position`, so re-ordering inside it has a fully visible result that no
+    // other client ever saw.
     //
-    // The poll does not cover it: it is stopped for a hidden document and a
-    // collapsed workspace, which is every second device. And this is not only a
-    // tiebreak — the PINNED block is ordered purely by `position`
-    // (orderedForWorkspace partitions a position-sorted read; sortSidebarTabs
-    // leaves that slice alone), so dragging within it is a pure position change
-    // with a fully visible result that no other client ever sees.
+    // Coarse by necessity, not by laziness: see TabsReorderedEventSchema for
+    // why a per-row `tab.updated` provably cannot carry a position change.
     //
-    // A per-row `tab.updated` genuinely cannot carry it: Tab has no `position`,
-    // and the client's applyTabRow re-sorts with its CURRENT index as the
-    // tiebreak, so it would reproduce the order it already holds. This needs a
-    // coarse event — `{type:'tabs.reordered', workspace_id}` in
-    // shared/src/types.ts, routed in web/src/main.tsx next to tab.added as
-    // `void refreshTabs(e.workspace_id)`. Both files are outside this change's
-    // reach; the route has `tabs.getWorkspaceId(body.ids[0])` ready for it.
+    // Read the workspace from the FIRST id rather than trusting the caller to
+    // send one: the ids are the request's only subject, and a reorder that
+    // spans two workspaces is not a thing this route can express. An empty
+    // list (or an id whose row vanished between the write and here) means
+    // there is no workspace to tell, and a reorder of nothing changed nothing.
+    const workspaceId = body.ids[0] ? tabs.getWorkspaceId(body.ids[0]) : undefined;
+    if (workspaceId) deps.events.emit({ type: 'tabs.reordered', workspace_id: workspaceId });
     return c.body(null, 204);
   });
 
