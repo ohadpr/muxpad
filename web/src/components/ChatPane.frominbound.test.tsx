@@ -141,8 +141,9 @@ describe('the wiring in ChatPane', () => {
   it('asks the server once per conversation, keyed on messages actually arriving', () => {
     // Not a poll. A chat the human types into has unattributed bubbles by
     // definition, so "re-ask while something is unattributed" would re-ask
-    // forever; the newest user message is the real staleness signal.
-    expect(SRC).toContain('loadInboundSenders(myTabId)');
+    // forever; the newest user message is the real staleness signal — and a
+    // NEW one (`arrived`) bypasses the loader's freshness window.
+    expect(SRC).toContain('loadInboundSenders(myTabId, arrived)');
     expect(SRC).toContain('}, [myTabId, newestUserId]);');
     expect(SRC.split('const inboundByEvent').length - 1).toBe(1);
   });
