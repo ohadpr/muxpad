@@ -2,7 +2,7 @@ import { fallbackTabIcon } from '@muxpad/shared';
 import { useNavigate } from '@tanstack/react-router';
 import { Fragment, type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { type ArchiveSearchHit, api } from '../api';
-import { cachedAllTabs, loadAllTabs } from '../lib/all-tabs';
+import { cachedAllTabs, loadAllTabs, subscribeAllTabs } from '../lib/all-tabs';
 import { type MentionSearchState, NO_MENTION_SEARCH, hitsFor } from '../lib/chat-mention';
 import { setLastPaneId } from '../lib/last-visited';
 import type { NavTreeVariantName } from '../lib/nav-row-affordances';
@@ -125,6 +125,15 @@ export function NavSearch({
   // though nothing has been fetched on this component's account.
   const { workspaces: allWorkspaces } = useWorkspaces();
   const [remote, setRemote] = useState<WorkspaceTabs[] | null>(() => cachedAllTabs());
+  // …and FOLLOWED, not snapshotted. `setRemote` used to run only when a focus
+  // fetch landed, so a chat deleted or renamed by another client while the box
+  // stayed focused kept being searched as it was — a dead destination still
+  // selectable, a new name unfindable — although the shared corpus had already
+  // patched it, and reconnect/visibility recovery healed everyone but this.
+  // `remote` outranks the workspace fallback, so nothing else could repair it.
+  // Subscribing makes this one more reader of the one corpus (as ChatPane is);
+  // it does not fetch, so the box is still lazy until focused.
+  useEffect(() => subscribeAllTabs(setRemote), []);
   const corpus = useMemo<SearchableTab[]>(() => {
     const groups: WorkspaceTabs[] =
       remote ??
