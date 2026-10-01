@@ -672,10 +672,22 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
           }
           return;
         }
-        const detail = await api.getTab(found.id);
+        // Fenced like the resync below. On a RELOAD (loadNonce — most often
+        // persistLayout's refetch after it skipped a concurrent tab.updated)
+        // the subscription is live, so a pane.added / tab.updated landing
+        // while this GET is on the wire is applied first and would then be
+        // rolled back by the older answer. Null = every answer was overtaken
+        // and the held tab is newer; only possible once a tab is held, since
+        // nothing moves the generation before then.
+        const detail = await fetchUnsuperseded(
+          () => api.getTab(found.id),
+          () => detailGeneration.current,
+        );
         if (cancelled) return;
-        setTab(detail);
-        layoutRef.current = toMosaic(detail.layout);
+        if (detail) {
+          setTab(detail);
+          layoutRef.current = toMosaic(detail.layout);
+        }
         viewedTabId = found.id;
         // Mark-seen on mount is deliberately NOT done here anymore — a
         // bulk tab-seen on mount would clear every pane's attention
