@@ -76,6 +76,22 @@ import type { WorkspaceTabs } from './nav-search';
 let cache: WorkspaceTabs[] | null = null;
 let settledAt = 0;
 let inFlight: Promise<WorkspaceTabs[]> | null = null;
+/**
+ * Bumped by everything that knows something NEWER than a request already in
+ * flight: a push, a merged workspace list, a status edge. (A resync has its own
+ * queue below and needs none of this.)
+ *
+ * ─── AN OLDER ANSWER MUST NOT OVERWRITE A NEWER ONE ──────────────────────────
+ * `/tabs/all` issued before a push can land after it, carrying the pre-push row.
+ * `loadAllTabs` used to publish it regardless and call the corpus fresh — the
+ * renamed chat got its old name back, a retired one went back to `working`, on
+ * every chip and card, and nothing healed it (no poll; and a status-edge fetch
+ * fired meanwhile simply JOINED the stale request). The per-workspace cache in
+ * `tabs.ts` guards its fetches with versions for exactly this; the corpus had no
+ * equivalent. So a request remembers the generation it was issued at, and a
+ * landing that finds it moved is not published — the next fetch is, instead.
+ */
+let generation = 0;
 const listeners = new Set<(groups: WorkspaceTabs[]) => void>();
 
 function publish(next: WorkspaceTabs[]): void {
@@ -105,7 +121,17 @@ export function subscribeAllTabs(fn: (groups: WorkspaceTabs[]) => void): () => v
  * do not hold is simply not our business yet — the next `loadAllTabs` gets it.
  */
 const unsubscribeLive = subscribe((e) => {
-  if (!cache) return;
+  if (!cache) {
+    // Nothing to patch — but a FIRST fetch may be travelling, and it was asked
+    // before this event happened. Mark it superseded so its answer is not
+    // served as current (see `generation`). Still no fetch of our own.
+    if (
+      inFlight &&
+      (e.type === 'tab.updated' || e.type === 'tab.added' || e.type === 'tab.removed')
+    )
+      generation++;
+    return;
+  }
   if (e.type === 'tab.updated') {
     let hit = false;
     const next = cache.map((g) => {
@@ -120,7 +146,10 @@ const unsubscribeLive = subscribe((e) => {
     // rankTabs) rather than displayed in its stored order, so re-sorting it
     // would be work with no reader — and `sortSidebarTabs` is the sidebar's
     // business, applied to the sidebar's own cache.
-    if (hit) publish(next);
+    if (hit) {
+      generation++;
+      publish(next);
+    }
     return;
   }
   if (e.type === 'tab.added') {
@@ -139,6 +168,7 @@ const unsubscribeLive = subscribe((e) => {
     // short-circuited by FRESH_MS. This costs no request of its own; it only
     // declines to serve a known-incomplete answer as a current one. (Reachable
     // whenever a workspace is created after the corpus was fetched.)
+    generation++;
     if (hit) publish(next);
     else settledAt = 0;
     return;
@@ -150,7 +180,10 @@ const unsubscribeLive = subscribe((e) => {
       hit = true;
       return { ...g, tabs: g.tabs.filter((t) => t.id !== e.tab_id) };
     });
-    if (hit) publish(next);
+    if (hit) {
+      generation++;
+      publish(next);
+    }
   }
 });
 
@@ -237,7 +270,11 @@ function publishFetched(next: WorkspaceTabs[]): WorkspaceTabs[] {
  * corpus nobody has asked for stays unasked-for.
  */
 export function mergeWorkspaceTabs(workspaceId: string, tabs: readonly Tab[]): void {
-  if (!cache) return;
+  if (!cache) {
+    // A list that landed while the first corpus fetch travels is newer than it.
+    if (inFlight) generation++;
+    return;
+  }
   const group = cache.find((g) => g.id === workspaceId);
   // A workspace outside the corpus we hold — nothing to merge into. Same
   // reasoning as `tab.added` above: an id with no name is not a group.
@@ -248,6 +285,7 @@ export function mergeWorkspaceTabs(workspaceId: string, tabs: readonly Tab[]): v
   // including `ChatPane`, which is a transcript. That is exactly the poll-on-
   // everything this module exists to avoid, arriving through the back door.
   if (rowsSignature(group.tabs) === rowsSignature(tabs)) return;
+  generation++;
   publish(cache.map((g) => (g.id === workspaceId ? { ...g, tabs: [...tabs] } : g)));
 }
 
@@ -305,6 +343,10 @@ export function refreshCorpusForTab(tabId: string): void {
       edgeTimer = null;
       lastEdgeFetchAt = Date.now();
       settledAt = 0;
+      // A request already travelling was asked before this edge; joining it
+      // would hand back the pre-edge status. Superseding it makes its landing
+      // queue the fetch this edge needs (see `loadAllTabs`).
+      if (inFlight) generation++;
       void loadAllTabs();
     },
     Math.max(CORPUS_EDGE_MS, CORPUS_EDGE_MIN_GAP_MS - since),
@@ -316,6 +358,14 @@ export function refreshCorpusForTab(tabId: string): void {
  * reconnect + visibility events cannot stack a fetch each.
  */
 let refetchQueued = false;
+
+/**
+ * Superseded landings in a row. A cockpit pushing continuously could otherwise
+ * supersede every retry; past this many the corpus keeps the pushes it holds,
+ * stays NOT-fresh (`settledAt` untouched), and the next `loadAllTabs` asks again.
+ */
+const MAX_SUPERSEDED_RETRIES = 3;
+let supersededRetries = 0;
 
 /**
  * Reconnect, and document-visible — the backstop for everything the pushes
@@ -390,9 +440,20 @@ export async function loadAllTabs(): Promise<WorkspaceTabs[]> {
   if (unsupported) return cache ?? [];
   if (cache && Date.now() - settledAt < FRESH_MS) return cache;
   if (inFlight) return inFlight;
+  const issuedAt = generation;
+  let superseded = false;
   inFlight = api
     .listAllTabs()
     .then((res) => {
+      if (generation !== issuedAt) {
+        // Something newer than this answer arrived while it travelled (see
+        // `generation`). Keep what we hold, do NOT mark it fresh, and go again
+        // once this request has cleared. With nothing held (a first fetch), an
+        // old answer beats none — the retry corrects it.
+        superseded = true;
+        return cache ?? publishFetched(res.workspaces);
+      }
+      supersededRetries = 0;
       settledAt = Date.now();
       // Landing is what makes the corpus fresh; publishing is only what tells
       // the readers, and an answer identical to the one they hold is not news.
@@ -406,6 +467,10 @@ export async function loadAllTabs(): Promise<WorkspaceTabs[]> {
     })
     .finally(() => {
       inFlight = null;
+      if (superseded && supersededRetries < MAX_SUPERSEDED_RETRIES) {
+        supersededRetries++;
+        void loadAllTabs();
+      }
     });
   return inFlight;
 }
@@ -417,6 +482,8 @@ export function resetAllTabsCache(): void {
   inFlight = null;
   unsupported = false;
   refetchQueued = false;
+  generation = 0;
+  supersededRetries = 0;
   if (edgeTimer !== null) {
     clearTimeout(edgeTimer);
     edgeTimer = null;
