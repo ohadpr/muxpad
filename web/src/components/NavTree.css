@@ -1317,8 +1317,39 @@
    the seam INSIDE a workspace, so it must read as a smaller break than the seam
    BETWEEN workspaces above — 10px against that 18px says that with one number,
    where a hairline against a hairline could only say it with weight. */
+/* THE PIN SEAM — and it is now actually drawn.
+   It was `height: 10px` and nothing else: an empty box. The JSX above it calls
+   it "a hairline" and the rail had no hairline, so the only thing separating
+   "you arranged these" from "these arrange themselves" was a gap — reported as
+   "no indicator no line just a bit of spacing. not good". A comment asserting
+   something the stylesheet never did.
+   `--border` and the 8px/4px insets are the `.navtree-foot` rule's, which is
+   this sheet's existing hairline and the one it should match. */
 .navtree-pin-divider {
-  height: 10px;
+  height: 0;
+  margin: 5px 8px 5px calc(var(--nt-pad) + var(--nt-indent));
+  border-top: 1px solid var(--border);
+}
+
+/* THE PIN ITSELF, VISIBLE AT REST ON A PINNED ROW.
+   `.navtree-pin` is a `.navtree-close`, and those collapse to `width: 0;
+   opacity: 0` until the row is hovered. So "a pinned tab keeps its pin lit —
+   that is the only 'this is pinned' signal in the rail, by design" (NavTree.tsx)
+   described something that has never once been on screen: the only rule for
+   `.is-pinned` set a COLOUR, on hover, on a box with no width.
+   Pinning is a state the user chose and expects to see, so the glyph holds its
+   square and its accent without being asked, and goes to full on hover with
+   every other control. */
+.navtree-tab-row > .navtree-tab-controls > .navtree-pin.is-pinned {
+  flex: 0 0 18px;
+  width: 18px;
+  opacity: 0.75;
+  color: var(--accent);
+}
+
+.navtree-tab-row:hover > .navtree-tab-controls > .navtree-pin.is-pinned,
+.navtree-tab-row > .navtree-tab-controls > .navtree-pin.is-pinned:focus-visible {
+  opacity: 1;
 }
 
 /* ─── Sheet pane list (mobile: tab row expands into its panes) ───────── */
