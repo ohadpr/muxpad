@@ -742,6 +742,8 @@ export const AgentTurnEventSchema = z.object({
   phase: z.enum(['start', 'done', 'fatal']),
   sid: z.string().nullable(),
   backend: z.string(),
+  /** Present only when this start relays this durable queue row. */
+  queue_id: z.string().optional(),
 });
 
 export const MuxpadEventSchema = z.discriminatedUnion('type', [
