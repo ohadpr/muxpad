@@ -20,7 +20,6 @@ import { tabRowAffordances } from '../lib/nav-row-affordances';
 import { nextCronLabel, railCronLabel } from '../lib/next-cron-label';
 import { PANE_DRAG_MIME, type PaneDragOrigin, paneDragOrigin } from '../lib/pane-drag';
 import { reorderByDrop } from '../lib/reorder';
-import { useFrozenSheetOrder } from '../lib/sheet-order';
 import { orderAfterPinnedDrop, paneDropAction } from '../lib/tab-drag';
 import { useFrozenTabOrder } from '../lib/tab-freeze';
 import { tabRowActions } from '../lib/tab-row-actions';
@@ -1356,25 +1355,37 @@ export function TabList({
   // find the seam. Deriving `pinnedCount` rather than re-sorting keeps one
   // authority for ordering and means a poll can never fight a local sort.
   //
-  // The single exception is the tab you're LOOKING AT: it is pinned in place
-  // visually for as long as it's active (useFrozenTabOrder) and settles into
-  // its sorted position when you leave. Being in a tab is itself activity —
-  // it bumps `last_activity_at` on every turn — so without this the row under
-  // your cursor climbs the list while you use it and drags every other row
-  // with it. This moves ONE row and never writes: the server's order is
-  // untouched, and every other tab keeps re-sorting live underneath.
+  // The single exception is the tab you're LOOKING AT: it holds the best
+  // position it has reached for as long as it's active (useFrozenTabOrder) and
+  // settles into its sorted place when you leave. Being in a tab is itself
+  // activity, so without this the row under your cursor gets shoved about by
+  // every other chat that goes busy. It moves ONE row and never writes.
   //
-  // The SHEET freezes the WHOLE list instead, for as long as it is open — see
-  // lib/sheet-order. Its rows carry almost no marks any more, so order is most
-  // of what the list still says, and a quiet list that reshuffles under a
-  // thumb is worse than a noisy stable one. The two freezes are exclusive: the
-  // one-row freeze is handed a null active id on the sheet so the list-wide
-  // one is the only thing deciding order there.
+  // ─── THE SHEET USED TO FREEZE THE WHOLE LIST ───────────────────────────────
+  // For as long as it was open, on the reasoning that the sheet's rows carry
+  // almost no marks any more — so order is most of what the list says, and a
+  // quiet list that reshuffles under a thumb loses the row you were reaching
+  // for. The premise is true. The conclusion does not follow: it argues for the
+  // order being RIGHT, and freezing whatever was cached when the sheet opened
+  // is how it ends up wrong.
+  //
+  // Which is what was reported — "if I go to mobile the sort order of the tabs
+  // is not right, this thing doesn't auto update". On a phone the document is
+  // hidden most of the time, so the 5s poll is stopped and the cache can be
+  // minutes old; the sheet then snapshotted THAT and held it for the whole
+  // visit, so a correction arriving a second after you opened it could never
+  // land. The list was not slow. It was frozen at the wrong moment.
+  //
+  // And the cost the freeze was buying is smaller here than it looks: the sheet
+  // is open for a few seconds at a time, so the window in which a reshuffle
+  // could steal a tap is narrow — while being stale lasts the entire visit.
+  //
+  // So both surfaces now run the same rule, which is also one fewer place for
+  // "what order is this list in" to be decided. lib/sheet-order is deleted.
   const sheet = variant === 'sheet';
   const activeTabId =
     (isActiveWorkspace && serverTabs.find((t) => t.slug === activeTabSlug)?.id) || null;
-  const railOrder = useFrozenTabOrder(serverTabs, sheet ? null : activeTabId);
-  const tabs = useFrozenSheetOrder(railOrder, sheet);
+  const tabs = useFrozenTabOrder(serverTabs, activeTabId);
 
   // ── The live list, the done group, and the nesting ──────────────────────
   // groupChats is pure and unit-tested (NavTree.chats.test.tsx) — it decides
