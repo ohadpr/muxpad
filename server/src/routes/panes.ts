@@ -1184,6 +1184,19 @@ export function panesScopedRoutes(deps: {
     const id = c.req.param('id');
     const pane = panes.getById(id);
     if (!pane) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    // ─── READING A CHAT IS ACTIVITY, ON THE PHONE TOO ───────────────────────
+    // The tab route stamps `last_activity_at` here for the same reason, and
+    // stamping it THERE ONLY is a bug with a surface attached: desktop clears
+    // read-state with `markTabSeen` and mobile with `markPaneSeen`, so the fix
+    // for "when I touch a chat it doesn't go to the top" worked on the machine
+    // and did nothing on the phone — which is where the sidebar's order was
+    // reported wrong in the first place. Two routes mean the same thing to the
+    // user ("I am looking at this"), so both have to say it.
+    //
+    // Keyed to the pane's TAB, because the sidebar sorts tabs; forced, for the
+    // same bounded-fan-out reason given on the tab route (`canReorder`
+    // suppresses the emit for a row that is already the most recent).
+    deps.tabActivity?.touchTab(pane.tab_id, { force: true });
     // Viewing clears both read-state flags: the "done, unreviewed" bold
     // (persisted) and the BEL red dot (ptyd runtime). Emit pane.updated so the
     // bold drops immediately instead of waiting for the next nav poll.
