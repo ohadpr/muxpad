@@ -21,6 +21,7 @@ import {
   CronScheduler,
   type CronSchedulerDeps,
 } from './CronScheduler.js';
+import { parseCronMarker } from '@muxpad/shared';
 import { CRON_RUNS_KEEP } from './CronStore.js';
 
 const HOURLY = '0 * * * *';
@@ -434,6 +435,14 @@ describe('CronScheduler', () => {
     // …and the cron prompt still follows the briefing.
     expect(sent[0]?.text).toContain('check the PRs');
     expect(s.store.runs(cron.id)[0]?.detail).toContain('rotated at 95% context with carryover');
+    // The cron marker stays OUTERMOST. It is a leading-block grammar shared by
+    // the server's human-send bookkeeping, the runner and the transcript
+    // renderer; a carryover prepended ahead of it made the fire read as typed
+    // by a person to all three.
+    const parsed = parseCronMarker(sent[0]?.text ?? '');
+    expect(parsed?.marker.id).toBe(cron.id);
+    expect(parsed?.body).toContain('<muxpad-carryover>');
+    expect(parsed?.body).toContain('check the PRs');
   });
 
   it('refuses to rotate when no briefing can be produced', async () => {

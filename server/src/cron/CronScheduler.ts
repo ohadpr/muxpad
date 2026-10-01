@@ -14,6 +14,7 @@
 // layer up, which is the entire thing this replaces (§6 risk 1).
 import {
   type Cron,
+  type CronMarker,
   type CronRun,
   DEFAULT_AGENT_MODE,
   coerceAgentMode,
@@ -342,13 +343,19 @@ export class CronScheduler {
     missed: number,
     now: number,
   ): Promise<CronFireResult> {
-    const text = renderCronMarker({ id: cron.id, name: cron.name, at: dueAt, missed }, cron.prompt);
+    const marker: CronMarker = { id: cron.id, name: cron.name, at: dueAt, missed };
+    const text = renderCronMarker(marker, cron.prompt);
     return cron.target_kind === 'new-tab'
       ? this.fireNewTab(cron, text, now)
-      : this.firePane(cron, text, now);
+      : this.firePane(cron, text, now, marker);
   }
 
-  private async firePane(cron: Cron, text: string, now: number): Promise<CronFireResult> {
+  private async firePane(
+    cron: Cron,
+    text: string,
+    now: number,
+    marker: CronMarker,
+  ): Promise<CronFireResult> {
     const paneId = cron.target_pane;
     if (!paneId) return { outcome: 'error', detail: 'no target pane' };
     const pane = this.panes.getById(paneId);
@@ -420,6 +427,12 @@ export class CronScheduler {
         // If we can't produce one, DON'T rotate. Losing a fire is recoverable
         // (the next slot comes around, and the run log says why this one
         // didn't); silently amnesiac output is not.
+        //
+        // The briefing goes INSIDE the cron marker, never ahead of it: the
+        // marker is a leading-block grammar (parseCronMarker) that the server's
+        // human-send bookkeeping, the runner and the transcript renderer all
+        // key on. Prepending the carryover made this fire read as typed by a
+        // person to every one of them.
         const carry = await this.carryoverFor(paneId);
         if (!carry)
           return {
@@ -429,7 +442,7 @@ export class CronScheduler {
           };
         const r = await this.fireNewTab(
           cron,
-          `${wrapCarryover(carry)}\n\n${text}`,
+          renderCronMarker(marker, `${wrapCarryover(carry)}\n\n${cron.prompt}`),
           now,
           workspaceId,
         );
