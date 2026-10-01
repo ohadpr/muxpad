@@ -388,14 +388,14 @@ describe('the keyboard on a phone', () => {
     expect(h.el('sink').focused).toBe(false);
   });
 
-  it('but never takes it back when you raised it by hand', () => {
-    // Some pages accept typing without focusing anything the host can see. The
-    // button is the override, and a focus report must not undo it.
-    const h = run();
-    h.el('kb').fire('click');
-    expect(h.el('sink').focused).toBe(true);
-    h.receive({ t: 'focus', editable: false });
-    expect(h.el('sink').focused).toBe(true);
+  it('and the by-hand override it used to defer to is gone', () => {
+    // There was a keyboard button, and code to stop a focus report overriding
+    // it. The button was removed from the bar and the code kept a stub that
+    // swallowed every call — so the override could never be switched on, and this
+    // test passed by clicking a control that does not exist: the stub DOM invents
+    // an element for any id you ask it for.
+    expect(VIEWER_HTML).not.toContain('id="kb"');
+    expect(script()).not.toContain('kbSticky');
   });
 
   it('raises NOTHING for a tap outside every known text field', () => {
@@ -1366,5 +1366,67 @@ describe('tapping a text field while watching just starts driving', () => {
     await h.settle();
     const hellos = h.sent.filter((m) => m.t === 'hello');
     expect(hellos[hellos.length - 1]?.mode).toBe('drive');
+  });
+});
+
+describe('the toolbar says what its controls do', () => {
+  const bar = (): string => {
+    const at = VIEWER_HTML.indexOf('<div id="bar">');
+    return VIEWER_HTML.slice(at, VIEWER_HTML.indexOf('</div>', at));
+  };
+
+  it('names the way out instead of drawing a hamburger', () => {
+    // The one control people actually have to find: opened from a card in a tab
+    // there is no browser chrome around this page and no modal to dismiss, so
+    // without it you are stranded. A glyph meaning "menu" everywhere else is a
+    // poor label for "leave".
+    expect(bar()).toContain('muxpad</a>');
+    expect(bar()).not.toContain('&#9776;');
+  });
+
+  it('gives every control a word, not just a symbol', () => {
+    // A row of glyphs is a guessing game, and this is a surface people reach in
+    // the middle of a login they did not plan for.
+    const labels = [...bar().matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((m) =>
+      (m[1] ?? '').replace(/&#\d+;/g, '').trim(),
+    );
+    expect(labels.length).toBeGreaterThan(4);
+    for (const label of labels) expect(label).toMatch(/[A-Za-z]/);
+  });
+
+  it('does not use the same symbol for reloading the page and updating muxpad', () => {
+    // Two identical reload arrows side by side, for unrelated things.
+    const arrows = [...bar().matchAll(/&#8635;/g)];
+    expect(arrows).toHaveLength(1);
+  });
+
+  it('says WHAT the update button updates', () => {
+    expect(bar()).toContain('Update muxpad');
+  });
+});
+
+describe('the touchable sink never covers a control', () => {
+  /**
+   * Making the sink touchable fixed the keyboard and created this: it is parked
+   * at the top-left until the first tap moves it, which is exactly where the way
+   * out lives. A tap on "muxpad" landed on a transparent input and was forwarded
+   * into the page.
+   *
+   * Over the STREAM it is harmless — a tap there is forwarded to the page anyway,
+   * which is the whole reason it shares the stream's handlers. Over the toolbar it
+   * is not, so the toolbar gets its own layer.
+   */
+  const css = (sel: string): string => {
+    const at = VIEWER_HTML.indexOf(`${sel}{`);
+    return VIEWER_HTML.slice(at, VIEWER_HTML.indexOf('}', at));
+  };
+
+  it('puts the toolbar on its own layer, above the sink', () => {
+    expect(css('#bar')).toContain('z-index:10');
+    expect(css('#bar')).toContain('position:relative');
+  });
+
+  it('and the sink claims no layer of its own to compete with it', () => {
+    expect(css('#sink')).not.toContain('z-index');
   });
 });
