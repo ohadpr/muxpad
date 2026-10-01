@@ -455,12 +455,27 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     // The accent stays, because a bold name alone cannot say which workspace you
     // are in; it is spent in a different SHAPE. Every header wears the same
     // neutral band, and the active one takes an edge.
-    const active = ruleBody(NAV_CSS, '.navtree-group > .navtree-ws-row[data-active="true"]');
-    expect(active).toMatch(/box-shadow:\s*inset 3px 0 0 var\(--accent\)/);
-    // No fill of its own — that is the whole point.
-    expect(active).not.toMatch(/background/);
-    // And an EDGE rather than a border, because a border would shift the row's
-    // content 3px and break the chevron column every header in the rail shares.
+    //
+    // WHERE that edge lives moved once more, and this is the part worth pinning.
+    // It was an inset shadow on the HEADER, which inherited the band's 6px
+    // radius: the stroke curved away at both corners and read as a notch, not
+    // an edge — and it was a second left edge in a column that already had the
+    // group's spine. They were always the same stroke. So the group's own
+    // border-left IS the edge now, and the active workspace simply inks it.
+    const group = ruleBody(NAV_CSS, '.navtree-group');
+    expect(group).toMatch(/border-left:\s*1px solid/);
+    const activeGroup = ruleBody(NAV_CSS, '.navtree-group[data-active="true"]');
+    expect(activeGroup).toMatch(/border-left-color:\s*var\(--accent\)/);
+    // Colour only: re-declaring the border would change the group's width and
+    // shift every row in it by a pixel when you switch workspaces.
+    expect(activeGroup).not.toMatch(/border-left:/);
+
+    const active = ruleBody(NAV_CSS, '.navtree-group > .navtree-ws-row[data-active="true"]:hover');
+    // No fill of its own — that is the whole point. (The only rule the active
+    // header still has is its hover step, which is a wash, not a selection.)
+    expect(active).not.toMatch(/background-color:\s*var\(--accent\)/);
+    // And no second marker on the header itself: no edge, no border.
+    expect(active).not.toMatch(/box-shadow/);
     expect(active).not.toMatch(/border-left/);
   });
 
