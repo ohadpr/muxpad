@@ -14,6 +14,8 @@ import { adoptServePanes } from './apps/adopt-serve-panes.js';
 import { ArchiveDb } from './archive/ArchiveDb.js';
 import { Archiver } from './archive/Archiver.js';
 import { ensureBrowserApp, listBrowserApps } from './browser/BrowserApps.js';
+import { BrowserWheel } from './browser/BrowserWheel.js';
+import { shouldStopIdleBrowser } from './browser/IdleStop.js';
 import { BrowserEvents } from './browser/BrowserEvents.js';
 import { BrowserOwner } from './browser/BrowserOwner.js';
 import { browserAppSlug, browserProfileDir } from './browser/BrowserProfile.js';
@@ -723,6 +725,69 @@ const reapSessionBrowsers = async () => {
     console.error('[browser] reap failed', err);
   }
 };
+// ─── AND STOP THE ONES NOBODY IS USING ──────────────────────────────────────
+// The reap above answers "is your tab gone?". That is the right question for a
+// DEAD session and the wrong one for memory: a browser whose tab is still open
+// is immortal, however long nobody has touched it. Measured on this machine —
+// two idle headless Chromes, one blank `chrome://newtab/` between them, 1.1 GB
+// each after four hours; and in the screenshot that prompted this, 22.37 GB
+// EACH, with macOS putting up "Your system has run out of application memory".
+//
+// Stopping an idle one costs nothing anybody notices, because the cold-start
+// bargain is already the design — `ensureBrowserApp` starts a browser on the
+// first CDP call and the route says so: "a small pause the first time something
+// browses, instead of a browser for every session that never does". This simply
+// makes that true for the SECOND time too.
+//
+// STOP, NOT REAP. The profile directory, the app row, the events and the stills
+// all stay: the tab is alive and its browser will be back, warm, with its
+// logins. Only the process goes.
+//
+// IDLENESS IS THE HOST'S ANSWER, not ours. Agent traffic rides one long-lived
+// CDP socket, so the HTTP route that opened it sees a single request and nothing
+// for the next hour — a server-side timestamp would call a browser being driven
+// hard "idle" and pull Chrome out from under a running agent. The host counts
+// attached sockets and reports `idleMs: 0` while any remain.
+const BROWSER_IDLE_STOP_MS = 20 * 60 * 1000;
+const stopIdleBrowsers = async () => {
+  try {
+    for (const row of listBrowserApps(db)) {
+      if (row.state !== 'running') continue;
+      const url = row.viewerUrl;
+      if (!url) continue;
+      type IdleReport = { agents: number; viewers: number; idleMs: number };
+      let idle: IdleReport | null = null;
+      try {
+        const res = await fetch(`${url}/idle`, { signal: AbortSignal.timeout(2_000) });
+        if (!res.ok) continue;
+        idle = (await res.json()) as IdleReport;
+      } catch {
+        // Unreachable or too old to know the route. SKIP — never stop a browser
+        // on a failed read, which is the same safe direction the reap takes.
+        continue;
+      }
+      if (
+        !shouldStopIdleBrowser({
+          report: idle,
+          running: true,
+          agentMayDrive: new BrowserWheel(db).canDrive(row.profile, 'agent'),
+          idleThresholdMs: BROWSER_IDLE_STOP_MS,
+        })
+      )
+        continue;
+      const appRow = new AppStore(db).getBySlug(row.slug);
+      if (!appRow) continue;
+      await appRegistry.stop(appRow.id);
+      console.log(
+        `[browser] stopped '${row.profile}' — idle ${Math.round(idle.idleMs / 60_000)}m, nobody attached`,
+      );
+    }
+  } catch (err) {
+    console.error('[browser] idle stop failed', err);
+  }
+};
+setInterval(() => void stopIdleBrowsers(), REAP_EVERY_MS).unref();
+
 setInterval(() => void reapSessionBrowsers(), REAP_EVERY_MS).unref();
 void reapSessionBrowsers();
 

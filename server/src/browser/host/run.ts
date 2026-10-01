@@ -321,7 +321,24 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
     webSocketDebuggerUrl: string;
   };
   const agentWss = new WebSocketServer({ noServer: true });
+  // WHO IS ACTUALLY HOLDING THIS BROWSER. Counted here rather than inferred
+  // anywhere else, because this process is the only one that knows: agent
+  // traffic rides a single CDP socket, so the HTTP route that opened it sees one
+  // request and nothing after. A reaper reading the route's timestamp would call
+  // a browser that is being driven hard "idle".
+  const agentSockets = new Set<WsSocket>();
+  // When the last client let go. Starts now, so a browser nobody ever attaches
+  // to still ages out from birth.
+  let lastEmptyAt = Date.now();
+  const noteClients = () => {
+    if (agentSockets.size === 0 && viewers.size === 0) lastEmptyAt = Date.now();
+  };
   agentWss.on('connection', (socket) => {
+    agentSockets.add(socket as unknown as WsSocket);
+    socket.on('close', () => {
+      agentSockets.delete(socket as unknown as WsSocket);
+      noteClients();
+    });
     bridgeAgentCdp(socket, agentVersion.webSocketDebuggerUrl, agentGate, (target) => {
       selectedAgentTarget = target;
     });
@@ -408,7 +425,10 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
     // forever: the compositor only commits on change, and a finished page never
     // changes again. Cost is one frame.
     void screencast.repaint();
-    socket.on('close', () => viewers.delete(socket));
+    socket.on('close', () => {
+      viewers.delete(socket);
+      noteClients();
+    });
     socket.on('message', (raw) => void handleInput(socket, raw.toString()));
     // A viewer that has just connected knows nothing about the page, so its
     // first tap would be a guess. Measure now, and keep measuring while it is
@@ -747,6 +767,24 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
           .writeHead(503, { 'content-type': 'application/json' })
           .end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
       }
+      return;
+    }
+    // HOW LONG HAS NOBODY WANTED THIS BROWSER. Read by the server's reaper,
+    // which cannot work this out for itself (see `agentSockets`). Reporting
+    // only — the decision to stop is the server's, because stopping ourselves
+    // would be a crash as far as `muxpad serve` is concerned and it would put
+    // us straight back up with its crash-loop backoff.
+    if (path === '/idle') {
+      const clients = agentSockets.size + viewers.size;
+      res.writeHead(200, { 'content-type': 'application/json' }).end(
+        JSON.stringify({
+          agents: agentSockets.size,
+          viewers: viewers.size,
+          // 0 while anyone is attached, so a busy browser can never read as idle
+          // however long its socket has been quiet.
+          idleMs: clients > 0 ? 0 : Date.now() - lastEmptyAt,
+        }),
+      );
       return;
     }
     if (path === '/healthz') {
