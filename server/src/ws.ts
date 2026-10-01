@@ -1025,8 +1025,8 @@ export function attachWsServer(deps: {
           // lifecycle hangs off — retirement, the spawn report, the round —
           // fires at TURN-END, and a dead runner never reaches one.
           //
-          // The POLICY (sub-chat only, not pinned, not multi-pane, reported as
-          // a crash) is tab-retire.ts's; this is the one line of fact. Same
+          // The POLICY (single-pane sub-chats report crashes; pins keep rows)
+          // is tab-retire.ts's; this is the one line of fact. Same
           // separation as the queue clear above, and the same reason cron's
           // keep-list is not re-derived here.
           deps.onRunnerDead?.(pane.id);
@@ -1042,16 +1042,25 @@ export function attachWsServer(deps: {
           } catch {
             // pane not in ptyd (reboot-orphaned) — ensurePane spawns it fresh
           }
-          const workspaceId = tabs.getWorkspaceId(pane.tab_id);
+          // Both probes awaited RPCs. Deletion, archival, or conversion in
+          // that gap revokes our ownership; never resurrect their stale row.
+          // This also picks up a resume repair or move made during the wait.
+          const fresh = panes.getById(pane.id);
+          if (
+            !fresh ||
+            fresh.kind !== 'shell' ||
+            !fresh.startup_cmd?.startsWith('muxpad agent') ||
+            tabs.clockRow(fresh.tab_id)?.retired_at !== null
+          )
+            continue;
+          const workspaceId = tabs.getWorkspaceId(fresh.tab_id);
           await deps.ptyd.ensurePane({
-            id: pane.id,
-            shell: pane.shell ?? process.env.SHELL ?? '/bin/zsh',
-            // Re-read: the dead-session heal above may have just rewritten it,
-            // and typing the stale `--resume` would reproduce the same fatal.
-            startup_cmd: panes.getById(pane.id)?.startup_cmd ?? pane.startup_cmd,
-            cwd: safeCwd(pane.cwd),
-            env: pane.env,
-            tab_id: pane.tab_id,
+            id: fresh.id,
+            shell: fresh.shell ?? process.env.SHELL ?? '/bin/zsh',
+            startup_cmd: fresh.startup_cmd,
+            cwd: safeCwd(fresh.cwd),
+            env: fresh.env,
+            tab_id: fresh.tab_id,
             ...(workspaceId !== undefined ? { workspace_id: workspaceId } : {}),
           });
         } catch {
@@ -1148,22 +1157,15 @@ export function attachWsServer(deps: {
     if (!t) return { status: 'rejected', reason: 'empty message' };
     const pane = panes.getById(paneId);
     if (!pane) return { status: 'rejected', reason: 'pane not found' };
-    // Living sidebar: the user addressing this pane is a discrete, deliberate
-    // act — forced, like turn-done. Recorded before the accept/queue/reject
-    // branch on purpose: a message the user MEANT to send is activity even if
-    // the agent turns out to be dead.
-    //
-    // It is also the one act that restarts the chat's decay clock (and revives
-    // it if the clock had already run out) — see TabActivity.noteUserMessage.
-    // THIS DOOR, rather than a broader one, because everything that reaches it
-    // is a message somebody chose to send: the chat composer, `muxpad agent
-    // send`, a cron firing into a pane. Turn-done and pty output take the
-    // recency path only, deliberately.
-    activity.noteUserMessage(pane.tab_id);
+    // An attempted send is attention even when rejected, but only accepted
+    // work may revive the chat or open a worker round. Record recency here;
+    // noteUserMessage below runs after relay/enqueue, before turn-start.
+    activity.touchTab(pane.tab_id, { force: true });
     const conn = agentRunners.get(paneId);
     // Fast path: agent free and nothing queued ahead of it → run immediately.
     if (conn && !conn.turnActive && queue.count(paneId) === 0) {
       if (sendToRunner(paneId, { t: 'send', text: t })) {
+        activity.noteUserMessage(pane.tab_id);
         conn.turnActive = true; // optimistic; runner's turn-start reaffirms
         conn.lastSendAt = Date.now();
         conn.pendingSendText = t;
@@ -1190,6 +1192,7 @@ export function attachWsServer(deps: {
         reason: `too many queued messages (max ${MAX_QUEUED_SENDS}) — wait for some to run`,
       };
     const row = queue.enqueue(paneId, t);
+    activity.noteUserMessage(pane.tab_id);
     broadcastQueue(paneId);
     // Nudge delivery: if the runner is idle we lost a relay race (drain now);
     // if it's absent, a sweep is the best "is it back yet?" probe.

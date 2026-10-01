@@ -511,6 +511,10 @@ export async function maybeWriteSpawnReport(
   model: SpawnReportModel,
   opts: {
     now?: number;
+    /** The captured closure still owns the tab; checked after every await. */
+    current?: () => boolean;
+    /** A valid historical result must not overwrite a newer job on the tab. */
+    writeTab?: () => boolean;
     /** The triggering turn ended `fatal`. */
     crashed?: boolean;
     /** The worker STOPPED TO ASK the user something (chat/awaiting.ts). A fact
@@ -537,6 +541,9 @@ export async function maybeWriteSpawnReport(
     force?: boolean;
   } = {},
 ): Promise<SpawnReportWrite | null> {
+  const current = opts.current ?? (() => true);
+  const writeTab = opts.writeTab ?? (() => true);
+  if (!current()) return null;
   const now = opts.now ?? Date.now();
   const crashed = opts.crashed === true;
   const awaiting = opts.awaiting === true;
@@ -558,7 +565,7 @@ export async function maybeWriteSpawnReport(
     // THE ARTIFACTS LAND EVEN WHEN NOTHING ELSE DOES. They are a regex over the
     // transcript, not a generation, so a refused reply has no bearing on them —
     // and a refused reply is exactly when the card most needs something in it.
-    tabs.setSpawnArtifacts(tabId, artifacts);
+    if (writeTab()) tabs.setSpawnArtifacts(tabId, artifacts);
     // A FACT we observed, written whether or not the model produced sentences:
     // the crash, and the question the worker stopped on. Both are the only thing
     // that stops its card reading as an ordinary delivery, and both would be
@@ -575,7 +582,7 @@ export async function maybeWriteSpawnReport(
     const state: SpawnReportState = endState === 'ok' && failed ? 'failed' : endState;
     if (state === 'ok' || tab.spawn_report_state === state) return null;
     const write: SpawnReportWrite = { report: null, state };
-    tabs.setSpawnReport(tabId, write, now);
+    if (writeTab()) tabs.setSpawnReport(tabId, write, now);
     return write;
   };
 
@@ -587,7 +594,7 @@ export async function maybeWriteSpawnReport(
   // retry. The round is CLOSED by the time we get here (the turn-end closes it
   // synchronously, ahead of this call, which is the whole reason retirement
   // never waits on a model), so the one that just ended is the one being
-  // reported on — and `writeResult` finds it again the same way.
+  // reported on. The writer captures its identity before awaiting the model.
   const rounds = new SpawnRoundStore(db);
   const round = rounds.openRound(tabId) ?? rounds.lastEnded(tabId);
   if (
@@ -614,6 +621,7 @@ export async function maybeWriteSpawnReport(
       abort.signal,
     );
   } catch (err) {
+    if (!current()) return null;
     // SAY SO. This was silent "by contract", and that contract was wrong: three
     // workers in one afternoon produced no summary and left not one line
     // anywhere to say why, so the only way to find out was to re-run the
@@ -625,7 +633,7 @@ export async function maybeWriteSpawnReport(
     // The CLOCK STILL ADVANCES — a child with no report yet
     // passes the gate unconditionally, so a persistent failure would otherwise
     // spawn a fresh subprocess on every finished turn indefinitely.
-    tabs.touchSpawnReportAt(tabId, now);
+    if (writeTab()) tabs.touchSpawnReportAt(tabId, now);
     // …AND THE ROW SAYS SO TOO. The log line above is for whoever is reading the
     // log; `failed` is the same fact where the person who spawned the worker
     // will actually meet it. Artifacts are a regex over the transcript with no
@@ -636,6 +644,7 @@ export async function maybeWriteSpawnReport(
     clearTimeout(timer);
   }
 
+  if (!current()) return null;
   const { report, nothing, reason } = parseSpawnReport(reply, conversation);
   if (reason) {
     // One line, at most once per child per interval (the clock below bounds it).
@@ -643,7 +652,7 @@ export async function maybeWriteSpawnReport(
     console.warn(
       `[spawn-report] rejected (${reason}) for tab ${tabId}: ${JSON.stringify(reply.trim().slice(0, 80))}`,
     );
-    tabs.touchSpawnReportAt(tabId, now);
+    if (writeTab()) tabs.touchSpawnReportAt(tabId, now);
     return fallback(scrapeArtifacts(conversation), true);
   }
   // THREE OUTCOMES, kept apart on the row so the card can say three different
@@ -656,7 +665,7 @@ export async function maybeWriteSpawnReport(
   const write: SpawnReportWrite = nothing
     ? { report: null, state: crashed ? 'crashed' : awaiting ? 'awaiting' : 'none', artifacts }
     : { report, state: endState, artifacts };
-  tabs.setSpawnReport(tabId, write, now);
+  if (writeTab()) tabs.setSpawnReport(tabId, write, now);
   return write;
 }
 

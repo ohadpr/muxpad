@@ -497,6 +497,58 @@ describe('SpawnReportWriter — a finished worker becomes a card', () => {
     expect(calls).toBe(0);
   });
 
+  it('discards a pending report when its round reopens', async () => {
+    let resolve!: (value: string) => void;
+    const { retirer, writer } = wire(() => new Promise<string>((r) => { resolve = r; }));
+    const kid = worker(parentChat());
+    const rounds = new SpawnRoundStore(db);
+    rounds.open(kid.tabId, 100);
+    rounds.close(kid.tabId, 200, { report: GOOD, state: 'ok' });
+    rounds.open(kid.tabId, 300);
+    finishJob(retirer, kid.paneId);
+    retirer.onTurnStart(kid.paneId);
+    resolve(SECOND);
+    await writer.idle();
+    expect(rounds.listByTab(kid.tabId).map((r) => r.report)).toEqual([GOOD, null]);
+    expect(new TabStore(db).getById(kid.tabId)?.spawn_report).toBeUndefined();
+    expect(reports()).not.toContain(SECOND);
+    retirer.stop();
+  });
+
+  it('lets a reclosed round report before its superseded generation returns', async () => {
+    const replies: Array<(value: string) => void> = [];
+    const { retirer, writer } = wire(() => new Promise<string>((r) => { replies.push(r); }));
+    const kid = worker(parentChat());
+    const rounds = new SpawnRoundStore(db);
+    rounds.open(kid.tabId, 100);
+    finishJob(retirer, kid.paneId);
+    retirer.onTurnStart(kid.paneId);
+    finishJob(retirer, kid.paneId);
+    expect(replies).toHaveLength(2);
+    replies[1]?.(SECOND);
+    replies[0]?.(GOOD);
+    await writer.idle();
+    expect(rounds.listByTab(kid.tabId)[0]?.report).toBe(SECOND);
+    expect(new TabStore(db).getById(kid.tabId)?.spawn_report).toBe(SECOND);
+    retirer.stop();
+  });
+
+  it('keeps a closed round result when a genuinely new job starts meanwhile', async () => {
+    let resolve!: (value: string) => void;
+    const { retirer, writer } = wire(() => new Promise<string>((r) => { resolve = r; }));
+    const kid = worker(parentChat());
+    const rounds = new SpawnRoundStore(db);
+    rounds.open(kid.tabId, 100);
+    finishJob(retirer, kid.paneId);
+    rounds.open(kid.tabId, Date.now() + 1);
+    retirer.onTurnStart(kid.paneId);
+    resolve(GOOD);
+    await writer.idle();
+    expect(rounds.listByTab(kid.tabId).map((r) => r.report)).toEqual([GOOD, null]);
+    expect(new TabStore(db).getById(kid.tabId)?.spawn_report).toBeUndefined();
+    retirer.stop();
+  });
+
   it('CLOSES THE ROUND at turn-end, and attaches the result when it lands', async () => {
     // Two moments, deliberately apart. The round closes SYNCHRONOUSLY — a
     // retirement must never sit behind a model call — and the sentences arrive
