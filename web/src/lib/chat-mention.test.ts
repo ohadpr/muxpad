@@ -199,11 +199,11 @@ describe('an explicit pick decides the recipient', () => {
     const corpus = [first, second];
     const { text, picks } = pickThenType('@work', 5, second, 'check it');
     expect(text).toBe('@Work review check it');
-    expect(parseDirective(text, corpus, picks)?.target.tabId).toBe('wr-2');
+    expect(parseDirective(text, corpus, picks)?.target?.tabId).toBe('wr-2');
     // …and picking the other one sends to the other one. Without the picks both
     // go to whichever the sort happens to put first.
     const other = pickThenType('@work', 5, first, 'check it');
-    expect(parseDirective(other.text, corpus, other.picks)?.target.tabId).toBe('wr-1');
+    expect(parseDirective(other.text, corpus, other.picks)?.target?.tabId).toBe('wr-1');
   });
 
   it('still gets the work to a chat RENAMED after it was picked', () => {
@@ -222,13 +222,25 @@ describe('an explicit pick decides the recipient', () => {
     // must not hijack the leading mention. The fallback is the old behaviour,
     // which is right for text typed by hand.
     const stray: MentionPick[] = [{ tabId: 'investing', name: 'Investing', start: 40 }];
-    expect(parseDirective('@Main repo run it', CORPUS, stray)?.target.tabName).toBe('Main repo');
+    expect(parseDirective('@Main repo run it', CORPUS, stray)?.target?.tabName).toBe('Main repo');
   });
 
-  it('ignores a pick for a chat that is no longer in the corpus', () => {
+  it('refuses, rather than redirects, when the picked chat is no longer in the corpus', () => {
+    // The user chose a chat; its absence from the corpus (deleted, merged, or a
+    // corpus that has not finished loading) is not evidence they chose another
+    // one. Re-resolving by name here used to hand the work to whichever chat
+    // shares the name — or, as here, to a different chat whose name is longer.
     const gone: MentionPick[] = [{ tabId: 'deleted', name: 'Main', start: 0 }];
-    // Resolution continues rather than failing: the name still reads as a chat.
-    expect(parseDirective('@Main repo run it', CORPUS, gone)?.target.tabName).toBe('Main repo');
+    expect(parseDirective('@Main repo run it', CORPUS, gone)).toEqual({
+      target: null,
+      missing: gone[0],
+      body: 'repo run it',
+    });
+    // The same-named case from the report: pick the second `Work review`, lose
+    // it, and the first one must NOT get the work.
+    const first = chat({ tabName: 'Work review', tabId: 'wr-1' });
+    const picked: MentionPick[] = [{ tabId: 'wr-2', name: 'Work review', start: 0 }];
+    expect(parseDirective('@Work review run the checks', [first], picked)?.target).toBeNull();
   });
 
   it('resolves the same way whatever order the corpus is in', () => {
@@ -237,8 +249,8 @@ describe('an explicit pick decides the recipient', () => {
     // destination through the day.
     const a = chat({ tabName: 'Work review', tabId: 'wr-1' });
     const b = chat({ tabName: 'Work review', tabId: 'wr-2' });
-    expect(parseDirective('@Work review go', [a, b])?.target.tabId).toBe(
-      parseDirective('@Work review go', [b, a])?.target.tabId,
+    expect(parseDirective('@Work review go', [a, b])?.target?.tabId).toBe(
+      parseDirective('@Work review go', [b, a])?.target?.tabId,
     );
   });
 });
@@ -314,7 +326,7 @@ describe('parseMentions — chips in rendered text', () => {
 describe('parseDirective — only a LEADING mention directs work', () => {
   it('reads @Name + text as a direction', () => {
     const d = parseDirective("@Investing what's the cash position?", CORPUS);
-    expect(d?.target.tabName).toBe('Investing');
+    expect(d?.target?.tabName).toBe('Investing');
     expect(d?.body).toBe("what's the cash position?");
   });
 
@@ -331,7 +343,7 @@ describe('parseDirective — only a LEADING mention directs work', () => {
 
   it('resolves the longest name, so the request reaches the right chat', () => {
     const d = parseDirective('@Main repo run the tests', CORPUS);
-    expect(d?.target.tabName).toBe('Main repo');
+    expect(d?.target?.tabName).toBe('Main repo');
     expect(d?.body).toBe('run the tests');
   });
 });
