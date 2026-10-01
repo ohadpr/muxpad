@@ -53,7 +53,11 @@ export function useAllChats(): { workspace: Workspace; tabs: Tab[] }[] {
       // An empty answer is real (no workspaces) but must not replace a usable
       // fallback when it came from a failed request — `loadAllTabs` resolves to
       // `cache ?? []` rather than rejecting. Same guard NavSearch uses.
-      if (groups.length > 0 || cachedAllTabs()) setCorpus(groups);
+      // A trailing refresh or push can publish before this promise callback.
+      // Read the held corpus now, never roll it back to the request's answer.
+      const current = cachedAllTabs();
+      if (current) setCorpus(current);
+      else if (groups.length > 0) setCorpus(groups);
     });
     return off;
   }, []);

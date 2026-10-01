@@ -134,3 +134,23 @@ describe('NavSearch — the corpus it searches is the shared, live one', () => {
     expect(options()).toHaveLength(0);
   });
 });
+
+it('does not overwrite a healed corpus with the older focus-request result', async () => {
+  let finish!: (v: { workspaces: WorkspaceTabs[] }) => void;
+  const old = SERVER;
+  listAllTabs.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  act(() => input().focus());
+  await act(async () => {
+    for (const h of handlers)
+      h({ type: 'tab.removed', tab_id: 'deleteme', workspace_id: 'w1' } as MuxpadEvent);
+    SERVER = [{ ...old[0]!, tabs: [tab('zzz', 'p')] }];
+    finish({ workspaces: old });
+  });
+  type('deleteme');
+  expect(host.querySelector('[role="option"]')).toBeNull();
+});

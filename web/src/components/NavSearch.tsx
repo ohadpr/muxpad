@@ -151,7 +151,11 @@ export function NavSearch({
       // An empty answer is a real answer (no workspaces), but it must not
       // REPLACE a usable fallback when it came from a failed request — see
       // loadAllTabs, which resolves to `cache ?? []` rather than rejecting.
-      if (groups.length > 0 || cachedAllTabs()) setRemote(groups);
+      // A trailing refresh or push can publish before this promise callback.
+      // Read the held corpus now, never roll it back to the request's answer.
+      const current = cachedAllTabs();
+      if (current) setRemote(current);
+      else if (groups.length > 0) setRemote(groups);
     });
   };
 
