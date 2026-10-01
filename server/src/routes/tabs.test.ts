@@ -6,6 +6,7 @@ import type { MuxpadEvent } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EventBus } from '../events.js';
+import { TabActivity } from '../tab-activity.js';
 import { TabStore } from '../store/TabStore.js';
 import { openDb } from '../store/db.js';
 import { type TestApp, createTestApp } from '../test-helpers/createTestApp.js';
@@ -514,6 +515,48 @@ describe('tabs routes', () => {
         expect(updated.tab.id).toBe(id);
         expect(updated.tab.unread).toBe(false);
         expect(updated.tab.status).not.toBe('ready');
+      }
+    });
+
+    it('POST /tabs/:id/seen STAMPS RECENCY — reading a chat is touching it', async () => {
+      // THE REPORT: "when I touch a chat, it doesn't go to the top of the list".
+      // It did not, and the list was not stale — `last_activity_at`, the column
+      // the sidebar sorts on, was moved by typing, by pty output and by a turn
+      // finishing, and by nothing else. Opening a chat and READING it wrote
+      // nothing, so the row you were sitting in went on getting older under you.
+      //
+      // Measured in the browser before the fix, against a two-hour-cold chat:
+      // opened it, waited past the 5s poll, and the stamp had not moved a
+      // millisecond (6679s → 6689s of age; index 8 → index 8).
+      const activity = new TabActivity(db, { startedAt: 0 });
+      const app = await createTestApp({ db, dataDir: tmp, events, tabActivity: activity });
+      try {
+        const wsRes = await app.app.request('/api/workspaces', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name: 'Recency' }),
+        });
+        const ws = (await wsRes.json()) as { id: string };
+        const res = await app.app.request('/api/tabs', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ workspace_id: ws.id, name: 'cold', layout: '' }),
+        });
+        const { id } = (await res.json()) as { id: string };
+        const tabs = new TabStore(db);
+        // Two hours cold, which is the case the report was about.
+        const cold = Date.now() - 2 * 60 * 60 * 1000;
+        db.prepare('UPDATE tabs SET last_activity_at = ? WHERE id = ?').run(cold, id);
+
+        await app.app.request(`/api/tabs/${id}/seen`, { method: 'POST' });
+
+        const after = tabs.getById(id)?.last_activity_at ?? 0;
+        expect(after).toBeGreaterThan(cold);
+        // And it is NOW, not some throttled approximation — the view is a
+        // discrete user moment, so it is a forced write.
+        expect(Date.now() - after).toBeLessThan(5_000);
+      } finally {
+        await app.cleanup();
       }
     });
 
