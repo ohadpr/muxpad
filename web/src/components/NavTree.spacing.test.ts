@@ -884,6 +884,61 @@ describe('the row’s × archives, and never reads as delete', () => {
  * noticing. (The third — the cron's nine-character `Thu 11:08` shape — is a
  * label, and lives in next-cron-label.test.)
  */
+describe('a revealed control never moves one that was already there', () => {
+  // THE REPORT: you move the pointer towards the workspace's "+", the row lights
+  // up, and the button now under your cursor is the × that deletes the workspace
+  // and every tab in it. Measured: "+" at x=240 at rest, x=220 on hover, with ×
+  // landing on 240 — a swap from "create a chat" to "destroy a workspace",
+  // under a cursor that had not moved.
+  //
+  // `.navtree-close` collapses to zero width at rest and claims 18px on hover,
+  // which is right for the LAST item in a right-aligned group and wrong for
+  // every other one. So the slot is reserved and only visibility changes.
+  it('reserves the workspace × so the + cannot be displaced', () => {
+    const body = ruleBody(
+      NAV_CSS,
+      '.navtree-ws-row > .navtree-tab-controls > .navtree-close:not(.navtree-ws-add)',
+    );
+    expect(Number.parseFloat(decl(body, 'width'))).toBe(18);
+  });
+
+  it('hides it with VISIBILITY, not opacity — a transparent button still takes the click', () => {
+    // The dangerous version of the same bug: a close button you cannot see,
+    // sitting in a reserved slot, is a workspace deleted with no warning at all.
+    const base = ruleBody(NAV_CSS, '.navtree-close');
+    expect(decl(base, 'visibility')).toBe('hidden');
+  });
+
+  it('keeps hiding at a specificity every reveal path outranks', () => {
+    // This is where it went wrong once: `:has()` carries the specificity of its
+    // argument, so a reservation scoped with `:has(.navtree-pin.is-pinned)`
+    // (three classes) beat `.navtree-tab-row:hover` (two) — and the archive
+    // stayed hidden on the row you were pointing at. Size and visibility are
+    // separate rules now: the reservations set width only.
+    for (const sel of [
+      '.navtree-tab-row:has(.navtree-pin.is-pinned) > .navtree-tab-rail > .navtree-archive',
+      '.navtree-tab-row:has(.navtree-cron) > .navtree-tab-rail > .navtree-pin:not(.is-pinned)',
+    ]) {
+      const body = ruleBody(NAV_CSS, sel);
+      expect(Number.parseFloat(decl(body, 'width'))).toBe(18);
+      expect(body).not.toMatch(/visibility/);
+    }
+  });
+
+  it('never hides the rail itself — the buttons live in it', () => {
+    // A rule here used to collapse the cell on a hovered row with no schedule,
+    // written when the cell held only the clock. Once the hover controls moved
+    // in beside it, `display: none` took the pin and the archive with them:
+    // hovering a pinned chat made both vanish and neither could be clicked.
+    const hidden = rules(NAV_CSS).filter(
+      (r) => r.atRules.length === 0 && /(?:^|;)\s*display:\s*none/.test(r.body),
+    );
+    expect(
+      hidden.flatMap((r) => r.selectors).filter((s) => /\.navtree-tab-rail$/.test(s.trim())),
+    ).toEqual([]);
+  });
+});
+
 describe('the trailing rail is ONE column, not three', () => {
   // Reported as horizontal "balagan": a pin at x=550 and a clock at x=597 down
   // the same list. The cause was structural — the row spent THREE grid tracks

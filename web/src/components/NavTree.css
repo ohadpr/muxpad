@@ -589,10 +589,28 @@
   margin-left: 0;
 }
 /* …and the spacing between them is charged only once they have width. */
+/* Charged in BOTH states, now that the slot it separates is reserved in both.
+   Applied on hover only, it moved the `+` another 2px the moment the row lit up
+   — the same defect the reservation above fixes, just small enough to read as a
+   twitch rather than a swap. A gap that appears is a gap that moves something. */
+.navtree-ws-row > .navtree-tab-controls > * + * {
+  margin-left: 2px;
+}
+
+/* Chat rows: charged in both states on the rows that RESERVE their slots, and
+   only on those. A hover-only margin shifted the clock 4px when the row lit up
+   — two gaps appearing between three now-permanent items.
+   Rows with an empty rail are deliberately excluded: their pin and archive are
+   zero-width, and a margin on a zero-width item is still space (the trap that
+   put this misalignment back twice already). */
+.navtree-tab-row:has(.navtree-cron) > .navtree-tab-rail > * + *,
+.navtree-tab-row:has(.navtree-pin.is-pinned) > .navtree-tab-rail > * + * {
+  margin-left: 2px;
+}
+
+/* Everything else keeps the gap only while the controls are actually out. */
 .navtree-tab-row:hover > .navtree-tab-rail > * + *,
-.navtree-tab-row:has(:focus-visible) > .navtree-tab-rail > * + *,
-.navtree-ws-row:hover > .navtree-tab-controls > * + *,
-.navtree-ws-row:has(:focus-visible) > .navtree-tab-controls > * + * {
+.navtree-tab-row:has(:focus-visible) > .navtree-tab-rail > * + * {
   margin-left: 2px;
 }
 .navtree-tab-row:hover > .navtree-tab-rail,
@@ -1125,6 +1143,11 @@
   cursor: pointer;
   user-select: none;
   opacity: 0;
+  /* NOT just transparent. A reserved slot has real width, and an invisible
+     button with width still takes the click — which on a workspace header is
+     the close button, so the accident would have been silent. `visibility`
+     removes it from hit-testing and keeps the box. */
+  visibility: hidden;
   transition: opacity 80ms ease, width 80ms ease, flex-basis 80ms ease, margin-left 80ms ease;
   /* Kill iOS's double-tap zoom delay so taps register instantly. */
   touch-action: manipulation;
@@ -1172,6 +1195,7 @@
   flex-basis: 18px;
   width: 18px;
   opacity: 1;
+  visibility: visible;
 }
 
 /* ── THE SCHEDULE AND THE BUTTONS ARE NEVER BOTH THERE ──────────────────────
@@ -1213,12 +1237,12 @@
   min-width: 0;
 }
 
-/* An EMPTY meta cell on a hovered row — every row with no schedule — collapses
-   completely, gutter and all, so the controls start where the name ends. */
-.navtree-tab-row:hover > .navtree-tab-rail:not(:has(.navtree-cron)),
-.navtree-tab-row:has(:focus-visible) > .navtree-tab-rail:not(:has(.navtree-cron)) {
-  display: none;
-}
+/* The rule that used to live here collapsed the cell on a hovered row with no
+   schedule — written when the cell held ONLY the schedule, and left behind when
+   the hover controls moved in beside it. `display: none` on the rail then took
+   the pin and the archive with it: hovering a pinned chat made both vanish and
+   neither could be clicked. Nothing may hide this cell; its CONTENTS hide
+   individually, which is what the `.navtree-cron-time` rule above does. */
 
 /* The glyph goes up to full strength on the row you are pointing at: it is the
    only thing left in the cell, so the 0.6 it wears as a prefix to a time reads
@@ -1400,6 +1424,7 @@
   flex: 0 0 18px;
   width: 18px;
   opacity: 0.75;
+  visibility: visible;
   color: var(--accent);
 }
 
@@ -1819,6 +1844,51 @@
    wears, at full strength, with the accent doing the work. */
 /* While the picker is open the button is the thing that opened it — say so, or
    the open list looks like it belongs to whatever is under it. */
+/* ─── A REVEALED CONTROL EXPANDS INTO THE NAME, NEVER INTO A NEIGHBOUR ──────
+   `.navtree-close` collapses to zero width at rest and claims 18px on hover.
+   In a right-aligned group that is fine for the LAST item and wrong for every
+   other one: the × is last on a workspace header, so revealing it took the
+   right-hand slot and shoved the `+` 20px left. Measured: `+` at x=240 at rest,
+   x=220 on hover, with × landing on 240.
+
+   The consequence is not cosmetic. You move the pointer towards `+`, the row
+   lights up, and the thing now under your cursor is the button that deletes the
+   workspace and every tab in it. Reported, correctly, as bad UX — and it is the
+   worst instance of a general rule this rail already follows everywhere else:
+   a control you reach for may appear, but it may not MOVE one that was already
+   there.
+
+   So the slot is RESERVED and only its visibility changes. These rules set the
+   size and nothing else: hiding lives on `.navtree-close` itself, at a
+   specificity the hover rules can beat. Putting both here was a bug — `:has()`
+   carries the specificity of its argument, so a reservation scoped with
+   `:has(.navtree-pin.is-pinned)` outranked `.navtree-tab-row:hover` and the
+   button stayed hidden on a row you were pointing at. */
+.navtree-ws-row > .navtree-tab-controls > .navtree-close:not(.navtree-ws-add) {
+  flex: 0 0 18px;
+  width: 18px;
+}
+
+/* Same rule for a CHAT row, and only where it can bite: the archive is the last
+   thing in the rail, so revealing it moves a pin or a clock sitting to its
+   left. A row with an empty rail has nothing to shove and keeps the width for
+   its name. */
+.navtree-tab-row:has(.navtree-pin.is-pinned) > .navtree-tab-rail > .navtree-archive,
+.navtree-tab-row:has(.navtree-cron) > .navtree-tab-rail > .navtree-archive {
+  flex: 0 0 18px;
+  width: 18px;
+}
+
+/* And the UNPINNED pin, on a row that has a clock. Revealing it is correct —
+   that button is how you pin — but it is 18px appearing to the clock's right,
+   which slid the clock 22px left on hover. Reserved only on scheduled rows,
+   which are few: on every other row the pin has nothing to displace and the
+   name keeps the width. */
+.navtree-tab-row:has(.navtree-cron) > .navtree-tab-rail > .navtree-pin:not(.is-pinned) {
+  flex: 0 0 18px;
+  width: 18px;
+}
+
 /* THE WORKSPACE'S "+", on its header row, beside the × it is the opposite of.
    `.navtree-close` gives it the 18px inset square and the hover surface every
    other row control wears; everything here is about the ONE way it differs —
@@ -1835,6 +1905,7 @@
   flex: 0 0 18px;
   width: 18px;
   opacity: 0.45;
+  visibility: visible;
 }
 
 .navtree-ws-row:hover > .navtree-tab-controls > .navtree-ws-add,
