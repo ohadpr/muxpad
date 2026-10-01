@@ -62,7 +62,15 @@
    controls — now needs 247px before the name track reaches zero, against 225px
    before. Below that the auto tracks overflow the row box and .navtree-scroll
    clips them; that was true before this pass and is 22px truer now. */
+/* THE SURFACE A ROW SITS ON, named by the surface itself.
+   The sticky workspace header has to be OPAQUE, and "opaque" means mixed into
+   whatever is actually behind it — which is not the same colour on both
+   surfaces: the rail hangs on `--bg-tabbar`, the mobile panel on `--bg-chrome`.
+   Mixing into the rail's base on the sheet produced a band a shade off its own
+   panel, visible as a seam the width of the header. One knob, set per variant,
+   so neither surface has to know about the other. */
 .navtree {
+  --nt-surface: var(--bg-tabbar);
   /* Row metrics + surfaces are the only things the variants disagree on. */
   --nt-row-ws: 32px;
   /* ONE LINE, and the chip decides the height: 6 + 24 + 6. It was 34px for a
@@ -306,8 +314,15 @@
    rows float off the rail's edges: the selected row is a band that runs edge to
    edge, and an inset pill is itself a floating object — a list whose one
    surface floats teaches the eye that the rows float too. */
+/* Top padding ZERO for the same reason the rail's is: a sticky header pins to
+   the top of the PADDING box, so any padding above it is a band the rows scroll
+   through in front of the header meant to be covering them. */
+.navtree[data-variant="sheet"] {
+  --nt-surface: var(--bg-chrome);
+}
+
 .navtree[data-variant="sheet"] .navtree-scroll {
-  padding: 2px 0 14px;
+  padding: 0 0 14px;
 }
 
 /* ─── The seam between workspaces is WHITESPACE ───────────────────────────
@@ -344,29 +359,34 @@
    Personal holds a hundred chats. Its header scrolls away within one screen and
    everything below it is unlabelled — the longer the list, the less the
    grouping is worth, which is backwards.
+   BOTH SURFACES. This was scoped to the rail, which was an oversight rather
+   than a decision: the sheet lists every workspace too now, in a panel shorter
+   than the rail, so it loses its header SOONER. Nothing here is rail-specific —
+   a grid row, a background and a `top: 0` all behave the same in the sheet's
+   scroller.
    The band above is what makes this possible at all: a sticky row has to be
    OPAQUE or the rows pass through it, and a transparent header would have
    needed a background inventing for it anyway. So the fill is mixed INTO
    `--bg-tabbar` rather than laid over it — sticky is the one state where the
    colour has to hide what is underneath instead of tinting it. */
-.navtree[data-variant="sidebar"] .navtree-group > .navtree-ws-row {
+.navtree-group > .navtree-ws-row {
   position: sticky;
   top: 0;
   z-index: 2;
   /* background-COLOR, never the shorthand: the shorthand resets every other
      background property, including the state tint a row can carry.
      StateChip.test pins that for exactly this reason. */
-  background-color: color-mix(in srgb, var(--fg) 6%, var(--bg-tabbar));
+  background-color: color-mix(in srgb, var(--fg) 6%, var(--nt-surface));
 }
 
-.navtree[data-variant="sidebar"] .navtree-group > .navtree-ws-row:hover {
-  background-color: color-mix(in srgb, var(--fg) 11%, var(--bg-tabbar));
+.navtree-group > .navtree-ws-row:hover {
+  background-color: color-mix(in srgb, var(--fg) 11%, var(--nt-surface));
 }
 
 /* The ACTIVE workspace reads warmer than the rest — the one thing a bold name
    alone could never say at a glance in a rail of three. */
-.navtree[data-variant="sidebar"] .navtree-group > .navtree-ws-row[data-active="true"] {
-  background-color: color-mix(in srgb, var(--accent) 16%, var(--bg-tabbar));
+.navtree-group > .navtree-ws-row[data-active="true"] {
+  background-color: color-mix(in srgb, var(--accent) 16%, var(--nt-surface));
 }
 
 /* ─── Workspace row (banded header) ──────────────────────────────────── */

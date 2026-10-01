@@ -463,12 +463,16 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     expect(Number.parseFloat(decl(body, 'margin-top'))).toBeGreaterThanOrEqual(8);
     // The band is what does the work now, and it is a background-COLOR: the
     // shorthand would reset the state tint a row can carry (see StateChip).
-    const band = ruleBody(
-      NAV_CSS,
-      '.navtree[data-variant="sidebar"] .navtree-group > .navtree-ws-row',
-    );
+    // Not variant-scoped: BOTH surfaces list every workspace now, and the
+    // sheet — being shorter — loses its header sooner than the rail does.
+    const band = ruleBody(NAV_CSS, '.navtree-group > .navtree-ws-row');
     expect(decl(band, 'background-color')).toMatch(/color-mix/);
     expect(decl(band, 'position')).toBe('sticky');
+    // Mixed into `--nt-surface`, which each variant sets to the thing actually
+    // behind it — the rail hangs on `--bg-tabbar`, the mobile panel on
+    // `--bg-chrome`. Using one of them for both left the sheet's sticky header a
+    // shade off its own panel, a seam the width of the header.
+    expect(decl(band, 'background-color')).toMatch(/--nt-surface/);
   });
   it('the pin seam IS a line, and one that can actually be seen', () => {
     // Reversed deliberately. The old rule was "paints nothing at all", on the
