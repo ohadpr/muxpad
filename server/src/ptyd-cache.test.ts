@@ -315,6 +315,38 @@ describe('PtydCache', () => {
       expect(cache.getCwd('p3')).toBe('/seed');
     });
 
+    // "Absent from the snapshot" is a statement about the moment ptyd TOOK it.
+    // A pane materialized after that moment is absent and alive: its first
+    // title/attention announcements land while the snapshot travels, and they
+    // are the newest truth in the system. ptyd's diff maps have now recorded
+    // them, so they will never be re-announced — a prune that blanked them
+    // would hold a ringing bell at `idle` for the life of that bell.
+    it('does not prune a pane first announced while the snapshot was in flight', async () => {
+      const cache = new PtydCache();
+      const c = respawnableClient();
+      let release: (() => void) | undefined;
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+      c.flushDecorations = async () => {
+        await gate;
+        return [];
+      };
+      cache.attach(c as unknown as PtydClient);
+      c.emit('connected');
+      // P spawns after ptyd took the (empty) snapshot, before it arrives here.
+      c.emit('paneTitle', { id: 'p1', title: 'build' });
+      c.emit('paneFg', { id: 'p1', cmd: 'make' });
+      c.emit('paneAttention', { id: 'p1', attention: true });
+      release?.();
+      await settle();
+
+      expect(cache.getTitle('p1')).toBe('build');
+      expect(cache.getFg('p1')).toBe('make');
+      expect(cache.getAttention('p1')).toBe(true);
+      expect(cache.getStatus('p1', false)).toBe('blocked');
+    });
+
     it('prunes nothing when the ptyd is too old for flushDecorations', async () => {
       // `decos` is null on that ptyd, so an empty `live` set would blank the
       // whole cockpit. The prune lives inside `if (decos)` for exactly this.

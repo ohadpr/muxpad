@@ -366,6 +366,14 @@ export class PtydCache extends EventEmitter {
           // still the right answer for a pane that is about to respawn.
           // `appUrls` also survives — the detector re-probes every 10s and
           // drops a dead listener on its own.
+          //
+          // "Absent from the snapshot" means absent when ptyd TOOK it, not
+          // now. A pane that materialized after that moment announces its
+          // first title/fg/attention while the snapshot travels — those land
+          // in `decoRacers`, are fresher than anything here, and ptyd's diff
+          // maps have recorded them, so they will never be re-sent. Blanking
+          // them held a ringing bell at `idle` until it rang again. So the
+          // racer veto is per field, exactly as in the loop above.
           for (const id of [...this.state.keys()]) {
             // A pane that exited mid-flight is legitimately absent from the
             // snapshot, and its entry is already gone; `update` would recreate
@@ -373,10 +381,11 @@ export class PtydCache extends EventEmitter {
             if (live.has(id) || exited.has(id)) continue;
             const s = this.state.get(id);
             if (!s) continue;
+            const raced = decoRacers.get(id);
             const patch: PaneState = {};
-            if (s.title !== undefined) patch.title = null;
-            if (s.fg !== undefined) patch.fg = null;
-            if (s.attention) patch.attention = false;
+            if (s.title !== undefined && !raced?.has('title')) patch.title = null;
+            if (s.fg !== undefined && !raced?.has('fg')) patch.fg = null;
+            if (s.attention && !raced?.has('attention')) patch.attention = false;
             if (s.busy) patch.busy = false;
             // The emptiness guard is load-bearing: `update` compares with
             // `!==`, so an unconditional `{busy: false}` on a pane whose busy
