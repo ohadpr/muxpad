@@ -45,7 +45,7 @@ import { PANE_DRAG_MIME, paneDragOrigin } from '../lib/pane-drag';
 import { usePaneFace } from '../lib/pane-face';
 import { consumePushFocusPane } from '../lib/push-focus';
 import { documentVisible, seenAckTarget, useDocumentVisible } from '../lib/seen-ack';
-import { applyTabUpdated, mergePaneUpdated } from '../lib/tab-detail-events';
+import { applyTabUpdated, fetchUnsuperseded, mergePaneUpdated } from '../lib/tab-detail-events';
 import { setTabViewMode, useTabViewMode } from '../lib/tab-view-mode';
 import { useDismissable } from '../lib/use-dismissable';
 import { freshTabs, refreshTabs, useTabs } from '../tabs';
@@ -245,6 +245,13 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
   // True when a tab.updated's layout was skipped mid-write — triggers a
   // refetch once writes settle (see persistLayout).
   const skippedTabUpdate = useRef(false);
+  // Moves on every structural change that reaches this tab by a route other
+  // than a detail GET — a pushed pane.added / pane.removed / tab.updated, or a
+  // local layout write. The reconnect resync captures it before fetching and
+  // discards an answer it overtook (see fetchUnsuperseded): `pendingLayoutWrites`
+  // only knows about OUR writes in flight, not about another client's pane that
+  // already arrived by push while the GET was on the wire.
+  const detailGeneration = useRef(0);
   const isMobile = useMediaQuery(MOBILE_BREAKPOINT);
   // Desktop 'tabbed' mode renders the same single-pane-at-a-time UI mobile is
   // forced into, so both share the "active pane" machinery below via
@@ -695,6 +702,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     async (layout: Layout) => {
       if (!tab) return;
       pendingLayoutWrites.current += 1;
+      detailGeneration.current += 1;
       try {
         // SERIALIZED PER TAB. A whole-layout PATCH is last-writer-wins, so two
         // rapid structural edits (split, then reorder) racing on the wire could
@@ -1029,12 +1037,14 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     const tabId = tab.id;
     return subscribe((e) => {
       if (e.type === 'pane.added' && e.tab_id === tabId) {
+        detailGeneration.current += 1;
         setTab((prev) =>
           prev && !prev.panes.some((p) => p.id === e.pane.id)
             ? { ...prev, panes: [...prev.panes, e.pane] }
             : prev,
         );
       } else if (e.type === 'pane.removed' && e.tab_id === tabId) {
+        detailGeneration.current += 1;
         setTab((prev) =>
           prev ? { ...prev, panes: prev.panes.filter((p) => p.id !== e.pane_id) } : prev,
         );
@@ -1043,11 +1053,14 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
           prev
             ? {
                 ...prev,
-                panes: prev.panes.map((p) => (p.id === e.pane.id ? mergePaneUpdated(p, e.pane) : p)),
+                panes: prev.panes.map((p) =>
+                  p.id === e.pane.id ? mergePaneUpdated(p, e.pane) : p,
+                ),
               }
             : prev,
         );
       } else if (e.type === 'tab.updated' && e.tab.id === tabId) {
+        detailGeneration.current += 1;
         // Skip the layout if we have a local layout write in flight — this
         // snapshot may predate it and would revert an optimistic split. But
         // REMEMBER the skip: the frame may also carry someone else's change
@@ -1093,9 +1106,18 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     if (!tab) return;
     const tabId = tab.id;
     return subscribeResync(() => {
-      void api
-        .getTab(tabId)
+      // Superseded answers are thrown away, not merged: a GET that left before
+      // another client's pane.added(Q) + tab.updated(P|Q) reached us answers
+      // with P alone, and installing it removed Q from state AND the mosaic —
+      // for good, since pane.updated only maps panes already held and nothing
+      // else re-adds one. Null = every answer was overtaken; what the events
+      // delivered is newer than all of them, so keep it.
+      void fetchUnsuperseded(
+        () => api.getTab(tabId),
+        () => detailGeneration.current,
+      )
         .then((detail) => {
+          if (!detail) return;
           // If a local layout write is in flight, this snapshot may predate it
           // — keep our optimistic layout + panes (the just-split pane isn't in
           // the server's copy yet) and take only the rest.

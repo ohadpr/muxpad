@@ -75,3 +75,27 @@ export function applyTabUpdated<T extends Tab>(prev: T, row: Tab, applyLayout: b
     updated_at: row.updated_at,
   };
 }
+
+/**
+ * Fetch a snapshot that no live event has overtaken.
+ *
+ * `generation` must move on every structural change that reached the caller by
+ * another route (a pushed pane.added / pane.removed / tab.updated, a local
+ * layout write). A response requested before such a change describes the world
+ * before it, and installing it rolls the change back — so it is discarded and
+ * the fetch is asked again. Bounded: after `attempts` superseded answers this
+ * resolves null and the caller keeps what the events gave it, which is newer
+ * than any of the snapshots it threw away.
+ */
+export async function fetchUnsuperseded<T>(
+  fetch: () => Promise<T>,
+  generation: () => number,
+  attempts = 3,
+): Promise<T | null> {
+  for (let i = 0; i < attempts; i++) {
+    const asked = generation();
+    const snapshot = await fetch();
+    if (generation() === asked) return snapshot;
+  }
+  return null;
+}
