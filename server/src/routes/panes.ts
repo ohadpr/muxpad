@@ -32,6 +32,7 @@ import { PaneStore } from '../store/PaneStore.js';
 import { TabStore } from '../store/TabStore.js';
 import { WorkspaceStore } from '../store/WorkspaceStore.js';
 import type { TabActivity } from '../tab-activity.js';
+import { retireOrphanedChild } from '../tab-retire.js';
 import { classifyUrlHost, probeUrlHealth } from '../url-health.js';
 
 const defaultShell = process.env.SHELL ?? '/bin/zsh';
@@ -667,6 +668,9 @@ export function panesScopedRoutes(deps: {
     deps.cache.forget(id);
     deps.tabActivity?.forgetPane(id);
     deps.events.emit({ type: 'pane.removed', tab_id: tabId, pane_id: id });
+    // No pane means no future turn-end or supervisor verdict can finish this
+    // child. Apply the same orphan transition as startup reconciliation now.
+    retireOrphanedChild(deps, tabId);
     // The tab's LAYOUT still names the pane we just deleted, and `pane.removed`
     // deliberately carries no layout — so every client holding this tab keeps a
     // leaf pointing at nothing (a phantom mosaic tile in split mode, a header

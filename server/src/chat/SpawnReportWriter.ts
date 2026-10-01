@@ -3,7 +3,7 @@ import type { EventBus } from '../events.js';
 import { decorateTab } from '../ptyd-cache.js';
 import type { PtydCache } from '../ptyd-cache.js';
 import { PaneStore } from '../store/PaneStore.js';
-import { SpawnRoundStore } from '../store/SpawnRoundStore.js';
+import { type SpawnRound, SpawnRoundStore } from '../store/SpawnRoundStore.js';
 import { type SpawnReportWrite, TabStore } from '../store/TabStore.js';
 import { clockIndex, isSubChat } from '../tab-clock.js';
 import { glossaryCache } from './glossary.js';
@@ -57,6 +57,7 @@ export class SpawnReportWriter {
   private readonly taskModel: SpawnTaskModel;
   private readonly glossary: () => readonly string[];
   private readonly inFlight = new Set<string>();
+  private closureAt = 0;
   /** Tabs whose task label has been ATTEMPTED this process — see `start`. */
   private readonly taskTried = new Set<string>();
   /**
@@ -170,9 +171,10 @@ export class SpawnReportWriter {
   /**
    * A sub-chat's work has ended. Wire this to `ChatRetirer`'s `onFinished`.
    *
-   * ONE in-flight generation per tab: a crash loop, or a worker revived and
+   * ONE in-flight generation per closure: a crash loop, or a worker revived and
    * finished twice inside a second, would otherwise stack calls that summarise
-   * nearly the same transcript and then race to write. The interval gate in
+   * nearly the same transcript and then race to write. A reopened round gets
+   * its own generation; the old one cannot block or overwrite it. The interval gate in
    * spawn-report.ts is the real limiter; this is the cheap one.
    */
   onFinished = (
@@ -188,15 +190,23 @@ export class SpawnReportWriter {
     // A no-op for a child whose rounds predate the table — it finishes turns
     // with nothing open, and an invented round with no beginning would be worse
     // than none.
-    new SpawnRoundStore(this.db).close(tabId, Date.now());
-    if (this.inFlight.has(tabId)) return;
-    this.inFlight.add(tabId);
+    const rounds = new SpawnRoundStore(this.db);
+    // Distinct closure generations even when a resume and finish share a tick.
+    this.closureAt = Math.max(Date.now(), this.closureAt + 1);
+    rounds.close(tabId, this.closureAt);
+    const round = rounds.lastEnded(tabId);
+    const key = `${tabId}:${round?.id}:${round?.ended_at}`;
+    if (this.inFlight.has(key)) return;
+    this.inFlight.add(key);
+    const current = () => this.isCurrent(tabId, round);
     const attempt = (force: boolean) =>
       maybeWriteSpawnReport(this.db, tabId, paneId, this.model, {
         crashed: opts.crashed,
         awaiting: opts.awaiting,
         glossary: this.glossary(),
         force,
+        current,
+        writeTab: () => this.ownsTab(tabId, round),
       });
     const run = attempt(false)
       .then(async (first) => {
@@ -212,6 +222,7 @@ export class SpawnReportWriter {
         // reading it as success would have quietly undone this retry the moment
         // the failure paths started recording themselves — the state exists to
         // describe a lost generation to the user, not to settle it.
+        if (!current()) return null;
         if (first && first.state !== 'failed') return first;
         if (this.retried.has(tabId)) return first;
         const row = new TabStore(this.db).getById(tabId);
@@ -220,14 +231,14 @@ export class SpawnReportWriter {
         return (await attempt(true)) ?? first;
       })
       .then((write) => {
-        this.deliver(tabId, write);
+        this.deliver(tabId, write, round);
       })
       .catch((err) => {
         // Logged, never surfaced. See the class note.
         console.error('[spawn-report] generation failed', err);
       })
       .finally(() => {
-        this.inFlight.delete(tabId);
+        this.inFlight.delete(key);
       });
     this.pending = this.pending.then(() => run);
   };
@@ -236,12 +247,23 @@ export class SpawnReportWriter {
    * One result, to the round and to every connected client. Shared by the
    * turn-end path and the boot sweep so the two cannot deliver differently.
    */
-  private deliver(tabId: string, write: SpawnReportWrite | null): void {
-    // The sentences arrive up to thirty seconds after the round closed, so
-    // they are attached to the round that ENDED rather than to whatever is
-    // open now — a worker re-tasked in the meantime must not have the
-    // previous round's result land on its new one.
-    if (write) new SpawnRoundStore(this.db).writeResult(tabId, write);
+  private isCurrent(tabId: string, round: SpawnRound | null): boolean {
+    const rounds = new SpawnRoundStore(this.db);
+    if (!round) return !rounds.openRound(tabId) && !rounds.lastEnded(tabId);
+    const fresh = rounds.listByTab(tabId).find((r) => r.id === round.id);
+    return fresh?.ended_at === round.ended_at;
+  }
+
+  private ownsTab(tabId: string, round: SpawnRound | null): boolean {
+    const rounds = new SpawnRoundStore(this.db);
+    return !rounds.openRound(tabId) && rounds.lastEnded(tabId)?.id === round?.id;
+  }
+
+  private deliver(tabId: string, write: SpawnReportWrite | null, round: SpawnRound | null): void {
+    // Reopening invalidates the captured closure. A NEW job does not: keep
+    // the historical result, but only the newest closed job may write the tab.
+    if (!this.isCurrent(tabId, round)) return;
+    if (write && round) new SpawnRoundStore(this.db).writeResult(tabId, write, round);
     // Nothing written is the common case — inside the interval, a worker with
     // no transcript — and it must reach nobody: an event per no-op is a repaint
     // per no-op on every connected client.
@@ -309,14 +331,17 @@ export class SpawnReportWriter {
       // crashed/awaiting are NOT re-asserted here. They are facts about a turn
       // this process never saw, and a row that carries either one is excluded by
       // the query anyway — only a NULL or `failed` state gets this far.
+      const round = new SpawnRoundStore(this.db).lastEnded(tabId);
       const run = maybeWriteSpawnReport(this.db, tabId, paneId, this.model, {
         crashed: false,
         awaiting: false,
         glossary: this.glossary(),
         force: true,
+        current: () => this.isCurrent(tabId, round),
+        writeTab: () => this.ownsTab(tabId, round),
       })
         .then((write) => {
-          this.deliver(tabId, write);
+          this.deliver(tabId, write, round);
         })
         .catch((err) => {
           console.error(`[spawn-report] boot sweep failed for tab ${tabId}`, err);

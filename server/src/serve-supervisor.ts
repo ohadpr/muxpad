@@ -154,9 +154,11 @@ export function createServeSupervisor(deps: ServeSupervisorDeps): ServeSuperviso
 
   const respawn = async (paneId: string): Promise<void> => {
     // Re-read: the sweep may be several awaits old by now, and the user could
-    // have edited the command or moved the pane in between.
-    const pane = panes.getById(paneId);
-    if (!pane || pane.kind !== 'shell') return;
+    // have edited the command, moved the pane, or stopped its owning app.
+    // Reuse the selection policy after hasPane: Stop disables the app before
+    // awaiting its kill, while the pane row and app pointer still exist.
+    const pane = panes.listServePanes().find((p) => p.id === paneId);
+    if (!pane) return;
     const workspaceId = tabs.getWorkspaceId(pane.tab_id);
     await deps.ptyd.ensurePane({
       id: pane.id,

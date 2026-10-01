@@ -19,6 +19,7 @@ import {
   createServeSupervisor,
   startServeSupervisor,
 } from './serve-supervisor.js';
+import { AppStore } from './store/AppStore.js';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
 import { WorkspaceStore } from './store/WorkspaceStore.js';
@@ -128,6 +129,31 @@ describe('serve supervisor', () => {
     // And it is alive afterwards, so the next sweep does nothing.
     await f.sup.sweep();
     expect(f.ptydFake.ensured).toHaveLength(1);
+  });
+
+  it('does not respawn an app stopped while its liveness probe was pending', async () => {
+    const f = setup();
+    const pane = f.addServePane();
+    const apps = new AppStore(f.db);
+    const app = apps.create({
+      slug: 'race',
+      name: 'Race',
+      cwd: '/tmp',
+      command: './start',
+      url: 'http://127.0.0.1:4321',
+    });
+    apps.setPane(app.id, pane.id);
+    let finishProbe!: (alive: boolean) => void;
+    f.ptydFake.ptyd.hasPane = () =>
+      new Promise((resolve) => {
+        finishProbe = resolve;
+      });
+    const sweep = f.sup.sweep();
+    // Stop disables first and retains the pane pointer while killPane awaits.
+    apps.update(app.id, { enabled: false });
+    finishProbe(false);
+    await sweep;
+    expect(f.ptydFake.ensured).toHaveLength(0);
   });
 
   it('leaves a live serve pane completely alone', async () => {

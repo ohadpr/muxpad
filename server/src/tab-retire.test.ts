@@ -590,6 +590,29 @@ describe('retiring a sub-chat when it delivers', () => {
       expect(isDone(child.tab)).toBe(false);
     });
 
+    it.each(['before turn-end', 'during settle'])(
+      'reconsiders a roster that clears %s without another turn',
+      (when) => {
+        const parent = chat('parent');
+        const child = chat('child', parent.tab);
+        const finished: boolean[] = [];
+        const retirer = new ChatRetirer({
+          ...deps,
+          onFinished: (_t, _p, o) => finished.push(o.crashed),
+        });
+        if (when === 'before turn-end') cache.setSubagentCount(child.pane, 1);
+        retirer.onTurnEnded({ pane_id: child.pane, phase: 'fatal' });
+        cache.setSubagentCount(child.pane, 1);
+        expect(retirer.settleNow(child.pane)).toBe(false);
+        expect(finished).toEqual([]);
+        // Both normal roster completion and stall reaping clear this cache.
+        cache.setSubagentCount(child.pane, 0);
+        retirer.settleNow(child.pane);
+        expect(finished).toEqual([true]);
+        retirer.stop();
+      },
+    );
+
     it('a pane that is WORKING at the settle is not finished', () => {
       const parent = chat('parent');
       const child = chat('child', parent.tab);
@@ -1013,12 +1036,24 @@ describe('retiring a sub-chat when it delivers', () => {
       expect(isDone(top.tab)).toBe(false);
     });
 
-    it('leaves a PINNED sub-chat alone', () => {
+    it('reports a pinned child crash and closes its round without retiring the row', () => {
       const parent = chat('parent');
       const child = chat('child', parent.tab);
       tabs.setPinned(child.tab, true);
-      expect(died(child.pane).retired).toBe(false);
+      const rounds = new SpawnRoundStore(db);
+      rounds.open(child.tab, 1_000);
+      const finished: boolean[] = [];
+      const retirer = new ChatRetirer({
+        ...deps,
+        onFinished: (tabId, _p, o) => {
+          rounds.close(tabId, Date.now()); // SpawnReportWriter's synchronous contract
+          finished.push(o.crashed);
+        },
+      });
+      expect(retirer.onRunnerDead(child.pane)).toBe(false);
       expect(isDone(child.tab)).toBe(false);
+      expect(finished).toEqual([true]);
+      expect(rounds.openRound(child.tab)).toBeNull();
     });
 
     it('leaves a MULTI-PANE tab alone — one agent dying says nothing about the others', () => {

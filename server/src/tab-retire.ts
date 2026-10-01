@@ -400,10 +400,10 @@ export class ChatRetirer {
     // leaves on its clock or when you archive it, never because an agent in it
     // stopped talking.
     if (!isSubChat(clockIndex(this.deps.db), pane.tab_id)) return false;
-    // Cheap early out: a worker that is plainly mid-job does not even need a
-    // timer. Not load-bearing — the settle re-reads all of this anyway — it
-    // just keeps a busy worker from arming one per turn.
-    if (this.stillWorking(e)) {
+    // A roster can outlive the final turn and clear without another turn-end
+    // (normal completion or stall reaping). Keep that decision pending, with
+    // its original phase; a real turn-start still cancels it.
+    if (this.stillWorking(e) && this.deps.cache.getSubagentCount(e.pane_id) === 0) {
       this.disarm(e.pane_id);
       return false;
     }
@@ -460,7 +460,11 @@ export class ChatRetirer {
     const index = clockIndex(this.deps.db);
     if (!isSubChat(index, pane.tab_id)) return false;
     const e = { pane_id: paneId, phase };
-    if (this.stillWorking(e)) return false;
+    if (this.stillWorking(e)) {
+      // The roster may also have appeared AFTER the turn-end armed us.
+      if (this.deps.cache.getSubagentCount(paneId) > 0) this.arm(paneId, phase);
+      return false;
+    }
     // AND THE DIRECT INSTRUMENT, which `stillWorking` does not have: is this
     // pane working RIGHT NOW? That covers a turn already in flight again —
     // the exact state the live failure was found in (`retired_at` set on a
@@ -595,7 +599,6 @@ export class ChatRetirer {
     // conversation you are having; its agent dying is a thing to FIX, and
     // filing the conversation away is not the response to it.
     if (!isSubChat(index, pane.tab_id)) return false;
-    if (index.get(pane.tab_id)?.pinned) return false;
     // A MULTI-PANE TAB IS NOT ONE UNIT OF WORK — the single clause of
     // `stillWorking` that survives a death. One agent dying says nothing about
     // the others, and retiring the tab would hide them.
@@ -608,6 +611,8 @@ export class ChatRetirer {
     // the row live is how the corpse stayed in the sidebar in the first place.
     if (panes.listByTab(pane.tab_id).length > 1) return false;
     this.deps.onFinished?.(pane.tab_id, paneId, { crashed: true, awaiting: false });
+    // Pinning keeps the row visible, not its dead worker's round unfinished.
+    if (index.get(pane.tab_id)?.pinned) return false;
     return retireChat(this.deps, pane.tab_id, 'died');
   }
 
@@ -683,6 +688,26 @@ export interface ReconcileResult {
   orphansRetired: number;
 }
 
+/** A deleted last supervised pane cannot reconnect; finish its orphaned work now. */
+export function retireOrphanedChild(deps: RetireDeps, tabId: string): boolean {
+  const index = clockIndex(deps.db);
+  if (!isSubChat(index, tabId) || index.get(tabId)?.retired_at !== null) return false;
+  if (
+    new PaneStore(deps.db).listByTab(tabId).some((p) => p.startup_cmd?.startsWith('muxpad agent'))
+  )
+    return false;
+  if (index.get(tabId)?.pinned) {
+    // Pinning preserves the empty row, not an unfinishable work round.
+    if (new SpawnRoundStore(deps.db).close(tabId, Date.now())) {
+      const tab = new TabStore(deps.db).getById(tabId);
+      if (tab)
+        deps.events.emit({ type: 'tab.updated', tab: decorateTab(deps.cache, deps.db, tab) });
+    }
+    return false;
+  }
+  return retireChat(deps, tabId, 'died');
+}
+
 /**
  * ONE IDEMPOTENT PASS AT BOOT over the states nothing live can reach.
  *
@@ -709,8 +734,8 @@ export interface ReconcileResult {
  * back, so no grace is owed and none is given.
  *
  * Empty on this install today. It is a GUARD, not a sweep with a population,
- * and it is cheap enough to be worth having for the case where a pane is
- * deleted out from under a running child.
+ * and the same orphan transition runs when the pane-delete route removes a
+ * child's last supervised pane, so runtime deletion need not wait for boot.
  *
  * ── THE REFUSAL: "retire live sub-chats whose runner is absent at boot" ──────
  * That is the naive fix, and it archives the machine. At boot EVERY runner is
@@ -746,7 +771,6 @@ export function reconcileDeadChats(deps: RetireDeps): ReconcileResult {
   // (b) Live sub-chats with no pane the dead-runner sweep will ever look at.
   // `isSubChat` (not a bare `spawned_by`) so a child whose parent is gone is
   // left alone — it is a root in its own right and decays on its own clock.
-  const index = clockIndex(deps.db);
   const orphans = deps.db
     .prepare(
       `SELECT t.id AS tab_id
@@ -758,9 +782,7 @@ export function reconcileDeadChats(deps: RetireDeps): ReconcileResult {
     )
     .all() as Array<{ tab_id: string }>;
   for (const { tab_id: tabId } of orphans) {
-    if (!isSubChat(index, tabId)) continue;
-    if (index.get(tabId)?.pinned) continue;
-    if (retireChat(deps, tabId, 'died')) out.orphansRetired += 1;
+    if (retireOrphanedChild(deps, tabId)) out.orphansRetired += 1;
   }
 
   if (out.roundsClosed > 0 || out.orphansRetired > 0) {
