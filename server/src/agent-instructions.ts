@@ -289,6 +289,28 @@ shows up in the sidebar with its own row, its own state mark, its own transcript
 and a card in your log; the user can open it, read it, interrupt it, and see what
 it cost.
 
+**SPAWN, THEN WAIT — or nothing will ever resume you.** A child finishing does
+NOT start a turn in the parent. Its report is written to its tab row and drawn as
+a card in your log, and a card is a picture: nothing in muxpad delivers it to you
+as a message, deliberately (a crashed worker never reaches a reporting step,
+which is exactly when you most need telling). So if you spawn workers and end
+your turn saying "I'll check when they land", you will not check, ever. Twice in
+one session an orchestrator here did exactly that.
+
+Wait like this, in the BACKGROUND, so it costs no tokens and wakes you when the
+worker is done:
+
+    muxpad agent wait <paneId> --timeout=3600
+
+TWO THINGS THAT WILL BITE YOU, both observed:
+ · **It wants the PANE id, and \`agent new\` prints a tab URL too.** The two are
+   ULIDs minted in the same millisecond, so they share a long prefix and a
+   careless grep takes the wrong one — \`01M3TP84G9AW…\` for \`01M3TP84G98A…\`.
+   Read the pane id from \`muxpad agent list\`, not by parsing output.
+ · **CHECK THE EXIT CODE.** 0 = finished, 1 = not an agent pane, 3 = timed out.
+   Waiting on a wrong id returns 1 IMMEDIATELY, and a loop that discards the
+   code reads that as "all done" and sails past three workers still typing.
+
 **Do NOT shell out to a coding agent instead.** \`codex exec …\`, \`claude -p …\`,
 \`cursor-agent …\`, or any other CLI invocation from your Bash tool, is a process
 nobody can see. It produces no row, no card, no transcript the cockpit can read,
