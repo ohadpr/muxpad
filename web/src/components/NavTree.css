@@ -383,10 +383,30 @@
   background-color: color-mix(in srgb, var(--fg) 11%, var(--nt-surface));
 }
 
-/* The ACTIVE workspace reads warmer than the rest — the one thing a bold name
-   alone could never say at a glance in a rail of three. */
+/* ─── THE ACTIVE WORKSPACE: AN EDGE, NOT A FILL ─────────────────────────────
+   It was `accent 16%` over the same surface, and the active ROW is the accent
+   at 20% alpha. Measured on the light theme, the two came out at a contrast
+   ratio of 1.00 — IDENTICAL luminance. Two different meanings ("this group is
+   the one you are in" and "this row is the one you are reading") wearing one
+   colour, so the header read as a second selection. Reported as exactly that.
+
+   The fix is not to drop the accent — losing it costs the one thing a bold name
+   could never say at a glance in a rail of three. It is to spend it in a
+   different SHAPE. The header keeps the neutral band every other header wears
+   and takes a 3px accent edge; the row keeps its fill. One accent, two
+   meanings, told apart by form instead of by hue.
+
+   `box-shadow` rather than `border-left`: a border would move the row's content
+   3px and break the column every disclosure chevron in the rail shares. An
+   inset shadow paints inside the box and costs no layout. */
 .navtree-group > .navtree-ws-row[data-active="true"] {
-  background-color: color-mix(in srgb, var(--accent) 16%, var(--nt-surface));
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+/* …and the hover tint still has to win over the resting band on the active
+   header, which it would not if the only rule for it sat above this one. */
+.navtree-group > .navtree-ws-row[data-active="true"]:hover {
+  background-color: color-mix(in srgb, var(--fg) 11%, var(--nt-surface));
 }
 
 /* ─── Workspace row (banded header) ──────────────────────────────────── */
