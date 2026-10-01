@@ -2,6 +2,7 @@ import { type PaneStatus, rollupStatus } from '@muxpad/shared';
 import { useRouterState } from '@tanstack/react-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { announceOverlayOpen, onOtherOverlayOpen } from '../lib/overlays';
+import { SHEET_BOTTOM_MARGIN, sheetMaxHeight } from '../lib/sheet-viewport';
 import { useTabs } from '../tabs';
 import { useWorkspaces, visibleWorkspaces } from '../workspaces';
 import { NavTree } from './NavTree';
@@ -68,6 +69,63 @@ export function MobileNavSwitcher({ activeWorkspaceSlug }: Props) {
     announceOverlayOpen('nav-sheet');
     return onOtherOverlayOpen('nav-sheet', close);
   }, [open, close]);
+
+  // Cap the panel by the VISUAL viewport while it is open, so the software
+  // keyboard the search box raises cannot swallow rows the user then has no
+  // way to scroll to. See lib/sheet-viewport for the full reasoning — the
+  // short version is that `100svh` is a LAYOUT unit and the keyboard does not
+  // shrink the layout viewport on either iOS or modern Chrome, so the
+  // scroller ends up with no overflow and the hidden rows are unreachable.
+  //
+  // Scoped to this overlay on purpose: main.tsx removed the GLOBAL
+  // visualViewport height mirror because it fed an xterm → PTY resize cascade
+  // that garbled TUI scrollback. There is no terminal in here.
+  useEffect(() => {
+    if (!open) return;
+    const vv = window.visualViewport;
+    if (!vv) return;
+    let tracking: number | null = null;
+    const apply = () => {
+      const el = panelRef.current;
+      if (!el) return;
+      // The panel's own `top` comes from CSS (safe-area + chrome height); read
+      // it back rather than restate it, so the two can't drift. `offsetTop`,
+      // not getBoundingClientRect: the panel slides in under a transform, and
+      // a rect measured mid-animation reports a top the panel never has at
+      // rest. (The `min()` in the stylesheet already makes an over-estimate
+      // harmless — this makes it not happen.)
+      const top = el.offsetTop;
+      const max = sheetMaxHeight(
+        { height: vv.height, offsetTop: vv.offsetTop },
+        top,
+        SHEET_BOTTOM_MARGIN,
+      );
+      if (max !== null) el.style.setProperty('--mns-avail-h', `${Math.round(max)}px`);
+    };
+    // iOS Safari can fire visualViewport 'resize' only at the END of its
+    // keyboard animation, so a focus change also drives a short rAF loop —
+    // the same treatment MobileInputBar gives the composer.
+    const trackUntil = (deadline: number) => {
+      apply();
+      tracking = Date.now() < deadline ? requestAnimationFrame(() => trackUntil(deadline)) : null;
+    };
+    const onFocusChange = () => {
+      if (tracking !== null) cancelAnimationFrame(tracking);
+      trackUntil(Date.now() + 600);
+    };
+    apply();
+    vv.addEventListener('resize', apply);
+    vv.addEventListener('scroll', apply);
+    document.addEventListener('focusin', onFocusChange);
+    document.addEventListener('focusout', onFocusChange);
+    return () => {
+      if (tracking !== null) cancelAnimationFrame(tracking);
+      vv.removeEventListener('resize', apply);
+      vv.removeEventListener('scroll', apply);
+      document.removeEventListener('focusin', onFocusChange);
+      document.removeEventListener('focusout', onFocusChange);
+    };
+  }, [open]);
 
   // On open, focus the tree on where you ARE: scroll the active tab into view
   // (its workspace expands by default), falling back to the active workspace

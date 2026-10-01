@@ -1,4 +1,5 @@
 import { mkdirSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import type { Server } from 'node:http';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -6,17 +7,32 @@ import { serve } from '@hono/node-server';
 import { createAgentBridge } from './agent-bridge.js';
 import { ensureAgentNotes, migrateAgentFileEdits } from './agent-files.js';
 import { INSTRUCTIONS_MIGRATION, seedAgentInstructions } from './agent-instructions.js';
-import { DO_MODE_MIGRATION, seedDoMode } from './agent-modes.js';
+import { CHAT_MODE_MIGRATION, retireLegacyChatModeFile, seedChatMode } from './agent-modes.js';
 import { createAppRegistry, startAppReconciler } from './apps/AppRegistry.js';
 import { createAppStatusProbe } from './apps/AppStatus.js';
 import { adoptServePanes } from './apps/adopt-serve-panes.js';
 import { ArchiveDb } from './archive/ArchiveDb.js';
 import { Archiver } from './archive/Archiver.js';
+import { ensureBrowserApp, listBrowserApps } from './browser/BrowserApps.js';
+import { BrowserWheel } from './browser/BrowserWheel.js';
+import { shouldStopIdleBrowser } from './browser/IdleStop.js';
+import { BrowserEvents } from './browser/BrowserEvents.js';
+import { BrowserOwner } from './browser/BrowserOwner.js';
+import { browserAppSlug, browserProfileDir } from './browser/BrowserProfile.js';
+import { DEFAULT_BROWSER_PROFILES } from './browser/BrowserProfile.js';
+import { parseBrowserProxyPath } from './browser/BrowserProxy.js';
+import { clearBrowserShots } from './browser/BrowserShots.js';
+import { isDisposableSessionProfile, sessionBrowsersToReap } from './browser/SessionReaper.js';
+import { findChrome } from './browser/findChrome.js';
+import { browserHostEntry } from './browser/hostEntry.js';
 import { HeadlineWriter } from './chat/HeadlineWriter.js';
+import { SpawnReportWriter } from './chat/SpawnReportWriter.js';
 import { projectsDir } from './chat/TranscriptReader.js';
+import { paneAwaitsUser } from './chat/awaiting.js';
+import { glossaryCache } from './chat/glossary.js';
 import { sweepImplausibleHeadlines } from './chat/headline.js';
 import { paneCarryover } from './chat/summarize.js';
-import { loadConfig } from './config.js';
+import { loadConfig, voiceApiKey } from './config.js';
 import { CronScheduler } from './cron/CronScheduler.js';
 import { EventBus } from './events.js';
 import { createTailscaleFunnel, localFunnel } from './funnel.js';
@@ -29,16 +45,25 @@ import { releaseResidentPane } from './resident-release.js';
 import { startServeSupervisor } from './serve-supervisor.js';
 import { createApp } from './server.js';
 import { mountStaticWeb } from './static-assets.js';
+import { AppStore } from './store/AppStore.js';
+import { GlobalsStore } from './store/GlobalsStore.js';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
 import { openDb } from './store/db.js';
 import { TabActivity } from './tab-activity.js';
+import { ChatClockSweeper } from './tab-clock.js';
+import { ChatRetirer, clearReadyMarks, reconcileDeadChats } from './tab-retire.js';
+import { tailnetHostname } from './tailnet-hostname.js';
+import { clearOrphanedTunnelBase, ensureTunnelApp } from './tunnel/TunnelApp.js';
+import { readNamedTunnel } from './tunnel/named.js';
+import { VoiceSessionManager, glossaryInstructions } from './voice/VoiceSessionManager.js';
+import { openAiVoiceTransport } from './voice/live.js';
 import { attachWsServer } from './ws.js';
 
 const config = loadConfig();
 mkdirSync(config.dataDir, { recursive: true });
 const db = openDb(join(config.dataDir, 'db.sqlite'));
-// The prompt files (agent-files.ts). agent-instructions.md and do-mode.md are
+// The prompt files (agent-files.ts). agent-instructions.md and chat-mode.md are
 // GENERATED — rewritten from source here on every boot, so they always describe
 // this build — and agent-notes.md is the user's, created once and never touched.
 // The migration runs FIRST and exactly once: it rescues anything the user had
@@ -50,7 +75,7 @@ const db = openDb(join(config.dataDir, 'db.sqlite'));
 const rescue = migrateAgentFileEdits({
   db,
   dataDir: config.dataDir,
-  files: [INSTRUCTIONS_MIGRATION, DO_MODE_MIGRATION],
+  files: [INSTRUCTIONS_MIGRATION, CHAT_MODE_MIGRATION],
 });
 for (const r of rescue.rescued)
   console.log(
@@ -58,13 +83,18 @@ for (const r of rescue.rescued)
   );
 if (rescue.safe) {
   seedAgentInstructions(config.dataDir);
-  seedDoMode(config.dataDir);
+  seedChatMode(config.dataDir);
+  // ⚡ Do mode became Chat mode, and its overlay file moved do-mode.md →
+  // chat-mode.md. Clear the old copy away so the data dir doesn't hold two
+  // contract-shaped files with no way to tell which one is live. Only ever
+  // removes muxpad's OWN generated text; an edited one stays put.
+  retireLegacyChatModeFile(config.dataDir);
 } else {
   // Something of the user's is still in a generated file's path and could not
   // be moved. Say so: the alternative is instructions that silently stop
   // tracking the build, with nothing anywhere explaining why.
   console.warn(
-    `muxpad: could not move your older agent-instructions.md / do-mode.md aside in ${config.dataDir}, so they were NOT regenerated (check permissions). Retrying next start.`,
+    `muxpad: could not move your older agent-instructions.md / chat-mode.md aside in ${config.dataDir}, so they were NOT regenerated (check permissions). Retrying next start.`,
   );
 }
 ensureAgentNotes(config.dataDir);
@@ -94,24 +124,110 @@ ptyd.on('paneCwd', (e: { id: string; cwd: string }) => {
 });
 
 // Living sidebar: `tabs.last_activity_at`. One recorder shared with the ws
-// layer so the 60s throttle is per TAB, not per signal source. Raw pty output
+// layer so the throttle is per TAB, not per signal source. Raw pty output
 // ticks land here (ptyd throttles them already, but a busy pane still emits
-// several per second — hence the throttle); ws.ts adds the forced bumps for
-// turn-done / user sends and the throttled one for keystrokes.
+// several per second — hence the 5s output sample); ws.ts adds the forced
+// bumps for turn-done / user sends and the 1s-batched one for keystrokes.
 const tabActivity = new TabActivity(db, {
-  // Recency changed → tell every open client now, instead of leaving the
-  // reorder to their next 5s poll (which is stopped entirely for a collapsed
-  // workspace or a hidden document). Already rate-limited by the recorder's
-  // own throttle, so this is at most one event per tab per minute plus the
-  // discrete forced bumps.
+  // Recency changed AND the change can move a row → tell every open client
+  // now, instead of leaving the reorder to their next 5s poll (which is
+  // stopped entirely for a collapsed workspace or a hidden document).
+  //
+  // Rate, honestly: the recorder admits up to one write per tab per second
+  // while you type and one per five seconds while a pane spews, so this is
+  // NOT "one a minute" — and each event costs every connected client a full
+  // `GET /api/workspaces?all=1`. TabActivity therefore drops the writes that
+  // cannot reorder anything (the common case: bumping the tab that is already
+  // the most recent). See TabActivity.canReorder for why that is lossless.
   onWrite: (tabId) => {
     const t = tabStore.getById(tabId);
     if (t) events.emit({ type: 'tab.updated', tab: decorateTab(cache, db, t) });
   },
 });
-ptyd.on('paneActivity', (e: { id: string }) => {
-  tabActivity.touchPane(e.id);
+// Both ptyd listeners at once — the raw activity tick AND the `connected`
+// signal that re-arms the "our own restart is not activity" grace. They live
+// inside TabActivity so the wiring is covered by its own tests; this file is a
+// script and nothing can import it.
+tabActivity.attach(ptyd);
+
+// The chat CLOCK's one un-triggered transition: a chat crossing into `done`
+// because four days passed with no message. Nothing else on the server will
+// ever notice it — there is no request, no keystroke, no turn — so without
+// this tick the sidebar would not move until the client's next poll, which is
+// stopped entirely for a hidden document or a collapsed workspace. Rising edge
+// only, and silent on the first pass (see ChatClockSweeper).
+// `blocked` reads the AGENT BRIDGE, not the cache, and so is deliberately the
+// same signal cron's keep-list reads: a question actually awaiting an answer.
+// The cache's `blocked` status is a superset (question ∪ BEL), and a bell is
+// not a reason to keep a delivered sub-chat in the live list. Declared lazily
+// because the bridge is constructed further down; it is only ever CALLED from
+// a turn event, which cannot arrive before the bridge exists.
+// THE SPAWN REPORT's writer, built here so `retireDeps` below can hand it the
+// one signal it needs. A worker retires the moment it delivers, so without this
+// the parent's log says "you started this" and never says what came back — the
+// whole of "i don't see the summary of the work of this card anywhere". It reads
+// the child's own transcript rather than asking the child for a summary, which
+// is what makes it survive a crash (chat/spawn-report.ts).
+const spawnReports = new SpawnReportWriter({ db, events, cache, dataDir: config.dataDir });
+const retireDeps = {
+  db,
+  cache,
+  events,
+  blocked: (paneId: string) => agentBridge.blocked(paneId),
+  // DID IT STOP TO ASK YOU SOMETHING? `blocked` above is the harness reporting a
+  // pending prompt; this is the worker ending its prose with a question, which
+  // raises no such thing and was therefore being filed as `delivered`. A bounded
+  // transcript read, no model — see chat/awaiting.ts.
+  awaitingUser: (paneId: string) => paneAwaitsUser(db, paneId),
+  // IS A RUNNER STILL THERE? null means none is connected, and a worker with no
+  // runner has not DELIVERED — a dying runner's synthesised `turn-done` would
+  // otherwise be retired as a delivery ninety seconds before the dead-runner
+  // sweep could say `died`. See the dep's note.
+  turnActive: (paneId: string) => agentBridge.turnActive(paneId),
+  // Called when a sub-chat's WORK ends — which is not the same moment as its row
+  // leaving the live list (a crashed worker keeps its row and still has plenty
+  // to report). Fire-and-forget; retirement never waits on a model call.
+  onFinished: spawnReports.onFinished,
+};
+const clockSweeper = new ChatClockSweeper(db, (tabId, { announce }) => {
+  // A chat that has decayed is not "finished, waiting for you" — it is four
+  // days past anyone caring. Clearing the marks as it crosses is the third
+  // door into the `ready` expiry (delivery and archive are the other two), and
+  // the one that catches the 41 agents in the screenshot: nobody will ever
+  // open those tabs, so nothing else would ever turn them off.
+  //
+  // Runs on the priming pass too — a chat that decayed while the server was
+  // down crossed just as truly as one that crossed a minute ago — but the
+  // EVENT does not, because those rows were already done in every client's
+  // first fetch.
+  clearReadyMarks(retireDeps, tabId);
+  if (!announce) return;
+  const t = tabStore.getById(tabId);
+  if (t) events.emit({ type: 'tab.updated', tab: decorateTab(cache, db, t) });
 });
+clockSweeper.start();
+
+// A SUB-CHAT retires once its work has LANDED back in its parent and it has
+// stayed quiet — not the moment a turn ends, which is a thing a running job
+// does several times. Subscribed to the same `agent_turn` the cron scheduler
+// watches, with cron's own keep-list (fatal / a pending question / an artifact
+// / more queued work), and one difference: cron closes the tab, this retires
+// it.
+const chatRetirer = new ChatRetirer(retireDeps);
+chatRetirer.start();
+// A settle is an in-memory timer, so a worker that finished within one window
+// of a restart lost its retirement to the restart and has no turn left to
+// re-arm it. Arming is not deciding — everything is re-read when it fires, and
+// a reconnecting runner disarms it.
+chatRetirer.armLiveSubChats();
+
+// …AND A SUB-CHAT WHOSE RUNNER DIED retires too, which turn-end cannot do for
+// it: three workers killed by the ptyd bug kept `retired_at IS NULL` for hours
+// and read as running. The one repair nothing live can reach — a retired chat
+// whose round was left open, which every hand-archive produced — is done once,
+// here, before anything is served. Its note carries the argument for what is
+// deliberately NOT swept at boot (a runner absent at boot is not a dead one).
+reconcileDeadChats(retireDeps);
 
 // An EXPLICIT app-url declaration (`muxpad app-url` / `muxpad serve` — the
 // OSC marker, not the output-scan heuristic) is the "this pane is a web app"
@@ -130,7 +246,11 @@ ptyd.on(
     paneStore.setFace(e.id, 'web', marker.url);
     const fresh = paneStore.getById(e.id);
     if (fresh) {
-      events.emit({ type: 'pane.updated', tab_id: fresh.tab_id, pane: decoratePane(cache, fresh) });
+      events.emit({
+        type: 'pane.updated',
+        tab_id: fresh.tab_id,
+        pane: decoratePane(cache, fresh, db),
+      });
     }
   },
 );
@@ -145,7 +265,7 @@ cache.on('paneChange', (paneId: string) => {
   events.emit({
     type: 'pane.updated',
     tab_id: pane.tab_id,
-    pane: decoratePane(cache, pane),
+    pane: decoratePane(cache, pane, db),
   });
 });
 
@@ -162,7 +282,7 @@ cache.on('paneRemoved', (paneId: string) => {
   events.emit({
     type: 'pane.updated',
     tab_id: pane.tab_id,
-    pane: decoratePane(cache, pane),
+    pane: decoratePane(cache, pane, db),
   });
 });
 
@@ -256,6 +376,41 @@ const cronScheduler = new CronScheduler({
 // The registry only creates/destroys the pane; keeping it ALIVE is the serve
 // supervisor's job below, which is why there is no second process supervisor
 // here — one dying with the main server would take every app down on deploy.
+// Voice mode. The server's ONLY job in a call is the SDP offer→answer relay at
+// session start (the audio is browser↔OpenAI, peer to peer) — plus every cost
+// control, because this is the first feature muxpad has that bills by wall
+// clock and the first endpoint that can spend the user's money. See
+// voice/VoiceSessionManager.ts for the caps and why each one exists.
+//
+// Built unconditionally, even with no key: the manager then reports itself
+// unconfigured and refuses with 503, which the UI can render. The key is read
+// here, at the one call site that needs it, and closed over by the transport —
+// it is never put on `config` and never logged.
+const voiceKey = voiceApiKey();
+const voiceGlossary = glossaryCache(db, config.dataDir);
+const voiceTransport = voiceKey ? openAiVoiceTransport(voiceKey) : null;
+const voice = new VoiceSessionManager({
+  globals: new GlobalsStore(db),
+  ...(voiceTransport
+    ? { exchange: voiceTransport.exchange, closeRemote: voiceTransport.close }
+    : {}),
+  // The same glossary the headline writer uses, behind the same cache. A live
+  // voice model mishears "muxpad" as "Max pad" for exactly the reason iOS
+  // dictation does, so it gets the install's own list of names rather than a
+  // second one that can drift out of sync with it.
+  instructions: glossaryInstructions(voiceGlossary),
+  paneExists: (id) => paneStore.getById(id) !== undefined,
+  voice: config.voice.voice,
+  sessionTtlMs: config.voice.sessionTtlMs,
+  dailyCapMinutes: config.voice.dailyCapMinutes,
+});
+// A deleted pane can't hang up, so close its call immediately — no grace, there
+// is nothing to reconnect to. (The softer case, a chat socket merely dropping,
+// comes through `onChatPresence` on the ws layer below.)
+events.subscribe((e) => {
+  if (e.type === 'pane.removed') voice.notePaneRemoved(e.pane_id);
+});
+
 const appRegistry = createAppRegistry({ db, ptyd, events });
 // Late-bound so the status probe can read the supervisor's give-up ledger:
 // the supervisor is constructed after the ws layer, and the probe is needed
@@ -267,11 +422,47 @@ const appStatus = createAppStatusProbe({
   gaveUp: (paneId) => serveSupervisorRef?.gaveUp(paneId) ?? false,
 });
 
+// muxpad's OWN public tunnel — an app like any other (`muxpad tunnel --port
+// <public port>` in a hidden pane), so ptyd owns it and it survives every
+// deploy. See tunnel/TunnelApp.ts for the whole argument; the only thing wired
+// here is the policy inputs it cannot discover for itself.
+//
+// MUXPAD_PUBLIC_BASE_URL is passed straight through because it does not merely
+// OUTRANK the tunnel, it cancels it: a real domain means there is nothing for a
+// quick tunnel to do, and running one anyway would hold a second public door
+// open forever for no reason.
+// Re-read on every call, not cached: `muxpad tunnel setup` writes this file
+// while the server is running, and the whole promise of that command is that it
+// takes effect without a restart.
+const ensureTunnel = (opts?: { start?: boolean }) =>
+  ensureTunnelApp({
+    db,
+    registry: appRegistry,
+    publicPort: config.publicPort,
+    namedTunnel: readNamedTunnel(config.dataDir),
+    ...(config.publicBaseUrl ? { configuredBaseUrl: config.publicBaseUrl } : {}),
+    ...(opts?.start !== undefined ? { start: opts.start } : {}),
+  });
+
+// Resolved once at boot, prompt-free (reverse DNS on the 100.64/10 address —
+// see tailnet-hostname.ts). Cached because it does not change while the process
+// lives, and because the browser view is read on every poll.
+let cachedTailnetHost: string | null = null;
+void tailnetHostname()
+  .then((h) => {
+    cachedTailnetHost = h;
+    if (h) console.log(`[browser] viewer links will use https://${h}`);
+    else console.log('[browser] no tailnet name — viewer links will be loopback only');
+  })
+  .catch(() => {});
+
 const app = createApp({
   db,
   ptyd,
   cache,
   dataDir: config.dataDir,
+  browserTailnetHost: () => cachedTailnetHost,
+  selfUrl: `http://127.0.0.1:${config.port}`,
   events,
   agentBridge,
   tabActivity,
@@ -283,8 +474,21 @@ const app = createApp({
     funnel,
     publicPort: config.publicPort,
     ...(config.publicBaseUrl ? { publicBaseUrl: config.publicBaseUrl } : {}),
+    // THE ONE PLACE the no-exec tailnet lookup is wired. It answers the same
+    // question as `tailscale status --json` — this machine's ts.net name — by
+    // reverse-resolving its own 100.64/10 address through MagicDNS, so it costs
+    // no exec and therefore no macOS "access data from other apps" prompt. That
+    // matters here because Tailscale is a Mac App Store install: the only binary
+    // lives in the sandboxed app bundle, and touching it always prompts.
+    //
+    // Behind `funnelEnabled` (MUXPAD_NO_FUNNEL=1 turns it off) for the same
+    // reason `funnel` is: the url this produces is a FUNNEL url, meaningless on
+    // an instance that has no funnel.
+    ...(config.funnelEnabled ? { tailnetHostname } : {}),
+    tunnel: { ensure: ensureTunnel },
   },
   apps: { registry: appRegistry, status: appStatus },
+  voice,
 });
 
 // Static asset serving (CSS, JS, fonts, images) from the built web bundle,
@@ -337,6 +541,21 @@ const wsServer = attachWsServer({
   agentBridge,
   tabActivity,
   notifyPane,
+  // A wall-clock-billed call must not outlive the chat view that started it.
+  onChatPresence: (paneId, clients) => voice.noteChatPresence(paneId, clients),
+  // The dead-runner sweep GAVE UP on a pane: end its sub-chat's lifecycle too.
+  // The sweep is the only thing that knows a runner is gone for good rather
+  // than for the moment — it has spent three respawns and a ptyd probe getting
+  // there — and nothing consumed that verdict before this line.
+  onRunnerDead: (paneId) => chatRetirer.onRunnerDead(paneId),
+  // Resolve /browser/<profile>/ws to the host's loopback socket, so the viewer
+  // stream rides muxpad's tailnet origin and its upgrade guard.
+  browserViewerSocket: (pathname) => {
+    const parsed = parseBrowserProxyPath(pathname);
+    if (!parsed) return null;
+    const state = listBrowserApps(db).find((b) => b.profile === parsed.profile);
+    return state ? `${state.viewerUrl.replace(/^http/, 'ws')}/ws` : null;
+  },
 });
 
 // Straggler prevention: retry pane kills that failed in transit, and (once
@@ -393,6 +612,185 @@ const appReconciler = startAppReconciler({
   },
 });
 
+// The tunnel, at boot. Two jobs, and NEITHER of them is "start it" — that is
+// the reconciler's, via the app row's autostart, so `muxpad app stop tunnel`
+// still means stopped after a deploy.
+//
+//   · POLICY: if MUXPAD_PUBLIC_BASE_URL has since been set, or cloudflared has
+//     been uninstalled, or the public port moved, fix that now rather than at
+//     the next publish.
+//   · THE STALE NAME: the database may hold a hostname from a tunnel whose pane
+//     is gone. Reads already refuse it (tunnelBaseUrl checks ownership), but a
+//     row that lies is worth deleting.
+//
+// Best-effort and fire-and-forget: a tunnel that cannot be sorted out must not
+// hold up the boot of everything else.
+if (clearOrphanedTunnelBase(db)) {
+  console.log('[tunnel] dropped a tunnel url whose pane is gone');
+}
+void ensureTunnel({ start: false })
+  .then((r) => {
+    if (r.state === 'disabled' && r.reason) console.log(`[tunnel] not running: ${r.reason}`);
+  })
+  .catch((err) => console.error('[tunnel] boot check failed', err));
+
+// Browsers muxpad owns. Registered at boot, NOT started: a browser is ~200 MB
+// and most boots are followed by nobody browsing at all, so the row exists (and
+// so its card, its URL and its port are stable and knowable) while the process
+// waits to be asked for.
+//
+// Best-effort, like the tunnel above. A machine with no Chrome installed is a
+// configuration fact, not a reason to hold up a boot — and it is reported once
+// here rather than as a 503 the first time somebody clicks something.
+void (async () => {
+  const chrome = findChrome();
+  if (!chrome) {
+    // Deliberately does not go looking in /Applications: a syscall into another
+    // app's bundle raises a macOS permission dialog on the user's real screen.
+    console.log(
+      '[browser] no browser to own — run `npx playwright install chromium`, or set MUXPAD_CHROME_BIN',
+    );
+    return;
+  }
+  // Say WHICH browser and WHY, because "it picked something" is the state that
+  // took an hour to debug the last time discovery guessed.
+  console.log(`[browser] using ${chrome.path} (${chrome.source})`);
+  for (const profile of DEFAULT_BROWSER_PROFILES) {
+    await ensureBrowserApp(profile, {
+      db,
+      dataDir: config.dataDir,
+      chromePath: chrome.path,
+      hostEntry: browserHostEntry(),
+      registry: appRegistry,
+      cwd: config.dataDir,
+      start: false,
+      // Must match what the route passes, or the two disagree about the command
+      // and each "repairs" it back — a browser restarted on every boot AND
+      // every registration, losing the flag either way round.
+      apiUrl: `http://127.0.0.1:${config.port}`,
+    });
+  }
+})().catch((err) => console.error('[browser] boot registration failed', err));
+
+// Session browsers whose tab is gone. Each one is a real Chrome — about 200 MB
+// — and one per agent tab with nothing collecting them is the memory complaint
+// this whole project started from, rebuilt out of its own parts.
+//
+// Swept on a timer rather than on tab.removed, because the interesting case is
+// the one no event covers: a tab that went away while the server was down.
+const REAP_EVERY_MS = 5 * 60 * 1000;
+const reapSessionBrowsers = async () => {
+  try {
+    // ARCHIVED COUNTS AS GONE. A chat you have finished with is finished with,
+    // and archiving is the ordinary way to say so — it is what the swipe does.
+    // Counting a retired tab as live meant its browser, its profile directory,
+    // its moments and its stills all survived forever: measured on this machine,
+    // 45 archived chats holding 45 browsers and 418 MB, seven of them still
+    // running Chrome.
+    //
+    // Reviving an archived chat is a message away, and a browser that comes back
+    // starts warm from the shared jar — so nothing worth keeping is lost by
+    // letting it go.
+    const live = new Set(
+      db
+        .prepare('SELECT id FROM tabs WHERE retired_at IS NULL')
+        .all()
+        .map((r) => String((r as { id: string }).id)),
+    );
+    // An empty table is a real answer ONLY if the read worked; a throw lands in
+    // the catch below and reaps nothing, which is the safe direction.
+    const apps = new AppStore(db);
+    for (const profile of sessionBrowsersToReap(listBrowserApps(db), live)) {
+      const row = apps.getBySlug(browserAppSlug(profile));
+      if (!row) continue;
+      if (row.enabled) await appRegistry.stop(row.id);
+      // AND THEN REMOVE IT. Stopping alone left the row behind disabled, and the
+      // condition above used to skip disabled rows — so nothing ever looked at
+      // them again. `muxpad app list` grew one permanent row per agent session
+      // ever opened, ninety-nine of them, each still holding a port out of a
+      // hundred-port space and a profile directory on disk.
+      //
+      // A tab id is never reissued, so this session cannot come back and wants
+      // none of it. The name is checked before anything is deleted, because the
+      // adjacent directory holds every login on the machine.
+      if (!isDisposableSessionProfile(profile)) continue;
+      apps.delete(row.id);
+      new BrowserEvents(db).clear(profile);
+      new BrowserOwner(db).clear(profile);
+      clearBrowserShots(config.dataDir, profile);
+      await rm(browserProfileDir(config.dataDir, profile), { recursive: true, force: true });
+      console.log(`[browser] reaped '${profile}' — its tab is gone`);
+    }
+  } catch (err) {
+    console.error('[browser] reap failed', err);
+  }
+};
+// ─── AND STOP THE ONES NOBODY IS USING ──────────────────────────────────────
+// The reap above answers "is your tab gone?". That is the right question for a
+// DEAD session and the wrong one for memory: a browser whose tab is still open
+// is immortal, however long nobody has touched it. Measured on this machine —
+// two idle headless Chromes, one blank `chrome://newtab/` between them, 1.1 GB
+// each after four hours; and in the screenshot that prompted this, 22.37 GB
+// EACH, with macOS putting up "Your system has run out of application memory".
+//
+// Stopping an idle one costs nothing anybody notices, because the cold-start
+// bargain is already the design — `ensureBrowserApp` starts a browser on the
+// first CDP call and the route says so: "a small pause the first time something
+// browses, instead of a browser for every session that never does". This simply
+// makes that true for the SECOND time too.
+//
+// STOP, NOT REAP. The profile directory, the app row, the events and the stills
+// all stay: the tab is alive and its browser will be back, warm, with its
+// logins. Only the process goes.
+//
+// IDLENESS IS THE HOST'S ANSWER, not ours. Agent traffic rides one long-lived
+// CDP socket, so the HTTP route that opened it sees a single request and nothing
+// for the next hour — a server-side timestamp would call a browser being driven
+// hard "idle" and pull Chrome out from under a running agent. The host counts
+// attached sockets and reports `idleMs: 0` while any remain.
+const BROWSER_IDLE_STOP_MS = 20 * 60 * 1000;
+const stopIdleBrowsers = async () => {
+  try {
+    for (const row of listBrowserApps(db)) {
+      if (row.state !== 'running') continue;
+      const url = row.viewerUrl;
+      if (!url) continue;
+      type IdleReport = { agents: number; viewers: number; idleMs: number };
+      let idle: IdleReport | null = null;
+      try {
+        const res = await fetch(`${url}/idle`, { signal: AbortSignal.timeout(2_000) });
+        if (!res.ok) continue;
+        idle = (await res.json()) as IdleReport;
+      } catch {
+        // Unreachable or too old to know the route. SKIP — never stop a browser
+        // on a failed read, which is the same safe direction the reap takes.
+        continue;
+      }
+      if (
+        !shouldStopIdleBrowser({
+          report: idle,
+          running: true,
+          agentMayDrive: new BrowserWheel(db).canDrive(row.profile, 'agent'),
+          idleThresholdMs: BROWSER_IDLE_STOP_MS,
+        })
+      )
+        continue;
+      const appRow = new AppStore(db).getBySlug(row.slug);
+      if (!appRow) continue;
+      await appRegistry.stop(appRow.id);
+      console.log(
+        `[browser] stopped '${row.profile}' — idle ${Math.round(idle.idleMs / 60_000)}m, nobody attached`,
+      );
+    }
+  } catch (err) {
+    console.error('[browser] idle stop failed', err);
+  }
+};
+setInterval(() => void stopIdleBrowsers(), REAP_EVERY_MS).unref();
+
+setInterval(() => void reapSessionBrowsers(), REAP_EVERY_MS).unref();
+void reapSessionBrowsers();
+
 // Durable schedules. The tick starts only now, with the ws layer attached and
 // the runner registry live behind the bridge; its own 15s startup grace then
 // keeps the first pass from firing before runners have re-registered after a
@@ -404,6 +802,15 @@ cronScheduler.start();
 // sid changes). See docs/plans/2026-08-28-session-archive.md.
 archiver?.start();
 headlines.start();
+// The other half of the spawn card: the LABEL on a worker's card, generated from
+// its first message. Subscribed here (the report half is driven by ChatRetirer's
+// `onFinished` instead — see the class note for why the two differ).
+spawnReports.start();
+// And retry the children that retired in an EARLIER process with the attempt
+// stamped and no summary to show for it. Nothing else can reach them: the
+// in-process retry hangs off a turn ending, and none of their turns will ever
+// end again. Bounded to the most recent few — see `recoverStuck`.
+spawnReports.recoverStuck();
 
 // One-time repair of headlines written before the shape check existed — the
 // generation that answered the conversation ("I'm not familiar with muxpad —
@@ -448,6 +855,11 @@ const shutdown = async () => {
   // Stop queueing archive work; in-flight copies finish or resume next boot
   // (offsets only advance past complete lines, so a cut mid-copy is safe).
   archiver?.stop();
+  // Settle any live voice call FIRST, before anything slow: it is the only
+  // thing shutting down here that keeps costing money after we're gone, and
+  // getting its minutes onto the books is what stops the next boot from
+  // charging the full session limit for it (see recoverOrphan).
+  voice.dispose();
   // Stop the cron tick — anything it started now would be an orphan.
   cronScheduler.stop();
   // Stop respawning app servers — we're on our way out; anything we started

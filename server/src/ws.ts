@@ -1,12 +1,27 @@
 import type { Server } from 'node:http';
 import type { Duplex } from 'node:stream';
-import { parseCronMarker, sanitizeAgentStatus } from '@muxpad/shared';
+import {
+  type AgentMode,
+  BASELINE_AGENT_MODE,
+  isBootstrapTabName,
+  modeForBackend,
+  parseCronMarker,
+  sanitizeAgentStatus,
+} from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { WebSocket, WebSocketServer } from 'ws';
 import type { AgentBridge } from './agent-bridge.js';
+import { recordModelCatalog } from './agent-model-catalog.js';
+import {
+  type ResumeRepair,
+  describeRepair,
+  repairAllResumeTargets,
+  repairPaneResume,
+} from './agent-resume-repair.js';
 import {
   type AgentQuestion,
   CLOSE_RUNNER_DISPLACED,
+  type NotifyStatus,
   type RunnerFrame,
   type ServerFrame,
   type SubagentProgress,
@@ -16,6 +31,7 @@ import {
 import { TranscriptTail, identityNormalize, muxpadLocate } from './chat/TranscriptReader.js';
 import { agentPaneHasMessages } from './chat/has-messages.js';
 import type { EventBus } from './events.js';
+import { clearProvisionError, provisionError } from './pane-provision.js';
 import { hasProjectContext } from './project-root.js';
 import { type PtydCache, decoratePane, decorateTab } from './ptyd-cache.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
@@ -35,6 +51,7 @@ import { AgentSessionStore } from './store/AgentSessionStore.js';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
 import { TabActivity } from './tab-activity.js';
+import { tabLifecycle } from './tab-clock.js';
 
 export interface WsServerHandle {
   close(): Promise<void>;
@@ -58,6 +75,33 @@ const CHAT_HISTORY_TAIL_BYTES = 128 * 1024;
 // is right there). Longer turns and autonomous wakeup/cron turns do push.
 const INTERACTIVE_PUSH_SUPPRESS_MS = 2 * 60_000;
 
+/**
+ * Minimum gap between two EXPLICIT `notify` pushes from one pane.
+ *
+ * The heuristic push paths are self-limiting — a BEL needs a program to ring
+ * it, a turn-done needs a turn to end. A tool is not: a model in a loop, or one
+ * that has decided every step is worth a buzz, can call `notify` twenty times
+ * in a minute, and a phone that buzzes twenty times is a phone whose owner
+ * turns muxpad's notifications off for good. That is an unrecoverable failure
+ * mode, so it gets a hard cap rather than a plea in the tool description.
+ *
+ * A minute is the coarsest window that still lets a genuinely eventful session
+ * ring more than once (a build fails, then the fallback also fails), and the
+ * excess is DROPPED rather than queued: a notification held for 60s and then
+ * delivered is archaeology, and the model is told it was dropped so it can put
+ * the news in its reply instead.
+ *
+ * Only a push that actually WENT OUT starts the clock — see the handler.
+ */
+const EXPLICIT_NOTIFY_MIN_GAP_MS = 60_000;
+
+/**
+ * Cap on an explicit notification's body. A lock screen shows about two lines
+ * and truncates the rest mid-word; the tool's schema asks for one sentence, and
+ * this is what happens when the model ignores that.
+ */
+const NOTIFY_BODY_MAX = 180;
+
 // Upper bound on a pane's pending send queue. Generous for real batches (queue a
 // dozen follow-ups) but a hard stop against unbounded growth from a wedged turn
 // or a runaway client / HTTP caller.
@@ -75,6 +119,131 @@ export const MAX_PANE_SUBAGENTS = 32;
 
 /** Rate limit for the roster-overflow warning, per pane. */
 const OVERFLOW_WARN_MS = 60_000;
+
+/**
+ * How long a roster entry may show NO forward progress before the server
+ * retires it on its own authority.
+ *
+ * Deliberately generous. A healthy subagent bumps `steps` on every tool call,
+ * so minutes of total silence is already abnormal — but "abnormal" is not
+ * "dead", and a single very long tool call (a full test suite, a slow network
+ * fetch) must not cost a live agent its row. 20 minutes is far past any real
+ * tool call and far short of the multi-hour ghosts this exists to kill.
+ */
+export const SUBAGENT_STALL_MS = 20 * 60_000;
+
+/** How often the stall sweep runs. Cheap: a walk of a handful of small maps. */
+const STALL_SWEEP_MS = 60_000;
+
+/**
+ * Retire roster entries that have stopped making progress.
+ *
+ * WHY THE SERVER NEEDS ITS OWN COPY OF THIS. The runner already ends its
+ * subagents on four paths, and does it well — but a runner only picks up that
+ * code when its PANE RESPAWNS, and panes live for weeks. A pre-durable runner
+ * emits no terminal frame at all, so before this the server's mirror had
+ * exactly one escape: {@link evictOverflowEntries}, which is a bound (32), not
+ * a policy. A pane leaking 2 ghosts never reaches 32 and reads `working`
+ * forever. (Live pane, 2026-09: 2 ghosts, 13-day-old runner, an hour after
+ * both processes were killed.)
+ *
+ * WHY NOT JUST TIME-SINCE-LAST-FRAME. The runner's 5s keepalive re-announces
+ * every live entry, ghosts included, so arrival time says nothing. What the
+ * keepalive deliberately does NOT do is invent progress: it re-sends the last
+ * REAL payload unchanged. So the signal is CONTENT CHANGE, not arrival —
+ * `steps` advancing is a subagent doing something, and a frozen `steps` across
+ * 20 minutes of heartbeats is a subagent that no longer exists.
+ *
+ * SCOPE — ONLY rows from runners too old to send `seenAt`. This is the whole
+ * safety argument, and it is narrow on purpose.
+ *
+ * A modern runner does not need us. It ends its subagents on four paths plus an
+ * authoritative LEVEL signal (`system/background_tasks_changed` carries the full
+ * live set), and it knows two things the server cannot see: which rows are
+ * PARKED behind a rate limit — `sweepSuspended`, whose own comment is "absence
+ * must never be the thing that kills a running subagent" — and that a row's
+ * silence may just be one enormous tool call. Neither survives `wireProgress`.
+ * So silence, at the server, is not evidence: a rate-limit hold runs for hours
+ * and `muxpad agent wait --timeout=3600` is a thing this very codebase does.
+ * Second-guessing a modern runner from silence trades a rare leak for a common
+ * false negative on a perfectly healthy agent — and a false negative here hides
+ * a LIVE agent's row and reads the pane as idle while real work runs.
+ *
+ * A pre-`seenAt` runner is the opposite case: it has no terminal frame at all,
+ * no level reconciliation, and no keepalive. Its leaks are permanent by
+ * construction, its `changedAt` is a true "nothing has happened since", and
+ * nothing else in the system can ever clean up after it. That is the population
+ * worth acting on, and the only one.
+ *
+ * Reaping is not destructive: nothing is killed, only unlisted. A reaped row
+ * returns on its next materially-different frame. But note the tombstone makes
+ * that return conditional on real progress rather than automatic — which is
+ * exactly why this must not fire on runners whose quiet rows are legitimate.
+ */
+export function reapStalledEntries(
+  subagents: Map<string, SubagentProgress>,
+  changedAt: Map<string, number>,
+  now: number,
+  reaped?: Map<string, SubagentProgress>,
+  staleMs: number = SUBAGENT_STALL_MS,
+): string[] {
+  const dropped: string[] = [];
+  for (const [id, p] of subagents) {
+    // `seenAt` present ⟹ a runner new enough to end its own subagents and to
+    // know which of them are legitimately quiet. Leave it alone; see the scope
+    // note above. This is a capability probe, not a freshness read — we never
+    // compare against `seenAt`, we only ask whether the field exists.
+    if (p.seenAt !== undefined) continue;
+    const fresh = changedAt.get(id);
+    // No stamp: adopt `now` so the entry gets a full window from when we first
+    // noticed it, rather than being reaped on sight.
+    if (fresh === undefined) {
+      changedAt.set(id, now);
+      continue;
+    }
+    if (now - fresh > staleMs) dropped.push(id);
+  }
+  for (const id of dropped) {
+    // Record what the row looked like at death BEFORE dropping it: the
+    // tombstone is what lets the insert path tell a keepalive echo of this
+    // exact payload from the row genuinely coming back to life.
+    const p = subagents.get(id);
+    if (reaped && p) {
+      reaped.set(id, p);
+      // A bound, not a policy — same reasoning as MAX_PANE_SUBAGENTS. A
+      // tombstone is released by a `done`, by real progress, or by teardown;
+      // the ghost this exists for does none of those, so its entry would
+      // otherwise live as long as the connection, and connections live weeks.
+      // Dropping the oldest only risks one more reap/echo cycle for a row
+      // nobody has heard from in a very long time.
+      while (reaped.size > MAX_PANE_SUBAGENTS) {
+        const oldest = reaped.keys().next();
+        if (oldest.done) break;
+        reaped.delete(oldest.value);
+      }
+    }
+    subagents.delete(id);
+    changedAt.delete(id);
+  }
+  return dropped;
+}
+
+/**
+ * Did this frame carry real news about the subagent, or is it the keepalive
+ * re-sending what we already had? Only the former restarts the stall clock.
+ */
+export function isMaterialProgress(
+  prev: SubagentProgress | undefined,
+  next: SubagentProgress,
+): boolean {
+  if (!prev) return true;
+  return (
+    prev.steps !== next.steps ||
+    prev.lastTool !== next.lastTool ||
+    prev.label !== next.label ||
+    prev.seenAt !== next.seenAt
+  );
+}
 
 /**
  * Keep a pane's server-side roster under {@link MAX_PANE_SUBAGENTS} by dropping
@@ -156,9 +325,14 @@ function makeRefusalLogger(log: (line: string) => void): (origin: string, why: s
     // Unbounded growth would be a (very slow) leak, and a caller that varies
     // its Origin per request defeats the key anyway. The map only exists to
     // suppress repeats, so dropping the whole thing when it gets silly costs
-    // at most one extra log line. Cleared BEFORE the set, or the origin that
-    // tripped the limit would be evicted immediately and log again next time —
-    // which is exactly the flood this is here to stop.
+    // at most one extra line PER FORGOTTEN ORIGIN — up to 256 of them at once,
+    // not one. Still bounded and still worth it, but say the number: "at most
+    // one extra X" is precisely the sentence that hid the `last_activity_at`
+    // collapse for days (true of the write count, catastrophic about the
+    // value), and it should not be reintroduced by habit anywhere.
+    // Cleared BEFORE the set, or the origin that tripped the limit would be
+    // evicted immediately and log again next time — which is exactly the flood
+    // this is here to stop.
     if (lastLoggedAt.size > 256) lastLoggedAt.clear();
     lastLoggedAt.set(origin, now);
     log(
@@ -169,6 +343,12 @@ function makeRefusalLogger(log: (line: string) => void): (origin: string, why: s
 
 export function attachWsServer(deps: {
   http: Server;
+  /**
+   * Resolves a `/browser/<profile>/ws` path to the host's loopback socket url,
+   * or null when there is no such browser. Injected rather than imported so the
+   * ws layer keeps knowing nothing about the browser subsystem.
+   */
+  browserViewerSocket?: (pathname: string) => string | null;
   db: Database.Database;
   ptyd: PtydClient;
   cache: PtydCache;
@@ -199,6 +379,33 @@ export function attachWsServer(deps: {
   allowedOrigins?: Set<string>;
   /** Refusal sink. Defaults to console.warn; tests pass a collector. */
   logRefusal?: (line: string) => void;
+  /**
+   * Called whenever a pane's set of live chat sockets changes size, with the new
+   * count. Voice mode is the only subscriber: a paid, wall-clock-billed session
+   * must not outlive the chat view that started it, and this socket closing is
+   * the earliest evidence the server gets that a phone was backgrounded or a tab
+   * was closed. Deliberately a raw count and not a "disconnected" callback —
+   * whether a momentary drop should hang up is a POLICY question, and policy
+   * belongs with the thing that owns the money (VoiceSessionManager), not in the
+   * socket layer.
+   */
+  onChatPresence?: (paneId: string, clients: number) => void;
+  /**
+   * The dead-runner sweep has GIVEN UP on this pane — three respawns spent, no
+   * runner, and the foreground probe answered (a ptyd outage skips the pane
+   * instead of reaching here). Wired to `ChatRetirer.onRunnerDead`, which
+   * retires a sub-chat whose worker died as `died` rather than leaving it
+   * looking live for ever.
+   *
+   * An injected callback and not a bus event, deliberately: `MuxpadEventSchema`
+   * is a strict discriminated union the client `.parse()`s, so a new event type
+   * would have to be taught to every client for a fact none of them needs — a
+   * browser learns about this as the `tab.updated` and `pane.updated` that
+   * already fire. Same seam shape as RetireDeps' own `onFinished`/`blocked`.
+   *
+   * Called synchronously from the sweep, so it must never throw.
+   */
+  onRunnerDead?: (paneId: string) => void;
 }): WsServerHandle {
   const wss = new WebSocketServer({ noServer: true });
   const allowedOrigins =
@@ -245,10 +452,73 @@ export function attachWsServer(deps: {
       deps.events.emit({
         type: 'pane.updated',
         tab_id: pane.tab_id,
-        pane: decoratePane(deps.cache, pane),
+        pane: decoratePane(deps.cache, pane, deps.db),
       });
     }
   };
+  /**
+   * Has this pane's chat already left the live list?
+   *
+   * Asked at turn-done, after `emitTurn('done')` — a SYNCHRONOUS bus emit, so
+   * ChatRetirer has already had its say by then. A chat that retired on this
+   * very turn must not then be marked "done, unreviewed": the mark is the
+   * thing retirement exists to clear, and once written to a row nobody will
+   * ever open again, nothing clears it a second time.
+   *
+   * Reads the lifecycle rather than a local flag because retirement is not the
+   * only way to be gone — a chat can equally have decayed while the turn ran.
+   */
+  const chatHasLeftTheLiveList = (paneId: string): boolean => {
+    const tabId = panes.getById(paneId)?.tab_id;
+    // No row: the pane went away mid-turn. `setUnread` is a harmless no-op on
+    // it, so answer in the direction that changes nothing.
+    return tabId ? tabLifecycle(deps.db, tabId, Date.now()).done : false;
+  };
+
+  // ── Stranded-conversation repair ──────────────────────────────────────────
+  // A pane's resume target can drift onto a session that never wrote a
+  // transcript, at which point every resume starts fresh and the pane reads as
+  // "my conversation got cleared" while the real one sits on disk one row away.
+  // See agent-resume-repair.ts for the mechanism and the decisions.
+  //
+  // Announcing is half the fix. A silent recovery is indistinguishable from the
+  // silent LOSS it repairs, which is how the original went unnoticed for three
+  // days — so every repair gets a server log line, a chat notice for anyone
+  // watching, and (once per sweep, not once per pane) a push.
+  //
+  // WHICH OF THOSE THREE ACTUALLY LAND DEPENDS ON WHEN IT RUNS, and the `boot`
+  // pass is the weak one. It fires during this function's own construction —
+  // before the HTTP server listens — so `chatClients` is empty and nothing has
+  // subscribed to the bus yet: the chat notice and the `pane.updated` /
+  // `agent_session.updated` emits reach ZERO clients, by construction. Only
+  // the console line and the push survive it. That is acceptable (a chat
+  // socket opening afterwards gets the repaired sid on its first `session`
+  // frame, and the push is the channel that reaches a person), but it must be
+  // stated rather than implied — a comment promising three channels where two
+  // are no-ops is the same shape of untrue claim this module exists to kill.
+  // The `respawn` pass below runs with clients connected and gets all three.
+  const announceRepairs = (repairs: ResumeRepair[], source: string): void => {
+    if (repairs.length === 0) return;
+    for (const r of repairs) {
+      const line = describeRepair(r);
+      console.warn(`[agent-resume-repair · ${source}] pane ${r.pane_id}: ${line}`);
+      emitPaneUpdated(r.pane_id);
+      bcastToPane(r.pane_id, { t: 'notice', message: line });
+      deps.events.emit({ type: 'agent_session.updated', pane_id: r.pane_id });
+    }
+    // ONE push, even for a boot pass that repairs several panes: this reaches a
+    // phone, and a per-pane loop would burn the whole rate limit on one event.
+    const first = repairs[0] as ResumeRepair;
+    const more = repairs.length > 1 ? ` (+${repairs.length - 1} more pane(s))` : '';
+    deps.notifyPane?.(first.pane_id, `${describeRepair(first)}${more}`);
+  };
+  // Boot pass: fix every pane that has ALREADY drifted, before a chat client
+  // connects and reads current_sid. The resume-time pass in the dead-runner
+  // sweep below only ever reaches panes something is respawning; a pane that
+  // drifted days ago and is just sitting there empty is never respawned, so
+  // without this it would never be fixed and the user would never learn why.
+  announceRepairs(repairAllResumeTargets(deps.db), 'boot');
+
   // Auto-name agent panes/tabs from the session's AI title (the `ai-title`
   // records Claude appends to the transcript after the first turn and on topic
   // shifts).
@@ -289,7 +559,7 @@ export function attachWsServer(deps: {
     if (!tab || panes.listByTab(tab.id).length !== 1) return;
     // The one check that outranks everything else, restart included.
     if (tabs.isNameSticky(tab.id)) return;
-    if (tab.name === 'agent' || tab.name === autoTitledTabs.get(tab.id)) {
+    if (isBootstrapTabName(tab.name) || tab.name === autoTitledTabs.get(tab.id)) {
       if (tab.name !== title) {
         const updated = tabs.update(tab.id, { name: title });
         autoTitledTabs.set(tab.id, title);
@@ -310,10 +580,58 @@ export function attachWsServer(deps: {
     /** Which harness drives this pane (claude|codex|cursor); set at hello. */
     backend: string;
     turnActive: boolean;
-    /** Question awaiting the user, so a (re)connecting chat client can render it. */
-    pendingQuestion: { qid: string; questions: AgentQuestion[] } | null;
+    /**
+     * Questions awaiting the user, oldest first (Map preserves insertion
+     * order), so a (re)connecting chat client can render one and the nav can
+     * say `blocked`.
+     *
+     * PLURAL, because the runner's side is plural and always was: the backend
+     * keeps its own `pendingQuestions` Map and `onConnected` re-emits EVERY
+     * entry. Two producers feed it — the `ask_user` tool and the reversibility
+     * gate's PreToolUse hook — and the hook is per tool call, so one assistant
+     * message containing two gated actions blocks on two questions at once
+     * with no `ask_user` involved at all.
+     *
+     * This used to be a single slot, and a second question silently evicted
+     * the first. The first was then unanswerable — its card had been replaced,
+     * its qid was gone from the server, and nothing re-announced it — while
+     * the gate hook it belonged to sat on a 7-day timeout. Answering the
+     * SECOND then cleared the slot and dropped the pane out of `blocked`, so a
+     * pane frozen mid-tool-call rendered as plain idle in the nav.
+     *
+     * Only the FRONT entry is broadcast to chat clients (see the `question`
+     * handler): the client holds one question card, so the queue is served one
+     * at a time rather than clobbering itself. That keeps the whole repair on
+     * this side of the wire — no new frame, no client change.
+     */
+    pendingQuestions: Map<string, AgentQuestion[]>;
     /** Latest per-task subagent progress for mid-turn (re)connects. */
     subagents: Map<string, SubagentProgress>;
+    /**
+     * When each roster entry's payload last CHANGED, by toolUseId. Not when a
+     * frame last arrived — the 5s keepalive re-sends ghosts unchanged, so
+     * arrival time cannot tell a live subagent from a dead one. Feeds
+     * {@link reapStalledEntries} for runners too old to send `seenAt`.
+     */
+    subagentChangedAt: Map<string, number>;
+    /**
+     * Rows this server retired for stalling, and the payload they carried when
+     * we did. A TOMBSTONE, and the reason the reaper terminates.
+     *
+     * Reaping alone is not enough: a keepalive-era runner re-announces its
+     * whole roster every 5s and knows nothing about our decision, so a reaped
+     * row reappears within one tick, gets re-reaped by the next sweep, and the
+     * pane's count blinks between N and N+1 forever — spraying a bogus `done`
+     * at every chat client each minute. Suppressing the re-announce is what
+     * makes the reap stick.
+     *
+     * The tombstone is NOT permanent, and that is the whole safety argument for
+     * reaping something that might be alive: it is lifted the moment the row
+     * shows real progress (see {@link isMaterialProgress}), so a subagent that
+     * was merely parked — a rate-limit hold, one enormous tool call — gets its
+     * row back on its very next step rather than staying invisible.
+     */
+    subagentReaped: Map<string, SubagentProgress>;
     /** Rate limit for the roster-overflow warning (see MAX_PANE_SUBAGENTS). */
     lastOverflowWarnAt: number;
     /** Latest session status (model, context fill, model list) for hellos. */
@@ -332,11 +650,88 @@ export function attachWsServer(deps: {
      * the cron `quiet_mins` policy (don't barge into a live conversation).
      */
     lastHumanSendAt: number;
+    /**
+     * When this pane's last EXPLICIT `notify` push actually went out (held and
+     * dropped calls don't count — they spent none of the user's attention).
+     *
+     * Two readers, and the second is the point: the rate limiter, and the
+     * turn-done push, which stands down when an explicit notification just
+     * fired. Without that, an agent that buzzes "staging deploy failed" and
+     * then ends its turn eight seconds later buzzes the phone twice, the second
+     * time with the strictly less useful "finished its turn" — which is exactly
+     * how a notification channel earns itself a mute.
+     */
+    lastExplicitNotifyAt: number;
+    /**
+     * The message we last relayed and whose turn has NOT started yet.
+     *
+     * A CORRELATION IDENTIFIER, and the only one available. Chat frames are a
+     * flat per-pane stream with no send id on them, so a client with two
+     * requests in flight — the voice layer, which can now have a task running
+     * and another queued behind it — cannot tell whose answer a `speak` is. It
+     * used to guess "the first turn-start after my send", which silently
+     * mis-attributes the moment anyone ELSE sends into the same pane (the user
+     * typing, a cron, a wakeup): the guess binds the typed turn to the voice
+     * request and speaks the wrong answer to the wrong question.
+     *
+     * Stamped onto the `turn-start` broadcast and CONSUMED there, so a turn
+     * that no send started — a cron fire inside the SDK session, a wakeup —
+     * carries no text and is correctly attributed to nobody.
+     *
+     * SINGLE USE, AND CLEARED BY EVERY PATH THAT ENDS THE SEND IT NAMES —
+     * not just by the turn-start that consumes it. It used to be cleared ONLY
+     * on consumption, which left it standing whenever a relayed send died
+     * before its turn began: a Stop that cancels a runner-queued send makes the
+     * runner emit a bare `turn-done` with no preceding `turn-start`, and the
+     * stamp survived it. The next AUTONOMOUS turn — a cron, a wakeup — then
+     * broadcast a `turn-start` wearing a dead send's text, and a voice client
+     * bound its still-waiting task to the cron's turn and spoke the cron's
+     * output as the answer to the user's question. That is the exact failure
+     * the stamp exists to prevent, so clearing it is part of the invariant:
+     * a stamp names a send that can still start a turn, or it is null.
+     *
+     * Why the text and not the queue row id: the id would be a better
+     * correlation key, but it is also one the client cannot always have — a
+     * send on the idle fast path never becomes a queue row, so it has no id to
+     * match on. The text is the one field both ends hold in every case.
+     */
+    pendingSendText: string | null;
   }
+  /**
+   * The question a chat client should be showing: the oldest unanswered one,
+   * which is the only one {@link AgentRunnerConn.pendingQuestions} ever
+   * broadcasts. One reader per surface (the live `question` bcast and the
+   * `session` snapshot) must agree, or a reload swaps the card out from under
+   * the user for a question they haven't got to yet.
+   */
+  const frontQuestion = (
+    conn: AgentRunnerConn | undefined,
+  ): { qid: string; questions: AgentQuestion[] } | null => {
+    const first = conn?.pendingQuestions.entries().next();
+    if (!first || first.done) return null;
+    return { qid: first.value[0], questions: first.value[1] };
+  };
   // A message that carries a cron fire marker was written by the scheduler,
   // not typed by anyone. One predicate, shared by both relay paths.
   const isHumanMessage = (text: string) => parseCronMarker(text) === null;
   const agentRunners = new Map<string, AgentRunnerConn>();
+  /**
+   * Publish the pane's subagent count to the cache — the number `GET /api/panes`
+   * renders as `agents:` and `getStatus` reads as "working".
+   *
+   * DERIVED, never independently maintained: it is always the REGISTERED
+   * runner's roster size, and zero when no runner owns the pane. That
+   * one-liner is the whole point — the count used to be written from the
+   * `subagent` frame handler and cleared only from teardown, which gave it a
+   * lifecycle of its own. Teardown is deliberately muted for a DISPLACED
+   * runner (a replaced socket must not detach its successor), so a runner that
+   * was replaced rather than closed left its count standing with nothing alive
+   * that could ever retire it: the pane rendered a dead process's subagents
+   * forever and read `working` for good — a spinner with no way back.
+   */
+  const syncSubagentCount = (paneId: string): void => {
+    deps.cache.setSubagentCount(paneId, agentRunners.get(paneId)?.subagents.size ?? 0);
+  };
   /**
    * The bus edge for an OPTIMISTIC turn start — the moment the server relays a
    * send and claims `turnActive` before the runner's own `turn-start` echoes
@@ -346,7 +741,7 @@ export function attachWsServer(deps: {
    * idempotent for every consumer (a waiter is already waiting, the Archiver
    * dedupes by sid), so a duplicate is strictly better than a gap.
    */
-  const emitOptimisticTurnStart = (paneId: string): void => {
+  const emitOptimisticTurnStart = (paneId: string, queueId?: string): void => {
     const conn = agentRunners.get(paneId);
     if (!conn) return;
     // Mirror the optimism into the PERSISTED turn state too. The runner's real
@@ -363,6 +758,7 @@ export function attachWsServer(deps: {
       phase: 'start',
       sid: conn.sid,
       backend: conn.backend,
+      ...(queueId ? { queue_id: queueId } : {}),
     });
   };
   const sendToRunner = (paneId: string, frame: ServerFrame): boolean => {
@@ -409,7 +805,8 @@ export function attachWsServer(deps: {
       return conn && conn.lastHumanSendAt > 0 ? conn.lastHumanSendAt : null;
     };
     deps.agentBridge.slash = (paneId, cmd) => sendToRunner(paneId, { t: 'slash', cmd });
-    deps.agentBridge.blocked = (paneId) => !!agentRunners.get(paneId)?.pendingQuestion;
+    deps.agentBridge.blocked = (paneId) =>
+      (agentRunners.get(paneId)?.pendingQuestions.size ?? 0) > 0;
   }
 
   // -------------------------------------------------------------------------
@@ -477,7 +874,45 @@ export function attachWsServer(deps: {
     if (sweepInFlight) return;
     sweepInFlight = true;
     try {
-      const agentPanes = panes.listAgentPanes();
+      // ─── WHAT THE SWEEP IS ALLOWED TO SEE ────────────────────────────────
+      // `listAgentPanes` answers "which panes need a process" from the DB
+      // alone: a turn in flight, or queued work. That is the right question for
+      // the lazy-start policy — it is what stopped the sweep resurrecting every
+      // chat ever created (103 live panes on this machine) — and it is BLIND to
+      // the one thing the DB cannot know: somebody has this chat OPEN.
+      //
+      // An idle chat with a dead runner and a reader watching it is precisely
+      // the case the sweep exists for. Nothing is in flight and nothing is
+      // queued, so the DB says "needs no process"; the reader types, and the
+      // only signal they get is silence. ws-respawn's control case asserts the
+      // opposite ("the sweep must act on it — otherwise the test below proves
+      // nothing") and it was failing.
+      //
+      // So the set is the UNION: panes the DB says need a process, plus panes a
+      // live chat client is attached to. The second half costs nothing — it is
+      // an in-memory map this module already maintains for broadcast — and it
+      // cannot reintroduce the resurrection bug, because an unattended chat has
+      // no client by definition.
+      const agentPanes = (() => {
+        const byDb = panes.listAgentPanes();
+        const have = new Set(byDb.map((p) => p.id));
+        const watched: typeof byDb = [];
+        for (const paneId of chatClients.keys()) {
+          if (have.has(paneId)) continue;
+          const p = panes.getById(paneId);
+          // Same two gates the query applies, re-asserted here rather than
+          // assumed: runner-owned, and not in a retired tab.
+          if (!p || !p.startup_cmd?.startsWith('muxpad agent')) continue;
+          // Read the column, not the shaped row: TabStore.getById returns the
+          // wire `Tab`, which does not carry `retired_at`.
+          const retired = deps.db
+            .prepare('SELECT retired_at FROM tabs WHERE id = ?')
+            .get(p.tab_id) as { retired_at: number | null } | undefined;
+          if (!retired || retired.retired_at != null) continue;
+          watched.push(p);
+        }
+        return [...byDb, ...watched];
+      })();
       // Prune records of panes that are gone or no longer runner-owned.
       const liveIds = new Set(agentPanes.map((p) => p.id));
       for (const id of respawns.keys()) if (!liveIds.has(id)) respawns.delete(id);
@@ -518,6 +953,23 @@ export function attachWsServer(deps: {
         }
         if (fg?.includes('agent-runner')) continue;
         // ── The runner really is gone. Only NOW may we change anything. ──
+        //
+        // Resume-time repair, and it runs BEFORE the dead-session heal below on
+        // purpose. Both handle "the resume target is no good", but they are not
+        // equal outcomes: recovering the pane's most recent sid that still has a
+        // transcript brings the conversation BACK, while stripping `--resume`
+        // starts an empty one. Recovery wins whenever it is available — and when
+        // it fires, the old fatal diagnosis no longer describes the new target,
+        // so it is cleared rather than left to strip a resume we just fixed.
+        const repaired = repairPaneResume(deps.db, pane.id);
+        if (repaired) {
+          st.fatal = undefined;
+          st.attempts = 0;
+          respawns.set(pane.id, st);
+          announceRepairs([repaired], 'respawn');
+          // The repair rewrote startup_cmd; the ensurePane below already
+          // re-reads the row rather than typing this loop's stale copy.
+        }
         //
         // Dead-session self-heal: the runner told us (fatal) that its resume
         // target is gone from the harness's store — a bridged session, a
@@ -566,6 +1018,19 @@ export function attachWsServer(deps: {
           // bubbles don't linger, and a much-later hand-restart (a fresh session)
           // doesn't suddenly flood them all in. New sends are already rejected.
           if (queue.clear(pane.id) > 0) broadcastQueue(pane.id);
+          // …AND ITS TAB'S LIFECYCLE ENDS TOO, if it is a sub-chat. This is the
+          // only place that knows a runner is gone FOR GOOD rather than for the
+          // moment, and until it said so the tab kept `retired_at IS NULL` for
+          // ever: three workers killed by the ptyd bug sat in the sidebar for
+          // hours reading exactly like running ones. Everything the tab
+          // lifecycle hangs off — retirement, the spawn report, the round —
+          // fires at TURN-END, and a dead runner never reaches one.
+          //
+          // The POLICY (single-pane sub-chats report crashes; pins keep rows)
+          // is tab-retire.ts's; this is the one line of fact. Same
+          // separation as the queue clear above, and the same reason cron's
+          // keep-list is not re-derived here.
+          deps.onRunnerDead?.(pane.id);
           continue;
         }
         bcastToPane(pane.id, {
@@ -578,16 +1043,25 @@ export function attachWsServer(deps: {
           } catch {
             // pane not in ptyd (reboot-orphaned) — ensurePane spawns it fresh
           }
-          const workspaceId = tabs.getWorkspaceId(pane.tab_id);
+          // Both probes awaited RPCs. Deletion, archival, or conversion in
+          // that gap revokes our ownership; never resurrect their stale row.
+          // This also picks up a resume repair or move made during the wait.
+          const fresh = panes.getById(pane.id);
+          if (
+            !fresh ||
+            fresh.kind !== 'shell' ||
+            !fresh.startup_cmd?.startsWith('muxpad agent') ||
+            tabs.clockRow(fresh.tab_id)?.retired_at !== null
+          )
+            continue;
+          const workspaceId = tabs.getWorkspaceId(fresh.tab_id);
           await deps.ptyd.ensurePane({
-            id: pane.id,
-            shell: pane.shell ?? process.env.SHELL ?? '/bin/zsh',
-            // Re-read: the dead-session heal above may have just rewritten it,
-            // and typing the stale `--resume` would reproduce the same fatal.
-            startup_cmd: panes.getById(pane.id)?.startup_cmd ?? pane.startup_cmd,
-            cwd: safeCwd(pane.cwd),
-            env: pane.env,
-            tab_id: pane.tab_id,
+            id: fresh.id,
+            shell: fresh.shell ?? process.env.SHELL ?? '/bin/zsh',
+            startup_cmd: fresh.startup_cmd,
+            cwd: safeCwd(fresh.cwd),
+            env: fresh.env,
+            tab_id: fresh.tab_id,
             ...(workspaceId !== undefined ? { workspace_id: workspaceId } : {}),
           });
         } catch {
@@ -600,6 +1074,35 @@ export function attachWsServer(deps: {
     }
   };
   const respawnSweep = setInterval(() => void sweepDeadRunners(), RESPAWN_SWEEP_MS);
+
+  /**
+   * Unlist subagents that stopped making progress. See {@link reapStalledEntries}
+   * for why the server needs this even though the runner ends its own agents:
+   * runners are version-skewed by design and old ones never send a terminal
+   * frame, so without this a leaked entry outlives every process involved.
+   */
+  const sweepStalledSubagents = (): void => {
+    const now = Date.now();
+    for (const [paneId, conn] of agentRunners) {
+      const reaped = reapStalledEntries(
+        conn.subagents,
+        conn.subagentChangedAt,
+        now,
+        conn.subagentReaped,
+      );
+      if (reaped.length === 0) continue;
+      // Must look like an end to every client, or the rows linger until the
+      // next 10s session poll happens to notice (same contract as eviction).
+      for (const id of reaped)
+        bcastToPane(paneId, { t: 'subagent', progress: { toolUseId: id, steps: 0, done: true } });
+      syncSubagentCount(paneId);
+      console.warn(
+        `[ws] pane ${paneId}: retired ${reaped.length} subagent row(s) with no progress in ${Math.round(SUBAGENT_STALL_MS / 60_000)}m. Either a runner end-path leaked (stale runner build?) or the work really is over.`,
+      );
+    }
+  };
+  const stallSweep = setInterval(sweepStalledSubagents, STALL_SWEEP_MS);
+  stallSweep.unref?.();
 
   // -------------------------------------------------------------------------
   // Server-owned send queue. A user message that can't run right now (agent
@@ -633,9 +1136,10 @@ export function attachWsServer(deps: {
       // false and no event fired at all. Mirror the optimism into both.
       conn.turnActive = true;
       conn.lastSendAt = Date.now();
+      conn.pendingSendText = next.text;
       if (isHumanMessage(next.text)) conn.lastHumanSendAt = conn.lastSendAt;
       deps.cache.setAgentBusy(paneId, true);
-      emitOptimisticTurnStart(paneId);
+      emitOptimisticTurnStart(paneId, next.id);
       queue.remove(next.id, paneId);
       broadcastQueue(paneId);
     }
@@ -654,17 +1158,18 @@ export function attachWsServer(deps: {
     if (!t) return { status: 'rejected', reason: 'empty message' };
     const pane = panes.getById(paneId);
     if (!pane) return { status: 'rejected', reason: 'pane not found' };
-    // Living sidebar: the user addressing this pane is a discrete, deliberate
-    // act — forced, like turn-done. Recorded before the accept/queue/reject
-    // branch on purpose: a message the user MEANT to send is activity even if
-    // the agent turns out to be dead.
+    // An attempted send is attention even when rejected, but only accepted
+    // work may revive the chat or open a worker round. Record recency here;
+    // noteUserMessage below runs after relay/enqueue, before turn-start.
     activity.touchTab(pane.tab_id, { force: true });
     const conn = agentRunners.get(paneId);
     // Fast path: agent free and nothing queued ahead of it → run immediately.
     if (conn && !conn.turnActive && queue.count(paneId) === 0) {
       if (sendToRunner(paneId, { t: 'send', text: t })) {
+        activity.noteUserMessage(pane.tab_id);
         conn.turnActive = true; // optimistic; runner's turn-start reaffirms
         conn.lastSendAt = Date.now();
+        conn.pendingSendText = t;
         if (isHumanMessage(t)) conn.lastHumanSendAt = conn.lastSendAt;
         // Same D14 mirroring as drainQueue: turn state, pane status and the
         // bus must not disagree for the duration of the round trip.
@@ -688,6 +1193,7 @@ export function attachWsServer(deps: {
         reason: `too many queued messages (max ${MAX_QUEUED_SENDS}) — wait for some to run`,
       };
     const row = queue.enqueue(paneId, t);
+    activity.noteUserMessage(pane.tab_id);
     broadcastQueue(paneId);
     // Nudge delivery: if the runner is idle we lost a relay race (drain now);
     // if it's absent, a sweep is the best "is it back yet?" probe.
@@ -780,6 +1286,42 @@ export function attachWsServer(deps: {
     // App-level event stream. One socket per browser; receives JSON-encoded
     // MuxpadEvent frames for structural state changes (panes/tabs/workspaces).
     // PTY I/O still goes through /ws/pane/:id below.
+    // The browser viewer's frame stream, proxied so the link can be a tailnet
+    // one (see browser/BrowserProxy.ts). It rides the origin check above, which
+    // is the main reason it lives here rather than on the host's own port.
+    if (url.pathname.startsWith('/browser/') && url.pathname.endsWith('/ws')) {
+      const target = deps.browserViewerSocket?.(url.pathname);
+      if (!target) {
+        refuseUpgrade(socket, 'no such browser');
+        return;
+      }
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        // A plain byte pipe in both directions. Nothing here inspects frames:
+        // the host already validates every input message, and a second opinion
+        // about the protocol is a second thing to keep in sync.
+        const upstream = new WebSocket(target);
+        upstream.binaryType = 'nodebuffer';
+        const closeBoth = () => {
+          try {
+            ws.close();
+          } catch {}
+          try {
+            upstream.close();
+          } catch {}
+        };
+        upstream.on('open', () => {
+          ws.on('message', (d) => upstream.readyState === 1 && upstream.send(d));
+        });
+        upstream.on('message', (d, isBinary) => {
+          if (ws.readyState === 1) ws.send(d, { binary: isBinary });
+        });
+        upstream.on('close', closeBoth);
+        upstream.on('error', closeBoth);
+        ws.on('close', closeBoth);
+        ws.on('error', closeBoth);
+      });
+      return;
+    }
     if (url.pathname === '/ws/events') {
       wss.handleUpgrade(req, socket, head, (ws) => {
         // Heartbeat participation: the sweep above pings every wss client.
@@ -828,6 +1370,35 @@ export function attachWsServer(deps: {
         const prev = agentRunners.get(paneId);
         if (prev) {
           agentRunners.delete(paneId);
+          // A displaced runner's TURN dies with it, and this is the only place
+          // that can say so. Teardown — which closes the turn out on a plain
+          // disconnect — refuses to act for a socket that is no longer the
+          // registered one, so a runner replaced MID-TURN used to emit `start`
+          // and never `done`: `muxpad agent wait` and the Archiver's realtime
+          // enqueue both block to timeout on a turn that ended when the process
+          // was told to exit. Same shape as teardown's, with this conn's own
+          // sid/backend (the successor's are not known yet, and would be a lie).
+          if (prev.turnActive) {
+            prev.turnActive = false;
+            deps.cache.setAgentBusy(paneId, false);
+            bcastToPane(paneId, {
+              t: 'turn-done',
+              ok: false,
+              error: 'agent replaced by a newer runner',
+            });
+            deps.events.emit({
+              type: 'agent_turn',
+              pane_id: paneId,
+              phase: 'done',
+              sid: prev.sid,
+              backend: prev.backend,
+            });
+          }
+          // The dead runner's half-streamed sentence is not the successor's.
+          // Teardown drops it on every other exit path; without this a chat
+          // socket that (re)connects while the NEW runner is mid-turn renders
+          // the corpse's partial text as the live stream.
+          streamBufs.delete(paneId);
           const stale = prev.ws;
           try {
             stale.close(CLOSE_RUNNER_DISPLACED, 'replaced by a newer runner for this pane');
@@ -847,15 +1418,48 @@ export function attachWsServer(deps: {
           sid: null,
           backend: 'claude',
           turnActive: false,
-          pendingQuestion: null,
+          pendingQuestions: new Map(),
           subagents: new Map(),
+          subagentChangedAt: new Map(),
+          subagentReaped: new Map(),
           lastOverflowWarnAt: 0,
           status: null,
           lastSendAt: 0,
           lastHumanSendAt: 0,
+          lastExplicitNotifyAt: 0,
+          pendingSendText: null,
         };
         agentRunners.set(paneId, conn);
+        // THIS runner owns the pane's per-connection state from this instant,
+        // and it starts empty. Anything the previous connection left in the
+        // CACHE has to go with it — the displaced conn's teardown is a no-op by
+        // design (see the guard in teardown), so this is the only place that
+        // can retire it. Both fields are rebuilt within a beat by the runner's
+        // own `onConnected` re-announce (roster + any question it is really
+        // holding), so a plain ws blip costs a blink, not a lost subagent. What
+        // it buys is that a REPLACED runner can no longer bequeath a phantom
+        // `agents: N` / stuck `working` (or a stuck `blocked`) to its successor.
+        syncSubagentCount(paneId);
+        deps.cache.setBlocked(paneId, false);
         const bcast = (obj: unknown) => bcastToPane(paneId, obj);
+        /**
+         * Put a question in front of the user: render it and ring their phone.
+         *
+         * One function for both the moment a question ARRIVES at the front of
+         * an empty queue and the moment one is PROMOTED to the front, because
+         * those are the same event from the user's side — a card appearing.
+         * Splitting them is how the push went missing: it used to fire on
+         * arrival, so a question that had to wait its turn rang for a card
+         * nobody could see yet and then stayed silent when it finally showed.
+         */
+        const presentQuestion = (qid: string, questions: AgentQuestion[]) => {
+          bcast({ t: 'question', qid, questions });
+          const q = questions[0]?.question;
+          deps.notifyPane?.(
+            paneId,
+            q ? `asks: ${q.length > 80 ? `${q.slice(0, 80)}…` : q}` : 'has a question',
+          );
+        };
         const emitChange = () =>
           deps.events.emit({ type: 'agent_session.updated', pane_id: paneId });
         // Turn lifecycle on the GLOBAL bus (spec A4): a supervisor watching N
@@ -909,6 +1513,14 @@ export function attachWsServer(deps: {
             // deliberate act by the user, so re-arm supervision immediately.
             if (respawns.get(paneId)?.gaveUp) respawns.delete(paneId);
             else armProbation(paneId);
+            // A runner saying hello is the strongest possible refutation of a
+            // recorded provisioning failure: the pty not only exists, something
+            // in it booted and connected back. Drop the complaint — the whole
+            // point of recording it was to stop a working chat from being
+            // described as broken, and describing a WORKING one as broken is
+            // the same bug wearing the other hat. The syncSession below is what
+            // repaints the open chat.
+            clearProvisionError(paneId);
             agents.attachRunner({
               pane_id: paneId,
               cwd: frame.cwd,
@@ -935,7 +1547,23 @@ export function attachWsServer(deps: {
             // (tabs route or a previous rewrite) — never from the ws frame —
             // so no new injection surface; the single-quoted form is the
             // tabs-route shape, the bare form a hand-typed `muxpad agent`.
-            const prevPane = panes.getById(paneId);
+            let prevPane = panes.getById(paneId);
+            // Chat is Claude; picking another harness IS picking Agent mode
+            // (modeForBackend — the one coercion point). Every door that
+            // decides a mode already runs through it, but a ROW can still
+            // arrive here saying 'chat' on a codex/cursor pane: one created
+            // before the rule, or a hand-typed startup command. The hello is
+            // the moment we learn which harness is ACTUALLY running, so it is
+            // where such a row gets settled — the mode is corrected, the
+            // startup_cmd loses its `--mode chat` below, and `pane.updated`
+            // re-renders the chip. No UI, no notice: the state just stops
+            // existing.
+            const settledMode = modeForBackend(prevPane?.mode, backendId);
+            if (prevPane && settledMode !== prevPane.mode) {
+              panes.setMode(paneId, settledMode);
+              prevPane = panes.getById(paneId) ?? prevPane;
+              emitPaneUpdated(paneId);
+            }
             const prevCmd = prevPane?.startup_cmd ?? '';
             const modelMatch = prevCmd.match(/--model ('[^']*'|[^\s']+)/);
             const modelPart = modelMatch ? ` --model ${modelMatch[1]}` : '';
@@ -945,9 +1573,9 @@ export function attachWsServer(deps: {
             const backendPart = backendId === 'claude' ? '' : ` --backend ${backendId}`;
             // Agent mode, taken from the PANE ROW (the source of truth), not
             // parsed back out of the previous command — a PATCH may have just
-            // changed it. 'deep' stays implicit for the same
+            // changed it. Agent mode stays implicit for the same
             // never-churn-existing-panes reason as claude above.
-            const modePart = prevPane?.mode === 'do' ? ' --mode do' : '';
+            const modePart = prevPane?.mode === 'chat' ? ' --mode chat' : '';
             const selfHealCmd = `muxpad agent${backendPart}${modePart}${modelPart} --resume ${frame.sid}`;
             const isReconnect = prevCmd === selfHealCmd;
             // Self-heal: the pane's startup command now resumes THIS session,
@@ -990,15 +1618,53 @@ export function attachWsServer(deps: {
             // event; no agent_session.updated here — emitting per turn made
             // every open view refetch the session twice per turn.
             deps.cache.setAgentBusy(paneId, true);
-            bcast({ t: 'turn-start' });
+            // Stamp the turn with the message that started it, and CONSUME the
+            // stamp — see `pendingSendText`. A turn with no pending send (cron,
+            // wakeup, a resume that picks up mid-thought) broadcasts bare, which
+            // is what tells a listening client "this one isn't yours".
+            const startedBy = conn.pendingSendText;
+            conn.pendingSendText = null;
+            bcast({ t: 'turn-start', ...(startedBy ? { text: startedBy } : {}) });
             emitTurn('start');
           } else if (frame.t === 'stream') {
             if (typeof frame.delta !== 'string') return;
             appendStreamBuf(paneId, frame.delta);
             bcast({ t: 'stream', delta: frame.delta });
+          } else if (frame.t === 'speak' || frame.t === 'speak-delta') {
+            // The agent's SPEECH, relayed the moment it exists, for a consumer
+            // that has to act on it (voice) rather than draw it.
+            //
+            // Relayed and NOTHING ELSE — deliberately. It does not touch
+            // `streamBufs`: that buffer is the scratchpad preview the chat
+            // replays on a mid-turn reconnect, and a reply is not scratchpad.
+            // It does not touch turn state, unread, or the push body; those are
+            // already decided at turn-done from the same replies. The one job
+            // here is latency.
+            //
+            // It also cannot double-render. The chat client's frame handler is
+            // an if/else chain with no branch for these kinds, so the text UI
+            // ignores them structurally — not by deduping against the
+            // transcript, which would be a rule two sides have to keep
+            // agreeing on. The transcript tail stays the only thing that draws
+            // a reply bubble.
+            if (typeof frame.id !== 'string' || !frame.id) return;
+            if (frame.t === 'speak') {
+              if (typeof frame.text !== 'string' || !frame.text) return;
+              bcast({ t: 'speak', id: frame.id, text: frame.text, n: frame.n });
+            } else {
+              if (typeof frame.delta !== 'string' || !frame.delta) return;
+              bcast({ t: 'speak-delta', id: frame.id, delta: frame.delta });
+            }
           } else if (frame.t === 'turn-done') {
             conn.turnActive = false;
-            conn.pendingQuestion = null;
+            conn.pendingQuestions.clear();
+            // Retire the correlation stamp with the turn. Normally turn-start
+            // already consumed it, but a `turn-done` can arrive with NO
+            // preceding `turn-start` — a Stop that cancels a send the runner
+            // had queued reports exactly that — and the stamp would otherwise
+            // outlive the send it names and be worn by the next autonomous
+            // turn. See `pendingSendText`.
+            conn.pendingSendText = null;
             // No question outlives its turn (the runner resolves them all on
             // interrupt/result), so the blocked state can't either.
             deps.cache.setBlocked(paneId, false);
@@ -1031,16 +1697,55 @@ export function attachWsServer(deps: {
             // Long-running turns (the user walked away) and autonomous
             // wakeup/cron turns (no recent send) do push.
             if (Date.now() - conn.lastHumanSendAt > INTERACTIVE_PUSH_SUPPRESS_MS) {
-              // Prefer a snippet of what the agent actually said over the
-              // generic "finished its turn".
-              deps.notifyPane?.(
-                paneId,
-                frame.ok !== false ? frame.summary?.trim() || 'finished its turn' : 'turn failed',
-              );
-              // Bold the pane "done, unreviewed" in the nav until it's viewed.
-              // Same interactivity gate as the push: a turn you're actively
-              // driving isn't "unread" (you're watching it). If you're looking
-              // but not typing, the chat client clears this on turn-done.
+              // …unless the agent just notified DELIBERATELY. It already said
+              // the specific thing; "finished its turn" landing on top of it a
+              // few seconds later is a second buzz carrying less information
+              // than the first. The unread mark below still goes up — that is
+              // the quiet channel, and it costs nobody a vibration.
+              if (Date.now() - conn.lastExplicitNotifyAt >= EXPLICIT_NOTIFY_MIN_GAP_MS) {
+                // Prefer a snippet of what the agent actually said over the
+                // generic "finished its turn".
+                deps.notifyPane?.(
+                  paneId,
+                  frame.ok !== false ? frame.summary?.trim() || 'finished its turn' : 'turn failed',
+                );
+              }
+            }
+            // ─── THE BOLD MARK — OUTSIDE THE PUSH GATE ────────────────────────
+            // Reported as "the sidebar isn't consistent in marking tabs that
+            // have new messages in bold", and it was not: this used to sit
+            // INSIDE the `lastHumanSendAt` gate above, so whether a finished
+            // turn bolded its row depended on how long the turn took. Send a
+            // message, switch tabs, turn lands in 90 seconds → no mark. The
+            // identical turn taking three minutes → mark. Same chat, same
+            // reader, opposite answers.
+            //
+            // The gate's stated reason — "a turn you're actively driving isn't
+            // unread (you're watching it)" — is a question about LOOKING, and
+            // `lastHumanSendAt` answers a question about TYPING. Those come
+            // apart the instant you send something and go elsewhere, which is
+            // the single commonest way to use this thing.
+            //
+            // The right test already exists and is exact: TabView clears the
+            // mark on the tab you actually have open, keyed on a signature that
+            // moves when a turn finishes (see `seenSignature`). So a reader who
+            // is watching never sees a bold row, a reader who is not always
+            // does, and neither answer depends on a clock.
+            //
+            // The PUSH keeps the gate. A vibration during a conversation you
+            // are driving is a real cost; a bold name is not — it is the quiet
+            // channel, and it is the channel a navigator is for.
+            //
+            // …unless that same turn just RETIRED the chat. `emitTurn('done')`
+            // above is a synchronous bus emit, so ChatRetirer has already run
+            // by the time control reaches here and has already cleared this
+            // pane's marks — re-setting one puts the row back into the exact
+            // state retirement exists to end (`done: true` wearing a READY
+            // dot), and nothing will ever clear it again, because nobody opens
+            // a tab that finished last week. The mark is not needed either way:
+            // a retired sub-chat delivered its result to the parent, which is
+            // what "reviewed" was asking about.
+            if (!chatHasLeftTheLiveList(paneId)) {
               panes.setUnread(paneId, true);
               emitPaneUpdated(paneId);
             }
@@ -1050,7 +1755,8 @@ export function attachWsServer(deps: {
             drainQueue(paneId);
           } else if (frame.t === 'question') {
             if (typeof frame.qid !== 'string' || !Array.isArray(frame.questions)) return;
-            conn.pendingQuestion = { qid: frame.qid, questions: frame.questions };
+            const firstOpen = conn.pendingQuestions.size === 0;
+            conn.pendingQuestions.set(frame.qid, frame.questions);
             // D5: "needs input" had NO representation in the nav. The question
             // reached chat sockets and a push and touched nothing else, so a
             // chat parked on ask_user read as plain idle in the sidebar — the
@@ -1061,20 +1767,102 @@ export function attachWsServer(deps: {
             // blocked edge on the bus — invisible to the web client (which
             // dedups) but wrong for anything counting edges.
             deps.cache.setBlocked(paneId, true);
-            bcast({ t: 'question', qid: frame.qid, questions: frame.questions });
-            const q = frame.questions[0]?.question;
-            deps.notifyPane?.(
-              paneId,
-              q ? `asks: ${q.length > 80 ? `${q.slice(0, 80)}…` : q}` : 'has a question',
-            );
+            // Only the FRONT of the queue reaches the clients. A chat client
+            // holds ONE question card (`setQuestion` in ChatPane), so
+            // broadcasting a second question while the first is unanswered
+            // replaces the card — which is precisely how the first one used to
+            // become unanswerable. Held questions are released by the
+            // `question-done` branch below, in order.
+            //
+            // This also gives the runner's reconnect re-emit the right shape
+            // for free: `onConnected` replays every pending frame into a fresh
+            // (empty) conn, so the oldest lands first and is the one shown.
+            if (firstOpen) presentQuestion(frame.qid, frame.questions);
           } else if (frame.t === 'question-done') {
-            if (conn.pendingQuestion?.qid === frame.qid) conn.pendingQuestion = null;
-            if (!conn.pendingQuestion) deps.cache.setBlocked(paneId, false);
+            const wasFront = conn.pendingQuestions.keys().next().value === frame.qid;
+            conn.pendingQuestions.delete(frame.qid);
+            // Unblock only when NOTHING is left. The single-slot version
+            // unblocked on whichever question happened to be in the slot, so
+            // answering the second of two dropped the pane out of `blocked`
+            // while the first still held a tool call frozen.
+            if (conn.pendingQuestions.size === 0) deps.cache.setBlocked(paneId, false);
+            // Harmless for a held qid the clients never saw — their handler is
+            // qid-guarded (`q?.qid === msg.qid ? null : q`).
             bcast({ t: 'question-done', qid: frame.qid });
+            // The card just cleared and someone is next in line: promote them.
+            // Without this the user answers one question and the pane sits
+            // `blocked` with no card, which is the same wedge one level down.
+            if (wasFront) {
+              const next = conn.pendingQuestions.entries().next();
+              if (!next.done) presentQuestion(next.value[0], next.value[1]);
+            }
+          } else if (frame.t === 'notify') {
+            // The `notify` TOOL — the agent deciding this one is worth a phone.
+            //
+            // Deliberately NOT under the turn-done path's interactivity gate.
+            // That gate ("only push if the user hasn't typed for two minutes")
+            // is a guess about whether anyone is watching, and this frame is
+            // the agent OVERRIDING that guess with knowledge the gate does not
+            // have. A five-second turn that discovers the production database
+            // is down must be able to ring.
+            //
+            // Presence is a different question and is still respected, inside
+            // the notifier: "nobody is watching" is a guess, "this device
+            // reported a keystroke nine seconds ago" is an observation. A
+            // backgrounded tab does not heartbeat (web/src/lib/presence.ts
+            // requires visible + real interaction), so the at-my-desk case
+            // still reaches the desktop.
+            if (typeof frame.nid !== 'string' || !frame.nid) return;
+            const ack = (status: NotifyStatus) =>
+              sendToRunner(paneId, { t: 'notify-result', nid: frame.nid, status });
+            const body =
+              typeof frame.text === 'string' ? frame.text.replace(/\s+/g, ' ').trim() : '';
+            if (!body || !deps.notifyPane) {
+              ack('unavailable');
+              return;
+            }
+            const now = Date.now();
+            if (now - conn.lastExplicitNotifyAt < EXPLICIT_NOTIFY_MIN_GAP_MS) {
+              console.warn(
+                `[ws] pane ${paneId}: notify dropped — one per ${EXPLICIT_NOTIFY_MIN_GAP_MS / 1000}s (agent called it again after ${Math.round((now - conn.lastExplicitNotifyAt) / 1000)}s)`,
+              );
+              ack('rate-limited');
+              return;
+            }
+            const outcome = deps.notifyPane(
+              paneId,
+              body.length > NOTIFY_BODY_MAX ? `${body.slice(0, NOTIFY_BODY_MAX - 1)}…` : body,
+            );
+            // Only a push that WENT OUT starts the clock. One held because the
+            // user is looking at the screen, or dropped for want of a
+            // subscription, has cost them nothing — so it must not cost the
+            // next, genuinely urgent call its window.
+            if (outcome === 'sent') conn.lastExplicitNotifyAt = now;
+            ack(outcome);
           } else if (frame.t === 'subagent') {
             if (!frame.progress || typeof frame.progress.toolUseId !== 'string') return;
-            if (frame.progress.done) conn.subagents.delete(frame.progress.toolUseId);
-            else conn.subagents.set(frame.progress.toolUseId, frame.progress);
+            if (frame.progress.done) {
+              conn.subagents.delete(frame.progress.toolUseId);
+              conn.subagentChangedAt.delete(frame.progress.toolUseId);
+              conn.subagentReaped.delete(frame.progress.toolUseId);
+            } else {
+              const id = frame.progress.toolUseId;
+              const tomb = conn.subagentReaped.get(id);
+              if (tomb !== undefined) {
+                // We retired this row for stalling. The runner does not know
+                // that and keeps re-announcing it every 5s. Ignore the echo —
+                // otherwise the reap never sticks and the count flaps forever.
+                // Real progress lifts the tombstone and the row comes back.
+                if (!isMaterialProgress(tomb, frame.progress)) return;
+                conn.subagentReaped.delete(id);
+              }
+              // Stamp only on real news. A keepalive re-announce is byte-identical
+              // to what we hold, and must NOT restart the stall clock — otherwise
+              // a ghost keeps itself alive with the runner's own heartbeat.
+              if (isMaterialProgress(conn.subagents.get(id), frame.progress))
+                conn.subagentChangedAt.set(id, Date.now());
+              conn.subagents.set(id, frame.progress);
+            }
             // Independent backstop on the SERVER's copy. The runner caps its own
             // roster, but runners are version-skewed by design — they only pick
             // up new code when their pane respawns, and a pre-durable runner
@@ -1083,6 +1871,7 @@ export function attachWsServer(deps: {
             // is a bound, never a policy: it drops the OLDEST insertion, so a
             // leak can no longer render an absurd number in the status rail.
             const evicted = evictOverflowEntries(conn.subagents);
+            for (const id of evicted) conn.subagentChangedAt.delete(id);
             // An eviction must LOOK like an end to every client, or the rows
             // linger until the next 10s session poll happens to notice.
             for (const id of evicted)
@@ -1099,7 +1888,7 @@ export function attachWsServer(deps: {
             // roster means "work is running here" whether or not a turn is.
             // setSubagentCount is edge-triggered on the COUNT, so the runner's
             // 5s keepalive (which re-sends the same ids) fans no events.
-            deps.cache.setSubagentCount(paneId, conn.subagents.size);
+            syncSubagentCount(paneId);
             bcast({ t: 'subagent', progress: frame.progress });
           } else if (frame.t === 'status') {
             // Validate off the wire — version-skewed runners are NORMAL
@@ -1110,6 +1899,10 @@ export function attachWsServer(deps: {
             // must still carry the last known list.
             const clean = sanitizeAgentStatus(frame);
             if (!clean) return;
+            // Remember this backend's model list so the LAUNCH picker (which
+            // runs before any session exists) can offer real models instead of
+            // only "Default". See agent-model-catalog.ts.
+            recordModelCatalog(deps.db, conn.backend, clean.models);
             const merged = {
               t: 'status' as const,
               ...clean,
@@ -1153,8 +1946,16 @@ export function attachWsServer(deps: {
           // re-announces its live roster in onConnected, so a ws blip costs at
           // most a blink, not a permanently lost subagent.)
           conn.subagents.clear();
-          deps.cache.setSubagentCount(paneId, 0);
+          conn.subagentChangedAt.clear();
+          conn.subagentReaped.clear();
+          // Registry-derived, and this conn has just left the registry — so
+          // this is a zero, by the same rule as everywhere else.
+          syncSubagentCount(paneId);
           streamBufs.delete(paneId);
+          // The dead runner's in-flight send dies with it; its stamp must not
+          // outlive it (this conn object is still reachable from a closure
+          // until GC, and a resurrected one starts from a fresh record anyway).
+          conn.pendingSendText = null;
           if (conn.turnActive) {
             conn.turnActive = false;
             bcast({ t: 'turn-done', ok: false, error: 'agent disconnected' });
@@ -1201,9 +2002,15 @@ export function attachWsServer(deps: {
           chatClients.set(chatPaneId, clients);
         }
         clients.add(send);
+        deps.onChatPresence?.(chatPaneId, clients.size);
         const unregister = () => {
           clients.delete(send);
-          if (clients.size === 0) chatClients.delete(chatPaneId);
+          const remaining = clients.size;
+          if (remaining === 0) chatClients.delete(chatPaneId);
+          // Fires on BOTH 'close' and 'error' below, so it must stay idempotent
+          // — reporting the same count twice is harmless; reporting it never
+          // would leave a paid voice session running with nobody listening.
+          deps.onChatPresence?.(chatPaneId, remaining);
         };
         ws.on('close', unregister);
         ws.on('error', unregister);
@@ -1222,7 +2029,9 @@ export function attachWsServer(deps: {
         let lastHello = '';
         // Mode last delivered to this socket — the gate for the pane.updated
         // subscription below.
-        let lastSentMode: 'do' | 'deep' = 'deep';
+        let lastSentMode: AgentMode = BASELINE_AGENT_MODE;
+        // Provisioning verdict last delivered, for the same gate.
+        let lastSentProvision: string | null = null;
         // "Has anything been said here?" — shipped on the session frame so the
         // empty-state UI never has to GUESS from `events.length`, which is 0
         // for a beat on every reconnect while history replays asynchronously.
@@ -1250,17 +2059,37 @@ export function attachWsServer(deps: {
         const syncSession = (first: boolean) => {
           const session = agents.getByPane(chatPaneId);
           // The pane's agent mode rides the session frame so every open chat
-          // view learns about a switch. There is deliberately NO chat-header
-          // control for it (a claim this comment used to make): mode is chosen
-          // at pane creation, and switches come from the CLI / automation via
-          // PATCH /api/panes/:id {mode}. That endpoint stays, and so does this
-          // relay — a CLI-driven switch must live-update every device rather
-          // than wait for a respawn. The 10s poll below re-reads the row and
-          // the hello signature includes `mode`, so a change re-pushes.
-          const paneMode = panes.getById(chatPaneId)?.mode ?? 'deep';
+          // view learns about a switch — the chip in the composer's status bar
+          // renders straight off this, and so does a switch made from another
+          // device, the CLI, or automation via PATCH /api/panes/:id {mode}.
+          // The 10s poll below re-reads the row and the hello signature
+          // includes `mode`, so a change re-pushes.
+          //
+          // BASELINE, not the default: the `??` only fires when the pane row
+          // has gone (a delete racing this socket), and inventing "Chat" for a
+          // pane we can no longer read would put a contract claim on screen
+          // with nothing behind it.
+          const paneMode = panes.getById(chatPaneId)?.mode ?? BASELINE_AGENT_MODE;
           const hasMessages = paneHasMessages(session?.current_sid ?? null);
+          // WHY THIS PANE HAS NO AGENT, when something refused to make one.
+          //
+          // It rides the session frame because the chat view's whole model of
+          // the world is this socket, and the alternative it replaces was a
+          // guess: with no session and the grace window elapsed, the UI showed
+          // "Nothing running here · This chat has no agent yet", which is the
+          // right sentence for a pane that never had one and a LIE for a pane
+          // whose spawn failed thirty seconds ago. The client renders this
+          // instead when it is set. See server/src/pane-provision.ts.
+          //
+          // In the hello signature (below) so a failure recorded after this
+          // socket connected — which is the normal order, the ladder runs for
+          // seconds — actually re-pushes, and so does the recovery that clears
+          // it. Null in every healthy case, so it adds nothing to the common
+          // frame and cannot cause churn.
+          const provision = provisionError(chatPaneId);
           const hello = JSON.stringify({
             sid: session?.current_sid ?? null,
+            provision,
             writer: session?.writer ?? null,
             view: session?.view_mode ?? null,
             mode: paneMode,
@@ -1280,15 +2109,20 @@ export function attachWsServer(deps: {
           if (first || hello !== lastHello) {
             lastHello = hello;
             lastSentMode = paneMode;
+            lastSentProvision = provision;
             const runner = agentRunners.get(chatPaneId);
             const turnRunning = runner?.turnActive === true;
             const streamText = streamBufs.get(chatPaneId);
+            const question = frontQuestion(runner);
             const cwd = deps.cache.getCwd(chatPaneId) ?? session?.cwd ?? null;
             send({
               t: 'session',
               session,
               mode: paneMode,
               hasMessages,
+              // Only when set: an absent field reads the same as null to the
+              // client, and the healthy frame stays exactly the bytes it was.
+              ...(provision ? { provisionError: provision } : {}),
               turnRunning,
               // Server-owned pending queue so a (re)connecting or reloaded
               // client renders the same bubbles — the queue is authoritative
@@ -1298,7 +2132,11 @@ export function attachWsServer(deps: {
               ...(turnRunning && streamText ? { streamText } : {}),
               // Mid-turn (re)connect extras: a question awaiting the user and
               // live subagent progress would otherwise be lost to this socket.
-              ...(runner?.pendingQuestion ? { question: runner.pendingQuestion } : {}),
+              // The FRONT of the queue — the same one live clients were
+              // broadcast — so a reloading client and an already-open one show
+              // the same card. (The wire field is singular; the rest of the
+              // queue is served as each is answered.)
+              ...(question ? { question } : {}),
               ...(runner?.status ? { status: runner.status } : {}),
               ...(runner && runner.subagents.size > 0
                 ? { subagents: [...runner.subagents.values()] }
@@ -1338,8 +2176,16 @@ export function attachWsServer(deps: {
           // those would burn two SQLite reads per output burst for a value
           // that changes maybe twice a day.
           else if (e.type === 'pane.updated' && e.pane.id === chatPaneId) {
-            const m = e.pane.mode ?? 'deep';
-            if (m !== lastSentMode) syncSession(false);
+            const m = e.pane.mode ?? BASELINE_AGENT_MODE;
+            // A provisioning verdict (failed, or recovered) is the OTHER thing
+            // worth a resync, and it has to be here rather than on the 10s poll:
+            // the user is looking at a spinner that is about to be wrong either
+            // way, and ten seconds of "Starting…" over a spawn that has already
+            // given up is the silence this whole change exists to remove.
+            // Compared, not merely present, for the same reason `mode` is — this
+            // event also fires on every busy/title/cwd churn.
+            const nextProvision = e.pane.provision_error ?? null;
+            if (m !== lastSentMode || nextProvision !== lastSentProvision) syncSession(false);
           }
         });
         const sessionPoll = setInterval(() => syncSession(false), 10_000);
@@ -1382,6 +2228,16 @@ export function attachWsServer(deps: {
             const conn = agentRunners.get(chatPaneId);
             const sendInFlight = conn ? Date.now() - conn.lastSendAt < 15_000 : false;
             if (conn && (conn.turnActive || sendInFlight)) {
+              // A Stop ABANDONS the relayed send: the runner either interrupts
+              // the turn it started or cancels it before it starts, and in the
+              // second case the only frame that comes back is a bare
+              // `turn-done`. Drop the stamp now — the send it names is over
+              // either way, and an un-retired stamp gets worn by the next
+              // autonomous turn (see `pendingSendText`). Erring toward "no
+              // stamp" is deliberate: an unstamped turn-start binds nothing,
+              // which is silence; a wrongly stamped one speaks a cron's output
+              // as the answer to the user's question.
+              conn.pendingSendText = null;
               sendToRunner(chatPaneId, { t: 'stop' });
             } else {
               send({ t: 'turn-done', ok: true });
@@ -1562,6 +2418,7 @@ export function attachWsServer(deps: {
       new Promise<void>((resolve) => {
         clearInterval(heartbeat);
         clearInterval(respawnSweep);
+        clearInterval(stallSweep);
         for (const paneId of [...probation.keys()]) clearProbation(paneId);
         for (const client of wss.clients) {
           try {

@@ -14,10 +14,24 @@ import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import type { Funnel } from '../funnel.js';
 import {
+  type PublicBase,
+  type PublicBaseAudience,
   type PublicBaseResolver,
   createPublicBaseResolver,
+  durabilityNote,
   normalizeBaseUrl,
 } from '../public-base.js';
+import {
+  type TunnelEnsureResult,
+  noteTunnelDown,
+  noteTunnelUp,
+  readTunnelRecord,
+  readTunnelStatus,
+  tunnelBaseUrl,
+  tunnelWarning,
+  waitForTunnelUrl,
+} from '../tunnel/TunnelApp.js';
+import { probeUrlHealth } from '../url-health.js';
 
 /**
  * Publish API (docs/plans/2026-08-28-muxpad-publish.md §2) — mounted on the
@@ -35,10 +49,17 @@ import {
  * hand.
  *
  * URL resolution does NOT live here. These routes call the ONE resolver in
- * public-base.ts (`createPublicBaseResolver`), which walks six tiers,
- * configuration before discovery:
+ * public-base.ts (`createPublicBaseResolver`), which puts configuration first
+ * and then ranks what it discovered by how long the address LIVES:
  *
- *   env > pinned > hint > funnel > persisted > local
+ *   env > pinned > [ tunnel / hint / tailnet / funnel / persisted,
+ *                    ordered by durability for the audience ] > local
+ *
+ * The default audience is `tailnet` — the durable answer, because these
+ * artifacts are read on their author's own devices and every one of those is a
+ * tailnet node. `audience: 'public'` (POST body, or `?audience=public` on the
+ * GETs) asks for the sendable form instead, and is told when it has a shelf
+ * life. See PublicBaseAudience.
  *
  *   env       MUXPAD_PUBLIC_BASE_URL — a permanent domain, set once.
  *   pinned    `public_base_url_pinned`, set by `muxpad publish --set-base`,
@@ -107,6 +128,39 @@ export { PUBLIC_BASE_URL_KEY, normalizeBaseUrl } from '../public-base.js';
 
 function publicDirOf(dataDir: string): string {
   return join(dataDir, 'public');
+}
+
+/**
+ * The base block every surface reports, built in ONE place so the CLI, the
+ * Hosted view and the publish response cannot describe the same base
+ * differently.
+ *
+ * `durability` and `note` are the fix for the defect this route was shipping
+ * silently: the response said `reachable: true` about a Cloudflare quick tunnel
+ * that would lose its hostname at the next restart, and nothing anywhere said
+ * the link had a shelf life. `note` is the human sentence; `durability` is the
+ * machine-readable half, so a caller can decide without string-matching.
+ *
+ * `localAsNull` because a loopback fallback is not a shareable link — the
+ * listing reports it as no link at all rather than something that looks
+ * copyable and isn't — while `PUT /base` echoes back exactly what it stored.
+ */
+function baseInfo(
+  resolved: PublicBase,
+  opts?: { localAsNull?: boolean; audience?: PublicBaseAudience },
+) {
+  // The note depends on WHO ASKED, not only on what was found: a tailnet address
+  // is the right default answer and a wrong `--public` one, and the sentence has
+  // to say which of those just happened.
+  const note = durabilityNote(resolved.durability, opts?.audience ?? 'tailnet');
+  return {
+    url: opts?.localAsNull !== false && resolved.source === 'local' ? null : resolved.baseUrl,
+    source: resolved.source,
+    reachable: resolved.health ? resolved.health.alive : null,
+    durability: resolved.durability,
+    ...(note ? { note } : {}),
+    ...(resolved.warning ? { warning: resolved.warning } : {}),
+  };
 }
 
 /**
@@ -215,6 +269,23 @@ export function publishRoutes(deps: {
   baseResolver?: PublicBaseResolver;
   baseProbe?: ((url: string) => Promise<import('@muxpad/shared').UrlHealth>) | undefined;
   baseProbeTtlMs?: number | undefined;
+  /**
+   * The no-exec tailnet-name lookup (tailnet-hostname.ts). Absent = off, which
+   * is what every test gets; index.ts wires the real one. See PublicBaseDeps.
+   */
+  tailnetHostname?: (() => Promise<string | null>) | undefined;
+  /**
+   * muxpad's own Cloudflare tunnel. Absent = this instance cannot run one
+   * (no app registry wired — HTTP-only tests), which must degrade to exactly
+   * the behaviour that existed before the tunnel did.
+   */
+  tunnel?:
+    | {
+        ensure(opts?: { start?: boolean }): Promise<TunnelEnsureResult>;
+        /** Bound on how long a publish waits for a cold tunnel. */
+        firstUrlWaitMs?: number;
+      }
+    | undefined;
 }): Hono {
   const app = new Hono();
   // ONE resolver for every path in this file. The read path (GET /) and the
@@ -227,8 +298,15 @@ export function publishRoutes(deps: {
       funnel: deps.funnel,
       publicPort: deps.publicPort ?? 7778,
       ...(deps.publicBaseUrl ? { configuredBaseUrl: deps.publicBaseUrl } : {}),
+      // Wired unconditionally, even without `deps.tunnel`: the RECORD lives in
+      // the database and outlives this process (ptyd owns the tunnel), so a
+      // main server that has just restarted must be able to read back a tunnel
+      // it did not itself start.
+      tunnelBaseUrl: () => tunnelBaseUrl(deps.db),
+      tunnelWarning: () => tunnelWarning(deps.db),
       ...(deps.baseProbe ? { probe: deps.baseProbe } : {}),
       ...(deps.baseProbeTtlMs !== undefined ? { probeTtlMs: deps.baseProbeTtlMs } : {}),
+      ...(deps.tailnetHostname ? { tailnetHostname: deps.tailnetHostname } : {}),
     });
 
   /**
@@ -236,8 +314,19 @@ export function publishRoutes(deps: {
    * where the daemon cannot) and reachability is checked, so `muxpad publish`
    * warns at the moment of publishing if the link it just printed is dead.
    */
-  const resolveForPublish = (hint: unknown) =>
-    base.resolve({ hint, allowDiscovery: true, probe: true });
+  const resolveForPublish = (hint: unknown, audience: PublicBaseAudience) =>
+    base.resolve({ hint, allowDiscovery: true, probe: true, audience });
+
+  /**
+   * `audience` off the wire, defaulting to the durable answer.
+   *
+   * Anything other than the literal `public` means the DEFAULT, deliberately —
+   * a typo, an older CLI, a field nobody sent. The failure mode of guessing
+   * wrong here is asymmetric: default-when-public-was-meant prints a link that
+   * works and is private, public-when-default-was-meant prints a link that dies.
+   */
+  const audienceOf = (raw: unknown): PublicBaseAudience =>
+    raw === 'public' ? 'public' : 'tailnet';
 
   app.post('/', async (c) => {
     const body = (await c.req.json().catch(() => null)) as {
@@ -245,6 +334,7 @@ export function publishRoutes(deps: {
       name?: unknown;
       update?: unknown;
       public_base_url?: unknown;
+      audience?: unknown;
     } | null;
     const src = typeof body?.path === 'string' ? body.path : '';
     if (!src || !isAbsolute(src))
@@ -416,7 +506,34 @@ export function publishRoutes(deps: {
         500,
       );
     }
-    const resolved = await resolveForPublish(hint);
+    // THE LAZY HALF OF "WHEN DOES THE TUNNEL RUN". There is now something to
+    // serve, so open the door — and on a cold instance, wait for it, because a
+    // publish that answers 300ms sooner with a loopback link has answered the
+    // wrong question. Every later publish finds the url already there and this
+    // costs one database read.
+    //
+    // Best-effort in every direction: a tunnel that will not start must never
+    // fail a publish. The bytes are already on disk and the fallback chain
+    // still resolves; the worst case is the link this prints is the one it
+    // would have printed before.
+    if (deps.tunnel) {
+      try {
+        const ensured = await deps.tunnel.ensure();
+        if (ensured.state !== 'disabled' && !tunnelBaseUrl(deps.db)) {
+          await waitForTunnelUrl(deps.db, {
+            ...(deps.tunnel.firstUrlWaitMs !== undefined
+              ? { timeoutMs: deps.tunnel.firstUrlWaitMs }
+              : {}),
+            // Announced is not the same as reachable — see waitForTunnelUrl.
+            ready: async (url) => (await probeUrlHealth(`${url}/`, { timeoutMs: 2500 })).alive,
+          });
+        }
+      } catch (err) {
+        console.error('[tunnel] ensure failed during publish (link may be local-only)', err);
+      }
+    }
+    const audience = audienceOf(body?.audience);
+    const resolved = await resolveForPublish(hint, audience);
     return c.json(
       {
         slug,
@@ -427,6 +544,11 @@ export function publishRoutes(deps: {
           n,
           url: `${resolved.baseUrl}/${versionDirName(slug, n)}/`,
         })),
+        // The publish response is where the shelf life MUST be stated: it is the
+        // one moment a human is handed the link and is about to paste it
+        // somewhere permanent. Everything else is a place they go to look it up
+        // again, which already implies they suspect something.
+        base: baseInfo(resolved, { localAsNull: false, audience }),
         ...(resolved.warning ? { warning: resolved.warning } : {}),
       },
       201,
@@ -451,7 +573,12 @@ export function publishRoutes(deps: {
     //     and under launchd it fails anyway;
     //   · reachability IS checked, because that result is cached for 30s and a
     //     dead tunnel is precisely what the user needs to see here.
-    const resolved = await base.resolve({ probe: true });
+    // `?audience=public` so `muxpad publish --list --public` can show the
+    // sendable form of every url. The DEFAULT listing is the durable one,
+    // because after a hostname rotation this table is the recovery surface —
+    // and a recovery surface full of links that expire is not one.
+    const audience = audienceOf(c.req.query('audience'));
+    const resolved = await base.resolve({ probe: true, audience });
     // A loopback fallback is not a shareable link, so it is reported as no link
     // at all rather than something that looks copyable and isn't.
     const baseUrl = resolved.source === 'local' ? null : resolved.baseUrl;
@@ -491,12 +618,7 @@ export function publishRoutes(deps: {
     // the page silently useless.
     return c.json({
       publishes,
-      base: {
-        url: baseUrl,
-        source: resolved.source,
-        reachable: resolved.health ? resolved.health.alive : null,
-        ...(resolved.warning ? { warning: resolved.warning } : {}),
-      },
+      base: baseInfo(resolved, { audience }),
     });
   });
 
@@ -512,13 +634,27 @@ export function publishRoutes(deps: {
    * DELETE clears the pin and falls back down the chain.
    */
   app.get('/base', async (c) => {
-    const resolved = await base.resolve({ probe: true });
+    // `?probe=0` skips the reachability walk. For `muxpad publish`, which reads
+    // only `discovery_needed` — a pure DB question — inside a 2s curl budget it
+    // cannot afford to spend on probing candidates at 2.5s each. A dead tunnel
+    // blowing that budget would make the CLI fall back to execing tailscale,
+    // which is the macOS prompt this whole change removes. Default stays ON:
+    // `muxpad publish --base` and the Hosted view both want the check.
+    const probe = c.req.query('probe') !== '0';
+    const audience = audienceOf(c.req.query('audience'));
+    const resolved = await base.resolve({ probe, audience });
     return c.json({
-      url: resolved.source === 'local' ? null : resolved.baseUrl,
-      source: resolved.source,
-      reachable: resolved.health ? resolved.health.alive : null,
-      ...(resolved.warning ? { warning: resolved.warning } : {}),
-      candidates: base.candidates(),
+      ...baseInfo(resolved, { audience }),
+      audience,
+      // Ordered for the SAME audience, so the table and the answer above it
+      // cannot disagree about which base won.
+      candidates: base.candidates({ audience }),
+      // For `muxpad publish`, which must decide whether to exec `tailscale` in
+      // its own shell BEFORE it posts. False means "I already know a base" —
+      // and a hint that only re-confirms a known base is not worth the macOS
+      // "access data from other apps" prompt that reading the Tailscale app
+      // bundle costs. A pure read: polling this cannot consume the attempt.
+      discovery_needed: base.discoveryNeeded(),
     });
   });
 
@@ -537,12 +673,7 @@ export function publishRoutes(deps: {
       );
     base.setPinned(url);
     const resolved = await base.resolve({ probe: true });
-    return c.json({
-      url: resolved.baseUrl,
-      source: resolved.source,
-      reachable: resolved.health ? resolved.health.alive : null,
-      ...(resolved.warning ? { warning: resolved.warning } : {}),
-    });
+    return c.json(baseInfo(resolved, { localAsNull: false }));
   });
 
   app.delete('/base', async (c) => {
@@ -551,6 +682,71 @@ export function publishRoutes(deps: {
     return c.json({
       url: resolved.source === 'local' ? null : resolved.baseUrl,
       source: resolved.source,
+    });
+  });
+
+  /**
+   * The tunnel muxpad owns (tunnel/TunnelApp.ts). These three are the ONLY new
+   * surface the feature adds, and all of the policy behind them lives on the
+   * server: the in-pane process reports a fact (a hostname appeared, a process
+   * exited) and is told nothing about precedence.
+   *
+   *   POST   /tunnel { url, pane_id? }        a tunnel is up at this hostname
+   *   DELETE /tunnel { error?, attempts? }    it is not any more
+   *   GET    /tunnel                          what muxpad thinks, for humans
+   *
+   * No new authorization question: the main port is unauthenticated by design
+   * and `PUT /base` already lets any caller on it pin any origin. What is
+   * checked is SHAPE — https, an origin with no path — because this value
+   * becomes the prefix of every published link.
+   */
+  app.post('/tunnel', async (c) => {
+    const body = (await c.req.json().catch(() => null)) as {
+      url?: unknown;
+      pane_id?: unknown;
+    } | null;
+    const url = typeof body?.url === 'string' ? body.url : '';
+    const paneId = typeof body?.pane_id === 'string' ? body.pane_id : null;
+    const stored = noteTunnelUp(deps.db, { url, paneId });
+    if (!stored)
+      return c.json(
+        { error: { code: 'bad_request', message: 'url must be a well-formed https origin' } },
+        400,
+      );
+    // Tell the reporter whether its url is actually being used. A tunnel
+    // running next to a configured MUXPAD_PUBLIC_BASE_URL is a door held open
+    // for nothing, and its own log should say so.
+    const resolved = await base.resolve();
+    return c.json({
+      url: stored,
+      active: resolved.source === 'tunnel',
+      base: resolved.baseUrl,
+      source: resolved.source,
+    });
+  });
+
+  app.delete('/tunnel', async (c) => {
+    const body = (await c.req.json().catch(() => null)) as {
+      error?: unknown;
+      attempts?: unknown;
+    } | null;
+    noteTunnelDown(deps.db, {
+      ...(typeof body?.error === 'string' ? { error: body.error } : {}),
+      ...(typeof body?.attempts === 'number' ? { attempts: body.attempts } : {}),
+    });
+    return c.body(null, 204);
+  });
+
+  app.get('/tunnel', (c) => {
+    const record = readTunnelRecord(deps.db);
+    return c.json({
+      // The live answer, with the ownership rules applied…
+      url: tunnelBaseUrl(deps.db),
+      // …and the raw row, so a url that is being IGNORED (its pane is gone, the
+      // app is stopped) is visible as such instead of just missing.
+      record,
+      status: readTunnelStatus(deps.db),
+      warning: tunnelWarning(deps.db),
     });
   });
 

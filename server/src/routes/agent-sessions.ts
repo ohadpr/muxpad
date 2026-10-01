@@ -1,4 +1,4 @@
-import { type ChatEvent, normalizeTranscriptLine } from '@muxpad/shared';
+import { BASELINE_AGENT_MODE, type ChatEvent, normalizeTranscriptLine } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -8,6 +8,7 @@ import { readTailLines } from '../chat/has-messages.js';
 import type { EventBus } from '../events.js';
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
 import { AgentSessionStore } from '../store/AgentSessionStore.js';
+import { InboundMessageStore } from '../store/InboundMessageStore.js';
 import { PaneStore } from '../store/PaneStore.js';
 
 // How much of a transcript's tail to read when serving /transcript. Bounds
@@ -72,6 +73,12 @@ export function agentSessionsRoutes(deps: {
   // runner-owned panes: no headless-spawn fallback, none of its guard
   // cascade. 409 with a reason while the runner is still booting — callers
   // poll; the runner registers within a few seconds of pane spawn.
+  //
+  // `from_pane` is WHO IS SENDING — `$MUXPAD_PANE_ID`, which every process
+  // inside a muxpad pane carries, so `muxpad agent send` can say which chat it
+  // ran in. Optional, and its absence is a real answer rather than a gap: the
+  // web composer is the human, and a human message renders exactly as it always
+  // has. See InboundMessageStore for what is stored and why it is not the text.
   app.post('/:paneId/send', async (c) => {
     const body = z
       .object({
@@ -79,14 +86,54 @@ export function agentSessionsRoutes(deps: {
           .string()
           .min(1)
           .max(64 * 1024),
+        from_pane: z.string().min(1).max(128).optional(),
       })
       .parse(await c.req.json().catch(() => ({})));
-    const res = deps.agentBridge?.send(c.req.param('paneId'), body.text) ?? {
+    const paneId = c.req.param('paneId');
+    const res = deps.agentBridge?.send(paneId, body.text) ?? {
       ok: false as const,
       reason: 'agent relay unavailable',
     };
+    // ONLY ON ACCEPTANCE, and only when somebody claimed to be a pane.
+    // Provenance for a message that was refused would put a card on a bubble
+    // that never appears. A QUEUED message is accepted — it arrives when the
+    // current turn ends, which is exactly the delayed delivery the text-keyed
+    // join exists to survive.
+    if (res.ok && body.from_pane) recordInbound(paneId, body.from_pane, body.text);
     return c.json(res, res.ok ? 202 : 409);
   });
+
+  /**
+   * Note that a message arrived in this pane's chat, from another chat.
+   *
+   * Both ends are resolved pane → TAB here, because a chat is a tab: the
+   * receiving conversation is drawn per tab, and the sender has to survive its
+   * pane being respawned under it. An unresolvable SENDER is recorded as null
+   * rather than dropped — muxpad knows a send happened and cannot name a chat
+   * behind it, and saying so is better than an invented attribution.
+   *
+   * Never throws into the send path. This is an annotation on a message that has
+   * already been accepted by the runner; a failure here must cost the card, not
+   * the delivery.
+   */
+  function recordInbound(toPaneId: string, fromPaneId: string, text: string): void {
+    try {
+      const panes = new PaneStore(deps.db);
+      const to = panes.getById(toPaneId);
+      if (!to) return; // nothing to hang the record on
+      // A chat does not brief itself — a pane sending into its own chat is the
+      // agent talking to itself, and a "from" card on that says nothing.
+      const from = panes.getById(fromPaneId);
+      if (from?.tab_id === to.tab_id) return;
+      new InboundMessageStore(deps.db).record({
+        tabId: to.tab_id,
+        text,
+        fromTabId: from?.tab_id ?? null,
+      });
+    } catch {
+      // A card is worth strictly less than a delivered message.
+    }
+  }
 
   app.post('/register', async (c) => {
     const body = RegisterSchema.parse(await c.req.json().catch(() => ({})));
@@ -114,14 +161,14 @@ export function agentSessionsRoutes(deps: {
   const turnActive = (paneId: string): boolean => deps.agentBridge?.turnActive(paneId) === true;
 
   // Every tracked session. `mode` is joined in from the PANE row (the source
-  // of truth for ⚡ do / 🧠 deep) rather than duplicated onto agent_sessions:
+  // of truth for Chat / Agent mode) rather than duplicated onto agent_sessions:
   // the mode belongs to the pane and must survive a session being re-minted.
   app.get('/', (c) => {
     const panes = new PaneStore(deps.db);
     return c.json(
       store.list().map((s) => ({
         ...s,
-        mode: panes.getById(s.pane_id)?.mode ?? 'deep',
+        mode: panes.getById(s.pane_id)?.mode ?? BASELINE_AGENT_MODE,
         turn_active: turnActive(s.pane_id),
       })),
     );

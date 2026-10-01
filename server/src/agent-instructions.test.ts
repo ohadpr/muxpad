@@ -148,3 +148,147 @@ describe('agent-instructions', () => {
     );
   });
 });
+
+/**
+ * The TCC rule.
+ *
+ * Two agents put a macOS permission dialog on the user's real screen in one day,
+ * both by reaching into an application bundle for a fact — `7dcf5f1` exec'd the
+ * binary inside Tailscale.app to print a URL, and browser discovery stat'd
+ * /Applications/Google Chrome.app to find a browser. Both had read the existing
+ * policy. "Never put a window on their screen" did not stop either of them,
+ * because neither thought they were opening a window.
+ *
+ * So the instruction has to name the ACTION, not just the outcome.
+ */
+describe('the browser policy names app bundles specifically', () => {
+  const policy = AGENT_INSTRUCTIONS_SEED;
+
+  it('forbids touching an app bundle, in those words', () => {
+    expect(policy).toMatch(/\.app\b/);
+    expect(policy).toMatch(/\/Applications/);
+    expect(policy).toMatch(/bundle/i);
+  });
+
+  it('says that a SYSTEM DIALOG counts as a window on their screen', () => {
+    // The gap that let this happen twice: an agent can believe it is obeying
+    // "no windows" while provoking a dialog it never renders itself.
+    expect(policy).toMatch(/permission dialog|system dialog/i);
+  });
+
+  it('names the prompt text, so the next agent recognises it on sight', () => {
+    expect(policy).toMatch(/access data from other apps/i);
+  });
+
+  it('gives the alternative, not just the prohibition', () => {
+    // A rule with no escape hatch gets worked around. Both real fixes had the
+    // same shape: ask something that already knows, or use a binary we own.
+    expect(policy).toMatch(/MUXPAD_CHROME_BIN|ms-playwright|ask the server/i);
+  });
+
+  it('covers the other prompt families, not just this one', () => {
+    expect(policy).toMatch(/Screen Recording/i);
+    expect(policy).toMatch(/Accessibility/i);
+    expect(policy).toMatch(/osascript|Automation/i);
+  });
+});
+
+/**
+ * Handing the browser to a person.
+ *
+ * The expensive failure this replaces, from a session on this machine:
+ * "I burned several turns on retries that were never going to work." A login
+ * wall does not become passable by trying again, and neither does a CAPTCHA —
+ * the industry position, including Claude Code's own Chrome integration, is to
+ * stop and ask the human. muxpad can now DO that, so the instruction has to
+ * name the move.
+ */
+describe('the browser policy teaches the handoff', () => {
+  const policy = AGENT_INSTRUCTIONS_SEED;
+
+  it('names the endpoint an agent calls to ask for a person', () => {
+    expect(policy).toContain('/needs-you');
+  });
+
+  it('says NOT to retry, and not to try to solve it', () => {
+    expect(policy).toMatch(/do not retry/i);
+    expect(policy).toMatch(/do not (try to )?solve/i);
+  });
+
+  it('lists the walls this applies to', () => {
+    expect(policy).toMatch(/login/i);
+    expect(policy).toMatch(/CAPTCHA/i);
+    expect(policy).toMatch(/payment|card/i);
+  });
+
+  it('tells the agent to pass its tab, or the card lands in no conversation', () => {
+    // Scoping is the difference between a summons in the chat that is waiting
+    // for it and a summons nobody ever sees.
+    expect(policy).toMatch(/MUXPAD_TAB_ID/);
+  });
+
+  it('says a refusal means WAIT, not try again', () => {
+    expect(policy).toMatch(/409|human has the wheel/i);
+  });
+});
+
+describe('the summons is one short line', () => {
+  const policy = AGENT_INSTRUCTIONS_SEED;
+
+  it('asks for a handful of words, not a paragraph', () => {
+    // The reason is the whole content of a card in a conversation, and a card
+    // is one line wide on a phone. A model given no budget writes three
+    // sentences of context nobody reads on a 390px screen.
+    expect(policy).toMatch(/five|5 words|one line/i);
+  });
+
+  it('shows what a good one looks like, because a rule alone is ignored', () => {
+    expect(policy).toMatch(/Amazon needs a login|e\.g\./i);
+  });
+});
+
+describe('the handoff lands where the work is', () => {
+  const policy = AGENT_INSTRUCTIONS_SEED;
+
+  it('tells the agent to reach the wall before summoning', () => {
+    // Handing somebody a home page and letting them hunt for the sign-in link
+    // is not a handoff, it is a forward. The agent can click through to the
+    // actual form; it just has to be told that is its job.
+    expect(policy).toMatch(/before you (ask|summon)|walk|get the page to/i);
+    expect(policy).toMatch(/login form|the form itself|point of action/i);
+  });
+
+  it('asks it to VERIFY the form is there, not assume', () => {
+    expect(policy).toMatch(/verify|confirm|check that/i);
+  });
+
+  it('asks for a selector so the viewer can point at it', () => {
+    expect(policy).toContain('selector');
+  });
+});
+
+describe('what agents are told about a browser that is not running yet', () => {
+  /**
+   * Browsers became lazy tonight: nothing starts until the first tool call.
+   * Every agent on the machine reads these instructions, and an agent that
+   * treats the birth of a browser as a failure retries — which is the one
+   * behaviour that turns a one-second pause into a storm.
+   */
+  it('says the first call starts it, and that the wait is not a fault', () => {
+    const text = AGENT_INSTRUCTIONS_SEED;
+    expect(text).toMatch(/starts when you first reach for it/i);
+    expect(text).toMatch(/do not retry/i);
+  });
+
+  it('still tells them to stop at a wall rather than push through it', () => {
+    // The rule the whole handoff rests on; a doc edit must not cost it.
+    expect(AGENT_INSTRUCTIONS_SEED).toMatch(/stop at a wall/i);
+    expect(AGENT_INSTRUCTIONS_SEED).toMatch(/needs-you/);
+  });
+
+  it('still names the profile as the agent’s OWN browser', () => {
+    // Summoning somebody to another browser sends them to log in somewhere the
+    // agent cannot see — the bug this replaced.
+    expect(AGENT_INSTRUCTIONS_SEED).toContain('s-$MUXPAD_TAB_ID');
+  });
+});

@@ -1,6 +1,7 @@
 import type { Tab } from '@muxpad/shared';
 import {
-  AgentModeSchema,
+  AgentModeInputSchema,
+  BOOTSTRAP_TAB_NAME,
   LayoutNodeSchema,
   appendLeafToLayout,
   collectLayoutLeaves,
@@ -16,11 +17,15 @@ import { type PtydCache, cronsByTab, decoratePane, decorateTab } from '../ptyd-c
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
 import { randomWorkspaceName } from '../random-name.js';
 import { safeCwd } from '../safe-cwd.js';
+import { InboundMessageStore } from '../store/InboundMessageStore.js';
 import { PaneStore } from '../store/PaneStore.js';
+import { SpawnRoundStore } from '../store/SpawnRoundStore.js';
 import { TabStore } from '../store/TabStore.js';
 import { WorkspaceStore } from '../store/WorkspaceStore.js';
 import { pruneDeadPanes } from '../store/migrations.js';
 import { type TabActivity, compareUnpinnedTabs } from '../tab-activity.js';
+import { type ClockSnapshot, clockSnapshot, reviveChat, tabLifecycle } from '../tab-clock.js';
+import { retireChat } from '../tab-retire.js';
 
 /**
  * CRUD for tabs (the things in the tab bar). Each tab belongs to a
@@ -37,13 +42,19 @@ export function tabsRoutes(deps: {
   const app = new Hono();
   const tabs = new TabStore(deps.db);
   const panes = new PaneStore(deps.db);
-  // Only for refusing hidden system containers as a move/merge destination.
+  // Refusing hidden system containers as a move/merge destination, and
+  // enumerating the VISIBLE ones for the cross-workspace `/all` read.
   const workspaces = new WorkspaceStore(deps.db);
 
   app.post('/', async (c) => {
     const body = z
       .object({
-        workspace_id: z.string(),
+        // OPTIONAL, because a spawn does not need one: a chat with a parent
+        // takes its parent's workspace (see below), and requiring the caller to
+        // name one anyway is what made every scripted spawn carry an ambient
+        // guess. Still required — enforced below, not by the schema — for a
+        // ROOT tab, which has nothing to inherit from.
+        workspace_id: z.string().optional(),
         name: z.string().optional(),
         layout: LayoutNodeSchema.optional(),
         // Atomic tab-with-pane creation — the tabs-first default. 'shell'
@@ -66,21 +77,86 @@ export function tabsRoutes(deps: {
         // Allowlisted enum → safe to bake into the startup_cmd shell string.
         // 'pick' = created pending, harness chosen later in the chat page.
         backend: z.enum(['claude', 'codex', 'cursor', 'pick']).optional(),
-        // Agent behavior mode for an 'agent' bootstrap (⚡ do / 🧠 deep;
-        // default deep = today's behavior). Rides the pane row AND the
+        // Agent mode for an 'agent' bootstrap (Chat / Agent). Omitted →
+        // DEFAULT_AGENT_MODE (Chat), applied in bootstrapTab so every door
+        // into "make me an agent tab" agrees. Rides the pane row AND the
         // startup_cmd, so it survives respawns. Allowlisted enum → safe to
-        // bake into the shell string.
-        mode: AgentModeSchema.optional(),
+        // bake into the shell string; accepts the pre-rename 'do'/'deep' so a
+        // version-skewed `muxpad agent new --mode=do` still lands.
+        mode: AgentModeInputSchema.optional(),
+        // HIERARCHY. The chat this one is being spawned FROM — it shares that
+        // chat's decay clock, and the sidebar nests it underneath.
+        //
+        // Two spellings because callers know two different things. The web app
+        // knows the tab it is in; anything running INSIDE a pane (the CLI,
+        // wearing $MUXPAD_PANE_ID) knows only its pane, and making every such
+        // caller do its own pane→tab lookup is how one of them ends up not
+        // doing it.
+        spawned_by: z.string().optional(),
+        spawned_by_pane: z.string().optional(),
       })
       .parse(await c.req.json().catch(() => ({})));
+    // Resolve the parent, and DROP it if it doesn't exist rather than
+    // rejecting: a worker being spawned must not fail to exist because the
+    // chat that asked for it has since been deleted. An unresolvable parent
+    // leaves the new chat a root with a clock of its own, which is exactly
+    // what it now is.
+    const spawnedByPaneTab = body.spawned_by_pane
+      ? panes.getById(body.spawned_by_pane)?.tab_id
+      : undefined;
+    const parentId = body.spawned_by ?? spawnedByPaneTab;
+    const spawned_by = parentId && tabs.getById(parentId) ? parentId : null;
+    /**
+     * WHERE A SPAWN LANDS IS ITS PARENT'S BUSINESS, and nobody else's.
+     *
+     * A child used to land wherever the CALLER said — which, for the CLI, meant
+     * `MUXPAD_WORKSPACE_ID` out of the spawning pane's environment. That is an
+     * ambient guess stamped at the pane's birth, and it goes wrong in the two
+     * ways the user actually hit:
+     *
+     *   · The env value is FROZEN. Move a chat to another workspace and its
+     *     agents keep spawning into the old one — and those children inherit
+     *     the same stale value, so a workspace nobody uses any more
+     *     perpetuates itself with no flag involved.
+     *   · A child in a DIFFERENT workspace from its parent does not nest. The
+     *     sidebar groups by workspace first, so the parent→child relationship
+     *     it was created with is not drawn anywhere the user was looking; the
+     *     child surfaces as an unrelated root in a workspace they had stopped
+     *     opening.
+     *
+     * Parentage is read LIVE from the row, so it cannot go stale, and a child
+     * in a different workspace from its parent stops being expressible. An
+     * explicit `workspace_id` is therefore IGNORED when a parent resolved —
+     * deliberately not a 400: a spawn is delegation, and failing one over a
+     * flag the caller had no reason to think was wrong helps nobody.
+     */
+    const parentWorkspace = spawned_by ? tabs.getWorkspaceId(spawned_by) : undefined;
+    const workspace_id = parentWorkspace ?? body.workspace_id;
+    if (!workspace_id) {
+      // Only reachable for a ROOT tab (no parent, or a parent that has since
+      // been deleted), which genuinely has nowhere to go.
+      // The `{ error: { code, message } }` shape this file uses everywhere —
+      // it is also the one the CLI unwraps to print (`http_request`), so the
+      // sentence reaches whoever ran the command.
+      return c.json(
+        {
+          error: {
+            code: 'workspace_required',
+            message: 'workspace_id required — there is no parent chat to inherit one from',
+          },
+        },
+        400,
+      );
+    }
     // Agent tabs get a deliberate name + mark (auto-renamed to the session's
     // AI title once the conversation has one); everything else keeps the
     // random-name default. Rows, events and the eager ptyd spawn live in
     // bootstrapTab — shared verbatim with the cron scheduler's new-tab mode.
     const name =
-      body.name?.trim() || (body.bootstrap === 'agent' ? 'agent' : randomWorkspaceName());
+      body.name?.trim() ||
+      (body.bootstrap === 'agent' ? BOOTSTRAP_TAB_NAME : randomWorkspaceName());
     const created = await bootstrapTab(deps, {
-      workspace_id: body.workspace_id,
+      workspace_id,
       name,
       ...(body.layout !== undefined ? { layout: body.layout as string } : {}),
       ...(body.bootstrap ? { bootstrap: body.bootstrap } : {}),
@@ -88,6 +164,7 @@ export function tabsRoutes(deps: {
       ...(body.model !== undefined ? { model: body.model } : {}),
       ...(body.backend !== undefined ? { backend: body.backend } : {}),
       ...(body.mode !== undefined ? { mode: body.mode } : {}),
+      ...(spawned_by ? { spawned_by } : {}),
       // Deliberately NO icon. Agent tabs used to be created wearing `✳`, which
       // was the worst of both worlds: every one of them drew the same glyph,
       // so the rail was already the uniform column a per-tab icon exists to
@@ -101,18 +178,30 @@ export function tabsRoutes(deps: {
       // row, bare or not. A bare row's advantage is that it has no headline
       // either, so its first accepted label is by definition a change.)
     });
-    return c.json(created.tab, 201);
+    // `workspace_id` rides the CREATE response (and only this one) because the
+    // caller no longer decides it: a spawn is told where it landed. The CLI
+    // needs it to print a URL, and a launcher that wants to look at its worker
+    // should not have to guess the answer it just delegated.
+    return c.json({ ...created.tab, workspace_id }, 201);
   });
 
-  app.get('/', (c) => {
-    const workspaceId = c.req.query('workspaceId');
-    if (!workspaceId) {
-      return c.json(
-        { error: { code: 'bad_request', message: 'workspaceId query param required' } },
-        400,
-      );
-    }
-    const list = tabs.listByWorkspace(workspaceId);
+  /**
+   * The living sidebar's order for ONE workspace's decorated rows.
+   *
+   * PINNED tabs first, in the user's manual drag order (`raw` arrives
+   * position-sorted, so a stable partition preserves it). Then the rest,
+   * auto-sorted: needs-attention → most recently active, with position and id
+   * as the final tiebreaks so the order is TOTAL and can't jitter between two
+   * renders of identical data.
+   *
+   * Sorting here rather than in the client means every consumer (web, sheet,
+   * CLI, a future surface) sees one authoritative order, and the
+   * recency/attention inputs never have to be re-derived. Shared by the
+   * per-workspace list and the cross-workspace `?all=1` read so the search
+   * results and the tree can never disagree about which tab comes first.
+   */
+  function orderedForWorkspace(workspaceId: string, shared?: ClockSnapshot): Tab[] {
+    const raw = tabs.listByWorkspace(workspaceId);
     // Fold in the two independent per-tab signals:
     //   attention (red dot, "wants you NOW") = any pane rang BEL since you
     //     last interacted. Purely runtime.
@@ -125,29 +214,98 @@ export function tabsRoutes(deps: {
     // decoratePane) — every tab.updated / tab.added emitter routes through it
     // too, so the list and the live events can't describe a tab differently.
     const manualUnreadIds = tabs.unreadIdsByWorkspace(workspaceId);
-    // One cron query for the whole workspace (see cronsByTab) — the sidebar
-    // polls this route every 5s, so a per-row lookup would be the hottest
-    // query in the app.
+    // One cron query per workspace (see cronsByTab) — the sidebar polls this
+    // route every 5s, so a per-row lookup would be the hottest query in the app.
     const cronIds = cronsByTab(deps.db, workspaceId);
-    const decorated = list.map((t) =>
-      decorateTab(deps.cache, deps.db, t, manualUnreadIds, cronIds),
+    // And one clock read for the whole list, for the same reason — plus one of
+    // its own: a child chat's clock is its PARENT's, so resolving a row needs
+    // rows the workspace-scoped read above may not contain.
+    // (`/all` builds it once and passes it down — the index is global, so
+    //  rebuilding it per workspace there would be the same scan N times.)
+    const clocks = shared ?? clockSnapshot(deps.db);
+    const decorated = raw.map((t) =>
+      decorateTab(deps.cache, deps.db, t, manualUnreadIds, cronIds, clocks),
     );
-    // ── The living sidebar's order ────────────────────────────────────────
-    // PINNED tabs first, in the user's manual drag order (`list` already
-    // arrives position-sorted, so a stable partition preserves it). Then the
-    // rest, auto-sorted: needs-attention → most recently active, with
-    // position and id as the final tiebreaks so the order is TOTAL and can't
-    // jitter between two renders of identical data.
-    //
-    // Sorting here rather than in the client means every consumer (web,
-    // sheet, CLI, a future surface) sees one authoritative order, and the
-    // recency/attention inputs never have to be re-derived.
-    const positions = new Map(list.map((t, i) => [t.id, i]));
+    const positions = new Map(raw.map((t, i) => [t.id, i]));
     const pinned = decorated.filter((t) => t.pinned);
     const rest = decorated
       .filter((t) => !t.pinned)
       .sort((a, b) => compareUnpinnedTabs(a, b, positions));
-    return c.json([...pinned, ...rest]);
+    return [...pinned, ...rest];
+  }
+
+  /**
+   * Every VISIBLE workspace's tabs in ONE request — the instant tier of the
+   * sidebar's search box (web/src/components/NavSearch.tsx).
+   *
+   * The search has to match across workspaces the user has never expanded, and
+   * `useTabs` only ever fetches a workspace once something mounts for it. The
+   * alternative was a fan-out of one `GET /api/tabs?workspaceId=…` per
+   * workspace on mount, which is precisely the mobile cold-load cost the
+   * per-workspace caches and the mount coalescer exist to avoid. One request,
+   * fetched lazily on first focus of the box, keeps first paint untouched.
+   *
+   * Grouped rather than flattened because the client needs the workspace's
+   * NAME (it is a matchable field) and its SLUG (half the route a result
+   * navigates to), and `Tab` carries neither.
+   */
+  app.get('/all', (c) => {
+    const clocks = clockSnapshot(deps.db);
+    const list = workspaces.list().map((w) => ({
+      id: w.id,
+      slug: w.slug,
+      name: w.name,
+      tabs: orderedForWorkspace(w.id, clocks),
+    }));
+    return c.json({ workspaces: list });
+  });
+
+  /**
+   * Every ROUND of every child of this chat, keyed by child tab id.
+   *
+   * ONE request for a whole conversation. A worker is handed successive jobs and
+   * each is a round with its own pair of cards, so the log needs the rounds of
+   * every child it draws — and a parent with thirty children is the case this is
+   * shaped for. Thirty round trips to draw one log is the problem the corpus
+   * already solved once.
+   *
+   * NOT on the tab row, deliberately: that rides every five-second sidebar poll,
+   * and a report is up to 800 characters × every round × every child. The same
+   * reasoning that kept the full transcript off the row.
+   */
+  app.get('/:id/spawn-rounds', (c) => {
+    const id = c.req.param('id');
+    const byChild = new SpawnRoundStore(deps.db).listByParent(id);
+    return c.json({ rounds: Object.fromEntries(byChild) });
+  });
+
+  /**
+   * WHO SENT the messages delivered INTO this chat.
+   *
+   * The mirror of `spawn-rounds`: that one is work going OUT of a conversation,
+   * this is work coming IN. A coordinator's brief arrives as an ordinary user
+   * bubble because muxpad does not write the agent's transcript — it tails the
+   * harness's file — so the attribution cannot be a transcript row and is joined
+   * back in by the client instead, keyed on the message text.
+   *
+   * ONE request per conversation, and OFF THE TAB ROW for the same reason the
+   * rounds are: the row rides every five-second sidebar poll, and this is a list
+   * that grows with every job a standing worker is handed.
+   */
+  app.get('/:id/inbound-senders', (c) => {
+    const senders = new InboundMessageStore(deps.db).listByTab(c.req.param('id'));
+    return c.json({ senders });
+  });
+
+  app.get('/', (c) => {
+    const workspaceId = c.req.query('workspaceId');
+    if (!workspaceId) {
+      return c.json(
+        { error: { code: 'bad_request', message: 'workspaceId query param required' } },
+        400,
+      );
+    }
+    return c.json(orderedForWorkspace(workspaceId));
   });
 
   // Mark every pane in a tab as "seen". Called by the web client when
@@ -155,9 +313,40 @@ export function tabsRoutes(deps: {
   // attention dot doesn't reappear if they leave without typing.
   app.post('/:id/seen', async (c) => {
     const id = c.req.param('id');
+    // ─── READING A CHAT IS ACTIVITY ─────────────────────────────────────────
+    // It was not, and that is the whole of "when I touch a chat it doesn't go
+    // to the top". `last_activity_at` — the column the sidebar sorts on — was
+    // moved by typing, by pty output and by a turn finishing, and by nothing
+    // else. OPENING a chat and reading it wrote nothing at all, so the row you
+    // were sitting in went on getting older underneath you. Measured against a
+    // two-hour-cold chat: opened it, waited past the poll, and its stamp had
+    // not moved a millisecond (6679s → 6689s of age, index 8 → index 8).
+    //
+    // The list was never stale. It was accurate about something the user had
+    // not done, which looks identical from outside and is harder to doubt.
+    //
+    // THIS is the right door. It is the one the client already knocks on when
+    // you arrive somewhere, it is gated on the tab actually being on screen
+    // (TabView's `isActive`), and it is the server's existing definition of
+    // "the user looked at this".
+    //
+    // Forced, and the fan-out is already bounded: this route also fires
+    // whenever the read-state signature moves (a turn finishing in the tab you
+    // are watching), but a tab you are LOOKING at is by definition the most
+    // recent one, and `canReorder` suppresses the emit for a row that is
+    // already maximal. So the repeats cost one UPDATE and wake nobody.
+    deps.tabActivity?.touchTab(id, { force: true });
+    // …and the column the sidebar actually SORTS on. See TabStore.noteUserTouch:
+    // `touchTab` above writes `last_activity_at`, which machine output also
+    // writes and which the order stopped reading.
+    tabs.noteUserTouch(id);
     // Viewing the tab clears the read-state flags — seeing it is the read
     // action: the manual tab "unread" mark AND every pane's "done, unreviewed"
     // bold. Synchronous DB writes, independent of ptyd.
+    // Read the tab's OWN mark before clearing it — it is the one piece of
+    // read-state the per-pane events below cannot describe (see the emit after
+    // the loop).
+    const hadManualMark = tabs.isUnread(id);
     tabs.setUnread(id, false);
     const tabPanes = panes.listByTab(id);
     for (const p of tabPanes) {
@@ -170,8 +359,18 @@ export function tabsRoutes(deps: {
         deps.events.emit({
           type: 'pane.updated',
           tab_id: fresh.tab_id,
-          pane: decoratePane(deps.cache, fresh),
+          pane: decoratePane(deps.cache, fresh, deps.db),
         });
+    }
+    // A tab marked unread by hand with no unread PANES emitted nothing at all
+    // above, while four rendered fields moved: the tab's bold name, its status
+    // rail (rollupStatus counts a manual mark as `ready`), and the workspace
+    // row's bold + rollup dot. Other clients only healed on their next 5s poll,
+    // which is stopped for a hidden document and a collapsed workspace.
+    if (hadManualMark) {
+      const fresh = tabs.getById(id);
+      if (fresh)
+        deps.events.emit({ type: 'tab.updated', tab: decorateTab(deps.cache, deps.db, fresh) });
     }
     // Issue markSeen (BEL/red-dot clear) against ptyd in parallel; swallow
     // per-pane failures (idempotent — markSeen on a missing id is a no-op on
@@ -190,24 +389,117 @@ export function tabsRoutes(deps: {
   // Manually flag a tab "unread" — restores the attention dot until the
   // tab is next viewed. Complements the BEL-driven runtime attention;
   // persisted in the DB so it survives ptyd/server restarts and needs no
-  // ptyd round-trip. The initiating client refreshes its tab list; other
-  // clients pick it up on the next poll.
+  // ptyd round-trip. The initiating client refreshes its tab list; every OTHER
+  // client learns from the emitted tab.updated (it used to wait for its next
+  // poll, which is stopped for a hidden document / a collapsed workspace — so
+  // a mark set on the phone could sit invisible on the desktop indefinitely).
   app.post('/:id/unread', (c) => {
     const id = c.req.param('id');
     if (!tabs.getById(id))
       return c.json({ error: { code: 'not_found', message: 'tab not found' } }, 404);
     tabs.setUnread(id, true);
+    const fresh = tabs.getById(id);
+    if (fresh)
+      deps.events.emit({ type: 'tab.updated', tab: decorateTab(deps.cache, deps.db, fresh) });
+    return c.body(null, 204);
+  });
+
+  /**
+   * ARCHIVE — the manual path into `done`, and the row's × from now on.
+   *
+   * It lands in exactly the same place decay does, which is the point: one
+   * destination, reached by a clock or by a decision. Nothing is removed, the
+   * transcript and the spawn tree are untouched, and the next message revives
+   * it — so this is an action a person can take without thinking about it,
+   * which `DELETE` never was. (That is why the × was never used: it meant
+   * destroy, so using it required being sure.)
+   *
+   * It also clears the chat's `ready` marks. Archiving something is telling
+   * the system you are done with it; leaving it lit green in the done group
+   * would be the same "READY forever" noise this whole change exists to end.
+   *
+   * Idempotent: archiving an archived chat keeps the original stamp (204
+   * either way). Destructive delete is still DELETE /api/tabs/:id, where it
+   * belongs — behind a menu, not a one-click ×.
+   *
+   * ── A PINNED CHAT IS REFUSED, NOT QUIETLY ACCEPTED ─────────────────────────
+   * Pinning is the universal override: a pinned chat is never `done`, however
+   * it got there (tab-clock.ts, and `tab-clock.test.ts` "a pinned chat is
+   * never done, even archived"). That rule is right and is NOT what changes
+   * here. What changed is this route, which used to write the retirement and
+   * answer 204 anyway — so the × on a pinned row moved nothing on screen and
+   * said nothing about why, which reads as a broken button rather than a
+   * refused one. Worse, the write persisted: unpin a month later and the chat
+   * vanished into `done` on the strength of a click nobody remembers.
+   *
+   * 409 instead, with no write. The state is unreachable rather than stored
+   * and deferred, and the client has something specific to render — see F6.
+   * Auto-unpinning was the other option and is worse: it would let an
+   * implicit gesture overturn an explicit one, which is the single thing
+   * pinning is for.
+   */
+  app.post('/:id/archive', (c) => {
+    const id = c.req.param('id');
+    const tab = tabs.getById(id);
+    if (!tab) return c.json({ error: { code: 'not_found', message: 'tab not found' } }, 404);
+    if (tab.pinned)
+      return c.json(
+        {
+          error: {
+            code: 'pinned',
+            message: 'a pinned chat cannot be archived — unpin it first',
+          },
+        },
+        409,
+      );
+    retireChat({ db: deps.db, cache: deps.cache, events: deps.events }, id, 'archived');
+    return c.body(null, 204);
+  });
+
+  /**
+   * Bring an archived chat back to the live list WITHOUT sending it anything —
+   * the undo for a mis-click, and the only way back that does not put words in
+   * an agent's mouth.
+   *
+   * It restarts the clock as well as clearing the retirement, because the two
+   * cannot be separated: a chat un-archived onto the expired clock it left
+   * with would be `done` again on the very next read, and the undo would look
+   * like it had silently failed.
+   *
+   * A sub-chat un-retired this way is live until it delivers again (it has no
+   * clock to restart — the reset is a harmless no-op on a column nothing
+   * reads while it has a parent).
+   */
+  app.post('/:id/unarchive', (c) => {
+    const id = c.req.param('id');
+    if (!reviveChat(deps.db, id))
+      return c.json({ error: { code: 'not_found', message: 'tab not found' } }, 404);
+    const fresh = tabs.getById(id);
+    if (fresh)
+      deps.events.emit({ type: 'tab.updated', tab: decorateTab(deps.cache, deps.db, fresh) });
     return c.body(null, 204);
   });
 
   app.post('/reorder', async (c) => {
     const body = z.object({ ids: z.array(z.string()) }).parse(await c.req.json());
     tabs.reorder(body.ids);
-    // TODO(events): tab reorder changes `position` for N tabs in bulk.
-    // Emitting one tab.updated per touched row would work but the Tab
-    // schema doesn't actually expose position to clients, so a single
-    // event would carry no useful diff. The 5s poll covers this case
-    // until we either widen TabSchema or add a coarse workspace event.
+    // TODO(events): STILL SILENT, and the reason is worth being precise about
+    // because the old note ("the poll covers this") was wrong twice over.
+    //
+    // The poll does not cover it: it is stopped for a hidden document and a
+    // collapsed workspace, which is every second device. And this is not only a
+    // tiebreak — the PINNED block is ordered purely by `position`
+    // (orderedForWorkspace partitions a position-sorted read; sortSidebarTabs
+    // leaves that slice alone), so dragging within it is a pure position change
+    // with a fully visible result that no other client ever sees.
+    //
+    // A per-row `tab.updated` genuinely cannot carry it: Tab has no `position`,
+    // and the client's applyTabRow re-sorts with its CURRENT index as the
+    // tiebreak, so it would reproduce the order it already holds. This needs a
+    // coarse event — `{type:'tabs.reordered', workspace_id}` in
+    // shared/src/types.ts, routed in web/src/main.tsx next to tab.added as
+    // `void refreshTabs(e.workspace_id)`. Both files are outside this change's
+    // reach; the route has `tabs.getWorkspaceId(body.ids[0])` ready for it.
     return c.body(null, 204);
   });
 
@@ -218,11 +510,31 @@ export function tabsRoutes(deps: {
     const valid = new Set(livePanes.map((p) => p.id));
     const cleaned = pruneDeadPanes(t.layout, valid);
     if (JSON.stringify(cleaned) !== JSON.stringify(t.layout)) {
-      tabs.update(t.id, { layout: cleaned });
+      const repaired = tabs.update(t.id, { layout: cleaned });
       t.layout = cleaned;
+      // A GET that WRITES. Whoever triggered the prune reads the repaired
+      // layout back in this same response, but nobody else ever heard about it
+      // — and the tab LIST endpoint does no prune of its own, so every other
+      // client kept serving and rendering the ghost leaf. Announce the repair
+      // like any other layout change; it is idempotent, so a second GET finds
+      // the layouts equal and emits nothing.
+      deps.events.emit({ type: 'tab.updated', tab: decorateTab(deps.cache, deps.db, repaired) });
     }
-    const decorated = livePanes.map((p) => decoratePane(deps.cache, p));
-    return c.json({ ...t, panes: decorated });
+    const decorated = livePanes.map((p) => decoratePane(deps.cache, p, deps.db));
+    // LIFECYCLE rides even the detail read. This endpoint deliberately does
+    // NOT run the full decorateTab (its job is the tab plus its panes, and the
+    // runtime rollups are the list's business) — but `done`/`clock` are not
+    // rollups, they are what this row IS, and a client that merges this
+    // response over a decorated one would otherwise blank them. Same
+    // resolution, same instant, one answer.
+    const lifecycle = tabLifecycle(deps.db, t.id, Date.now());
+    return c.json({
+      ...t,
+      done: lifecycle.done,
+      ...(lifecycle.done_reason ? { done_reason: lifecycle.done_reason } : {}),
+      clock: lifecycle.clock,
+      panes: decorated,
+    });
   });
 
   app.patch('/:id', async (c) => {
@@ -464,7 +776,7 @@ export function tabsRoutes(deps: {
         deps.events.emit({
           type: 'pane.added',
           tab_id: dest.id,
-          pane: decoratePane(deps.cache, p),
+          pane: decoratePane(deps.cache, p, deps.db),
         });
     }
     deps.events.emit({ type: 'tab.updated', tab: decorateTab(deps.cache, deps.db, finalDest) });

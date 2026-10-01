@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ChatClockSchema } from './chat-clock.js';
 
 export type LayoutNode =
   | string
@@ -67,17 +68,159 @@ export type UrlHealth = z.infer<typeof UrlHealthSchema>;
 export type UrlHealthReason = UrlHealth['reason'];
 
 /**
- * How an agent pane is asked to behave. 'deep' is the historical (and
- * default) behavior — no extra system-prompt material at all. 'do' overlays
- * the generated `<dataDir>/do-mode.md` contract on top of the harness's
- * normal prompt: decisive, terse, result-first.
+ * How an agent pane is ARRANGED. Two modes, both user-facing and both named
+ * in the UI:
  *
- * Stored per PANE (agent sessions are pane-scoped), never per tab — the
- * sidebar deliberately doesn't surface it.
+ *   'chat'   **Chat mode** — muxpad's own assistant. The house contract
+ *            (`<dataDir>/chat-mode.md`) is overlaid on top of the harness's
+ *            normal system prompt: decisive, terse, result-first, delegates.
+ *            What a new tab opens as, and the DEFAULT.
+ *   'agent'  **Agent mode** — the harness exactly as it ships, with no muxpad
+ *            contract on top. You choose the backend, the working folder and
+ *            the model at launch.
+ *
+ * Yes, Chat is also agent-powered. The names describe the ARRANGEMENT (a
+ * house assistant vs. a raw harness you configured), not the engine — a
+ * deliberate, accepted trade for two words a person can actually say.
+ *
+ * Stored per PANE (agent sessions are pane-scoped), never per tab. Surfaced
+ * in the chat's bottom-right chip row beside the folder and model chips —
+ * NOT in the sidebar rail, which runs on a strict one-bit (status) budget.
+ *
+ * WIRE COMPATIBILITY. These values were called 'do' and 'deep' until the
+ * rename; stored rows were migrated (migrations.ts v26) but a version-skewed
+ * CLI/runner can still SEND the old spellings, so every inbound seam parses
+ * through {@link AgentModeInputSchema} / {@link coerceAgentMode} rather than
+ * rejecting and wedging a pane.
  */
-export const AgentModeSchema = z.enum(['do', 'deep']);
+/**
+ * What a freshly bootstrapped agent tab is called until the auto-titler names
+ * it from the conversation.
+ *
+ * It used to be the literal string `'agent'`, which became actively confusing
+ * the day "Agent" started naming a MODE: a new tab that defaults to CHAT mode
+ * was sitting in the rail labelled "agent".
+ *
+ * This doubles as the auto-titler's SENTINEL — ws.ts renames a tab only while
+ * it still wears this name (or the title ws itself last set), so a name the
+ * user typed is never overwritten. Both spellings must therefore be honoured:
+ * a tab created before this change still says `'agent'` on disk and must stay
+ * renameable, which is why {@link isBootstrapTabName} exists rather than a
+ * bare `===`. No migration: these names are transient by design, and rewriting
+ * user-visible rows to fix a label nobody will see for long is not worth a
+ * schema version.
+ */
+export const BOOTSTRAP_TAB_NAME = 'New chat';
+
+/** Legacy bootstrap names still in the wild — see {@link BOOTSTRAP_TAB_NAME}. */
+const LEGACY_BOOTSTRAP_TAB_NAMES = new Set(['agent']);
+
+export function isBootstrapTabName(name: string | null | undefined): boolean {
+  if (!name) return false;
+  return name === BOOTSTRAP_TAB_NAME || LEGACY_BOOTSTRAP_TAB_NAMES.has(name);
+}
+
+export const AgentModeSchema = z.enum(['chat', 'agent']);
 export type AgentMode = z.infer<typeof AgentModeSchema>;
-export const DEFAULT_AGENT_MODE: AgentMode = 'deep';
+
+/**
+ * What a NEW agent pane opens in when the caller doesn't say: Chat mode.
+ *
+ * Deliberately NOT the same constant as {@link BASELINE_AGENT_MODE}. This one
+ * is a CHOICE made at creation ("what should a new thing be?"); that one is a
+ * READING of missing data ("what does a row with no recorded mode mean?").
+ * They used to be one value, which is exactly why flipping the default was
+ * dangerous: it would have silently re-interpreted every pre-existing row.
+ */
+export const DEFAULT_AGENT_MODE: AgentMode = 'chat';
+
+/**
+ * What an ABSENT or unrecognised mode means: 'agent' — inject nothing.
+ *
+ * This is the historical, pre-modes behaviour, and it is the only safe reading
+ * of a row (or a `muxpad agent` startup command) that predates a mode being
+ * recorded: claiming 'chat' would assert a contract that was never actually
+ * put in front of the model. Also what a non-agent pane (plain terminal, URL
+ * pane, a `muxpad claude` TUI wrapper) carries, so nothing gets overlaid on a
+ * session the user launched by hand.
+ */
+export const BASELINE_AGENT_MODE: AgentMode = 'agent';
+
+/** Pre-rename spellings, still accepted on every inbound seam for one release. */
+const LEGACY_AGENT_MODES: Readonly<Record<string, AgentMode>> = { do: 'chat', deep: 'agent' };
+
+/**
+ * Narrow an off-the-wire / off-the-command-line value to an AgentMode,
+ * accepting the pre-rename spellings. Returns null for anything else — the
+ * caller decides whether that is a 400 or a fall-back to
+ * {@link BASELINE_AGENT_MODE}.
+ */
+export function coerceAgentMode(v: unknown): AgentMode | null {
+  if (v === 'chat' || v === 'agent') return v;
+  if (typeof v === 'string' && v in LEGACY_AGENT_MODES) return LEGACY_AGENT_MODES[v] as AgentMode;
+  return null;
+}
+
+/**
+ * The schema for a mode arriving from OUTSIDE (an HTTP body, a CLI flag).
+ * Accepts the legacy spellings and normalizes them, so a version-skewed
+ * `muxpad agent new --mode=do` keeps working instead of 400ing and leaving the
+ * caller with a pane it can't configure. Output is always a current value.
+ */
+export const AgentModeInputSchema = z
+  .enum(['chat', 'agent', 'do', 'deep'])
+  .transform((v): AgentMode => (coerceAgentMode(v) as AgentMode) ?? BASELINE_AGENT_MODE);
+
+/** User-facing label for a mode. ONE table, so the chip, the menu and any
+ *  future surface can never disagree about what these are called. */
+export const AGENT_MODE_LABELS: Readonly<Record<AgentMode, string>> = {
+  chat: 'Chat',
+  agent: 'Agent',
+};
+
+/**
+ * THE ONE COERCION POINT: mode and backend are not independent.
+ *
+ *   Chat  = Claude, implicitly. The harness is not a choice you make — the
+ *           pane just says "Chat".
+ *   Agent = you pick the harness (claude | codex | cursor), plus folder and
+ *           model.
+ *
+ * So choosing a non-Claude harness IS choosing Agent mode, and that is the
+ * whole rule. It is not a restriction bolted onto two free variables; it is
+ * what the two words mean.
+ *
+ * The mechanism underneath, for anyone wondering why it can't be otherwise:
+ * Chat mode is built on the in-process `reply` tool (the agent's only
+ * user-facing voice — see chat-events.ts), hosted by the Agent SDK's in-process
+ * MCP server. `codex exec` and `cursor-agent` have no in-process tool surface
+ * at all, so "codex in Chat mode" could only ever be a chip promising something
+ * the harness cannot do.
+ *
+ * Every door that decides a mode runs its answer through here — bootstrapTab,
+ * POST /api/tabs, POST /api/panes, PATCH /api/panes/:id, POST
+ * /:id/agent-backend, the cron scheduler's new-tab fire, `muxpad agent new
+ * --mode=` — and so does ws.ts when a runner's hello reveals which harness is
+ * ACTUALLY running (the one place an old row or a hand-typed startup command
+ * can be found out). No UI is built around the collapse: the state simply
+ * cannot persist.
+ *
+ * `null`/`undefined` backend means "not chosen yet" (a `--pick` pane) or
+ * "claude, by omission" — both keep the requested mode; `/agent-backend`
+ * re-resolves at the moment a harness is actually picked.
+ */
+export function modeForBackend(
+  mode: AgentMode | null | undefined,
+  backend: string | null | undefined,
+): AgentMode {
+  const requested = mode ?? DEFAULT_AGENT_MODE;
+  return backendSupportsChatMode(backend) ? requested : BASELINE_AGENT_MODE;
+}
+
+/** Can this backend actually deliver Chat mode? See {@link modeForBackend}. */
+export function backendSupportsChatMode(backend: string | null | undefined): boolean {
+  return backend !== 'codex' && backend !== 'cursor';
+}
 
 /**
  * The ONE status a pane/tab/workspace is in. Five states, mutually exclusive,
@@ -186,10 +329,13 @@ export const PaneSpecSchema = z.object({
   // events). `face_url` is the web face's chosen URL.
   face: z.enum(['terminal', 'web', 'chat']).default('terminal'),
   face_url: z.string().nullable().default(null),
-  // Agent behavior mode (⚡ Do / 🧠 Deep). Meaningful only for agent panes;
-  // every other pane carries the 'deep' default and ignores it. Persisted so
-  // the choice survives respawns and follows the user across devices.
-  mode: AgentModeSchema.default('deep'),
+  // Agent mode (Chat / Agent). Meaningful only for agent panes; every other
+  // pane carries the BASELINE ('agent' — nothing injected) and ignores it.
+  // Persisted so the choice survives respawns and follows the user across
+  // devices. Defaults to the BASELINE, not to DEFAULT_AGENT_MODE: an absent
+  // value describes an existing row, and the honest reading of "no mode
+  // recorded" is "no contract was overlaid".
+  mode: AgentModeInputSchema.default(BASELINE_AGENT_MODE),
   // Runtime-only fields decorated by the route layer.
   title: z.string().nullable().optional(),
   foreground_cmd: z.string().nullable().optional(),
@@ -217,6 +363,16 @@ export const PaneSpecSchema = z.object({
   // confirmed listening. Decorated at the route layer from the ptyd cache.
   // Empty/absent for url panes and shells that aren't serving anything.
   app_urls: z.array(AppUrlSchema).optional(),
+  // Runtime-only. Why this pane has NO pty, in the words of whatever refused to
+  // make one ("posix_spawnp failed", "ptyd disconnected"). Set only after every
+  // retry is spent (see server/src/pane-provision.ts); absent/null is the
+  // normal case and means nothing is known to be wrong.
+  //
+  // It exists because "the rows are right and there is no process" used to be
+  // indistinguishable from "this pane has no agent yet", and the UI showed the
+  // second sentence for the first situation. A chat that could not start now
+  // says why and offers to try again.
+  provision_error: z.string().nullable().optional(),
 });
 export type PaneSpec = z.infer<typeof PaneSpecSchema>;
 
@@ -225,6 +381,30 @@ export type PaneSpec = z.infer<typeof PaneSpecSchema>;
  * layout (binary tree of pane ids) and N panes. Belongs to a parent
  * workspace via tab_id (server-side field on tab rows).
  */
+/**
+ * ONE ROUND of a worker's life — given a job, finished that job.
+ *
+ * A sub-chat is not one job: `muxpad agent send` revives a retired worker and
+ * hands it the next one. Both of its cards were anchored to `created_at` and
+ * `retired_at`, which are one pair per TAB, so every round after the first was
+ * invisible — measured at five handovers against one pair on the real database.
+ *
+ * Served from `GET /api/tabs/:id/spawn-rounds` for a whole conversation at once
+ * rather than published on the tab row: a parent with thirty children would put
+ * every round of every one of them into every five-second sidebar poll.
+ */
+export const SpawnRoundSchema = z.object({
+  id: z.string(),
+  tab_id: z.string(),
+  started_at: z.number(),
+  /** Null while this round is still running. */
+  ended_at: z.number().nullable(),
+  report: z.string().nullable(),
+  report_state: z.enum(['ok', 'none', 'crashed', 'awaiting']).nullable(),
+  artifacts: z.array(z.string()),
+});
+export type SpawnRound = z.infer<typeof SpawnRoundSchema>;
+
 export const TabSchema = z.object({
   id: z.string(),
   slug: z.string(),
@@ -252,6 +432,14 @@ export const TabSchema = z.object({
   status: PaneStatusSchema.optional(),
   // Sum of live background subagents across this tab's panes.
   agents: z.number().int().nonnegative().optional(),
+  // Does this tab offer PANES — the `+` in its chrome and the "New pane" item in
+  // its row menu (see tabTakesPanes). False for a tab that is nothing but
+  // agents, which is every chat: a chat's parallel work is a CHILD CHAT, and a
+  // second agent in the same tab is that relationship with its provenance
+  // thrown away. Runtime-only, decorated at the route layer from the tab's
+  // panes. Absent (an older server) reads as "show it", which is the behaviour
+  // that predates the field.
+  takes_panes: z.boolean().optional(),
   // "Done, unreviewed" rollup (bold name). True iff this tab was manually
   // marked unread OR any of its panes is unread (an agent finished a turn
   // there unobserved). Distinct from `attention` (red dot / wants-you);
@@ -267,6 +455,17 @@ export const TabSchema = z.object({
   // output. Drives the recency ordering of the unpinned block. Null on rows
   // migrated in before the column existed — those sort last.
   last_activity_at: z.number().nullable().optional(),
+  // Epoch ms of the last act by the USER on this chat: creating it, sending it
+  // a message, or unarchiving it. Nothing the machine does moves it — not pty
+  // output, not a turn finishing — which is the entire difference from
+  // `last_activity_at` above and the reason the GLOBAL (cross-workspace) list
+  // orders on this instead. See shared/tab-order `userTouchAt` for why one
+  // column cannot do both jobs, and migrations v33 for the backfill.
+  //
+  // ALWAYS SENT by a server that has the column. `.optional()` is wire-compat
+  // with one that predates it, where absent falls back to `last_activity_at` —
+  // i.e. to today's ordering — rather than to no order at all.
+  last_user_at: z.number().nullable().optional(),
   // How many ENABLED crons target a pane in this tab. A schedule is a
   // PROPERTY of a chat, not a status, so it deliberately does NOT ride the
   // status rail (which is transient and mutually exclusive by construction) —
@@ -295,6 +494,132 @@ export const TabSchema = z.object({
   // manual name matched neither the bootstrap sentinel nor the last
   // auto-title.
   name_sticky: z.boolean().optional(),
+  // The tab this chat was SPAWNED FROM — an agent working in that chat asked
+  // for this one to exist. Null/absent for a chat a human made, which is most
+  // of them. Deliberately NOT a foreign key in the DB: deleting a parent must
+  // not cascade its children away (nothing in this model is ever deleted by a
+  // clock), so a dangling id is an expected state and the resolver treats a
+  // child whose parent is gone as a root in its own right.
+  spawned_by: z.string().nullable().optional(),
+  // ── LIFECYCLE, COMPUTED SERVER-SIDE ────────────────────────────────────────
+  // This chat has left the live list and collapsed into the `done` group,
+  // either because its clock ran out, because it was a sub-chat that finished
+  // its work, or because the user archived it. Nothing is deleted and a
+  // message revives it.
+  //
+  // ALWAYS SENT by any server that has this field, even when false, and that
+  // is load-bearing: clients coalesce `tab.updated` onto their cached row, so
+  // a field omitted when false would leave a stale `done: true` sitting there
+  // forever after a revival. Same reason `attention`/`unread`/`busy` are
+  // unconditional. `.optional()` here is wire-compat with a server that
+  // predates the column, where absent correctly reads as "not done".
+  done: z.boolean().optional(),
+  // WHY it is done — each is visually distinct in the done group and in a
+  // tooltip, and only the server can tell them apart. Absent while live.
+  //   'decayed'   — four days with no message
+  //   'delivered' — a sub-chat finished its work; its result went to the
+  //                 parent as a card
+  //   'archived'  — the user did it by hand (the row's ×)
+  //   'died'      — its RUNNER was given up on, and the work is INCOMPLETE.
+  //                 The one reason here that is not an ending anybody chose:
+  //                 a killed worker and a finished one both stop existing and
+  //                 they mean opposite things, so filing the first as
+  //                 `delivered` is how a job disappears without being noticed.
+  //                 Enumerated HERE and not only on the server because this is
+  //                 a strict zod parse on the client — an unlisted reason
+  //                 fails the whole tab row, so the row for the one chat that
+  //                 most needs explaining would be the one that vanishes.
+  done_reason: z.enum(['decayed', 'delivered', 'archived', 'died']).optional(),
+  // WHEN it finished — epoch ms, null while it is live.
+  //
+  // A worker's conversation draws TWO entries for it: the LAUNCH at its
+  // `created_at` ("you started this") and the COMPLETION at this one ("and here
+  // is what came back"). One card that mutated in place instead is invisible the
+  // moment the log has scrolled past it, which is exactly when a long job
+  // finishes — so the result has to arrive where the reader is looking.
+  //
+  // The RETIREMENT stamp, not the spawn report's: that one is an attempt clock
+  // which advances on failures and is rate-limited, so it can land half an hour
+  // after the work ended. For a chat that decayed there was no event to stamp,
+  // so it is the clock's own expiry.
+  //
+  // Unconditional (null, not absent) for the same reason as `done` — a client
+  // coalescing rows must be able to un-say it.
+  done_at: z.number().nullable().optional(),
+  // How far through its clock the chat is — the one input the sidebar chip
+  // renders (white → filling → dashed on the last day).
+  //
+  // NULL means THERE IS NO CLOCK, which is a different and truer statement
+  // than "the clock is at 0%": a sub-chat does not decay, it retires when it
+  // delivers, so nothing about elapsed time describes it. Render those as a
+  // plain mark, not an empty tile.
+  //
+  // Unconditional (null rather than absent) for the same coalescing reason as
+  // `done`; `stopped` is how a pinned chat says its clock does not run.
+  clock: ChatClockSchema.nullable().optional(),
+  // ── THE SPAWN REPORT ───────────────────────────────────────────────────────
+  // What this SUB-CHAT did, read off its own transcript by a cheap model when
+  // its work ended, and shown as an entry in its PARENT's conversation. A
+  // worker retires the moment it delivers, so without this the log says "you
+  // started this" and never says what came back.
+  //
+  // A few sentences at most: what it was asked, what it concluded, whether it
+  // worked, and where the work IS (a report file, a published URL, an
+  // attachment) — that last part being the actual complaint this answers, since
+  // a push notification arrives and the work is then unfindable. NULL text with
+  // a non-null state is a real answer ("finished with nothing to report"); the
+  // FULL work is not here at all, it is fetched on demand from the transcript
+  // endpoint when the card is expanded (a 25 KB report on a row that rides
+  // every sidebar poll is 25 KB per poll per tab).
+  //
+  // All three are ABSENT together, not null, whenever there is no report —
+  // which is every chat nobody spawned. Unlike `done`/`clock` there is nothing
+  // to un-say: a report is only ever written, never withdrawn, so a client
+  // coalescing rows cannot be left holding a stale one.
+  // WHAT THIS WORKER WAS ASKED — one short line, read off its FIRST message the
+  // moment it starts work (server/src/chat/spawn-task.ts). The pair with
+  // `spawn_report` reads "asked" and "concluded".
+  //
+  // It exists for the same reason the report does and answers the earlier half:
+  // a spawn card showed `status-line`, the `--name=` handle typed on a command
+  // line, which says nothing about what is running. Deliberately NOT the
+  // headline — that is a tab-wide facility built for stillness (a 6-minute
+  // floor, an anti-drift prompt) and it answers "what is this chat ABOUT"
+  // rather than "what was this worker ASKED". The headline remains the card's
+  // fallback, which is the one job it is good at.
+  //
+  // Absent, not null, when there is none — which is every chat nobody spawned.
+  spawn_task: z.string().nullable().optional(),
+  spawn_report: z.string().nullable().optional(),
+  // Epoch ms the report was written. Its place in the parent's log — the moment
+  // the result LANDED, not the spawn that may be hours further up.
+  spawn_report_at: z.number().nullable().optional(),
+  // Which kind of answer this is. 'ok' — a report. 'none' — the child produced
+  // nothing usable and says so plainly (never an invented summary). 'crashed' —
+  // its last turn was fatal; a crashed sub-chat deliberately KEEPS its row, so
+  // this is the only thing that stops its card spinning forever. A report we
+  // could not produce at all is the absence of these fields, and renders
+  // nothing.
+  // 'ok' a report · 'none' it produced nothing and said so · 'crashed' its last
+  // turn was fatal · 'awaiting' IT STOPPED TO ASK YOU SOMETHING.
+  //
+  // That last one is a different state from `delivered` and they were one, which
+  // is the bug it exists to fix: retirement fires at turn-end, so "I finished the
+  // job" and "I finished a turn and the ball is in your court" arrived as the
+  // same event — and the second was archived out of the live list, which is the
+  // worst response available to somebody waiting on you. See chat/awaiting.ts.
+  //
+  // 'failed' WE TRIED AND LOST IT — the generator threw, timed out, or answered
+  // with something the parser refused. Distinct from the column's ABSENCE, which
+  // now means only "not attempted yet": those two were one value, and the card
+  // said "No summary was generated" for both, so a worker whose 13 KB write-up
+  // was thrown away by a length rule was indistinguishable from one nobody had
+  // got to yet. The rejection used to appear in server.log alone.
+  spawn_report_state: z.enum(['ok', 'none', 'crashed', 'awaiting', 'failed']).optional(),
+  // WHERE THE WORK IS — the urls and files this worker produced, scraped from
+  // its transcript rather than asked of a model, so it survives a generation the
+  // model got wrong. Absent when there are none.
+  spawn_artifacts: z.array(z.string()).optional(),
 });
 export type Tab = z.infer<typeof TabSchema>;
 
@@ -417,6 +742,8 @@ export const AgentTurnEventSchema = z.object({
   phase: z.enum(['start', 'done', 'fatal']),
   sid: z.string().nullable(),
   backend: z.string(),
+  /** Present only when this start relays this durable queue row. */
+  queue_id: z.string().optional(),
 });
 
 export const MuxpadEventSchema = z.discriminatedUnion('type', [

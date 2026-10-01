@@ -8,6 +8,7 @@ import type { PtydClient } from '../ptyd-client/PtydClient.js';
 import { PaneStore } from '../store/PaneStore.js';
 import { TabStore } from '../store/TabStore.js';
 import { WorkspaceStore } from '../store/WorkspaceStore.js';
+import { clockSnapshot } from '../tab-clock.js';
 
 /**
  * CRUD for the top-level workspace concept. Workspaces own tabs; tabs
@@ -50,7 +51,11 @@ export function workspacesRoutes(deps: {
     // excluded from the
     // default list — and thus the sidebar tree — unless ?all=1.
     const list = workspaces.list({ all: c.req.query('all') === '1' });
-    const decorated = list.map((w) => decorateWorkspace(deps.cache, deps.db, w));
+    // ONE clock read for the whole list, not one per workspace: the spawn tree
+    // is global (a child's parent may live in another workspace), so every row
+    // needs the same whole-table index — and this endpoint is on a 5s poll.
+    const clocks = clockSnapshot(deps.db);
+    const decorated = list.map((w) => decorateWorkspace(deps.cache, deps.db, w, clocks));
     return c.json(decorated);
   });
 
@@ -134,6 +139,21 @@ export function workspacesRoutes(deps: {
   app.post('/reorder', async (c) => {
     const body = z.object({ ids: z.array(z.string()) }).parse(await c.req.json());
     workspaces.reorder(body.ids);
+    // The sidebar's workspace order IS `position`, so a drag on one device was
+    // invisible on every other one until its 5s poll — which is stopped while
+    // the document is hidden, i.e. reliably stale on the second device the
+    // reorder was meant to reach.
+    //
+    // ONE event for ONE touched row is enough and deliberate: the global router
+    // (web/src/main.tsx) maps any workspace.* event to a wholesale
+    // refreshWorkspaces(), which refetches the list in the server's order. N
+    // events would trigger N identical refetches of the same list.
+    const touched = body.ids.map((id) => workspaces.getById(id)).find((w) => w);
+    if (touched)
+      deps.events.emit({
+        type: 'workspace.updated',
+        workspace: decorateWorkspace(deps.cache, deps.db, touched),
+      });
     return c.body(null, 204);
   });
 

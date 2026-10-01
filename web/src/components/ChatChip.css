@@ -1,0 +1,242 @@
+/* ─── THE CHIP ─────────────────────────────────────────────────────────────
+   The clock, drawn. See ChatChip.tsx for what the phases mean and why the clock
+   is carried by OPACITY with the colour drain riding along; this file is the
+   exact values.
+
+   Everything here is scoped to `.chatchip`, --clock included, so the surfaces
+   that render one (the sidebar row, the mobile row, a conversation card, an
+   inline mention) need nothing from their own stylesheets to make it correct.
+   What they may legitimately supply is SIZE — the mobile row re-scales the two
+   glyph tokens to its own 20px cell (NavTree.css) — and what the THEME supplies
+   is ink: --clock-base and the two fade alphas (styles.css). */
+
+.chatchip {
+  /* ─── --clock: the SUB-CHAT DOT's ink ───────────────────────────────────
+     It was the tile's descending fill as well, at two scales; the fill is gone
+     and the dot is what is left of that substance. It stays a definite colour
+     for the same reason it always was one: six pixels cannot carry a fade, and
+     a sub-chat has no clock to fade with anyway.
+
+     TWO PLACES, ONE EACH, and the split is the point:
+       · the RELATIONSHIP — the accent, cut to 34% — is here, next to the thing
+         it describes, and is one number for every theme;
+       · the BASE it is cut WITH re-steps per theme in styles.css, exactly as
+         the --status-* tokens do.
+
+     It used to be `color-mix(in srgb, var(--accent) 34%, #d9d3ea)` right here,
+     literal and all. The mix was right and the literal was not: that pale lilac
+     was picked against the WHITE cockpit, so on the dark themes the fill
+     descended as a bright wash on a near-black tile — one declaration
+     whispering on one theme and shouting on another.
+
+     DECLARED ON THE CHIP, not at :root, and that is load-bearing rather than
+     tidy. A custom property is substituted on the element that declares it, so
+     a `--clock` at :root resolves against :root's base and inherits down as a
+     FINISHED colour — every per-theme override arriving too late to change it.
+     Measured: with the mix at :root, all seven themes rendered the same
+     #526595. It would have shipped looking correct, because the theme
+     attribute happens to sit on documentElement (settings.ts) and the app
+     therefore hits the one case where :root and the theme rule are the same
+     element. On the chip, the mix resolves against whatever base is in scope
+     and the token is right wherever a chip is drawn.
+
+     (And NOT `--clock: var(--clock, …)`: a custom property that substitutes
+     itself is a cycle, invalid at computed-value time, and that spelling
+     silently produces no colour at all.) */
+  --clock: color-mix(in srgb, var(--accent) 34%, var(--clock-base));
+
+  /* Density is SIZE ONLY. Four tokens, set once per density below, and nothing
+     else in this file varies with it.
+
+     --chatchip-size is the BOX, and for four phases out of five nothing paints
+     it: it is what the last day's outline is drawn on, what a child's dot is
+     centred in, and what the row's height is measured from. The glyph is 20px
+     INSIDE that 24px box — it was 14px when a tile had to be visible around it.
+
+     --chatchip-glyph-last is the one step the mark takes: 18px, once, on the
+     last day, so the glyph lands inside the outline instead of wearing it
+     snugly. 20/24 and 18/24 are the two ratios, and every other density is
+     those same ratios at its own scale. */
+  --chatchip-size: 24px;
+  --chatchip-radius: 8px;
+  --chatchip-glyph: 20px;
+  --chatchip-glyph-last: 18px;
+  --chatchip-dot: 6px;
+
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  position: relative;
+  width: var(--chatchip-size);
+  height: var(--chatchip-size);
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* `card` is identical to `row` by construction — a card is a row in a
+   different container. Declared anyway so a future divergence is one line
+   here rather than a fork of the component. */
+.chatchip[data-density="card"] {
+  --chatchip-size: 24px;
+  --chatchip-radius: 8px;
+  --chatchip-glyph: 20px;
+  --chatchip-glyph-last: 18px;
+  --chatchip-dot: 6px;
+}
+/* Inline in running text. Sized to sit ON a text line rather than drive its
+   leading — a 24px mark in a 20px line box pushes the line apart and the whole
+   paragraph ripples around one mention.
+
+   A2 ARRIVES HERE WITHOUT TOUCHING THE LINE, and the reason is the box: it is
+   16px before and after, and the pill hangs off its own TEXT's baseline with the
+   chip opted out of baseline alignment (ChatMentionPicker.css), so nothing about
+   a paragraph's leading is computed from what is inside this box. The glyph
+   inside it grows 10px → 13px, which is the space the deleted tile was using —
+   and deleting it here takes a container out of a container, the pill being the
+   one that was already doing that job. 13/16 and 12/16 are the row's 20/24 and
+   18/24: one drawing at two scales, not a second set of numbers.
+
+   SIZE ONLY, like the other two, and there is a deleted declaration behind that.
+   This rule used to also carry `vertical-align: -3px` — a pixel offset tuned
+   against one font size, which is wrong at every other one. It was also INERT:
+   the only thing that renders a `chip` density is `.chat-mention-pill`, which is
+   a flex container, and `vertical-align` does not apply to a flex item. Measured
+   in Chromium: `-20px` moved it zero pixels. So a chip sitting wrong on a line is
+   not this file's to fix — where the chip sits is a fact about the CONTAINER that
+   puts it on the line, and the pill now hangs itself off its own text's baseline
+   (see ChatMentionPicker.css). Do not put a length back here; it will look like a
+   fix and do nothing. */
+.chatchip[data-density="chip"] {
+  --chatchip-size: 16px;
+  --chatchip-radius: 5px;
+  --chatchip-glyph: 13px;
+  --chatchip-glyph-last: 12px;
+  --chatchip-dot: 5px;
+}
+
+/* ─── The tile, which paints NOTHING ─────────────────────────────────────── */
+
+/* There is no container for four days out of five. What is left is a box: the
+   thing the last day's outline is drawn on, and the thing the row's height is
+   measured from.
+
+   The border is TRANSPARENT rather than absent, and that is load-bearing: the
+   box must not resize when the outline arrives, or the glyph shifts a pixel at
+   exactly the step where it is already stepping down 2px. Only the STYLE and the
+   COLOUR change on the last day, never the geometry. */
+.chatchip[data-shape="tile"] {
+  border-radius: var(--chatchip-radius);
+  border: 1px solid transparent;
+  /* No `overflow: hidden`. It existed only to clip the descending fill to these
+     corners, and it is now a clip waiting to cut a glyph that deliberately fills
+     more of its box than the box has. */
+  transition: border-color 0.3s, border-style 0.3s;
+}
+
+/* No `position`/`z-index` any more: both existed to put the glyph UNDER the fill
+   that buried it, and it is the only thing in the box now. */
+.chatchip-glyph {
+  font-weight: 400;
+  font-size: var(--chatchip-glyph);
+  line-height: 1;
+  /* opacity is the clock; filter rides along; font-size steps once, at the end.
+     Quicker than the fade so the mark has settled into the outline by the time
+     the outline has finished arriving. */
+  transition: opacity 0.45s, filter 0.45s, font-size 0.35s;
+}
+
+/* ─── The clock: TWO RUNGS, and the alphas are the theme's ───────────────── */
+
+/* OPACITY CARRIES IT, because opacity is the channel with a fixed zero — see the
+   long note in ChatChip.tsx. The grayscale DRAIN rides along on a second,
+   independent channel, which is what makes the ladder read decisively across a
+   luminance range of barely 2× (3.42 → 1.65 measured end to end).
+
+   --fade-1 / --fade-2 are THEME tokens (styles.css) for the reason --clock-base
+   is one, arriving through a different channel: an emoji composited at α over a
+   LIGHT ground loses contrast faster than the same α over a dark one, because
+   the glyph's own luminance sits nearer the light surface. Measured against a
+   mid-grey glyph — the drain has taken the hue by these steps — 0.70 gives
+   2.23:1 on alucard's #f0edf7 and 2.49:1 on dracula's #282a36. One ladder would
+   leave the dark themes a step brighter at exactly the end where the rungs are
+   already compressed.
+
+   TWO RUNGS AND NO MORE. The fresh end needs no step (1.00 vs 0.95 is not one)
+   and there is no rung 3: `last_day` is read before the quantisation, so the
+   fourth day is the outline below. */
+.chatchip[data-step="1"] .chatchip-glyph {
+  opacity: var(--fade-1);
+  filter: grayscale(50%);
+}
+.chatchip[data-step="2"] .chatchip-glyph {
+  opacity: var(--fade-2);
+  filter: grayscale(85%);
+}
+
+/* ─── Last day, and done ─────────────────────────────────────────────────── */
+
+/* THE OUTLINE ARRIVES ONCE, and this is the only frame in the whole drawing.
+   DOTTED, not dashed: the fade has already made the mark soft, a dashed box is
+   the hardest edge left on the row, and dotted reads as dissolving rather than
+   cut out. Provisional, which is exactly what a chat about to leave the live
+   list is. `done` draws the same — the mark has nothing left to say about time,
+   and the row's place in the done group is what says it is over. */
+.chatchip[data-phase="last-day"][data-shape="tile"],
+.chatchip[data-phase="done"][data-shape="tile"] {
+  border-style: dotted;
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border-strong));
+}
+/* The glyph steps DOWN to 18px here — the one size change there is — so it lands
+   inside the 24px box instead of wearing it. It costs nothing at a step that
+   already changes everything else about the mark, and it happens once. */
+.chatchip[data-phase="last-day"] .chatchip-glyph,
+.chatchip[data-phase="done"] .chatchip-glyph {
+  font-size: var(--chatchip-glyph-last);
+  filter: grayscale(100%);
+  opacity: 0.34;
+}
+
+/* ─── The child dot ──────────────────────────────────────────────────────── */
+
+/* The same material at dot size. It occupies a box the width of the TILE, so a
+   child's dot lands in the same mark column its parent's chip does and every
+   child name in the tree starts on one shared x. */
+.chatchip[data-shape="dot"] {
+  /* width stays --chatchip-size (the tile's), height too — the box is the
+     column, the dot is what is drawn in the middle of it. */
+  background: none;
+  border: 0;
+}
+/* TWO states, and no fill — a sub-chat has no clock (see ChatChip.tsx). Solid
+   while it is working, hollow once it has delivered. The opacity is a constant
+   here rather than an inline style, because there is nothing left for it to
+   track: it used to encode the parent's remaining days, which was neither a
+   fact about this chat nor readable off six pixels. */
+.chatchip-dot {
+  display: block;
+  width: var(--chatchip-dot);
+  height: var(--chatchip-dot);
+  border-radius: 50%;
+  background: var(--clock);
+  opacity: 0.85;
+  transition: box-shadow 0.3s, background 0.3s;
+}
+/* Delivered. The dot's equivalent of the tile's dashed outline — the same
+   "this is finished, not gone" reading, at 6px. */
+.chatchip-dot[data-hollow="true"] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--clock);
+}
+
+/* ─── Reduced motion ─────────────────────────────────────────────────────── */
+
+/* The fade's 0.45s is a state CHANGE, not a loop, so it does not break the
+   rail's "only `working` moves" invariant — but it is still motion, and a user
+   who has asked for none gets the new step immediately instead. */
+@media (prefers-reduced-motion: reduce) {
+  .chatchip[data-shape="tile"],
+  .chatchip-glyph,
+  .chatchip-dot {
+    transition: none;
+  }
+}

@@ -10,7 +10,13 @@ import {
 } from 'react-mosaic-component';
 import 'react-mosaic-component/react-mosaic-component.css';
 import type { AppUrl, LayoutNode, PaneSpec, Tab } from '@muxpad/shared';
-import { collectLayoutLeaves, spliceLayoutAtTarget } from '@muxpad/shared';
+import {
+  collectLayoutLeaves,
+  isAgentPane,
+  spliceLayoutAtTarget,
+  tabShowsPaneStrip,
+  tabTakesPanes,
+} from '@muxpad/shared';
 import { type TabWithPanes, api } from '../api';
 import { ExternalOpenToasts } from '../components/ExternalOpenToasts';
 import { MobileInputBar } from '../components/MobileInputBar';
@@ -29,7 +35,7 @@ import { ShellPaneBody } from '../components/ShellPaneBody';
 import { StatusMark } from '../components/StatusMark';
 import { UrlPane } from '../components/UrlPane';
 import { SvgClose } from '../components/icons';
-import { subscribe, subscribeReconnect } from '../events';
+import { subscribe, subscribeResync } from '../events';
 import { HOUSE_CHAT_PANE_CREATE } from '../lib/agent-backend';
 import { consumeFollowTarget } from '../lib/follow-tab';
 import { getLastPaneId, setLastPaneId, setLastTabSlug } from '../lib/last-visited';
@@ -38,6 +44,8 @@ import { pushUndo } from '../lib/move-undo-store';
 import { PANE_DRAG_MIME, paneDragOrigin } from '../lib/pane-drag';
 import { usePaneFace } from '../lib/pane-face';
 import { consumePushFocusPane } from '../lib/push-focus';
+import { documentVisible, seenAckTarget, useDocumentVisible } from '../lib/seen-ack';
+import { applyTabUpdated, fetchUnsuperseded, mergePaneUpdated } from '../lib/tab-detail-events';
 import { setTabViewMode, useTabViewMode } from '../lib/tab-view-mode';
 import { useDismissable } from '../lib/use-dismissable';
 import { freshTabs, refreshTabs, useTabs } from '../tabs';
@@ -237,6 +245,12 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
   // True when a tab.updated's layout was skipped mid-write — triggers a
   // refetch once writes settle (see persistLayout).
   const skippedTabUpdate = useRef(false);
+  // Moves on every change that reaches this tab by a route other
+  // than a detail GET — a pushed pane or tab event, or a local layout write. The reconnect resync captures it before fetching and
+  // discards an answer it overtook (see fetchUnsuperseded): `pendingLayoutWrites`
+  // only knows about OUR writes in flight, not about another client's pane that
+  // already arrived by push while the GET was on the wire.
+  const detailGeneration = useRef(0);
   const isMobile = useMediaQuery(MOBILE_BREAKPOINT);
   // Desktop 'tabbed' mode renders the same single-pane-at-a-time UI mobile is
   // forced into, so both share the "active pane" machinery below via
@@ -492,20 +506,22 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     return () => window.removeEventListener('muxpad:pane-focused', onFocused);
   }, [tab?.id, tab?.panes]);
 
-  // Surgical mark-seen. Mobile: only the active pane (so other panes
-  // can keep flagging in the dropdown). Desktop: bulk-seen because the
-  // mosaic shows every pane at once — every pane is "seen" by virtue of
-  // the tab being open. Fires on tab mount and on any pane switch.
-  // Refreshes workspaces/tabs so the favicon + chrome dots update
-  // without waiting for the 5s poll.
+  // Surgical mark-seen. Single-pane views (mobile AND desktop 'tabbed'
+  // mode): only the active pane (so hidden panes can keep flagging in the
+  // dropdown / tab strip). Split mosaic: bulk-seen because it shows every
+  // pane at once — every pane is "seen" by virtue of the tab being open.
+  // The choice is `singlePane`, not `isMobile`: desktop tabbed mode hides
+  // its siblings exactly like mobile does (see seen-ack.ts). Fires on tab
+  // mount and on any pane switch. Refreshes workspaces/tabs so the favicon
+  // + chrome dots update without waiting for the 5s poll.
   //
-  // For mobile we resolve the active pane through the same fallback
-  // chain the render branch uses (state → last-visited storage → first
-  // pane). Without this, the implicit-active pane on a fresh tab mount
+  // For single-pane views we resolve the active pane through the same
+  // fallback chain the render branch uses (state → last-visited storage →
+  // first pane). Without this, the implicit-active pane on a fresh tab mount
   // (mobileActiveId still null) would never get mark-seen until the
   // user explicitly tapped it — leaving the attention dot stuck.
   const mobileActiveResolved = (() => {
-    if (!isMobile || !tab) return null;
+    if (!singlePane || !tab) return null;
     const ids = tab.panes.map((p) => p.id);
     if (mobileActiveId && ids.includes(mobileActiveId)) return mobileActiveId;
     const stored = getLastPaneId(tab.id);
@@ -527,31 +543,30 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
   const seenSignature = (tab?.panes ?? [])
     .map((p) => `${p.id}:${p.attention === true ? 1 : 0}${p.unread === true ? 1 : 0}`)
     .join('|');
+  // Selected is not seen: a backgrounded browser keeps this tab `isActive`,
+  // and acking there cleared unread marks on every device for replies nobody
+  // displayed. Gated on visibility here and rechecked when the debounce fires;
+  // the flip back to visible re-runs the effect and acks what piled up.
+  const docVisible = useDocumentVisible();
   useEffect(() => {
-    if (!tab || !workspace || !isActive) return;
+    if (!tab || !workspace || !isActive || !docVisible) return;
     // Debounced. `attention` is the BEL bit, and a pane can ring it in a tight
     // loop (shell completion beeps, a chatty build) — each ring moves the
     // signature, and each run costs a POST plus two list refetches. Coalescing
     // a storm into one round trip is free; the delay is imperceptible for
     // something whose whole job is to clear a dot on the tab you're watching.
     const t = window.setTimeout(() => {
+      if (!documentVisible()) return;
       const refresh = () =>
         Promise.all([refreshTabs(workspace.id), refreshWorkspaces()]).catch(() => {});
-      if (isMobile) {
-        if (!mobileActiveResolved) return;
-        api
-          .markPaneSeen(mobileActiveResolved)
-          .then(refresh)
-          .catch(() => {});
-      } else {
-        api
-          .markTabSeen(tab.id)
-          .then(refresh)
-          .catch(() => {});
-      }
+      const ack = seenAckTarget({ singlePane, activePaneId: mobileActiveResolved, tabId: tab.id });
+      if (!ack) return;
+      (ack.kind === 'pane' ? api.markPaneSeen(ack.id) : api.markTabSeen(ack.id))
+        .then(refresh)
+        .catch(() => {});
     }, 300);
     return () => window.clearTimeout(t);
-  }, [tab?.id, mobileActiveResolved, isMobile, workspace?.id, isActive, seenSignature]);
+  }, [tab?.id, mobileActiveResolved, singlePane, workspace?.id, isActive, docVisible, seenSignature]);
 
   // Title pulls the live name from the shared tabs list so renames in
   // the tab bar update the document title without a refetch here. The
@@ -626,7 +641,6 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     if (!workspace) return;
     setClosingTab(false);
     setError(null);
-    let viewedTabId: string | null = null;
     let cancelled = false;
     (async () => {
       try {
@@ -656,29 +670,34 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
           }
           return;
         }
-        const detail = await api.getTab(found.id);
+        // Fenced like the resync below. On a RELOAD (loadNonce — most often
+        // persistLayout's refetch after it skipped a concurrent tab.updated)
+        // the subscription is live, so a pane.added / tab.updated landing
+        // while this GET is on the wire is applied first and would then be
+        // rolled back by the older answer. Null = every answer was overtaken
+        // and the held tab is newer; only possible once a tab is held, since
+        // nothing moves the generation before then.
+        const detail = await fetchUnsuperseded(
+          () => api.getTab(found.id),
+          () => detailGeneration.current,
+        );
         if (cancelled) return;
-        setTab(detail);
-        layoutRef.current = toMosaic(detail.layout);
-        viewedTabId = found.id;
+        if (detail) {
+          setTab(detail);
+          layoutRef.current = toMosaic(detail.layout);
+        }
         // Mark-seen on mount is deliberately NOT done here anymore — a
         // bulk tab-seen on mount would clear every pane's attention
         // before the user could see which pane was BELing in the nav
         // sheet's pane list. The per-pane / per-mode seen happens
-        // in the dedicated effect below; the bulk seen on unmount still
-        // runs (tab-level dot still clears when you actually leave).
+        // in the dedicated visibility-gated effect. Cleanup must not ack:
+        // it also runs on reloads and for panes nobody ever displayed.
       } catch (e) {
         setError(String(e));
       }
     })();
     return () => {
       cancelled = true;
-      if (viewedTabId) {
-        api
-          .markTabSeen(viewedTabId)
-          .then(() => Promise.all([refreshTabs(workspace.id), refreshWorkspaces()]))
-          .catch(() => {});
-      }
     };
   }, [workspace?.id, tabSlug, loadNonce]);
 
@@ -686,6 +705,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     async (layout: Layout) => {
       if (!tab) return;
       pendingLayoutWrites.current += 1;
+      detailGeneration.current += 1;
       try {
         // SERIALIZED PER TAB. A whole-layout PATCH is last-writer-wins, so two
         // rapid structural edits (split, then reorder) racing on the wire could
@@ -759,7 +779,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
       if (!tab) return;
       const created = await api.createPane(tab.id, {
         ...(sourcePaneId ? { inherit_cwd_from: sourcePaneId } : {}),
-        // New panes are the house chat, same as new tabs. The alternatives
+        // New panes open in Chat mode, same as new tabs. The alternatives
         // (raw Claude/Codex/Cursor, terminal, web) live in the empty chat's
         // own "open instead:" strip.
         ...HOUSE_CHAT_PANE_CREATE,
@@ -1012,60 +1032,41 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
   // re-subscribes on tab change. We still filter on `e.tab_id ===
   // tab.id` defensively in case any in-flight events slip through.
   //
-  // pane.updated merges rather than overwrites: PATCH-route events
-  // carry the raw row without runtime decorations (title,
-  // foreground_cmd), so we preserve old values when the incoming
-  // payload omits them. PaneManager-emitted events do carry the
-  // decorations and overwrite cleanly.
+  // pane.updated merges rather than overwrites (mergePaneUpdated): a
+  // payload that OMITS a runtime decoration keeps the old value, while an
+  // explicit null — the server saying the runtime is gone — clears it.
   useEffect(() => {
     if (!tab) return;
     const tabId = tab.id;
     return subscribe((e) => {
       if (e.type === 'pane.added' && e.tab_id === tabId) {
+        detailGeneration.current += 1;
         setTab((prev) =>
           prev && !prev.panes.some((p) => p.id === e.pane.id)
             ? { ...prev, panes: [...prev.panes, e.pane] }
             : prev,
         );
       } else if (e.type === 'pane.removed' && e.tab_id === tabId) {
+        detailGeneration.current += 1;
         setTab((prev) =>
           prev ? { ...prev, panes: prev.panes.filter((p) => p.id !== e.pane_id) } : prev,
         );
       } else if (e.type === 'pane.updated' && e.tab_id === tabId) {
+        // Detail snapshots carry decorations too; an older GET must not revive
+        // a cleared title or roll back the live status/unread value.
+        detailGeneration.current += 1;
         setTab((prev) =>
           prev
             ? {
                 ...prev,
-                panes: prev.panes.map((p) => {
-                  if (p.id !== e.pane.id) return p;
-                  return {
-                    ...e.pane,
-                    title: e.pane.title ?? p.title ?? null,
-                    foreground_cmd: e.pane.foreground_cmd ?? p.foreground_cmd ?? null,
-                    // Like title/fg above: PATCH-route events may omit the
-                    // runtime-only attention flag. Preserve prior so we
-                    // don't clobber a true value with undefined.
-                    attention: e.pane.attention ?? p.attention,
-                    // Same for the runtime-only status channel. The server now
-                    // decorates every pane.updated, but a version-skewed (or
-                    // future partial) emitter must not be able to blank the
-                    // status mark mid-turn — coalescing is the cheap invariant.
-                    // `status`/`agents` are the fields this file actually
-                    // RENDERS (the tabbed strip's StatusMark); `busy` is the
-                    // deprecated alias, coalesced for anything still reading it.
-                    status: e.pane.status ?? p.status,
-                    agents: e.pane.agents ?? p.agents,
-                    busy: e.pane.busy ?? p.busy,
-                    // Same: a PATCH-route pane.updated carries the raw row
-                    // without runtime app_urls. Coalesce so a kind/url edit
-                    // doesn't transiently blank the web-switch dropdown.
-                    app_urls: e.pane.app_urls ?? p.app_urls,
-                  };
-                }),
+                panes: prev.panes.map((p) =>
+                  p.id === e.pane.id ? mergePaneUpdated(p, e.pane) : p,
+                ),
               }
             : prev,
         );
       } else if (e.type === 'tab.updated' && e.tab.id === tabId) {
+        detailGeneration.current += 1;
         // Skip the layout if we have a local layout write in flight — this
         // snapshot may predate it and would revert an optimistic split. But
         // REMEMBER the skip: the frame may also carry someone else's change
@@ -1074,23 +1075,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
         // write settles, persistLayout refetches the server truth.
         const applyLayout = pendingLayoutWrites.current === 0;
         if (!applyLayout) skippedTabUpdate.current = true;
-        setTab((prev) =>
-          prev
-            ? {
-                ...prev,
-                name: e.tab.name,
-                slug: e.tab.slug,
-                ...(applyLayout ? { layout: e.tab.layout } : {}),
-                // tab.updated is emitted from PATCH /tabs and from pane
-                // append/remove paths; the server-side Tab row doesn't
-                // carry the runtime-only `attention` field, so e.tab.attention
-                // is undefined here. Coalesce to prev so we don't clobber
-                // the locally-tracked dot.
-                attention: e.tab.attention ?? prev.attention,
-                updated_at: e.tab.updated_at,
-              }
-            : prev,
-        );
+        setTab((prev) => (prev ? applyTabUpdated(prev, e.tab, applyLayout) : prev));
         if (applyLayout) layoutRef.current = toMosaic(e.tab.layout);
       } else if (e.type === 'tab.removed' && e.tab_id === tabId) {
         setClosingTab(true);
@@ -1118,18 +1103,27 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
   }, [tab?.id, navigate, wsSlug]);
 
   // Re-fetch the active tab's detail whenever the events socket
-  // (re)connects. Any pane.added/removed/updated emitted during the
-  // disconnect window was lost, and the subscribe() effect above only
-  // delivers events from now on. Without this re-fetch, an active tab
-  // could keep stale panes/layout indefinitely after a server restart
-  // or network blip — refresh covers what events couldn't.
+  // (re)connects AND when the document becomes visible. Any
+  // pane.added/removed/updated emitted during a disconnect window was
+  // lost, and iOS can kill a backgrounded events socket without firing
+  // close — so subscribeReconnect never runs. Visibility is the HTTP
+  // backstop; the sidebar already refetches this way, the mosaic did not.
   useEffect(() => {
     if (!tab) return;
     const tabId = tab.id;
-    return subscribeReconnect(() => {
-      void api
-        .getTab(tabId)
+    return subscribeResync(() => {
+      // Superseded answers are thrown away, not merged: a GET that left before
+      // another client's pane.added(Q) + tab.updated(P|Q) reached us answers
+      // with P alone, and installing it removed Q from state AND the mosaic —
+      // for good, since pane.updated only maps panes already held and nothing
+      // else re-adds one. Null = every answer was overtaken; what the events
+      // delivered is newer than all of them, so keep it.
+      void fetchUnsuperseded(
+        () => api.getTab(tabId),
+        () => detailGeneration.current,
+      )
         .then((detail) => {
+          if (!detail) return;
           // If a local layout write is in flight, this snapshot may predate it
           // — keep our optimistic layout + panes (the just-split pane isn't in
           // the server's copy yet) and take only the rest.
@@ -1345,31 +1339,42 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
         {/* Pane-level controls now live in the TOP bar (line 1), not a second
             strip: mobile spends no whole row on chrome. The nav sheet owns pane
             SWITCH + CLOSE (the old picker & ×), leaving just the face switch
-            (what am I looking at) and an always-visible + (new pane). Portalled
-            up because the top bar (AppLayout) has no pane context; gated on
-            isActive so kept-mounted hidden tabs don't paint duplicates. */}
+            (what am I looking at) and — for a tab that takes panes at all — the
+            + . It is no longer "always visible": a chat tab has no pane + on any
+            device (see tabTakesPanes), and with neither control left there is no
+            bar to paint. Portalled up because the top bar (AppLayout) has no
+            pane context; gated on isActive so kept-mounted hidden tabs don't
+            paint duplicates. */}
         {isActive
           ? (() => {
               const ap = activeId ? tab.panes.find((p) => p.id === activeId) : undefined;
+              // The shared rule, not a second hand-rolled copy of half of it:
+              // a pane CONVERTED to chat (face only, original startup command
+              // intact) is just as much an agent as one launched as a chat.
               const webSwitch =
-                ap &&
-                ap.kind === 'shell' &&
-                !(ap.startup_cmd?.startsWith('muxpad agent') ?? false) ? (
+                ap && ap.kind === 'shell' && !isAgentPane(ap) ? (
                   <PaneWebSwitch
                     paneId={ap.id}
                     appUrls={ap.app_urls ?? []}
                     startupCmd={ap.startup_cmd}
                   />
                 ) : null;
+              // Same rule as the desktop strip, and stated once: a chat tab
+              // shows no pane `+` on any device.
+              const plus = tabTakesPanes(tab.panes) ? (
+                <NewTabButton
+                  idleLabel="+"
+                  idleTitle="New pane"
+                  idleClassName="mobile-strip-add"
+                  onCreate={() => void addPane()}
+                />
+              ) : null;
+              // Nothing left to put in the bar — don't paint an empty one.
+              if (!webSwitch && !plus) return null;
               return (
                 <MobilePaneChrome>
                   {webSwitch ? <div className="mobile-strip-webswitch">{webSwitch}</div> : null}
-                  <NewTabButton
-                    idleLabel="+"
-                    idleTitle="New pane"
-                    idleClassName="mobile-strip-add"
-                    onCreate={() => void addPane()}
-                  />
+                  {plus}
                 </MobilePaneChrome>
               );
             })()
@@ -1462,111 +1467,126 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
 
     return (
       <div className="workspace-root">
-        <nav className="desktop-tab-strip" aria-label="Panes">
-          <div className="desktop-tab-strip-tabs" role="tablist">
-            {paneIds.map((paneId) => {
-              const p = tab.panes.find((x) => x.id === paneId);
-              const isActiveTab = paneId === activeId;
-              const isEditing = editingPaneId === paneId;
-              return (
-                <div
-                  key={paneId}
-                  className="desktop-tab"
-                  data-active={isActiveTab ? 'true' : undefined}
-                  data-drop={paneDropTargetId === paneId ? paneDropSide : undefined}
-                  data-dragging={paneDragId === paneId ? 'true' : undefined}
-                  // Editing borrows the header for a text input; dragging then
-                  // would steal the pointer selection, so disable it mid-edit.
-                  draggable={!isEditing}
-                  onDragStart={(e) => onPaneDragStart(e, paneId)}
-                  onDragOver={(e) => onPaneDragOver(e, paneId)}
-                  onDragEnd={onPaneDragEnd}
-                  onDrop={(e) => onPaneDrop(e, paneId)}
-                >
-                  {isEditing ? (
-                    <input
-                      ref={paneEditRef}
-                      className="desktop-tab-input"
-                      value={paneDraft}
-                      onChange={(e) => setPaneDraft(e.target.value)}
-                      onBlur={() => void commitPaneRename()}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          void commitPaneRename();
-                        } else if (e.key === 'Escape') {
-                          e.preventDefault();
-                          cancelPaneRename();
-                        }
-                      }}
-                      size={Math.max(6, paneDraft.length + 1)}
-                    />
-                  ) : (
-                    <>
-                      <button
-                        type="button"
-                        role="tab"
-                        aria-selected={isActiveTab}
-                        className="desktop-tab-select"
-                        onClick={() => setMobileActiveId(paneId)}
-                        onDoubleClick={() => startPaneRename(paneId)}
-                        title={p?.name ? p.name : 'Double-click to rename'}
-                      >
-                        <span
-                          className="desktop-tab-kind"
-                          title={paneSurfaceLabel(p)}
-                          aria-label={paneSurfaceLabel(p)}
-                        >
-                          {paneSurfaceIcon(p)}
-                        </span>
-                        <span className="desktop-tab-label">{paneLabel(paneId)}</span>
-                        {/* The same status rail the navigator uses — one
-                            component, so the strip and the sidebar can never
-                            tell different stories about the same pane. */}
-                        <StatusMark status={p?.status} />
-                      </button>
-                      {/* Trailing slot holds only the hover-revealed × now —
-                          status moved to LEAD the label. */}
-                      <span className="desktop-tab-trailing">
+        {/* THE STRIP ONLY PAINTS WHEN IT HAS A JOB — see tabShowsPaneStrip.
+            Dropping the `+` from a chat tab was only half of "one pane per tab,
+            except terminals": this row still painted for every chat, carrying a
+            label for the pane already on screen, a second copy of the sidebar's
+            status mark, a × that only empties the tab, and an "Expand to split"
+            with nothing to split. The mobile branch above already refuses to
+            paint an empty bar; this is the same rule on the other surface. */}
+        {tabShowsPaneStrip(tab.panes) ? (
+          <nav className="desktop-tab-strip" aria-label="Panes">
+            <div className="desktop-tab-strip-tabs" role="tablist">
+              {paneIds.map((paneId) => {
+                const p = tab.panes.find((x) => x.id === paneId);
+                const isActiveTab = paneId === activeId;
+                const isEditing = editingPaneId === paneId;
+                return (
+                  <div
+                    key={paneId}
+                    className="desktop-tab"
+                    data-active={isActiveTab ? 'true' : undefined}
+                    data-drop={paneDropTargetId === paneId ? paneDropSide : undefined}
+                    data-dragging={paneDragId === paneId ? 'true' : undefined}
+                    // Editing borrows the header for a text input; dragging then
+                    // would steal the pointer selection, so disable it mid-edit.
+                    draggable={!isEditing}
+                    onDragStart={(e) => onPaneDragStart(e, paneId)}
+                    onDragOver={(e) => onPaneDragOver(e, paneId)}
+                    onDragEnd={onPaneDragEnd}
+                    onDrop={(e) => onPaneDrop(e, paneId)}
+                  >
+                    {isEditing ? (
+                      <input
+                        ref={paneEditRef}
+                        className="desktop-tab-input"
+                        value={paneDraft}
+                        onChange={(e) => setPaneDraft(e.target.value)}
+                        onBlur={() => void commitPaneRename()}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            void commitPaneRename();
+                          } else if (e.key === 'Escape') {
+                            e.preventDefault();
+                            cancelPaneRename();
+                          }
+                        }}
+                        size={Math.max(6, paneDraft.length + 1)}
+                      />
+                    ) : (
+                      <>
                         <button
                           type="button"
-                          className="desktop-tab-close"
-                          title="Close pane"
-                          aria-label="Close pane"
-                          onClick={() => closePane(paneId)}
+                          role="tab"
+                          aria-selected={isActiveTab}
+                          className="desktop-tab-select"
+                          onClick={() => setMobileActiveId(paneId)}
+                          onDoubleClick={() => startPaneRename(paneId)}
+                          title={p?.name ? p.name : 'Double-click to rename'}
                         >
-                          {/* 13 → ~8px drawn X with a light stroke — reads
+                          <span
+                            className="desktop-tab-kind"
+                            title={paneSurfaceLabel(p)}
+                            aria-label={paneSurfaceLabel(p)}
+                          >
+                            {paneSurfaceIcon(p)}
+                          </span>
+                          <span className="desktop-tab-label">{paneLabel(paneId)}</span>
+                          {/* The same status rail the navigator uses — one
+                            component, so the strip and the sidebar can never
+                            tell different stories about the same pane. */}
+                          <StatusMark status={p?.status} />
+                        </button>
+                        {/* Trailing slot holds only the hover-revealed × now —
+                          status moved to LEAD the label. */}
+                        <span className="desktop-tab-trailing">
+                          <button
+                            type="button"
+                            className="desktop-tab-close"
+                            title="Close pane"
+                            aria-label="Close pane"
+                            onClick={() => closePane(paneId)}
+                          >
+                            {/* 13 → ~8px drawn X with a light stroke — reads
                               as the face glyph's equal (a 16px X overpowered
                               its thin 14px outline). */}
-                          <SvgClose size={13} />
-                        </button>
-                      </span>
-                    </>
-                  )}
-                </div>
-              );
-            })}
-            {/* Browser-standard lone "+"; always opens the harness picker
-                (Claude / Codex / Cursor + Terminal below). */}
-            <NewTabButton
-              idleLabel="+"
-              idleTitle="New pane"
-              idleClassName="desktop-tab-add desktop-tab-add-plus"
-              onCreate={() => void addPane()}
-            />
-          </div>
-          <div className="desktop-tab-strip-actions">
-            <button
-              type="button"
-              className="pane-chrome-btn"
-              title="Expand to split"
-              aria-label="Expand to split view"
-              onClick={() => changeViewMode('split')}
-            >
-              <SvgSplitView />
-            </button>
-          </div>
-        </nav>
+                            <SvgClose size={13} />
+                          </button>
+                        </span>
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+              {/* Browser-standard lone "+"; always opens the harness picker
+                (Claude / Codex / Cursor + Terminal below).
+                GONE for a tab that is nothing but agents — see tabTakesPanes.
+                This `+` was how the user got more chats without a sidebar row,
+                and children-under-a-parent replaced it: a second agent in this
+                tab is a chat with no parent, no clock and no card. */}
+              {tabTakesPanes(tab.panes) ? (
+                <NewTabButton
+                  idleLabel="+"
+                  idleTitle="New pane"
+                  idleClassName="desktop-tab-add desktop-tab-add-plus"
+                  onCreate={() => void addPane()}
+                />
+              ) : null}
+            </div>
+            <div className="desktop-tab-strip-actions">
+              <button
+                type="button"
+                className="pane-chrome-btn"
+                title="Expand to split"
+                aria-label="Expand to split view"
+                onClick={() => changeViewMode('split')}
+              >
+                <SvgSplitView />
+              </button>
+            </div>
+          </nav>
+        ) : null}
         <main className="workspace-body">
           {/* Render the pane bodies in a STABLE order (sorted pane id), NOT in
               tab-strip order. Only one slot is visible at a time (absolutely
@@ -1679,22 +1699,34 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                         </button>
                       )}
                       <span className="pane-chrome-spacer" />
-                      <button
-                        className="pane-chrome-btn"
-                        title="Split right"
-                        aria-label="Split right"
-                        onClick={() => void splitFromPane(paneId, 'row')}
-                      >
-                        <SvgSplitRight />
-                      </button>
-                      <button
-                        className="pane-chrome-btn"
-                        title="Split down"
-                        aria-label="Split down"
-                        onClick={() => void splitFromPane(paneId, 'column')}
-                      >
-                        <SvgSplitDown />
-                      </button>
+                      {/* SPLIT IS THE SAME PRIMITIVE AS THE STRIP'S `+` — it
+                          adds a pane — so it goes for an agent pane too. Two
+                          shells side by side is a layout; two agents side by
+                          side is two chats with no relationship, which is the
+                          thing children replaced. Kept per-pane (not gated on
+                          the whole tab like the strip's `+`): here the button
+                          belongs to ONE pane, and a terminal sharing a tab with
+                          a chat is still splittable. */}
+                      {isAgentPane(tilePane) ? null : (
+                        <>
+                          <button
+                            className="pane-chrome-btn"
+                            title="Split right"
+                            aria-label="Split right"
+                            onClick={() => void splitFromPane(paneId, 'row')}
+                          >
+                            <SvgSplitRight />
+                          </button>
+                          <button
+                            className="pane-chrome-btn"
+                            title="Split down"
+                            aria-label="Split down"
+                            onClick={() => void splitFromPane(paneId, 'column')}
+                          >
+                            <SvgSplitDown />
+                          </button>
+                        </>
+                      )}
                       {/* The split⇄tabbed toggle lives once, in the top strip's
                           right slot (mirroring tabbed mode's "expand to split"),
                           not per-pane — so it's not repeated here. */}
@@ -1977,7 +2009,10 @@ function SvgChevron() {
 function paneSurfaceKind(p: PaneSpec | undefined): 'agent' | 'web' | 'terminal' {
   if (!p) return 'terminal';
   if (p.kind === 'url') return 'web';
-  if (p.startup_cmd?.startsWith('muxpad agent') || p.face === 'chat') return 'agent';
+  // The SHARED rule (shared/src/agent-pane.ts) — the same one the server
+  // publishes `takes_panes` from, so the icon here and the presence of a `+`
+  // cannot come to different conclusions about the same pane.
+  if (isAgentPane(p)) return 'agent';
   if (p.face === 'web' && p.face_url) return 'web';
   return 'terminal';
 }

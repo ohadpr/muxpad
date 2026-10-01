@@ -4,17 +4,20 @@ import type { AgentBridge } from './agent-bridge.js';
 import type { AppRegistry } from './apps/AppRegistry.js';
 import type { AppStatusProbe } from './apps/AppStatus.js';
 import type { ArchiveDb } from './archive/ArchiveDb.js';
-import type { CleanupModel } from './chat/clean-transcript.js';
+import { wakeBrowser } from './browser/WakeBrowser.js';
+import { findChrome } from './browser/findChrome.js';
+import { browserHostEntry } from './browser/hostEntry.js';
 import type { CronScheduler } from './cron/CronScheduler.js';
 import { EventBus } from './events.js';
 import { type Funnel, localFunnel } from './funnel.js';
 import type { PtydCache } from './ptyd-cache.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
 import type { Presence, PushService } from './push.js';
+import { agentLaunchRoutes } from './routes/agent-launch.js';
 import { agentSessionsRoutes } from './routes/agent-sessions.js';
 import { appsRoutes } from './routes/apps.js';
 import { attachmentsRoutes } from './routes/attachments.js';
-import { cleanTranscriptRoutes } from './routes/clean-transcript.js';
+import { browserProxyRoutes, browsersRoutes } from './routes/browsers.js';
 import { cronsRoutes } from './routes/crons.js';
 import { eventsRoutes } from './routes/events.js';
 import { openRoutes } from './routes/open.js';
@@ -25,9 +28,11 @@ import { pushRoutes } from './routes/push.js';
 import { archiveRoutes, searchRoutes } from './routes/search.js';
 import { summaryRoutes } from './routes/summary.js';
 import { tabsRoutes } from './routes/tabs.js';
+import { voiceRoutes } from './routes/voice.js';
 import { workspacesRoutes } from './routes/workspaces.js';
 import { sameOriginGuard } from './same-origin.js';
 import type { TabActivity } from './tab-activity.js';
+import type { VoiceSessionManager } from './voice/VoiceSessionManager.js';
 
 export interface AppDeps {
   db: Database.Database;
@@ -44,6 +49,18 @@ export interface AppDeps {
    */
   cache: PtydCache;
   dataDir: string;
+  /**
+   * This machine's tailnet host, if known. The viewer link is built on it so a
+   * handoff can be answered from a phone; null falls back to loopback rather
+   * than assembling a hostname that would fail later and less visibly.
+   */
+  browserTailnetHost?: () => string | null;
+  /**
+   * This server's own loopback address, handed to a browser host so it can say
+   * a page was actually visited. Loopback rather than the tailnet name: the
+   * host runs on this machine and the call is an internal one.
+   */
+  selfUrl?: string;
   /**
    * In-process pub/sub for structural state-change events. Routes emit
    * here after a successful mutation; the /ws/events upgrade arm
@@ -98,6 +115,24 @@ export interface AppDeps {
     /** Test-only override for the base reachability probe. */
     baseProbe?: ((url: string) => Promise<import('@muxpad/shared').UrlHealth>) | undefined;
     baseProbeTtlMs?: number | undefined;
+    /**
+     * The no-exec tailnet-name lookup. Absent = off, like `funnel` absent means
+     * localFunnel: a test-built app never touches the network by accident.
+     */
+    tailnetHostname?: (() => Promise<string | null>) | undefined;
+    /**
+     * muxpad's own Cloudflare tunnel (tunnel/TunnelApp.ts). Omitted here means
+     * a publish never starts one — which is what every test wants: a suite
+     * that could open a public tunnel by accident is not a suite.
+     */
+    tunnel?:
+      | {
+          ensure(opts?: { start?: boolean }): Promise<
+            import('./tunnel/TunnelApp.js').TunnelEnsureResult
+          >;
+          firstUrlWaitMs?: number;
+        }
+      | undefined;
   };
   /**
    * The server-owned cron scheduler (cron/CronScheduler.ts). Optional so
@@ -114,11 +149,13 @@ export interface AppDeps {
    */
   apps?: { registry?: AppRegistry | undefined; status?: AppStatusProbe | undefined };
   /**
-   * Test seam for POST /api/clean-transcript's model call. Production omits it
-   * and gets the Agent SDK Haiku completion; tests and browser-driven e2e
-   * supply a fake so no suite can ever reach the network.
+   * Voice mode's session manager (voice/VoiceSessionManager.ts) — the SDP relay
+   * plus every cost control. Optional: without it /api/voice is still mounted
+   * and answers `configured: false` / 503, which is renderable. An install with
+   * no MUXPAD_OPENAI_API_KEY reaches the same answer through a manager that has
+   * no transport, so the "voice is off" path is one behaviour, not two.
    */
-  cleanupModel?: CleanupModel;
+  voice?: VoiceSessionManager;
   /**
    * Extra hostnames the CSRF guard trusts as an Origin, on top of loopback
    * and "same hostname as Host". Production reads MUXPAD_ALLOWED_ORIGINS;
@@ -157,19 +194,15 @@ export function createApp(deps: AppDeps): Hono {
   app.route('/api/panes', attachmentsRoutes(resolved));
   app.route('/api/panes', summaryRoutes(resolved));
   app.route('/api/open', openRoutes(resolved));
-  // Phone-dictation cleanup for the mobile composers. Read-only and
-  // side-effect-free: it hands corrected text back for the human to review.
-  app.route(
-    '/api/clean-transcript',
-    cleanTranscriptRoutes({
-      db: resolved.db,
-      dataDir: resolved.dataDir,
-      ...(resolved.cleanupModel ? { model: resolved.cleanupModel } : {}),
-    }),
-  );
+  // Voice mode's SDP relay + its cost controls. Always mounted (see
+  // routes/voice.ts): "no API key" must be an answer, not a 404.
+  app.route('/api/voice', voiceRoutes({ voice: resolved.voice }));
   // SSE mirror of /ws/events — curl-able subscription for scripts/agents.
   app.route('/api/events', eventsRoutes(resolved));
   app.route('/api/agent-sessions', agentSessionsRoutes(resolved));
+  // What the empty chat's harness picker needs to offer folder + model at the
+  // moment of choosing, in one read (see routes/agent-launch.ts).
+  app.route('/api/agent-launch', agentLaunchRoutes(resolved));
   // Durable schedules (`muxpad cron`). See docs/plans/2026-08-14-muxpad-cron.md.
   app.route(
     '/api/crons',
@@ -191,6 +224,73 @@ export function createApp(deps: AppDeps): Hono {
       ...(resolved.apps?.status ? { status: resolved.apps.status } : {}),
     }),
   );
+  // Browsers muxpad OWNS — one headless Chrome per named profile, with a
+  // screencast a person can take the wheel of. Mounted next to apps because
+  // that is what a browser owner IS (an app row in a hidden workspace); what
+  // lives on its own surface is the profile naming and the wheel.
+  //
+  // Only mounted when the app registry is present: without a registry there is
+  // nothing that could start a browser, and a route that 500s on every call is
+  // worse than a 404.
+  if (resolved.apps?.registry) {
+    app.route(
+      '/api/browsers',
+      browsersRoutes({
+        db: resolved.db,
+        dataDir: resolved.dataDir,
+        hostEntry: browserHostEntry(),
+        cwd: resolved.dataDir,
+        registry: resolved.apps.registry,
+        ...(resolved.selfUrl ? { apiUrl: resolved.selfUrl } : {}),
+        ...(resolved.browserTailnetHost ? { tailnetHost: resolved.browserTailnetHost } : {}),
+        // Pressing Done in the viewer tells the conversation that asked. The
+        // relay is the same one the chat composer uses, so a message that
+        // arrives mid-turn queues rather than being dropped.
+        ...(resolved.agentBridge
+          ? {
+              resumeAgent: (paneId: string, text: string) =>
+                resolved.agentBridge?.send(paneId, text),
+            }
+          : {}),
+      }),
+    );
+    // The viewer, served underneath muxpad's own origin so the link a person is
+    // given is the tailnet one they can open on a phone. See BrowserProxy.ts —
+    // the alternative is exposing another port, or a `tailscale serve` mapping
+    // that would need the CLI inside the app bundle.
+    app.route(
+      '/browser',
+      browserProxyRoutes({
+        db: resolved.db,
+        // Tapping a card is somebody asking to look. Start it for them.
+        wake: async (profile) => {
+          const chrome = findChrome();
+          const registry = resolved.apps?.registry;
+          if (!chrome || !registry) return false;
+          const { awake } = await wakeBrowser({
+            profile,
+            deps: {
+              db: resolved.db,
+              dataDir: resolved.dataDir,
+              chromePath: chrome.path,
+              hostEntry: browserHostEntry(),
+              registry,
+              cwd: resolved.dataDir,
+              ...(resolved.selfUrl ? { apiUrl: resolved.selfUrl } : {}),
+            },
+            probe: async (state) => {
+              try {
+                return (await fetch(`${state.viewerUrl}/healthz`)).ok;
+              } catch {
+                return false;
+              }
+            },
+          });
+          return awake;
+        },
+      }),
+    );
+  }
   // Artifact publishing (copies into <dataDir>/public, served by the separate
   // public-port app). Default funnel is exec-free — see AppDeps.publish.
   app.route(
@@ -204,9 +304,13 @@ export function createApp(deps: AppDeps): Hono {
       publicPort: resolved.publish?.publicPort ?? 7778,
       ...(resolved.publish?.publicBaseUrl ? { publicBaseUrl: resolved.publish.publicBaseUrl } : {}),
       ...(resolved.publish?.baseProbe ? { baseProbe: resolved.publish.baseProbe } : {}),
+      ...(resolved.publish?.tailnetHostname
+        ? { tailnetHostname: resolved.publish.tailnetHostname }
+        : {}),
       ...(resolved.publish?.baseProbeTtlMs !== undefined
         ? { baseProbeTtlMs: resolved.publish.baseProbeTtlMs }
         : {}),
+      ...(resolved.publish?.tunnel ? { tunnel: resolved.publish.tunnel } : {}),
     }),
   );
   if (resolved.push) app.route('/api/push', pushRoutes(resolved.push));

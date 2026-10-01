@@ -161,9 +161,22 @@ export type Artifact = z.infer<typeof ArtifactSchema>;
 export const PublicBaseInfoSchema = z.object({
   /** null = no shareable base; links would be loopback-only. */
   url: z.string().nullable(),
-  source: z.enum(['env', 'pinned', 'hint', 'funnel', 'persisted', 'local']),
+  source: z.enum(['env', 'pinned', 'tunnel', 'hint', 'tailnet', 'funnel', 'persisted', 'local']),
   /** null = not checked. */
   reachable: z.boolean().nullable(),
+  /**
+   * How long the ADDRESS lives — a different failure from `reachable`, and the
+   * one that actually kills published links.
+   *
+   * `reachable` says yes about a Cloudflare quick tunnel right up until the
+   * restart that reassigns its hostname, at which point every link ever built
+   * from it is dead forever. Measured on this machine 2026-09-27: one ptyd
+   * restart took out nine days of links, with every surface reporting healthy
+   * throughout. So the two travel together, always.
+   */
+  durability: z.enum(['permanent', 'ephemeral', 'tailnet', 'local']),
+  /** The human sentence for a base that will not keep. Absent when it will. */
+  note: z.string().optional(),
   warning: z.string().optional(),
 });
 export type PublicBaseInfo = z.infer<typeof PublicBaseInfoSchema>;

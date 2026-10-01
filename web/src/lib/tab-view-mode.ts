@@ -137,7 +137,16 @@ export function useTabViewMode(
   // Adopt the server's value whenever it changes (initial load, tab.updated
   // from another device, our own PATCH echo).
   useEffect(() => {
-    if (tabId) syncTabViewMode(tabId, serverMode);
-  }, [tabId, serverMode]);
+    if (!tabId) return;
+    syncTabViewMode(tabId, serverMode);
+    // An event skipped during the local grace period may be the LAST event.
+    // Reconcile it when the period expires; changing either the server value
+    // or the local mode cancels this timer and uses the latest pair instead.
+    const remaining = LOCAL_WINS_MS - (Date.now() - (lastLocalSet.get(tabId) ?? 0));
+    if (serverMode && serverMode !== getTabViewMode(tabId) && remaining > 0) {
+      const timer = setTimeout(() => syncTabViewMode(tabId, serverMode), remaining);
+      return () => clearTimeout(timer);
+    }
+  }, [tabId, serverMode, mode]);
   return mode;
 }

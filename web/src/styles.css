@@ -63,6 +63,99 @@
      which darkens the ink on light themes and lightens it on dark ones. Tuned
      to clear 4.5:1 against the chip's own fill on every theme and surface. */
   --status-ink-mix: 55%;
+
+  /* ─── The chat CLOCK's two rungs ───────────────────────────────────────
+     The chip's clock is the GLYPH FADING, with its colour draining alongside
+     (components/ChatChip.css). These are the two middle rungs' alphas, and they
+     re-step per theme for the same class of reason --status-* do, arriving
+     through a different channel: an emoji composited at α over a LIGHT ground
+     loses contrast faster than the same α over a dark one, because the glyph's
+     own luminance sits nearer the light surface.
+
+     Measured against a mid-grey glyph — the drain has taken the hue by these
+     steps — as contrast against the row's surface:
+
+              α      vs #f0edf7 (alucard)   vs #282a36 (dracula)
+             1.00          3.42                   3.61
+             0.70          2.23                   2.49
+             0.46          1.65                   1.82
+
+     One ladder would leave the dark themes a step brighter at exactly the end
+     where the rungs are already compressed — the whole visible ladder spans
+     3.42 → 1.65, barely a 2× range, which is also why the drain is there at all:
+     it is a second, independent channel, and the fade alone has only that 2× to
+     work with. The FRESH end needs no step (1.00 vs 0.95 is not one), so this is
+     two numbers per theme rather than a ladder each.
+
+     DARK-surface step here, as everywhere else in this block; the light themes
+     re-step it below. */
+  --fade-1: 0.61;
+  --fade-2: 0.39;
+
+  /* ─── The sub-chat dot's ink ───────────────────────────────────────────
+     6px of definite colour, and the one mark on a row that is not the user's
+     own artwork. It was the tile's descending fill as well, at two scales; the
+     fill is gone (the glyph carries the clock now) and the dot is what is left
+     of that substance — six pixels cannot carry a fade, and a sub-chat has no
+     clock to fade with anyway.
+
+     Stated as a MIX so the relationship is the constant: the mark is always the
+     accent cut to 34%, on every theme, and only what it is cut WITH re-steps.
+     That base is the token below, and it re-steps for exactly the reason
+     --status-* do — the mark has to sit at a fixed distance from the surface it
+     is drawn on, and a single literal cannot do that on a white row and a
+     near-black one at once. It was `#d9d3ea` for every theme: drawn against the
+     white cockpit, correct there, and a bright lilac shouting off a dark row
+     everywhere else.
+
+     DARK-surface step here; the light themes re-step it below. Dark wants a
+     MID tone (lighter than the row, so the mark reads as present) and light
+     wants a PALE one (darker than the row, same reason) — the base moves to
+     the opposite side of the surface, which is why it cannot be derived from
+     --border or --bg-hover and is written out per theme.
+
+     Only the BASE lives here. `--clock` itself — the 34% mix — is declared on
+     `.chatchip` (components/ChatChip.css), and that is deliberate: a custom
+     property is substituted on the element that DECLARES it, so a `--clock`
+     written here would resolve against THIS element's base and inherit down as
+     a finished colour, with every theme override below arriving too late to
+     matter. It happens to work today only because the theme attribute is set
+     on documentElement (settings.ts) — the same element as `:root` — which is
+     a coincidence of placement, not a design. Declared on the chip, the mix
+     resolves against whatever base is in scope there, and the token is correct
+     wherever a chip is rendered. */
+  --clock-base: #3d4663;
+
+  /* ─── Search-hit highlight ─────────────────────────────────────────────
+     What a term looks like once you have been taken to the message that says
+     it (components/ChatPane.css `.chat-hit`). Its own token trio, not
+     --accent: the accent is already the "this is selected / this has focus"
+     colour throughout the app, and a found word is neither — reusing it would
+     make a highlighted run inside a focused pane say two different things in
+     the same hue. A held marker instead, which is what a highlighter IS.
+
+     Three tokens because a highlight has three jobs and one colour cannot do
+     all of them:
+       · --hit-bg    the fill;
+       · --hit-ink   the text ON the fill (>= 4.5:1 against it in every theme;
+                     measured 11:1+, because the fill is a strong colour and
+                     the ink is near-black by construction);
+       · --hit-rule  the edge. Load-bearing on the LIGHT themes and nowhere
+                     else: a yellow fill on white is a difference in HUE, not
+                     in luminance (measured 1.28:1 on acme, 1.43:1 on
+                     github-light), so the fill alone would fail non-text
+                     contrast and would vanish entirely for a reader who
+                     cannot separate those hues. The rule carries the boundary
+                     there (4.87:1 / 5.52:1 against the page). On the dark
+                     themes the fill already clears it on its own (10.5–12.7:1)
+                     and the rule is just definition.
+
+     Deliberately NOT --fg-faint anywhere in this: it measures 3.03:1 on light
+     and 2.91:1 on dark, which fails text contrast — and a highlight nobody can
+     read is worse than none, because it claims to have answered the question. */
+  --hit-bg: #f2c55c;
+  --hit-ink: #141520;
+  --hit-rule: #8a5e00;
 }
 
 /* Tokyo Night — saturated deep navy with a vivid blue accent. */
@@ -82,6 +175,14 @@
   --danger: #f7768e;
   --accent: #7aa2f7;
   --accent-fg: #1a1b26;
+  /* Dark ground: the fade keeps its α, an emoji holding contrast better here. */
+  --fade-1: 0.61;
+  --fade-2: 0.39;
+  /* Dark surface (--bg-elev #1f2335): a MID slate the accent lightens. */
+  --clock-base: #3d4663;
+  --hit-bg: #f2c55c;
+  --hit-ink: #141520;
+  --hit-rule: #8a5e00;
 }
 
 /* Dracula — grey-purple base with vivid purple/pink accents. The standout
@@ -102,6 +203,71 @@
   --danger: #ff5555;
   --accent: #bd93f9;
   --accent-fg: #282a36;
+  /* Dark ground, and the one the fade was MEASURED on: 0.61 gives 2.49:1 and
+     0.39 gives 1.82:1 against #282a36. */
+  --fade-1: 0.61;
+  --fade-2: 0.39;
+  /* Dark surface (--bg-elev #21222c): a MID purple-grey. */
+  --clock-base: #454758;
+  --hit-bg: #f1fa8c;
+  --hit-ink: #1e1f29;
+  --hit-rule: #7a7f2a;
+}
+
+/* Alucard — Dracula in daylight. COOL, not cream.
+   Upstream's Alucard is a warm #fffbeb, and a first pass followed it. Rendered
+   in the actual app it read as beige mush: a dimmer Acme, not Dracula's
+   sibling, because Dracula's identity is a blue-purple charcoal (#282a36) and
+   the warm parchment threw away the one thing that made them a pair. Its
+   surfaces also sat inside a narrow tan band (bg/chrome/border within a few
+   points of each other), so nothing separated from anything.
+
+   So: a lavender-tinted white, cool like the dark side, with the surfaces
+   actually stepped apart and white elevation available above the page. The
+   accent is Dracula's violet taken down only as far as white-on-it needs
+   (6.38:1) — enough to stay violet rather than becoming indigo. */
+[data-theme="alucard"] {
+  --bg: #f5f4fb;
+  --bg-elev: #ffffff;
+  --bg-hover: #e2ddf5;
+  --bg-chrome: #edecf7;
+  --bg-tabbar: #ddd8ef;
+  --fg: #232135;
+  --fg-dim: #4e496b;
+  /* Decorative only — see the --hit-* note in :root; never text. */
+  --fg-faint: #8b86a5;
+  --border: #ddd8ee;
+  --border-strong: #b8b0d4;
+  --xterm-bg: #f5f4fb;
+  --xterm-fg: #232135;
+  --danger: #c62828;
+  --accent: #6641d6;
+  --accent-fg: #ffffff;
+  /* Light re-step, and the one the fade was MEASURED on: an emoji at α loses
+     contrast faster over this ground, so both middle rungs go UP — 0.70 gives
+     2.23:1 against #f0edf7 and 0.46 gives 1.65:1. */
+  --fade-1: 0.7;
+  --fade-2: 0.46;
+  /* Light re-step, and the ORIGINAL: this pale lilac on the white cockpit is
+     the colour the prototype was drawn against and signed off on. Every other
+     theme is a re-step of it, never the other way round. */
+  --clock-base: #d9d3ea;
+  /* Light re-step (see :root), on a COOL surface — so --status-quiet is the
+     lavender-grey counterpart of github-light's neutral, not Acme's warm one. */
+  --status-blocked: #c62828;
+  --status-working: #8a6410;
+  --status-ready: #1a6b3d;
+  --status-quiet: #a9a3c0;
+  --status-dead: #6b6684;
+  --status-wash: 10%;
+  --status-chip-wash: 18%;
+  --status-ink-mix: 50%;
+  /* Dracula's #f1fa8c is a pale wash on a light surface; this is that hue
+     brought down until the ink clears 11:1 on it, with the rule carrying the
+     boundary the fill cannot (see :root). */
+  --hit-bg: #f2dc6a;
+  --hit-ink: #232135;
+  --hit-rule: #7d6410;
 }
 
 /* GitHub Light — crisp pure white. The "well-lit room" theme. */
@@ -120,6 +286,14 @@
   --xterm-fg: #1f2328;
   --danger: #cf222e;
   --accent: #0969da;
+  /* Light ground — alucard's ladder. */
+  --fade-1: 0.7;
+  --fade-2: 0.46;
+  /* Light re-step, neutral-cool to match the surface. Stepped DOWN from the
+     obvious pale value until the fill reads at least as clearly against white
+     as alucard's does (2.36 vs 2.30) — alucard is the reference because it is
+     the one a human actually approved. */
+  --clock-base: #c3cfdd;
   --accent-fg: #ffffff;
   /* Light re-step (see :root). Neutral --status-quiet here rather than the
      warm one Acme uses — this surface is a cool pure white.
@@ -143,6 +317,9 @@
   --status-wash: 10%;
   --status-chip-wash: 18%;
   --status-ink-mix: 50%;
+  --hit-bg: #ffd33d;
+  --hit-ink: #1f2328;
+  --hit-rule: #9a6700;
 }
 
 /* Acme — warm cream paper with a vivid violet brand accent. Inspired by
@@ -163,6 +340,14 @@
   --xterm-fg: #0d0d12;
   --danger: #d83a5b;
   --accent: #6f55ff;
+  /* Light ground — alucard's ladder, cream being no kinder to a faded glyph
+     than white is. */
+  --fade-1: 0.7;
+  --fade-2: 0.46;
+  /* Light re-step on a WARM cream surface, so the base carries a little warmth
+     rather than going grey against it — and stepped down to alucard's
+     readability for the same reason as github-light above. */
+  --clock-base: #cdc6e2;
   --accent-fg: #ffffff;
   /* Light re-step for the WARM CREAM surface — the values the design was
      iterated against (see the reference prototype's `.theme.light` block),
@@ -177,6 +362,9 @@
   --status-wash: 10%;
   --status-chip-wash: 18%;
   --status-ink-mix: 50%;
+  --hit-bg: #ffd85e;
+  --hit-ink: #0d0d12;
+  --hit-rule: #8a5a00;
 }
 
 /* Acme Dark — calm dark surfaces with a hint of violet, brand-violet
@@ -197,7 +385,17 @@
   --xterm-fg: #ebe5d2;
   --danger: #ff7a99;
   --accent: #9d85f5;
+  /* Dark ground — dracula's ladder. */
+  --fade-1: 0.61;
+  --fade-2: 0.39;
+  /* Dark surface, and a deep VIOLET one (--bg-elev #2c1d5b) rather than a
+     neutral — the base is lifted out of that violet, not out of grey, or the
+     fill reads as a muddy patch instead of a step up from the tile. */
+  --clock-base: #4a3a7d;
   --accent-fg: #221547;
+  --hit-bg: #f5c85a;
+  --hit-ink: #1a1035;
+  --hit-rule: #8a5e00;
 }
 
 * {

@@ -1,0 +1,60 @@
+/* ─── THE LIVE DRAFT ────────────────────────────────────────────────────────
+   The composer's box is still `.chat-input` in ChatPane.css — the size, the
+   colour, the auto-grow ceiling and the mobile ≥16px rule are all there and
+   unchanged, because the composer did not become a different thing when it
+   stopped being a <textarea>. What is here is only what a contenteditable needs
+   that a textarea gave for free. */
+
+.chat-draft {
+  /* The placeholder below is absolutely positioned, and without this its
+     containing block is `.chat-pane` — which is `position: relative` for the
+     scroll-down arrow, and would put "Message Chat…" in the top-left corner of
+     the conversation. */
+  position: relative;
+  /* A textarea preserves the newlines in its value and wraps long words; a div
+     does neither by default. Both halves are required — without `pre-wrap` a
+     two-line draft collapses to one line on the next render, and every offset in
+     chat-draft.ts is then counting characters the user cannot see. */
+  white-space: pre-wrap;
+  /* The log's own rule (.chat-md p). A pasted URL with no spaces in it must
+     break rather than push the composer's box wider than the pane. */
+  overflow-wrap: anywhere;
+  /* The whole box is the text field, so the pointer says so everywhere in it —
+     including over a chip, which is inert and therefore has no cursor of its
+     own to fight. */
+  cursor: text;
+}
+
+/* The placeholder. A textarea has ::placeholder; this does not, so it is drawn
+   as generated content and toggled by a class rather than by `:empty` — a
+   contenteditable that has been typed in and emptied again keeps stray nodes,
+   so `:empty` stops matching and the placeholder never comes back. The class is
+   driven off the VALUE, which cannot be stale in that way. */
+.chat-draft.is-empty::before {
+  content: attr(data-placeholder);
+  /* Out of the flow, so it neither adds a text node nor moves the caret. */
+  position: absolute;
+  pointer-events: none;
+  /* The same muting as .chat-input::placeholder, which this replaces. */
+  color: color-mix(in srgb, var(--chat-faint) 70%, var(--chat-elev));
+}
+
+/* ─── A chip in the draft ───────────────────────────────────────────────────
+   The host is an empty inert span until React portals the pill into it. It gets
+   no styling of its own beyond this: the pill inside it is the SAME component
+   the log draws, so anything declared here would be a second opinion about what
+   a mention looks like — which is the fork this whole arrangement exists to
+   avoid. */
+.chat-draft-chip {
+  /* `inert` already stops the pointer reaching the button inside; this makes the
+     click land on the editable underneath rather than on nothing, so clicking a
+     chip puts the caret beside it. */
+  pointer-events: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+/* The pill is a <button> in the log because there it is a link. Here it is
+   scenery, and a button's own cursor and focus ring would both be lying. */
+.chat-draft-chip .chat-mention-pill {
+  cursor: text;
+}

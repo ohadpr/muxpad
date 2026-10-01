@@ -40,14 +40,18 @@ const noModels = async () => ({ models: [], defaultModel: null });
 
 function makeHost() {
   const frames: RunnerFrame[] = [];
+  // The pane's terminal face. Kept, not discarded: a backend that DECLINES to
+  // do something (chat mode, which is Claude-only) has the log as its only way
+  // to say so, and "it announced the collapse" is the assertion.
+  const logs: string[] = [];
   const host: RunnerHost = {
     emit: (f) => frames.push(f),
-    log: () => {},
+    log: (l) => void logs.push(l),
     connected: () => true,
     paneId: 'pane-1',
     apiUrl: 'http://localhost',
   };
-  return { host, frames };
+  return { host, frames, logs };
 }
 const types = (frames: RunnerFrame[]) => frames.map((f) => f.t);
 function readLog(sid: string): ChatEvent[] {
@@ -75,18 +79,18 @@ describe('codex backend', () => {
   });
 
   async function boot(requestedSid: string | null = null) {
-    const { host, frames } = makeHost();
+    const { host, frames, logs } = makeHost();
     const { spawn, calls } = fakeSpawner();
     const b = createCodexBackend(
       host,
-      { requestedSid, requestedModel: null, mode: 'deep' },
+      { requestedSid, requestedModel: null, mode: 'agent' },
       { spawn, listModels: noModels },
     );
     b.start();
     await tick();
     closeChild(calls[0]!.child, 0); // auth: `codex login status` exits 0
     await tick();
-    return { b, host, frames, calls };
+    return { b, host, frames, logs, calls };
   }
 
   it('runs a turn: turn-start → stream(whole message) → turn-done + status(no context)', async () => {
@@ -156,7 +160,7 @@ describe('codex backend', () => {
     const { spawn, calls } = fakeSpawner();
     const b = createCodexBackend(
       host,
-      { requestedSid: null, requestedModel: null, mode: 'deep' },
+      { requestedSid: null, requestedModel: null, mode: 'agent' },
       { spawn, listModels: noModels },
     );
     b.start();
@@ -216,7 +220,7 @@ describe('codex backend', () => {
     const { spawn, calls } = fakeSpawner();
     const b = createCodexBackend(
       host,
-      { requestedSid: null, requestedModel: null, mode: 'deep' },
+      { requestedSid: null, requestedModel: null, mode: 'agent' },
       {
         spawn,
         listModels: noModels,
@@ -301,12 +305,15 @@ describe('codex backend', () => {
     expect(calls[1]!.args.at(-1)).toBe('plain');
   });
 
-  // ── ⚡ Do mode ────────────────────────────────────────────────────────────
-  // Same injection mechanism as the universal instructions (codex exec has no
-  // append-instructions surface), so it rides the same first-message preamble.
+  // ── Chat mode ───────────────────────────────────────────────────────────
+  // There isn't one here. Chat IS Claude (modeForBackend): the mode is built
+  // on the in-process `reply` tool and codex has no in-process tool surface.
+  // What these pin is the COLLAPSE — a chat-mode request produces an ordinary
+  // Agent-mode session and says so in the pane log, rather than a half-mode
+  // wearing a "Chat" chip.
 
-  async function bootMode(mode: 'do' | 'deep', requestedSid: string | null = null) {
-    const { host, frames } = makeHost();
+  async function bootMode(mode: 'chat' | 'agent', requestedSid: string | null = null) {
+    const { host, frames, logs } = makeHost();
     const { spawn, calls } = fakeSpawner();
     const b = createCodexBackend(
       host,
@@ -317,25 +324,30 @@ describe('codex backend', () => {
     await tick();
     closeChild(calls[0]!.child, 0);
     await tick();
-    return { b, host, frames, calls };
+    return { b, host, frames, logs, calls };
   }
 
-  it('do mode prepends the overlay after the instructions on a NEW session', async () => {
+  it('a chat-mode request is collapsed to Agent mode — no overlay, and it says so', async () => {
+    // Chat IS Claude (modeForBackend): Chat mode is built on the in-process
+    // `reply` tool and `codex exec` has no in-process tool surface at all. A
+    // row or a hand-typed startup command can still ask for it; the runner
+    // announces the collapse in the pane's own log instead of injecting a
+    // contract the harness cannot honour.
     writeFileSync(join(dataDir, 'agent-instructions.md'), 'use muxpad publish\n');
-    writeFileSync(join(dataDir, 'do-mode.md'), 'be terse\n');
-    const { b, calls } = await bootMode('do');
+    writeFileSync(join(dataDir, 'chat-mode.md'), 'be terse\n');
+    const { b, calls, logs } = await bootMode('chat');
     b.send('hi');
     await tick();
     expect(calls[1]!.args.at(-1)).toBe(
-      '<muxpad-instructions>\nuse muxpad publish\n</muxpad-instructions>\n\n' +
-        '<muxpad-mode>\nbe terse\n</muxpad-mode>\n\nhi',
+      '<muxpad-instructions>\nuse muxpad publish\n</muxpad-instructions>\n\nhi',
     );
+    expect(logs.some((l) => /Claude-only/i.test(l))).toBe(true);
   });
 
   it('deep mode injects NOTHING extra — byte-identical to the pre-mode prompt', async () => {
     writeFileSync(join(dataDir, 'agent-instructions.md'), 'use muxpad publish\n');
-    writeFileSync(join(dataDir, 'do-mode.md'), 'be terse\n');
-    const { b, calls } = await bootMode('deep');
+    writeFileSync(join(dataDir, 'chat-mode.md'), 'be terse\n');
+    const { b, calls } = await bootMode('agent');
     b.send('hi');
     await tick();
     expect(calls[1]!.args.at(-1)).toBe(
@@ -343,17 +355,19 @@ describe('codex backend', () => {
     );
   });
 
-  it('do mode with no do-mode.md → nothing injected, no error', async () => {
-    const { b, calls } = await bootMode('do');
+  it('chat mode with no chat-mode.md → nothing injected, no error', async () => {
+    const { b, calls } = await bootMode('chat');
     b.send('hi');
     await tick();
     expect(calls[1]!.args.at(-1)).toBe('hi');
   });
 
-  it('a mid-session switch rides ONE <muxpad-mode> note on the next resumed turn', async () => {
-    writeFileSync(join(dataDir, 'do-mode.md'), 'be terse\n');
-    const { b, calls } = await bootMode('deep');
-    // Establish the thread so subsequent turns resume it.
+  it('a mid-session switch to Chat changes NOTHING about the prompt', async () => {
+    // There is no contract to announce: this session is Agent mode and stays
+    // Agent mode. The old in-band <muxpad-mode> note is retired with the
+    // overlay it used to carry.
+    writeFileSync(join(dataDir, 'chat-mode.md'), 'be terse\n');
+    const { b, calls, logs } = await bootMode('agent');
     b.send('first');
     await tick();
     const t1 = calls[1]!.child;
@@ -362,27 +376,17 @@ describe('codex backend', () => {
     closeChild(t1, 0);
     await tick();
 
-    b.setMode('do');
+    b.setMode('chat');
     b.send('second');
     await tick();
     expect(calls[2]!.args.slice(0, 3)).toEqual(['exec', 'resume', 'thr-mode']);
-    expect(calls[2]!.args.at(-1)).toBe(
-      '<muxpad-mode>\nThe user switched this session to ⚡ Do mode. Follow this contract from now on:\n\nbe terse\n</muxpad-mode>\n\nsecond',
-    );
-    const t2 = calls[2]!.child;
-    line(t2, { type: 'turn.completed' });
-    closeChild(t2, 0);
-    await tick();
-
-    // ONE-TIME: the turn after it is a bare prompt again.
-    b.send('third');
-    await tick();
-    expect(calls[3]!.args.at(-1)).toBe('third');
+    expect(calls[2]!.args.at(-1)).toBe('second');
+    expect(logs.some((l) => /Claude-only/i.test(l))).toBe(true);
   });
 
   it('re-setting the SAME mode is a no-op (no spurious note)', async () => {
-    writeFileSync(join(dataDir, 'do-mode.md'), 'be terse\n');
-    const { b, calls } = await bootMode('deep');
+    writeFileSync(join(dataDir, 'chat-mode.md'), 'be terse\n');
+    const { b, calls } = await bootMode('agent');
     b.send('first');
     await tick();
     const t1 = calls[1]!.child;
@@ -390,14 +394,14 @@ describe('codex backend', () => {
     line(t1, { type: 'turn.completed' });
     closeChild(t1, 0);
     await tick();
-    b.setMode('deep'); // already deep — the server sends this on every hello
+    b.setMode('agent'); // already agent — the server sends this on every hello
     b.send('second');
     await tick();
     expect(calls[2]!.args.at(-1)).toBe('second');
   });
 
-  it('switching back to deep revokes the contract in-band', async () => {
-    const { b, calls } = await bootMode('do');
+  it('switching to Agent mode is a no-op — there was never anything to revoke', async () => {
+    const { b, calls } = await bootMode('chat');
     b.send('first');
     await tick();
     const t1 = calls[1]!.child;
@@ -405,11 +409,10 @@ describe('codex backend', () => {
     line(t1, { type: 'turn.completed' });
     closeChild(t1, 0);
     await tick();
-    b.setMode('deep');
+    b.setMode('agent');
     b.send('second');
     await tick();
-    expect(calls[2]!.args.at(-1)).toMatch(/^<muxpad-mode>\n.*no longer applies/s);
-    expect(calls[2]!.args.at(-1)).toMatch(/second$/);
+    expect(calls[2]!.args.at(-1)).toBe('second');
   });
 
   it('advertises its model list + default in the status frame (the picker)', async () => {
@@ -417,7 +420,7 @@ describe('codex backend', () => {
     const { spawn, calls } = fakeSpawner();
     const b = createCodexBackend(
       host,
-      { requestedSid: null, requestedModel: null, mode: 'deep' },
+      { requestedSid: null, requestedModel: null, mode: 'agent' },
       {
         spawn,
         listModels: async () => ({

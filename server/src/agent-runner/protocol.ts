@@ -4,20 +4,28 @@
 // server relays chat clients' sends/stops to it and fans its turn lifecycle
 // back out to every open chat view of the pane.
 
-import type {
-  AgentMode,
-  AgentQuestion,
-  AgentSessionStatus,
-  SubagentProgress,
+import {
+  type AgentMode,
+  type AgentQuestion,
+  type AgentSessionStatus,
+  type SubagentProgress,
+  coerceAgentMode,
 } from '@muxpad/shared';
 
 export type { AgentMode, AgentQuestion, AgentSessionStatus, SubagentProgress };
 
-/** Narrow an off-the-wire value to an AgentMode. Same shape as isBackendId:
- *  the value can reach a shell (`muxpad agent --mode do` in a startup_cmd),
- *  so only these two literals may ever pass. */
-export function isAgentMode(v: unknown): v is AgentMode {
-  return v === 'do' || v === 'deep';
+/** Narrow an off-the-wire value to an AgentMode, accepting the pre-rename
+ *  'do'/'deep' spellings and normalizing them. The value can reach a shell
+ *  (`muxpad agent --mode chat` in a startup_cmd), so only the four known
+ *  literals may ever pass — everything else returns null and the caller keeps
+ *  its current mode.
+ *
+ *  Legacy tolerance is load-bearing in BOTH directions of a version skew: a
+ *  runner started from a startup_cmd an older server wrote sees `--mode do`,
+ *  and a server that has been upgraded under a live runner relays a `mode`
+ *  frame the runner must not ignore. */
+export function parseAgentMode(v: unknown): AgentMode | null {
+  return coerceAgentMode(v);
 }
 
 /** Which agent CLI/SDK drives a pane's session. The runner declares it in its
@@ -45,6 +53,50 @@ export type RunnerFrame =
     }
   | { t: 'turn-start' }
   | { t: 'stream'; delta: string }
+  | {
+      /**
+       * A `reply` — the agent's actual SPEECH — delivered the moment it exists,
+       * for a consumer that has to ACT on it rather than draw it.
+       *
+       * This is NOT a render path and must never become one. Replies reach an
+       * open chat exactly one way: the transcript, tailed by TranscriptReader.
+       * That path is authoritative, it survives reload, and it is the only one
+       * the chat UI reads — so the chat UI has no branch for this frame kind
+       * and therefore cannot double-render it. The separation is structural,
+       * not a dedupe rule somebody has to keep correct.
+       *
+       * It exists because the transcript path cannot serve SPEECH. A reply is
+       * only in the transcript once the whole tool_use block has been
+       * generated, plus up to one 250 ms poll — so a voice turn could not open
+       * its mouth until the agent had finished the entire sentence. Here the
+       * text is on the wire the instant the tool runs.
+       *
+       * `id` is the reply's TRANSCRIPT identity (its tool_use id), which is
+       * what `normalizeTranscriptLine` builds the chat event's id from — so a
+       * consumer can tie a spoken reply to the bubble that renders for it.
+       */
+      t: 'speak';
+      id: string;
+      text: string;
+      /** 1-based position within the turn; the contract asks for 2–4. */
+      n: number;
+    }
+  | {
+      /**
+       * A reply's text as it is being GENERATED, under the same `id` as the
+       * `speak` that will follow. Decoded from the tool call's
+       * `input_json_delta` chunks (see reply-stream.ts), which the loop used to
+       * discard because it filtered the token stream to `text_delta` only.
+       *
+       * This is what lets speech start mid-reply instead of after it. A
+       * consumer that ignores these and waits for `speak` is still correct,
+       * just slower — which is the right failure mode for a frame kind whose
+       * only job is latency.
+       */
+      t: 'speak-delta';
+      id: string;
+      delta: string;
+    }
   | { t: 'turn-done'; ok: boolean; error?: string; summary?: string }
   | {
       /** The session is blocked on the user: render these as tappable chips. */
@@ -56,6 +108,28 @@ export type RunnerFrame =
       /** The question was resolved (answered, or the turn ended) — dismiss it. */
       t: 'question-done';
       qid: string;
+    }
+  | {
+      /**
+       * The agent DELIBERATELY reaching the user's devices — the `notify` tool.
+       *
+       * Every other push muxpad sends is a heuristic firing on the agent's
+       * behalf: a BEL, or a turn that ended more than two minutes after the
+       * user last typed. Those cannot tell a five-second turn carrying
+       * something urgent from a ten-minute turn carrying nothing. This frame is
+       * the agent saying which one it is, mid-turn if need be.
+       *
+       * The runner is a separate process and cannot reach the PushService, so
+       * the tool's whole mechanism is this frame plus the `notify-result` that
+       * comes back: the server owns the rate limit, the presence check and
+       * whether any device is subscribed at all, and reports which of those
+       * happened so the tool can tell the MODEL rather than lie to it.
+       */
+      t: 'notify';
+      /** Correlates the `notify-result` that answers this frame. */
+      nid: string;
+      /** The push BODY — what the user reads on the lock screen. */
+      text: string;
     }
   | { t: 'subagent'; progress: SubagentProgress }
   | {
@@ -83,9 +157,30 @@ export type RunnerFrame =
       error: string;
     };
 
+/**
+ * What became of a `notify` — the server's answer, and the text the tool turns
+ * into its tool RESULT. Every value is a thing the model should know:
+ *
+ *   sent          on its way to every subscribed device.
+ *   held-active   the user is at a device right now (Presence), so the in-app
+ *                 UI already shows this and a buzz would be noise.
+ *   no-devices    nothing has ever subscribed to push here — no VAPID pairing,
+ *                 no PWA installed. A no-op, not a failure.
+ *   rate-limited  this pane already notified within the minimum gap.
+ *   unavailable   this server has no push wired up at all (tests, a headless
+ *                 deployment), or the request was malformed.
+ */
+export type NotifyStatus = 'sent' | 'held-active' | 'no-devices' | 'rate-limited' | 'unavailable';
+
 /** server → runner */
 export type ServerFrame =
   | { t: 'send'; text: string }
+  | {
+      /** What became of the `notify` frame carrying `nid`. */
+      t: 'notify-result';
+      nid: string;
+      status: NotifyStatus;
+    }
   | { t: 'stop' }
   | { t: 'set-model'; model: string }
   | {

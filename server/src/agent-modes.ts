@@ -1,15 +1,20 @@
-// Agent MODES — ⚡ Do / 🧠 Deep.
+// Agent MODES — Chat / Agent.
 //
-// 'deep' is the baseline: exactly what muxpad has always done, nothing extra
-// injected. 'do' overlays ONE additional block of system-prompt material on
-// top of the universal agent instructions: a short behavioral contract that
-// makes the agent decisive and terse.
+// 'agent' (Agent mode) is the baseline: the harness exactly as it ships,
+// nothing extra injected. 'chat' (Chat mode) overlays ONE additional block of
+// system-prompt material on top of the universal agent instructions: a short
+// behavioral contract that makes the agent decisive and terse. Chat mode is
+// what a new tab opens as (DEFAULT_AGENT_MODE); Agent mode is what you get
+// when you pick a harness by name and configure it yourself.
 //
-// The contract text lives in `<dataDir>/do-mode.md`, a GENERATED file with the
-// same lifecycle as agent-instructions.md (agent-files.ts): rewritten from
-// DO_MODE_SEED below on every boot, so it always states this build's contract.
-// Missing or empty → nothing is injected and 'do' silently degrades to 'deep'
-// behavior; never an error.
+// The names are user-facing and appear in the chat's chip row. They describe
+// the ARRANGEMENT, not the engine — Chat mode is agent-powered too.
+//
+// The contract text lives in `<dataDir>/chat-mode.md`, a GENERATED file with
+// the same lifecycle as agent-instructions.md (agent-files.ts): rewritten from
+// CHAT_MODE_SEED below on every boot, so it always states this build's
+// contract. Missing or empty → nothing is injected and 'chat' silently
+// degrades to Agent-mode behavior; never an error.
 //
 // Injection uses the SAME per-backend mechanism as agent-instructions.md —
 // each documented at its call site:
@@ -38,13 +43,16 @@
 //      the next user message, declaring the new contract in-conversation.
 // That note is a MESSAGE, not a system prompt — a long session can drift from
 // it the way it drifts from any instruction. A fresh pane (or a respawn) in
-// 'do' mode gets the real system-prompt-level overlay.
-import { readFileSync } from 'node:fs';
+// Chat mode gets the real system-prompt-level overlay. The UI says so: the
+// mode chip's menu labels a mid-session switch "takes hold from your next
+// message" and offers a respawn as the strong form.
+import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import type { AgentMode } from '@muxpad/shared';
+import { type AgentMode, coerceAgentMode } from '@muxpad/shared';
 import {
   type MigratedFile,
   runnerDataDir,
+  sha256,
   shippedBodyHashes,
   writeGeneratedFile,
 } from './agent-files.js';
@@ -52,24 +60,147 @@ import {
 /** Seed content — harness-neutral (claude/codex/cursor may all read it) and
  *  deliberately short: it competes for attention with the harness's own
  *  system prompt. Written to disk verbatim (under a generated-file banner) on
- *  every boot. */
-export const DO_MODE_SEED = `# ⚡ Do mode
+ *  every boot.
+ *
+ *  MEASURED, so the next person does not re-litigate it. A/B over real
+ *  `muxpad agent --mode chat` runners in an isolated instance, plus a census
+ *  of the live Chat transcripts either side of 1f92db6:
+ *
+ *    - The MULTIPLICITY fix took, completely. Live, 203 reply-bearing turns
+ *      before it ran a median of 2 replies/turn (64% multi-reply, max 6) at
+ *      1,874 chars/turn; the 34 turns after it are 1.00 replies/turn — zero
+ *      multi-reply turns — at 607. The A/B agrees: 12/12 Chat turns sent
+ *      exactly one message, against an Agent-mode control that sent up to 4.
+ *    - LENGTH is where it still sits above target: a median turn is ~515 chars
+ *      in the harness and ~607 live, against the 400 this file asks for.
+ *    - Three further rules aimed at that residue were written, run and
+ *      DISCARDED, because the number said no: "the offer replaces what it
+ *      offers", "reply with the path AND ONE SENTENCE, never the document
+ *      too", and a worked one-line exemplar of a three-item answer. On eight
+ *      matched open-ended turns the median went 515 → 544 and the max 820 →
+ *      1,027. Adding more words about brevity is not the lever; don't spend
+ *      the next attempt there.
+ *    - What DID move: the reply-guard bullet below. On trivial turns (a
+ *      lookup, a one-file chore) the model used to answer in plain text and
+ *      leave the harness to promote it — 6 of 10 matched turns. With that
+ *      bullet, 0 of 10 (Fisher p = 0.011), and reply length was unchanged
+ *      (~70–130 chars either way). It fixes the CHANNEL, not the size. */
+export const CHAT_MODE_SEED = `# Chat mode
 
-This session is in **Do mode**. Optimize for shipped results, not for
-conversation.
+This session is in **Chat mode** — muxpad's own assistant. Optimize for
+shipped results, not for conversation.
+
+## Your plain text is private. \`reply\` is your only voice.
+
+Everything you write as ordinary assistant text is an **inner monologue the
+user never sees** — a private scratchpad for reasoning, planning and working
+through a problem. It costs nothing and it is unlimited. Think there as much as
+you like.
+
+**Nothing reaches the user until it is the content of a \`reply\` call.** That
+tool is the only channel out. Deciding to answer is not answering; describing
+the message you are about to send is not sending it. If you end a turn without
+calling \`reply\`, the person who messaged you got silence.
+
+## The screen already shows your work
+
+Your reply is not the user's only window onto this turn. muxpad renders the
+session around it, and all of this is on their screen whether you mention it or
+not:
+
+- **Every tool call is a row** — the verb, the argument, and \`+12 −3\` for an
+  edit. One tap opens the full command, its output, and the diff.
+- **Runs of them fold into a header** — \`7 actions · Bash ×4 · Edit ×3\`, with
+  a red count when something failed.
+- **Every subagent is visible** — a card when it launches, a ⚙ notice when it
+  reports, and a live roster chip naming each one with its step count.
+- **A working row names the tool you are running right now**, so "still going"
+  never needs saying.
+- **Your scratchpad is one tap away**, folded under \`notes\` and shown in full.
+- **Files you pass to \`show_files\` render inline** as images, video and
+  download chips.
+
+So the command you ran, the diff, the files you touched, the agents you
+launched and what you are waiting on are ALREADY in front of them. Restating
+any of it is the single biggest reason a reply gets long. **Point at the screen
+instead of repeating it** — "diff's above", "the agent's card has the steps".
+
+## What a reply is
+
+A reply is **the answer, in its first sentence**. Write that sentence, then
+stop. Supporting detail follows only when the user cannot act without it.
+
+Real replies, at the size replies should be:
+
+> Fixed — \`PaneRuntime.spawn\` set \`tab_id\` before the row existed. Suite green.
+
+> ~/Documents/2026-taxes.pdf
+
+> Three agents are on it. I'll come back when the last one lands.
+
+> Opus 5 is the pricey one: $15/M in, $75/M out. Sonnet does this job for a
+> fifth of that — want me to switch?
+
+That is the target: **one to three lines, and under 400 characters for the
+whole turn.** A full paragraph is already long.
+
+- **One claim, not a survey.** Give the single strongest point and the reason
+  for it. Hold the others and OFFER them — "there are two smaller ones, want
+  them?" — rather than spending the reply on them. A reply that lists every
+  consideration you thought of is your notes, not your answer.
+- **A reply is prose, not a document.** No bold section headings, no bulleted
+  survey of options. When the answer genuinely wants that shape, write it to a
+  file and reply with the path — muxpad renders the file, and a link the user
+  can open beats a wall they have to scroll past.
+- **Lead with the outcome and the artifact.** The destination a file landed in,
+  the link, the command to run. "Done" on its own is not evidence.
+- **Open with the result** — the first sentence is the answer, never a preamble,
+  a plan, or a recap of what you are about to say.
+- **One \`reply\` per turn, at the end.** Speak when you have an answer, not as
+  you go. Do NOT report each subagent as it returns, narrate progress, or think
+  out loud in the channel — the roster, the cards and the working row already
+  show all of that, live. Measured on a real session, the old rule here asked
+  for "two to four short texts" and produced a median of THREE replies per turn
+  at ~1,600 characters each: a machine-gun of walls, fired while the work was
+  still running. If you catch yourself about to send a second \`reply\` because
+  something finished, that is the moment to say nothing and keep working.
+- **One line is the target.** If a reply needs a blank line inside it, it has
+  stopped being a message and become a report.
+- **Every turn ends with a \`reply\` — including the easy ones.** A turn whose
+  whole job was one lookup is where this is easiest to skip, because there was
+  nothing to do but answer. Answer through the tool: a one-line lookup is a
+  one-line \`reply\`.
+- **Your last \`reply\` ends the turn.** Anything worth saying belongs inside a
+  \`reply\`; if it is not worth a \`reply\` it does not need writing at all.
+
+## Say it in full when it matters
+
+Brevity is the default, not a ceiling. These earn every word they need, and
+trimming them is the bug:
+
+- **An error the user has to act on** — the message verbatim, and where it came
+  from.
+- **A security or data-loss warning** — what is exposed, and what to do now.
+- **Anything irreversible.** Before: exactly what will happen and what it
+  touches. After: what happened, and what can still be undone.
+- **A direct request for depth** — "explain", "walk me through", "list all".
+- **An answer that would be WRONG if shortened** — not merely thinner. "I had
+  five observations" is thinner; "this deletes the only copy" is wrong to cut.
+  When in doubt: give the short answer, say it is the short one, and offer the
+  rest.
+
+## How to work
 
 - **Be decisive.** Act on the most reasonable assumption instead of asking.
   State the assumption in one clause and keep going.
 - **Delegate the legwork.** Use subagents for search, reading, and anything
   parallelizable; run independent work concurrently rather than in sequence.
-- **Be brief.** Replies are at most 3 sentences unless depth is explicitly
-  requested (or the answer genuinely cannot be correct in short form).
-- **Result first.** No preamble, no narration, no play-by-play of what you are
-  about to do or are doing. Lead with the outcome.
-- **A completed task is one line** stating what was done. Nothing else.
+- **Answer in 3 sentences or fewer** unless one of the exemptions above applies.
+- **A completed task is one line** stating the outcome and where it landed.
 - **Ask only when truly blocked** on something hard to reverse — a
   destructive action, a spend, an irreversible external side effect. Anything
-  reversible: pick, do it, mention it.
+  reversible: pick, do it, mention it. Never pose a question you could have
+  answered yourself.
 
 ## Route it to whoever owns it
 
@@ -89,48 +220,86 @@ it faster.
   matters. Never a narration of who you asked and what you're waiting on.
 `;
 
-export const DO_MODE_FILE = 'do-mode.md';
+export const CHAT_MODE_FILE = 'chat-mode.md';
 
-export function doModePath(dataDir: string): string {
-  return join(dataDir, DO_MODE_FILE);
+/** The pre-rename filename. The one-shot file migration still names it so an
+ *  upgraded install doesn't leave a stale `do-mode.md` lying next to the new
+ *  one, looking like a live contract it no longer is. */
+export const LEGACY_CHAT_MODE_FILE = 'do-mode.md';
+
+export function chatModePath(dataDir: string): string {
+  return join(dataDir, CHAT_MODE_FILE);
 }
 
 /**
- * sha256 of every `do-mode.md` default this project ever shipped (one:
- * edb661b, the revision that introduced modes); the current seed is added at
- * use. Only the one-shot migration reads them — see
- * SHIPPED_INSTRUCTIONS_DEFAULTS.
+ * sha256 of every mode-overlay default this project ever shipped: the
+ * pre-rename `do-mode.md` contract (introduced in edb661b and byte-stable
+ * until the rename), bare and bannered. The current seed is added at use.
+ *
+ * Read by the one-shot migration (see SHIPPED_INSTRUCTIONS_DEFAULTS) AND by
+ * {@link retireLegacyChatModeFile} — which is why the BANNERED hash has to be
+ * here and not just the bare one: what is actually sitting in an upgrading
+ * install's data dir is the bannered body, and a `do-mode.md` we failed to
+ * recognise as our own would be left behind as if the user had written it.
  */
-export const SHIPPED_DO_MODE_DEFAULTS: readonly string[] = [
+export const SHIPPED_CHAT_MODE_DEFAULTS: readonly string[] = [
   'dd07e927e4833873ccf0bfc5ce8a12ab4331aacb2cdbc422824e9fde1c6ac209',
+  '41924003a7bfdecc71d1930dece4f7bdbd687eb29a3efeffec258da06e438d64',
 ];
 
-/** What the one-shot migration needs about this file. An edited do-mode.md is
+/** What the one-shot migration needs about this file. An edited overlay is
  *  kept as a `.bak` rather than folded into the notes: it is a contract that
- *  only applies in ⚡ Do mode, and the notes are injected in EVERY session. */
-export const DO_MODE_MIGRATION: MigratedFile = {
-  name: DO_MODE_FILE,
-  knownDefaults: [...SHIPPED_DO_MODE_DEFAULTS, ...shippedBodyHashes(DO_MODE_SEED)],
+ *  only applies in Chat mode, and the notes are injected in EVERY session. */
+export const CHAT_MODE_MIGRATION: MigratedFile = {
+  name: CHAT_MODE_FILE,
+  knownDefaults: [...SHIPPED_CHAT_MODE_DEFAULTS, ...shippedBodyHashes(CHAT_MODE_SEED)],
   appendToNotes: false,
 };
 
 /** Rewrite the generated file at server boot. It always matches this build. */
-export function seedDoMode(dataDir: string): void {
-  writeGeneratedFile(dataDir, DO_MODE_FILE, DO_MODE_SEED);
+export function seedChatMode(dataDir: string): void {
+  writeGeneratedFile(dataDir, CHAT_MODE_FILE, CHAT_MODE_SEED);
 }
 
 /**
- * Read the Do-mode overlay at injection time. Returns null for mode 'deep'
+ * Clear away `do-mode.md` after the rename, but ONLY when it is muxpad's own
+ * generated text.
+ *
+ * It cannot be folded into the one-shot agent-files migration: that is behind
+ * a globals marker every existing install has already set, so it would never
+ * look. A leftover copy is inert (nothing reads that name any more), but it
+ * sits in the data dir next to `chat-mode.md` looking like a live contract, and
+ * "which of these two is actually injected?" is exactly the confusion the
+ * generated-file banner exists to prevent.
+ *
+ * A file the user EDITED is left exactly where it is — it isn't ours to
+ * delete, and it costs nothing to keep. Best-effort and never throws: this
+ * runs at boot under launchd KeepAlive.
+ */
+export function retireLegacyChatModeFile(dataDir: string): void {
+  const path = join(dataDir, LEGACY_CHAT_MODE_FILE);
+  try {
+    const content = readFileSync(path, 'utf8');
+    const known = new Set([...SHIPPED_CHAT_MODE_DEFAULTS, ...shippedBodyHashes(CHAT_MODE_SEED)]);
+    if (content.trim() && !known.has(sha256(content))) return; // the user's — leave it
+    rmSync(path, { force: true });
+  } catch {
+    // Absent, or an unwritable data dir. Either way there is nothing to do.
+  }
+}
+
+/**
+ * Read the Chat-mode overlay at injection time. Returns null for Agent mode
  * (nothing to inject, by definition) and for a missing/empty/unreadable file
  * — the caller injects nothing, no error.
  */
-export function readDoModeOverlay(
+export function readChatModeOverlay(
   mode: AgentMode,
   dataDir: string = runnerDataDir(),
 ): string | null {
-  if (mode !== 'do') return null;
+  if (mode !== 'chat') return null;
   try {
-    const text = readFileSync(doModePath(dataDir), 'utf8');
+    const text = readFileSync(chatModePath(dataDir), 'utf8');
     return text.trim() ? text : null;
   } catch {
     return null;
@@ -144,9 +313,12 @@ export function readDoModeOverlay(
  * respawn (ptyd restart, reboot, dead-runner sweep, "Switch folder") builds
  * the system prompt from the flag.
  *
- * 'deep' is expressed by the ABSENCE of the flag, so a deep pane's command is
- * byte-for-byte what it was before modes existed — existing rows never churn.
- * A non-agent command (or null) is returned untouched.
+ * Agent mode is expressed by the ABSENCE of the flag, and that stays true
+ * across the rename. It is what lets an untouched pre-rename `muxpad agent`
+ * command keep meaning EXACTLY what it always meant (no overlay) — flipping
+ * the bare command to mean Chat would have silently re-prompted every
+ * existing pane on its next respawn. A non-agent command (or null) is
+ * returned untouched.
  */
 export function applyModeToStartupCmd(cmd: string | null, mode: AgentMode): string | null {
   if (!cmd?.startsWith('muxpad agent')) return cmd;
@@ -158,9 +330,11 @@ export function applyModeToStartupCmd(cmd: string | null, mode: AgentMode): stri
   // on the pane ROW, and /agent-backend re-applies it to the real command the
   // moment a harness is picked.
   if (/(^|\s)--pick(\s|$)/.test(cmd)) return cmd;
-  // Strip any existing flag first, so repeated switches can't accrete.
-  const stripped = cmd.replace(/\s--mode\s+(do|deep)\b/g, '');
-  if (mode !== 'do') return stripped;
+  // Strip any existing flag first, so repeated switches can't accrete. The
+  // PRE-RENAME spellings are stripped too: a command written by an older
+  // server (or an older CLI) must not end up carrying two --mode flags.
+  const stripped = cmd.replace(/\s--mode\s+(chat|agent|do|deep)\b/g, '');
+  if (mode !== 'chat') return stripped;
   // Insert AFTER any --backend selector and before --model/--resume/--pick.
   // This exact ordering is load-bearing: ws.ts's self-heal rewrite composes
   // the same shape and compares the result to the stored command to decide
@@ -168,7 +342,19 @@ export function applyModeToStartupCmd(cmd: string | null, mode: AgentMode): stri
   // as a new runner on every hello and re-flip the pane's face.
   const head = stripped.match(/^muxpad agent(?:\s--backend\s+(?:claude|codex|cursor))?/)?.[0];
   if (!head) return stripped;
-  return `${head} --mode do${stripped.slice(head.length)}`;
+  return `${head} --mode chat${stripped.slice(head.length)}`;
+}
+
+/**
+ * Read the mode back OUT of a startup command, accepting the pre-rename
+ * spellings. Returns null when the command carries no `--mode` flag at all —
+ * which is NOT the same as Agent mode: "the caller said nothing" and "the
+ * caller said baseline" are different answers, and only the first one may be
+ * overridden by a default.
+ */
+export function modeFromStartupCmd(cmd: string | null | undefined): AgentMode | null {
+  const m = cmd?.match(/\s--mode\s+(\S+)/);
+  return m ? coerceAgentMode(m[1]) : null;
 }
 
 /**
@@ -176,16 +362,25 @@ export function applyModeToStartupCmd(cmd: string | null, mode: AgentMode): stri
  * user message. Distinct tag from <muxpad-instructions> so the model can tell
  * "muxpad's standing instructions" from "your contract just changed".
  *
- * Switching TO 'do' carries the full contract (the live session's system
- * prompt has none). Switching to 'deep' just revokes it — the baseline is the
- * absence of the overlay, so there is nothing to restate.
+ * Switching TO Chat mode carries the full contract (the live session's system
+ * prompt has none). Switching to Agent mode just revokes it — the baseline is
+ * the absence of the overlay, so there is nothing to restate.
  */
 export function wrapModeNote(mode: AgentMode, overlay: string | null): string {
+  // A switch INTO Chat mid-session must not tell the model to use the `reply`
+  // tool: tools are fixed at query() construction, so a session that launched
+  // in Agent mode does not have one and never will. Naming it would send the
+  // model looking for a tool that is not there. What it gets instead is the
+  // harness guard — the turn's final text is promoted into a real bubble — so
+  // it should simply write its answer as its last words. That is one bubble a
+  // turn rather than two to four, which is precisely why a mid-session switch
+  // is documented as weaker than a fresh pane.
+  const chatBody = overlay
+    ? `The user switched this session to Chat mode. Follow this contract from now on:\n\n${overlay.trim()}`
+    : 'The user switched this session to Chat mode: be decisive, act on reasonable assumptions, delegate legwork to subagents, reply in at most 3 sentences, result first with no narration, and ask only when truly blocked on something hard to reverse.';
   const body =
-    mode === 'do'
-      ? overlay
-        ? `The user switched this session to ⚡ Do mode. Follow this contract from now on:\n\n${overlay.trim()}`
-        : 'The user switched this session to ⚡ Do mode: be decisive, act on reasonable assumptions, delegate legwork to subagents, reply in at most 3 sentences, result first with no narration, and ask only when truly blocked on something hard to reverse.'
-      : 'The user switched this session back to 🧠 Deep mode. Any previous ⚡ Do-mode contract (terse, result-only, act-without-asking) no longer applies — resume your normal, thorough default behavior.';
+    mode === 'chat'
+      ? `${chatBody}\n\nThis session has no reply tool — it started in Agent mode and tools cannot be added to a running session. Write your answer as ordinary text and make it the LAST thing in your turn; muxpad delivers it. Everything you write before it is working-out the user does not read.`
+      : 'The user switched this session to Agent mode. Any previous Chat-mode contract (terse, result-only, act-without-asking) no longer applies — resume your normal, thorough default behavior.';
   return `<muxpad-mode>\n${body}\n</muxpad-mode>`;
 }

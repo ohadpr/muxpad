@@ -48,27 +48,7 @@ export function orderAfterPinnedDrop(
   return { pinnedIds: nextPinned, allIds: [...nextPinned, ...rest] };
 }
 
-/**
- * What dropping a dragged PANE on a workspace header should do.
- *
- *  - `new-tab`  — extract the pane into a fresh tab in that workspace.
- *  - `move-tab` — the pane is its tab's ONLY pane, so it effectively IS that
- *    tab: move the whole tab across instead. Extracting would delete a tab
- *    and rebuild an identical one, losing its name/icon/slug and bouncing
- *    anyone viewing it to the workspace root; a tab move keeps all of that
- *    and comes with an undo.
- *  - `none`     — a solo pane dropped on the workspace it already lives in.
- *    There is nothing to extract (the server refuses that churn), so the row
- *    must not advertise itself as a drop target either.
- *
- * Unknown origin (a drag whose mirror was never set) falls back to `new-tab`:
- * the server is the one that enforces the churn rule, and its answer for a
- * solo pane at home is a harmless no-op.
- */
-export function paneDropAction(
-  origin: PaneDragOrigin | null | undefined,
-  destWorkspaceId: string,
-): 'new-tab' | 'move-tab' | 'none' {
-  if (!origin?.soloPane || !origin.fromWorkspaceId) return 'new-tab';
-  return origin.fromWorkspaceId === destWorkspaceId ? 'none' : 'move-tab';
-}
+// `paneDropAction` lived here: it decided whether a PANE dragged from the tab
+// strip could be dropped on a workspace header (becoming a new tab there). That
+// drop is gone along with tab-into-tab merging — the sidebar now takes exactly
+// one drop, a TAB onto a WORKSPACE — so the predicate had no callers left.

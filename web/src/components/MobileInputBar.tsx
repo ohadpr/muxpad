@@ -1,11 +1,10 @@
+import { ATTACHMENT_ACCEPT, attachmentExtForMime } from '@muxpad/shared';
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { companionTextForImagePaste, splitClipboard } from '../lib/clipboard-detect';
-import { useDictationCleanup } from '../lib/dictation-cleanup';
 import { planSubmit } from '../lib/mobile-submit';
 import { usePaneFace } from '../lib/pane-face';
 import { isCursorAgentCmd } from '../lib/xterm-internals';
-import { CleanupButton, CleanupHint } from './DictationCleanup';
 import './MobileInputBar.css';
 
 /**
@@ -194,36 +193,6 @@ export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: Mobil
   const syncEmpty = () => {
     const el = editableRef.current;
     if (el) el.classList.toggle('is-empty', (el.textContent ?? '').length === 0);
-    setHasText((el?.textContent ?? '').trim().length > 0);
-  };
-
-  // ── Dictation cleanup ────────────────────────────────────────────────────
-  // This bar is rendered only in TabView's mobile branch, so it is already
-  // mobile-only — no viewport gate needed here (the chat composer, which
-  // renders on both, gates itself).
-  //
-  // The composer is an imperative contenteditable, so cleanup reads/writes it
-  // through the same textContent + syncEmpty path everything else here uses.
-  // NOTE the two are deliberately separate concerns: cleanup rewrites the
-  // buffer, submit() sends it. Nothing below sends.
-  const [hasText, setHasText] = useState(false);
-  const cleanup = useDictationCleanup({
-    read: () => editableRef.current?.textContent ?? '',
-    write: (text) => {
-      const el = editableRef.current;
-      if (!el) return;
-      el.textContent = text;
-      syncEmpty();
-    },
-  });
-  const { reset: resetCleanup } = cleanup;
-
-  // Typing after a cleanup retires the undo: the stashed original no longer
-  // corresponds to what's in the box, and offering to restore it would throw
-  // away edits the user just made.
-  const onEditableInput = () => {
-    syncEmpty();
-    resetCleanup();
   };
 
   const insertAtCaret = (text: string) => {
@@ -248,10 +217,6 @@ export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: Mobil
       el.textContent = (el.textContent ?? '') + text;
     }
     syncEmpty();
-    // The execCommand path fires a real `input` event (which already retires
-    // the cleanup undo via onEditableInput); the textContent fallback does not.
-    // Retire it here so both paths behave the same.
-    resetCleanup();
   };
 
   // Upload image blobs to muxpad's attachments endpoint and splice the returned
@@ -296,19 +261,20 @@ export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: Mobil
     await uploadAndInsert(items, tail);
   };
 
-  // Photo/camera button → native file picker. `accept="image/*"` with NO
-  // `capture` attribute makes iOS show the full sheet (Photo Library / Take
-  // Photo / Choose File) and Android offer camera + gallery, so the one button
-  // covers both grabbing an existing photo and shooting a new one. Uploads the
-  // chosen image(s) through the same path as paste.
+  // Attach button → native file picker. NO `capture` attribute, so iOS shows
+  // the full sheet (Photo Library / Take Photo / Choose File) and Android
+  // offers camera + gallery. `accept` names the extensions the upload route
+  // accepts rather than `image/*`: the server has always taken pdf, csv, json,
+  // zip and the rest, and on iOS an image-only accept SUPPRESSES the Files and
+  // iCloud entries in that sheet. Uploads through the same path as paste.
   const onPickFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const input = e.target;
     const items = Array.from(input.files ?? [])
-      // The OS already constrained the picker to images via accept="image/*";
-      // accept empty-type too — some Android providers and HEIC captures report
-      // type "" and would otherwise be silently dropped (photo taken, nothing
-      // happens). Reject only files that explicitly declare a non-image type.
-      .filter((f) => f.type === '' || f.type.startsWith('image/'))
+      // Accept empty-type too: HEIC captures, some Android providers and iOS
+      // Files hand over type "" and would otherwise be dropped in silence
+      // (file picked, nothing happens). The server checks the extension, so a
+      // type it cannot take is refused there with a reason.
+      .filter((f) => f.type === '' || attachmentExtForMime(f.type) !== null)
       .map((f) => ({ blob: f, name: f.name || `image.${f.type.split('/')[1] ?? 'png'}` }));
     // Reset first so picking the SAME file again still fires onChange.
     input.value = '';
@@ -350,16 +316,10 @@ export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: Mobil
       el.textContent = '';
       syncEmpty();
     }
-    // The buffer is gone — an "undo cleanup" that restored the previous
-    // message into an empty composer would be a trap.
-    resetCleanup();
   };
 
   return (
     <div ref={barRef} className="mobile-input-bar" data-pane={paneId} hidden={!visible}>
-      {/* Above the keys row, not below the composer: the composer's bottom edge
-          is pinned to the keyboard, so a line under it would be off-screen. */}
-      <CleanupHint cleanup={cleanup} variant="terminal" />
       <div className="mobile-input-keys" role="toolbar" aria-label="Special keys">
         <button type="button" className="mobile-input-key" onClick={() => send('\x1b')}>
           Esc
@@ -401,13 +361,13 @@ export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: Mobil
         </button>
       </div>
       <div className="mobile-input-row">
-        {/* Photo/camera attach. The hidden input does the work; the button is
-            the visible affordance. accept="image/*" + no `capture` → native
-            sheet offers both library and camera (see onPickFiles). */}
+        {/* Attach any file muxpad can render. The hidden input does the work;
+            the button is the visible affordance. See onPickFiles for why the
+            accept list is extensions rather than image/*. */}
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/*"
+          accept={ATTACHMENT_ACCEPT}
           multiple
           hidden
           onChange={onPickFiles}
@@ -416,8 +376,8 @@ export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: Mobil
           type="button"
           className="mobile-input-attach"
           onClick={() => fileInputRef.current?.click()}
-          title="Add photo"
-          aria-label="Add photo or take a picture"
+          title="Attach a file"
+          aria-label="Attach a file, photo or take a picture"
         >
           <SvgCamera />
         </button>
@@ -434,13 +394,9 @@ export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: Mobil
           aria-multiline="true"
           aria-label="Send to pane"
           data-placeholder="Send to pane…"
-          onInput={onEditableInput}
+          onInput={syncEmpty}
           onPaste={onPaste}
         />
-        {/* Between the composer and Send: adjacent to the text it acts on, and
-            it is a REVIEW step that happens before sending, so it reads left of
-            the send button. */}
-        <CleanupButton cleanup={cleanup} variant="terminal" hasText={hasText} />
         <button type="button" className="mobile-input-send" onClick={submit} aria-label="Send">
           Send
         </button>

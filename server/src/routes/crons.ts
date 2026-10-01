@@ -1,3 +1,4 @@
+import { AgentModeInputSchema, DEFAULT_AGENT_MODE } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -69,7 +70,11 @@ export function cronsRoutes(deps: {
           .regex(/^[A-Za-z0-9._[\]-]{1,64}$/)
           .optional(),
         backend: z.enum(['claude', 'codex', 'cursor']).optional(),
-        mode: z.enum(['do', 'deep']).optional(),
+        // Agent mode for a new-tab fire. Accepts the pre-rename 'do'/'deep'
+        // (a stored cron written by an older build re-PUTs its own value
+        // back, and a version-skewed `muxpad cron new --mode=do` must still
+        // work) and normalizes to the current spelling.
+        mode: AgentModeInputSchema.optional(),
         catchup: z.enum(['once', 'skip', 'all']).optional(),
         overlap: z.enum(['skip', 'queue']).optional(),
         on_context: z.enum(['fire', 'compact-first', 'rotate', 'skip']).optional(),
@@ -144,9 +149,10 @@ export function cronsRoutes(deps: {
       model: body.model ?? null,
       backend: body.backend ?? null,
       // A scheduled job's report wants terse + result-first, so a NEW-TAB cron
-      // defaults to ⚡ Do (agent-modes.ts). Pane mode inherits the pane's own
-      // mode and ignores this column entirely.
-      mode: body.target_kind === 'new-tab' ? (body.mode ?? 'do') : null,
+      // defaults to Chat mode (agent-modes.ts) — the same default a new tab
+      // gets. Pane mode inherits the pane's own mode and ignores this column
+      // entirely.
+      mode: body.target_kind === 'new-tab' ? (body.mode ?? DEFAULT_AGENT_MODE) : null,
       ...(body.catchup ? { catchup: body.catchup } : {}),
       ...(body.overlap ? { overlap: body.overlap } : {}),
       ...(body.on_context ? { on_context: body.on_context } : {}),
@@ -205,6 +211,12 @@ export function cronsRoutes(deps: {
         prompt: body.prompt ?? cron.prompt,
         from: Date.now(),
       });
+      // A reschedule MOVES `next_due_at`, which decorateTab folds into the nav
+      // row as `next_cron` — the `◷ 07:00` in the meta column. Create, enable/
+      // disable and delete all re-emit; this branch, the only one that actually
+      // changes the time being rendered, did not, so the clock stayed on the old
+      // schedule until the 5s poll (indefinitely for a collapsed workspace).
+      emitCronTabUpdate(deps, cron.target_pane);
     }
     if (body.enabled !== undefined) {
       // RESUMING re-anchors: a cron paused for a week must not wake up to a

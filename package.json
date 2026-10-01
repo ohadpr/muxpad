@@ -10,6 +10,7 @@
     "build": "pnpm -r build",
     "clean": "pnpm -r exec rm -rf dist tsconfig.tsbuildinfo",
     "test": "pnpm -r test",
+    "typecheck": "tsc -b shared server web --force",
     "lint": "pnpm -r lint",
     "dev": "pnpm -r --parallel dev",
     "serve": "./scripts/muxpad start",

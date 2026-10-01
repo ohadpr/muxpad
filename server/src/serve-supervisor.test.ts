@@ -6,6 +6,7 @@ import type Database from 'better-sqlite3';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { EventBus } from './events.js';
 import { PtydCache } from './ptyd-cache.js';
+import type { PaneNotifier } from './push.js';
 import {
   RESPAWN_COOLDOWN_MS,
   RESPAWN_MAX_ATTEMPTS,
@@ -18,6 +19,7 @@ import {
   createServeSupervisor,
   startServeSupervisor,
 } from './serve-supervisor.js';
+import { AppStore } from './store/AppStore.js';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
 import { WorkspaceStore } from './store/WorkspaceStore.js';
@@ -71,7 +73,7 @@ describe('serve supervisor', () => {
   /** Past the cooldown, so the next dead sweep is allowed to act. */
   const pastCooldown = () => advance(RESPAWN_COOLDOWN_MS + 1);
 
-  function setup(opts?: { notifyPane?: (id: string, body: string) => void }) {
+  function setup(opts?: { notifyPane?: PaneNotifier }) {
     const db = openDb(':memory:');
     const workspaces = new WorkspaceStore(db);
     const tabs = new TabStore(db);
@@ -127,6 +129,31 @@ describe('serve supervisor', () => {
     // And it is alive afterwards, so the next sweep does nothing.
     await f.sup.sweep();
     expect(f.ptydFake.ensured).toHaveLength(1);
+  });
+
+  it('does not respawn an app stopped while its liveness probe was pending', async () => {
+    const f = setup();
+    const pane = f.addServePane();
+    const apps = new AppStore(f.db);
+    const app = apps.create({
+      slug: 'race',
+      name: 'Race',
+      cwd: '/tmp',
+      command: './start',
+      url: 'http://127.0.0.1:4321',
+    });
+    apps.setPane(app.id, pane.id);
+    let finishProbe!: (alive: boolean) => void;
+    f.ptydFake.ptyd.hasPane = () =>
+      new Promise((resolve) => {
+        finishProbe = resolve;
+      });
+    const sweep = f.sup.sweep();
+    // Stop disables first and retains the pane pointer while killPane awaits.
+    apps.update(app.id, { enabled: false });
+    finishProbe(false);
+    await sweep;
+    expect(f.ptydFake.ensured).toHaveLength(0);
   });
 
   it('leaves a live serve pane completely alone', async () => {
@@ -194,7 +221,12 @@ describe('serve supervisor', () => {
 
   it('gives up after the attempt cap and says so exactly once', async () => {
     const notes: Array<[string, string]> = [];
-    const f = setup({ notifyPane: (id, body) => notes.push([id, body]) });
+    const f = setup({
+      notifyPane: (id, body) => {
+        notes.push([id, body]);
+        return 'sent';
+      },
+    });
     const pane = f.addServePane();
     f.ptydFake.ensureFails = true;
     for (let i = 0; i < RESPAWN_MAX_ATTEMPTS; i++) {

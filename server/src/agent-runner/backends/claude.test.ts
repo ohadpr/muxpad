@@ -22,14 +22,14 @@ describe('claude backend — universal muxpad instructions', () => {
   });
 });
 
-describe('claude backend — ⚡ Do-mode overlay (same native preset+append seam)', () => {
+describe('claude backend — Chat-mode overlay (same native preset+append seam)', () => {
   it('appends the mode overlay AFTER the universal instructions', () => {
     // Order is load-bearing: capabilities first, behavior last, so the
     // behavioral contract reads as the most recent (governing) instruction.
-    expect(claudeSystemPromptOption('use muxpad publish', '# Do mode\nbe terse')).toEqual({
+    expect(claudeSystemPromptOption('use muxpad publish', '# Chat mode\nbe terse')).toEqual({
       type: 'preset',
       preset: 'claude_code',
-      append: 'use muxpad publish\n\n# Do mode\nbe terse',
+      append: 'use muxpad publish\n\n# Chat mode\nbe terse',
     });
   });
 
@@ -40,10 +40,10 @@ describe('claude backend — ⚡ Do-mode overlay (same native preset+append seam
   });
 
   it('overlay alone still injects (a user who deleted agent-instructions.md)', () => {
-    expect(claudeSystemPromptOption(null, '# Do mode')).toEqual({
+    expect(claudeSystemPromptOption(null, '# Chat mode')).toEqual({
       type: 'preset',
       preset: 'claude_code',
-      append: '# Do mode',
+      append: '# Chat mode',
     });
   });
 

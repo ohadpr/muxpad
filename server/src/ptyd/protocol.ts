@@ -70,6 +70,19 @@ export interface CtrlMethods {
     params: Record<string, never>;
     result: { entries: Array<{ id: string; cwd: string }> };
   };
+  /**
+   * The title/fg/attention counterpart to `flushCwds` — the snapshot a
+   * (re)connecting main server needs because the decoration PUSH is diff-
+   * driven and its diff maps live in ptyd, not per subscriber. Additive:
+   * a pre-flushDecorations ptyd answers `unknown method`, which the caller
+   * treats as "no snapshot available" and degrades to the old behaviour.
+   */
+  flushDecorations: {
+    params: Record<string, never>;
+    result: {
+      entries: Array<{ id: string; title: string | null; fg: string | null; attention: boolean }>;
+    };
+  };
   closePtyClients: { params: IdParams; result: { ok: true } };
   /** Live pane ids — the server's straggler reconcile on (re)connect. */
   listPanes: { params: Record<string, never>; result: { ok: true; ids: string[] } };

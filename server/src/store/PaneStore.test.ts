@@ -7,12 +7,13 @@ import { openDb } from './db.js';
 import { runMigrations } from './migrations.js';
 
 describe('PaneStore', () => {
+  let db: Database.Database;
   let panes: PaneStore;
   let tabs: TabStore;
   let tabId: string;
 
   beforeEach(() => {
-    const db = openDb(':memory:');
+    db = openDb(':memory:');
     panes = new PaneStore(db);
     tabs = new TabStore(db);
     const workspaces = new WorkspaceStore(db);
@@ -57,6 +58,39 @@ describe('PaneStore', () => {
     const p = panes.create({ tab_id: tabId, shell: '/bin/zsh', cwd: '/tmp' });
     panes.delete(p.id);
     expect(panes.getById(p.id)).toBeNull();
+  });
+
+  it('supervises only live agent panes with running or queued work', () => {
+    const workspaceId = tabs.getWorkspaceId(tabId)!;
+    const idleTab = tabs.create({ name: 'Idle', layout: '', workspace_id: workspaceId });
+    const runningTab = tabs.create({ name: 'Running', layout: '', workspace_id: workspaceId });
+    const queuedTab = tabs.create({ name: 'Queued', layout: '', workspace_id: workspaceId });
+    const retiredTab = tabs.create({ name: 'Retired', layout: '', workspace_id: workspaceId });
+    const idle = panes.create({ tab_id: idleTab.id, startup_cmd: 'muxpad agent' });
+    const running = panes.create({ tab_id: runningTab.id, startup_cmd: 'muxpad agent' });
+    const queued = panes.create({ tab_id: queuedTab.id, startup_cmd: 'muxpad agent' });
+    const retired = panes.create({ tab_id: retiredTab.id, startup_cmd: 'muxpad agent' });
+
+    const insertSession = db.prepare(
+      `INSERT INTO agent_sessions (id, pane_id, status, created_at, updated_at)
+       VALUES (?, ?, ?, 1, 1)`,
+    );
+    insertSession.run('s-idle', idle.id, 'idle');
+    insertSession.run('s-running', running.id, 'running');
+    insertSession.run('s-queued', queued.id, 'idle');
+    insertSession.run('s-retired', retired.id, 'running');
+    db.prepare(
+      `INSERT INTO agent_queue (id, pane_id, seq, text, created_at)
+       VALUES ('q1', ?, 1, 'work', 1)`,
+    ).run(queued.id);
+    db.prepare('UPDATE tabs SET retired_at = 1 WHERE id = ?').run(retiredTab.id);
+
+    expect(
+      panes
+        .listAgentPanes()
+        .map((pane) => pane.id)
+        .sort(),
+    ).toEqual([queued.id, running.id].sort());
   });
 
   it('creates a kind=url pane with null shell/cwd', () => {

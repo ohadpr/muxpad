@@ -10,7 +10,7 @@ import { GlobalsStore } from './store/GlobalsStore.js';
  * rule that makes them boring:
  *
  *   agent-instructions.md  GENERATED. Rewritten from source on EVERY boot.
- *   do-mode.md             GENERATED. Same.
+ *   chat-mode.md           GENERATED. Same.
  *   agent-notes.md         THE USER'S. Created once if absent, never touched
  *                          again by muxpad.
  *

@@ -90,21 +90,51 @@ describe('advanceTabFreeze — the sidebar over time', () => {
     return { out, freeze };
   };
 
-  it('holds the active row still while the others re-sort around it', () => {
+  // ── THE FREEZE IS DIRECTIONAL ───────────────────────────────────────────
+  // It used to hold the active row at the index it was clicked at, for the
+  // whole visit, in both directions. The half that was right: a row must not
+  // slide DOWN the list while you work in it — other chats get busier, push it
+  // away, and closing the row below it or re-finding where you are becomes a
+  // moving-target problem.
+  //
+  // The half that was wrong: opening a chat makes it the most recent thing you
+  // have touched, so the server sorts it to the top — and the freeze held it
+  // at row 8, where it had been two hours cold. The promotion the click earned
+  // never reached the screen, and the row that DID climb was the one you had
+  // just left, its freeze having been dropped on the way out. Reported as "when
+  // I touch a chat it doesn't go to the top".
+  //
+  // So: up is allowed and kept, down is refused.
+  it('lets the active row CLIMB to its sorted place, and keeps it there', () => {
     const { out } = run([
       { tabs: 'a b c d', activeId: 'c' }, // arrive at c (index 2)
-      { tabs: 'c a b d', activeId: 'c' }, // c bumped to top by its own activity
+      { tabs: 'c a b d', activeId: 'c' }, // its own arrival bumped it to the top
       { tabs: 'c d a b', activeId: 'c' }, // d goes busy and climbs
     ]);
     expect(out[0]).toBe('a b c d');
-    expect(out[1]).toBe('a b c d'); // c held; nothing else moved either
-    expect(out[2]).toBe('d a c b'); // d climbed, c still third
+    // THE PROMOTION LANDS. This was 'a b c d' before — the click's whole
+    // visible consequence, suppressed.
+    expect(out[1]).toBe('c a b d');
+    // …and d climbing cannot push c back down. c stays at 0; d takes the next
+    // free row rather than c's.
+    expect(out[2]).toBe('c d a b');
+  });
+
+  it('refuses to be pushed DOWN by another chat getting busier', () => {
+    const { out } = run([
+      { tabs: 'c a b', activeId: 'c' }, // arrive at c, already top
+      { tabs: 'a c b', activeId: 'c' }, // a goes busy and outranks it
+      { tabs: 'a b c', activeId: 'c' }, // and then b does too
+    ]);
+    expect(out[0]).toBe('c a b');
+    expect(out[1]).toBe('c a b'); // held
+    expect(out[2]).toBe('c a b'); // still held — this is the moving target
   });
 
   it('settles into its sorted position the moment it is deactivated', () => {
     const { out, freeze } = run([
       { tabs: 'a b c', activeId: 'c' },
-      { tabs: 'c a b', activeId: 'c' }, // still frozen at the bottom
+      { tabs: 'a b c', activeId: 'c' }, // nothing promoted it; still at the end
       { tabs: 'c a b', activeId: null }, // navigated away → falls into place
     ]);
     expect(out[1]).toBe('a b c');
@@ -113,28 +143,43 @@ describe('advanceTabFreeze — the sidebar over time', () => {
   });
 
   it('a newly activated tab is captured where the user just clicked it', () => {
-    // While b was active and frozen at index 1, the server moved b to the top
-    // — so `a` is displayed FIRST but sits SECOND in server order. Clicking a
-    // must leave it under the cursor; capturing from server order instead
-    // would have dropped it a row the instant it was selected.
+    // The capture still measures against the DISPLAYED order, so selecting a
+    // row never yanks it out from under the cursor on the same frame. What
+    // changed is only what happens AFTER: the server's promotion is now let
+    // through, instead of this index being a ceiling for the whole visit.
     const { out } = run([
       { tabs: 'a b c', activeId: 'b' }, // b frozen at 1
-      { tabs: 'b a c', activeId: 'b' }, // server bumped b; displayed stays a b c
-      { tabs: 'b a c', activeId: 'a' }, // click a, displayed at index 0
+      { tabs: 'b a c', activeId: 'b' }, // server bumps b — and it now lands
+      { tabs: 'b a c', activeId: 'a' }, // click a, displayed at index 1
     ]);
-    expect(out[1]).toBe('a b c');
-    expect(out[2]).toBe('a b c'); // a held at 0; b settles into 1, not 0
+    expect(out[1]).toBe('b a c');
+    expect(out[2]).toBe('b a c'); // a captured where it was shown, not moved
   });
 
   it('retries the capture until the tab list has actually loaded', () => {
     const { out, freeze } = run([
       { tabs: '', activeId: 'c' }, // URL knows the tab; the fetch hasn't landed
       { tabs: 'a b c', activeId: 'c' }, // now capture — where it first renders
-      { tabs: 'c a b', activeId: 'c' },
+      { tabs: 'a b c', activeId: 'c' }, // nothing promotes it; it holds at 2
     ]);
     expect(out[1]).toBe('a b c');
     expect(out[2]).toBe('a b c');
     expect(freeze).toEqual({ id: 'c', index: 2 });
+  });
+
+  it('a cold chat opened from the bottom ends up at the top — the whole report', () => {
+    // The sequence as lived: a chat two hours cold at row 3, clicked. The
+    // server stamps it on the /seen that arrival fires, the next list has it
+    // first, and the row is there to see rather than waiting for you to leave.
+    const { out, freeze } = run([
+      { tabs: 'a b c d', activeId: 'd' }, // click the coldest row
+      { tabs: 'd a b c', activeId: 'd' }, // the view stamp lands
+      { tabs: 'd a b c', activeId: 'd' }, // and it stays put while you read
+    ]);
+    expect(out[0]).toBe('a b c d');
+    expect(out[1]).toBe('d a b c');
+    expect(out[2]).toBe('d a b c');
+    expect(freeze).toEqual({ id: 'd', index: 0 });
   });
 
   it('drops the freeze when the active tab gets pinned, and re-captures after unpin', () => {

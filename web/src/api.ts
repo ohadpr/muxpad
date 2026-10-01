@@ -1,4 +1,5 @@
 import type { AgentMode, LayoutNode, PaneSpec, Tab, UrlHealth, Workspace } from '@muxpad/shared';
+import type { WorkspaceTabs } from './lib/nav-search';
 
 /**
  * Turn a failed response into something a human can read.
@@ -9,16 +10,20 @@ import type { AgentMode, LayoutNode, PaneSpec, Tab, UrlHealth, Workspace } from 
  * when the envelope is there; fall back to the status for anything else
  * (HTML error pages, proxies, an empty body).
  */
-async function errorMessage(res: Response): Promise<string> {
+async function errorEnvelope(res: Response): Promise<{ message: string; code: string | null }> {
   const text = await res.text().catch(() => '');
   try {
-    const body = JSON.parse(text) as { error?: { message?: unknown } };
+    const body = JSON.parse(text) as { error?: { message?: unknown; code?: unknown } };
     const m = body?.error?.message;
-    if (typeof m === 'string' && m.trim()) return m;
+    const code = typeof body?.error?.code === 'string' ? body.error.code : null;
+    if (typeof m === 'string' && m.trim()) return { message: m, code };
   } catch {
     // not our envelope — fall through
   }
-  return text.trim() ? `${res.status} ${text.slice(0, 200)}` : `request failed (${res.status})`;
+  return {
+    message: text.trim() ? `${res.status} ${text.slice(0, 200)}` : `request failed (${res.status})`,
+    code: null,
+  };
 }
 
 /**
@@ -32,10 +37,21 @@ async function errorMessage(res: Response): Promise<string> {
  */
 export class ApiError extends Error {
   readonly status: number;
-  constructor(message: string, status: number) {
+  /**
+   * The envelope's machine-readable `code`, when it had one.
+   *
+   * The status alone is too coarse for the refusals that matter: `has_messages`
+   * and `mid_turn` are both 409 and mean opposite things to the UI (one says
+   * "your view of this chat is wrong", the other says "not yet"). The
+   * alternative — matching on the human sentence — breaks the first time the
+   * wording is improved.
+   */
+  readonly code: string | null;
+  constructor(message: string, status: number, code: string | null = null) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -49,13 +65,57 @@ export async function req<T>(input: RequestInfo, init?: RequestInit): Promise<T>
       ...(init?.headers ?? {}),
     },
   });
-  if (!res.ok) throw new ApiError(await errorMessage(res), res.status);
+  if (!res.ok) {
+    const { message, code } = await errorEnvelope(res);
+    throw new ApiError(message, res.status, code);
+  }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
 }
 
 export interface TabWithPanes extends Tab {
   panes: PaneSpec[];
+}
+
+/** A folder the user has recently worked in — a one-tap option in the
+ *  launch card. `path` is already snapped to its project root, so the chip
+ *  and the session that starts from it name the same directory. */
+export interface RecentFolder {
+  path: string;
+  name: string;
+  /** `~`-relative form, for the chip's second line. */
+  short: string;
+  hasProject: boolean;
+}
+
+export interface AgentLaunchOptions {
+  folders: RecentFolder[];
+  /** Per-backend model lists, absent for a backend that has never run here —
+   *  the card then offers only the harness's own default, which is honest. */
+  models: Record<string, Array<{ value: string; displayName: string; resolvedModel?: string }>>;
+  home: string;
+}
+
+/** One `/api/search` hit: where it was said, and the FTS5 snippet of it. */
+export interface ArchiveSearchHit {
+  sid: string;
+  ts: number;
+  role: string;
+  snippet: string;
+  session?: {
+    sid: string;
+    pane_id: string | null;
+    cwd: string | null;
+    assistant: string | null;
+  };
+}
+
+export interface ArchiveSearchResponse {
+  query: string;
+  /** True when the raw FTS5 expression didn't parse and the server retried it
+   *  as a quoted phrase — the results are still real, just less precise. */
+  fallback: boolean;
+  hits: ArchiveSearchHit[];
 }
 
 export interface MovePaneResult {
@@ -107,6 +167,31 @@ export const api = {
   listTabs: (workspaceId: string) =>
     req<Tab[]>(`/api/tabs?workspaceId=${encodeURIComponent(workspaceId)}`),
 
+  /**
+   * EVERY visible workspace's tabs, grouped, in ONE request — the corpus the
+   * sidebar's search box matches against.
+   *
+   * Deliberately not a fan-out of `listTabs` per workspace: `useTabs` only
+   * fetches a workspace once something mounts for it, and a collapsed
+   * workspace never has. Issuing N requests to fill that gap is exactly the
+   * cold-load cost the per-workspace caches exist to avoid, so this is one
+   * request, taken lazily on first focus of the box.
+   */
+  listAllTabs: () => req<{ workspaces: WorkspaceTabs[] }>('/api/tabs/all'),
+
+  /**
+   * Full-text search over archived session transcripts — the search box's
+   * "In messages" tier.
+   *
+   * OPTIONAL ENDPOINT. `/api/search` is mounted only when the archive exists
+   * (server.ts), so a 404 here is a normal configuration, not a failure: the
+   * caller stands the whole tier down and keeps the instant tier working.
+   */
+  searchMessages: (q: string, limit = 8) =>
+    req<ArchiveSearchResponse>(
+      `/api/search?q=${encodeURIComponent(q)}&limit=${encodeURIComponent(String(limit))}`,
+    ),
+
   createTab: (
     workspaceId: string,
     body: {
@@ -119,7 +204,8 @@ export const api = {
       // Which agent backend an 'agent' bootstrap runs. 'pick' creates it pending
       // (harness chosen in the chat page); default claude.
       backend?: 'claude' | 'codex' | 'cursor' | 'pick';
-      /** Agent behavior mode for an 'agent' bootstrap (default 'deep'). */
+      /** Agent mode for an 'agent' bootstrap. Omitted → the server's
+       *  DEFAULT_AGENT_MODE, which is 'chat'. */
       mode?: AgentMode;
     } = {},
   ) =>
@@ -148,6 +234,20 @@ export const api = {
       body: JSON.stringify(patch),
     }),
 
+  /**
+   * Retire a chat to the `done` group by hand — the manual path to the same
+   * place decay leads. NOT a delete: nothing is removed, the chat keeps its
+   * transcript, it stays findable by `@`, and sending it a message revives it.
+   * This is what the row's × does now.
+   *
+   * A verb endpoint, like `seen` above, because that is the house style for
+   * "do this to the tab" as opposed to "set this field" — and because `done`
+   * is DERIVED from the clock server-side (see server/src/tab-clock.ts), so
+   * archiving is "expire the clock now", not a column the client may write.
+   */
+  archiveTab: (id: string) => req<void>(`/api/tabs/${id}/archive`, { method: 'POST' }),
+
+  /** PERMANENT. Behind the row's context menu, never a one-click affordance. */
   deleteTab: (id: string) => req<void>(`/api/tabs/${id}`, { method: 'DELETE' }),
 
   markTabSeen: (id: string) => req<void>(`/api/tabs/${id}/seen`, { method: 'POST' }),
@@ -179,8 +279,10 @@ export const api = {
       env?: Record<string, string> | null;
       inherit_cwd_from?: string;
       face?: 'terminal' | 'web' | 'chat';
-      /** Behavior overlay for an agent pane: 'do' = the house chat, 'deep' =
-       *  a raw harness session. Internal plumbing; never named in the UI. */
+      /** Agent mode for an agent pane: 'chat' = Chat mode (muxpad's
+       *  assistant, house contract overlaid), 'agent' = Agent mode (the
+       *  harness as it ships). Omitted → derived from the startup command's
+       *  own --mode flag, else the server default. */
       mode?: AgentMode;
       /** Server places the pane atomically (root append) — for callers
        *  without a local layout to patch (CLI, the nav sheet). */
@@ -194,19 +296,39 @@ export const api = {
 
   deletePane: (id: string) => req<void>(`/api/panes/${id}`, { method: 'DELETE' }),
 
-  /** Choose the harness for a pending ('muxpad agent --pick') agent pane —
-   *  sets the backend + respawns the runner. */
+  /** Choose the harness for an EMPTY agent pane — sets the backend (and,
+   *  optionally, the folder and model it starts with) and respawns the runner. */
   setAgentBackend: (
     paneId: string,
     backend: 'claude' | 'codex' | 'cursor',
-    /** Omit to keep the pane's current overlay; pass 'deep' for a RAW
-     *  session of the harness (no house contract on top). */
+    /** Omit to keep the pane's current mode; pass 'agent' for Agent mode —
+     *  the harness exactly as it ships, no house contract on top. */
     mode?: AgentMode,
+    /** Chosen at the moment of picking, in the launch card. Omit either to
+     *  keep the pane's folder / let the harness pick its own model. */
+    start?: { cwd?: string | undefined; model?: string | undefined },
   ) =>
-    req<void>(`/api/panes/${paneId}/agent-backend`, {
+    req<{
+      backend: 'claude' | 'codex' | 'cursor';
+      mode: AgentMode;
+      /** The folder the session ACTUALLY got. The server snaps the request to
+       *  the project root, so echoing our own input can name a different
+       *  folder than the one running. Always prefer this. */
+      cwd: string | null;
+      model: string | null;
+    }>(`/api/panes/${paneId}/agent-backend`, {
       method: 'POST',
-      body: JSON.stringify({ backend, ...(mode ? { mode } : {}) }),
+      body: JSON.stringify({
+        backend,
+        ...(mode ? { mode } : {}),
+        ...(start?.cwd ? { cwd: start.cwd } : {}),
+        ...(start?.model ? { model: start.model } : {}),
+      }),
     }),
+
+  /** Folder + model choices for the empty chat's launch card, in one read.
+   *  See server/src/routes/agent-launch.ts for why they travel together. */
+  agentLaunchOptions: () => req<AgentLaunchOptions>('/api/agent-launch/options'),
 
   /** Convert an agent pane into a plain terminal (clears the startup command,
    *  flips to the terminal face, respawns). */
@@ -259,9 +381,10 @@ export const api = {
       name?: string | null;
       face?: 'terminal' | 'web' | 'chat';
       face_url?: string | null;
-      /** Agent behavior mode. Takes effect immediately for the NEXT message
-       *  (the live session gets a one-time in-band note; the full
-       *  system-prompt overlay lands on the pane's next respawn). */
+      /** Agent mode (Chat / Agent). Takes effect from the NEXT message: the
+       *  live session gets a one-time in-band note, because no harness can
+       *  rewrite a running session's system prompt. The full system-prompt
+       *  overlay lands on the pane's next respawn. The mode chip says so. */
       mode?: AgentMode;
     },
   ) =>
@@ -296,21 +419,6 @@ export const api = {
   summarizePane: (paneId: string) =>
     req<{ summary: string; title: string; artifacts: string[] }>(`/api/panes/${paneId}/summarize`, {
       method: 'POST',
-    }),
-
-  /**
-   * Repair phone-dictation mishearings in composed text ("crown schedule" →
-   * "cron schedule"). Returns the corrected text for the human to REVIEW — it
-   * sends nothing, and the caller must never treat it as send-ready.
-   *
-   * Throws `ApiError` on every failure (502 when the model is unreachable).
-   * There is no silent-success path: a caller that swallows the throw would
-   * teach the user that cleanup ran and found nothing wrong.
-   */
-  cleanTranscript: (text: string) =>
-    req<{ text: string; changed: boolean }>('/api/clean-transcript', {
-      method: 'POST',
-      body: JSON.stringify({ text }),
     }),
 
   uploadAttachment: async (paneId: string, blob: Blob, name: string): Promise<{ path: string }> => {

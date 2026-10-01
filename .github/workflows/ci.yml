@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: ${{ matrix.check }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      # Report every check even if, for example, lint fails first.
+      fail-fast: false
+      matrix:
+        include:
+          - check: typecheck
+            command: pnpm typecheck
+          - check: lint
+            command: pnpm lint
+          - check: shared tests
+            command: pnpm --dir shared exec vitest run
+          - check: web tests (jsdom)
+            command: pnpm --dir web exec vitest run
+          - check: server tests (serial)
+            # Parallel file execution intermittently times out ~9 integration
+            # tests under load; they pass serially. Do not increase timeouts.
+            command: pnpm --dir server exec vitest run --no-file-parallelism
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        # Reads the pinned packageManager version from package.json.
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build shared exports for web tests
+        if: matrix.check == 'web tests (jsdom)'
+        run: pnpm --dir shared exec tsc -b --force
+      - name: Run ${{ matrix.check }}
+        # Vitest strips types: the separate tsc -b check is mandatory.
+        run: ${{ matrix.command }}
+        env:
+          NODE_OPTIONS: --no-experimental-webstorage
+          # This workflow does not install browsers or build web/dist. Existing
+          # browser integration tests report skips. See ../README.md for gaps;
+          # a green run is NOT a browser/scrolling or mobile-keyboard guarantee.
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/muxpad-no-browsers

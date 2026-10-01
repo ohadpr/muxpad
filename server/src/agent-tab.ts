@@ -6,9 +6,16 @@
 // of "how you make an agent tab" is how the two would drift on the next change
 // to the startup-command shape. The route now calls these; nothing about its
 // behaviour changed.
-import type { AgentMode, LayoutNode, PaneSpec, Tab } from '@muxpad/shared';
+import {
+  type AgentMode,
+  type LayoutNode,
+  type PaneSpec,
+  type Tab,
+  modeForBackend,
+} from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import type { EventBus } from './events.js';
+import { clearProvisionError, provisionPane } from './pane-provision.js';
 import { queuePaneKill } from './pane-reaper.js';
 import { agentCwd } from './project-root.js';
 import { type PtydCache, decoratePane, decorateTab } from './ptyd-cache.js';
@@ -27,7 +34,7 @@ export interface BootstrapTabDeps {
 
 export interface BootstrapTabInput {
   workspace_id: string;
-  /** Tab name. Omit for the bootstrap defaults ('agent' / a random name). */
+  /** Tab name. Omit for the bootstrap defaults (BOOTSTRAP_TAB_NAME / a random name). */
   name?: string | undefined;
   layout?: LayoutNode | undefined;
   bootstrap?: 'shell' | 'agent' | undefined;
@@ -38,6 +45,10 @@ export interface BootstrapTabInput {
   backend?: 'claude' | 'codex' | 'cursor' | 'pick' | undefined;
   mode?: AgentMode | undefined;
   icon?: string | undefined;
+  /** The chat this one is being spawned FROM. Shares that chat's decay clock
+   *  and nests under it in the sidebar. Resolved (and dropped if the parent is
+   *  gone) by the caller — see routes/tabs.ts. */
+  spawned_by?: string | undefined;
 }
 
 /**
@@ -56,7 +67,10 @@ export function agentStartupCmd(opts: {
   // compare against it verbatim.
   if (opts.backend === 'pick') return 'muxpad agent --pick';
   const backendPart = opts.backend && opts.backend !== 'claude' ? ` --backend ${opts.backend}` : '';
-  const modePart = opts.mode === 'do' ? ' --mode do' : '';
+  // Agent mode is the ABSENCE of the flag (agent-modes.ts), which is what
+  // keeps every pre-rename bare `muxpad agent` command meaning exactly what it
+  // always meant.
+  const modePart = opts.mode === 'chat' ? ' --mode chat' : '';
   // Single-quoted model so zsh's nomatch can't glob-error on ids with brackets
   // ('claude-opus-4-8[1m]'); the charset gate upstream makes the quoting safe.
   const modelPart = opts.model ? ` --model '${opts.model}'` : '';
@@ -64,9 +78,73 @@ export function agentStartupCmd(opts: {
 }
 
 /**
+ * How long a create request will wait for ptyd to acknowledge the eager spawn
+ * before answering anyway.
+ *
+ * WHY THERE IS A CAP AT ALL. ptyd's `ensurePane` RPC is nominally
+ * fire-and-forget — its handler calls `getOrCreate` and replies immediately —
+ * but `getOrCreate` ends in a SYNCHRONOUS `PaneRuntime.start()`, and the reply
+ * is written after it returns. So the acknowledgement is gated on a real pty
+ * fork on ptyd's single event loop, behind whatever else that loop is already
+ * doing for every other live pane. Measured on this machine, `POST /api/tabs`
+ * with an agent bootstrap: 0.03s idle, and 19.5s and 38.6s while ptyd was busy
+ * spawning. The same request with no bootstrap — rows only, no ptyd call — is
+ * 4–90ms throughout, which is where the seconds were.
+ *
+ * That wait bought the caller nothing. The result is discarded, the failure
+ * path is a swallowed catch, and the runtime is recoverable either way (a
+ * client attach re-ensures; ChatNoRunner offers "Start agent"). It was pure
+ * latency, and it was latency the WEB SIDEBAR sat in: the create button could
+ * not navigate until this resolved.
+ *
+ * WHY NOT ZERO. The common case is genuinely fast, and answering after it
+ * leaves the old guarantee intact — the pty exists by the time the client
+ * lands — which is what keeps ChatPane's 8s no-session grace measured against
+ * a live pty rather than against a queue. 250ms covers the idle case several
+ * times over and truncates the pathological one; it is a ceiling, not a delay,
+ * so an idle ptyd still returns in its own 30ms.
+ *
+ * NOT FIXABLE FROM HERE. The blocking spawn is ptyd's, and ptyd only picks up
+ * changes on a restart that kills every pane on the machine. This caps our
+ * exposure to it; it does not make ptyd faster.
+ */
+const EAGER_SPAWN_WAIT_MS = 250;
+
+/**
+ * Eager spawns that have been ASKED FOR but not yet acknowledged, by pane id.
+ *
+ * The cap above means `bootstrapTab` can answer before the pty exists, which
+ * opens a race the blocking await used to close by accident: **a pane can be
+ * deleted before its own spawn has landed.** `killPane` on a pane ptyd has not
+ * created yet is a successful no-op, so the delete completes, the queued spawn
+ * then arrives, and ptyd is left holding a pty whose DB row is gone — invisible
+ * to every UI and unreachable by anything except the straggler reconcile, which
+ * only runs on a ptyd reconnect (i.e. a restart that kills every pane).
+ *
+ * The kill queue cannot cover this either: the sweeper dequeues as soon as
+ * `killPane` *succeeds*, and against a not-yet-spawned pane it succeeds
+ * immediately, doing nothing.
+ *
+ * This was observed, not theorised — a batch of agent tabs deleted while ptyd
+ * was saturated left eight orphaned runners alive with no rows behind them.
+ * So a delete BOOKS A SECOND KILL against any pane whose spawn is still in
+ * flight, to run the moment that spawn lands.
+ *
+ * A chaser rather than an await, and the distinction is the whole design: the
+ * delete must not inherit the unbounded wait this file exists to remove, and a
+ * ptyd that never answers would hang the cascade instead of merely leaking a
+ * pty — strictly worse than the bug. The delete therefore stays exactly as
+ * fast as it was, and the chaser cleans up behind it.
+ */
+const inFlightSpawns = new Map<string, Promise<void>>();
+
+/**
  * Create a tab (optionally with its bootstrapped pane), emit the events, and
  * eagerly spawn the pty. Rows commit in one transaction so a mid-request
  * failure can't leave a half-bootstrapped ghost tab.
+ *
+ * Resolves once the rows are committed and the events are out — NOT
+ * necessarily once the pty is up. See EAGER_SPAWN_WAIT_MS.
  */
 export async function bootstrapTab(
   deps: BootstrapTabDeps,
@@ -75,12 +153,24 @@ export async function bootstrapTab(
   const tabs = new TabStore(deps.db);
   const panes = new PaneStore(deps.db);
   const agent = input.bootstrap === 'agent';
+  // An agent bootstrap that doesn't name a mode gets the DEFAULT — Chat.
+  // This is the one place the flipped default actually lands: the CLI
+  // (`muxpad agent new`), the API, the cron scheduler's new-tab fire and the
+  // web app all bootstrap through here, so "a new agent tab is a Chat" holds
+  // no matter which door it came in. A non-agent bootstrap stays on the
+  // baseline (PaneStore.create) — there is no agent in it to contract with.
+  //
+  // …except that Chat mode is CLAUDE-ONLY (modeForBackend): a codex/cursor
+  // bootstrap lands in Agent mode whatever the caller asked for, because
+  // neither harness can host the `reply` tool Chat mode is built on.
+  const mode: AgentMode | undefined = agent ? modeForBackend(input.mode, input.backend) : undefined;
   const created = deps.db.transaction(() => {
     let tab = tabs.create({
       name: input.name as string,
       layout: input.layout ?? '',
       workspace_id: input.workspace_id,
       ...(input.icon ? { icon: input.icon } : {}),
+      ...(input.spawned_by ? { spawned_by: input.spawned_by } : {}),
     });
     if (!input.bootstrap) return { tab, pane: null as PaneSpec | null };
     const pane = panes.create({
@@ -89,12 +179,12 @@ export async function bootstrapTab(
       // Agent panes snap up to the git root so they start with project context.
       cwd: agent ? agentCwd(safeCwd(input.cwd)) : safeCwd(input.cwd),
       startup_cmd: agent
-        ? agentStartupCmd({ backend: input.backend, mode: input.mode, model: input.model })
+        ? agentStartupCmd({ backend: input.backend, mode, model: input.model })
         : null,
       // Agent tabs land directly on the chat face; the (hidden) terminal face
       // spawns the pty underneath, which runs the startup command.
       face: agent ? 'chat' : 'terminal',
-      ...(agent && input.mode ? { mode: input.mode } : {}),
+      ...(mode ? { mode } : {}),
     });
     tab = tabs.update(tab.id, { layout: pane.id }) ?? tab;
     return { tab, pane };
@@ -110,24 +200,60 @@ export async function bootstrapTab(
     deps.events.emit({
       type: 'pane.added',
       tab_id: created.tab.id,
-      pane: decoratePane(deps.cache, created.pane),
+      pane: decoratePane(deps.cache, created.pane, deps.db),
     });
-    // Eager spawn: an agent tab created from a phone (or by the cron tick,
-    // with no browser anywhere) starts its runner immediately.
-    try {
-      await deps.ptyd.ensurePane({
-        id: created.pane.id,
-        shell: created.pane.shell ?? process.env.SHELL ?? '/bin/zsh',
-        startup_cmd: created.pane.startup_cmd,
-        cwd: safeCwd(created.pane.cwd),
-        env: created.pane.env,
-        tab_id: created.tab.id,
-        workspace_id: input.workspace_id,
-      });
-    } catch {
-      // ptyd unreachable: the rows are committed; the runtime spawns lazily
-      // when a client attaches and ptyd reconnects.
-    }
+    // ─── PROVISIONING IS PART OF CREATING ──────────────────────────────────
+    // An agent tab created from a phone (or by the cron tick, with no browser
+    // anywhere) starts its runner immediately — and for a CHAT-face pane that
+    // is the only thing that ever will. Its client attaches to /ws/chat, never
+    // to the pty, so there is no lazy-spawn fallback behind this the way there
+    // is for a terminal.
+    //
+    // This used to be one `ensurePane` inside a bare `.catch(() => {})` whose
+    // comment claimed the runtime would "spawn lazily when a client attaches".
+    // For this pane it would not, and the result was the user's top complaint:
+    // a new chat with correct rows, a correct startup_cmd, and no process,
+    // showing the neutral "This chat has no agent yet" — a sentence about a
+    // steady state, printed over a silent failure two seconds old.
+    //
+    // provisionPane RETRIES (the real failures — `ptyd disconnected` mid-blip,
+    // `posix_spawnp failed` on a full process table — are transient) and
+    // records the reason if it never lands, which is what the chat then shows
+    // instead of the neutral screen. See server/src/pane-provision.ts.
+    //
+    // STARTED eagerly, WAITED FOR only briefly — see EAGER_SPAWN_WAIT_MS. We
+    // race the FIRST attempt against the cap; the ladder runs long past the
+    // response, which is what keeps `POST /api/tabs` as fast as 22688ec made it.
+    const provisioning = provisionPane(deps, {
+      id: created.pane.id,
+      shell: created.pane.shell ?? process.env.SHELL ?? '/bin/zsh',
+      startup_cmd: created.pane.startup_cmd,
+      cwd: safeCwd(created.pane.cwd),
+      env: created.pane.env,
+      tab_id: created.tab.id,
+      workspace_id: input.workspace_id,
+    });
+    // Published for deleteTabCascade — see inFlightSpawns. The WHOLE ladder, not
+    // the first attempt: the chaser has to fire after the last thing that could
+    // hand ptyd a pty, or a delete that beats attempt 3 leaks exactly the runner
+    // inFlightSpawns exists to catch. Cleared on settle, so a pane that is never
+    // deleted leaves nothing behind.
+    const paneId = created.pane.id;
+    const spawning = provisioning.settled;
+    inFlightSpawns.set(paneId, spawning);
+    void spawning.finally(() => {
+      // Only if we are still the spawn of record: a respawn/recreate for the
+      // same id must not have its entry dropped by an older settle.
+      if (inFlightSpawns.get(paneId) === spawning) inFlightSpawns.delete(paneId);
+    });
+    let cap: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      provisioning.first,
+      new Promise<void>((resolve) => {
+        cap = setTimeout(resolve, EAGER_SPAWN_WAIT_MS);
+      }),
+    ]);
+    clearTimeout(cap);
   }
   return created;
 }
@@ -149,6 +275,17 @@ export async function deleteTabCascade(
   const workspaceId = tabs.getWorkspaceId(tabId);
   const doomed = panes.listByTab(tabId);
   for (const p of doomed) {
+    // A pane whose own eager spawn has not landed yet gets a SECOND kill,
+    // booked for the moment it does — see inFlightSpawns. Deliberately not an
+    // `await`: the delete must not inherit the unbounded wait this file exists
+    // to remove, and awaiting a ptyd that never answers would hang the cascade
+    // outright (it hung a test teardown when written that way). So the kill
+    // below still runs now, at its normal speed, and this only adds a chaser
+    // for the one case where "now" was too early to catch anything.
+    const spawning = inFlightSpawns.get(p.id);
+    if (spawning) {
+      void spawning.then(() => deps.ptyd.killPane(p.id).catch(() => queuePaneKill(deps.db, p.id)));
+    }
     try {
       await deps.ptyd.killPane(p.id);
     } catch {
@@ -163,6 +300,11 @@ export async function deleteTabCascade(
   for (const p of doomed) {
     deps.cache.forget(p.id);
     deps.tabActivity?.forgetPane(p.id);
+    // A recorded provisioning failure must not outlive the pane it was about.
+    // Ids are ULIDs so nothing can reuse one, but the registry is process-lived
+    // and this is the only place a pane stops existing — leaving the entry is a
+    // small permanent leak for every chat that failed and was thrown away.
+    clearProvisionError(p.id);
   }
   deps.tabActivity?.forget(tabId);
   if (workspaceId) {

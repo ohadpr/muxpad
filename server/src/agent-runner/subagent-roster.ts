@@ -23,6 +23,13 @@ import type { SubagentProgress } from '@muxpad/shared';
  * evict a live agent, so liveness must never depend on the SDK pumping.
  *
  * ── The invariant that makes that safe ───────────────────────────────────
+ * The LEVEL signal is the source of truth, and the roster's job is to make sure
+ * every background entry is REACHABLE by it. That reachability is established at
+ * the launch ack ({@link bindBackgroundTask}) — a tool_result in the
+ * conversation with no optional fields — rather than from `task_started`, whose
+ * `tool_use_id` the SDK declares optional and whose absence used to leave an
+ * entry with no task id and therefore no background end-path at all.
+ *
  * EVERY path that ends a subagent must say so. There are exactly four:
  *   1. its non-launch-ack `tool_result`      (a foreground Task completing)
  *   2. its finish notice                     (a background Task completing:
@@ -31,11 +38,14 @@ import type { SubagentProgress } from '@muxpad/shared';
  *   3. {@link reconcileBackground}           (the SDK's authoritative LEVEL
  *      signal — `system/background_tasks_changed` carries the full set of
  *      live background tasks, so an end whose edge we missed is still caught)
- *   4. {@link retireAll}                     (a Stop or a failed turn, which
- *      take their background tasks down with them and announce it NOWHERE —
- *      no tool_result, no finish notice)
+ *   4. {@link retireForeground}              (a Stop or a failed turn, whose
+ *      FOREGROUND subagents die announcing nothing — no tool_result, no finish
+ *      notice. Its background ones are NOT covered here: the SDK announces the
+ *      kills it makes, and the agents earlier turns launched keep running)
  * Miss one and the entry is immortal: the pane reads `working` until the
  * runner process dies, and the keepalive re-announces the ghost every tick.
+ * Over-reach and the opposite happens — the count reads below the truth and a
+ * live agent loses its row.
  *
  * ── Membership: TOP-LEVEL launches only ──────────────────────────────────
  * `activity()` used to ADOPT any `parent_tool_use_id` it had never seen
@@ -57,15 +67,28 @@ import type { SubagentProgress } from '@muxpad/shared';
 export interface RosterEntry extends SubagentProgress {
   lastSentAt: number;
   dirty: boolean;
-  /** The SDK task id (`system/task_started`) behind this tool_use, once seen.
-   *  Only this lets the LEVEL signal — which speaks task ids, not tool_use
-   *  ids — reconcile against the roster. */
+  /** The SDK task id behind this tool_use, once known — from the LAUNCH ACK
+   *  ({@link bindBackgroundTask}) or from `system/task_started`
+   *  ({@link bindTask}). Only this lets the LEVEL signal — which speaks task
+   *  ids, not tool_use ids — reconcile against the roster. */
   taskId?: string;
-  /** True once {@link taskId} has been observed in a live background-task
-   *  LEVEL payload. Reconciliation only ever retires entries it has actually
-   *  seen running in the background: a FOREGROUND Task never appears in that
-   *  payload, so it must not be swept by its absence. */
+  /** This entry is KNOWN to be a background task, so the level signal's
+   *  membership is authoritative for it and a Stop does not take it. Earned
+   *  from the launching tool_use's `run_in_background` (the SDK's own typed
+   *  statement), from its launch ack, or from a live level sighting. A
+   *  FOREGROUND Task never earns it, so it is never swept by its absence. */
   background?: boolean;
+  /** Sweep suppression for a PAUSED task (see {@link pauseTask}): it may leave
+   *  the live set while still being a live agent. Kept separate from
+   *  {@link background} so a pause suspends the sweep without ALSO erasing the
+   *  knowledge that this is a background task — a resumed agent whose next
+   *  level sighting never comes would otherwise lose the sweep for good. */
+  sweepSuspended?: boolean;
+  /** Its launch ack arrived — proof the agent actually STARTED. Distinct from
+   *  {@link background}, which now comes from the launching tool_use's
+   *  `run_in_background` and is therefore true even for a launch that was
+   *  retracted before it ever ran. {@link retireUnstarted} needs the former. */
+  launchAcked?: boolean;
 }
 
 /** Minimum gap between two progress frames for the same subagent. */
@@ -88,7 +111,7 @@ const MAX_REMEMBERED_TASKS = 256;
 
 /** The roster's own bookkeeping fields, stripped for the wire. */
 function wireProgress(p: RosterEntry): SubagentProgress {
-  const { lastSentAt, dirty, taskId, background, ...progress } = p;
+  const { lastSentAt, dirty, taskId, background, sweepSuspended, launchAcked, ...progress } = p;
   return progress;
 }
 
@@ -151,8 +174,14 @@ export class SubagentRoster {
    *
    * This is the ONLY way an entry is created: see the membership note above.
    * Idempotent.
+   *
+   * @param background The launching tool_use's `run_in_background` — the SDK's
+   *   own typed statement of which kind of agent this is. It decides which
+   *   end-paths apply, so it must come from that field and never from prose:
+   *   a FOREGROUND agent's completion text carries an `agentId:` trailer and is
+   *   the subagent's own report, which can read exactly like a launch ack.
    */
-  launch(toolUseId: string, label: string): void {
+  launch(toolUseId: string, label: string, background = false): void {
     if (this.entries.has(toolUseId)) return;
     this.enforceCap();
     const p: RosterEntry = {
@@ -162,6 +191,7 @@ export class SubagentRoster {
       seenAt: this.now(),
       lastSentAt: 0,
       dirty: true,
+      ...(background ? { background: true } : {}),
     };
     this.entries.set(toolUseId, p);
     this.send(p);
@@ -192,14 +222,57 @@ export class SubagentRoster {
   bindTask(toolUseId: string, taskId: string): void {
     const p = this.entries.get(toolUseId);
     if (!p) return;
-    // A REBIND (this tool_use now names a different task) must re-earn the
+    // A REBIND (this tool_use already named a DIFFERENT task) must re-earn the
     // background flag from scratch: carrying it over would let a level payload
     // that predates the new binding sweep a live entry.
-    if (p.taskId !== taskId) p.background = false;
+    //
+    // A FIRST bind must not: `task_started` can land after the launch ack, and
+    // clearing the flag there would throw away the one piece of positive
+    // evidence we have — the ack saying outright that this is a background
+    // agent — leaving the entry unsweepable unless a level payload happens to
+    // name it in the same instant.
+    if (p.taskId !== undefined && p.taskId !== taskId) {
+      p.background = false;
+      p.sweepSuspended = false;
+    }
     p.taskId = taskId;
     // The level payload may have arrived FIRST (the SDK documents the ordering
     // as unspecified); if it named this task, it is already known-background.
     if (this.lastLevel.has(taskId)) p.background = true;
+    this.remember(taskId, p);
+  }
+
+  /**
+   * Bind from the BACKGROUND LAUNCH ACK — the `tool_result` the SDK returns for
+   * a `run_in_background` Task/Agent call, which carries `agentId: <task_id>`
+   * (probe-verified, 0.3.220).
+   *
+   * This exists because {@link bindTask}'s source, `system/task_started`, has an
+   * OPTIONAL `tool_use_id`: when the SDK omits it there is no binding at all,
+   * and an entry with no task id is invisible to BOTH background end-paths —
+   * {@link reconcileBackground} skips it and {@link doneByTaskId} cannot match
+   * it. Its only remaining end would be `task_notification`'s equally optional
+   * `tool_use_id`; miss that too and the entry is immortal, exactly the shape
+   * the live pane showed (hundreds of steps, never retired, `retireUnstarted`
+   * powerless because it plainly RAN).
+   *
+   * The ack has no optional field and no ordering hazard: it is a tool_result in
+   * the conversation, always delivered, always after the launch. And unlike a
+   * level sighting it is POSITIVE evidence of backgroundness, so the entry
+   * becomes sweep-eligible immediately rather than waiting to be caught live.
+   *
+   * `taskId` is null when the ack text says "launched" but carries no `agentId`.
+   * The backgroundness still counts: see {@link reconcileBackground}, where an
+   * EMPTY live set retires it regardless of whether it was ever bound.
+   */
+  bindBackgroundTask(toolUseId: string, taskId: string | null): void {
+    const p = this.entries.get(toolUseId);
+    if (!p) return;
+    p.background = true;
+    p.launchAcked = true;
+    if (!taskId) return;
+    if (p.taskId !== taskId) p.sweepSuspended = false;
+    p.taskId = taskId;
     this.remember(taskId, p);
   }
 
@@ -227,7 +300,14 @@ export class SubagentRoster {
    * again. Absence must never be the thing that kills a running subagent.
    */
   pauseTask(taskId: string): void {
-    for (const p of this.entries.values()) if (p.taskId === taskId) p.background = false;
+    for (const p of this.entries.values()) if (p.taskId === taskId) p.sweepSuspended = true;
+  }
+
+  /** This task is RUNNING again (`task_updated`), so the level signal speaks for
+   *  it once more. The next level payload naming it would do this anyway; this
+   *  just doesn't wait for one. */
+  resumeTask(taskId: string): void {
+    for (const p of this.entries.values()) if (p.taskId === taskId) p.sweepSuspended = false;
   }
 
   /**
@@ -237,12 +317,19 @@ export class SubagentRoster {
    * never in the level set, so not one end-path can reach it. Called at the
    * turn `result`, where "it produced nothing at all" is finally decidable.
    *
-   * This is NOT the turn-clearing regression: an agent that actually started
-   * has a bound task id (background) or steps (foreground), and is untouched.
+   * This is NOT the turn-clearing regression: an agent that actually started has
+   * a bound task id, an arrived launch ack, or steps — and is untouched.
+   *
+   * `launchAcked` rather than `background` on purpose. Backgroundness now comes
+   * from the launching tool_use's `run_in_background`, so it is true of a
+   * RETRACTED launch too — which is precisely what this method exists to sweep.
+   * The ack is the proof the agent actually ran, and it matters on its own: an
+   * ack whose text carried no `agentId` leaves an entry that is unbound and, for
+   * up to 44 measured seconds, stepless.
    */
   retireUnstarted(): void {
     for (const p of [...this.entries.values()]) {
-      if (!p.taskId && p.steps === 0) this.done(p.toolUseId);
+      if (!p.taskId && !p.launchAcked && p.steps === 0) this.done(p.toolUseId);
     }
   }
 
@@ -267,8 +354,9 @@ export class SubagentRoster {
    * that a missed edge cannot wedge — an entry we have SEEN in this set and
    * that has now left it is finished, whatever else did or didn't arrive.
    *
-   * Only entries observed as background are eligible: a foreground Task never
-   * appears here, and sweeping it on absence would evict a live agent.
+   * Only entries KNOWN to be background are eligible — from their launch ack, or
+   * from a live sighting here. A foreground Task never appears in this payload,
+   * and sweeping it on absence would evict a live agent.
    *
    * It resurrects too. A task id that is live again but has no row is a RESUMED
    * agent — the level signal is the only place that shows up, since the resume
@@ -277,10 +365,21 @@ export class SubagentRoster {
   reconcileBackground(liveTaskIds: readonly string[]): void {
     this.lastLevel = new Set(liveTaskIds);
     for (const p of [...this.entries.values()]) {
-      if (!p.taskId) continue;
+      if (!p.taskId) {
+        // Known-background but never BOUND (its ack carried no agentId and
+        // `task_started` omitted the optional tool_use_id): no id to match, so
+        // membership tells us nothing — except when the live set is EMPTY, which
+        // says outright that no background task is running. That is a deduction
+        // from the level signal, not a guess about this entry.
+        if (p.background && !p.sweepSuspended && this.lastLevel.size === 0) {
+          this.done(p.toolUseId);
+        }
+        continue;
+      }
       if (this.lastLevel.has(p.taskId)) {
         p.background = true;
-      } else if (p.background) {
+        p.sweepSuspended = false;
+      } else if (p.background && !p.sweepSuspended) {
         this.done(p.toolUseId);
       }
     }
@@ -346,14 +445,34 @@ export class SubagentRoster {
   }
 
   /**
-   * Retire the WHOLE roster — the fourth end-path. A Stop or a failed turn kills
-   * its background tasks (live-verified), and those deaths produce no
-   * tool_result and no finish notice, so nothing else would ever remove them.
+   * Retire only the entries a stopped/failed turn takes with it that nothing
+   * else will report: the ones that are NOT background tasks.
+   *
+   * {@link retireAll} used to run here, and it was wrong. Live probe
+   * (`--stop-after`, 2026-09): an interrupt kills the tasks of the INTERRUPTED
+   * turn and announces each — `task_updated{status:'killed'}` then
+   * `task_notification{status:'stopped'}` — while the level payload emitted at
+   * the same instant still lists the background tasks belonging to EARLIER
+   * turns, which go on to finish normally (measured: 19s and 28s later). A
+   * fleet is exactly that: long-running agents launched across many turns. So
+   * `retireAll` on a Stop was deleting live agents, and the pane's count read
+   * BELOW the truth until a later level payload happened to resurrect them.
+   *
+   * A FOREGROUND Task in flight has no such reporting: it never appears in the
+   * level set and its `tool_result` may never arrive if the turn was killed.
+   * That — and only that — is what this retires.
    */
-  retireAll(reason: string): void {
-    if (this.entries.size === 0) return;
-    this.log(`⏹ ${this.entries.size} background subagent(s) ended with the turn (${reason})`);
-    for (const id of [...this.entries.keys()]) this.done(id);
+  retireForeground(reason: string): void {
+    const doomed = this.values().filter((p) => !p.background);
+    const spared = this.entries.size - doomed.length;
+    if (doomed.length === 0 && spared === 0) return;
+    // Always say something when the roster was non-empty. A Stop that
+    // deliberately keeps rows is the interesting case, and a leak there would
+    // otherwise leave no breadcrumb in the pane's terminal face at all.
+    this.log(
+      `⏹ ${reason}: retired ${doomed.length} foreground subagent(s), kept ${spared} background one(s)`,
+    );
+    for (const p of doomed) this.done(p.toolUseId);
   }
 
   /**

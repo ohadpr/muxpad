@@ -16,3 +16,7 @@ test-results/
 # Leading slash on purpose: PNGs that are real assets live inside packages
 # (web/public, docs/) and must stay tracked.
 /*.png
+
+# Written when MUXPAD_DATA_DIR is the literal string "undefined" (a harness
+# env leak, not a real data dir). Never an artifact worth tracking.
+server/undefined/

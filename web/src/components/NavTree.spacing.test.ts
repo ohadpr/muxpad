@@ -3,7 +3,23 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 /**
- * The nav row's HORIZONTAL spacing scale, pinned.
+ * The nav row's geometry, pinned. TWO surfaces, and they no longer share a
+ * model.
+ *
+ * ─── Read this first: the sheet forked ───────────────────────────────────
+ * Everything under "the row spacing scale" and "gap 1/2/3" below describes the
+ * DESKTOP RAIL: a four-track grid whose columns have to land on one x, held
+ * together by a three-step scale (4 / 8 / 12). That model still governs the
+ * rail, and — because they are still grid/flex rows built from the same tokens
+ * — the sheet's WORKSPACE-PICKER and PANE rows.
+ *
+ * It does NOT govern the sheet's CHAT rows any more. Those were rebuilt as a
+ * flex line with two fixed points and no columns to align, on its own
+ * four-number scale (--nt-rail-*), and they are pinned in their own describe
+ * block at the bottom of this file. Where a test below used to loop over both
+ * variants and now loops over the rail only, that is why — a sheet arm that
+ * kept passing by reading a base rule the sheet overrides would be worse than
+ * no arm at all.
  *
  * ─── Why this file exists ────────────────────────────────────────────────
  * Two spacing defects shipped past review and past a passing test suite, and
@@ -213,6 +229,19 @@ const VARIANTS: [name: string, tokens: Record<string, string>][] = [
   ['rail', BASE],
   ['sheet', SHEET],
 ];
+/** The rail alone — for the gaps whose model the sheet's chat rows left. */
+const RAIL: [name: string, tokens: Record<string, string>][] = [['rail', BASE]];
+
+/** The sheet's chat-row rule, addressed once so every arm reads the same body. */
+const SHEET_ROW = '.navtree[data-variant="sheet"] .navtree-tab-row';
+
+/** One side of a two-value LOGICAL shorthand (`padding-inline: start end`),
+ *  with CSS's own one-value fill. */
+function logical(shorthand: string, which: 'start' | 'end'): string {
+  const t = terms(shorthand);
+  const [a, b = a] = t as [string, string?];
+  return which === 'start' ? a : (b as string);
+}
 
 /**
  * The right-hand inset of a row kind, as the engine computes it — the SHORTHAND
@@ -286,24 +315,33 @@ describe('gap 1 — the state chip clears the row’s right edge', () => {
   // a column.
   const KINDS = ['.navtree-tab-row', '.navtree-ws-row', '.navtree-pane-row-wrap'];
 
-  it('every row kind insets its tail by one step of AIR, in both variants', () => {
-    for (const [name, t] of VARIANTS) {
+  it('every row kind insets its tail by one step of AIR — except the one that cannot', () => {
+    for (const [name, t] of RAIL) {
       const air = resolve(t['--nt-air'] as string, t);
       for (const kind of KINDS) {
+        // The WORKSPACE row is the exception, and it is arithmetic rather than
+        // taste: it charges a 4px `column-gap` before its (usually empty) state
+        // track where a tab row charges none, so the SAME token puts the two
+        // tails on DIFFERENT x. Measured with air on both: the header's × ended
+        // at 240 against the chat rows' marks at 246 — two columns 6px apart
+        // pretending to be one, which is what "the + and × can be more to the
+        // right" was describing. 6px is what lands them together.
+        if (kind === '.navtree-ws-row') {
+          expect({ name, kind, gap: paddingRight(kind, t) }).toEqual({ name, kind, gap: 6 });
+          continue;
+        }
         expect({ name, kind, gap: paddingRight(kind, t) }).toEqual({ name, kind, gap: air });
         expect(paddingRight(kind, t)).toBeGreaterThanOrEqual(12);
       }
     }
   });
 
-  it('the sheet’s tab row does not quietly re-declare its own right inset', () => {
-    // It overrides top/bottom/left (different row metrics) and MUST inherit the
-    // right, or the two variants drift apart the next time one of them moves.
-    const body = ruleBody(NAV_CSS, '.navtree[data-variant="sheet"] .navtree-tab-row');
-    expect(body).not.toMatch(/(?:^|;)\s*padding-right:/);
-    expect(body).not.toMatch(/(?:^|;)\s*padding:/);
+  it('…and the sheet’s pane row still pays it', () => {
+    // The workspace-picker row and the pane row are still built from this
+    // scale; only the CHAT row left it, and now the rail's workspace header.
+    const air = resolve(SHEET['--nt-air'] as string, SHEET);
+    expect(paddingRight('.navtree-pane-row-wrap', SHEET)).toBe(air);
   });
-
   it('the pane row’s inset is on the WRAP, which is the box that paints the block', () => {
     // On the list it was outside the accent block and bought the block nothing.
     expect(ruleBody(NAV_CSS, '.navtree-pane-row-wrap')).toContain('padding-right: var(--nt-air)');
@@ -336,7 +374,10 @@ describe('gap 2 — the icon chip clears the name', () => {
   });
 
   it('the gap from the chip’s right edge to the name is one step of AIR', () => {
-    for (const [name, t] of VARIANTS) {
+    // Rail only: the sheet's chat row has no icon TRACK at all now — its emoji
+    // is a fixed flex item and the gap is the row's own `gap` property. See
+    // the mobile-rail block at the bottom.
+    for (const [name, t] of RAIL) {
       const track = resolve(t['--nt-col-icon'] as string, t);
       const chip = resolve(t['--nt-chip'] as string, t);
       const air = resolve(t['--nt-air'] as string, t);
@@ -403,7 +444,7 @@ describe('gap 3 — a truncated name never crowds the chip', () => {
     for (const [selector, row] of LEADING) {
       if (row === '.navtree-ws-row') continue;
       const margin = decl(ruleBody(NAV_CSS, selector), 'margin-left');
-      for (const [name, t] of VARIANTS) {
+      for (const [name, t] of RAIL) {
         const gap = resolve(margin, t) + (row ? columnGap(row, t) : 0);
         expect({ selector, name, gap }).toEqual({
           selector,
@@ -471,49 +512,579 @@ describe('what the pass was NOT allowed to move', () => {
     expect(left).toBe('calc(var(--nt-pad) + var(--nt-indent))');
     expect(resolve(left, BASE)).toBe(16); // rail: 4 + 12
     expect(ruleBody(NAV_CSS, '.navtree-tab-icon::before')).toContain('left: 0');
-    // The sheet spends its indent on the leading disclosure track instead, so
-    // its row padding-left is the bare pad.
-    const sheetRow = ruleBody(NAV_CSS, '.navtree[data-variant="sheet"] .navtree-tab-row');
-    expect(resolve(decl(sheetRow, 'padding-left'), SHEET)).toBe(4);
   });
 
-  it('the pane list keeps its 18px hierarchy step under the tab name', () => {
+  it('the sheet’s pane list keeps its 18px hierarchy step under the chat name', () => {
     // Derived, because as a literal (64px) it silently shrank to a 6px step the
     // moment the icon track grew — children reading as siblings.
-    // Evaluated against the SHEET only, and that is correct rather than lazy:
-    // the pane list is sheet-gated in NavTree.tsx (the expander only renders at
-    // `variant === 'sheet'`), and the derivation encodes the sheet's row shape
-    // — a leading --nt-disc track, with the indent spent there instead of in
-    // the row's padding. On the rail the same expression would give 24px, not
-    // 18. If a pane list is ever rendered on the rail, this is the rule to
-    // revisit first.
-    const listLeft = side(decl(ruleBody(NAV_CSS, '.navtree-pane-list'), 'padding'), 'left');
+    //
+    // The DERIVATION changed with the rail rebuild and the step did not: a chat
+    // name used to start at `pad + disclosure + icon-track`, and now starts at
+    // `lead + emoji + gap`, because the leading disclosure column is gone. Both
+    // expressions are read out of the sheet's own rules here, so the step
+    // cannot drift again the next time either side moves.
+    const listLeft = decl(
+      ruleBody(NAV_CSS, '.navtree[data-variant="sheet"] .navtree-pane-list'),
+      'padding-inline-start',
+    );
     const paneRowPad = side(decl(ruleBody(NAV_CSS, '.navtree-pane-row'), 'padding'), 'left');
-    // Where a tab NAME starts, measured from the list's own left edge.
-    const tabNameLeft =
-      resolve('var(--nt-pad)', SHEET) +
-      resolve(SHEET['--nt-disc'] as string, SHEET) +
-      resolve(SHEET['--nt-col-icon'] as string, SHEET);
     const paneLabelLeft = resolve(listLeft, SHEET) + resolve(paneRowPad, SHEET);
-    expect(paneLabelLeft - tabNameLeft).toBe(18);
+    expect(paneLabelLeft - chatNameLeft()).toBe(18);
   });
 
-  it('the pass is HORIZONTAL only — no vertical metric moved', () => {
-    // Row heights are 34/50 on the rail and 44/61 on the sheet, and they come
-    // from the vertical padding plus the text lines. Air must never appear in
-    // one, or a one-line row stops matching --nt-row-tab and the leading of
-    // one- and two-line rows diverges again.
+  it('the RAIL’s row height is the CHIP’s, and every row is the same height', () => {
+    // The rail's row is ONE LINE now — name only, the headline having moved to
+    // the row's tooltip — so the tallest thing in it is no longer a stack of
+    // text: it is the 24px chip, which is a real element (it clips the clock's
+    // fill) and therefore does enter the row's height.
+    //
+    // What this test defends did not change with the number: --nt-row-tab must
+    // be EXACTLY the padding plus the tallest item, or the row is floor-clamped
+    // by its min-height and the vertical rhythm comes from two places at once.
+    // Air must never appear in the vertical padding for the same reason.
     const railPad = decl(ruleBody(NAV_CSS, '.navtree-tab-row'), 'padding');
-    expect(resolve(side(railPad, 'top'), BASE)).toBe(8);
-    expect(resolve(side(railPad, 'bottom'), BASE)).toBe(8);
-    const sheetRow = ruleBody(NAV_CSS, '.navtree[data-variant="sheet"] .navtree-tab-row');
-    expect(resolve(decl(sheetRow, 'padding-top'), SHEET)).toBe(12);
-    expect(resolve(decl(sheetRow, 'padding-bottom'), SHEET)).toBe(12);
-    // 12 + 20 (--nt-icon-h) + 12 = 44, exactly the touch floor.
-    expect(12 + resolve(SHEET['--nt-icon-h'] as string, SHEET) + 12).toBe(44);
-    // 8 + 18 + 8 = 34, exactly --nt-row-tab.
-    expect(8 + resolve(BASE['--nt-icon-h'] as string, BASE) + 8).toBe(
+    expect(resolve(side(railPad, 'top'), BASE)).toBe(6);
+    expect(resolve(side(railPad, 'bottom'), BASE)).toBe(6);
+    // 6 + 24 + 6 = 36, exactly --nt-row-tab.
+    expect(6 + resolve(BASE['--nt-chip'] as string, BASE) + 6).toBe(
       resolve(BASE['--nt-row-tab'] as string, BASE),
+    );
+  });
+
+  it('the rail’s chip sits at its track’s HEAD, like the plate it replaced', () => {
+    // Same load-bearing assumption as the icon plate above, restated for the
+    // element that is actually rendered on the rail: the gap to the name is
+    // `track − chip` only while the chip is at the track's START. The chip's
+    // own width comes from --chatchip-size in ChatChip.css, which is the same
+    // 24 as --nt-chip; the alignment is this file's business.
+    expect(
+      decl(ruleBody(NAV_CSS, '.navtree[data-variant="sidebar"] .navtree-tab-chip'), 'justify-self'),
+    ).toBe('start');
+  });
+
+  it('a CHILD row steps one indent, and nothing else moves', () => {
+    // The child's mark is drawn in a box the width of the parent's chip
+    // (ChatChip.css), so the only thing separating a child row from a parent
+    // row is this one step — which is what puts every child name on one shared
+    // x while keeping the dot in the mark column.
+    //
+    // THIS TEST WAS INERT AND PASSING for three reviews: the rule is correct,
+    // and `data-child="true"` was emitted on no element in the product, because
+    // `renderRow` never forwarded `parent` to `TabRow`. A stylesheet test cannot
+    // see that. Its other half is NavTree.rows.test.tsx, which renders the list
+    // and asserts the attribute and the dot actually reach the DOM — do not
+    // change this selector without it, or the pair goes dead again.
+    const child = ruleBody(
+      NAV_CSS,
+      '.navtree[data-variant="sidebar"] .navtree-tab-row[data-child="true"]',
+    );
+    expect(decl(child, 'padding-left')).toBe('calc(var(--nt-pad) + var(--nt-indent) * 2)');
+    const parentLeft = resolve(
+      side(decl(ruleBody(NAV_CSS, '.navtree-tab-row'), 'padding'), 'left'),
+      BASE,
+    );
+    expect(resolve(decl(child, 'padding-left'), BASE) - parentLeft).toBe(
+      resolve(BASE['--nt-indent'] as string, BASE),
+    );
+  });
+});
+
+/** Where a chat name's first glyph lands on the sheet, from the row's own edge:
+ *  the leading inset, the fixed emoji box, and the one gap between them. */
+function chatNameLeft(): number {
+  return (
+    resolve(SHEET['--nt-rail-lead'] as string, SHEET) +
+    resolve(SHEET['--nt-rail-emoji'] as string, SHEET) +
+    resolve(SHEET['--nt-rail-gap'] as string, SHEET)
+  );
+}
+
+describe('the MOBILE RAIL — a flex line, and its four numbers', () => {
+  // The sheet's chat row is not the rail's row at thumb height any more. It has
+  // no columns to align, so it has no three-step scale; it has two fixed points
+  // (the emoji and the trailing mark) and a name between them, and these four
+  // tokens describe it completely.
+  const ROW = () => ruleBody(NAV_CSS, SHEET_ROW);
+
+  it('declares exactly the four numbers, and they are 14 / 20 / 8 / 12', () => {
+    const t = tokensOf(NAV_CSS, '.navtree[data-variant="sheet"]');
+    expect({
+      lead: resolve(t['--nt-rail-lead'] as string, SHEET),
+      emoji: resolve(t['--nt-rail-emoji'] as string, SHEET),
+      gap: resolve(t['--nt-rail-gap'] as string, SHEET),
+      trail: resolve(t['--nt-rail-trail'] as string, SHEET),
+    }).toEqual({ lead: 14, emoji: 20, gap: 8, trail: 12 });
+  });
+
+  it('the row is EXACTLY 44px — the touch floor, and not a floor with slack', () => {
+    // NavTree.spacing's old sheet arm pinned 44 as a MINIMUM under a 46px
+    // nominal row, so one-line and two-line rows had different leading. There
+    // is one row shape now, so there is one number: block-size and
+    // min-block-size are both it, and it is the floor exactly.
+    const h = resolve(SHEET['--nt-rail-h'] as string, SHEET);
+    expect(h).toBe(44);
+    expect(resolve(decl(ROW(), 'block-size'), SHEET)).toBe(h);
+    expect(resolve(decl(ROW(), 'min-block-size'), SHEET)).toBe(h);
+    // Nothing may put vertical padding back on it — that is what used to make
+    // the row taller than the token said.
+    expect(resolve(decl(ROW(), 'padding-block'), SHEET)).toBe(0);
+  });
+
+  it('every row’s insets and gap come from the tokens, never a literal', () => {
+    const pad = decl(ROW(), 'padding-inline');
+    expect(resolve(logical(pad, 'start'), SHEET)).toBe(14);
+    expect(resolve(logical(pad, 'end'), SHEET)).toBe(12);
+    expect(resolve(decl(ROW(), 'gap'), SHEET)).toBe(8);
+    // LOGICAL properties throughout: this list is read in Hebrew as often as in
+    // English, and a physical inset would put the emoji on the wrong side of an
+    // RTL row.
+    expect(ROW()).not.toMatch(/(?:^|;)\s*padding(?:-left|-right|-top|-bottom)?:/);
+  });
+
+  it('the emoji is a FIXED box at the head of the row, with no plate behind it', () => {
+    // Fixed, because emoji advance widths differ (a variation selector adds
+    // one) and an auto box moves the name's x a pixel or two per row.
+    const icon = ruleBody(NAV_CSS, '.navtree[data-variant="sheet"] .navtree-tab-icon');
+    expect(decl(icon, 'flex')).toBe('0 0 var(--nt-rail-emoji)');
+    expect(resolve(decl(icon, 'inline-size'), SHEET)).toBe(20);
+    // The plate is deleted. It is load-bearing on the rail (emoji ink coverage
+    // runs 11%–48%, so a glyph's edge is not a column edge) and it is a mark on
+    // EVERY row, which is the one thing this list refuses.
+    expect(ruleBody(NAV_CSS, '.navtree[data-variant="sheet"] .navtree-tab-icon::before')).toContain(
+      'content: none',
+    );
+    // The 1px optical lift — emoji artwork sits low against a Latin baseline.
+    expect(resolve(decl(icon, 'inset-block-start'), SHEET)).toBe(-1);
+  });
+
+  it('that box now holds the CHIP, scaled to it, so the phone runs the same clock', () => {
+    // The cell is unchanged — same class, same 20px box, same lift, same deleted
+    // plate — and what sits in it is the rail's own component (NavTree.tsx). That
+    // is why the four numbers above still hold after the convergence: the chip is
+    // sized BY this rule rather than bringing its own 24px box.
+    const icon = ruleBody(NAV_CSS, '.navtree[data-variant="sheet"] .navtree-tab-icon');
+    // 17/20 and 15/20 are A2's 20/24 and 18/24 at this surface's scale — and 17px
+    // is the size this sheet's emoji has always rendered at, so convergence
+    // changes nothing visible on a fresh row and adds the clock to an aged one.
+    expect(decl(icon, '--chatchip-glyph')).toBe('17px');
+    expect(decl(icon, '--chatchip-glyph-last')).toBe('15px');
+    // RESTATED, not inherited, and that is the point: `.chatchip` and
+    // `.navtree-tab-icon` are both one class, so which display wins would be
+    // decided by the order two stylesheets happen to be bundled in. This rule
+    // carries the variant and cannot lose.
+    expect(decl(icon, 'display')).toBe('inline-grid');
+    expect(decl(icon, 'place-items')).toBe('center');
+  });
+
+  it('so every name starts at 42px, on every row, in every script', () => {
+    expect(chatNameLeft()).toBe(42);
+  });
+
+  it('a CHILD row steps ONE indent — 54px, not 76 — and its dot holds the column', () => {
+    // The sheet had no child row at all: TabList emptied `children` before the
+    // DOM, so a sub-chat came out as a top-level line above its own parent. Both
+    // halves are pinned — the attribute and the dot in NavTree.rows.test.tsx,
+    // the arithmetic here.
+    //
+    // ONE --nt-indent, the same step the desktop child takes and the same step a
+    // tab takes under its workspace name. The obvious alternative — indent by a
+    // whole emoji box, "put the dot where the tile was" — computes to a name at
+    // 76px, 34px off its parent's, which is the "indentation is too much" this
+    // rail was already once redrawn to fix. The number is the guard.
+    const child = ruleBody(
+      NAV_CSS,
+      '.navtree[data-variant="sheet"] .navtree-tab-row[data-child="true"]',
+    );
+    const childLead = resolve(decl(child, 'padding-inline-start'), SHEET);
+    expect(childLead).toBe(26);
+    const childNameLeft =
+      childLead +
+      resolve(SHEET['--nt-rail-emoji'] as string, SHEET) +
+      resolve(SHEET['--nt-rail-gap'] as string, SHEET);
+    expect(childNameLeft).toBe(54);
+    expect(childNameLeft - chatNameLeft()).toBe(resolve(SHEET['--nt-indent'] as string, SHEET));
+    // The dot must BE the emoji's box, not a 6px mark in a flex line that closes
+    // up around it — otherwise the name jumps 14px left on every child row and
+    // the shared x this whole rule exists to hold is gone.
+    const dot = ruleBody(NAV_CSS, '.navtree[data-variant="sheet"] .navtree-rail-dot');
+    expect(decl(dot, 'flex')).toBe('0 0 var(--nt-rail-emoji)');
+    expect(resolve(decl(dot, 'inline-size'), SHEET)).toBe(20);
+    // Logical, like every other inset on this surface: the list is read in
+    // Hebrew as often as in English and a physical inset indents the wrong side.
+    expect(child).not.toMatch(/(?:^|;)\s*padding(?:-left|-right):/);
+  });
+
+  it('there is no leading disclosure track left to push that 42 anywhere', () => {
+    // It used to be charged to every row — chevron-less rows carried an
+    // identical-width spacer to keep the column — and it put the emoji, the
+    // rail's one hard leading edge, 24px in.
+    expect(NAV_CSS).not.toMatch(/navtree-pane-expander\.-spacer/);
+    expect(ROW()).not.toMatch(/grid-template-columns/);
+  });
+
+  it('SELECTION is a full-bleed band: no radius on the row OR on its swipe shell', () => {
+    // An inset pill is itself a floating object, and a list whose one surface
+    // floats teaches the eye that the rows float too. The radius also has to
+    // leave the SHELL: it clips, and a rounded clip cuts a square band's own
+    // corners off — and it was what let the swipe tray's red Close block bleed
+    // through as a column of ticks down the list's edge.
+    expect(resolve(decl(ROW(), 'border-radius'), SHEET)).toBe(0);
+    expect(
+      resolve(
+        decl(ruleBody(NAV_CSS, '.navtree[data-variant="sheet"] .swiperow'), 'border-radius'),
+        SHEET,
+      ),
+    ).toBe(0);
+    // …and the scroller stops insetting the rows, or "full bleed" is a lie.
+    const scroll = decl(
+      ruleBody(NAV_CSS, '.navtree[data-variant="sheet"] .navtree-scroll'),
+      'padding',
+    );
+    expect(resolve(side(scroll, 'left'), SHEET)).toBe(0);
+    expect(resolve(side(scroll, 'right'), SHEET)).toBe(0);
+  });
+});
+
+describe('the MOBILE RAIL — the bidi fix, which is why it is a flex line', () => {
+  /**
+   * The shipped defect: `dir="auto"` on a name inside a box with SLACK. `dir`
+   * sets the CSS `direction`; `direction` is what `text-align`'s initial
+   * `start` resolves against; and `flex: 1` hands a five-character Hebrew name
+   * a 250px box to be aligned inside. Measured on the shipped sheet: the first
+   * glyphs of sixteen names spread over 280px of a 390px rail.
+   *
+   * These assert the MECHANISM, because the mechanism is the surprising part —
+   * the two obvious fixes were measured and rejected (see the CSS). The pixels
+   * are measured in a real engine by the Playwright pass; jsdom has no layout.
+   */
+  it('the name’s box is `flex: 0 1 auto` — it fits its own text, with no slack', () => {
+    const link = ruleBody(NAV_CSS, '.navtree[data-variant="sheet"] .navtree-tab-link');
+    expect(decl(link, 'flex')).toBe('0 1 auto');
+    expect(decl(link, 'min-inline-size')).toBe('0');
+  });
+
+  it('the auto margin is on the MARKS, never on the name', () => {
+    // This is the whole trap: `margin-inline-end: auto` on a name whose
+    // dir="auto" resolved to rtl maps to margin-LEFT and re-creates the
+    // original bug wearing a logical property. The marks are never dir="auto",
+    // so their inline-start is the row's leading edge, always.
+    expect(decl(ruleBody(NAV_CSS, '.navtree-rail-tail'), 'margin-inline-start')).toBe('auto');
+    for (const sel of [
+      '.navtree[data-variant="sheet"] .navtree-tab-link',
+      '.navtree[data-variant="sheet"] .navtree-tab-link .navtree-name-text',
+    ]) {
+      expect(ruleBody(NAV_CSS, sel)).not.toMatch(/margin[\w-]*:\s*[^;]*auto/);
+    }
+  });
+
+  it('ONE auto margin, on a wrapper — two would share the free space', () => {
+    // Flexbox distributes free space equally across every auto margin on the
+    // line, so a chevron and a dot each carrying one would float apart into the
+    // middle of the row. The wrapper is why the trailing group is one object.
+    const autos = rules(NAV_CSS).filter(
+      (r) =>
+        r.atRules.length === 0 &&
+        /(?:^|;)\s*margin-inline-start:\s*auto/.test(r.body) &&
+        r.selectors.some((s) => /rail-tail|rail-mark|navtree-state|pane-expander/.test(s)),
+    );
+    expect(autos.map((r) => r.selectors.join(','))).toEqual(['.navtree-rail-tail']);
+  });
+
+  it('does NOT pin alignment — the pinned version is the one that failed', () => {
+    // `text-align: left` is the desktop rail's fix and is correct THERE (its
+    // name sits in a 1fr grid track). Here it would be a no-op that hid the
+    // real mechanism, and `text-align: start` is the thing that was measured
+    // NOT to work: `start` resolves against the plaintext-derived paragraph
+    // direction, so the Hebrew still flew to the trailing edge.
+    const name = ruleBody(
+      NAV_CSS,
+      '.navtree[data-variant="sheet"] .navtree-tab-link .navtree-name-text',
+    );
+    expect(decl(name, 'text-align')).toBe('unset');
+    expect(name).not.toMatch(/unicode-bidi/);
+    expect(name).not.toMatch(/direction:\s*ltr/);
+  });
+
+  it('the row stays tappable end to end despite the name’s box stopping at its text', () => {
+    // A shrink-wrapped name on a 390px row would leave most of the row dead.
+    // The link is stretched over the row by a zero-ink pseudo-element, and the
+    // things that need their own taps are lifted above it.
+    const stretch = ruleBody(NAV_CSS, '.navtree[data-variant="sheet"] .navtree-tab-link::after');
+    expect(stretch).toContain('position: absolute');
+    expect(stretch).toContain('inset: 0');
+    // It must paint NOTHING, or it is a mark on every row.
+    expect(stretch).toMatch(/content:\s*""/);
+    expect(stretch).not.toMatch(/background/);
+    for (const sel of ['.navtree[data-variant="sheet"] .navtree-tab-icon', '.navtree-rail-tail']) {
+      expect(decl(ruleBody(NAV_CSS, sel), 'z-index')).toBe('1');
+    }
+  });
+});
+
+/**
+ * ARCHIVE is not destructive, and the cascade has to agree.
+ *
+ * The archive button borrows `.navtree-close` for its geometry and then has to
+ * take the MEANING back out — `.navtree-close:hover` paints `--danger`. Whether
+ * the override actually lands is a specificity question, and specificity is
+ * exactly the kind of thing that is invisible to inspection and survives review:
+ * the first version of this lost on the selected row ONLY, because the danger
+ * rule carries a `:not(.navtree-pin)` worth one extra point.
+ */
+describe('the row’s × archives, and never reads as delete', () => {
+  /** Specificity as (ids, classes+attrs+pseudo-classes, types), CSS's own rules. */
+  function specificity(selector: string): [number, number, number] {
+    const s = selector.replace(/:not\(([^)]*)\)/g, ' $1 '); // :not() contributes its ARG
+    const ids = (s.match(/#[\w-]+/g) ?? []).length;
+    const classes = (s.match(/\.[\w-]+|\[[^\]]+\]|:[\w-]+(?!\()/g) ?? []).length;
+    const types = (s.match(/(?:^|[\s>+~])([a-z][\w-]*)/g) ?? []).length;
+    return [ids, classes, types];
+  }
+  const beats = (a: string, b: string) => {
+    const [x, y] = [specificity(a), specificity(b)];
+    for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return (x[i] as number) > (y[i] as number);
+    return null; // a tie — source order decides, and ours is declared later
+  };
+
+  it('overrides the danger hover on an ORDINARY row', () => {
+    const danger = '.navtree-close:hover';
+    const ours = '.navtree-archive:hover';
+    expect(NAV_CSS).toContain(ours);
+    // A tie (null) is fine: ours is declared after. Losing is not.
+    expect(beats(danger, ours)).not.toBe(true);
+    expect(NAV_CSS.indexOf(ours)).toBeGreaterThan(NAV_CSS.indexOf(danger));
+    expect(decl(ruleBody(NAV_CSS, ours), 'color')).toBe('var(--accent)');
+  });
+
+  it('overrides it on the ACTIVE row too — the case that was wrong', () => {
+    const danger =
+      '.navtree-tab-row[data-active="true"] button.navtree-close:not(.navtree-pin):hover';
+    const ours =
+      '.navtree-tab-row[data-active="true"] button.navtree-archive:not(.navtree-pin):hover';
+    expect(NAV_CSS).toContain(ours);
+    expect(beats(danger, ours)).not.toBe(true);
+    expect(NAV_CSS.indexOf(ours)).toBeGreaterThan(NAV_CSS.indexOf(danger));
+    expect(decl(ruleBody(NAV_CSS, ours), 'color')).toBe('var(--accent)');
+  });
+
+  it('and the specificity helper itself can tell the two apart', () => {
+    // Guards the guard: if this ever reports the losing selector as a tie, the
+    // two tests above stop meaning anything.
+    expect(
+      beats(
+        '.navtree-tab-row[data-active="true"] button.navtree-close:not(.navtree-pin):hover',
+        '.navtree-tab-row[data-active="true"] button.navtree-archive:hover',
+      ),
+    ).toBe(true);
+  });
+});
+
+/**
+ * THE RIGHT-HAND SIDE OF A ROW — HOW MANY THINGS MAY BE THERE AT ONCE.
+ *
+ * Reported with a screenshot: "too many things on the right side of the tab
+ * labels. scheduled cron time, spinner, action buttons." Three sources, and
+ * they were additive, so the worst row carried a pin, an archive button, a
+ * clock, a time and a state mark in a strip about 90px wide — on a 270px rail
+ * whose names were already ellipsising.
+ *
+ * Two of the three are fixed in this sheet and are pinned here, because both
+ * are one-selector changes that a later edit could undo without any test
+ * noticing. (The third — the cron's nine-character `Thu 11:08` shape — is a
+ * label, and lives in next-cron-label.test.)
+ */
+describe('nothing in the rail animates sideways', () => {
+  it('transitions OPACITY and nothing with a width in it', () => {
+    // `width`, `flex-basis` and `margin-left` were all animated, so a control
+    // slid open horizontally — and the row's name is the flexible track, so
+    // every one of those 80ms pushed the NAME too. Running the cursor down the
+    // list left a wave of text reflowing behind it, one row at a time.
+    // A control appearing is not a journey: it is there or it is not.
+    const body = ruleBody(NAV_CSS, '.navtree-close');
+    const t = decl(body, 'transition');
+    expect(t).toMatch(/opacity/);
+    for (const prop of ['width', 'flex-basis', 'margin-left', 'all']) {
+      expect(t).not.toMatch(new RegExp(prop));
+    }
+  });
+});
+
+describe('a revealed control never moves one that was already there', () => {
+  // THE REPORT: you move the pointer towards the workspace's "+", the row lights
+  // up, and the button now under your cursor is the × that deletes the workspace
+  // and every tab in it. Measured: "+" at x=240 at rest, x=220 on hover, with ×
+  // landing on 240 — a swap from "create a chat" to "destroy a workspace",
+  // under a cursor that had not moved.
+  //
+  // `.navtree-close` collapses to zero width at rest and claims 18px on hover,
+  // which is right for the LAST item in a right-aligned group and wrong for
+  // every other one. So the slot is reserved and only visibility changes.
+  it('reserves the workspace × so the + cannot be displaced', () => {
+    const body = ruleBody(
+      NAV_CSS,
+      '.navtree-ws-row > .navtree-tab-controls > .navtree-close:not(.navtree-ws-add)',
+    );
+    expect(Number.parseFloat(decl(body, 'width'))).toBe(18);
+  });
+
+  it('hides it with VISIBILITY, not opacity — a transparent button still takes the click', () => {
+    // The dangerous version of the same bug: a close button you cannot see,
+    // sitting in a reserved slot, is a workspace deleted with no warning at all.
+    const base = ruleBody(NAV_CSS, '.navtree-close');
+    expect(decl(base, 'visibility')).toBe('hidden');
+  });
+
+  it('keeps hiding at a specificity every reveal path outranks', () => {
+    // This is where it went wrong once: `:has()` carries the specificity of its
+    // argument, so a reservation scoped with `:has(.navtree-pin.is-pinned)`
+    // (three classes) beat `.navtree-tab-row:hover` (two) — and the archive
+    // stayed hidden on the row you were pointing at. Size and visibility are
+    // separate rules now: the reservations set width only.
+    // Chat rows need no reservation at all now — nothing in their rail is
+    // permanent, because the clock LEAVES when the buttons arrive. The one
+    // reservation left is the workspace header's ×, and it still sets size only.
+    const body = ruleBody(
+      NAV_CSS,
+      '.navtree-ws-row > .navtree-tab-controls > .navtree-close:not(.navtree-ws-add)',
+    );
+    expect(Number.parseFloat(decl(body, 'width'))).toBe(18);
+    expect(body).not.toMatch(/visibility/);
+  });
+
+  it('never hides the rail itself — the buttons live in it', () => {
+    // A rule here used to collapse the cell on a hovered row with no schedule,
+    // written when the cell held only the clock. Once the hover controls moved
+    // in beside it, `display: none` took the pin and the archive with them:
+    // hovering a pinned chat made both vanish and neither could be clicked.
+    const hidden = rules(NAV_CSS).filter(
+      (r) => r.atRules.length === 0 && /(?:^|;)\s*display:\s*none/.test(r.body),
+    );
+    expect(
+      hidden.flatMap((r) => r.selectors).filter((s) => /\.navtree-tab-rail$/.test(s.trim())),
+    ).toEqual([]);
+  });
+});
+
+describe('the trailing rail is ONE column, not three', () => {
+  // Reported as horizontal "balagan": a pin at x=550 and a clock at x=597 down
+  // the same list. The cause was structural — the row spent THREE grid tracks
+  // on its right-hand side (hover controls, schedule, state mark), so two
+  // indicators in different cells could not share an edge however they were
+  // styled. One flex rail, right-aligned, fixed order, and the state mark alone
+  // keeping its own track as the scan line.
+  // Measured after: every pin and every clock ends at x=226, marks at 246.
+  it('puts every indicator in ONE cell', () => {
+    const row = ruleBody(NAV_CSS, '.navtree-tab-row');
+    // Four tracks now, not five: icon | name | rail | state.
+    const cols = decl(row, 'grid-template-columns').split(/\s+(?![^(]*\))/);
+    expect(cols).toHaveLength(4);
+    // And the retired cells are gone from the tab row entirely.
+    const all = rules(NAV_CSS).flatMap((r) => r.selectors);
+    expect(all.filter((s) => s.startsWith('.navtree-tab-row') && s.includes('tab-meta'))).toEqual(
+      [],
+    );
+    expect(
+      all.filter((s) => s.startsWith('.navtree-tab-row') && s.includes('tab-controls')),
+    ).toEqual([]);
+  });
+
+  it('charges NOTHING between rail items — the 6px that kept coming back', () => {
+    // Twice: once as a flex `gap`, once as a `margin-left` on the item after
+    // the clock. Both land on the zero-width archive button, and space given to
+    // a zero-width item is still space — it pushed every clock 6px left of
+    // every pin, which is the same defect one order of magnitude smaller.
+    const rail = ruleBody(NAV_CSS, '.navtree-tab-row > .navtree-tab-rail');
+    expect(Number.parseFloat(decl(rail, 'gap'))).toBe(0);
+    expect(rail).toMatch(/justify-content:\s*flex-end/);
+  });
+
+  it('needs NO state-track reservation, because nothing in the rail is permanent', () => {
+    // It existed so a clock and a pin on adjacent rows agreed about where the
+    // column was while the state mark's own track flickered between 0 and 18px.
+    // With the pin hover-only and the clock stepping aside for the buttons, a
+    // row shows at most ONE rail item at a time and there is nothing left to
+    // keep in line — so the width goes back to the name.
+    const all = rules(NAV_CSS).flatMap((r) => r.selectors);
+    expect(all.filter((s) => s.includes(':has(.navtree-tab-rail > *)'))).toEqual([]);
+  });
+});
+
+describe('the row’s right-hand side holds one thing at a time', () => {
+  // `:focus-within` is true on the ACTIVE row for as long as you are in that
+  // chat, because clicking its link leaves focus there. So the row you were
+  // using was the one row permanently wearing its hover controls. The reveal
+  // has to key off a KEYBOARD focus, which is what `:focus-visible` means — and
+  // the keyboard path must keep working, which is why the selector is replaced
+  // rather than deleted.
+  it('reveals the controls on hover or a KEYBOARD focus, never on a click', () => {
+    const revealing = rules(NAV_CSS).filter(
+      (r) => r.atRules.length === 0 && /flex-basis:\s*18px/.test(r.body),
+    );
+    expect(revealing.length).toBeGreaterThan(0);
+    const tabArms = revealing
+      .flatMap((r) => r.selectors)
+      .filter((sel) => sel.startsWith('.navtree-tab-row'));
+    // Hover still reveals…
+    expect(tabArms).toContain('.navtree-tab-row:hover .navtree-close');
+    // …and so does a keyboard focus…
+    expect(tabArms).toContain('.navtree-tab-row:has(:focus-visible) .navtree-close');
+    // …but a plain :focus-within arm is the bug, on any row kind.
+    expect(
+      revealing.flatMap((r) => r.selectors).filter((s) => s.includes(':focus-within')),
+    ).toEqual([]);
+  });
+
+  it('steps the WHOLE schedule aside while the controls are out', () => {
+    // This asserted the opposite twice, in two directions, and both were right
+    // at the time. First the whole cell hid, which made the row under your
+    // pointer the only row not saying it had a schedule. Then the glyph was
+    // kept and only the time hidden. Then the pin became permanent too, and
+    // three icons plus a state slot ate a third of the row — reported as such.
+    // A schedule is a standing PROPERTY and the buttons are ACTIONS; the rail
+    // shows one kind at a time, which is this block's own title.
+    const body = ruleBody(NAV_CSS, '.navtree-tab-row:hover > .navtree-tab-rail > .navtree-cron');
+    expect(decl(body, 'display')).toBe('none');
+    expect(
+      rules(NAV_CSS).some(
+        (r) =>
+          r.atRules.length === 0 &&
+          r.selectors.includes(
+            '.navtree-tab-row:has(:focus-visible) > .navtree-tab-rail > .navtree-cron',
+          ) &&
+          /(?:^|;)\s*display:\s*none/.test(r.body),
+      ),
+    ).toBe(true);
+  });
+
+  it('shows the PIN only on hover — position is what says "pinned"', () => {
+    // The pin was made permanent when the pinned seam was `height: 10px` and
+    // nothing else, so position claimed to say "pinned" and drew no line. The
+    // seam is a real rule now (see the selection suite), so the icon was saying
+    // a second time what the row's place already said — in the scarcest space
+    // on the row. It is an action again, revealed beside the archive.
+    const all = rules(NAV_CSS).flatMap((r) => r.selectors);
+    const permanent = all.filter(
+      (sel) =>
+        sel.includes('.navtree-pin.is-pinned') && !sel.includes(':hover') && !sel.includes('focus'),
+    );
+    // Any rule left for a resting pinned pin may set COLOUR and nothing that
+    // gives it a box.
+    for (const sel of permanent) {
+      const body = ruleBody(NAV_CSS, sel);
+      expect(body).not.toMatch(/width|flex|visibility/);
+    }
+  });
+
+  it('leaves the state mark alone — it is in neither cell and must not move', () => {
+    // The mark is the LAST track and the name is the 1fr one, so the name
+    // absorbs the whole swap. A `display: none` that ever reached the mark, or
+    // a width on the meta cell that the mark had to share, would put the one
+    // thing you scan down the rail onto a different x for the row you happen to
+    // be pointing at.
+    const hoverRail = ruleBody(NAV_CSS, '.navtree-tab-row:hover > .navtree-tab-rail');
+    expect(hoverRail).not.toMatch(/navtree-mark/);
+    expect(decl(ruleBody(NAV_CSS, '.navtree-tab-row'), 'grid-template-columns')).toContain(
+      'minmax(0, 1fr)',
     );
   });
 });

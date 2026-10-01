@@ -1,6 +1,7 @@
 import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { serveStatic } from '@hono/node-server/serve-static';
+import { buildIdFromHtml } from '@muxpad/shared';
 import type { Context, Hono } from 'hono';
 
 /**
@@ -121,6 +122,32 @@ export function ifNoneMatchSatisfied(header: string | undefined, etag: string): 
  * conditional requests, precompressed static files, and the SPA fallback.
  */
 export function mountStaticWeb(app: Hono, webRoot: string): void {
+  // WHICH BUILD IS ON DISK. Mounted here rather than next to /api/health in
+  // server.ts for one reason: this is the only place that knows `webRoot`, and
+  // the answer is a property of the bundle being served, not of the process
+  // being alive. (Keeping it off /api/health also keeps the liveness probe —
+  // curl'd in a loop by scripts/muxpad — free of filesystem work.)
+  //
+  // Read fresh per request, like the shell below and for the same reason: a
+  // memoized answer after a rebuild is precisely the staleness this route
+  // exists to detect. It costs one ~1KB read, and the client asks only when it
+  // reconnects or comes back to the foreground — never on a timer.
+  app.get('/api/build', (c) => {
+    // no-store, and deliberately no ETag: a 304 from an intermediate cache
+    // would be the same "your client can never learn about a deploy" bug in a
+    // different costume.
+    c.header('Cache-Control', 'no-store');
+    let html: string;
+    try {
+      html = readFileSync(join(webRoot, 'index.html'), 'utf-8');
+    } catch {
+      // No built shell (a source checkout that never ran `pnpm build`). Null
+      // means "I cannot name a build", which leaves the client quiet.
+      return c.json({ build: null });
+    }
+    return c.json({ build: buildIdFromHtml(html) });
+  });
+
   // The HTML shell. Read fresh on every request: caching it in memory means a
   // rebuild that produces a new hashed bundle name still serves the old HTML,
   // which then 404s on its asset references. The file is ~1KB.

@@ -6,6 +6,7 @@ import type { MuxpadEvent } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EventBus } from '../events.js';
+import { TabActivity } from '../tab-activity.js';
 import { TabStore } from '../store/TabStore.js';
 import { openDb } from '../store/db.js';
 import { type TestApp, createTestApp } from '../test-helpers/createTestApp.js';
@@ -434,5 +435,173 @@ describe('tabs routes', () => {
     const tab = (await res.json()) as { id: string; icon?: string };
     expect(tab.icon).toBeUndefined();
     expect(new TabStore(db).getById(tab.id)?.icon).toBeUndefined();
+  });
+
+  // ── event coverage: the manual unread mark, and the mutating GET ─────────
+
+  describe('read-state marks announce themselves', () => {
+    let events: EventBus;
+    let local: TestApp;
+    let localWs: string;
+    let received: MuxpadEvent[];
+
+    beforeEach(async () => {
+      events = new EventBus();
+      local = await createTestApp({ db: openDb(':memory:'), dataDir: tmp, events });
+      localWs = (
+        (await (
+          await local.app.request('/api/workspaces', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ name: 'W' }),
+          })
+        ).json()) as { id: string }
+      ).id;
+      received = [];
+    });
+
+    afterEach(async () => {
+      await local.cleanup();
+    });
+
+    const mkTab = async (): Promise<string> =>
+      (
+        (await (
+          await local.app.request('/api/tabs', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ name: 'T', workspace_id: localWs }),
+          })
+        ).json()) as { id: string }
+      ).id;
+
+    it('POST /tabs/:id/unread emits a decorated tab.updated', async () => {
+      // C3: "other clients pick it up on the next poll" was the route's own
+      // concession, and the poll is stopped for a hidden document / a collapsed
+      // workspace. Four rendered fields move on this write — the tab's bold
+      // name, its status rail (a manual mark rolls up as `ready`), and the
+      // workspace row's bold + rollup dot — and the bus said nothing.
+      const id = await mkTab();
+      events.subscribe((e) => received.push(e));
+
+      expect((await local.app.request(`/api/tabs/${id}/unread`, { method: 'POST' })).status).toBe(
+        204,
+      );
+
+      const updated = received.find((e) => e.type === 'tab.updated');
+      expect(updated).toBeDefined();
+      if (updated?.type === 'tab.updated') {
+        expect(updated.tab.id).toBe(id);
+        expect(updated.tab.unread).toBe(true);
+        expect(updated.tab.status).toBe('ready');
+      }
+    });
+
+    it('POST /tabs/:id/seen emits tab.updated for the tab’s OWN mark', async () => {
+      // The per-pane emits in this handler only fire for panes that were
+      // unread. A tab marked unread by hand with no unread panes — which is
+      // every tab the ⋯ menu's "Mark as unread" touches — cleared silently.
+      const id = await mkTab();
+      await local.app.request(`/api/tabs/${id}/unread`, { method: 'POST' });
+      events.subscribe((e) => received.push(e));
+
+      expect((await local.app.request(`/api/tabs/${id}/seen`, { method: 'POST' })).status).toBe(
+        204,
+      );
+
+      const updated = received.find((e) => e.type === 'tab.updated');
+      expect(updated).toBeDefined();
+      if (updated?.type === 'tab.updated') {
+        expect(updated.tab.id).toBe(id);
+        expect(updated.tab.unread).toBe(false);
+        expect(updated.tab.status).not.toBe('ready');
+      }
+    });
+
+    it('POST /tabs/:id/seen STAMPS RECENCY — reading a chat is touching it', async () => {
+      // THE REPORT: "when I touch a chat, it doesn't go to the top of the list".
+      // It did not, and the list was not stale — `last_activity_at`, the column
+      // the sidebar sorts on, was moved by typing, by pty output and by a turn
+      // finishing, and by nothing else. Opening a chat and READING it wrote
+      // nothing, so the row you were sitting in went on getting older under you.
+      //
+      // Measured in the browser before the fix, against a two-hour-cold chat:
+      // opened it, waited past the 5s poll, and the stamp had not moved a
+      // millisecond (6679s → 6689s of age; index 8 → index 8).
+      const activity = new TabActivity(db, { startedAt: 0 });
+      const app = await createTestApp({ db, dataDir: tmp, events, tabActivity: activity });
+      try {
+        const wsRes = await app.app.request('/api/workspaces', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name: 'Recency' }),
+        });
+        const ws = (await wsRes.json()) as { id: string };
+        const res = await app.app.request('/api/tabs', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ workspace_id: ws.id, name: 'cold', layout: '' }),
+        });
+        const { id } = (await res.json()) as { id: string };
+        const tabs = new TabStore(db);
+        // Two hours cold, which is the case the report was about.
+        const cold = Date.now() - 2 * 60 * 60 * 1000;
+        db.prepare('UPDATE tabs SET last_activity_at = ? WHERE id = ?').run(cold, id);
+
+        await app.app.request(`/api/tabs/${id}/seen`, { method: 'POST' });
+
+        const after = tabs.getById(id)?.last_activity_at ?? 0;
+        expect(after).toBeGreaterThan(cold);
+        // AND the column the sidebar sorts on. Stamping only `last_activity_at`
+        // made this fix invisible the moment the order moved to `userTouchAt`:
+        // machine output writes that column too, which is the bug that moved it.
+        const touched = tabs.getById(id)?.last_user_at ?? 0;
+        expect(touched).toBeGreaterThan(cold);
+        // And it is NOW, not some throttled approximation — the view is a
+        // discrete user moment, so it is a forced write.
+        expect(Date.now() - after).toBeLessThan(5_000);
+      } finally {
+        await app.cleanup();
+      }
+    });
+
+    it('POST /tabs/:id/seen stays quiet when there was no mark to clear', async () => {
+      // The emit is gated on the mark actually having been set, so an ordinary
+      // navigation (which POSTs /seen on every tab switch) does not push a
+      // no-op row to every connected client.
+      const id = await mkTab();
+      events.subscribe((e) => received.push(e));
+      await local.app.request(`/api/tabs/${id}/seen`, { method: 'POST' });
+      expect(received.filter((e) => e.type === 'tab.updated')).toEqual([]);
+    });
+
+    it('GET /tabs/:id announces the layout it silently repaired', async () => {
+      // C6: a GET that WRITES. The prune drops leaves with no pane row; the
+      // caller reads the repair back in the same response, but nobody else ever
+      // heard — and GET /api/tabs (the list) does no prune of its own, so every
+      // other client kept being served the ghost.
+      const id = await mkTab();
+      await local.app.request(`/api/tabs/${id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ layout: 'no-such-pane' }),
+      });
+      events.subscribe((e) => received.push(e));
+
+      const body = (await (await local.app.request(`/api/tabs/${id}`)).json()) as {
+        layout: unknown;
+      };
+      expect(body.layout).toBe('');
+
+      const updated = received.find((e) => e.type === 'tab.updated');
+      expect(updated).toBeDefined();
+      if (updated?.type === 'tab.updated') expect(updated.tab.layout).toBe('');
+
+      // Idempotent: a second read finds the layouts equal and emits nothing, so
+      // a polling client can't turn this into an event loop.
+      received.length = 0;
+      await local.app.request(`/api/tabs/${id}`);
+      expect(received).toEqual([]);
+    });
   });
 });

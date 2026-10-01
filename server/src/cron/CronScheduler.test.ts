@@ -21,6 +21,7 @@ import {
   CronScheduler,
   type CronSchedulerDeps,
 } from './CronScheduler.js';
+import { parseCronMarker } from '@muxpad/shared';
 import { CRON_RUNS_KEEP } from './CronStore.js';
 
 const HOURLY = '0 * * * *';
@@ -353,6 +354,66 @@ describe('CronScheduler', () => {
     expect(s2.store.runs(cron.id)[0]?.detail).toBe('overlap');
   });
 
+  it('overlap=skip still protects a QUEUED fire once the queue drains it into a turn', async () => {
+    // The fire arrives mid-turn, so submitSend queues it and nothing marks it
+    // in flight. When that turn ends, ws's drainQueue relays it — emitting the
+    // optimistic turn-start while the row is still the queue head, then
+    // removing it. From then on neither the queue scan nor `inflight` saw it,
+    // and the next slot stacked a second fire on top of a running one.
+    submitResult = { status: 'queued' };
+    const s = scheduler({ turnActive: () => true });
+    s.start();
+    const cron = makeCron(s, { overlap: 'skip' });
+    runAt(cron);
+    await s.tick();
+    db.prepare(
+      'INSERT INTO agent_queue (id, pane_id, seq, text, created_at) VALUES (?, ?, 1, ?, ?)',
+    ).run('q1', paneId, sent[0]?.text, now);
+    // drainQueue: optimistic start (row still at the head), then the remove.
+    events.emit({
+      type: 'agent_turn',
+      pane_id: paneId,
+      phase: 'start',
+      sid: null,
+      backend: 'claude',
+      queue_id: 'q1',
+    });
+    db.prepare('DELETE FROM agent_queue WHERE id = ?').run('q1');
+    now += 3_600_000;
+    await s.tick();
+    s.stop();
+    expect(sent).toHaveLength(1);
+    expect(s.store.runs(cron.id)[0]?.detail).toBe('overlap');
+  });
+
+  it('does not attribute an unrelated start to a queued cron that is later canceled', async () => {
+    submitResult = { status: 'queued' };
+    const s = scheduler({ turnActive: () => true });
+    s.start();
+    try {
+      const cron = makeCron(s, { overlap: 'skip' });
+      runAt(cron);
+      await s.tick();
+      db.prepare(
+        'INSERT INTO agent_queue (id, pane_id, seq, text, created_at) VALUES (?, ?, 1, ?, ?)',
+      ).run('cancel-me', paneId, sent[0]?.text, now);
+      // Echo/reconnect for the existing HUMAN turn, not a queue drain.
+      events.emit({
+        type: 'agent_turn',
+        pane_id: paneId,
+        phase: 'start',
+        sid: null,
+        backend: 'claude',
+      });
+      db.prepare('DELETE FROM agent_queue WHERE id = ?').run('cancel-me');
+      now += 3_600_000;
+      await s.tick();
+      expect(sent).toHaveLength(2);
+    } finally {
+      s.stop();
+    }
+  });
+
   it('overlap=queue stacks (that is the point of the setting)', async () => {
     const s = scheduler({ turnActive: () => true });
     runAt(makeCron(s, { overlap: 'queue' }));
@@ -434,6 +495,14 @@ describe('CronScheduler', () => {
     // …and the cron prompt still follows the briefing.
     expect(sent[0]?.text).toContain('check the PRs');
     expect(s.store.runs(cron.id)[0]?.detail).toContain('rotated at 95% context with carryover');
+    // The cron marker stays OUTERMOST. It is a leading-block grammar shared by
+    // the server's human-send bookkeeping, the runner and the transcript
+    // renderer; a carryover prepended ahead of it made the fire read as typed
+    // by a person to all three.
+    const parsed = parseCronMarker(sent[0]?.text ?? '');
+    expect(parsed?.marker.id).toBe(cron.id);
+    expect(parsed?.body).toContain('<muxpad-carryover>');
+    expect(parsed?.body).toContain('check the PRs');
   });
 
   it('refuses to rotate when no briefing can be produced', async () => {
@@ -463,13 +532,13 @@ describe('CronScheduler', () => {
 
   // ── new-tab mode ──────────────────────────────────────────────────────
 
-  it('new-tab mode creates an agent tab in Do mode and sends into it', async () => {
+  it('new-tab mode creates an agent tab in Chat mode and sends into it', async () => {
     const s = scheduler();
     const cron = makeCron(s, {
       target_kind: 'new-tab',
       target_pane: null,
       workspace_id: wsId,
-      mode: 'do',
+      mode: 'chat',
       cwd: '/tmp',
     });
     runAt(cron);
@@ -480,8 +549,8 @@ describe('CronScheduler', () => {
     const tab = new TabStore(db).getById(run?.target_tab as string);
     expect(tab?.name).toBe('job');
     const pane = new PaneStore(db).listByTab(tab?.id as string)[0];
-    // A scheduled job's report wants terse + result-first — the ⚡ Do contract.
-    expect(pane?.startup_cmd).toBe('muxpad agent --mode do');
+    // A scheduled job's report wants terse + result-first — the Chat contract.
+    expect(pane?.startup_cmd).toBe('muxpad agent --mode chat');
     expect(sent[0]?.paneId).toBe(pane?.id);
   });
 
@@ -543,6 +612,32 @@ describe('CronScheduler', () => {
       sid: null,
       backend: 'x',
     });
+    await new Promise((r) => setImmediate(r));
+    expect(new TabStore(db).getById(tabId)).not.toBeNull();
+    expect(s.store.runs(cron.id).some((r) => r.outcome === 'kept')).toBe(true);
+    s.stop();
+  });
+
+  // The keep-lists must not drift. `tab-retire.ts` grew this condition and
+  // cron did not, and cron is the one that DELETES: deleteTabCascade kills the
+  // pane, the runner and the background agents with it. A scheduled job that
+  // launches a background Task and ends its turn was deleting itself mid-run.
+  it('close_when_done KEEPS the tab while background agents are still running', async () => {
+    const s = scheduler({});
+    s.start();
+    const cron = makeCron(s, {
+      target_kind: 'new-tab',
+      target_pane: null,
+      workspace_id: wsId,
+      close_when_done: true,
+    });
+    runAt(cron);
+    await s.tick();
+    const tabId = s.store.runs(cron.id)[0]?.target_tab as string;
+    const pid = sent[0]?.paneId as string;
+    // The DURABLE roster, the same source tab-retire.ts reads.
+    cache.setSubagentCount(pid, 1);
+    events.emit({ type: 'agent_turn', pane_id: pid, phase: 'done', sid: null, backend: 'x' });
     await new Promise((r) => setImmediate(r));
     expect(new TabStore(db).getById(tabId)).not.toBeNull();
     expect(s.store.runs(cron.id).some((r) => r.outcome === 'kept')).toBe(true);

@@ -1,4 +1,9 @@
-import { type AgentMode, DEFAULT_AGENT_MODE, type PaneSpec } from '@muxpad/shared';
+import {
+  type AgentMode,
+  BASELINE_AGENT_MODE,
+  type PaneSpec,
+  coerceAgentMode,
+} from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { monotonicFactory } from 'ulid';
 
@@ -44,7 +49,15 @@ export class PaneStore {
     const startup_cmd = input.startup_cmd ?? null;
     const env = input.env ?? null;
     const face = input.face ?? 'terminal';
-    const mode = input.mode ?? DEFAULT_AGENT_MODE;
+    // BASELINE, not DEFAULT_AGENT_MODE. This creates EVERY pane — plain
+    // terminals, URL panes, split panes — and most of them have no agent in
+    // them at all; stamping the house mode on a bare shell would make
+    // `muxpad claude` (which reads this row to decide whether to
+    // --append-system-prompt the contract) overlay a session the user
+    // launched by hand. Callers that are genuinely creating an AGENT pane
+    // pass DEFAULT_AGENT_MODE explicitly — agent-tab.ts and the pane-create
+    // route both do.
+    const mode = input.mode ?? BASELINE_AGENT_MODE;
     this.db
       .prepare(
         'INSERT INTO panes (id, tab_id, kind, url, shell, startup_cmd, cwd, env, face, mode, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
@@ -96,14 +109,48 @@ export class PaneStore {
   }
 
   /**
-   * Every runner-owned pane: startup_cmd is the durable ownership marker
-   * (`muxpad agent`, possibly with --model/--resume args). Used by the
-   * dead-runner sweep in ws.ts to find panes whose runner process should
-   * be alive but isn't registered.
+   * Runner-owned panes that currently need a process.
+   *
+   * Three ways to qualify, and the third was missing — which broke the
+   * supervision half of the sweep that reads this:
+   *
+   *   a turn in flight      `agent_sessions.status = 'running'`
+   *   queued work           something waiting in `agent_queue`
+   *   AN UNRETIRED SUB-CHAT a worker that was given a job and has not finished
+   *
+   * The first two are the lazy-start policy: an idle chat starts when its next
+   * send is queued, because keeping every historical chat resident is what put
+   * 103 panes on this machine. That policy is right and is why the blanket
+   * `startup_cmd LIKE 'muxpad agent%'` had to go.
+   *
+   * But it answers "should this pane be warm?", and the sweep also asks "has
+   * this pane DIED?" — and a worker whose runner crashed between turns has
+   * nothing in flight and nothing queued, so it scored zero on both counts and
+   * was never looked at again. It stayed `live` forever: no give-up, no
+   * `done_reason: 'died'`, and its round left open, which is the parent's spawn
+   * card spinning for good. ws-respawn pins exactly that and was failing.
+   *
+   * A sub-chat is the one pane that is SUPPOSED to be running without having to
+   * prove it each time — that is what spawning one means. It cannot reopen the
+   * resurrection bug: a finished worker has `retired_at` set and is excluded by
+   * the clause above, and a historical top-level chat has no `spawned_by` at
+   * all. Measured on this machine at the time of the change: 35 live agent
+   * tabs, 0 of them unretired sub-chats.
    */
   listAgentPanes(): PaneSpec[] {
     const rows = this.db
-      .prepare("SELECT * FROM panes WHERE startup_cmd LIKE 'muxpad agent%'")
+      .prepare(
+        `SELECT p.* FROM panes p
+           JOIN tabs t ON t.id = p.tab_id
+      LEFT JOIN agent_sessions s ON s.pane_id = p.id
+          WHERE p.startup_cmd LIKE 'muxpad agent%'
+            AND t.retired_at IS NULL
+            AND (
+              s.status = 'running'
+              OR EXISTS (SELECT 1 FROM agent_queue q WHERE q.pane_id = p.id)
+              OR t.spawned_by IS NOT NULL
+            )`,
+      )
       .all() as PaneRow[];
     return rows.map((r) => this.row(r) as PaneSpec);
   }
@@ -266,15 +313,18 @@ export class PaneStore {
       face: x.face ?? 'terminal',
       face_url: x.face_url ?? null,
       unread: !!x.unread,
-      // Anything unrecognized (or a NULL from a row written before the
-      // column) reads as the safe default: 'deep' = today's behavior.
-      mode: x.mode === 'do' ? 'do' : DEFAULT_AGENT_MODE,
+      // Anything unrecognized (a NULL from before the column existed, a
+      // pre-rename 'do'/'deep' written by an older build someone downgraded
+      // to and back) reads through the tolerant coercion, then falls to the
+      // BASELINE — 'agent', nothing injected. A row can therefore never
+      // surface a value AgentModeSchema would reject.
+      mode: coerceAgentMode(x.mode) ?? BASELINE_AGENT_MODE,
       created_at: x.created_at,
     };
   }
 
   /**
-   * Set the pane's agent behavior mode (⚡ do / 🧠 deep). Pure SQLite — the
+   * Set the pane's agent mode (Chat / Agent). Pure SQLite — the
    * live session is told separately (a `mode` frame relayed to its runner);
    * see agent-modes.ts for why a running session can only be NOTIFIED, not
    * re-prompted.

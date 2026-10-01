@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import * as pty from 'node-pty';
 import { RingBuffer } from './RingBuffer.js';
+import { disownPty, ownPty, sweepStrayPtmx } from './ptmx-leak.js';
 import { type AppUrlMarker, PtyScanner } from './pty-scanner.js';
 
 // Debounce window between a URL/marker sighting and the (async) confirm pass.
@@ -115,8 +116,47 @@ export interface PaneRuntimeSpec {
 
 type Listener<T extends unknown[]> = (...args: T) => void;
 
+/**
+ * Hands the pty's file descriptor back to the kernel.
+ *
+ * WHY THIS IS NOT NODE-PTY'S JOB, apparently. Its `_close()` only flips a few
+ * flags — `readable = false`, a no-op `write` — and the descriptor is released
+ * when the read stream wrapping it is DESTROYED. On exit it tries to arrange
+ * that behind a macOS-specific timeout ("sometimes the socket never gets
+ * closed"), and when that path does not run the fd is simply kept.
+ *
+ * Kept fds are not free. Every pty needs an open handle on `/dev/ptmx`, and
+ * macOS caps those at `kern.tty.ptmx_max` — 511 on this machine. Measured on a
+ * live daemon after a day of panes coming and going: 505 handles held, 72 ptys
+ * actually in use, 362 of the daemon's descriptors in the kernel's `(revoked)`
+ * state — the pty long gone, the descriptor still ours. Six short of the
+ * ceiling, at which point NOTHING can spawn: not a browser, not an app, not a
+ * plain terminal tab. The whole cockpit stops being able to open anything, and
+ * the error it reports is about something else entirely.
+ *
+ * So we ask, rather than hoping. Idempotent — `destroy()` closes a socket that
+ * may already be closed, which is a no-op — and defensive about the method
+ * existing at all, because it is on the concrete UnixTerminal rather than the
+ * IPty interface we hold.
+ */
+export function releasePtyHandle(process: unknown, onError?: (err: unknown) => void): boolean {
+  const destroy = (process as { destroy?: () => void } | null)?.destroy;
+  if (typeof destroy !== 'function') return false;
+  try {
+    destroy.call(process);
+    return true;
+  } catch (err) {
+    // A descriptor we failed to release is a slow leak; one that throws here
+    // and takes the exit handler with it is every pane on the machine.
+    onError?.(err);
+    return false;
+  }
+}
+
 export class PaneRuntime extends EventEmitter {
   private process: pty.IPty | null = null;
+  /** The pty master descriptor, so it can be disowned when the shell dies. */
+  private ptyFd = -1;
   private buffer = new RingBuffer(RING_CAPACITY);
   private exited = false;
   private exitCode = 0;
@@ -204,6 +244,13 @@ export class PaneRuntime extends EventEmitter {
     // Always spawn the shell interactively (no `-c`). When startup_cmd is set,
     // it's auto-typed into the shell so that when it exits the user is left
     // at a prompt — same scrollback, same cwd, same pane.
+    // THE ONLY pty.spawn IN THE TREE. The tripwire below assumes it: a pty
+    // descriptor this process holds and nobody registered is, by that argument,
+    // leaked. A second spawn site elsewhere would make its own live ptys look
+    // like strays — harmless while the sweep only counts, a closed terminal if
+    // MUXPAD_PTMX_SWEEP=close is ever set. If you add one, call ownPty() with
+    // its master descriptor. Verified by grep at the time of writing: this is
+    // the sole `import * as pty from 'node-pty'` in server/src.
     this.process = pty.spawn(this.spec.shell, [], {
       name: 'xterm-256color',
       cols: this.cols,
@@ -211,6 +258,20 @@ export class PaneRuntime extends EventEmitter {
       cwd: this.spec.cwd,
       env,
     });
+    // Claim this pty, then look for pty descriptors nobody claims. node-pty is
+    // pinned to a version that does not leak them, so the expected answer is
+    // none; a non-zero count means that stopped being true and the daemon is on
+    // its way to the kern.tty.ptmx_max ceiling again. Counted, not closed — see
+    // ptmx-leak.ts for why that trade changed once the leak was fixed upstream.
+    this.ptyFd = (this.process as unknown as { _fd?: number })._fd ?? -1;
+    ownPty(this.ptyFd);
+    const sweep = sweepStrayPtmx();
+    if (sweep.strays.length > 0) {
+      const which = sweep.strays.join(',');
+      console.error(
+        `[ptmx] ${sweep.strays.length} pty descriptor(s) belong to nobody (${which}), mode=${sweep.mode}, closed=${sweep.closed}. node-pty is leaking again — check the node-pty pin in server/package.json.`,
+      );
+    }
     this.process.onData((data) => {
       const ev = this.scanner.feed(data);
       if (ev.bel && !this.needsAttention) {
@@ -244,6 +305,13 @@ export class PaneRuntime extends EventEmitter {
     this.process.onExit(({ exitCode }) => {
       this.exited = true;
       this.exitCode = exitCode;
+      // Give the descriptor back BEFORE anyone reacts to the exit. A listener
+      // that spawns a replacement pane — which is exactly what the serve
+      // supervisor does — would otherwise be asking for a pty while this one
+      // still holds the slot it just finished with.
+      releasePtyHandle(this.process);
+      // A recycled number must not keep looking like ours.
+      disownPty(this.ptyFd);
       this.emit('exit', exitCode);
     });
     if (this.spec.startup_cmd) {

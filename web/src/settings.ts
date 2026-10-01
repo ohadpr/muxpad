@@ -1,16 +1,58 @@
 import { useEffect, useState } from 'react';
 
-export type Theme = 'tokyo-night' | 'dracula' | 'github-light' | 'acme' | 'acme-dark';
+export type Theme =
+  | 'tokyo-night'
+  | 'dracula'
+  | 'alucard'
+  | 'github-light'
+  | 'acme'
+  | 'acme-dark';
+
+/** What the picker offers: a theme, or "whatever the OS is doing". */
+export type ThemeChoice = Theme | 'system';
+
+/**
+ * The pair "System" resolves to. Fixed rather than configurable: two extra
+ * pickers to express a preference almost nobody holds is a worse trade than
+ * one obvious entry in one list, and Dracula is the only theme here that has a
+ * real light counterpart built to match it.
+ */
+export const SYSTEM_PAIR = { light: 'alucard', dark: 'dracula' } as const;
 
 export const THEMES: { value: Theme; label: string }[] = [
   { value: 'tokyo-night', label: 'Tokyo Night' },
   { value: 'dracula', label: 'Dracula' },
+  { value: 'alucard', label: 'Alucard (Dracula Light)' },
   { value: 'github-light', label: 'GitHub Light' },
   { value: 'acme', label: 'Acme' },
   { value: 'acme-dark', label: 'Acme Dark' },
 ];
 
 const VALID_THEMES = new Set<Theme>(THEMES.map((t) => t.value));
+
+/** The picker's options: System first, because it is the recommended default. */
+export const THEME_CHOICES: { value: ThemeChoice; label: string }[] = [
+  { value: 'system', label: 'System (Dracula / Alucard)' },
+  ...THEMES,
+];
+
+/** The media query the OS answers. One string, so the listener and the read
+ *  can never drift apart. */
+export const DARK_QUERY = '(prefers-color-scheme: dark)';
+
+export function systemPrefersDark(): boolean {
+  if (typeof window === 'undefined' || !window.matchMedia) return false;
+  return window.matchMedia(DARK_QUERY).matches;
+}
+
+/**
+ * The theme actually painted, given the choice and what the OS reports.
+ * Pure, so the resolution rule is testable without a DOM.
+ */
+export function resolveTheme(choice: ThemeChoice, prefersDark: boolean): Theme {
+  if (choice !== 'system') return choice;
+  return prefersDark ? SYSTEM_PAIR.dark : SYSTEM_PAIR.light;
+}
 
 // Old theme ids that no longer exist — migrate to the closest replacement.
 const THEME_ALIASES: Record<string, Theme> = {
@@ -26,8 +68,7 @@ const THEME_ALIASES: Record<string, Theme> = {
 
 export interface Settings {
   fontSize: number;
-  fontFamily: string;
-  theme: Theme;
+  theme: ThemeChoice;
   // Persisted width of the desktop sidebar. The upper bound is enforced live
   // while dragging (never wider than the longest tab name + its status/close
   // icon needs); this stored value is only sanity-clamped on read.
@@ -51,13 +92,35 @@ export const SIDENAV_MAX_WIDTH = 640;
 
 const DEFAULTS: Settings = {
   fontSize: 14,
-  fontFamily: 'Menlo, Monaco, monospace',
-  theme: 'acme',
+  // System by default: it is the option most people want, and it is the one
+  // pair in this list built to be flipped between.
+  theme: 'system',
   sidebarWidth: 280,
 };
 
 const KEY = 'muxpad.settings.v1';
 const LEGACY_KEY = 'webagents.settings.v1';
+
+
+/**
+ * Resolve the stored theme choice, migrating the two shapes that came before.
+ *
+ * The system preference briefly shipped as a `followSystem` flag plus a chosen
+ * theme per side. That is gone — it was two extra controls for a preference
+ * almost nobody holds — so an install carrying the flag becomes plain
+ * 'system', and its per-side picks are dropped rather than honoured: keeping
+ * them would mean keeping the machinery that read them.
+ */
+function readChoice(parsed: Partial<Settings> & { followSystem?: unknown }): ThemeChoice {
+  if (parsed.followSystem === true) return 'system';
+  const raw = parsed.theme;
+  if (raw === 'system') return 'system';
+  if (typeof raw !== 'string') return DEFAULTS.theme;
+  if (VALID_THEMES.has(raw as Theme)) return raw as Theme;
+  if (raw in THEME_ALIASES) return THEME_ALIASES[raw] as Theme;
+  // Unknown id — the default, which is 'system'.
+  return DEFAULTS.theme;
+}
 
 function read(): Settings {
   try {
@@ -76,14 +139,7 @@ function read(): Settings {
     const parsed = JSON.parse(raw) as Partial<Settings>;
     return {
       fontSize: typeof parsed.fontSize === 'number' ? parsed.fontSize : DEFAULTS.fontSize,
-      fontFamily: typeof parsed.fontFamily === 'string' ? parsed.fontFamily : DEFAULTS.fontFamily,
-      theme: ((): Theme => {
-        const t = parsed.theme;
-        if (typeof t !== 'string') return DEFAULTS.theme;
-        if (VALID_THEMES.has(t as Theme)) return t as Theme;
-        if (t in THEME_ALIASES) return THEME_ALIASES[t] as Theme;
-        return DEFAULTS.theme;
-      })(),
+      theme: readChoice(parsed),
       sidebarWidth:
         typeof parsed.sidebarWidth === 'number' && Number.isFinite(parsed.sidebarWidth)
           ? Math.min(SIDENAV_MAX_WIDTH, Math.max(SIDENAV_MIN_WIDTH, parsed.sidebarWidth))
@@ -100,7 +156,27 @@ let current: Settings = typeof window === 'undefined' ? DEFAULTS : read();
 
 function applyToDocument(s: Settings) {
   if (typeof document === 'undefined') return;
-  document.documentElement.dataset.theme = s.theme;
+  document.documentElement.dataset.theme = resolveTheme(s.theme, systemPrefersDark());
+}
+
+/**
+ * Repaint when the OS flips, without a reload. Registered once at module load
+ * rather than per-component: the theme is a document-level fact, and a
+ * component-scoped listener would stop working the moment that component
+ * unmounted (the settings popover is mounted only while open).
+ *
+ * Listeners are notified too, so anything reading `useSettings` re-renders —
+ * XtermPane rebuilds its terminal palette from the resolved theme.
+ */
+if (typeof window !== 'undefined' && window.matchMedia) {
+  const mq = window.matchMedia(DARK_QUERY);
+  const onFlip = () => {
+    if (current.theme !== 'system') return;
+    applyToDocument(current);
+    for (const fn of listeners) fn({ ...current });
+  };
+  if (mq.addEventListener) mq.addEventListener('change', onFlip);
+  else mq.addListener?.(onFlip); // Safari < 14
 }
 
 if (typeof window !== 'undefined') {
@@ -115,47 +191,39 @@ export function updateSettings(patch: Partial<Settings>): void {
   current = { ...current, ...patch };
   localStorage.setItem(KEY, JSON.stringify(current));
   applyToDocument(current);
-  void ensureTerminalFonts(current.fontFamily);
   for (const fn of listeners) fn(current);
 }
 
 /**
- * The terminal-font families that need a webfont downloaded. Menlo is a system
- * font on every platform muxpad runs on, and MesloLGS NF is declared eagerly
- * in fonts.css, so neither is here.
- */
-const WEBFONT_FAMILIES = new Set([
-  '"JetBrains Mono", Menlo, monospace',
-  '"Fira Code", Menlo, monospace',
-  '"IBM Plex Mono", Menlo, monospace',
-]);
-
-let terminalFontsChunk: Promise<unknown> | null = null;
-
-/**
- * Pull in the terminal-font @font-face declarations, once, and only if the
- * selected family actually needs them. They are ~25 KB of render-blocking CSS
- * (36 faces × unicode-range) that the default install never uses — see
- * terminal-fonts.css.
+ * The terminal font. Not a setting.
  *
- * Resolves when the stylesheet is applied, so callers that measure glyphs
- * (XtermPane, which sizes its grid from the font) can wait for the
- * declarations to exist before asking document.fonts to load them. Awaiting a
- * family we don't ship resolves immediately.
+ * It was a five-way picker backed by three self-hosted webfont families —
+ * ~25 KB of render-blocking CSS (36 faces x unicode-range) lazily imported,
+ * plus a document.fonts round trip that terminal startup had to await before
+ * xterm could measure a cell, or it would measure Menlo and re-measure
+ * (garbled) when the real font swapped in. Menlo is a system font on every
+ * platform muxpad runs on, so choosing it removes the chunk, the await and
+ * the re-measure entirely.
  */
-export function ensureTerminalFonts(family: string): Promise<unknown> {
-  if (!WEBFONT_FAMILIES.has(family)) return Promise.resolve();
-  terminalFontsChunk ??= import('./terminal-fonts.css').catch(() => {
-    // Chunk fetch failed (offline, mid-deploy). The family falls back to
-    // Menlo; a later load retries because we keep no failed promise.
-    terminalFontsChunk = null;
-  });
-  return terminalFontsChunk;
-}
+export const TERMINAL_FONT = 'Menlo, Monaco, monospace';
 
-// Start the fetch at boot for someone who already picked one of these, so the
-// stylesheet is usually in place before the first XtermPane measures anything.
-if (typeof window !== 'undefined') void ensureTerminalFonts(current.fontFamily);
+export function useResolvedTheme(): Theme {
+  const s = useSettings();
+  const [prefersDark, setPrefersDark] = useState(systemPrefersDark);
+  useEffect(() => {
+    if (!window.matchMedia) return;
+    const mq = window.matchMedia(DARK_QUERY);
+    const onFlip = () => setPrefersDark(mq.matches);
+    onFlip(); // the OS may have flipped between first render and this effect
+    if (mq.addEventListener) {
+      mq.addEventListener('change', onFlip);
+      return () => mq.removeEventListener('change', onFlip);
+    }
+    mq.addListener?.(onFlip);
+    return () => mq.removeListener?.(onFlip);
+  }, []);
+  return resolveTheme(s.theme, prefersDark);
+}
 
 export function useSettings(): Settings {
   const [state, setState] = useState<Settings>(current);
@@ -167,22 +235,3 @@ export function useSettings(): Settings {
   }, []);
   return state;
 }
-
-// Curated list — visually distinct fonts only. Dropped near-duplicates of
-// Menlo (SF Mono, System UI Mono, Source Code Pro) since at body sizes they
-// look near-identical.
-export const FONT_FAMILIES = [
-  'Menlo, Monaco, monospace',
-  '"MesloLGS NF", Menlo, monospace',
-  '"JetBrains Mono", Menlo, monospace',
-  '"Fira Code", Menlo, monospace',
-  '"IBM Plex Mono", Menlo, monospace',
-];
-
-export const FONT_FAMILY_LABELS: Record<string, string> = {
-  'Menlo, Monaco, monospace': 'Menlo (default)',
-  '"MesloLGS NF", Menlo, monospace': 'MesloLGS Nerd Font',
-  '"JetBrains Mono", Menlo, monospace': 'JetBrains Mono',
-  '"Fira Code", Menlo, monospace': 'Fira Code',
-  '"IBM Plex Mono", Menlo, monospace': 'IBM Plex Mono',
-};
