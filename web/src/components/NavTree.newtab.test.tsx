@@ -205,37 +205,43 @@ describe('the rail — one “+” per workspace, on its header', () => {
   });
 });
 
-describe('the flat “Recent” view is gone from both surfaces', () => {
+describe('the flat “Recent” view is gone, and so is the sheet’s picker', () => {
   it('renders no view switch on the rail', () => {
     const box = mount('sidebar');
     expect(box.querySelectorAll('.navtree-viewswitch').length).toBe(0);
-    // …and the tree is what you get, with no stored preference to consult.
     expect(box.querySelectorAll('.navtree-ws-row').length).toBe(3);
   });
 
-  it('offers no “Recent” row in the sheet’s workspace picker', async () => {
+  it('shows EVERY workspace on the sheet, with no picker to go through', () => {
+    // The sheet used to render ONE workspace's list and reach the others by
+    // swapping the whole list for a picker — a mode change you had to remember
+    // you were in. Reported as "clicking in and out of the workspace name".
     const box = mount('sheet');
-    await click(box.querySelector('.navtree-bar-ws'));
-    const names = [...box.querySelectorAll('.navtree-wspick-name')].map((b) =>
-      (b.textContent ?? '').trim(),
+    const names = [...box.querySelectorAll('.navtree-ws-row .navtree-name-text')].map((e) =>
+      (e.textContent ?? '').trim(),
     );
     expect(names).toEqual(['Personal', 'Trayo', 'Trayobot']);
+    // …and the bar's workspace button is gone with it.
+    expect(box.querySelectorAll('.navtree-bar-ws').length).toBe(0);
+    expect(box.querySelectorAll('.navtree-wspick-name').length).toBe(0);
   });
 });
 
-describe('the sheet — the bar’s "+" creates in the workspace the bar names', () => {
-  it('creates straight into it, with no picker', async () => {
+describe('the sheet creates from a workspace header, like the rail', () => {
+  it('gives every workspace its own “+”, and the bar none', () => {
     const box = mount('sheet');
-    await click(box.querySelector('[aria-label="New chat"]'));
-    expect(CREATED).toEqual([{ workspaceId: 'w-personal', body: { ...HOUSE_CHAT_CREATE } }]);
-    expect(box.querySelectorAll('.navtree-wspick-name').length).toBe(0);
+    // One per workspace — the bar cannot carry one, because it no longer names
+    // a workspace to create in.
+    expect(box.querySelectorAll('.navtree-ws-add').length).toBe(3);
+    expect(box.querySelectorAll('[aria-label="New chat"]').length).toBe(0);
   });
 
-  it('follows the bar after you switch workspaces', async () => {
+  it('creates in the workspace whose “+” was tapped', async () => {
     const box = mount('sheet');
-    await click(box.querySelector('.navtree-bar-ws'));
-    await click(pickerRow(box, 'Trayobot'));
-    await click(box.querySelector('[aria-label="New chat"]'));
+    const rows = [...box.querySelectorAll('.navtree-ws-row')];
+    const bots = rows.find((r) => (r.textContent ?? '').includes('Trayobot'));
+    await click(bots?.querySelector('.navtree-ws-add'));
     expect(CREATED).toEqual([{ workspaceId: 'w-bots', body: { ...HOUSE_CHAT_CREATE } }]);
+    expect(WENT).toEqual([{ wsSlug: 'bots', tabSlug: 'new-chat' }]);
   });
 });

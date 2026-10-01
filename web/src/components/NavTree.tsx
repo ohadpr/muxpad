@@ -18,9 +18,9 @@ import { pushUndo } from '../lib/move-undo-store';
 import { isExpanded, toggleExpanded, useNavExpansion } from '../lib/nav-expansion';
 import { tabRowAffordances } from '../lib/nav-row-affordances';
 import { nextCronLabel, railCronLabel } from '../lib/next-cron-label';
-import { PANE_DRAG_MIME, type PaneDragOrigin, paneDragOrigin } from '../lib/pane-drag';
+
 import { reorderByDrop } from '../lib/reorder';
-import { orderAfterPinnedDrop, paneDropAction } from '../lib/tab-drag';
+import { orderAfterPinnedDrop } from '../lib/tab-drag';
 import { useFrozenTabOrder } from '../lib/tab-freeze';
 import { tabRowActions } from '../lib/tab-row-actions';
 import { useAllChats } from '../lib/use-all-chats';
@@ -92,14 +92,6 @@ interface TabDragPayload {
   fromWorkspaceId: string;
 }
 
-/** Middle band of a tab row = the "merge / move INTO this tab" drop zone;
- *  the edges stay with reorder — the file-tree drop-into convention. */
-function inMergeBand(e: React.DragEvent): boolean {
-  const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-  const y = (e.clientY - r.top) / Math.max(1, r.height);
-  return y >= 0.3 && y <= 0.7;
-}
-
 // Origin of the in-flight tab drag, set on dragstart / cleared on dragend.
 // `dataTransfer.getData` is unreadable during dragover (only `types` is
 // exposed), so a workspace row can't tell from the event alone whether a
@@ -144,74 +136,6 @@ async function moveTabToWorkspace(args: {
     });
   } catch (err) {
     console.error('move tab→workspace failed', err);
-  }
-}
-
-/**
- * Move a dragged pane into `dest` — the drag-a-pane-onto-a-workspace-header
- * gesture. The pane's pty/agent keeps running untouched; only its parent tab
- * changes.
- *
- * Two shapes, because a pane that is its tab's ONLY pane effectively IS that
- * tab: extracting it into a "new" tab would delete a tab and build an
- * identical one, throwing away its name, icon and slug — and, if you were
- * looking at it, dropping you on the workspace root when it vanished. So a
- * solo pane travels as a TAB MOVE (`moveTabToWorkspace`, which brings its own
- * undo); anything else extracts into a fresh tab over there.
- *
- * No navigation either way: you dropped it over there precisely because
- * you're staying here.
- */
-async function movePaneToNewTabIn(
-  paneId: string,
-  dest: Workspace,
-  origin: PaneDragOrigin | null,
-): Promise<void> {
-  const action = paneDropAction(origin, dest.id);
-  if (action === 'none') return; // solo pane, already a tab of this workspace
-  if (action === 'move-tab' && origin?.fromWorkspaceId) {
-    const name = (await api.getTab(origin.fromTabId).catch(() => null))?.name ?? 'this tab';
-    await moveTabToWorkspace({
-      tabId: origin.fromTabId,
-      tabName: name,
-      fromWorkspaceId: origin.fromWorkspaceId,
-      toWorkspaceId: dest.id,
-      toWorkspaceName: dest.name,
-    });
-    return;
-  }
-  try {
-    const res = await api.movePane(paneId, { newTab: true, toWorkspaceId: dest.id });
-    // Defensive: the server refuses to churn a tab's identity by extracting
-    // its only pane at home. The solo branch above means we shouldn't get
-    // here, but a stale drag origin must not look like a successful move.
-    if (res.to_tab.id === res.from_tab_id) return;
-    await Promise.all([
-      refreshTabs(dest.id),
-      ...(res.from_workspace_id && res.from_workspace_id !== dest.id
-        ? [refreshTabs(res.from_workspace_id)]
-        : []),
-      refreshWorkspaces(),
-    ]);
-    if (!res.from_tab_removed) {
-      pushUndo({
-        message: `Moved pane to “${dest.name}”`,
-        run: async () => {
-          try {
-            await api.movePane(paneId, { toTabId: res.from_tab_id });
-            await Promise.all([
-              refreshTabs(dest.id),
-              ...(res.from_workspace_id ? [refreshTabs(res.from_workspace_id)] : []),
-              refreshWorkspaces(),
-            ]);
-          } catch (err) {
-            console.error('undo pane→workspace move failed', err);
-          }
-        },
-      });
-    }
-  } catch (err) {
-    console.error('move pane→workspace failed', err);
   }
 }
 
@@ -629,6 +553,9 @@ function SheetRail({
   // another one from the bar — looking at another workspace's chats must not
   // require navigating into it first. A picked workspace that then disappears
   // falls back to the active one via the lookup below.
+  // Same store the rail uses, so a workspace you opened on one surface is
+  // open on the other.
+  const expansion = useNavExpansion();
   const [picked, setPicked] = useState<string | null>(null);
   const shown =
     workspaces.find((w) => w.slug === (picked ?? activeWorkspaceSlug)) ??
@@ -660,18 +587,15 @@ function SheetRail({
           place instead of pushing the chats one row further down. */}
       {searching ? null : (
         <div className="navtree-bar">
-          <button
-            type="button"
-            className="navtree-bar-ws"
-            onClick={() => setPicking((p) => (p === 'switch' ? null : 'switch'))}
-            aria-expanded={picking === 'switch'}
-            title={`Workspace: ${shown?.name ?? '—'}`}
-          >
-            <span className="navtree-bar-wsname" dir="auto">
-              {barLabel}
-            </span>
-            <SvgCaret open={picking !== null} />
-          </button>
+          {/* A LABEL, not a control. The bar used to open a workspace PICKER,
+              because the sheet showed one workspace at a time and getting to
+              another meant choosing it first. The list below now holds every
+              workspace, so there is nothing left to pick — and a button that
+              swapped the whole list for a different list was the thing that
+              made this surface feel like clicking in and out of a folder. */}
+          <span className="navtree-bar-wsname" dir="auto">
+            Chats
+          </span>
           <button
             type="button"
             className="navtree-bar-icon"
@@ -680,17 +604,12 @@ function SheetRail({
           >
             <SvgSearchGlyph />
           </button>
-          <button
-            type="button"
-            className="navtree-bar-icon"
-            onClick={() => {
-              if (newChatIn) void newChat(newChatIn);
-            }}
-            disabled={busy || !newChatIn}
-            aria-label="New chat"
-          >
-            <SvgPlus />
-          </button>
+          {/* NO "+" HERE EITHER. It created in "the workspace the bar names",
+              and the bar no longer names one — every workspace is on screen,
+              and each header carries its own, exactly as on the rail. A single
+              bar button would have had to pick one of them on your behalf,
+              which is the guess this navigator keeps being redesigned to
+              avoid. */}
         </div>
       )}
       {/* The box owns `.navtree-scroll`, so the scroller stays a direct flex
@@ -702,29 +621,29 @@ function SheetRail({
         onDismissBox={() => setSearching(false)}
         onNavigate={onNavigate}
       >
-        {picking === 'switch' ? (
-          <WorkspacePickList
-            workspaces={workspaces}
-            shownId={shown?.id ?? null}
-            editing={editing}
-            setEditing={setEditing}
-            onPick={(w) => {
-              setPicked(w.slug);
-              setPicking(null);
-            }}
-            onNavigate={onNavigate}
-          />
-        ) : shown ? (
-          <TabList
-            workspace={shown}
-            isActiveWorkspace={shown.slug === activeWorkspaceSlug}
+        {/* EVERY WORKSPACE, like the desktop rail. The sheet used to render one
+            workspace's TabList and reach the others through a picker that
+            replaced the whole list — so moving between them was a mode change,
+            and you had to remember which one you were in. Reported as clicking
+            in and out of the workspace name.
+            Same WorkspaceNode the rail uses, so the two surfaces cannot drift
+            about what a workspace row is, what collapses, or where the done
+            drawer lives. Collapsed-by-default keeps the scroller short: only
+            the workspace you are in is open (isExpanded). */}
+        {workspaces.map((w) => (
+          <WorkspaceNode
+            key={w.id}
+            workspace={w}
+            isActive={w.slug === activeWorkspaceSlug}
+            expanded={isExpanded(expansion, w.slug, activeWorkspaceSlug)}
+            activeWorkspaceSlug={activeWorkspaceSlug}
             activeTabSlug={activeTabSlug}
             variant="sheet"
             editing={editing}
             setEditing={setEditing}
             onNavigate={onNavigate}
           />
-        ) : null}
+        ))}
       </NavSearch>
     </nav>
   );
@@ -1026,62 +945,13 @@ function WorkspaceNode({
     }
   };
 
-  // Accept a PANE dragged from the tab strip, dropped on this workspace's
-  // HEADER: the pane leaves its tab and lands in a brand-new tab here. The
-  // header is the only sensible target for "put this somewhere in that
-  // workspace" — its tab rows already mean "into THAT tab", and a workspace
-  // you're looking at from the outside has no other obvious slot.
-  //
-  // Deliberately allowed for a pane from this same workspace too: that's the
-  // ordinary "pop this pane out into its own tab" gesture, just aimed at the
-  // header rather than the pane chrome's button. The ONE case we decline is a
-  // pane that's already its tab's only pane being dropped on its own
-  // workspace — there is nothing to extract, so lighting up would promise a
-  // move that can't happen.
-  const [paneDropOver, setPaneDropOver] = useState(false);
-  const isPaneDrag = (e: React.DragEvent) =>
-    e.dataTransfer.types.includes(PANE_DRAG_MIME) &&
-    paneDropAction(paneDragOrigin.get(), workspace.id) !== 'none';
-  const onHeaderDragOver = (e: React.DragEvent) => {
-    if (!isPaneDrag(e)) return; // not ours — let the ws-reorder handlers see it
-    e.preventDefault();
-    // The group below also listens (tab drags); a pane drop is fully handled
-    // here, so don't let it bubble into a second interpretation.
-    e.stopPropagation();
-    e.dataTransfer.dropEffect = 'move';
-    if (!paneDropOver) setPaneDropOver(true);
-  };
-  const onHeaderDragLeave = (e: React.DragEvent) => {
-    if (paneDropOver && !e.currentTarget.contains(e.relatedTarget as Node | null)) {
-      setPaneDropOver(false);
-    }
-  };
-  // Reorder dnd for the header row — dropped while renaming (an input owns
-  // the row then, and dragging text inside it must not start a row drag).
+  // Reorder dnd for the header row — dropped while renaming (an input owns the
+  // row then, and dragging text inside it must not start a row drag).
   const wsRowDnd = rowDnd && !isEditing ? rowDnd : undefined;
-  const onHeaderDrop = (e: React.DragEvent) => {
-    setPaneDropOver(false);
-    const paneId = e.dataTransfer.getData(PANE_DRAG_MIME);
-    if (!paneId || !isPaneDrag(e)) return;
-    e.preventDefault();
-    e.stopPropagation();
-    void movePaneToNewTabIn(paneId, workspace, paneDragOrigin.get());
-  };
 
   /**
-   * "+ New chat", ON THE HEADER, and this is where it belongs.
-   *
-   * The destination is the row the button is drawn on, so there is nothing to
-   * ask and nothing to label — which is what every previous arrangement was
-   * paying for. It began as a row at the bottom of the workspace's list, where
-   * twenty chats could scroll it out of reach; became one button at the top of
-   * the whole rail with a workspace picker, which read as bolted on and whose
-   * picker did not reliably leave you in the chat it made; then a row at the TOP
-   * of the list, which was reachable but still a row — and this list is for
-   * chats.
-   *
-   * On the header it costs the list nothing, never scrolls, and cannot be about
-   * the wrong workspace.
+   * "+ New chat", ON THE HEADER. The destination is the row the button is drawn
+   * on, so there is nothing to ask and nothing to label.
    */
   const [creating, setCreating] = useState(false);
   const createHere = async (e: React.MouseEvent) => {
@@ -1102,6 +972,12 @@ function WorkspaceNode({
     }
   };
 
+  // NO PANE DROPS. The header used to accept a pane dragged off the tab strip
+  // and turn it into a new tab here. It is gone with the rest of the
+  // drag-a-thing-into-a-thing family: the gesture had no visible target
+  // vocabulary (a workspace header means "this group", not "extract that pane
+  // into a fresh tab inside it") and the same move is a context-menu item that
+  // says what it does. The ONE drop this tree still takes is a TAB, below.
   const closeWorkspace = async (e: React.MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
@@ -1150,24 +1026,11 @@ function WorkspaceNode({
         data-unread={workspace.unread ? 'true' : undefined}
         data-pressing={pressing ? 'true' : undefined}
         data-tab-drop={tabDropOver ? 'true' : undefined}
-        data-pane-drop={paneDropOver ? 'true' : undefined}
         {...wsRowDnd}
         // Pane drops are layered ON TOP of workspace-reorder dnd: a pane drag
         // is claimed here and goes no further, anything else falls through to
         // the reorder handlers spread above (hence the explicit chaining —
         // these props would otherwise just replace them).
-        onDragOver={(e) => {
-          onHeaderDragOver(e);
-          if (!e.isPropagationStopped()) wsRowDnd?.onDragOver(e);
-        }}
-        onDragLeave={(e) => {
-          onHeaderDragLeave(e);
-          wsRowDnd?.onDragLeave(e);
-        }}
-        onDrop={(e) => {
-          onHeaderDrop(e);
-          if (!e.isPropagationStopped()) wsRowDnd?.onDrop(e);
-        }}
       >
         <button
           type="button"
@@ -1436,7 +1299,9 @@ export function TabList({
         await refreshTabs(workspace.id);
       })();
     },
-    { claimOver: (e) => !inMergeBand(e) },
+    // No `claimOver` any more. It existed to leave the row's MIDDLE band free
+    // for merge-into-this-tab, so reorder only claimed the edges. With merging
+    // gone the whole row is a reorder target, which is also what it looks like.
   );
 
   // An UNPINNED row is still draggable, but the drag can only MOVE it: drop
@@ -1464,29 +1329,6 @@ export function TabList({
     ...(movingTabId === id ? { 'data-dragging': 'true' as const } : {}),
   });
 
-  // Merge a dragged tab's panes into `dest` (the row it was dropped on).
-  // The source tab dissolves; if it was the one being viewed, its TabView's
-  // tab.removed handler follows the panes via the follow-target hint —
-  // recorded BEFORE the call so the event can never race an explicit
-  // navigate (and so cross-workspace merges follow too, which a dest-list
-  // lookup here could never resolve).
-  const mergeTabInto = async (payload: TabDragPayload, dest: Tab) => {
-    setFollowTarget(payload.tabId, workspace.slug, dest.slug);
-    try {
-      await api.mergeTab(payload.tabId, dest.id);
-      await Promise.all([
-        refreshTabs(payload.fromWorkspaceId),
-        refreshTabs(workspace.id),
-        refreshWorkspaces(),
-      ]);
-    } catch (err) {
-      // The source tab survives a failed merge — retract the hint or a
-      // later unrelated close of that tab would teleport to `dest`.
-      clearFollowTarget(payload.tabId);
-      console.error('merge tab failed', err);
-    }
-  };
-
   // Create a pane in `t` and land on it. Shared by the sheet pane list's
   // chooser and the tab context menu. Always opens the harness picker
   // (Claude / Codex / Cursor + Terminal / Web view below).
@@ -1508,47 +1350,6 @@ export function TabList({
       });
     } catch (err) {
       console.error('add pane failed', err);
-    }
-  };
-
-  // Move a single pane (dragged from the tab strip) into `dest`. If it was
-  // the source tab's LAST pane, that tab dissolves — the follow hint makes
-  // its tab.removed redirect land on `dest` instead of the workspace root.
-  const movePaneHere = async (paneId: string, sourceTabId: string | null, dest: Tab) => {
-    if (sourceTabId) setFollowTarget(sourceTabId, workspace.slug, dest.slug);
-    try {
-      const res = await api.movePane(paneId, { toTabId: dest.id });
-      // The hint only matters when the source tab dissolved (its removal is
-      // what navigates). Any other outcome must retract it — see
-      // clearFollowTarget.
-      if (sourceTabId && !res.from_tab_removed) clearFollowTarget(sourceTabId);
-      if (res.to_tab.id === res.from_tab_id) return; // no-op (already here)
-      await Promise.all([
-        refreshTabs(workspace.id),
-        // The source tab may live in ANOTHER workspace (cross-workspace
-        // moves) — refresh its tab-list cache too or it keeps referencing
-        // the moved-away pane until the next poll.
-        ...(res.from_workspace_id && res.from_workspace_id !== workspace.id
-          ? [refreshTabs(res.from_workspace_id)]
-          : []),
-        refreshWorkspaces(),
-      ]);
-      // Undo only while the source tab still exists to receive it back.
-      if (!res.from_tab_removed) {
-        pushUndo({
-          message: `Moved pane to “${dest.name}”`,
-          run: async () => {
-            try {
-              await api.movePane(paneId, { toTabId: res.from_tab_id });
-            } catch (err) {
-              console.error('undo pane move failed', err);
-            }
-          },
-        });
-      }
-    } catch (err) {
-      if (sourceTabId) clearFollowTarget(sourceTabId);
-      console.error('move pane failed', err);
     }
   };
 
@@ -1649,9 +1450,7 @@ export function TabList({
       onSetUnread={(want) => actions.setUnread(t, want)}
       onSetIcon={(icon) => void actions.setIcon(t, icon)}
       onSetPinned={(want) => void actions.setPinned(t, want)}
-      onMergeInto={(payload) => void mergeTabInto(payload, t)}
       onAddPane={() => void addPaneToTab(t)}
-      onMovePaneHere={(paneId, sourceTabId) => void movePaneHere(paneId, sourceTabId, t)}
       // A CHILD is not draggable: its place in the list is its parent, not an
       // order you arranged, so there is nothing for a drop to mean.
       rowDnd={
@@ -1938,13 +1737,11 @@ interface TabRowProps {
   /** Pin/unpin — hold this tab at the top of its workspace block in the
    *  manual order, instead of letting it be auto-sorted. */
   onSetPinned: (pinned: boolean) => void;
-  /** A dragged TAB was dropped on this row's merge band — absorb its panes. */
-  onMergeInto: (payload: TabDragPayload) => void;
-  /** Create a pane in this tab and land on it (opens the harness picker). */
   onAddPane: () => void;
+  /** A dragged TAB was dropped on this row's merge band — absorb its panes. */
+  /** Create a pane in this tab and land on it (opens the harness picker). */
   /** A pane dragged from the strip was dropped here — move it into this tab.
    *  sourceTabId (from the drag mirror) feeds the follow-navigation hint. */
-  onMovePaneHere: (paneId: string, sourceTabId: string | null) => void;
   rowDnd?: DragItemProps | undefined;
 }
 
@@ -2225,8 +2022,6 @@ function TabRow({
   onSetUnread,
   onSetIcon,
   onSetPinned,
-  onMergeInto,
-  onMovePaneHere,
   onAddPane,
 }: TabRowProps) {
   // Right-click context menu (desktop sidebar). Anchored at the cursor.
@@ -2271,14 +2066,20 @@ function TabRow({
   const sheet = variant === 'sheet';
   const togglePanes = () => setPanesOpen((o) => !o);
 
-  // "Drop INTO this tab" affordance — lit for a pane dragged from the tab
-  // strip (whole row) or another tab dragged over the row's middle band
-  // (merge; the edges stay with reorder via the hook's claimOver).
-  const [dropInto, setDropInto] = useState(false);
-  const isForeignPaneDrag = (e: React.DragEvent) =>
-    e.dataTransfer.types.includes(PANE_DRAG_MIME) && paneDragOrigin.get()?.fromTabId !== tab.id;
-  const isForeignTabDrag = (e: React.DragEvent) =>
-    e.dataTransfer.types.includes(TAB_DRAG_MIME) && tabDragOrigin.get()?.tabId !== tab.id;
+  // ─── A TAB ROW IS A DRAG SOURCE, AND NOTHING LANDS ON IT ─────────────────
+  // It used to accept two drops: a PANE dragged off the tab strip (which became
+  // a pane in this tab) and another TAB dropped on its middle band (which MERGED
+  // the two chats, dissolving one). Both are gone.
+  //
+  // They were removable because they were unaskable-for. A merge is destructive
+  // and irreversible from the sidebar — one of the two chats stops existing —
+  // and it was armed by the middle third of a row that otherwise means reorder,
+  // so the difference between "put this above that" and "destroy one of these"
+  // was twenty pixels of vertical aim. Nothing on screen said which band you
+  // were in until the drop had happened.
+  //
+  // What survives is the one drag with an obvious meaning and an obvious target:
+  // a tab onto a WORKSPACE. See WorkspaceNode's group handlers.
 
   // Reuse the row's reorder dnd, but also stamp a typed payload on dragstart
   // so a workspace row can recognise this as a cross-workspace tab move.
@@ -2310,57 +2111,8 @@ function TabRow({
       }
     : {};
 
-  // Compose drop-into on TOP of reorder: the claimed branches stopPropagation
-  // so the workspace group's move-tab-here handler (an ancestor) never
-  // double-handles the same drop.
-  const dropDnd: Partial<DragItemProps> =
-    variant === 'sidebar' && !isEditing
-      ? {
-          ...tabRowDnd,
-          onDragOver: (e: React.DragEvent) => {
-            if (isForeignPaneDrag(e) || (isForeignTabDrag(e) && inMergeBand(e))) {
-              e.preventDefault();
-              e.stopPropagation();
-              e.dataTransfer.dropEffect = 'move';
-              if (!dropInto) setDropInto(true);
-              return;
-            }
-            if (dropInto) setDropInto(false);
-            tabRowDnd.onDragOver?.(e);
-          },
-          onDragLeave: (e: React.DragEvent) => {
-            if (dropInto && !e.currentTarget.contains(e.relatedTarget as Node | null)) {
-              setDropInto(false);
-            }
-            tabRowDnd.onDragLeave?.(e);
-          },
-          onDrop: (e: React.DragEvent) => {
-            const paneId = e.dataTransfer.getData(PANE_DRAG_MIME);
-            if (paneId && paneDragOrigin.get()?.fromTabId !== tab.id) {
-              e.preventDefault();
-              e.stopPropagation();
-              setDropInto(false);
-              onMovePaneHere(paneId, paneDragOrigin.get()?.fromTabId ?? null);
-              return;
-            }
-            const rawTab = e.dataTransfer.getData(TAB_DRAG_MIME);
-            if (rawTab && dropInto) {
-              e.preventDefault();
-              e.stopPropagation();
-              setDropInto(false);
-              try {
-                const payload = JSON.parse(rawTab) as TabDragPayload;
-                if (payload.tabId !== tab.id) onMergeInto(payload);
-              } catch {
-                // malformed payload — ignore
-              }
-              return;
-            }
-            setDropInto(false);
-            tabRowDnd.onDrop?.(e);
-          },
-        }
-      : tabRowDnd;
+  // No composition left to do: reorder is the only gesture a row takes part in.
+  const dropDnd: Partial<DragItemProps> = tabRowDnd;
 
   /** The row's full action set. On TOUCH this menu (reached by a long press)
    *  is the only route to rename and to "New pane"; pin, mark-unread and close
@@ -2726,7 +2478,6 @@ function TabRow({
       data-child={parent ? 'true' : undefined}
       data-unread={tab.unread ? 'true' : undefined}
       data-pressing={pressing ? 'true' : undefined}
-      data-drop-into={dropInto ? 'true' : undefined}
       {...(!isEditing
         ? {
             onContextMenu: (e: React.MouseEvent) => {
