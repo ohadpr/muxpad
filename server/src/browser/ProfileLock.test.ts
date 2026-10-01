@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, symlinkSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -66,6 +66,14 @@ describe('actually clearing a lock, on a real disk', () => {
     writeFileSync(join(dir, 'SingletonLock'), 'pid-of-a-dead-browser');
     expect(clearStaleProfileLock(dir)).toEqual([join(dir, 'SingletonLock')]);
     expect(existsSync(join(dir, 'SingletonLock'))).toBe(false);
+  });
+
+  it('removes dangling Chrome lock and socket symlinks', () => {
+    const dir = tempProfile();
+    const paths = ['SingletonLock', 'SingletonSocket'].map((name) => join(dir, name));
+    for (const path of paths) symlinkSync('nonexistent-host-1234', path);
+    expect(clearStaleProfileLock(dir)).toEqual(paths);
+    for (const path of paths) expect(() => lstatSync(path)).toThrow();
   });
 
   it('reports NOTHING when there was nothing to clear', () => {

@@ -16,6 +16,7 @@ import { browserViewerPort } from '../BrowserProfile.js';
 import { CdpConnection } from '../CdpConnection.js';
 import {
   type CdpCookie,
+  type StorageState,
   cdpCookiesToStorageState,
   storageStateToCdpCookies,
 } from '../CookieJar.js';
@@ -68,12 +69,13 @@ export interface BrowserHostOptions {
   chromePath: string;
   /** Overrides the derived viewer port. Tests only; production wants it stable. */
   viewerPort?: number;
-  /** Where the shared cookie jar is written. Agents read it with --storage-state. */
+  /** Shared seed jar to read. Exports are merged by the muxpad API writer. */
   jarPath?: string;
   /**
    * Where to announce the first page actually visited, so the conversation gets
-   * its card at the right moment. Optional: without it the browser works and
-   * simply says nothing.
+   * its card at the right moment, and submit cookie changes to the sole jar
+   * writer. Optional: without it browsing works, but announcements and cookie
+   * exports are unavailable.
    */
   apiUrl?: string;
   /** Called when Chrome exits on its own. Defaults to taking this process with it. */
@@ -263,15 +265,40 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
   // the jar, and without it a per-session browser is just a cold one with extra
   // steps. Best-effort: a missing or unreadable jar is the ordinary first-run
   // case, not a reason to refuse to start.
+  let cookieSeed: StorageState = { cookies: [], origins: [] };
   if (jarPath && existsSync(jarPath)) {
     try {
       const cookies = storageStateToCdpCookies(JSON.parse(readFileSync(jarPath, 'utf8')));
       if (cookies.length) await cdp.send('Storage.setCookies', { cookies });
+      cookieSeed = cdpCookiesToStorageState(cookies);
       log(`[host] seeded ${cookies.length} cookies from the shared jar`);
     } catch (err) {
       log(`[host] could not seed cookies: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
+
+  // Exports describe changes from the cookies this browser was seeded with,
+  // not ownership of the entire shared jar. Existing profile-only logins count
+  // as additions, so a human can still save those on handback.
+  let cookieExport: Promise<void> = Promise.resolve();
+  const exportCookies = async (): Promise<StorageState> => {
+    if (!opts.apiUrl) throw new Error('cookie export requires the muxpad API writer');
+    const { cookies } = (await cdp.send('Storage.getCookies')) as unknown as {
+      cookies: CdpCookie[];
+    };
+    const current = cdpCookiesToStorageState(cookies);
+    const response = await fetch(
+      `${opts.apiUrl}/api/browsers/${encodeURIComponent(opts.profile)}/cookies`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ seed: cookieSeed, current }),
+      },
+    );
+    if (!response.ok) throw new Error('shared cookie export failed');
+    cookieSeed = current;
+    return current;
+  };
 
   await applySessionState();
   await screencast.start();
@@ -597,15 +624,18 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
     }
     // The shared jar. Agents start warm from this file — see CookieJar.ts for
     // why they cannot simply share this browser. Written on demand rather than
-    // on a timer: it is only read when an agent starts, and a stale file is
+    // on a timer: the API merges this host's changes, and a stale file is
     // better than a write every few seconds against a live profile.
     if (path === '/storage-state') {
       try {
-        const { cookies } = (await cdp.send('Storage.getCookies')) as unknown as {
-          cookies: CdpCookie[];
-        };
-        const state = cdpCookiesToStorageState(cookies);
-        if (jarPath) writeFileSync(jarPath, JSON.stringify(state));
+        // Serialize this host's exports too, so an older snapshot cannot arrive
+        // after a newer one and become its baseline.
+        const pending = cookieExport.then(exportCookies);
+        cookieExport = pending.then(
+          () => {},
+          () => {},
+        );
+        const state = await pending;
         res
           .writeHead(200, { 'content-type': 'application/json' })
           .end(JSON.stringify({ ok: true, cookies: state.cookies.length, path: jarPath }));

@@ -136,3 +136,28 @@ export function storageStateToCdpCookies(state: StorageState): CdpSetCookie[] {
   }
   return out;
 }
+
+/**
+ * Export only what this browser changed since its last successful export (or
+ * startup). An unchanged cookie is not evidence that a newer login in the jar
+ * should be rolled back. Delete only when the jar still has the seed value:
+ * another browser may have refreshed that login while this one logged out.
+ */
+export function mergeCookieChanges(
+  jar: StorageState,
+  seed: StorageState,
+  current: StorageState,
+): StorageState {
+  const key = (c: StorageState['cookies'][number]) => JSON.stringify([c.domain, c.path, c.name]);
+  const before = new Map(seed.cookies.map((c) => [key(c), c]));
+  const after = new Map(current.cookies.map((c) => [key(c), c]));
+  const merged = new Map(jar.cookies.map((c) => [key(c), c]));
+  for (const [id, cookie] of before) {
+    if (!after.has(id) && JSON.stringify(merged.get(id)) === JSON.stringify(cookie))
+      merged.delete(id);
+  }
+  for (const [id, cookie] of after) {
+    if (JSON.stringify(before.get(id)) !== JSON.stringify(cookie)) merged.set(id, cookie);
+  }
+  return { cookies: [...merged.values()], origins: jar.origins };
+}

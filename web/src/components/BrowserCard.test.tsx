@@ -152,7 +152,7 @@ describe('the modal', () => {
 
   it('frames the viewer RELATIVELY, so it is same-origin either way', () => {
     const { host } = mount(<BrowserModal {...props} />);
-    expect(host.querySelector('iframe')?.getAttribute('src')).toBe('/browser/shopping/');
+    expect(host.querySelector('iframe')?.getAttribute('src')).toBe('/browser/shopping/?by=pane-7');
   });
 
   it('says plainly that watching does not stop the agent', () => {
@@ -168,7 +168,9 @@ describe('the modal', () => {
 
   it('frames the viewer read-only when watching', () => {
     const { host } = mount(<BrowserModal {...props} intent="watch" />);
-    expect(host.querySelector('iframe')?.getAttribute('src')).toBe('/browser/shopping/?mode=watch');
+    expect(host.querySelector('iframe')?.getAttribute('src')).toBe(
+      '/browser/shopping/?mode=watch&by=pane-7',
+    );
   });
 
   it('closes on Escape, which is how the wheel gets handed back', () => {

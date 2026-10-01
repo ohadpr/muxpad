@@ -117,7 +117,9 @@ export class BrowserWheel {
     const name = normalizeProfileName(profile);
     const current = this.holder(name);
 
-    if (current && current.by !== request.by) {
+    // The pane identifies the conversation, not whether its human or agent is
+    // driving. Sharing that ID must not let an agent demote a human lease.
+    if (current && (current.by !== request.by || current.holder !== request.holder)) {
       // The one rule that cannot bend.
       if (current.holder === 'human' && request.holder === 'agent') {
         return {
