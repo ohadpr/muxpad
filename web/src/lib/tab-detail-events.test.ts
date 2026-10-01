@@ -1,6 +1,6 @@
 import type { PaneSpec, Tab } from '@muxpad/shared';
-import { describe, expect, it } from 'vitest';
-import { applyTabUpdated, mergePaneUpdated } from './tab-detail-events';
+import { describe, expect, it, vi } from 'vitest';
+import { applyTabUpdated, fetchUnsuperseded, mergePaneUpdated } from './tab-detail-events';
 
 const held = {
   id: 'p1',
@@ -60,5 +60,34 @@ describe('applyTabUpdated', () => {
     const next = applyTabUpdated(tab, { ...tab, layout: 'p2', name: 'renamed' }, false);
     expect(next.layout).toBe('p1');
     expect(next.name).toBe('renamed');
+  });
+});
+
+describe('fetchUnsuperseded', () => {
+  // The reconnect resync: GET starts holding P; another client appends Q, and
+  // pane.added(Q) + tab.updated(P|Q) land here first; THEN the old GET answers
+  // with P alone. Installing it removed Q from state and from the mosaic, and
+  // nothing re-adds it (pane.updated only maps panes already held).
+  it('discards a snapshot a live event overtook, and asks again', async () => {
+    let gen = 0;
+    const answers = ['P', 'P|Q'];
+    const fetch = vi.fn(async () => {
+      const a = answers.shift();
+      // The structural event lands while the FIRST request is on the wire.
+      if (a === 'P') gen += 1;
+      return a;
+    });
+    expect(await fetchUnsuperseded(fetch, () => gen)).toBe('P|Q');
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('gives up rather than chase a generation that never settles', async () => {
+    let gen = 0;
+    const fetch = vi.fn(async () => {
+      gen += 1;
+      return 'stale';
+    });
+    expect(await fetchUnsuperseded(fetch, () => gen, 3)).toBeNull();
+    expect(fetch).toHaveBeenCalledTimes(3);
   });
 });
