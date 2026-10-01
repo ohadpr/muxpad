@@ -33,8 +33,14 @@ describe('sheetMaxHeight — the panel is capped by the VISUAL viewport', () => 
       PANEL_TOP,
       SHEET_BOTTOM_MARGIN,
     );
-    // 508 − 46 − 48 = 414, against the 750 the stylesheet alone would allow.
-    expect(withKeyboard).toBe(414);
+    // 508 − 46 − 24 = 438, against the 774 the stylesheet alone would allow.
+    // The margin was 48 and is 24: the panel measured 89% of a chromeless
+    // viewport while reading as "half the screen" on a real phone, because the
+    // stylesheet's fallback term used `svh` — the SMALLEST viewport, i.e. the
+    // height with browser chrome fully expanded. It uses `dvh` now, and the
+    // reserved scrim band was halved, since the chrome bar above the panel
+    // closes it too and this band is the second way out, not the only one.
+    expect(withKeyboard).toBe(438);
     const contentHeight = 627; // measured: 12 result rows
     expect(contentHeight).toBeGreaterThan(withKeyboard as number);
   });
@@ -48,12 +54,12 @@ describe('sheetMaxHeight — the panel is capped by the VISUAL viewport', () => 
       PANEL_TOP,
       SHEET_BOTTOM_MARGIN,
     );
-    expect(scrolled).toBe(414 + 60);
+    expect(scrolled).toBe(438 + 60);
   });
 
   it('is a no-op with no keyboard: the cap lands at the stylesheet’s own value', () => {
     const idle = sheetMaxHeight({ height: LAYOUT_H, offsetTop: 0 }, PANEL_TOP, SHEET_BOTTOM_MARGIN);
-    expect(idle).toBe(LAYOUT_H - PANEL_TOP - SHEET_BOTTOM_MARGIN); // 750
+    expect(idle).toBe(LAYOUT_H - PANEL_TOP - SHEET_BOTTOM_MARGIN); // 774
   });
 
   it('never collapses to a sliver, however little the keyboard leaves', () => {
@@ -76,7 +82,7 @@ describe('the CSS actually consumes it', () => {
     'utf8',
   );
 
-  it('caps .mns-panel with min(svh, --mns-avail-h)', () => {
+  it('caps .mns-panel with min(dvh, --mns-avail-h)', () => {
     const flat = CSS.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\s+/g, ' ');
     const panel = flat.match(/\.mns-panel \{([^}]*)\}/)?.[1] ?? '';
     expect(panel).toMatch(/max-height:\s*min\(/);
@@ -84,13 +90,13 @@ describe('the CSS actually consumes it', () => {
     // A bare `var(--mns-avail-h)` with no fallback would leave the panel
     // UNCAPPED on a browser without visualViewport — the property would be
     // invalid at computed-value time and max-height would drop to `none`.
-    expect(panel).toMatch(/var\(--mns-avail-h,\s*calc\(100svh/);
+    expect(panel).toMatch(/var\(--mns-avail-h,\s*calc\(100dvh/);
   });
 
   it('the JS margin and the CSS margin are the same number', () => {
     // Two spellings of the scrim band. If one moves and the other doesn't,
     // the panel and the "tap outside to dismiss" target stop agreeing.
-    const marginsInCss = [...CSS.matchAll(/100svh - var\(--mns-panel-top\) - (\d+)px/g)].map((m) =>
+    const marginsInCss = [...CSS.matchAll(/100dvh - var\(--mns-panel-top\) - (\d+)px/g)].map((m) =>
       Number(m[1]),
     );
     expect(marginsInCss.length).toBeGreaterThan(0);

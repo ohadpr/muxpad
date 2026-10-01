@@ -4,7 +4,7 @@
  * thinks it is.
  *
  * ─── The bug this exists to prevent ──────────────────────────────────────
- * `.mns-panel` is `position: fixed` and capped at `100svh - top - 48px`.
+ * `.mns-panel` is `position: fixed` and capped at `100dvh - top - 24px`.
  * `svh` is a LAYOUT viewport unit, and on iOS Safari the layout viewport does
  * not shrink when the keyboard opens — only `visualViewport` does. Modern
  * Chrome behaves the same way (`interactive-widget: resizes-visual` has been
@@ -66,4 +66,4 @@ export function sheetMaxHeight(
  * The scrim's bottom band, kept in step with the panel's cap. Mirrors the
  * `- 48px` in MobileNavSwitcher.css; exported so the two cannot drift.
  */
-export const SHEET_BOTTOM_MARGIN = 48;
+export const SHEET_BOTTOM_MARGIN = 24;
