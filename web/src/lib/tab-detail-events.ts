@@ -79,8 +79,8 @@ export function applyTabUpdated<T extends Tab>(prev: T, row: Tab, applyLayout: b
 /**
  * Fetch a snapshot that no live event has overtaken.
  *
- * `generation` must move on every structural change that reached the caller by
- * another route (a pushed pane.added / pane.removed / tab.updated, a local
+ * `generation` must move on every change that reached the caller by
+ * another route (a pushed pane.added / pane.removed / pane.updated / tab.updated, a local
  * layout write). A response requested before such a change describes the world
  * before it, and installing it rolls the change back — so it is discarded and
  * the fetch is asked again. Bounded: after `attempts` superseded answers this

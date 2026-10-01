@@ -245,9 +245,8 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
   // True when a tab.updated's layout was skipped mid-write — triggers a
   // refetch once writes settle (see persistLayout).
   const skippedTabUpdate = useRef(false);
-  // Moves on every structural change that reaches this tab by a route other
-  // than a detail GET — a pushed pane.added / pane.removed / tab.updated, or a
-  // local layout write. The reconnect resync captures it before fetching and
+  // Moves on every change that reaches this tab by a route other
+  // than a detail GET — a pushed pane or tab event, or a local layout write. The reconnect resync captures it before fetching and
   // discards an answer it overtook (see fetchUnsuperseded): `pendingLayoutWrites`
   // only knows about OUR writes in flight, not about another client's pane that
   // already arrived by push while the GET was on the wire.
@@ -642,7 +641,6 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     if (!workspace) return;
     setClosingTab(false);
     setError(null);
-    let viewedTabId: string | null = null;
     let cancelled = false;
     (async () => {
       try {
@@ -688,25 +686,18 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
           setTab(detail);
           layoutRef.current = toMosaic(detail.layout);
         }
-        viewedTabId = found.id;
         // Mark-seen on mount is deliberately NOT done here anymore — a
         // bulk tab-seen on mount would clear every pane's attention
         // before the user could see which pane was BELing in the nav
         // sheet's pane list. The per-pane / per-mode seen happens
-        // in the dedicated effect below; the bulk seen on unmount still
-        // runs (tab-level dot still clears when you actually leave).
+        // in the dedicated visibility-gated effect. Cleanup must not ack:
+        // it also runs on reloads and for panes nobody ever displayed.
       } catch (e) {
         setError(String(e));
       }
     })();
     return () => {
       cancelled = true;
-      if (viewedTabId) {
-        api
-          .markTabSeen(viewedTabId)
-          .then(() => Promise.all([refreshTabs(workspace.id), refreshWorkspaces()]))
-          .catch(() => {});
-      }
     };
   }, [workspace?.id, tabSlug, loadNonce]);
 
@@ -1061,6 +1052,9 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
           prev ? { ...prev, panes: prev.panes.filter((p) => p.id !== e.pane_id) } : prev,
         );
       } else if (e.type === 'pane.updated' && e.tab_id === tabId) {
+        // Detail snapshots carry decorations too; an older GET must not revive
+        // a cleared title or roll back the live status/unread value.
+        detailGeneration.current += 1;
         setTab((prev) =>
           prev
             ? {

@@ -2092,7 +2092,11 @@ export function ChatPane({
       // successful load publishes to every subscriber, so there is nothing to
       // set here; this only covers the fresh-cache case, where loadAllTabs
       // answers from the cache without notifying anyone.
-      if (groups.length > 0 || cachedAllTabs()) setCorpusGroups(groups);
+      // A trailing refresh or push can publish before this promise callback.
+      // Read the held corpus now, never roll it back to the request's answer.
+      const current = cachedAllTabs();
+      if (current) setCorpusGroups(current);
+      else if (groups.length > 0) setCorpusGroups(groups);
     });
   }, []);
 
@@ -4961,7 +4965,7 @@ export function ChatPane({
           // live-patched from the server's own `tab.updated` (lib/all-tabs), so
           // nothing here polls and nothing caches a state.
           const state = spawnState(kid);
-          // Launches read the live child; completions carry a round snapshot.
+          // Closed-round entries carry a snapshot; the open round reads the live child.
           if (x.card.kind === 'launch') {
             // THE LAUNCH. "you started this, and it is running." Nothing else:
             // at a launch there is nothing to summarise, and once the work is
