@@ -217,6 +217,19 @@ const connect = () => {
   ws = sock
   sock.onopen = () => {
     retryIn = 400
+    // WHO JUST CONNECTED. Every question about this page tonight — is it current,
+    // is it read-only, is it even attached — was answered by guessing from the
+    // outside, several times wrongly. The page knows all three and the host keeps
+    // logs, so it says so once per connection and the logs can be read instead.
+    try {
+      sock.send(JSON.stringify({
+        t: 'hello',
+        build: MY_BUILD,
+        mode: watching ? 'watch' : 'drive',
+        w: window.innerWidth,
+        h: window.innerHeight,
+      }))
+    } catch { /* a hello is never worth failing a connection over */ }
     // Clears the DISCONNECTION notice, and puts back whatever the page's own
     // state has to say. A bare clear wiped the one line explaining that this
     // viewer is read-only — so on a watch-mode tab the explanation was removed

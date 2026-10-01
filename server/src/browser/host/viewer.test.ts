@@ -1240,3 +1240,38 @@ describe('a page that is out of date finds out', () => {
     expect(h.reloaded).toBe(true);
   });
 });
+
+describe('a viewer says what it is when it connects', () => {
+  /**
+   * Every question about this page tonight — is it current, is it read-only, is
+   * it even attached — was answered by guessing from the outside, and several of
+   * those guesses were wrong. The page knows all three.
+   */
+  const hello = (h: Harness) =>
+    h.sent.find((m) => m.t === 'hello') as Record<string, unknown> | undefined;
+
+  it('says which build it is running', () => {
+    // The one that matters: a stamp that is not the one being served means the
+    // script was replaced, and anything measured here is measured on dead code.
+    const mine = /const MY_BUILD = '([^']*)'/.exec(script())?.[1];
+    expect(hello(run())?.build).toBe(mine);
+  });
+
+  it('says whether it can type', () => {
+    expect(hello(run())?.mode).toBe('drive');
+    expect(hello(run({ search: '?mode=watch' }))?.mode).toBe('watch');
+  });
+
+  it('says how big it is, which is how a phone is told from a desktop', () => {
+    expect(hello(run({ width: 390 }))?.w).toBe(390);
+  });
+
+  it('says it again on every reconnection, not just the first', () => {
+    // A host restart is exactly when this matters, and it arrives as a
+    // reconnection.
+    const h = run();
+    h.drop();
+    h.open();
+    expect(h.sent.filter((m) => m.t === 'hello').length).toBeGreaterThan(1);
+  });
+});
