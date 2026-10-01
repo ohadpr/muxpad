@@ -38,14 +38,18 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
 const noModels = async () => ({ models: [], defaultModel: null });
 function makeHost() {
   const frames: RunnerFrame[] = [];
+  // The pane's terminal face. Kept, not discarded: a backend that DECLINES to
+  // do something (chat mode, which is Claude-only) has the log as its only way
+  // to say so, and "it announced the collapse" is the assertion.
+  const logs: string[] = [];
   const host: RunnerHost = {
     emit: (f) => frames.push(f),
-    log: () => {},
+    log: (l) => void logs.push(l),
     connected: () => true,
     paneId: 'pane-1',
     apiUrl: 'http://localhost',
   };
-  return { host, frames };
+  return { host, frames, logs };
 }
 const types = (frames: RunnerFrame[]) => frames.map((f) => f.t);
 function readLog(sid: string): ChatEvent[] {
@@ -77,7 +81,7 @@ describe('cursor backend', () => {
     const { spawn, calls } = fakeSpawner();
     const b = createCursorBackend(
       host,
-      { requestedSid, requestedModel: null, mode: 'deep' },
+      { requestedSid, requestedModel: null, mode: 'agent' },
       { spawn, listModels: noModels },
     );
     b.start();
@@ -234,7 +238,7 @@ describe('cursor backend', () => {
     const { spawn, calls } = fakeSpawner();
     const b = createCursorBackend(
       host,
-      { requestedSid: null, requestedModel: null, mode: 'deep' },
+      { requestedSid: null, requestedModel: null, mode: 'agent' },
       { spawn, listModels: noModels },
     );
     b.start();
@@ -293,7 +297,7 @@ describe('cursor backend', () => {
     const { spawn, calls } = fakeSpawner();
     const b = createCursorBackend(
       host,
-      { requestedSid: null, requestedModel: null, mode: 'deep' },
+      { requestedSid: null, requestedModel: null, mode: 'agent' },
       {
         spawn,
         listModels: noModels,
@@ -364,12 +368,13 @@ describe('cursor backend', () => {
     expect(calls[1]!.args.at(-1)).toBe('plain');
   });
 
-  // ── ⚡ Do mode ────────────────────────────────────────────────────────────
-  // cursor-agent has no instructions flag either, so the overlay rides the
-  // same first-message preamble as the universal instructions.
+  // ── Chat mode ───────────────────────────────────────────────────────────
+  // There isn't one here — same as codex. Chat IS Claude (modeForBackend),
+  // because the mode is built on the in-process `reply` tool and cursor-agent
+  // has no in-process tool surface. What these pin is the COLLAPSE.
 
-  async function bootMode(mode: 'do' | 'deep', requestedSid: string | null = null) {
-    const { host, frames } = makeHost();
+  async function bootMode(mode: 'chat' | 'agent', requestedSid: string | null = null) {
+    const { host, frames, logs } = makeHost();
     const { spawn, calls } = fakeSpawner();
     const b = createCursorBackend(
       host,
@@ -380,25 +385,30 @@ describe('cursor backend', () => {
     await tick();
     closeChild(calls[0]!.child, 0);
     await tick();
-    return { b, host, frames, calls };
+    return { b, host, frames, logs, calls };
   }
 
-  it('do mode prepends the overlay after the instructions on a NEW session', async () => {
+  it('a chat-mode request is collapsed to Agent mode — no overlay, and it says so', async () => {
+    // Chat IS Claude (modeForBackend): Chat mode is built on the in-process
+    // `reply` tool and cursor-agent has no in-process tool surface. A stale
+    // row or a hand-typed startup command can still ask for it; the runner
+    // announces the collapse in the pane's own log rather than injecting a
+    // contract the harness cannot honour.
     writeFileSync(join(dataDir, 'agent-instructions.md'), 'use muxpad publish\n');
-    writeFileSync(join(dataDir, 'do-mode.md'), 'be terse\n');
-    const { b, calls } = await bootMode('do');
+    writeFileSync(join(dataDir, 'chat-mode.md'), 'be terse\n');
+    const { b, calls, logs } = await bootMode('chat');
     b.send('hi');
     await tick();
     expect(calls[1]!.args.at(-1)).toBe(
-      '<muxpad-instructions>\nuse muxpad publish\n</muxpad-instructions>\n\n' +
-        '<muxpad-mode>\nbe terse\n</muxpad-mode>\n\nhi',
+      '<muxpad-instructions>\nuse muxpad publish\n</muxpad-instructions>\n\nhi',
     );
+    expect(logs.some((l) => /Claude-only/i.test(l))).toBe(true);
   });
 
   it('deep mode injects NOTHING extra — byte-identical to the pre-mode prompt', async () => {
     writeFileSync(join(dataDir, 'agent-instructions.md'), 'use muxpad publish\n');
-    writeFileSync(join(dataDir, 'do-mode.md'), 'be terse\n');
-    const { b, calls } = await bootMode('deep');
+    writeFileSync(join(dataDir, 'chat-mode.md'), 'be terse\n');
+    const { b, calls } = await bootMode('agent');
     b.send('hi');
     await tick();
     expect(calls[1]!.args.at(-1)).toBe(
@@ -406,16 +416,19 @@ describe('cursor backend', () => {
     );
   });
 
-  it('do mode with no do-mode.md → nothing injected, no error', async () => {
-    const { b, calls } = await bootMode('do');
+  it('chat mode with no chat-mode.md → nothing injected, no error', async () => {
+    const { b, calls } = await bootMode('chat');
     b.send('hi');
     await tick();
     expect(calls[1]!.args.at(-1)).toBe('hi');
   });
 
-  it('a mid-session switch rides ONE <muxpad-mode> note on the next resumed turn', async () => {
-    writeFileSync(join(dataDir, 'do-mode.md'), 'be terse\n');
-    const { b, calls } = await bootMode('deep');
+  it('a mid-session switch to Chat changes NOTHING about the prompt', async () => {
+    // There is no contract to announce: this session is Agent mode and stays
+    // Agent mode. The old in-band <muxpad-mode> note is retired along with the
+    // overlay it used to carry.
+    writeFileSync(join(dataDir, 'chat-mode.md'), 'be terse\n');
+    const { b, calls, logs } = await bootMode('agent');
     b.send('first');
     await tick();
     const t1 = calls[1]!.child;
@@ -424,27 +437,17 @@ describe('cursor backend', () => {
     closeChild(t1, 0);
     await tick();
 
-    b.setMode('do');
+    b.setMode('chat');
     b.send('second');
     await tick();
     expect(calls[2]!.args).toContain('--resume');
-    expect(calls[2]!.args.at(-1)).toBe(
-      '<muxpad-mode>\nThe user switched this session to ⚡ Do mode. Follow this contract from now on:\n\nbe terse\n</muxpad-mode>\n\nsecond',
-    );
-    const t2 = calls[2]!.child;
-    line(t2, { type: 'result', subtype: 'success' });
-    closeChild(t2, 0);
-    await tick();
-
-    // ONE-TIME: the next turn is a bare prompt again.
-    b.send('third');
-    await tick();
-    expect(calls[3]!.args.at(-1)).toBe('third');
+    expect(calls[2]!.args.at(-1)).toBe('second');
+    expect(logs.some((l) => /Claude-only/i.test(l))).toBe(true);
   });
 
   it('re-setting the SAME mode is a no-op (the server sends it on every hello)', async () => {
-    writeFileSync(join(dataDir, 'do-mode.md'), 'be terse\n');
-    const { b, calls } = await bootMode('deep');
+    writeFileSync(join(dataDir, 'chat-mode.md'), 'be terse\n');
+    const { b, calls } = await bootMode('agent');
     b.send('first');
     await tick();
     const t1 = calls[1]!.child;
@@ -452,7 +455,7 @@ describe('cursor backend', () => {
     line(t1, { type: 'result', subtype: 'success' });
     closeChild(t1, 0);
     await tick();
-    b.setMode('deep');
+    b.setMode('agent');
     b.send('second');
     await tick();
     expect(calls[2]!.args.at(-1)).toBe('second');
@@ -463,7 +466,7 @@ describe('cursor backend', () => {
     const { spawn, calls } = fakeSpawner();
     const b = createCursorBackend(
       host,
-      { requestedSid: null, requestedModel: null, mode: 'deep' },
+      { requestedSid: null, requestedModel: null, mode: 'agent' },
       {
         spawn,
         listModels: async () => ({

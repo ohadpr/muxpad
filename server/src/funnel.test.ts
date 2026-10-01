@@ -70,6 +70,39 @@ describe('createTailscaleFunnel', () => {
     expect(state.warning).toContain('node attribute');
   });
 
+  it('honours MUXPAD_TAILSCALE_BIN instead of PATH or the app bundle', async () => {
+    // funnel.ts used to carry its own hardcoded candidate list and ignore the
+    // override entirely, so the server could reach into the Tailscale app
+    // bundle even where the CLI had been told not to.
+    const exec = fakeExec((_cmd, args) =>
+      args[0] === 'status' ? { stdout: STATUS_JSON } : { stdout: '' },
+    );
+    const funnel = createTailscaleFunnel({
+      publicPort: 7778,
+      exec,
+      env: { MUXPAD_TAILSCALE_BIN: '/tmp/ts-stub' },
+    });
+    await funnel.ensure();
+    expect(exec.calls.map((c) => c.cmd)).toEqual(['/tmp/ts-stub', '/tmp/ts-stub']);
+  });
+
+  it('caches the FAILURE too — a second ensure() execs nothing', async () => {
+    // The whole reported bug in one line. Under launchd the app-bundle CLI
+    // always fails (CLIError 3), and an uncached failure meant every single
+    // publish re-execed it — which is what puts up the macOS "access data from
+    // other apps" prompt, several times a day.
+    const exec = fakeExec(() => {
+      throw new Error('The Tailscale GUI failed to start');
+    });
+    const funnel = createTailscaleFunnel({ publicPort: 7778, exec });
+    const first = await funnel.ensure();
+    const after = exec.calls.length;
+    expect(after).toBeGreaterThan(0);
+    const second = await funnel.ensure();
+    expect(exec.calls.length).toBe(after);
+    expect(second).toEqual(first);
+  });
+
   it('degrades when status has no DNSName', async () => {
     const exec = fakeExec((_cmd, args) =>
       args[0] === 'status' ? { stdout: '{"Self":{}}' } : { stdout: '' },

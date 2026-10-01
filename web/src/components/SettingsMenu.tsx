@@ -2,10 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { type PushState, disablePush, enablePush, getPushState, sendTestPush } from '../lib/push';
 import { useDismissable } from '../lib/use-dismissable';
 import {
-  FONT_FAMILIES,
-  FONT_FAMILY_LABELS,
-  THEMES,
-  type Theme,
+  THEME_CHOICES,
+  type ThemeChoice,
   updateSettings,
   useSettings,
 } from '../settings';
@@ -36,9 +34,9 @@ export function SettingsMenu() {
             <select
               id="theme"
               value={settings.theme}
-              onChange={(e) => updateSettings({ theme: e.target.value as Theme })}
+              onChange={(e) => updateSettings({ theme: e.target.value as ThemeChoice })}
             >
-              {THEMES.map((t) => (
+              {THEME_CHOICES.map((t) => (
                 <option key={t.value} value={t.value}>
                   {t.label}
                 </option>
@@ -75,21 +73,6 @@ export function SettingsMenu() {
                 +
               </button>
             </div>
-          </div>
-
-          <div className="settings-row">
-            <label htmlFor="font-family">Font</label>
-            <select
-              id="font-family"
-              value={settings.fontFamily}
-              onChange={(e) => updateSettings({ fontFamily: e.target.value })}
-            >
-              {FONT_FAMILIES.map((f) => (
-                <option key={f} value={f}>
-                  {FONT_FAMILY_LABELS[f] ?? f}
-                </option>
-              ))}
-            </select>
           </div>
 
           <PushRow />

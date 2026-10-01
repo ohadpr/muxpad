@@ -141,6 +141,24 @@ export class PtydClient extends EventEmitter {
   }
 
   /**
+   * Returns ptyd's current snapshot of every live runtime's title, foreground
+   * command and attention bit — the three decorations whose PUSH side is
+   * diff-driven, and which a (re)connecting server is therefore never told
+   * about unless they happen to change.
+   *
+   * @throws Error('ptyd disconnected') if the socket isn't OPEN, or
+   *   `unknown method: flushDecorations` against a ptyd older than this RPC.
+   *   Both mean "no snapshot" to the caller, which is exactly the behaviour
+   *   that existed before it.
+   */
+  async flushDecorations(): Promise<
+    Array<{ id: string; title: string | null; fg: string | null; attention: boolean }>
+  > {
+    const r = await this.call('flushDecorations', {});
+    return r.entries;
+  }
+
+  /**
    * Force-close any /pty/:id sockets ptyd is holding for `id`. No-op when
    * there are none.
    * @throws Error('ptyd disconnected') if the socket isn't OPEN.

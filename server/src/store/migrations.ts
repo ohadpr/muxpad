@@ -1,5 +1,13 @@
-import { type LayoutNode, pruneLayout, randomTabIcon, splitLeadingEmoji } from '@muxpad/shared';
+import {
+  type LayoutNode,
+  pruneLayout,
+  randomTabIcon,
+  splitLeadingEmoji,
+  staggeredClockOffset,
+  staggeredClockStart,
+} from '@muxpad/shared';
 import type Database from 'better-sqlite3';
+import { applyModeToStartupCmd } from '../agent-modes.js';
 
 interface Migration {
   version: number;
@@ -316,9 +324,10 @@ const MIGRATIONS: Migration[] = [
   {
     // Step 1 of the UX evolution — two independent, purely additive pieces:
     //
-    //   panes.mode          — agent behavior mode (⚡ do / 🧠 deep). Default
-    //     'deep' is EXACTLY today's behavior (no overlay injected at all), so
-    //     every existing pane keeps running unchanged after the migration.
+    //   panes.mode          — agent behavior mode, then spelled 'do'/'deep'
+    //     (renamed to 'chat'/'agent' in v26). Default 'deep' is EXACTLY
+    //     today's behavior (no overlay injected at all), so every existing
+    //     pane keeps running unchanged after the migration.
     //
     //   tabs.pinned         — manual "keep this at the top" flag. Default 0,
     //     so on upgrade every tab lands in the auto-sorted block, which is
@@ -511,6 +520,585 @@ const MIGRATIONS: Migration[] = [
     sql: `
       ALTER TABLE tabs ADD COLUMN icon_sticky INTEGER NOT NULL DEFAULT 0;
       ALTER TABLE tabs ADD COLUMN icon_at INTEGER;
+    `,
+  },
+  {
+    // The two agent modes get their user-facing names: 'do' → 'chat',
+    // 'deep' → 'agent' (see shared/types.ts AgentModeSchema). Purely a rename
+    // of the STORED vocabulary — no pane's behaviour changes here.
+    //
+    // The value lives in two places and BOTH have to move together, or a pane
+    // reads one mode and boots in another:
+    //
+    //   panes.mode        — the authoritative row. Rewritten below. Anything
+    //     unrecognised (a NULL from before v21, a value from a future build
+    //     someone downgraded out of) lands on 'agent', the baseline: it is the
+    //     only reading of "no mode recorded" that doesn't claim a contract was
+    //     overlaid when it wasn't.
+    //
+    //   panes.startup_cmd — `muxpad agent … --mode do|deep`, which is what a
+    //     RESPAWN actually boots from. Rewritten via applyModeToStartupCmd so
+    //     the flag ordering stays byte-identical to what ws.ts's self-heal
+    //     rewrite composes (a different order reads as a new runner on every
+    //     hello and re-flips the pane's face).
+    //
+    // Agent mode stays expressed by the ABSENCE of the flag, so a bare
+    // `muxpad agent` — every pane that predates modes entirely — is already
+    // correct and is left untouched. `--mode deep` is STRIPPED rather than
+    // rewritten to `--mode agent`: same meaning, and it converges those rows
+    // onto the one canonical spelling.
+    //
+    // crons.mode is deliberately NOT migrated. It is nullable free text read
+    // at fire time through a tolerant normalizer (CronScheduler), a stored
+    // 'do'/'deep' keeps meaning exactly what it meant, and rewriting user
+    // rows for a cosmetic rename buys nothing.
+    //
+    // Note on the column DEFAULT: v21 created it as `DEFAULT 'deep'`, and
+    // SQLite cannot alter a default without rebuilding the table. It is
+    // unreachable — PaneStore.create is the only INSERT and always supplies
+    // the value — and PaneStore.row() normalizes anything unrecognised to the
+    // baseline, so a row can never surface a value the schema rejects. Not
+    // worth a full table rebuild.
+    version: 26,
+    apply: (db) => {
+      db.prepare("UPDATE panes SET mode = 'chat' WHERE mode = 'do'").run();
+      db.prepare("UPDATE panes SET mode = 'agent' WHERE mode IS NULL OR mode <> 'chat'").run();
+      const rows = db
+        .prepare(
+          "SELECT id, mode, startup_cmd FROM panes WHERE startup_cmd LIKE 'muxpad agent%--mode %'",
+        )
+        .all() as Array<{ id: string; mode: string; startup_cmd: string | null }>;
+      const update = db.prepare('UPDATE panes SET startup_cmd = ? WHERE id = ?');
+      for (const r of rows) {
+        const next = applyModeToStartupCmd(r.startup_cmd, r.mode === 'chat' ? 'chat' : 'agent');
+        if (next !== r.startup_cmd) update.run(next, r.id);
+      }
+    },
+  },
+  {
+    // THE CHAT CLOCK, and the hierarchy it is shared down.
+    //
+    //   tabs.spawned_by — the tab this chat was spawned FROM (an agent working
+    //     in that chat asked for this one). Nullable; null is the normal case.
+    //
+    //     Deliberately NO foreign key, and the reason is the whole model:
+    //     nothing here is ever deleted by a clock, so a child must survive its
+    //     parent's manual deletion rather than cascade away with it. A dangling
+    //     id is therefore an EXPECTED state, and the resolver (tab-clock.ts)
+    //     reads a child whose parent is gone as a root in its own right. An
+    //     ON DELETE SET NULL would also have worked, but only while
+    //     `foreign_keys = ON` — which is a pragma, i.e. a property of the
+    //     CONNECTION, not of the data. Tolerating the dangle is the invariant
+    //     that holds however the db is opened.
+    //
+    //   tabs.clock_started_at — epoch ms the chat's 4-day clock last started.
+    //     Reset by a message the user sends it; when it runs out the chat is
+    //     `done` (computed at read time, never stored — a stored flag would be
+    //     a second source of truth that goes stale the instant the clock ticks
+    //     past it with no writer awake).
+    //
+    // ── WHY NOT REUSE last_activity_at ───────────────────────────────────────
+    // It answers a different question. `last_activity_at` is bumped by pty
+    // OUTPUT (sampled every 5s) and by keystrokes, so a chat left tailing a log
+    // would be immortal while a chat you genuinely finished with three days ago
+    // decays on schedule — the clock would measure the terminal, not you. It is
+    // also the sidebar's recency ORDER, and one column cannot be both a sort
+    // key everything touches and a lifecycle clock only a deliberate act may
+    // move.
+    //
+    // ── THE BACKFILL: EVERYONE STARTS FRESH, BUT NOT ALL AT ONCE ─────────────
+    // No existing tab's clock starts before THIS MOMENT — the first boot after
+    // this ships — so nothing decays on day one. Backfilling from
+    // `last_activity_at` was considered and explicitly rejected: it would have
+    // arrived with roughly half the existing tabs already expired, collapsing
+    // most of the sidebar into a `done` group on the first render, which reads
+    // as data loss even though nothing was lost.
+    //
+    // What one shared `Date.now()` gets wrong is the OTHER end of the same
+    // four days. Ninety rows stamped in one minute expire in one minute, so
+    // the sidebar does not thin on the fourth morning, it empties — every
+    // untouched workspace a collapsed `N done` header over nothing, arriving
+    // as ninety `tab.updated` events in a single sweeper tick. So each row's
+    // clock starts at boot PLUS an offset derived from its id
+    // (`staggeredClockStart`, in shared, with the argument for the direction
+    // and for not ranking by activity). Measured on the real 90-tab database:
+    // 38/26/26 crossings across days four to seven, and never more than two in
+    // any one tick.
+    //
+    // The offset is never negative, which is how the day-one promise survives
+    // the change: staggering can only give a chat more time than it had.
+    //
+    // Guarded by `IS NULL` so the backfill is idempotent in the real sense: a
+    // second pass cannot re-stamp a clock the user has since reset (the version
+    // guard already prevents a second pass, but a migration that would corrupt
+    // data if it ever ran twice is one restore-from-backup away from doing it).
+    // The offset is a pure function of the id for the same reason — a restore
+    // must not re-deal every surviving chat a different death date than the one
+    // the user has been watching count down.
+    version: 27,
+    sql: `
+      ALTER TABLE tabs ADD COLUMN spawned_by TEXT;
+      ALTER TABLE tabs ADD COLUMN clock_started_at INTEGER;
+      CREATE INDEX tabs_spawned_by ON tabs(spawned_by);
+    `,
+    apply: (db) => {
+      const boot = Date.now();
+      const ids = db.prepare('SELECT id FROM tabs WHERE clock_started_at IS NULL').all() as Array<{
+        id: string;
+      }>;
+      const update = db.prepare('UPDATE tabs SET clock_started_at = ? WHERE id = ?');
+      for (const { id } of ids) update.run(staggeredClockStart(id, boot), id);
+    },
+  },
+  {
+    // RETIREMENT — the other way into `done`, and the one that answers the
+    // 41-agent sidebar.
+    //
+    //   tabs.retired_at     — epoch ms this chat left the live list by an act
+    //     rather than by the clock. Null means "still live" (or decayed, which
+    //     is computed from the clock and never written).
+    //   tabs.retired_reason — WHICH act. 'delivered' (a sub-chat finished its
+    //     work and its result went back to the parent), 'archived' (the user
+    //     did it by hand). Stored rather than inferred because the two read
+    //     very differently in a tooltip, and because `spawned_by` alone cannot
+    //     tell them apart — a sub-chat can also be archived by hand.
+    //
+    // WHY A COLUMN AND NOT A COMPUTED STATE, when `done`-by-decay is computed:
+    // decay is a function of TIME, which the server can always re-derive; a
+    // retirement is an EVENT, and an event nobody wrote down did not happen.
+    // A sub-chat's delivery is observable exactly once, at turn-done, and the
+    // runtime that observed it is gone after a restart.
+    //
+    // Nullable with no backfill, and that is the whole upgrade: every existing
+    // tab is live, which is exactly the state they were in before this column
+    // existed. Nothing retires retroactively — including the 41 agents that
+    // motivated this. They decay on the v27 clock like everything else, and
+    // any sub-chat among them retires the next time it finishes a turn.
+    version: 28,
+    sql: `
+      ALTER TABLE tabs ADD COLUMN retired_at INTEGER;
+      ALTER TABLE tabs ADD COLUMN retired_reason TEXT;
+    `,
+  },
+  {
+    // THE SPAWN REPORT — what a sub-chat actually did, in the parent's log.
+    //
+    // A worker retires the moment it delivers, which answered the 41-agent
+    // sidebar and created a new complaint in its place: "I don't see the
+    // summary of the work of this card anywhere". The chat leaves, the push
+    // notification arrives, and the report it wrote is behind a click nobody
+    // knows to make. These three columns are what the parent's log shows
+    // instead.
+    //
+    //   spawn_report       — a few sentences: what it was asked, what it
+    //     concluded, whether it worked, and where the work IS (a file path, a
+    //     published URL, an attachment). NULL when there was nothing to say.
+    //   spawn_report_at    — epoch ms of the ATTEMPT. Two jobs, deliberately:
+    //     the rate limiter's clock (headline_at's precedent — a restart is
+    //     exactly when a limiter must not forget itself, and a FAILURE has to
+    //     advance it or a broken install spawns a subprocess per retirement
+    //     forever), and the report entry's PLACE in the parent's transcript,
+    //     which is the moment the result landed rather than the spawn three
+    //     hours further up.
+    //   spawn_report_state — what KIND of answer this is, and it is what keeps
+    //     three different outcomes from reading as one shrug:
+    //       'ok'      — a report was written
+    //       'none'    — the child finished having produced nothing usable, and
+    //                   says so. NEVER an invented summary.
+    //       'crashed' — its last turn was FATAL. Written with or without text
+    //                   (whatever it got done before dying is worth saying),
+    //                   and it is the ONLY signal the client has that a child
+    //                   which never retires has stopped — a crashed sub-chat
+    //                   keeps its row by design, so its card span otherwise.
+    //       NULL      — we could not summarise (no SDK, a timeout, a reply that
+    //                   was not a report). The clock still advanced; nothing
+    //                   renders. Every failure path leaves the surface exactly
+    //                   as it was, which is chat/headline.ts's contract.
+    //
+    // WHY THE TAB ROW and not a side table: one report per child is a 1:1
+    // relation, and the child's row already IS the record that the spawn
+    // happened (the cards derive from the corpus and store nothing of their
+    // own). The row also reaches the parent's conversation with no new
+    // protocol — TabStore.row() → decorateTab → `tab.updated` → the client's
+    // tab cache → the spawn cards — which is durable, cross-device, and the
+    // same liveness path the headline already rides. A `spawn_notes` table
+    // earns its keep when a parent needs MANY notes of SEVERAL kinds (the
+    // directed-work echo in web/src/lib/chat-directed.ts being the other
+    // candidate); it is the upgrade, not this.
+    //
+    // ONLY THE SUMMARY LIVES HERE. The report the child actually wrote can be
+    // 25 KB, and the tab row is published on every sidebar list and every 5s
+    // poll — so the expansion is fetched on demand from the transcript
+    // endpoint instead. See web/src/lib/spawn-work.ts.
+    //
+    // No backfill, and there cannot be one: a report is read off a transcript
+    // at the moment a child finishes, and no existing child is finishing now.
+    // Absent is the right state for every row that predates the column, and
+    // the client draws nothing for it.
+    version: 29,
+    sql: `
+      ALTER TABLE tabs ADD COLUMN spawn_report TEXT;
+      ALTER TABLE tabs ADD COLUMN spawn_report_at INTEGER;
+      ALTER TABLE tabs ADD COLUMN spawn_report_state TEXT;
+    `,
+  },
+  {
+    // WHAT THE WORKER WAS ASKED — the other half of the pair, and the one the
+    // reader sees FIRST.
+    //
+    //   tabs.spawn_task — one short line of plain English, read off the child's
+    //     FIRST message when it starts work. NULL until then, and for every chat
+    //     nobody spawned.
+    //
+    // A worker's card read `status-line`, beside a dot and a spinner, and
+    // nothing else: `--name=` values are handles typed on a command line, chosen
+    // to be short enough to type and unique enough to grep, which are not the
+    // qualities a label needs. Two of them side by side say nothing about what
+    // is running.
+    //
+    // WHY NOT THE HEADLINE, which already exists and already restates the
+    // prompt. Two reasons, and the second is the one that decides it:
+    //
+    //   · It is a TAB-WIDE facility with a deliberately different cadence. The
+    //     whole of chat/headline.ts is an argument for STILLNESS — a 6-minute
+    //     floor, an anti-drift prompt, a "rewording is not a change" rule —
+    //     because it is the sidebar's second line for every chat in the app.
+    //     Making it fire immediately to serve a card would change what every
+    //     row in the rail does, to fix one card.
+    //   · It answers a different question. The headline names what a chat is
+    //     ABOUT and keeps re-answering that as the subject moves; this names
+    //     what a worker was ASKED, once, and is never revised — the task does
+    //     not drift, and a label that changed under a running card would be the
+    //     drift the headline exists to prevent, reintroduced next door.
+    //
+    // So: its own column, 1:1 with the child, write-once, beside `spawn_report`
+    // — the pair reads "asked" and "concluded" — and written by the same writer
+    // through the same model seam, firing on the first turn instead of the last.
+    // The headline is still the card's FALLBACK (see web `spawnLabel`), which is
+    // the one job it is genuinely good at.
+    //
+    // No backfill: a label is read off a first message and no existing child is
+    // sending one. Absent is correct for every row that predates this, and the
+    // card falls back through the headline to the handle rather than going
+    // blank.
+    version: 30,
+    sql: `
+      ALTER TABLE tabs ADD COLUMN spawn_task TEXT;
+    `,
+  },
+  {
+    // WHERE THE WORK IS — a JSON array of the urls and files a worker produced.
+    //
+    //   tabs.spawn_artifacts — `["https://…/muxpad-cross-workspace",
+    //     "/tmp/sidebar/cross-workspace.md"]`, or NULL.
+    //
+    // `cross-ws` published a page and wrote a 13 KB report, and NEITHER reached
+    // the conversation: "it went and investigated, produced an artifact … and so
+    // I have no idea that it's waiting on me, that there's an artifact". A url or
+    // a report path is the most valuable thing a completion card can carry — the
+    // difference between a summary and something you can act on.
+    //
+    // ITS OWN COLUMN rather than a line inside `spawn_report`, and that is the
+    // whole reason it helps here. The report is a MODEL's sentences and can fail;
+    // for `cross-ws` it did (generated, then refused by a length rule), and
+    // anything riding it failed with it. This is scraped from the transcript by a
+    // regex, on the same read, and survives every failure the generator has. It
+    // also has to render as LINKS, which prose cannot.
+    //
+    // A JSON array in a TEXT column, not a side table: it is a short bounded list
+    // (4) belonging 1:1 to a row that already exists, and nothing ever queries
+    // ACROSS artifacts — the only reader wants "this child's", which is the one
+    // question a column answers better than a join.
+    version: 31,
+    sql: `
+      ALTER TABLE tabs ADD COLUMN spawn_artifacts TEXT;
+    `,
+  },
+  {
+    // A WORKER IS A SEQUENCE OF ROUNDS, not one job.
+    //
+    // "if the chat has progressed then it doesn't help much to update the
+    // original card" was answered with two entries per child — a launch at
+    // `created_at` and a completion at `retired_at`. Both are ONE PAIR PER TAB,
+    // and a worker does not get one job: it gets handed successive ones with
+    // `muxpad agent send`, which revives the retired chat and starts fresh work.
+    // Every round after the first was invisible to the person who asked for it.
+    //
+    // Measured on the real database, and it is not a corner case: the chat
+    // writing this had FIVE user messages against a single pair of timestamps.
+    // Worse than invisible, in fact — `reviveChat` NULLs `retired_at`, so
+    // re-tasking a worker made its completion card disappear and reappear lower
+    // down the log when the new round ended.
+    //
+    // WHY A TABLE AND NOT MORE COLUMNS: rounds are 1:N and unbounded. No
+    // arrangement of a fixed pair carries them, which is the whole finding.
+    //
+    // WHY NOT DERIVED FROM THE ARCHIVE, which was the promising alternative:
+    // `archive.sqlite` already stores one row per message with `sid`/`ts`/`role`
+    // plus its own byte copy of each transcript, so rounds ARE reconstructible
+    // from it — durably, stably, and measured at 38 ms per sid over 33 247
+    // messages. It fails on LIVENESS. `Archiver` triggers on `agent_turn
+    // done|fatal` and a 15-minute timer, so the message that STARTS a round is
+    // archived when that round ENDS or up to a quarter of an hour later. A
+    // launch card that arrives after the work finishes is not a launch card.
+    // The archive remains the right BACKFILL for rounds that predate this table.
+    //
+    // The two live signals both already exist and are already wired:
+    //   START  TabActivity.noteUserMessage — ws.ts's single funnel for every
+    //          message into every agent pane, where `reviveChat` already fires.
+    //   END    ChatRetirer.onFinished — where the spawn report already fires.
+    //
+    // ON DELETE CASCADE because a round of a chat that is gone is nothing. This
+    // is the one place in the lifecycle where a cascade is right: everywhere
+    // else "nothing is ever deleted" is the rule, and a round has no meaning
+    // apart from its child.
+    version: 32,
+    sql: `
+      CREATE TABLE spawn_rounds (
+        id            TEXT PRIMARY KEY,
+        tab_id        TEXT NOT NULL REFERENCES tabs(id) ON DELETE CASCADE,
+        started_at    INTEGER NOT NULL,
+        ended_at      INTEGER,
+        report        TEXT,
+        report_state  TEXT,
+        artifacts     TEXT
+      );
+      CREATE INDEX spawn_rounds_tab ON spawn_rounds(tab_id, started_at);
+    `,
+  },
+  {
+    // WHEN THE USER LAST TOUCHED THIS CHAT — the key a GLOBAL recency list can
+    // be ordered on, which `last_activity_at` is not.
+    //
+    //   tabs.last_user_at — epoch ms of the last act by the USER on this chat:
+    //     its creation, a message sent into it, or an unarchive. NOT NULL from
+    //     here on. Nothing the machine does moves it — not pty output, not a
+    //     turn finishing, not an agent writing into the pane.
+    //
+    // ── WHY A FOURTH TIMESTAMP ───────────────────────────────────────────────
+    // The sidebar can now be ordered as ONE flat list across every workspace,
+    // and that turns the ordering key from a convenience into the product.
+    // `last_activity_at` is bumped by sampled pty OUTPUT, which inside one
+    // workspace is tolerable (you picked the workspace; the list is your
+    // current context) and globally is not: measured on the live database while
+    // this was written, 6 of 58 chats were `working` and held 6 of the global
+    // top 7 — all under a minute old, none of them anything the user did. v27
+    // had already written the sentence, about the same column, for the clock:
+    // "a chat left tailing a log would be immortal".
+    //
+    // ── WHY NOT REUSE clock_started_at, WHICH MEANS ALMOST EXACTLY THIS ──────
+    // Because it carries v27's backfill, and that backfill is deliberately NOT
+    // a user-touch time: it is `boot + hash(id)` (`staggeredClockStart`), which
+    // on the live database leaves 4 rows stamped in the FUTURE and 35 rows
+    // ordered by an id hash. An untouched chat sorting ABOVE everything you
+    // actually did — because its hash happens to be large — is strictly worse
+    // than the noisy key it was meant to replace.
+    //
+    // Nor may that column be corrected in place. Its OTHER reader is the decay
+    // clock the user watches count down on every chip, and v27 says why a
+    // re-stamp is off the table: "a restore must not re-deal every surviving
+    // chat a different death date than the one the user has been watching".
+    // Correcting the sort would silently move 35 expiry dates. So: a second
+    // column, with one writer, and v27's column left exactly as it is.
+    //
+    // ── THE BACKFILL: THE SYNTHETIC CLOCKS IDENTIFY THEMSELVES ───────────────
+    // v27 stamped every row it touched at `boot + staggeredClockOffset(id)` for
+    // ONE boot instant. Subtracting that offset therefore maps every row it
+    // backfilled — and only those — back onto that single shared value, while a
+    // clock a real message has since reset lands on some unrelated instant. The
+    // population is recoverable exactly, with no stored flag, because the offset
+    // was already required to be a pure function of the id.
+    //
+    // So: take the most common `clock_started_at - offset(id)` across the table.
+    // With ≥ 2 rows agreeing, that value is v27's boot and every row at it is
+    // UNTOUCHED — its clock says nothing about the user and is discarded. Every
+    // other row's clock IS a user act (a send, or an unarchive, both of which go
+    // through TabStore.resetClock) and is kept.
+    //
+    //   last_user_at = MAX(created_at, clock_started_at)  for a touched row
+    //                = created_at                         for an untouched one
+    //
+    // `created_at` is the floor in both arms and is itself a genuine user touch
+    // — somebody made this chat — so an untouched chat is not guessed at, it is
+    // ranked by the last thing about it anyone can actually vouch for. It sinks
+    // below everything you have messaged since, which is where it belongs, and
+    // it can never be in the future.
+    //
+    // Verified against the live 85-tab database before it was written: one
+    // candidate boot with 35 rows, every runner-up with exactly 1, and all 4 of
+    // the future-stamped clocks inside the 35. 50 rows kept a real user send.
+    //
+    // ── HOW IT DEGRADES, IN BOTH DIRECTIONS ──────────────────────────────────
+    // Fewer than 2 rows agree (a small or heavily-used install where v27 left
+    // nothing untouched): no population to discard, every clock is read as real.
+    // A row whose clock happens to collide with the boot value is read as
+    // untouched and falls back to `created_at` — one row, one rank, no lie.
+    // Both errors cost a position in a list; neither can produce a timestamp
+    // nobody earned, which is the failure v27's backfill actually shipped.
+    //
+    // A guard the arithmetic does not need but the data does: a kept clock is
+    // clamped to the migration instant. It cannot be in the future by
+    // construction (only the discarded population is), and clamping means a
+    // clock-skewed row cannot outrank the present anyway.
+    version: 33,
+    sql: 'ALTER TABLE tabs ADD COLUMN last_user_at INTEGER;',
+    apply: (db) => {
+      const now = Date.now();
+      const rows = db
+        .prepare('SELECT id, created_at, clock_started_at FROM tabs WHERE last_user_at IS NULL')
+        .all() as Array<{ id: string; created_at: number; clock_started_at: number | null }>;
+
+      // The mode of `clock_started_at - offset(id)` — v27's boot, if it is
+      // still legible in this table.
+      const tally = new Map<number, number>();
+      for (const r of rows) {
+        if (r.clock_started_at === null) continue;
+        const boot = r.clock_started_at - staggeredClockOffset(r.id);
+        tally.set(boot, (tally.get(boot) ?? 0) + 1);
+      }
+      let syntheticBoot: number | null = null;
+      let best = 1; // ≥ 2 to count: one row agreeing with itself is not a population
+      for (const [boot, n] of tally) {
+        if (n > best) {
+          best = n;
+          syntheticBoot = boot;
+        }
+      }
+
+      const update = db.prepare('UPDATE tabs SET last_user_at = ? WHERE id = ?');
+      for (const r of rows) {
+        const synthetic =
+          r.clock_started_at === null ||
+          (syntheticBoot !== null &&
+            r.clock_started_at - staggeredClockOffset(r.id) === syntheticBoot);
+        const touched = synthetic ? r.created_at : Math.min(r.clock_started_at as number, now);
+        update.run(Math.max(r.created_at, touched), r.id);
+      }
+    },
+  },
+  {
+    // THE WORKERS THAT FINISHED BEFORE ROUNDS EXISTED.
+    //
+    // `spawn_rounds` only records what happens after v32 lands, and five workers
+    // had already been spawned, run and retired by then — so the user watched
+    // five jobs finish with nothing in the conversation at all. Their rounds are
+    // reconstructible from what the row already says, exactly, with no model
+    // call and no guess:
+    //
+    //   started_at  = created_at    the spawn IS the handover, for the first round
+    //   ended_at    = retired_at    NULL for one still running, which is right
+    //   report      = spawn_report  whatever was generated for it, if anything
+    //
+    // ONE round per child, because that is all the tab columns can express —
+    // which is the whole reason the table exists. A worker re-tasked four times
+    // before this ran gets one round covering the lot, and that is the honest
+    // limit of the data rather than a defect of the backfill: the boundaries of
+    // rounds 2..N were never written down anywhere. (The archive knows them, at
+    // its own 15-minute lag — see the v32 note. Not worth a model call or a scan
+    // for history nobody is looking at.)
+    //
+    // A RETIRED CHILD WITH NO REPORT STILL GETS ITS ROUND. An honest empty card
+    // beats no card: the round is the record that it ran and finished, and the
+    // missing summary is a separate fact the card says out loud.
+    //
+    // IDEMPOTENT, and by the data rather than by the version gate: it inserts
+    // only for children with NO round at all. The gate already prevents a second
+    // pass, but a migration that would double every card in every conversation
+    // if it ever ran twice is one restore-from-backup away from doing it.
+    version: 34,
+    apply: (db) => {
+      const orphans = db
+        .prepare(
+          `SELECT t.id, t.created_at, t.retired_at, t.spawn_report, t.spawn_report_state
+             FROM tabs t
+            WHERE t.spawned_by IS NOT NULL
+              AND NOT EXISTS (SELECT 1 FROM spawn_rounds r WHERE r.tab_id = t.id)`,
+        )
+        .all() as Array<{
+        id: string;
+        created_at: number;
+        retired_at: number | null;
+        spawn_report: string | null;
+        spawn_report_state: string | null;
+      }>;
+      const ins = db.prepare(
+        `INSERT INTO spawn_rounds (id, tab_id, started_at, ended_at, report, report_state)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      );
+      for (const t of orphans) {
+        // A deterministic id, so a restore that somehow reaches this twice
+        // collides on the primary key rather than inserting a twin.
+        ins.run(
+          `backfill-${t.id}`,
+          t.id,
+          t.created_at,
+          t.retired_at,
+          t.spawn_report,
+          t.spawn_report_state,
+        );
+      }
+    },
+  },
+  {
+    // WHO SENT THE MESSAGE — provenance for a message delivered INTO a chat.
+    //
+    // `muxpad agent send` drops a message into another chat's conversation, and
+    // on the receiving side it has always rendered as an ordinary user bubble.
+    // A coordinator's multi-paragraph brief is therefore indistinguishable from
+    // something the human typed, in the worker's own transcript. This table is
+    // the record that says otherwise.
+    //
+    // ── WHY A ROW AND NOT A MARKER IN THE TEXT ───────────────────────────────
+    // The cron fire solves the same problem the other way: `renderCronMarker`
+    // wraps the prompt in a `<muxpad-cron>` block that IS delivered to the
+    // model, deliberately, because a scheduled job has to tell the agent it is
+    // not a human speaking.
+    //
+    // A chat-to-chat send must not do that. Prepending a block would change the
+    // prompt every worker in the fleet receives — a behaviour change wearing a
+    // presentation change's clothes. So this follows `spawn_rounds` instead: a
+    // muxpad-owned row, joined into the conversation by the client. muxpad does
+    // not write the agent's transcript (it tails the harness's file), so a
+    // sender label could never have been a transcript row anyway.
+    //
+    // ── WHY THE JOIN KEY IS A HASH OF THE TEXT ───────────────────────────────
+    // The row and the bubble share no id, and the obvious substitute — the
+    // timestamp — does not work: a send that lands mid-turn is persisted to the
+    // server-side queue and delivered when that turn ends, which on a long turn
+    // is many minutes later. The TEXT survives that trip unchanged, so it is
+    // what the two sides agree on. `at` is kept anyway, to break ties when the
+    // same text was sent twice, and to age rows out.
+    //
+    // ── WHY THE TEXT ITSELF IS NOT STORED ────────────────────────────────────
+    // It is already in the transcript. The messages this exists for run to
+    // several hundred lines; a second copy per send would grow the database by
+    // the size of the conversation for no fact it does not already hold.
+    //
+    // `from_tab_id` is the SENDING CHAT, resolved server-side from the pane the
+    // sender ran in — never a name supplied by the caller, so a card cannot be
+    // made to claim a chat it did not come from. NULL means muxpad recorded a
+    // send it cannot attribute, which renders as an ordinary bubble.
+    //
+    // ON DELETE CASCADE on the receiving tab, for the same reason `spawn_rounds`
+    // has one: provenance for a conversation that is gone is nothing. The
+    // SENDER is deliberately NOT a foreign key — deleting the coordinator must
+    // not erase the record that it once briefed a worker; an id that no longer
+    // resolves renders as an unattributed bubble, which is honest.
+    // IF NOT EXISTS, for the reason v34 states in its own note: a restore from
+    // backup is one step from re-running a migration, and the version gate is
+    // not the only thing that decides whether this runs twice. `migrations.test`
+    // exercises exactly that — it clears `schema_version` above a point and runs
+    // the tail again — so a bare CREATE here fails every later migration's test.
+    version: 35,
+    sql: `
+      CREATE TABLE IF NOT EXISTS inbound_messages (
+        id          TEXT PRIMARY KEY,
+        tab_id      TEXT NOT NULL REFERENCES tabs(id) ON DELETE CASCADE,
+        at          INTEGER NOT NULL,
+        text_key    TEXT NOT NULL,
+        from_tab_id TEXT
+      );
+      CREATE INDEX IF NOT EXISTS inbound_messages_tab ON inbound_messages(tab_id, at);
     `,
   },
 ];

@@ -1,0 +1,708 @@
+/* ──────────────────────────────────────────────────────────────────────
+   The `@` picker — a floating list over the composer.
+
+   ABSOLUTELY POSITIONED, and that is load-bearing rather than cosmetic:
+   ChatPane measures `.chat-composer-wrap` with a ResizeObserver and
+   reserves exactly that much room at the foot of the transcript. A list
+   in the wrap's normal flow would add its own 300px to that measurement,
+   so opening the picker would scroll the conversation. Out of flow, the
+   wrap's height is unchanged and nothing behind the picker moves.
+
+   Its own namespace, like NavSearch's: `.chat-chip` in this sheet's
+   neighbourhood is already the composer's ATTACHMENT chip (a thumbnail
+   with a remove button), so a mention row borrowing that name would put
+   two unrelated things one selector apart.
+   ────────────────────────────────────────────────────────────────────── */
+
+.chat-mention {
+  position: absolute;
+  /* Matches `.chat-composer-wrap`'s own horizontal padding so the list lines
+     up with the composer pill under it. */
+  left: 12px;
+  right: 12px;
+  bottom: 100%;
+  z-index: 6;
+  max-width: 768px;
+  margin: 0 auto 6px;
+  max-height: min(46vh, 320px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--chat-elev);
+  border: 1px solid var(--chat-border-strong);
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgb(0 0 0 / 28%);
+  padding: 4px 0 5px;
+}
+
+.chat-mention-head,
+.chat-mention-divider,
+.chat-mention-foot {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--chat-faint);
+  padding: 7px 13px 4px;
+}
+.chat-mention-divider {
+  margin-top: 3px;
+  border-top: 1px solid var(--chat-border);
+  padding-top: 7px;
+}
+.chat-mention-foot {
+  font-weight: 400;
+}
+
+.chat-mention-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 13px;
+  cursor: pointer;
+  /* The name must not be pushed out by a long headline or snippet. */
+  min-width: 0;
+}
+.chat-mention-row[data-cursor="true"] {
+  background: color-mix(in srgb, var(--chat-fg) 9%, transparent);
+}
+
+.chat-mention-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--chat-fg);
+  /* The name is the thing you are choosing: it keeps its width, and the
+     second column is what gives way. Capped so one very long chat name
+     cannot push the snippet off the row entirely. */
+  flex: 0 1 auto;
+  max-width: 62%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A done chat is still pickable — nothing is deleted and a message revives it —
+   but it should not read as loud as a live one. The CHIP already says it (the
+   dashed outline round a ghost); the name just steps back. */
+.chat-mention-row[data-done="true"] .chat-mention-name {
+  color: var(--chat-dim);
+  font-weight: 500;
+}
+
+/* Provenance — "delivered · under muxpad sidebar". Shrinks LAST (the snippet
+   beside it gives way first), because it is what tells two same-named sub-chats
+   apart — but it is capped and ellipsises rather than pushing the row past the
+   panel, which a chat named in a full sentence would otherwise do. */
+/* The workspace. Plain text rather than the bordered tag next to it: it is on
+   EVERY row, and a box on every row is a box that has stopped being a mark.
+   Shrinks before the name does and after the snippet does — if the row runs out
+   of space, "which chat" matters more than "where", and both matter more than a
+   preview. */
+.chat-mention-ws {
+  flex: 0 2 auto;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--chat-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-mention-under {
+  flex: 0 1 auto;
+  max-width: 45%;
+  font-size: 11.5px;
+  color: var(--chat-faint);
+  padding: 0 5px;
+  border: 1px solid var(--chat-border);
+  border-radius: 5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-mention-why {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--chat-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-mention-hit {
+  background: var(--chat-hit-bg);
+  color: var(--chat-hit-ink);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+/* ── The inline mention, in rendered message text ──────────────────────
+   A pill around the chip and the name, sitting ON a text line: it must
+   not drive the line's leading (the 16px `chip` density exists for
+   exactly this), and it must not break across lines mid-name. */
+.chat-mention-pill {
+  display: inline-flex;
+  /* ─── THE PILL HANGS OFF ITS OWN TEXT, NOT OFF THE TILE ──────────────────
+     `baseline`, and this is the one declaration that decides whether a mention
+     sits on a line of prose or floats near it.
+
+     It was `center`. With `center` no flex item takes part in baseline
+     alignment, so the engine synthesises the pill's baseline from its FIRST
+     item — the tile — whose own baseline is that of the 10px emoji inside it.
+     The pill was therefore hung on a text line by a glyph in a box, which is why
+     it was wrong by an amount that did not move with the text: measured in
+     Chromium, the tile's bottom edge sat 4.00px below the prose baseline at
+     15.5px text AND at 17.8px, while the cap band it wants to be centred on grew
+     from 10.91px to 12.53px. One size looked tuned; every other size drifted.
+
+     With `baseline` the tile opts out (align-self below) and the NAME — real
+     text, same family as the prose around it, one shared baseline — is what the
+     pill aligns by. Measured after: the tile's centre lands 0.23px off the cap
+     band's centre at 15.5px and 0.66px at 17.8px, with no length anywhere in the
+     chain, and the same under RTL. (ChatChip.css used to carry a `-3px` nudge for
+     this; it never had any effect at all — see the note there.) */
+  align-items: baseline;
+  gap: 4px;
+  vertical-align: baseline;
+  background: color-mix(in srgb, var(--chat-fg) 9%, transparent);
+  border: 1px solid var(--chat-border-strong);
+  border-radius: 999px;
+  padding: 0 8px 0 5px;
+  /* Slightly under the surrounding prose, like every other inline token. */
+  font-size: 0.96em;
+  line-height: 1.45;
+  white-space: nowrap;
+  cursor: pointer;
+  color: inherit;
+  font-family: inherit;
+}
+/* The tile is centred ACROSS the pill's line rather than sat on its baseline.
+   Both halves matter: without this the tile would be baseline-aligned too — its
+   bottom edge on the text baseline, hanging the whole 16px above the line — and
+   the pill would go back to taking its baseline from the tile, which is the bug
+   above. Centring across a line box whose height is the TEXT's is what makes the
+   whole arrangement scale with the font size. */
+.chat-mention-pill > .chatchip {
+  align-self: center;
+}
+.chat-mention-pill:hover {
+  border-color: var(--chat-accent);
+}
+
+/* ── The card — a directed chat, in the conversation ───────────────────
+   Same material as a sidebar row in a different container (that is what
+   the `card` density means), sized like an assistant message rather than
+   full width so it reads as one item in the log and not as a banner. */
+/* The container is INERT — see ChatMentionCard. It was a <button>, and a report
+   body containing a mention put a button inside it. The properties that were
+   here only to undo a button's own styling (color, font-family) are kept: the
+   head is a button now, and inherits through them. */
+/* SHRINKS TO ITS CONTENTS. This was a fixed `min(420px, 94%)` — the width a
+   card needs when it is carrying a REPORT, applied to every card including the
+   ones that are a name and a spinner. A spawn card for `count-todos` came out as
+   a 420px pill holding 90px of text, which is mostly an empty box with a border
+   round it. The `-report` rule below still sets a width, because a body does
+   need one; this base rule now only sets a CEILING. */
+/* THE MATERIAL. Two token-derived touches and no third — "make it a bit nicer",
+   not "make it a banner":
+
+   1. A vertical sheen, mixed from `--chat-fg` rather than stated as a colour, so
+      it lifts the card off the transcript in a light theme and in a dark one with
+      the same declaration. 3.5% measured as present-but-not-noticed on all six.
+   2. A hairline shadow. BLACK at low alpha, like the picker panel above — a
+      shadow mixed from --chat-fg would be a WHITE glow on every dark theme,
+      which is the one way to get this wrong that looks deliberate.
+
+   Both transition, so the hover state has somewhere to go. */
+.chat-mention-card {
+  display: inline-flex;
+  flex-direction: column;
+  align-self: flex-start;
+  gap: 7px;
+  /* SHRINK TO FIT, but not below a common measure. A bare name made a 90px pill
+     and the one under it a 150px pill, and a pair of them looked ragged — the
+     complaint was "noticeably different widths". A floor rather than a fixed
+     width: two launch cards now share an edge, a long label still grows to its
+     own, and nothing goes back to the 420px box that was mostly empty border. */
+  width: fit-content;
+  min-width: min(280px, 100%);
+  max-width: min(420px, 94%);
+  margin: 3px 0;
+  padding: 7px 12px 8px;
+  text-align: left;
+  background: linear-gradient(color-mix(in srgb, var(--chat-fg) 3.5%, transparent), transparent 70%),
+    var(--chat-panel);
+  border: 1px solid var(--chat-border-strong);
+  border-radius: 11px;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 7%);
+  color: inherit;
+  font-family: inherit;
+  transition: border-color 0.14s ease, box-shadow 0.14s ease;
+}
+/* Hover is driven by the LINK rather than the box: on a report the box also
+   contains the answer and its own mentions, and a border that lit up while the
+   pointer was over a paragraph promised a click that paragraph does not make. */
+.chat-mention-card:has(.chat-mention-card-head:hover) {
+  border-color: var(--chat-accent);
+  box-shadow: 0 2px 10px rgb(0 0 0 / 13%);
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-mention-card {
+    transition: none;
+  }
+}
+
+/* The head ROW: the link, then the right-edge cluster (state, disclosure). Its
+   own element because the link is one child of it rather than the whole of it —
+   see ChatMentionCard on why the state and the chevron cannot live inside a
+   button. */
+.chat-mention-card-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
+}
+/* A direction and its report arrive as USER messages (they are real delivered
+   messages), and `.chat-turn-user` pushes its child to the right edge. A card is
+   not the user speaking — it is the other chat — so it keeps the left, where
+   every other piece of furniture in the log sits. */
+.chat-turn-user > .chat-mention-card {
+  margin-right: auto;
+}
+/* A report carries an answer, so it gets a message's width rather than a
+   row's — the same reading measure as the assistant text around it. */
+.chat-mention-card.-report {
+  /* A body is prose and wants a measure, so this one overrides the shrink. */
+  width: min(560px, 96%);
+  max-width: min(560px, 96%);
+}
+
+/* The card's one link. A button, so it is reachable by keyboard and announced as
+   the control it is — stripped back to the head's own layout, because the box
+   around it already paints the card. */
+.chat-mention-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  width: 100%;
+  padding: 0;
+  text-align: left;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+}
+button.chat-mention-card-head {
+  cursor: pointer;
+}
+
+/* The answer from the other chat, in full: it is a message, and a message that
+   ellipsises is a message you have to go somewhere else to read. */
+.chat-mention-card-body {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--chat-fg);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chat-mention-card-text {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.chat-mention-card-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--chat-fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-mention-card-sub {
+  font-size: 12.5px;
+  color: var(--chat-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The state slot, at the card's right edge: the SAME 10px mark in the same
+   place as everywhere else — a spinner while the other chat is working, and
+   otherwise a word for what happened. No tint, no badge. */
+.chat-mention-card-mark {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1.5px solid var(--chat-accent);
+  border-top-color: transparent;
+  animation: chat-mention-spin 0.8s linear infinite;
+}
+@keyframes chat-mention-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-mention-card-mark {
+    animation-duration: 2.4s;
+  }
+}
+
+/* ── The state WORD ────────────────────────────────────────────────────────
+   This was 10.5px mono grey text, which is how `delivered` came to read as a
+   leftover debug string in the one slot the rest of the app uses to say what
+   something is doing.
+
+   It is now the app's own state chip: StateChip.css's formula, verbatim, and the
+   hue tokens from the status channel declared at the top of styles.css. That
+   choice carries three things this sheet would otherwise have to solve alone —
+   the two `color-mix`es are MEASURED for contrast on every theme × surface (4.6
+   to 6.9 for the ink on its own fill, i.e. AA for small text), the hue tokens are
+   re-stepped per theme so a light palette gets a darker green rather than a
+   washed one, and the vocabulary is already in the user's eye from the navigator.
+
+   Its own selector rather than reusing `.navtree-state-word`: this sheet is
+   deliberately its own namespace (see the file head), and a chat card borrowing a
+   navigator class would tie a conversation's appearance to the rail's layout.
+
+   NOT --accent/--danger, for the status channel's own two reasons: the channel
+   must not change hue with the theme, and every theme re-tunes --danger to fit
+   its palette. */
+.chat-mention-card-state {
+  flex: 0 0 auto;
+  padding: 1.5px 6px;
+  border-radius: 5px;
+  font-family: inherit;
+  font-size: 9.5px;
+  line-height: 13px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  background: color-mix(in srgb, var(--state-hue) var(--status-chip-wash, 22%), transparent);
+  color: color-mix(in srgb, var(--state-hue) var(--status-ink-mix, 55%), var(--chat-fg));
+}
+/* An ANNOTATION, not a lifecycle state ("reported", "directed here"). Neutral on
+   purpose — see the `tone` prop. It is the only thing left that draws a WORD. */
+.chat-mention-card-state[data-state="note"] {
+  --state-hue: var(--chat-faint);
+}
+
+/* ── The SUB-CHAT mark ────────────────────────────────────────────────────
+   A BRANCH: a stem coming down from above and turning out to the right, with a
+   node on its end. "Another chat started this one."
+
+   It replaces `ChatChip` on a spawn card rather than joining it. That component
+   is the decay CLOCK, a sub-chat has no clock, and what it draws for one is the
+   rail's 6px child dot — which works in the rail because a parent ROW sits above
+   it. Here there is nothing above it to belong to, and it read as a bullet.
+
+   Drawn, like the tick and the chevron: two borders and a radius are the same
+   shape at every size and DPI, and a glyph from a font is not. `currentColor`
+   throughout, so the two states below set ONE property between them.
+
+   Quiet by default and the ACCENT while the worker runs — the only place on this
+   card where the accent appears, and it is carrying "this is live" beside the
+   spinner at the other edge rather than competing with it. */
+.chat-mention-card-spawn {
+  position: relative;
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  color: var(--chat-faint);
+}
+.chat-mention-card-spawn[data-working="true"] {
+  color: var(--chat-accent);
+}
+/* The stem and the elbow, in one box: a left border down, a bottom border out,
+   and a radius joining them. */
+.chat-mention-card-spawn::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 6px;
+  height: 8px;
+  border-left: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  border-bottom-left-radius: 4px;
+}
+/* The node the branch arrives at. */
+.chat-mention-card-spawn::after {
+  content: "";
+  position: absolute;
+  left: 9px;
+  top: 6.5px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* ── The lifecycle MARK ───────────────────────────────────────────────────
+   A tick, an ✕ or a dot in the slot where a working card spins — never a word.
+
+   The word was the complaint, in the user's own terms: "delivered needs to be
+   replaced with a green checkmark". It is right, and it is the rail's own rule
+   arriving here late — the sidebar settled on "the SAME 10px mark in the same
+   slot" for exactly this reason. A label in a mark's slot is read on purpose,
+   every time, to learn something that has not changed.
+
+   DRAWN, not typed: a ✓ from a font lands differently in every theme's UI font
+   and carries emoji presentation on some platforms. Two borders rotated 45° are
+   the same two lines at every size and DPI, and they take `currentColor`.
+
+   The hue is the status channel's, re-stepped per theme in styles.css — so
+   nothing here names a colour, and the green a light theme gets is a darker
+   green rather than a washed one. */
+.chat-mention-card-tick {
+  flex: 0 0 auto;
+  position: relative;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  /* A disc of the hue at the chip wash, so the mark is a SHAPE at a glance
+     rather than two thin strokes floating at the card's edge. */
+  background: color-mix(in srgb, var(--state-hue) var(--status-chip-wash, 22%), transparent);
+  color: var(--state-hue);
+}
+.chat-mention-card-tick::after {
+  content: "";
+  position: absolute;
+  box-sizing: border-box;
+}
+/* DELIVERED — the green the rail already uses for "finished, waiting for you",
+   which is precisely what a worker's result is. */
+.chat-mention-card-tick[data-state="delivered"] {
+  --state-hue: var(--status-ready);
+}
+/* The checkmark: the short arm and the long arm of an L, rotated. Positioned off
+   the CENTRE rather than the box, and nudged up a hair, because a tick's optical
+   centre sits below its bounding box's. */
+.chat-mention-card-tick[data-state="delivered"]::after {
+  left: 4.5px;
+  top: 3.5px;
+  width: 5px;
+  height: 8px;
+  border-right: 1.7px solid currentColor;
+  border-bottom: 1.7px solid currentColor;
+  transform: rotate(45deg);
+}
+/* FAILED is grey, not red, and that is the channel's rule rather than this
+   sheet's taste: red means "you are needed", and a crashed worker needs nothing
+   until you decide it does. --status-dead over --status-quiet because quiet is
+   tuned to recede and a dead run still has to be findable. */
+.chat-mention-card-tick[data-state="failed"] {
+  --state-hue: var(--status-dead);
+}
+/* An ✕, as two crossed rules on one element (the second is a linear-gradient, so
+   it needs no extra box). */
+.chat-mention-card-tick[data-state="failed"]::after {
+  left: 4px;
+  top: 7px;
+  width: 7px;
+  height: 1.6px;
+  background: currentColor;
+  box-shadow: 0 0 0 0 transparent;
+  transform: rotate(45deg);
+  border-radius: 1px;
+}
+.chat-mention-card-tick[data-state="failed"]::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 7px;
+  width: 7px;
+  height: 1.6px;
+  background: currentColor;
+  transform: rotate(-45deg);
+  border-radius: 1px;
+}
+/* AWAITING YOU — the one state on this card that WANTS something, so it takes
+   the channel that means exactly that. `--status-blocked` is the rail's "it
+   wants you NOW", and this is the same claim in a different container.
+   Deliberately the loudest mark here: a worker holding a question is the only
+   thing on a completion card that is not already over. */
+.chat-mention-card-tick[data-state="awaiting"] {
+  --state-hue: var(--status-blocked);
+}
+/* A question mark, drawn: the dot of one, and the hook above it as a rotated
+   elbow. Two pseudo-elements, like every other mark here, so it takes
+   currentColor and stays the same shape at any DPI. */
+.chat-mention-card-tick[data-state="awaiting"]::before {
+  content: "";
+  position: absolute;
+  left: 5.5px;
+  top: 3px;
+  width: 5px;
+  height: 4px;
+  border: 1.6px solid currentColor;
+  border-bottom: 0;
+  border-radius: 3px 3px 0 0;
+}
+.chat-mention-card-tick[data-state="awaiting"]::after {
+  left: 6.8px;
+  top: 7px;
+  width: 1.6px;
+  height: 4.5px;
+  background: currentColor;
+  border-radius: 1px;
+}
+/* DONE — archived, or decayed without ever delivering. A filled dot: the state
+   with the least to tell you gets the mark with the least shape in it. */
+.chat-mention-card-tick[data-state="done"] {
+  --state-hue: var(--chat-faint);
+}
+.chat-mention-card-tick[data-state="done"]::after {
+  left: 5.5px;
+  top: 5.5px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* ── The disclosure ───────────────────────────────────────────────────────
+   A SECOND control beside the state, never a replacement for the head: expand to
+   read the work here, the head to go there and continue. Sized to the 10px mark's
+   column so a card with a spinner and a card with a chevron have the same right
+   edge. */
+.chat-mention-card-more {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: 5px;
+  color: var(--chat-faint);
+  cursor: pointer;
+}
+.chat-mention-card-more:hover {
+  background: color-mix(in srgb, var(--chat-fg) 9%, transparent);
+  color: var(--chat-fg);
+}
+/* The chevron is drawn rather than typed: a glyph would put a font's idea of "▸"
+   in the middle of a measured row, and two borders rotate cleanly at any DPI. */
+.chat-mention-card-chevron {
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  /* Pointing right when collapsed; the 2px offsets keep the visual centre of an
+     L-shape on the button's centre rather than its bounding box. */
+  transform: translate(-1px, 0) rotate(-45deg);
+  transition: transform 0.16s ease;
+}
+[data-expanded="true"]
+  > .chat-mention-card-row
+  > .chat-mention-card-more
+  .chat-mention-card-chevron {
+  transform: translate(0, -1px) rotate(45deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-mention-card-chevron {
+    transition: none;
+  }
+}
+/* The button's accessible name, and the only text in it. */
+.chat-mention-card-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ── THE WORK, expanded in place ──────────────────────────────────────────
+   The child's final turn, rendered as the markdown it is (AssistantText, the same
+   component assistant prose uses — so a report's headings, lists, links and
+   attachment gallery all arrive as themselves).
+
+   NO INNER SCROLLER, deliberately. A scrolling region inside a scrolling log is a
+   scroll trap: the wheel stops working depending on where the pointer happens to
+   be. The log is already the scroller, and the FETCH is what is bounded
+   (lib/spawn-work.ts) — at a turn boundary, which is an honest place to stop.
+
+   `white-space` is NOT set here, which is the whole difference from
+   `.chat-mention-card-body` above: `pre-wrap` fights a markdown renderer, every
+   rendered block gaining its source newlines back on top of its own. */
+.chat-mention-card-work {
+  border-top: 1px solid var(--chat-border);
+  padding-top: 8px;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--chat-fg);
+  overflow-wrap: anywhere;
+}
+/* The prose inherits the log's own spacing, but a report's first heading must not
+   push the hairline away from the summary above it. */
+.chat-mention-card-work > :first-child {
+  margin-top: 0;
+}
+.chat-mention-card-work > :last-child {
+  margin-bottom: 0;
+}
+/* ── WHERE THE WORK IS ────────────────────────────────────────────────────
+   The urls and files the worker produced, under the summary.
+
+   Its own row rather than a line inside the prose, because these are the one
+   thing on the card you press. The worker that published a page and wrote a
+   13 KB report had its summary refused and its card showed nothing at all —
+   these are scraped, not generated, so they are what survives that. */
+.chat-mention-card-artifacts {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+}
+.chat-mention-card-artifact {
+  max-width: 100%;
+  font-size: 12.5px;
+  /* The one place a path is worth monospacing: it is a thing to copy, and the
+     shape of a path is how you recognise it. */
+  font-family: var(--mono-font, ui-monospace, monospace);
+  color: var(--chat-accent);
+  /* Truncate from the LEFT: the end of a url or a path is what identifies it
+     (`…/muxpad-cross-workspace`), and the origin is the part you can lose. */
+  direction: rtl;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* …but the text inside still reads left to right — `direction: rtl` on the box
+   only decides which end the ellipsis eats. */
+.chat-mention-card-artifact > * {
+  direction: ltr;
+}
+/* A local path is not pressable — there is nothing for a browser to open — so it
+   is ink rather than a link, and says so by being quiet. */
+.chat-mention-card-artifact[data-path="true"] {
+  color: var(--chat-dim);
+}
+a.chat-mention-card-artifact:hover {
+  text-decoration: underline;
+}
+
+/* The one line that is ours rather than the worker's: what was NOT shown, and
+   where the rest is. Never silent — a bounded read that says nothing reads as a
+   complete report that stops mid-sentence. */
+.chat-mention-card-cut {
+  display: block;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--chat-faint);
+}

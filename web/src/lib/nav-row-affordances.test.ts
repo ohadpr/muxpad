@@ -6,7 +6,6 @@ const row = (o: Partial<Parameters<typeof tabRowAffordances>[0]> = {}) =>
   tabRowAffordances({
     variant: 'sidebar',
     paneCount: 1,
-    panesOpen: false,
     isEditing: false,
     ...o,
   });
@@ -17,13 +16,11 @@ describe('tab row affordances — desktop sidebar', () => {
       pinButton: true,
       closeButton: true,
       paneExpander: false,
-      paneCountChip: false,
-      tapExpandsPanes: false,
     });
   });
 
   it('never expands into a pane list — the mosaic already shows every pane', () => {
-    expect(row({ variant: 'sidebar', paneCount: 9 }).tapExpandsPanes).toBe(false);
+    expect(row({ variant: 'sidebar', paneCount: 9 }).paneExpander).toBe(false);
   });
 });
 
@@ -39,41 +36,34 @@ describe('tab row affordances — mobile sheet', () => {
     expect(a.closeButton).toBe(false);
   });
 
-  it('a SINGLE-pane tab is a plain row: no chevron, no chip, tap opens it', () => {
+  it('a SINGLE-pane tab is a plain row: emoji, name, nothing else', () => {
     expect(row({ variant: 'sheet', paneCount: 1 })).toEqual({
       pinButton: false,
       closeButton: false,
       paneExpander: false,
-      paneCountChip: false,
-      tapExpandsPanes: false,
     });
   });
 
-  it('a MULTI-pane tab announces itself: chevron + count, and tap expands', () => {
+  it('a MULTI-pane tab gets ONE extra thing: the chevron that opens its panes', () => {
     expect(row({ variant: 'sheet', paneCount: 4 })).toEqual({
       pinButton: false,
       closeButton: false,
       paneExpander: true,
-      paneCountChip: true,
-      tapExpandsPanes: true,
     });
   });
 
-  it('the count chip is COLLAPSED-only — expanded, the panes speak for themselves', () => {
-    expect(row({ variant: 'sheet', paneCount: 4, panesOpen: true }).paneCountChip).toBe(false);
-    // The chevron stays (it's how you collapse again) and tap still toggles.
-    expect(row({ variant: 'sheet', paneCount: 4, panesOpen: true }).paneExpander).toBe(true);
-    expect(row({ variant: 'sheet', paneCount: 4, panesOpen: true }).tapExpandsPanes).toBe(true);
+  it('the pane-count CHIP is gone — a 2-pane chat looks like a 1-pane chat', () => {
+    // An accepted loss of the rail rebuild, recorded here so re-adding it is a
+    // decision rather than a drift. The rail spends its marks on one question
+    // ("does this want you?"); a pane count does not answer it, and a chip on
+    // every multi-pane row competed with the one mark that does.
+    expect(row({ variant: 'sheet', paneCount: 4 })).not.toHaveProperty('paneCountChip');
   });
 
-  it('one pane and many panes are now DISTINGUISHABLE before you tap', () => {
-    // The whole point of the change: the two row types differed only by a
-    // 10px chevron at the far-left edge, opposite the name you read, yet
-    // behaved completely differently on tap.
-    const one = row({ variant: 'sheet', paneCount: 1 });
-    const many = row({ variant: 'sheet', paneCount: 2 });
-    expect(one.paneCountChip).not.toBe(many.paneCountChip);
-    expect(one.tapExpandsPanes).not.toBe(many.tapExpandsPanes);
+  it('TAP always opens the chat now — the expand-instead-of-navigate case is gone', () => {
+    // One rule for every row, with no exception to learn. The chevron is what
+    // opens the pane list.
+    expect(row({ variant: 'sheet', paneCount: 4 })).not.toHaveProperty('tapExpandsPanes');
   });
 
   it('an inline rename stands every row control down', () => {
@@ -85,13 +75,6 @@ describe('tab row affordances — mobile sheet', () => {
     const d = row({ variant: 'sidebar', paneCount: 1, isEditing: true });
     expect(d.pinButton).toBe(false);
     expect(d.closeButton).toBe(false);
-  });
-
-  it('editing does not hide the count chip’s meaning for a collapsed row', () => {
-    // The chip lives inside the link, which the rename input replaces
-    // wholesale — so its flag is irrelevant while editing and we don't
-    // pretend otherwise by special-casing it.
-    expect(row({ variant: 'sheet', paneCount: 4, isEditing: true }).paneCountChip).toBe(true);
   });
 });
 

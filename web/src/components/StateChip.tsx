@@ -64,19 +64,61 @@ import './StateChip.css';
  * time an agent started or stopped ("Main" → "Main, Working" → "Main"). As a
  * sibling it is still read when the row is read, and the control keeps one
  * stable name. The pane rows got this wrong once — see NavTree.tsx.
+ *
+ * ─── `mode="mark"` — the MOBILE RAIL's one bit ───────────────────────────
+ * The sheet's rail was rebuilt around a single question — does this chat want
+ * you, or not — so it does not speak the five-state vocabulary above. Five
+ * states collapse to one bit there, and the encoding is:
+ *
+ *   blocked  a 9px DOT. The only permanent mark in the whole list.
+ *   working  the same spinner as the chip mode, and nothing else. Transient
+ *            by definition, so it needs no permanent mark and gets none.
+ *   ready    NOTHING here — it is carried by the name's WEIGHT (unread bold),
+ *            which is a channel the row already has and pays nothing for.
+ *   dead     NOTHING. Rare, and it is not asking for anything; you find it
+ *            inside the chat.
+ *   idle     NOTHING, and no element at all — see below.
+ *
+ * The screen-reader text is unchanged in both modes: a state a sighted user
+ * reads off weight or off the row's absence of a mark still has to be SAID.
+ * `ready` and `dead` therefore render an sr-only span and no visible ink,
+ * which is the one place the two modes disagree about what "empty" means.
+ *
+ * `idle` renders a genuinely childless span in chip mode (the grid cell has to
+ * survive) and NOTHING AT ALL in mark mode (the sheet row is a flex line with
+ * no reserved column, and the invariant there is that an idle row carries no
+ * state element whatsoever).
  */
 export function StateChip({
   status,
   className,
+  mode = 'chip',
 }: {
   status: PaneStatus | undefined;
   className?: string | undefined;
+  /** `chip` = word/spinner in a fixed cell (desktop rail). `mark` = the mobile
+   *  rail's one bit: a dot for `blocked`, the spinner for `working`, nothing
+   *  visible for anything else. */
+  mode?: 'chip' | 'mark';
 }) {
   const s = status ?? 'idle';
   if (s === 'idle' || !(s in WORDS)) {
+    // Mark mode draws NO element for an idle row. There is no column to hold
+    // open on the sheet, and "an idle row renders no state mark" is the rule
+    // the whole rail rests on.
+    if (mode === 'mark') return null;
     // Empty, not absent: the cell stays in the grid (so nothing re-flows into
     // its track) but measures zero and declines its gutter.
     return <span className={cls(className)} data-state="idle" />;
+  }
+  if (mode === 'mark') {
+    return (
+      <span className={cls(className)} data-state={s} data-mode="mark">
+        {s === 'blocked' ? <span className="navtree-state-dot" aria-hidden="true" /> : null}
+        {s === 'working' ? <span className="navtree-state-spin" aria-hidden="true" /> : null}
+        <span className="navtree-state-sr">{ANNOUNCED[s]}</span>
+      </span>
+    );
   }
   return (
     <span className={cls(className)} data-state={s}>

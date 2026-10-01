@@ -4,7 +4,7 @@
 // server→runner control frames into method calls; the backend owns the session
 // and emits runner→server frames via the host. Nothing in the harness knows
 // which backend is running.
-import type { AgentMode, BackendId, RunnerFrame } from '../protocol.js';
+import type { AgentMode, BackendId, NotifyStatus, RunnerFrame } from '../protocol.js';
 
 /** Services the harness provides to a backend. */
 export interface RunnerHost {
@@ -27,13 +27,23 @@ export interface BackendOptions {
   /** `--model <id>`: pin the session model (null = backend default). */
   requestedModel: string | null;
   /**
-   * `--mode do|deep`: the pane's agent behavior mode at LAUNCH. This is the
-   * only point at which a mode can reach the session as real system-prompt
+   * `--mode chat|agent`: the pane's agent mode at LAUNCH. This is the only
+   * point at which a mode can reach the session as real system-prompt
    * material; a later switch arrives as a `mode` frame and can only be
    * delivered in-conversation (see AgentBackend.setMode / agent-modes.ts).
-   * Absent flag = 'deep' = exactly the pre-mode behavior.
+   * Absent flag = BASELINE_AGENT_MODE ('agent') = exactly the pre-mode
+   * behavior.
    */
   mode: AgentMode;
+  /**
+   * Override the auth self-heal back-off ladder (see auth-heal.ts). Absent in
+   * production — the harness never sets it, and the default ladder is the
+   * policy. It exists because the give-up path is reached by walking four
+   * rungs whose real delays total 85 seconds, and a test that waited them out
+   * would be a test nobody runs. The POLICY itself is unit-tested on its own
+   * injected clock; this is only for driving the backend through it.
+   */
+  authHealDelaysMs?: readonly number[];
 }
 
 /**
@@ -68,6 +78,16 @@ export interface AgentBackend {
   setMode(mode: AgentMode): void;
   /** Answer an outstanding ask_user question (answers validated by the backend). */
   answer(qid: string, answers: unknown): void;
+  /**
+   * What became of a `notify` the backend emitted (sent / held / dropped), so
+   * its blocked tool call can tell the MODEL rather than claim a delivery it
+   * cannot observe.
+   *
+   * OPTIONAL, unlike the rest: it answers a frame only a backend that offers
+   * the `notify` tool can ever have sent, so a backend without that tool has
+   * nothing to implement. The harness calls it with `?.`.
+   */
+  notifyResult?(nid: string, status: NotifyStatus): void;
   /** ws (re)connected: re-deliver anything the server lost (pending questions,
    *  last status) so chat clients recover after a blip. */
   onConnected(): void;

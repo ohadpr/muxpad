@@ -2,8 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   type ChatEvent,
   LAUNCH_ACK_RE,
+  REPLY_ACK,
+  REPLY_TOOL_NAME,
   blockText,
   isAgentLaunchTool,
+  isInterruptMarker,
+  needsReplyFallback,
   normalizeTranscriptLine,
   sanitizeAgentStatus,
   subagentLabel,
@@ -310,5 +314,194 @@ describe('subagent lifecycle recognisers', () => {
       taskNotificationToolUseId('<task-notification><summary>done</summary></task-notification>'),
     ).toBeNull();
     expect(taskNotificationToolUseId('just some prose')).toBeNull();
+  });
+});
+
+// ── Chat mode's voice ───────────────────────────────────────────────────────
+// The `reply` tool is the agent's only user-facing channel in Chat mode. It
+// reaches every reader of a transcript through THIS function, which is why the
+// promotion happens here and not at render time: the archive indexes assistant
+// text and not tool_use rows, so a reply normalized as a tool call would be
+// invisible to search — the one thing a user is most likely to look for later.
+
+describe('the reply tool in a transcript', () => {
+  const assistantLine = (content: unknown[]) => ({
+    type: 'assistant',
+    uuid: 'u1',
+    timestamp: TS,
+    message: { model: 'claude-opus-4-8', content },
+  });
+
+  it('normalizes a reply call to assistant TEXT, marked as spoken', () => {
+    expect(
+      normalizeTranscriptLine(
+        assistantLine([
+          { type: 'tool_use', id: 't1', name: REPLY_TOOL_NAME, input: { text: 'Filed it.' } },
+        ]),
+      ),
+    ).toEqual([
+      {
+        kind: 'assistant',
+        id: 'u1:0',
+        ts: MS,
+        text: 'Filed it.',
+        voice: 'reply',
+        model: 'claude-opus-4-8',
+      },
+    ]);
+  });
+
+  it('keeps several replies as several messages, each with its own id', () => {
+    const out = normalizeTranscriptLine(
+      assistantLine([
+        { type: 'tool_use', id: 't1', name: REPLY_TOOL_NAME, input: { text: 'one' } },
+        { type: 'tool_use', id: 't2', name: REPLY_TOOL_NAME, input: { text: 'two' } },
+      ]),
+    );
+    expect(out.map((e) => e.id)).toEqual(['u1:0', 'u1:1']);
+  });
+
+  it('drops an empty reply rather than rendering a blank bubble', () => {
+    expect(
+      normalizeTranscriptLine(
+        assistantLine([
+          { type: 'tool_use', id: 't1', name: REPLY_TOOL_NAME, input: { text: '  ' } },
+        ]),
+      ),
+    ).toEqual([]);
+  });
+
+  it('leaves every OTHER tool call a tool call', () => {
+    // Matched on the exact SDK-prefixed name — a user's own MCP server
+    // exposing a `reply` tool must never be promoted into muxpad's bubbles.
+    expect(
+      kinds(
+        normalizeTranscriptLine(
+          assistantLine([
+            { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } },
+            { type: 'tool_use', id: 't2', name: 'mcp__other__reply', input: { text: 'hi' } },
+          ]),
+        ),
+      ),
+    ).toEqual(['tool_use', 'tool_use']);
+  });
+
+  it("drops the reply's ack — the tool_use is a message, so nothing pairs with it", () => {
+    expect(
+      normalizeTranscriptLine({
+        type: 'user',
+        uuid: 'u2',
+        timestamp: TS,
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 't1',
+              content: [{ type: 'text', text: REPLY_ACK }],
+            },
+          ],
+        },
+      }),
+    ).toEqual([]);
+  });
+
+  it('keeps ordinary tool_results, including ones that merely mention delivery', () => {
+    expect(
+      kinds(
+        normalizeTranscriptLine({
+          type: 'user',
+          uuid: 'u3',
+          timestamp: TS,
+          message: {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 't9',
+                content: [{ type: 'text', text: 'Delivered to the user. [muxpad-reply] and more' }],
+              },
+            ],
+          },
+        }),
+      ),
+    ).toEqual(['tool_result']);
+  });
+});
+
+describe('the interrupt marker — a Stop, as the transcript records it', () => {
+  it('recognises both harness spellings, and nothing else', () => {
+    expect(isInterruptMarker('[Request interrupted by user]')).toBe(true);
+    expect(isInterruptMarker('[Request interrupted by user for tool use]')).toBe(true);
+    expect(isInterruptMarker('  [Request interrupted by user]')).toBe(true);
+    expect(isInterruptMarker('the [Request interrupted by user] line')).toBe(false);
+    expect(isInterruptMarker('Request interrupted')).toBe(false);
+  });
+
+  it('turns a BARE-STRING interrupt into a stopped notice', () => {
+    expect(
+      normalizeTranscriptLine({
+        type: 'user',
+        uuid: 'u1',
+        timestamp: TS,
+        message: { role: 'user', content: '[Request interrupted by user]' },
+      }),
+    ).toEqual([{ kind: 'notice', id: 'u1', ts: MS, variant: 'interrupted', text: 'Stopped' }]);
+  });
+
+  it('turns a BLOCK-ARRAY interrupt into a stopped notice', () => {
+    // The shape a Stop lands in when it interrupts a tool call — live-verified.
+    // This branch used to read tool_result blocks ONLY, so the marker was
+    // dropped whole and a reloaded chat had no idea the turn was stopped.
+    expect(
+      normalizeTranscriptLine({
+        type: 'user',
+        uuid: 'u1',
+        timestamp: TS,
+        message: {
+          role: 'user',
+          content: [{ type: 'text', text: '[Request interrupted by user for tool use]' }],
+        },
+      }),
+    ).toEqual([{ kind: 'notice', id: 'u1:0', ts: MS, variant: 'interrupted', text: 'Stopped' }]);
+  });
+
+  it('leaves an ordinary user message alone', () => {
+    expect(
+      kinds(
+        normalizeTranscriptLine({
+          type: 'user',
+          uuid: 'u1',
+          timestamp: TS,
+          message: { role: 'user', content: 'stop asking me that' },
+        }),
+      ),
+    ).toEqual(['user']);
+  });
+});
+
+describe('needsReplyFallback — the guard, as one rule', () => {
+  const turn = (over: Partial<Parameters<typeof needsReplyFallback>[0]> = {}) =>
+    needsReplyFallback({ mode: 'chat', humanInitiated: true, replies: 0, ...over });
+
+  it('fires for a silent turn a human was waiting on', () => {
+    expect(turn()).toBe(true);
+  });
+
+  it('does not fire when the agent actually spoke', () => {
+    expect(turn({ replies: 1 })).toBe(false);
+  });
+
+  it('does not fire in Agent mode — plain text is the voice there', () => {
+    expect(turn({ mode: 'agent' })).toBe(false);
+  });
+
+  it('does not fire for a self-initiated wake — nobody is waiting', () => {
+    expect(turn({ humanInitiated: false })).toBe(false);
+  });
+
+  it('does not fire for a turn the user stopped, or one that failed', () => {
+    expect(turn({ interrupted: true })).toBe(false);
+    expect(turn({ failed: true })).toBe(false);
   });
 });

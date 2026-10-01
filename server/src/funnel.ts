@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { tailscaleBins } from './tailscale-bin.js';
 
 /**
  * Tailscale Funnel management for the public artifact server
@@ -22,13 +23,16 @@ import { promisify } from 'node:util';
  * path is the CLI discovering the base url in the pane shell and passing a
  * `public_base_url` hint, which routes/publish.ts persists in the globals
  * KV and falls back to when ensure() warns.
+ *
+ * Because that failure is the NORMAL case in production, it is cached as firmly
+ * as a success: one attempt per process, either way. An exec here is not free —
+ * with no `tailscale` on PATH it runs the app-bundle binary, which reads another
+ * app's container and makes macOS prompt the user (see tailscale-bin.ts). The
+ * attempt is also remembered ACROSS processes, in public-base.ts.
  */
 
 /** The public HTTPS port funnel listens on (one of 443/8443/10000). */
 export const FUNNEL_PORT = 8443;
-
-/** Candidate tailscale binaries, tried in order (PATH, then the app bundle). */
-const TAILSCALE_BINS = ['tailscale', '/Applications/Tailscale.app/Contents/MacOS/Tailscale'];
 
 export interface FunnelState {
   /** URL base to prefix slugs with, no trailing slash. */
@@ -66,11 +70,23 @@ export function createTailscaleFunnel(opts: {
   publicPort: number;
   exec?: ExecFn;
   bins?: string[];
+  /** Injectable for tests; defaults to process.env. Read for the bin override. */
+  env?: Record<string, string | undefined>;
 }): Funnel {
   const exec = opts.exec ?? defaultExec;
-  const bins = opts.bins ?? TAILSCALE_BINS;
+  const bins = opts.bins ?? tailscaleBins(opts.env);
   let resolvedBin: string | null = null;
   let baseUrl: string | null = null;
+  // The FAILURE is cached as hard as the success, and that is the fix for the
+  // reported bug rather than an optimisation. Under launchd the app-bundle CLI
+  // never works (CLIError 3), so an uncached failure meant two execs on every
+  // single publish, and two chances for macOS to ask about reading another
+  // app's data. One process, one attempt, whichever way it goes.
+  //
+  // Per-process only — which is the right scope HERE, because a restarted
+  // daemon genuinely should re-check. What must not be re-checked on every
+  // command is persisted a layer up, in public-base.ts.
+  let failed: FunnelState | null = null;
 
   // Try candidates in order; only a missing binary (ENOENT) falls through to
   // the next one — a real tailscale error (funnel not permitted, logged out)
@@ -95,6 +111,7 @@ export function createTailscaleFunnel(opts: {
   return {
     async ensure(): Promise<FunnelState> {
       if (baseUrl) return { baseUrl };
+      if (failed) return failed;
       try {
         // Idempotent: tailscaled treats a repeat --bg mapping as a no-op.
         await run([
@@ -110,10 +127,11 @@ export function createTailscaleFunnel(opts: {
         return { baseUrl };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        return {
+        failed = {
           baseUrl: `http://127.0.0.1:${opts.publicPort}`,
           warning: `tailscale funnel unavailable — URL is local-only: ${message}`,
         };
+        return failed;
       }
     },
   };

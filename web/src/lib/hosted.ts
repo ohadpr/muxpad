@@ -49,20 +49,22 @@ export function useHosted(): HostedState {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const alive = useRef(true);
+  const generation = useRef(0);
 
   const refresh = useCallback(async () => {
+    const mine = ++generation.current;
     try {
       const [a, p] = await Promise.all([hostedApi.listApps(), hostedApi.listArtifacts()]);
-      if (!alive.current) return;
+      if (!alive.current || mine !== generation.current) return;
       setApps(a.apps);
       setArtifacts(p.publishes);
       setBase(p.base ?? null);
       setError(null);
     } catch (err) {
-      if (!alive.current) return;
+      if (!alive.current || mine !== generation.current) return;
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      if (alive.current) setLoading(false);
+      if (alive.current && mine === generation.current) setLoading(false);
     }
   }, []);
 
@@ -92,6 +94,7 @@ export function useHosted(): HostedState {
     document.addEventListener('visibilitychange', onVisibility);
     return () => {
       alive.current = false;
+      generation.current += 1;
       stop();
       document.removeEventListener('visibilitychange', onVisibility);
     };

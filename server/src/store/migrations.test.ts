@@ -1,6 +1,27 @@
+import { CHAT_STAGGER_MS, staggeredClockStart } from '@muxpad/shared';
 import Database from 'better-sqlite3';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { LATEST_SCHEMA_VERSION, runMigrations } from './migrations.js';
+
+/**
+ * Everything that defines this database: the schema TEXT of every object, plus
+ * every row of every table. The unit of comparison for "a second migration
+ * pass is a no-op" — asserting that it didn't throw proves nothing about
+ * whether it kept the data.
+ *
+ * Rows are ordered by their first column so the comparison can't be fooled (or
+ * flaked) by SQLite's unordered scan.
+ */
+function fingerprint(db: Database.Database): unknown {
+  const master = db
+    .prepare('SELECT type, name, sql FROM sqlite_master ORDER BY type, name')
+    .all() as Array<{ type: string; name: string; sql: string | null }>;
+  const rows: Record<string, unknown[]> = {};
+  for (const t of master.filter((m) => m.type === 'table')) {
+    rows[t.name] = db.prepare(`SELECT * FROM "${t.name}" ORDER BY 1`).all();
+  }
+  return { master, rows };
+}
 
 describe('migrations', () => {
   it('creates the v1 baseline tables on a fresh db', () => {
@@ -19,6 +40,91 @@ describe('migrations', () => {
     const db = new Database(':memory:');
     runMigrations(db);
     expect(() => runMigrations(db)).not.toThrow();
+  });
+
+  // "Did not throw" is the weakest possible reading of idempotent, and it is
+  // the one the test above makes: a migration that dropped and recreated a
+  // table on its second pass — losing every row — would sail through it. Two
+  // of the migrations here DO rebuild tables (v6) and three rewrite existing
+  // rows in place (v8, v14, v26), which is exactly the population where a
+  // re-run can be silently destructive.
+  //
+  // So this one takes a full fingerprint — schema TEXT plus every row of every
+  // table — of a genuinely OLD database that has been upgraded to head, then
+  // migrates again and demands the fingerprint be unchanged.
+  it('a second pass over an upgraded old database changes nothing at all', () => {
+    const db = new Database(':memory:');
+    // A v6-era database: before icons (v8), before the chat-face reset (v14),
+    // before modes (v21) — so the upgrade walks every rewriting migration.
+    runMigrations(db, { upTo: 6 });
+    db.prepare(
+      'INSERT INTO workspaces (id, slug, name, position, created_at, updated_at) VALUES (?,?,?,?,?,?)',
+    ).run('w1', 'ws1', 'Work', 0, 1, 1);
+    const tab = db.prepare(
+      'INSERT INTO tabs (id, slug, name, layout, workspace_id, position, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)',
+    );
+    // A leading-emoji name (v8 lifts it into `icon`), a plain one (v8 invents
+    // a RANDOM icon — non-deterministic on the FIRST pass, which is precisely
+    // why the fingerprint is taken after it and not before).
+    tab.run('t1', 'sl1', '🌐 Home', '"p1"', 'w1', 0, 1, 1);
+    tab.run('t2', 'sl2', 'Notes', '"p2"', 'w1', 1, 1, 1);
+    const pane = db.prepare(
+      'INSERT INTO panes (id, tab_id, kind, shell, startup_cmd, cwd, created_at) VALUES (?,?,?,?,?,?,?)',
+    );
+    pane.run('p1', 't1', 'shell', '/bin/zsh', 'muxpad agent --mode do --resume abc', '/tmp', 1);
+    pane.run('p2', 't2', 'shell', '/bin/zsh', 'muxpad agent --mode deep', '/tmp', 1);
+    pane.run('p3', 't2', 'shell', '/bin/zsh', null, '/tmp', 1);
+
+    runMigrations(db);
+    expect(
+      (
+        db.prepare('SELECT version FROM schema_version ORDER BY version DESC LIMIT 1').get() as {
+          version: number;
+        }
+      ).version,
+    ).toBe(LATEST_SCHEMA_VERSION);
+    // The rebuild in v6 rewrites FK targets; a dangling one would survive
+    // silently and only surface as a cascade that never fires.
+    expect(db.pragma('foreign_key_check')).toEqual([]);
+    expect(db.pragma('integrity_check')).toEqual([{ integrity_check: 'ok' }]);
+    // The upgrade did its job before we pin it.
+    //
+    // Note which side wins, because it is not obvious and it is right: v21
+    // gives every pre-existing row `mode = 'deep'`, v26 renames that to
+    // 'agent', and v26 then rewrites startup_cmd to MATCH THE ROW — so the
+    // `--mode do` this command was carrying is stripped rather than adopted.
+    // For a database this old that is the only sound reading: modes did not
+    // exist when these rows were written, so a flag in the command is noise
+    // from a later hand-edit and the row is the authority.
+    expect(db.prepare('SELECT mode, startup_cmd FROM panes WHERE id = ?').get('p1')).toEqual({
+      mode: 'agent',
+      startup_cmd: 'muxpad agent --resume abc',
+    });
+    expect(db.prepare('SELECT startup_cmd FROM panes WHERE id = ?').get('p3')).toEqual({
+      startup_cmd: null, // a non-agent pane is never rewritten
+    });
+    expect(db.prepare('SELECT name, icon FROM tabs WHERE id = ?').get('t1')).toEqual({
+      name: 'Home', // v8 lifted the leading emoji out of the name…
+      icon: '🌐', // …and into the icon slot
+    });
+
+    const before = fingerprint(db);
+
+    // Prove the DETECTOR detects, or the assertion below is theatre: a
+    // fingerprint that quietly returned a constant would make every possible
+    // migration "idempotent". One row moved must show up, and moving it back
+    // must restore the fingerprint exactly.
+    db.prepare('UPDATE panes SET cwd = ? WHERE id = ?').run('/elsewhere', 'p3');
+    expect(fingerprint(db)).not.toEqual(before);
+    db.prepare('UPDATE panes SET cwd = ? WHERE id = ?').run('/tmp', 'p3');
+    expect(fingerprint(db)).toEqual(before);
+
+    runMigrations(db);
+    expect(fingerprint(db)).toEqual(before);
+    // …and a third, because "stable after two" and "stable forever" are not
+    // the same claim and this is free.
+    runMigrations(db);
+    expect(fingerprint(db)).toEqual(before);
   });
 
   it('records the current schema version', () => {
@@ -170,7 +276,10 @@ describe('migrations v21 — agent modes + the living sidebar', () => {
   it('adds panes.mode defaulting to deep (= exactly the pre-migration behavior)', () => {
     const db = new Database(':memory:');
     db.pragma('foreign_keys = OFF');
-    runMigrations(db);
+    // Stopped AT v21: this is about the column v21 created, in v21's
+    // vocabulary. v26 renamed those values (see its own block below), and
+    // running past it here would be testing two steps at once.
+    runMigrations(db, { upTo: 21 });
     // Insert with the PRE-v21 column set — a row written by old code must
     // still land on 'deep' rather than NULL or 'do'.
     db.prepare(
@@ -256,7 +365,11 @@ describe('migrations v21 — agent modes + the living sidebar', () => {
       unknown
     >;
     expect(pane.startup_cmd).toBe('muxpad agent');
-    expect(pane.mode).toBe('deep');
+    // v21 gave it 'deep'; v26 renamed that to 'agent' and left the bare
+    // command alone — Agent mode is still the absence of the flag, so this
+    // pane's behaviour is unchanged across BOTH steps.
+    expect(pane.mode).toBe('agent');
+    expect(pane.startup_cmd).toBe('muxpad agent');
 
     // Idempotent: re-running on the now-current DB changes nothing.
     runMigrations(db);
@@ -406,7 +519,7 @@ describe('migrations v21 — agent modes + the living sidebar', () => {
       .prepare('SELECT version FROM schema_version ORDER BY version DESC LIMIT 1')
       .get() as { version: number };
     expect(v.version).toBe(LATEST_SCHEMA_VERSION);
-    expect(LATEST_SCHEMA_VERSION).toBe(25);
+    expect(LATEST_SCHEMA_VERSION).toBe(35);
   });
 });
 
@@ -525,5 +638,781 @@ describe('migrations v25 — content-derived tab icons', () => {
       icon_sticky: 1,
       icon_at: 99,
     });
+  });
+});
+
+describe('migrations v26 — ⚡ do / 🧠 deep become Chat / Agent', () => {
+  /** A v25 database (pre-rename) with one workspace and one tab to hang panes
+   *  off. `upTo: 25` is what makes this a real upgrade test rather than a
+   *  current-schema DB pretending to be old. */
+  function v25(): Database.Database {
+    const db = new Database(':memory:');
+    runMigrations(db, { upTo: 25 });
+    db.prepare(
+      `INSERT INTO workspaces (id, slug, name, position, created_at, updated_at)
+       VALUES ('w1', 'w', 'w', 0, 0, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO tabs (id, slug, name, layout, workspace_id, position, created_at, updated_at)
+       VALUES ('t1', 't', 't', '""', 'w1', 0, 0, 0)`,
+    ).run();
+    return db;
+  }
+
+  function addPane(db: Database.Database, id: string, mode: string, cmd: string | null): void {
+    db.prepare(
+      `INSERT INTO panes (id, tab_id, shell, startup_cmd, cwd, mode, created_at)
+       VALUES (?, 't1', '/bin/zsh', ?, '/tmp', ?, 0)`,
+    ).run(id, cmd, mode);
+  }
+
+  const paneRow = (db: Database.Database, id: string) =>
+    db.prepare('SELECT mode, startup_cmd FROM panes WHERE id = ?').get(id) as {
+      mode: string;
+      startup_cmd: string | null;
+    };
+
+  it('migrates a real `do` row AND its `--mode do` command together', () => {
+    // The headline case: the row and the startup command are two halves of
+    // one fact, and a migration that moved only one of them would produce a
+    // pane that REPORTS Chat and RESPAWNS as Agent.
+    const db = v25();
+    addPane(db, 'p1', 'do', 'muxpad agent --mode do --resume sid-1');
+    runMigrations(db);
+    expect(paneRow(db, 'p1')).toEqual({
+      mode: 'chat',
+      startup_cmd: 'muxpad agent --mode chat --resume sid-1',
+    });
+  });
+
+  it('migrates a `deep` row and STRIPS its `--mode deep` command', () => {
+    // Agent mode is the absence of the flag, so the explicit form converges
+    // on the canonical one rather than becoming `--mode agent`.
+    const db = v25();
+    addPane(db, 'p1', 'deep', 'muxpad agent --mode deep --resume sid-2');
+    runMigrations(db);
+    expect(paneRow(db, 'p1')).toEqual({
+      mode: 'agent',
+      startup_cmd: 'muxpad agent --resume sid-2',
+    });
+  });
+
+  it('leaves a bare `muxpad agent` command byte-identical', () => {
+    // Every pane created before modes existed carries this. Its meaning is
+    // unchanged by the rename, so the row must not churn.
+    const db = v25();
+    addPane(db, 'p1', 'deep', 'muxpad agent');
+    runMigrations(db);
+    expect(paneRow(db, 'p1')).toEqual({ mode: 'agent', startup_cmd: 'muxpad agent' });
+  });
+
+  it('keeps the canonical flag order when --backend and --model are present', () => {
+    // ws.ts's self-heal rewrite composes `muxpad agent --backend X --mode Y
+    // --model Z` and compares it to the stored command to tell a reconnect
+    // from a new runner. A migration that reordered the flags would make
+    // every hello look like a new runner and re-flip the pane's face.
+    const db = v25();
+    addPane(db, 'p1', 'do', "muxpad agent --backend codex --mode do --model 'gpt-5.5'");
+    runMigrations(db);
+    expect(paneRow(db, 'p1').startup_cmd).toBe(
+      "muxpad agent --backend codex --mode chat --model 'gpt-5.5'",
+    );
+  });
+
+  it('leaves a PENDING `muxpad agent --pick` command alone (row still migrates)', () => {
+    // Four call sites compare that literal verbatim; inserting a flag wedges
+    // the harness picker. The mode lives on the row until one is chosen.
+    const db = v25();
+    addPane(db, 'p1', 'do', 'muxpad agent --pick');
+    runMigrations(db);
+    expect(paneRow(db, 'p1')).toEqual({ mode: 'chat', startup_cmd: 'muxpad agent --pick' });
+  });
+
+  it('lands every unrecognised value on the baseline — never on one the schema rejects', () => {
+    // NOT NULL since v21 (which backfilled), so a literal NULL is
+    // unreachable here — the migration still guards it, because the cost of
+    // the guard is a clause and the cost of being wrong is a pane that reads
+    // as a value the schema rejects.
+    const db = v25();
+    addPane(db, 'p-junk', 'turbo', null);
+    addPane(db, 'p-empty', '', null);
+    runMigrations(db);
+    for (const id of ['p-junk', 'p-empty']) {
+      // 'agent' = nothing injected. The only honest reading of "no mode
+      // recorded" — claiming Chat would assert a contract nobody applied.
+      expect(paneRow(db, id).mode).toBe('agent');
+    }
+    const modes = (db.prepare('SELECT DISTINCT mode FROM panes').all() as { mode: string }[]).map(
+      (r) => r.mode,
+    );
+    expect(modes.every((m) => m === 'chat' || m === 'agent')).toBe(true);
+  });
+
+  it('leaves a NON-agent pane’s startup command untouched', () => {
+    const db = v25();
+    addPane(db, 'p1', 'deep', 'npm run dev -- --mode deep');
+    runMigrations(db);
+    expect(paneRow(db, 'p1').startup_cmd).toBe('npm run dev -- --mode deep');
+  });
+
+  it('is idempotent', () => {
+    const db = v25();
+    addPane(db, 'p1', 'do', 'muxpad agent --mode do');
+    runMigrations(db);
+    const once = paneRow(db, 'p1');
+    runMigrations(db);
+    expect(paneRow(db, 'p1')).toEqual(once);
+  });
+
+  it('does NOT rewrite crons.mode — those rows are read through a coercion', () => {
+    // A user's schedule is theirs; the column is free text read at fire time
+    // and a stored 'do' still means Chat. Rewriting it would buy nothing and
+    // touch rows the rename has no business touching.
+    const db = v25();
+    db.prepare(
+      `INSERT INTO crons (id, name, schedule, tz, prompt, target_kind, mode, next_due_at,
+                          jitter_ms, created_at)
+       VALUES ('c1', 'c', '0 9 * * *', 'UTC', 'p', 'new-tab', 'do', 0, 0, 0)`,
+    ).run();
+    runMigrations(db);
+    expect(
+      (db.prepare("SELECT mode FROM crons WHERE id = 'c1'").get() as { mode: string }).mode,
+    ).toBe('do');
+  });
+});
+
+describe('migrations v27 — the chat clock and the spawn link', () => {
+  /** A v26-era database (before clocks) with one workspace and one tab. */
+  function v26(): Database.Database {
+    const db = new Database(':memory:');
+    runMigrations(db, { upTo: 26 });
+    db.prepare(
+      'INSERT INTO workspaces (id, slug, name, position, created_at, updated_at) VALUES (?,?,?,?,?,?)',
+    ).run('w1', 'wslug1aa', 'W', 0, 1, 1);
+    return db;
+  }
+
+  function addTab(db: Database.Database, id: string, lastActivityAt: number | null): void {
+    db.prepare(
+      `INSERT INTO tabs (id, slug, name, layout, workspace_id, position, created_at, updated_at,
+                         last_activity_at)
+       VALUES (?, ?, ?, '""', 'w1', 0, 1, 1, ?)`,
+    ).run(id, `s-${id}`, id, lastActivityAt);
+  }
+
+  function clockOf(db: Database.Database, id: string): number | null {
+    return (
+      db.prepare('SELECT clock_started_at FROM tabs WHERE id = ?').get(id) as {
+        clock_started_at: number | null;
+      }
+    ).clock_started_at;
+  }
+
+  /**
+   * `n` ULID-shaped ids sharing ONE timestamp prefix — worse than a real
+   * install, where tabs were created over months and the prefixes differ. Ids
+   * minted in one burst differ only in the trailing 16 random characters, and
+   * those are the ids a spread that only looked at the front would bucket
+   * together.
+   */
+  function realisticTabIds(n: number): string[] {
+    const alphabet = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+    return Array.from({ length: n }, (_, i) => {
+      let s = Math.imul(i + 1, 2654435761) >>> 0;
+      let suffix = '';
+      for (let c = 0; c < 16; c++) {
+        s = (Math.imul(s, 1103515245) + 12345) >>> 0;
+        suffix += alphabet[s >>> 27]; // the TOP bits — an LCG's low bits cycle
+      }
+      return `01JQK7XY0A${suffix}`;
+    });
+  }
+
+  it('starts EVERY existing tab fresh at boot, not from its last activity', () => {
+    // The decision this test exists to pin down. Backfilling from
+    // `last_activity_at` was explicitly rejected: `stale` below has not been
+    // touched in a month, so that reading would have shipped it already
+    // expired — and roughly half a real sidebar with it, collapsed into a
+    // `done` group on the very first render.
+    const db = v26();
+    const monthAgo = Date.now() - 30 * 86_400_000;
+    addTab(db, 'stale', monthAgo);
+    addTab(db, 'fresh', Date.now());
+    addTab(db, 'never', null); // never observed at all — no timestamp to inherit
+    const before = Date.now();
+    runMigrations(db);
+
+    for (const id of ['stale', 'fresh', 'never']) {
+      const clock = clockOf(db, id);
+      expect(clock, `${id} got a clock`).not.toBeNull();
+      // At or after boot — never before it. The stagger moves clocks LATER, so
+      // this bound is the day-one guarantee itself and not an approximation of
+      // it: no tab can reach four days sooner than a tab stamped at boot.
+      expect(clock).toBeGreaterThanOrEqual(before);
+      expect(clock).toBeLessThan(before + CHAT_STAGGER_MS);
+    }
+    expect(clockOf(db, 'stale')).not.toBe(monthAgo);
+    // `stale` and `fresh` are a month apart in activity and must land in the
+    // same window regardless — the spread reads the id, nothing else.
+    expect(clockOf(db, 'stale')).not.toBe(clockOf(db, 'fresh'));
+  });
+
+  it('spreads the backfilled clocks over days instead of expiring them together', () => {
+    // F1, the day-four cliff. One `Date.now()` for every row means every row
+    // expires in the same minute: the sidebar does not thin on the fourth
+    // morning, it empties, and the sweeper emits one `tab.updated` per row in
+    // a single tick — each costing every connected client a full workspace
+    // walk. Revert `apply` to one shared stamp and this fails on both counts.
+    const db = v26();
+    const ids = realisticTabIds(90);
+    for (const id of ids) addTab(db, id, null);
+    const before = Date.now();
+    runMigrations(db);
+
+    const starts = ids.map((id) => clockOf(db, id) as number);
+    const perDay = [0, 1, 2].map(
+      (d) =>
+        starts.filter((s) => s - before >= d * 86_400_000 && s - before < (d + 1) * 86_400_000)
+          .length,
+    );
+    for (const n of perDay) expect(n, `day ${perDay.indexOf(n)} share`).toBeGreaterThan(90 / 6);
+
+    const perTick = new Map<number, number>();
+    for (const s of starts) {
+      const tick = Math.floor((s - before) / 60_000); // the sweeper's interval
+      perTick.set(tick, (perTick.get(tick) ?? 0) + 1);
+    }
+    expect(Math.max(...perTick.values())).toBeLessThanOrEqual(2);
+  });
+
+  it('gives a tab the same OFFSET whenever the backfill runs, so a restore does not re-deal', () => {
+    // The offset is derived from the id, not randomised. Restore a pre-v27
+    // backup a week later and the migration runs again: it has to hand every
+    // surviving chat back the same position in the queue, not a fresh draw
+    // that moves a death date the user has been watching count down.
+    const id = '01JQK7XY0AVVVVVVVVVVVVVVVV';
+    const offsetAt = (boot: number): number => {
+      const db = v26();
+      addTab(db, id, null);
+      vi.spyOn(Date, 'now').mockReturnValue(boot);
+      try {
+        runMigrations(db);
+        return (clockOf(db, id) as number) - boot;
+      } finally {
+        vi.restoreAllMocks();
+      }
+    };
+    expect(offsetAt(1_800_000_000_000)).toBe(offsetAt(1_800_000_000_000 + 7 * 86_400_000));
+  });
+
+  it('adds spawned_by as a nullable column with no parent by default', () => {
+    const db = v26();
+    addTab(db, 't1', null);
+    runMigrations(db);
+    expect(
+      (
+        db.prepare('SELECT spawned_by FROM tabs WHERE id = ?').get('t1') as {
+          spawned_by: string | null;
+        }
+      ).spawned_by,
+    ).toBeNull();
+  });
+
+  it('does NOT cascade-delete a child when its parent tab is deleted', () => {
+    // No foreign key, deliberately: nothing in this model is deleted by a
+    // clock, so a child has to outlive its parent's manual deletion rather
+    // than vanish with it. The child becomes a root with its own clock.
+    const db = v26();
+    addTab(db, 'parent', null);
+    addTab(db, 'child', null);
+    runMigrations(db);
+    db.pragma('foreign_keys = ON');
+    db.prepare('UPDATE tabs SET spawned_by = ? WHERE id = ?').run('parent', 'child');
+    db.prepare('DELETE FROM tabs WHERE id = ?').run('parent');
+    const child = db.prepare('SELECT id, spawned_by FROM tabs WHERE id = ?').get('child');
+    expect(child).toEqual({ id: 'child', spawned_by: 'parent' });
+    expect(db.pragma('foreign_key_check')).toEqual([]);
+  });
+
+  it('never re-stamps a clock the user has since reset', () => {
+    // The version guard already stops a second pass; this pins the backfill
+    // itself as safe to re-run, which is one restore-from-backup away from
+    // mattering.
+    const db = v26();
+    addTab(db, 't1', null);
+    runMigrations(db);
+    const reset = Date.now() + 5_000;
+    db.prepare('UPDATE tabs SET clock_started_at = ? WHERE id = ?').run(reset, 't1');
+    runMigrations(db);
+    expect(clockOf(db, 't1')).toBe(reset);
+  });
+});
+
+describe('migrations v28 — retirement', () => {
+  function v27(): Database.Database {
+    const db = new Database(':memory:');
+    runMigrations(db, { upTo: 27 });
+    db.prepare(
+      'INSERT INTO workspaces (id, slug, name, position, created_at, updated_at) VALUES (?,?,?,?,?,?)',
+    ).run('w1', 'wslug1aa', 'W', 0, 1, 1);
+    db.prepare(
+      `INSERT INTO tabs (id, slug, name, layout, workspace_id, position, created_at, updated_at)
+       VALUES ('t1', 's1', 'T', '""', 'w1', 0, 1, 1)`,
+    ).run();
+    return db;
+  }
+
+  it('leaves every existing tab LIVE — nothing retires retroactively', () => {
+    // Including the 41 agents that motivated the column. They decay on the
+    // v27 clock like everything else; any sub-chat among them retires the
+    // next time it finishes a turn.
+    const db = v27();
+    runMigrations(db);
+    expect(
+      db.prepare('SELECT retired_at, retired_reason FROM tabs WHERE id = ?').get('t1'),
+    ).toEqual({ retired_at: null, retired_reason: null });
+  });
+
+  it('stores the reason alongside the stamp', () => {
+    const db = v27();
+    runMigrations(db);
+    db.prepare('UPDATE tabs SET retired_at = ?, retired_reason = ? WHERE id = ?').run(
+      5_000,
+      'delivered',
+      't1',
+    );
+    expect(
+      db.prepare('SELECT retired_at, retired_reason FROM tabs WHERE id = ?').get('t1'),
+    ).toEqual({ retired_at: 5_000, retired_reason: 'delivered' });
+  });
+});
+
+describe('migrations v29 — the spawn report', () => {
+  /** A v28 database — retirement exists, the report does not. */
+  function v28(): Database.Database {
+    const db = new Database(':memory:');
+    runMigrations(db, { upTo: 28 });
+    db.prepare(
+      'INSERT INTO workspaces (id, slug, name, position, created_at, updated_at) VALUES (?,?,?,?,?,?)',
+    ).run('w1', 'wslug1aa', 'W', 0, 1, 1);
+    db.prepare(
+      `INSERT INTO tabs (id, slug, name, layout, workspace_id, position, created_at, updated_at)
+       VALUES ('t1', 's1', 'T', '""', 'w1', 0, 1, 1)`,
+    ).run();
+    return db;
+  }
+
+  it('adds the three columns with nothing in them', () => {
+    // No backfill, and there cannot be one: a report is READ OFF a transcript
+    // at the moment a child finishes, and no existing child is finishing now.
+    // An absent report is the correct state for every row that predates it.
+    const db = v28();
+    runMigrations(db);
+    expect(
+      db
+        .prepare('SELECT spawn_report, spawn_report_at, spawn_report_state FROM tabs WHERE id = ?')
+        .get('t1'),
+    ).toEqual({ spawn_report: null, spawn_report_at: null, spawn_report_state: null });
+  });
+
+  it('keeps the attempt clock and the text in separate columns', () => {
+    // `spawn_report_at` is a rate limiter AND the report entry's place in the
+    // parent's log, so it is stamped on a FAILED attempt too — with no text
+    // and no state. The pair (at, state=NULL) is "we tried and got nothing
+    // usable", which must be representable.
+    const db = v28();
+    runMigrations(db);
+    db.prepare('UPDATE tabs SET spawn_report_at = ? WHERE id = ?').run(7_000, 't1');
+    expect(
+      db
+        .prepare('SELECT spawn_report, spawn_report_at, spawn_report_state FROM tabs WHERE id = ?')
+        .get('t1'),
+    ).toEqual({ spawn_report: null, spawn_report_at: 7_000, spawn_report_state: null });
+  });
+});
+
+describe('migrations v30 — what the worker was asked', () => {
+  function v29(): Database.Database {
+    const db = new Database(':memory:');
+    runMigrations(db, { upTo: 29 });
+    db.prepare(
+      'INSERT INTO workspaces (id, slug, name, position, created_at, updated_at) VALUES (?,?,?,?,?,?)',
+    ).run('w1', 'wslug1aa', 'W', 0, 1, 1);
+    db.prepare(
+      `INSERT INTO tabs (id, slug, name, layout, workspace_id, position, created_at, updated_at)
+       VALUES ('t1', 's1', 'status-line', '""', 'w1', 0, 1, 1)`,
+    ).run();
+    return db;
+  }
+
+  it('adds the column empty — a label is read off a first message, and no existing child is sending one', () => {
+    const db = v29();
+    runMigrations(db);
+    expect(db.prepare('SELECT spawn_task FROM tabs WHERE id = ?').get('t1')).toEqual({
+      spawn_task: null,
+    });
+  });
+
+  it('is independent of the report — asked and concluded are two facts', () => {
+    const db = v29();
+    runMigrations(db);
+    db.prepare('UPDATE tabs SET spawn_task = ? WHERE id = ?').run('Move the status line', 't1');
+    expect(db.prepare('SELECT spawn_task, spawn_report FROM tabs WHERE id = ?').get('t1')).toEqual({
+      spawn_task: 'Move the status line',
+      spawn_report: null,
+    });
+  });
+});
+
+describe('migrations v32 — a worker is a sequence of ROUNDS', () => {
+  function v31(): Database.Database {
+    const db = new Database(':memory:');
+    runMigrations(db, { upTo: 31 });
+    db.prepare(
+      'INSERT INTO workspaces (id, slug, name, position, created_at, updated_at) VALUES (?,?,?,?,?,?)',
+    ).run('w1', 'wslug1aa', 'W', 0, 1, 1);
+    db.prepare(
+      `INSERT INTO tabs (id, slug, name, layout, workspace_id, position, created_at, updated_at)
+       VALUES ('t1', 's1', 'card-summary', '""', 'w1', 0, 1, 1)`,
+    ).run();
+    return db;
+  }
+
+  it('holds MANY rounds for one child, which the tab columns structurally cannot', () => {
+    // The hole, in one assertion. `created_at` and `retired_at` are one pair per
+    // tab: a worker handed five successive jobs has five rounds and the tab can
+    // express one. Measured on the real database — `card-summary` had 5 user
+    // messages against a single pair of timestamps.
+    const db = v31();
+    runMigrations(db);
+    const ins = db.prepare(
+      'INSERT INTO spawn_rounds (id, tab_id, started_at, ended_at) VALUES (?,?,?,?)',
+    );
+    ins.run('r1', 't1', 100, 200);
+    ins.run('r2', 't1', 300, 400);
+    ins.run('r3', 't1', 500, null);
+    expect(
+      db
+        .prepare(
+          'SELECT started_at, ended_at FROM spawn_rounds WHERE tab_id = ? ORDER BY started_at',
+        )
+        .all('t1'),
+    ).toEqual([
+      { started_at: 100, ended_at: 200 },
+      { started_at: 300, ended_at: 400 },
+      { started_at: 500, ended_at: null },
+    ]);
+  });
+
+  it('goes with the child when it is deleted — a round of nothing is nothing', () => {
+    const db = v31();
+    runMigrations(db);
+    db.pragma('foreign_keys = ON');
+    db.prepare('INSERT INTO spawn_rounds (id, tab_id, started_at) VALUES (?,?,?)').run(
+      'r1',
+      't1',
+      100,
+    );
+    db.prepare('DELETE FROM tabs WHERE id = ?').run('t1');
+    expect(db.prepare('SELECT count(*) AS n FROM spawn_rounds').get()).toEqual({ n: 0 });
+  });
+
+  it('adds no rounds to existing children — they are backfilled or they are not', () => {
+    const db = v31();
+    runMigrations(db);
+    expect(db.prepare('SELECT count(*) AS n FROM spawn_rounds').get()).toEqual({ n: 0 });
+  });
+});
+
+describe('migrations v33 — the user-touch recency key', () => {
+  /**
+   * A v32-era database — head, minus this migration — with one workspace, so
+   * every test below walks the real upgrade path rather than asserting things
+   * about a database that was born current.
+   */
+  function v32(): Database.Database {
+    const db = new Database(':memory:');
+    runMigrations(db, { upTo: 32 });
+    db.prepare(
+      'INSERT INTO workspaces (id, slug, name, position, created_at, updated_at) VALUES (?,?,?,?,?,?)',
+    ).run('w1', 'wslug1aa', 'W', 0, 1, 1);
+    return db;
+  }
+
+  function addTab(
+    db: Database.Database,
+    id: string,
+    o: { createdAt: number; clock: number | null; lastActivityAt?: number },
+  ): void {
+    db.prepare(
+      `INSERT INTO tabs (id, slug, name, layout, workspace_id, position, created_at, updated_at,
+                         last_activity_at, clock_started_at)
+       VALUES (?, ?, ?, '""', 'w1', 0, ?, ?, ?, ?)`,
+    ).run(id, `s-${id}`, id, o.createdAt, o.createdAt, o.lastActivityAt ?? null, o.clock);
+  }
+
+  function userAt(db: Database.Database, id: string): number | null {
+    return (
+      db.prepare('SELECT last_user_at FROM tabs WHERE id = ?').get(id) as {
+        last_user_at: number | null;
+      }
+    ).last_user_at;
+  }
+
+  /** v27's backfill, replayed: one boot instant, one id-derived offset each. */
+  function backfilled(ids: string[], boot: number): Map<string, number> {
+    return new Map(ids.map((id) => [id, staggeredClockStart(id, boot)]));
+  }
+
+  const DAY = 86_400_000;
+
+  it('discards v27’s SYNTHETIC clocks and keeps the ones a user really set', () => {
+    // The whole migration in one case. Six chats carry v27's backfilled clock —
+    // `boot + hash(id)`, which says nothing about the user — and two carry a
+    // clock a real message reset since. Only the two real ones may survive as a
+    // user-touch time; the six must fall back to their own creation.
+    const db = v32();
+    const boot = Date.now() - 3 * DAY;
+    const untouched = ['a', 'b', 'c', 'd', 'e', 'f'];
+    const clocks = backfilled(untouched, boot);
+    for (const id of untouched) {
+      addTab(db, id, { createdAt: boot - 20 * DAY, clock: clocks.get(id) as number });
+    }
+    const sentAt = Date.now() - 2 * 3_600_000;
+    addTab(db, 'messaged', { createdAt: boot - 40 * DAY, clock: sentAt });
+    const revivedAt = Date.now() - 20 * 60_000;
+    addTab(db, 'revived', { createdAt: boot - 40 * DAY, clock: revivedAt });
+
+    runMigrations(db);
+
+    expect(userAt(db, 'messaged')).toBe(sentAt);
+    expect(userAt(db, 'revived')).toBe(revivedAt);
+    for (const id of untouched) {
+      expect({ id, at: userAt(db, id) }).toEqual({ id, at: boot - 20 * DAY });
+    }
+  });
+
+  it('never leaves a key in the FUTURE — the defect that made v27 unusable here', () => {
+    // 4 of 36 live clocks on the real database were stamped up to ~17h ahead,
+    // because the stagger only ever moves a clock LATER. Sorting on a future
+    // timestamp puts an untouched chat above everything you actually did, which
+    // is strictly worse than the noisy key this column replaces.
+    const db = v32();
+    const boot = Date.now(); // every offset lands ahead of now
+    const ids = ['f1', 'f2', 'f3', 'f4', 'f5'];
+    const clocks = backfilled(ids, boot);
+    for (const id of ids)
+      addTab(db, id, { createdAt: boot - 10 * DAY, clock: clocks.get(id) as number });
+    // At least one of them really is in the future, or the test proves nothing.
+    expect([...clocks.values()].some((c) => c > boot)).toBe(true);
+
+    runMigrations(db);
+
+    const after = Date.now();
+    for (const id of ids) {
+      expect({ id, future: (userAt(db, id) as number) > after }).toEqual({ id, future: false });
+    }
+  });
+
+  it('orders the untouched population by CREATION, never by the id hash', () => {
+    // v27's fallback ordering is `hash(id)`, which is arbitrary but stable —
+    // so a test that only checked "not in the future" would pass on it. This
+    // pins the replacement: an untouched chat ranks by the last thing about it
+    // anybody can vouch for, which is when it was made.
+    const db = v32();
+    const boot = Date.now() - 2 * DAY;
+    const ids = ['z1', 'z2', 'z3', 'z4', 'z5', 'z6'];
+    const clocks = backfilled(ids, boot);
+    // Creation order deliberately OPPOSITE to the hash order, so the two
+    // rankings cannot be confused for each other.
+    const byHash = [...ids].sort((x, y) => (clocks.get(x) as number) - (clocks.get(y) as number));
+    const createdAt = new Map(byHash.map((id, i) => [id, boot - (i + 1) * DAY]));
+    for (const id of ids) {
+      addTab(db, id, { createdAt: createdAt.get(id) as number, clock: clocks.get(id) as number });
+    }
+
+    runMigrations(db);
+
+    const ranked = ids
+      .slice()
+      .sort((x, y) => (userAt(db, y) as number) - (userAt(db, x) as number));
+    expect(ranked).toEqual(byHash);
+  });
+
+  it('is not moved by pty output — a chat tailing a log stays where it was', () => {
+    // The sentence v27 wrote about the clock, restated for the sort key: this
+    // column must be blind to `last_activity_at`, which is bumped by sampled
+    // terminal OUTPUT. `tailing` has been noisy for a month and touched never.
+    const db = v32();
+    const boot = Date.now() - 2 * DAY;
+    const clocks = backfilled(['tailing', 'quiet'], boot);
+    addTab(db, 'tailing', {
+      createdAt: boot - 30 * DAY,
+      clock: clocks.get('tailing') as number,
+      lastActivityAt: Date.now(),
+    });
+    addTab(db, 'quiet', {
+      createdAt: boot - 10 * DAY,
+      clock: clocks.get('quiet') as number,
+      lastActivityAt: boot - 10 * DAY,
+    });
+
+    runMigrations(db);
+
+    // The quiet chat is the newer one and must rank above the noisy one.
+    expect(userAt(db, 'quiet') as number).toBeGreaterThan(userAt(db, 'tailing') as number);
+  });
+
+  it('never ranks a chat BEFORE it existed', () => {
+    // `created_at` is the floor in both arms. A clock somehow older than the
+    // row (a hand-edited database, a restore) must not produce a key that
+    // claims the user touched a chat that did not exist yet.
+    const db = v32();
+    const born = Date.now() - 5 * DAY;
+    addTab(db, 'odd', { createdAt: born, clock: born - 30 * DAY });
+    addTab(db, 'odd2', { createdAt: born, clock: born - 31 * DAY });
+    runMigrations(db);
+    expect(userAt(db, 'odd')).toBe(born);
+  });
+
+  it('reads every clock as REAL when no backfilled population is left', () => {
+    // The degradation that matters on a small or heavily-used install: v27 may
+    // have left nothing untouched, in which case there is no mode to find and
+    // nothing may be discarded. One row agreeing with itself is not a
+    // population — the guard is ≥ 2.
+    const db = v32();
+    const t1 = Date.now() - 3_600_000;
+    const t2 = Date.now() - 7_200_000;
+    addTab(db, 'one', { createdAt: Date.now() - 20 * DAY, clock: t1 });
+    addTab(db, 'two', { createdAt: Date.now() - 20 * DAY, clock: t2 });
+    runMigrations(db);
+    expect(userAt(db, 'one')).toBe(t1);
+    expect(userAt(db, 'two')).toBe(t2);
+  });
+
+  it('survives a row with no clock at all', () => {
+    const db = v32();
+    const born = Date.now() - 9 * DAY;
+    addTab(db, 'clockless', { createdAt: born, clock: null });
+    expect(() => runMigrations(db)).not.toThrow();
+    expect(userAt(db, 'clockless')).toBe(born);
+  });
+
+  it('is idempotent in the real sense — a re-run cannot re-stamp a live key', () => {
+    // Same hazard v27 guarded, and the same guard: `IS NULL`. A second pass
+    // after the user has sent a message must not drag the key back to the
+    // migration's own reading.
+    const db = v32();
+    const boot = Date.now() - 2 * DAY;
+    const clocks = backfilled(['t1', 't2'], boot);
+    addTab(db, 't1', { createdAt: boot - 20 * DAY, clock: clocks.get('t1') as number });
+    addTab(db, 't2', { createdAt: boot - 20 * DAY, clock: clocks.get('t2') as number });
+    runMigrations(db);
+    const sent = Date.now() + 5_000;
+    db.prepare('UPDATE tabs SET last_user_at = ?, clock_started_at = ? WHERE id = ?').run(
+      sent,
+      sent,
+      't1',
+    );
+    runMigrations(db);
+    expect(userAt(db, 't1')).toBe(sent);
+  });
+});
+
+describe('migrations v34 — the workers that finished before rounds existed', () => {
+  /** A v33 database with a parent and some children, mid-flight and finished. */
+  function v33(): Database.Database {
+    const db = new Database(':memory:');
+    runMigrations(db, { upTo: 33 });
+    db.prepare(
+      'INSERT INTO workspaces (id, slug, name, position, created_at, updated_at) VALUES (?,?,?,?,?,?)',
+    ).run('w1', 'wslug1aa', 'W', 0, 1, 1);
+    const tab = db.prepare(
+      `INSERT INTO tabs (id, slug, name, layout, workspace_id, position, created_at, updated_at,
+                         spawned_by, retired_at, spawn_report, spawn_report_state)
+       VALUES (?,?,?,'""','w1',0,?,?,?,?,?,?)`,
+    );
+    tab.run('parent', 'sp', 'muxpad', 1, 1, null, null, null, null);
+    tab.run('done1', 's1', 'slack-land', 100, 100, 'parent', 200, 'Found the rail.', 'ok');
+    tab.run('done2', 's2', 'xws-build-2', 300, 300, 'parent', 400, null, null);
+    tab.run('live1', 's3', 'still-going', 500, 500, 'parent', null, null, null);
+    tab.run('root1', 's4', 'not-a-worker', 600, 600, null, 700, null, null);
+    return db;
+  }
+
+  const rounds = (db: Database.Database) =>
+    db
+      .prepare(
+        'SELECT tab_id, started_at, ended_at, report, report_state FROM spawn_rounds ORDER BY tab_id',
+      )
+      .all();
+
+  it('gives every existing child ONE round from what the row already says', () => {
+    // Five workers finished before the table landed and left no trace in the
+    // conversation at all. `created_at` is when the work was handed over,
+    // `retired_at` is when it came back, and `spawn_report` is what it said.
+    const db = v33();
+    runMigrations(db);
+    expect(rounds(db)).toEqual([
+      {
+        tab_id: 'done1',
+        started_at: 100,
+        ended_at: 200,
+        report: 'Found the rail.',
+        report_state: 'ok',
+      },
+      { tab_id: 'done2', started_at: 300, ended_at: 400, report: null, report_state: null },
+      { tab_id: 'live1', started_at: 500, ended_at: null, report: null, report_state: null },
+    ]);
+  });
+
+  it('A RETIRED CHILD WITH NO REPORT STILL GETS ITS ROUND', () => {
+    // "an honest empty card beats no card." `xws-build-2` did real work and the
+    // generator produced nothing for it; the round is still the record that it
+    // ran and finished.
+    const db = v33();
+    runMigrations(db);
+    const r = rounds(db).find((x) => (x as { tab_id: string }).tab_id === 'done2');
+    expect(r).toMatchObject({ ended_at: 400, report: null });
+  });
+
+  it('leaves a RUNNING child its round open, not closed at some invented time', () => {
+    const db = v33();
+    runMigrations(db);
+    const r = rounds(db).find((x) => (x as { tab_id: string }).tab_id === 'live1');
+    expect(r).toMatchObject({ started_at: 500, ended_at: null });
+  });
+
+  it('backfills only CHILDREN — a root chat has no rounds', () => {
+    const db = v33();
+    runMigrations(db);
+    expect(rounds(db).map((r) => (r as { tab_id: string }).tab_id)).not.toContain('root1');
+    expect(rounds(db).map((r) => (r as { tab_id: string }).tab_id)).not.toContain('parent');
+  });
+
+  it('IS IDEMPOTENT — it cannot manufacture a second round', () => {
+    // The guard that matters: re-running must not double every card in every
+    // conversation. Written as a real second pass rather than trusting the
+    // version gate, because a restore from backup is one step from running it.
+    const db = v33();
+    runMigrations(db);
+    const first = rounds(db);
+    db.prepare('DELETE FROM schema_version WHERE version >= 34').run();
+    runMigrations(db);
+    expect(rounds(db)).toEqual(first);
+  });
+
+  it('does not touch a child that already has a round of its own', () => {
+    const db = v33();
+    db.prepare('INSERT INTO spawn_rounds (id, tab_id, started_at, ended_at) VALUES (?,?,?,?)').run(
+      'r-live',
+      'done1',
+      111,
+      222,
+    );
+    runMigrations(db);
+    const mine = rounds(db).filter((r) => (r as { tab_id: string }).tab_id === 'done1');
+    expect(mine).toHaveLength(1);
+    expect(mine[0]).toMatchObject({ started_at: 111, ended_at: 222 });
   });
 });

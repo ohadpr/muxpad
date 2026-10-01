@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PaneRuntime, prettifyCommand } from './PaneRuntime.js';
+import { PaneRuntime, prettifyCommand, releasePtyHandle } from './PaneRuntime.js';
 
 describe('prettifyCommand', () => {
   it('strips absolute path from argv[0]', () => {
@@ -152,5 +152,59 @@ describe('PaneRuntime', () => {
     const code = await new Promise<number>((resolve) => runtime.on('exit', resolve));
     expect(code).toBe(0);
     expect(runtime.isExited()).toBe(true);
+  });
+});
+
+describe('giving the pty descriptor back', () => {
+  /**
+   * The failure this prevents is not a slow one. Every pty needs an open handle
+   * on /dev/ptmx and macOS caps those at kern.tty.ptmx_max — 511 here. Measured
+   * on a live daemon: 505 held, 72 ptys actually in use, 362 descriptors in the
+   * kernel's `(revoked)` state. Six short of the ceiling, past which nothing
+   * spawns at all — not a browser, not an app, not a plain terminal tab.
+   */
+  it('destroys the handle, which is what actually frees the fd', () => {
+    let destroyed = 0;
+    expect(
+      releasePtyHandle({
+        destroy: () => {
+          destroyed++;
+        },
+      }),
+    ).toBe(true);
+    expect(destroyed).toBe(1);
+  });
+
+  it('is safe to call on something that cannot be released', () => {
+    // `destroy` lives on the concrete UnixTerminal, not on the IPty interface
+    // we hold — so its absence is a version away, not a fantasy.
+    expect(releasePtyHandle({})).toBe(false);
+    expect(releasePtyHandle(null)).toBe(false);
+    expect(releasePtyHandle(undefined)).toBe(false);
+  });
+
+  it('swallows a throwing destroy, and says so', () => {
+    // A descriptor we fail to release is a slow leak. One that throws here and
+    // takes the exit handler with it is every pane on the machine.
+    const seen: unknown[] = [];
+    const boom = {
+      destroy: () => {
+        throw new Error('already gone');
+      },
+    };
+    expect(releasePtyHandle(boom, (e) => seen.push(e))).toBe(false);
+    expect(seen).toHaveLength(1);
+  });
+
+  it('can be called twice, because exit paths overlap', () => {
+    let destroyed = 0;
+    const p = {
+      destroy: () => {
+        destroyed++;
+      },
+    };
+    releasePtyHandle(p);
+    releasePtyHandle(p);
+    expect(destroyed).toBe(2); // destroy() is itself idempotent on a dead socket
   });
 });

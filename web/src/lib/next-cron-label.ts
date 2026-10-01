@@ -60,3 +60,32 @@ export function nextCronLabel(nextDueAt: number, now: number = Date.now()): stri
   if (days < 7) return `${WEEKDAYS[due.getDay()]} ${clock}`;
   return `${due.getDate()} ${MONTHS[due.getMonth()]}`;
 }
+
+/**
+ * The same fact, for the RAIL, where the row has about 30px to spare.
+ *
+ * TODAY ONLY. `nextCronLabel` above has three shapes and the widest of them
+ * (`Thu 11:08`) is nine characters — measured at roughly a third of a 270px
+ * rail, against names that were already ellipsising. Reported as one of three
+ * things crowding the right of every row.
+ *
+ * The cut is not arbitrary. The reason the time is on the rail at all is the
+ * glance question — "does anything run before I go out?" — and that question is
+ * about today. A job due on Thursday does not need a readout in a navigator; it
+ * needs to be FINDABLE, which the glyph alone already does. So the rail answers
+ * "today, at —" and says nothing else; the tooltip still carries the cron's
+ * name and the full `nextCronLabel` for every other case.
+ *
+ * It also makes the column STABLE: the one shape it can now render is `HH:MM`,
+ * so the meta cell is the same width on every row that has one, and the
+ * tabular-figure alignment the original was built for is no longer competing
+ * with a weekday that only some rows have.
+ */
+export function railCronLabel(nextDueAt: number, now: number = Date.now()): string {
+  const due = new Date(nextDueAt);
+  if (Number.isNaN(due.getTime())) return '';
+  // Overdue reads as today for the same reason it does above: the useful fact
+  // is the time it wanted, not that a scheduler is behind.
+  if (calendarDaysApart(new Date(now), due) > 0) return '';
+  return `${pad2(due.getHours())}:${pad2(due.getMinutes())}`;
+}

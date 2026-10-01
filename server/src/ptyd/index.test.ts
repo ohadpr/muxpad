@@ -243,6 +243,43 @@ describe('ptyd control RPCs', () => {
     expect(flush.ok).toBe(true);
     if (flush.ok) expect(flush.result).toEqual({ entries: [] });
   });
+
+  // The decoration PUSH is diff-driven and its diff maps live HERE, keyed by
+  // pane id rather than by subscriber — so a main server that reconnects is
+  // told nothing about title/fg/attention unless they happen to move. This
+  // RPC is how it harvests them, and it must answer for every live pane
+  // whether or not anything changed.
+  it('flushDecorations returns a row for every live pane, unchanged values included', async () => {
+    const { call } = await setupPtyd();
+    await call('ensurePane', {
+      spec: { id: 'fd1', shell: '/bin/sh', startup_cmd: 'sleep 5', cwd: '/tmp' },
+    });
+    await new Promise((r) => setTimeout(r, 100));
+    // Two calls: the second proves it is a READ. If it consumed or poisoned
+    // the diff state the pane would drop out, which is the failure mode that
+    // would quietly reintroduce the whole bug.
+    await call('flushDecorations', {});
+    const flush = await call('flushDecorations', {});
+    expect(flush.ok).toBe(true);
+    if (flush.ok) {
+      const { entries } = flush.result as {
+        entries: Array<{ id: string; title: string | null; fg: string | null; attention: boolean }>;
+      };
+      const entry = entries.find((e) => e.id === 'fd1');
+      expect(entry).toBeDefined();
+      expect(entry?.attention).toBe(false);
+      // title/fg are nullable — a fresh `sh` may not have been sampled yet.
+      // The load-bearing claim is that the pane is PRESENT in the snapshot.
+    }
+    await call('killPane', { id: 'fd1' });
+  });
+
+  it('flushDecorations returns an empty entries array when no panes exist', async () => {
+    const { call } = await setupPtyd();
+    const flush = await call('flushDecorations', {});
+    expect(flush.ok).toBe(true);
+    if (flush.ok) expect(flush.result).toEqual({ entries: [] });
+  });
 });
 
 describe('ptyd /pty/:id per-attach WS endpoint', () => {

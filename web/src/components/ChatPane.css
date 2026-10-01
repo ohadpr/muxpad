@@ -15,6 +15,12 @@
   --chat-accent-fg: var(--accent-fg, #0b0c12);
   --chat-danger: var(--danger, #f7768e);
   --chat-user-bubble: color-mix(in srgb, var(--fg, #d7dae0) 9%, var(--bg, #12131a));
+  /* Search-hit highlight — derived like every other chat token, with dark
+     fallbacks for a pane rendered before a theme is applied. See the
+     derivation and the measured contrast ratios in styles.css. */
+  --chat-hit-bg: var(--hit-bg, #f2c55c);
+  --chat-hit-ink: var(--hit-ink, #141520);
+  --chat-hit-rule: var(--hit-rule, #8a5e00);
   --chat-gutter-gap: 14px;
 
   display: flex;
@@ -47,15 +53,30 @@
   overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
-  /* Explicitly OFF. The browser's own scroll anchoring tries to hold the
-     reader's position when content above them resizes — which sounds like
-     what we want, but it fights the pinned-to-bottom re-assert (the
-     ResizeObserver in ChatPane): the engine pulls back toward the anchored
-     node in the same frame we push to the bottom, and which wins is not
-     specified. One owner of scroll position, and it's ours. */
-  overflow-anchor: none;
   scrollbar-width: thin;
   scrollbar-color: var(--chat-border-strong) transparent;
+}
+/* Scroll anchoring — the engine holding the reader's place when content ABOVE
+   them changes height — is ON, unconditionally.
+
+   It was off for the whole pane, then off only while pinned. Both were wrong,
+   and the second was wrong in a way you could see: `setPinned` runs on EVERY
+   scroll event (a 40px threshold), so while output streamed the class flickered
+   and anchoring switched on and off frame to frame. In the frames it was off, a
+   pasted screenshot decoding higher up grew the document above the reader with
+   nobody paying for it — they jumped BACK by that growth and were snapped
+   forward again when the follow-bottom observer caught up. Reported as
+   "sometimes it just jumps back randomly a bit". The randomness was an image
+   finishing; the smallness was one image's worth.
+
+   There is no conflict to avoid. Appending below the reader does not trigger
+   anchoring at all, so live output still follows. When content grows ABOVE a
+   pinned reader the engine holds their row — which IS the bottom — and the
+   follow-bottom ResizeObserver re-asserts `maxScrollTop` after layout anyway,
+   so it has the last word. The two agree; the engine just removes the backward
+   flash in between. */
+.chat-scroll {
+  overflow-anchor: auto;
 }
 .chat-scroll::-webkit-scrollbar {
   width: 9px;
@@ -71,12 +92,42 @@
   display: flex;
   flex-direction: column;
   gap: 22px;
-  /* Bottom padding clears the floating composer (~90px tall + safe-area) so the
-     last message settles just above it; earlier messages scroll frosted-through
-     underneath. */
-  padding: 22px 20px calc(96px + env(safe-area-inset-bottom, 0px));
+  /* Containing block for .chat-load-earlier-spinner, which must not take flow
+     space — see its note. Scoped here rather than on .chat-scroll so the
+     spinner rides WITH the content (it marks the top of the log, not the top
+     of the viewport) and so no modal/overlay elsewhere in the pane changes
+     which box it resolves against. */
+  position: relative;
+  /* NO bottom padding. The floating composer's clearance lives in
+     .chat-composer-reserve, a sibling row at the end of the list — see its
+     rule. A computed `padding` change on this element suppresses the browser's
+     scroll anchoring for every row in the chat, because this is their common
+     ancestor, and the composer's height moves on typing, attachments, the
+     notice banner and the mobile keyboard. */
+  padding: 22px 20px 0;
   max-width: 768px;
   margin: 0 auto;
+}
+/* The floating composer overlaps the scroller (~90px tall + safe-area), so the
+   log reserves its exact measured height here and the last message settles just
+   above it; earlier messages scroll frosted-through underneath.
+
+   A SIBLING ROW, not `.chat-list`'s padding and not the scroller's: a computed
+   padding change on either of those is a scroll-anchoring SUPPRESSION TRIGGER
+   for every row in the chat (the spec walks the anchor node's ancestors up to
+   AND INCLUDING the scrolling box). Measured in headless Chromium against an
+   unpinned reader with 480px of growth above them: 0px drift normally, the full
+   480px when `.chat-list`'s padding moved in the same layout pass, the full
+   480px again when `.chat-scroll`'s did — and 0px with this box. Its height is
+   nobody's ancestor.
+
+   `margin-top` cancels `.chat-list`'s row gap so the resting clearance is
+   exactly the height set inline, matching the padding this replaced. */
+.chat-composer-reserve {
+  flex: 0 0 auto;
+  height: calc(96px + env(safe-area-inset-bottom, 0px));
+  margin-top: -22px;
+  pointer-events: none;
 }
 
 /* ── Empty / connecting states ─────────────────────────────────────────── */
@@ -493,6 +544,16 @@
 }
 
 /* Reasoning aside: dimmed, italic, smaller, quiet left rail. */
+/* A message the HARNESS spoke because the turn ended without a `reply` call
+   (chat-voice.ts). It is the agent's own final words, promoted — so it reads as
+   a normal message — but the dotted rule says "nobody chose to send this",
+   which is the difference between a reply and a fallback. Muted enough to be a
+   footnote, present enough that a screenshot shows it. */
+.chat-turn-assistant[data-voice="fallback"] .chat-msg {
+  border-left: 2px dotted var(--chat-border-strong);
+  padding-left: 10px;
+}
+
 .chat-thinking {
   flex: 1 1 auto;
   min-width: 0;
@@ -723,11 +784,29 @@
   font-size: 13px;
 }
 
-/* Top-of-list spinner while paging in older history on scroll-up. */
+/* Top-of-list spinner while paging in older history on scroll-up.
+
+   ABSOLUTE, for the same reason .chat-search-missed is (see its note): an
+   in-flow box here sits ABOVE the reader, so appearing and disappearing moves
+   every message under them by its own height. That is not a cosmetic flicker.
+   The older-prepend compensation in ChatPane measures scrollHeight WITH the
+   spinner and applies the delta after `older-done` has already removed it, so
+   the 46 px (24 px box + .chat-list's 22 px gap) is silently deducted from the
+   restore: measured on the real stack, a probe row sat 1044 px down the
+   viewport before a page and 1090 px after it — the reader dragged 46 px
+   further back into history on EVERY page, compounding across a scroll-up.
+
+   Out of flow, the document height simply never changes, so there is nothing
+   for anything to compensate. It is placed inside .chat-list's own 22 px top
+   padding, above the first message rather than over it. */
 .chat-load-earlier-spinner {
+  position: absolute;
+  top: 2px;
+  left: 0;
+  right: 0;
   display: flex;
   justify-content: center;
-  padding: 4px 0 2px;
+  pointer-events: none;
 }
 .chat-load-earlier-spinner .chat-empty-spinner {
   width: 18px;
@@ -832,15 +911,21 @@
    conversation stays visible in every gap around the input (left/right of it on
    desktop, above and below it) instead of being hidden behind an opaque bar.
    The pill is opaque with a drop shadow so it reads as floating over the
-   content, and .chat-list reserves the wrap's measured height as bottom padding
-   so, at rest, the last message sits fully above the pill (never covered). */
+   content, and .chat-composer-reserve holds the wrap's measured height at the
+   end of the log so, at rest, the last message sits fully above the pill (never
+   covered). */
 .chat-composer-wrap {
   position: absolute;
   left: 0;
   right: 0;
-  bottom: 0;
+  /* 0 until a mobile visualViewport listener lifts the pill above the software
+     keyboard — the layout viewport does not shrink on iOS, so `bottom: 0` alone
+     puts the composer UNDER it. Set on `.chat-pane` by ChatPane's
+     chatKeyboardInset effect and never set anywhere else, so desktop and every
+     failure mode resolve to the fallback and keep the layout that shipped. */
+  bottom: var(--chat-keyboard-inset, 0px);
   z-index: 5;
-  padding: 6px 12px calc(16px + env(safe-area-inset-bottom, 0px));
+  padding: 6px 12px calc(10px + env(safe-area-inset-bottom, 0px));
   background: transparent;
   pointer-events: none; /* the transparent gaps don't eat scroll/clicks… */
 }
@@ -871,13 +956,16 @@
 .chat-composer {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  /* The strip sits on the pill's surface, so the only thing holding it off the
+     text below is this. 2px read as crammed — enough space to be a separate
+     line, not enough to be a separate thought. */
+  gap: 6px;
   max-width: 768px;
   margin: 0 auto;
   /* Symmetric side insets: the filled send circle carries more visual weight
      than the small camera glyph, so equal padding reads balanced rather than
      edge-hugging. */
-  padding: 5px 8px 5px 8px;
+  padding: 4px 8px;
   background: color-mix(in srgb, var(--chat-elev) 92%, var(--chat-fg));
   border: 1px solid color-mix(in srgb, var(--chat-fg) 12%, var(--chat-border));
   border-radius: 26px;
@@ -945,13 +1033,16 @@
   min-width: 0;
   box-sizing: border-box;
   resize: none;
-  /* One line is exactly button-height (36px = 22 line + 2×7 padding) so a
-     single line sits perfectly centered next to the round buttons; JS grows
-     `height` from here for multi-line. */
-  height: 48px;
-  min-height: 48px;
+  /* One line is 40px (22 line + 2×9 padding): a little taller than the 36px
+     round buttons beside it, so the text has room to breathe without the input
+     towering over its own controls. JS grows `height` from here for multi-line.
+     The comment here used to claim 36px while the rule said 48 — the number was
+     changed and the reasoning left behind, which is how a bar gets tall without
+     anybody deciding it should. */
+  height: 40px;
+  min-height: 40px;
   max-height: 200px;
-  padding: 13px 0;
+  padding: 9px 0;
   border: 0;
   background: transparent;
   color: var(--chat-fg);
@@ -975,15 +1066,13 @@
   border: 2px solid transparent;
   background-clip: content-box;
 }
-.chat-input::placeholder {
-  /* Muted toward the bar background so it reads as a quiet hint, not a
-     saturated accent-colored label. */
-  color: color-mix(in srgb, var(--chat-faint) 70%, var(--chat-elev));
-  opacity: 1;
-}
-.chat-input:disabled {
-  opacity: 0.7;
-}
+/* `::placeholder` and `:disabled` used to be here. Both belong to a form
+   control, and the composer is a contenteditable now (see ChatDraft.tsx) — so
+   neither selector can match anything, and a rule that cannot match is a rule
+   that defends nothing while looking like it does. The placeholder moved to
+   `.chat-draft.is-empty::before` in ChatDraft.css, muted to the same colour;
+   `:disabled` was already dead, because nothing has ever passed `disabled` to
+   this field. */
 
 .chat-send {
   flex: 0 0 auto;
@@ -1066,7 +1155,10 @@
   flex: 0 0 auto;
   display: inline-flex;
   flex-direction: column;
-  gap: 2px;
+  /* The strip sits on the pill's surface, so the only thing holding it off the
+     text below is this. 2px read as crammed — enough space to be a separate
+     line, not enough to be a separate thought. */
+  gap: 6px;
 }
 .chat-queued-edit,
 .chat-queued-cancel {
@@ -1185,7 +1277,10 @@
 .chat-question-option {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  /* The strip sits on the pill's surface, so the only thing holding it off the
+     text below is this. 2px read as crammed — enough space to be a separate
+     line, not enough to be a separate thought. */
+  gap: 6px;
   padding: 8px 11px;
   border: 1px solid var(--chat-border);
   border-radius: 10px;
@@ -1599,32 +1694,89 @@
   }
 }
 
-/* Option C status bar: one segmented strip (folder | model | live) above
-   the composer. Each segment opens its own upward panel; only one at a time. */
+/* ── The session line ─────────────────────────────────────────────────────
+ * A quiet line ABOUT the session (folder | model | live), sitting on the
+ * transparent gap above the composer pill. Each cell opens its own upward
+ * panel; only one at a time.
+ *
+ * IT IS NOT IN THE BOX, AND IT IS NOT A BOX. Both halves matter, because this
+ * strip has now been wrong in both directions. As a floating object above the
+ * pill it carried a border, a background and a 10px gap — 37px of a 119px bar
+ * for a line you read and almost never press. Moved ONTO the pill's surface to
+ * pay that back, it became chrome inside the thing you type in, crammed against
+ * the input: "it's all too tight there." So it is out of the pill again but
+ * keeps the diet — no border, no background, no second surface. It costs its
+ * own line of text plus the 6px that separates it from the pill, which is
+ * exactly what the pill's row gap used to spend on it. Out of the box for free.
+ *
+ * ── ONE LINE, BY CONSTRUCTION ──
+ * `height` is the load-bearing declaration: a FIXED one-line height, not a
+ * min-height and not a max-height. A min-height lets content add a second row;
+ * a max-height lets it lay one out and merely clips it, which shows as a
+ * half-visible line. With a fixed height there is no second row to clip.
+ *
+ * Everything else serves that: `flex-wrap: nowrap` said out loud (it is the
+ * initial value, so an explicit declaration is what a future edit has to
+ * consciously delete rather than silently override); `min-width: 0` on the cells
+ * so a long label ellipsizes instead of winning the argument and overflowing the
+ * pane; and `flex-shrink: 0` on the live cell alone, so when the width runs out
+ * it is the folder and the model that give way and never "2 agents".
+ *
+ * ChatPane.statusline.test.tsx pins this set and fails if any rule in the strip
+ * ever acquires a declaration that would permit a second line. */
 .chat-status-bar {
   display: flex;
-  align-items: stretch;
-  width: fit-content;
-  max-width: min(92vw, 420px);
-  /* Clear the composer pill below — 4px read as crammed against it. */
-  margin: 0 6px 10px auto;
-  border: 1px solid color-mix(in srgb, var(--border-strong, #3b4261) 70%, transparent);
-  border-radius: 10px;
+  flex-wrap: nowrap;
+  align-items: center;
+  /* Right-aligned over the input below it, at every pane width. */
+  justify-content: flex-end;
+  /* ONE LINE. Equal to the cells' line-height, which carry no block padding —
+     see the arithmetic tie in ChatPane.statusline.test.tsx. */
+  height: 16px;
+  /* The pill's own centering, repeated — that is the idiom every child of
+     `.chat-composer-wrap` uses (see .chat-notice), and it is what makes this
+     line's right edge sit over the PILL's right edge on a wide desktop instead
+     of way out at the pane's. */
+  width: 100%;
+  max-width: 768px;
+  /* The 6px is the whole separation between this line and the pill now that the
+     pill's row gap no longer reaches it. */
+  margin: 0 auto 6px;
+  padding-right: 2px;
   /* Menus escape via position:absolute on .chat-status-menu; segment buttons
      clip their own labels so long model names can't paint over the live cell. */
   overflow: visible;
-  background: color-mix(in srgb, var(--bg-chrome, #16161e) 70%, transparent);
 }
+/* `flex: 0 1 auto` — sized by content, never STRETCHED to fill the 768px above
+   (which would spread three cells across the whole pill), and shrinkable, which
+   is what hands the width to the live cell when it runs short. */
 .chat-status-seg-wrap {
   position: relative;
   display: flex;
   min-width: 0;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
+  overflow: visible;
+}
+/* The live cell is a flex item of the BAR through this wrapper, so this — not the
+   button's own flex-shrink — is the declaration that actually protects
+   "12 agents" from being ellipsized at 320px. Both are set; this is the one that
+   does the work. */
+.chat-status-seg-wrap.-live {
+  flex: 0 0 auto;
+}
+/* THE YIELD ORDER. Flex shrinks items in proportion to their base size, so the
+   LONGEST cell keeps the most absolute width — at 320px that left the folder
+   reading `trayo-self-serve…` while the model was squeezed to `Op…`, which is
+   backwards: a clipped folder name is still recognisable, a clipped model name
+   is two letters. The folder gives way three times as fast. */
+.chat-status-seg-wrap.-folder {
+  flex-shrink: 3;
 }
 .chat-status-seg-wrap + .chat-status-seg-wrap {
-  border-left: 1px solid color-mix(in srgb, var(--border-strong, #3b4261) 55%, transparent);
+  border-left: 1px solid color-mix(in srgb, var(--chat-border-strong) 45%, transparent);
 }
 .chat-status-seg {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 5px;
@@ -1632,13 +1784,15 @@
   width: 100%;
   max-width: 180px;
   min-width: 0;
-  padding: 5px 10px;
+  /* No block padding, so the cell IS the line — the bar's fixed height and this
+     line-height are the same number on purpose. */
+  padding: 0 7px;
   border: none;
   background: transparent;
-  color: var(--fg-faint, #6f7488);
+  color: var(--chat-faint);
   font-family: var(--chrome-font, inherit);
   font-size: 11px;
-  line-height: 1.4;
+  line-height: 16px;
   cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
@@ -1647,17 +1801,32 @@
 }
 .chat-status-seg:hover,
 .chat-status-seg.is-open {
-  color: var(--fg, #d7dae0);
-  background: color-mix(in srgb, var(--fg, #d7dae0) 5%, transparent);
+  color: var(--chat-fg);
+  background: color-mix(in srgb, var(--chat-fg) 5%, transparent);
 }
 .chat-status-seg.-live {
-  /* Never shrink or ellipsize — "N agents" must fit whole. */
+  /* Never shrink or ellipsize — "N agents" must fit whole. It is the one cell
+     that reports something CHANGING, so it is the one the others yield to. */
+  flex-shrink: 0;
   width: auto;
   max-width: none;
   min-width: max-content;
+  /* Safe here and nowhere else: this cell's content always fits, so nothing can
+     paint out of it. The truncating cells keep their clip. What visibility buys
+     is the hit area below. */
   overflow: visible;
-  color: var(--accent, #7aa2f7);
+  color: var(--chat-accent);
   font-weight: 600;
+}
+/* A 16px line is a fine thing to READ and a poor thing to hit with a thumb. This
+   is the cell you actually press — it opens the roster of running children — so
+   its hit area is extended OFF-LAYOUT rather than by growing the row: the strip
+   stays one 16px line and the tappable box is 26px. Stops 4px short below so a
+   tap at the top of the composer still lands on the composer. */
+.chat-status-seg.-live::after {
+  content: "";
+  position: absolute;
+  inset: -6px 0 -4px;
 }
 .chat-status-seg.-live .chat-roster-spin {
   flex: 0 0 auto;
@@ -1666,15 +1835,18 @@
 .chat-status-seg svg {
   flex: 0 0 auto;
   /* Icons read as identity marks — keep them denser than the faint label. */
-  color: var(--fg-dim, #a9b1d6);
+  color: var(--chat-dim);
 }
 .chat-status-seg:hover svg,
 .chat-status-seg.is-open svg {
-  color: var(--fg, #d7dae0);
+  color: var(--chat-fg);
 }
 .chat-status-seg.-live svg {
-  color: var(--accent, #7aa2f7);
+  color: var(--chat-accent);
 }
+/* Where the truncation actually happens. `min-width: 0` is what lets a flex item
+   go below its min-content width at all — without it the label refuses to
+   shrink and the strip overflows the pane instead of ellipsizing. */
 .chat-status-seg-label {
   flex: 1 1 auto;
   min-width: 0;
@@ -1709,7 +1881,10 @@
 .chat-roster-list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  /* The strip sits on the pill's surface, so the only thing holding it off the
+     text below is this. 2px read as crammed — enough space to be a separate
+     line, not enough to be a separate thought. */
+  gap: 6px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -1752,6 +1927,23 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: color-mix(in srgb, var(--chat-fg) 80%, transparent);
+}
+/* A CHILD CHAT's row is a link — the one entry in this list you can open. Same
+   metrics as the span next to it (it shares .chat-roster-name), so the two read
+   as one list; the pointer and the hover brightening are the whole difference. */
+.chat-roster-link {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.chat-roster-link:hover,
+.chat-roster-link:focus-visible {
+  color: var(--chat-fg);
 }
 .chat-roster-meta {
   flex: 0 0 auto;
@@ -1822,6 +2014,16 @@
 .chat-session-item:hover {
   background: var(--bg-hover, rgba(255, 255, 255, 0.06));
 }
+/* A row that STATES something rather than doing it (the Mode row). Same
+   typography as its neighbours — it belongs to the same list — but no pointer
+   and no hover, because a highlight on a row that cannot be pressed is a
+   promise the menu does not keep. */
+.chat-session-item.-static {
+  cursor: default;
+}
+.chat-session-item.-static:hover {
+  background: transparent;
+}
 .chat-session-item.is-active .chat-session-item-label {
   color: var(--accent, #4a9eff);
 }
@@ -1836,6 +2038,37 @@
   font-size: 10.5px;
   line-height: 1.35;
 }
+/* Mode chip — CHAT MODE ONLY (see SessionBar: in Agent mode the backend logo
+   beside the model already says which arrangement you are in, and the word was
+   the longest redundant thing on the line). Never ellipsized: the label is one
+   short word, and a truncated "Ch…" would be worse than no chip at all. */
+.chat-status-seg.-mode.-static {
+  cursor: default;
+}
+
+.chat-status-seg.-mode {
+  width: auto;
+  max-width: none;
+  min-width: max-content;
+  flex: 0 0 auto;
+}
+/* Chat mode is the house arrangement, so it carries the accent; Agent mode
+   stays in the bar's normal muted ink. This is a SECOND channel on top of the
+   glyph and the word — never the only one. */
+.chat-status-seg.-mode .chat-status-seg-label {
+  font-weight: 600;
+}
+/* `.chat-status-menu` is POSITIONING ONLY — every menu in this bar draws its
+   own card (see .chat-live-menu / .chat-session-menu / .chat-folder-menu).
+   Inheriting only the position left this one floating over the transcript
+   with no surface at all. */
+/* The honest caveat about a mid-session switch. Sits INSIDE the menu, right
+   under the two choices, because that is where the decision is made — a
+   footnote elsewhere would be read after the fact, if ever. */
+.chat-session-item[aria-busy="true"] .chat-session-item-label::after {
+  content: " …";
+}
+
 /* Concrete resolved model id under an alias (e.g. Opus → claude-opus-4-8):
    monospace so the exact version reads unambiguously. */
 .chat-model-id {
@@ -2023,4 +2256,469 @@
 .chat-folder-go:disabled {
   opacity: 0.6;
   cursor: default;
+}
+
+/* ── Making a conversion visible ───────────────────────────────────────────
+   Picking a harness on an empty chat converts the pane IN PLACE: same pane,
+   same position, same greeting. It used to leave the screen byte-identical, so
+   the button read as dead. Three pieces fix that, all in the empty state:
+   the mark now carries the harness's own logo, a line under the greeting names
+   the harness and its folder, and a transient confirmation says what just
+   started. */
+
+/* The mark carrying a brand logo drops the accent gradient: Claude's orange
+   and Codex's green are the point, and they cannot be read on top of it. */
+.chat-empty-mark.-logo {
+  background: var(--chat-elev, var(--bg-elev));
+  border: 1px solid var(--chat-border, var(--border));
+  box-shadow: none;
+  color: var(--chat-dim, var(--fg-dim));
+}
+
+.chat-empty-ident {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: -4px;
+  font-family: var(--chrome-font, inherit);
+  font-size: 12.5px;
+}
+.chat-empty-ident-name {
+  color: var(--fg-dim, #a9b1d6);
+  font-weight: 600;
+}
+.chat-empty-ident-cwd {
+  font-family: var(--mono-font, monospace);
+  font-size: 11.5px;
+  color: var(--fg-faint, #6f7488);
+  word-break: break-all;
+}
+
+/* "Now running Codex · ~/dev/muxpad" — the receipt. Accent-tinted so it reads
+   as an answer to the tap rather than as an error, and it fades itself out
+   (see CONVERT_CONFIRM_MS) instead of needing dismissal. */
+.chat-convert-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  /* min() not a bare 420px: the empty state is only ~342px wide on a phone,
+     and a fixed max-width let the receipt (which carries a full path) run off
+     the right edge of the screen. */
+  max-width: min(420px, 100%);
+  box-sizing: border-box;
+  margin-top: 6px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent, #7aa2f7) 45%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent, #7aa2f7) 12%, transparent);
+  color: var(--fg, #d7dae0);
+  font-family: var(--chrome-font, inherit);
+  font-size: 12.5px;
+  line-height: 1.35;
+  text-align: left;
+  animation: chat-convert-in 160ms ease-out;
+}
+.chat-convert-confirm svg {
+  flex: 0 0 auto;
+}
+/* A working directory is one long unbreakable token; let it break anywhere
+   rather than widen the box past the viewport. */
+.chat-convert-confirm span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+@keyframes chat-convert-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-convert-confirm {
+    animation: none;
+  }
+}
+
+/* The server's refusal ("this chat already has messages"). Rendered by BOTH
+   empty-state branches, because a 409 is exactly what moves the user from one
+   to the other — see convertRefusal in ChatPane.tsx. */
+.chat-convert-refusal {
+  max-width: min(420px, 100%);
+  box-sizing: border-box;
+  margin-top: 6px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--danger, #f7768e) 45%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--danger, #f7768e) 10%, transparent);
+  color: var(--danger, #f7768e);
+  font-family: var(--chrome-font, inherit);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+/* ── The launch card ───────────────────────────────────────────────────────
+   Opened by tapping a harness in the "or open instead" strip; replaces the
+   strip in place so nothing else on screen moves. Folder and model arrive
+   pre-answered, so it stays one tap for anyone who doesn't care. */
+.chat-launch-card {
+  width: 100%;
+  max-width: 420px;
+  box-sizing: border-box;
+  margin-top: 18px;
+  padding: 12px;
+  border: 1px solid var(--border-strong, #3b4261);
+  border-radius: 12px;
+  background: var(--bg-elev, #1a1b26);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  text-align: left;
+}
+.chat-launch-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.chat-launch-title {
+  font-family: var(--chrome-font, inherit);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg, #d7dae0);
+}
+.chat-launch-sub {
+  flex: 1 1 auto;
+  font-family: var(--chrome-font, inherit);
+  font-size: 11.5px;
+  color: var(--fg-faint, #6f7488);
+}
+.chat-launch-cancel {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  margin: -10px -8px -10px 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg-faint, #6f7488);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.chat-launch-cancel:hover:not(:disabled) {
+  color: var(--fg, #d7dae0);
+}
+.chat-launch-section {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.chat-launch-lbl {
+  font-family: var(--chrome-font, inherit);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-faint, #6f7488);
+}
+.chat-launch-note {
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--fg-faint, #6f7488);
+}
+.chat-launch-models {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.chat-launch-model {
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--border-strong, #3b4261) 65%, transparent);
+  border-radius: 9px;
+  background: transparent;
+  color: var(--fg-dim, #a9b1d6);
+  font-family: var(--chrome-font, inherit);
+  font-size: 12.5px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+.chat-launch-model:hover:not(:disabled) {
+  color: var(--fg, #d7dae0);
+  background: color-mix(in srgb, var(--fg, #d7dae0) 6%, transparent);
+}
+/* Selection is aria-pressed, so the visual state and the announced state can
+   never drift apart. */
+.chat-launch-model[aria-pressed="true"] {
+  color: var(--accent, #7aa2f7);
+  border-color: color-mix(in srgb, var(--accent, #7aa2f7) 65%, transparent);
+  background: color-mix(in srgb, var(--accent, #7aa2f7) 12%, transparent);
+}
+.chat-launch-model:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.chat-launch-model:focus-visible,
+.chat-folder-chip:focus-visible,
+.chat-launch-go:focus-visible,
+.chat-launch-cancel:focus-visible {
+  outline: 1px solid var(--accent, #7aa2f7);
+  outline-offset: 1px;
+}
+.chat-launch-go {
+  min-height: 44px;
+  padding: 10px 14px;
+  border: 1px solid var(--accent, #7aa2f7);
+  border-radius: 10px;
+  background: var(--accent, #7aa2f7);
+  color: #fff;
+  font-family: var(--chrome-font, inherit);
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.chat-launch-go:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* ── Folder chooser (shared: launch card + the session menu's switcher) ──── */
+.chat-folder-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.chat-folder-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.chat-folder-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-height: 44px;
+  max-width: 100%;
+  padding: 6px 10px;
+  border: 1px solid color-mix(in srgb, var(--border-strong, #3b4261) 65%, transparent);
+  border-radius: 9px;
+  background: transparent;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+.chat-folder-chip-name {
+  font-family: var(--chrome-font, inherit);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--fg-dim, #a9b1d6);
+  line-height: 1.15;
+}
+/* The basename alone is ambiguous across worktrees; the `~`-path is what tells
+   two `muxpad` folders apart. Clamped so a deep path can't stretch the row. */
+.chat-folder-chip-path {
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono-font, monospace);
+  font-size: 10.5px;
+  color: var(--fg-faint, #6f7488);
+  line-height: 1.15;
+}
+.chat-folder-chip:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--fg, #d7dae0) 6%, transparent);
+}
+.chat-folder-chip:hover:not(:disabled) .chat-folder-chip-name {
+  color: var(--fg, #d7dae0);
+}
+.chat-folder-chip[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--accent, #7aa2f7) 65%, transparent);
+  background: color-mix(in srgb, var(--accent, #7aa2f7) 12%, transparent);
+}
+.chat-folder-chip[aria-pressed="true"] .chat-folder-chip-name {
+  color: var(--accent, #7aa2f7);
+}
+.chat-folder-chip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+/* The card's path field is full-width; the session menu's popover already
+   constrains it. */
+.chat-launch-card .chat-folder-input {
+  width: 100%;
+  box-sizing: border-box;
+}
+@media (max-width: 520px) {
+  .chat-launch-card {
+    max-width: none;
+  }
+  .chat-folder-chip-path {
+    max-width: 18ch;
+  }
+}
+
+/* ── The search-hit highlight ───────────────────────────────────────────────
+   Painted when a MESSAGE-tier search result took you here: the term you
+   searched for, marked in the message the archive found it in. It is a
+   `<mark>` built from plain string runs (lib/search-highlight) — never
+   `dangerouslySetInnerHTML`, on either the plain-text or the markdown route.
+
+   Three cues, not one, because "colour alone" fails for a meaningful share of
+   readers and in forced-colours mode:
+     1. the fill + its edge rule (below),
+     2. a wash over the whole message, so "which message" survives the marks
+        being scrolled to the edge of the viewport,
+     3. bringing it into view — the motion itself is signal.
+
+   The highlight is TRANSIENT by construction and lives only in component
+   state: it goes when you leave the pane, press Escape, type, send, scroll it
+   off screen, search again, or reload. See ChatPane's dismissal block. */
+.chat-hit {
+  background: var(--chat-hit-bg);
+  color: var(--chat-hit-ink);
+  /* The edge. An inset shadow rather than a border so nothing reflows: a
+     border on an inline box would re-wrap the paragraph it sits in, which on
+     a long message would move the very line we are scrolling to. */
+  box-shadow: inset 0 -0.1em 0 var(--chat-hit-rule);
+  border-radius: 3px;
+  padding: 0 0.12em;
+  /* A match that wraps across two lines must be filled and ruled on BOTH
+     fragments — without this the second half loses its background entirely. */
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  /* <mark>'s UA style is a fixed yellow; ours is themed. Inherit the weight so
+     a hit inside a heading or a <strong> keeps its typography. */
+  font-weight: inherit;
+}
+
+/* Inside code, the padding would break the monospace grid the block is read
+   on — and code is exactly where an exact-width column tends to matter. */
+.chat-md pre .chat-hit,
+.chat-md code .chat-hit {
+  padding: 0;
+  border-radius: 2px;
+}
+
+/* Which MESSAGE, not just which words. A wash rather than a border or a left
+   rule: a border would reflow the row, and a left rule is the wrong side of an
+   RTL message. The outer shadow extends the same wash past the box so it reads
+   as padded, again without touching layout. */
+.chat-turn[data-search-hit] {
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--chat-hit-bg) 10%, transparent);
+  box-shadow: 0 0 0 6px color-mix(in srgb, var(--chat-hit-bg) 10%, transparent);
+}
+
+/* A brief flourish on arrival — the eye follows the change, which is the
+   cheapest way to say "here, this one" without a label. Replaces .chat-turn's
+   `chat-rise`, which is an entry animation for messages that just arrived and
+   this row is not one. */
+@media (prefers-reduced-motion: no-preference) {
+  .chat-turn[data-search-hit] {
+    animation: chat-hit-land 900ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+  }
+}
+@keyframes chat-hit-land {
+  0%,
+  35% {
+    background-color: color-mix(in srgb, var(--chat-hit-bg) 30%, transparent);
+  }
+  100% {
+    background-color: color-mix(in srgb, var(--chat-hit-bg) 10%, transparent);
+  }
+}
+
+/* Forced colours throws away every custom colour above, including the wash
+   that says which message. Map onto the platform's own "marked text" pair,
+   which is the one thing guaranteed to be legible there. */
+@media (forced-colors: active) {
+  .chat-hit {
+    forced-color-adjust: none;
+    background: Mark;
+    color: MarkText;
+    box-shadow: none;
+    text-decoration: underline;
+  }
+  .chat-turn[data-search-hit] {
+    outline: 2px solid CanvasText;
+    outline-offset: 2px;
+    background: none;
+    box-shadow: none;
+  }
+}
+
+/* ── "I couldn't find it" ───────────────────────────────────────────────────
+   A jump that cannot reach its message must SAY so. Landing on an unchanged
+   chat is the single outcome that reads as a broken search — the user asked to
+   be shown where a word was and got a page with nothing on it.
+
+   Floats over the transcript instead of sitting in the flow: a strip inserted
+   above .chat-scroll would reflow the log and move the scroll position by its
+   own height. */
+/* An <output>, not a div+role=status: it carries the live-region semantics
+   implicitly, so the sentence is announced when it appears — which is the
+   whole point of a message that exists to break a silence. */
+.chat-search-missed {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 6;
+  max-width: min(560px, calc(100% - 24px));
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 8px 8px 14px;
+  border-radius: 999px;
+  background: var(--chat-elev);
+  color: var(--chat-fg);
+  border: 1px solid var(--chat-border-strong);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 28%);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.chat-search-missed-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-search-missed-more {
+  flex: none;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--chat-border-strong);
+  background: transparent;
+  color: var(--chat-fg);
+  font: inherit;
+  cursor: pointer;
+}
+.chat-search-missed-more:hover {
+  background: var(--bg-hover, var(--chat-panel));
+}
+.chat-search-missed-close {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 0;
+  background: transparent;
+  color: var(--chat-dim);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.chat-search-missed-close:hover {
+  background: var(--bg-hover, var(--chat-panel));
+  color: var(--chat-fg);
 }

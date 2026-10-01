@@ -1,4 +1,42 @@
-import type { Terminal } from '@xterm/xterm';
+import type { IBuffer, Terminal } from '@xterm/xterm';
+
+/** Grid floor shared by every fit-and-send path. Must stay below any real device. */
+export const MIN_FIT_COLS = 20;
+export const MIN_FIT_ROWS = 5;
+
+/** xterm.js built-in default. A real session fills this; wrap reflow then evicts. */
+export const XTERM_BUILTIN_SCROLLBACK = 1000;
+
+/**
+ * What muxpad constructs terminals with. 50k lines is a long Cursor/Claude
+ * dump without being an unbounded memory leak per pane.
+ */
+export const DEFAULT_XTERM_SCROLLBACK = 50_000;
+
+/**
+ * Grow the ring so a width-shrink reflow cannot evict the line the reader
+ * is parked on. xterm caps at `rows + scrollback`; wrapping 80→40 roughly
+ * doubles occupied rows, so a buffer already at the cap loses the top.
+ * Must run BEFORE resize/fit — afterwards the line is already gone.
+ */
+export function ensureScrollbackForReflow(term: Terminal, minCols = MIN_FIT_COLS): void {
+  try {
+    if (term.buffer.active.type !== 'normal') return;
+    const current =
+      typeof term.options?.scrollback === 'number'
+        ? term.options.scrollback
+        : XTERM_BUILTIN_SCROLLBACK;
+    const cols = Math.max(1, term.cols);
+    const floor = Math.max(1, minCols);
+    const factor = Math.max(1, Math.ceil(cols / floor));
+    const needed = Math.max(0, term.buffer.active.length * factor - term.rows);
+    if (needed > current && term.options) {
+      term.options.scrollback = needed;
+    }
+  } catch {
+    // disposed, or a test fake without options
+  }
+}
 
 /**
  * Why this file exists: xterm.js v5 exposes cell dimensions and the viewport
@@ -282,5 +320,200 @@ export function setScrollBarWidthZero(term: Terminal): void {
     }
   } catch {
     // ignore
+  }
+}
+
+export type ProposedFit = { cols: number; rows: number };
+
+/** True when a FitAddon proposal is safe to apply locally (and to send). */
+export function proposedFitUsable(
+  proposed: ProposedFit | undefined | null,
+  minCols = MIN_FIT_COLS,
+  minRows = MIN_FIT_ROWS,
+): proposed is ProposedFit {
+  return (
+    !!proposed &&
+    Number.isFinite(proposed.cols) &&
+    Number.isFinite(proposed.rows) &&
+    proposed.cols >= minCols &&
+    proposed.rows >= minRows
+  );
+}
+
+export type ViewportAnchor =
+  | { kind: 'bottom' }
+  | { kind: 'line'; text: string; offsetIntoLogical: number; linesAbove: number }
+  | { kind: 'ratio'; ratio: number; linesAbove: number };
+
+function logicalLineStart(buf: IBuffer, y: number): number {
+  let start = y;
+  while (start > 0) {
+    const line = buf.getLine(start);
+    if (!line?.isWrapped) break;
+    start--;
+  }
+  return start;
+}
+
+function readLogicalLine(buf: IBuffer, start: number): string {
+  let text = buf.getLine(start)?.translateToString(true) ?? '';
+  let y = start + 1;
+  while (y < buf.length) {
+    const line = buf.getLine(y);
+    if (!line?.isWrapped) break;
+    text += line.translateToString(true);
+    y++;
+  }
+  return text;
+}
+
+function logicalLineRowCount(buf: IBuffer, start: number): number {
+  let n = 1;
+  let y = start + 1;
+  while (y < buf.length && buf.getLine(y)?.isWrapped) {
+    n++;
+    y++;
+  }
+  return n;
+}
+
+function findLogicalLineStart(buf: IBuffer, text: string, hintY: number): number | null {
+  const matches: number[] = [];
+  for (let y = 0; y < buf.length; y++) {
+    if (buf.getLine(y)?.isWrapped) continue;
+    if (readLogicalLine(buf, y) === text) matches.push(y);
+  }
+  if (matches.length === 0) return null;
+  if (matches.length === 1) return matches[0] ?? null;
+  return matches.reduce((best, y) => (Math.abs(y - hintY) < Math.abs(best - hintY) ? y : best));
+}
+
+/** Snapshot of what the reader is looking at, for restore after a reflow. */
+export function captureViewportAnchor(term: Terminal): ViewportAnchor | null {
+  try {
+    const buf = term.buffer.active;
+    if (buf.type !== 'normal') return null;
+    if (linesAboveBottom(term) === 0) return { kind: 'bottom' };
+    const viewportY = buf.viewportY;
+    const start = logicalLineStart(buf, viewportY);
+    const text = readLogicalLine(buf, start);
+    if (text.trim().length >= 2) {
+      return {
+        kind: 'line',
+        text,
+        offsetIntoLogical: viewportY - start,
+        linesAbove: linesAboveBottom(term),
+      };
+    }
+    const searchEnd = Math.min(buf.length, viewportY + Math.max(1, term.rows));
+    for (let y = viewportY + 1; y < searchEnd; y++) {
+      const s = logicalLineStart(buf, y);
+      const t = readLogicalLine(buf, s);
+      if (t.trim().length < 2) continue;
+      return {
+        kind: 'line',
+        text: t,
+        offsetIntoLogical: y - s,
+        linesAbove: linesAboveBottom(term),
+      };
+    }
+    return { kind: 'ratio', ratio: scrollRatioFromTerm(term), linesAbove: linesAboveBottom(term) };
+  } catch {
+    return null;
+  }
+}
+
+export function restoreViewportAnchor(term: Terminal, anchor: ViewportAnchor): void {
+  try {
+    const buf = term.buffer.active;
+    if (buf.type !== 'normal') return;
+    if (anchor.kind === 'bottom') {
+      term.scrollToBottom();
+      return;
+    }
+    if (anchor.kind === 'line') {
+      const hint = Math.max(0, buf.baseY - anchor.linesAbove);
+      const found = findLogicalLineStart(buf, anchor.text, hint);
+      if (found !== null) {
+        const wrapRows = logicalLineRowCount(buf, found);
+        const into = Math.max(0, Math.min(anchor.offsetIntoLogical, Math.max(0, wrapRows - 1)));
+        const target = Math.max(0, Math.min(buf.baseY, found + into));
+        term.scrollToLine(target);
+        return;
+      }
+      restoreLinesAboveBottom(term, anchor.linesAbove);
+      return;
+    }
+    restoreLinesAboveBottom(term, linesAboveFromRatio(term, anchor.ratio));
+  } catch {
+    // term disposed
+  }
+}
+
+/** Capture the viewport, mutate (fit/resize), put the same content back. */
+export function withViewportAnchor(term: Terminal, mutate: () => void): void {
+  // Raise the cap first so wrap reflow cannot evict the snapshot target.
+  ensureScrollbackForReflow(term);
+  const anchor = captureViewportAnchor(term);
+  mutate();
+  if (anchor) restoreViewportAnchor(term, anchor);
+}
+
+/**
+ * Capture-phase policy: when we own the buffer path, ALWAYS consume the
+ * event even if getLinesScrolled is 0. Sub-line trackpad deltas must not
+ * fall through to xterm handleWheel (pixel scroll on the same gesture).
+ */
+export function consumeCapturedWheel(
+  term: Terminal,
+  e: WheelEvent,
+  foregroundCmd?: string | null,
+): 'buffer' | 'none' {
+  if (!shouldScrollXtermBuffer(term, foregroundCmd)) return 'none';
+  scrollBufferWheel(term, e);
+  return 'buffer';
+}
+
+/** False → xterm must not run its fallback handleWheel. */
+export function customWheelAllowsXterm(term: Terminal, foregroundCmd?: string | null): boolean {
+  return !shouldScrollXtermBuffer(term, foregroundCmd);
+}
+
+export function mayFireQueuedResize(opts: { closed: boolean; mayDrive: boolean }): boolean {
+  return !opts.closed && opts.mayDrive;
+}
+
+export function shouldSkipCursorUnchangedBox(opts: {
+  isCursor: boolean;
+  force: boolean;
+  prevW: number;
+  prevH: number;
+  nextW: number;
+  nextH: number;
+  epsilon?: number;
+}): boolean {
+  if (!opts.isCursor || opts.force) return false;
+  const eps = opts.epsilon ?? 2;
+  return Math.abs(opts.nextW - opts.prevW) < eps && Math.abs(opts.nextH - opts.prevH) < eps;
+}
+
+export function cursorShouldRefitOnVisibility(skippedFitWhileHidden: boolean): boolean {
+  return skippedFitWhileHidden;
+}
+
+/** Aim SGR wheel at the transcript band (upper third), not the composer row. */
+export function transcriptBandRow(rows: number, hitRow: number): number {
+  return Math.min(hitRow, Math.max(1, Math.floor(rows / 3)));
+}
+
+/** End/Home jump the local buffer when the reader has scrolled up. */
+export function bufferJumpForKey(term: Terminal, key: string): 'bottom' | 'top' | null {
+  if (key !== 'End' && key !== 'Home') return null;
+  try {
+    if (term.buffer.active.type !== 'normal') return null;
+    if (linesAboveBottom(term) === 0) return null;
+    return key === 'End' ? 'bottom' : 'top';
+  } catch {
+    return null;
   }
 }

@@ -12,7 +12,16 @@
 // are all inherited for free, and its return value is the ONLY honest answer to
 // "did that land?". Ignoring that return value would rebuild silent failure one
 // layer up, which is the entire thing this replaces (§6 risk 1).
-import { type Cron, type CronRun, messageIsFromCron, renderCronMarker } from '@muxpad/shared';
+import {
+  type Cron,
+  type CronMarker,
+  type CronRun,
+  DEFAULT_AGENT_MODE,
+  coerceAgentMode,
+  messageIsFromCron,
+  parseCronMarker,
+  renderCronMarker,
+} from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { bootstrapTab, deleteTabCascade } from '../agent-tab.js';
 import { wrapCarryover } from '../chat/summarize.js';
@@ -122,7 +131,8 @@ export class CronScheduler {
   private ticking = false;
   /**
    * Panes with an in-flight turn this scheduler started, keyed by pane id →
-   * cron id. Two jobs: the `overlap=skip` check (a turn we started is still
+   * cron id — whether submitSend ran it at once or the queue drained it later
+   * (see `onTurnStarted`). Two jobs: the `overlap=skip` check (a turn we started is still
    * outstanding) and `close_when_done` (this turn is the one whose end closes
    * the tab). Rebuilt from nothing after a restart, deliberately: the DURABLE
    * half of overlap detection is the queue scan, and the worst case here is
@@ -152,6 +162,7 @@ export class CronScheduler {
       if (e.type === 'agent_turn' && (e.phase === 'done' || e.phase === 'fatal')) {
         void this.onTurnEnded(e.pane_id, e.phase);
       }
+      if (e.type === 'agent_turn' && e.phase === 'start') this.onTurnStarted(e.pane_id, e.queue_id);
       // A pane going away takes its in-flight bookkeeping with it; the cron
       // row itself is handled on the next tick (disable + push), because
       // "your job's target is gone" deserves a notification, not a silent drop.
@@ -335,13 +346,19 @@ export class CronScheduler {
     missed: number,
     now: number,
   ): Promise<CronFireResult> {
-    const text = renderCronMarker({ id: cron.id, name: cron.name, at: dueAt, missed }, cron.prompt);
+    const marker: CronMarker = { id: cron.id, name: cron.name, at: dueAt, missed };
+    const text = renderCronMarker(marker, cron.prompt);
     return cron.target_kind === 'new-tab'
       ? this.fireNewTab(cron, text, now)
-      : this.firePane(cron, text, now);
+      : this.firePane(cron, text, now, marker);
   }
 
-  private async firePane(cron: Cron, text: string, now: number): Promise<CronFireResult> {
+  private async firePane(
+    cron: Cron,
+    text: string,
+    now: number,
+    marker: CronMarker,
+  ): Promise<CronFireResult> {
     const paneId = cron.target_pane;
     if (!paneId) return { outcome: 'error', detail: 'no target pane' };
     const pane = this.panes.getById(paneId);
@@ -413,6 +430,12 @@ export class CronScheduler {
         // If we can't produce one, DON'T rotate. Losing a fire is recoverable
         // (the next slot comes around, and the run log says why this one
         // didn't); silently amnesiac output is not.
+        //
+        // The briefing goes INSIDE the cron marker, never ahead of it: the
+        // marker is a leading-block grammar (parseCronMarker) that the server's
+        // human-send bookkeeping, the runner and the transcript renderer all
+        // key on. Prepending the carryover made this fire read as typed by a
+        // person to every one of them.
         const carry = await this.carryoverFor(paneId);
         if (!carry)
           return {
@@ -422,7 +445,7 @@ export class CronScheduler {
           };
         const r = await this.fireNewTab(
           cron,
-          `${wrapCarryover(carry)}\n\n${text}`,
+          renderCronMarker(marker, `${wrapCarryover(carry)}\n\n${cron.prompt}`),
           now,
           workspaceId,
         );
@@ -499,9 +522,23 @@ export class CronScheduler {
       ...(cron.model ? { model: cron.model } : {}),
       ...(cron.backend === 'codex' || cron.backend === 'cursor' ? { backend: cron.backend } : {}),
       // A scheduled job's report wants terse and result-first — exactly the
-      // ⚡ Do contract — so new-tab fires default to it. Pane mode inherits
-      // the pane's own mode instead; there is nothing to choose there.
-      mode: cron.mode === 'deep' ? 'deep' : 'do',
+      // Chat-mode contract — so new-tab fires default to it. Pane mode
+      // inherits the pane's own mode instead; there is nothing to choose
+      // there.
+      //
+      // `cron.mode` is NULLABLE FREE TEXT read straight off the row, and cron
+      // rows were deliberately NOT migrated by the rename (they are the
+      // user's schedules, and the column is only ever read here). So it is
+      // coerced rather than compared: a pre-rename 'deep' still means Agent
+      // mode, a 'do' still means Chat, and anything else — including null —
+      // falls to the default.
+      //
+      // Not re-checked against `cron.backend` here: bootstrapTab runs every
+      // mode through modeForBackend, so a codex/cursor cron lands in Agent
+      // mode whatever the row says. Enforcing it twice would let the two
+      // copies drift; the row stays as the user wrote it because the backend
+      // on a schedule is editable and the mode is only read at fire time.
+      mode: coerceAgentMode(cron.mode) ?? DEFAULT_AGENT_MODE,
     });
     if (!created.pane) return { outcome: 'error', detail: 'tab bootstrap produced no pane' };
     const paneId = created.pane.id;
@@ -534,6 +571,26 @@ export class CronScheduler {
 
   // ── Turn lifecycle ───────────────────────────────────────────────────────
 
+  /**
+   * A fire that was QUEUED (submitSend said `queued`) becomes in-flight here,
+   * at the moment the queue hands it to the runner. Without this the overlap
+   * check lost it the instant it was drained: the row is gone from the queue,
+   * and `inflight` was only ever set for fires that returned `sent`.
+   *
+   * Only an explicit queue relay identifies the running message. Echoes and
+   * reconnect starts must not claim a queued job: that row may be canceled
+   * while the unrelated current turn keeps running. ws emits the queue id
+   * synchronously before removing the relayed row.
+   */
+  private onTurnStarted(paneId: string, queueId?: string): void {
+    if (!queueId) return;
+    const head = this.queue.peek(paneId);
+    if (head?.id !== queueId) return;
+    const cronId = parseCronMarker(head.text)?.marker.id;
+    if (cronId) this.inflight.set(paneId, cronId);
+    else this.inflight.delete(paneId);
+  }
+
   private async onTurnEnded(paneId: string, phase: 'done' | 'fatal'): Promise<void> {
     this.inflight.delete(paneId);
     const pending = this.closeOnDone.get(paneId);
@@ -557,6 +614,27 @@ export class CronScheduler {
     }
     if (this.paneHasArtifact(paneId)) {
       this.noteTabKept(pending.cronId, pending.tabId, 'the run produced an artifact');
+      return;
+    }
+    // A turn that ends with live background subagents has NOT delivered — the
+    // work it spawned is still out there and its results arrive after this
+    // moment. `tab-retire.ts` holds a sub-chat open for exactly this and says
+    // the two keep-lists must not drift; it grew this condition and cron did
+    // not, which is the drift that header warns about.
+    //
+    // It matters MORE here than there. Retirement loses a row from the live
+    // list and the work keeps running. This path calls `deleteTabCascade`,
+    // which kills the pane, which kills the runner, which kills the subagents
+    // with it — so the drift did not cost a row, it cost the work. Reachable
+    // today: `muxpad cron new --new-tab` defaults `close_when_done` to true,
+    // so any scheduled job that launches a background Task and then ends its
+    // turn was deleting itself mid-flight.
+    //
+    // The DURABLE server-owned roster, same source the retirer reads — a
+    // background subagent parked in one long tool call emits nothing for
+    // minutes, so a pty heuristic would call it finished.
+    if (this.deps.cache.getSubagentCount(paneId) > 0) {
+      this.noteTabKept(pending.cronId, pending.tabId, 'background agents are still running');
       return;
     }
     // The pane may have more of OUR queued messages (catchup=all) — closing

@@ -140,6 +140,196 @@ their screen.**
 - Leave nothing running. Before you report, check for servers and browser
   processes you started and kill them.
 
+### A system permission dialog IS a window on their screen
+
+This is the rule two different agents broke in one day, so it is spelled out.
+
+- **Never touch another application's bundle.** No exec, no stat, no read, no
+  \`ls\`, nothing, anywhere under \`/Applications\` or any other \`.app\`. On macOS
+  that is a TCC-gated action and it raises
+
+      "node" would like to access data from other apps   [Don't Allow] [Allow]
+
+  on the PHYSICAL DISPLAY of a machine you are not sitting at. You did not open
+  a window, so it can feel like you obeyed the rule above. You did not: they got
+  an interruption they have to answer, from software they did not run.
+
+- **The fix is never "do it less".** A prompt on a rare path is still a prompt.
+  Get the fact another way: ask the muxpad server, which usually already knows
+  (\`7dcf5f1\` replaced \`/Applications/Tailscale.app/…\` with one API call), or
+  use a binary muxpad owns — the browsers under
+  \`~/Library/Caches/ms-playwright\` are ours and prompt-free, and
+  \`MUXPAD_CHROME_BIN\` exists for when they are not there. If neither works,
+  **return nothing and say so.** "I could not find one, here is how to configure
+  it" is a fine outcome. A dialog on somebody's desk is not.
+
+- **Same rule for every other prompt family**, none of which you need:
+  **Screen Recording** (\`screencapture\`, \`getDisplayMedia\`, any desktop
+  capture — the Playwright MCP screenshots the page, which is not this),
+  **Accessibility** (\`AXUIElement\`, synthetic system-wide input),
+  **Automation** (\`osascript\`, AppleScript, "System Events", telling another
+  app to do anything), **Files & Folders** (\`~/Desktop\`, \`~/Documents\`,
+  \`~/Downloads\`, another browser's \`Application Support\` profile), the
+  **Keychain** (\`security find-…\`; a headless Chrome needs
+  \`--password-store=basic --use-mock-keychain\` or it prompts on first launch),
+  and **Local Network** (bind loopback, never \`0.0.0.0\` — which the rule above
+  already requires for a different reason).
+
+- **If you are unsure whether something prompts, it prompts.** Ask the user
+  before running it, or do without.
+
+### The browser is muxpad's, and a person can take it from you
+
+\`mcp__playwright__*\` drives a browser MUXPAD OWNS AND CAN SHOW, created for
+this session alone and started warm from a shared cookie jar — so you inherit
+the logins a person has already performed, no other agent can touch your pages,
+and the browser you are stuck in is the one they can see.
+
+**IT STARTS WHEN YOU FIRST REACH FOR IT.** Nothing is running until your first
+browser tool call, which then waits a second or two for Chrome — longer on a busy
+machine. That pause is the browser being born, not a failure: do not retry it,
+and do not conclude the browser is broken. A session that never browses never
+costs anything, which is why it works this way.
+
+That last part is the whole reason this exists. Two consequences.
+
+**Stop at a wall. Do not push through it.** A login page, a CAPTCHA, a payment
+form, an SMS or 2FA code, an "are you a robot" interstitial — none of these
+become passable by trying again. **Do not try to solve them.** What
+you do instead is ask for the human, in one call:
+
+\`\`\`
+curl -sS -X POST "\$MUXPAD_API_URL/api/browsers/s-\$MUXPAD_TAB_ID/needs-you" -H 'content-type: application/json' -d '{"reason":"<five words>","selector":"input[type=password]","tabId":"'"\$MUXPAD_TAB_ID"'"}'
+\`\`\`
+
+WALK TO THE WALL FIRST. Do not hand somebody a home page and let them hunt for
+the sign-in link — that is a forward, not a handoff. Get the page to the POINT OF
+ACTION: click through to the login form itself, open the payment step, reach the
+captcha. Then VERIFY it is there before you summon anybody —
+\`document.querySelector('input[type=password]')\` and its like are cheap, and a
+summons to the wrong page costs a person a trip to their phone for nothing.
+
+Send a \`selector\` for the thing that needs them, when you can name one. The
+viewer scrolls to it and rings it, so they arrive looking at the field rather
+than at a page. It is optional and a wrong one is harmless — the browser simply
+opens as it is.
+
+\`reason\` IS THE CARD. Keep it to ONE SHORT LINE — about five words, no
+trailing period. It appears on a phone, in a conversation, at the width of a
+sentence; three sentences of context get truncated and nobody reads the rest.
+Say the thing that is in the way, not the story of how you got there:
+
+    good    "Amazon needs a login"
+    good    "Captcha on the checkout page"
+    good    "Ulta Labs blocks my browser"
+    bad     "Amazon bounced me to the sign-in page for your order history — sign
+             in (and clear any 2FA) and hand the browser back, and I'll read
+             your recent orders."
+
+What you would have put in the long version belongs in your REPLY, where there
+is room for it. The card is a doorbell, not a letter.
+
+The profile is \`s-\$MUXPAD_TAB_ID\` — YOUR browser, the one you are stuck in.
+Summoning somebody to any other browser asks them to log in somewhere you cannot
+see, which is the bug this replaced. A card appears in that conversation, goes
+loud, and offers them the wheel — on their phone if that is where they are. Pass \`$MUXPAD_TAB_ID\` or the card lands
+in no conversation and nobody ever sees it. Then **say what you are waiting for
+and stop**, in that turn. Do not poll, do not retry the click, do not try a
+different selector. Somebody dealing with a login is not a race you can win, and
+the retries are pure cost: a session on this machine burned several turns on
+them and got nowhere. **Do not retry.**
+
+**While a person has the wheel, you do not.** Taking it is refused with \`409\`
+and a sentence naming why. That is not an error to work around — it means a
+human is typing into the page right now, possibly a card number. Report it and
+wait. When they hand it back, RE-CHECK the page before doing anything: the url
+may have changed and the DOM certainly has, and resuming from a stale snapshot
+is a documented top failure mode for exactly this handoff.
+
+Nothing above changes the rules further up: still headless, still no window, and
+the file chooser is intercepted so no native dialog ever opens.
+
+## The two modes: Chat and Agent
+
+Every agent pane is in one of exactly two modes. These are the NAMES — use
+them, in the UI and when you talk about a pane. There is no "Do mode" or
+"Deep mode"; those were the old internal spellings and they are gone.
+
+- **Chat mode** (\`chat\`) — muxpad's own assistant. On top of these
+  instructions it carries a short house contract (\`<dataDir>/chat-mode.md\`):
+  decisive, brief, result-first, delegates the legwork. This is what a new tab
+  opens as, and it is the DEFAULT for anything you create.
+- **Agent mode** (\`agent\`) — the harness exactly as it ships, with no muxpad
+  contract on top. You choose the backend, the folder and the model at launch.
+  This is what "open Claude / Codex / Cursor" gives you.
+
+Yes, Chat mode is also agent-powered. The names describe the ARRANGEMENT, not
+the engine.
+
+Where it appears: \`--mode=chat|agent\` on \`muxpad agent new\` and
+\`muxpad cron new\`, the \`MODE\` column of \`muxpad agent list\`, and
+\`PATCH /api/panes/:id {"mode":"chat"}\`. A pane with no recorded mode reads as
+\`agent\` — "nothing was overlaid" — which is why a plain terminal is never in
+Chat mode.
+
+**Switching a LIVE session is weaker than starting one in that mode.** No
+harness can rewrite a running session's system prompt, so a switch updates the
+pane row, rewrites its startup command for the next respawn, and delivers the
+new contract as a one-time \`<muxpad-mode>\` note in the conversation — which a
+long session can drift from, like any instruction. If the mode genuinely
+matters for a piece of work, open a NEW pane in it rather than switching this
+one.
+
+## Delegating work — it goes in a PANE, never in a hidden subprocess
+
+**Every agent you put to work must be a muxpad pane.** \`muxpad agent new
+[--backend=<b>] [--model=<m>] [--name=<label>] "the brief"\` is how you start one,
+and run from inside a pane it lands as a SUB-CHAT of yours automatically. It then
+shows up in the sidebar with its own row, its own state mark, its own transcript,
+and a card in your log; the user can open it, read it, interrupt it, and see what
+it cost.
+
+**SPAWN, THEN WAIT — or nothing will ever resume you.** A child finishing does
+NOT start a turn in the parent. Its report is written to its tab row and drawn as
+a card in your log, and a card is a picture: nothing in muxpad delivers it to you
+as a message, deliberately (a crashed worker never reaches a reporting step,
+which is exactly when you most need telling). So if you spawn workers and end
+your turn saying "I'll check when they land", you will not check, ever. Twice in
+one session an orchestrator here did exactly that.
+
+Wait like this, in the BACKGROUND, so it costs no tokens and wakes you when the
+worker is done:
+
+    muxpad agent wait <paneId> --timeout=3600
+
+TWO THINGS THAT WILL BITE YOU, both observed:
+ · **It wants the PANE id, and \`agent new\` prints a tab URL too.** The two are
+   ULIDs minted in the same millisecond, so they share a long prefix and a
+   careless grep takes the wrong one — \`01M3TP84G9AW…\` for \`01M3TP84G98A…\`.
+   Read the pane id from \`muxpad agent list\`, not by parsing output.
+ · **CHECK THE EXIT CODE.** 0 = finished, 1 = not an agent pane, 3 = timed out.
+   Waiting on a wrong id returns 1 IMMEDIATELY, and a loop that discards the
+   code reads that as "all done" and sails past three workers still typing.
+
+**Do NOT shell out to a coding agent instead.** \`codex exec …\`, \`claude -p …\`,
+\`cursor-agent …\`, or any other CLI invocation from your Bash tool, is a process
+nobody can see. It produces no row, no card, no transcript the cockpit can read,
+no status, and no way for the user to interrupt it. It was done once on this
+machine — six parallel \`codex exec\` reviews, each writing a report to \`/tmp\` —
+and the user's reaction was the correct one: *"why didn't I see the code reviews
+as sub-chats of you? where did they run?"* They had run fine. That is not the
+point; the point is that a cockpit whose whole job is making agent work visible
+had been handed a fleet it could not show.
+
+This holds however many you are starting, and it holds especially for the big
+fans-out, because that is when being able to watch matters most. The same goes
+for your harness's own in-process subagent mechanism when the work is
+substantial and long-running: a muxpad pane survives your turn ending, survives
+a restart, and can be read tomorrow.
+
+The narrow exception is a one-shot command that is not an agent at all — a
+\`git log\`, a test run, a build. Those are tools, not workers.
+
 ## Working across panes
 
 Other agents and terminals are running alongside you. The map:
@@ -192,7 +382,8 @@ export function agentInstructionsPath(dataDir: string): string {
 
 /**
  * sha256 of every `agent-instructions.md` default this project ever shipped,
- * oldest first (c2110d5, edb661b, ccfbebc, 3ab5df2, 6d66549), recovered by
+ * oldest first (c2110d5, edb661b, ccfbebc, 3ab5df2, 6d66549, and the
+ * pre-chat/agent-rename revision — bare and bannered), recovered by
  * evaluating AGENT_INSTRUCTIONS_SEED at each revision of this file. The
  * CURRENT seed is added at use — together they are every byte sequence muxpad
  * can have written here.
@@ -208,6 +399,8 @@ export const SHIPPED_INSTRUCTIONS_DEFAULTS: readonly string[] = [
   '277aae4ac82196b5360b5d78570ec7b17cc907ea9cb7b588d199bb88985b2efb',
   '81bc702c727c66bc3302178b264fe2bbc69a1d055c457e02e3e2c45eded4908d',
   '423da5969cfd0a4cfc24c0bb8a2a156f291699a37e860988885afa9bbfca324c',
+  'c0e9d3b51218b971cad82fde696445ad07999e4280883a551891c9cdc0f2a571',
+  '961728f1599ca6a80ffae036d6d09767751be447d552b40dd232d8e3c0779200',
 ];
 
 /** What the one-shot migration needs to know about this file: anything on

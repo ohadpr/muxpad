@@ -1,0 +1,99 @@
+/* "New version — reload" pill, top-centre.
+
+   TOP, not bottom, and this is the load-bearing choice in this file: the bottom
+   edge already has three tenants — the mobile composer (position:fixed;
+   bottom:0), the move-undo stack (bottom-left) and the external-open stack
+   (bottom-right). In an installed PWA the composer sits hard against the screen
+   bottom, so a pill down there is either hidden by it or, worse, tappable-
+   adjacent to it.
+
+   The offset is safe-area + chrome height. In standalone mode the document owns
+   the full screen (100lvh + viewport-fit=cover, see styles.css), so a bare
+   `top: 10px` lands under the status bar / Dynamic Island. On mobile the chrome
+   term clears the top bar; on desktop, where the sidebar absorbed that bar,
+   it simply floats the pill a little below the top edge of the pane area. One
+   rule, correct in all three. */
+.update-banner {
+  position: fixed;
+  top: calc(env(safe-area-inset-top) + var(--chrome-h) + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px 4px 4px;
+  background: var(--bg-tabbar);
+  color: var(--fg);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4);
+  font-family: var(--chrome-font);
+  font-size: 13px;
+  line-height: 1.35;
+  /* Appears while the user is doing something else — slide it in rather than
+     letting it pop into a stable layout. */
+  animation: update-banner-in 180ms ease-out;
+}
+
+@keyframes update-banner-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -8px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .update-banner {
+    animation: none;
+  }
+}
+
+.update-banner-action {
+  background: var(--bg-hover);
+  color: var(--fg);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  /* A thumb target, not a desktop button: this is tapped on a phone, one-handed,
+     near the top of the screen. */
+  padding: 7px 14px;
+  font: inherit;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 80ms ease, border-color 80ms ease;
+}
+.update-banner-action:hover {
+  background: var(--border-strong);
+  border-color: var(--fg-faint);
+}
+.update-banner-action:focus-visible {
+  outline: 2px solid var(--fg-faint);
+  outline-offset: 2px;
+}
+
+.update-banner-dismiss {
+  background: transparent;
+  border: none;
+  color: var(--fg-faint);
+  font-size: 18px;
+  line-height: 1;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.update-banner-dismiss:hover {
+  background: var(--border-strong);
+  color: var(--fg);
+}
+.update-banner-dismiss:focus-visible {
+  outline: 2px solid var(--fg-faint);
+  outline-offset: 2px;
+}

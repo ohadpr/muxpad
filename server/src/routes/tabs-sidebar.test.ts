@@ -4,7 +4,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Tab } from '@muxpad/shared';
+import { MuxpadEventSchema, sortSidebarTabs, type Tab } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openDb } from '../store/db.js';
@@ -49,9 +49,25 @@ describe('living sidebar — tab ordering + pinning', () => {
   const list = async () =>
     (await (await test.app.request(`/api/tabs?workspaceId=${wsId}`)).json()) as Tab[];
   const names = async () => (await list()).map((t) => t.name);
-  /** Write last_activity_at directly — the ordering input, whatever produced it. */
+  /**
+   * Write the ordering input directly.
+   *
+   * BOTH COLUMNS. The sort reads `userTouchAt` — `last_user_at`, falling back to
+   * `last_activity_at` only for a row an older server published. These fixtures
+   * used to set `last_activity_at` alone, which stopped expressing "this tab is
+   * more recent" the moment the sort started asking when the USER last touched
+   * a chat rather than when something last printed in it: every tab here is
+   * created in the same millisecond, so they all shared one `last_user_at` and
+   * the order collapsed onto the id tiebreak.
+   *
+   * That column swap is the fix for a chat four days untouched and
+   * near archival — outranking one used that morning, because an agent
+   * had emitted a line in it nine minutes earlier.
+   */
   const setActivity = (id: string, at: number | null) =>
-    db.prepare('UPDATE tabs SET last_activity_at = ? WHERE id = ?').run(at, id);
+    db
+      .prepare('UPDATE tabs SET last_activity_at = ?, last_user_at = ? WHERE id = ?')
+      .run(at, at, id);
 
   it('exposes pinned + last_activity_at on every listed tab', async () => {
     const t = await makeTab('A');
@@ -61,6 +77,39 @@ describe('living sidebar — tab ordering + pinning', () => {
     expect(typeof row?.last_activity_at).toBe('number');
     expect(row?.id).toBe(t.id);
   });
+
+  it.each([null, 200])(
+    'a schema-parsed pushed tie matches GET, regardless of manual positions (%s)',
+    async (tie) => {
+      const a = await makeTab('A');
+      const b = await makeTab('B');
+      // Deliberately choose a stored order opposite to the canonical ID order.
+      // This catches server-side drift back to hidden positions independently
+      // of the client hook tests, which cover the actual push subscription.
+      const canonical = [a, b].sort((x, y) => (x.id < y.id ? -1 : 1));
+      await test.app.request('/api/tabs/reorder', {
+        method: 'POST',
+        ...json({ ids: canonical.map((t) => t.id).reverse() }),
+      });
+      const first = canonical[0]!;
+      const second = canonical[1]!;
+      setActivity(first.id, tie === null ? null : 100);
+      setActivity(second.id, 300);
+      const cached = await list();
+      expect(cached.map((t) => t.id)).toEqual([second.id, first.id]);
+      setActivity(first.id, tie);
+      setActivity(second.id, tie);
+      const authoritative = await list();
+      let client = cached;
+      for (const row of authoritative) {
+        const event = MuxpadEventSchema.parse({ type: 'tab.updated', tab: row });
+        if (event.type !== 'tab.updated') throw new Error('wrong event');
+        client = sortSidebarTabs(client.map((t) => (t.id === event.tab.id ? event.tab : t)));
+      }
+      expect(client).toEqual(authoritative);
+      expect(client.map((t) => t.id)).toEqual(canonical.map((t) => t.id));
+    },
+  );
 
   it('orders the unpinned block by recency, most recent first', async () => {
     const a = await makeTab('A');

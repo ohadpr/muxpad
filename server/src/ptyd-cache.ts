@@ -1,12 +1,21 @@
 import { EventEmitter } from 'node:events';
 import type { AppUrl, PaneSpec, PaneStatus, Tab, Workspace } from '@muxpad/shared';
-import { rollupStatus } from '@muxpad/shared';
+import { rollupStatus, tabTakesPanes } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
+import { provisionError } from './pane-provision-state.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
 import { AppUrlDetector } from './runtime/app-url-detector.js';
 import type { AppUrlMarker } from './runtime/pty-scanner.js';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
+import {
+  type ClockSnapshot,
+  clockSnapshot,
+  liveChildCount,
+  resolveTabClock,
+  tabLifecycle,
+  tabLiveChildCount,
+} from './tab-clock.js';
 
 /**
  * Per-pane decoration state cached on the main server from ptyd push events.
@@ -27,12 +36,22 @@ import { TabStore } from './store/TabStore.js';
  *
  * Cold start: `cwd` is seeded synchronously from `PaneStore.listCwds()`
  * (see `seedCwds` and the main entry's startup wiring). `title`,
- * `foreground_cmd`, and `attention` are NOT seeded — they live only in
- * ptyd's memory. During the window between HTTP start and the first
- * ptyd-event for a given pane those fields read as null. Acceptable
- * trade — the web side renders nulls gracefully. Future-me should not
- * "fix" this by seeding from SQLite, because those values aren't
- * persisted there.
+ * `foreground_cmd` and `attention` are NOT in SQLite — they live only in
+ * ptyd's memory — so they arrive on the ptyd `connected` handshake instead,
+ * via the `flushDecorations` snapshot, alongside `flushCwds`.
+ *
+ * That snapshot is load-bearing, not a nicety, and this comment used to say
+ * the opposite: it described the gap as "the window between HTTP start and
+ * the first ptyd-event" and called it an acceptable trade. It was not a
+ * window. ptyd's decoration bus fires only on CHANGE and its diff maps are
+ * keyed by pane id in ptyd's own memory — not per subscriber — so a value
+ * that does not move is never re-announced to a server that reconnected.
+ * A pane parked in one foreground command read `foreground_cmd: null` for
+ * the life of that command, and a pane whose bell was still ringing came
+ * back from every restart reading `idle` instead of `blocked`.
+ *
+ * Future-me should still not "fix" any of this by seeding from SQLite: those
+ * values aren't persisted there, and ptyd is the one thing that knows them.
  */
 export interface PaneState {
   cwd?: string;
@@ -60,8 +79,12 @@ export interface PaneState {
  *  - `paneExit` → drop the entry entirely (no event — consumer will get a
  *    matching `pane.removed` from the route layer or react to `paneExit`
  *    on the client directly).
- *  - `connected` → seed `cwd` for every live runtime via `flushCwds()`.
- *    Other fields will populate as their respective events arrive.
+ *  - `connected` → snapshot every live runtime via `flushCwds()` +
+ *    `flushDecorations()`, AND wash out every pane ptyd does not have. The
+ *    second half is not symmetry for its own sake: after a ptyd restart no
+ *    `paneExit` is ever delivered (ptyd was the thing that died), so a pane's
+ *    decorations would otherwise stand unchallenged forever — see the prune's
+ *    comment in the handler.
  */
 export class PtydCache extends EventEmitter {
   private state = new Map<string, PaneState>();
@@ -72,6 +95,21 @@ export class PtydCache extends EventEmitter {
   // the paneCwd handler's `?.add` is a no-op — so the set never grows
   // beyond a single inflight flushCwds.
   private cwdEventRacers: Set<string> | null = null;
+  // The same idea as `cwdEventRacers`, for the decoration snapshot, but keyed
+  // per FIELD: title/fg/attention move independently, and a `paneFg` landing
+  // mid-flight says nothing about whether the snapshot's `title` is stale.
+  // Non-null only while a `connected`-driven `flushDecorations()` is inflight.
+  private decoEventRacers: Map<string, Set<'title' | 'fg' | 'attention'>> | null = null;
+  // Ids whose pane EXITED while a `connected` snapshot was inflight. Both
+  // snapshots are a picture ptyd took BEFORE the exit, so re-applying either
+  // resurrects the entry — with the dead pane's decorations, and with the one
+  // `paneExit` that would have removed it already spent. The result is a
+  // permanent zombie: an entry no event will ever touch again, reading
+  // `blocked` forever if the bell happened to be ringing.
+  //
+  // Same lifetime rule as the two racer collections above: non-null only
+  // inside the inflight window, so nothing accumulates in steady state.
+  private exitRacers: Set<string> | null = null;
   // Server-side app-url detection. ptyd ships raw URL sightings
   // (`paneUrlsSeen`); the detector classifies hosts + probes for a listener
   // and writes the confirmed list back into the cache. It lives here so this
@@ -192,12 +230,15 @@ export class PtydCache extends EventEmitter {
       this.update(e.id, { cwd: e.cwd });
     });
     client.on('paneFg', (e: { id: string; cmd: string | null }) => {
+      this.noteDecoRacer(e.id, 'fg');
       this.update(e.id, { fg: e.cmd });
     });
     client.on('paneTitle', (e: { id: string; title: string | null }) => {
+      this.noteDecoRacer(e.id, 'title');
       this.update(e.id, { title: e.title });
     });
     client.on('paneAttention', (e: { id: string; attention: boolean }) => {
+      this.noteDecoRacer(e.id, 'attention');
       this.update(e.id, { attention: e.attention });
     });
     client.on('paneActivity', (e: { id: string }) => {
@@ -216,6 +257,9 @@ export class PtydCache extends EventEmitter {
       // repopulate the cache.
       this.clearBusyTimer(e.id);
       this.detector.forget(e.id);
+      // Veto both connect snapshots for this id if one is inflight — see
+      // {@link exitRacers}. No-op outside that window.
+      this.exitRacers?.add(e.id);
       if (this.state.delete(e.id)) {
         this.emit('paneRemoved', e.id);
       }
@@ -239,18 +283,144 @@ export class PtydCache extends EventEmitter {
       // so steady-state events don't accumulate ids forever.
       const racers = new Set<string>();
       this.cwdEventRacers = racers;
+      const decoRacers = new Map<string, Set<'title' | 'fg' | 'attention'>>();
+      this.decoEventRacers = decoRacers;
+      const exited = new Set<string>();
+      this.exitRacers = exited;
       try {
-        const entries = await client.flushCwds();
-        for (const { id, cwd } of entries) {
-          if (racers.has(id)) continue;
-          this.update(id, { cwd });
+        // Both snapshots on the one connect, and both for the same reason:
+        // ptyd's pushes fire only on CHANGE, so events alone cannot wash out a
+        // stale value — or, for a server that has just started against a ptyd
+        // that outlived it, supply one at all.
+        //
+        // `title` / `fg` / `attention` used to be left out of this, and the
+        // file's own comment called that a small "boot window". It is not a
+        // window: ptyd's diff maps are keyed by pane id in ptyd's memory, not
+        // per subscriber, so a value that does not MOVE is never re-announced.
+        // A pane parked in one foreground process kept `foreground_cmd: null`
+        // for the life of that process, and a pane whose bell was still
+        // ringing came back from a routine restart reading `idle` instead of
+        // `blocked` — losing the status rail's × AND the sidebar's
+        // "wants you now" promotion, silently, on every restart.
+        // Each call is isolated. They are INDEPENDENT snapshots, and one of
+        // them is newer than the other — a ptyd too old for
+        // `flushDecorations` must not cost us the cwds, and the eager
+        // evaluation inside a `Promise.allSettled([...])` array literal does
+        // exactly that when the method is simply absent (it throws
+        // synchronously, before allSettled ever runs). Caught by a unit test
+        // whose fake client predates the method — which is precisely the
+        // version skew this has to survive in the field.
+        const snapshot = async <T>(fn: () => Promise<T>): Promise<T | null> => {
+          try {
+            return await fn();
+          } catch {
+            return null;
+          }
+        };
+        const [cwds, decos] = await Promise.all([
+          snapshot(() => client.flushCwds()),
+          snapshot(() => client.flushDecorations()),
+        ]);
+        if (cwds) {
+          for (const { id, cwd } of cwds) {
+            if (racers.has(id) || exited.has(id)) continue;
+            this.update(id, { cwd });
+          }
         }
+        if (decos) {
+          const live = new Set(decos.map((d) => d.id));
+          for (const { id, title, fg, attention } of decos) {
+            if (exited.has(id)) continue;
+            // Per-field, because the three move independently: a `paneFg`
+            // that landed mid-flight makes the snapshot's `fg` stale and
+            // says nothing about its `title`.
+            const raced = decoRacers.get(id);
+            this.update(id, {
+              ...(raced?.has('title') ? {} : { title }),
+              ...(raced?.has('fg') ? {} : { fg }),
+              ...(raced?.has('attention') ? {} : { attention }),
+            });
+          }
+          // …and now the panes ptyd does NOT have. The loop above only ever
+          // WRITES ids ptyd currently knows, which leaves the opposite set —
+          // ids this cache holds and ptyd has no opinion about — untouched
+          // forever. Those are precisely the panes whose `paneExit` was never
+          // delivered, because ptyd was the thing that died: after a ptyd
+          // restart every pane is gone, and nothing has ever contradicted
+          // their decorations. `busy` self-heals (its decay timer fires ~1.5s
+          // later) but `attention` does not, and `attention` outranks
+          // everything in getStatus and folds into decorateTab /
+          // decorateWorkspace — so a pane whose bell was ringing when ptyd
+          // died shows a red "wants you NOW" dot on its tab and its workspace
+          // for the rest of that pane's life. Agent and serve panes heal on
+          // respawn; a plain terminal pane is spawned LAZILY on browser
+          // attach, so a terminal in a tab you don't open never heals at all.
+          //
+          // Runs only when the snapshot ANSWERED. On a ptyd too old for
+          // flushDecorations `decos` is null, `live` would be empty, and this
+          // would blank every pane in the cockpit — so the whole prune is
+          // inside the `if (decos)`, which is the correct degradation.
+          //
+          // `cwd` deliberately survives: it is the one field seedCwds restores
+          // from SQLite for a not-yet-spawned pane, and the last-known cwd is
+          // still the right answer for a pane that is about to respawn.
+          // `appUrls` also survives — the detector re-probes every 10s and
+          // drops a dead listener on its own.
+          //
+          // "Absent from the snapshot" means absent when ptyd TOOK it, not
+          // now. A pane that materialized after that moment announces its
+          // first title/fg/attention while the snapshot travels — those land
+          // in `decoRacers`, are fresher than anything here, and ptyd's diff
+          // maps have recorded them, so they will never be re-sent. Blanking
+          // them held a ringing bell at `idle` until it rang again. So the
+          // racer veto is per field, exactly as in the loop above.
+          for (const id of [...this.state.keys()]) {
+            // A pane that exited mid-flight is legitimately absent from the
+            // snapshot, and its entry is already gone; `update` would recreate
+            // it for the same reason the deco loop would have.
+            if (live.has(id) || exited.has(id)) continue;
+            const s = this.state.get(id);
+            if (!s) continue;
+            const raced = decoRacers.get(id);
+            const patch: PaneState = {};
+            if (s.title !== undefined && !raced?.has('title')) patch.title = null;
+            if (s.fg !== undefined && !raced?.has('fg')) patch.fg = null;
+            if (s.attention && !raced?.has('attention')) patch.attention = false;
+            if (s.busy) patch.busy = false;
+            // The emptiness guard is load-bearing: `update` compares with
+            // `!==`, so an unconditional `{busy: false}` on a pane whose busy
+            // is `undefined` counts as a change and would fan a `pane.updated`
+            // for every pane in the DB on every single reconnect.
+            if (Object.keys(patch).length === 0) continue;
+            this.clearBusyTimer(id);
+            this.update(id, patch);
+          }
+        }
+        // A ptyd too old for flushDecorations rejects with `unknown method`,
+        // which lands here as a settled rejection and is simply the behaviour
+        // that existed before this call — no snapshot, fields fill in from
+        // events. Version skew is normal (a ptyd bounce kills every pane, so
+        // it waits for the user's moment); it must never be an error.
       } catch {
-        // ignore — cache will fill in via paneCwd events
+        // ignore — cache will fill in via push events
       } finally {
         if (this.cwdEventRacers === racers) this.cwdEventRacers = null;
+        if (this.decoEventRacers === decoRacers) this.decoEventRacers = null;
+        if (this.exitRacers === exited) this.exitRacers = null;
       }
     });
+  }
+
+  /** Record that a decoration event for `id`.`field` landed while a
+   *  `flushDecorations()` snapshot was inflight — see {@link decoEventRacers}.
+   *  Outside that window the map is null and this is a no-op, so the racer
+   *  state can never outlive a single connect. */
+  private noteDecoRacer(id: string, field: 'title' | 'fg' | 'attention'): void {
+    const racers = this.decoEventRacers;
+    if (!racers) return;
+    const set = racers.get(id);
+    if (set) set.add(field);
+    else racers.set(id, new Set([field]));
   }
 
   /**
@@ -551,7 +721,18 @@ export class PtydCache extends EventEmitter {
  * through this — a hand-built partial payload silently blanks `busy` on the
  * client and poisons the sidebar's change-dedup signature.
  */
-export function decoratePane(cache: PtydCache, pane: PaneSpec): PaneSpec {
+export function decoratePane(
+  cache: PtydCache,
+  pane: PaneSpec,
+  /**
+   * For the CHILD-CHAT half of `agents` (see below). Optional only so a caller
+   * with no database — there are none in production — degrades to the harness
+   * count instead of failing; every emitter passes it, because a payload that
+   * left it out would publish a LOWER number than the one before it and the
+   * client coalesces payloads onto the row it holds.
+   */
+  db?: Database.Database,
+): PaneSpec {
   const status = cache.getStatus(pane.id, pane.unread === true);
   return {
     ...pane,
@@ -566,8 +747,23 @@ export function decoratePane(cache: PtydCache, pane: PaneSpec): PaneSpec {
     // Deprecated alias, exact by construction.
     busy: status === 'working',
     status,
-    agents: cache.getSubagentCount(pane.id),
+    // Both kinds of parallel work, exactly as the tab row counts them (see
+    // decorateTab): the harness roster in THIS pane, plus the chats spawned
+    // under the tab it lives in. A chat's children are its work even though the
+    // pointer that records them (`spawned_by`) names the tab and not the pane —
+    // there is no pane-level spawn link to read, and no consumer sums this
+    // field across a tab's panes (the tab and workspace rollups both go to the
+    // cache and the clock index directly), so attributing them here cannot
+    // double-count.
+    agents:
+      cache.getSubagentCount(pane.id) + (db ? tabLiveChildCount(db, pane.tab_id, Date.now()) : 0),
     app_urls: cache.getAppUrls(pane.id),
+    // Why this pane has no pty, when something refused to make one. Decorated
+    // HERE, with every other runtime field, precisely because clients coalesce
+    // pane payloads onto the row they hold: an emitter that left it out would
+    // silently clear a live complaint on the next unrelated `pane.updated`.
+    // Normally null, which is the "nothing is known to be wrong" case.
+    provision_error: provisionError(pane.id),
   };
 }
 
@@ -592,6 +788,12 @@ export function decorateTab(
   manualUnreadIds?: ReadonlySet<string>,
   /** Pre-read cron summary per tab, for the same reason (see cronsByTab). */
   cronsByTabId?: ReadonlyMap<string, TabCronSummary>,
+  /** Pre-read clock inputs for EVERY tab AND the instant to resolve them at,
+   *  for the same reason again — and because a row cannot be resolved from
+   *  itself alone: whether its `spawned_by` parent still exists is what decides
+   *  between a sub-chat and a root (see tab-clock.ts / TabStore.clockRows).
+   *  The `now` rides along so one list is one snapshot (see ClockSnapshot). */
+  clocks?: ClockSnapshot,
 ): Tab {
   const panes = new PaneStore(db);
   const tabs = new TabStore(db);
@@ -606,12 +808,36 @@ export function decorateTab(
     ...tabPanes.map((p) => cache.getStatus(p.id, p.unread === true)),
     ...(manualUnread ? (['ready'] as const) : []),
   ]);
-  const agents = tabPanes.reduce((n, p) => n + cache.getSubagentCount(p.id), 0);
+  // PARALLEL WORK, both kinds. The harness roster (subagents, which die with
+  // their turn) PLUS the chats this one spawned (which do not) — see
+  // liveChildCount. Counting only the first is why a chat with a dozen working
+  // children published `agents: 0`.
+  const agents =
+    tabPanes.reduce((n, p) => n + cache.getSubagentCount(p.id), 0) +
+    (clocks
+      ? liveChildCount(clocks.index, tab.id, clocks.now)
+      : tabLiveChildCount(db, tab.id, Date.now()));
   // A SCHEDULE, not a status: folded in here (rather than queried per row in
   // the client or the renderer) so the sidebar costs ONE cron query per list,
   // not one per tab. Absent when the tab has none, so the payload — and the
   // client's change-dedup signature — is unchanged for every tab without a cron.
   const cron = cronsByTabId ? cronsByTabId.get(tab.id) : cronsForTab(db, tab.id);
+  // LIFECYCLE, resolved here and nowhere else. `done` and `clock` are computed
+  // server-side and published on the row precisely so no client re-derives
+  // them: a decay clock evaluated independently by the sidebar, the picker and
+  // the chat header is three surfaces that will eventually disagree about one
+  // chat. Both fields are UNCONDITIONAL, even when false/fresh — clients
+  // coalesce `tab.updated` onto their cached row, so a field omitted when
+  // false would leave a stale `done: true` after a revival.
+  const lifecycle = clocks
+    ? resolveTabClock(clocks.index, tab.id, clocks.now)
+    : // No pre-read (a single-row emit): resolve from at most two targeted row
+      // reads rather than scanning the table. See tabLifecycle.
+      tabLifecycle(db, tab.id, Date.now());
+  // `done_reason` is the one lifecycle field that IS conditional, and it can
+  // be: it only ever appears alongside `done: true`, which is unconditional —
+  // so a client coalescing a live row over a done one clears `done` in the
+  // same merge, and a stale reason has nothing left to attach to.
   // Deprecated alias, exact by construction (see PaneStatusSchema).
   return {
     ...tab,
@@ -620,7 +846,19 @@ export function decorateTab(
     busy: status === 'working',
     status,
     agents,
+    // Whether this tab's chrome offers a `+` at all — resolved from the panes
+    // this function already read, so it costs nothing, and resolved HERE so the
+    // rail, the pane strip and the mobile bar cannot each decide differently.
+    takes_panes: tabTakesPanes(tabPanes),
     ...(cron ? { crons: cron.count, next_cron: cron.next } : {}),
+    done: lifecycle.done,
+    ...(lifecycle.done_reason ? { done_reason: lifecycle.done_reason } : {}),
+    // WHEN it finished. Unconditional (null while live) for the same coalescing
+    // reason `done` is: a field omitted when absent would leave a stale stamp on
+    // a client's cached row after a revival, and that stamp is where a worker's
+    // completion card is DRAWN in its parent's log.
+    done_at: lifecycle.done_at,
+    clock: lifecycle.clock,
   };
 }
 
@@ -716,6 +954,9 @@ export function decorateWorkspace(
   cache: PtydCache,
   db: Database.Database,
   workspace: Workspace,
+  /** Pre-read clock inputs, when the caller is decorating a LIST of workspaces —
+   *  same pre-read discipline (and same reason) as decorateTab's. */
+  clocks: ClockSnapshot = clockSnapshot(db),
 ): Workspace {
   const panes = new PaneStore(db);
   const tabs = new TabStore(db);
@@ -729,6 +970,9 @@ export function decorateWorkspace(
       unread = true;
       statuses.push('ready');
     }
+    // A collapsed workspace has nothing mounted to observe its tabs, so the
+    // children spawned under them are exactly the work it cannot otherwise see.
+    agents += liveChildCount(clocks.index, t.id, clocks.now);
     for (const p of panes.listByTab(t.id)) {
       if (cache.getAttention(p.id)) attention = true;
       if (p.unread) unread = true;

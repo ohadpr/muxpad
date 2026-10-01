@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { type DraggableTab, orderAfterPinnedDrop, paneDropAction } from './tab-drag';
+import { type DraggableTab, orderAfterPinnedDrop } from './tab-drag';
 
 const tabs: DraggableTab[] = [
   { id: 'p1', pinned: true },
@@ -52,37 +52,5 @@ describe('orderAfterPinnedDrop', () => {
         .slice()
         .sort(),
     );
-  });
-});
-
-describe('paneDropAction — dropping a pane on a workspace header', () => {
-  const origin = (over: Partial<{ soloPane: boolean; fromWorkspaceId: string }> = {}) => ({
-    paneId: 'p',
-    fromTabId: 't',
-    fromWorkspaceId: 'ws-a',
-    ...over,
-  });
-
-  it('extracts a pane from a multi-pane tab into a new tab there', () => {
-    expect(paneDropAction(origin({ soloPane: false }), 'ws-b')).toBe('new-tab');
-    expect(paneDropAction(origin({ soloPane: false }), 'ws-a')).toBe('new-tab'); // pop out at home
-  });
-
-  it("moves the whole TAB when the pane is that tab's only one", () => {
-    // Extracting would delete the tab and rebuild an identical one — losing
-    // its name/icon/slug and bouncing anyone viewing it to the workspace root.
-    expect(paneDropAction(origin({ soloPane: true }), 'ws-b')).toBe('move-tab');
-  });
-
-  it('declines a solo pane dropped on the workspace it already lives in', () => {
-    // Nothing to extract; the row must not advertise a drop it can't perform.
-    expect(paneDropAction(origin({ soloPane: true }), 'ws-a')).toBe('none');
-  });
-
-  it('falls back to new-tab when the drag origin is unknown', () => {
-    // The server enforces the churn rule anyway, and its answer for a solo
-    // pane at home is a no-op — never a destroyed tab.
-    expect(paneDropAction(null, 'ws-b')).toBe('new-tab');
-    expect(paneDropAction({ paneId: 'p', fromTabId: 't', soloPane: true }, 'ws-b')).toBe('new-tab');
   });
 });

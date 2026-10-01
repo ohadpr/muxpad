@@ -608,6 +608,12 @@ print_table() {
   } | awk -F '\t' -v bold="$C_BOLD" -v reset="$C_RESET" '
     {
       for (i = 1; i <= NF; i++) {
+        # Carriage returns and tabs cannot survive into a cell: this output is
+        # routinely parsed by a supervisor (and by an agent) with cut/awk, and
+        # a control character inside a pane id is a malformed URL and a curl
+        # that returns 000 with no explanation. jq @tsv escapes them in the
+        # DATA, but a value that arrives already containing one would not be.
+        gsub(/[\r\t]/, "", $i);
         if (length($i) > w[i]) w[i] = length($i);
         cell[NR, i] = $i;
       }
@@ -619,10 +625,16 @@ print_table() {
         line = "";
         for (i = 1; i <= ncols; i++) {
           v = cell[r, i];
-          pad = w[i] - length(v);
-          if (pad < 0) pad = 0;
-          line = line v sprintf("%*s", pad, "");
-          if (i < ncols) line = line "  ";
+          # Pad only BETWEEN columns. Padding the last one too put trailing
+          # whitespace on every row of every table muxpad prints — invisible
+          # on screen, and one more thing a caller has to strip off an id.
+          if (i < ncols) {
+            pad = w[i] - length(v);
+            if (pad < 0) pad = 0;
+            line = line v sprintf("%*s", pad, "") "  ";
+          } else {
+            line = line v;
+          }
         }
         if (r == 1) printf "%s%s%s\n", bold, line, reset;
         else printf "%s\n", line;
@@ -1394,6 +1406,382 @@ cmd_serve() {
   done
 }
 
+# `muxpad tunnel --port <public port>` — run and OWN the Cloudflare quick
+# tunnel that makes published artifacts reachable from the internet.
+#
+# Not meant to be typed. muxpad registers it as an app (slug `tunnel`) on the
+# first publish, so it runs inside a supervised hidden pane where ptyd owns it
+# and it survives a main-server restart — see server/src/tunnel/TunnelApp.ts.
+# `muxpad app logs tunnel` shows cloudflared's own output; `muxpad app stop
+# tunnel` closes the door.
+#
+# The work is node, not bash, for one reason: the load-bearing step is parsing
+# the hostname out of cloudflared's banner (a quick tunnel mints a NEW random
+# name on every start), and that parser has to be unit-tested against real
+# captured output. A grep in a shell loop cannot be.
+cmd_tunnel() {
+  if [ "${1:-}" = "setup" ]; then
+    shift
+    cmd_tunnel_setup "$@"
+    return
+  fi
+  local runner="$ROOT/server/dist/tunnel/index.js"
+  if [ ! -f "$runner" ]; then
+    echo "muxpad tunnel: not built ($runner missing) — run 'pnpm build' in $ROOT" >&2
+    exit 1
+  fi
+  exec node "$runner" "$@"
+}
+
+# `muxpad tunnel setup <hostname> [--name=muxpad] [--relogin]` — turn published
+# links PERMANENT and PUBLIC, in one command.
+#
+# DOMAIN-AGNOSTIC BY CONSTRUCTION. The hostname is an argument and muxpad knows
+# nothing else about it: any name, any depth, any zone on the user's Cloudflare
+# account. No domain is assumed, defaulted or suggested anywhere in this script —
+# the one thing it does know how to check is whether the zone it was handed is on
+# Cloudflare at all, which it asks over plain DNS before touching anything.
+#
+# WHAT IT IS FOR. The default published link is your tailnet address: permanent,
+# but reachable only from your own devices. The quick tunnel is public, but
+# Cloudflare reassigns its four-word hostname on every restart, so every link
+# built from one dies at the next deploy. A NAMED tunnel is the only option that
+# is both — you own the hostname, it is a CNAME to a UUID whose credentials live
+# on disk, and it survives restarts, reboots and a new IP.
+#
+# WHY IT IS A COMMAND AND NOT A CHECKLIST. The steps are `login`, `create`,
+# `route dns` and remembering what you chose, and getting any of them subtly
+# wrong leaves a hostname that resolves nowhere. Only ONE of them genuinely needs
+# a human — the browser login, which is an OAuth flow against your own Cloudflare
+# account — and this skips even that when the account cert is already there.
+#
+# WHAT IT DELIBERATELY DOES NOT DO: set MUXPAD_PUBLIC_BASE_URL. It does not need
+# to. The hostname lands in the ordinary tunnel announce, public-base.ts reads a
+# real domain off the host and classes it `permanent`, and the durability ranking
+# puts it above everything. No plist, no launchd job, no daemon restart.
+cmd_tunnel_setup() {
+  local hostname='' name='muxpad' relogin=0 skip_zone=0 a
+  for a in "$@"; do
+    case "$a" in
+      --hostname=*) hostname="${a#--hostname=}" ;;
+      --name=*) name="${a#--name=}" ;;
+      --relogin) relogin=1 ;;
+      # The zone check has one real false-negative case — Cloudflare's custom /
+      # vanity nameservers replace the `*.ns.cloudflare.com` pair, so a zone that
+      # IS on Cloudflare can look like it is not. A hard block with no way
+      # through would be worse than no block.
+      --skip-zone-check) skip_zone=1 ;;
+      -*) echo "muxpad tunnel setup: unknown flag '$a'" >&2; exit 1 ;;
+      # THE HOSTNAME IS AN ARGUMENT, and muxpad knows nothing else about it. Any
+      # zone on the user's Cloudflare account works; nothing here assumes a
+      # domain, a naming convention, or a depth.
+      *)
+        if [ -n "$hostname" ]; then
+          echo "muxpad tunnel setup: two hostnames given ('$hostname' and '$a')" >&2
+          exit 1
+        fi
+        hostname="$a"
+        ;;
+    esac
+  done
+
+  if [ -z "$hostname" ]; then
+    cat >&2 <<'EOF'
+muxpad tunnel setup: a hostname is required.
+
+  muxpad tunnel setup pub.example.com
+
+Any hostname in any zone on your Cloudflare account. The zone has to be on
+Cloudflare nameservers, because the tunnel writes a CNAME into it — if it is not,
+this will tell you exactly what to do rather than failing at the CNAME.
+
+One thing worth knowing before you choose: a FIRST-level subdomain
+(pub.example.com) is covered by free Universal SSL. Going deeper
+(<slug>.pub.example.com) needs Advanced Certificate Manager at $10/month and buys
+nothing muxpad can use — the public server routes by PATH, not by Host header.
+EOF
+    exit 1
+  fi
+
+  # Validated HERE, before anything touches the account. The same shape
+  # server/src/tunnel/named.ts enforces on read: a bare hostname, because this
+  # value becomes the origin of every published link and a scheme would produce
+  # `https://https://…` downstream.
+  case "$hostname" in
+    *://* | */* | *:* | *' '* | '')
+      echo "muxpad tunnel setup: '$hostname' must be a bare hostname — no scheme, no port, no path" >&2
+      exit 1
+      ;;
+  esac
+  if ! printf '%s' "$hostname" | grep -qE '^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$'; then
+    echo "muxpad tunnel setup: '$hostname' must be a bare hostname" >&2
+    exit 1
+  fi
+
+  # IS THAT ZONE EVEN ON CLOUDFLARE? Asked FIRST, over plain DNS, because it is
+  # the one precondition muxpad can check for itself and the one whose native
+  # failure is useless: `cloudflared tunnel route dns` against a zone Cloudflare
+  # is not the authority for returns an API error that mentions neither
+  # nameservers nor a registrar — and by then a tunnel has been created and a
+  # browser login spent.
+  #
+  # Overridable binary for the same reason as MUXPAD_TAILSCALE_BIN: a test must
+  # drive this rather than depend on the network and on who owns the example
+  # domain this week.
+  local dig_bin="${MUXPAD_DIG_BIN:-dig}"
+  local apex='' zone_ns=''
+  local probe="$hostname"
+  # Walk UP from the hostname and take the longest suffix that has its own NS
+  # records — that is the zone apex. This is why there is no public-suffix list
+  # here and why `pub.example.co.uk` still works: `example.co.uk` has NS records
+  # and `pub.example.co.uk` does not, so the walk stops in the right place.
+  while [ "$skip_zone" = "0" ] && [ -n "$probe" ] && [ "$probe" != "${probe#*.}" ]; do
+    # `+noall +answer` and an explicit type filter, NOT `+short`. `+short NS`
+    # follows a CNAME and prints the chain, so a hostname that is already a CNAME
+    # (`www.bbc.co.uk`, measured) reads as though it were its own zone — the walk
+    # stops at the wrong level and the advice names the wrong domain. Column 4 is
+    # the record type; only a real NS line counts.
+    zone_ns="$("$dig_bin" +noall +answer +time=3 +tries=1 NS "$probe" 2>/dev/null \
+      | awk '$4 == "NS" { print $5 }' | grep -v '^$' || true)"
+    if [ -n "$zone_ns" ]; then
+      apex="$probe"
+      break
+    fi
+    probe="${probe#*.}"
+  done
+
+  if [ "$skip_zone" = "1" ]; then
+    # Taken at the user's word. `apex` is only used for messages from here on;
+    # the hostname stands in for it.
+    apex="$hostname"
+    printf '%s!%s skipping the Cloudflare zone check for %s\n' "$C_DIM" "$C_RESET" "$hostname"
+  elif [ -z "$apex" ]; then
+    cat >&2 <<EOF
+muxpad tunnel setup: found no DNS zone for $hostname.
+
+Nothing in that name answers an NS query, which usually means the domain is not
+registered, or it is a typo. Check the spelling; if the domain is new, DNS may
+not have propagated yet.
+
+Nothing was changed.
+EOF
+    exit 1
+  fi
+
+  if [ "$skip_zone" = "0" ] && ! printf '%s' "$zone_ns" | grep -qi '\.ns\.cloudflare\.com\.\?$'; then
+    cat >&2 <<EOF
+muxpad tunnel setup: the zone $apex is not on Cloudflare.
+
+Its nameservers right now are:
+
+$(printf '%s' "$zone_ns" | sed 's/^/    /')
+
+A tunnel hostname is a CNAME that Cloudflare has to be able to write, so $apex
+has to use Cloudflare as its DNS authority first. That is free, and it is three
+things:
+
+  1. dash.cloudflare.com → "Add a site" → enter: $apex   (the Free plan is fine)
+  2. Let Cloudflare scan the existing DNS records, and CHECK THE LIST it found.
+     Repointing nameservers moves the WHOLE ZONE, not just this one name — if a
+     website, mail (MX), or anything else lives on $apex and its records are not
+     in that list, add them before step 3 or they go dark.
+  3. At the registrar those nameservers point to today, replace them with the two
+     Cloudflare gives you. Cloudflare emails you when the zone goes active —
+     usually minutes, occasionally a few hours.
+
+Then re-run:
+
+  muxpad tunnel setup $hostname
+
+Nothing was changed, and nothing was created on your Cloudflare account.
+
+If you would rather not move that zone: pick a hostname in a domain you already
+have on Cloudflare, or leave it — published links already default to your tailnet
+address, which is permanent and works on all your own devices.
+
+Already on Cloudflare with CUSTOM (vanity) nameservers? Then this check is simply
+wrong about you — it looks for the \`*.ns.cloudflare.com\` pair. Re-run with
+--skip-zone-check.
+EOF
+    exit 1
+  fi
+  [ "$skip_zone" = "0" ] && printf '%s✓%s %s is on Cloudflare\n' "$C_GREEN" "$C_RESET" "$apex"
+
+  # Honour the same override the server uses, so a test can drive this without a
+  # Cloudflare account and a Homebrew-less machine can point at its own binary.
+  local cf="${MUXPAD_CLOUDFLARED_BIN:-}"
+  if [ -z "$cf" ]; then
+    cf="$(command -v cloudflared 2>/dev/null || true)"
+    [ -z "$cf" ] && [ -x /opt/homebrew/bin/cloudflared ] && cf=/opt/homebrew/bin/cloudflared
+    [ -z "$cf" ] && [ -x /usr/local/bin/cloudflared ] && cf=/usr/local/bin/cloudflared
+  fi
+  if [ -z "$cf" ] || [ ! -x "$cf" ]; then
+    cat >&2 <<EOF
+muxpad tunnel setup: cloudflared is not installed.
+
+  brew install cloudflared
+
+Then re-run: muxpad tunnel setup --hostname=$hostname
+EOF
+    exit 1
+  fi
+
+  # cloudflared's own home. Overridable so the test above never reads or writes
+  # the real one — those are live credentials for a real account.
+  local cfhome="${MUXPAD_CLOUDFLARED_HOME:-$HOME/.cloudflared}"
+  mkdir -p "$cfhome"
+  # Exported ONCE, and as the env var cloudflared documents rather than
+  # `--origincert` on four command lines. Two reasons: the commands below then
+  # read exactly like the ones printed for a human to copy (a flag they do not
+  # need is a flag they will paste), and every call is covered — an earlier draft
+  # set it only on `login`, leaving `create` and `route dns` reading the DEFAULT
+  # `~/.cloudflared/cert.pem` while the rest of the command used the override.
+  export TUNNEL_ORIGIN_CERT="$cfhome/cert.pem"
+
+  # STEP 1 — the account login. The ONE step that needs a human, and the one
+  # thing this command will not do twice: cert.pem is the account credential and
+  # re-running the flow would open a browser to re-learn what is already known.
+  # `--relogin` forces it, because the cert is scoped to the zone picked at login
+  # time and a DIFFERENT domain later needs another one — without the flag the
+  # only way through is deleting cert.pem by hand.
+  if [ -f "$cfhome/cert.pem" ] && [ "$relogin" = "0" ]; then
+    printf '%s✓%s already logged in to Cloudflare (%s)\n' "$C_GREEN" "$C_RESET" "$cfhome/cert.pem"
+  else
+    printf '%s→%s opening your browser to authorise cloudflared — pick the zone %s\n' \
+      "$C_DIM" "$C_RESET" "$apex"
+    if ! "$cf" tunnel login; then
+      echo 'muxpad tunnel setup: cloudflared tunnel login failed — nothing was changed' >&2
+      exit 1
+    fi
+  fi
+
+  # STEP 2 — the tunnel. Reusing an existing one by name makes re-running this
+  # safe, which matters because the most likely reason to re-run it is a typo in
+  # the hostname on the first attempt.
+  local existing_id=''
+  existing_id="$("$cf" tunnel list -o json -n "$name" 2>/dev/null \
+    | jq -r 'if type == "array" then (.[0].id // empty) else empty end' 2>/dev/null || true)"
+  if [ -n "$existing_id" ]; then
+    printf '%s✓%s tunnel %s already exists (%s)\n' "$C_GREEN" "$C_RESET" "$name" "$existing_id"
+  else
+    printf '%s→%s creating tunnel %s\n' "$C_DIM" "$C_RESET" "$name"
+    if ! "$cf" tunnel create "$name"; then
+      echo "muxpad tunnel setup: cloudflared tunnel create $name failed" >&2
+      exit 1
+    fi
+  fi
+
+  # The credentials file `create` wrote. FOUND, not guessed: muxpad treats this
+  # file's existence as "the tunnel is runnable" (server/src/tunnel/named.ts), so
+  # recording a path that is not there would mean announcing a permanent hostname
+  # in front of a cloudflared that cannot authenticate.
+  local creds=''
+  if [ -n "$existing_id" ] && [ -f "$cfhome/$existing_id.json" ]; then
+    creds="$cfhome/$existing_id.json"
+  else
+    creds="$(ls -t "$cfhome"/*.json 2>/dev/null | head -1 || true)"
+  fi
+  if [ -z "$creds" ] || [ ! -f "$creds" ]; then
+    cat >&2 <<EOF
+muxpad tunnel setup: no tunnel credentials file in $cfhome.
+
+\`cloudflared tunnel create $name\` should have written one. If the tunnel exists
+but its credentials are on another machine, fetch them with:
+
+  cloudflared tunnel token --cred-file $cfhome/$name.json $name
+EOF
+    exit 1
+  fi
+
+  # STEP 3 — the CNAME. Before writing any config, because a hostname with no
+  # route resolves nowhere, and a config written anyway would have muxpad publish
+  # links to a permanent address that is permanently dead.
+  #
+  # IS IT ALREADY ROUTED HERE? Asked first, because `cloudflared tunnel route dns`
+  # REFUSES an existing record without -f, and "re-running this is safe" has to be
+  # true — it was not. Found on the machine this was built for: the hostname had
+  # been routed by hand before muxpad knew about it, so setup failed at its last
+  # step on the one case that mattered most.
+  #
+  # Decided by FINGERPRINT, not by the Cloudflare API: the hostname must answer
+  # like muxpad's public artifact server — a 404 at `/` carrying a sandbox CSP,
+  # the same positive check run.ts makes before it will tunnel anything. A bare
+  # 404 is somebody else's server or a parked name, and skipping the route on
+  # that evidence would leave the hostname pointing wherever it already pointed
+  # while muxpad announced it as its own base.
+  local probe_url="${MUXPAD_TUNNEL_PROBE_URL:-https://$hostname}"
+  local probe_hdrs=''
+  probe_hdrs="$(curl -sS -o /dev/null -D - --max-time 8 "$probe_url/" 2>/dev/null || true)"
+  local already=0
+  if printf '%s' "$probe_hdrs" | grep -qiE '^HTTP/[0-9.]+ 404' \
+    && printf '%s' "$probe_hdrs" | grep -qi '^content-security-policy: *sandbox'; then
+    already=1
+  fi
+
+  if [ "$already" = "1" ]; then
+    printf '%s✓%s %s is already routed to this machine — leaving the DNS record alone\n' \
+      "$C_GREEN" "$C_RESET" "$hostname"
+  else
+  printf '%s→%s routing %s to the tunnel\n' "$C_DIM" "$C_RESET" "$hostname"
+  if ! "$cf" tunnel route dns "$name" "$hostname"; then
+    cat >&2 <<EOF
+muxpad tunnel setup: could not route $hostname to tunnel $name.
+
+$apex IS on Cloudflare (checked above), so the two likely causes are:
+
+  · THE LOGIN DOES NOT COVER THIS ZONE. \`cloudflared tunnel login\` writes a
+    cert scoped to the zone you picked, so a hostname in a different one is
+    refused. Re-authorise, picking $apex:
+
+      muxpad tunnel setup $hostname --relogin
+
+  · A RECORD FOR THAT NAME ALREADY EXISTS. Replace it — check what it is first:
+
+      $cf tunnel route dns -f $name $hostname
+
+No config was written, so re-running this is safe either way.
+EOF
+    exit 1
+  fi
+  fi
+
+  # STEP 4 — tell muxpad. The server re-reads this on every publish, so it takes
+  # effect with no restart.
+  local cfg="$DATA_DIR/tunnel.json"
+  jq -n --arg n "$name" --arg h "$hostname" --arg c "$creds" \
+    '{name: $n, hostname: $h, credentials_file: $c}' > "$cfg"
+
+  # STEP 5 — hand the tunnel to muxpad. The app's pane bakes its startup command
+  # in at materialise time and the runner reads the config at ITS start, so a
+  # tunnel that is already running is still running in QUICK mode until its pane
+  # is rebuilt. Restarting the app here is what makes one command enough; without
+  # it the hostname stays ephemeral until the next accidental restart.
+  #
+  # Best-effort: an instance with no tunnel app registered yet has nothing to
+  # restart, and the first publish will start it in named mode anyway.
+  if "$0" app list --json 2>/dev/null | jq -e '.[]? | select(.slug == "tunnel")' >/dev/null 2>&1; then
+    printf '%s→%s restarting the tunnel app so it runs the NAMED tunnel\n' "$C_DIM" "$C_RESET"
+    "$0" app restart tunnel >/dev/null 2>&1 || true
+  fi
+
+  printf '\n%s✓%s published links are now permanent AND public:\n' "$C_GREEN" "$C_RESET"
+  printf '    https://%s/<slug>/\n\n' "$hostname"
+  cat <<EOF
+  config:  $cfg
+  creds:   $creds  (back this up — it is what claims the hostname)
+
+Nothing else to do. To confirm:
+
+  muxpad publish --base      # expect: keeps: yes
+
+The quick tunnel's four-word hostnames are done with, and any link that died
+with one comes back under this name:
+
+  muxpad publish --url <slug>
+EOF
+  return 0
+}
+
 # `muxpad claude [claude args...]` — launch Claude Code in THIS pane as a
 # muxpad-tracked agent session, so it can later be viewed/driven from the web
 # chat and switched between terminal and chat. Passthrough that AUGMENTS: runs
@@ -1456,27 +1844,34 @@ cmd_claude() {
   # interactive TUI too. Skipped when the user passed any system-prompt flag of
   # their own; a missing/empty file simply contributes nothing (never an error).
   #
-  # ⚡ Do mode rides the SAME flag, appended after the instructions (behavior
+  # Chat mode rides the SAME flag, appended after the instructions (behavior
   # last, matching the SDK backend's append order). The pane's mode is read
   # from the API with a tolerant grep — jq is NOT required for `muxpad claude`
   # and adding a hard dependency here would break launching the TUI on a box
   # without it. Every step is best-effort: a down server, an old server with
-  # no `mode` field, or a missing file all fall through to Deep, which is the
-  # historical behavior.
+  # no `mode` field, or a missing file all fall through to AGENT mode, which
+  # is the historical behavior.
+  #
+  # This is why the pane-row default had to stay 'agent' when the CREATION
+  # default flipped to 'chat': a `muxpad claude` typed into a plain terminal
+  # reads THIS row, and a shell pane stamped 'chat' would have silently
+  # overlaid muxpad's contract on a session the user launched by hand. Only a
+  # pane explicitly put in Chat mode gets the overlay. The pre-rename 'do' is
+  # still honoured for one release, for a pane row an older server wrote.
   if [ "$user_has_sysprompt" = "0" ]; then
     local sysprompt="" part
     for part in agent-instructions.md agent-notes.md; do
       [ -s "$DATA_DIR/$part" ] || continue
       sysprompt="${sysprompt:+$sysprompt$'\n\n'}$(cat "$DATA_DIR/$part")"
     done
-    if [ -s "$DATA_DIR/do-mode.md" ] && [ -n "${MUXPAD_API_URL:-}" ]; then
+    if [ -s "$DATA_DIR/chat-mode.md" ] && [ -n "${MUXPAD_API_URL:-}" ]; then
       local pane_mode
       pane_mode="$(curl -sS --max-time 3 \
         "${MUXPAD_API_URL%/}/api/panes/$MUXPAD_PANE_ID" 2>/dev/null \
         | grep -o '"mode"[[:space:]]*:[[:space:]]*"[a-z]*"' \
         | head -1 | grep -o '[a-z]*"$' | tr -d '"')" || pane_mode=""
-      if [ "$pane_mode" = "do" ]; then
-        sysprompt="${sysprompt:+$sysprompt$'\n\n'}$(cat "$DATA_DIR/do-mode.md")"
+      if [ "$pane_mode" = "chat" ] || [ "$pane_mode" = "do" ]; then
+        sysprompt="${sysprompt:+$sysprompt$'\n\n'}$(cat "$DATA_DIR/chat-mode.md")"
       fi
     fi
     [ -n "$sysprompt" ] && extra+=(--append-system-prompt "$sysprompt")
@@ -1511,32 +1906,130 @@ cmd_claude() {
 # face; the terminal shows a compact activity log. The pane's startup command
 # is rewritten to `muxpad agent --resume <sid>` by the server, so a ptyd
 # restart or reboot springs the pane back into the same session from disk.
-# muxpad agent new [--workspace=<id>] [--cwd=<dir>] [--name=<tab name>] [--model=<model>] "first message"
+# The base URL to PRINT in a link a human will click.
+#
+# `MUXPAD_API_URL` is what this CLI talks to, which is loopback — correct for
+# an API call from this machine and useless in a link, because the person
+# reading it is usually on a phone. A wildcard bind is worse: `0.0.0.0` is not
+# connectable at all.
+#
+# So prefer a reachable hostname when the machine has one. Tailscale's MagicDNS
+# name is the right default here: muxpad's cockpit is deliberately tailnet-only
+# (an unauthenticated cockpit must never sit on a public funnel — see
+# funnel.ts), so the ts.net name is exactly as private as loopback and works
+# from every device the user owns. Falls back to loopback when there is no
+# tailnet, which is the honest answer on a standalone machine.
+printable_base() {
+  local base="${MUXPAD_API_URL%/}"
+  base="${base/0.0.0.0/127.0.0.1}"
+  # MUXPAD_PUBLIC_BASE_URL IS DELIBERATELY NOT CONSULTED HERE, and used to be.
+  #
+  # It is the ARTIFACT origin — config.ts: "the origin published artifact links
+  # are built from" — and this function builds the COCKPIT url, the
+  # `<base>/w/<ws>/t/<tab>` that `muxpad agent new` prints. Those are two
+  # different hosts on purpose. The artifact server is :7778: loopback-bound,
+  # serving nothing but `/<slug>/`, and the one intended to face the internet.
+  # The cockpit is :7777, it has NO authentication whatsoever, and its entire
+  # security model is being reachable only from the tailnet.
+  #
+  # So borrowing the artifact origin was wrong twice over: the printed link
+  # 404s (the public server has no `/w/...` route), and it puts a private,
+  # unauthenticated surface behind a name chosen to be public — the wrong
+  # direction to get confused in. The cockpit base is the tailnet name, which
+  # the rest of this function already works out; `candidates()` in
+  # public-base.ts still offers the persisted *.ts.net url when `env` is set,
+  # so nothing is lost by not looking here.
+  #
+  # Ask the SERVER for a hostname it already knows, rather than executing the
+  # Tailscale binary inside /Applications/Tailscale.app. Reaching into another
+  # app's bundle is what makes macOS put up "node would like to access data
+  # from other apps" — once per invocation, on the machine running muxpad.
+  #
+  # The candidate list is published for the PUBLISH base (artifacts, on :8443),
+  # so its port is wrong for the cockpit; only the HOST is borrowed. The bare
+  # hostname reaches the cockpit because muxpad's tailnet serve puts :443 there
+  # (tailnet-only — an unauthenticated cockpit is never on a public funnel).
+  #
+  # `probe=0` and `|| true` for the same two reasons publish_base_url has them:
+  # only the candidate LIST is wanted, so paying for a reachability walk is
+  # pointless; and under this script's `set -euo pipefail` a curl that fails or
+  # outruns the 2s budget makes the assignment non-zero and `set -e` kills the
+  # script. That last one bites hardest right here — `muxpad agent new` calls
+  # this at the very END, after the tab is created and the first message
+  # delivered, so an abort would lose the URL for work already done.
+  local host
+  host="$(curl -sS --max-time 2 "${MUXPAD_API_URL%/}/api/publish/base?probe=0" 2>/dev/null \
+    | jq -r '[.candidates[]?.url] | map(select(test("\\.ts\\.net"))) | .[0] // ""' 2>/dev/null \
+    | sed -E 's#^https?://##; s#[:/].*$##' \
+    || true)"
+  if [ -n "$host" ]; then printf 'https://%s' "$host"; return; fi
+  printf '%s' "$base"
+}
+
+# muxpad agent new [--workspace=<id>] [--cwd=<dir>] [--name=<tab name>] [--model=<model>] [--backend=<b>] "first message"
 # One-shot launcher: creates an agent tab (chat-native Claude session), waits
 # for its runner to register, sends the first message so the session starts
 # processing immediately, and prints the tab's URL. The runner needs a couple
 # of seconds to boot inside the fresh pane, so the send polls until accepted.
 cmd_agent_new() {
-  reset_flags workspace cwd name model mode
-  parse_flags workspace cwd name model mode -- "$@"
+  reset_flags workspace cwd name model mode backend
+  parse_flags workspace cwd name model mode backend -- "$@"
   local message="${POSITIONAL[0]:-}"
   if [ -z "$message" ]; then
-    echo 'usage: muxpad agent new [--workspace=<id>] [--cwd=<dir>] [--name=<tab name>] [--model=<model>] [--mode=do|deep] "first message"' >&2
+    echo 'usage: muxpad agent new [--workspace=<id>] [--cwd=<dir>] [--name=<tab name>] [--model=<model>] [--mode=chat|agent] [--backend=claude|codex|cursor|pick] "first message"' >&2
     exit 1
   fi
-  # Agent behavior mode (see agent-modes.ts): 'do' overlays the terse,
-  # decisive contract; 'deep' (the default) is muxpad's historical behavior.
+  # Agent mode (see agent-modes.ts): 'chat' overlays muxpad's terse, decisive
+  # contract; 'agent' is the harness exactly as it ships. Omitted = the
+  # server's default, which is 'chat' — a spawned worker is muxpad asking for
+  # work to be done, not a harness someone sat down at.
+  #
   # Validated HERE as well as server-side so a typo fails loudly instead of
-  # silently spawning a deep-mode worker you asked to be fast.
-  case "${FLAG_mode:-deep}" in
-    do|deep) ;;
-    *) echo "muxpad: --mode must be 'do' or 'deep' (got '$FLAG_mode')" >&2; exit 1 ;;
+  # silently spawning a worker in the wrong mode. The pre-rename 'do'/'deep'
+  # still pass: this script and the server upgrade together, but a checked-out
+  # older copy of it (or a script someone wrote against it) must not start
+  # failing.
+  case "${FLAG_mode:-chat}" in
+    chat|agent|do|deep) ;;
+    *) echo "muxpad: --mode must be 'chat' or 'agent' (got '$FLAG_mode')" >&2; exit 1 ;;
   esac
-  local workspace_id="${FLAG_workspace:-}"
-  if [ -z "$workspace_id" ]; then
+  # Which harness the worker runs. POST /api/tabs has always accepted this; the
+  # CLI just never passed it, so every scripted spawn was a Claude one and
+  # fleets of mixed harnesses had to be built by hand against the HTTP API.
+  # Validated here for the same reason --mode is: a typo must fail loudly
+  # rather than silently spawn the wrong harness.
+  if [ -n "${FLAG_backend:-}" ]; then
+    case "$FLAG_backend" in
+      claude|codex|cursor|pick) ;;
+      *) echo "muxpad: --backend must be claude, codex, cursor or pick (got '$FLAG_backend')" >&2; exit 1 ;;
+    esac
+  fi
+  # WHERE THE WORKER LANDS. Two cases, and the first one is nearly every spawn.
+  #
+  # SPAWNED FROM INSIDE A PANE ($MUXPAD_PANE_ID) — the worker has a PARENT, and
+  # the parent's workspace is the answer. The server resolves it from the live
+  # row (see routes/tabs.ts), so this sends no workspace at all: not the flag,
+  # and above all not $MUXPAD_WORKSPACE_ID, which is stamped into the pane's
+  # environment at birth and is therefore a guess that goes stale the moment the
+  # chat is moved. That stale guess is what kept re-seeding a workspace the user
+  # had abandoned — every generation of agents carrying the same dead id.
+  #
+  # A ROOT spawn (no pane, e.g. a cron or a plain shell) keeps the old
+  # behaviour: the flag, then the env, then a hard error.
+  local workspace_id=''
+  if [ -n "${MUXPAD_PANE_ID:-}" ]; then
+    if [ -n "${FLAG_workspace:-}" ]; then
+      # Ignored, not refused, and SAID OUT LOUD — a launcher that passed it was
+      # working around exactly the bug this now fixes, and it must not silently
+      # keep putting children somewhere other than their parent.
+      echo "muxpad: --workspace is ignored for a spawn from inside a pane — the worker goes where its parent chat lives" >&2
+    fi
+  elif [ -n "${FLAG_workspace:-}" ]; then
+    workspace_id="$FLAG_workspace"
+  else
     workspace_id="${MUXPAD_WORKSPACE_ID:-}"
     if [ -z "$workspace_id" ]; then
-      echo "muxpad: --workspace=<id> required (no MUXPAD_WORKSPACE_ID in env)" >&2
+      echo "muxpad: --workspace=<id> required (no parent pane and no MUXPAD_WORKSPACE_ID in env)" >&2
       exit 1
     fi
     # A pane living in a hidden system workspace inherits a hidden
@@ -1560,7 +2053,10 @@ cmd_agent_new() {
   fi
   local cwd="${FLAG_cwd:-$PWD}"
   local body
-  body="{\"workspace_id\":$(json_string "$workspace_id"),\"bootstrap\":\"agent\",\"cwd\":$(json_string "$cwd")"
+  body="{\"bootstrap\":\"agent\",\"cwd\":$(json_string "$cwd")"
+  # Absent for a spawn with a parent — see "WHERE THE WORKER LANDS" above. The
+  # server requires one only when there is no parent to inherit from.
+  [ -n "$workspace_id" ] && body+=",\"workspace_id\":$(json_string "$workspace_id")"
   # A custom tab name survives the session's AI auto-rename (only the
   # bootstrap default 'agent' gets renamed) — so launchers can label the tab.
   [ -n "${FLAG_name:-}" ] && body+=",\"name\":$(json_string "$FLAG_name")"
@@ -1569,17 +2065,37 @@ cmd_agent_new() {
   [ -n "${FLAG_model:-}" ] && body+=",\"model\":$(json_string "$FLAG_model")"
   # Mode rides the pane row AND its startup command, so a respawn keeps it.
   [ -n "${FLAG_mode:-}" ] && body+=",\"mode\":$(json_string "$FLAG_mode")"
+  # Backend rides the pane's startup command too (`muxpad agent --backend <b>`),
+  # so a respawn keeps the harness it was launched with.
+  [ -n "${FLAG_backend:-}" ] && body+=",\"backend\":$(json_string "$FLAG_backend")"
+  # HIERARCHY. Spawned from inside a pane — which is nearly every scripted
+  # spawn, since the caller is an agent delegating work — the new chat records
+  # which chat asked for it. That is what makes it nest in the sidebar and
+  # share its parent's decay clock, so a worker cannot outlive the chat it was
+  # spawned to serve. The server resolves pane→tab and silently drops the link
+  # if that tab is gone, so a spawn never fails over provenance.
+  [ -n "${MUXPAD_PANE_ID:-}" ] && body+=",\"spawned_by_pane\":$(json_string "$MUXPAD_PANE_ID")"
   body+='}'
   local tab_json tab_id tab_slug
   tab_json="$(http_request POST /api/tabs "$body")"
   tab_id="$(printf '%s' "$tab_json" | jq -r '.id')"
   tab_slug="$(printf '%s' "$tab_json" | jq -r '.slug')"
+  # WHERE IT ACTUALLY LANDED, from the server — not from what we asked for. For a
+  # spawn we asked for nothing (the parent decides), so this is the only way to
+  # know, and it is also the honest value for the URL when a flag was ignored.
+  local landed
+  landed="$(printf '%s' "$tab_json" | jq -r '.workspace_id // empty')"
+  [ -n "$landed" ] && workspace_id="$landed"
   local pane_id
   pane_id="$(http_request GET "/api/tabs/$tab_id" | jq -r '.panes[0].id')"
   # Poll the send until the runner registers (409 + reason until then).
   # http_request exits on non-2xx, so drive curl directly here.
   local send_body status tmp deadline
-  send_body="{\"text\":$(json_string "$message")}"
+  # WHO IS BRIEFING THE WORKER. The spawn's first message is a chat talking to a
+  # chat exactly as `agent send` is, so it carries the same provenance — see
+  # cmd_agent_send. Empty when muxpad is driven from an ordinary shell, which is
+  # a human and renders as one.
+  send_body="{\"text\":$(json_string "$message")$(inbound_from_field)}"
   tmp="$(mktemp)"
   deadline=$((SECONDS + 30))
   while :; do
@@ -1605,8 +2121,7 @@ cmd_agent_new() {
   # default list, and a silent empty slug would break the printed URL.
   local ws_slug base url
   ws_slug="$(http_request GET '/api/workspaces?all=1' | jq -r --arg id "$workspace_id" '.[] | select(.id == $id) | .slug')"
-  base="${MUXPAD_API_URL%/}"
-  base="${base/0.0.0.0/127.0.0.1}"
+  base="$(printable_base)"
   url="$base/w/${ws_slug:-$workspace_id}/t/$tab_slug"
   if [ "$JSON_OUTPUT" = "1" ]; then
     printf '{"tab_id":%s,"pane_id":%s,"url":%s}\n' \
@@ -1631,10 +2146,115 @@ cmd_agent_list() {
   print_table "$res" \
     'PANE:.pane_id' \
     'BACKEND:.assistant' \
-    'MODE:(.mode // "deep")' \
+    'MODE:(.mode // "agent")' \
     'TURN:.status' \
     'VIEW:.view_mode' \
     'SID:(.current_sid // "-")'
+}
+
+# `muxpad agent respawn <paneId>` | `--all [--backend=<id>]`
+#
+# Re-exec a pane's agent runner in place. The pane's startup_cmd carries
+# `--resume <sid>`, so the session comes back from its transcript and the
+# conversation continues; ptyd is never touched and no terminal dies.
+#
+# THE BULK FORM EXISTS BECAUSE A RECOVERY SHOULD BE ONE COMMAND. On 2026-09-20
+# every Claude pane went dead at once (a token expiry racing 25 long-lived
+# `claude` children) and the fix was a respawn of all 24. The obvious shell
+# loop against the HTTP API — `for p in $(muxpad agent list | awk …)` — ate two
+# attempts before anyone noticed the ids were dirty, and a hand-rolled loop
+# also swallows per-pane failures. Both are handled here, once.
+#
+# The runner now self-heals that particular condition on its own (see
+# server/src/agent-runner/auth-heal.ts). This stays as the escape hatch for
+# everything it cannot: a wedged session, a runner that outlived a `pnpm build`,
+# a pane whose SDK child is simply gone.
+cmd_agent_respawn() {
+  local a rest=() all=0
+  for a in "$@"; do
+    case "$a" in
+      --all) all=1 ;;
+      *) rest+=("$a") ;;
+    esac
+  done
+  set -- ${rest[@]+"${rest[@]}"}
+  reset_flags backend
+  parse_flags backend -- "$@"
+  require_api_url
+  local backend="${FLAG_backend:-}"
+  local ids=() id
+  if [ "$all" = 1 ]; then
+    require_jq
+    if [ "${#POSITIONAL[@]}" -gt 0 ]; then
+      echo 'muxpad: agent respawn takes a pane id OR --all, not both' >&2
+      exit 1
+    fi
+    local res filter='.[]'
+    res="$(http_request GET /api/agent-sessions)"
+    if [ -n "$backend" ]; then
+      filter=".[] | select(.assistant == $(json_string "$backend"))"
+    fi
+    while IFS= read -r id; do
+      [ -n "$id" ] && ids+=("$id")
+    done < <(printf '%s' "$res" | jq -r "$filter | .pane_id")
+  else
+    if [ -n "$backend" ]; then
+      echo 'muxpad: --backend only makes sense with --all' >&2
+      exit 1
+    fi
+    if [ "${#POSITIONAL[@]}" -ne 1 ]; then
+      echo 'usage: muxpad agent respawn <paneId> | --all [--backend=<id>]' >&2
+      exit 1
+    fi
+    ids=("${POSITIONAL[0]}")
+  fi
+  if [ "${#ids[@]}" -eq 0 ]; then
+    printf '%s(none)%s\n' "$C_DIM" "$C_RESET"
+    return 0
+  fi
+  local ok=0 bad=0 status
+  for id in "${ids[@]}"; do
+    # Scrub whitespace and control characters off the id before it becomes a
+    # URL. A pane id pasted from a terminal carries the tty's CR (ONLCR turns
+    # every \n into \r\n on the way out of a pty), and a CR inside a URL makes
+    # curl fail with 000 and no message at all — which is exactly how two
+    # recovery attempts were lost during the incident above.
+    id="$(printf '%s' "$id" | tr -d '[:space:]')"
+    [ -z "$id" ] && continue
+    status="$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+      "${MUXPAD_API_URL%/}/api/panes/$id/respawn" || echo 000)"
+    case "$status" in
+      2*)
+        ok=$((ok + 1))
+        printf '%s✓%s %s\n' "$C_GREEN" "$C_RESET" "$id"
+        ;;
+      *)
+        bad=$((bad + 1))
+        printf '%s✗%s %s %s(HTTP %s)%s\n' \
+          "$C_RED" "$C_RESET" "$id" "$C_DIM" "$status" "$C_RESET" >&2
+        ;;
+    esac
+  done
+  if [ "$bad" -gt 0 ]; then
+    printf '%s%d respawned, %d failed%s\n' "$C_DIM" "$ok" "$bad" "$C_RESET"
+    exit 1
+  fi
+  printf '%s%d respawned%s\n' "$C_DIM" "$ok" "$C_RESET"
+}
+
+# WHO IS SENDING — `,"from_pane":"p-…"`, or the empty string.
+#
+# Every process inside a muxpad pane carries $MUXPAD_PANE_ID (PaneRuntime injects
+# it), so an agent running `muxpad agent send` can say which chat it is. The
+# server resolves that pane to a TAB and stores the tab id, and the receiving
+# conversation draws a card naming the chat instead of an anonymous user bubble.
+#
+# EMPTY FROM AN ORDINARY SHELL, deliberately. Nobody claimed to be a chat, so
+# nothing is recorded and the message renders exactly as it always has — which
+# is the correct answer for a human at a terminal.
+inbound_from_field() {
+  [ -n "${MUXPAD_PANE_ID:-}" ] || return 0
+  printf ',"from_pane":%s' "$(json_string "$MUXPAD_PANE_ID")"
 }
 
 # `muxpad agent send <paneId> "message"` — deliver a message to the pane's
@@ -1657,7 +2277,7 @@ cmd_agent_send() {
   tmp="$(mktemp)"
   status="$(curl -sS -o "$tmp" -w '%{http_code}' \
     -X POST -H 'content-type: application/json' \
-    --data "{\"text\":$(json_string "$message")}" \
+    --data "{\"text\":$(json_string "$message")$(inbound_from_field)}" \
     "${MUXPAD_API_URL%/}/api/agent-sessions/$pane_id/send" || echo 000)"
   if [ "$status" = "202" ]; then
     local queued
@@ -1825,21 +2445,35 @@ cmd_agent_wait() {
 }
 
 cmd_agent() {
-  # `muxpad agent new|list|send|transcript|wait …` are HTTP verbs; anything else is
-  # the in-pane runner itself (including the server-written
+  # `muxpad agent new|list|respawn|send|transcript|wait …` are HTTP verbs;
+  # anything else is the in-pane runner itself (including the server-written
   # `muxpad agent --resume <sid>`).
   case "${1:-}" in
     new) shift; cmd_agent_new "$@"; return ;;
     list) shift; require_jq; cmd_agent_list "$@"; return ;;
+    respawn) shift; cmd_agent_respawn "$@"; return ;;
     send) shift; require_jq; cmd_agent_send "$@"; return ;;
     transcript) shift; require_jq; cmd_agent_transcript "$@"; return ;;
     wait) shift; require_jq; cmd_agent_wait "$@"; return ;;
   esac
+  local runner="$ROOT/server/dist/agent-runner/index.js" a
+  # `--help` is answered BEFORE the pane check, by the runner itself (one usage
+  # text, in server/src/agent-runner/args.ts). Asking a subcommand what it does
+  # is a reflex — and the reflex answer here used to be "must be run inside a
+  # muxpad pane", which teaches nothing and is what sent someone to type the
+  # bare command in a pane that already had a session (see args.ts).
+  for a in "$@"; do
+    case "$a" in
+      --help|-h)
+        if [ -f "$runner" ]; then exec node "$runner" --help; fi
+        echo "muxpad agent: runner not built ($runner missing) — run 'pnpm build' in $ROOT" >&2
+        exit 1 ;;
+    esac
+  done
   if [ -z "${MUXPAD_PANE_ID:-}" ]; then
     echo "muxpad agent: must be run inside a muxpad pane (no MUXPAD_PANE_ID)" >&2
     exit 1
   fi
-  local runner="$ROOT/server/dist/agent-runner/index.js"
   if [ ! -f "$runner" ]; then
     echo "muxpad agent: runner not built ($runner missing) — run 'pnpm build' in $ROOT" >&2
     exit 1
@@ -1912,7 +2546,7 @@ cmd_cron_new() {
 usage: muxpad cron new --name=<name> --at='<cron expr | daily at 09:00 | every 30m>'
          (--pane[=<id|name>] | --new-tab [--workspace=<id>])
          [--tz=America/Los_Angeles] [--cwd=<dir>] [--model=<m>] [--backend=claude|codex|cursor]
-         [--mode=do|deep] [--catchup=once|skip|all] [--overlap=skip|queue]
+         [--mode=chat|agent] [--catchup=once|skip|all] [--overlap=skip|queue]
          [--on-context=fire|compact-first|rotate|skip] [--quiet=<mins>]
          [--max-open=<n>] [--no-close] "prompt"
 
@@ -2190,9 +2824,14 @@ cmd_search() {
 # dedicated public static port). The URL is the one thing printed on stdout,
 # so `url=$(muxpad publish report.html)` just works; warnings go to stderr.
 
-# Locate the tailscale binary: MUXPAD_TAILSCALE_BIN (tests stub it — the
-# real one must never run there) > PATH > the macOS app bundle. Prints the
-# path, or nothing when unavailable. Always exits 0.
+# Locate the tailscale binary. THE POLICY LIVES IN server/src/tailscale-bin.ts
+# — this is its shell twin, and tailscale-bin.test.ts asserts the two still
+# agree (via the `_tailscale-bin` verb below). Read that file before changing
+# either. In short: MUXPAD_TAILSCALE_BIN (exclusive — a missing override
+# resolves to NOTHING, never to the app bundle, so tests can never exec the
+# real binary) > PATH > /Applications/Tailscale.app.
+#
+# Prints the path, or nothing when unavailable. Always exits 0.
 find_tailscale() {
   if [ -n "${MUXPAD_TAILSCALE_BIN:-}" ]; then
     [ -x "$MUXPAD_TAILSCALE_BIN" ] && echo "$MUXPAD_TAILSCALE_BIN"
@@ -2208,14 +2847,126 @@ find_tailscale() {
   return 0
 }
 
-# Best-effort public-base-url discovery from THIS shell. The daemon runs
-# under launchd, where the macOS Tailscale app CLI refuses to run (CLIError
-# 3) — but it works fine from user/pane shells. So the CLI ensures the
-# funnel and reads Self.DNSName here, and hands the server a
-# `public_base_url` hint to persist. EVERY failure is silent (empty output):
-# the server's fallback chain (persisted globals → local URL + warning)
-# copes without us.
+# Best-effort public-base-url discovery from THIS shell. The daemon runs under
+# launchd, where the macOS Tailscale app CLI refuses to run (CLIError 3) — but
+# it works fine from user/pane shells. So the CLI ensures the funnel and reads
+# Self.DNSName here, and hands the server a `public_base_url` hint to persist.
+# EVERY failure is silent (empty output): the server's fallback chain (persisted
+# globals → local URL + warning) copes without us.
+#
+# ASK FIRST. This function used to run unconditionally on every `muxpad
+# publish`, and on a Mac with no `tailscale` on PATH that means executing the
+# binary inside /Applications/Tailscale.app — which reads that app's container,
+# so macOS puts up "node would like to access data from other apps". Every
+# publish, several times a day.
+#
+# The hint is only worth anything when the server does not already know a base,
+# and the server is the only one who can say (public-base.ts: env > pinned >
+# tunnel > hint > funnel > persisted). On this machine it holds a live tunnel
+# AND the persisted ts.net name, so the discovered hint was ranked below both
+# and thrown away — a modal dialog per publish for a value nobody used.
+#
+# `discovery_needed` also stays false after a FAILED attempt for
+# DISCOVERY_RETRY_TTL_MS, so a machine with no tailnet asks at most once a
+# working day rather than once a command. A server too old to send the field, or
+# unreachable, yields empty → we discover, i.e. the old behaviour.
+# This machine's tailnet FQDN, WITHOUT touching Tailscale. Prints the name or
+# nothing; never fails.
+#
+# Tailscale here is a Mac App Store install: the only CLI is inside the sandboxed
+# /Applications/Tailscale.app, there will be no `brew install`, and every exec of
+# that binary reads the app's own container — which is what makes macOS ask "node
+# would like to access data from other apps". So the name has to come from
+# somewhere else, and it does, twice over:
+#
+#   1. tailscaled puts this host's address in 100.64.0.0/10 (CGNAT) on a utun
+#      interface. `ifconfig` reads interface config — not privileged, no prompt.
+#   2. MagicDNS answers that address's PTR with the full name (macOS's
+#      /etc/resolv.conf lists `nameserver 100.100.100.100`), so a plain reverse
+#      lookup resolves it — again no prompt.
+#
+# Verified: 100.111.22.33 → dt-mac-mini.example-tailnet.ts.net, which is exactly the
+# base already persisted in globals.
+#
+# NOT `scutil --get LocalHostName`, though it is equally prompt-free: on this
+# machine it answers `home` while the tailnet name is `dt-mac-mini`. They are
+# unrelated settings, so gluing LocalHostName to the tailnet suffix would produce
+# `home.example-tailnet.ts.net` — a wrong host and a link that cannot work. The PTR is
+# the machine's real tailnet identity, not a guess assembled from parts.
+#
+# The TS twin is server/src/tailnet-hostname.ts; keep the two in step.
+tailnet_hostname() {
+  local ip name
+  # 100.64–100.127 only. 100.5.x and 100.200.x are ORDINARY public addresses, and
+  # treating all of 100/8 as tailnet would reverse-resolve a stranger's host and
+  # then trust the name that came back.
+  ip="$(ifconfig 2>/dev/null \
+    | grep -oE 'inet 100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]+\.[0-9]+' \
+    | awk '{print $2}' | head -1 || true)"
+  [ -z "$ip" ] && return 0
+  name="$(dig +short +time=2 +tries=1 -x "$ip" 2>/dev/null | head -1 | sed 's/\.*$//' || true)"
+  # Only a *.ts.net answer is believed. Anything else means MagicDNS is off or
+  # something else on the network answered the PTR for CGNAT space, and a name
+  # from there would build a dead link. `*.ts.net` (not a substring match), so
+  # `ts.net.attacker.example` and a bare `ts.net` are both refused.
+  case "$name" in
+    *.ts.net) printf '%s' "$name" ;;
+  esac
+  return 0
+}
+
+# Say it, when the link being handed over will not keep.
+#
+# THE DEFECT THIS CLOSES. `muxpad publish` printed a URL on stdout and nothing
+# else. On this machine that URL is a Cloudflare QUICK tunnel, whose hostname is
+# randomly reassigned every time the tunnel restarts — so every link printed
+# between 2026-09-19 and 2026-09-27 died together at 19:45 on the 27th, when a
+# ptyd restart rebuilt the tunnel pane. Nothing crashed and nothing was
+# misconfigured; that cloudflared ran eight days and exited zero times. The
+# links were simply handed out as permanent when they were not.
+#
+# STDERR, never stdout. `muxpad publish` documents stdout as JUST the url so it
+# can be piped, and a caveat that breaks `$(muxpad publish …)` would be a worse
+# bug than the one it warns about.
+base_note_line() {
+  local json="${1:-}" note
+  [ -z "$json" ] && return 0
+  note="$(printf '%s' "$json" | jq -r '.note // empty' 2>/dev/null || true)"
+  [ -z "$note" ] && return 0
+  printf '%smuxpad: %s%s\n' "$C_DIM" "$note" "$C_RESET" >&2
+  return 0
+}
+
 publish_base_url() {
+  # probe=0: this is a pure DB question, and the probing variant walks every
+  # candidate at up to 2.5s each — a dead tunnel would blow the 2s budget below,
+  # leaving us to exec tailscale exactly when things are already wrong.
+  #
+  # The trailing `|| true` is NOT decoration. This script runs `set -euo
+  # pipefail`, so a curl that fails or times out makes the whole assignment
+  # non-zero and `set -e` tears the script down — a slow server would abort the
+  # publish instead of merely leaving this question unanswered. An unanswered
+  # question means "assume yes", i.e. the pre-existing behaviour.
+  local needed
+  needed="$(curl -sS --max-time 2 "${MUXPAD_API_URL%/}/api/publish/base?probe=0" 2>/dev/null \
+    | jq -r 'if .discovery_needed == null then "" else (.discovery_needed | tostring) end' 2>/dev/null \
+    || true)"
+  [ "$needed" = "false" ] && return 0
+
+  # COLD CACHE, AND STILL NO EXEC. The tailnet name is derivable from this
+  # machine's own address (see tailnet_hostname above) — the same answer
+  # `tailscale status --json` would give, for no prompt. So a first publish on a
+  # fresh machine works without ever opening the app bundle.
+  local host
+  host="$(tailnet_hostname)"
+  if [ -n "$host" ]; then printf 'https://%s:8443' "$host"; return 0; fi
+
+  # LAST RESORT, and the only tier that costs a prompt. Reached only when the
+  # server knows no base AND this machine has no tailnet address to reverse —
+  # i.e. Tailscale is not up, in which case the exec will most likely fail too.
+  # It is kept because it is also the only way to CREATE the funnel mapping
+  # rather than merely name it; the server rations it to once per
+  # DISCOVERY_RETRY_TTL_MS via `discovery_needed` above.
   local ts dns
   ts="$(find_tailscale)"
   [ -z "$ts" ] && return 0
@@ -2236,13 +2987,46 @@ cmd_publish() {
   local mode=publish
   local rest=()
   local set_base=''
+  local want_url=''
+  # WHO THE LINK IS FOR, and the default is the whole fix.
+  #
+  # Every artifact link handed out before this defaulted to the Cloudflare quick
+  # tunnel, whose hostname Cloudflare reassigns on every restart — so the link
+  # printed here worked when it was printed and was NXDOMAIN within hours. At
+  # least six went dead in one afternoon on 2026-09-28.
+  #
+  # These artifacts are read on the author's own laptop and phone, and both are
+  # tailnet nodes, where `https://<host>.ts.net:8443` is permanent and needs
+  # nothing installed. So that is the default, and `--public` is how you ask for
+  # a link you can send to somebody else — with its shelf life stated.
+  local audience=''
   local a
   while [ $# -gt 0 ]; do
     a="$1"
     case "$a" in
+      --public) audience=public ;;
       --list) mode=list ;;
       --base) mode=base ;;
       --clear-base) mode=clear-base ;;
+      # `--url <slug-or-dead-link>` — REPRINT a live link for something already
+      # published. The recovery path for the failure that motivated it: a
+      # Cloudflare quick tunnel's hostname is randomly reassigned on every
+      # restart, so every link handed out under the old name goes NXDOMAIN at
+      # once, permanently. The BYTES are untouched — they are a directory under
+      # `<dataDir>/public/<slug>` and the slug never changes — so the dead link
+      # is not lost information, it is a stale prefix on a live slug.
+      #
+      # Takes a whole dead URL as well as a bare slug, because that is the form
+      # the user actually has: it is sitting in a chat log or a report, and
+      # asking them to parse the slug out of it by hand is asking them to do the
+      # one mechanical step a script is for.
+      --url=*) mode=url; want_url="${a#--url=}" ;;
+      --url)
+        shift
+        want_url="${1:-}"
+        [ -z "$want_url" ] && { echo 'muxpad publish: --url requires a slug or a dead link' >&2; exit 1; }
+        mode=url
+        ;;
       --set-base=*) set_base="${a#--set-base=}" ;;
       --set-base)
         shift
@@ -2255,6 +3039,11 @@ cmd_publish() {
   done
   reset_flags name rm update
   parse_flags name rm update -- "${rest[@]+"${rest[@]}"}"
+
+  # Query suffix for the read paths. Empty when nothing was asked for, so the
+  # server's own default — the durable base — is what answers.
+  local aq=''
+  [ -n "$audience" ] && aq="?audience=$audience"
 
   # `--set-base <url>` pins the origin every published link is built from.
   #
@@ -2287,34 +3076,87 @@ cmd_publish() {
   # `--base` shows what every link is being built from, and why.
   if [ "$mode" = "base" ]; then
     local res
-    res="$(http_request GET /api/publish/base)"
+    res="$(http_request GET "/api/publish/base$aq")"
     if [ "$JSON_OUTPUT" = "1" ]; then printf '%s\n' "$res"; return; fi
     printf '%s' "$res" | jq -r '
       "  base:      \(.url // "(none — links would be local-only)")",
       "  from:      \(.source)",
+      "  for:       \(.audience // "tailnet" | if . == "public" then "anyone (--public)" else "your own devices — the default" end)",
+      "  keeps:     \(
+         if .durability == "ephemeral" then "NO — dies at the next tunnel restart"
+         elif .durability == "tailnet" then "yes, forever — but only on your tailnet"
+         elif .durability == "local"   then "no — loopback, never shareable"
+         elif .durability == "permanent" then "yes"
+         # An older daemon that predates this field. "yes" would be the one
+         # answer that is unsafe to guess, since the whole point is that an
+         # ephemeral base looks exactly like a permanent one.
+         else "unknown (daemon predates this field)" end)",
       "  reachable: \(if .reachable == null then "not checked" else .reachable end)"
     '
+    local n
+    n="$(printf '%s' "$res" | jq -r '.note // empty')"
+    [ -n "$n" ] && printf '  %snote:      %s%s\n' "$C_DIM" "$n" "$C_RESET"
     local w
     w="$(printf '%s' "$res" | jq -r '.warning // empty')"
     [ -n "$w" ] && printf '  %swarning:   %s%s\n' "$C_DIM" "$w" "$C_RESET"
     printf '  %scandidates (highest first):%s\n' "$C_DIM" "$C_RESET"
-    printf '%s' "$res" | jq -r '.candidates[] | "    \(.source)\t\(.url)"'
+    printf '%s' "$res" | jq -r '.candidates[] | "    \(.source)\t\(.durability // "?")\t\(.url)"'
     return
+  fi
+
+  # `--url <slug-or-dead-link>` — the recovery verb. See the flag parser above.
+  if [ "$mode" = "url" ]; then
+    # Accept a whole URL and keep only its first path segment; a bare slug falls
+    # through both substitutions unchanged. Also tolerates a `@N` version suffix
+    # so a link to `/report@2/` resolves back to `report`.
+    local slug="$want_url"
+    slug="${slug#*://}"          # drop scheme
+    case "$slug" in */*) slug="${slug#*/}" ;; *) slug='' ;; esac
+    [ -z "$slug" ] && slug="$want_url"
+    slug="${slug%%/*}"           # first path segment only
+    slug="${slug%%\?*}"          # …without a query
+    local res found
+    res="$(http_request GET "/api/publish$aq")"
+    found="$(printf '%s' "$res" | jq -r --arg s "${slug%%@*}" \
+      '(.publishes[]? | select(.slug == $s) | .url) // empty')"
+    if [ -z "$found" ] || [ "$found" = "null" ]; then
+      printf 'muxpad publish: no artifact named %s — `muxpad publish --list` shows what is here\n' \
+        "${slug%%@*}" >&2
+      exit 1
+    fi
+    # A version suffix survives the round trip: `--url .../report@2/` answers
+    # with the CURRENT link to that same version, not to the live one.
+    case "$slug" in
+      *@*) printf '%s\n' "${found%/"${slug%%@*}"/}/${slug}/" ;;
+      *) printf '%s\n' "$found" ;;
+    esac
+    # The recovery verb now says what it just handed over. stdout stays JUST the
+    # url — `$(muxpad publish --url x)` has to keep working — so the caveat goes
+    # to stderr, which is where the publish path already puts it. This matters
+    # most for `--public`: the note is how you learn that the link you asked to
+    # be sendable is not one.
+    base_note_line "$(printf '%s' "$res" | jq -c '.base // empty')"
+    return 0
   fi
 
   if [ "$mode" = "list" ]; then
     local res
-    res="$(http_request GET /api/publish)"
+    res="$(http_request GET "/api/publish$aq")"
     if [ "$JSON_OUTPUT" = "1" ]; then
       printf '%s\n' "$res"
       return
     fi
+    # The URL column is the point of the listing, not decoration: when a
+    # quick-tunnel hostname rotates, every link the user is holding is dead and
+    # this table is where the live ones are. It was printing everything about an
+    # artifact EXCEPT how to open it.
     print_table "$(printf '%s' "$res" | jq '.publishes')" \
       'SLUG:.slug' \
       'FILES:(.files | tostring)' \
-      'BYTES:(.bytes | tostring)' \
       'VERS:((.versions // []) | length | tostring)' \
-      'CREATED:(.created / 1000 | strflocaltime("%Y-%m-%d %H:%M"))'
+      'CREATED:(.created / 1000 | strflocaltime("%Y-%m-%d %H:%M"))' \
+      'URL:(.url // "—")'
+    base_note_line "$(printf '%s' "$res" | jq -c '.base')"
     return
   fi
 
@@ -2337,7 +3179,7 @@ cmd_publish() {
 
   local src="${POSITIONAL[0]:-}"
   if [ -z "$src" ]; then
-    echo 'usage: muxpad publish <file-or-dir> [--name=slug | --update=slug] | --list | --rm <slug>' >&2
+    echo 'usage: muxpad publish <file-or-dir> [--name=slug | --update=slug] | --list | --url <slug> | --rm <slug>' >&2
     exit 1
   fi
   # The server requires an absolute path — resolve relative ones here.
@@ -2352,6 +3194,10 @@ cmd_publish() {
   [ -n "$slug" ] && body="$body,\"name\":$(json_string "$slug")"
   [ -n "$update_slug" ] && body="$body,\"update\":true"
   [ -n "$base_url" ] && body="$body,\"public_base_url\":$(json_string "$base_url")"
+  # Sent only when asked for. An absent field means the server's default, which
+  # is the durable base — so an older CLI, a script, and the Hosted view all get
+  # the link that still works tomorrow without knowing this field exists.
+  [ -n "$audience" ] && body="$body,\"audience\":$(json_string "$audience")"
   body="$body}"
   local res
   res="$(http_request POST /api/publish "$body")"
@@ -2362,6 +3208,9 @@ cmd_publish() {
   local warning
   warning="$(printf '%s' "$res" | jq -r '.warning // empty')"
   [ -n "$warning" ] && printf '%smuxpad: %s%s\n' "$C_DIM" "$warning" "$C_RESET" >&2
+  # The shelf life of the link about to be printed. This is the moment it
+  # matters: the user is about to paste it somewhere permanent.
+  base_note_line "$(printf '%s' "$res" | jq -c '.base // empty')"
   # stdout is JUST the URL — script-friendly.
   printf '%s' "$res" | jq -r '.url'
 }
@@ -2693,6 +3542,33 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                      e.g. muxpad serve --url=http://host:4321 \
                                             --label=Notes -- ./start
 
+  tunnel setup <hostname> [--name=muxpad] [--relogin]
+                                     make published links PERMANENT and PUBLIC,
+                                     in one command: checks the zone is on
+                                     Cloudflare, logs in (browser, once —
+                                     skipped if already done), creates a named
+                                     tunnel, routes the CNAME and tells muxpad.
+                                     e.g. `muxpad tunnel setup pub.example.com`
+                                     — ANY hostname in ANY zone on your
+                                     Cloudflare account. $0/yr. If the zone is
+                                     not on Cloudflare it says exactly what to
+                                     do instead of failing at the CNAME.
+                                     --relogin re-authorises, which a hostname
+                                     in a second zone needs. No plist and no
+                                     restart: the server re-reads the config on
+                                     the next publish.
+  tunnel --port <public port>        run the tunnel that puts published
+                                     artifacts on the internet, and re-pin
+                                     muxpad's public base. Uses the NAMED tunnel
+                                     when `tunnel setup` has been run (one fixed
+                                     hostname, forever); otherwise a QUICK
+                                     tunnel, whose four-word hostname Cloudflare
+                                     reassigns on every restart, killing every
+                                     link built from it. Started for you as the
+                                     `tunnel` app on the first publish —
+                                     `muxpad app logs tunnel` to watch it,
+                                     `muxpad app stop tunnel` to close the door.
+
   app-url <url> [--label=<text>]     declare the web app THIS pane serves.
                                      The pane chrome then offers a "switch to
                                      web view" of it. Run from your dev script
@@ -2704,22 +3580,33 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                      chat face; the terminal shows an activity
                                      log. Auto-resumes across ptyd restarts via
                                      the pane's saved startup command.
-  agent new [--workspace=<id>] [--cwd=<dir>] [--name=<tab name>]
-            [--model=<model>] [--mode=do|deep] "message"
+  agent new [--workspace=<id>] [--cwd=<dir>] [--name=<tab name>] [--backend=<b>]
+            [--model=<model>] [--mode=chat|agent] "message"
                                      create an agent tab, send the first
                                      message so it starts working immediately,
                                      and print the tab's URL. cwd defaults to
                                      $PWD; workspace to MUXPAD_WORKSPACE_ID.
                                      --name labels the tab (skips AI auto-
                                      rename); --model pins the session model
-                                     (e.g. 'claude-opus-4-8[1m]'); --mode=do
-                                     starts it in Do mode (decisive, terse,
-                                     result-first) instead of the Deep default.
+                                     (e.g. 'claude-opus-4-8[1m]'); --mode
+                                     picks Chat mode (muxpad's assistant —
+                                     decisive, terse, result-first; the
+                                     default) or Agent mode (the harness as
+                                     it ships, no muxpad contract).
   agent list                         every tracked agent session (pane id,
                                      backend, mode, TURN, view, session id).
                                      TURN is the session's running|idle turn
                                      state — NOT the five-state pane/tab
                                      `status` the list commands above print.
+  agent respawn <paneId> | --all [--backend=<id>]
+                                     re-exec a pane's agent runner in place.
+                                     startup_cmd carries --resume <sid>, so the
+                                     conversation comes back from its transcript
+                                     and ptyd is never touched (no terminal
+                                     dies). --all covers every tracked agent
+                                     session; --backend narrows it to one
+                                     harness. Per-pane result, exit 1 if any
+                                     failed.
   agent send <paneId> "message"      deliver a message to a pane's agent via
                                      the server queue. exit 0 = sent/queued
                                      (queued noted on stderr), 1 = rejected
@@ -2737,7 +3624,7 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                      fatal, 3 = timeout.
   cron new --name=<n> --at='<schedule>' (--pane[=<id|name>] | --new-tab)
            [--tz=<IANA>] [--cwd=<dir>] [--model=<m>] [--backend=<b>]
-           [--mode=do|deep] [--catchup=once|skip|all] [--overlap=skip|queue]
+           [--mode=chat|agent] [--catchup=once|skip|all] [--overlap=skip|queue]
            [--on-context=fire|compact-first|rotate|skip] [--quiet=<mins>]
            [--max-open=<n>] [--no-close] "prompt"
                                      a DURABLE schedule owned by muxpad, not by
@@ -2797,15 +3684,38 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                      identical slug. Run `publish --list` first
                                      and reuse the slug when updating the same
                                      thing.
-  publish --list                     list published artifacts (slug, files,
-                                     bytes, versions, created)
+  publish --list                     list published artifacts, with the CURRENT
+                                     link for each (slug, files, versions,
+                                     created, url)
+  publish --url <slug-or-dead-link>  reprint a live link for something already
+                                     published. The bytes outlive the address:
+                                     when a quick tunnel restarts it is handed a
+                                     new random hostname and every link given
+                                     out under the old one goes dead, but the
+                                     slug never moves. Paste the dead URL in
+                                     whole — the slug is read out of its path.
+                                     Answers with the PERMANENT tailnet link, so
+                                     recovering a dead link twice is not a
+                                     thing that happens; add --public for the
+                                     sendable form.
   publish --rm <slug>                unpublish, versions included (the funnel
                                      stays up; run
                                      `tailscale funnel --https=8443 off` to
                                      close it entirely)
+  publish --public                   ask for a link you can SEND to somebody.
+                                     By default every published link uses your
+                                     TAILNET address, which is permanent and
+                                     works on all your own devices (phone
+                                     included) but nowhere else. --public uses
+                                     the Cloudflare tunnel instead — reachable
+                                     by anyone, and its hostname is reassigned
+                                     on every tunnel restart, so the link dies
+                                     then. The caveat is printed to stderr
+                                     either way. Combines with --list, --base
+                                     and --url.
   publish --base                     show the origin every published link is
-                                     built from, whether it is answering, and
-                                     the full candidate list
+                                     built from, who it is for, whether it is
+                                     answering, and the full candidate list
   publish --set-base=<https://…>     pin that origin. Tailscale Funnel's :8443
                                      is blocked outbound on many real networks,
                                      so a discovered funnel URL gives links that
@@ -2884,12 +3794,32 @@ case "$VERB" in
   app-url) cmd_app_url "${ARGS[@]:1}" ;;
   app) cmd_app "${ARGS[@]:1}" ;;
   serve) cmd_serve "${ARGS[@]:1}" ;;
+  tunnel) cmd_tunnel "${ARGS[@]:1}" ;;
   claude) cmd_claude "${ARGS[@]:1}" ;;
   agent) cmd_agent "${ARGS[@]:1}" ;;
   cron) cmd_cron "${ARGS[@]:1}" ;;
   search) cmd_search "${ARGS[@]:1}" ;;
   publish) cmd_publish "${ARGS[@]:1}" ;;
   _agent-hook) cmd_agent_hook ;;
+  # Internal: print which tailscale binary this script would use, or nothing.
+  # The only seam onto find_tailscale, so tailscale-bin.test.ts can check the
+  # shell and TypeScript resolvers still agree — and it answers "why is muxpad
+  # touching the Tailscale app?" without a stack trace.
+  _tailscale-bin) find_tailscale ;;
+  # Internal: print the public-base hint this shell would send with a publish,
+  # or nothing. The only seam onto publish_base_url — otherwise it is reachable
+  # only by doing a real publish, and the property that matters most about it is
+  # what it does when things FAIL (see tailscale-bin.test.ts).
+  _publish-base-url) publish_base_url ;;
+  # Internal: print the base URL this shell would put in a human-clickable link.
+  # Same reason as the two above — it asks the server over curl under `set -e`,
+  # and `muxpad agent new` calls it only after the tab exists, so its behaviour
+  # on a dead or slow server is the thing worth pinning.
+  _printable-base) printable_base ;;
+  # Internal: print this machine's tailnet FQDN, worked out with no exec at all.
+  # Also the honest answer to "does muxpad still need the Tailscale binary?" —
+  # if this prints a name, it does not.
+  _tailnet-hostname) tailnet_hostname ;;
   ''|help|-h|--help) usage; [ "$VERB" = '' ] && exit 1 || exit 0 ;;
   *)
     echo "muxpad: unknown command '$VERB'" >&2

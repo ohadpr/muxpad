@@ -13,12 +13,12 @@ import { execFileSync, type spawn as nodeSpawn, spawn } from 'node:child_process
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { isAbsolute, join, resolve, sep } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import type { ChatEvent } from '@muxpad/shared';
 import { readAgentInstructions, wrapAgentInstructions } from '../../agent-instructions.js';
-import { readDoModeOverlay, wrapModeNote } from '../../agent-modes.js';
 import { appendTranscriptEvent, migrateTranscript } from '../../chat/TranscriptReader.js';
+import { codexHome, readCodexDefaultModel, readCodexModels } from '../../codex-models.js';
 
 // Provider ids we adopt as the transcript-log filename + hello sid must satisfy
 // the server's charset gate, or the hello is rejected and the pane goes dark.
@@ -37,7 +37,7 @@ const CODEX_BIN = process.env.MUXPAD_CODEX_BIN || 'codex';
  * Shared by both so they can't drift.
  *
  * `instructions` is the universal <dataDir>/agent-instructions.md;
- * `modeOverlay` is <dataDir>/do-mode.md, present only in ⚡ Do mode. Both
+ * `modeOverlay` is <dataDir>/chat-mode.md, present only in Chat mode. Both
  * optional — with neither, the prompt is returned untouched.
  */
 export function withSessionPreamble(
@@ -52,13 +52,34 @@ export function withSessionPreamble(
   return blocks.length ? `${blocks.join('\n\n')}\n\n${prompt}` : prompt;
 }
 
-// When the pane's cwd is a git WORKTREE, the real git metadata lives in the main
-// repo's `.git` (outside the worktree). Codex's `workspace-write` sandbox makes
-// only the cwd writable, so that external `.git` is read-only and `git add` /
-// `git commit` fail from the worktree. Grant write access to the git common dir
-// via `--add-dir`. A normal checkout keeps `.git` inside the cwd (already
-// writable), so nothing is added. Best-effort — any git failure yields nothing.
-function gitWorktreeExtraDirs(cwd: string): string[] {
+// CODEX CANNOT COMMIT UNLESS WE SAY SO, AND THAT IS NOT A WORKTREE PROBLEM.
+//
+// This used to add the git common dir only when it was OUTSIDE the cwd — i.e.
+// for worktrees — on the reasoning that "a normal checkout keeps `.git` inside
+// the cwd (already writable), so nothing is added". That reasoning is wrong.
+// Codex's `workspace-write` refuses writes to `.git` whether or not it sits
+// inside the writable root: it is a deliberate protection for history, not a
+// consequence of where the directory lives.
+//
+// So EVERY codex pane in an ordinary checkout silently could not commit.
+// Measured directly, in a scratch repo, with `.git` plainly inside the cwd:
+//
+//   workspace-write alone        fatal: Unable to create '.git/index.lock':
+//                                Operation not permitted
+//   + .git in writable_roots     [main dcccf8f] test2 — commit succeeds
+//
+// It cost three Astra review agents their entire output: they did the work,
+// hit this, and one of them reported commit hashes that had never existed
+// rather than the refusal. Their 37 files had to be recovered and committed by
+// hand. A sandbox that blocks the last step of the job, after the job is done,
+// is worse than one that blocks the first.
+//
+// Granted unconditionally now. The worktree case still works — it is just no
+// longer the only case — because the common dir is what we ask git for, and
+// that is the right answer in both layouts. Best-effort: any git failure yields
+// nothing, which returns the old (broken-but-safe) behaviour rather than a
+// crash at backend startup.
+export function gitWritableDirs(cwd: string): string[] {
   try {
     const out = execFileSync('git', ['-C', cwd, 'rev-parse', '--git-common-dir'], {
       encoding: 'utf8',
@@ -67,8 +88,8 @@ function gitWorktreeExtraDirs(cwd: string): string[] {
     }).trim();
     if (!out) return [];
     const abs = isAbsolute(out) ? out : resolve(cwd, out);
-    // Inside the cwd → already covered by workspace-write; only add when external.
-    if (abs === cwd || abs.startsWith(cwd + sep)) return [];
+    // Returned whether or not it sits inside the cwd — see the note above for
+    // why "inside" was never the same thing as "writable".
     return [abs];
   } catch {
     return []; // not a git repo, git missing, etc.
@@ -123,41 +144,15 @@ export interface BackendDeps {
   listModels?: ModelFetch;
 }
 
-/** Read Codex's cached model catalog (+ config default) — best-effort. */
+/** Read Codex's cached model catalog (+ config default) — best-effort.
+ *  The parsing lives in codex-models.ts so the launch picker can use the same
+ *  reader without needing a live session to have reported one. */
 function codexModelFetch(): {
   models: Array<{ value: string; displayName: string }>;
   defaultModel: string | null;
 } {
-  const home = process.env.CODEX_HOME || join(homedir(), '.codex');
-  let models: Array<{ value: string; displayName: string }> = [];
-  let defaultModel: string | null = null;
-  try {
-    const cache = JSON.parse(readFileSync(join(home, 'models_cache.json'), 'utf8')) as {
-      models?: Array<{
-        slug?: string;
-        display_name?: string;
-        visibility?: string;
-        supported_in_api?: boolean;
-      }>;
-    };
-    models = (cache.models ?? [])
-      .filter(
-        (m) =>
-          m.visibility === 'list' && m.supported_in_api !== false && typeof m.slug === 'string',
-      )
-      .map((m) => ({ value: m.slug as string, displayName: m.display_name || (m.slug as string) }));
-  } catch {
-    // no cache / unreadable — picker just won't show
-  }
-  try {
-    const match = readFileSync(join(home, 'config.toml'), 'utf8').match(
-      /^\s*model\s*=\s*"([^"]+)"/m,
-    );
-    defaultModel = match?.[1] ?? null;
-  } catch {
-    // no config — leave default null
-  }
-  return { models, defaultModel };
+  const home = codexHome();
+  return { models: readCodexModels(home), defaultModel: readCodexDefaultModel(home) };
 }
 
 export function createCodexBackend(
@@ -177,22 +172,32 @@ export function createCodexBackend(
   let liveSid = opts.requestedSid ?? randomUUID();
   let model = opts.requestedModel;
 
-  // Agent mode. Codex spawns a fresh `codex exec` per turn but RESUMES the
-  // same thread, so — exactly like Claude — the mode overlay only reaches the
-  // model as prompt material on a NEW session's first message. A mid-session
-  // switch can only be announced in-conversation: see agent-modes.ts.
-  let currentMode: AgentMode = opts.mode;
-  let pendingModeNote: string | null = null;
+  // Agent mode — and for codex there is only ONE.
+  //
+  // Chat mode's defining mechanism is now the in-process `reply` tool (the
+  // agent's only user-facing voice; see chat-events.ts and backends/claude.ts).
+  // `codex exec` has no in-process tool surface at all, so it cannot host that
+  // tool and cannot deliver Chat mode — only a prompt that ASKS for brevity,
+  // which is exactly the thing that demonstrably did not work. The old
+  // first-message overlay preamble is therefore retired here rather than left
+  // as a half-implementation wearing a "Chat" chip.
+  //
+  // Every door that decides a mode already enforces this (modeForBackend), and
+  // ws.ts corrects a stale row on hello. This is the last line of defence: a
+  // runner booted from a hand-typed `muxpad agent --backend codex --mode chat`
+  // announces the downgrade in the pane's own log rather than pretending.
+  if (opts.mode === 'chat') {
+    log(dim('chat mode is Claude-only (no in-process reply tool here) — running in Agent mode'));
+  }
   function setMode(next: AgentMode): void {
-    if (next === currentMode) return;
-    currentMode = next;
-    pendingModeNote = wrapModeNote(next, readDoModeOverlay(next));
-    log(dim(`mode → ${next} (announced to the thread on the next message)`));
+    if (next === 'chat') {
+      log(dim('chat mode is Claude-only — this codex session stays in Agent mode'));
+    }
   }
 
-  // Extra writable roots for the sandbox (the worktree's external git dir, if
-  // any) — computed once; the cwd is fixed for a runner's lifetime.
-  const extraWritableDirs = gitWorktreeExtraDirs(process.cwd());
+  // The sandbox's extra writable roots — the git dir, so the agent can commit
+  // its own work. Computed once; the cwd is fixed for a runner's lifetime.
+  const extraWritableDirs = gitWritableDirs(process.cwd());
   if (extraWritableDirs.length) {
     log(dim(`codex: granting git write access → ${extraWritableDirs.join(', ')}`));
   }
@@ -254,33 +259,21 @@ export function createCodexBackend(
 
   function buildArgs(prompt: string, useResume: boolean): string[] {
     const resuming = useResume && !!sessionRef;
-    // Universal muxpad instructions + the ⚡ Do-mode overlay — CODEX injection
-    // mechanism: `codex exec` has NO append-instructions surface (its only
-    // hook, `-c experimental_instructions_file`, REPLACES the base prompt, and
+    // Universal muxpad instructions — CODEX injection mechanism: `codex exec`
+    // has NO append-instructions surface (its only hook,
+    // `-c experimental_instructions_file`, REPLACES the base prompt, and
     // AGENTS.md lives in user-owned dirs muxpad must not write), so fall back
     // to prepending the delimited file content to the FIRST user message of
     // each NEW session — fresh spawns only; a resume already carries it
     // in-thread. Read at spawn time; missing file → nothing injected, no
     // error. The muxpad transcript records the RAW prompt (logEvent runs
     // before this), so rendered chat history stays clean.
-    let finalPrompt = prompt;
-    if (resuming) {
-      // A mid-session mode switch: the thread already ran with the old
-      // contract, so declare the new one once, in-band.
-      if (pendingModeNote) {
-        finalPrompt = `${pendingModeNote}\n\n${prompt}`;
-        pendingModeNote = null;
-      }
-    } else {
-      // Fresh thread → the overlay lands as real preamble; any pending
-      // switch note is redundant (the preamble already states the contract).
-      pendingModeNote = null;
-      finalPrompt = withSessionPreamble(
-        prompt,
-        readAgentInstructions(),
-        readDoModeOverlay(currentMode),
-      );
-    }
+    //
+    // NO mode overlay rides along any more: codex is Agent-mode only, and
+    // Agent mode is by definition the harness exactly as it ships.
+    const finalPrompt = resuming
+      ? prompt
+      : withSessionPreamble(prompt, readAgentInstructions(), null);
     const head = resuming ? ['exec', 'resume', sessionRef as string] : ['exec'];
     const common = [
       '--json',
@@ -512,7 +505,6 @@ export function createCodexBackend(
     process.stdout.write('\x1b]0;✳ codex\x07');
     log(`${bold('muxpad agent')} — codex backend · session ${liveSid}`);
     log(dim(`pane ${host.paneId} · ${process.cwd()}`));
-    if (currentMode === 'do') log(dim('⚡ do mode — decisive, terse, result-first'));
     authOk = await checkAuth();
     if (!authOk) {
       log(dim('codex not logged in — run `codex login` in this pane’s terminal face'));

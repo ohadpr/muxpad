@@ -32,9 +32,9 @@ function legacyInstall(opts: { visibleWorkspace: boolean }) {
     tab_id: tab.id,
     shell: '/bin/zsh',
     cwd: '/tmp',
-    startup_cmd: 'muxpad agent --mode do',
+    startup_cmd: 'muxpad agent --mode chat',
     face: 'chat',
-    mode: 'do',
+    mode: 'chat',
   });
   tabs.update(tab.id, { layout: pane.id });
   for (const k of ['ceo_pane_id', 'ceo_tab_id', 'ceo_mode_defaulted']) {
@@ -84,8 +84,8 @@ describe('resident-pane release', () => {
     releaseResidentPane({ db: f.db });
     const pane = f.panes.getById(f.pane.id);
     expect(pane).not.toBeNull();
-    expect(pane?.startup_cmd).toBe('muxpad agent --mode do');
-    expect(pane?.mode).toBe('do');
+    expect(pane?.startup_cmd).toBe('muxpad agent --mode chat');
+    expect(pane?.mode).toBe('chat');
     expect(pane?.tab_id).toBe(f.tab.id);
   });
 

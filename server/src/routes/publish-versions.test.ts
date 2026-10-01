@@ -276,6 +276,62 @@ describe('the public base every link is built from', () => {
       body: JSON.stringify(body),
     });
 
+  // `muxpad publish` asks this before deciding whether to exec tailscale in its
+  // own shell. It is the question that stops the macOS "access data from other
+  // apps" prompt, so it has to be answerable CHEAPLY and without side effects.
+  describe('discovery_needed — what the CLI asks before shelling out', () => {
+    it('is true on a cold server and false once a base is pinned', async () => {
+      const cold = (await (await req('/api/publish/base')).json()) as {
+        discovery_needed: boolean;
+      };
+      expect(cold.discovery_needed).toBe(true);
+      await setBase(TUNNEL);
+      const warm = (await (await req('/api/publish/base')).json()) as {
+        discovery_needed: boolean;
+      };
+      expect(warm.discovery_needed).toBe(false);
+    });
+
+    it('?probe=0 answers without a reachability check', async () => {
+      // WHY THIS MATTERS. The CLI's pre-flight curl has a 2s budget, and the
+      // probing read walks every candidate at up to 2.5s each. A dead tunnel
+      // would blow through that budget, the CLI would read nothing, assume an
+      // old server, and exec tailscale — reintroducing the prompt precisely
+      // when things are already going wrong. So the CLI asks probe-free.
+      await setBase(TUNNEL);
+      let probes = 0;
+      const counted = await createTestApp({
+        db,
+        dataDir,
+        publish: {
+          funnel: {
+            async ensure() {
+              return { baseUrl: FUNNEL };
+            },
+          },
+          baseProbe: async () => {
+            probes += 1;
+            return { alive: true, status: 404, reason: 'client_error', elapsedMs: 1 };
+          },
+        },
+      });
+      try {
+        const body = (await (
+          await counted.app.request('http://local/api/publish/base?probe=0')
+        ).json()) as { discovery_needed: boolean; reachable: boolean | null; url: string };
+        expect(probes).toBe(0);
+        expect(body.discovery_needed).toBe(false);
+        expect(body.reachable).toBeNull(); // not checked, and says so
+        expect(body.url).toBe(TUNNEL); // still the real answer
+        // The default is unchanged — `muxpad publish --base` wants the probe.
+        await counted.app.request('http://local/api/publish/base');
+        expect(probes).toBeGreaterThan(0);
+      } finally {
+        await counted.cleanup();
+      }
+    });
+  });
+
   it('a pinned base wins over the funnel hint, on publish AND in the listing', async () => {
     expect((await setBase(TUNNEL)).status).toBe(200);
     // Every `muxpad publish` sends the funnel url as a hint — the exact input
@@ -331,12 +387,15 @@ describe('the public base every link is built from', () => {
     const shown = (await (await req('/api/publish/base')).json()) as {
       url: string;
       source: string;
-      candidates: { url: string; source: string }[];
+      candidates: { url: string; source: string; durability: string }[];
     };
     expect(shown).toMatchObject({ url: TUNNEL, source: 'pinned' });
+    // Each candidate carries how long its ADDRESS lives: the pinned quick
+    // tunnel loses its hostname at the next restart, and the tailnet runner-up
+    // keeps its name forever but is only reachable from the tailnet.
     expect(shown.candidates).toEqual([
-      { url: TUNNEL, source: 'pinned' },
-      { url: FUNNEL, source: 'persisted' },
+      { url: TUNNEL, source: 'pinned', durability: 'ephemeral' },
+      { url: FUNNEL, source: 'persisted', durability: 'tailnet' },
     ]);
 
     const cleared = (await (await req('/api/publish/base', { method: 'DELETE' })).json()) as {

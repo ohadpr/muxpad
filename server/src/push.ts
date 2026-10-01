@@ -179,6 +179,20 @@ function loadOrCreateVapidKeys(dataDir: string): VapidKeys {
 }
 
 /**
+ * What a notifier call actually DID. Every caller but one ignores it — a BEL
+ * or a finished turn has nobody to report back to. The `notify` tool does: it
+ * has to tell the model whether the user was reached, and "no device has ever
+ * subscribed" must read as a no-op rather than a failure that derails the turn.
+ */
+export type PaneNotifyOutcome =
+  /** Handed to the push service for every subscribed device. */
+  | 'sent'
+  /** Held: the user is at a device right now and can already see this. */
+  | 'held-active'
+  /** Nothing to send to — no subscriptions exist on this server. */
+  | 'no-devices';
+
+/**
  * Pane-scoped notification sender: resolves the pane's owning tab +
  * workspace into the "Tab — Workspace" title and the deep-link URL, so
  * every pane-triggered notification (BEL attention, chat turn-done, agent
@@ -190,7 +204,7 @@ export type PaneNotifier = (
   /** A live label for the pane, when the caller has a better one than the DB
    *  row can give (the pty title/foreground command). */
   opts?: { label?: string | undefined },
-) => void;
+) => PaneNotifyOutcome;
 
 /**
  * The name a HUMAN would call this pane, mirroring the web's `paneLabel`
@@ -325,7 +339,13 @@ export function createPaneNotifier(
   const apps = new AppStore(db);
   return (paneId, body, opts) => {
     // Hold the push while the user is active on any device — they can see it.
-    if (presence?.isActive()) return;
+    if (presence?.isActive()) return 'held-active';
+    // No subscription anywhere: `send` would already be a no-op (it iterates an
+    // empty table), so this early return changes nothing about DELIVERY. It
+    // exists to make the no-op SAYABLE — the `notify` tool reports it to the
+    // model, which would otherwise believe it had reached a phone that has
+    // never been paired.
+    if (push.count() === 0) return 'no-devices';
     const pane = panes.getById(paneId);
     const tab = pane ? tabs.getById(pane.tab_id) : null;
     const ws = tab ? workspaces.getById(tabs.getWorkspaceId(tab.id) ?? '') : null;
@@ -360,6 +380,7 @@ export function createPaneNotifier(
       ...target,
       tag: paneId,
     });
+    return 'sent';
   };
 }
 

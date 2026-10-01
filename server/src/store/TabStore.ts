@@ -29,13 +29,156 @@ interface TabRow {
   workspace_id: string;
   pinned: number;
   last_activity_at: number | null;
+  last_user_at: number | null;
   headline: string | null;
   headline_at: number | null;
   name_sticky: number;
   icon_sticky: number;
   icon_at: number | null;
+  spawned_by: string | null;
+  clock_started_at: number | null;
+  retired_at: number | null;
+  retired_reason: string | null;
+  spawn_task: string | null;
+  spawn_artifacts: string | null;
+  spawn_report: string | null;
+  spawn_report_at: number | null;
+  spawn_report_state: string | null;
   created_at: number;
   updated_at: number;
+}
+
+/**
+ * Why a chat left the live list by an ACT rather than by the clock.
+ * `decayed` is never stored — it is what the clock says.
+ *
+ * `died` — ITS RUNNER WAS GIVEN UP ON, and the work is INCOMPLETE. A third
+ * reason rather than a flavour of `delivered`, for the reason 3af1ba2 split
+ * `awaiting` off: a worker that finished its job and one that was killed
+ * mid-sentence both stop existing, and they mean opposite things to the person
+ * who spawned them. Filing the second as `delivered` is how three jobs vanish
+ * quietly — which is exactly what happened (new-chat-fix, xws-build,
+ * artifact-urls, all hand-archived hours later).
+ *
+ * Only the dead-runner sweep's GIVE-UP writes it (see tab-retire.ts
+ * `onRunnerDead`), never a pane that merely looks dead for a moment.
+ */
+export type RetireReason = 'delivered' | 'archived' | 'died';
+
+/**
+ * What KIND of spawn report a child's row carries.
+ *
+ * Outcomes that must not read as one shrug (see the v29 migration):
+ * `ok` we wrote one, `none` the child produced nothing and says so, `crashed`
+ * its last turn was fatal, `awaiting` it stopped to ask.
+ *
+ * `failed` — WE TRIED AND LOST IT. This used to be the ABSENCE of the column,
+ * "deliberately: nothing renders for it", and that was wrong in the one case it
+ * mattered. Absence also means NOT ATTEMPTED YET, so the two were one value and
+ * the card drew the same line for both: a worker whose summary a length rule
+ * threw away looked exactly like one the generator had not reached. The only
+ * record of the difference was a `[spawn-report] rejected` line in server.log,
+ * which is not a place a user looks.
+ *
+ * Now absence means only "not attempted", `failed` is attempted-and-lost, and
+ * the boot sweep in SpawnReportWriter retries the second one.
+ */
+export type SpawnReportState = 'ok' | 'none' | 'crashed' | 'awaiting' | 'failed';
+
+/** A generated report, as it is written. `report` is null for a state that
+ *  stands on its own (`none`, and a `crashed` child that got nothing done). */
+export interface SpawnReportWrite {
+  report: string | null;
+  state: SpawnReportState;
+  /** Urls and files this worker produced, scraped from its transcript. Written
+   *  with the report because it is read on the same pass — but it is NOT the
+   *  model's output, and it survives a generation the model got wrong. */
+  artifacts?: string[] | undefined;
+}
+
+/**
+ * ONE projection, used by both the list read and the single-row read, so the
+ * two paths cannot come to different conclusions about the same tab.
+ *
+ * `has_agent` is the question "is there anything in here you could send a
+ * message TO" — see {@link TabClockRow.has_agent}. `startup_cmd LIKE 'muxpad
+ * agent%'` is the same durable ownership marker {@link
+ * TabStore.prototype.listAgentPanes}'s sibling in PaneStore uses; it survives
+ * a ptyd restart, a reboot, and a dead runner, which a live-registry answer
+ * would not.
+ */
+const CLOCK_COLUMNS = `tabs.id, tabs.spawned_by, tabs.pinned, tabs.clock_started_at,
+    tabs.retired_at, tabs.retired_reason,
+    EXISTS (SELECT 1 FROM panes p
+             WHERE p.tab_id = tabs.id AND p.startup_cmd LIKE 'muxpad agent%') AS has_agent`;
+
+interface RawClockRow {
+  id: string;
+  spawned_by: string | null;
+  pinned: number;
+  clock_started_at: number | null;
+  retired_at: number | null;
+  retired_reason: string | null;
+  has_agent: number;
+}
+
+function toClockRow(r: RawClockRow): TabClockRow {
+  return {
+    id: r.id,
+    spawned_by: r.spawned_by,
+    pinned: !!r.pinned,
+    clock_started_at: r.clock_started_at,
+    retired_at: r.retired_at,
+    // Anything unrecognised reads as a hand archive: it is the conservative
+    // one (it claims only that a person did this), and the alternative would
+    // be a row that is retired for no stated reason at all.
+    //
+    // EVERY REASON MUST BE LISTED HERE. The fallback is not a pass-through —
+    // it REWRITES — so a reason the database holds and this switch has not
+    // learnt is published as `archived`, i.e. "a person did this", about a
+    // machine event nobody performed. `died` in particular would be laundered
+    // into the very state it exists to be distinguishable from.
+    retired_reason:
+      r.retired_at === null
+        ? null
+        : r.retired_reason === 'delivered'
+          ? 'delivered'
+          : r.retired_reason === 'died'
+            ? 'died'
+            : 'archived',
+    has_agent: !!r.has_agent,
+  };
+}
+
+/** Everything a chat's lifecycle is resolved from, for every tab at once.
+ *  See {@link TabStore.clockRows} and server/src/tab-clock.ts. */
+export interface TabClockRow {
+  id: string;
+  spawned_by: string | null;
+  pinned: boolean;
+  clock_started_at: number | null;
+  retired_at: number | null;
+  retired_reason: RetireReason | null;
+  /**
+   * Is there an AGENT in this tab — something a message could be sent to?
+   *
+   * The decay clock's only exit is "send it a message", and a terminal or a
+   * web view has no inbox: `noteUserMessage` has exactly one production caller
+   * (ws.ts `submitSend`), which runs for runner-owned agent panes and nothing
+   * else. A tab without one that decays is not resting, it is gone — see
+   * tab-clock.ts.
+   */
+  has_agent: boolean;
+}
+
+/** The stored JSON array, or [] for anything unparseable. */
+function parseArtifacts(raw: string): string[] {
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
 }
 
 export class TabStore {
@@ -46,6 +189,10 @@ export class TabStore {
     layout: LayoutNode;
     workspace_id: string;
     icon?: string;
+    /** The tab this chat was spawned FROM, when something running in another
+     *  chat asked for it. Not validated here — the caller resolves it (see
+     *  routes/tabs.ts), and a dangling id is a tolerated state by design. */
+    spawned_by?: string | null;
   }): Tab {
     const id = ulid();
     const slug = this.uniqueSlug();
@@ -76,9 +223,10 @@ export class TabStore {
     // column's 'split' default) — this changes the default going forward
     // only.
     const view_mode = 'tabbed' as const;
+    const spawned_by = input.spawned_by ?? null;
     this.db
       .prepare(
-        'INSERT INTO tabs (id, slug, name, icon, layout, workspace_id, view_mode, created_at, updated_at, position, last_activity_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO tabs (id, slug, name, icon, layout, workspace_id, view_mode, created_at, updated_at, position, last_activity_at, spawned_by, clock_started_at, last_user_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
       .run(
         id,
@@ -91,6 +239,22 @@ export class TabStore {
         now,
         now,
         maxPos + 1,
+        now,
+        spawned_by,
+        // Every chat is born with a full clock, INCLUDING a sub-chat — whose
+        // column is then ignored for as long as its parent exists, because a
+        // sub-chat does not decay at all (it retires when it delivers).
+        // Stamping it anyway costs nothing and means a sub-chat ORPHANED by
+        // its parent's deletion — which does become an ordinary decaying chat
+        // — falls back to a real timestamp instead of a null nobody can
+        // interpret.
+        now,
+        // `last_user_at`: making a chat IS a user touch, and it is the one the
+        // global recency list ranks a brand-new chat by until the first message
+        // lands. A chat spawned by an agent is stamped too — it appeared
+        // because of something you set in motion, it appears ONCE (unlike an
+        // output bump), and it nests under its parent anyway, so its own key
+        // decides nothing on screen.
         now,
       );
     return {
@@ -108,6 +272,11 @@ export class TabStore {
       // recent thing the user did, and sorting it last (null = never) would
       // bury a just-created tab at the bottom of its workspace. Stamp it.
       last_activity_at: now,
+      last_user_at: now,
+      // Same rule as `icon`/`headline`: absent, not null, when there is no
+      // parent — so the overwhelmingly common case adds nothing to the payload
+      // or to the client's change-dedup signature.
+      ...(spawned_by ? { spawned_by } : {}),
       created_at: now,
       updated_at: now,
     };
@@ -211,8 +380,39 @@ export class TabStore {
     return { ...existing, ...next, updated_at: now };
   }
 
-  delete(id: string): void {
-    this.db.prepare('DELETE FROM tabs WHERE id = ?').run(id);
+  /**
+   * Delete a tab — and START THE CLOCK on every child it orphans.
+   *
+   * There is no foreign key, deliberately (see migrations v27), so a child
+   * survives its parent's deletion. What it survives AS changes, though: while
+   * the parent existed it was a sub-chat, which has no clock and cannot decay;
+   * the moment the parent is gone it is a root, and the clock it inherits is
+   * `clock_started_at` — stamped at its BIRTH, and never once read since,
+   * because a sub-chat's clock is not consulted.
+   *
+   * So a worker born ten days ago is `done: 'decayed'` the instant its parent
+   * is deleted, still mid-job, with a full tile. That is not a rare shape.
+   * `cron --new-tab` with `close_when_done` cascades the tab away on every
+   * clean fire, and every pane carries MUXPAD_PANE_ID, so any agent that runs
+   * `muxpad agent new` inside a cron-created tab leaves an orphan behind
+   * minutes later. Even a young orphan inherits a PARTIAL clock it never had a
+   * chance to reset.
+   *
+   * Promotion is an event, so it gets a clock the way every other promotion
+   * into the live list does: fresh, from now. The chat has never had a clock
+   * before this moment; starting it anywhere but now is claiming to know
+   * something about a timer that was not running.
+   *
+   * Here rather than in `deleteTabCascade` because this is not the only door:
+   * the workspace delete loops over tabs, and AppRegistry drops a tab whose
+   * last pane went away. Three hand-written copies of the same rule is how two
+   * of them end up disagreeing.
+   */
+  delete(id: string, at: number = Date.now()): void {
+    this.db.transaction(() => {
+      this.db.prepare('UPDATE tabs SET clock_started_at = ? WHERE spawned_by = ?').run(at, id);
+      this.db.prepare('DELETE FROM tabs WHERE id = ?').run(id);
+    })();
   }
 
   /**
@@ -296,6 +496,158 @@ export class TabStore {
   }
 
   /**
+   * "The user looked at this" — `last_user_at` ALONE.
+   *
+   * Deliberately not `resetClock`, which writes `clock_started_at` in the same
+   * statement. Opening a chat must not restart its decay: clicking down a
+   * sidebar would otherwise un-archive everything you glanced at, and the
+   * archive clock is supposed to measure neglect, not attention.
+   *
+   * It exists because the sidebar's order moved onto `userTouchAt` (see
+   * shared/tab-order), and the two routes that mean "I am looking at this" —
+   * POST /tabs/:id/seen on desktop, POST /panes/:id/seen on mobile — were
+   * stamping `last_activity_at`, which the sort had just stopped reading.
+   * Without this, opening a cold chat promoted it for exactly as long as it
+   * took the next poll to disagree.
+   *
+   * MONOTONIC. A chat whose last real user message is newer than this glance
+   * keeps the newer stamp — looking at something is weaker evidence than
+   * sending to it, and the column is one number.
+   */
+  noteUserTouch(tabId: string, at: number = Date.now()): void {
+    this.db
+      .prepare(
+        'UPDATE tabs SET last_user_at = ? WHERE id = ? AND (last_user_at IS NULL OR last_user_at < ?)',
+      )
+      .run(at, tabId, at);
+  }
+
+  /**
+   * Restart this tab's decay clock. The raw write; the revival it is half of
+   * lives in tab-clock.ts (`reviveChat`, which also clears any retirement —
+   * a chat handed back onto an expired clock would be done again on the next
+   * read).
+   *
+   * Harmless on a sub-chat, which has no clock: the column is written and
+   * simply not read while the parent exists. It becomes meaningful again if
+   * that parent is ever deleted.
+   *
+   * Deliberately not touching `updated_at`, for the same reason
+   * `touchActivity` doesn't: that column tracks structural edits and clients
+   * key cache invalidation off it.
+   */
+  resetClock(id: string, at: number = Date.now()): void {
+    // `last_user_at` rides along in the SAME statement, and that is the whole
+    // design of the column rather than a convenience. Its promise is "the last
+    // act by the USER", and the acts that restart the decay clock are exactly
+    // that set — v27 chose them for the same reason ("it measures your
+    // attention rather than the machine's"). Writing it here makes the two
+    // agree by construction: there is no second call site to forget, and no way
+    // for the recency order and the clock to end up disagreeing about when you
+    // were last here.
+    //
+    // Note what this does NOT catch, deliberately: `delete()` starts an
+    // orphan's clock with its own UPDATE, because promoting a sub-chat to a
+    // root is something the parent's deletion did, not something the user did
+    // to the child.
+    this.db
+      .prepare('UPDATE tabs SET clock_started_at = ?, last_user_at = ? WHERE id = ?')
+      .run(at, at, id);
+  }
+
+  /**
+   * Every tab's lifecycle inputs, in ONE query.
+   *
+   * Resolving a single row needs another row — whether its `spawned_by`
+   * parent still EXISTS is what decides between "a sub-chat, which retires on
+   * delivery" and "a root, which decays" — and `decorateTab` runs per row on a
+   * 5s sidebar poll, so a per-row lookup would be the hottest thing in the
+   * app. The table is tens of rows on a real install, which makes reading all
+   * of it once cheaper than the index lookups a smarter query would do.
+   *
+   * GLOBAL rather than per-workspace on purpose: a chat can be spawned from a
+   * chat in ANOTHER workspace (a worker dropped into a project workspace, say),
+   * and a workspace-scoped read would not find that parent — silently
+   * promoting a live sub-chat to a decaying root.
+   */
+  clockRows(): TabClockRow[] {
+    const rows = this.db.prepare(`SELECT ${CLOCK_COLUMNS} FROM tabs`).all() as RawClockRow[];
+    return rows.map(toClockRow);
+  }
+
+  /**
+   * ONE tab's lifecycle inputs.
+   *
+   * The counterpart to {@link clockRows}, and the reason both exist: a LIST
+   * resolves every row and wants the whole table once, but a single
+   * `tab.updated` — which fires on every rename, every turn, every activity
+   * bump — wants one row, not thirty.
+   *
+   * Reading the whole table for a single decoration measurably cost: it more
+   * than doubled `decorateTab` (296µs → 706µs on a 30-tab database) and pushed
+   * the slower integration tests past their timeout. The list path is
+   * unaffected because it pre-reads the index once and passes it down; this is
+   * for everything else.
+   */
+  clockRow(id: string): TabClockRow | null {
+    const r = this.db.prepare(`SELECT ${CLOCK_COLUMNS} FROM tabs WHERE tabs.id = ?`).get(id) as
+      | RawClockRow
+      | undefined;
+    return r ? toClockRow(r) : null;
+  }
+
+  /**
+   * The lifecycle inputs of every chat spawned DIRECTLY under `id`.
+   *
+   * The third member of the {@link clockRows} / {@link clockRow} family, for the
+   * one question a single row cannot answer about itself: how much work it
+   * started that is still running (see tab-clock.ts `tabLiveChildCount`). Goes
+   * through the `tabs_spawned_by` index, so it stays a lookup rather than a
+   * scan on the hot single-row decoration path.
+   */
+  childClockRows(id: string): TabClockRow[] {
+    const rows = this.db
+      .prepare(`SELECT ${CLOCK_COLUMNS} FROM tabs WHERE tabs.spawned_by = ?`)
+      .all(id) as RawClockRow[];
+    return rows.map(toClockRow);
+  }
+
+  /**
+   * Retire a chat: it leaves the live list and joins the `done` group.
+   *
+   * NOT a delete, and the distinction is the whole model — the row, its panes,
+   * its transcript and its place in the spawn tree all stay exactly where they
+   * were, and the next message revives it ({@link unretire}). This is where
+   * BOTH manual archive and a sub-chat's delivery land, because they are the
+   * same state arrived at two ways.
+   *
+   * Idempotent on purpose: retiring a retired chat keeps the ORIGINAL stamp
+   * and reason. A second turn-done on an already-delivered sub-chat must not
+   * silently re-date it (the timestamp is what a `done` group sorts and labels
+   * by), and an archive must not be overwritten by a later delivery.
+   */
+  retire(id: string, reason: RetireReason, at: number = Date.now()): boolean {
+    const r = this.db
+      .prepare(
+        'UPDATE tabs SET retired_at = ?, retired_reason = ? WHERE id = ? AND retired_at IS NULL',
+      )
+      .run(at, reason, id);
+    return r.changes > 0;
+  }
+
+  /** Bring a retired chat back. Its clock is restarted by the caller — see
+   *  tab-clock.ts `reviveChat`, which does both in one act, because a chat
+   *  un-retired onto an expired clock would be done again on the next read. */
+  unretire(id: string): boolean {
+    const r = this.db
+      .prepare(
+        'UPDATE tabs SET retired_at = NULL, retired_reason = NULL WHERE id = ? AND retired_at IS NOT NULL',
+      )
+      .run(id);
+    return r.changes > 0;
+  }
+
+  /**
    * Write the nav row's second line, stamping the rate limiter's clock in the
    * same statement so the two can never disagree.
    *
@@ -319,6 +671,114 @@ export class TabStore {
    */
   touchHeadlineAt(id: string, at: number = Date.now()): void {
     this.db.prepare('UPDATE tabs SET headline_at = ? WHERE id = ?').run(at, id);
+  }
+
+  /**
+   * Write a sub-chat's spawn report, stamping the attempt clock in the same
+   * statement so the two can never disagree — `setHeadline`'s arrangement, for
+   * `setHeadline`'s reason, including staying off `update()` and therefore off
+   * `updated_at` (a report is not a structural edit to the tab).
+   *
+   * The TEXT and the STATE are written together and either may be null-ish:
+   * `{report: null, state: 'none'}` is the child that produced nothing, and it
+   * is a real answer rather than a failure. The failure is
+   * {@link touchSpawnReportAt}, which writes neither.
+   */
+  setSpawnReport(id: string, write: SpawnReportWrite, at: number = Date.now()): void {
+    this.db
+      .prepare(
+        `UPDATE tabs SET spawn_report = ?, spawn_report_state = ?, spawn_report_at = ?,
+           spawn_artifacts = COALESCE(?, spawn_artifacts) WHERE id = ?`,
+      )
+      .run(
+        write.report,
+        write.state,
+        at,
+        // COALESCE, so a later round that finds none does not ERASE the link a
+        // previous one published. An artifact does not stop existing.
+        write.artifacts?.length ? JSON.stringify(write.artifacts) : null,
+        id,
+      );
+  }
+
+  /**
+   * Write ONLY the artifacts — the urls and files a worker produced.
+   *
+   * Separate from {@link setSpawnReport} because the two have different failure
+   * modes and that is the entire point: the report is a model's sentences and
+   * can be refused, the artifacts are a regex over the same text and cannot.
+   * `cross-ws` published a page, had its summary rejected for length, and showed
+   * an empty card — the link has to land on the path where the sentences did
+   * not.
+   */
+  setSpawnArtifacts(id: string, artifacts: readonly string[]): void {
+    if (artifacts.length === 0) return;
+    this.db
+      .prepare('UPDATE tabs SET spawn_artifacts = ? WHERE id = ?')
+      .run(JSON.stringify(artifacts), id);
+  }
+
+  /**
+   * FORGET THE LAST ROUND'S VERDICT, because a new one is under way.
+   *
+   * `spawn_report` and `spawn_report_state` describe ONE round, and they were
+   * outliving it. Measured live on `sidebar-fresh`: retired `delivered` with the
+   * row still reading `spawn_report_state = 'awaiting'` from an earlier round,
+   * so the card — which reads this column for the worker's state — insisted it
+   * was waiting on the user about a job it had already delivered. `awaiting` and
+   * `crashed` are the dangerous two, because both are facts we OBSERVED about a
+   * moment that has passed, and both outrank an ordinary delivery on the card.
+   *
+   * Cleared when work RESUMES rather than corrected when it ends, because at the
+   * moment a new round begins we know the old verdict is out of date and we do
+   * not yet know the new one. Absence is honest for that gap; the card already
+   * has a sentence for it.
+   *
+   * `spawn_report_at` is deliberately LEFT ALONE. It is the rate limiter's
+   * clock, not a verdict, and handing a broken install a fresh call budget every
+   * time a worker resumes is the failure `touchSpawnReportAt` exists to prevent.
+   * The round-aware gate (see chat/spawn-report.ts) is what lets a genuine new
+   * round through without clearing it.
+   *
+   * Artifacts stay too: they are urls and files that exist.
+   */
+  clearSpawnReport(id: string): void {
+    this.db
+      .prepare('UPDATE tabs SET spawn_report = NULL, spawn_report_state = NULL WHERE id = ?')
+      .run(id);
+  }
+
+  /**
+   * Advance the spawn-report rate limiter WITHOUT writing a report.
+   *
+   * `touchHeadlineAt`'s twin, and the same hard-won rule: the clock counts
+   * ATTEMPTS, because the expensive thing is the call. A child whose model call
+   * keeps failing — no login, an SDK import error, a reply that is not a report
+   * — would otherwise spawn a fresh subprocess every time it finished a turn,
+   * and a crashed child finishes turns in a loop.
+   */
+  touchSpawnReportAt(id: string, at: number = Date.now()): void {
+    this.db.prepare('UPDATE tabs SET spawn_report_at = ? WHERE id = ?').run(at, id);
+  }
+
+  /**
+   * Write the one-line label for what this worker was ASKED.
+   *
+   * Write-once in practice — the generator only ever runs for a child whose
+   * column is empty — and off `update()` for the same reason `setHeadline` is:
+   * `updated_at` is what clients key cache invalidation off, and a label landing
+   * is not a structural edit to the tab.
+   */
+  setSpawnTask(id: string, task: string): void {
+    this.db.prepare('UPDATE tabs SET spawn_task = ? WHERE id = ?').run(task, id);
+  }
+
+  /** When a spawn report was last ATTEMPTED for this chat; null if never. */
+  spawnReportAt(id: string): number | null {
+    const r = this.db.prepare('SELECT spawn_report_at FROM tabs WHERE id = ?').get(id) as
+      | { spawn_report_at: number | null }
+      | undefined;
+    return r?.spawn_report_at ?? null;
   }
 
   /** When this tab's headline was last written; null if never. */
@@ -444,12 +904,50 @@ export class TabStore {
       // Null (never observed) is a real state and stays null — see the
       // migration note; the ordering sinks nulls rather than faking a time.
       last_activity_at: x.last_activity_at ?? null,
+      // UNCONDITIONAL, like `last_activity_at` and for the sharper version of
+      // the same reason: clients coalesce `tab.updated` onto a cached row, so a
+      // field omitted when it happens to be null would leave the previous value
+      // sitting there. It is also the ONLY key the global list can be ordered
+      // by, so a row that arrives without it does not sort low — it sorts by
+      // the noisy column this exists to replace (see userTouchAt). v33
+      // backfills every row, so the `?? null` is reachable only for a row
+      // inserted by something that bypassed `create` above.
+      last_user_at: x.last_user_at ?? null,
       // Same rule: null means "never summarised", which is permanent for any
       // tab without an agent session. Only present when non-null, so a chat
       // that has no headline adds nothing to the payload — and nothing to the
       // client's change-dedup signature.
       ...(x.headline ? { headline: x.headline } : {}),
       ...(x.name_sticky ? { name_sticky: true } : {}),
+      // Absent, not null, when this chat has no parent — the common case, and
+      // one that should not widen every payload. `clock_started_at` is
+      // deliberately NOT surfaced next to it: what a client renders is the
+      // EFFECTIVE clock (a child's is its parent's), which decorateTab
+      // publishes as `clock`. Shipping the raw column too would put two
+      // timestamps on one row that disagree for every child chat.
+      ...(x.spawned_by ? { spawned_by: x.spawned_by } : {}),
+      // THE SPAWN REPORT, present only when there is one — which for every chat
+      // nobody spawned is never. Three null fields on every row of every
+      // sidebar poll would be payload, and three more inputs to the client's
+      // change-dedup signature, for a permanent non-state. `_at` rides on the
+      // STATE rather than on its own: an attempt with nothing to show for it
+      // (state NULL) is a rate-limiter fact the client has no use for, and
+      // publishing the timestamp alone would put a report entry in the log with
+      // nothing in it.
+      // The ASK, published on its own: it exists from the child's first turn,
+      // long before there is anything to report, and that is exactly when the
+      // card needs it.
+      ...(x.spawn_task ? { spawn_task: x.spawn_task } : {}),
+      // Parsed here so no client ever has to. A malformed value reads as none —
+      // it is a link list, and the honest degradation is showing no links.
+      ...(x.spawn_artifacts ? { spawn_artifacts: parseArtifacts(x.spawn_artifacts) } : {}),
+      ...(x.spawn_report_state
+        ? {
+            spawn_report: x.spawn_report,
+            spawn_report_at: x.spawn_report_at,
+            spawn_report_state: x.spawn_report_state as SpawnReportState,
+          }
+        : {}),
       // `icon_sticky` is deliberately NOT surfaced. Nothing on the client
       // branches on it — the picker sets it as a side effect of PATCHing an
       // icon, and the rail renders whatever glyph it is handed — so adding it

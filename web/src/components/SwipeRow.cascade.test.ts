@@ -128,21 +128,32 @@ function rowPaintQualifiers(): string[] {
 /** jsdom's spelling of `transparent` once it has been through the cascade. */
 const TRANSPARENT = 'rgba(0, 0, 0, 0)';
 
-describe('the mobile selected row is accent-filled regardless of sheet order', () => {
-  it('keeps the accent when SwipeRow.css is loaded LAST', () => {
+/**
+ * THE MARKER MOVED, THE INVARIANT DID NOT. These asserted the winning
+ * declaration was literally `var(--accent)`, because selection used to be a
+ * solid accent fill. It is now a wash held in `--nt-sel` (NavTree.css), so the
+ * string the cascade hands back is `var(--nt-sel)` — jsdom does not resolve
+ * custom properties, which is exactly why a token is as good a marker as the
+ * colour was: either string can ONLY have come from NavTree.css's active-row
+ * rule winning the tie. The subject here is cascade order, not colour.
+ */
+const SELECTED_FILL = '--nt-sel';
+
+describe('the mobile selected row keeps its own fill regardless of sheet order', () => {
+  it('keeps the selected fill when SwipeRow.css is loaded LAST', () => {
     // The order that loses on a tie, and therefore the whole test. Today's
     // build happens to produce the other one.
     const { active } = paint('swipe-last');
     expect(active).not.toBe(TRANSPARENT);
-    expect(active).toContain('--accent');
+    expect(active).toContain(SELECTED_FILL);
   });
 
-  it('keeps the accent when NavTree.css is loaded last', () => {
+  it('keeps it when NavTree.css is loaded last', () => {
     // The order the app currently ships. Asserted too, so the pair together
     // says "order does not decide this" rather than "the other order works".
     const { active } = paint('nav-last');
     expect(active).not.toBe(TRANSPARENT);
-    expect(active).toContain('--accent');
+    expect(active).toContain(SELECTED_FILL);
   });
 
   it('still clears the fill on a RESTING row, in both orders', () => {

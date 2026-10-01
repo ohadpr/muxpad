@@ -2,8 +2,10 @@ import { statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import type { AgentMode, LayoutNode, PaneSpec } from '@muxpad/shared';
 import {
-  AgentModeSchema,
+  AgentModeInputSchema,
+  DEFAULT_AGENT_MODE,
   appendLeafToLayout,
+  modeForBackend,
   removeLeafFromLayout,
   spliceLayoutAtTarget,
   splitLeadingEmoji,
@@ -12,13 +14,16 @@ import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AgentBridge } from '../agent-bridge.js';
-import { applyModeToStartupCmd } from '../agent-modes.js';
+import { applyModeToStartupCmd, modeFromStartupCmd } from '../agent-modes.js';
+import { agentStartupCmd } from '../agent-tab.js';
 import { agentPaneHasMessages } from '../chat/has-messages.js';
 import type { EventBus } from '../events.js';
+import { announceProvision, provisionPane, setProvisionError } from '../pane-provision.js';
 import { queuePaneKill } from '../pane-reaper.js';
 import { agentCwd, hasProjectContext } from '../project-root.js';
 import { type PtydCache, decoratePane, decorateTab } from '../ptyd-cache.js';
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
+import { whyNot } from '../ptyd-failure.js';
 import { randomWorkspaceName } from '../random-name.js';
 import { safeCwd } from '../safe-cwd.js';
 import { AgentQueueStore } from '../store/AgentQueueStore.js';
@@ -27,6 +32,7 @@ import { PaneStore } from '../store/PaneStore.js';
 import { TabStore } from '../store/TabStore.js';
 import { WorkspaceStore } from '../store/WorkspaceStore.js';
 import type { TabActivity } from '../tab-activity.js';
+import { retireOrphanedChild } from '../tab-retire.js';
 import { classifyUrlHost, probeUrlHealth } from '../url-health.js';
 
 const defaultShell = process.env.SHELL ?? '/bin/zsh';
@@ -102,17 +108,29 @@ function conversionRefusal(
   db: Database.Database,
   p: PaneSpec,
   bridge?: AgentBridge | undefined,
-): string | null {
+): { code: string; message: string } | null {
   if (p.kind !== 'shell' || !(p.startup_cmd?.startsWith('muxpad agent') ?? false)) {
-    return 'only an agent chat can be converted';
+    return { code: 'not_an_agent', message: 'only an agent chat can be converted' };
   }
+  // The CODE matters, not just the sentence. The client's empty state decides
+  // what it believes about this chat from the answer: `has_messages` is the
+  // server correcting our "this chat is empty" render (so the offer must
+  // retire), while `mid_turn` is a WAIT — the chat really is empty and the
+  // offer should come back when the turn ends. Sniffing the prose to tell
+  // those apart would break the first time the wording improved.
   if (agentPaneHasMessages(db, p.id)) {
-    return 'this chat already has messages — open a new tab instead';
+    return {
+      code: 'has_messages',
+      message: 'this chat already has messages — open a new tab instead',
+    };
   }
   const live = bridge?.turnActive(p.id) === true;
   const persisted = new AgentSessionStore(db).getByPane(p.id)?.status === 'running';
   if (live || persisted) {
-    return 'this chat is mid-turn — wait for it to finish, or open a new tab';
+    return {
+      code: 'mid_turn',
+      message: 'this chat is mid-turn — wait for it to finish, or open a new tab',
+    };
   }
   return null;
 }
@@ -191,12 +209,13 @@ export function panesTabScopedRoutes(deps: {
         inherit_cwd_from: z.string().optional(),
         // Which face the pane opens on — agent panes land directly on chat.
         face: z.enum(['terminal', 'web', 'chat']).optional(),
-        // Behavior overlay for an agent pane: 'do' = the house chat (carries
-        // the <dataDir>/do-mode.md contract), 'deep' = a raw session of the
-        // harness with capabilities injection only. Internal plumbing — the
-        // UI never names these; it offers "the house chat" vs "Claude /
-        // Codex / Cursor".
-        mode: AgentModeSchema.optional(),
+        // Agent mode for an agent pane: 'chat' = Chat mode (muxpad's own
+        // assistant, carrying the <dataDir>/chat-mode.md contract), 'agent' =
+        // Agent mode, the harness exactly as it ships with capabilities
+        // injection only. Omitted → derived from the startup command's own
+        // `--mode` flag, and failing that DEFAULT_AGENT_MODE. Accepts the
+        // pre-rename 'do'/'deep' from a version-skewed caller.
+        mode: AgentModeInputSchema.optional(),
         // Layout placement controls. Off by default — the UI patches the
         // tab's layout in a separate request after creating the pane. When
         // `append_to_layout` is true the server places the new pane atomically:
@@ -243,7 +262,11 @@ export function panesTabScopedRoutes(deps: {
         );
       }
       const pane = panes.create({ tab_id: tabId, kind: 'url', url: body.url });
-      deps.events.emit({ type: 'pane.added', tab_id: tabId, pane: decoratePane(deps.cache, pane) });
+      deps.events.emit({
+        type: 'pane.added',
+        tab_id: tabId,
+        pane: decoratePane(deps.cache, pane, deps.db),
+      });
       if (body.append_to_layout) {
         const nextLayout = appendPaneToLayout(
           t.layout,
@@ -289,16 +312,42 @@ export function panesTabScopedRoutes(deps: {
     // root so it starts with project context (rules/MCP), not a random subdir.
     const isAgent = body.face === 'chat' || (body.startup_cmd?.startsWith('muxpad agent') ?? false);
     const resolvedCwd = isAgent ? agentCwd(safeCwd(cwd)) : safeCwd(cwd);
+    // THE ROW AND THE COMMAND MUST AGREE. The row is what the UI and
+    // `muxpad claude` read; the command is what a respawn actually boots. An
+    // API caller can supply either, both, or neither, so resolve once and
+    // write both from the same value:
+    //   explicit `mode`  wins (and is baked into the command),
+    //   else the command's own `--mode` flag is believed,
+    //   else DEFAULT_AGENT_MODE — the flip — and the flag is added to match.
+    // The old code stamped `mode` on the row and left the command alone,
+    // which could hand back a pane that reported Chat and respawned as Agent.
+    // …and Chat mode is CLAUDE-ONLY (modeForBackend): the backend is whatever
+    // the caller's own startup command selected, so a `--backend codex` pane
+    // lands in Agent mode no matter what `mode` says.
+    const requestedBackend = body.startup_cmd?.match(/--backend (claude|codex|cursor)/)?.[1];
+    const agentMode: AgentMode | undefined = isAgent
+      ? modeForBackend(
+          body.mode ?? modeFromStartupCmd(body.startup_cmd) ?? DEFAULT_AGENT_MODE,
+          requestedBackend,
+        )
+      : undefined;
+    const startupCmd = agentMode
+      ? applyModeToStartupCmd(body.startup_cmd ?? null, agentMode)
+      : (body.startup_cmd ?? null);
     const pane = panes.create({
       tab_id: tabId,
       shell: body.shell ?? defaultShell,
       cwd: resolvedCwd,
-      startup_cmd: body.startup_cmd ?? null,
+      startup_cmd: startupCmd,
       env: body.env ?? null,
       ...(body.face ? { face: body.face } : {}),
-      ...(isAgent && body.mode ? { mode: body.mode } : {}),
+      ...(agentMode ? { mode: agentMode } : {}),
     });
-    deps.events.emit({ type: 'pane.added', tab_id: tabId, pane: decoratePane(deps.cache, pane) });
+    deps.events.emit({
+      type: 'pane.added',
+      tab_id: tabId,
+      pane: decoratePane(deps.cache, pane, deps.db),
+    });
     if (body.append_to_layout) {
       const nextLayout = appendPaneToLayout(
         t.layout,
@@ -314,21 +363,27 @@ export function panesTabScopedRoutes(deps: {
     // Eager spawn: otherwise the PTY only starts when the frontend mounts
     // the XtermPane (i.e. when the user navigates to its tab). A CLI-created
     // pane with --cmd would sit idle until then. Same spec shape as ws.ts.
+    //
+    // Through provisionPane, exactly as bootstrapTab's is, because THIS route
+    // makes chat panes too — HOUSE_CHAT_PANE_CREATE splits a new Chat into an
+    // existing tab — and a chat-face pane has no lazy-spawn fallback: its client
+    // attaches to /ws/chat, never to the pty. The old bare `catch {}` here was
+    // the same silent death as the one on the tab path. A terminal pane loses
+    // nothing by going through it either; it gains the retry.
     const workspaceId = tabs.getWorkspaceId(tabId);
-    try {
-      await deps.ptyd.ensurePane({
-        id: pane.id,
-        shell: pane.shell ?? defaultShell,
-        startup_cmd: pane.startup_cmd,
-        cwd: safeCwd(pane.cwd),
-        env: pane.env,
-        tab_id: tabId,
-        workspace_id: workspaceId,
-      });
-    } catch {
-      // ptyd unreachable: the pane row is committed; the runtime will be
-      // created lazily when a client attaches and ptyd reconnects.
-    }
+    const provisioning = provisionPane(deps, {
+      id: pane.id,
+      shell: pane.shell ?? defaultShell,
+      startup_cmd: pane.startup_cmd,
+      cwd: safeCwd(pane.cwd),
+      env: pane.env,
+      tab_id: tabId,
+      workspace_id: workspaceId,
+    });
+    // The FIRST attempt only — same trade as the tab path: this route is on the
+    // client's create path, the retries are not worth holding it open for, and
+    // `settled` is a promise nobody has to hold (it cannot reject).
+    await provisioning.first;
     return c.json(pane, 201);
   });
 
@@ -399,7 +454,7 @@ export function panesScopedRoutes(deps: {
       const p = panes.getById(r.pane_id);
       if (!p) continue; // raced a delete between the join and the fetch
       out.push({
-        ...decoratePane(deps.cache, p),
+        ...decoratePane(deps.cache, p, deps.db),
         // Live shell cwd when ptyd has reported one; else the spawn cwd row.
         cwd: deps.cache.getCwd(p.id) ?? p.cwd,
         isRunning: live.has(p.id),
@@ -426,7 +481,7 @@ export function panesScopedRoutes(deps: {
     }
     // Decorated (title/fg/attention/busy/app_urls) like the flat list — the
     // web's pinned rows seed their badges from this single-pane GET.
-    return c.json({ ...decoratePane(deps.cache, p), isRunning });
+    return c.json({ ...decoratePane(deps.cache, p, deps.db), isRunning });
   });
 
   app.patch('/:id', async (c) => {
@@ -447,9 +502,11 @@ export function panesScopedRoutes(deps: {
         // Same iframe sink as `url`, so same http(s) gate — but '' / null are
         // the legitimate "clear the web face" signals and must pass through.
         face_url: httpUrl.or(z.literal('')).nullable().optional(),
-        // Agent behavior mode (⚡ do / 🧠 deep). See the handler below for the
-        // mid-session semantics — deliberately NOT a respawn.
-        mode: AgentModeSchema.optional(),
+        // Agent mode (Chat / Agent). See the handler below for the
+        // mid-session semantics — deliberately NOT a respawn. Accepts the
+        // pre-rename 'do'/'deep': rejecting a version-skewed client's PATCH
+        // would leave it unable to change a pane's mode at all.
+        mode: AgentModeInputSchema.optional(),
       })
       // safeParse (not parse): a rejected url/face_url must 400, not 500.
       .safeParse(await c.req.json().catch(() => ({})));
@@ -463,13 +520,19 @@ export function panesScopedRoutes(deps: {
     const patch = body.data;
 
     // ── VALIDATE EVERYTHING FIRST, THEN MUTATE ──────────────────────────────
-    // This handler used to interleave the two: `{name:'renamed', mode:'do'}`
+    // This handler used to interleave the two: `{name:'renamed', mode:'chat'}`
     // against a non-agent pane persisted the rename and THEN returned 400, so
     // the caller saw a failure while half its patch had landed and no
     // pane.updated was emitted to tell anyone. A PATCH is one edit — it applies
     // whole or not at all. Every semantic check runs here, before the first
     // write; the writes themselves go in one transaction below.
     const isAgentPane = p.face === 'chat' || (p.startup_cmd?.startsWith('muxpad agent') ?? false);
+    // Choosing a non-Claude harness IS choosing Agent mode (modeForBackend) —
+    // so a `mode: 'chat'` patch against a codex/cursor pane resolves to Agent
+    // rather than 400ing. Collapsed, not handled: the response carries the mode
+    // the pane actually has, which is the only thing the caller needs.
+    const paneBackend = p.startup_cmd?.match(/--backend (claude|codex|cursor)/)?.[1] ?? 'claude';
+    if (patch.mode !== undefined) patch.mode = modeForBackend(patch.mode, paneBackend);
     const modeChanged = patch.mode !== undefined && patch.mode !== p.mode;
     if (modeChanged && !isAgentPane) {
       return c.json(
@@ -572,7 +635,7 @@ export function panesScopedRoutes(deps: {
       // undefined), so a face switch / rename mid-turn killed the spinner until
       // the next busy EDGE. It also poisoned the sidebar's (busy,attention)
       // dedup signature, swallowing the real busy→false edge afterwards.
-      const decorated = decoratePane(deps.cache, refreshed);
+      const decorated = decoratePane(deps.cache, refreshed, deps.db);
       deps.events.emit({ type: 'pane.updated', tab_id: refreshed.tab_id, pane: decorated });
       return c.json(decorated);
     }
@@ -605,6 +668,30 @@ export function panesScopedRoutes(deps: {
     deps.cache.forget(id);
     deps.tabActivity?.forgetPane(id);
     deps.events.emit({ type: 'pane.removed', tab_id: tabId, pane_id: id });
+    // No pane means no future turn-end or supervisor verdict can finish this
+    // child. Apply the same orphan transition as startup reconciliation now.
+    retireOrphanedChild(deps, tabId);
+    // The tab's LAYOUT still names the pane we just deleted, and `pane.removed`
+    // deliberately carries no layout — so every client holding this tab keeps a
+    // leaf pointing at nothing (a phantom mosaic tile in split mode, a header
+    // that opens blank in tabbed mode). The desktop's own close path PATCHes the
+    // layout itself, which is why this was invisible there; the mobile sheet's
+    // pane list, the CLI and any API caller do not, and the only repair on the
+    // server is the lazy prune inside GET /api/tabs/:id — which the tab LIST
+    // never runs. Prune here, where the pane actually goes away, and announce it.
+    //
+    // Emitted even when the layout was already clean (the desktop patched it
+    // first): the tab's rollup — status, agents, unread — moved regardless, and
+    // `pane.removed` is a dead end for it in web/src/tabs.ts.
+    const sourceTab = tabs.getById(tabId);
+    if (sourceTab) {
+      const pruned = removeLeafFromLayout(sourceTab.layout, id);
+      const tabRow =
+        JSON.stringify(pruned) === JSON.stringify(sourceTab.layout)
+          ? sourceTab
+          : tabs.update(tabId, { layout: pruned });
+      deps.events.emit({ type: 'tab.updated', tab: decorateTab(deps.cache, deps.db, tabRow) });
+    }
     return c.body(null, 204);
   });
 
@@ -645,17 +732,41 @@ export function panesScopedRoutes(deps: {
         tab_id: p.tab_id,
         ...(workspaceId !== undefined ? { workspace_id: workspaceId } : {}),
       });
-    } catch {
-      return c.json(
-        {
-          error: {
-            code: 'ptyd_unavailable',
-            message: 'ptyd is unreachable; cannot respawn pane',
-          },
-        },
-        503,
-      );
+    } catch (err) {
+      // A respawn is a USER-INITIATED retry, so it answers straight away rather
+      // than starting a ladder underneath their finger — but the verdict is
+      // recorded all the same. Without this, tapping "Start agent" on a chat
+      // whose provisioning had failed and failing again would CLEAR the reason
+      // from the row (the button owns its own local error string, the row does
+      // not), so a reload came back to the neutral "no agent yet" and the
+      // diagnosis was lost.
+      const why = whyNot('respawn pane', err);
+      setProvisionError(id, { error: why, at: Date.now(), attempts: 1 });
+      announceProvision(deps, id);
+      return c.json({ error: { code: 'ptyd_unavailable', message: why } }, 503);
     }
+    // It was ACCEPTED. That is not the same as it being alive, and clearing the
+    // complaint here on the strength of the acknowledgement alone would rebuild
+    // the original bug inside the retry button: a respawn that acks and whose
+    // pty then dies would drop the reason and drop the chat back onto the
+    // neutral "no agent yet".
+    //
+    // So the verdict is settled the same way a create's is — one more
+    // `ensurePane` (idempotent: ptyd's getOrCreate hands back the runtime it
+    // already has) followed by a liveness check a beat later, which then either
+    // clears the reason or replaces it. `attempts: 1` because the user is
+    // already retrying by hand and a ladder under their finger only delays the
+    // honest answer. Unawaited: the 204 goes out now, exactly as it did before.
+    void provisionPane(deps, {
+      id: p.id,
+      shell: p.shell ?? defaultShell,
+      startup_cmd: p.startup_cmd,
+      cwd: safeCwd(p.cwd),
+      env: p.env,
+      tab_id: p.tab_id,
+      attempts: 1,
+      ...(workspaceId !== undefined ? { workspace_id: workspaceId } : {}),
+    }).settled;
     return c.body(null, 204);
   });
 
@@ -765,27 +876,80 @@ export function panesScopedRoutes(deps: {
     // conversionRefusal for the two conditions and why the zero-message one
     // is enforced server-side rather than trusted from the UI.
     const refusal = conversionRefusal(deps.db, p, deps.agentBridge);
-    if (refusal) return c.json({ error: { code: 'conflict', message: refusal } }, 409);
+    if (refusal) return c.json({ error: refusal }, 409);
     const body = z
       .object({
         backend: z.enum(['claude', 'codex', 'cursor']),
-        // Which behavior overlay the new session runs. Omitted = keep the
-        // pane's current one (the legacy harness-picker path, where the pane
-        // was created with its mode already decided). The "open a RAW
-        // session instead" affordance passes 'deep' explicitly: a raw
-        // harness is exactly the harness, with no house contract on top.
-        mode: AgentModeSchema.optional(),
+        // Which mode the new session runs in. Omitted = keep the pane's
+        // current one (the legacy harness-picker path, where the pane was
+        // created with its mode already decided). The "or open instead:
+        // Claude · Codex · Cursor" affordance passes 'agent' explicitly —
+        // choosing a harness BY NAME means you want that harness, not
+        // muxpad's assistant wearing it.
+        mode: AgentModeInputSchema.optional(),
+        // Where the session starts. The launch picker offers this at the
+        // moment of choosing — the one moment the user is actually thinking
+        // about it — instead of deferring it to a menu they must already know
+        // exists. Omitted = keep the pane's current folder.
+        cwd: z.string().min(1).optional(),
+        // Which model to pin. Baked into `startup_cmd`, which runs through a
+        // shell, so the charset is gated exactly as the tabs route gates it:
+        // ids like 'claude-opus-4-8[1m]' pass, shell metacharacters cannot.
+        // Omitted = no `--model` flag = whatever the harness's own default is.
+        // The leading-dash exclusion is not cosmetic: the charset alone admits
+        // `--dangerously-skip-permissions`, which reaches the runner as
+        // `muxpad agent --model '--dangerously-skip-permissions'` and is taken
+        // as the model VALUE. Not RCE (the value is single-quoted and the
+        // charset has no quote, space, $ or backtick), but a flag-shaped model
+        // is never a real model, so reject the shape outright.
+        model: z
+          .string()
+          .regex(/^[A-Za-z0-9._[\]-]{1,64}$/)
+          .refine((m) => !m.startsWith('-'), 'a model id cannot start with "-"')
+          .optional(),
       })
       .safeParse(await c.req.json().catch(() => ({})));
     if (!body.success)
       return c.json(
-        { error: { code: 'bad_request', message: 'backend must be claude|codex|cursor' } },
+        {
+          error: {
+            code: 'bad_request',
+            message: 'backend must be claude|codex|cursor (and model must be a plain model id)',
+          },
+        },
         400,
       );
     const backend = body.data.backend;
-    const nextMode: AgentMode = body.data.mode ?? p.mode;
-    const base = `muxpad agent${backend === 'claude' ? '' : ` --backend ${backend}`}`;
-    const startupCmd = applyModeToStartupCmd(base, nextMode) ?? base;
+    // Chat mode is CLAUDE-ONLY (modeForBackend). This is the exact moment a
+    // harness is chosen, so it is where the rule has to bite: picking Codex or
+    // Cursor from the launch card converts the pane to Agent mode even if it
+    // was created as a Chat pane (which every `--pick` pane is).
+    const nextMode: AgentMode = modeForBackend(body.data.mode ?? p.mode, backend);
+    // Resolve the folder BEFORE anything is killed: a bad path must 400 with
+    // the pane still running, not leave it dead between a kill and a refused
+    // respawn. Same rules as POST /:id/cwd — expand `~`, require absolute,
+    // require an existing directory — then snap to the project root so the
+    // session lands with its rules/MCP/repo, as every other agent spawn does.
+    let nextCwd = p.cwd;
+    if (body.data.cwd !== undefined) {
+      const dir = body.data.cwd.replace(/^~(?=\/|$)/, homedir());
+      if (!dir.startsWith('/'))
+        return c.json(
+          { error: { code: 'bad_request', message: 'cwd must be an absolute path' } },
+          400,
+        );
+      try {
+        if (!statSync(dir).isDirectory()) throw new Error('not a dir');
+      } catch {
+        return c.json({ error: { code: 'bad_request', message: `not a directory: ${dir}` } }, 400);
+      }
+      nextCwd = agentCwd(dir);
+    }
+    const startupCmd = agentStartupCmd({
+      backend,
+      mode: nextMode,
+      ...(body.data.model !== undefined ? { model: body.data.model } : {}),
+    });
     const workspaceId = tabs.getWorkspaceId(p.tab_id);
     // SPAWN FIRST, PERSIST AFTER. The conversion used to be written to the DB
     // before ensurePane, so a ptyd outage returned 503 with the row ALREADY
@@ -805,19 +969,14 @@ export function panesScopedRoutes(deps: {
         id: p.id,
         shell: p.shell ?? defaultShell,
         startup_cmd: startupCmd,
-        cwd: safeCwd(p.cwd),
+        cwd: safeCwd(nextCwd),
         env: p.env,
         tab_id: p.tab_id,
         ...(workspaceId !== undefined ? { workspace_id: workspaceId } : {}),
       });
-    } catch {
+    } catch (err) {
       return c.json(
-        {
-          error: {
-            code: 'ptyd_unavailable',
-            message: 'ptyd is unreachable; cannot start the agent',
-          },
-        },
+        { error: { code: 'ptyd_unavailable', message: whyNot('start the agent', err) } },
         503,
       );
     }
@@ -825,15 +984,33 @@ export function panesScopedRoutes(deps: {
       if (nextMode !== p.mode) panes.setMode(id, nextMode);
       panes.setStartupCmd(id, startupCmd);
       panes.setFace(id, 'chat');
+      if (nextCwd !== p.cwd && nextCwd) {
+        panes.updateCwd(id, nextCwd);
+        // A different folder is a different project: anything queued against
+        // the old one must not drain into the new session. Same reasoning as
+        // POST /:id/cwd, which is the other way a pane changes folder.
+        new AgentQueueStore(deps.db).clear(id);
+      }
     })();
     const refreshed = panes.getById(id);
     if (refreshed)
       deps.events.emit({
         type: 'pane.updated',
         tab_id: refreshed.tab_id,
-        pane: decoratePane(deps.cache, refreshed),
+        pane: decoratePane(deps.cache, refreshed, deps.db),
       });
-    return c.body(null, 204);
+    // Return what was ACTUALLY used, not what was asked for. `agentCwd` snaps
+    // the request to the project root, so a client echoing its own input can
+    // name a different folder than the session got -- the confirmation said
+    // `.../muxpad/src` while the greeting said `.../muxpad`: two folders on
+    // screen for one conversion. The resolved values are the only honest thing
+    // to show, and the caller cannot compute them.
+    return c.json({
+      backend,
+      mode: nextMode,
+      cwd: nextCwd ?? null,
+      model: body.data.model ?? null,
+    });
   });
 
   // Convert an EMPTY agent chat into a plain terminal. Same gate as
@@ -845,7 +1022,7 @@ export function panesScopedRoutes(deps: {
     const p = panes.getById(id);
     if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
     const refusal = conversionRefusal(deps.db, p, deps.agentBridge);
-    if (refusal) return c.json({ error: { code: 'conflict', message: refusal } }, 409);
+    if (refusal) return c.json({ error: refusal }, 409);
     const workspaceId = tabs.getWorkspaceId(p.tab_id);
     // Spawn first, persist after — see the note on /agent-backend. A 503 here
     // must leave the pane an agent chat, not a half-converted row the client
@@ -866,14 +1043,9 @@ export function panesScopedRoutes(deps: {
         tab_id: p.tab_id,
         ...(workspaceId !== undefined ? { workspace_id: workspaceId } : {}),
       });
-    } catch {
+    } catch (err) {
       return c.json(
-        {
-          error: {
-            code: 'ptyd_unavailable',
-            message: 'ptyd is unreachable; cannot start the terminal',
-          },
-        },
+        { error: { code: 'ptyd_unavailable', message: whyNot('start the terminal', err) } },
         503,
       );
     }
@@ -886,7 +1058,7 @@ export function panesScopedRoutes(deps: {
       deps.events.emit({
         type: 'pane.updated',
         tab_id: refreshed.tab_id,
-        pane: decoratePane(deps.cache, refreshed),
+        pane: decoratePane(deps.cache, refreshed, deps.db),
       });
     return c.body(null, 204);
   });
@@ -899,7 +1071,7 @@ export function panesScopedRoutes(deps: {
     const p = panes.getById(id);
     if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
     const refusal = conversionRefusal(deps.db, p, deps.agentBridge);
-    if (refusal) return c.json({ error: { code: 'conflict', message: refusal } }, 409);
+    if (refusal) return c.json({ error: refusal }, 409);
     try {
       await deps.ptyd.closePtyClients(id);
     } catch {
@@ -917,7 +1089,7 @@ export function panesScopedRoutes(deps: {
       deps.events.emit({
         type: 'pane.updated',
         tab_id: refreshed.tab_id,
-        pane: decoratePane(deps.cache, refreshed),
+        pane: decoratePane(deps.cache, refreshed, deps.db),
       });
     return c.body(null, 204);
   });
@@ -990,11 +1162,9 @@ export function panesScopedRoutes(deps: {
         tab_id: p.tab_id,
         ...(workspaceId !== undefined ? { workspace_id: workspaceId } : {}),
       });
-    } catch {
+    } catch (err) {
       return c.json(
-        {
-          error: { code: 'ptyd_unavailable', message: 'ptyd is unreachable; cannot switch folder' },
-        },
+        { error: { code: 'ptyd_unavailable', message: whyNot('switch folder', err) } },
         503,
       );
     }
@@ -1003,7 +1173,7 @@ export function panesScopedRoutes(deps: {
       deps.events.emit({
         type: 'pane.updated',
         tab_id: refreshed.tab_id,
-        pane: decoratePane(deps.cache, refreshed),
+        pane: decoratePane(deps.cache, refreshed, deps.db),
       });
     return c.body(null, 204);
   });
@@ -1018,6 +1188,23 @@ export function panesScopedRoutes(deps: {
     const id = c.req.param('id');
     const pane = panes.getById(id);
     if (!pane) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    // ─── READING A CHAT IS ACTIVITY, ON THE PHONE TOO ───────────────────────
+    // The tab route stamps `last_activity_at` here for the same reason, and
+    // stamping it THERE ONLY is a bug with a surface attached: desktop clears
+    // read-state with `markTabSeen` and mobile with `markPaneSeen`, so the fix
+    // for "when I touch a chat it doesn't go to the top" worked on the machine
+    // and did nothing on the phone — which is where the sidebar's order was
+    // reported wrong in the first place. Two routes mean the same thing to the
+    // user ("I am looking at this"), so both have to say it.
+    //
+    // Keyed to the pane's TAB, because the sidebar sorts tabs; forced, for the
+    // same bounded-fan-out reason given on the tab route (`canReorder`
+    // suppresses the emit for a row that is already the most recent).
+    deps.tabActivity?.touchTab(pane.tab_id, { force: true });
+    // …and the column the sidebar actually SORTS on. See TabStore.noteUserTouch:
+    // `touchTab` above writes `last_activity_at`, which machine output also
+    // writes and which the order stopped reading.
+    tabs.noteUserTouch(pane.tab_id);
     // Viewing clears both read-state flags: the "done, unreviewed" bold
     // (persisted) and the BEL red dot (ptyd runtime). Emit pane.updated so the
     // bold drops immediately instead of waiting for the next nav poll.
@@ -1028,7 +1215,7 @@ export function panesScopedRoutes(deps: {
         deps.events.emit({
           type: 'pane.updated',
           tab_id: refreshed.tab_id,
-          pane: decoratePane(deps.cache, refreshed),
+          pane: decoratePane(deps.cache, refreshed, deps.db),
         });
     }
     // D12: `unread` was UNCLEARABLE FROM MOBILE. Mobile takes this surgical
@@ -1039,7 +1226,21 @@ export function panesScopedRoutes(deps: {
     // exactly the moment the tab-level bold stops meaning anything.
     if (tabs.isUnread(pane.tab_id)) {
       const stillUnread = panes.listByTab(pane.tab_id).some((p) => p.unread);
-      if (!stillUnread) tabs.setUnread(pane.tab_id, false);
+      if (!stillUnread) {
+        tabs.setUnread(pane.tab_id, false);
+        // …and SAY so. When the pane itself was already read the block above
+        // didn't run, so this route cleared the tab's bold while emitting
+        // nothing whatsoever: reading a tab on the phone left it bold on the
+        // desktop until that device's next 5s poll — which is stopped while the
+        // document is hidden or the workspace is collapsed, i.e. exactly when a
+        // second device is sitting there wrong.
+        const freshTab = tabs.getById(pane.tab_id);
+        if (freshTab)
+          deps.events.emit({
+            type: 'tab.updated',
+            tab: decorateTab(deps.cache, deps.db, freshTab),
+          });
+      }
     }
     try {
       await deps.ptyd.markSeen(id);
@@ -1102,7 +1303,7 @@ export function panesScopedRoutes(deps: {
 
     const decorate = (paneId: string) => {
       const p = panes.getById(paneId);
-      return p ? decoratePane(deps.cache, p) : null;
+      return p ? decoratePane(deps.cache, p, deps.db) : null;
     };
 
     // Extracting the SOLE pane of a tab into a new tab is pure churn — it

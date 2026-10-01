@@ -1,0 +1,332 @@
+/*
+ * The browser card.
+ *
+ * A LOG ENTRY, NOT A PANEL. These sit inside a conversation, often several in a
+ * row, and the first version drew each one as a bordered box with its own
+ * padding — so a chat with three browser moments looked like a settings screen
+ * dropped into a transcript. Calm states are now a tinted strip with no border
+ * at all; the box is reserved for the one card that wants something.
+ *
+ * ONE ROW WHEREVER POSSIBLE. On a phone the glyph used to take a line of its
+ * own, above the title, which cost a whole row to say nothing. The grid below
+ * keeps the glyph beside the title at every width and lets only the REASON wrap,
+ * because the reason is the part carrying information.
+ */
+
+/*
+ * THE PALETTE. Pastels rather than the muted greys and mustard this had:
+ * these cards sit in a conversation somebody reads all day, and "a browser
+ * opened" should feel like a small good thing happening, not a warning label.
+ *
+ * Each state is one hue with a light wash and a saturated mark. Declared here
+ * rather than inline so the whole family can be re-tuned in one place — and so
+ * a dark theme can override three variables instead of thirty rules.
+ */
+.browser-card {
+  --b-idle: #8f8fb0;
+  --b-live: #6f7bf7;
+  --b-wait: #f0943f;
+  --b-wash: 13%;
+  /* One line box, shared by the glyph, the text and the button, so all three
+     centre on the SAME thing instead of each centring on itself. */
+  --b-line: 18px;
+
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: start;
+  column-gap: 9px;
+  row-gap: 3px;
+  /* SIZED TO ITS CONTENT, like the spawn card beside it. Full width made every
+     browser moment look like a banner across the conversation; these are log
+     entries and should end where their words do. */
+  width: fit-content;
+  max-width: min(460px, 94%);
+  align-self: flex-start;
+  box-sizing: border-box;
+  padding: 8px 11px;
+  margin: 4px 10px;
+  border-radius: 10px;
+  /* The same two-stop wash the spawn card uses, so they read as siblings — a
+     flat fill next to it looked unfinished. */
+  background: linear-gradient(
+      color-mix(in srgb, var(--chat-fg, #1c1c22) 5%, transparent),
+      transparent 70%
+    ), var(--chat-panel, #fff);
+  border: 1px solid var(--chat-border, #dcdce6);
+  color: var(--chat-fg, #1c1c22);
+  font-family: var(--chrome-font, inherit);
+  font-size: 12.5px;
+  line-height: 1.38;
+}
+
+/*
+ * The browser mark. Next to a spawn card in the same log, a coloured dot said
+ * only "some card" — the two were tellable apart by their words alone. A window
+ * outline reads as a browser at the size it has to work at.
+ */
+.browser-card__glyph {
+  grid-column: 1;
+  grid-row: 1;
+  /* A box exactly one line tall, with the mark centred inside it. Aligned to
+     the FIRST line rather than to the card, so a wrapped reason does not drag
+     the icon down to the middle of a paragraph — and a one-line card still has
+     it dead level with the words. */
+  height: var(--b-line);
+  display: grid;
+  place-items: center;
+  color: var(--b-idle);
+}
+.browser-card__glyph svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.2;
+}
+.browser-card__glyph .browser-card__light {
+  fill: currentColor;
+  stroke: none;
+}
+
+.browser-card__body {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  column-gap: 8px;
+}
+
+/* Every line in the body is the same height as the glyph's box, which is what
+   makes them line up without nudging anything by hand. */
+.browser-card__title,
+.browser-card__detail {
+  line-height: var(--b-line);
+}
+
+.browser-card__title {
+  font-weight: 560;
+  white-space: nowrap;
+}
+
+/*
+ * ONE LINE. The agent is told to write about five words, and this is what
+ * happens when it does not: a card in a conversation is a doorbell, and a
+ * paragraph in it pushes the button off the screen. Truncated rather than
+ * wrapped, with the whole thing on the title attribute for anyone who wants it.
+ */
+.browser-card__detail {
+  color: var(--chat-dim, #6b6b7a);
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.browser-card__countdown {
+  grid-column: 3;
+  grid-row: 1;
+  height: var(--b-line);
+  display: grid;
+  place-items: center;
+  color: var(--chat-faint, #8b8b9c);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  padding-right: 2px;
+}
+
+/*
+ * The action is a LINK until it is a request. A button chrome on every card
+ * turns a quiet log into a row of controls.
+ */
+.browser-card__action {
+  grid-column: 4;
+  grid-row: 1;
+  justify-self: end;
+  /* Centred on the first line like everything else. The padding grows the
+     button around that line rather than pushing the row taller on one side. */
+  height: var(--b-line);
+  display: grid;
+  place-items: center;
+  padding: 0 9px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: color-mix(in srgb, var(--b-live) 82%, var(--chat-fg, #1c1c22));
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.browser-card:has(.browser-card__countdown) {
+  grid-template-columns: auto 1fr auto auto;
+}
+.browser-card:not(:has(.browser-card__countdown)) .browser-card__action {
+  grid-column: 3;
+}
+
+.browser-card__action:hover {
+  background: color-mix(in srgb, var(--b-live) 14%, transparent);
+}
+.browser-card__action:focus-visible {
+  outline: 1px solid var(--chat-accent, #5b5bd6);
+  outline-offset: 1px;
+}
+
+/*
+ * PASSIVE — a card that is telling you something, not asking.
+ *
+ * No button, because a button is a job. It is still clickable, because looking
+ * should always be possible; the affordance just waits to be looked for. On a
+ * pointer device the mark brightens and the whole card lifts a little on hover.
+ * On a phone there is no hover, and that is fine — the card is a note, and
+ * anyone who wants the browser will tap it.
+ */
+.browser-card--passive {
+  cursor: pointer;
+  /* Quieter than a card with something to say. */
+  --b-wash: 9%;
+}
+.browser-card--passive:hover {
+  --b-wash: 16%;
+  border-color: color-mix(in srgb, var(--b-idle) 42%, transparent);
+}
+.browser-card--passive:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--b-live) 55%, transparent);
+  outline-offset: 2px;
+}
+
+/* The agent is driving: a periwinkle wash. Present, not attention-seeking. */
+.browser-card--working {
+  --b-idle: var(--b-live);
+}
+
+/* You hold the wheel. A wash, not a border — you already know. */
+.browser-card--yours {
+  border-color: color-mix(in srgb, var(--chat-accent, #5b5bd6) 35%, var(--chat-border, #dcdce6));
+  background: linear-gradient(
+      color-mix(in srgb, var(--chat-accent, #5b5bd6) 10%, transparent),
+      transparent 70%
+    ), var(--chat-panel, #fff);
+}
+.browser-card--yours .browser-card__glyph {
+  color: var(--chat-accent, #5b5bd6);
+}
+
+/*
+ * WAITING — the one card that asks for something, and deliberately NOT red.
+ *
+ * Red means something broke. Nothing has: the agent reached a step only a person
+ * can take, which is the system working. It should read as "your turn", so it
+ * gets the only border and the only filled button on the surface — enough to
+ * find at a glance, not enough to look like a failure.
+ */
+.browser-card--waiting {
+  --b-idle: var(--b-wait);
+  --b-wash: 22%;
+}
+.browser-card--waiting .browser-card__title {
+  color: color-mix(in srgb, var(--b-wait) 62%, var(--chat-fg, #1c1c22));
+}
+/* The only filled button on the surface — enough to find at a glance, and warm
+   rather than alarming, because nothing has gone wrong. */
+.browser-card--waiting .browser-card__action {
+  background: var(--b-wait);
+  border-color: color-mix(in srgb, var(--b-wait) 80%, #000);
+  color: #fff;
+  font-weight: 560;
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 40%, transparent);
+}
+.browser-card--waiting .browser-card__action:hover {
+  background: color-mix(in srgb, var(--b-wait) 88%, #000);
+}
+
+/*
+ * NARROW. The action moves to its OWN ROW rather than holding a column, because
+ * a button in the right column squeezes the reason into a ribbon four words
+ * wide — and the reason is the sentence the agent wrote about what it needs.
+ * Full width for the words; the button follows underneath.
+ */
+@media (max-width: 560px) {
+  /*
+   * ONE ROW, ALWAYS. The action used to drop to a line of its own when there
+   * was a reason to read, which on a phone left a mostly-empty row under every
+   * summons — the card looked airy and said no more. A one-word button is
+   * narrow enough to sit beside the title at 390px, so the reason wraps under
+   * the title inside its own column and nothing gets a row to itself.
+   */
+  .browser-card,
+  .browser-card:has(.browser-card__countdown) {
+    grid-template-columns: auto 1fr auto;
+    max-width: 100%;
+  }
+  .browser-card__body {
+    grid-column: 2;
+    flex-direction: column;
+    align-items: flex-start;
+    row-gap: 0;
+  }
+  /* Two lines at most on a phone: enough for a short sentence that did not
+     quite fit, never enough to bury the button. */
+  .browser-card__detail {
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+  }
+  .browser-card__action {
+    grid-column: 3;
+    grid-row: 1;
+  }
+  /* The countdown joins the title rather than claiming a row. */
+  .browser-card__countdown {
+    display: none;
+  }
+}
+
+/*
+ * THE STILL. A picture of the page at the moment the card is about.
+ *
+ * Full width under the line, in its own grid row, so the text above stays one
+ * line and the image is the only thing that grows — a card whose words reflow
+ * around a picture is two layouts pretending to be one.
+ *
+ * Height-capped and cropped from the TOP: a page's identity is in its first
+ * couple of hundred pixels — the logo, the heading, the form — and letting a
+ * tall screenshot run to its natural height would put a strip of footer in a
+ * conversation.
+ */
+.browser-card__shot {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  width: 100%;
+  max-height: 148px;
+  margin-top: 6px;
+  object-fit: cover;
+  object-position: top center;
+  border-radius: 7px;
+  /* A hairline rather than a shadow: it sits INSIDE a card that already floats,
+     and a second shadow inside the first reads as a sticker. */
+  border: 1px solid color-mix(in srgb, var(--chat-fg, #1c1c22) 10%, transparent);
+  /* Its own colours are the page's, which is the point — but a bright page in a
+     dark chat is a lamp. Taken down a touch so the card still reads as the
+     surface and the picture as its content. */
+  filter: saturate(0.94);
+  display: block;
+}
+
+/* The picture is the only thing that makes these cards worth widening. */
+.browser-card:has(.browser-card__shot) {
+  max-width: min(520px, 94%);
+}
+
+@media (max-width: 560px) {
+  .browser-card:has(.browser-card__shot) {
+    max-width: 100%;
+  }
+  /* Shorter on a phone: the card is a line in a conversation you are scrolling,
+     not a viewer. */
+  .browser-card__shot {
+    max-height: 116px;
+  }
+}

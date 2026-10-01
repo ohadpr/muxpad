@@ -1,7 +1,8 @@
-import type { Tab } from '@muxpad/shared';
+import { type Tab, sortSidebarTabs } from '@muxpad/shared';
 import { useEffect, useState } from 'react';
 import { api } from './api';
 import { subscribe, subscribeReconnect } from './events';
+import { mergeWorkspaceTabs, refreshCorpusForTab } from './lib/all-tabs';
 import { unreadRowPatch } from './lib/tab-unread';
 import { refreshWorkspaces } from './workspaces';
 
@@ -62,6 +63,72 @@ export async function refreshTabs(workspaceId: string): Promise<void> {
   caches.set(workspaceId, next);
   const subs = listenersByWs.get(workspaceId);
   if (subs) for (const fn of subs) fn(next);
+  // ─── …and on into the cross-workspace corpus ───────────────────────────────
+  // A LANDED LIST IS THE ONE THING A PUSH CANNOT REPLACE. `lib/all-tabs` is
+  // push-only with no poll by design, which leaves it blind to the single field
+  // no push carries: a tab's rolled-up `status`. That moves on `pane.updated`
+  // (the refetch scheduled below is this module's answer to it) and on no
+  // `tab.updated` at all — so the corpus froze that field at whatever its last
+  // fetch said, and finished agents went on spinning as cards beside sidebar
+  // rows that had already moved to the done drawer. Same truth, two clocks.
+  //
+  // Handing the corpus the list we just landed costs NO request — it is an
+  // answer fetched anyway — and makes the rail and the cards the same bytes.
+  // Every refetch this module already does (5s visible poll, pane status edge,
+  // reconnect) therefore refreshes the corpus too, for free.
+  //
+  // Only here, not in `applyTabRow`: see the note there. And a no-op unless a
+  // corpus is actually held, so all-tabs' laziness is untouched.
+  mergeWorkspaceTabs(workspaceId, next);
+}
+
+/**
+ * Whatever tabs are already cached for a workspace, with NO fetch of any kind.
+ *
+ * The sidebar search box's fallback corpus: the box's real source is one
+ * cross-workspace read taken on first focus, and until that lands the first
+ * keystroke has to match against something. These slots hold every workspace
+ * the user has actually expanded — which on any real session is the ones they
+ * are most likely to be looking for.
+ */
+export function cachedTabsFor(workspaceId: string): Tab[] {
+  return caches.get(workspaceId) ?? [];
+}
+
+/**
+ * Splice a tab the server has JUST CONFIRMED into its workspace's cache.
+ *
+ * This is not an optimistic row and it cannot leave a ghost: the only caller
+ * passes the body of a successful `POST /api/tabs`, so the row already exists
+ * server-side with the id and slug written here. A failed create throws before
+ * reaching this, and nothing is inserted.
+ *
+ * WHY IT IS NEEDED. Creating used to `await refreshTabs()` before navigating,
+ * so the list was guaranteed to contain the new tab by the time TabView looked
+ * for its slug. Navigating immediately removes that guarantee, and the gap is
+ * not benign: TabView resolves `tabSlug` through `freshTabs`, which serves the
+ * cache without a refetch while it is fresh (FRESH_MS) — and a list that
+ * landed a second before the create is fresh AND has no such slug in it. That
+ * is TabView's "tab not found" path, which bounces to the workspace root. The
+ * user would tap New chat and be thrown out of the chat they just made.
+ *
+ * So the cache is told directly rather than being raced for. `tab.added` still
+ * arrives over the socket and still drives the corpus and the workspace
+ * rollup — this only closes the one window that navigation reads
+ * synchronously. A no-op for a workspace with no cache slot: there is no stale
+ * list to correct, and `freshTabs` will fetch.
+ */
+export function insertTabRow(workspaceId: string, tab: Tab): void {
+  const list = caches.get(workspaceId);
+  if (!list) return;
+  if (list.some((t) => t.id === tab.id)) return; // the push beat us here
+  // Same version bump as applyTabRow / applyTabOrder: a refresh that started
+  // before this insert must not land after it and drop the row again.
+  versions.set(workspaceId, (versions.get(workspaceId) ?? 0) + 1);
+  const merged = sortSidebarTabs([...list, tab]);
+  caches.set(workspaceId, merged);
+  const subs = listenersByWs.get(workspaceId);
+  if (subs) for (const fn of subs) fn(merged);
 }
 
 /**
@@ -125,14 +192,31 @@ function scheduleLiveRefresh(): void {
  *
  * The event already carries the whole decorated row (every emitter goes
  * through `decorateTab` for exactly this reason), so there is nothing to fetch:
- * splicing it in is a round trip saved AND — the part that matters more —
- * it leaves the ARRAY ORDER alone. The server owns the order (pinned block,
- * then attention → recency) and the client only renders the sequence it was
- * given, so an in-place replacement cannot make a row jump under the cursor.
- * A refetch here would have: `tab.updated` also fires on every
- * `last_activity_at` write, so wiring this to a refetch would have turned the
- * unpinned block into a list that re-sorts on every finished turn, at the
- * debounce rate, everywhere except the one frozen active row.
+ * splicing it in is a round trip saved.
+ *
+ * ─── …and why it now RE-SORTS ────────────────────────────────────────────
+ * The splice used to leave the array ORDER alone, on the reasoning that the
+ * server owns the order and an in-place replacement therefore cannot make a row
+ * jump under the cursor. True, and it made the sidebar wrong: `tab.updated`
+ * fires on every `last_activity_at` write, so the row that had just become the
+ * most recently active one kept its old rank until the next 5s poll — and
+ * indefinitely while that poll is stopped, which it is for a collapsed
+ * workspace or a hidden document. On a second device, which is backgrounded
+ * most of the time, the order was reliably minutes stale. Reported as "the
+ * sidebar doesn't reorder properly and fast enough, on main device and on
+ * secondary devices".
+ *
+ * The hazard the old reasoning was protecting against is real but already
+ * owned: `freezeActiveTab` (lib/tab-freeze.ts) holds the row you are ON where
+ * you found it and lets everything else re-sort around it — which that file
+ * calls "the whole point of a living sidebar". So the two were contradicting
+ * each other, and the freeze is the one that is right.
+ *
+ * Sorting locally rather than refetching keeps the round trip saved and cannot
+ * go out of sync, because both sides now run the SAME comparator
+ * (`sortSidebarTabs`, shared/src/tab-order.ts). `position` is passed from the
+ * rows we hold; it is only a tiebreak between two tabs with identical attention
+ * AND activity, so a stale one cannot reorder anything that actually differs.
  *
  * ─── The one thing a patch cannot do ─────────────────────────────────────
  * `pinned` is the single field of the row that the ORDER has to agree with:
@@ -166,14 +250,23 @@ function applyTabRow(next: Tab): void {
       scheduleLiveRefresh();
       continue;
     }
-    const merged = [...list];
-    merged[i] = next;
+    const spliced = [...list];
+    spliced[i] = next;
+    // Both sides break unpinned ties using wire IDs. The previous array order
+    // cannot stand in for the server's stored/manual order after a status or
+    // recency change. Pinned rows retain their authoritative manual order.
+    const merged = sortSidebarTabs(spliced);
     // Same version bump as applyTabOrder / applyTabUnread: a poll that started
     // before this event must not land after it and undo it.
     versions.set(wsId, (versions.get(wsId) ?? 0) + 1);
     caches.set(wsId, merged);
     const subs = listenersByWs.get(wsId);
     if (subs) for (const fn of subs) fn(merged);
+    // NOT merged into the corpus here, deliberately: `lib/all-tabs` subscribes
+    // to `tab.updated` itself and has already patched the same row from the
+    // same event. Doing it again would publish the group twice per event — a
+    // second repaint of every corpus reader, `ChatPane` included — to land
+    // bytes that are already there.
   }
 }
 
@@ -200,9 +293,21 @@ const unsubLiveRefresh = subscribe((e) => {
   ].join('|');
   if (lastPaneStatus.get(e.pane.id) === status) return; // title/fg-only → no list change
   lastPaneStatus.set(e.pane.id, status);
+  let held = false;
   for (const [wsId, list] of caches) {
-    if (list.some((t) => t.id === e.tab_id)) pendingWorkspaceRefresh.add(wsId);
+    if (list.some((t) => t.id === e.tab_id)) {
+      pendingWorkspaceRefresh.add(wsId);
+      held = true;
+    }
   }
+  // A status edge for a workspace the SIDEBAR has not loaded still moves rows
+  // the corpus renders — the flat 'recent' list spans every visible workspace,
+  // and a card can point at another one. Nothing above would refetch for it, so
+  // the corpus is asked to refresh itself. Only when no slot holds the tab:
+  // when one does, the refetch queued above already feeds the corpus through
+  // `mergeWorkspaceTabs`, and asking twice would spend a second request on an
+  // answer already on its way.
+  if (!held) refreshCorpusForTab(e.tab_id);
   scheduleLiveRefresh();
 });
 // Events don't replay across a reconnect, and pane.updated only fires on busy

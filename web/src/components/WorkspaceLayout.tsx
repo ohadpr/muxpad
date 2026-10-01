@@ -1,9 +1,11 @@
 import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { useEffect, useState } from 'react';
 import { api } from '../api';
+import { HOUSE_CHAT_CREATE } from '../lib/agent-backend';
 import { getLastTabSlug } from '../lib/last-visited';
 import { TabView } from '../pages/TabView';
-import { refreshTabs, useTabs } from '../tabs';
+import { freshTabs, refreshTabs, useTabs } from '../tabs';
+import { tabUrlIsDead } from '../lib/stale-tab-url';
 import { refreshWorkspaces, useWorkspaces } from '../workspaces';
 
 export interface WorkspaceShellProps {
@@ -60,18 +62,49 @@ export function WorkspaceShell({ wsSlug, isActive }: WorkspaceShellProps) {
     void navigate({ to: '/hosted', replace: true });
   }, [isActive, workspace, navigate]);
 
-  // Recovery for a stale tab URL — a reload (or a PWA restoring its last
-  // URL) can land on /w/:ws/t/:tab where the tab no longer exists (deleted
-  // from another device). The tabs.map render below would then match
-  // nothing and the user gets a permanent blank screen with no way out.
-  // Once the tab list is confirmed fresh (length matches the workspace's
-  // tab_count), bounce to the workspace root, where the redirect effect
-  // below picks a valid tab (or the empty-state UI renders).
+  // Recovery for a stale tab URL — a reload (or a PWA restoring its last URL)
+  // can land on /w/:ws/t/:tab where the tab no longer exists (deleted from
+  // another device). The tabs.map render below would then match nothing and the
+  // user gets a permanent blank screen with no way out, so this bounces to the
+  // workspace root, where the redirect effect below picks a valid tab.
+  //
+  // ─── IT USED TO FIRE ON TABS THAT EXISTED ────────────────────────────────
+  // Reported as "starting a new chat doesn't go to it": the chat was always
+  // created, and you were always put back on the one you came from. Measured
+  // 4 of 6 clicks, and 6 of 6 once console logging shifted the timing.
+  //
+  // The freshness guard was `tabs.length !== workspace.tab_count` — two numbers
+  // from two DIFFERENT endpoints that refresh independently. Creating a chat
+  // moves them one at a time: `insertTabRow` makes the list N+1 while the
+  // workspace rollup still says N, then `refreshWorkspaces` makes the count N+1
+  // too. If the list is momentarily stale when that second update lands — a 5s
+  // poll already in flight when the optimistic row went in — the two numbers
+  // agree while the list does not contain the tab you are standing on, the
+  // guard passes, and this bounces you off a tab that exists. The workspace
+  // root then redirects to your last-visited tab, which is the one you just
+  // left. Hence: chat created, and you never see it.
+  //
+  // So it no longer infers freshness from a count. It ASKS — `freshTabs` serves
+  // the cache when the cache is actually fresh and fetches when it is not, which
+  // is the question this guard was trying to approximate. A tab that is really
+  // gone still bounces, one refresh later than before; a tab that exists never
+  // does, which is the half that was broken.
   useEffect(() => {
     if (!isActive || !workspace || !urlTabSlug) return;
-    if (tabs.length !== workspace.tab_count) return; // list not fresh yet
     if (tabs.some((t) => t.slug === urlTabSlug)) return;
-    void navigate({ to: '/w/$wsSlug', params: { wsSlug }, replace: true });
+    let cancelled = false;
+    void (async () => {
+      // Re-ask the server before doing anything irreversible to the URL. The
+      // await is also what makes this safe against its own trigger: a create
+      // that has not finished reconciling resolves here as "present".
+      const confirmed = await freshTabs(workspace.id).catch(() => null);
+      if (cancelled) return;
+      if (!tabUrlIsDead({ urlTabSlug, cached: tabs, confirmed })) return;
+      void navigate({ to: '/w/$wsSlug', params: { wsSlug }, replace: true });
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [isActive, workspace, urlTabSlug, tabs, wsSlug, navigate]);
 
   useEffect(() => {
@@ -103,9 +136,11 @@ export function WorkspaceShell({ wsSlug, isActive }: WorkspaceShellProps) {
           className="btn btn-primary"
           onClick={async () => {
             try {
-              // Tabs-first: the server creates the tab with a full-size
-              // terminal pane atomically, so the user lands on a live shell.
-              const t = await api.createTab(workspace.id, { bootstrap: 'shell' });
+              // Tabs-first: the server creates the tab with its single
+              // full-size pane atomically. Same HOUSE_CHAT_CREATE as every
+              // other "+ New tab" — this button is worded identically to the
+              // sidebar's, so it must not quietly create something else.
+              const t = await api.createTab(workspace.id, { ...HOUSE_CHAT_CREATE });
               await refreshTabs(workspace.id);
               void navigate({
                 to: '/w/$wsSlug/t/$tabSlug',

@@ -3,7 +3,7 @@
 //   409 {"error":{"code":"conflict","message":"…"}}
 // inside the chat's empty state.
 import { describe, expect, it } from 'vitest';
-import { req } from '../api';
+import { ApiError, req } from '../api';
 
 function stubFetch(status: number, body: string, contentType = 'application/json') {
   globalThis.fetch = (async () =>
@@ -32,6 +32,21 @@ describe('req() error surfacing', () => {
     expect(err.message).toBe('nope');
     expect(err.message).not.toContain('{');
     expect(err.message).not.toContain('409');
+  });
+
+  it('carries the envelope’s CODE, so 409s that mean different things can be told apart', async () => {
+    stubFetch(
+      409,
+      JSON.stringify({ error: { code: 'has_messages', message: 'already has messages' } }),
+    );
+    const err = (await req('/api/x').catch((e) => e)) as ApiError;
+    expect(err).toBeInstanceOf(ApiError);
+    expect({ status: err.status, code: err.code }).toEqual({ status: 409, code: 'has_messages' });
+  });
+
+  it('a code-less envelope yields null rather than an invented code', async () => {
+    stubFetch(500, JSON.stringify({ error: { message: 'boom' } }));
+    expect(((await req('/api/x').catch((e) => e)) as ApiError).code).toBeNull();
   });
 
   it('falls back to status + body for a non-envelope error (proxy, HTML page)', async () => {

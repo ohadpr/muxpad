@@ -1,0 +1,93 @@
+/*
+ * The take-the-wheel modal.
+ *
+ * Big on purpose. Somebody opened this to read a page and type into it, and a
+ * polite little dialog showing a 1280px page at a third of its size is the one
+ * thing guaranteed not to work for that. On a phone we do not use this at all —
+ * see browserOpenMode.
+ */
+
+.browser-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+}
+
+.browser-modal__scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.66);
+}
+
+.browser-modal__panel {
+  position: relative;
+  width: min(1340px, 96vw);
+  height: min(900px, 92vh);
+  display: flex;
+  flex-direction: column;
+  background: var(--chat-panel, #fff);
+  border: 1px solid var(--chat-border-strong, #c2c2d0);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
+}
+
+.browser-modal__bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px 8px 14px;
+  background: var(--bg-elev, #f4f4f8);
+  border-bottom: 1px solid var(--chat-border, #d6d6e0);
+  font-size: 12px;
+  color: var(--chat-dim, #6b6b7a);
+}
+
+.browser-modal__title {
+  font-weight: 560;
+  color: var(--chat-fg, #1c1c22);
+}
+
+.browser-modal__wheel {
+  padding: 2px 8px;
+  border-radius: 20px;
+  background: color-mix(in srgb, var(--chat-fg, #1c1c22) 8%, transparent);
+}
+
+/* You are driving — worth saying, because it governs whether the agent can. */
+.browser-modal__wheel[data-yours="true"] {
+  background: color-mix(in srgb, var(--chat-accent, #5b5bd6) 16%, transparent);
+  color: var(--chat-accent, #5b5bd6);
+}
+
+.browser-modal__countdown {
+  font-variant-numeric: tabular-nums;
+}
+
+.browser-modal__close {
+  margin-left: auto;
+  padding: 5px 13px;
+  border-radius: 7px;
+  border: 1px solid var(--chat-border-strong, #c2c2d0);
+  background: transparent;
+  color: var(--chat-fg, #1c1c22);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.browser-modal__close:hover {
+  background: color-mix(in srgb, var(--chat-fg, #1c1c22) 8%, transparent);
+}
+
+.browser-modal__frame {
+  flex: 1;
+  width: 100%;
+  border: 0;
+  background: #000;
+  /* The stream is the point; never let the frame letterbox it away. */
+  display: block;
+}

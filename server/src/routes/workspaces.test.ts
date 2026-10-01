@@ -207,4 +207,52 @@ describe('workspaces routes', () => {
     }>;
     expect(list.map((w) => w.id)).toEqual([c.id, a.id, b.id]);
   });
+
+  it('a workspace reorder announces itself on the bus', async () => {
+    // C4: the sidebar's workspace order IS `position`, so a drag on one device
+    // was invisible on every other one until its 5s poll — which is stopped
+    // while the document is hidden, i.e. reliably stale on exactly the second
+    // device the reorder was meant to reach. One event is enough and
+    // deliberate: web/src/main.tsx maps any workspace.* event to a wholesale
+    // refreshWorkspaces(), which refetches the list in the server's order.
+    const events = new EventBus();
+    const local = await createTestApp({ db: openDb(':memory:'), dataDir: tmp, events });
+    try {
+      const mk = async (name: string) =>
+        (
+          (await (
+            await local.app.request('/api/workspaces', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ name }),
+            })
+          ).json()) as { id: string }
+        ).id;
+      const a = await mk('A');
+      const b = await mk('B');
+
+      const received: MuxpadEvent[] = [];
+      events.subscribe((e) => received.push(e));
+
+      const res = await local.app.request('/api/workspaces/reorder', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ids: [b, a] }),
+      });
+      expect(res.status).toBe(204);
+
+      const updated = received.filter((e) => e.type === 'workspace.updated');
+      expect(updated).toHaveLength(1);
+      const [first] = updated;
+      if (first?.type === 'workspace.updated') {
+        expect(first.workspace.id).toBe(b);
+        // Decorated, so a client that splices rather than refetches still gets
+        // a complete row (tab_count is required by WorkspaceSchema — an event
+        // missing it is dropped by the client's parse).
+        expect(first.workspace.tab_count).toBeDefined();
+      }
+    } finally {
+      await local.cleanup();
+    }
+  });
 });

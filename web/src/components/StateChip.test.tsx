@@ -17,8 +17,8 @@ import { StateChip } from './StateChip';
  * prefers-reduced-motion, so a computed-style test here would be testing jsdom.
  * The pixels are covered by the Playwright pass, which uses a real engine.
  */
-const html = (status: PaneStatus | undefined) =>
-  renderToStaticMarkup(<StateChip status={status} />);
+const html = (status: PaneStatus | undefined, mode: 'chip' | 'mark' = 'chip') =>
+  renderToStaticMarkup(<StateChip status={status} mode={mode} />);
 
 const css = (name: string) => readFileSync(join(import.meta.dirname, name), 'utf8');
 /** Collapse whitespace so assertions don't depend on the formatter's wrapping. */
@@ -220,12 +220,52 @@ describe('the CSS mapping — hue, bar, tint', () => {
     expect(STATE_CSS).toMatch(
       /\.navtree-tab-row::before,[^{]*\{[^}]*width: 3px;[^}]*background: transparent;/,
     );
-    // …and painted only when there is a state to paint.
-    const painted = rules(STATE_CSS).filter((r) => /background: var\(--state-hue\)/.test(r.body));
+    // …and painted only when there is a state to paint. Scoped to the ::before
+    // pseudo-element, which IS the bar: the mobile rail's blocked dot also
+    // paints the undiluted hue (deliberately — it is the same signal in a
+    // different shape), and an unscoped filter would count it as a second bar.
+    const painted = rules(STATE_CSS).filter(
+      (r) => /background: var\(--state-hue\)/.test(r.body) && r.selectors.includes('::before'),
+    );
     expect(painted).toHaveLength(1);
     expect(painted[0]?.selectors).toContain(
       '.navtree-ws-row[data-state]:not([data-state="idle"])::before',
     );
+  });
+
+  it('the mobile rail’s one bit: a dot for `blocked`, and nothing else permanent', () => {
+    // Five states collapse to ONE BIT on the sheet — wants-you, or not — so
+    // `blocked` is the only state there with a permanent mark, and it carries
+    // the SAME undiluted hue the desktop bar does rather than inventing a
+    // colour. `working` reuses the spinner; ready/dead/idle draw nothing.
+    expect(html('blocked', 'mark')).toContain('navtree-state-dot');
+    expect(html('working', 'mark')).toContain('navtree-state-spin');
+    expect(html('working', 'mark')).not.toContain('navtree-state-word');
+    for (const s of ['ready', 'dead'] as const) {
+      expect(html(s, 'mark')).not.toContain('navtree-state-dot');
+      expect(html(s, 'mark')).not.toContain('navtree-state-spin');
+      expect(html(s, 'mark')).not.toContain('navtree-state-word');
+    }
+    expect(STATE_CSS).toMatch(/\.navtree-state-dot \{[^}]*background: var\(--state-hue\);/);
+  });
+
+  it('an IDLE row renders NO state element at all in mark mode', () => {
+    // The rule the whole mobile rail rests on: a mark on every row is not a
+    // signal. There is no reserved column on that surface to hold open, so an
+    // idle row's mark is not "empty" — it does not exist.
+    expect(html('idle', 'mark')).toBe('');
+    expect(html(undefined, 'mark')).toBe('');
+    expect(html('done' as never, 'mark')).toBe('');
+  });
+
+  it('…but ready and dead are still ANNOUNCED, since weight is not audible', () => {
+    // The one place the two modes disagree about "empty": a state a sighted
+    // user reads off the name's weight (or off the absence of a mark) still
+    // has to be said out loud.
+    expect(html('ready', 'mark')).toContain('>Ready for you<');
+    expect(html('dead', 'mark')).toContain('>Agent exited<');
+    expect(html('blocked', 'mark')).toContain('>Waiting on you<');
+    expect(html('working', 'mark')).toContain('>Working<');
   });
 
   it('the tint is a background-IMAGE on the ROW, so a hover fill cannot take it away', () => {
@@ -256,10 +296,29 @@ describe('the CSS mapping — hue, bar, tint', () => {
 });
 
 describe('the CSS mapping — selection is not a state', () => {
-  it('the selected row is a SOLID accent block with the accent ink', () => {
+  it('the selected CHAT row is a quiet wash, and keeps the rail’s own ink', () => {
+    // THIS ASSERTION WAS INVERTED, and the inversion is the change rather than a
+    // loosened test. It used to read "a SOLID accent block with the accent ink",
+    // which was correct for as long as the row carried a state TINT and could
+    // not spend that channel on selection. The chat row stopped emitting
+    // `data-state` when the tint and the 3px bar were deleted (see the arm
+    // below, which has always asserted that a selected row drops both), so the
+    // slab was the last thing still paying for a constraint that had been
+    // removed — a saturated fill on screen permanently, with thirty
+    // declarations re-inking the row's contents against it.
+    //
+    // The full grammar, the six-theme arithmetic behind the 20%, and the
+    // hover-out-ranks-selection defect it introduces are in
+    // NavTree.selection.test.ts. Here: the fill is a token, not a raw accent.
     expect(NAV_CSS).toMatch(
-      /\.navtree-tab-row\[data-active="true"\] \{ background-color: var\(--accent\); color: var\(--accent-fg\); \}/,
+      /\.navtree-tab-row\[data-active="true"\] \{ background-color: var\(--nt-sel\); \}/,
     );
+    expect(NAV_CSS).not.toMatch(
+      /\.navtree-tab-row\[data-active="true"\] \{ background-color: var\(--accent\);/,
+    );
+    // The PANE row is the deliberate exception and still a slab: it never
+    // stopped emitting `data-state`, so it still carries a state tint and still
+    // cannot put selection in the same channel.
     expect(NAV_CSS).toMatch(
       /\.navtree-pane-row-wrap\[data-active="true"\] \{ background-color: var\(--accent\);/,
     );
@@ -321,11 +380,20 @@ describe('the CSS mapping — selection is not a state', () => {
 });
 
 describe('only WORKING moves', () => {
-  it('the rail declares exactly ONE animation, and it is the spinner', () => {
-    const animations = [...`${STATE_CSS} ${NAV_CSS}`.matchAll(/animation: ([^;]+);/g)].map(
-      (m) => m[1],
-    );
-    expect(animations).toEqual(['navtree-state-spin 0.8s linear infinite']);
+  it('the rail runs exactly ONE animation, and it is the spinner', () => {
+    // Comments stripped FIRST: prose about animations is not an animation, and
+    // a sentence containing the word was enough to fail this outright.
+    const css = `${STATE_CSS} ${NAV_CSS}`.replace(/\/\*[\s\S]*?\*\//g, '');
+    const animations = [...css.matchAll(/animation: ([^;]+);/g)].map((m) => m[1]);
+    // DISTINCT animations, not declarations. Two rails draw the working
+    // spinner now — StateChip's chip (the sheet, the pane rows) and the chat
+    // rows' 10px mark — and they must use the SAME one: two keyframes that
+    // happen to agree today are two that can disagree tomorrow. So the set is
+    // what is pinned, and it is still a set of one.
+    expect([...new Set(animations)]).toEqual(['navtree-state-spin 0.8s linear infinite']);
+    // …and every site really is that one, so a second animation cannot hide
+    // behind a duplicate of the first.
+    expect(animations.every((a) => a === 'navtree-state-spin 0.8s linear infinite')).toBe(true);
   });
 
   it('the spinner is a 13px ring on a 2px stroke, turning once every 0.8s', () => {
