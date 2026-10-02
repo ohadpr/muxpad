@@ -456,19 +456,24 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     // are in; it is spent in a different SHAPE. Every header wears the same
     // neutral band, and the active one takes an edge.
     //
-    // WHERE that edge lives moved once more, and this is the part worth pinning.
-    // It was an inset shadow on the HEADER, which inherited the band's 6px
-    // radius: the stroke curved away at both corners and read as a notch, not
-    // an edge — and it was a second left edge in a column that already had the
-    // group's spine. They were always the same stroke. So the group's own
-    // border-left IS the edge now, and the active workspace simply inks it.
+    // WHERE that edge lives has moved twice, and the current answer is the one
+    // worth pinning. It was an inset shadow on the HEADER (which inherited the
+    // band's radius and read as a notch), then the group's border-left. Both
+    // were strokes trying to do a CONTAINER's job, and both lost — reported as
+    // "they all converge too much", because a stroke is texture and a workspace
+    // needed to be an object. The group is a card now, and the active one takes
+    // a RING around that card.
     const group = ruleBody(NAV_CSS, '.navtree-group');
-    expect(group).toMatch(/border-left:\s*1px solid/);
+    expect(group).toMatch(/background-color:\s*var\(--nt-card\)/);
+    expect(group).toMatch(/border-radius/);
+    // The spine is gone with it: a card has four edges, not one.
+    expect(group).not.toMatch(/border-left/);
+
     const activeGroup = ruleBody(NAV_CSS, '.navtree-group[data-active="true"]');
-    expect(activeGroup).toMatch(/border-left-color:\s*var\(--accent\)/);
-    // Colour only: re-declaring the border would change the group's width and
-    // shift every row in it by a pixel when you switch workspaces.
-    expect(activeGroup).not.toMatch(/border-left:/);
+    expect(activeGroup).toMatch(/box-shadow:\s*0 0 0 [\d.]+px var\(--accent\)/);
+    // A RING, never a fill. A filled card competes with the selected ROW inside
+    // it, and that row is what the accent is actually for.
+    expect(activeGroup).not.toMatch(/background/);
 
     const active = ruleBody(NAV_CSS, '.navtree-group > .navtree-ws-row[data-active="true"]:hover');
     // No fill of its own — that is the whole point. (The only rule the active
@@ -494,18 +499,28 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     const body = ruleBody(NAV_CSS, '.navtree-group + .navtree-group');
     expect(body).not.toMatch(/border-top:\s*1px/);
     expect(Number.parseFloat(decl(body, 'margin-top'))).toBeGreaterThanOrEqual(8);
-    // The band is what does the work now, and it is a background-COLOR: the
-    // shorthand would reset the state tint a row can carry (see StateChip).
-    // Not variant-scoped: BOTH surfaces list every workspace now, and the
-    // sheet — being shorter — loses its header sooner than the rail does.
+    // The CARD is what does the work now — see the group rule. The header's own
+    // band is gone: inside a card it was redundant (the card already separates
+    // the group) and the wrong colour (it tinted the RAIL's surface, not the
+    // card's). All the header still owes is opacity, or rows scroll through it.
+    //
+    // ONE token, read twice. The card and its sticky header must be the same
+    // colour, and writing the mix out in both places is the
+    // two-surfaces-deriving-one-value bug this file has caught before — a
+    // header a shade off its own card is a seam the width of the header.
     const band = ruleBody(NAV_CSS, '.navtree-group > .navtree-ws-row');
-    expect(decl(band, 'background-color')).toMatch(/color-mix/);
+    expect(decl(band, 'background-color')).toBe('var(--nt-card)');
     expect(decl(band, 'position')).toBe('sticky');
-    // Mixed into `--nt-surface`, which each variant sets to the thing actually
-    // behind it — the rail hangs on `--bg-tabbar`, the mobile panel on
-    // `--bg-chrome`. Using one of them for both left the sheet's sticky header a
-    // shade off its own panel, a seam the width of the header.
-    expect(decl(band, 'background-color')).toMatch(/--nt-surface/);
+    // …and `--nt-card` is itself mixed into `--nt-surface`, which each variant
+    // points at the thing actually behind it — the rail hangs on `--bg-tabbar`,
+    // the mobile panel on `--bg-chrome`. One of them for both left the sheet's
+    // header a shade off its own panel.
+    const group = ruleBody(NAV_CSS, '.navtree-group');
+    expect(decl(group, '--nt-card')).toMatch(/--nt-surface/);
+    // Lifted toward `--bg`, NOT `--bg-elev`: that token is "another surface",
+    // not "a raised one" — lighter than `--bg` on tokyo-night, darker on
+    // dracula, so a card built on it is raised on one theme and sunk on another.
+    expect(decl(group, '--nt-card')).toMatch(/var\(--bg\)/);
   });
   it('the pin seam IS a line, and one that can actually be seen', () => {
     // Reversed deliberately. The old rule was "paints nothing at all", on the

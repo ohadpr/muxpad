@@ -365,15 +365,57 @@
    one step inside it. The active workspace colours that line instead of
    carrying a separate marker: the edge and the spine were always trying to be
    the same stroke. */
+/* ─── A WORKSPACE IS A CARD ──────────────────────────────────────────────────
+   Reported as "they all converge too much", and the measurement agreed: the
+   three things separating one workspace from the next were a 6% header tint, a
+   13% spine and 10px of margin — all the SAME SIGNAL STRENGTH. That is texture,
+   not boundary. Nothing in it said "this group is a container", so three
+   workspaces read as one long list with some bold words in it.
+
+   The fix is a change of kind, not of degree. A group now has its own SURFACE:
+   lifted off the rail, rounded, with real air around it. A workspace stops
+   being a region of one list and becomes an object, and objects cannot
+   converge — there is nothing to tune, because the separation is structural.
+
+   The spine is gone with it. It was doing the container's job badly, and a card
+   has edges on all four sides rather than one.
+
+   ── WHY THE SURFACE IS MIXED FROM `--bg` ─────────────────────────────────────
+   Not from `--bg-elev`, which sounds exactly right and is not: it is "another
+   surface", not "a lifted one". On tokyo-night it is LIGHTER than `--bg`
+   (#1f2335 over #1a1b26) and on dracula it is DARKER (#21222c under #282a36),
+   so a card built on it is raised on one theme and sunk on another.
+
+   `--bg` is the content surface and is distinguishable from `--bg-tabbar` (the
+   rail) on every theme by construction — that contrast is what makes the rail
+   read as chrome in the first place. Mixing toward it is therefore reliably
+   "lifted", on all six, without a single literal colour. */
 .navtree-group {
+  /* ONE token, two readers — the card and its sticky header. They have to be
+     the same colour or rows scroll through a header that nearly matches; this
+     is the two-surfaces-deriving-one-value bug that keeps turning up here, so
+     the value is declared once and read twice rather than written twice. */
+  --nt-card: color-mix(in srgb, var(--bg) 60%, var(--nt-surface));
   margin-top: 10px;
-  padding-left: var(--nt-spine-pad);
-  border-left: 1px solid color-mix(in srgb, var(--fg) 13%, transparent);
+  padding: 2px var(--nt-pad) 5px;
+  border-radius: 10px;
+  background-color: var(--nt-card);
+  /* A hairline under the fill, because the fill alone is not reliable. Measured
+     lift of the card over the rail, all six themes: 0.064 dracula, 0.061
+     alucard, 0.060 github-light, 0.049 tokyo-night, 0.046 acme-dark — and
+     0.026 on acme, which is thin enough to read as a smudge rather than an
+     edge. The border costs nothing where the fill already works and carries
+     the card where it does not. */
+  border: 1px solid color-mix(in srgb, var(--fg) 7%, transparent);
 }
 
-/* The one you are in. Same stroke, different ink — no second shape, no notch. */
+/* The one you are in, and the ONLY place the accent appears at group level: a
+   ring around the card. Not a fill — a filled card competes with the selected
+   ROW inside it, which is the accent's real job here and the one thing that
+   must stay unambiguous. A ring states "this container" without spending the
+   colour that states "this row". */
 .navtree-group[data-active="true"] {
-  border-left-color: var(--accent);
+  box-shadow: 0 0 0 1.5px var(--accent);
 }
 
 .navtree-group + .navtree-group {
@@ -398,14 +440,18 @@
   position: sticky;
   top: 0;
   z-index: 2;
+  /* The CARD's surface, not a tint over the rail's. Inside a card the old
+     `--fg 6%` band was both the wrong colour and redundant — the card already
+     separates the group, so the header only has to be OPAQUE. */
   /* background-COLOR, never the shorthand: the shorthand resets every other
      background property, including the state tint a row can carry.
      StateChip.test pins that for exactly this reason. */
-  background-color: color-mix(in srgb, var(--fg) 6%, var(--nt-surface));
+  background-color: var(--nt-card);
+  border-radius: 8px 8px 0 0;
 }
 
 .navtree-group > .navtree-ws-row:hover {
-  background-color: color-mix(in srgb, var(--fg) 11%, var(--nt-surface));
+  background-color: color-mix(in srgb, var(--fg) 8%, var(--nt-card));
 }
 
 /* ─── THE ACTIVE WORKSPACE: AN EDGE, NOT A FILL ─────────────────────────────
@@ -430,7 +476,7 @@
 /* …and the hover tint still has to win over the resting band on the active
    header, which it would not if the only rule for it sat above this one. */
 .navtree-group > .navtree-ws-row[data-active="true"]:hover {
-  background-color: color-mix(in srgb, var(--fg) 11%, var(--nt-surface));
+  background-color: color-mix(in srgb, var(--fg) 8%, var(--nt-card));
 }
 
 /* ─── Workspace row (banded header) ──────────────────────────────────── */
