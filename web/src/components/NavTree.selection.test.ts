@@ -481,11 +481,18 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     expect(group).not.toMatch(/border-left/);
 
     const activeGroup = ruleBody(NAV_CSS, '.navtree-group[data-active="true"]');
-    // A hairline at HALF ink, not a solid rule. Once the inactive groups are
-    // drained of colour the active card is already the only bright thing in the
-    // rail, so a full-strength ring was the loudest mark on screen competing
-    // with the selected ROW for the same meaning.
-    expect(activeGroup).toMatch(/box-shadow:\s*0 0 0 1px color-mix\(.*--accent.*\)/);
+    // ELEVATION, and no accent at all. The marker has been an inset shadow, a
+    // border, a full ring and a half-ink ring; every one of them spent the
+    // accent, and the rail already spends it on the selected ROW and on status.
+    // A third claim on one colour is what kept making the container compete
+    // with the row inside it. Depth was the unused channel.
+    expect(activeGroup).toMatch(/box-shadow:/);
+    expect(activeGroup).not.toMatch(/--accent/);
+    // …and the lift is what carries it on a dark theme, where a black shadow
+    // barely shows. Inactive groups are flat ON the rail, so the active card's
+    // own surface IS the contrast — see the `:not([data-active])` rule.
+    const inactive = ruleBody(NAV_CSS, '.navtree-group:not([data-active="true"])');
+    expect(decl(inactive, '--nt-card')).toBe('transparent');
     // A RING, never a fill. A filled card competes with the selected ROW inside
     // it, and that row is what the accent is actually for.
     expect(activeGroup).not.toMatch(/background/);
