@@ -618,6 +618,40 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     // there by definition. `--nt-card` is gone with the card it named.
     expect(decl(band, 'background-color')).toContain('--nt-surface');
   });
+  it('the fillets are in ::after, because ::before is already somebody else’s', () => {
+    // THE BUG THIS EXISTS FOR, which was on screen and was reported as a pale
+    // notch beside the selected row. StateChip.css reserves `::before` on EVERY
+    // `.navtree-tab-row` as the 3px left state track, and pins it with
+    // `left: var(--nt-pad)`. The fillet rule then added `right` + `width` to
+    // the SAME pseudo — over-constrained in the inline direction, so the
+    // browser keeps `left` and discards `right`. The top fillet rendered on the
+    // row's LEFT edge; the corner it was supposed to round stayed square, while
+    // the bottom one (in `::after`, unclaimed) looked perfect. One corner right
+    // and one wrong is the signature, and it is invisible to any test that only
+    // reads the rule it wrote.
+    //
+    // So the invariant is ownership, not geometry: NavTree.css does not style
+    // `::before` on a tab row at all, and the fillet that replaced it declares
+    // `left: auto` so it can never be over-constrained again by a third party.
+    const nav = NAV_CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+    const beforeOwners = (nav.match(/[^{}]*\{[^}]*\}/g) ?? [])
+      .map((r) => r.slice(0, r.indexOf('{')).trim())
+      .filter((sel) => /\.navtree-tab-row(?!-)[^,{]*::before/.test(sel))
+      // The sub-chat trunk is drawn on the CHILD row's ::before and is the one
+      // sanctioned exception — it is a different row and a different axis.
+      .filter((sel) => !sel.includes('[data-child="true"]'));
+    expect(beforeOwners).toEqual([]);
+
+    const fillet = ruleBody(NAV_CSS, '.navtree-tab-row[data-active="true"]::after');
+    expect(decl(fillet, 'left')).toBe('auto');
+    expect(decl(fillet, 'right')).toContain('--nt-pad');
+    // Both corners, one box: the overhang reaches 18px past the row at each end
+    // and the two quarter-discs are background LAYERS pinned to its corners.
+    expect(decl(fillet, 'top')).toBe('-18px');
+    expect(decl(fillet, 'bottom')).toBe('-18px');
+    expect(decl(fillet, 'background-image').match(/radial-gradient/g)).toHaveLength(2);
+    expect(decl(fillet, 'background-image')).toContain('--bg-pane-face');
+  });
   it('the pin seam IS a line, and one that can actually be seen', () => {
     // Reversed deliberately. The old rule was "paints nothing at all", on the
     // reasoning that pinning is already told by POSITION and per-row by "the

@@ -1005,22 +1005,38 @@
    browser-tab shape, turned on its side.
    18px, not 11: a fillet is a square MINUS a quarter-disc, so only ~21% of its
    box is ink. At 11px that is a two-pixel crescent nobody can see. */
-.navtree-tab-row[data-active="true"]::before,
+/* BOTH fillets live in ::after, in ONE box, and that is a correctness
+   requirement rather than a tidy-up. ::before is already taken: StateChip.css
+   reserves it on EVERY row as the 3px left state track, and it sets
+   `left: var(--nt-pad)`. A second rule adding `right` and `width` to the same
+   pseudo is over-constrained in the inline direction, so the browser keeps
+   `left` and throws `right` away — the top fillet was rendering as an 18px
+   wedge on the row's LEFT edge, which is the pale notch visible above the
+   selected row, while the right-hand corner it was meant to round stayed
+   square. The bottom fillet in ::after was unaffected and did render, which is
+   why only one of the two corners ever looked right. Probed live: ::before
+   painted zero pixels anywhere near the join.
+
+   So: one box spanning the row plus 18px of overhang top and bottom, with the
+   two quarter-discs as background LAYERS pinned to its corners. The middle band
+   is deliberately unpainted — the row's own fill is already there. */
 .navtree-tab-row[data-active="true"]::after {
   content: "";
   position: absolute;
   right: calc(var(--nt-pad) * -1);
-  width: 18px;
-  height: 18px;
-  pointer-events: none;
-}
-.navtree-tab-row[data-active="true"]::before {
+  left: auto;
   top: -18px;
-  background: radial-gradient(circle at top left, transparent 18px, var(--bg-pane-face) 18px);
-}
-.navtree-tab-row[data-active="true"]::after {
   bottom: -18px;
-  background: radial-gradient(circle at bottom left, transparent 18px, var(--bg-pane-face) 18px);
+  width: 18px;
+  background-image:
+    radial-gradient(circle at 0% 0%, transparent 18px, var(--bg-pane-face) 18px),
+    radial-gradient(circle at 0% 100%, transparent 18px, var(--bg-pane-face) 18px);
+  background-size: 18px 18px;
+  background-position:
+    right top,
+    right bottom;
+  background-repeat: no-repeat;
+  pointer-events: none;
 }
 .navtree-tab-row[data-active="true"] .navtree-name-text {
   color: var(--fg);
