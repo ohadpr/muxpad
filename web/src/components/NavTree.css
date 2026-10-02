@@ -360,10 +360,24 @@
    Same ratio between the two states as the rail keeps — the active card is
    roughly three times the inactive one's separation. */
 .navtree[data-variant="sheet"] .navtree-group {
-  --nt-card: color-mix(in srgb, var(--fg) 7%, var(--nt-surface));
+  --nt-card: color-mix(in srgb, var(--fg) 14%, var(--nt-surface));
 }
 .navtree[data-variant="sheet"] .navtree-group:not([data-active="true"]) {
-  --nt-card: color-mix(in srgb, var(--fg) 2.5%, var(--nt-surface));
+  /* FLUSH with the panel, and the active card well clear of it.
+     7%/2.5% was arithmetically a difference — 0.036 of luminance, the same
+     separation the desktop rail ships — and still read as "exactly the same
+     colour" on a phone. The reason is what each card is compared AGAINST: on
+     the rail both cards sit on dark chrome and the eye compares them to each
+     other, while on the sheet the inactive card at 2.5% was within a hair of
+     the panel itself, so BOTH cards read as "panel" and the only real signal
+     was a shade nobody was looking for.
+
+     So the inactive card stops competing: it is the panel, with only its
+     hairline to say it is a card. The active one takes 14%, four times the
+     step it had. One card is a surface, the rest are outlines — which is the
+     same decision the rail makes with elevation, said in the only channel a
+     flat panel has. */
+  --nt-card: transparent;
 }
 
 .navtree[data-variant="sheet"] .navtree-scroll {
