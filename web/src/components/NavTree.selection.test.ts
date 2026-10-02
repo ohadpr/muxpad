@@ -135,6 +135,34 @@ const ratio = (a: string, b: string) => {
   const [x, y] = [lum(a), lum(b)];
   return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
 };
+/**
+ * Perceptual distance in OKLab (×100) — "do these two surfaces look different?"
+ *
+ * NOT the WCAG ratio above, and the distinction is load-bearing here. A contrast
+ * ratio is a LEGIBILITY metric: it answers "can text on this be read", it is
+ * built from luminance alone, and it is blind to hue. For two near-identical
+ * BACKGROUNDS that is the wrong question and gives the wrong answer — acme's
+ * rail is lilac #f0e9f6 and its content is cream #fdf6ea, which a luminance
+ * ratio calls nearly identical and an eye does not.
+ *
+ * Keep `ratio` for text on a ground. Use this for surface against surface.
+ */
+const oklab = (h: string): [number, number, number] => {
+  const [r = 0, g = 0, b = 0] = hex(h).map((v) => lin(v));
+  const l = Math.cbrt(0.4122 * r + 0.5363 * g + 0.0514 * b);
+  const m = Math.cbrt(0.2119 * r + 0.6807 * g + 0.1074 * b);
+  const q = Math.cbrt(0.0883 * r + 0.2817 * g + 0.63 * b);
+  return [
+    0.2105 * l + 0.7936 * m - 0.0041 * q,
+    1.978 * l - 2.4286 * m + 0.4506 * q,
+    0.0259 * l + 0.7828 * m - 0.8087 * q,
+  ];
+};
+const deltaE = (a: string, b: string) => {
+  const [A, B] = [oklab(a), oklab(b)];
+  return Math.hypot(A[0] - B[0], A[1] - B[1], A[2] - B[2]) * 100;
+};
+
 /** `color-mix(in srgb, top P%, transparent)` composited over `ground`. */
 const over = (top: string, ground: string, p: number) => {
   const [A, B] = [hex(top), hex(ground)];
@@ -200,6 +228,20 @@ function washPercent(expr: string): number {
   return p;
 }
 /** A row surface's contrast against the rail, whatever form it is written in. */
+/** The same resolution as `vsRail`, measured perceptually. See `deltaE`. */
+function dEvsRail(expr: string, t: Record<string, string>): number {
+  const rail = t['--bg-tabbar'] as string;
+  try {
+    const [token, p] = washOf(expr);
+    return deltaE(over(t[token] as string, rail, p), rail);
+  } catch {
+    const flat = deNt(expr)
+      .replace(/var\(|\)/g, '')
+      .trim();
+    return deltaE(t[flat] as string, rail);
+  }
+}
+
 function vsRail(expr: string, t: Record<string, string>): number {
   const rail = t['--bg-tabbar'] as string;
   try {
@@ -231,23 +273,46 @@ describe('the themes this file measures against', () => {
   });
 });
 
-describe('selection is a TINT of the accent, never a fill of it', () => {
-  it('the rail’s selected row washes the accent over its own surface', () => {
-    const bg = decl(ruleBody(NAV_CSS, RAIL_ACTIVE), 'background-color');
-    // The shipped defect, named: a bare `var(--accent)` is a solid block.
-    expect(bg).not.toBe('var(--accent)');
-    expect(washPercent(bg)).toBeGreaterThan(0);
-    expect(washPercent(bg)).toBeLessThanOrEqual(0.3);
+describe('selection is the CONTENT SURFACE, not a colour on the list', () => {
+  it('the selected row takes --bg, so it and the pane beside it are one shape', () => {
+    // This was a 20% accent wash. It is now the content surface itself: the row
+    // runs into the pane with no right-hand radius and no gap, which is what
+    // makes it read as a tab the panel hangs from rather than a highlight.
+    //
+    // THE TOKEN, NEVER A LITERAL. The content surface is #f5f4fb on alucard,
+    // #fdf6ea on acme, #1a1b26 on tokyo-night, #221547 on acme-dark — only
+    // github-light is actually white, so a hardcoded colour would be correct on
+    // one theme in six. Reading the token also means the row and the pane cannot
+    // drift, because they resolve the same value.
+    const body = ruleBody(NAV_CSS, RAIL_ACTIVE);
+    expect(decl(body, 'background-color')).toBe('var(--bg)');
+    expect(decl(body, 'border-radius')).toMatch(/0 0/);
   });
 
-  it('BOTH surfaces select with the same value — one grammar, one number', () => {
-    // The two had drifted apart: the sheet was rebuilt as a wash and the rail
-    // was left as a slab, so "where I am" was drawn two different ways in one
-    // component. Asserting the EXPRESSIONS match is what stops a future tweak
-    // to one surface from quietly re-forking them.
-    expect(decl(ruleBody(NAV_CSS, SHEET_ACTIVE), 'background-color')).toBe(
-      decl(ruleBody(NAV_CSS, RAIL_ACTIVE), 'background-color'),
-    );
+  it('frees the accent entirely — selection spends none of it', () => {
+    // The point of the change, and the thing most likely to be undone by
+    // somebody "restoring" the highlight. With selection on the content surface
+    // the accent is left to mean one thing only: a row that wants you.
+    const body = ruleBody(NAV_CSS, RAIL_ACTIVE);
+    expect(body).not.toMatch(/--accent/);
+  });
+
+  it('the SHEET keeps the accent wash, because it has no pane to join', () => {
+    // These were deliberately identical for a long time — the sheet had been
+    // rebuilt as a wash while the rail was still a slab, so "where I am" was
+    // drawn two ways in one component, and pinning them equal stopped that
+    // recurring.
+    //
+    // They now differ, and the reason is structural rather than cosmetic. The
+    // rail sits BESIDE its content, so its selected row can BE the edge of that
+    // content. The sheet floats OVER the content as a dropdown — there is no
+    // pane beside it to join, and a row painted `--bg` there would be a pale
+    // band meaning nothing.
+    //
+    // Pinned as a divergence rather than deleted, so the next reader finds a
+    // decision instead of an inconsistency.
+    expect(decl(ruleBody(NAV_CSS, RAIL_ACTIVE), 'background-color')).toBe('var(--bg)');
+    expect(decl(ruleBody(NAV_CSS, SHEET_ACTIVE), 'background-color')).toBe('var(--nt-sel)');
   });
 
   it('never inverts the row’s ink: no --accent-fg on a selected CHAT row', () => {
@@ -387,32 +452,30 @@ describe('what the quiet selection HANDS BACK to the row', () => {
   });
 });
 
-describe('the ARITHMETIC — six themes, and the defect the wash introduces', () => {
-  const wash = () => washPercent(decl(ruleBody(NAV_CSS, RAIL_ACTIVE), 'background-color'));
-
-  it('the name on the wash clears AA on every theme', () => {
+describe('the ARITHMETIC — six themes, and the defect the TAB introduces', () => {
+  it('the name on the tab clears AA on every theme — trivially, and that is the point', () => {
+    // The selected row is the CONTENT surface, so its text sits on exactly the
+    // pairing the whole app reads on. It cannot be less legible than the chat
+    // beside it without the chat being illegible too. Measured anyway, because
+    // "obviously fine" is how the wash got shipped at 1.04:1 on dracula.
     for (const [name, t] of Object.entries(THEMES)) {
-      const ground = over(t['--accent'] as string, t['--bg-tabbar'] as string, wash());
-      const cr = ratio(t['--fg'] as string, ground);
-      expect({ name, ok: cr >= 4.5, cr: Number(cr.toFixed(2)) }).toEqual({
-        name,
-        ok: true,
-        cr: Number(cr.toFixed(2)),
-      });
+      const cr = ratio(t['--fg'] as string, t['--bg'] as string);
+      expect({ name, ok: cr >= 4.5 }).toEqual({ name, ok: true });
     }
   });
 
-  it('SELECTION OUT-RANKS HOVER on every theme — the one the naive fix fails', () => {
-    // THE point of this file. A 20% wash is 1.33 on the tokyo-night rail and
-    // 1.39 on dracula's; `--bg-hover` is 1.50 and 2.09 on the same two. Quieting
-    // selection without also deriving the row's hover makes a hovered
-    // UNSELECTED row louder than the selected one, on the two darkest themes,
-    // and nothing else in the suite can see it.
-    // BOTH rows that take --nt-sel are ranked, not just the chat row. Hosted was
-    // converted to the wash and its hover was left on --bg-hover, so the rung
-    // scale held on one row and not the other and this test could not see it —
-    // 2.09:1 on the dracula rail under a selected row's 1.39. A row is only
-    // converted when its hover comes with it.
+  it('SELECTION OUT-RANKS HOVER on every theme — and the tab nearly lost it', () => {
+    // THE point of this file, and it caught a real regression in the tab.
+    // Selection used to be an accent wash, which is far from any rail. The
+    // content surface is NOT: on a theme whose rail and content sit close
+    // together the selected row barely moves, and an idle row under the cursor
+    // can out-shout the row you are actually on.
+    //
+    // acme is that theme — rail #f0e9f6 lilac against content #fdf6ea cream,
+    // which differ in hue more than in light. Perceptual distance from the rail
+    // (OKLab ΔE ×100): tab 4.61, hover at 8% 5.41, at 7% 4.73, at 6% 4.05. So
+    // --nt-hover came down to 6%, which is the LARGEST value that holds this
+    // invariant on all six. Raising it again breaks acme first.
     const pairs: [row: string, hover: string, selected: string][] = [
       ['chat row', '.navtree-tab-row:hover', RAIL_ACTIVE],
       ['Hosted', '.navtree-foot-link:hover', '.navtree-foot-link[data-active="true"]'],
@@ -421,38 +484,22 @@ describe('the ARITHMETIC — six themes, and the defect the wash introduces', ()
       const hover = fill(ruleBody(NAV_CSS, hoverSel));
       const selected = fill(ruleBody(NAV_CSS, activeSel));
       for (const [name, t] of Object.entries(THEMES)) {
-        const sel = vsRail(selected, t);
-        const hov = vsRail(hover, t);
-        expect({ row, name, ok: sel > hov, sel: +sel.toFixed(2), hov: +hov.toFixed(2) }).toEqual({
-          row,
-          name,
-          ok: true,
-          sel: +sel.toFixed(2),
-          hov: +hov.toFixed(2),
-        });
+        const sel = dEvsRail(selected, t);
+        const hov = dEvsRail(hover, t);
+        expect({ row, name, ok: sel > hov }).toEqual({ row, name, ok: true });
       }
     }
   });
 
-  it('…and the theme token it replaced would have FAILED that, on two themes', () => {
-    // Guards the guard, and records the measurement. Swapping --bg-hover back in
-    // is the obvious "simplification" of the rung scale, so this pins what it
-    // would cost: dracula 2.09 and tokyo-night 1.50 against a wash of 1.39 and
-    // 1.33. If this test ever stops finding failures, the token has changed and
-    // the derived hover may genuinely no longer be needed — which is a result
-    // worth being told about, not a test to delete.
-    const selected = decl(ruleBody(NAV_CSS, RAIL_ACTIVE), 'background-color');
-    const failed = Object.entries(THEMES)
-      .filter(([, t]) => vsRail(selected, t) <= vsRail('var(--bg-hover)', t))
-      .map(([name]) => name);
-    expect(failed.sort()).toEqual(['acme-dark', 'dracula', 'tokyo-night']);
-  });
-
-  it('…and hovering the row you are ALREADY on is still visible', () => {
-    // It must be a step of the block's own fill, not a second colour — the row
-    // you are on has almost nothing to say on hover, so it says it quietly.
-    const hov = washPercent(decl(ruleBody(NAV_CSS, `${RAIL_ACTIVE}:hover`), 'background-color'));
-    expect(hov).toBeGreaterThan(wash());
+  it('the tab does NOT move on hover, and that is deliberate', () => {
+    // Inverted from what this asserted under the wash. The selected row is not a
+    // control you are considering — it is where you already are, and it is
+    // joined to the pane. Tinting it on hover would break the join for no
+    // information: every other row answers "could I go here", and this one
+    // cannot.
+    const hoverBg = decl(ruleBody(NAV_CSS, `${RAIL_ACTIVE}:hover`), 'background-color');
+    const restBg = decl(ruleBody(NAV_CSS, RAIL_ACTIVE), 'background-color');
+    expect(hoverBg).toBe(restBg);
   });
 });
 
@@ -474,36 +521,19 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     // "they all converge too much", because a stroke is texture and a workspace
     // needed to be an object. The group is a card now, and the active one takes
     // a RING around that card.
+    // THE CARD IS GONE, and with it the question it kept failing to answer.
+    // "How does a workspace say you are here" was answered four times — an inset
+    // shadow, a border, a full ring, then elevation — and every answer was at
+    // the wrong level. A card groups the rows you can SEE beside it; once a
+    // workspace runs eleven rows its own container has scrolled off with them,
+    // which is why five independent redesigns all deleted it first.
+    //
+    // The sticky BAND is the grouping now — the one device that survives a
+    // scroll — and the group itself is a plain run with no surface at all.
     const group = ruleBody(NAV_CSS, '.navtree-group');
-    expect(group).toMatch(/background-color:\s*var\(--nt-card\)/);
-    expect(group).toMatch(/border-radius/);
-    // The spine is gone with it: a card has four edges, not one.
+    expect(group).not.toMatch(/background/);
+    expect(group).not.toMatch(/box-shadow/);
     expect(group).not.toMatch(/border-left/);
-
-    const activeGroup = ruleBody(NAV_CSS, '.navtree-group[data-active="true"]');
-    // ELEVATION, and no accent at all. The marker has been an inset shadow, a
-    // border, a full ring and a half-ink ring; every one of them spent the
-    // accent, and the rail already spends it on the selected ROW and on status.
-    // A third claim on one colour is what kept making the container compete
-    // with the row inside it. Depth was the unused channel.
-    expect(activeGroup).toMatch(/box-shadow:/);
-    expect(activeGroup).not.toMatch(/--accent/);
-    // …and the lift is what carries it on a dark theme, where a black shadow
-    // barely shows. EVERY group is a card — flattening the inactive ones to the
-    // rail left the card doing no work for two workspaces out of three, and put
-    // "groups must not run together" back on margin alone. They differ by LIFT:
-    // 22% of the mix against the active card's 60%, which is what keeps
-    // elevation (not colour, and not the presence of a surface) as the one
-    // thing saying "you are here".
-    const inactive = ruleBody(NAV_CSS, '.navtree-group:not([data-active="true"])');
-    expect(decl(inactive, '--nt-card')).toMatch(/color-mix/);
-    expect(decl(inactive, '--nt-card')).not.toBe(
-      decl(ruleBody(NAV_CSS, '.navtree-group'), '--nt-card'),
-    );
-    expect(decl(inactive, 'border-color')).not.toBe('transparent');
-    // A RING, never a fill. A filled card competes with the selected ROW inside
-    // it, and that row is what the accent is actually for.
-    expect(activeGroup).not.toMatch(/background/);
 
     const active = ruleBody(NAV_CSS, '.navtree-group > .navtree-ws-row[data-active="true"]:hover');
     // No fill of its own — that is the whole point. (The only rule the active
@@ -539,18 +569,13 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     // two-surfaces-deriving-one-value bug this file has caught before — a
     // header a shade off its own card is a seam the width of the header.
     const band = ruleBody(NAV_CSS, '.navtree-group > .navtree-ws-row');
-    expect(decl(band, 'background-color')).toBe('var(--nt-card)');
+    expect(decl(band, 'background-color')).toMatch(/color-mix\(in srgb, var\(--fg\)/);
     expect(decl(band, 'position')).toBe('sticky');
-    // …and `--nt-card` is itself mixed into `--nt-surface`, which each variant
-    // points at the thing actually behind it — the rail hangs on `--bg-tabbar`,
-    // the mobile panel on `--bg-chrome`. One of them for both left the sheet's
-    // header a shade off its own panel.
-    const group = ruleBody(NAV_CSS, '.navtree-group');
-    expect(decl(group, '--nt-card')).toMatch(/--nt-surface/);
-    // Lifted toward `--bg`, NOT `--bg-elev`: that token is "another surface",
-    // not "a raised one" — lighter than `--bg` on tokyo-night, darker on
-    // dracula, so a card built on it is raised on one theme and sunk on another.
-    expect(decl(group, '--nt-card')).toMatch(/var\(--bg\)/);
+    // Mixed from --fg, not from a surface token: the band has to be visible on a
+    // near-black rail and a cream one, and the foreground is the only value
+    // guaranteed to have range over both — the rail's text has to be readable
+    // there by definition. `--nt-card` is gone with the card it named.
+    expect(decl(band, 'background-color')).toContain('--nt-surface');
   });
   it('the pin seam IS a line, and one that can actually be seen', () => {
     // Reversed deliberately. The old rule was "paints nothing at all", on the

@@ -119,7 +119,21 @@
 
      --fg and --accent, never a literal: six themes, and the mix is what makes
      one declaration land correctly on a warm cream rail and a near-black one. */
-  --nt-hover: color-mix(in srgb, var(--fg) 8%, transparent);
+  /* 6%, NOT 8%, and the ceiling is measured rather than chosen. Selection is no
+     longer an accent wash — it is the content surface — so on a theme whose rail
+     and content sit close together the selected row moves LESS than it used to,
+     and hover can out-shout it. acme is that theme: rail #f0e9f6 lilac against
+     content #fdf6ea cream, which differ in hue more than in light.
+
+     Perceptual distance from the rail (OKLab ΔE ×100), acme:
+       selected tab   4.61
+       hover at 8%    5.41   ← hovering an idle row beat the row you are on
+       hover at 7%    4.73   ← still beats it
+       hover at 6%    4.05   ✓
+     Every other theme wins by a mile at any of these; acme sets the ceiling, so
+     6 is the largest value that holds the invariant everywhere. Hover is still
+     plainly visible — the quietest it gets is ΔE 3.39, on github-light. */
+  --nt-hover: color-mix(in srgb, var(--fg) 6%, transparent);
   --nt-sel: color-mix(in srgb, var(--accent) 20%, transparent);
   --nt-sel-hover: color-mix(in srgb, var(--accent) 26%, transparent);
 
@@ -301,6 +315,11 @@
 /* Rows sit inside a horizontal inset so selection/hover render as
    rounded pills that float off the rail's edges (Slack-style), rather
    than full-bleed bands. */
+.navtree-scroll::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
 .navtree-scroll {
   flex: 1;
   min-height: 0;
@@ -314,7 +333,17 @@
      scrollbar here is an overlay. With the workspace controls also pulled out
      (see .navtree-ws-row), the reported "unnecessarily large space" to the
      right of + and × is gone and every row is ~20px wider. */
-  padding: 0 2px 12px 4px;
+  padding: 0 0 12px 4px;
+  /* NO SCROLLBAR GUTTER, and this is now load-bearing rather than tidy. A
+     classic scrollbar is laid out at the scroller's right edge — measured here,
+     15px of it — which is exactly where the selected row has to meet the pane.
+     It cut the join in half.
+
+     The comment this replaces asserted "the scrollbar here is an overlay". It
+     was not: `offsetWidth - clientWidth` measured 15 on this machine, so the
+     claim had been wrong for as long as it had been written down. Hiding it
+     makes the statement true instead of hopeful. */
+  scrollbar-width: none;
 }
 /* Desktop has no section header (dropped as redundant under the brand),
    so the list sits directly below the brand hairline — give it a little
@@ -338,47 +367,10 @@
   --nt-surface: var(--bg-chrome);
 }
 
-/* ─── THE SHEET'S CARD IS MIXED THE OTHER WAY ───────────────────────────────
-   Reported as no visible difference between the focused workspace and the rest
-   on mobile, and the measurement agrees: mixing toward `--bg` lifts the card
-   0.027–0.064 over the RAIL but only 0.011–0.023 over the SHEET, about a third.
-
-   The reason is in the tokens, not the recipe. The rail hangs on `--bg-tabbar`,
-   which every theme pushes well away from `--bg` so that chrome reads as
-   chrome. The sheet hangs on `--bg-chrome`, which sits close to `--bg` by
-   design — so "mix 60% toward --bg" has almost nowhere to travel. Raising the
-   ratio cannot fix it either: even at 100% the sheet card would only BE `--bg`,
-   which is still short of the rail's separation.
-
-   So the sheet mixes toward `--fg` instead, which is guaranteed to have range
-   on every theme — the foreground has to contrast with the background or the
-   text would be unreadable. The direction flips (the card is a shade DARKER
-   than the panel on a light theme rather than lighter), and that is the right
-   trade: what the eye needs here is "this one is different", and a panel
-   floating over dimmed content reads a recessed card perfectly well.
-
-   Same ratio between the two states as the rail keeps — the active card is
-   roughly three times the inactive one's separation. */
-.navtree[data-variant="sheet"] .navtree-group {
-  --nt-card: color-mix(in srgb, var(--fg) 14%, var(--nt-surface));
-}
-.navtree[data-variant="sheet"] .navtree-group:not([data-active="true"]) {
-  /* FLUSH with the panel, and the active card well clear of it.
-     7%/2.5% was arithmetically a difference — 0.036 of luminance, the same
-     separation the desktop rail ships — and still read as "exactly the same
-     colour" on a phone. The reason is what each card is compared AGAINST: on
-     the rail both cards sit on dark chrome and the eye compares them to each
-     other, while on the sheet the inactive card at 2.5% was within a hair of
-     the panel itself, so BOTH cards read as "panel" and the only real signal
-     was a shade nobody was looking for.
-
-     So the inactive card stops competing: it is the panel, with only its
-     hairline to say it is a card. The active one takes 14%, four times the
-     step it had. One card is a surface, the rest are outlines — which is the
-     same decision the rail makes with elevation, said in the only channel a
-     flat panel has. */
-  --nt-card: transparent;
-}
+/* The sheet needs no card rule of its own any more: the sticky band is the
+   grouping on both surfaces, and it is mixed from --fg, which has range over
+   any background. The old pair of --nt-card declarations here existed only to
+   give the sheet a card contrast that `--bg` could not reach. */
 
 .navtree[data-variant="sheet"] .navtree-scroll {
   padding: 0 0 14px;
@@ -417,137 +409,41 @@
    one step inside it. The active workspace colours that line instead of
    carrying a separate marker: the edge and the spine were always trying to be
    the same stroke. */
-/* ─── A WORKSPACE IS A CARD ──────────────────────────────────────────────────
-   Reported as "they all converge too much", and the measurement agreed: the
-   three things separating one workspace from the next were a 6% header tint, a
-   13% spine and 10px of margin — all the SAME SIGNAL STRENGTH. That is texture,
-   not boundary. Nothing in it said "this group is a container", so three
-   workspaces read as one long list with some bold words in it.
+/* ─── THE GROUP IS A RUN; ITS HEADER IS WHAT HOLDS IT TOGETHER ──────────────
+   The card is gone. It was introduced to stop workspaces converging and it did
+   — but five independent redesigns all deleted it first, and the reason holds:
+   a card groups the rows you can SEE beside it, and once a workspace runs
+   eleven rows its own container has scrolled away with everything else. The
+   only device that survives a scroll is a header that does not leave.
 
-   The fix is a change of kind, not of degree. A group now has its own SURFACE:
-   lifted off the rail, rounded, with real air around it. A workspace stops
-   being a region of one list and becomes an object, and objects cannot
-   converge — there is nothing to tune, because the separation is structural.
-
-   The spine is gone with it. It was doing the container's job badly, and a card
-   has edges on all four sides rather than one.
-
-   ── WHY THE SURFACE IS MIXED FROM `--bg` ─────────────────────────────────────
-   Not from `--bg-elev`, which sounds exactly right and is not: it is "another
-   surface", not "a lifted one". On tokyo-night it is LIGHTER than `--bg`
-   (#1f2335 over #1a1b26) and on dracula it is DARKER (#21222c under #282a36),
-   so a card built on it is raised on one theme and sunk on another.
-
-   `--bg` is the content surface and is distinguishable from `--bg-tabbar` (the
-   rail) on every theme by construction — that contrast is what makes the rail
-   read as chrome in the first place. Mixing toward it is therefore reliably
-   "lifted", on all six, without a single literal colour. */
+   So the grouping moves entirely into the sticky band below, which was already
+   sticky and already doing most of this work — it merely looked like the lid of
+   a card rather than the thing holding a list together. */
 .navtree-group {
-  /* ONE token, two readers — the card and its sticky header. They have to be
-     the same colour or rows scroll through a header that nearly matches; this
-     is the two-surfaces-deriving-one-value bug that keeps turning up here, so
-     the value is declared once and read twice rather than written twice. */
-  --nt-card: color-mix(in srgb, var(--bg) 60%, var(--nt-surface));
   margin-top: 10px;
-  padding: 2px var(--nt-pad) 5px;
-  border-radius: 10px;
-  background-color: var(--nt-card);
-  /* A hairline under the fill, because the fill alone is not reliable. Measured
-     lift of the card over the rail, all six themes: 0.064 dracula, 0.061
-     alucard, 0.060 github-light, 0.049 tokyo-night, 0.046 acme-dark — and
-     0.026 on acme, which is thin enough to read as a smudge rather than an
-     edge. The border costs nothing where the fill already works and carries
-     the card where it does not. */
-  border: 1px solid color-mix(in srgb, var(--fg) 7%, transparent);
+  padding: 0 var(--nt-pad) 5px;
 }
 
-/* ─── THE WORKSPACE YOU ARE NOT IN COSTS LESS INK ───────────────────────────
-   Reported as "a bit noisy". It was: an inactive workspace was rendered at
-   exactly the same strength as the active one — same weight, same row height,
-   and above all the same full-colour emoji.
+/* ─── EVERY ICON IS DESATURATED, NOT ONLY THE ONES YOU ARE NOT IN ───────────
+   62 distinct emoji are in use on this install and, measured, only four sit on
+   a status hue — so they were never really colliding with the green and amber
+   marks. The cost is subtler: 62 uncontrolled colours spending the loudest
+   channel in the rail on IDENTITY, which never changes, while status, which
+   does, gets a 7px dot.
 
-   The EMOJI are the thing. They are the loudest objects in the rail by a
-   distance: saturated, full-size, and carrying no information at all about
-   whether you are in that workspace. Draining them is the one move that
-   removes most of the noise while leaving every NAME at full legibility —
-   which a blanket `opacity` on the card does not, because it dims the text you
-   might still want to read in order to dim the icon you do not.
+   DESATURATED, NOT GREYSCALED, and the difference is what decided it: much of
+   this set is flat document shapes — clipboard, chart, receipt, scroll — that
+   at 19px are near-identical in outline. Colour is most of what tells them
+   apart, so draining it completely costs the icon the job it was there for.
+   Pulling the chroma down keeps recognition and stops the shouting.
 
-   The name takes one quiet step down with it. Not more: these rows are still
-   navigation targets, and a workspace you are not in is not a workspace you
-   have stopped caring about. */
-/* …and the SURFACE recedes with them. Draining the icons was not enough: all
-   three cards still sat at the same lift, so each one went on advertising
-   itself as a container of equal importance — reported as "the workspaces you
-   are not on have the same bg color, they take too much attention".
-
-   Lift is the thing that says "this is a surface you are working on", so an
-   inactive card keeps the SHAPE and gives up most of the lift. It stays a card
-   — the hairline still closes it — but it stops being a raised one, and the
-   active workspace becomes the only genuinely raised surface in the rail.
-
-   Overriding the TOKEN rather than the background does both the card and its
-   sticky header in one move, because they already read the same value. That is
-   the payoff for declaring it once: a change of mind lands in one place and
-   cannot leave a header a shade off its own card. */
-.navtree-group:not([data-active="true"]) {
-  /* STILL A CARD, just a quieter one. Flattening these to the rail went too
-     far: it left the card doing no work at all for two workspaces out of
-     three, and the thing a card was introduced to prevent — groups running
-     together into one list — was back to being held up by margin alone.
-
-     So the shape stays and only the LIFT steps down: 22% of the active card's
-     mix against its 60%. Measured over the rail, roughly 0.022 against 0.061.
-     Enough that each group is visibly its own container; far enough below the
-     active card that the ranking is never in question.
-
-     Which leaves elevation — not colour, and not the presence of a surface —
-     as the single thing that says "you are here". See the active rule. */
-  --nt-card: color-mix(in srgb, var(--bg) 22%, var(--nt-surface));
-  border-color: color-mix(in srgb, var(--fg) 5%, transparent);
+   The row you are ON keeps its full colour wherever it lives: it is the one row
+   in the rail that is not background. */
+.navtree-tab-row .chatchip {
+  filter: saturate(0.45) contrast(0.95);
 }
-
-.navtree-group:not([data-active="true"]) .navtree-tab-row .chatchip {
-  filter: grayscale(1);
-  opacity: 0.4;
-}
-.navtree-group:not([data-active="true"]) .navtree-tab-row .navtree-name-text {
-  color: var(--fg-dim);
-}
-/* …except the row you are ON, wherever it lives. A chat open in a collapsed or
-   unfocused workspace is the one row in that group that is NOT background, and
-   draining it would hide the thing the rail exists to point at. */
-.navtree-group:not([data-active="true"]) .navtree-tab-row[data-active="true"] .chatchip {
+.navtree-tab-row[data-active="true"] .chatchip {
   filter: none;
-  opacity: 1;
-}
-
-/* The one you are in. A ring around the card — not a fill, because a filled
-   card competes with the selected ROW inside it, which is the accent's real
-   job and the one thing that must stay unambiguous.
-
-   SOFTENED from a solid 1.5px accent once the dimming above landed. The two
-   signals are redundant by design — every other card is visibly drained, so
-   the active card is already the only bright thing in the rail — and at full
-   strength the ring was then the loudest mark on screen, competing with the
-   selected row for the same meaning. A hairline at half ink still closes the
-   shape without shouting; it reads as the edge of the card you are in rather
-   than as a highlight on it. */
-/* ELEVATION, NOT COLOUR. The ring is gone, and the reason is palette budget:
-   the rail already spends the accent on the selected ROW and green/amber on
-   status, so an accent outline round the card was a third claim on the same
-   colour — which is exactly how it ended up competing with the row it
-   surrounded. Depth is an unused channel here, and "the one with a shadow" is
-   read before any of the text.
-
-   The lift does the work on every theme; the shadow is the part that only
-   really shows on a light one, which is fine — it is polish on top of a signal
-   that already carries. See the inactive rule below: with those flattened to
-   the rail, the active card's lift IS the contrast, and that is theme-proof in
-   a way a black shadow is not. */
-.navtree-group[data-active="true"] {
-  box-shadow: 0 2px 5px rgb(0 0 0 / 11%), 0 8px 18px rgb(0 0 0 / 8%);
-  border-color: color-mix(in srgb, var(--fg) 10%, transparent);
 }
 
 .navtree-group + .navtree-group {
@@ -572,18 +468,19 @@
   position: sticky;
   top: 0;
   z-index: 2;
-  /* The CARD's surface, not a tint over the rail's. Inside a card the old
-     `--fg 6%` band was both the wrong colour and redundant — the card already
-     separates the group, so the header only has to be OPAQUE. */
-  /* background-COLOR, never the shorthand: the shorthand resets every other
+  /* THE BAND IS THE GROUPING. Mixed from --fg so it cannot go invisible on any
+     theme — the rail's text has to be readable there by definition — and solid,
+     because a sticky header has to hide what scrolls under it.
+
+     background-COLOR, never the shorthand: the shorthand resets every other
      background property, including the state tint a row can carry.
      StateChip.test pins that for exactly this reason. */
-  background-color: var(--nt-card);
-  border-radius: 8px 8px 0 0;
+  background-color: color-mix(in srgb, var(--fg) 7%, var(--nt-surface));
+  border-radius: 7px;
 }
 
 .navtree-group > .navtree-ws-row:hover {
-  background-color: color-mix(in srgb, var(--fg) 8%, var(--nt-card));
+  background-color: color-mix(in srgb, var(--fg) 11%, var(--nt-surface));
 }
 
 /* ─── THE ACTIVE WORKSPACE: AN EDGE, NOT A FILL ─────────────────────────────
@@ -608,7 +505,7 @@
 /* …and the hover tint still has to win over the resting band on the active
    header, which it would not if the only rule for it sat above this one. */
 .navtree-group > .navtree-ws-row[data-active="true"]:hover {
-  background-color: color-mix(in srgb, var(--fg) 8%, var(--nt-card));
+  background-color: color-mix(in srgb, var(--fg) 11%, var(--nt-surface));
 }
 
 /* ─── Workspace row (banded header) ──────────────────────────────────── */
@@ -1051,8 +948,53 @@
    Still no left-rail — it floated disconnected in the indent, and that is
    unchanged. Weight is 640, which sits clearly under the unread 700, so "you
    are here" and "unread" stay separable without a second colour. */
+/* ─── THE SELECTED ROW IS THE PANEL, NOT A HIGHLIGHT ON THE LIST ────────────
+   It takes the CONTENT surface and runs into it: no right-hand radius, no gap,
+   so the row and the pane beside it are one shape. The accent is freed
+   completely — it now means "needs you" and nothing else.
+
+   `--bg` AND NEVER A LITERAL. The content surface is #f5f4fb on alucard,
+   #fdf6ea on acme, #1a1b26 on tokyo-night and #221547 on acme-dark; only
+   github-light is actually white. A hardcoded colour would be right on one
+   theme in six, and reading the token also means the row and the pane cannot
+   drift apart, because they resolve the same value.
+
+   KNOWN LIMIT, stated rather than discovered later: this assumes the thing to
+   the right IS the content surface. True for a chat, which is the common case.
+   A terminal pane paints its own black and a web pane paints somebody's site —
+   there the tab joins a colour it does not match. The fix when that matters is
+   to read the ACTIVE PANE's background rather than the theme's. */
 .navtree-tab-row[data-active="true"] {
-  background-color: var(--nt-sel);
+  background-color: var(--bg);
+  border-radius: var(--nt-pill) 0 0 var(--nt-pill);
+  /* Out past the GROUP's own right padding, so the row genuinely touches the
+     pane instead of stopping a hair short of it. Measured: without this the tab
+     ended at 277 against a rail edge of 279, and two pixels of rail showing
+     through is enough to read as a seam rather than a join. */
+  margin-right: calc(var(--nt-pad) * -1);
+  padding-right: calc(var(--nt-air) + var(--nt-pad));
+}
+/* The funnel. Two concave fillets above and below the tab's right end, so the
+   pane's surface flares INTO the row instead of meeting it at a corner — the
+   browser-tab shape, turned on its side.
+   18px, not 11: a fillet is a square MINUS a quarter-disc, so only ~21% of its
+   box is ink. At 11px that is a two-pixel crescent nobody can see. */
+.navtree-tab-row[data-active="true"]::before,
+.navtree-tab-row[data-active="true"]::after {
+  content: "";
+  position: absolute;
+  right: calc(var(--nt-pad) * -1);
+  width: 18px;
+  height: 18px;
+  pointer-events: none;
+}
+.navtree-tab-row[data-active="true"]::before {
+  top: -18px;
+  background: radial-gradient(circle at top left, transparent 18px, var(--bg) 18px);
+}
+.navtree-tab-row[data-active="true"]::after {
+  bottom: -18px;
+  background: radial-gradient(circle at bottom left, transparent 18px, var(--bg) 18px);
 }
 .navtree-tab-row[data-active="true"] .navtree-name-text {
   color: var(--fg);
@@ -1060,8 +1002,10 @@
 }
 /* Hover on the row you are already on has almost nothing to say, so it says it
    quietly: one step of the block's own fill, never a second colour. */
+/* The tab does not change on hover. It is not a control you are considering —
+   it is where you already are, and tinting it would break the join. */
 .navtree-tab-row[data-active="true"]:hover {
-  background-color: var(--nt-sel-hover);
+  background-color: var(--bg);
 }
 /* ─── THE THIRTY RE-INKS ARE GONE, not re-tuned ───────────────────────────
    Recorded because the deletions are the change, and a future pass must not
@@ -2353,7 +2297,14 @@
      mobile strip), not --bg-chrome: the latter is only a hair off --bg, so
      the rail's empty space + footer blurred into the pane content behind it. */
   background: var(--bg-tabbar);
-  border-right: 1px solid var(--border);
+  /* NO RIGHT HAIRLINE. It was the seam between rail and pane, and the selected
+     row is now the place where those two are deliberately ONE surface — a 1px
+     border runs straight through the join, which is the only part of it that
+     matters. Measured before removing: the tab reached x=279 and the border
+     painted the rail's own colour at exactly 279, so the funnel ended in a
+     one-pixel stripe of the thing it was supposed to be escaping.
+     Nothing is lost: --bg-tabbar against --bg already separates the two, which
+     is the whole reason the rail uses the darker chrome token (above). */
 }
 
 /* ─── Drag-to-resize grip ────────────────────────────────────────────────
