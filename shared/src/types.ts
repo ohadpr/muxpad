@@ -764,6 +764,18 @@ export const AgentTurnEventSchema = z.object({
   backend: z.string(),
   /** Present only when this start relays this durable queue row. */
   queue_id: z.string().optional(),
+  /**
+   * Did the turn SUCCEED? Present on `done` only, and optional for wire compat
+   * with an older server that never sent it.
+   *
+   * `phase` alone cannot answer this and deliberately does not try: `done`
+   * means the turn ENDED, which is the thing a waiter waits for, and an errored
+   * turn is still a finished wait. But "it ended" and "it worked" are different
+   * questions, and the cron scheduler needs the second one — without it, a fire
+   * whose turn died of a spent quota is recorded as a success and the failure
+   * streak resets. See usage-limit.ts.
+   */
+  ok: z.boolean().optional(),
 });
 
 export const MuxpadEventSchema = z.discriminatedUnion('type', [

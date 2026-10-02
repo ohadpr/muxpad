@@ -1,3 +1,4 @@
+import { parseCronMarker } from '@muxpad/shared';
 // Policy tests for the cron tick. Everything here runs against a real
 // in-memory SQLite (the schema IS the design) with a FAKE injection primitive,
 // a fake ptyd and a driven clock — no sleeping, no daemon, no ~/.muxpad.
@@ -21,7 +22,6 @@ import {
   CronScheduler,
   type CronSchedulerDeps,
 } from './CronScheduler.js';
-import { parseCronMarker } from '@muxpad/shared';
 import { CRON_RUNS_KEEP } from './CronStore.js';
 
 const HOURLY = '0 * * * *';
@@ -735,5 +735,154 @@ describe('CronScheduler', () => {
     await s.tick();
     expect(sent).toHaveLength(1);
     expect(s.store.runs(a.id)).toHaveLength(1);
+  });
+});
+
+describe('a fire whose TURN fails is not a fire that worked', () => {
+  // The bug this closes, end to end. A cron's verdict came from `submitSend` —
+  // `sent` / `queued` — which answers "did the message reach the pane", not
+  // "did the work happen". Those come apart precisely where it hurts most: the
+  // agent is out of quota, says so in one line of prose, and ends the turn
+  // cleanly (agent-runner/usage-limit.ts). Delivery succeeded, so the run was
+  // green, so the failure streak reset, so nothing ever surfaced — for
+  // unattended work, which is the only kind a cron does.
+  let db: Database.Database;
+  let cache: PtydCache;
+  let events: EventBus;
+  let wsId: string;
+  let paneId: string;
+  let now: number;
+
+  const makePane = () => {
+    const tabs = new TabStore(db);
+    const panes = new PaneStore(db);
+    const tab = tabs.create({ name: 'agent', layout: '', workspace_id: wsId });
+    const pane = panes.create({
+      tab_id: tab.id,
+      shell: '/bin/zsh',
+      cwd: '/tmp',
+      startup_cmd: 'muxpad agent',
+      face: 'chat',
+    });
+    tabs.update(tab.id, { layout: pane.id });
+    return pane.id;
+  };
+
+  beforeEach(() => {
+    db = openDb(':memory:');
+    cache = new PtydCache();
+    events = new EventBus();
+    wsId = new WorkspaceStore(db).create({ name: 'W' }).id;
+    paneId = makePane();
+    now = T0;
+  });
+
+  const build = () =>
+    new CronScheduler({
+      db,
+      ptyd: fakePtyd(),
+      cache,
+      events,
+      submitSend: () => ({ status: 'sent' as const }),
+      now: () => now,
+    });
+
+  /** Fire a cron for real, so the run row is written the way production writes it. */
+  const fire = async (s: CronScheduler) => {
+    const cron = s.store.create({
+      name: 'nightly',
+      schedule: HOURLY,
+      tz: 'UTC',
+      prompt: 'sweep the PRs',
+      target_kind: 'pane',
+      target_pane: paneId,
+      next_due_at: T0,
+    });
+    now = Math.max(cron.next_due_at, T0 + CRON_STARTUP_GRACE_MS) + 1000;
+    await s.tick();
+    return cron;
+  };
+
+  const endTurn = (ok: boolean) =>
+    events.emit({
+      type: 'agent_turn',
+      pane_id: paneId,
+      phase: 'done',
+      sid: null,
+      backend: 'claude',
+      ok,
+    });
+
+  it('marks the run FAILED and bumps the streak when the turn dies', async () => {
+    const s = build();
+    s.start();
+    const cron = await fire(s);
+    // Delivery succeeded, which is all the old verdict ever knew.
+    expect(s.store.runs(cron.id)[0]?.outcome).toBe('sent');
+    expect(s.store.getById(cron.id)?.fail_streak).toBe(0);
+
+    endTurn(false);
+
+    expect(s.store.runs(cron.id)[0]?.outcome).toBe('failed');
+    const after = s.store.getById(cron.id);
+    expect(after?.fail_streak).toBe(1);
+    expect(after?.last_status).toContain('turn failed');
+    s.stop();
+  });
+
+  it('leaves a run alone when the turn succeeds', async () => {
+    const s = build();
+    s.start();
+    const cron = await fire(s);
+    endTurn(true);
+    expect(s.store.runs(cron.id)[0]?.outcome).toBe('sent');
+    expect(s.store.getById(cron.id)?.fail_streak).toBe(0);
+    s.stop();
+  });
+
+  it('ignores a failed turn in a pane it did not fire into', async () => {
+    const s = build();
+    s.start();
+    const cron = await fire(s);
+    events.emit({
+      type: 'agent_turn',
+      pane_id: makePane(),
+      phase: 'done',
+      sid: null,
+      backend: 'claude',
+      ok: false,
+    });
+    expect(s.store.runs(cron.id)[0]?.outcome).toBe('sent');
+    s.stop();
+  });
+
+  it('treats an ABSENT ok as "not stated", not as failure', async () => {
+    // Wire compat: an older server sends no `ok`. Reading that as a failure
+    // would retire every working cron on the first turn after an upgrade.
+    const s = build();
+    s.start();
+    const cron = await fire(s);
+    events.emit({
+      type: 'agent_turn',
+      pane_id: paneId,
+      phase: 'done',
+      sid: null,
+      backend: 'claude',
+    });
+    expect(s.store.runs(cron.id)[0]?.outcome).toBe('sent');
+    expect(s.store.getById(cron.id)?.fail_streak).toBe(0);
+    s.stop();
+  });
+
+  it('does not amend twice if a second turn ends in the same pane', async () => {
+    // `inflight` is cleared by onTurnEnded, so the second end finds no cron and
+    // the run keeps the verdict the first one gave it.
+    const s = build();
+    s.start();
+    const cron = await fire(s);
+    endTurn(false);
+    endTurn(false);
+    expect(s.store.getById(cron.id)?.fail_streak).toBe(1);
+    s.stop();
   });
 });

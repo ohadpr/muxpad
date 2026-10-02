@@ -160,6 +160,9 @@ export class CronScheduler {
     this.timer.unref?.();
     this.unsubscribe = this.deps.events.subscribe((e) => {
       if (e.type === 'agent_turn' && (e.phase === 'done' || e.phase === 'fatal')) {
+        // BEFORE onTurnEnded, which clears `inflight` — the amendment needs to
+        // know which cron this pane's turn belonged to.
+        if (e.ok === false) this.amendFiredRun(e.pane_id);
         void this.onTurnEnded(e.pane_id, e.phase);
       }
       if (e.type === 'agent_turn' && e.phase === 'start') this.onTurnStarted(e.pane_id, e.queue_id);
@@ -589,6 +592,30 @@ export class CronScheduler {
     const cronId = parseCronMarker(head.text)?.marker.id;
     if (cronId) this.inflight.set(paneId, cronId);
     else this.inflight.delete(paneId);
+  }
+
+  /**
+   * The turn this cron fired has ended BADLY. Say so on the run row.
+   *
+   * Until this existed a fire's only verdict was `submitSend`'s — `sent` /
+   * `queued` — which answers "did the message reach the pane", not "did the
+   * work happen". Those come apart in exactly the case that matters most: the
+   * agent is out of quota, says so in one line of prose, and ends the turn
+   * cleanly (see agent-runner/usage-limit.ts). The message was delivered, so
+   * the run was green, so the failure streak reset, so nothing ever surfaced —
+   * for unattended work, which is the only kind a cron does.
+   *
+   * The streak is bumped too. An auto-disable after a run of genuinely failing
+   * fires is the behaviour that was already designed for and could not trigger,
+   * because the streak was being reset by deliveries.
+   */
+  private amendFiredRun(paneId: string): void {
+    const cronId = this.inflight.get(paneId);
+    if (!cronId) return; // not a fire of ours — an ordinary turn in some pane
+    if (!this.store.amendLatestRun({ cronId, paneId, outcome: 'failed', detail: 'turn failed' })) {
+      return;
+    }
+    this.store.recordOutcome(cronId, { at: this.now(), status: 'error:turn failed', ok: false });
   }
 
   private async onTurnEnded(paneId: string, phase: 'done' | 'fatal'): Promise<void> {
