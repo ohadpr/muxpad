@@ -139,6 +139,16 @@ export class CronScheduler {
    * one extra fire after a restart, never a missed one.
    */
   private readonly inflight = new Map<string, string>();
+  /**
+   * Panes whose in-flight fire came from `muxpad cron run`, not the schedule.
+   *
+   * The hand-test path already refuses to push a manual fire toward
+   * auto-disable — "the user is standing right there watching it fail, and one
+   * bad hand-test should not silently retire a working nightly job". The
+   * turn-end amendment has to honour the same rule or it reintroduces exactly
+   * what that guard prevents, one step later.
+   */
+  private readonly manualFires = new Set<string>();
   /** Panes whose finishing turn should close their (cron-created) tab. */
   private readonly closeOnDone = new Map<string, { cronId: string; tabId: string }>();
   private unsubscribe: (() => void) | null = null;
@@ -171,6 +181,7 @@ export class CronScheduler {
       // "your job's target is gone" deserves a notification, not a silent drop.
       if (e.type === 'pane.removed') {
         this.inflight.delete(e.pane_id);
+        this.manualFires.delete(e.pane_id);
         this.closeOnDone.delete(e.pane_id);
       }
     });
@@ -217,6 +228,10 @@ export class CronScheduler {
     if (!cron) return null;
     const at = this.now();
     const result = await this.fire(cron, at, 0, at);
+    // `fire` set `inflight` if it delivered; mark that entry as hand-run so the
+    // turn-end amendment can tell a test from the schedule.
+    if (cron.target_pane) this.manualFires.add(cron.target_pane);
+    if (result.targetPane) this.manualFires.add(result.targetPane);
     this.record(cron, at, at, result, { manual: true });
     return result;
   }
@@ -612,14 +627,40 @@ export class CronScheduler {
   private amendFiredRun(paneId: string): void {
     const cronId = this.inflight.get(paneId);
     if (!cronId) return; // not a fire of ours — an ordinary turn in some pane
-    if (!this.store.amendLatestRun({ cronId, paneId, outcome: 'failed', detail: 'turn failed' })) {
-      return;
-    }
-    this.store.recordOutcome(cronId, { at: this.now(), status: 'error:turn failed', ok: false });
+    // ATTRIBUTION IS GOOD, NOT PERFECT, and the gap is worth stating rather
+    // than implying. `inflight` says "this pane is running a fire of ours", and
+    // `onTurnStarted` corrects it whenever a turn starts from a queue row that
+    // is NOT ours. What it cannot correct is a turn that starts with no queue
+    // row at all — a direct send — so a human typing into a cron's target pane
+    // during the window between delivery and the fire's own turn could have
+    // their failure recorded against the cron. The window is small (a send
+    // during an active turn is queued, which IS corrected) and the failure mode
+    // is benign: one over-reported run against a job that was genuinely being
+    // interfered with. The opposite default — attribute nothing unless certain
+    // — is the silence this whole change exists to end.
+    const amended = this.store.amendLatestRun({
+      cronId,
+      paneId,
+      outcome: 'failed',
+      detail: 'turn failed',
+    });
+    if (!amended) return;
+    // A HAND-RUN fire gets the honest run row and nothing else. The history
+    // should say the test failed; the SCHEDULE should not be a step closer to
+    // retirement because somebody tried it while something was wrong.
+    if (this.manualFires.delete(paneId)) return;
+    // Stamped with the FIRE time, not with now: the turn can end many minutes
+    // after it started, and `last_fire_at` is when the job ran.
+    this.store.recordOutcome(cronId, {
+      at: amended.firedAt,
+      status: 'error:turn failed',
+      ok: false,
+    });
   }
 
   private async onTurnEnded(paneId: string, phase: 'done' | 'fatal'): Promise<void> {
     this.inflight.delete(paneId);
+    this.manualFires.delete(paneId);
     const pending = this.closeOnDone.get(paneId);
     if (!pending) return;
     this.closeOnDone.delete(paneId);

@@ -15,6 +15,11 @@ describe('isUsageLimitText — the refusals it must catch', () => {
     'Insufficient quota: your credit balance is too low. Please upgrade your plan.',
     'Rate limit exceeded for your subscription; try again at 18:00.',
     'Exceeded the usage limit on this plan. Resumes after the window resets.',
+    // THE ONE THAT MATTERS. The likeliest real wording leads with the product,
+    // and an earlier draft of the openings started at the noun and missed it —
+    // which would have made this whole module dead on arrival.
+    'Claude usage limit reached. Your limit will reset at 3pm (America/Los_Angeles).',
+    'Claude usage limit reached · resets at 3pm',
   ])('catches %j', (text) => {
     expect(isUsageLimitText(text)).toBe(true);
   });
@@ -34,6 +39,11 @@ describe('…and the prose it must not', () => {
     'The cron recorded ok:true even though the plan quota was spent.',
     // A refusal shape with no refusal content.
     'You have reached step three.',
+    // A WARNING is not a refusal: the turn ran. Treating it as a failure would
+    // mark a working cron failed every time it got close to the ceiling.
+    'Approaching usage limit — 10% of your quota remains.',
+    // The vendor prefix must not rescue prose either.
+    'Claude usage limit — that is the bug.',
   ])('rejects %j', (text) => {
     expect(isUsageLimitText(text)).toBe(false);
   });

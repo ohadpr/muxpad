@@ -45,14 +45,26 @@
  * failure this module exists to end, while a false positive costs one turn
  * marked failed and one push — annoying, visible, and self-correcting.
  */
+/**
+ * An optional vendor word in front of the refusal.
+ *
+ * This is the one that would have made the whole module dead on arrival. The
+ * likeliest real wording opens with the PRODUCT — "Claude usage limit reached.
+ * Your limit will reset at 3pm" — and an earlier draft of the openings, written
+ * to start at the noun, missed exactly that and therefore missed the only
+ * message that matters. Caught by probing the classifier with the real string
+ * rather than by reading it.
+ */
+const VENDOR = '(claude |anthropic |openai |codex |cursor |api )?';
+
 const USAGE_LIMIT_OPENINGS: readonly RegExp[] = [
-  /^(you('ve| have)? )?(reached|hit|exceeded)\b/,
+  new RegExp(`^${VENDOR}(you('ve| have)? )?(reached|hit|exceeded)\\b`),
+  new RegExp(`^${VENDOR}(your )?(usage|rate|quota|spend|credit)( limits?)?\\b`),
   // The noun phrase is consumed WHOLE — `usage limit`, not `usage`. If the
   // opening stopped at the noun, the word `limit` sitting right behind it would
   // satisfy the tail on its own and prove nothing, which is how
   // `Usage limit — that is the bug.` classified as a refusal on the first pass
   // of this file. The tests pin both halves of that.
-  /^(your )?(usage|rate|quota|spend|credit)( limits?)?\b/,
   /^(out of|no more) (quota|credits?|usage|tokens)\b/,
   /^insufficient (quota|credits?|balance)\b/,
   /^api (quota|credit|usage)( limits?)?\b/,

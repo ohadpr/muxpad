@@ -874,6 +874,45 @@ describe('a fire whose TURN fails is not a fire that worked', () => {
     s.stop();
   });
 
+  it('keeps the FIRE time as last_fire_at — a failure is not a second fire', async () => {
+    // `recordOutcome` writes last_fire_at, and the amendment happens when the
+    // TURN ends, which can be minutes later. Stamping it with `now` would make
+    // a failing cron's "last run" drift later than the run actually was, and
+    // `cron list` reads exactly that column.
+    const s = build();
+    s.start();
+    const cron = await fire(s);
+    const firedAt = s.store.runs(cron.id)[0]?.fired_at as number;
+    now = firedAt + 11 * 60_000; // the turn ran for eleven minutes, then died
+    endTurn(false);
+    expect(s.store.getById(cron.id)?.last_fire_at).toBe(firedAt);
+    s.stop();
+  });
+
+  it('a MANUAL `cron run` that fails does not push toward auto-disable', async () => {
+    // The hand-test path states this outright: "one bad hand-test should not
+    // silently retire a working nightly job" — the user is standing right
+    // there watching it. Amending the run row is still right (the run DID
+    // fail, and the history should say so); bumping the streak is not.
+    const s = build();
+    s.start();
+    const cron = s.store.create({
+      name: 'nightly',
+      schedule: HOURLY,
+      tz: 'UTC',
+      prompt: 'sweep the PRs',
+      target_kind: 'pane',
+      target_pane: paneId,
+      next_due_at: T0,
+    });
+    now = T0 + CRON_STARTUP_GRACE_MS + 1000;
+    await s.runNow(cron.id);
+    endTurn(false);
+    expect(s.store.runs(cron.id)[0]?.outcome).toBe('failed'); // history is honest
+    expect(s.store.getById(cron.id)?.fail_streak).toBe(0); // …the schedule is not punished
+    s.stop();
+  });
+
   it('does not amend twice if a second turn ends in the same pane', async () => {
     // `inflight` is cleared by onTurnEnded, so the second end finds no cron and
     // the run keeps the verdict the first one gave it.

@@ -262,21 +262,28 @@ export class CronStore {
     paneId: string;
     outcome: string;
     detail?: string | null;
-  }): boolean {
+  }): { firedAt: number } | null {
     const row = this.db
       .prepare(
-        `SELECT id, outcome FROM cron_runs
+        `SELECT id, outcome, fired_at FROM cron_runs
           WHERE cron_id = ? AND target_pane = ?
           ORDER BY fired_at DESC, id DESC LIMIT 1`,
       )
-      .get(opts.cronId, opts.paneId) as { id: string; outcome: string } | undefined;
+      .get(opts.cronId, opts.paneId) as
+      | { id: string; outcome: string; fired_at: number }
+      | undefined;
     // Only a DELIVERY outcome may be amended. Anything else is already a
     // judgement about the work itself and is not ours to overwrite.
-    if (!row || (row.outcome !== 'sent' && row.outcome !== 'queued')) return false;
+    if (!row || (row.outcome !== 'sent' && row.outcome !== 'queued')) return null;
     this.db
       .prepare('UPDATE cron_runs SET outcome = ?, detail = ? WHERE id = ?')
       .run(opts.outcome, opts.detail ?? null, row.id);
-    return true;
+    // The FIRE time goes back to the caller. `recordOutcome` writes
+    // `last_fire_at`, and this amendment happens when the turn ends — which can
+    // be many minutes later — so stamping it with `now` would make a failing
+    // cron's "last run" drift later than the run was. `cron list` reads that
+    // column directly.
+    return { firedAt: row.fired_at };
   }
 
   addRun(run: {
