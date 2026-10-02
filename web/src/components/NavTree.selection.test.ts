@@ -315,9 +315,20 @@ describe('what the quiet selection HANDS BACK to the row', () => {
     // --accent-fg and the tile's fill dropped outright. Over a wash the chip's
     // own material reads as it does on any other row. The chip is A2's: this
     // asserts the rail DRAWS it and does not reach into it.
+    //
+    // NARROWED, deliberately. This began as "no rule mentioning both
+    // `[data-active]` and `.chatchip`", which is a proxy for the real rule and
+    // outlawed a legitimate one: draining the chips of INACTIVE workspaces
+    // (grayscale + opacity, applied to the whole chip, and lifted again on the
+    // row you are on). That is not re-inking — it does not pick a colour inside
+    // the chip and overrule it, it attenuates the chip's own material
+    // uniformly and reversibly. What broke the clock was `color`, a `fill`, and
+    // a dropped background; those are what this forbids now, by name.
+    const INK = /(^|[\s;{])(color|background|background-color|fill|stroke|--clock)\s*:/;
     const offenders = rules(NAV_CSS)
       .filter((r) => r.selectors.some((s) => s.includes('[data-active="true"]')))
       .filter((r) => r.selectors.some((s) => /\.chatchip/.test(s)))
+      .filter((r) => INK.test(r.body))
       .flatMap((r) => r.selectors);
     expect(offenders).toEqual([]);
   });
@@ -470,7 +481,11 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     expect(group).not.toMatch(/border-left/);
 
     const activeGroup = ruleBody(NAV_CSS, '.navtree-group[data-active="true"]');
-    expect(activeGroup).toMatch(/box-shadow:\s*0 0 0 [\d.]+px var\(--accent\)/);
+    // A hairline at HALF ink, not a solid rule. Once the inactive groups are
+    // drained of colour the active card is already the only bright thing in the
+    // rail, so a full-strength ring was the loudest mark on screen competing
+    // with the selected ROW for the same meaning.
+    expect(activeGroup).toMatch(/box-shadow:\s*0 0 0 1px color-mix\(.*--accent.*\)/);
     // A RING, never a fill. A filled card competes with the selected ROW inside
     // it, and that row is what the accent is actually for.
     expect(activeGroup).not.toMatch(/background/);
