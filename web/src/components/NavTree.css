@@ -953,7 +953,16 @@
    so the row and the pane beside it are one shape. The accent is freed
    completely — it now means "needs you" and nothing else.
 
-   `--bg` AND NEVER A LITERAL. The content surface is #f5f4fb on alucard,
+   `--bg-pane-face`, NOT `--bg`, and this is the correction that made the join
+   actually work. The visible pane wears a 5% accent wash saying "this is the
+   one you are in" (.tabbed-pane-slot::after). Against plain --bg the tab was
+   measurably a different shade — sampled across the seam, 245,244,251 on the
+   tab against 238,235,249 on the pane — which is the gap that was reported as
+   the tab not reaching the content. The desktop tab strip had already hit this
+   and already carried the fix in a comment; the value is a token now so the
+   three places that must agree cannot drift.
+
+   AND NEVER A LITERAL. The content surface is #f5f4fb on alucard,
    #fdf6ea on acme, #1a1b26 on tokyo-night and #221547 on acme-dark; only
    github-light is actually white. A hardcoded colour would be right on one
    theme in six, and reading the token also means the row and the pane cannot
@@ -965,7 +974,7 @@
    there the tab joins a colour it does not match. The fix when that matters is
    to read the ACTIVE PANE's background rather than the theme's. */
 .navtree-tab-row[data-active="true"] {
-  background-color: var(--bg);
+  background-color: var(--bg-pane-face);
   border-radius: var(--nt-pill) 0 0 var(--nt-pill);
   /* Out past the GROUP's own right padding, so the row genuinely touches the
      pane instead of stopping a hair short of it. Measured: without this the tab
@@ -973,6 +982,23 @@
      through is enough to read as a seam rather than a join. */
   margin-right: calc(var(--nt-pad) * -1);
   padding-right: calc(var(--nt-air) + var(--nt-pad));
+  /* AN EDGE ON THE THREE SIDES THAT DO NOT JOIN, and it is load-bearing rather
+     than decorative. The tab's fill is the pane's face, and on a theme where
+     the pane and the rail sit close together that fill alone barely separates
+     the row from the rail behind it — measured on acme (lilac rail #f0e9f6, cream
+     content #fdf6ea, plus the pane's 5% violet wash) the tab is ΔE 2.40 from
+     the rail, against a hover of 2.70 at 4% and 4.05 at 6% — an idle row under
+     the cursor out-shouts the row you are ON, at every hover value quiet enough
+     to still be visible elsewhere.
+
+     The fill cannot fix that without breaking the join, so the DELINEATION
+     does: three inset hairlines, top, bottom and left, and deliberately none on
+     the right, where the row has to become the pane. A tab is outlined
+     everywhere except where it meets the panel — which is also just what a tab
+     is. Inset rather than a border so no geometry moves. */
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--fg) 14%, transparent), inset 0 -1px 0
+    color-mix(in srgb, var(--fg) 14%, transparent), inset 1px 0 0
+    color-mix(in srgb, var(--fg) 14%, transparent);
 }
 /* The funnel. Two concave fillets above and below the tab's right end, so the
    pane's surface flares INTO the row instead of meeting it at a corner — the
@@ -990,11 +1016,11 @@
 }
 .navtree-tab-row[data-active="true"]::before {
   top: -18px;
-  background: radial-gradient(circle at top left, transparent 18px, var(--bg) 18px);
+  background: radial-gradient(circle at top left, transparent 18px, var(--bg-pane-face) 18px);
 }
 .navtree-tab-row[data-active="true"]::after {
   bottom: -18px;
-  background: radial-gradient(circle at bottom left, transparent 18px, var(--bg) 18px);
+  background: radial-gradient(circle at bottom left, transparent 18px, var(--bg-pane-face) 18px);
 }
 .navtree-tab-row[data-active="true"] .navtree-name-text {
   color: var(--fg);
@@ -1004,8 +1030,10 @@
    quietly: one step of the block's own fill, never a second colour. */
 /* The tab does not change on hover. It is not a control you are considering —
    it is where you already are, and tinting it would break the join. */
+/* The tab does not change on hover. It is not a control you are considering —
+   it is where you already are, and tinting it would break the join. */
 .navtree-tab-row[data-active="true"]:hover {
-  background-color: var(--bg);
+  background-color: var(--bg-pane-face);
 }
 /* ─── THE THIRTY RE-INKS ARE GONE, not re-tuned ───────────────────────────
    Recorded because the deletions are the change, and a future pass must not

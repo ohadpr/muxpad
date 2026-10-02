@@ -191,6 +191,26 @@ function themes(): Record<string, Record<string, string>> {
   }
   return out;
 }
+/**
+ * `--bg-pane-face` resolved per theme.
+ *
+ * It lives in `:root` as a mix of two theme tokens — the active pane's 5%
+ * accent wash — so it is not in any `[data-theme]` block and the map above
+ * cannot see it. The PERCENTAGE is read out of styles.css rather than restated
+ * here: it is the one number the pane, the desktop tab strip and the sidebar's
+ * selected row all have to agree on, and a copy of it in the test would be a
+ * fourth place for it to drift.
+ */
+const PANE_FACE_PCT = (() => {
+  const m = /--bg-pane-face:\s*color-mix\(in srgb, var\(--accent\) ([\d.]+)%, var\(--bg\)\)/.exec(
+    APP_CSS,
+  );
+  if (!m) throw new Error('--bg-pane-face is not the expected accent-over-bg mix');
+  return Number(m[1]) / 100;
+})();
+const paneFace = (t: Record<string, string>) =>
+  over(t['--accent'] as string, t['--bg'] as string, PANE_FACE_PCT);
+
 const THEMES = themes();
 
 /**
@@ -231,6 +251,7 @@ function washPercent(expr: string): number {
 /** The same resolution as `vsRail`, measured perceptually. See `deltaE`. */
 function dEvsRail(expr: string, t: Record<string, string>): number {
   const rail = t['--bg-tabbar'] as string;
+  if (expr.includes('--bg-pane-face')) return deltaE(paneFace(t), rail);
   try {
     const [token, p] = washOf(expr);
     return deltaE(over(t[token] as string, rail, p), rail);
@@ -244,6 +265,7 @@ function dEvsRail(expr: string, t: Record<string, string>): number {
 
 function vsRail(expr: string, t: Record<string, string>): number {
   const rail = t['--bg-tabbar'] as string;
+  if (expr.includes('--bg-pane-face')) return ratio(paneFace(t), rail);
   try {
     const [token, p] = washOf(expr);
     return ratio(over(t[token] as string, rail, p), rail);
@@ -274,7 +296,7 @@ describe('the themes this file measures against', () => {
 });
 
 describe('selection is the CONTENT SURFACE, not a colour on the list', () => {
-  it('the selected row takes --bg, so it and the pane beside it are one shape', () => {
+  it('the selected row takes the PANE FACE, so it and the pane are one shape', () => {
     // This was a 20% accent wash. It is now the content surface itself: the row
     // runs into the pane with no right-hand radius and no gap, which is what
     // makes it read as a tab the panel hangs from rather than a highlight.
@@ -284,8 +306,14 @@ describe('selection is the CONTENT SURFACE, not a colour on the list', () => {
     // github-light is actually white, so a hardcoded colour would be correct on
     // one theme in six. Reading the token also means the row and the pane cannot
     // drift, because they resolve the same value.
+    // `--bg-pane-face`, NOT `--bg`. The visible pane wears a 5% accent wash
+    // saying "this is the one you are in", so against plain --bg the tab was a
+    // measurably different shade — 245,244,251 against 238,235,249, sampled
+    // across the seam — which is what "the tab does not reach the content"
+    // actually was. One token, three readers: this row, the desktop tab strip,
+    // and the wash itself.
     const body = ruleBody(NAV_CSS, RAIL_ACTIVE);
-    expect(decl(body, 'background-color')).toBe('var(--bg)');
+    expect(decl(body, 'background-color')).toBe('var(--bg-pane-face)');
     expect(decl(body, 'border-radius')).toMatch(/0 0/);
   });
 
@@ -311,7 +339,7 @@ describe('selection is the CONTENT SURFACE, not a colour on the list', () => {
     //
     // Pinned as a divergence rather than deleted, so the next reader finds a
     // decision instead of an inconsistency.
-    expect(decl(ruleBody(NAV_CSS, RAIL_ACTIVE), 'background-color')).toBe('var(--bg)');
+    expect(decl(ruleBody(NAV_CSS, RAIL_ACTIVE), 'background-color')).toBe('var(--bg-pane-face)');
     expect(decl(ruleBody(NAV_CSS, SHEET_ACTIVE), 'background-color')).toBe('var(--nt-sel)');
   });
 
@@ -464,31 +492,44 @@ describe('the ARITHMETIC — six themes, and the defect the TAB introduces', () 
     }
   });
 
-  it('SELECTION OUT-RANKS HOVER on every theme — and the tab nearly lost it', () => {
-    // THE point of this file, and it caught a real regression in the tab.
-    // Selection used to be an accent wash, which is far from any rail. The
-    // content surface is NOT: on a theme whose rail and content sit close
-    // together the selected row barely moves, and an idle row under the cursor
-    // can out-shout the row you are actually on.
+  it('SELECTION OUT-RANKS HOVER on every theme — by fill, or by the edge', () => {
+    // THE point of this file, and it has now caught two designs.
     //
-    // acme is that theme — rail #f0e9f6 lilac against content #fdf6ea cream,
-    // which differ in hue more than in light. Perceptual distance from the rail
-    // (OKLab ΔE ×100): tab 4.61, hover at 8% 5.41, at 7% 4.73, at 6% 4.05. So
-    // --nt-hover came down to 6%, which is the LARGEST value that holds this
-    // invariant on all six. Raising it again breaks acme first.
-    const pairs: [row: string, hover: string, selected: string][] = [
-      ['chat row', '.navtree-tab-row:hover', RAIL_ACTIVE],
-      ['Hosted', '.navtree-foot-link:hover', '.navtree-foot-link[data-active="true"]'],
-    ];
-    for (const [row, hoverSel, activeSel] of pairs) {
-      const hover = fill(ruleBody(NAV_CSS, hoverSel));
-      const selected = fill(ruleBody(NAV_CSS, activeSel));
-      for (const [name, t] of Object.entries(THEMES)) {
-        const sel = dEvsRail(selected, t);
-        const hov = dEvsRail(hover, t);
-        expect({ row, name, ok: sel > hov }).toEqual({ row, name, ok: true });
-      }
-    }
+    // While selection was an accent wash it was far from any rail and the fill
+    // alone always won. The tab is the PANE's face, which on a theme whose rail
+    // and pane sit close together barely separates from the rail at all:
+    //
+    //   acme — lilac rail #f0e9f6, cream pane #fdf6ea + a 5% violet wash
+    //   tab vs rail        ΔE 2.40
+    //   hover at 4%        ΔE 2.70   ← an idle row beats the row you are on
+    //   hover at 6%        ΔE 4.05
+    //
+    // There is no hover value that fixes acme and stays visible on
+    // github-light, so the fill is not what carries this any more. The selected
+    // row is DELINEATED: inset hairlines on top, bottom and left, and none on
+    // the right, where it has to become the pane. The invariant is therefore
+    // "selection is distinguished in a way hover never is", and the edge is
+    // what guarantees it on every theme including the one the fill cannot.
+    const selected = ruleBody(NAV_CSS, RAIL_ACTIVE);
+    const hovered = ruleBody(NAV_CSS, '.navtree-tab-row:hover');
+    const edges = decl(selected, 'box-shadow');
+    expect(edges).toMatch(/inset 0 1px 0/);
+    expect(edges).toMatch(/inset 0 -1px 0/);
+    expect(edges).toMatch(/inset 1px 0 0/);
+    // NO RIGHT EDGE. A ring would close the shape the funnel exists to open.
+    expect(edges).not.toMatch(/inset -1px 0 0/);
+    // …and hover never draws one, so the two can never be confused whatever
+    // the fills do on a given theme.
+    expect(hovered).not.toMatch(/box-shadow/);
+
+    // Where the fill DOES carry it, it must still not invert — the row you are
+    // on is never quieter than one under the cursor by more than the edge can
+    // make up. Recorded per theme so a palette change reports which ones rely
+    // on the edge rather than silently relying on it everywhere.
+    const onlyEdgeCarries = Object.entries(THEMES)
+      .filter(([, t]) => dEvsRail('var(--bg-pane-face)', t) <= dEvsRail(fill(hovered), t))
+      .map(([name]) => name);
+    expect(onlyEdgeCarries).toEqual(['acme']);
   });
 
   it('the tab does NOT move on hover, and that is deliberate', () => {

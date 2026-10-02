@@ -317,7 +317,7 @@ describe('the CSS mapping — selection is not a state', () => {
     // What this arm still guards is unchanged and is the point: the chat row's
     // fill is never a raw `--accent`.
     expect(NAV_CSS).toMatch(
-      /\.navtree-tab-row\[data-active="true"\] \{ background-color: var\(--bg\);/,
+      /\.navtree-tab-row\[data-active="true"\] \{ background-color: var\(--bg-pane-face\);/,
     );
     expect(NAV_CSS).not.toMatch(
       /\.navtree-tab-row\[data-active="true"\] \{ background-color: var\(--accent\);/,
