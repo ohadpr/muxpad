@@ -27,6 +27,26 @@ import { attachWsServer } from '../ws.js';
 
 const settle = (ms = 250) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Wait for a CONDITION rather than for a duration.
+ *
+ * `settle(ms)` is a guess about how long the server needs, and a guess is only
+ * as good as the machine's current load. The tab-closes assertion below was
+ * written as `settle(500)` and duly failed the first time this file shared a
+ * serial run with the dictation e2e, which spawns a Chromium — the close is
+ * asynchronous (turn-done → retire → prune), 500ms is ample idle and not
+ * always ample under load. Polling makes the test wait exactly as long as it
+ * has to and no longer, which is both faster when idle and correct when not.
+ */
+async function until(what: string, cond: () => Promise<boolean>, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (await cond()) return;
+    if (Date.now() > deadline) throw new Error(`timed out waiting for: ${what}`);
+    await settle(50);
+  }
+}
+
 describe('muxpad cron e2e (isolated instance, fake runner)', () => {
   let server: ServerType;
   let port: number;
@@ -335,9 +355,10 @@ describe('muxpad cron e2e (isolated instance, fake runner)', () => {
     // Turn finishes cleanly with nothing pending → the tab closes. Nothing is
     // lost: the session is archived and FTS-searchable.
     runner.endTurn();
-    await settle(500);
-    const tabsFinal = await api<Tab[]>(`/api/tabs?workspaceId=${wsId}`);
-    expect(tabsFinal.find((t) => t.id === tabId)).toBeUndefined();
+    await until("the finished run's tab to close", async () => {
+      const tabs = await api<Tab[]>(`/api/tabs?workspaceId=${wsId}`);
+      return tabs.find((t) => t.id === tabId) === undefined;
+    });
   });
 
   it('the sidebar row carries the ⏱ data for a scheduled chat', async () => {

@@ -8,7 +8,9 @@
     "dev:ptyd": "tsx src/ptyd/index.ts",
     "start": "node dist/index.js",
     "start:ptyd": "node dist/ptyd/index.js",
-    "test": "vitest run",
+    "test": "pnpm test:fast && pnpm test:serial",
+    "test:fast": "vitest run --project unit",
+    "test:serial": "vitest run --project serial --no-file-parallelism",
     "test:watch": "vitest",
     "lint": "biome check ."
   },
