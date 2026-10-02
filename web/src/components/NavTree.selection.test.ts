@@ -489,10 +489,18 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     expect(activeGroup).toMatch(/box-shadow:/);
     expect(activeGroup).not.toMatch(/--accent/);
     // …and the lift is what carries it on a dark theme, where a black shadow
-    // barely shows. Inactive groups are flat ON the rail, so the active card's
-    // own surface IS the contrast — see the `:not([data-active])` rule.
+    // barely shows. EVERY group is a card — flattening the inactive ones to the
+    // rail left the card doing no work for two workspaces out of three, and put
+    // "groups must not run together" back on margin alone. They differ by LIFT:
+    // 22% of the mix against the active card's 60%, which is what keeps
+    // elevation (not colour, and not the presence of a surface) as the one
+    // thing saying "you are here".
     const inactive = ruleBody(NAV_CSS, '.navtree-group:not([data-active="true"])');
-    expect(decl(inactive, '--nt-card')).toBe('transparent');
+    expect(decl(inactive, '--nt-card')).toMatch(/color-mix/);
+    expect(decl(inactive, '--nt-card')).not.toBe(
+      decl(ruleBody(NAV_CSS, '.navtree-group'), '--nt-card'),
+    );
+    expect(decl(inactive, 'border-color')).not.toBe('transparent');
     // A RING, never a fill. A filled card competes with the selected ROW inside
     // it, and that row is what the accent is actually for.
     expect(activeGroup).not.toMatch(/background/);

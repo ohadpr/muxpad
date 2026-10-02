@@ -439,17 +439,20 @@
    the payoff for declaring it once: a change of mind lands in one place and
    cannot leave a header a shade off its own card. */
 .navtree-group:not([data-active="true"]) {
-  /* Flat on the rail — no surface of its own, no border. Only the workspace
-     you are IN is a card.
+  /* STILL A CARD, just a quieter one. Flattening these to the rail went too
+     far: it left the card doing no work at all for two workspaces out of
+     three, and the thing a card was introduced to prevent — groups running
+     together into one list — was back to being held up by margin alone.
 
-     This is further than the half-lift that preceded it, and it is only safe
-     because the card is no longer the thing keeping workspaces apart: the
-     dimmed icons, the quieter names and the margin do that, and the active
-     card's elevation is what ranks them. If groups ever read as converging
-     again, the fix is to give this rule a border back — not a fill, which is
-     what made every workspace shout equally in the first place. */
-  --nt-card: transparent;
-  border-color: transparent;
+     So the shape stays and only the LIFT steps down: 22% of the active card's
+     mix against its 60%. Measured over the rail, roughly 0.022 against 0.061.
+     Enough that each group is visibly its own container; far enough below the
+     active card that the ranking is never in question.
+
+     Which leaves elevation — not colour, and not the presence of a surface —
+     as the single thing that says "you are here". See the active rule. */
+  --nt-card: color-mix(in srgb, var(--bg) 22%, var(--nt-surface));
+  border-color: color-mix(in srgb, var(--fg) 5%, transparent);
 }
 
 .navtree-group:not([data-active="true"]) .navtree-tab-row .chatchip {
