@@ -49,6 +49,17 @@ export const CronSchema = z.object({
    *  written before it still says 'do'/'deep' and still means the same thing. */
   mode: z.string().nullable(),
   enabled: z.boolean(),
+  /**
+   * Fire ONCE, then retire.
+   *
+   * Set explicitly (`--once`) or inferred at creation from a DATED expression —
+   * one naming both a month and a day-of-month, which has always been this
+   * product's idiom for "do this once" because there was no other way to say
+   * it. The old advice was to delete the row by hand afterwards; measured
+   * compliance with that was zero, and two live reminders were sitting armed
+   * for 2027 as a result.
+   */
+  once: z.boolean(),
   catchup: CronCatchupSchema,
   overlap: CronOverlapSchema,
   on_context: CronOnContextSchema,

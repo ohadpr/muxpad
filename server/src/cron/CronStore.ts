@@ -1,7 +1,7 @@
 import type { Cron, CronRun } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { monotonicFactory } from 'ulid';
-import { nextAfter, scheduleJitterMs } from './schedule.js';
+import { isDatedSchedule, nextAfter, scheduleJitterMs } from './schedule.js';
 
 const ulid = monotonicFactory();
 
@@ -28,6 +28,7 @@ interface CronRow {
   backend: string | null;
   mode: string | null;
   enabled: number;
+  once: number;
   catchup: string;
   overlap: string;
   on_context: string;
@@ -64,6 +65,9 @@ export interface CronCreateInput {
   /** The NOMINAL next slot. `create` adds this cron's deterministic jitter and
    *  stores the sum — every reader sees when it will actually fire. */
   next_due_at: number;
+  /** Fire once, then retire. Omitted means "infer from the schedule" — see
+   *  `isDatedSchedule`. Pass it to override the inference either way. */
+  once?: boolean;
 }
 
 /** SQLite access for `crons` + `cron_runs`. No policy — see CronScheduler. */
@@ -83,8 +87,8 @@ export class CronStore {
            id, name, schedule, tz, prompt, target_kind, target_pane, workspace_id,
            cwd, model, backend, mode, enabled, catchup, overlap, on_context,
            quiet_mins, jitter_ms, max_open, close_when_done, open_tabs, next_due_at,
-           last_fire_at, last_status, fail_streak, created_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, '[]', ?, NULL, NULL, 0, ?)`,
+           last_fire_at, last_status, fail_streak, created_at, once
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, '[]', ?, NULL, NULL, 0, ?, ?)`,
       )
       .run(
         id,
@@ -108,6 +112,10 @@ export class CronStore {
         input.close_when_done ? 1 : 0,
         input.next_due_at + jitter,
         Date.now(),
+        // Explicit wins; otherwise the SCHEDULE decides. A dated expression has
+        // always meant "once" here — this just stops it being a convention
+        // somebody has to remember to clean up after.
+        (input.once ?? isDatedSchedule(input.schedule)) ? 1 : 0,
       );
     return this.getById(id) as Cron;
   }
@@ -164,6 +172,20 @@ export class CronStore {
     const n = this.db.prepare('DELETE FROM crons WHERE id = ?').run(id).changes;
     this.db.prepare('DELETE FROM cron_runs WHERE cron_id = ?').run(id);
     return n > 0;
+  }
+
+  /**
+   * A one-off has fired. Retire it: disabled, status `done`, row kept.
+   *
+   * Kept rather than deleted on purpose — "it ran and it is done" and "it never
+   * existed" are different facts and only one of them is true. The row holds
+   * the history, stays in `cron list`, and can be re-enabled if the job turns
+   * out to be wanted again.
+   */
+  retireOnce(id: string, at: number): void {
+    this.db
+      .prepare("UPDATE crons SET enabled = 0, last_status = 'done', last_fire_at = ? WHERE id = ?")
+      .run(at, id);
   }
 
   setEnabled(id: string, enabled: boolean, reanchorFrom?: number): void {
@@ -327,6 +349,7 @@ function rowToCron(r: CronRow): Cron {
     backend: r.backend,
     mode: r.mode,
     enabled: r.enabled === 1,
+    once: r.once === 1,
     catchup: r.catchup === 'skip' || r.catchup === 'all' ? r.catchup : 'once',
     overlap: r.overlap === 'queue' ? 'queue' : 'skip',
     on_context:
