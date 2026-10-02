@@ -1767,20 +1767,27 @@
    this sheet's existing hairline and the one it should match. */
 .navtree-pin-divider {
   height: 0;
-  /* Spans the ROWS, not its own private inset. It used to start 16px further in
-     than everything around it — a fourth left edge in a column that now has
-     one. Both ends are flush with the row BOX, which is what the eye reads as
-     the column's width — measured, the earlier 4px right inset matched nothing
-     at all (the rows' box ends at 262, their content at 250, the line at 258),
-     so it was an asymmetry pretending to be an alignment. */
-  margin: 5px 0;
+  /* THE ROW'S CONTENT BOX, not the card's full width.
+     Flush was right when the group was a region of one long list: the line had
+     to span everything or it read as a fourth left edge. Inside a CARD it reads
+     as the opposite — a rule touching both walls cuts the container in half,
+     reported as "it feels like it's splitting the sidebar".
+
+     So it now starts where the icons start and ends where the rows end: the
+     same two insets every row already uses, which makes it a separator BETWEEN
+     rows rather than a division OF the card. Nothing new to keep in step —
+     both numbers are the row's own padding, read from the same tokens. */
+  margin: 5px var(--nt-air) 5px calc(var(--nt-pad) + var(--nt-indent));
   /* NOT `--border`: measured at 1.00:1 against the rail on alucard
      (#ddd8ee on #ddd8ef), 1.06 on acme, 1.14 on github-light — i.e. the token
      this sheet uses for hairlines is INVISIBLE on the theme in the screenshot
      that reported the seam missing. Deriving it from the foreground instead
      cannot be invisible on any theme, because the rail's text has to be
      readable there by definition. */
-  border-top: 1px solid color-mix(in srgb, var(--fg) 30%, transparent);
+  /* …and a step lighter with it. 30% was tuned for a line that had to carry a
+     full-width seam on six themes; a short inset rule needs less ink to read as
+     a break, and the extra weight was part of what made it shout. */
+  border-top: 1px solid color-mix(in srgb, var(--fg) 20%, transparent);
 }
 
 /* …AND THE MARK'S TRACK IS RESERVED ON A PINNED ROW, so the pin cannot move.
