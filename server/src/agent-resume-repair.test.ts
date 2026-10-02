@@ -1,3 +1,4 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 // The stranded-conversation repair, driven against the SHAPE OF THE REAL
 // INCIDENT: pane 01M2R8RT874AC74YR6899FH2ZG carried four session ids over three
 // days, `agent_sessions.current_sid` pointed at the one that never wrote a
@@ -8,7 +9,6 @@
 // Claude — because "we only looked in one of them" is precisely the class of
 // miss this module exists to stop.
 import { createServer } from 'node:http';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type Database from 'better-sqlite3';
@@ -23,13 +23,13 @@ import {
 } from './agent-resume-repair.js';
 import { EventBus } from './events.js';
 import { PtydCache } from './ptyd-cache.js';
+import type { PtydClient } from './ptyd-client/PtydClient.js';
 import type { PaneNotifyOutcome } from './push.js';
 import { AgentSessionStore } from './store/AgentSessionStore.js';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
 import { WorkspaceStore } from './store/WorkspaceStore.js';
 import { openDb } from './store/db.js';
-import type { PtydClient } from './ptyd-client/PtydClient.js';
 import { attachWsServer } from './ws.js';
 
 let tmp: string;
@@ -68,7 +68,7 @@ function writeMuxpadTranscript(sid: string): void {
 
 /** A Claude transcript: `$CLAUDE_CONFIG_DIR/projects/<cwd-slug>/<sid>.jsonl`. */
 function writeClaudeTranscript(sid: string): void {
-  const dir = join(tmp, 'claude', 'projects', '-Users-ohadpr');
+  const dir = join(tmp, 'claude', 'projects', '-Users-example');
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, `${sid}.jsonl`), '{"type":"user"}\n');
 }

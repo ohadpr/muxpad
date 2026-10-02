@@ -20,7 +20,7 @@ import { networkInterfaces } from 'node:os';
  *      installs itself into the resolver (/etc/resolv.conf here lists
  *      `nameserver 100.100.100.100`), so an ordinary reverse lookup resolves it.
  *
- * Verified on the affected machine: 100.111.22.33 → example-host.example-tailnet.ts.net,
+ * Verified on the affected machine: 100.64.0.1 → example-host.example-tailnet.ts.net,
  * matching its persisted base exactly, with no prompt.
  *
  * WHY NOT `scutil --get LocalHostName`, which is also prompt-free: on this

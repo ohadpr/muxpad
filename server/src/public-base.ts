@@ -107,7 +107,7 @@ import { probeUrlHealth } from './url-health.js';
  *
  * "Nowhere but here" — no: everywhere the READER is. These artifacts are opened
  * on their author's own laptop and phone, and both are tailnet nodes. Verified
- * 2026-09-29: Tailscale listens on `100.111.22.33:8443` — the tailnet address
+ * 2026-09-29: Tailscale listens on `100.64.0.1:8443` — the tailnet address
  * ONLY, not loopback and not 0.0.0.0 — and answers 200 for a published artifact
  * in 20ms. That is a permanent address, with no login, no tunnel process, no
  * supervision and nothing to install.
@@ -295,7 +295,7 @@ export function durabilityNote(
     // the default has to state both halves of the truth plainly.
     //
     // Measured 2026-09-29: Tailscale listens on the tailnet address ONLY
-    // (100.111.22.33:8443 — not loopback, not 0.0.0.0) and answers 200. From
+    // (100.64.0.1:8443 — not loopback, not 0.0.0.0) and answers 200. From
     // off-tailnet the public DNS for a `*.ts.net` name points at Tailscale's
     // SHARED ingress, which accepts the TCP connection and then never completes
     // the TLS handshake — so a stranger gets a hang, not a clear error. Nothing
