@@ -409,13 +409,49 @@
   border: 1px solid color-mix(in srgb, var(--fg) 7%, transparent);
 }
 
-/* The one you are in, and the ONLY place the accent appears at group level: a
-   ring around the card. Not a fill — a filled card competes with the selected
-   ROW inside it, which is the accent's real job here and the one thing that
-   must stay unambiguous. A ring states "this container" without spending the
-   colour that states "this row". */
+/* ─── THE WORKSPACE YOU ARE NOT IN COSTS LESS INK ───────────────────────────
+   Reported as "a bit noisy". It was: an inactive workspace was rendered at
+   exactly the same strength as the active one — same weight, same row height,
+   and above all the same full-colour emoji.
+
+   The EMOJI are the thing. They are the loudest objects in the rail by a
+   distance: saturated, full-size, and carrying no information at all about
+   whether you are in that workspace. Draining them is the one move that
+   removes most of the noise while leaving every NAME at full legibility —
+   which a blanket `opacity` on the card does not, because it dims the text you
+   might still want to read in order to dim the icon you do not.
+
+   The name takes one quiet step down with it. Not more: these rows are still
+   navigation targets, and a workspace you are not in is not a workspace you
+   have stopped caring about. */
+.navtree-group:not([data-active="true"]) .navtree-tab-row .chatchip {
+  filter: grayscale(1);
+  opacity: 0.55;
+}
+.navtree-group:not([data-active="true"]) .navtree-tab-row .navtree-name-text {
+  color: var(--fg-dim);
+}
+/* …except the row you are ON, wherever it lives. A chat open in a collapsed or
+   unfocused workspace is the one row in that group that is NOT background, and
+   draining it would hide the thing the rail exists to point at. */
+.navtree-group:not([data-active="true"]) .navtree-tab-row[data-active="true"] .chatchip {
+  filter: none;
+  opacity: 1;
+}
+
+/* The one you are in. A ring around the card — not a fill, because a filled
+   card competes with the selected ROW inside it, which is the accent's real
+   job and the one thing that must stay unambiguous.
+
+   SOFTENED from a solid 1.5px accent once the dimming above landed. The two
+   signals are redundant by design — every other card is visibly drained, so
+   the active card is already the only bright thing in the rail — and at full
+   strength the ring was then the loudest mark on screen, competing with the
+   selected row for the same meaning. A hairline at half ink still closes the
+   shape without shouting; it reads as the edge of the card you are in rather
+   than as a highlight on it. */
 .navtree-group[data-active="true"] {
-  box-shadow: 0 0 0 1.5px var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 50%, transparent);
 }
 
 .navtree-group + .navtree-group {
