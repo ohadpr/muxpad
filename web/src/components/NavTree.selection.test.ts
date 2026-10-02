@@ -605,13 +605,16 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     expect(group).not.toMatch(/border-left/);
     expect(ruleBody(NAV_CSS, '.navtree-group[data-active="true"]', true)).toBe('');
 
-    const active = ruleBody(NAV_CSS, '.navtree-group > .navtree-ws-row[data-active="true"]:hover');
-    // No fill of its own — that is the whole point. (The only rule the active
-    // header still has is its hover step, which is a wash, not a selection.)
-    expect(active).not.toMatch(/background-color:\s*var\(--accent\)/);
-    // And no second marker on the header itself: no edge, no border.
-    expect(active).not.toMatch(/box-shadow/);
-    expect(active).not.toMatch(/border-left/);
+    // The active header's ONLY mark is its label stepping to full ink. No
+    // fill, no edge, no accent — the accent means "needs you", and the active
+    // TAB inside the group is already the one tinted surface on screen.
+    const active = ruleBody(NAV_CSS, '.navtree-ws-row[data-active="true"] .navtree-name-text');
+    expect(decl(active, 'color')).toBe('var(--fg)');
+    expect(active).not.toMatch(/background|box-shadow|border/);
+    // …and the group-scoped hover band that used to exist is gone with the band.
+    expect(
+      ruleBody(NAV_CSS, '.navtree-group > .navtree-ws-row[data-active="true"]:hover', true),
+    ).toBe('');
   });
 
   it('separates workspaces with a BANDED HEADER, not a rule and not only air', () => {
@@ -639,15 +642,15 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     // two-surfaces-deriving-one-value bug this file has caught before — a
     // header a shade off its own card is a seam the width of the header.
     const band = ruleBody(NAV_CSS, '.navtree-group > .navtree-ws-row');
-    expect(decl(band, 'background-color')).toBe('var(--nt-group-head)');
+    expect(decl(band, 'background-color')).toBe('var(--nt-surface)');
     expect(decl(band, 'position')).toBe('sticky');
     // Mixed from --fg, not from a surface token: the band has to be visible on a
     // near-black rail and a cream one, and the foreground is the only value
     // guaranteed to have range over both — the rail's text has to be readable
     // there by definition. Chained through the TRAY now, so the header can
     // never be a shade the card is not. See the tray test for the arithmetic.
-    expect(NT_TOKENS['--nt-group-head']).toMatch(/color-mix\(in srgb, var\(--fg\)/);
-    expect(NT_TOKENS['--nt-group-head']).toContain('--nt-surface');
+    expect(NT_TOKENS['--nt-group-head']).toBeUndefined();
+    expect(NT_TOKENS['--nt-trough']).toBeUndefined();
   });
   it('the fillets are in ::after, because ::before is already somebody else’s', () => {
     // THE BUG THIS EXISTS FOR, which was on screen and was reported as a pale
@@ -683,51 +686,63 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     expect(decl(fillet, 'background-image').match(/radial-gradient/g)).toHaveLength(2);
     expect(decl(fillet, 'background-image')).toContain('--bg-pane-face');
   });
-  it('the group is a TRAY, and the TINT IS ON THE GAP, not on the rows', () => {
-    // "i still yearn for more grouping of workspaces", against the sticky band.
-    // The band marks where a group STARTS and says nothing about where it ends,
-    // so twenty rows under it still read as one run. A body says both.
+  it('the group has NO SURFACE — air and a label carry it, and the row keeps its contrast', () => {
+    // "i still yearn for more grouping of workspaces", then "bad contrast of
+    // bg", then "not good". Three attempts, each measured, each failing for its
+    // own reason, and the sequence is the argument for where this landed:
     //
-    // The body is what was deleted, and its right wall was why: the selected
-    // row has to run INTO the pane, and a container with a right edge stops it
-    // a wall short. So the shape, not the fill, is the first assertion — left
-    // corners only, open on the right.
+    //   1 · a tinted TRAY (--fg 8% over the rail). Mixing a surface toward --fg
+    //       moves every row's background toward its own ink: text contrast fell
+    //       on all six themes (11.30 → 9.77 alucard, 12.61 → 10.87
+    //       github-light) and github-light's DIM ink went 4.88 → 4.21, under
+    //       the AA floor. --fg also flips with the theme, so one percentage
+    //       RECESSED the tray on three themes and RAISED it on the other three.
+    //   2 · a tinted TROUGH. Fixed the contrast — the tint sat on the gap,
+    //       which has no text — but left FOUR surfaces (rail, trough, tray,
+    //       header band) within a few ΔE of one another. That is a flat field
+    //       with faint lines in it, not a hierarchy.
+    //   3 · no group surface at all, which is what every reference describes:
+    //       group with air and a muted label, and spend the one surface you
+    //       have on the one thing that is selected.
+    //
+    // So the assertions are NEGATIVE on purpose. Each one is a thing that was
+    // tried, shipped, and reported.
     const group = ruleBody(NAV_CSS, '.navtree-group');
-    expect(decl(group, 'border-radius')).toMatch(/^\d+px 0 0 \d+px$/);
-
-    // AND THE FILL IS THE OTHER WAY ROUND, which is the correction this test
-    // exists for. The tray was first drawn as `--fg 8%` over the rail, and
-    // mixing a surface toward --fg is the one direction guaranteed to be wrong:
-    // it moves every row's background toward its own ink. Measured, text
-    // contrast fell on all six themes — 11.30 → 9.77 alucard, 16.33 → 13.83
-    // acme, 12.61 → 10.87 github-light — and github-light's DIM ink went
-    // 4.88 → 4.21, under the 4.5 floor. Reported as "bad contrast of bg".
-    //
-    // It was wrong a second way nobody had to notice: --fg flips with the
-    // theme, so one percentage RECESSED the tray on the three light themes and
-    // RAISED it on the three dark ones. A card cannot mean two opposite things.
-    //
-    // So the tray keeps the rail's own surface, untouched, and the GAP is what
-    // steps — tint on the one surface that has no text on it.
-    expect(decl(group, 'background-color')).toBe('var(--nt-surface)');
-    expect(decl(ruleBody(NAV_CSS, '.navtree-scroll'), 'background-color')).toBe('var(--nt-trough)');
-    expect(group).not.toMatch(/--accent/);
+    expect(group).not.toMatch(/background/);
+    expect(group).not.toMatch(/border-radius/);
     expect(group).not.toMatch(/box-shadow/);
+    expect(group).not.toMatch(/--accent/);
+    expect(ruleBody(NAV_CSS, '.navtree-scroll')).not.toMatch(/background-color/);
 
-    const tray = (t: Record<string, string>) => t['--bg-tabbar'] as string;
-    const trough = (t: Record<string, string>) => over(t['--fg'] as string, tray(t), 0.08);
-    const band = (t: Record<string, string>) => over(t['--fg'] as string, tray(t), 0.07);
+    // The sticky header is OPAQUE but not tinted. Opacity is the entire
+    // requirement — rows must not scroll through the label — and a band was
+    // over-paying for it.
+    const head = ruleBody(NAV_CSS, '.navtree-group > .navtree-ws-row');
+    expect(decl(head, 'position')).toBe('sticky');
+    expect(decl(head, 'background-color')).toBe('var(--nt-surface)');
+
+    // And the label is a LABEL: smaller than the rows it heads, not larger,
+    // and set apart by case rather than by a surface. It used to be the same
+    // size as a chat and heavier, which is why three workspaces read as three
+    // more list items instead of as three containers.
+    const label = ruleBody(NAV_CSS, '.navtree-ws-row .navtree-name-text');
+    expect(decl(label, 'text-transform')).toBe('uppercase');
+    expect(Number.parseFloat(decl(label, 'font-size'))).toBeLessThan(13);
+    expect(decl(label, 'color')).toBe('var(--fg-dim)');
+    expect(decl(ruleBody(NAV_CSS, '.navtree-ws-row[data-active="true"] .navtree-name-text'), 'color')).toBe(
+      'var(--fg)',
+    );
+
+    // Air is now the whole separating device, so it has to be a real amount.
+    expect(
+      Number.parseFloat(decl(ruleBody(NAV_CSS, '.navtree-group + .navtree-group'), 'margin-top')),
+    ).toBeGreaterThanOrEqual(24);
+
+    // THE ROW'S CONTRAST IS UNTOUCHED, on every theme — this is the assertion
+    // attempt 1 failed and the reason the tint is not on a reading surface.
     for (const [name, t] of Object.entries(THEMES)) {
-      // The rows read EXACTLY as they did before there was a tray, because the
-      // surface under them did not move. This is the assertion, not a bound:
-      // nothing about grouping is allowed to cost the text anything.
-      const textOnTray = ratio(t['--fg'] as string, tray(t));
-      const textOnRail = ratio(t['--fg'] as string, t['--bg-tabbar'] as string);
-      expect({ name, same: textOnTray === textOnRail }).toEqual({ name, same: true });
-      expect({ name, aa: textOnTray >= 4.5 }).toEqual({ name, aa: true });
-      // And the grouping still has to be visible, on the channel instead.
-      expect({ name, gap: deltaE(trough(t), tray(t)) >= 3.5 }).toEqual({ name, gap: true });
-      expect({ name, head: deltaE(band(t), tray(t)) >= 3.5 }).toEqual({ name, head: true });
+      const onRow = ratio(t['--fg'] as string, t['--bg-tabbar'] as string);
+      expect({ name, aa: onRow >= 4.5 }).toEqual({ name, aa: true });
     }
   });
 

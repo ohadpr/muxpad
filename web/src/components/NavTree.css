@@ -71,24 +71,20 @@
    so neither surface has to know about the other. */
 .navtree {
   --nt-surface: var(--bg-tabbar);
-  /* THE TROUGH, AND WHY THE TINT IS ON THE GAP RATHER THAN ON THE TRAY.
-     The tray was `--fg 8%` over the rail, which is the one direction that is
-     guaranteed to be wrong: mixing a surface toward --fg moves every row's
-     background toward its own ink. Measured, text contrast fell on all six
-     themes — 11.30 → 9.77 on alucard, 16.33 → 13.83 on acme, 12.61 → 10.87 on
-     github-light — and the DIM ink went 4.88 → 4.21 there, under the 4.5 floor.
-     Reported as "bad contrast of bg", and it was.
+/* NO GROUP SURFACE AT ALL, and that is the third answer to this question.
+     The sequence is worth keeping because each attempt was measured and each
+     one failed for a different reason: a tinted TRAY moved every row's
+     background toward its own ink (text contrast fell on all six themes); a
+     tinted TROUGH fixed the contrast but left four surfaces — rail, trough,
+     tray, header band — inside a few ΔE of each other, which is a flat field
+     with faint lines in it rather than a hierarchy. Reported as "not good".
 
-     It was wrong in a second way nobody had to notice: --fg flips with the
-     theme, so the same 8% RECESSED the tray on the three light themes and
-     RAISED it on the three dark ones. A card cannot mean two opposite things.
-
-     So the tint moves to the GAP, where there is no text to sit on. The tray
-     keeps the rail's own colour untouched — every row reads exactly as it did
-     before there was a tray — and the channel between trays is what steps. One
-     surface moved instead of two, and the one that moved has nothing on it. */
-  --nt-trough: color-mix(in srgb, var(--fg) 8%, var(--nt-surface));
-  --nt-group-head: color-mix(in srgb, var(--fg) 7%, var(--nt-surface));
+     What every reference says to do instead, and what this now does: group
+     with AIR and a LABEL, and spend the one surface you have on the one thing
+     that is selected. Section headers are non-interactive muted labels that do
+     not consume a full row's worth of ink; the gap between groups does the
+     containing. One tinted surface on screen means it cannot be mistaken, and
+     the three faint ones that were competing with it are gone. */
   /* Row metrics + surfaces are the only things the variants disagree on. */
   --nt-row-ws: 32px;
   /* ONE LINE, and the chip decides the height: 6 + 24 + 6. It was 34px for a
@@ -341,8 +337,6 @@
 .navtree-scroll {
   flex: 1;
   min-height: 0;
-  /* The channel the trays sit in. See --nt-trough. */
-  background-color: var(--nt-trough);
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
@@ -454,11 +448,6 @@
 .navtree-group {
   margin-top: 10px;
   padding: 0 var(--nt-pad) 5px;
-  /* The rail's OWN surface, unmixed — see --nt-trough. The tray is not tinted;
-     the gap around it is. */
-  background-color: var(--nt-surface);
-  /* Left only. The right is where the pane is. */
-  border-radius: 10px 0 0 10px;
 }
 
 /* ─── EVERY ICON IS DESATURATED, NOT ONLY THE ONES YOU ARE NOT IN ───────────
@@ -477,17 +466,19 @@
    The row you are ON keeps its full colour wherever it lives: it is the one row
    in the rail that is not background. */
 .navtree-tab-row .chatchip {
-  filter: saturate(0.45) contrast(0.95);
+  filter: saturate(0.7);
 }
 .navtree-tab-row[data-active="true"] .chatchip {
   filter: none;
 }
 
-/* AIR, and more of it than the card needs to be seen — the gap is the second
-   half of the grouping, and at 10px the trays touched closely enough to read as
-   one surface with lines in it. 18px is a clear band of rail between them. */
+/* AIR IS THE GROUPING, so it has to be a real amount of it. 18px was tuned
+   when a tray was carrying the separation and the gap only had to show that
+   two trays were not one; with nothing but the gap left, it is the whole
+   device. 26px is unambiguous at a glance and still cheap — three groups cost
+   52px of a rail that scrolls anyway. */
 .navtree-group + .navtree-group {
-  margin-top: 18px;
+  margin-top: 26px;
 }
 
 /* ─── STICKY, so you never lose which workspace you are reading ─────────────
@@ -508,20 +499,18 @@
   position: sticky;
   top: 0;
   z-index: 2;
-  /* THE BAND IS THE GROUPING. Mixed from --fg so it cannot go invisible on any
-     theme — the rail's text has to be readable there by definition — and solid,
-     because a sticky header has to hide what scrolls under it.
+  /* THE RAIL'S OWN COLOUR, which is the point: at rest this is invisible, and
+     it exists only so that rows cannot scroll through the label. A sticky
+     header has to be OPAQUE or the list passes under it — that is the whole
+     requirement, and a tinted band was over-paying for it. The label's
+     typography is what says "header" now.
 
      background-COLOR, never the shorthand: the shorthand resets every other
      background property, including the state tint a row can carry.
      StateChip.test pins that for exactly this reason. */
-  background-color: var(--nt-group-head);
-  border-radius: 7px;
+  background-color: var(--nt-surface);
 }
 
-.navtree-group > .navtree-ws-row:hover {
-  background-color: color-mix(in srgb, var(--fg) 6%, var(--nt-group-head));
-}
 
 /* ─── THE ACTIVE WORKSPACE: AN EDGE, NOT A FILL ─────────────────────────────
    It was `accent 16%` over the same surface, and the active ROW is the accent
@@ -544,9 +533,6 @@
 
 /* …and the hover tint still has to win over the resting band on the active
    header, which it would not if the only rule for it sat above this one. */
-.navtree-group > .navtree-ws-row[data-active="true"]:hover {
-  background-color: color-mix(in srgb, var(--fg) 6%, var(--nt-group-head));
-}
 
 /* ─── Workspace row (banded header) ──────────────────────────────────── */
 
@@ -584,6 +570,30 @@
   padding: 0 6px 0 var(--nt-pad);
   border-radius: var(--nt-pill);
   font-weight: 600;
+  color: var(--fg);
+}
+/* ─── THE HEADER IS A LABEL, NOT A ROW ──────────────────────────────────────
+   Every reference agrees on this one and the rail was doing the opposite: a
+   section header is a muted, smaller, letter-spaced caption that does NOT
+   consume a navigation row's worth of ink. It had the SAME size and a heavier
+   weight than the chats under it, which is why three stacked workspaces read
+   as three more list items rather than as three containers.
+
+   Uppercase and tracked rather than merely smaller: at 11px a lowercase name
+   just looks like a quiet chat. The case change is what makes it read as a
+   different KIND of thing at a glance, and the tracking is what keeps it
+   legible after the case change. */
+.navtree-ws-row .navtree-name-text {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+}
+/* The active workspace steps to full ink — one channel, no fill. The accent
+   is NOT spent here: it means "needs you", and the active TAB inside this
+   group is already the one tinted surface on screen. */
+.navtree-ws-row[data-active="true"] .navtree-name-text {
   color: var(--fg);
 }
 .navtree-ws-row:has(.navtree-rename) {
