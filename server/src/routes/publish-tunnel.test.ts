@@ -217,7 +217,7 @@ describe('publish tunnel routes', () => {
    * wins by default and the tunnel is something you ASK for.
    */
   describe('audience — the default link is the durable one', () => {
-    const TAILNET = 'https://dt-mac-mini.example-tailnet.ts.net:8443';
+    const TAILNET = 'https://example-host.example-tailnet.ts.net:8443';
 
     const publish = (name: string, audience?: string) =>
       test.app.request('/api/publish', {

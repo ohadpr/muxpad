@@ -8,7 +8,7 @@ const ifaces = (addrs: Record<string, Array<{ address: string; family: string }>
 const TAILNET = ifaces({
   lo0: [{ address: '127.0.0.1', family: 'IPv4' }],
   en0: [{ address: '192.168.1.40', family: 'IPv4' }],
-  utun4: [{ address: '100.111.22.33', family: 'IPv4' }],
+  utun4: [{ address: '100.64.0.1', family: 'IPv4' }],
 });
 
 describe('tailnetHostname', () => {
@@ -18,12 +18,12 @@ describe('tailnetHostname', () => {
       interfaces: () => TAILNET,
       reverse: async (ip) => {
         asked.push(ip);
-        return ['dt-mac-mini.example-tailnet.ts.net.'];
+        return ['example-host.example-tailnet.ts.net.'];
       },
     });
-    expect(got).toBe('dt-mac-mini.example-tailnet.ts.net');
+    expect(got).toBe('example-host.example-tailnet.ts.net');
     // Only the tailnet address is asked about — not the LAN or loopback one.
-    expect(asked).toEqual(['100.111.22.33']);
+    expect(asked).toEqual(['100.64.0.1']);
   });
 
   it('ignores addresses outside 100.64/10', async () => {

@@ -93,7 +93,7 @@ describe('host-identity — isPrivateAddress', () => {
       '172.31.255.255',
       '169.254.1.1',
       '100.64.0.1',
-      '100.111.22.33', // CGNAT (Tailscale-style)
+      '100.64.0.1', // CGNAT (Tailscale-style)
       '100.127.255.255',
       '::1',
       'fe80::1',
@@ -135,7 +135,7 @@ describe('host-identity — isSelfHost', () => {
   it('accepts private/LAN/VPN address literals without any DNS or VPN CLI', async () => {
     expect(await isSelfHost('192.168.1.50')).toBe(true);
     expect(await isSelfHost('10.1.2.3')).toBe(true);
-    expect(await isSelfHost('100.111.22.33')).toBe(true); // tailnet-style CGNAT IP
+    expect(await isSelfHost('100.64.0.1')).toBe(true); // tailnet-style CGNAT IP
   });
 
   it('rejects a public address literal (no DNS needed)', async () => {

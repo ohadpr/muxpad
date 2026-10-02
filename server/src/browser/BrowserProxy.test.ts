@@ -60,8 +60,8 @@ describe('the proxy path', () => {
 
 describe('the link handed to a person', () => {
   it('is the TAILNET origin when the machine has one', () => {
-    expect(browserViewerLink('default', 'dt-mac-mini.example-tailnet.ts.net')).toBe(
-      'https://dt-mac-mini.example-tailnet.ts.net/browser/default/',
+    expect(browserViewerLink('default', 'example-host.example-tailnet.ts.net')).toBe(
+      'https://example-host.example-tailnet.ts.net/browser/default/',
     );
   });
 
