@@ -982,23 +982,29 @@
      through is enough to read as a seam rather than a join. */
   margin-right: calc(var(--nt-pad) * -1);
   padding-right: calc(var(--nt-air) + var(--nt-pad));
-  /* AN EDGE ON THE THREE SIDES THAT DO NOT JOIN, and it is load-bearing rather
-     than decorative. The tab's fill is the pane's face, and on a theme where
-     the pane and the rail sit close together that fill alone barely separates
-     the row from the rail behind it — measured on acme (lilac rail #f0e9f6, cream
-     content #fdf6ea, plus the pane's 5% violet wash) the tab is ΔE 2.40 from
-     the rail, against a hover of 2.70 at 4% and 4.05 at 6% — an idle row under
-     the cursor out-shouts the row you are ON, at every hover value quiet enough
-     to still be visible elsewhere.
+  /* AND NO EDGE, which is a REVERSAL, and the reversal is the point.
 
-     The fill cannot fix that without breaking the join, so the DELINEATION
-     does: three inset hairlines, top, bottom and left, and deliberately none on
-     the right, where the row has to become the pane. A tab is outlined
-     everywhere except where it meets the panel — which is also just what a tab
-     is. Inset rather than a border so no geometry moves. */
-  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--fg) 14%, transparent), inset 0 -1px 0
-    color-mix(in srgb, var(--fg) 14%, transparent), inset 1px 0 0
-    color-mix(in srgb, var(--fg) 14%, transparent);
+     What was here: three inset hairlines, top, bottom and left, added because
+     on acme the tab measures ΔE 2.40 from the rail against a hover of 4.05 — an
+     idle row under the cursor reading louder than the row you are on. The
+     hairline was supposed to be the channel hover does not have.
+
+     It does not survive contact with the shape. The hairlines follow the ROW's
+     rectangle; the fillets are a separate box that extends the surface 18px
+     past it at each end. So the top edge runs straight on through the point
+     where the tab has already curved away, and terminates in mid-air over the
+     rounded corner — a line crossing a curve it was supposed to turn into.
+     Reported as "the lines here are no good", and it is the two-elements-
+     deriving-one-outline bug, which is this sheet's recurring one.
+
+     The premise was also wrong. Hover is TRANSIENT and sits under the cursor,
+     where the reader already knows their pointer is; selection has to be
+     readable AT REST, and at rest no row is hovered, so the two never actually
+     compete for the same glance. And what selection has that hover can never
+     have is the SHAPE — the row merging into the pane. A hover tint cannot
+     round a corner into the content. That is the channel; it was there the
+     whole time, and the hairline was a weaker copy of it drawn in a place that
+     could not hold the geometry. */
 }
 /* The funnel. Two concave fillets above and below the tab's right end, so the
    pane's surface flares INTO the row instead of meeting it at a corner — the

@@ -492,8 +492,8 @@ describe('the ARITHMETIC — six themes, and the defect the TAB introduces', () 
     }
   });
 
-  it('SELECTION OUT-RANKS HOVER on every theme — by fill, or by the edge', () => {
-    // THE point of this file, and it has now caught two designs.
+  it('SELECTION OUT-RANKS HOVER on every theme — by SHAPE, which hover has no access to', () => {
+    // THE point of this file, and it has now caught three designs.
     //
     // While selection was an accent wash it was far from any rail and the fill
     // alone always won. The tab is the PANE's face, which on a theme whose rail
@@ -504,32 +504,52 @@ describe('the ARITHMETIC — six themes, and the defect the TAB introduces', () 
     //   hover at 4%        ΔE 2.70   ← an idle row beats the row you are on
     //   hover at 6%        ΔE 4.05
     //
-    // There is no hover value that fixes acme and stays visible on
-    // github-light, so the fill is not what carries this any more. The selected
-    // row is DELINEATED: inset hairlines on top, bottom and left, and none on
-    // the right, where it has to become the pane. The invariant is therefore
-    // "selection is distinguished in a way hover never is", and the edge is
-    // what guarantees it on every theme including the one the fill cannot.
+    // THE EDGE THAT USED TO ANSWER THIS IS GONE, and the arithmetic above is
+    // why it was tried: three inset hairlines, a channel hover does not have.
+    // It could not hold the geometry. The hairlines follow the ROW's rectangle
+    // while the fillets extend the surface 18px past it, so the top edge ran
+    // straight through the point where the tab had already curved away and
+    // ended in mid-air over the corner. Reported as "the lines here are no
+    // good".
+    //
+    // The premise was wrong too, which is the part worth keeping. A ΔE
+    // comparison between selection and hover assumes they compete for one
+    // glance, and they do not: hover is transient and sits under the cursor,
+    // where the reader already knows their pointer is, while selection has to
+    // be readable AT REST — and at rest nothing is hovered. What selection has
+    // that hover cannot have at any fill value is the SHAPE: the row merges
+    // into the pane. A tint cannot round a corner into the content.
+    //
+    // So the invariant is unchanged — "distinguished in a way hover never is" —
+    // and what carries it is the funnel.
     const selected = ruleBody(NAV_CSS, RAIL_ACTIVE);
     const hovered = ruleBody(NAV_CSS, '.navtree-tab-row:hover');
-    const edges = decl(selected, 'box-shadow');
-    expect(edges).toMatch(/inset 0 1px 0/);
-    expect(edges).toMatch(/inset 0 -1px 0/);
-    expect(edges).toMatch(/inset 1px 0 0/);
-    // NO RIGHT EDGE. A ring would close the shape the funnel exists to open.
-    expect(edges).not.toMatch(/inset -1px 0 0/);
-    // …and hover never draws one, so the two can never be confused whatever
-    // the fills do on a given theme.
-    expect(hovered).not.toMatch(/box-shadow/);
+    const fillet = ruleBody(NAV_CSS, `${RAIL_ACTIVE}::after`);
 
-    // Where the fill DOES carry it, it must still not invert — the row you are
-    // on is never quieter than one under the cursor by more than the edge can
-    // make up. Recorded per theme so a palette change reports which ones rely
-    // on the edge rather than silently relying on it everywhere.
-    const onlyEdgeCarries = Object.entries(THEMES)
+    // The shape, stated as the three things that make it one: it takes the
+    // pane's own face, it loses its right-hand corners, and it reaches past the
+    // rail's padding so there is no strip of rail left between the two.
+    expect(decl(selected, 'background-color')).toBe('var(--bg-pane-face)');
+    expect(decl(selected, 'border-radius')).toMatch(/^var\(--nt-pill\) 0 0 var\(--nt-pill\)$/);
+    expect(decl(selected, 'margin-right')).toContain('-1');
+    expect(decl(fillet, 'background-image')).toContain('--bg-pane-face');
+
+    // And hover has none of it — no fill from the pane, no geometry at all. A
+    // hovered row cannot be mistaken for the selected one however the two fills
+    // measure on a given theme, which is what the edge was standing in for.
+    expect(fill(hovered)).not.toContain('--bg-pane-face');
+    expect(hovered).not.toMatch(/border-radius|margin-right|box-shadow/);
+    // No edge on the selected row either — a straight line cannot follow this
+    // shape, and one that tries ends over the curve.
+    expect(selected).not.toMatch(/box-shadow/);
+
+    // The fill arithmetic is still RECORDED, because it is the reason the shape
+    // has to carry this and a palette change that fixes acme should show up
+    // here as a change rather than silently.
+    const fillAloneFails = Object.entries(THEMES)
       .filter(([, t]) => dEvsRail('var(--bg-pane-face)', t) <= dEvsRail(fill(hovered), t))
       .map(([name]) => name);
-    expect(onlyEdgeCarries).toEqual(['acme']);
+    expect(fillAloneFails).toEqual(['acme']);
   });
 
   it('the tab does NOT move on hover, and that is deliberate', () => {
