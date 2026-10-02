@@ -6,7 +6,7 @@ import { renderToStaticMarkup as html } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { MentionChat } from '../lib/chat-mention';
 import { matchInboundSenders } from '../lib/inbound-senders';
-import { ChatMentionContext, MentionMessage } from './ChatPane';
+import { ChatMentionContext, MentionMessage } from './ChatTranscript';
 
 /**
  * A MESSAGE FROM ANOTHER AGENT IS NOT A MESSAGE THE HUMAN TYPED.
@@ -19,7 +19,16 @@ import { ChatMentionContext, MentionMessage } from './ChatPane';
  * messages left exactly as they were.
  */
 
-const SRC = readFileSync(join(__dirname, 'ChatPane.tsx'), 'utf8');
+// BOTH files, concatenated. This wiring spans the seam: the LOOKUP side
+// (`inbound?.get(eventId)`, resolving a sender out of the live corpus) renders
+// a message and moved to ChatTranscript.tsx, while the FETCH side
+// (`loadInboundSenders`) is lifecycle and stayed in ChatPane.tsx. The contract
+// under test is the wiring itself, which is unchanged — so the source it reads
+// is both halves rather than whichever half happens to hold a given line.
+const SRC = [
+  readFileSync(join(__dirname, 'ChatPane.tsx'), 'utf8'),
+  readFileSync(join(__dirname, 'ChatTranscript.tsx'), 'utf8'),
+].join('\n');
 
 function chat(tabName: string): MentionChat {
   return {

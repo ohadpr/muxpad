@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { RecentFolder } from '../api';
-import { ChatReadyGreeting, FolderChoice, HarnessLaunchCard } from './ChatPane';
+import { ChatReadyGreeting, FolderChoice, HarnessLaunchCard } from './ChatStart';
 
 /**
  * The two halves of "converting an empty chat gives no feedback and no
