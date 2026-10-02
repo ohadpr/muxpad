@@ -647,7 +647,7 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     // there by definition. Chained through the TRAY now, so the header can
     // never be a shade the card is not. See the tray test for the arithmetic.
     expect(NT_TOKENS['--nt-group-head']).toMatch(/color-mix\(in srgb, var\(--fg\)/);
-    expect(NT_TOKENS['--nt-group']).toContain('--nt-surface');
+    expect(NT_TOKENS['--nt-group-head']).toContain('--nt-surface');
   });
   it('the fillets are in ::after, because ::before is already somebody else’s', () => {
     // THE BUG THIS EXISTS FOR, which was on screen and was reported as a pale
@@ -683,58 +683,54 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     expect(decl(fillet, 'background-image').match(/radial-gradient/g)).toHaveLength(2);
     expect(decl(fillet, 'background-image')).toContain('--bg-pane-face');
   });
-  it('the group is a TRAY — a body on every theme, and open on the right', () => {
+  it('the group is a TRAY, and the TINT IS ON THE GAP, not on the rows', () => {
     // "i still yearn for more grouping of workspaces", against the sticky band.
     // The band marks where a group STARTS and says nothing about where it ends,
     // so twenty rows under it still read as one run. A body says both.
     //
-    // The body is what was here before and was deleted, because its right wall
-    // cut the funnel — the selected row has to run INTO the pane, and a
-    // container with a right edge stops it a wall short. So the shape, not the
-    // fill, is the assertion: left corners only.
+    // The body is what was deleted, and its right wall was why: the selected
+    // row has to run INTO the pane, and a container with a right edge stops it
+    // a wall short. So the shape, not the fill, is the first assertion — left
+    // corners only, open on the right.
     const group = ruleBody(NAV_CSS, '.navtree-group');
     expect(decl(group, 'border-radius')).toMatch(/^\d+px 0 0 \d+px$/);
-    expect(decl(group, 'background-color')).toBe('var(--nt-group)');
 
-    // ONE AUTHORITY FOR THE TWO SURFACES. The card was deleted once for exactly
-    // the drift this prevents: a header mixed against the RAIL while the card
-    // was mixed against something else, so the header read as a seam across its
-    // own card. The header is now derived FROM the card.
-    expect(NT_TOKENS['--nt-group-head']).toContain('var(--nt-group)');
-    const head = ruleBody(NAV_CSS, '.navtree-group > .navtree-ws-row');
-    expect(decl(head, 'background-color')).toBe('var(--nt-group-head)');
+    // AND THE FILL IS THE OTHER WAY ROUND, which is the correction this test
+    // exists for. The tray was first drawn as `--fg 8%` over the rail, and
+    // mixing a surface toward --fg is the one direction guaranteed to be wrong:
+    // it moves every row's background toward its own ink. Measured, text
+    // contrast fell on all six themes — 11.30 → 9.77 alucard, 16.33 → 13.83
+    // acme, 12.61 → 10.87 github-light — and github-light's DIM ink went
+    // 4.88 → 4.21, under the 4.5 floor. Reported as "bad contrast of bg".
+    //
+    // It was wrong a second way nobody had to notice: --fg flips with the
+    // theme, so one percentage RECESSED the tray on the three light themes and
+    // RAISED it on the three dark ones. A card cannot mean two opposite things.
+    //
+    // So the tray keeps the rail's own surface, untouched, and the GAP is what
+    // steps — tint on the one surface that has no text on it.
+    expect(decl(group, 'background-color')).toBe('var(--nt-surface)');
+    expect(decl(ruleBody(NAV_CSS, '.navtree-scroll'), 'background-color')).toBe('var(--nt-trough)');
+    expect(group).not.toMatch(/--accent/);
+    expect(group).not.toMatch(/box-shadow/);
 
-    // And the arithmetic, over the real tokens on all six themes. A tray that
-    // is invisible on one theme is the failure mode this file exists for.
-    const card = (t: Record<string, string>) =>
-      over(t['--fg'] as string, t['--bg-tabbar'] as string, 0.08);
-    const band = (t: Record<string, string>) => over(t['--fg'] as string, card(t), 0.07);
+    const tray = (t: Record<string, string>) => t['--bg-tabbar'] as string;
+    const trough = (t: Record<string, string>) => over(t['--fg'] as string, tray(t), 0.08);
+    const band = (t: Record<string, string>) => over(t['--fg'] as string, tray(t), 0.07);
     for (const [name, t] of Object.entries(THEMES)) {
-      const cardVsRail = deltaE(card(t), t['--bg-tabbar'] as string);
-      const headVsCard = deltaE(band(t), card(t));
-      const tabVsCard = deltaE(paneFace(t), card(t));
-      // 3.5, and the LIGHT themes are what set it — which is the thing worth
-      // knowing here, because the instinct is to tune on the dark ones. The
-      // same 8% of --fg that steps 7.62 over tokyo-night's near-black rail
-      // steps 4.62 over alucard's lilac one, and the header above it 3.74. A
-      // percentage is not a perceptual step, and three surfaces stacked on a
-      // light theme is where that bites. alucard's header sets this floor.
-      expect({ name, cardVsRail: cardVsRail >= 3.5 }).toEqual({ name, cardVsRail: true });
-      expect({ name, headVsCard: headVsCard >= 3.5 }).toEqual({ name, headVsCard: true });
-      expect({ name, tabVsCard: tabVsCard >= 3.5 }).toEqual({ name, tabVsCard: true });
+      // The rows read EXACTLY as they did before there was a tray, because the
+      // surface under them did not move. This is the assertion, not a bound:
+      // nothing about grouping is allowed to cost the text anything.
+      const textOnTray = ratio(t['--fg'] as string, tray(t));
+      const textOnRail = ratio(t['--fg'] as string, t['--bg-tabbar'] as string);
+      expect({ name, same: textOnTray === textOnRail }).toEqual({ name, same: true });
+      expect({ name, aa: textOnTray >= 4.5 }).toEqual({ name, aa: true });
+      // And the grouping still has to be visible, on the channel instead.
+      expect({ name, gap: deltaE(trough(t), tray(t)) >= 3.5 }).toEqual({ name, gap: true });
+      expect({ name, head: deltaE(band(t), tray(t)) >= 3.5 }).toEqual({ name, head: true });
     }
-
-    // AND IT REPAIRS ACME, which is worth pinning because it was free. The tab
-    // measures ΔE 2.40 against acme's bare rail — the number that made hover
-    // out-shout selection and that an edge was added and then deleted over. The
-    // tray is what the tab actually sits in now, and against the tray it is
-    // several times clearer. Selection stopped being the thin case here.
-    const acme = THEMES['acme'] as Record<string, string>;
-    expect(deltaE(paneFace(acme), acme['--bg-tabbar'] as string)).toBeLessThan(3);
-    expect(deltaE(paneFace(acme), card(acme))).toBeGreaterThan(
-      deltaE(paneFace(acme), acme['--bg-tabbar'] as string),
-    );
   });
+
   it('the pin seam IS a line, and one that can actually be seen', () => {
     // Reversed deliberately. The old rule was "paints nothing at all", on the
     // reasoning that pinning is already told by POSITION and per-row by "the
