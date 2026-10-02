@@ -1126,7 +1126,57 @@
    name. A child of a chat is exactly one level of the same hierarchy, so it
    costs the same. */
 .navtree[data-variant="sidebar"] .navtree-tab-row[data-child="true"] {
-  padding-left: calc(var(--nt-pad) + var(--nt-indent) * 2);
+  /* 8px past a normal row, not 12. A full second indent pushed the child far
+     enough right that it stopped reading as "under that one" and started
+     reading as its own column. */
+  padding-left: calc(var(--nt-pad) + var(--nt-indent) + 8px);
+  position: relative;
+}
+
+/* ─── ONE TRUNK, AND IT NEVER TOUCHES THE PARENT ────────────────────────────
+   Drawn from a sketch, after three rounds of getting it wrong. Two rules:
+
+   1. THE LINE IS THE CHILDREN'S, NOT THE PARENT'S. Every earlier attempt
+      started the connector inside the parent row — which is a chat like any
+      other, and drawing tree furniture onto it says it is part of the
+      scaffolding. The rows are FLUSH (measured: 36px tall, 0 gap), so a line
+      beginning at the parent had nowhere to begin except on top of it. The
+      trunk now starts 7px into the FIRST child's own box, which is the gap.
+
+   2. ONE TRUNK FOR ALL OF THEM. A connector drawn per child repeats its
+      furniture N times; a single vertical with a tick per child is one shape
+      no matter how many there are. Each child paints the segment of the trunk
+      that crosses it, so the pieces abut into one line.
+
+   The last child stops its segment at the tick, so the trunk terminates INSIDE
+   the family rather than trailing into whatever follows. */
+.navtree[data-variant="sidebar"] .navtree-tab-row[data-child="true"]::before {
+  content: "";
+  position: absolute;
+  left: calc(var(--nt-pad) + var(--nt-indent) - 1px);
+  top: 0;
+  bottom: 50%;
+  border-left: 1.5px solid color-mix(in srgb, var(--fg) 18%, transparent);
+}
+/* The FIRST child in a run: start below the parent's edge, not at it. */
+.navtree[data-variant="sidebar"]
+  .navtree-tab-row:not([data-child="true"])
+  + .navtree-tab-row[data-child="true"]::before {
+  top: 7px;
+}
+/* A child with another child after it carries the trunk straight through. */
+.navtree[data-variant="sidebar"]
+  .navtree-tab-row[data-child="true"]:has(+ .navtree-tab-row[data-child="true"])::before {
+  bottom: 0;
+}
+/* …and the tick into each child. */
+.navtree[data-variant="sidebar"] .navtree-tab-row[data-child="true"]::after {
+  content: "";
+  position: absolute;
+  left: calc(var(--nt-pad) + var(--nt-indent) - 1px);
+  top: 50%;
+  width: 8px;
+  border-top: 1.5px solid color-mix(in srgb, var(--fg) 18%, transparent);
 }
 /* One step quieter than a parent's name, in weight and colour — a child is
    subordinate, and saying so in the type means not having to say it with a
