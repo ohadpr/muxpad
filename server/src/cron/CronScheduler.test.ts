@@ -1,3 +1,4 @@
+import { parseCronMarker } from '@muxpad/shared';
 // Policy tests for the cron tick. Everything here runs against a real
 // in-memory SQLite (the schema IS the design) with a FAKE injection primitive,
 // a fake ptyd and a driven clock — no sleeping, no daemon, no ~/.muxpad.
@@ -21,7 +22,6 @@ import {
   CronScheduler,
   type CronSchedulerDeps,
 } from './CronScheduler.js';
-import { parseCronMarker } from '@muxpad/shared';
 import { CRON_RUNS_KEEP } from './CronStore.js';
 
 const HOURLY = '0 * * * *';
