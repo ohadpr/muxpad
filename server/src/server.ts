@@ -7,6 +7,7 @@ import type { ArchiveDb } from './archive/ArchiveDb.js';
 import { wakeBrowser } from './browser/WakeBrowser.js';
 import { findChrome } from './browser/findChrome.js';
 import { browserHostEntry } from './browser/hostEntry.js';
+import type { CleanupModel } from './chat/clean-transcript.js';
 import type { CronScheduler } from './cron/CronScheduler.js';
 import { EventBus } from './events.js';
 import { type Funnel, localFunnel } from './funnel.js';
@@ -18,6 +19,7 @@ import { agentSessionsRoutes } from './routes/agent-sessions.js';
 import { appsRoutes } from './routes/apps.js';
 import { attachmentsRoutes } from './routes/attachments.js';
 import { browserProxyRoutes, browsersRoutes } from './routes/browsers.js';
+import { cleanTranscriptRoutes } from './routes/clean-transcript.js';
 import { cronsRoutes } from './routes/crons.js';
 import { eventsRoutes } from './routes/events.js';
 import { openRoutes } from './routes/open.js';
@@ -162,6 +164,12 @@ export interface AppDeps {
    * this is the injection seam for tests. See same-origin.ts.
    */
   allowedOrigins?: Set<string>;
+  /**
+   * Test seam for POST /api/clean-transcript's model call. Production omits it
+   * and gets the Agent SDK Haiku completion; tests and browser-driven e2e
+   * supply a fake so no suite can ever reach the network.
+   */
+  cleanupModel?: CleanupModel;
 }
 
 export function createApp(deps: AppDeps): Hono {
@@ -198,6 +206,16 @@ export function createApp(deps: AppDeps): Hono {
   // routes/voice.ts): "no API key" must be an answer, not a 404.
   app.route('/api/voice', voiceRoutes({ voice: resolved.voice }));
   // SSE mirror of /ws/events — curl-able subscription for scripts/agents.
+  // Phone-dictation cleanup for the mobile composers. Read-only and
+  // side-effect-free: it hands corrected text back for the human to review.
+  app.route(
+    '/api/clean-transcript',
+    cleanTranscriptRoutes({
+      db: resolved.db,
+      dataDir: resolved.dataDir,
+      ...(resolved.cleanupModel ? { model: resolved.cleanupModel } : {}),
+    }),
+  );
   app.route('/api/events', eventsRoutes(resolved));
   app.route('/api/agent-sessions', agentSessionsRoutes(resolved));
   // What the empty chat's harness picker needs to offer folder + model at the

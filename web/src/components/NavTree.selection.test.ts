@@ -446,6 +446,39 @@ describe('the ARITHMETIC — six themes, and the defect the wash introduces', ()
 });
 
 describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
+  it('marks the ACTIVE workspace with an edge, never a second fill', () => {
+    // The active header used to be `accent 16%` over the same surface, and the
+    // active ROW is the accent at 20% alpha. Measured on the light theme the two
+    // came out at a contrast ratio of 1.00 — identical luminance. Two different
+    // meanings ("the group you are in", "the row you are reading") wearing one
+    // colour, so the header read as a second selection.
+    // The accent stays, because a bold name alone cannot say which workspace you
+    // are in; it is spent in a different SHAPE. Every header wears the same
+    // neutral band, and the active one takes an edge.
+    //
+    // WHERE that edge lives moved once more, and this is the part worth pinning.
+    // It was an inset shadow on the HEADER, which inherited the band's 6px
+    // radius: the stroke curved away at both corners and read as a notch, not
+    // an edge — and it was a second left edge in a column that already had the
+    // group's spine. They were always the same stroke. So the group's own
+    // border-left IS the edge now, and the active workspace simply inks it.
+    const group = ruleBody(NAV_CSS, '.navtree-group');
+    expect(group).toMatch(/border-left:\s*1px solid/);
+    const activeGroup = ruleBody(NAV_CSS, '.navtree-group[data-active="true"]');
+    expect(activeGroup).toMatch(/border-left-color:\s*var\(--accent\)/);
+    // Colour only: re-declaring the border would change the group's width and
+    // shift every row in it by a pixel when you switch workspaces.
+    expect(activeGroup).not.toMatch(/border-left:/);
+
+    const active = ruleBody(NAV_CSS, '.navtree-group > .navtree-ws-row[data-active="true"]:hover');
+    // No fill of its own — that is the whole point. (The only rule the active
+    // header still has is its hover step, which is a wash, not a selection.)
+    expect(active).not.toMatch(/background-color:\s*var\(--accent\)/);
+    // And no second marker on the header itself: no edge, no border.
+    expect(active).not.toMatch(/box-shadow/);
+    expect(active).not.toMatch(/border-left/);
+  });
+
   it('separates workspaces with a BANDED HEADER, not a rule and not only air', () => {
     // This asserted "nothing rules off one group from the next", and the
     // measurement behind it still stands: `--border` against the rail is

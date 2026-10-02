@@ -150,7 +150,7 @@ describe('the shell CLI agrees with the helper', () => {
       const got = await bin2('_tailnet-hostname');
       // `scutil --get LocalHostName` was the tempting shortcut and it is wrong:
       // on the affected machine it answers `home` while the tailnet name is
-      // `dt-mac-mini`, so gluing it to the tailnet suffix would mint
+      // `example-host`, so gluing it to the tailnet suffix would mint
       // `home.example-tailnet.ts.net` and a public link that cannot work. Only a name
       // that came back from the PTR is acceptable.
       expect(got === '' || /^[a-z0-9-]+(\.[a-z0-9-]+)+\.ts\.net$/.test(got)).toBe(true);

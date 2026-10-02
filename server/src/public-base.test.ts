@@ -277,7 +277,7 @@ describe('precedence — configuration beats discovery', () => {
       const r = make({
         tailnetHostname: async () => {
           asked += 1;
-          return 'dt-mac-mini.example-tailnet.ts.net';
+          return 'example-host.example-tailnet.ts.net';
         },
       });
       await r.resolve({ probe: true });
@@ -612,7 +612,7 @@ describe('durability — how long the ADDRESS lives, not whether it answers now'
  * the author's OWN devices — laptop, phone — and all of them are on the tailnet,
  * where `https://<host>.ts.net:8443` is permanent, needs no login, no tunnel, no
  * supervision and nothing installed. Verified 2026-09-29: Tailscale listens on
- * 100.111.22.33:8443 (the tailnet address ONLY — not loopback, not 0.0.0.0) and
+ * 100.64.0.1:8443 (the tailnet address ONLY — not loopback, not 0.0.0.0) and
  * answers 200 for a published artifact.
  *
  * So the default is the link that still works tomorrow, and a public link is

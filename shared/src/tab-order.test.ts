@@ -1,10 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  type SortableTab,
-  compareByUserTouch,
-  compareUnpinnedTabs,
-  sortSidebarTabs,
-} from './tab-order.js';
+import { type SortableTab, compareUnpinnedTabs, sortSidebarTabs } from './tab-order.js';
 
 describe('wire-only sidebar order', () => {
   it.each([null, 200])(
@@ -40,8 +35,13 @@ describe('wire-only sidebar order', () => {
   });
 });
 
-describe('compareByUserTouch — the GLOBAL list’s order', () => {
-  const sort = (rows: SortableTab[]) => [...rows].sort(compareByUserTouch).map((r) => r.id);
+// These were written against `compareByUserTouch`, the global list's own
+// comparator, back when the per-workspace order still ranked on machine
+// activity. That function is gone (it had no production caller and had become
+// byte-for-byte identical to this one — see tab-order.ts), but the contracts
+// it was pinning are real and now belong to the single surviving comparator.
+describe('compareUnpinnedTabs ranks on what YOU did', () => {
+  const sort = (rows: SortableTab[]) => [...rows].sort(compareUnpinnedTabs).map((r) => r.id);
   const T = 1_800_000_000_000;
 
   it('ignores pty churn: a WORKING chat does not outrank one you just messaged', () => {
@@ -63,10 +63,13 @@ describe('compareByUserTouch — the GLOBAL list’s order', () => {
       last_user_at: T - 3_600_000,
     };
     expect(sort([noisy, mine])).toEqual(['mine', 'noisy']);
-    // …and the shipped per-workspace order is the one that gets it the other
-    // way round. Both are correct for their own surface; that is why there are
-    // two comparators and not one.
-    expect([noisy, mine].sort(compareUnpinnedTabs).map((r) => r.id)).toEqual(['noisy', 'mine']);
+    // This assertion used to be its own opposite: the per-workspace order was
+    // expected to put `noisy` FIRST, on the reasoning that inside a workspace
+    // you have already chosen the context so machine activity is signal. A
+    // screenshot killed that — see `compareUnpinnedTabs`. Both surfaces now
+    // rank on the user's touch, and the duplicate comparator that encoded the
+    // old split is deleted rather than left to drift.
+    expect(sort([mine, noisy])).toEqual(['mine', 'noisy']);
   });
 
   it('still puts a chat that WANTS YOU first — the rail’s one loud bit survives', () => {
@@ -95,7 +98,7 @@ describe('compareByUserTouch — the GLOBAL list’s order', () => {
 
   it('is a consistent total order even when every row is null', () => {
     // (-Inf) - (-Inf) is NaN, which makes a comparator inconsistent and its
-    // sort implementation-defined. Same guard as compareUnpinnedTabs.
+    // sort implementation-defined.
     const rows: SortableTab[] = [{ id: 'c' }, { id: 'a' }, { id: 'b' }];
     expect(sort(rows)).toEqual(['a', 'b', 'c']);
   });

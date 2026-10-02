@@ -20,11 +20,11 @@ import { networkInterfaces } from 'node:os';
  *      installs itself into the resolver (/etc/resolv.conf here lists
  *      `nameserver 100.100.100.100`), so an ordinary reverse lookup resolves it.
  *
- * Verified on the affected machine: 100.111.22.33 → dt-mac-mini.example-tailnet.ts.net,
+ * Verified on the affected machine: 100.64.0.1 → example-host.example-tailnet.ts.net,
  * matching its persisted base exactly, with no prompt.
  *
  * WHY NOT `scutil --get LocalHostName`, which is also prompt-free: on this
- * machine it answers `home`, while the tailnet name is `dt-mac-mini`. The two
+ * machine it answers `home`, while the tailnet name is `example-host`. The two
  * are unrelated settings, so composing LocalHostName with the tailnet suffix
  * would mint `home.example-tailnet.ts.net` — a wrong host and a public link that
  * cannot work. The PTR is the machine's actual tailnet identity rather than a

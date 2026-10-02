@@ -220,7 +220,7 @@ export function fieldBoxesExpression(): string {
  *
  * WHY THE VIEWER NEEDS TO KNOW. A password manager fills forms in the page it is
  * looking at — and the page it is looking at is muxpad, not the site. 1Password
- * sees `dt-mac-mini.ts.net/browser/s-01m…`, has no entry for it, and offers
+ * sees `example-host.ts.net/browser/s-01m…`, has no entry for it, and offers
  * nothing; the site's real form is a JPEG. So the viewer puts up a REAL form of
  * its own, which a password manager can see and fill from a manually chosen
  * entry, and the values are then typed into the page over CDP.

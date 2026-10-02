@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -72,7 +72,7 @@ beforeEach(() => {
       cwd: '/home',
       registry,
       chromePath: () => CHROME,
-      tailnetHost: () => 'dt-mac-mini.example-tailnet.ts.net',
+      tailnetHost: () => 'example-host.example-tailnet.ts.net',
       resumeAgent,
     }),
   );
@@ -118,7 +118,7 @@ describe('creating', () => {
       cdpUrl: string;
     };
     expect(body.profile).toBe('shopping');
-    expect(body.viewerUrl).toBe('https://dt-mac-mini.example-tailnet.ts.net/browser/shopping/');
+    expect(body.viewerUrl).toBe('https://example-host.example-tailnet.ts.net/browser/shopping/');
     // The loopback origin is still reported, because the proxy needs it — but
     // it is not the thing a person is handed.
     expect(body.localUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);

@@ -2885,11 +2885,11 @@ find_tailscale() {
 #      /etc/resolv.conf lists `nameserver 100.100.100.100`), so a plain reverse
 #      lookup resolves it — again no prompt.
 #
-# Verified: 100.111.22.33 → dt-mac-mini.example-tailnet.ts.net, which is exactly the
+# Verified: a tailnet IP → example-host.example-tailnet.ts.net, which is exactly the
 # base already persisted in globals.
 #
 # NOT `scutil --get LocalHostName`, though it is equally prompt-free: on this
-# machine it answers `home` while the tailnet name is `dt-mac-mini`. They are
+# machine it answers `home` while the tailnet name is `example-host`. They are
 # unrelated settings, so gluing LocalHostName to the tailnet suffix would produce
 # `home.example-tailnet.ts.net` — a wrong host and a link that cannot work. The PTR is
 # the machine's real tailnet identity, not a guess assembled from parts.
