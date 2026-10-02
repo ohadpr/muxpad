@@ -1765,17 +1765,30 @@
      same two insets every row already uses, which makes it a separator BETWEEN
      rows rather than a division OF the card. Nothing new to keep in step —
      both numbers are the row's own padding, read from the same tokens. */
-  margin: 5px var(--nt-air) 5px calc(var(--nt-pad) + var(--nt-indent));
+  /* AND SHORT — a STUB, not a rule that crosses the rail. Inset-both-ends was
+     already a step back from flush, but it still spanned 240 of the rail's
+     268px, which is 90% and reads as a cut however you inset it. Reported
+     twice, the second time against the inset version. A separator only has to
+     mark WHERE the break is; it does not have to travel the whole way to say
+     so, and the thing on the other side of this one is the selected tab's
+     bottom fillet, which a long rule runs straight into.
+
+     It starts on the trunk — the same x every icon chip is centred on, so it
+     lines up with a column that is already there — and runs 40px. */
+  width: 40px;
+  margin: 7px 0 7px calc(var(--nt-pad) + var(--nt-indent));
   /* NOT `--border`: measured at 1.00:1 against the rail on alucard
      (#ddd8ee on #ddd8ef), 1.06 on acme, 1.14 on github-light — i.e. the token
      this sheet uses for hairlines is INVISIBLE on the theme in the screenshot
      that reported the seam missing. Deriving it from the foreground instead
      cannot be invisible on any theme, because the rail's text has to be
      readable there by definition. */
-  /* …and a step lighter with it. 30% was tuned for a line that had to carry a
-     full-width seam on six themes; a short inset rule needs less ink to read as
-     a break, and the extra weight was part of what made it shout. */
-  border-top: 1px solid color-mix(in srgb, var(--fg) 20%, transparent);
+  /* A stub this short is 40px of 1px hairline and nothing else, so it goes back
+     UP in weight rather than down: 20% was tuned for a near-full-width rule,
+     where the length carried the signal and the ink only had to be visible. At
+     40px the ink IS the signal. 32% is still under the 1px borders the rest of
+     the sheet uses, and short enough that it cannot shout. */
+  border-top: 1px solid color-mix(in srgb, var(--fg) 32%, transparent);
 }
 
 /* …AND THE MARK'S TRACK IS RESERVED ON A PINNED ROW, so the pin cannot move.

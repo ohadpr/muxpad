@@ -667,5 +667,10 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     // has to be readable on every theme by construction.
     expect(decl(body, 'border-top')).toMatch(/--fg/);
     expect(decl(body, 'border-top')).not.toMatch(/var\(--border\)/);
+    // AND A STUB. Inset-both-ends still spanned 240 of the rail's 268px, which
+    // reads as a cut however it is inset — reported a second time against the
+    // inset version. A fixed, short width is the thing being asserted, because
+    // every margin-based attempt at this has drifted back toward full width.
+    expect(Number.parseFloat(decl(body, 'width'))).toBeLessThanOrEqual(64);
   });
 });
