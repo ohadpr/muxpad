@@ -211,6 +211,12 @@
      had to sit behind a glyph; a tile that has to read as a VESSEL filling up
      needs the extra 4px to show a quarter of itself. */
   --nt-chip: 24px;
+  /* WHERE THE SUB-CHAT TRUNK HANGS, per surface. The line descends from the
+     centre of the PARENT's icon, and the two surfaces put that icon in
+     different places — the rail has a 24px chip 16px in, the sheet a 20px emoji
+     14px in. One set of rules, two sets of coordinates. */
+  --nt-trunk-x: calc(var(--nt-pad) + var(--nt-indent) + var(--nt-chip) / 2);
+  --nt-tick-w: 24px;
   --nt-chip-radius: 8px;
   /* Floor for the meta cell, wide enough that `◷ 07:00` and `◷ Sun 09:00`
      right-align on the same digits instead of jittering row to row. A FLOOR,
@@ -259,6 +265,10 @@
    they sized do not exist on this surface any more. --nt-air/--nt-gutter stay
    because the sheet's PANE rows are still built from them. */
 .navtree[data-variant="sheet"] {
+  --nt-trunk-x: calc(var(--nt-rail-lead) + var(--nt-rail-emoji) / 2);
+  /* Shorter than the rail's: the sheet's name starts at 42 against the rail's
+     60, so the same 24px tick would run straight into the text. */
+  --nt-tick-w: 14px;
   --nt-rail-lead: 14px;
   --nt-rail-trail: 12px;
   --nt-rail-emoji: 20px;
@@ -326,6 +336,34 @@
    through in front of the header meant to be covering them. */
 .navtree[data-variant="sheet"] {
   --nt-surface: var(--bg-chrome);
+}
+
+/* ─── THE SHEET'S CARD IS MIXED THE OTHER WAY ───────────────────────────────
+   Reported as no visible difference between the focused workspace and the rest
+   on mobile, and the measurement agrees: mixing toward `--bg` lifts the card
+   0.027–0.064 over the RAIL but only 0.011–0.023 over the SHEET, about a third.
+
+   The reason is in the tokens, not the recipe. The rail hangs on `--bg-tabbar`,
+   which every theme pushes well away from `--bg` so that chrome reads as
+   chrome. The sheet hangs on `--bg-chrome`, which sits close to `--bg` by
+   design — so "mix 60% toward --bg" has almost nowhere to travel. Raising the
+   ratio cannot fix it either: even at 100% the sheet card would only BE `--bg`,
+   which is still short of the rail's separation.
+
+   So the sheet mixes toward `--fg` instead, which is guaranteed to have range
+   on every theme — the foreground has to contrast with the background or the
+   text would be unreadable. The direction flips (the card is a shade DARKER
+   than the panel on a light theme rather than lighter), and that is the right
+   trade: what the eye needs here is "this one is different", and a panel
+   floating over dimmed content reads a recessed card perfectly well.
+
+   Same ratio between the two states as the rail keeps — the active card is
+   roughly three times the inactive one's separation. */
+.navtree[data-variant="sheet"] .navtree-group {
+  --nt-card: color-mix(in srgb, var(--fg) 7%, var(--nt-surface));
+}
+.navtree[data-variant="sheet"] .navtree-group:not([data-active="true"]) {
+  --nt-card: color-mix(in srgb, var(--fg) 2.5%, var(--nt-surface));
 }
 
 .navtree[data-variant="sheet"] .navtree-scroll {
@@ -1150,7 +1188,7 @@
 
    The last child stops its segment at the tick, so the trunk terminates INSIDE
    the family rather than trailing into whatever follows. */
-.navtree[data-variant="sidebar"] .navtree-tab-row[data-child="true"]::before {
+.navtree .navtree-tab-row[data-child="true"]::before {
   content: "";
   position: absolute;
   /* UNDER THE PARENT'S ICON — its CENTRE, not the row's edge. This was
@@ -1158,32 +1196,29 @@
      hung 12px to its left and descended out of nothing. A tree line has to come
      out of the thing it belongs to. Measured: the parent chip sits 16px into the
      row and is 24 wide, so its centre is 28 — which is what this computes. */
-  left: calc(var(--nt-pad) + var(--nt-indent) + var(--nt-chip) / 2);
+  left: var(--nt-trunk-x);
   top: 0;
   bottom: 50%;
   border-left: 1.5px solid color-mix(in srgb, var(--fg) 18%, transparent);
 }
 /* The FIRST child in a run: start below the parent's edge, not at it. */
-.navtree[data-variant="sidebar"]
-  .navtree-tab-row:not([data-child="true"])
-  + .navtree-tab-row[data-child="true"]::before {
+.navtree .navtree-tab-row:not([data-child="true"]) + .navtree-tab-row[data-child="true"]::before {
   top: 7px;
 }
 /* A child with another child after it carries the trunk straight through. */
-.navtree[data-variant="sidebar"]
-  .navtree-tab-row[data-child="true"]:has(+ .navtree-tab-row[data-child="true"])::before {
+.navtree .navtree-tab-row[data-child="true"]:has(+ .navtree-tab-row[data-child="true"])::before {
   bottom: 0;
 }
 /* …and the tick into each child. */
-.navtree[data-variant="sidebar"] .navtree-tab-row[data-child="true"]::after {
+.navtree .navtree-tab-row[data-child="true"]::after {
   content: "";
   position: absolute;
-  left: calc(var(--nt-pad) + var(--nt-indent) + var(--nt-chip) / 2);
+  left: var(--nt-trunk-x);
   top: 50%;
   /* Reaches to just short of the child's NAME, so the elbow points at the label
      instead of stopping in empty space. The name lands at 60 and the trunk is
      at 28; 24px leaves an 8px breath before the text. */
-  width: 24px;
+  width: var(--nt-tick-w);
   border-top: 1.5px solid color-mix(in srgb, var(--fg) 18%, transparent);
 }
 
@@ -1193,7 +1228,7 @@
    the dot as a second mark for one meaning sitting exactly where the elbow
    lands. Hidden, not removed: the grid column it occupies is a fixed 36px and
    stays, so no child name moves by a pixel. */
-.navtree[data-variant="sidebar"] .navtree-tab-row[data-child="true"] > .navtree-tab-chip {
+.navtree .navtree-tab-row[data-child="true"] > .navtree-tab-chip {
   visibility: hidden;
 }
 /* One step quieter than a parent's name, in weight and colour — a child is
@@ -2711,7 +2746,11 @@ body.sidenav-resizing iframe {
    makes this read as nesting rather than as a line pushed right, and it is what
    lands every child name in the list on one shared x. */
 .navtree[data-variant="sheet"] .navtree-tab-row[data-child="true"] {
-  padding-inline-start: calc(var(--nt-rail-lead) + var(--nt-indent));
+  /* 8px, matching the rail — see the desktop rule. A full --nt-indent was the
+     step on both surfaces until the trunk arrived; with a line doing the work
+     the extra 4px only pushes the name further from the elbow pointing at it. */
+  padding-inline-start: calc(var(--nt-rail-lead) + 8px);
+  position: relative;
 }
 /* The dot stands in the emoji's box, so it has to BE that box — otherwise the
    flex line closes up around a 6px mark and the name jumps left by 14px on
@@ -2720,6 +2759,11 @@ body.sidenav-resizing iframe {
   flex: 0 0 var(--nt-rail-emoji);
   inline-size: var(--nt-rail-emoji);
   block-size: var(--nt-rail-emoji);
+  /* The BOX stays and the mark goes — the trunk says "child" now, and a dot
+     sitting where the elbow lands is a second mark for one meaning. Hiding
+     rather than removing keeps the column, which is the thing holding every
+     child name on one x (see the comment above). */
+  visibility: hidden;
 }
 /* One step quieter in the type, same as the desktop child — a child is
    subordinate, and saying it in the type means not spending a second mark on

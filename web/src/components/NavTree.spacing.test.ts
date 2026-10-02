@@ -697,29 +697,32 @@ describe('the MOBILE RAIL — a flex line, and its four numbers', () => {
     // halves are pinned — the attribute and the dot in NavTree.rows.test.tsx,
     // the arithmetic here.
     //
-    // ONE --nt-indent, the same step the desktop child takes and the same step a
-    // tab takes under its workspace name. The obvious alternative — indent by a
-    // whole emoji box, "put the dot where the tile was" — computes to a name at
-    // 76px, 34px off its parent's, which is the "indentation is too much" this
-    // rail was already once redrawn to fix. The number is the guard.
+    // 8px, NOT a full --nt-indent. Both surfaces took a whole step until the
+    // trunk arrived; with a line drawing the relationship the extra 4px only
+    // pushes the name further from the elbow pointing at it. The rail made the
+    // same move for the same reason — see the desktop child rule.
+    //
+    // The ceiling the old comment guarded still stands and is what matters:
+    // indenting by a whole emoji box puts the name 34px off its parent's, which
+    // is the "indentation is too much" this rail was once redrawn to fix. So
+    // the assertion is a RANGE — clearly stepped, clearly under one level —
+    // rather than a number that has now been retuned twice.
     const child = ruleBody(
       NAV_CSS,
       '.navtree[data-variant="sheet"] .navtree-tab-row[data-child="true"]',
     );
     const childLead = resolve(decl(child, 'padding-inline-start'), SHEET);
-    expect(childLead).toBe(26);
-    const childNameLeft =
-      childLead +
-      resolve(SHEET['--nt-rail-emoji'] as string, SHEET) +
-      resolve(SHEET['--nt-rail-gap'] as string, SHEET);
-    expect(childNameLeft).toBe(54);
-    expect(childNameLeft - chatNameLeft()).toBe(resolve(SHEET['--nt-indent'] as string, SHEET));
-    // The dot must BE the emoji's box, not a 6px mark in a flex line that closes
-    // up around it — otherwise the name jumps 14px left on every child row and
-    // the shared x this whole rule exists to hold is gone.
+    const step = childLead - resolve(SHEET['--nt-rail-lead'] as string, SHEET);
+    expect(step).toBeGreaterThanOrEqual(6);
+    expect(step).toBeLessThan(resolve(SHEET['--nt-indent'] as string, SHEET));
+    // The dot's BOX must stay the emoji's box even though the mark itself is now
+    // hidden — the trunk says "child", and a dot where the elbow lands is a
+    // second mark for one meaning. If the box collapsed, every child name would
+    // jump 14px left and the shared x this rule exists to hold would be gone.
     const dot = ruleBody(NAV_CSS, '.navtree[data-variant="sheet"] .navtree-rail-dot');
     expect(decl(dot, 'flex')).toBe('0 0 var(--nt-rail-emoji)');
     expect(resolve(decl(dot, 'inline-size'), SHEET)).toBe(20);
+    expect(decl(dot, 'visibility')).toBe('hidden');
     // Logical, like every other inset on this surface: the list is read in
     // Hebrew as often as in English and a physical inset indents the wrong side.
     expect(child).not.toMatch(/(?:^|;)\s*padding(?:-left|-right):/);
