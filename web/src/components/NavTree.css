@@ -1153,7 +1153,12 @@
 .navtree[data-variant="sidebar"] .navtree-tab-row[data-child="true"]::before {
   content: "";
   position: absolute;
-  left: calc(var(--nt-pad) + var(--nt-indent) - 1px);
+  /* UNDER THE PARENT'S ICON — its CENTRE, not the row's edge. This was
+     `nt-pad + nt-indent`, which is where the parent's icon BEGINS, so the trunk
+     hung 12px to its left and descended out of nothing. A tree line has to come
+     out of the thing it belongs to. Measured: the parent chip sits 16px into the
+     row and is 24 wide, so its centre is 28 — which is what this computes. */
+  left: calc(var(--nt-pad) + var(--nt-indent) + var(--nt-chip) / 2);
   top: 0;
   bottom: 50%;
   border-left: 1.5px solid color-mix(in srgb, var(--fg) 18%, transparent);
@@ -1173,10 +1178,23 @@
 .navtree[data-variant="sidebar"] .navtree-tab-row[data-child="true"]::after {
   content: "";
   position: absolute;
-  left: calc(var(--nt-pad) + var(--nt-indent) - 1px);
+  left: calc(var(--nt-pad) + var(--nt-indent) + var(--nt-chip) / 2);
   top: 50%;
-  width: 8px;
+  /* Reaches to just short of the child's NAME, so the elbow points at the label
+     instead of stopping in empty space. The name lands at 60 and the trunk is
+     at 28; 24px leaves an 8px breath before the text. */
+  width: 24px;
   border-top: 1.5px solid color-mix(in srgb, var(--fg) 18%, transparent);
+}
+
+/* NO BULLET. The child wore a dot in its mark column, from when the dot was the
+   ONLY thing saying "this is a child" — an indent alone could not do that job,
+   so the mark had to. The trunk says it now, and says it better, which leaves
+   the dot as a second mark for one meaning sitting exactly where the elbow
+   lands. Hidden, not removed: the grid column it occupies is a fixed 36px and
+   stays, so no child name moves by a pixel. */
+.navtree[data-variant="sidebar"] .navtree-tab-row[data-child="true"] > .navtree-tab-chip {
+  visibility: hidden;
 }
 /* One step quieter than a parent's name, in weight and colour — a child is
    subordinate, and saying so in the type means not having to say it with a
