@@ -1465,18 +1465,13 @@ export function attachWsServer(deps: {
         // Turn lifecycle on the GLOBAL bus (spec A4): a supervisor watching N
         // workers holds one /ws/events (or /api/events SSE) subscription
         // instead of N chat sockets. Ids only — content stays off the bus.
-        const emitTurn = (phase: 'start' | 'done' | 'fatal', ok?: boolean) =>
+        const emitTurn = (phase: 'start' | 'done' | 'fatal') =>
           deps.events.emit({
             type: 'agent_turn',
             pane_id: paneId,
             phase,
             sid: conn.sid,
             backend: conn.backend,
-            // Carried only when we KNOW: "it ended" and "it worked" are
-            // different questions and `phase` answers the first one. Omitted on
-            // start, and omitted where the outcome is genuinely unknown, so a
-            // consumer can tell "failed" from "not stated".
-            ...(ok === undefined ? {} : { ok }),
           });
         ws.on('message', (data) => {
           // A displaced socket can still deliver in-flight frames during the
@@ -1690,10 +1685,7 @@ export function attachWsServer(deps: {
             });
             // `done` regardless of ok — the turn ENDED (an errored turn is
             // still a finished wait); a dying runner reports `fatal` below.
-            // The OUTCOME rides alongside rather than in the phase, because the
-            // scheduler needs to know whether the work happened and every other
-            // consumer only needs to know that the wait is over.
-            emitTurn('done', frame.ok !== false);
+            emitTurn('done');
             // Living sidebar: a finished turn is the single most meaningful
             // "something happened here" signal, so it bypasses the throttle.
             activity.touchPane(paneId, { force: true });
@@ -1970,9 +1962,7 @@ export function attachWsServer(deps: {
             // Balance the pair on the GLOBAL bus too. A SIGKILLed runner used
             // to emit `start` and never `done`, so `muxpad agent wait` blocked
             // to timeout and the Archiver missed its realtime enqueue.
-            // Not ok: the runner vanished mid-turn, so whatever it was asked to
-            // do did not finish. A cron that fired into it fired into nothing.
-            emitTurn('done', false);
+            emitTurn('done');
           }
           emitChange();
         };

@@ -242,50 +242,6 @@ export class CronStore {
     );
   }
 
-  /**
-   * Amend a run that has already been written, once its turn's REAL outcome is
-   * known.
-   *
-   * A fire's verdict is recorded the instant `submitSend` answers, which is the
-   * only honest thing it can do then: the agent has not run yet. But that
-   * verdict is about DELIVERY — "the message reached the pane" — and it was the
-   * only verdict a run ever got, so a fire whose turn then died of a spent
-   * quota was stored as a success and reset the failure streak. `cron list`
-   * showed green for a weekday job that had done nothing.
-   *
-   * Scoped to the LATEST run of this cron on this pane, and only while that run
-   * still wears its delivery outcome, so a late turn-end cannot overwrite a
-   * verdict something more specific already corrected.
-   */
-  amendLatestRun(opts: {
-    cronId: string;
-    paneId: string;
-    outcome: string;
-    detail?: string | null;
-  }): { firedAt: number } | null {
-    const row = this.db
-      .prepare(
-        `SELECT id, outcome, fired_at FROM cron_runs
-          WHERE cron_id = ? AND target_pane = ?
-          ORDER BY fired_at DESC, id DESC LIMIT 1`,
-      )
-      .get(opts.cronId, opts.paneId) as
-      | { id: string; outcome: string; fired_at: number }
-      | undefined;
-    // Only a DELIVERY outcome may be amended. Anything else is already a
-    // judgement about the work itself and is not ours to overwrite.
-    if (!row || (row.outcome !== 'sent' && row.outcome !== 'queued')) return null;
-    this.db
-      .prepare('UPDATE cron_runs SET outcome = ?, detail = ? WHERE id = ?')
-      .run(opts.outcome, opts.detail ?? null, row.id);
-    // The FIRE time goes back to the caller. `recordOutcome` writes
-    // `last_fire_at`, and this amendment happens when the turn ends — which can
-    // be many minutes later — so stamping it with `now` would make a failing
-    // cron's "last run" drift later than the run was. `cron list` reads that
-    // column directly.
-    return { firedAt: row.fired_at };
-  }
-
   addRun(run: {
     cron_id: string;
     due_at: number;

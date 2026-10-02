@@ -41,7 +41,6 @@ import {
 } from '../reversibility.js';
 import { markSessionCleared, markSessionTurned, sessionHadTurn } from '../session-marks.js';
 import { SubagentRoster } from '../subagent-roster.js';
-import { isUsageLimitText, usageLimitNotice } from '../usage-limit.js';
 import type { AgentBackend, BackendOptions, RunnerHost } from './types.js';
 
 // Default model for a FRESH agent chat with no explicit `--model` pin: muxpad
@@ -549,16 +548,6 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
   let clearRequested = false;
   /** The auth message seen during the current turn, if any. */
   let authFailureThisTurn: string | null = null;
-  /**
-   * The usage-limit message seen during the current turn, if any.
-   *
-   * Separate from `authFailureThisTurn` because the RESPONSE is the opposite.
-   * A dead credential is often something muxpad can fix by itself — the file on
-   * disk may already be good, so re-exec and retry. A spent quota is not: no
-   * number of re-execs refills it, and the ladder would be a louder way to do
-   * nothing. This is reported once, honestly, and pushed. See usage-limit.ts.
-   */
-  let usageLimitThisTurn: string | null = null;
   /**
    * Tool calls made in the current turn — the classifier's corroboration.
    *
@@ -1115,7 +1104,6 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
         firstReplyText = '';
         currentTurnText = text;
         authFailureThisTurn = null;
-        usageLimitThisTurn = null;
         toolUsesThisTurn = 0;
         // A cron fire is a relay, not a person: the scheduler wrote it and
         // nobody is sitting there, so it may legitimately end silent. Read off
@@ -1677,7 +1665,6 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
       // nothing to put back — see the turn-result branch.
       currentTurnText = null;
       authFailureThisTurn = null;
-      usageLimitThisTurn = null;
       toolUsesThisTurn = 0;
       // Nobody asked for this turn, so nobody is owed an answer for it — the
       // reply guard stays out of the way. (This is the distinction xAI's
@@ -1823,10 +1810,6 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
               // reports `success`, and this one line is the only signal on the
               // wire. Recorded now, acted on at the turn's result (auth-heal.ts).
               if (isAuthFailureText(block.text)) authFailureThisTurn = block.text.trim();
-              // …and the OTHER refusal that arrives as prose over a turn that
-              // will go on to report success. Same record-now, act-at-the-result
-              // shape; see usage-limit.ts for why it is not auth-heal.
-              if (isUsageLimitText(block.text)) usageLimitThisTurn = block.text.trim();
               log(`${bold('claude')} ${block.text.trim()}`);
             } else if (block.type === 'tool_use') {
               // Counted for the auth classifier: a child that cannot
@@ -1933,45 +1916,6 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
               ok: false,
               error: `${message} — run /login on the muxpad host, then send again`,
             });
-            kick();
-            void refreshStatus(false);
-            continue;
-          }
-          // ── OUT OF QUOTA ──────────────────────────────────────────────────
-          // Same corroboration the auth classifier gets, for the same reason: a
-          // turn refused for quota never reached a model, so it cannot have
-          // called anything. A turn that DID call something was working, and
-          // whatever it wrote about limits is prose about them — which, in this
-          // repository, is a thing agents write all day.
-          if (usageLimitThisTurn && toolUsesThisTurn > 0) {
-            log(
-              dim(
-                `(usage-looking line in a turn that ran ${toolUsesThisTurn} tool call(s) — treated as prose, not a spent quota)`,
-              ),
-            );
-            usageLimitThisTurn = null;
-          }
-          if (usageLimitThisTurn) {
-            const message = usageLimitThisTurn;
-            usageLimitThisTurn = null;
-            // NO re-exec and no ladder. The condition is not a broken process
-            // muxpad can replace; it is an empty bucket that refills on the
-            // provider's clock. The only useful acts are to stop claiming the
-            // turn worked, and to tell a human.
-            log(`${bold('✗ usage')} ${message}`);
-            // Pushed unconditionally, OUTSIDE the interactive-suppress window
-            // the ordinary turn-done notify respects. That window exists so a
-            // conversation you are driving does not buzz your phone — but a
-            // person mid-conversation whose quota just ran out is exactly who
-            // needs telling, and the unattended case (a cron at 07:00) has
-            // nobody watching the pane at all. Both want the push.
-            notifyUser(usageLimitNotice(basename(process.cwd()), message));
-            currentTurnText = null;
-            interruptRequested = false;
-            // `ok: false` is the load-bearing part. It is what stops a cron
-            // from recording a fire that did nothing as a success — see
-            // CronScheduler's turn-end amendment.
-            emit({ t: 'turn-done', ok: false, error: message });
             kick();
             void refreshStatus(false);
             continue;
