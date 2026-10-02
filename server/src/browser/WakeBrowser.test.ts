@@ -42,7 +42,10 @@ describe('starting a browser because somebody asked for it', () => {
     const r = await wakeBrowser({
       profile: 'shopping',
       deps,
-      probe: async () => (asked++, true),
+      probe: async () => {
+        asked++;
+        return true;
+      },
       sleep: noSleep,
     });
     expect(r.awake).toBe(true);
@@ -75,7 +78,10 @@ describe('starting a browser because somebody asked for it', () => {
       sleep: async () => {},
       now: (() => {
         let t = 0;
-        return () => (t += 20_000);
+        return () => {
+          t += 20_000;
+          return t;
+        };
       })(),
     });
     expect(r.state.viewerUrl).toBe('http://127.0.0.1:9599');

@@ -213,11 +213,19 @@ export class ChatScrollController {
     // while the old row stayed at the same document coordinate, the movement
     // was not compensation for a prepend. Reconcile it before overwriting it.
     // A shrink clamped to the new maximum is layout, not evidence of a gesture.
-    if (reconcileReader && this.state.placed && this.sawTop !== null &&
-        before.scrollTop !== this.sawTop && oldBox && this.wasDocumentTop !== null &&
-        Math.abs(oldBox.top + before.scrollTop - this.wasDocumentTop) <= 1 &&
-        !(before.scrollTop < this.sawTop &&
-          before.scrollTop >= before.scrollHeight - before.clientHeight)) {
+    if (
+      reconcileReader &&
+      this.state.placed &&
+      this.sawTop !== null &&
+      before.scrollTop !== this.sawTop &&
+      oldBox &&
+      this.wasDocumentTop !== null &&
+      Math.abs(oldBox.top + before.scrollTop - this.wasDocumentTop) <= 1 &&
+      !(
+        before.scrollTop < this.sawTop &&
+        before.scrollTop >= before.scrollHeight - before.clientHeight
+      )
+    ) {
       if (this.onScroll()) this.pendingReader = true;
     }
     // We have looked. Everything below is about what we found; this is true

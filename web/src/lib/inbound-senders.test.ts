@@ -86,7 +86,7 @@ describe('matchInboundSenders', () => {
     expect(got.get('e2')).toBe('t-boss');
   });
 
-  it('does not hand a coordinator\'s row to a LATER human repeat of the same text', () => {
+  it("does not hand a coordinator's row to a LATER human repeat of the same text", () => {
     // A sends `status?` and it lands; later the human types `status?` too. Only
     // A's send has a row. Walking backwards gave A's row to the human bubble and
     // took the card off the message A actually sent.
@@ -171,7 +171,12 @@ describe('loadInboundSenders', () => {
     let finish!: (response: Response) => void;
     const f = vi
       .fn()
-      .mockImplementationOnce(() => new Promise<Response>((r) => { finish = r; }))
+      .mockImplementationOnce(
+        () =>
+          new Promise<Response>((r) => {
+            finish = r;
+          }),
+      )
       .mockResolvedValueOnce(ok([row('the brief', 't-boss')]));
     vi.stubGlobal('fetch', f);
     const first = loadInboundSenders('t');

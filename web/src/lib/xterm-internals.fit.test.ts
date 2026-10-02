@@ -209,4 +209,3 @@ describe('muxpad scrollback default', () => {
     expect(DEFAULT_XTERM_SCROLLBACK).toBeGreaterThanOrEqual(10_000);
   });
 });
-

@@ -53,7 +53,7 @@ beforeAll(() => {
 
 afterEach(() => {
   resetFakeAgentSdk();
-  delete process.env.MUXPAD_GATE;
+  process.env.MUXPAD_GATE = undefined;
 });
 
 type Decision = {
@@ -75,7 +75,7 @@ function boot(mode: AgentMode = 'chat', gate: 'on' | 'off' | 'unset' = 'on') {
   // PARAMETER DEFAULT, so the case meant to exercise the shipped default was
   // booting with the gate on and asserting the opposite. And `process.env.X =
   // undefined` assigns the STRING "undefined" — the key has to be deleted.
-  if (gate === 'unset') delete process.env.MUXPAD_GATE;
+  if (gate === 'unset') process.env.MUXPAD_GATE = undefined;
   else process.env.MUXPAD_GATE = gate;
   const sent: RunnerFrame[] = [];
   const logs: string[] = [];

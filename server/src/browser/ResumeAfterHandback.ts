@@ -66,11 +66,7 @@ export interface HandbackNudge {
  */
 export function handbackMessage(reason: string | null): string {
   const what = reason?.trim() ? ` (you asked: ${reason.trim()})` : '';
-  return (
-    `The browser is yours again${what} — I have finished with it and handed it back. ` +
-    'The page has almost certainly changed, so look at it before you act on anything ' +
-    'you saw before the handoff.'
-  );
+  return `The browser is yours again${what} — I have finished with it and handed it back. The page has almost certainly changed, so look at it before you act on anything you saw before the handoff.`;
 }
 
 /**

@@ -54,7 +54,10 @@ export const NO_ROUNDS: SpawnRoundsByChild = new Map();
  * which is exactly what shipped before rounds existed. A conversation must never
  * lose its cards because one request did.
  */
-export async function loadSpawnRounds(parentTabId: string, changed = false): Promise<SpawnRoundsByChild> {
+export async function loadSpawnRounds(
+  parentTabId: string,
+  changed = false,
+): Promise<SpawnRoundsByChild> {
   if (unsupported) return NO_ROUNDS;
   const running = inFlight.get(parentTabId);
   if (changed) {
@@ -70,7 +73,9 @@ export async function loadSpawnRounds(parentTabId: string, changed = false): Pro
     do {
       dirty.delete(parentTabId);
       try {
-        const res = await req<RoundsResponse>(`/api/tabs/${encodeURIComponent(parentTabId)}/spawn-rounds`);
+        const res = await req<RoundsResponse>(
+          `/api/tabs/${encodeURIComponent(parentTabId)}/spawn-rounds`,
+        );
         rounds = new Map(Object.entries(res.rounds ?? {}));
         cache.set(parentTabId, { at: Date.now(), rounds });
       } catch (err: unknown) {

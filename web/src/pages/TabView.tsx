@@ -492,6 +492,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
   // in the current tab. Desktop has no "active pane" in component
   // state — focus lives entirely in the DOM — so we record it here so
   // a page refresh can restore the right pane via getLastPaneId below.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `tab?.panes` is narrower than `tab` deliberately: this subscribes a window listener, and re-subscribing on every poll-replaced tab object is pure churn
   useEffect(() => {
     if (!tab) return;
     const tabId = tab.id;
@@ -548,6 +549,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
   // displayed. Gated on visibility here and rechecked when the debounce fires;
   // the flip back to visible re-runs the effect and acks what piled up.
   const docVisible = useDocumentVisible();
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `seenSignature` is the load-bearing dep and biome calls it unnecessary. It is not: it moves on exactly the read-state edges (D11) that `tab` identity cannot express, and depending on `tab` instead would re-ack on every poll
   useEffect(() => {
     if (!tab || !workspace || !isActive || !docVisible) return;
     // Debounced. `attention` is the BEL bit, and a pane can ring it in a tight
@@ -566,7 +568,15 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
         .catch(() => {});
     }, 300);
     return () => window.clearTimeout(t);
-  }, [tab?.id, mobileActiveResolved, singlePane, workspace?.id, isActive, docVisible, seenSignature]);
+  }, [
+    tab?.id,
+    mobileActiveResolved,
+    singlePane,
+    workspace?.id,
+    isActive,
+    docVisible,
+    seenSignature,
+  ]);
 
   // Title pulls the live name from the shared tabs list so renames in
   // the tab bar update the document title without a refetch here. The
@@ -598,6 +608,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
   }, [isActive, documentTitle]);
 
   // Keep local tab.name in sync with the shared list.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs off `allTabs`; `tab.name` is the value being COMPARED against, and listing it would re-run the effect with the answer it just wrote
   useEffect(() => {
     if (!tab) return;
     const updated = allTabs.find((t) => t.id === tab.id);
@@ -636,6 +647,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
   // tab gets its own instance (kept alive while hidden) so switching
   // tabs does not tear down xterm panes. Title / fg / attention and
   // structural changes arrive via /ws/events after the initial load.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on `workspace?.id`: `navigate` and the workspace object are both recreated per render, and re-running this recovery on either would fight the navigation it performs
   useEffect(() => {
     void loadNonce; // dep is the retry trigger; no value needed in the body
     if (!workspace) return;
@@ -1035,6 +1047,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
   // pane.updated merges rather than overwrites (mergePaneUpdated): a
   // payload that OMITS a runtime decoration keeps the old value, while an
   // explicit null — the server saying the runtime is gone — clears it.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on `tab?.id` on purpose: the tab OBJECT is replaced by every poll, so depending on it would re-run this on a timer rather than when the tab actually changes
   useEffect(() => {
     if (!tab) return;
     const tabId = tab.id;
@@ -1108,6 +1121,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
   // lost, and iOS can kill a backgrounded events socket without firing
   // close — so subscribeReconnect never runs. Visibility is the HTTP
   // backstop; the sidebar already refetches this way, the mosaic did not.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on `tab?.id` on purpose — see the other effects in this file; the object identity churns on every refresh and the id is what actually identifies the tab
   useEffect(() => {
     if (!tab) return;
     const tabId = tab.id;
@@ -1652,7 +1666,11 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
         {isEmpty ? (
           <div className="workspace-empty">
             <p>This tab has no panes.</p>
-            <button className="btn btn-primary" onClick={() => void splitFromPane(null, 'row')}>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => void splitFromPane(null, 'row')}
+            >
               New pane
             </button>
             <button type="button" className="workspace-empty-close" onClick={() => void closeTab()}>
@@ -1684,6 +1702,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                       )}
                       {isUrl && (
                         <button
+                          type="button"
                           className="pane-chrome-btn pane-chrome-btn-inline"
                           title="Reload"
                           aria-label="Reload"
@@ -1710,6 +1729,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                       {isAgentPane(tilePane) ? null : (
                         <>
                           <button
+                            type="button"
                             className="pane-chrome-btn"
                             title="Split right"
                             aria-label="Split right"
@@ -1718,6 +1738,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                             <SvgSplitRight />
                           </button>
                           <button
+                            type="button"
                             className="pane-chrome-btn"
                             title="Split down"
                             aria-label="Split down"
@@ -1738,6 +1759,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                           a drag-onto-sidebar-tab gesture. */}
                       {tab.panes.length > 1 && (
                         <button
+                          type="button"
                           className="pane-chrome-btn"
                           title="Pop out to a new tab"
                           aria-label="Pop out to a new tab"
@@ -1747,6 +1769,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                         </button>
                       )}
                       <button
+                        type="button"
                         className="pane-chrome-btn pane-chrome-close"
                         title="Close pane"
                         aria-label="Close pane"

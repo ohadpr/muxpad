@@ -122,12 +122,9 @@ export function BrowserModal({
           ref={frameRef}
           // Keep the initial mode in the URL: changing it after takeover would
           // reload the iframe and discard the focus the person just chose.
-          src={
-            browserViewerPath(data.profile, intent) +
-            (intent === 'watch' ? '&' : '?') +
-            'by=' +
-            encodeURIComponent(by)
-          }
+          src={`${
+            browserViewerPath(data.profile, intent) + (intent === 'watch' ? '&' : '?')
+          }by=${encodeURIComponent(by)}`}
           // RELATIVE, so the frame is same-origin however you reached the
           // cockpit — loopback at the desk, tailnet from the sofa. Not
           // sandboxed: taking keyboard and pointer input is the entire point,

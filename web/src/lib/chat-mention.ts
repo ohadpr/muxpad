@@ -668,10 +668,18 @@ export function spawnCards(
         const rep = roundReport(r);
         // Both entries of a finished round describe that job, even while a
         // later job is running. Absence of a report is part of the snapshot.
-        const snapshot: MentionChat = r.ended_at === null ? chat : {
-          ...chat, report: rep, artifacts: r.artifacts, status: 'ready',
-          done: true, doneAt: r.ended_at, doneReason: 'delivered',
-        };
+        const snapshot: MentionChat =
+          r.ended_at === null
+            ? chat
+            : {
+                ...chat,
+                report: rep,
+                artifacts: r.artifacts,
+                status: 'ready',
+                done: true,
+                doneAt: r.ended_at,
+                doneReason: 'delivered',
+              };
         out.push({
           chat: snapshot,
           kind: 'launch',

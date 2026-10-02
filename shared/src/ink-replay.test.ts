@@ -20,7 +20,7 @@ describe('inkReplayPayload', () => {
   });
 
   it('tails from the last clear-screen when no sync markers', () => {
-    const snap = `old-scroll\x1b[2J\x1b[Hcurrent-screen`;
+    const snap = 'old-scroll\x1b[2J\x1b[Hcurrent-screen';
     expect(inkReplayPayload(snap)).toBe('\x1b[2J\x1b[Hcurrent-screen');
   });
 

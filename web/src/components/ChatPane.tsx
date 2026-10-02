@@ -2595,7 +2595,6 @@ export function ChatPane({
     }
     return ids;
   }, [events]);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed to the reported SET changing; `syncReported` is a pure write-through and listing `directed` would re-enter on its own result.
   useEffect(() => {
     if (reportedIds.size === 0) return;
     setDirected(syncReported(paneId, reportedIds));
@@ -5169,6 +5168,14 @@ export function ChatPane({
     // ago keeps shouting, because the memo never recomputes.
     browserMoments,
     openBrowser,
+    // Both of these were CAPTURED but not listed, which in a memo means the
+    // transcript keeps rendering against the values it first saw. `mode` is the
+    // one with teeth: switching a live pane between Chat and Agent changed the
+    // pane row and the next turn's contract, and left this body memoized
+    // against the old mode. Adding deps to a memo has no side effects — it only
+    // recomputes more often — so there is no reason to have left them out.
+    mode,
+    onFoldToggled,
   ]);
 
   // The agent is working when: we're driving a turn (`sending`), tokens are
@@ -6453,11 +6460,11 @@ function ZoomableImage({ url, name }: { url: string; name: string }) {
     );
     setFit({ w: Math.round(img.naturalWidth * r), h: Math.round(img.naturalHeight * r) });
   };
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time listener set up on mount; every value it acts on is read through a live ref, so re-subscribing on each change would detach and reattach for nothing
   useEffect(() => {
     computeFit();
     window.addEventListener('resize', computeFit);
     return () => window.removeEventListener('resize', computeFit);
-    // biome-ignore lint/correctness/useExhaustiveDependencies: one-time listener; reads live refs
   }, []);
 
   const clampScale = (s: number) => Math.min(MAX, Math.max(1, s));
@@ -6570,6 +6577,7 @@ function ZoomableImage({ url, name }: { url: string; name: string }) {
       oy: pRef.current.y,
     };
   };
+  // biome-ignore lint/correctness/useExhaustiveDependencies: stable listeners driven by refs — `apply` is recreated per render and listing it would tear down and rebuild the listener set on every keystroke
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
       if (!drag.current.on) return;
@@ -6588,11 +6596,9 @@ function ZoomableImage({ url, name }: { url: string; name: string }) {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
     };
-    // biome-ignore lint/correctness/useExhaustiveDependencies: stable listeners driven by refs
   }, []);
 
   return (
-    // biome-ignore lint/a11y/noStaticElementInteractions: image zoom surface; keyboard users close via Escape/× and don't need pan/zoom
     <img
       ref={imgRef}
       className={`chat-img-full chat-img-zoom${scale > 1 ? ' -zoomed' : ''}`}
@@ -6645,7 +6651,6 @@ function MediaGallery({
         onClick={() => onOpen({ url: it.url, name: it.name, video })}
       >
         {video ? (
-          // biome-ignore lint/a11y/useMediaCaption: user-shared clip
           <video src={it.url} preload="metadata" muted playsInline />
         ) : (
           <img src={it.url} alt={it.name} loading="lazy" />
@@ -6665,7 +6670,6 @@ function MediaGallery({
           <button
             // Index-suffixed: the same attachment can legitimately appear twice
             // in one message, so the url alone isn't a unique key.
-            // biome-ignore lint/suspicious/noArrayIndexKey: order is stable within a message
             key={`${it.url}-${i}`}
             type="button"
             className={`chat-gallery-item${video ? ' -video' : ''}`}
@@ -6673,7 +6677,6 @@ function MediaGallery({
             onClick={() => onOpen({ url: it.url, name: it.name, video })}
           >
             {video ? (
-              // biome-ignore lint/a11y/useMediaCaption: user-shared clip
               <video src={it.url} preload="metadata" muted playsInline />
             ) : (
               <img src={it.url} alt={it.name} loading="lazy" />

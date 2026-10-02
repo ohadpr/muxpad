@@ -40,6 +40,7 @@ export function UrlPane({ paneId, url }: UrlPaneProps) {
     else setEditing(false);
   }, [url]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `url` is listed deliberately: the effect reloads the frame when the pane is pointed somewhere new, which is the whole point even though biome cannot see the read
   useEffect(() => {
     if (!editing) return;
     const el = inputRef.current;

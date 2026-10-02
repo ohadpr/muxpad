@@ -51,7 +51,9 @@ describe('TranscriptReader', () => {
     const events: Array<{ e: ChatEvent; phase: string }> = [];
     const tail = new TranscriptTail(SID, {
       dir,
-      onEvents: (es, phase) => es.forEach((e) => events.push({ e, phase })),
+      onEvents: (es, phase) => {
+        for (const e of es) events.push({ e, phase });
+      },
     });
     tail.tick();
     expect(events.map((x) => x.phase)).toEqual(['history', 'history']);
@@ -111,7 +113,9 @@ describe('TranscriptReader', () => {
     const events: Array<{ e: ChatEvent; phase: string }> = [];
     const tail = new TranscriptTail(SID, {
       dir,
-      onEvents: (es, p) => es.forEach((e) => events.push({ e, phase: p })),
+      onEvents: (es, p) => {
+        for (const e of es) events.push({ e, phase: p });
+      },
     });
     tail.tick();
     expect(events).toHaveLength(3);

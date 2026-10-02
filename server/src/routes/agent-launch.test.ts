@@ -137,7 +137,7 @@ describe('GET /api/agent-launch/options', () => {
     test = await createTestApp({ db, dataDir: tmp });
   });
   afterEach(async () => {
-    if (prevCodexHome === undefined) delete process.env.CODEX_HOME;
+    if (prevCodexHome === undefined) process.env.CODEX_HOME = undefined;
     else process.env.CODEX_HOME = prevCodexHome;
     await test.cleanup();
     rmSync(tmp, { recursive: true, force: true });
