@@ -578,14 +578,25 @@ describe('what the pass was NOT allowed to move', () => {
       NAV_CSS,
       '.navtree[data-variant="sidebar"] .navtree-tab-row[data-child="true"]',
     );
-    expect(decl(child, 'padding-left')).toBe('calc(var(--nt-pad) + var(--nt-indent) * 2)');
+    //
+    // THE STEP IS NO LONGER A FULL INDENT. It was `--nt-indent * 2` — one whole
+    // step past a normal row — and reported as the child being "indented just
+    // too much": far enough right that it stopped reading as "under that one"
+    // and started reading as its own column. 8px instead, which is two thirds
+    // of the step and still unmistakably a step.
+    //
+    // Pinned as a RANGE rather than an expression, because the exact number is
+    // taste and will be tuned again. What must not drift is that a child is
+    // clearly indented and clearly less than a full level.
+    expect(decl(child, 'padding-left')).toBe('calc(var(--nt-pad) + var(--nt-indent) + 8px)');
     const parentLeft = resolve(
       side(decl(ruleBody(NAV_CSS, '.navtree-tab-row'), 'padding'), 'left'),
       BASE,
     );
-    expect(resolve(decl(child, 'padding-left'), BASE) - parentLeft).toBe(
-      resolve(BASE['--nt-indent'] as string, BASE),
-    );
+    const step = resolve(decl(child, 'padding-left'), BASE) - parentLeft;
+    const indent = resolve(BASE['--nt-indent'] as string, BASE);
+    expect(step).toBeGreaterThanOrEqual(6);
+    expect(step).toBeLessThan(indent);
   });
 });
 
