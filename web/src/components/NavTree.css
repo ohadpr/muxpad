@@ -439,8 +439,13 @@
    the payoff for declaring it once: a change of mind lands in one place and
    cannot leave a header a shade off its own card. */
 .navtree-group:not([data-active="true"]) {
-  --nt-card: color-mix(in srgb, var(--bg) 15%, var(--nt-surface));
-  border-color: color-mix(in srgb, var(--fg) 5%, transparent);
+  /* HALF the active card's lift, not a tenth of it. 15% read as "switched off"
+     rather than "in the background" — the card had given up so much surface it
+     stopped looking like a container you could go to. Measured over the rail:
+     0.061 active, 0.030 inactive. Half is enough to rank them and not so much
+     that the quiet ones look disabled. */
+  --nt-card: color-mix(in srgb, var(--bg) 30%, var(--nt-surface));
+  border-color: color-mix(in srgb, var(--fg) 6%, transparent);
 }
 
 .navtree-group:not([data-active="true"]) .navtree-tab-row .chatchip {
