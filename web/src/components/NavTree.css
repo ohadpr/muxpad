@@ -71,6 +71,12 @@
    so neither surface has to know about the other. */
 .navtree {
   --nt-surface: var(--bg-tabbar);
+  /* THE GROUP'S BODY AND ITS HEADER, derived ONE from the other rather than
+     written twice. The card was deleted once already for exactly the bug that
+     caused: two mixes, edited separately, drifting until the header read as a
+     seam across its own card. The header is the card plus one step. */
+  --nt-group: color-mix(in srgb, var(--fg) 8%, var(--nt-surface));
+  --nt-group-head: color-mix(in srgb, var(--fg) 7%, var(--nt-group));
   /* Row metrics + surfaces are the only things the variants disagree on. */
   --nt-row-ws: 32px;
   /* ONE LINE, and the chip decides the height: 6 + 24 + 6. It was 34px for a
@@ -419,9 +425,24 @@
    So the grouping moves entirely into the sticky band below, which was already
    sticky and already doing most of this work — it merely looked like the lid of
    a card rather than the thing holding a list together. */
+/* ─── THE GROUP IS A BODY AGAIN, AND IT IS OPEN ON THE RIGHT ────────────────
+   A sticky caption alone was not enough grouping — reported as still yearning
+   for it — and the reason is that a band marks where a group STARTS and says
+   nothing about where it ends. Twenty rows under it read as one run.
+
+   A card says both, and the card is what was here before. It was deleted
+   because its right wall cut the funnel: the selected row has to run into the
+   pane, and a container with a right edge stops it a wall short. So this one
+   has NO right side — rounded on the left, flush and open on the right, out to
+   the rail's own edge. The tab crosses where the card has no wall to cross.
+   Which is also the honest shape for a rail: a stack of trays whose open end
+   is the content. */
 .navtree-group {
   margin-top: 10px;
   padding: 0 var(--nt-pad) 5px;
+  background-color: var(--nt-group);
+  /* Left only. The right is where the pane is. */
+  border-radius: 10px 0 0 10px;
 }
 
 /* ─── EVERY ICON IS DESATURATED, NOT ONLY THE ONES YOU ARE NOT IN ───────────
@@ -446,8 +467,11 @@
   filter: none;
 }
 
+/* AIR, and more of it than the card needs to be seen — the gap is the second
+   half of the grouping, and at 10px the trays touched closely enough to read as
+   one surface with lines in it. 18px is a clear band of rail between them. */
 .navtree-group + .navtree-group {
-  margin-top: 10px;
+  margin-top: 18px;
 }
 
 /* ─── STICKY, so you never lose which workspace you are reading ─────────────
@@ -475,12 +499,12 @@
      background-COLOR, never the shorthand: the shorthand resets every other
      background property, including the state tint a row can carry.
      StateChip.test pins that for exactly this reason. */
-  background-color: color-mix(in srgb, var(--fg) 7%, var(--nt-surface));
+  background-color: var(--nt-group-head);
   border-radius: 7px;
 }
 
 .navtree-group > .navtree-ws-row:hover {
-  background-color: color-mix(in srgb, var(--fg) 11%, var(--nt-surface));
+  background-color: color-mix(in srgb, var(--fg) 6%, var(--nt-group-head));
 }
 
 /* ─── THE ACTIVE WORKSPACE: AN EDGE, NOT A FILL ─────────────────────────────
@@ -505,7 +529,7 @@
 /* …and the hover tint still has to win over the resting band on the active
    header, which it would not if the only rule for it sat above this one. */
 .navtree-group > .navtree-ws-row[data-active="true"]:hover {
-  background-color: color-mix(in srgb, var(--fg) 11%, var(--nt-surface));
+  background-color: color-mix(in srgb, var(--fg) 6%, var(--nt-group-head));
 }
 
 /* ─── Workspace row (banded header) ──────────────────────────────────── */
