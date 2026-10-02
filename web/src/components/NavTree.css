@@ -424,6 +424,25 @@
    The name takes one quiet step down with it. Not more: these rows are still
    navigation targets, and a workspace you are not in is not a workspace you
    have stopped caring about. */
+/* …and the SURFACE recedes with them. Draining the icons was not enough: all
+   three cards still sat at the same lift, so each one went on advertising
+   itself as a container of equal importance — reported as "the workspaces you
+   are not on have the same bg color, they take too much attention".
+
+   Lift is the thing that says "this is a surface you are working on", so an
+   inactive card keeps the SHAPE and gives up most of the lift. It stays a card
+   — the hairline still closes it — but it stops being a raised one, and the
+   active workspace becomes the only genuinely raised surface in the rail.
+
+   Overriding the TOKEN rather than the background does both the card and its
+   sticky header in one move, because they already read the same value. That is
+   the payoff for declaring it once: a change of mind lands in one place and
+   cannot leave a header a shade off its own card. */
+.navtree-group:not([data-active="true"]) {
+  --nt-card: color-mix(in srgb, var(--bg) 15%, var(--nt-surface));
+  border-color: color-mix(in srgb, var(--fg) 5%, transparent);
+}
+
 .navtree-group:not([data-active="true"]) .navtree-tab-row .chatchip {
   filter: grayscale(1);
   opacity: 0.55;
