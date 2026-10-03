@@ -1827,21 +1827,39 @@
    width for its name, and a row with ANY indicator lines up with every other
    row that has one. */
 
-/* THE PIN IS NOT AN INDICATOR ANY MORE — IT IS AN ACTION, LIKE THE ARCHIVE.
-   It was made permanent because the pinned block had NO visible designation at
-   all: the seam between it and the rest was `height: 10px` and nothing else, so
-   a comment claimed position said "pinned" while the stylesheet drew no line.
-   The seam is a real 1px rule now, and with it drawn, position genuinely is the
-   designation — which is what the original design said and could not deliver.
-   A lit pin on every pinned row says a second time what the row's place in the
-   list already says, and it says it in the scarcest space on the row: reported
-   as four icons eating a third of the width.
-   So it goes back to hover-only. You can still unpin from the row — point at
-   it and the button is there, beside the archive, which is exactly the company
-   it belongs in. Its accent colour stays, because a LIT pin and an unlit one
-   are different things when both are revealed: lit means "clicking unpins". */
+/* THE PIN IS AN INDICATOR AGAIN, and this reverses a reversal rather than
+   forgetting one. It was made hover-only on an explicit premise, quoted from
+   the comment that did it: "the seam is a real 1px rule now, and with it drawn,
+   position genuinely is the designation". That rule has since been deleted —
+   it was a line BETWEEN two blocks used to say something about ONE of them, and
+   three attempts at drawing it were each reported in turn — so the premise is
+   simply no longer true. Position says "pinned" only to someone who already
+   knows the list is sorted that way.
+
+   WHAT WAS TRIED IN BETWEEN, and why neither worked. A 3px tick in the row's
+   left track: free, but outside the icon column, so it ragged the rail's left
+   edge — the only thing holding a workspace together now that the group has no
+   surface. A ring, then a plate, on the chip: measured invisible, and not
+   fixable by tuning, because the tile is transparent and a 20px glyph fills a
+   24px box. There is no room on that object for a second mark.
+
+   The cost is real and is accepted rather than denied: 18px of name width, on
+   exactly the rows pinned because they matter. It is charged only to those rows
+   — the track reservation below already exists for this — and pinned rows are
+   few by construction.
+
+   --fg-faint at rest, --accent on hover. A lit pin and an unlit one are
+   different things when both are visible: lit means "clicking unpins". */
 .navtree-tab-row > .navtree-tab-rail > .navtree-pin.is-pinned {
+  flex: 0 0 18px;
+  width: 18px;
+  opacity: 0.85;
+  visibility: visible;
+}
+.navtree-tab-row:hover > .navtree-tab-rail > .navtree-pin.is-pinned,
+.navtree-tab-row:has(:focus-visible) > .navtree-tab-rail > .navtree-pin.is-pinned {
   color: var(--accent);
+  opacity: 1;
 }
 
 /* ─── Sheet pane list (mobile: tab row expands into its panes) ───────── */

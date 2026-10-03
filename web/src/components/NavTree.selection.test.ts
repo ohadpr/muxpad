@@ -748,36 +748,40 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     }
   });
 
-  it('PINNED is a ring on the chip — not a rule, and not in the left gutter', () => {
-    // Three designs for a rule under the block (flush, inset, a 40px stub) and
-    // then a 3px tick in the row's left track, each reported in turn.
-    //
-    // The RULE was wrong in kind: a line BETWEEN two things used to say
-    // something about ONE of them. "Which rows are pinned" is a property of
-    // those rows, so the element survives as the gap and nothing else.
+  it('PINNED is told on the ROW, and the seam between the blocks is only air', () => {
+    // Three designs for a rule under the pinned block — flush, inset at both
+    // ends, then a 40px stub — each reported in turn. They were wrong in KIND,
+    // not in tuning: a line BETWEEN two things used to say something about ONE
+    // of them. "Which rows are pinned" is a property of those rows. So the
+    // element survives as the gap and nothing else.
     const body = ruleBody(NAV_CSS, '.navtree-pin-divider');
     expect(body).not.toMatch(/border/);
     expect(Number.parseFloat(decl(body, 'margin'))).toBeGreaterThanOrEqual(6);
 
-    // The TICK was wrong in place. The track was genuinely free — chat rows
-    // stopped emitting `data-state`, so those 3px have been empty since — but
-    // it is OUTSIDE the icon column, so marking some rows and not others made
-    // the rail's left edge ragged and took the workspace's containment with it.
-    // Nothing in the rail paints that gutter per-row.
+    // NOT IN THE LEFT GUTTER. A 3px tick in the row's left state track was free
+    // — chat rows stopped emitting `data-state`, so those pixels have been
+    // empty since — but free was the wrong test: the track is OUTSIDE the icon
+    // column, so marking some rows and not others ragged the rail's left edge,
+    // which is the only containment a workspace has now that the group has no
+    // surface.
     expect(strip(NAV_CSS)).not.toMatch(/\[data-pinned/);
     expect(strip(STATE_CSS)).not.toMatch(/\[data-pinned/);
 
-    // It is the chip's own outline, on a border the tile already reserves as
-    // `1px solid transparent` — no width, no movement. And the channel is free
-    // BY CONSTRUCTION rather than by luck: the outline means "provisional" for
-    // last-day and done, and pinning stops the clock, so a pinned chat reaches
-    // neither phase. Dotted for leaving, solid for staying.
-    const pin = ruleBody(CHIP_CSS, '.chatchip[data-phase="pinned"][data-shape="tile"]');
-    expect(decl(pin, 'border-color')).toMatch(/color-mix\(in srgb, var\(--fg\)/);
-    expect(pin).not.toMatch(/--accent/);
-    expect(pin).not.toMatch(/border-style|width|margin|padding/);
+    // AND NOT ON THE CHIP. A ring, then a plate behind the glyph, both measured
+    // invisible — and not fixable by raising a percentage, because the tile is
+    // transparent and a 20px glyph fills a 24px box. There is no room on that
+    // object for a second mark, so no value of one exists.
+    expect(strip(CHIP_CSS)).not.toMatch(/data-phase="pinned"/);
+    // The tile's border stays reserved and transparent, which is what the age
+    // outline uses; nothing here may spend it.
+    expect(decl(ruleBody(CHIP_CSS, '.chatchip[data-shape="tile"]'), 'border')).toBe(
+      '1px solid transparent',
+    );
+
+    // It is the pin itself, at rest — see NavTree.spacing for the geometry and
+    // the cost argument.
     expect(
-      decl(ruleBody(CHIP_CSS, '.chatchip[data-shape="tile"]'), 'border'),
-    ).toBe('1px solid transparent');
+      ruleBody(NAV_CSS, '.navtree-tab-row > .navtree-tab-rail > .navtree-pin.is-pinned'),
+    ).toMatch(/visibility:\s*visible/);
   });
 });
