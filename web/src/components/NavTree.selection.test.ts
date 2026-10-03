@@ -48,6 +48,7 @@ import { describe, expect, it } from 'vitest';
 const read = (name: string) => readFileSync(join(import.meta.dirname, name), 'utf8');
 const NAV_CSS = read('NavTree.css');
 const STATE_CSS = read('StateChip.css');
+const CHIP_CSS = read('ChatChip.css');
 const APP_CSS = readFileSync(join(import.meta.dirname, '..', 'styles.css'), 'utf8');
 
 const flat = (s: string) => s.replace(/\s+/g, ' ');
@@ -747,33 +748,36 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     }
   });
 
-  it('PINNED is a mark on each row, not a rule between the blocks', () => {
-    // Three designs, and the third is the one that matters. The seam was flush,
-    // then inset at both ends, then a 40px stub — each reported in turn, and
-    // every version had the same defect underneath the tuning: it is a line
-    // BETWEEN two things, used to say something about ONE of them. "which rows
-    // are pinned" is a property of those rows.
+  it('PINNED is a ring on the chip — not a rule, and not in the left gutter', () => {
+    // Three designs for a rule under the block (flush, inset, a 40px stub) and
+    // then a 3px tick in the row's left track, each reported in turn.
     //
-    // So the element survives as the GAP and nothing else.
+    // The RULE was wrong in kind: a line BETWEEN two things used to say
+    // something about ONE of them. "Which rows are pinned" is a property of
+    // those rows, so the element survives as the gap and nothing else.
     const body = ruleBody(NAV_CSS, '.navtree-pin-divider');
     expect(body).not.toMatch(/border/);
     expect(Number.parseFloat(decl(body, 'margin'))).toBeGreaterThanOrEqual(6);
 
-    // And the mark lands in the 3px left track. It costs nothing — the track is
-    // reserved on every row and a chat row never fills it, because chat rows
-    // stopped emitting `data-state` when the bar and the tint were deleted.
-    // That is why this is in StateChip.css: it OWNS that pseudo-element, and
-    // the sibling test above pins that NavTree.css must not touch it.
-    const pin = ruleBody(
-      STATE_CSS,
-      '.navtree-tab-row[data-pinned="true"]:not([data-active="true"])::before',
-    );
-    expect(decl(pin, 'background')).toMatch(/color-mix\(in srgb, var\(--fg\)/);
-    // NOT the accent, which means "needs you" and nothing else.
+    // The TICK was wrong in place. The track was genuinely free — chat rows
+    // stopped emitting `data-state`, so those 3px have been empty since — but
+    // it is OUTSIDE the icon column, so marking some rows and not others made
+    // the rail's left edge ragged and took the workspace's containment with it.
+    // Nothing in the rail paints that gutter per-row.
+    expect(strip(NAV_CSS)).not.toMatch(/\[data-pinned/);
+    expect(strip(STATE_CSS)).not.toMatch(/\[data-pinned/);
+
+    // It is the chip's own outline, on a border the tile already reserves as
+    // `1px solid transparent` — no width, no movement. And the channel is free
+    // BY CONSTRUCTION rather than by luck: the outline means "provisional" for
+    // last-day and done, and pinning stops the clock, so a pinned chat reaches
+    // neither phase. Dotted for leaving, solid for staying.
+    const pin = ruleBody(CHIP_CSS, '.chatchip[data-phase="pinned"][data-shape="tile"]');
+    expect(decl(pin, 'border-color')).toMatch(/color-mix\(in srgb, var\(--fg\)/);
     expect(pin).not.toMatch(/--accent/);
-    // The selected row is still pinned and still says so, against its own face.
+    expect(pin).not.toMatch(/border-style|width|margin|padding/);
     expect(
-      ruleBody(STATE_CSS, '.navtree-tab-row[data-pinned="true"][data-active="true"]::before'),
-    ).toMatch(/color-mix\(in srgb, var\(--fg\)/);
+      decl(ruleBody(CHIP_CSS, '.chatchip[data-shape="tile"]'), 'border'),
+    ).toBe('1px solid transparent');
   });
 });

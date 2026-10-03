@@ -173,6 +173,32 @@
   filter: grayscale(85%);
 }
 
+/* ─── PINNED ────────────────────────────────────────────────────────────────
+   A SOLID RING, on the border this tile already reserves (`1px solid
+   transparent` above), so it costs no width and moves nothing.
+
+   THE CHANNEL IS FREE BY CONSTRUCTION, which is why it is here rather than
+   anywhere else on the row. The outline says "provisional" for `last-day` and
+   `done`, and a pinned chat can reach NEITHER: pinning stops the clock
+   (`published.stopped` → this phase, read before `done` in chipClock), so it
+   never decays and never ages out. Two meanings cannot collide on one property
+   when one of them is unreachable while the other holds. Dotted for leaving,
+   solid for staying, and nothing ever has to arbitrate.
+
+   WHAT IT REPLACED, twice. First a rule under the pinned block — three
+   versions, flush, inset, then a 40px stub, each a line BETWEEN two things used
+   to say something about ONE of them. Then a 3px tick in the row's left track,
+   which was free but was in the WRONG PLACE: it put ink outside the icon column
+   on some rows and not others, so the rail's left edge went ragged and the one
+   thing holding a workspace together visually went with it. Reported
+   immediately as breaking the containment. The mark belongs inside the row, on
+   the row's own object.
+
+   --fg, not --accent: the accent means "needs you". */
+.chatchip[data-phase="pinned"][data-shape="tile"] {
+  border-color: color-mix(in srgb, var(--fg) 30%, transparent);
+}
+
 /* ─── Last day, and done ─────────────────────────────────────────────────── */
 
 /* THE OUTLINE ARRIVES ONCE, and this is the only frame in the whole drawing.

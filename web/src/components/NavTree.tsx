@@ -2465,9 +2465,6 @@ function TabRow({
       // went deliberately — see RowMark. The row's state is now told exactly
       // once, by the 10px mark at its right edge.
       data-child={parent ? 'true' : undefined}
-      // PINNED IS A MARK ON THE ROW NOW, not a rule under the block — see
-      // StateChip.css, which owns the left track this paints in.
-      data-pinned={tab.pinned ? 'true' : undefined}
       data-unread={tab.unread ? 'true' : undefined}
       data-pressing={pressing ? 'true' : undefined}
       {...(!isEditing
