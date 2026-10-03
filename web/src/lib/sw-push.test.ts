@@ -57,7 +57,6 @@ function loadWorker(opts: { cached: boolean; online: boolean }): Harness {
           : undefined,
     }),
   };
-  // biome-ignore lint/security/noGlobalEval: loading the real sw.js source is the point
   new Function('self', 'caches', 'fetch', SW_SRC)(self, caches, fetchMock);
   return { handlers, subscribe, fetch: fetchMock, cacheEntry: null };
 }
@@ -189,7 +188,6 @@ function loadClickWorker(
   const caches = {
     open: async () => ({ match: async () => undefined, put: cachePut, delete: async () => true }),
   };
-  // biome-ignore lint/security/noGlobalEval: loading the real sw.js source is the point
   new Function('self', 'caches', 'fetch', SW_SRC)(self, caches, vi.fn());
   return { handlers, openWindow, cachePut, order };
 }
@@ -454,7 +452,6 @@ describe('sw push', () => {
       clients: { claim: vi.fn(), matchAll: vi.fn(), openWindow: vi.fn() },
       registration: { pushManager: { subscribe: vi.fn() }, showNotification },
     };
-    // biome-ignore lint/security/noGlobalEval: loading the real sw.js source is the point
     new Function('self', 'caches', 'fetch', SW_SRC)(self, { open: async () => ({}) }, vi.fn());
     handlers.get('push')?.({
       data: { json: () => ({ title: 'claude · muxpad', body: 'asks: ok?', tag: 'P1', url: '/x' }) },

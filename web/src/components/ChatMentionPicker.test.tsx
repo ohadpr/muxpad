@@ -435,7 +435,7 @@ describe('the card names no colour of its own', () => {
  *
  * The `@` list is the only surface that spans workspaces. The sidebar shows one
  * at a time, so a chat name is unique THERE and is not unique here: searching
- * "main" returned a `Main` from Trayo and a `Main` from Trayobot as two rows
+ * "main" returned a `Main` from Acme and a `Main` from Acmebot as two rows
  * distinguished only by an emoji and whatever headline each happened to carry.
  * Picking the wrong one directs work to the wrong chat, which is the failure
  * this grammar exists to prevent.
@@ -444,13 +444,13 @@ describe('a mention row says which workspace the chat is in', () => {
   it('tells two identically-named chats apart', () => {
     const out = picker(
       [
-        { chat: chat({ tabName: 'Main', workspaceName: 'Trayo' }), via: 'name' },
-        { chat: chat({ tabName: 'Main', workspaceName: 'Trayobot' }), via: 'name' },
+        { chat: chat({ tabName: 'Main', workspaceName: 'Acme' }), via: 'name' },
+        { chat: chat({ tabName: 'Main', workspaceName: 'Acmebot' }), via: 'name' },
       ],
       { query: 'main' },
     );
-    expect(out).toContain('Trayo<');
-    expect(out).toContain('Trayobot<');
+    expect(out).toContain('Acme<');
+    expect(out).toContain('Acmebot<');
   });
 
   it('shows it on an ORDINARY live row, not only a delivered or nested one', () => {

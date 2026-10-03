@@ -5,7 +5,7 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, describe, expect, it } from 'vitest';
 import { liveStatusLabel, runningChildren } from '../lib/live-status';
-import { SessionBar } from './ChatPane';
+import { SessionBar } from './ChatStart';
 import { StateChip } from './StateChip';
 
 /**

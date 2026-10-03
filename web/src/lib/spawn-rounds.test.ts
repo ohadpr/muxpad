@@ -47,7 +47,9 @@ describe('loadSpawnRounds', () => {
   });
 
   it('refreshes a lifecycle change inside the freshness window', async () => {
-    const f = vi.fn().mockResolvedValueOnce(ok({ kid: [{ id: 'r', ended_at: null }] }))
+    const f = vi
+      .fn()
+      .mockResolvedValueOnce(ok({ kid: [{ id: 'r', ended_at: null }] }))
       .mockResolvedValueOnce(ok({ kid: [{ id: 'r', ended_at: 200 }] }));
     vi.stubGlobal('fetch', f);
     await loadSpawnRounds('p');
@@ -57,7 +59,14 @@ describe('loadSpawnRounds', () => {
 
   it('refreshes after a lifecycle change during an in-flight read', async () => {
     let finish!: (response: Response) => void;
-    const f = vi.fn().mockImplementationOnce(() => new Promise<Response>((r) => { finish = r; }))
+    const f = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<Response>((r) => {
+            finish = r;
+          }),
+      )
       .mockResolvedValueOnce(ok({ kid: [{ id: 'r', ended_at: 200 }] }));
     vi.stubGlobal('fetch', f);
     const first = loadSpawnRounds('p');

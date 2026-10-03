@@ -116,11 +116,9 @@ export function useBrowsers({
         });
       }
       if (mode === 'tab') {
-        const url =
-          data.viewerUrl +
-          (intent === 'watch' ? '?mode=watch&' : '?') +
-          'by=' +
-          encodeURIComponent(by);
+        const url = `${
+          data.viewerUrl + (intent === 'watch' ? '?mode=watch&' : '?')
+        }by=${encodeURIComponent(by)}`;
         (openTab ?? ((u: string) => window.open(u, '_blank')))(url);
       } else {
         setOpenProfile(data.profile);

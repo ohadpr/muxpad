@@ -1,12 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { type PushState, disablePush, enablePush, getPushState, sendTestPush } from '../lib/push';
 import { useDismissable } from '../lib/use-dismissable';
-import {
-  THEME_CHOICES,
-  type ThemeChoice,
-  updateSettings,
-  useSettings,
-} from '../settings';
+import { THEME_CHOICES, type ThemeChoice, updateSettings, useSettings } from '../settings';
 import './SettingsMenu.css';
 
 export function SettingsMenu() {

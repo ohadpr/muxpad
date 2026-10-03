@@ -1,5 +1,5 @@
 import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
+import { type Root, createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -60,9 +60,7 @@ async function mount() {
   document.body.appendChild(host);
   root = createRoot(host);
   await act(async () => {
-    root?.render(
-      <DocChat paneId="pane_doc" active onExit={() => {}} />,
-    );
+    root?.render(<DocChat paneId="pane_doc" active onExit={() => {}} />);
   });
 }
 

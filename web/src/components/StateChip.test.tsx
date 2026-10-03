@@ -307,11 +307,17 @@ describe('the CSS mapping — selection is not a state', () => {
     // removed — a saturated fill on screen permanently, with thirty
     // declarations re-inking the row's contents against it.
     //
-    // The full grammar, the six-theme arithmetic behind the 20%, and the
-    // hover-out-ranks-selection defect it introduces are in
-    // NavTree.selection.test.ts. Here: the fill is a token, not a raw accent.
+    // AND INVERTED AGAIN, one step further along the same line. The wash was the
+    // right answer while selection still had to be a colour; it no longer is.
+    // The rail's selected row now takes the CONTENT surface and runs into the
+    // pane beside it — a tab, not a highlight — which frees the accent
+    // completely. The six-theme arithmetic, and the acme regression that forced
+    // --nt-hover down to 6%, are in NavTree.selection.test.ts.
+    //
+    // What this arm still guards is unchanged and is the point: the chat row's
+    // fill is never a raw `--accent`.
     expect(NAV_CSS).toMatch(
-      /\.navtree-tab-row\[data-active="true"\] \{ background-color: var\(--nt-sel\); \}/,
+      /\.navtree-tab-row\[data-active="true"\] \{ background-color: var\(--bg-pane-face\);/,
     );
     expect(NAV_CSS).not.toMatch(
       /\.navtree-tab-row\[data-active="true"\] \{ background-color: var\(--accent\);/,

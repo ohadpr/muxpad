@@ -74,8 +74,8 @@ describe('the draft is laid out by the same rule the log renders by', () => {
   it('leaves an `@word` that resolves to nothing as text', () => {
     // The correct degradation, and the same one parseMentions ships: a chip is
     // for a chat that exists, and a draft may contain any `@` the user likes.
-    expect(draftNodes('email me @ohad later', CORPUS)).toEqual([
-      { kind: 'text', text: 'email me @ohad later' },
+    expect(draftNodes('email me @sam later', CORPUS)).toEqual([
+      { kind: 'text', text: 'email me @sam later' },
     ]);
   });
 

@@ -73,15 +73,34 @@ describe('groupChats', () => {
     expect(shape(done)).toEqual([['old', []]]);
   });
 
-  it('takes a still-working child into done WITH its parent', () => {
-    // The parent has left the live list; its family has no business staying in
-    // it. (A child's own state does not rescue it from a retired parent.)
+  it('PROMOTES a still-working child when its parent retires', () => {
+    // The parent has left the live list and the drawer holds top-level chats
+    // only — so a child that has NOT delivered would render nowhere at all.
+    // That shipped briefly and is the bug this arm exists for: a sub-chat with
+    // a turn still running, gone from the rail.
+    //
+    // It is rule 2 arriving from a second direction. A chat whose `spawned_by`
+    // does not resolve is promoted rather than orphaned, because a chat is
+    // never invisible on account of a pointer; a parent that retired out from
+    // under a running child is that situation with the pointer still intact.
     const { live, done } = groupChats([
       tab('old', { agedDays: 9 }),
       tab('kid', { spawned_by: 'old', done: false }),
     ]);
+    expect(shape(live)).toEqual([['kid', []]]);
+    expect(shape(done)).toEqual([['old', []]]);
+  });
+
+  it('does NOT promote a delivered child — that one really is finished', () => {
+    // The other half, and the thing that keeps the drawer clean: a sub-chat
+    // that reported is reachable from its card in the parent and by `@`, and
+    // has no row anywhere.
+    const { live, done } = groupChats([
+      tab('old', { agedDays: 9 }),
+      tab('kid', { spawned_by: 'old', done: true }),
+    ]);
     expect(live).toEqual([]);
-    expect(shape(done)).toEqual([['old', ['kid']]]);
+    expect(shape(done)).toEqual([['old', []]]);
   });
 
   // ─── THE 41-AGENT CASE ───────────────────────────────────────────────────
@@ -90,33 +109,39 @@ describe('groupChats', () => {
   // so a workspace that spawned forty agents shows the parent and nothing else
   // once they have all reported.
   describe('a sub-chat retires on delivery, on its own', () => {
-    it('drops a delivered sub-chat out of the live list immediately', () => {
+    it('drops a delivered sub-chat out of BOTH lists', () => {
+      // INVERTED, and the inversion is the feature. A delivered sub-chat used
+      // to land in the drawer under a label naming its parent; the drawer is
+      // top-level chats only now. Nothing is lost — the result came back to the
+      // parent as a card in its conversation, and `@` still finds it by name.
       const { live, done } = groupChats([
         tab('parent'),
         tab('kid', { spawned_by: 'parent', done: true }),
       ]);
       expect(shape(live)).toEqual([['parent', []]]);
-      expect(shape(done)).toEqual([['parent', ['kid']]]);
-      expect(done[0]?.contextOnly).toBe(true);
+      expect(done).toEqual([]);
     });
 
-    it('splits one live parent across both lists — working up, delivered down', () => {
+    it('a live parent contributes to ONE list — working children up, nothing down', () => {
       const { live, done } = groupChats([
         tab('parent'),
         tab('working', { spawned_by: 'parent', done: false }),
         tab('delivered', { spawned_by: 'parent', done: true }),
       ]);
       expect(shape(live)).toEqual([['parent', ['working']]]);
-      expect(shape(done)).toEqual([['parent', ['delivered']]]);
+      expect(done).toEqual([]);
     });
 
-    it('leaves a parent with forty delivered agents as ONE live row', () => {
+    it('leaves a parent with forty delivered agents as ONE live row and an EMPTY drawer', () => {
+      // The case the whole rule is for. Forty errands that reported used to be
+      // forty rows in the drawer, which buried the chats you actually
+      // abandoned — the only thing the drawer is for.
       const agents = Array.from({ length: 40 }, (_, i) =>
         tab(`agent${i}`, { spawned_by: 'hunt', done: true, status: 'ready' }),
       );
       const { live, done } = groupChats([tab('hunt'), ...agents]);
       expect(shape(live)).toEqual([['hunt', []]]);
-      expect(done[0]?.children).toHaveLength(40);
+      expect(done).toEqual([]);
     });
 
     // A sub-chat has NO clock, so age must not retire it and must not keep it.
@@ -145,28 +170,17 @@ describe('groupChats', () => {
     expect(done).toEqual([]);
   });
 
-  // The pin divider is drawn at this index. Counted over the LIVE tops only,
-  // or a decayed pinned row would leave the hairline stranded one row low.
-  it('counts the pin seam over the live top-level rows only', () => {
-    const { livePinned } = groupChats([
-      tab('p1', { pinned: true }),
-      tab('p2', { pinned: true }),
-      tab('kid', { spawned_by: 'p1' }),
-      tab('u1'),
-      tab('gone', { agedDays: 9 }),
-    ]);
-    expect(livePinned).toBe(2);
-  });
-
   it('is empty-safe', () => {
-    expect(groupChats([])).toEqual({ live: [], done: [], livePinned: 0 });
+    expect(groupChats([])).toEqual({ live: [], done: [] });
   });
 });
 
 describe('doneChatCount — the number in the done header', () => {
-  it('counts the CHATS you will find, not the groups', () => {
+  it('counts the CHATS you will find — which is now one per group', () => {
     // One decayed top-level chat, plus a live parent with three delivered
-    // agents. Four things are in that drawer; two groups hold them.
+    // agents. The agents are NOT in the drawer any more, so the number is 1 —
+    // and the invariant this test names is unchanged: the header's number has
+    // to be what you find when you open it.
     const { done } = groupChats([
       tab('decayed', { agedDays: 9 }),
       tab('hunt'),
@@ -174,20 +188,20 @@ describe('doneChatCount — the number in the done header', () => {
       tab('a2', { spawned_by: 'hunt', done: true }),
       tab('a3', { spawned_by: 'hunt', done: true }),
     ]);
-    expect(done).toHaveLength(2);
-    expect(doneChatCount(done)).toBe(4);
-  });
-
-  it('does not count a context label as a done chat', () => {
-    // The parent is live and has a row above; only its one delivered sub-chat
-    // is actually in the drawer.
-    const { done } = groupChats([tab('hunt'), tab('a1', { spawned_by: 'hunt', done: true })]);
+    expect(done).toHaveLength(1);
     expect(doneChatCount(done)).toBe(1);
   });
 
-  it('counts a decayed parent AND the family it took with it', () => {
+  it('is zero when only sub-chats have delivered', () => {
+    // The parent is live and has a row above it; its delivered sub-chat is not
+    // listed anywhere, so the drawer is empty and says so. It used to say "1".
+    const { done } = groupChats([tab('hunt'), tab('a1', { spawned_by: 'hunt', done: true })]);
+    expect(doneChatCount(done)).toBe(0);
+  });
+
+  it('counts a decayed parent ONCE, not the family it took with it', () => {
     const { done } = groupChats([tab('old', { agedDays: 9 }), tab('kid', { spawned_by: 'old' })]);
-    expect(doneChatCount(done)).toBe(2);
+    expect(doneChatCount(done)).toBe(1);
   });
 
   it('is zero for an empty drawer', () => {
@@ -229,17 +243,19 @@ describe('a grandchild lists under the root, not into a hole', () => {
     expect(shape(done)).toEqual([]);
   });
 
-  it('counts a delivered grandchild in the done header', () => {
-    // The header's number has to be what you find when you open the drawer, and
-    // a row in neither list was counted by neither.
+  it('resolves a delivered grandchild to its root, and then drops it', () => {
+    // The bug this guards is the grandchild going into `childrenOf[child.id]`,
+    // which nothing reads — a row in NEITHER list. It still has to resolve to
+    // the root; what changed is where it lands once it has. A delivered
+    // sub-chat is not listed at any depth, so it leaves the live list and does
+    // not appear in the drawer either.
     const { live, done } = groupChats([
       tab('root'),
       tab('child', { spawned_by: 'root' }),
       tab('grandchild', { spawned_by: 'child', done: true }),
     ]);
     expect(shape(live)).toEqual([['root', ['child']]]);
-    expect(shape(done)).toEqual([['root', ['grandchild']]]);
-    expect(done[0]?.contextOnly).toBe(true);
+    expect(done).toEqual([]);
   });
 
   it('carries a whole chain of handoffs, four deep', () => {
@@ -254,16 +270,22 @@ describe('a grandchild lists under the root, not into a hole', () => {
     expect(shape(live)).toEqual([['root', ['a', 'b', 'c']]]);
   });
 
-  it('takes the whole family down when the ROOT is done', () => {
-    // Unchanged rule, restated at depth: the family follows the root, not the
-    // nearest ancestor that happens to still be live.
+  it('takes the DELIVERED family down when the ROOT is done, and promotes the rest', () => {
+    // Restated at depth, and it is the promotion that needs saying here: both
+    // descendants resolve to `root`, so when root retires they are both
+    // children of a done parent — and neither has delivered, so both are still
+    // running work and both get a row. Flattened to one level, as everywhere.
     const { live, done } = groupChats([
       tab('root', { done: true }),
       tab('child', { spawned_by: 'root' }),
       tab('grandchild', { spawned_by: 'child' }),
     ]);
-    expect(shape(live)).toEqual([]);
-    expect(shape(done)).toEqual([['root', ['child', 'grandchild']]]);
+    expect(shape(live)).toEqual([
+      ['child', []],
+      ['grandchild', []],
+    ]);
+    // The drawer is the root alone — nothing is re-listed underneath it.
+    expect(shape(done)).toEqual([['root', []]]);
   });
 
   it('promotes a chat whose chain leaves this list', () => {

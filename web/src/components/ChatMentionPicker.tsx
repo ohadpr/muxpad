@@ -124,8 +124,8 @@ function Row({
       {/* WHICH WORKSPACE, on every row.
           This list is the one surface that spans them — the sidebar only ever
           shows you one at a time, so a name is unique there and is NOT unique
-          here. Searching "main" returns a `Main` from Trayo and a `Main` from
-          Trayobot as two identical rows, and the only things distinguishing them
+          here. Searching "main" returns a `Main` from Acme and a `Main` from
+          Acmebot as two identical rows, and the only things distinguishing them
           are an emoji and a headline about whatever they happened to be doing.
           Picking the wrong one directs work to the wrong chat, which is the
           failure this whole grammar is written to avoid.

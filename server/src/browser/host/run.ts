@@ -4,6 +4,7 @@ import { type IncomingMessage, type ServerResponse, createServer } from 'node:ht
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WebSocketServer, type WebSocket as WsSocket } from 'ws';
+import { AgentCdpGate, bridgeAgentCdp } from '../AgentCdp.js';
 import {
   type KeyInput,
   type MouseInput,
@@ -13,7 +14,6 @@ import {
 } from '../BrowserInput.js';
 import { browserLaunchSpec } from '../BrowserLaunch.js';
 import { browserViewerPort } from '../BrowserProfile.js';
-import { AgentCdpGate, bridgeAgentCdp } from '../AgentCdp.js';
 import { CdpConnection } from '../CdpConnection.js';
 import {
   type CdpCookie,

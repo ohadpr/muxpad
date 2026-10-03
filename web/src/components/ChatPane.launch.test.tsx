@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { RecentFolder } from '../api';
-import { ChatReadyGreeting, FolderChoice, HarnessLaunchCard } from './ChatPane';
+import { ChatReadyGreeting, FolderChoice, HarnessLaunchCard } from './ChatStart';
 
 /**
  * The two halves of "converting an empty chat gives no feedback and no
@@ -28,7 +28,13 @@ const FOLDERS: RecentFolder[] = [
 describe('the empty chat names what is running in it', () => {
   const greet = (assistant: string, cwd: string | null = '/Users/me/dev/muxpad') =>
     html(
-      <ChatReadyGreeting mode="agent" assistant={assistant} cwd={cwd} converted={null} refusal={null} />,
+      <ChatReadyGreeting
+        mode="agent"
+        assistant={assistant}
+        cwd={cwd}
+        converted={null}
+        refusal={null}
+      />,
     );
 
   it('a Codex pane and a Claude pane do not render the same thing', () => {
@@ -47,7 +53,8 @@ describe('the empty chat names what is running in it', () => {
 
   it('confirms a conversion, naming the harness, model and folder chosen', () => {
     const out = html(
-      <ChatReadyGreeting mode="agent"
+      <ChatReadyGreeting
+        mode="agent"
         assistant="codex"
         cwd="/Users/me/dev/muxpad"
         converted={{ backend: 'codex', cwd: '/Users/me/dev/muxpad', model: 'gpt-5-codex' }}
@@ -63,7 +70,8 @@ describe('the empty chat names what is running in it', () => {
 
   it('omits the model from the receipt when none was pinned', () => {
     const out = html(
-      <ChatReadyGreeting mode="agent"
+      <ChatReadyGreeting
+        mode="agent"
         assistant="claude"
         cwd="/Users/me/dev/muxpad"
         converted={{ backend: 'claude', cwd: '/Users/me/dev/muxpad', model: null }}
@@ -76,7 +84,8 @@ describe('the empty chat names what is running in it', () => {
 
   it('surfaces the server’s refusal verbatim', () => {
     const out = html(
-      <ChatReadyGreeting mode="agent"
+      <ChatReadyGreeting
+        mode="agent"
         assistant="claude"
         cwd={null}
         converted={null}

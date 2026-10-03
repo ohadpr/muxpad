@@ -147,8 +147,15 @@ export async function fetchSpawnWork(
     const events = parseTranscriptJsonl(body);
     // A pane endpoint serves the current session's tail. Never substitute a
     // later job when this round has aged out of that tail or the session rotated.
-    const within = round ? events.filter((e) => round.ended_at !== null && e.ts !== null &&
-      e.ts >= round.started_at && e.ts <= round.ended_at) : events;
+    const within = round
+      ? events.filter(
+          (e) =>
+            round.ended_at !== null &&
+            e.ts !== null &&
+            e.ts >= round.started_at &&
+            e.ts <= round.ended_at,
+        )
+      : events;
     const { text, truncated } = finalAnswer(within);
     if (!text) continue;
     return { kind: 'work', text, truncated };

@@ -107,9 +107,9 @@ describe('web "New chat" ends up with a live agent session', () => {
   });
 
   afterAll(async () => {
-    if (prevPort === undefined) delete process.env.MUXPAD_PORT;
+    if (prevPort === undefined) process.env.MUXPAD_PORT = undefined;
     else process.env.MUXPAD_PORT = prevPort;
-    if (prevShell === undefined) delete process.env.SHELL;
+    if (prevShell === undefined) process.env.SHELL = undefined;
     else process.env.SHELL = prevShell;
     for (const s of openSockets) {
       try {
@@ -242,7 +242,7 @@ describe('web "New chat" ends up with a live agent session', () => {
       // does not start failing, it starts being HONEST about failing.
       expect(created.pane.face).toBe('chat');
     } finally {
-      if (goodShell === undefined) delete process.env.SHELL;
+      if (goodShell === undefined) process.env.SHELL = undefined;
       else process.env.SHELL = goodShell;
     }
 

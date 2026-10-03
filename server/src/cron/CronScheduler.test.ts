@@ -1,3 +1,4 @@
+import { parseCronMarker } from '@muxpad/shared';
 // Policy tests for the cron tick. Everything here runs against a real
 // in-memory SQLite (the schema IS the design) with a FAKE injection primitive,
 // a fake ptyd and a driven clock — no sleeping, no daemon, no ~/.muxpad.
@@ -21,7 +22,6 @@ import {
   CronScheduler,
   type CronSchedulerDeps,
 } from './CronScheduler.js';
-import { parseCronMarker } from '@muxpad/shared';
 import { CRON_RUNS_KEEP } from './CronStore.js';
 
 const HOURLY = '0 * * * *';
@@ -735,5 +735,119 @@ describe('CronScheduler', () => {
     await s.tick();
     expect(sent).toHaveLength(1);
     expect(s.store.runs(a.id)).toHaveLength(1);
+  });
+});
+
+describe('a one-off fires once and retires', () => {
+  // Two live reminders were sitting enabled with next_due_at in SEPTEMBER 2027
+  // when this was written — a META option and a wifi check, both long done.
+  // A dated cron expression recurs annually, which is never what the person
+  // writing one meant.
+  let db: Database.Database;
+  let cache: PtydCache;
+  let events: EventBus;
+  let wsId: string;
+  let paneId: string;
+  let now: number;
+
+  beforeEach(() => {
+    db = openDb(':memory:');
+    cache = new PtydCache();
+    events = new EventBus();
+    wsId = new WorkspaceStore(db).create({ name: 'W' }).id;
+    const tabs = new TabStore(db);
+    const panes = new PaneStore(db);
+    const tab = tabs.create({ name: 'agent', layout: '', workspace_id: wsId });
+    const pane = panes.create({
+      tab_id: tab.id,
+      shell: '/bin/zsh',
+      cwd: '/tmp',
+      startup_cmd: 'muxpad agent',
+      face: 'chat',
+    });
+    tabs.update(tab.id, { layout: pane.id });
+    paneId = pane.id;
+    now = T0;
+  });
+
+  const build = () =>
+    new CronScheduler({
+      db,
+      ptyd: fakePtyd(),
+      cache,
+      events,
+      submitSend: () => ({ status: 'sent' as const }),
+      now: () => now,
+    });
+
+  const make = (schedule: string, over: Record<string, unknown> = {}) =>
+    build().store.create({
+      name: 'reminder',
+      schedule,
+      tz: 'UTC',
+      prompt: 'buy the META leap',
+      target_kind: 'pane',
+      target_pane: paneId,
+      next_due_at: T0,
+      ...over,
+    });
+
+  it('infers `once` from a dated expression at creation', () => {
+    expect(make('0 7 24 9 *').once).toBe(true);
+    expect(make('0 9 * * 1-5', { name: 'weekdays' }).once).toBe(false);
+  });
+
+  it('an explicit flag beats the inference, both ways', () => {
+    // An annual reminder IS a legitimate thing to want.
+    expect(make('0 7 24 9 *', { once: false }).once).toBe(false);
+    expect(make('0 9 * * 1-5', { name: 'w', once: true }).once).toBe(true);
+  });
+
+  it('retires after firing instead of re-arming for next year', async () => {
+    const s = build();
+    // `once: true` with an ordinary schedule, deliberately. The RETIRE path is
+    // what is under test here, and pairing it with a dated expression would
+    // make the test depend on the clock landing in September — which is what
+    // the first draft of this test did, and it failed for that reason rather
+    // than for a real one. The inference from a dated expression is covered
+    // above, on its own.
+    const cron = s.store.create({
+      name: 'meta-leap',
+      schedule: HOURLY,
+      tz: 'UTC',
+      prompt: 'buy it',
+      target_kind: 'pane',
+      target_pane: paneId,
+      next_due_at: T0,
+      once: true,
+    });
+    expect(cron.once).toBe(true);
+    now = Math.max(cron.next_due_at, T0 + CRON_STARTUP_GRACE_MS) + 1000;
+    await s.tick();
+
+    const after = s.store.getById(cron.id);
+    expect(after?.enabled).toBe(false);
+    expect(after?.last_status).toBe('done');
+    // The ROW survives: "it ran and it is done" is not "it never existed".
+    expect(after).not.toBeNull();
+    expect(s.store.runs(cron.id)).toHaveLength(1);
+  });
+
+  it('a recurring cron is untouched by any of this', async () => {
+    const s = build();
+    const cron = s.store.create({
+      name: 'nightly',
+      schedule: HOURLY,
+      tz: 'UTC',
+      prompt: 'sweep',
+      target_kind: 'pane',
+      target_pane: paneId,
+      next_due_at: T0,
+    });
+    now = Math.max(cron.next_due_at, T0 + CRON_STARTUP_GRACE_MS) + 1000;
+    await s.tick();
+    const after = s.store.getById(cron.id);
+    expect(after?.enabled).toBe(true);
+    expect(after?.next_due_at).toBeGreaterThan(now);
   });
 });

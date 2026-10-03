@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { ChatNoRunner } from './ChatPane';
+import { ChatNoRunner } from './ChatStart';
 
 /**
  * THE EMPTY STATE OF AN AGENT PANE WITH NO PROCESS IN IT.

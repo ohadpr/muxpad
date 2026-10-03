@@ -179,6 +179,7 @@ export function XtermPane({
   // effect deliberately does NOT depend on `settings` — recreating the
   // Terminal would drop scrollback and re-establish the WS attach. Initial
   // font/theme is read from getSettings() at mount for the same reason.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `autoFocus` is an initial-mount intent, not a live setting — re-running on it would steal focus from whatever the user moved to since
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -1793,7 +1794,7 @@ export function XtermPane({
         replayRestoring && isCursorAgentCmd(resolvedFg) ? ' replay-restoring' : ''
       }`}
     >
-      <div className="xterm-pane" ref={containerRef} tabIndex={0} />
+      <div className="xterm-pane" ref={containerRef} />
       {reconnecting ? (
         <div className="xterm-reconnecting" role="status" aria-live="polite">
           <span className="xterm-reconnecting-dot" aria-hidden="true" />

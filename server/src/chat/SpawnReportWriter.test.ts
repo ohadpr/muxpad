@@ -499,7 +499,12 @@ describe('SpawnReportWriter — a finished worker becomes a card', () => {
 
   it('discards a pending report when its round reopens', async () => {
     let resolve!: (value: string) => void;
-    const { retirer, writer } = wire(() => new Promise<string>((r) => { resolve = r; }));
+    const { retirer, writer } = wire(
+      () =>
+        new Promise<string>((r) => {
+          resolve = r;
+        }),
+    );
     const kid = worker(parentChat());
     const rounds = new SpawnRoundStore(db);
     rounds.open(kid.tabId, 100);
@@ -517,7 +522,12 @@ describe('SpawnReportWriter — a finished worker becomes a card', () => {
 
   it('lets a reclosed round report before its superseded generation returns', async () => {
     const replies: Array<(value: string) => void> = [];
-    const { retirer, writer } = wire(() => new Promise<string>((r) => { replies.push(r); }));
+    const { retirer, writer } = wire(
+      () =>
+        new Promise<string>((r) => {
+          replies.push(r);
+        }),
+    );
     const kid = worker(parentChat());
     const rounds = new SpawnRoundStore(db);
     rounds.open(kid.tabId, 100);
@@ -535,7 +545,12 @@ describe('SpawnReportWriter — a finished worker becomes a card', () => {
 
   it('keeps a closed round result when a genuinely new job starts meanwhile', async () => {
     let resolve!: (value: string) => void;
-    const { retirer, writer } = wire(() => new Promise<string>((r) => { resolve = r; }));
+    const { retirer, writer } = wire(
+      () =>
+        new Promise<string>((r) => {
+          resolve = r;
+        }),
+    );
     const kid = worker(parentChat());
     const rounds = new SpawnRoundStore(db);
     rounds.open(kid.tabId, 100);

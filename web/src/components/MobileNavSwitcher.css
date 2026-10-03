@@ -153,6 +153,28 @@
     calc(100dvh - var(--mns-panel-top) - 24px),
     var(--mns-avail-h, calc(100dvh - var(--mns-panel-top) - 24px))
   );
+  /* …AND A FLOOR, which is the half-height complaint.
+     The cap was never what limited this panel — on an 844px phone it computes
+     to roughly 727px, 86% of the screen. The panel has a `max-height` and no
+     `height`, so it HUGS ITS CONTENT, and the content is short: the sheet
+     inherits each workspace's collapsed state, so a typical open is one
+     expanded workspace of half a dozen rows. That measures out near half the
+     viewport, which is exactly what it looked like.
+
+     So the panel now claims a floor as well as a ceiling. Two thirds of the
+     available height, never more than the cap — a sheet that always opens to a
+     usable size, rather than one whose height depends on how many groups you
+     happen to have left folded. Scrolling inside it is unchanged; this only
+     stops it from choosing to be small.
+
+     `min()` with the same cap terms, not a bare `68dvh`: on a short viewport —
+     landscape, or a keyboard up — a fixed floor would exceed the ceiling, and a
+     min-height beats a max-height in CSS. That is how you get a panel taller
+     than the screen with its last rows unreachable. */
+  min-height: min(
+    calc((100dvh - var(--mns-panel-top) - 24px) * 0.68),
+    var(--mns-avail-h, calc(100dvh - var(--mns-panel-top) - 24px))
+  );
   /* Chrome surface — the panel is an extension of the bar it hangs
      from, and gives the bg-elev workspace cards the same figure/ground
      contrast the desktop sidebar has. */

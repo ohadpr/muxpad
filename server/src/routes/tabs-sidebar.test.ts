@@ -4,7 +4,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { MuxpadEventSchema, sortSidebarTabs, type Tab } from '@muxpad/shared';
+import { MuxpadEventSchema, type Tab, sortSidebarTabs } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openDb } from '../store/db.js';

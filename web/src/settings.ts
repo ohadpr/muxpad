@@ -1,12 +1,6 @@
 import { useEffect, useState } from 'react';
 
-export type Theme =
-  | 'tokyo-night'
-  | 'dracula'
-  | 'alucard'
-  | 'github-light'
-  | 'acme'
-  | 'acme-dark';
+export type Theme = 'tokyo-night' | 'dracula' | 'alucard' | 'github-light' | 'acme' | 'acme-dark';
 
 /** What the picker offers: a theme, or "whatever the OS is doing". */
 export type ThemeChoice = Theme | 'system';
@@ -100,7 +94,6 @@ const DEFAULTS: Settings = {
 
 const KEY = 'muxpad.settings.v1';
 const LEGACY_KEY = 'webagents.settings.v1';
-
 
 /**
  * Resolve the stored theme choice, migrating the two shapes that came before.

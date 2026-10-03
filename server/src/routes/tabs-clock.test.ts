@@ -122,7 +122,7 @@ describe('the chat clock on the wire', () => {
     // a terminal has no inbox, so decaying one does not rest it, it loses it.
     // The client has no unarchive button, `noteUserMessage` has one production
     // caller and it is the agent send path, and pinning is the only way back.
-    const t = await newTerminalTab('Trayobot');
+    const t = await newTerminalTab('Acmebot');
     tabs.resetClock(t.id, Date.now() - 40 * DAY_MS);
     const row = (await listTabs()).find((r) => r.id === t.id) as Tab;
     expect(row.done).toBe(false);
