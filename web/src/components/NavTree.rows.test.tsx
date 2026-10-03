@@ -180,25 +180,48 @@ describe('opening the done drawer shows a delivered child as a hollow dot', () =
     return host;
   }
 
-  it('a delivered sub-chat is in NEITHER list — the drawer never opens for it', () => {
-    // INVERTED. This used to assert the drawer held a `contextOnly` label with
-    // the delivered child under it, and the whole shape is gone: the drawer is
-    // top-level chats only. A sub-chat's result already came back to the parent
-    // as a card in its conversation, which is where you look for it, and `@`
-    // still finds the chat by name — so forty reported errands no longer bury
-    // the chats you actually abandoned, which is the only thing the drawer
-    // is for.
+  it('a delivered sub-chat is TWO clicks in, never at the top of the drawer', () => {
+    // The archive filled with machine-named work nobody recognised, so the
+    // drawer's top level is yours alone. The sub-chats are still there — one
+    // disclosure further in, below the chats you archived yourself, shut by
+    // default even once the drawer above them is open.
     const box = mountRail([
       tab('root'),
       // No clock at all — a sub-chat does not decay, it delivers (groupChats).
       tab('kid', { spawned_by: 'root', done: true, done_reason: 'delivered', clock: null }),
     ]);
-    // No drawer at all: nothing is in it.
-    expect(box.querySelector('.navtree-done-head')).toBeNull();
+    const heads = () => [...box.querySelectorAll<HTMLButtonElement>('.navtree-done-head')];
+    // Shut: ONE line, and it counts the top level — which is empty here, so it
+    // reads "0 done". The sub-chat head is not even rendered yet.
+    expect(heads()).toHaveLength(1);
+    expect(heads()[0]?.textContent).toContain('0 done');
     expect(box.querySelectorAll('[data-shape="dot"]')).toHaveLength(0);
-    // The parent keeps its own live row, and is NOT also drawn as a label.
-    expect(box.querySelectorAll('.navtree-tab-row')).toHaveLength(1);
-    expect(box.querySelector('.navtree-done-parent')).toBeNull();
+
+    // One click: the drawer opens onto the nested head, and STILL no sub-chat.
+    act(() => heads()[0]?.click());
+    expect(heads()).toHaveLength(2);
+    expect(heads()[1]?.textContent).toContain('1 sub-chat');
+    expect(box.querySelectorAll('[data-shape="dot"]')).toHaveLength(0);
+
+    // Two clicks: now the row, as a hollow dot under a label naming its parent.
+    act(() => heads()[1]?.click());
+    expect(box.querySelectorAll('.chatchip-dot[data-hollow="true"]')).toHaveLength(1);
+    expect(box.querySelectorAll('.navtree-tab-row[data-child="true"]')).toHaveLength(1);
+    // The parent is a LABEL — it has a live row of its own above.
+    expect(box.querySelector('.navtree-done-parent')?.textContent).toBe('root');
+    expect(box.querySelectorAll('.navtree-tab-row')).toHaveLength(2);
+  });
+
+  it('singular, because "1 sub-chats" is the kind of thing nobody fixes later', () => {
+    const box = mountRail([
+      tab('root'),
+      tab('a', { spawned_by: 'root', done: true, done_reason: 'delivered', clock: null }),
+      tab('b', { spawned_by: 'root', done: true, done_reason: 'delivered', clock: null }),
+    ]);
+    act(() => box.querySelector<HTMLButtonElement>('.navtree-done-head')?.click());
+    expect([...box.querySelectorAll<HTMLButtonElement>('.navtree-done-head')][1]?.textContent).toContain(
+      '2 sub-chats',
+    );
   });
 
   it('a DECAYED top-level chat still fills the drawer', () => {
