@@ -249,8 +249,8 @@ describe('putting the details into the page', () => {
   it('fills both fields', () => {
     document.body.innerHTML = '<input id="u" type="text"><input id="p" type="password">';
     for (const el of Array.from(document.querySelectorAll('input'))) sized(el);
-    expect(fillLoginForm('ohad', 'hunter2')).toBe(true);
-    expect((document.getElementById('u') as HTMLInputElement).value).toBe('ohad');
+    expect(fillLoginForm('sam', 'hunter2')).toBe(true);
+    expect((document.getElementById('u') as HTMLInputElement).value).toBe('sam');
     expect((document.getElementById('p') as HTMLInputElement).value).toBe('hunter2');
   });
 

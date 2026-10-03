@@ -1174,10 +1174,10 @@ function esc(v: string): string {
  * XML escaping is not shell quoting, and `esc` above is XML escaping. It leaves
  * the apostrophe alone — correctly, for an attribute in a `"`-quoted slot — and
  * the report-back command interpolates those same attributes into a
- * single-quoted shell argument. So a chat called `Ohad's project` produced a
+ * single-quoted shell argument. So a chat called `Sam's project` produced a
  * ready-to-copy command whose quote ended in the middle of its own name:
  *
- *   muxpad agent send p1 '<muxpad-report … from="Ohad's project" …>
+ *   muxpad agent send p1 '<muxpad-report … from="Sam's project" …>
  *
  * `/bin/sh -n` rejects it with an unterminated quote, and the round trip then
  * depended on the receiving agent noticing and repairing our command. Review 3
@@ -1516,7 +1516,7 @@ export function withContentRows(
 // archive most of it does not: the endpoint ranks messages across every session
 // ever recorded on this machine, and this client then discards every hit whose
 // pane is not a chat that still exists, every repeat from one chat, and the chat
-// being typed in. Measured on the user's own archive: for `trayo`, 47 of the
+// being typed in. Measured on the user's own archive: for `acme`, 47 of the
 // first 50 hits were unresolvable and one chat made the list, out of eight that
 // have the word in them. A chat whose matching message ranks 51st was
 // unreachable by that query while the picker sat with seven empty slots.

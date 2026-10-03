@@ -1766,7 +1766,7 @@
 }
 /* THE YIELD ORDER. Flex shrinks items in proportion to their base size, so the
    LONGEST cell keeps the most absolute width — at 320px that left the folder
-   reading `trayo-self-serve…` while the model was squeezed to `Op…`, which is
+   reading `acme-self-serve…` while the model was squeezed to `Op…`, which is
    backwards: a clipped folder name is still recognisable, a clipped model name
    is two letters. The folder gives way three times as fast. */
 .chat-status-seg-wrap.-folder {

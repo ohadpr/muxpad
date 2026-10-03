@@ -148,9 +148,9 @@ describe('a picked mention is a chip, immediately', () => {
   });
 
   it('leaves an unresolvable `@word` as plain text', () => {
-    const { el } = mount('email me @ohad later');
+    const { el } = mount('email me @sam later');
     expect(hosts(el)).toHaveLength(0);
-    expect(el.textContent).toBe('email me @ohad later');
+    expect(el.textContent).toBe('email me @sam later');
   });
 
   it('makes the chip atomic and untabbable', () => {
