@@ -748,65 +748,64 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     }
   });
 
-  it('PINNED is a FILL on the row, on one ladder with selection', () => {
-    // Five designs, and the first four are recorded as negative assertions
-    // because each is ruled out by a reason, not by a value:
+  it('PINNED is a HUE on the name — a channel selection does not use', () => {
+    // Six designs, and the first five are negative assertions because each is
+    // ruled out by a reason rather than by a value. All five were on the row's
+    // BOX, which is the one thing selection owns:
     //
-    //   · a rule under the block (flush, inset, a 40px stub) — wrong in KIND: a
-    //     line BETWEEN two things used to say something about ONE of them.
-    //   · a 3px tick in the row's left state track — free (chat rows stopped
-    //     emitting `data-state`), but OUTSIDE the icon column, so it ragged the
-    //     rail's left edge, the only containment a workspace has left.
-    //   · a ring, then a plate, on the chip — measured invisible and not
-    //     tunable: the tile is transparent and a 20px glyph fills a 24px box.
+    //   · a rule under the block (flush, inset, a 40px stub) — a line BETWEEN
+    //     two things used to say something about ONE of them.
+    //   · a 3px tick in the left state track — free, but outside the icon
+    //     column, so it ragged the rail's left edge.
+    //   · a ring, then a plate, on the chip — measured invisible: the tile is
+    //     transparent and a 20px glyph fills a 24px box.
     //   · the pin shown at rest — visible, but 18px of name width on exactly
     //     the rows pinned because they matter.
+    //   · a FILL at the midpoint between the rail and the selected row —
+    //     rejected as "too close to the active tab indicator", which is the
+    //     correct reading of the whole category rather than of that mix.
     //
-    // The row's own fill costs nothing and is the only one you read without
-    // looking for it. The GAP goes with it: spacing was the last thing still
-    // saying "these are different" from between the rows instead of on them.
+    // So the mark is INSIDE the row, on its contents, where selection says
+    // nothing at all. Nothing may go back on the box.
     const seam = ruleBody(NAV_CSS, '.navtree-pin-divider');
     expect(seam).not.toMatch(/border/);
     expect(Number.parseFloat(decl(seam, 'margin'))).toBe(0);
     expect(strip(STATE_CSS)).not.toMatch(/\[data-pinned/);
     expect(strip(CHIP_CSS)).not.toMatch(/data-phase="pinned"/);
+    for (const r of rules(NAV_CSS)) {
+      const onTheBox = r.selectors.some((sel) => /\[data-pinned="true"\]$/.test(sel));
+      if (onTheBox) expect({ sel: r.selectors, body: r.body }).toEqual({ sel: r.selectors, body: '' });
+    }
 
-    const pinned = ruleBody(
-      NAV_CSS,
-      '.navtree-tab-row[data-pinned="true"]:not([data-active="true"])',
-    );
-    expect(decl(pinned, 'background-color')).toBe('var(--nt-pinned)');
-    // A PILL, not the tab's shape. Selection loses its right-hand corners and
-    // runs into the pane; keeping both ends round here is what stops two filled
-    // rows from reading as the same kind of thing.
-    expect(decl(pinned, 'border-radius')).toBe('var(--nt-pill)');
+    // HUE, not lightness, and that is the point rather than a flourish: the
+    // name keeps its luminance and changes temperature, so a pinned name cannot
+    // read as louder or dimmer than any other — the two marks are not on the
+    // same axis, so they cannot be compared at all.
+    const ink = ruleBody(NAV_CSS, '.navtree-tab-row[data-pinned="true"] .navtree-name-text');
+    expect(decl(ink, 'color')).toBe('var(--nt-pinned-ink)');
+    expect(ink).not.toMatch(/background|border|box-shadow|font-weight|font-size/);
+    expect(NT_TOKENS['--nt-pinned-ink']).toMatch(/var\(--accent\) \d+%, var\(--fg\)/);
 
-    // ONE LADDER, and the order is guaranteed by construction rather than by
-    // arithmetic that happens to come out right. --nt-pinned is mixed FROM
-    // --bg-pane-face, so pinned is literally the midpoint between the rail and
-    // the selected row on every theme.
-    //
-    // Written as its own mix toward --bg it was not: on acme it measured ΔE
-    // 3.32 from the rail against 1.11 from SELECTION — a pinned row more
-    // distinct than the selected one — because acme's rail and content sit a
-    // hair apart and two independent mixes can order themselves differently per
-    // theme. A midpoint cannot.
-    expect(NT_TOKENS['--nt-pinned']).toContain('var(--bg-pane-face)');
-    const half = (t: Record<string, string>) =>
-      over(paneFace(t), t['--bg-tabbar'] as string, 0.5);
+    // IT MUST SURVIVE SELECTION. A pinned row you are also IN is still pinned,
+    // and `[data-active="true"] .navtree-name-text` is (0,3,0) — exactly the
+    // same specificity — so the only thing keeping the hue is source order.
+    const sels = rules(NAV_CSS).flatMap((r, i) => r.selectors.map((sel) => ({ sel, i })));
+    const activeInk = sels.find((x) => x.sel === '.navtree-tab-row[data-active="true"] .navtree-name-text');
+    const pinnedInk = sels.find((x) => x.sel === '.navtree-tab-row[data-pinned="true"] .navtree-name-text');
+    expect(pinnedInk && activeInk && pinnedInk.i > activeInk.i).toBe(true);
+
+    // And it stays readable on both grounds it can land on, everywhere. The
+    // accent is a HUE token, not an ink one, so this is the arm that catches a
+    // theme whose accent is too close to its own rail.
     for (const [name, t] of Object.entries(THEMES)) {
-      const rail = t['--bg-tabbar'] as string;
-      const pinVsRail = deltaE(half(t), rail);
-      const selVsRail = deltaE(paneFace(t), rail);
-      // Strictly below selection, everywhere. This is the invariant; the
-      // SIZES are a theme's business and acme's is correctly tiny — that theme
-      // has no room, which is why selection there is carried by the funnel
-      // SHAPE, and pinned borrows none of it.
-      expect({ name, ordered: pinVsRail < selVsRail }).toEqual({ name, ordered: true });
-      // And the row's ink is never the thing that pays: a fill toward the
-      // CONTENT surface raises the row, where a wash toward --fg would move it
-      // toward its own text. That is the tray's lesson, applied.
-      expect({ name, aa: ratio(t['--fg'] as string, half(t)) >= 4.5 }).toEqual({ name, aa: true });
+      const tint = over(t['--accent'] as string, t['--fg'] as string, 0.75);
+      const onRail = ratio(tint, t['--bg-tabbar'] as string);
+      const onTab = ratio(tint, paneFace(t));
+      expect({ name, rail: onRail >= 4.5, tab: onTab >= 4.5 }).toEqual({
+        name,
+        rail: true,
+        tab: true,
+      });
     }
   });
 });
