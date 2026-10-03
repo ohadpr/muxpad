@@ -1790,50 +1790,19 @@
    the seam INSIDE a workspace, so it must read as a smaller break than the seam
    BETWEEN workspaces above — 10px against that 18px says that with one number,
    where a hairline against a hairline could only say it with weight. */
-/* THE PIN SEAM — and it is now actually drawn.
-   It was `height: 10px` and nothing else: an empty box. The JSX above it calls
-   it "a hairline" and the rail had no hairline, so the only thing separating
-   "you arranged these" from "these arrange themselves" was a gap — reported as
-   "no indicator no line just a bit of spacing. not good". A comment asserting
-   something the stylesheet never did.
-   `--border` and the 8px/4px insets are the `.navtree-foot` rule's, which is
-   this sheet's existing hairline and the one it should match. */
+/* THE SEAM IS AIR NOW, and the mark moved onto the rows themselves.
+   A rule here was drawn three ways — flush, inset both ends, then a 40px stub —
+   and the last one still had the same problem the first two did: it is a line
+   BETWEEN two things used to say something about ONE of them. "which rows are
+   pinned" is a property of those rows, and it is now told on each of them, in
+   the 3px left track StateChip.css reserves and a chat row never fills (see
+   `[data-pinned]` there).
+
+   So this element stays and its border does not: it is the gap that keeps the
+   pinned block from running into the rest, and nothing else. */
 .navtree-pin-divider {
   height: 0;
-  /* THE ROW'S CONTENT BOX, not the card's full width.
-     Flush was right when the group was a region of one long list: the line had
-     to span everything or it read as a fourth left edge. Inside a CARD it reads
-     as the opposite — a rule touching both walls cuts the container in half,
-     reported as "it feels like it's splitting the sidebar".
-
-     So it now starts where the icons start and ends where the rows end: the
-     same two insets every row already uses, which makes it a separator BETWEEN
-     rows rather than a division OF the card. Nothing new to keep in step —
-     both numbers are the row's own padding, read from the same tokens. */
-  /* AND SHORT — a STUB, not a rule that crosses the rail. Inset-both-ends was
-     already a step back from flush, but it still spanned 240 of the rail's
-     268px, which is 90% and reads as a cut however you inset it. Reported
-     twice, the second time against the inset version. A separator only has to
-     mark WHERE the break is; it does not have to travel the whole way to say
-     so, and the thing on the other side of this one is the selected tab's
-     bottom fillet, which a long rule runs straight into.
-
-     It starts on the trunk — the same x every icon chip is centred on, so it
-     lines up with a column that is already there — and runs 40px. */
-  width: 40px;
-  margin: 7px 0 7px calc(var(--nt-pad) + var(--nt-indent));
-  /* NOT `--border`: measured at 1.00:1 against the rail on alucard
-     (#ddd8ee on #ddd8ef), 1.06 on acme, 1.14 on github-light — i.e. the token
-     this sheet uses for hairlines is INVISIBLE on the theme in the screenshot
-     that reported the seam missing. Deriving it from the foreground instead
-     cannot be invisible on any theme, because the rail's text has to be
-     readable there by definition. */
-  /* A stub this short is 40px of 1px hairline and nothing else, so it goes back
-     UP in weight rather than down: 20% was tuned for a near-full-width rule,
-     where the length carried the signal and the ink only had to be visible. At
-     40px the ink IS the signal. 32% is still under the 1px borders the rest of
-     the sheet uses, and short enough that it cannot shout. */
-  border-top: 1px solid color-mix(in srgb, var(--fg) 32%, transparent);
+  margin: 9px 0;
 }
 
 /* …AND THE MARK'S TRACK IS RESERVED ON A PINNED ROW, so the pin cannot move.

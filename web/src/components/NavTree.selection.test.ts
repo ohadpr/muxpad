@@ -47,6 +47,7 @@ import { describe, expect, it } from 'vitest';
 
 const read = (name: string) => readFileSync(join(import.meta.dirname, name), 'utf8');
 const NAV_CSS = read('NavTree.css');
+const STATE_CSS = read('StateChip.css');
 const APP_CSS = readFileSync(join(import.meta.dirname, '..', 'styles.css'), 'utf8');
 
 const flat = (s: string) => s.replace(/\s+/g, ' ');
@@ -746,25 +747,33 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     }
   });
 
-  it('the pin seam IS a line, and one that can actually be seen', () => {
-    // Reversed deliberately. The old rule was "paints nothing at all", on the
-    // reasoning that pinning is already told by POSITION and per-row by "the
-    // pin button's aria-pressed" — and aria-pressed is not a visual signal, so
-    // that half was never on screen: `.navtree-pin` is a `.navtree-close`, and
-    // those have zero width until the row is hovered. The whole indicator was a
-    // gap. Reported as "no indicator no line just a bit of spacing. not good".
+  it('PINNED is a mark on each row, not a rule between the blocks', () => {
+    // Three designs, and the third is the one that matters. The seam was flush,
+    // then inset at both ends, then a 40px stub — each reported in turn, and
+    // every version had the same defect underneath the tuning: it is a line
+    // BETWEEN two things, used to say something about ONE of them. "which rows
+    // are pinned" is a property of those rows.
+    //
+    // So the element survives as the GAP and nothing else.
     const body = ruleBody(NAV_CSS, '.navtree-pin-divider');
-    expect(body).toMatch(/border-top:\s*1px/);
-    // And NOT in `--border`, which the sibling test above measures at 1.00:1
-    // against the rail on alucard — a hairline nobody can see is the state this
-    // is fixing, not a fix for it. Derived from the foreground instead, which
-    // has to be readable on every theme by construction.
-    expect(decl(body, 'border-top')).toMatch(/--fg/);
-    expect(decl(body, 'border-top')).not.toMatch(/var\(--border\)/);
-    // AND A STUB. Inset-both-ends still spanned 240 of the rail's 268px, which
-    // reads as a cut however it is inset — reported a second time against the
-    // inset version. A fixed, short width is the thing being asserted, because
-    // every margin-based attempt at this has drifted back toward full width.
-    expect(Number.parseFloat(decl(body, 'width'))).toBeLessThanOrEqual(64);
+    expect(body).not.toMatch(/border/);
+    expect(Number.parseFloat(decl(body, 'margin'))).toBeGreaterThanOrEqual(6);
+
+    // And the mark lands in the 3px left track. It costs nothing — the track is
+    // reserved on every row and a chat row never fills it, because chat rows
+    // stopped emitting `data-state` when the bar and the tint were deleted.
+    // That is why this is in StateChip.css: it OWNS that pseudo-element, and
+    // the sibling test above pins that NavTree.css must not touch it.
+    const pin = ruleBody(
+      STATE_CSS,
+      '.navtree-tab-row[data-pinned="true"]:not([data-active="true"])::before',
+    );
+    expect(decl(pin, 'background')).toMatch(/color-mix\(in srgb, var\(--fg\)/);
+    // NOT the accent, which means "needs you" and nothing else.
+    expect(pin).not.toMatch(/--accent/);
+    // The selected row is still pinned and still says so, against its own face.
+    expect(
+      ruleBody(STATE_CSS, '.navtree-tab-row[data-pinned="true"][data-active="true"]::before'),
+    ).toMatch(/color-mix\(in srgb, var\(--fg\)/);
   });
 });

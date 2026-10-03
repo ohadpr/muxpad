@@ -132,6 +132,39 @@
   background: var(--state-hue);
 }
 
+/* ─── 1b · …and the same track says PINNED ──────────────────────────────────
+   The track is reserved on every row and a chat row never fills it: chat rows
+   stopped emitting `data-state` when the bar and the tint were deleted, so on
+   the rail's main list these 3px are permanently empty. Pinned-ness is the one
+   thing that wants a per-row mark and has nowhere to put it.
+
+   WHY IT IS NOT ANY OF THE OBVIOUS THINGS. A lit pin glyph was tried and
+   removed: it cost 26px of name width on exactly the rows pinned because they
+   matter most, and a pinned tab with a schedule rendered `📌 ◷ 23:30`, two
+   unrelated marks reading as one chip. Weight was ruled out by the request.
+   A row fill would put a second tinted surface in a rail whose whole hierarchy
+   is now "one surface, and it is the selected row". This track costs no width,
+   no weight and no surface, because it is already there and already empty.
+
+   It replaces the horizontal rule under the pinned block, which drew the seam
+   as a cut ACROSS the rail to say something about the rows above it — a line
+   between two things, to mark a property of one of them.
+
+   --fg, NOT --accent: the accent means "needs you". A neutral mark at 30% is
+   legible on every theme (the rail's text has to be) and cannot be read as a
+   state. */
+.navtree-tab-row[data-pinned="true"]:not([data-active="true"])::before {
+  background: color-mix(in srgb, var(--fg) 30%, transparent);
+}
+/* The selected row keeps it too — it is still pinned — but against the tab's
+   own face rather than the rail's, so it needs the same step from a different
+   ground. Scoped separately rather than left to the rule above, because the
+   active row's fill is a different surface and a single value cannot sit
+   correctly on both. */
+.navtree-tab-row[data-pinned="true"][data-active="true"]::before {
+  background: color-mix(in srgb, var(--fg) 24%, transparent);
+}
+
 /* ─── 2 · The row tint ──────────────────────────────────────────────────── */
 
 /* `background-image`, so the hover `background-color` underneath it still
