@@ -22,7 +22,14 @@ function makeDeps(overrides: Partial<AppUrlTrackerDeps> = {}): {
     now: () => clock,
     ...overrides,
   };
-  return { deps, selfHosts, listening, setNow: (n) => (clock = n) };
+  return {
+    deps,
+    selfHosts,
+    listening,
+    setNow: (n) => {
+      clock = n;
+    },
+  };
 }
 
 describe('AppUrlTracker', () => {

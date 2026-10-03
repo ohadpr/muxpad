@@ -4,9 +4,24 @@ import { parseCodexModels, readCodexModels } from './codex-models.js';
 /** Shaped like the real ~/.codex/models_cache.json, trimmed to the fields read. */
 const CACHE = JSON.stringify({
   models: [
-    { slug: 'gpt-6-astra', display_name: 'GPT-6-Astra', visibility: 'list', supported_in_api: true },
-    { slug: 'gpt-reserve', display_name: 'GPT-Reserve', visibility: 'hide', supported_in_api: true },
-    { slug: 'gpt-5.6-sol', display_name: 'GPT-5.6-Sol', visibility: 'list', supported_in_api: true },
+    {
+      slug: 'gpt-6-astra',
+      display_name: 'GPT-6-Astra',
+      visibility: 'list',
+      supported_in_api: true,
+    },
+    {
+      slug: 'gpt-reserve',
+      display_name: 'GPT-Reserve',
+      visibility: 'hide',
+      supported_in_api: true,
+    },
+    {
+      slug: 'gpt-5.6-sol',
+      display_name: 'GPT-5.6-Sol',
+      visibility: 'list',
+      supported_in_api: true,
+    },
     {
       slug: 'codex-auto-review',
       display_name: 'Codex Auto Review',

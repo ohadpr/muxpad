@@ -33,7 +33,7 @@ const settle = (ms = 250) => new Promise((r) => setTimeout(r, ms));
  * `settle(ms)` is a guess about how long the server needs, and a guess is only
  * as good as the machine's current load. The tab-closes assertion below was
  * written as `settle(500)` and duly failed the first time this file shared a
- * serial run with the dictation e2e, which spawns a Chromium — the close is
+ * serial run with a browser e2e, which spawns a Chromium — the close is
  * asynchronous (turn-done → retire → prune), 500ms is ample idle and not
  * always ample under load. Polling makes the test wait exactly as long as it
  * has to and no longer, which is both faster when idle and correct when not.

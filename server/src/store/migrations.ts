@@ -1101,6 +1101,77 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS inbound_messages_tab ON inbound_messages(tab_id, at);
     `,
   },
+  {
+    // ── ONE-TIME CRONS ───────────────────────────────────────────────────────
+    // A cron expression naming BOTH a month and a day-of-month — `0 7 24 9 *`,
+    // "07:00 on September 24th" — has always been this product's idiom for "do
+    // this once", because there was no other way to say it. The agent
+    // instructions spell that out and then tell you to delete the row by hand
+    // afterwards.
+    //
+    // Nobody ever does. Measured on the live database before this migration:
+    // three of five crons were one-offs by that idiom, two had already fired
+    // and done their job, and both were sitting enabled with `next_due_at` in
+    // SEPTEMBER 2027 — a reminder about a META option and a wifi check, queued
+    // to go off again a year later. The "delete it afterwards" instruction had
+    // a 0% compliance rate, which is the correct way to read an instruction
+    // nobody follows: the design was wrong, not the user.
+    //
+    // So the idiom becomes a stored fact. `once` is set here for every dated
+    // schedule, and a fired one is retired on the spot rather than rolled
+    // forward — which cleans up the two live stragglers as part of the upgrade
+    // instead of leaving them for somebody to notice in 2027.
+    //
+    // Deliberately NOT deleted: a retired one-off keeps its row, its history
+    // and its place in `cron list`. "It ran and it is done" and "it never
+    // existed" are different things, and only one of them is true.
+    version: 36,
+    // `apply`, not `sql`, for two reasons. SQLite has no
+    // `ADD COLUMN IF NOT EXISTS`, and the idempotency test re-runs migrations
+    // with the version rows deleted on purpose ("a restore from backup is one
+    // step from running it"). And the dated-schedule test is a field check that
+    // SQL can only fake with brittle GLOBs — in JS it is what it says it is.
+    apply: (db) => {
+      const cols = db.prepare('PRAGMA table_info(crons)').all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === 'once')) {
+        db.exec('ALTER TABLE crons ADD COLUMN once INTEGER NOT NULL DEFAULT 0');
+      }
+      const rows = db.prepare('SELECT id, schedule, last_fire_at FROM crons').all() as Array<{
+        id: string;
+        schedule: string;
+        last_fire_at: number | null;
+      }>;
+      for (const r of rows) {
+        // RE-IMPLEMENTED HERE, not imported from cron/schedule.ts, and that is
+        // deliberate rather than an oversight to tidy up later. A migration ran
+        // once against the data as it was; if it imported the live predicate it
+        // would silently change behaviour every time that predicate is refined,
+        // and replaying history would no longer reproduce it. The duplication
+        // is the stability. (They agree today — see `isDatedSchedule`.)
+        //
+        // Dated = a specific day-of-month AND a specific month. Both must be
+        // pinned: `0 9 1 * *` is monthly and `0 9 * 9 *` is every day in
+        // September, and neither is a one-off.
+        const f = r.schedule.trim().split(/\s+/);
+        const dom = f[2];
+        const mon = f[3];
+        const dated =
+          f.length >= 5 &&
+          dom !== undefined &&
+          mon !== undefined &&
+          dom !== '*' &&
+          mon !== '*' &&
+          !dom.includes('*') &&
+          !mon.includes('*');
+        if (!dated) continue;
+        db.prepare('UPDATE crons SET once = 1 WHERE id = ?').run(r.id);
+        // …and a one-off that ALREADY fired is done now, not next year.
+        if (r.last_fire_at !== null) {
+          db.prepare("UPDATE crons SET enabled = 0, last_status = 'done' WHERE id = ?").run(r.id);
+        }
+      }
+    },
+  },
 ];
 
 /** Highest version in the migration list. Exported so a test can assert the

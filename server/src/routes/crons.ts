@@ -86,6 +86,8 @@ export function cronsRoutes(deps: {
           .optional(),
         max_open: z.number().int().min(1).max(20).optional(),
         close_when_done: z.boolean().optional(),
+        /** Omitted = infer from the schedule (see isDatedSchedule). */
+        once: z.boolean().optional(),
       })
       .safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json(bad(parsed.error.issues[0]?.message ?? 'invalid body'), 400);
@@ -162,6 +164,10 @@ export function cronsRoutes(deps: {
       // archived + FTS-searchable, and the scheduler keeps the tab anyway when
       // the agent left a question or an artifact. So new-tab crons default ON.
       close_when_done: body.close_when_done ?? body.target_kind === 'new-tab',
+      // Passed through only when stated. Omitted, the store infers it from the
+      // schedule — and `?? undefined` matters: `once: false` is a real answer
+      // ("yes I do want this annually") and must not read as "not stated".
+      ...(body.once === undefined ? {} : { once: body.once }),
       next_due_at: nextAfter(schedule, tz, now),
     });
     emitCronTabUpdate(deps, cron.target_pane);

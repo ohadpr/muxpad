@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readModelCatalog, recordModelCatalog } from './agent-model-catalog.js';
-import { openDb } from './store/db.js';
 import { GlobalsStore } from './store/GlobalsStore.js';
+import { openDb } from './store/db.js';
 
 describe('agent model catalog', () => {
   const db = () => openDb(':memory:');

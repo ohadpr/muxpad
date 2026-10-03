@@ -377,8 +377,10 @@
 .desktop-tab[data-active="true"]:hover {
   /* Match the active pane's exact colour — it wears a 5%-accent wash
      (.tabbed-pane-slot::after), so plain --bg would read as a different shade
-     and the tab wouldn't fuse into the pane. */
-  background: color-mix(in srgb, var(--accent) 5%, var(--bg));
+     and the tab wouldn't fuse into the pane. The value is --bg-pane-face now:
+     the sidebar's selected row has to fuse with the same pane, and three
+     hand-written copies of one number is how they drift apart. */
+  background: var(--bg-pane-face);
   /* Hairline on the SIDES only — a full inset ring painted its own 1px
      line across the tab's bottom edge, exactly the seam the height
      overlap below exists to remove (the top edge is under the accent

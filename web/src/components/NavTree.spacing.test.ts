@@ -578,14 +578,25 @@ describe('what the pass was NOT allowed to move', () => {
       NAV_CSS,
       '.navtree[data-variant="sidebar"] .navtree-tab-row[data-child="true"]',
     );
-    expect(decl(child, 'padding-left')).toBe('calc(var(--nt-pad) + var(--nt-indent) * 2)');
+    //
+    // THE STEP IS NO LONGER A FULL INDENT. It was `--nt-indent * 2` — one whole
+    // step past a normal row — and reported as the child being "indented just
+    // too much": far enough right that it stopped reading as "under that one"
+    // and started reading as its own column. 8px instead, which is two thirds
+    // of the step and still unmistakably a step.
+    //
+    // Pinned as a RANGE rather than an expression, because the exact number is
+    // taste and will be tuned again. What must not drift is that a child is
+    // clearly indented and clearly less than a full level.
+    expect(decl(child, 'padding-left')).toBe('calc(var(--nt-pad) + var(--nt-indent) + 8px)');
     const parentLeft = resolve(
       side(decl(ruleBody(NAV_CSS, '.navtree-tab-row'), 'padding'), 'left'),
       BASE,
     );
-    expect(resolve(decl(child, 'padding-left'), BASE) - parentLeft).toBe(
-      resolve(BASE['--nt-indent'] as string, BASE),
-    );
+    const step = resolve(decl(child, 'padding-left'), BASE) - parentLeft;
+    const indent = resolve(BASE['--nt-indent'] as string, BASE);
+    expect(step).toBeGreaterThanOrEqual(6);
+    expect(step).toBeLessThan(indent);
   });
 });
 
@@ -686,29 +697,32 @@ describe('the MOBILE RAIL — a flex line, and its four numbers', () => {
     // halves are pinned — the attribute and the dot in NavTree.rows.test.tsx,
     // the arithmetic here.
     //
-    // ONE --nt-indent, the same step the desktop child takes and the same step a
-    // tab takes under its workspace name. The obvious alternative — indent by a
-    // whole emoji box, "put the dot where the tile was" — computes to a name at
-    // 76px, 34px off its parent's, which is the "indentation is too much" this
-    // rail was already once redrawn to fix. The number is the guard.
+    // 8px, NOT a full --nt-indent. Both surfaces took a whole step until the
+    // trunk arrived; with a line drawing the relationship the extra 4px only
+    // pushes the name further from the elbow pointing at it. The rail made the
+    // same move for the same reason — see the desktop child rule.
+    //
+    // The ceiling the old comment guarded still stands and is what matters:
+    // indenting by a whole emoji box puts the name 34px off its parent's, which
+    // is the "indentation is too much" this rail was once redrawn to fix. So
+    // the assertion is a RANGE — clearly stepped, clearly under one level —
+    // rather than a number that has now been retuned twice.
     const child = ruleBody(
       NAV_CSS,
       '.navtree[data-variant="sheet"] .navtree-tab-row[data-child="true"]',
     );
     const childLead = resolve(decl(child, 'padding-inline-start'), SHEET);
-    expect(childLead).toBe(26);
-    const childNameLeft =
-      childLead +
-      resolve(SHEET['--nt-rail-emoji'] as string, SHEET) +
-      resolve(SHEET['--nt-rail-gap'] as string, SHEET);
-    expect(childNameLeft).toBe(54);
-    expect(childNameLeft - chatNameLeft()).toBe(resolve(SHEET['--nt-indent'] as string, SHEET));
-    // The dot must BE the emoji's box, not a 6px mark in a flex line that closes
-    // up around it — otherwise the name jumps 14px left on every child row and
-    // the shared x this whole rule exists to hold is gone.
+    const step = childLead - resolve(SHEET['--nt-rail-lead'] as string, SHEET);
+    expect(step).toBeGreaterThanOrEqual(6);
+    expect(step).toBeLessThan(resolve(SHEET['--nt-indent'] as string, SHEET));
+    // The dot's BOX must stay the emoji's box even though the mark itself is now
+    // hidden — the trunk says "child", and a dot where the elbow lands is a
+    // second mark for one meaning. If the box collapsed, every child name would
+    // jump 14px left and the shared x this rule exists to hold would be gone.
     const dot = ruleBody(NAV_CSS, '.navtree[data-variant="sheet"] .navtree-rail-dot');
     expect(decl(dot, 'flex')).toBe('0 0 var(--nt-rail-emoji)');
     expect(resolve(decl(dot, 'inline-size'), SHEET)).toBe(20);
+    expect(decl(dot, 'visibility')).toBe('hidden');
     // Logical, like every other inset on this surface: the list is read in
     // Hebrew as often as in English and a physical inset indents the wrong side.
     expect(child).not.toMatch(/(?:^|;)\s*padding(?:-left|-right):/);
@@ -1056,12 +1070,16 @@ describe('the row’s right-hand side holds one thing at a time', () => {
     ).toBe(true);
   });
 
-  it('shows the PIN only on hover — position is what says "pinned"', () => {
-    // The pin was made permanent when the pinned seam was `height: 10px` and
-    // nothing else, so position claimed to say "pinned" and drew no line. The
-    // seam is a real rule now (see the selection suite), so the icon was saying
-    // a second time what the row's place already said — in the scarcest space
-    // on the row. It is an action again, revealed beside the archive.
+  it('shows the PIN only on hover — the ROW is what says "pinned"', () => {
+    // This has flipped twice and the second flip is the stable one, because the
+    // marker finally landed on the right object rather than in the cheapest
+    // free space. The pin was ON at rest for one iteration, after the seam rule
+    // under the pinned block was deleted and nothing replaced it. It worked —
+    // and it cost 18px of name width on exactly the rows pinned because they
+    // matter most, which was the original objection to it and was still true.
+    //
+    // The row's NAME carries a hue now (`--nt-pinned-ink`), which costs no
+    // width at all, so the pin goes back to being an action beside the archive.
     const all = rules(NAV_CSS).flatMap((r) => r.selectors);
     const permanent = all.filter(
       (sel) =>

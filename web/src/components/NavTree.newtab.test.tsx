@@ -52,8 +52,8 @@ function tab(id: string): Tab {
 
 const CORPUS = [
   { id: 'w-personal', slug: 'personal', name: 'Personal', tabs: [tab('p1')] },
-  { id: 'w-trayo', slug: 'trayo', name: 'Trayo', tabs: [tab('t1')] },
-  { id: 'w-bots', slug: 'bots', name: 'Trayobot', tabs: [tab('b1')] },
+  { id: 'w-acme', slug: 'acme', name: 'Acme', tabs: [tab('t1')] },
+  { id: 'w-bots', slug: 'bots', name: 'Acmebot', tabs: [tab('b1')] },
 ];
 const WORKSPACES = CORPUS.map(
   (g) => ({ id: g.id, slug: g.slug, name: g.name, created_at: NOW, updated_at: NOW }) as Workspace,
@@ -186,7 +186,7 @@ describe('the rail — one “+” per workspace, on its header', () => {
   it('creates in a workspace you are NOT in, from its own row', async () => {
     const box = mount('sidebar');
     const rows = [...box.querySelectorAll('.navtree-ws-row')];
-    const bots = rows.find((r) => (r.textContent ?? '').includes('Trayobot'));
+    const bots = rows.find((r) => (r.textContent ?? '').includes('Acmebot'));
     await click(bots?.querySelector('.navtree-ws-add'));
     expect(CREATED).toEqual([{ workspaceId: 'w-bots', body: { ...HOUSE_CHAT_CREATE } }]);
     expect(WENT).toEqual([{ wsSlug: 'bots', tabSlug: 'new-chat' }]);
@@ -220,7 +220,7 @@ describe('the flat “Recent” view is gone, and so is the sheet’s picker', (
     const names = [...box.querySelectorAll('.navtree-ws-row .navtree-name-text')].map((e) =>
       (e.textContent ?? '').trim(),
     );
-    expect(names).toEqual(['Personal', 'Trayo', 'Trayobot']);
+    expect(names).toEqual(['Personal', 'Acme', 'Acmebot']);
     // …and the bar's workspace button is gone with it.
     expect(box.querySelectorAll('.navtree-bar-ws').length).toBe(0);
     expect(box.querySelectorAll('.navtree-wspick-name').length).toBe(0);
@@ -239,7 +239,7 @@ describe('the sheet creates from a workspace header, like the rail', () => {
   it('creates in the workspace whose “+” was tapped', async () => {
     const box = mount('sheet');
     const rows = [...box.querySelectorAll('.navtree-ws-row')];
-    const bots = rows.find((r) => (r.textContent ?? '').includes('Trayobot'));
+    const bots = rows.find((r) => (r.textContent ?? '').includes('Acmebot'));
     await click(bots?.querySelector('.navtree-ws-add'));
     expect(CREATED).toEqual([{ workspaceId: 'w-bots', body: { ...HOUSE_CHAT_CREATE } }]);
     expect(WENT).toEqual([{ wsSlug: 'bots', tabSlug: 'new-chat' }]);

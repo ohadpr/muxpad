@@ -1,5 +1,5 @@
-import { act } from 'react';
 import type { MuxpadEvent } from '@muxpad/shared';
+import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, expect, it, vi } from 'vitest';
 import { TabView } from './TabView';

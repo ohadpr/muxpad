@@ -26,6 +26,17 @@
 
   /* The header-bar height — referenced from multiple places so it's one
      knob. 36px desktop / 40px mobile (set via media query at the bottom). */
+  /* ─── THE ACTIVE PANE'S FACE ────────────────────────────────────────────
+     The visible pane wears a 5% accent wash to say "this is the one you are
+     in" (.tabbed-pane-slot::after in tab.css). ANYTHING THAT HAS TO FUSE WITH
+     THAT PANE must therefore be this colour and not plain --bg, or it reads as
+     a different shade and the join breaks.
+
+     Three readers now, which is why it is a token: the desktop tab strip's open
+     tab, the sidebar's selected row (it runs into the pane as a tab), and the
+     wash itself. The first two were written out by hand and the third is where
+     the 5% comes from — three copies of one number is exactly how they drift. */
+  --bg-pane-face: color-mix(in srgb, var(--accent) 5%, var(--bg));
   --chrome-h: 36px;
   --chrome-pane-h: 28px;
   /* Thickness of the accent rail that signals "this is the active tab"

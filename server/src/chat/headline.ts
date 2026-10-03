@@ -450,7 +450,7 @@ function fenceSafe(conversation: string): string {
  * and that its only output is a noun phrase. That framing is the actual fix
  * for the observed bug — the validator downstream is the net, not the fix.
  *
- * `glossary` is the same list the dictation cleanup pass uses
+ * `glossary` is the install's own vocabulary (chat/glossary.ts)
  * (chat/glossary.ts): this install's product nouns plus its live workspace,
  * tab, pane, app and artifact names. A cheap model that has never heard of
  * "muxpad" or "ptyd" is exactly the model that stops labelling and starts

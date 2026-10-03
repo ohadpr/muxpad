@@ -251,7 +251,7 @@ describe('tab-clock', () => {
     });
 
     it('never decays — there is no message that would bring it back', () => {
-      const id = terminal('Trayobot', 40);
+      const id = terminal('Acmebot', 40);
       expect(resolve(id).done).toBe(false);
       expect(doneTabIds(clockIndex(db), Date.now()).has(id)).toBe(false);
     });

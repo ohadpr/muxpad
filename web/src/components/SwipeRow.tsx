@@ -310,7 +310,6 @@ export function SwipeRow({
           Archive
         </button>
       </div>
-      {/* biome-ignore lint/a11y/useKeyWithClickEvents: the row's own link owns the keyboard path; this handler only swallows a post-swipe click */}
       <div
         className="swiperow-face"
         data-dragging={dragging ? 'true' : undefined}

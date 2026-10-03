@@ -232,3 +232,35 @@ export function firesDue(expr: string, tz: string, anchor: number, now: number):
   }
   return { fires, capped: fires.length >= MAX_CATCHUP_FIRES };
 }
+
+/**
+ * Does this expression name ONE MOMENT rather than a recurrence?
+ *
+ * True when BOTH the day-of-month and the month are pinned — `0 7 24 9 *`,
+ * "07:00 on September 24th". Strictly speaking cron has no such thing: that
+ * expression recurs every year. But a human writing it means "this September
+ * 24th", and muxpad's own agent instructions have told agents to write exactly
+ * that for a one-off since there was no other way to say it.
+ *
+ * Both fields must be pinned, and that is the whole subtlety:
+ *   `0 9 1 * *`  monthly on the 1st        — recurs, not dated
+ *   `0 9 * 9 *`  every day in September    — recurs, not dated
+ *   `0 9 24 9 *` September 24th            — dated
+ *
+ * Ranges and steps inside those fields (`1-5`, `*\/2`) are recurrences too, so
+ * anything carrying a `*` is rejected outright.
+ *
+ * This is an INFERENCE about intent, not a fact about cron, which is why it is
+ * only ever a default: `--once` and `--repeat` both override it, and the value
+ * is stored on the row rather than re-derived, so changing this function later
+ * cannot silently re-interpret jobs somebody already created.
+ */
+export function isDatedSchedule(expr: string): boolean {
+  const f = expr.trim().split(/\s+/);
+  if (f.length < 5) return false;
+  const dom = f[2];
+  const mon = f[3];
+  if (dom === undefined || mon === undefined) return false;
+  const pinned = (v: string) => v !== '*' && !v.includes('*');
+  return pinned(dom) && pinned(mon);
+}

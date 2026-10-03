@@ -1,10 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  SYSTEM_PAIR,
-  THEME_CHOICES,
-  resolveTheme,
-  updateSettings,
-} from './settings';
+import { SYSTEM_PAIR, THEME_CHOICES, resolveTheme, updateSettings } from './settings';
 
 describe('settings', () => {
   beforeEach(() => {

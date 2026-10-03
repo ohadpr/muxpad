@@ -275,6 +275,17 @@ export class CronScheduler {
       this.record(cron, current, now, r, { capped });
       if (r.defer) return; // quiet hours — leave the anchor alone
     }
+    // ── A ONE-OFF IS DONE ────────────────────────────────────────────────────
+    // It fired; there is no next slot. Rolling it forward is what left two live
+    // reminders armed for September 2027 — a dated expression recurs ANNUALLY
+    // in cron, which is never what the person writing one meant.
+    //
+    // Checked after the fire rather than before, so a deferred fire (quiet
+    // hours returns above) keeps its anchor and still gets its turn.
+    if (cron.once) {
+      this.store.retireOnce(cron.id, now);
+      return;
+    }
     // Re-anchor from the nominal clock (now - jitter), so a jittered fire can't
     // make the NEXT slot slip by another jitter each time — the offset is a
     // constant shift of the schedule, never a compounding drift.

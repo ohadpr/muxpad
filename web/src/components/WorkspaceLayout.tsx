@@ -3,9 +3,9 @@ import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { HOUSE_CHAT_CREATE } from '../lib/agent-backend';
 import { getLastTabSlug } from '../lib/last-visited';
+import { tabUrlIsDead } from '../lib/stale-tab-url';
 import { TabView } from '../pages/TabView';
 import { freshTabs, refreshTabs, useTabs } from '../tabs';
-import { tabUrlIsDead } from '../lib/stale-tab-url';
 import { refreshWorkspaces, useWorkspaces } from '../workspaces';
 
 export interface WorkspaceShellProps {

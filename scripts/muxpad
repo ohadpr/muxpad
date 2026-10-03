@@ -2548,11 +2548,16 @@ usage: muxpad cron new --name=<name> --at='<cron expr | daily at 09:00 | every 3
          [--tz=America/Los_Angeles] [--cwd=<dir>] [--model=<m>] [--backend=claude|codex|cursor]
          [--mode=chat|agent] [--catchup=once|skip|all] [--overlap=skip|queue]
          [--on-context=fire|compact-first|rotate|skip] [--quiet=<mins>]
-         [--max-open=<n>] [--no-close] "prompt"
+         [--max-open=<n>] [--no-close] [--once | --repeat] "prompt"
 
   --pane with no value targets THIS pane ($MUXPAD_PANE_ID) — the usual gesture.
   --new-tab spawns a fresh agent tab per fire (clean context, no drift) and
   closes it when the run finishes cleanly; --no-close keeps it.
+
+  A DATED schedule ('0 17 4 9 *' — 17:00 on Sep 4) is treated as a ONE-OFF: it
+  fires, then retires itself as 'done' and stays in the list. That is almost
+  always what a dated expression means. --repeat forces a genuine annual
+  reminder; --once forces one-shot on any schedule.
 USAGE
     exit 1
   fi
@@ -2576,6 +2581,11 @@ USAGE
     body+=",\"target_kind\":\"new-tab\",\"workspace_id\":$(json_string "$workspace_id")"
     body+=",\"cwd\":$(json_string "${FLAG_cwd:-$PWD}")"
   fi
+  # --once / --repeat override the inference the server makes from the schedule
+  # (a dated expression means one-off — see isDatedSchedule). Omit both and the
+  # server decides, which is right almost always.
+  [ -n "${FLAG_once:-}" ] && body+=",\"once\":true"
+  [ -n "${FLAG_repeat:-}" ] && body+=",\"once\":false"
   [ -n "${FLAG_tz:-}" ] && body+=",\"tz\":$(json_string "$FLAG_tz")"
   [ -n "${FLAG_model:-}" ] && body+=",\"model\":$(json_string "$FLAG_model")"
   [ -n "${FLAG_backend:-}" ] && body+=",\"backend\":$(json_string "$FLAG_backend")"
@@ -2618,8 +2628,8 @@ cmd_cron_list() {
     'SCHEDULE:.schedule' \
     'TZ:.tz' \
     'TARGET:(if .target_kind == "pane" then "pane " + (.target_pane // "?") else "new-tab" end)' \
-    'ON:(if .enabled then "yes" else "no" end)' \
-    'NEXT:(.next_due_at / 1000 | strflocaltime("%a %d %b %H:%M"))' \
+    'ON:(if .enabled then "yes" elif .once then "done" else "no" end)' \
+    'NEXT:(if .enabled then (.next_due_at / 1000 | strflocaltime("%a %d %b %H:%M")) elif .once then "once \u00b7 fired" else "-" end)' \
     'LAST:(if .last_fire_at then (.last_fire_at / 1000 | strflocaltime("%d %b %H:%M")) else "-" end)' \
     'STATUS:(.last_status // "-")' \
     'FAILS:(.fail_streak | tostring)' \

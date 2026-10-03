@@ -117,7 +117,12 @@ describe('a card per round gets an id per round', () => {
     const history = rounds(2);
     const first = history.get('kid')![0]!;
     first.artifacts = ['https://example.test/A'];
-    const kid = { ...KID, status: 'working' as const, report: { text: 'B', state: 'crashed' as const, at: 9000 }, artifacts: ['B'] };
+    const kid = {
+      ...KID,
+      status: 'working' as const,
+      report: { text: 'B', state: 'crashed' as const, at: 9000 },
+      artifacts: ['B'],
+    };
     const card = spawnCards([kid], 'parent', 12, history).find((c) => c.kind === 'completion')!;
     expect(spawnState(spawnCards([kid], 'parent', 12, history)[0]!.chat)).toBe('delivered');
     expect(spawnState(card.chat)).toBe('delivered');
@@ -141,10 +146,16 @@ describe('a card per round gets an id per round', () => {
   });
 
   it('keeps the live offset when fallback rows acquire round identities', () => {
-    const sim = new SimScroller([{ id: 'before', height: 1000 },
-      { id: 'spawn-kid', height: 100 }, { id: 'after', height: 2000 }]);
+    const sim = new SimScroller([
+      { id: 'before', height: 1000 },
+      { id: 'spawn-kid', height: 100 },
+      { id: 'after', height: 2000 },
+    ]);
     const c = new ChatScrollController(sim);
-    c.dispatch({ t: 'shown', mem: { anchorId: 'spawn-kid', anchorOffset: -20, caughtUp: false, sid: 's1' } });
+    c.dispatch({
+      t: 'shown',
+      mem: { anchorId: 'spawn-kid', anchorOffset: -20, caughtUp: false, sid: 's1' },
+    });
     const to = resolveSpawnAnchor('spawn-kid', rounds(1));
     sim.rows[1]!.id = to;
     c.dispatch({ t: 'anchor-renamed', from: 'spawn-kid', to });

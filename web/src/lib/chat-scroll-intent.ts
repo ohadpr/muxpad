@@ -219,7 +219,8 @@ export function next(state: ScrollState, input: ScrollInput): ScrollState {
   switch (input.t) {
     case 'anchor-renamed':
       return state.intent.at === 'row' && state.intent.id === input.from
-        ? { ...state, intent: { ...state.intent, id: input.to } } : state;
+        ? { ...state, intent: { ...state.intent, id: input.to } }
+        : state;
 
     case 'mounted':
       return IDLE_STATE;
@@ -242,9 +243,11 @@ export function next(state: ScrollState, input: ScrollInput): ScrollState {
       return { ...state, intent: intentFor(input.mem), placed: false };
     }
 
+    // Deliberate fall-through: dismissing an ACTUAL hit is the reader planting
+    // themselves where the hit left them, which is exactly `reader-moved`.
+    // biome-ignore lint/suspicious/noFallthroughSwitchClause: intentional — the no-hit case returns above; biome does not honour comment fall-through markers the way eslint does
     case 'search-cleared':
       if (state.intent.at !== 'hit') return state;
-      // fall through: dismissing an actual hit establishes a reading position.
     case 'reader-moved':
       // The reader is the authority on where they belong, so this ends a seek
       // (the budget is not reset — that would let a flip-flopping reader re-spend

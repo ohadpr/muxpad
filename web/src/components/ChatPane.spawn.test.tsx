@@ -4,7 +4,7 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { liveStatusLabel } from '../lib/live-status';
-import { SessionBar } from './ChatPane';
+import { SessionBar } from './ChatStart';
 
 /**
  * "I SEE NO INDICATION THAT SOMETHING IS RUNNING."

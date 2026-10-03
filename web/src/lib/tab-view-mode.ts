@@ -136,6 +136,7 @@ export function useTabViewMode(
   }, [tabId]);
   // Adopt the server's value whenever it changes (initial load, tab.updated
   // from another device, our own PATCH echo).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `mode` is listed as the CHANGE TRIGGER, not as a value read in the body — it is what the effect exists to react to
   useEffect(() => {
     if (!tabId) return;
     syncTabViewMode(tabId, serverMode);

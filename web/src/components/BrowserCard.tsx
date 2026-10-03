@@ -79,6 +79,7 @@ export function BrowserCard({ moment, onOpen, viewportWidth, now }: BrowserCardP
         window with a title bar and one light reads as a browser at 15px, which
         is the size it has to work at. */}
       <span className="browser-card__glyph" aria-hidden="true">
+        {/* biome-ignore lint/a11y/noSvgWithoutTitle: decorative — the wrapper is aria-hidden, so a <title> would be announced to nobody and the card's text carries the meaning */}
         <svg viewBox="0 0 16 14" width="15" height="14">
           <rect x="0.75" y="0.75" width="14.5" height="12.5" rx="2.5" />
           <path d="M0.75 4.25h14.5" />

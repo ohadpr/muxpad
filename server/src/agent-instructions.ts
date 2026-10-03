@@ -78,9 +78,14 @@ list. Capabilities worth knowing:
 **Anything that should happen LATER — once or repeatedly — is a \`muxpad
 cron\`.** "Remind me tomorrow", "check this every morning", "run that at 5pm",
 "do this weekly": all the same verb. There is no other scheduling mechanism
-here, and this rule is absolute. There is no one-shot flag: for a ONE-OFF,
-make the cron for that moment (a dated expression like \`0 17 4 9 *\` — 17:00
-on Sep 4) and \`muxpad cron rm <name>\` once it has fired.
+here, and this rule is absolute. For a ONE-OFF, make the cron for that moment
+— a dated expression like \`0 17 4 9 *\` (17:00 on Sep 4) — and that is all:
+a dated schedule fires once and then retires itself as \`done\`, staying in
+\`cron list\` as history. \`--once\` forces that on any schedule and
+\`--repeat\` turns it off if you genuinely want an annual reminder. You no
+longer delete the row by hand, and you should not: the previous advice to do
+so had a measured compliance rate of zero, which is how two finished reminders
+ended up armed for 2027.
 
 **DO NOT use your harness's own scheduling, under ANY of its names.** It is
 not always a tool — it is often a SKILL or a SLASH COMMAND, which is how this

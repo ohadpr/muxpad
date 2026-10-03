@@ -68,7 +68,9 @@ export async function loadInboundSenders(tabId: string, changed = false): Promis
     do {
       dirty.delete(tabId);
       try {
-        const res = await req<SendersResponse>(`/api/tabs/${encodeURIComponent(tabId)}/inbound-senders`);
+        const res = await req<SendersResponse>(
+          `/api/tabs/${encodeURIComponent(tabId)}/inbound-senders`,
+        );
         senders = res.senders ?? [];
         cache.set(tabId, { at: Date.now(), senders });
       } catch (err: unknown) {

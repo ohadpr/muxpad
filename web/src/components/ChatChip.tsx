@@ -272,6 +272,18 @@ export interface ChipClock {
 export function chipClock(chat: ChatChipChat): ChipClock {
   const published = chat.clock;
 
+  // PINNED IS READ OFF THE CHAT, not inferred from its clock, and that order is
+  // a fix rather than a preference. `stopped` below says the same thing, but
+  // only for a chat that HAD a decay clock to stop: resolveTabClock publishes
+  // `clock: null` for a pinned chat with no clock (a terminal, a sub-chat), and
+  // those fell through to `fresh` — pinned, and drawn as though it were not.
+  // Invisible while no rule targeted the phase; the moment one did it would
+  // have been a marker that appeared on some pinned rows and not others.
+  //
+  // (ChatChip.css.test's sweep already carried the belief this now makes true:
+  // its "pinned" fixture is `{ name: 'p', pinned: true }`, with no clock.)
+  if (chat.pinned) return { phase: 'pinned', daysLeft: DECAY_DAYS, step: 0 };
+
   // NO CLOCK — and there is nothing to work out. A sub-chat (`clock: null`)
   // does not decay, and a row the server has said nothing about is not the
   // client's to guess at. Both draw the mark at full presence: no fade, no

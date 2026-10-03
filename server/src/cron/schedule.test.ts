@@ -6,6 +6,7 @@ import {
   compileSchedule,
   estimateIntervalMs,
   firesDue,
+  isDatedSchedule,
   isValidTimezone,
   nextAfter,
   scheduleJitterMs,
@@ -226,5 +227,25 @@ describe('scheduleJitterMs', () => {
     const j = scheduleJitterMs('01X', '* * * * *', 'UTC', ref);
     expect(j).toBeGreaterThanOrEqual(0);
     expect(j).toBeLessThanOrEqual(30_000);
+  });
+});
+
+describe('isDatedSchedule — one moment, or a recurrence?', () => {
+  it.each([
+    ['0 7 24 9 *', true], // September 24th — the idiom this exists for
+    ['0 17 4 9 *', true], // the exact example in the agent instructions
+    ['0 9 1 * *', false], // monthly on the 1st
+    ['0 9 * 9 *', false], // every day in September
+    ['0 9 * * 1-5', false], // weekdays
+    ['*/30 * * * *', false], // every 30m
+    ['0 9 1-5 9 *', true], // a RANGE of days, but still one September
+    ['0 9 */2 9 *', false], // a step is a recurrence, even inside one month
+  ])('%s -> %s', (expr, dated) => {
+    expect(isDatedSchedule(expr)).toBe(dated);
+  });
+
+  it('is not fooled by a short or empty expression', () => {
+    expect(isDatedSchedule('')).toBe(false);
+    expect(isDatedSchedule('0 9')).toBe(false);
   });
 });

@@ -71,6 +71,40 @@
    so neither surface has to know about the other. */
 .navtree {
   --nt-surface: var(--bg-tabbar);
+/* PINNED IS A HUE ON THE NAME, and the channel is the whole argument.
+     SELECTION OWNS THE ROW'S BOX — a fill, with a funnel that runs into the
+     pane. Every earlier design for this mark was also on that box: a rule under
+     the block, a tick at its edge, a ring on the chip, and finally a fill that
+     was the selected colour at half strength. Each was the same sentence in
+     selection's own voice, said quieter, and the last one was rejected as "too
+     close to the active tab indicator" — which is the correct reading of the
+     whole category, not of that value.
+
+     So this is INSIDE the row, on its contents, where selection says nothing.
+     And it is HUE rather than lightness: the name keeps its luminance and
+     changes temperature, so it cannot read as "louder" or "dimmer" than any
+     other name — the two marks are not on the same axis at all.
+
+     The accent is spent here by request. It had been reserved for "needs you";
+     a 75% tint of it on a name is a different object from the solid accent that
+     attention uses, but it is one token doing two jobs and that is worth
+     knowing. */
+  --nt-pinned-ink: color-mix(in srgb, var(--accent) 75%, var(--fg));
+
+  /* NO GROUP SURFACE AT ALL, and that is the third answer to this question.
+     The sequence is worth keeping because each attempt was measured and each
+     one failed for a different reason: a tinted TRAY moved every row's
+     background toward its own ink (text contrast fell on all six themes); a
+     tinted TROUGH fixed the contrast but left four surfaces — rail, trough,
+     tray, header band — inside a few ΔE of each other, which is a flat field
+     with faint lines in it rather than a hierarchy. Reported as "not good".
+
+     What every reference says to do instead, and what this now does: group
+     with AIR and a LABEL, and spend the one surface you have on the one thing
+     that is selected. Section headers are non-interactive muted labels that do
+     not consume a full row's worth of ink; the gap between groups does the
+     containing. One tinted surface on screen means it cannot be mistaken, and
+     the three faint ones that were competing with it are gone. */
   /* Row metrics + surfaces are the only things the variants disagree on. */
   --nt-row-ws: 32px;
   /* ONE LINE, and the chip decides the height: 6 + 24 + 6. It was 34px for a
@@ -119,7 +153,21 @@
 
      --fg and --accent, never a literal: six themes, and the mix is what makes
      one declaration land correctly on a warm cream rail and a near-black one. */
-  --nt-hover: color-mix(in srgb, var(--fg) 8%, transparent);
+  /* 6%, NOT 8%, and the ceiling is measured rather than chosen. Selection is no
+     longer an accent wash — it is the content surface — so on a theme whose rail
+     and content sit close together the selected row moves LESS than it used to,
+     and hover can out-shout it. acme is that theme: rail #f0e9f6 lilac against
+     content #fdf6ea cream, which differ in hue more than in light.
+
+     Perceptual distance from the rail (OKLab ΔE ×100), acme:
+       selected tab   4.61
+       hover at 8%    5.41   ← hovering an idle row beat the row you are on
+       hover at 7%    4.73   ← still beats it
+       hover at 6%    4.05   ✓
+     Every other theme wins by a mile at any of these; acme sets the ceiling, so
+     6 is the largest value that holds the invariant everywhere. Hover is still
+     plainly visible — the quietest it gets is ΔE 3.39, on github-light. */
+  --nt-hover: color-mix(in srgb, var(--fg) 6%, transparent);
   --nt-sel: color-mix(in srgb, var(--accent) 20%, transparent);
   --nt-sel-hover: color-mix(in srgb, var(--accent) 26%, transparent);
 
@@ -211,6 +259,12 @@
      had to sit behind a glyph; a tile that has to read as a VESSEL filling up
      needs the extra 4px to show a quarter of itself. */
   --nt-chip: 24px;
+  /* WHERE THE SUB-CHAT TRUNK HANGS, per surface. The line descends from the
+     centre of the PARENT's icon, and the two surfaces put that icon in
+     different places — the rail has a 24px chip 16px in, the sheet a 20px emoji
+     14px in. One set of rules, two sets of coordinates. */
+  --nt-trunk-x: calc(var(--nt-pad) + var(--nt-indent) + var(--nt-chip) / 2);
+  --nt-tick-w: 24px;
   --nt-chip-radius: 8px;
   /* Floor for the meta cell, wide enough that `◷ 07:00` and `◷ Sun 09:00`
      right-align on the same digits instead of jittering row to row. A FLOOR,
@@ -259,6 +313,10 @@
    they sized do not exist on this surface any more. --nt-air/--nt-gutter stay
    because the sheet's PANE rows are still built from them. */
 .navtree[data-variant="sheet"] {
+  --nt-trunk-x: calc(var(--nt-rail-lead) + var(--nt-rail-emoji) / 2);
+  /* Shorter than the rail's: the sheet's name starts at 42 against the rail's
+     60, so the same 24px tick would run straight into the text. */
+  --nt-tick-w: 14px;
   --nt-rail-lead: 14px;
   --nt-rail-trail: 12px;
   --nt-rail-emoji: 20px;
@@ -291,6 +349,11 @@
 /* Rows sit inside a horizontal inset so selection/hover render as
    rounded pills that float off the rail's edges (Slack-style), rather
    than full-bleed bands. */
+.navtree-scroll::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
 .navtree-scroll {
   flex: 1;
   min-height: 0;
@@ -304,7 +367,17 @@
      scrollbar here is an overlay. With the workspace controls also pulled out
      (see .navtree-ws-row), the reported "unnecessarily large space" to the
      right of + and × is gone and every row is ~20px wider. */
-  padding: 0 2px 12px 4px;
+  padding: 0 0 12px 4px;
+  /* NO SCROLLBAR GUTTER, and this is now load-bearing rather than tidy. A
+     classic scrollbar is laid out at the scroller's right edge — measured here,
+     15px of it — which is exactly where the selected row has to meet the pane.
+     It cut the join in half.
+
+     The comment this replaces asserted "the scrollbar here is an overlay". It
+     was not: `offsetWidth - clientWidth` measured 15 on this machine, so the
+     claim had been wrong for as long as it had been written down. Hiding it
+     makes the statement true instead of hopeful. */
+  scrollbar-width: none;
 }
 /* Desktop has no section header (dropped as redundant under the brand),
    so the list sits directly below the brand hairline — give it a little
@@ -327,6 +400,11 @@
 .navtree[data-variant="sheet"] {
   --nt-surface: var(--bg-chrome);
 }
+
+/* The sheet needs no card rule of its own any more: the sticky band is the
+   grouping on both surfaces, and it is mixed from --fg, which has range over
+   any background. The old pair of --nt-card declarations here existed only to
+   give the sheet a card contrast that `--bg` could not reach. */
 
 .navtree[data-variant="sheet"] .navtree-scroll {
   padding: 0 0 14px;
@@ -365,19 +443,69 @@
    one step inside it. The active workspace colours that line instead of
    carrying a separate marker: the edge and the spine were always trying to be
    the same stroke. */
+/* ─── THE GROUP IS A RUN; ITS HEADER IS WHAT HOLDS IT TOGETHER ──────────────
+   The card is gone. It was introduced to stop workspaces converging and it did
+   — but five independent redesigns all deleted it first, and the reason holds:
+   a card groups the rows you can SEE beside it, and once a workspace runs
+   eleven rows its own container has scrolled away with everything else. The
+   only device that survives a scroll is a header that does not leave.
+
+   So the grouping moves entirely into the sticky band below, which was already
+   sticky and already doing most of this work — it merely looked like the lid of
+   a card rather than the thing holding a list together. */
+/* ─── THE GROUP IS A BODY AGAIN, AND IT IS OPEN ON THE RIGHT ────────────────
+   A sticky caption alone was not enough grouping — reported as still yearning
+   for it — and the reason is that a band marks where a group STARTS and says
+   nothing about where it ends. Twenty rows under it read as one run.
+
+   A card says both, and the card is what was here before. It was deleted
+   because its right wall cut the funnel: the selected row has to run into the
+   pane, and a container with a right edge stops it a wall short. So this one
+   has NO right side — rounded on the left, flush and open on the right, out to
+   the rail's own edge. The tab crosses where the card has no wall to cross.
+   Which is also the honest shape for a rail: a stack of trays whose open end
+   is the content. */
 .navtree-group {
   margin-top: 10px;
-  padding-left: var(--nt-spine-pad);
-  border-left: 1px solid color-mix(in srgb, var(--fg) 13%, transparent);
+  padding: 0 var(--nt-pad) 5px;
 }
 
-/* The one you are in. Same stroke, different ink — no second shape, no notch. */
-.navtree-group[data-active="true"] {
-  border-left-color: var(--accent);
+/* ─── EVERY ICON IS DESATURATED, NOT ONLY THE ONES YOU ARE NOT IN ───────────
+   62 distinct emoji are in use on this install and, measured, only four sit on
+   a status hue — so they were never really colliding with the green and amber
+   marks. The cost is subtler: 62 uncontrolled colours spending the loudest
+   channel in the rail on IDENTITY, which never changes, while status, which
+   does, gets a 7px dot.
+
+   DESATURATED, NOT GREYSCALED, and the difference is what decided it: much of
+   this set is flat document shapes — clipboard, chart, receipt, scroll — that
+   at 19px are near-identical in outline. Colour is most of what tells them
+   apart, so draining it completely costs the icon the job it was there for.
+   Pulling the chroma down keeps recognition and stops the shouting.
+
+   The row you are ON keeps its full colour wherever it lives: it is the one row
+   in the rail that is not background. */
+.navtree-tab-row .chatchip {
+  /* 0.45, which is the value this was agreed at. It went to 0.7 in the pass
+     that deleted the group surfaces, on the reasoning that 0.45 had been tuned
+     while 62 emoji competed with three other tinted surfaces and was now just
+     mud — which was a design decision taken without being asked for, and it was
+     noticed ("i don't see the emojis dimmed as we agreed"). The agreement
+     stands: the loudest channel in the rail does not go to identity, which
+     never changes. */
+  filter: saturate(0.45) contrast(0.95);
+}
+.navtree-tab-row[data-active="true"] .chatchip {
+  filter: none;
 }
 
+/* AIR IS THE GROUPING, so it has to be a real amount of it. 18px was tuned
+   when a tray was carrying the separation and the gap only had to show that
+   two trays were not one; with nothing but the gap left, it is the whole
+   device. 26px is unambiguous at a glance and still cheap — three groups cost
+   52px of a rail that scrolls anyway. */
 .navtree-group + .navtree-group {
-  margin-top: 10px;
+  margin-top: 26px;
 }
 
 /* ─── STICKY, so you never lose which workspace you are reading ─────────────
@@ -398,15 +526,18 @@
   position: sticky;
   top: 0;
   z-index: 2;
-  /* background-COLOR, never the shorthand: the shorthand resets every other
+  /* THE RAIL'S OWN COLOUR, which is the point: at rest this is invisible, and
+     it exists only so that rows cannot scroll through the label. A sticky
+     header has to be OPAQUE or the list passes under it — that is the whole
+     requirement, and a tinted band was over-paying for it. The label's
+     typography is what says "header" now.
+
+     background-COLOR, never the shorthand: the shorthand resets every other
      background property, including the state tint a row can carry.
      StateChip.test pins that for exactly this reason. */
-  background-color: color-mix(in srgb, var(--fg) 6%, var(--nt-surface));
+  background-color: var(--nt-surface);
 }
 
-.navtree-group > .navtree-ws-row:hover {
-  background-color: color-mix(in srgb, var(--fg) 11%, var(--nt-surface));
-}
 
 /* ─── THE ACTIVE WORKSPACE: AN EDGE, NOT A FILL ─────────────────────────────
    It was `accent 16%` over the same surface, and the active ROW is the accent
@@ -429,9 +560,6 @@
 
 /* …and the hover tint still has to win over the resting band on the active
    header, which it would not if the only rule for it sat above this one. */
-.navtree-group > .navtree-ws-row[data-active="true"]:hover {
-  background-color: color-mix(in srgb, var(--fg) 11%, var(--nt-surface));
-}
 
 /* ─── Workspace row (banded header) ──────────────────────────────────── */
 
@@ -469,6 +597,30 @@
   padding: 0 6px 0 var(--nt-pad);
   border-radius: var(--nt-pill);
   font-weight: 600;
+  color: var(--fg);
+}
+/* ─── THE HEADER IS A LABEL, NOT A ROW ──────────────────────────────────────
+   Every reference agrees on this one and the rail was doing the opposite: a
+   section header is a muted, smaller, letter-spaced caption that does NOT
+   consume a navigation row's worth of ink. It had the SAME size and a heavier
+   weight than the chats under it, which is why three stacked workspaces read
+   as three more list items rather than as three containers.
+
+   Uppercase and tracked rather than merely smaller: at 11px a lowercase name
+   just looks like a quiet chat. The case change is what makes it read as a
+   different KIND of thing at a glance, and the tracking is what keeps it
+   legible after the case change. */
+.navtree-ws-row .navtree-name-text {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+}
+/* The active workspace steps to full ink — one channel, no fill. The accent
+   is NOT spent here: it means "needs you", and the active TAB inside this
+   group is already the one tinted surface on screen. */
+.navtree-ws-row[data-active="true"] .navtree-name-text {
   color: var(--fg);
 }
 .navtree-ws-row:has(.navtree-rename) {
@@ -873,17 +1025,121 @@
    Still no left-rail — it floated disconnected in the indent, and that is
    unchanged. Weight is 640, which sits clearly under the unread 700, so "you
    are here" and "unread" stay separable without a second colour. */
+/* ─── THE SELECTED ROW IS THE PANEL, NOT A HIGHLIGHT ON THE LIST ────────────
+   It takes the CONTENT surface and runs into it: no right-hand radius, no gap,
+   so the row and the pane beside it are one shape. The accent is freed
+   completely — it now means "needs you" and nothing else.
+
+   `--bg-pane-face`, NOT `--bg`, and this is the correction that made the join
+   actually work. The visible pane wears a 5% accent wash saying "this is the
+   one you are in" (.tabbed-pane-slot::after). Against plain --bg the tab was
+   measurably a different shade — sampled across the seam, 245,244,251 on the
+   tab against 238,235,249 on the pane — which is the gap that was reported as
+   the tab not reaching the content. The desktop tab strip had already hit this
+   and already carried the fix in a comment; the value is a token now so the
+   three places that must agree cannot drift.
+
+   AND NEVER A LITERAL. The content surface is #f5f4fb on alucard,
+   #fdf6ea on acme, #1a1b26 on tokyo-night and #221547 on acme-dark; only
+   github-light is actually white. A hardcoded colour would be right on one
+   theme in six, and reading the token also means the row and the pane cannot
+   drift apart, because they resolve the same value.
+
+   KNOWN LIMIT, stated rather than discovered later: this assumes the thing to
+   the right IS the content surface. True for a chat, which is the common case.
+   A terminal pane paints its own black and a web pane paints somebody's site —
+   there the tab joins a colour it does not match. The fix when that matters is
+   to read the ACTIVE PANE's background rather than the theme's. */
 .navtree-tab-row[data-active="true"] {
-  background-color: var(--nt-sel);
+  background-color: var(--bg-pane-face);
+  border-radius: var(--nt-pill) 0 0 var(--nt-pill);
+  /* Out past the GROUP's own right padding, so the row genuinely touches the
+     pane instead of stopping a hair short of it. Measured: without this the tab
+     ended at 277 against a rail edge of 279, and two pixels of rail showing
+     through is enough to read as a seam rather than a join. */
+  margin-right: calc(var(--nt-pad) * -1);
+  padding-right: calc(var(--nt-air) + var(--nt-pad));
+  /* AND NO EDGE, which is a REVERSAL, and the reversal is the point.
+
+     What was here: three inset hairlines, top, bottom and left, added because
+     on acme the tab measures ΔE 2.40 from the rail against a hover of 4.05 — an
+     idle row under the cursor reading louder than the row you are on. The
+     hairline was supposed to be the channel hover does not have.
+
+     It does not survive contact with the shape. The hairlines follow the ROW's
+     rectangle; the fillets are a separate box that extends the surface 18px
+     past it at each end. So the top edge runs straight on through the point
+     where the tab has already curved away, and terminates in mid-air over the
+     rounded corner — a line crossing a curve it was supposed to turn into.
+     Reported as "the lines here are no good", and it is the two-elements-
+     deriving-one-outline bug, which is this sheet's recurring one.
+
+     The premise was also wrong. Hover is TRANSIENT and sits under the cursor,
+     where the reader already knows their pointer is; selection has to be
+     readable AT REST, and at rest no row is hovered, so the two never actually
+     compete for the same glance. And what selection has that hover can never
+     have is the SHAPE — the row merging into the pane. A hover tint cannot
+     round a corner into the content. That is the channel; it was there the
+     whole time, and the hairline was a weaker copy of it drawn in a place that
+     could not hold the geometry. */
+}
+/* The funnel. Two concave fillets above and below the tab's right end, so the
+   pane's surface flares INTO the row instead of meeting it at a corner — the
+   browser-tab shape, turned on its side.
+   18px, not 11: a fillet is a square MINUS a quarter-disc, so only ~21% of its
+   box is ink. At 11px that is a two-pixel crescent nobody can see. */
+/* BOTH fillets live in ::after, in ONE box, and that is a correctness
+   requirement rather than a tidy-up. ::before is already taken: StateChip.css
+   reserves it on EVERY row as the 3px left state track, and it sets
+   `left: var(--nt-pad)`. A second rule adding `right` and `width` to the same
+   pseudo is over-constrained in the inline direction, so the browser keeps
+   `left` and throws `right` away — the top fillet was rendering as an 18px
+   wedge on the row's LEFT edge, which is the pale notch visible above the
+   selected row, while the right-hand corner it was meant to round stayed
+   square. The bottom fillet in ::after was unaffected and did render, which is
+   why only one of the two corners ever looked right. Probed live: ::before
+   painted zero pixels anywhere near the join.
+
+   So: one box spanning the row plus 18px of overhang top and bottom, with the
+   two quarter-discs as background LAYERS pinned to its corners. The middle band
+   is deliberately unpainted — the row's own fill is already there. */
+.navtree-tab-row[data-active="true"]::after {
+  content: "";
+  position: absolute;
+  right: calc(var(--nt-pad) * -1);
+  left: auto;
+  top: -18px;
+  bottom: -18px;
+  width: 18px;
+  background-image:
+    radial-gradient(circle at 0% 0%, transparent 18px, var(--bg-pane-face) 18px),
+    radial-gradient(circle at 0% 100%, transparent 18px, var(--bg-pane-face) 18px);
+  background-size: 18px 18px;
+  background-position:
+    right top,
+    right bottom;
+  background-repeat: no-repeat;
+  pointer-events: none;
 }
 .navtree-tab-row[data-active="true"] .navtree-name-text {
   color: var(--fg);
   font-weight: 640;
 }
+/* AFTER the active-row rule on purpose. Both selectors are (0,3,0), so source
+   order decides, and a pinned row that you are ALSO in is still pinned — the
+   hue has to survive selection rather than be overwritten by it. The weight
+   above still applies; only the colour is taken back. */
+.navtree-tab-row[data-pinned="true"] .navtree-name-text {
+  color: var(--nt-pinned-ink);
+}
 /* Hover on the row you are already on has almost nothing to say, so it says it
    quietly: one step of the block's own fill, never a second colour. */
+/* The tab does not change on hover. It is not a control you are considering —
+   it is where you already are, and tinting it would break the join. */
+/* The tab does not change on hover. It is not a control you are considering —
+   it is where you already are, and tinting it would break the join. */
 .navtree-tab-row[data-active="true"]:hover {
-  background-color: var(--nt-sel-hover);
+  background-color: var(--bg-pane-face);
 }
 /* ─── THE THIRTY RE-INKS ARE GONE, not re-tuned ───────────────────────────
    Recorded because the deletions are the change, and a future pass must not
@@ -1000,7 +1256,72 @@
    name. A child of a chat is exactly one level of the same hierarchy, so it
    costs the same. */
 .navtree[data-variant="sidebar"] .navtree-tab-row[data-child="true"] {
-  padding-left: calc(var(--nt-pad) + var(--nt-indent) * 2);
+  /* 8px past a normal row, not 12. A full second indent pushed the child far
+     enough right that it stopped reading as "under that one" and started
+     reading as its own column. */
+  padding-left: calc(var(--nt-pad) + var(--nt-indent) + 8px);
+  position: relative;
+}
+
+/* ─── ONE TRUNK, AND IT NEVER TOUCHES THE PARENT ────────────────────────────
+   Drawn from a sketch, after three rounds of getting it wrong. Two rules:
+
+   1. THE LINE IS THE CHILDREN'S, NOT THE PARENT'S. Every earlier attempt
+      started the connector inside the parent row — which is a chat like any
+      other, and drawing tree furniture onto it says it is part of the
+      scaffolding. The rows are FLUSH (measured: 36px tall, 0 gap), so a line
+      beginning at the parent had nowhere to begin except on top of it. The
+      trunk now starts 7px into the FIRST child's own box, which is the gap.
+
+   2. ONE TRUNK FOR ALL OF THEM. A connector drawn per child repeats its
+      furniture N times; a single vertical with a tick per child is one shape
+      no matter how many there are. Each child paints the segment of the trunk
+      that crosses it, so the pieces abut into one line.
+
+   The last child stops its segment at the tick, so the trunk terminates INSIDE
+   the family rather than trailing into whatever follows. */
+.navtree .navtree-tab-row[data-child="true"]::before {
+  content: "";
+  position: absolute;
+  /* UNDER THE PARENT'S ICON — its CENTRE, not the row's edge. This was
+     `nt-pad + nt-indent`, which is where the parent's icon BEGINS, so the trunk
+     hung 12px to its left and descended out of nothing. A tree line has to come
+     out of the thing it belongs to. Measured: the parent chip sits 16px into the
+     row and is 24 wide, so its centre is 28 — which is what this computes. */
+  left: var(--nt-trunk-x);
+  top: 0;
+  bottom: 50%;
+  border-left: 1.5px solid color-mix(in srgb, var(--fg) 18%, transparent);
+}
+/* The FIRST child in a run: start below the parent's edge, not at it. */
+.navtree .navtree-tab-row:not([data-child="true"]) + .navtree-tab-row[data-child="true"]::before {
+  top: 7px;
+}
+/* A child with another child after it carries the trunk straight through. */
+.navtree .navtree-tab-row[data-child="true"]:has(+ .navtree-tab-row[data-child="true"])::before {
+  bottom: 0;
+}
+/* …and the tick into each child. */
+.navtree .navtree-tab-row[data-child="true"]::after {
+  content: "";
+  position: absolute;
+  left: var(--nt-trunk-x);
+  top: 50%;
+  /* Reaches to just short of the child's NAME, so the elbow points at the label
+     instead of stopping in empty space. The name lands at 60 and the trunk is
+     at 28; 24px leaves an 8px breath before the text. */
+  width: var(--nt-tick-w);
+  border-top: 1.5px solid color-mix(in srgb, var(--fg) 18%, transparent);
+}
+
+/* NO BULLET. The child wore a dot in its mark column, from when the dot was the
+   ONLY thing saying "this is a child" — an indent alone could not do that job,
+   so the mark had to. The trunk says it now, and says it better, which leaves
+   the dot as a second mark for one meaning sitting exactly where the elbow
+   lands. Hidden, not removed: the grid column it occupies is a fixed 36px and
+   stays, so no child name moves by a pixel. */
+.navtree .navtree-tab-row[data-child="true"] > .navtree-tab-chip {
+  visibility: hidden;
 }
 /* One step quieter than a parent's name, in weight and colour — a child is
    subordinate, and saying so in the type means not having to say it with a
@@ -1128,24 +1449,6 @@
 }
 .navtree-done-head:hover {
   color: var(--fg-dim);
-}
-/* Whose retired sub-chats these are. The parent is still LIVE and has its own
-   row up in the list above — this is a label, not a second copy of it, and it
-   is styled so nobody can mistake it for one: no chip, no state mark, no hover,
-   no hit target. Set one step in from the done header so it reads as nested
-   inside the group rather than as a second heading for it. */
-.navtree-done-parent {
-  padding: 8px var(--nt-air) 2px calc(var(--nt-pad) + var(--nt-indent));
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--fg-faint);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  /* It is `aria-hidden` in the markup — each retired row's own title already
-     names its parent, and a screen reader stopping on a decorative label
-     between rows is one more thing between the user and the list. */
-  pointer-events: none;
 }
 
 /* A done chat's row is quieter still — it has left the live list, and the only
@@ -1514,30 +1817,22 @@
    the seam INSIDE a workspace, so it must read as a smaller break than the seam
    BETWEEN workspaces above — 10px against that 18px says that with one number,
    where a hairline against a hairline could only say it with weight. */
-/* THE PIN SEAM — and it is now actually drawn.
-   It was `height: 10px` and nothing else: an empty box. The JSX above it calls
-   it "a hairline" and the rail had no hairline, so the only thing separating
-   "you arranged these" from "these arrange themselves" was a gap — reported as
-   "no indicator no line just a bit of spacing. not good". A comment asserting
-   something the stylesheet never did.
-   `--border` and the 8px/4px insets are the `.navtree-foot` rule's, which is
-   this sheet's existing hairline and the one it should match. */
+/* THE SEAM IS AIR NOW, and the mark moved onto the rows themselves.
+   A rule here was drawn three ways — flush, inset both ends, then a 40px stub —
+   and the last one still had the same problem the first two did: it is a line
+   BETWEEN two things used to say something about ONE of them. "which rows are
+   pinned" is a property of those rows, and it is now told on each of them, in
+   the 3px left track StateChip.css reserves and a chat row never fills (see
+   `[data-pinned]` there).
+
+   So this element stays and its border does not: it is the gap that keeps the
+   pinned block from running into the rest, and nothing else. */
 .navtree-pin-divider {
   height: 0;
-  /* Spans the ROWS, not its own private inset. It used to start 16px further in
-     than everything around it — a fourth left edge in a column that now has
-     one. Both ends are flush with the row BOX, which is what the eye reads as
-     the column's width — measured, the earlier 4px right inset matched nothing
-     at all (the rows' box ends at 262, their content at 250, the line at 258),
-     so it was an asymmetry pretending to be an alignment. */
-  margin: 5px 0;
-  /* NOT `--border`: measured at 1.00:1 against the rail on alucard
-     (#ddd8ee on #ddd8ef), 1.06 on acme, 1.14 on github-light — i.e. the token
-     this sheet uses for hairlines is INVISIBLE on the theme in the screenshot
-     that reported the seam missing. Deriving it from the foreground instead
-     cannot be invisible on any theme, because the rail's text has to be
-     readable there by definition. */
-  border-top: 1px solid color-mix(in srgb, var(--fg) 30%, transparent);
+  /* NO GAP EITHER. The spacing was the last thing still saying "these rows are
+     different" from between them instead of on them; with the rows filled it is
+     a hole in the list for no reason. */
+  margin: 0;
 }
 
 /* …AND THE MARK'S TRACK IS RESERVED ON A PINNED ROW, so the pin cannot move.
@@ -1562,19 +1857,14 @@
    width for its name, and a row with ANY indicator lines up with every other
    row that has one. */
 
-/* THE PIN IS NOT AN INDICATOR ANY MORE — IT IS AN ACTION, LIKE THE ARCHIVE.
-   It was made permanent because the pinned block had NO visible designation at
-   all: the seam between it and the rest was `height: 10px` and nothing else, so
-   a comment claimed position said "pinned" while the stylesheet drew no line.
-   The seam is a real 1px rule now, and with it drawn, position genuinely is the
-   designation — which is what the original design said and could not deliver.
-   A lit pin on every pinned row says a second time what the row's place in the
-   list already says, and it says it in the scarcest space on the row: reported
-   as four icons eating a third of the width.
-   So it goes back to hover-only. You can still unpin from the row — point at
-   it and the button is there, beside the archive, which is exactly the company
-   it belongs in. Its accent colour stays, because a LIT pin and an unlit one
-   are different things when both are revealed: lit means "clicking unpins". */
+/* THE PIN IS AN ACTION AGAIN — and this time position really does say it,
+   because the row's NAME now carries the mark (see --nt-pinned-ink). The pin
+   was tried as
+   a resting indicator when nothing else did the job; it works, but it costs
+   18px of name width on exactly the rows pinned because they matter, and a
+   fill costs nothing. Its accent colour stays, because a LIT pin and an unlit
+   one are different things when both are revealed: lit means "clicking
+   unpins". */
 .navtree-tab-row > .navtree-tab-rail > .navtree-pin.is-pinned {
   color: var(--accent);
 }
@@ -2103,7 +2393,14 @@
      mobile strip), not --bg-chrome: the latter is only a hair off --bg, so
      the rail's empty space + footer blurred into the pane content behind it. */
   background: var(--bg-tabbar);
-  border-right: 1px solid var(--border);
+  /* NO RIGHT HAIRLINE. It was the seam between rail and pane, and the selected
+     row is now the place where those two are deliberately ONE surface — a 1px
+     border runs straight through the join, which is the only part of it that
+     matters. Measured before removing: the tab reached x=279 and the border
+     painted the rail's own colour at exactly 279, so the funnel ended in a
+     one-pixel stripe of the thing it was supposed to be escaping.
+     Nothing is lost: --bg-tabbar against --bg already separates the two, which
+     is the whole reason the rail uses the darker chrome token (above). */
 }
 
 /* ─── Drag-to-resize grip ────────────────────────────────────────────────
@@ -2480,8 +2777,7 @@ body.sidenav-resizing iframe {
    The header component is shared and already unscoped; these two rules only
    move it onto the sheet's leading edge, so its caret lines up with the emoji
    column instead of the desktop rail's narrower one. */
-.navtree[data-variant="sheet"] .navtree-done-head,
-.navtree[data-variant="sheet"] .navtree-done-parent {
+.navtree[data-variant="sheet"] .navtree-done-head {
   padding-inline-start: var(--nt-rail-lead);
 }
 /* A done chat is quieter, same as desktop. The shared rule cannot reach these
@@ -2517,7 +2813,11 @@ body.sidenav-resizing iframe {
    makes this read as nesting rather than as a line pushed right, and it is what
    lands every child name in the list on one shared x. */
 .navtree[data-variant="sheet"] .navtree-tab-row[data-child="true"] {
-  padding-inline-start: calc(var(--nt-rail-lead) + var(--nt-indent));
+  /* 8px, matching the rail — see the desktop rule. A full --nt-indent was the
+     step on both surfaces until the trunk arrived; with a line doing the work
+     the extra 4px only pushes the name further from the elbow pointing at it. */
+  padding-inline-start: calc(var(--nt-rail-lead) + 8px);
+  position: relative;
 }
 /* The dot stands in the emoji's box, so it has to BE that box — otherwise the
    flex line closes up around a 6px mark and the name jumps left by 14px on
@@ -2526,6 +2826,11 @@ body.sidenav-resizing iframe {
   flex: 0 0 var(--nt-rail-emoji);
   inline-size: var(--nt-rail-emoji);
   block-size: var(--nt-rail-emoji);
+  /* The BOX stays and the mark goes — the trunk says "child" now, and a dot
+     sitting where the elbow lands is a second mark for one meaning. Hiding
+     rather than removing keeps the column, which is the thing holding every
+     child name on one x (see the comment above). */
+  visibility: hidden;
 }
 /* One step quieter in the type, same as the desktop child — a child is
    subordinate, and saying it in the type means not spending a second mark on

@@ -5,7 +5,13 @@ import { decodeServerMessage, encodeInput } from '@muxpad/shared';
 import { afterEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import { type PtydHandle, type PtydOptions, startPtyd } from './index.js';
-import { type CtrlEvent, type CtrlResponse, decodeMessage, encodeRequest } from './protocol.js';
+import {
+  type CtrlEvent,
+  type CtrlMessage,
+  type CtrlResponse,
+  decodeMessage,
+  encodeRequest,
+} from './protocol.js';
 
 let handle: PtydHandle | null = null;
 let dir = '';
@@ -55,7 +61,10 @@ async function setupPtyd(opts?: Partial<PtydOptions>): Promise<{
   const waiters = new Map<string, Array<(e: CtrlEvent) => void>>();
 
   sock.on('message', (b: Buffer) => {
-    let msg;
+    // Typed from the decoder rather than left implicit-any: `decodeMessage`
+    // already returns CtrlMessage, so the annotation costs nothing and the
+    // discriminated-union narrowing below is checked rather than assumed.
+    let msg: CtrlMessage;
     try {
       msg = decodeMessage(b.toString());
     } catch {
@@ -71,7 +80,7 @@ async function setupPtyd(opts?: Partial<PtydOptions>): Promise<{
     }
     if (msg.kind === 'event') {
       const list = waiters.get(msg.event);
-      if (list && list.length) {
+      if (list?.length) {
         // FIFO: oldest waiter wins. Don't fan out to all waiters — that
         // would tie unrelated callers together; we want one event = one
         // resolver, like a single-shot queue.

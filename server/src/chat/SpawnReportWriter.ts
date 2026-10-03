@@ -92,7 +92,7 @@ export class SpawnReportWriter {
     this.cache = opts.cache;
     this.model = opts.model ?? agentSdkSpawnReportModel;
     this.taskModel = opts.taskModel ?? opts.model ?? agentSdkSpawnReportModel;
-    // The SAME vocabulary the headline generator and the dictation cleanup pass
+    // The SAME vocabulary the headline generator
     // use, for a sharper version of the same reason: a cheap model summarising
     // work on "ptyd" is exactly the model that stops reporting and starts asking
     // what ptyd is. Cached, because a report is rate-limited but a boot is not.

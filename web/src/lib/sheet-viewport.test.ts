@@ -93,6 +93,25 @@ describe('the CSS actually consumes it', () => {
     expect(panel).toMatch(/var\(--mns-avail-h,\s*calc\(100dvh/);
   });
 
+  it('also claims a FLOOR, and the floor can never beat the ceiling', () => {
+    // The half-height complaint was not the cap — on an 844px phone that
+    // computes to ~727px. The panel has no `height`, so it hugs its content,
+    // and the sheet inherits each workspace's collapsed state: a typical open
+    // is one expanded group of half a dozen rows, which lands near half the
+    // viewport. The floor stops it choosing to be small.
+    const flat = CSS.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\s+/g, ' ');
+    const panel = flat.match(/\.mns-panel \{([^}]*)\}/)?.[1] ?? '';
+    expect(panel).toMatch(/min-height:\s*min\(/);
+    // THE LOAD-BEARING PART. A min-height beats a max-height in CSS, so a bare
+    // `68dvh` floor would win over the visual-viewport cap on a short viewport
+    // — landscape, or the keyboard up — and hand back a panel taller than the
+    // screen with its last rows unreachable. The floor has to carry the same
+    // cap terms so it can never exceed them.
+    const minH = panel.match(/min-height:\s*min\(([^;]*)\)/)?.[1] ?? '';
+    expect(minH).toContain('--mns-avail-h');
+    expect(minH).toContain('--mns-panel-top');
+  });
+
   it('the JS margin and the CSS margin are the same number', () => {
     // Two spellings of the scrim band. If one moves and the other doesn't,
     // the panel and the "tap outside to dismiss" target stop agreeing.

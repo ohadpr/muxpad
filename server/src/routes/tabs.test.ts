@@ -6,9 +6,9 @@ import type { MuxpadEvent } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EventBus } from '../events.js';
-import { TabActivity } from '../tab-activity.js';
 import { TabStore } from '../store/TabStore.js';
 import { openDb } from '../store/db.js';
+import { TabActivity } from '../tab-activity.js';
 import { type TestApp, createTestApp } from '../test-helpers/createTestApp.js';
 
 describe('tabs routes', () => {

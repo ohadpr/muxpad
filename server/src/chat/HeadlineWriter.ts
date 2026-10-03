@@ -65,10 +65,10 @@ export class HeadlineWriter {
     this.events = opts.events;
     this.cache = opts.cache;
     this.model = opts.model ?? agentSdkHeadlineModel;
-    // Same builder, and same time-cache, as the dictation cleanup pass: the
+    // Same builder, and same time-cache, as the spawn-report writer: the
     // model labelling a chat needs to know "muxpad" and "ptyd" for exactly the
-    // reason the model repairing dictation does, and maintaining a second list
-    // would guarantee the two drift. Cached because a generation is
+    // reason the model writing a spawn report does, and maintaining a second
+    // list would guarantee the two drift. Cached because a generation is
     // rate-limited but a boot with forty tabs is not.
     const dataDir = opts.dataDir;
     this.glossary = dataDir ? glossaryCache(opts.db, dataDir) : () => [];

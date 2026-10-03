@@ -415,7 +415,7 @@ describe('the markers — one grammar, both directions', () => {
     const instruction = (to: string) =>
       renderDirectMarker({ id: 'd1', from: 'muxpad', pane: 'pane-1', to, toPane: 'pane-2' }, 'go');
 
-    it.each(["Ohad's project", "it's a 'quoted' name", 'say "hi" <b> & co', "don't; rm -rf /"])(
+    it.each(["Sam's project", "it's a 'quoted' name", 'say "hi" <b> & co', "don't; rm -rf /"])(
       'is valid sh for a chat called %s',
       (name) => {
         const script = commandOf(instruction(name));
@@ -432,7 +432,7 @@ describe('the markers — one grammar, both directions', () => {
       // Runs the real command with the real quoting and a stub in muxpad's
       // place, then parses what arrived. Nothing in the chain is simulated
       // except the CLI itself.
-      const name = "Ohad's project";
+      const name = "Sam's project";
       const script = `muxpad() { printf '%s' "$4"; }\n${commandOf(instruction(name))}`;
       const run = spawnSync('/bin/sh', [], { input: script, encoding: 'utf8' });
       expect(run.status).toBe(0);
@@ -613,7 +613,7 @@ describe('hitsFor — a result never outlives the query it answers', () => {
 describe('nextSearchLimit — how far the content tier goes, and when it stops', () => {
   const ask = (over: Partial<Parameters<typeof nextSearchLimit>[0]> = {}) =>
     nextSearchLimit({
-      query: 'trayo',
+      query: 'acme',
       state: NO_MENTION_SEARCH,
       rows: 0,
       want: 8,
@@ -636,18 +636,18 @@ describe('nextSearchLimit — how far the content tier goes, and when it stops',
     // The real shape of the defect: the archive returns 50 hits, 47 of them in
     // sessions whose panes are no longer chats, so the picker renders one row
     // with seven slots free and no way to ask for more.
-    const state = { query: 'trayo', limit: 50, hits: Array.from({ length: 50 }) as never };
+    const state = { query: 'acme', limit: 50, hits: Array.from({ length: 50 }) as never };
     expect(ask({ state, rows: 1 })).toBe(MENTION_SEARCH_MAX);
   });
 
   it('stops once the picker is full — a full list is not worth another request', () => {
-    const state = { query: 'trayo', limit: 50, hits: Array.from({ length: 50 }) as never };
+    const state = { query: 'acme', limit: 50, hits: Array.from({ length: 50 }) as never };
     expect(ask({ state, rows: 8 })).toBeNull();
   });
 
   it('stops when the page came back SHORT — the archive has no more to give', () => {
     // Asking for more of nothing is a round trip that cannot change the answer.
-    const state = { query: 'trayo', limit: 50, hits: Array.from({ length: 12 }) as never };
+    const state = { query: 'acme', limit: 50, hits: Array.from({ length: 12 }) as never };
     expect(ask({ state, rows: 1 })).toBeNull();
   });
 
@@ -656,7 +656,7 @@ describe('nextSearchLimit — how far the content tier goes, and when it stops',
     // it to ask for. Without this the escalation would re-fire forever on a
     // query whose hits never resolve.
     const state = {
-      query: 'trayo',
+      query: 'acme',
       limit: MENTION_SEARCH_MAX,
       hits: Array.from({ length: MENTION_SEARCH_MAX }) as never,
     };
@@ -664,7 +664,7 @@ describe('nextSearchLimit — how far the content tier goes, and when it stops',
   });
 
   it('starts over for a new query even mid-escalation', () => {
-    const state = { query: 'trayo', limit: 50, hits: Array.from({ length: 50 }) as never };
+    const state = { query: 'acme', limit: 50, hits: Array.from({ length: 50 }) as never };
     expect(ask({ state, query: 'codex', rows: 0 })).toBe(MENTION_SEARCH_PAGE);
   });
 });

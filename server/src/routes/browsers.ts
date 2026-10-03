@@ -485,7 +485,7 @@ export function browsersRoutes(deps: {
           // Never expose Chrome's unguarded socket to the MCP client.
           const payload = (await res.json()) as Record<string, unknown>;
           if (typeof payload.webSocketDebuggerUrl === 'string')
-            payload.webSocketDebuggerUrl = state.viewerUrl.replace(/^http/, 'ws') + '/agent-cdp';
+            payload.webSocketDebuggerUrl = `${state.viewerUrl.replace(/^http/, 'ws')}/agent-cdp`;
           return new Response(JSON.stringify(payload), {
             status: 200,
             headers: { 'content-type': res.headers.get('content-type') ?? 'application/json' },
@@ -532,8 +532,8 @@ export function browsersRoutes(deps: {
     }
     const merged = mergeCookieChanges(jar, parsed.data.seed, parsed.data.current);
     mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path + '.tmp', JSON.stringify(merged));
-    renameSync(path + '.tmp', path);
+    writeFileSync(`${path}.tmp`, JSON.stringify(merged));
+    renameSync(`${path}.tmp`, path);
     return c.json({ ok: true });
   });
 

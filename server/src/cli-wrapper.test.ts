@@ -767,7 +767,7 @@ exit 0`);
       const stderr = (err as { stderr: string }).stderr;
       expect(stderr).toContain('example.com');
       // muxpad has no business assuming which domain this is.
-      for (const assumed of ['ohad.', 'rows.to', 'trayo.ai']) {
+      for (const assumed of ['sam.', 'widgets.test', 'acme.test']) {
         expect(stderr).not.toContain(assumed);
       }
     });

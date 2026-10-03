@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
 import type { SubagentProgress } from '@muxpad/shared';
+import { describe, expect, it } from 'vitest';
 import { SUBAGENT_STALL_MS, isMaterialProgress, reapStalledEntries } from './ws.js';
 
 const p = (over: Partial<SubagentProgress> & { toolUseId: string }): SubagentProgress => ({
@@ -138,7 +138,9 @@ describe('the reap must STICK against a live keepalive', () => {
     const changed = new Map([['g', T0]]);
     const reaped = new Map<string, SubagentProgress>();
 
-    expect(reapStalledEntries(subagents, changed, T0 + SUBAGENT_STALL_MS + 1, reaped)).toEqual(['g']);
+    expect(reapStalledEntries(subagents, changed, T0 + SUBAGENT_STALL_MS + 1, reaped)).toEqual([
+      'g',
+    ]);
     expect(reaped.get('g')).toEqual(ghost); // tombstone captured the payload
 
     // Five seconds later the runner re-announces it, unchanged.
