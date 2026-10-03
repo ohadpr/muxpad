@@ -1142,6 +1142,13 @@ const MIGRATIONS: Migration[] = [
         last_fire_at: number | null;
       }>;
       for (const r of rows) {
+        // RE-IMPLEMENTED HERE, not imported from cron/schedule.ts, and that is
+        // deliberate rather than an oversight to tidy up later. A migration ran
+        // once against the data as it was; if it imported the live predicate it
+        // would silently change behaviour every time that predicate is refined,
+        // and replaying history would no longer reproduce it. The duplication
+        // is the stability. (They agree today — see `isDatedSchedule`.)
+        //
         // Dated = a specific day-of-month AND a specific month. Both must be
         // pinned: `0 9 1 * *` is monthly and `0 9 * 9 *` is every day in
         // September, and neither is a one-off.

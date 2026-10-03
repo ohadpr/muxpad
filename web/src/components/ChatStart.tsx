@@ -104,7 +104,7 @@ export interface RosterAgent {
 }
 
 /** Trim a trailing slash so `/a/b` and `/a/b/` compare equal. */
-export const normPath = (s: string) => s.replace(/\/+$/, '') || '/';
+const normPath = (s: string) => s.replace(/\/+$/, '') || '/';
 
 /**
  * Choose a folder: one-tap chips for the places you've recently worked, plus a
@@ -583,7 +583,7 @@ export function OpenInsteadStrip({
  * these two sentences are the only place the vocabulary is explained, so they
  * have to carry it.
  */
-export const MODE_CHOICES: ReadonlyArray<{ id: AgentMode; label: string; desc: string }> = [
+const MODE_CHOICES: ReadonlyArray<{ id: AgentMode; label: string; desc: string }> = [
   // Chat doesn't name a harness on purpose: it IS Claude, and which engine is
   // underneath is not a choice you make here (see modeForBackend). Agent is
   // where you pick one.
