@@ -1078,8 +1078,8 @@ describe('the row’s right-hand side holds one thing at a time', () => {
     // and it cost 18px of name width on exactly the rows pinned because they
     // matter most, which was the original objection to it and was still true.
     //
-    // The row carries a fill now (`--nt-pinned`), which costs no width at all,
-    // so the pin goes back to being an action beside the archive.
+    // The row's NAME carries a hue now (`--nt-pinned-ink`), which costs no
+    // width at all, so the pin goes back to being an action beside the archive.
     const all = rules(NAV_CSS).flatMap((r) => r.selectors);
     const permanent = all.filter(
       (sel) =>

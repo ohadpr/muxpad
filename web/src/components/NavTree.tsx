@@ -1214,9 +1214,11 @@ export function TabList({
 
   // ── The living sidebar's two blocks ─────────────────────────────────────
   // The SERVER owns the order (pinned first in manual order, then unpinned
-  // auto-sorted by attention → recency), so the client only has to
-  // find the seam. Deriving `pinnedCount` rather than re-sorting keeps one
-  // authority for ordering and means a poll can never fight a local sort.
+  // auto-sorted by attention → recency) and the client never re-sorts, so a
+  // poll can never fight a local sort. It no longer has to find the SEAM
+  // either: the pinned block had a divider drawn at `livePinned`, and the mark
+  // moved onto the rows themselves (--nt-pinned-ink), so the index went with
+  // the element.
   //
   // The single exception is the tab you're LOOKING AT: it holds the best
   // position it has reached for as long as it's active (useFrozenTabOrder) and
@@ -1272,7 +1274,6 @@ export function TabList({
   const liveGroups = grouped.live;
   const doneGroups = grouped.done;
   const doneCount = doneChatCount(doneGroups);
-  const pinnedCount = grouped.livePinned;
   // COLLAPSED by default. A chat crossing into done should be something you
   // notice leaving the live list, not something that re-opens a drawer of
   // fourteen finished chats under it.
@@ -1469,21 +1470,16 @@ export function TabList({
     <div className="navtree-tab-list">
       {liveGroups.map((g, i) => (
         <Fragment key={g.chat.id}>
-          {/* The seam between "you arranged these" and "these arrange
-              themselves". Only drawn when BOTH blocks exist — a hairline
-              above nothing (or below nothing) is noise, and a workspace
-              with no pins should look exactly like it did before pinning
-              existed. */}
-          {/* Purely decorative: pinnedness is already announced per-row by
-              the pin button's aria-pressed, so a semantic separator here
-              would only add a second, redundant thing for a screen reader to
-              stop on.
-              SHEET: not drawn at all. Pinning there is ORDER — being at the
-              top IS the signal — and a hairline is one more mark in a list
-              whose whole point is that it has almost none. */}
-          {!sheet && i === pinnedCount && pinnedCount > 0 ? (
-            <div className="navtree-pin-divider" aria-hidden="true" />
-          ) : null}
+          {/* NO SEAM BETWEEN THE BLOCKS, and the element that drew it is gone
+              rather than zeroed. It was a rule (flush, then inset, then a 40px
+              stub), then pure air, then a `height: 0; margin: 0` div that
+              rendered nothing at all — an element kept alive by edits that each
+              took one more thing away from it.
+              The mark is on the ROWS now: a pinned chat's NAME carries a hue
+              (--nt-pinned-ink), which is a channel selection does not use.
+              Marking the rows is also what the seam could never do — it said
+              "something changes here" from BETWEEN two blocks, which is only
+              legible to someone who already knows the list is sorted. */}
           {renderGroup(g)}
         </Fragment>
       ))}
@@ -1774,8 +1770,9 @@ export interface ChatGroup {
  *      look for them — the cards in the parent's conversation — and by `@`.
  *
  * Order is the server's throughout — pinned block first, then the auto-sorted
- * one. `livePinned` is the seam between them, recomputed over the live tops
- * only, so the pin divider cannot be stranded below a row that decayed away.
+ * one. It used to also return `livePinned`, the index the pin divider was drawn
+ * at; the divider is gone (a pinned chat's NAME carries the mark now) and the
+ * count went with it rather than being left for a future caller to rediscover.
  *
  * It takes no `now`, and that is the point: nothing in here is time-dependent
  * any more. `done` is read off the row and `spawned_by` is a pointer, so this
@@ -1784,7 +1781,6 @@ export interface ChatGroup {
 export function groupChats(tabs: Tab[]): {
   live: ChatGroup[];
   done: ChatGroup[];
-  livePinned: number;
 } {
   const byId = new Map(tabs.map((t) => [t.id, t]));
   /**
@@ -1861,11 +1857,27 @@ export function groupChats(tabs: Tab[]): {
     // only to head a list of delivered sub-chats, and there is no such list now.
     if (isChatDone(chat)) {
       done.push({ chat, children: [] });
+      // …BUT A CHILD THAT IS STILL WORKING OUTLIVES IT, as a top-level row.
+      // Dropping the whole family was right for the DELIVERED ones and wrong
+      // for this case: a sub-chat that has not reported yet is live work, and
+      // sending it down with its parent while also emptying the drawer left it
+      // rendering NOWHERE — gone from the rail with a turn still running.
+      //
+      // This is rule 2 above arriving from a second direction. A chat whose
+      // `spawned_by` does not resolve is promoted rather than orphaned, for the
+      // stated reason that a chat is never invisible because of a pointer; a
+      // parent that has retired out from under a running child is the same
+      // situation with the pointer still intact.
+      //
+      // Position is safe: a pinned chat never decays, so a done parent is never
+      // in the pinned block, and a row promoted at its place therefore always
+      // lands after the pinned rows.
+      for (const kid of children) if (!isChatRetired(kid)) live.push({ chat: kid, children: [] });
       continue;
     }
     live.push({ chat, children: children.filter((k) => !isChatRetired(k)) });
   }
-  return { live, done, livePinned: live.filter((g) => g.chat.pinned).length };
+  return { live, done };
 }
 
 /**
@@ -2465,7 +2477,7 @@ function TabRow({
       // went deliberately — see RowMark. The row's state is now told exactly
       // once, by the 10px mark at its right edge.
       data-child={parent ? 'true' : undefined}
-      // The row IS the pinned mark now — see --nt-pinned in NavTree.css.
+      // The NAME carries the pinned mark — see --nt-pinned-ink in NavTree.css.
       data-pinned={tab.pinned ? 'true' : undefined}
       data-unread={tab.unread ? 'true' : undefined}
       data-pressing={pressing ? 'true' : undefined}

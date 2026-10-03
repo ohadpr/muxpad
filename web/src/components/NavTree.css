@@ -1858,7 +1858,8 @@
    row that has one. */
 
 /* THE PIN IS AN ACTION AGAIN — and this time position really does say it,
-   because the ROW now carries the mark (see --nt-pinned). The pin was tried as
+   because the row's NAME now carries the mark (see --nt-pinned-ink). The pin
+   was tried as
    a resting indicator when nothing else did the job; it works, but it costs
    18px of name width on exactly the rows pinned because they matter, and a
    fill costs nothing. Its accent colour stays, because a LIT pin and an unlit
