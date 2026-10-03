@@ -36,6 +36,7 @@ import { loadConfig, voiceApiKey } from './config.js';
 import { CronScheduler } from './cron/CronScheduler.js';
 import { EventBus } from './events.js';
 import { createTailscaleFunnel, localFunnel } from './funnel.js';
+import { startAttachmentReaper } from './attachment-reaper.js';
 import { startPaneReaper } from './pane-reaper.js';
 import { PtydCache, decoratePane, decorateTab } from './ptyd-cache.js';
 import { PtydClient } from './ptyd-client/PtydClient.js';
@@ -561,6 +562,9 @@ const wsServer = attachWsServer({
 // Straggler prevention: retry pane kills that failed in transit, and (once
 // ptyd supports listPanes) kill any live pty whose DB row is gone.
 startPaneReaper({ db, ptyd, paneExists: (id) => paneStore.getById(id) !== null });
+// …and the same job for attachment FILES, whose rows are removed by a cascade
+// the application never sees. See attachment-reaper.ts.
+startAttachmentReaper({ db, dataDir: config.dataDir });
 
 // Supervision for `muxpad serve` panes. ws.ts's sweep only knows about agent
 // panes, so before this an app server whose pty vanished (ptyd restart, reboot)

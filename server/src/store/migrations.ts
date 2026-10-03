@@ -1172,6 +1172,43 @@ const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    // ORPHANED ATTACHMENT FILES, and the trigger that stops them being made.
+    //
+    // `attachments.pane_id` is `ON DELETE CASCADE`, so deleting a pane — or a
+    // tab, or a workspace, which cascade into panes — removes the attachment
+    // ROWS. Nothing has ever removed the FILES. Measured on a real install:
+    // 1493 files on disk against 794 rows, so 699 files and 348 MB that no
+    // query can reach and no sweep collected, growing with every chat deleted.
+    //
+    // A TRIGGER, not a call in each delete path, for the same reason
+    // `pending_pane_kills` exists: the cascade is SQLite's and the application
+    // never sees it. PaneStore.delete is not the chokepoint — a `DELETE FROM
+    // tabs` reaches panes without passing through it, and a workspace delete
+    // reaches them through two cascades. A trigger on the attachments row is
+    // the only place every path converges.
+    //
+    // The unlink itself is deferred rather than done here: a trigger cannot
+    // touch the filesystem, and it must not try — the DELETE has to commit
+    // whether or not a file can be removed. The sweeper owns the retry, same
+    // division of labour as the kill queue.
+    version: 37,
+    // IF NOT EXISTS on both, because the idempotency test re-runs every
+    // migration with the version rows deleted ("a restore from backup is one
+    // step from running it") — and it caught this one bare.
+    sql: `
+      CREATE TABLE IF NOT EXISTS pending_attachment_unlinks (
+        path       TEXT PRIMARY KEY,
+        created_at INTEGER NOT NULL
+      );
+      CREATE TRIGGER IF NOT EXISTS attachments_unlink_on_delete
+      AFTER DELETE ON attachments
+      BEGIN
+        INSERT OR IGNORE INTO pending_attachment_unlinks (path, created_at)
+        VALUES (OLD.path, CAST(strftime('%s','now') AS INTEGER) * 1000);
+      END;
+    `,
+  },
 ];
 
 /** Highest version in the migration list. Exported so a test can assert the
