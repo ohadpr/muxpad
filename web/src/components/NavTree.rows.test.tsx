@@ -180,31 +180,33 @@ describe('opening the done drawer shows a delivered child as a hollow dot', () =
     return host;
   }
 
-  it('keeps the drawer shut until asked, then draws the ring in the mark column', () => {
-    // A live parent with one delivered sub-chat: it contributes a live row up top
-    // and a `contextOnly` label with the child under it, down in the drawer.
+  it('a delivered sub-chat is in NEITHER list — the drawer never opens for it', () => {
+    // INVERTED. This used to assert the drawer held a `contextOnly` label with
+    // the delivered child under it, and the whole shape is gone: the drawer is
+    // top-level chats only. A sub-chat's result already came back to the parent
+    // as a card in its conversation, which is where you look for it, and `@`
+    // still finds the chat by name — so forty reported errands no longer bury
+    // the chats you actually abandoned, which is the only thing the drawer
+    // is for.
     const box = mountRail([
       tab('root'),
       // No clock at all — a sub-chat does not decay, it delivers (groupChats).
       tab('kid', { spawned_by: 'root', done: true, done_reason: 'delivered', clock: null }),
     ]);
-    expect(box.querySelector('.navtree-done-head')?.textContent).toContain('1 done');
-    // COLLAPSED by default: a chat leaving the live list must not re-open a
-    // drawer of finished ones under it.
+    // No drawer at all: nothing is in it.
+    expect(box.querySelector('.navtree-done-head')).toBeNull();
     expect(box.querySelectorAll('[data-shape="dot"]')).toHaveLength(0);
+    // The parent keeps its own live row, and is NOT also drawn as a label.
+    expect(box.querySelectorAll('.navtree-tab-row')).toHaveLength(1);
+    expect(box.querySelector('.navtree-done-parent')).toBeNull();
+  });
 
+  it('a DECAYED top-level chat still fills the drawer', () => {
+    // The drawer is not deleted, only narrowed — this is what it is for.
+    const box = mountRail([tab('root'), tab('old', { done: true, done_reason: 'decayed' })]);
+    expect(box.querySelector('.navtree-done-head')?.textContent).toContain('1 done');
     act(() => box.querySelector<HTMLButtonElement>('.navtree-done-head')?.click());
-
-    const dots = box.querySelectorAll('[data-shape="dot"]');
-    expect(dots).toHaveLength(1);
-    // Hollow, not solid — "finished, not gone", the dot's whole second state.
-    expect(box.querySelectorAll('.chatchip-dot[data-hollow="true"]')).toHaveLength(1);
-    // …and it is a CHILD row, so its dot lands in the column its parent's tile
-    // occupies and its name shares the tree's one child x.
-    expect(box.querySelectorAll('.navtree-tab-row[data-child="true"]')).toHaveLength(1);
-    // The parent above is a label here, not a second clickable copy of the row
-    // that is still live at the top of the list.
-    expect(box.querySelector('.navtree-done-parent')?.textContent).toBe('root');
+    expect(box.querySelectorAll('.navtree-tab-row')).toHaveLength(2);
   });
 
   it('draws a working child as a SOLID dot in the live list', () => {

@@ -466,7 +466,14 @@
    The row you are ON keeps its full colour wherever it lives: it is the one row
    in the rail that is not background. */
 .navtree-tab-row .chatchip {
-  filter: saturate(0.7);
+  /* 0.45, which is the value this was agreed at. It went to 0.7 in the pass
+     that deleted the group surfaces, on the reasoning that 0.45 had been tuned
+     while 62 emoji competed with three other tinted surfaces and was now just
+     mud — which was a design decision taken without being asked for, and it was
+     noticed ("i don't see the emojis dimmed as we agreed"). The agreement
+     stands: the loudest channel in the rail does not go to identity, which
+     never changes. */
+  filter: saturate(0.45) contrast(0.95);
 }
 .navtree-tab-row[data-active="true"] .chatchip {
   filter: none;
@@ -1415,24 +1422,6 @@
 }
 .navtree-done-head:hover {
   color: var(--fg-dim);
-}
-/* Whose retired sub-chats these are. The parent is still LIVE and has its own
-   row up in the list above — this is a label, not a second copy of it, and it
-   is styled so nobody can mistake it for one: no chip, no state mark, no hover,
-   no hit target. Set one step in from the done header so it reads as nested
-   inside the group rather than as a second heading for it. */
-.navtree-done-parent {
-  padding: 8px var(--nt-air) 2px calc(var(--nt-pad) + var(--nt-indent));
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--fg-faint);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  /* It is `aria-hidden` in the markup — each retired row's own title already
-     names its parent, and a screen reader stopping on a decorative label
-     between rows is one more thing between the user and the list. */
-  pointer-events: none;
 }
 
 /* A done chat's row is quieter still — it has left the live list, and the only
@@ -2794,8 +2783,7 @@ body.sidenav-resizing iframe {
    The header component is shared and already unscoped; these two rules only
    move it onto the sheet's leading edge, so its caret lines up with the emoji
    column instead of the desktop rail's narrower one. */
-.navtree[data-variant="sheet"] .navtree-done-head,
-.navtree[data-variant="sheet"] .navtree-done-parent {
+.navtree[data-variant="sheet"] .navtree-done-head {
   padding-inline-start: var(--nt-rail-lead);
 }
 /* A done chat is quieter, same as desktop. The shared rule cannot reach these

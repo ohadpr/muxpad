@@ -1459,18 +1459,8 @@ export function TabList({
     />
   );
   const renderGroup = (g: ChatGroup) => (
-    <Fragment key={`${g.chat.id}${g.contextOnly ? ':retired' : ''}`}>
-      {g.contextOnly ? (
-        /* The parent is LIVE and has a row of its own above. This is a label
-           saying whose sub-chats these were — not a link, not a chip, no state
-           mark. Rendering a real row here would put two clickable copies of one
-           chat in the list, one of which would go on lighting up as it worked. */
-        <div className="navtree-done-parent" aria-hidden="true">
-          {g.chat.name}
-        </div>
-      ) : (
-        renderRow(g.chat)
-      )}
+    <Fragment key={g.chat.id}>
+      {renderRow(g.chat)}
       {g.children.map((k) => renderRow(k, g.chat))}
     </Fragment>
   );
@@ -1755,7 +1745,6 @@ export interface ChatGroup {
    * is drawn here as a quiet label rather than as a second, clickable copy of
    * a row that already exists.
    */
-  contextOnly?: boolean;
 }
 
 /**
@@ -1778,11 +1767,11 @@ export interface ChatGroup {
  *      This is what keeps a workspace that spawned forty agents from showing
  *      forty rows: they are gone as they report, and their cards remain.
  *
- *      So a live parent contributes to BOTH lists — its still-working children
- *      nested under it up top, its delivered ones down in the done group under
- *      a `contextOnly` label. A done parent takes its whole family with it;
- *      children of a chat that has itself left the live list have no business
- *      staying in it.
+ *      And once retired it is not shown AT ALL: the done drawer holds
+ *      top-level chats only. A live parent nests its still-working children
+ *      under it up top and contributes nothing to the drawer; a done parent
+ *      goes in alone. The forty that reported are reachable where you would
+ *      look for them — the cards in the parent's conversation — and by `@`.
  *
  * Order is the server's throughout — pinned block first, then the auto-sorted
  * one. `livePinned` is the seam between them, recomputed over the live tops
@@ -1860,18 +1849,21 @@ export function groupChats(tabs: Tab[]): {
   const done: ChatGroup[] = [];
   for (const chat of tops) {
     const children = childrenOf.get(chat.id) ?? [];
+    // THE DONE DRAWER HOLDS TOP-LEVEL CHATS ONLY. A sub-chat retires the moment
+    // it delivers, so with forty spawned agents the drawer was forty rows of
+    // finished errands under a label, and the chats you actually abandoned were
+    // somewhere underneath them. Nothing is lost by dropping them: the result
+    // already came back to the parent as a card in its conversation, which is
+    // where you would look for it, and `@` still finds the chat by name.
+    //
+    // This is also what deleted `contextOnly` — a group whose parent was drawn
+    // as a bare label because its real row was still live above. That existed
+    // only to head a list of delivered sub-chats, and there is no such list now.
     if (isChatDone(chat)) {
-      // The parent has left the live list; the whole family goes with it.
-      done.push({ chat, children });
+      done.push({ chat, children: [] });
       continue;
     }
-    const working = children.filter((k) => !isChatRetired(k));
-    const delivered = children.filter((k) => isChatRetired(k));
-    live.push({ chat, children: working });
-    // Delivered sub-chats keep their parent's name over them so you can see
-    // whose work they were — but the parent is drawn as a label, not as a
-    // second copy of a row that is still live above.
-    if (delivered.length > 0) done.push({ chat, children: delivered, contextOnly: true });
+    live.push({ chat, children: children.filter((k) => !isChatRetired(k)) });
   }
   return { live, done, livePinned: live.filter((g) => g.chat.pinned).length };
 }
@@ -1879,16 +1871,13 @@ export function groupChats(tabs: Tab[]): {
 /**
  * How many CHATS the done group holds — the number in its header.
  *
- * Groups would be the wrong unit in both directions at once: a `contextOnly`
- * group's parent is a label for a chat that is still live above (so counting it
- * over-counts), while its retired sub-chats are real done chats (so counting
- * the group as one under-counts). With forty delivered agents under one parent
- * the two errors compound into "1 done" over a drawer of forty.
- *
- * The header's number has to be what you will find when you open it.
+ * One per group now that the drawer holds top-level chats only and every group
+ * in it is childless. It is still a function rather than `.length` at the call
+ * site because the invariant it encodes is the one that matters: the header's
+ * number has to be what you will find when you open it.
  */
 export function doneChatCount(groups: readonly ChatGroup[]): number {
-  return groups.reduce((n, g) => n + g.children.length + (g.contextOnly ? 0 : 1), 0);
+  return groups.reduce((n, g) => n + g.children.length + 1, 0);
 }
 
 /**
