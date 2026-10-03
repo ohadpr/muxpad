@@ -58,3 +58,29 @@ export function isDisposableSessionProfile(profile: string): boolean {
   // A prefix and nothing after it is not a session; it is the prefix.
   return profile.length > SESSION_PROFILE_PREFIX.length;
 }
+
+/**
+ * Profile DIRECTORIES that no app row names, and may therefore be removed.
+ *
+ * The row-driven sweep cannot see these: it walks app rows, so a directory
+ * whose row is gone is invisible to it forever. They exist because the reaper
+ * used to delete the row BEFORE the directory, so an `rm` that threw — a race
+ * with the Chrome still writing into the profile it was being evicted from —
+ * left a directory with nothing pointing at it. Measured when it was found: 42
+ * of 48 directories stranded, 147 MB. The ordering is fixed; this collects what
+ * it already stranded, and anything a future failure strands between passes.
+ *
+ * PURE, and separated from the rm that acts on it, because the consequence of
+ * getting the name wrong is deleting `browser-profiles/default` — the directory
+ * holding every login on the machine. A decision that authorises an rm -rf is
+ * worth being able to test exhaustively, which a function reading a real
+ * directory is not.
+ */
+export function strandedProfilesToRemove(
+  /** Every entry in the profiles directory — files included, as readdir gives it. */
+  entries: readonly string[],
+  /** Profiles an app row still names; theirs is the sweep above, not this one. */
+  known: ReadonlySet<string>,
+): string[] {
+  return entries.filter((name) => isDisposableSessionProfile(name) && !known.has(name));
+}

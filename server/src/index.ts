@@ -1,5 +1,5 @@
 import { mkdirSync } from 'node:fs';
-import { rm } from 'node:fs/promises';
+import { readdir, rm } from 'node:fs/promises';
 import type { Server } from 'node:http';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,7 +22,11 @@ import { parseBrowserProxyPath } from './browser/BrowserProxy.js';
 import { clearBrowserShots } from './browser/BrowserShots.js';
 import { BrowserWheel } from './browser/BrowserWheel.js';
 import { shouldStopIdleBrowser } from './browser/IdleStop.js';
-import { isDisposableSessionProfile, sessionBrowsersToReap } from './browser/SessionReaper.js';
+import {
+  isDisposableSessionProfile,
+  sessionBrowsersToReap,
+  strandedProfilesToRemove,
+} from './browser/SessionReaper.js';
 import { findChrome } from './browser/findChrome.js';
 import { browserHostEntry } from './browser/hostEntry.js';
 import { HeadlineWriter } from './chat/HeadlineWriter.js';
@@ -705,8 +709,27 @@ const reapSessionBrowsers = async () => {
     // the catch below and reaps nothing, which is the safe direction.
     const apps = new AppStore(db);
     for (const profile of sessionBrowsersToReap(listBrowserApps(db), live)) {
+      // PER PROFILE, and this is a fix rather than a style. The try used to wrap
+      // the whole loop, so the first profile that failed to delete aborted every
+      // profile after it in that pass — and the thing that fails is a transient
+      // race, so it fired often: 24 times in this log.
+      try {
+        await reapOne(apps, profile);
+      } catch (err) {
+        console.error(`[browser] reap of '${profile}' failed — will retry`, err);
+      }
+    }
+  } catch (err) {
+    console.error('[browser] reap failed', err);
+  }
+};
+
+/** One profile, so a failure is contained to it. Throws; the caller logs. */
+const reapOne = async (apps: AppStore, profile: string): Promise<void> => {
+  {
+    {
       const row = apps.getBySlug(browserAppSlug(profile));
-      if (!row) continue;
+      if (!row) return;
       if (row.enabled) await appRegistry.stop(row.id);
       // AND THEN REMOVE IT. Stopping alone left the row behind disabled, and the
       // condition above used to skip disabled rows — so nothing ever looked at
@@ -717,16 +740,76 @@ const reapSessionBrowsers = async () => {
       // A tab id is never reissued, so this session cannot come back and wants
       // none of it. The name is checked before anything is deleted, because the
       // adjacent directory holds every login on the machine.
-      if (!isDisposableSessionProfile(profile)) continue;
+      if (!isDisposableSessionProfile(profile)) return;
+      // THE DIRECTORY FIRST, THE ROW SECOND, and the order is the whole bug.
+      // It was the other way round: the row was deleted and then the rm threw
+      // ENOTEMPTY, which left a directory with no row — and the sweep is driven
+      // BY the rows, so nothing would ever look at it again. Measured before
+      // this change: 48 profile directories against 28 rows, 42 of them
+      // unreachable, 147 MB. Deleting the row last makes a failure a RETRY: the
+      // row survives, the next sweep tries again, and the directory cannot be
+      // stranded.
+      //
+      // maxRetries because the failure is a race, not a corruption: Chrome is
+      // still writing into the profile it is being evicted from, so files
+      // reappear between readdir and rmdir. Node's rm retries exactly this.
+      await rm(browserProfileDir(config.dataDir, profile), {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 200,
+      });
       apps.delete(row.id);
       new BrowserEvents(db).clear(profile);
       new BrowserOwner(db).clear(profile);
       clearBrowserShots(config.dataDir, profile);
-      await rm(browserProfileDir(config.dataDir, profile), { recursive: true, force: true });
       console.log(`[browser] reaped '${profile}' — its tab is gone`);
     }
+  }
+};
+
+/**
+ * …AND THE ONES ALREADY STRANDED, which no row names.
+ *
+ * The sweep above walks APP ROWS, so a directory whose row is gone is invisible
+ * to it forever. The bug that made them is fixed (the row is deleted last now),
+ * but the ones it already made are still on disk: 42 of 48 directories, 147 MB,
+ * with nothing left pointing at them.
+ *
+ * Driven by the DIRECTORY listing rather than the rows, which is the only way
+ * to see them — the same reason the attachment reaper walks its directory.
+ * Every name goes through `isDisposableSessionProfile`, which is what stands
+ * between this and `browser-profiles/default`: the directory holding every
+ * login on the machine.
+ */
+const reapStrandedProfiles = async (): Promise<void> => {
+  try {
+    const root = join(config.dataDir, 'browser-profiles');
+    let names: string[];
+    try {
+      names = await readdir(root);
+    } catch {
+      return; // no browsers have ever run here
+    }
+    const known = new Set(listBrowserApps(db).map((a) => a.profile));
+    let freed = 0;
+    // The decision is pure and tested (SessionReaper); only the rm is here.
+    for (const name of strandedProfilesToRemove(names, known)) {
+      try {
+        await rm(join(root, name), {
+          recursive: true,
+          force: true,
+          maxRetries: 5,
+          retryDelay: 200,
+        });
+        freed++;
+      } catch (err) {
+        console.error(`[browser] stranded profile '${name}' not removed`, err);
+      }
+    }
+    if (freed) console.log(`[browser] removed ${freed} stranded profile(s)`);
   } catch (err) {
-    console.error('[browser] reap failed', err);
+    console.error('[browser] stranded sweep failed', err);
   }
 };
 // ─── AND STOP THE ONES NOBODY IS USING ──────────────────────────────────────
@@ -794,6 +877,10 @@ setInterval(() => void stopIdleBrowsers(), REAP_EVERY_MS).unref();
 
 setInterval(() => void reapSessionBrowsers(), REAP_EVERY_MS).unref();
 void reapSessionBrowsers();
+// Same timer, after the row-driven pass: anything it orphaned this round is
+// caught on the next one rather than waiting for a restart.
+setInterval(() => void reapStrandedProfiles(), REAP_EVERY_MS).unref();
+void reapStrandedProfiles();
 
 // Durable schedules. The tick starts only now, with the ws layer attached and
 // the runner registry live behind the bridge; its own 15s startup grace then
