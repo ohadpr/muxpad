@@ -1451,6 +1451,33 @@
   color: var(--fg-dim);
 }
 
+/* The nested disclosure: the agents' work, inside the drawer and under the
+   chats you archived yourself. One step further in than the head above it and
+   one step quieter, so the nesting is legible without a second kind of
+   control — it IS the done head, indented. */
+.navtree-done-head.-subs {
+  padding-top: 6px;
+  padding-left: calc(var(--nt-pad) + var(--nt-indent) * 2);
+  font-size: 12px;
+}
+
+/* Whose work these were. The parent is NOT drawn as a row: it may be live with
+   a row of its own above, or done with one beside these, and either way a
+   second clickable copy would be one chat appearing twice in a list. No chip,
+   no state mark, no hover, no hit target — and `aria-hidden`, because each
+   sub-chat's own title already names its parent and a decorative label between
+   rows is one more thing between the reader and the list. */
+.navtree-done-parent {
+  padding: 8px var(--nt-air) 2px calc(var(--nt-pad) + var(--nt-indent) * 2);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--fg-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
 /* A done chat's row is quieter still — it has left the live list, and the only
    reason it is on screen at all is that you opened the drawer to look. The
    chip already says it (a dashed outline round a ghosted emoji); this stops
@@ -2777,8 +2804,13 @@ body.sidenav-resizing iframe {
    The header component is shared and already unscoped; these two rules only
    move it onto the sheet's leading edge, so its caret lines up with the emoji
    column instead of the desktop rail's narrower one. */
-.navtree[data-variant="sheet"] .navtree-done-head {
+.navtree[data-variant="sheet"] .navtree-done-head,
+.navtree[data-variant="sheet"] .navtree-done-parent {
   padding-inline-start: var(--nt-rail-lead);
+}
+/* …except the nested one, which has to stay visibly nested. */
+.navtree[data-variant="sheet"] .navtree-done-head.-subs {
+  padding-inline-start: calc(var(--nt-rail-lead) + var(--nt-indent));
 }
 /* A done chat is quieter, same as desktop. The shared rule cannot reach these
    rows: it is a SIBLING selector, and on this surface every row is wrapped in

@@ -1274,10 +1274,13 @@ export function TabList({
   const liveGroups = grouped.live;
   const doneGroups = grouped.done;
   const doneCount = doneChatCount(doneGroups);
+  const subGroups = grouped.doneSubs;
+  const subCount = subGroups.reduce((n, g) => n + g.children.length, 0);
   // COLLAPSED by default. A chat crossing into done should be something you
   // notice leaving the live list, not something that re-opens a drawer of
   // fourteen finished chats under it.
   const [doneOpen, setDoneOpen] = useState(false);
+  const [subsOpen, setSubsOpen] = useState(false);
 
   // Drag-to-reorder is PINNED-ONLY (see lib/tab-drag for why). The hook is
   // fed just the pinned ids, so an unpinned row can neither be dragged into
@@ -1460,8 +1463,18 @@ export function TabList({
     />
   );
   const renderGroup = (g: ChatGroup) => (
-    <Fragment key={g.chat.id}>
-      {renderRow(g.chat)}
+    <Fragment key={`${g.chat.id}${g.contextOnly ? ':subs' : ''}`}>
+      {g.contextOnly ? (
+        /* A LABEL, not a row. The parent may be live with a row of its own
+           above, or done with one beside these — either way a second clickable
+           copy of it here would be a chat appearing twice in one list, and the
+           live one would go on lighting up as it worked. */
+        <div className="navtree-done-parent" aria-hidden="true">
+          {g.chat.name}
+        </div>
+      ) : (
+        renderRow(g.chat)
+      )}
       {g.children.map((k) => renderRow(k, g.chat))}
     </Fragment>
   );
@@ -1490,7 +1503,7 @@ export function TabList({
           Shaped like the workspace header one step quieter: a section head,
           not a third kind of label, and no count badge (the number is the
           label). */}
-      {doneGroups.length > 0 ? (
+      {doneGroups.length > 0 || subCount > 0 ? (
         <>
           <button
             type="button"
@@ -1502,6 +1515,32 @@ export function TabList({
             {doneCount} done
           </button>
           {doneOpen ? doneGroups.map(renderGroup) : null}
+          {/* ─── AND THE AGENTS' WORK, one level further in ──────────────────
+              Delivered sub-chats were IN the list above and filled it with
+              machine-named work nobody recognised: on this install, 104 of them
+              against 28 chats actually abandoned, so the thing the drawer is
+              for was buried under the thing it is not. Reported as the archive
+              filling with unfamiliar stuff.
+              They are not deleted from it — that fixed the noise by removing
+              the only place they could be found. They are one disclosure
+              further in, and NEVER at the top: this sits below the chats you
+              archived yourself, costs one line when shut, and is shut by
+              default even when the drawer above it is open. Two clicks to a
+              place you only go when you are looking for it. */}
+          {doneOpen && subCount > 0 ? (
+            <>
+              <button
+                type="button"
+                className="navtree-done-head -subs"
+                onClick={() => setSubsOpen((o) => !o)}
+                aria-expanded={subsOpen}
+              >
+                <SvgCaret open={subsOpen} />
+                {subCount} sub-chat{subCount === 1 ? '' : 's'}
+              </button>
+              {subsOpen ? subGroups.map(renderGroup) : null}
+            </>
+          ) : null}
         </>
       ) : null}
     </div>
@@ -1735,6 +1774,8 @@ interface TabRowProps {
 export interface ChatGroup {
   chat: Tab;
   children: Tab[];
+  /** The parent is a LABEL here, not a row — see `doneSubs`. */
+  contextOnly?: boolean;
   /**
    * This group is in the DONE list only to say whose retired sub-chats these
    * are. `chat` itself is live and has its own row up in the list above, so it
@@ -1781,6 +1822,20 @@ export interface ChatGroup {
 export function groupChats(tabs: Tab[]): {
   live: ChatGroup[];
   done: ChatGroup[];
+  /**
+   * Delivered sub-chats, grouped under the chat that spawned them, for the
+   * drawer's own second disclosure.
+   *
+   * SEPARATE FROM `done`, which is the whole point. They were in it, and the
+   * drawer filled with machine-named work nobody recognised — 104 of them
+   * against 28 chats actually abandoned, so the thing the drawer is FOR was
+   * buried under the thing it is not. They were then dropped entirely, which
+   * fixed the noise by removing the only place they could be found.
+   *
+   * This is the third answer: still in the drawer, never at the top of it, and
+   * behind a disclosure of their own. Shut, they cost one line.
+   */
+  doneSubs: ChatGroup[];
 } {
   const byId = new Map(tabs.map((t) => [t.id, t]));
   /**
@@ -1843,8 +1898,16 @@ export function groupChats(tabs: Tab[]): {
   }
   const live: ChatGroup[] = [];
   const done: ChatGroup[] = [];
+  const doneSubs: ChatGroup[] = [];
   for (const chat of tops) {
     const children = childrenOf.get(chat.id) ?? [];
+    // Delivered children go to the drawer's sub-chat section WHATEVER their
+    // parent is doing — it may be live above, or done beside them. The group
+    // carries the parent only to name whose work this was; `contextOnly` marks
+    // it as a label rather than a row, because the parent is not the thing
+    // being listed here and may already have a real row elsewhere.
+    const delivered = children.filter((k) => isChatRetired(k));
+    if (delivered.length > 0) doneSubs.push({ chat, children: delivered, contextOnly: true });
     // THE DONE DRAWER HOLDS TOP-LEVEL CHATS ONLY. A sub-chat retires the moment
     // it delivers, so with forty spawned agents the drawer was forty rows of
     // finished errands under a label, and the chats you actually abandoned were
@@ -1852,9 +1915,8 @@ export function groupChats(tabs: Tab[]): {
     // already came back to the parent as a card in its conversation, which is
     // where you would look for it, and `@` still finds the chat by name.
     //
-    // This is also what deleted `contextOnly` — a group whose parent was drawn
-    // as a bare label because its real row was still live above. That existed
-    // only to head a list of delivered sub-chats, and there is no such list now.
+    // `contextOnly` groups are built above, for the drawer's own sub-chat
+    // disclosure — not for this list. Nothing here lists a sub-chat.
     if (isChatDone(chat)) {
       done.push({ chat, children: [] });
       // …BUT A CHILD THAT IS STILL WORKING OUTLIVES IT, as a top-level row.
@@ -1877,7 +1939,7 @@ export function groupChats(tabs: Tab[]): {
     }
     live.push({ chat, children: children.filter((k) => !isChatRetired(k)) });
   }
-  return { live, done };
+  return { live, done, doneSubs };
 }
 
 /**
@@ -1889,7 +1951,7 @@ export function groupChats(tabs: Tab[]): {
  * number has to be what you will find when you open it.
  */
 export function doneChatCount(groups: readonly ChatGroup[]): number {
-  return groups.reduce((n, g) => n + g.children.length + 1, 0);
+  return groups.reduce((n, g) => n + g.children.length + (g.contextOnly ? 0 : 1), 0);
 }
 
 /**
