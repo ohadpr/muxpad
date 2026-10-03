@@ -1070,39 +1070,26 @@ describe('the row’s right-hand side holds one thing at a time', () => {
     ).toBe(true);
   });
 
-  it('shows the PIN at rest on a pinned row, and charges it to that row only', () => {
-    // REVERSED, and the reversal is a premise expiring rather than a change of
-    // taste. The pin was made hover-only on an explicit argument: "the seam is
-    // a real 1px rule now, and with it drawn, position genuinely is the
-    // designation". That rule has since been deleted — it was a line BETWEEN
-    // two blocks used to say something about ONE of them, drawn three ways and
-    // reported each time — so the premise is no longer true, and the rail went
-    // back to claiming position says "pinned" while drawing nothing. Reported
-    // as "its invisible".
+  it('shows the PIN only on hover — the ROW is what says "pinned"', () => {
+    // This has flipped twice and the second flip is the stable one, because the
+    // marker finally landed on the right object rather than in the cheapest
+    // free space. The pin was ON at rest for one iteration, after the seam rule
+    // under the pinned block was deleted and nothing replaced it. It worked —
+    // and it cost 18px of name width on exactly the rows pinned because they
+    // matter most, which was the original objection to it and was still true.
     //
-    // Two cheaper marks were tried first and both failed for reasons that rule
-    // out their whole category: a 3px tick in the left track ragged the rail's
-    // left edge, which is the only containment a workspace has left; a ring and
-    // then a plate on the chip measured invisible and could not be tuned into
-    // visibility, because the tile is transparent and a 20px glyph fills a 24px
-    // box.
+    // The row carries a fill now (`--nt-pinned`), which costs no width at all,
+    // so the pin goes back to being an action beside the archive.
     const all = rules(NAV_CSS).flatMap((r) => r.selectors);
     const permanent = all.filter(
       (sel) =>
         sel.includes('.navtree-pin.is-pinned') && !sel.includes(':hover') && !sel.includes('focus'),
     );
-    expect(permanent.length).toBeGreaterThan(0);
-    const resting = permanent.map((sel) => ruleBody(NAV_CSS, sel)).join(' ');
-    expect(resting).toMatch(/visibility:\s*visible/);
-    expect(Number.parseFloat(decl(resting, 'width'))).toBe(18);
-
-    // THE COST IS CHARGED TO PINNED ROWS ONLY, which is the whole reason this
-    // is affordable: every selector that opens the box names `.is-pinned`, so
-    // an unpinned row keeps the full width for its name. The original objection
-    // to a permanent pin was "four icons eating a third of the width" — that
-    // was about reserving it everywhere.
+    // Any rule left for a resting pinned pin may set COLOUR and nothing that
+    // gives it a box.
     for (const sel of permanent) {
-      expect({ sel, scoped: sel.includes('.is-pinned') }).toEqual({ sel, scoped: true });
+      const body = ruleBody(NAV_CSS, sel);
+      expect(body).not.toMatch(/width|flex|visibility/);
     }
   });
 

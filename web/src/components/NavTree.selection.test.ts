@@ -748,40 +748,65 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     }
   });
 
-  it('PINNED is told on the ROW, and the seam between the blocks is only air', () => {
-    // Three designs for a rule under the pinned block — flush, inset at both
-    // ends, then a 40px stub — each reported in turn. They were wrong in KIND,
-    // not in tuning: a line BETWEEN two things used to say something about ONE
-    // of them. "Which rows are pinned" is a property of those rows. So the
-    // element survives as the gap and nothing else.
-    const body = ruleBody(NAV_CSS, '.navtree-pin-divider');
-    expect(body).not.toMatch(/border/);
-    expect(Number.parseFloat(decl(body, 'margin'))).toBeGreaterThanOrEqual(6);
-
-    // NOT IN THE LEFT GUTTER. A 3px tick in the row's left state track was free
-    // — chat rows stopped emitting `data-state`, so those pixels have been
-    // empty since — but free was the wrong test: the track is OUTSIDE the icon
-    // column, so marking some rows and not others ragged the rail's left edge,
-    // which is the only containment a workspace has now that the group has no
-    // surface.
-    expect(strip(NAV_CSS)).not.toMatch(/\[data-pinned/);
+  it('PINNED is a FILL on the row, on one ladder with selection', () => {
+    // Five designs, and the first four are recorded as negative assertions
+    // because each is ruled out by a reason, not by a value:
+    //
+    //   · a rule under the block (flush, inset, a 40px stub) — wrong in KIND: a
+    //     line BETWEEN two things used to say something about ONE of them.
+    //   · a 3px tick in the row's left state track — free (chat rows stopped
+    //     emitting `data-state`), but OUTSIDE the icon column, so it ragged the
+    //     rail's left edge, the only containment a workspace has left.
+    //   · a ring, then a plate, on the chip — measured invisible and not
+    //     tunable: the tile is transparent and a 20px glyph fills a 24px box.
+    //   · the pin shown at rest — visible, but 18px of name width on exactly
+    //     the rows pinned because they matter.
+    //
+    // The row's own fill costs nothing and is the only one you read without
+    // looking for it. The GAP goes with it: spacing was the last thing still
+    // saying "these are different" from between the rows instead of on them.
+    const seam = ruleBody(NAV_CSS, '.navtree-pin-divider');
+    expect(seam).not.toMatch(/border/);
+    expect(Number.parseFloat(decl(seam, 'margin'))).toBe(0);
     expect(strip(STATE_CSS)).not.toMatch(/\[data-pinned/);
-
-    // AND NOT ON THE CHIP. A ring, then a plate behind the glyph, both measured
-    // invisible — and not fixable by raising a percentage, because the tile is
-    // transparent and a 20px glyph fills a 24px box. There is no room on that
-    // object for a second mark, so no value of one exists.
     expect(strip(CHIP_CSS)).not.toMatch(/data-phase="pinned"/);
-    // The tile's border stays reserved and transparent, which is what the age
-    // outline uses; nothing here may spend it.
-    expect(decl(ruleBody(CHIP_CSS, '.chatchip[data-shape="tile"]'), 'border')).toBe(
-      '1px solid transparent',
-    );
 
-    // It is the pin itself, at rest — see NavTree.spacing for the geometry and
-    // the cost argument.
-    expect(
-      ruleBody(NAV_CSS, '.navtree-tab-row > .navtree-tab-rail > .navtree-pin.is-pinned'),
-    ).toMatch(/visibility:\s*visible/);
+    const pinned = ruleBody(
+      NAV_CSS,
+      '.navtree-tab-row[data-pinned="true"]:not([data-active="true"])',
+    );
+    expect(decl(pinned, 'background-color')).toBe('var(--nt-pinned)');
+    // A PILL, not the tab's shape. Selection loses its right-hand corners and
+    // runs into the pane; keeping both ends round here is what stops two filled
+    // rows from reading as the same kind of thing.
+    expect(decl(pinned, 'border-radius')).toBe('var(--nt-pill)');
+
+    // ONE LADDER, and the order is guaranteed by construction rather than by
+    // arithmetic that happens to come out right. --nt-pinned is mixed FROM
+    // --bg-pane-face, so pinned is literally the midpoint between the rail and
+    // the selected row on every theme.
+    //
+    // Written as its own mix toward --bg it was not: on acme it measured ΔE
+    // 3.32 from the rail against 1.11 from SELECTION — a pinned row more
+    // distinct than the selected one — because acme's rail and content sit a
+    // hair apart and two independent mixes can order themselves differently per
+    // theme. A midpoint cannot.
+    expect(NT_TOKENS['--nt-pinned']).toContain('var(--bg-pane-face)');
+    const half = (t: Record<string, string>) =>
+      over(paneFace(t), t['--bg-tabbar'] as string, 0.5);
+    for (const [name, t] of Object.entries(THEMES)) {
+      const rail = t['--bg-tabbar'] as string;
+      const pinVsRail = deltaE(half(t), rail);
+      const selVsRail = deltaE(paneFace(t), rail);
+      // Strictly below selection, everywhere. This is the invariant; the
+      // SIZES are a theme's business and acme's is correctly tiny — that theme
+      // has no room, which is why selection there is carried by the funnel
+      // SHAPE, and pinned borrows none of it.
+      expect({ name, ordered: pinVsRail < selVsRail }).toEqual({ name, ordered: true });
+      // And the row's ink is never the thing that pays: a fill toward the
+      // CONTENT surface raises the row, where a wash toward --fg would move it
+      // toward its own text. That is the tray's lesson, applied.
+      expect({ name, aa: ratio(t['--fg'] as string, half(t)) >= 4.5 }).toEqual({ name, aa: true });
+    }
   });
 });

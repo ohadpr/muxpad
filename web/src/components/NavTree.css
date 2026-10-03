@@ -71,7 +71,38 @@
    so neither surface has to know about the other. */
 .navtree {
   --nt-surface: var(--bg-tabbar);
-/* NO GROUP SURFACE AT ALL, and that is the third answer to this question.
+/* PINNED, AND THE ONE AXIS THE RAIL'S SURFACES NOW SIT ON.
+     Toward --bg, the CONTENT surface, and never toward --fg. That direction is
+     the whole lesson of the tray: mixing a reading surface toward the
+     foreground moves every row's background toward its own ink, and text
+     contrast fell on all six themes when it was tried. --bg is lighter than the
+     rail on all six (measured), so this RAISES the row — one direction, every
+     theme, which --fg could not manage because it flips.
+
+     So there is a single ladder, and the distance up it is the meaning:
+       rail            an ordinary row
+       --nt-pinned     held — HALFWAY to the row you are in
+       --bg-pane-face  the row you are IN, which IS the content surface
+     Mixed from `--bg-pane-face` and not independently from `--bg`, and that is
+     the correctness argument rather than a tidiness one. Written as its own mix
+     toward --bg it measured, on acme, ΔE 3.32 from the rail against 1.11 from
+     SELECTION — a pinned row more distinct than the selected one, on a theme
+     whose rail and content sit a hair apart. Two independent mixes can order
+     themselves differently per theme; a midpoint cannot. Pinned is now exactly
+     half the rail→selection distance on all six, which also means acme's is
+     small — correctly so: that theme has no room, which is why selection there
+     is carried by the funnel SHAPE, and pinned borrows none of it.
+
+     WHAT THIS REPLACED. A gap plus a seam under the block (three versions, each
+     reported), a 3px tick in the left gutter (ragged the rail's left edge), a
+     ring and then a plate on the chip (measured invisible — the tile is
+     transparent and a 20px glyph fills a 24px box), and the pin shown at rest
+     (visible, but 18px of name width on the rows that matter most). Marking the
+     row itself costs nothing and is the only one of the five you read without
+     looking for it. */
+  --nt-pinned: color-mix(in srgb, var(--bg-pane-face) 50%, var(--nt-surface));
+
+  /* NO GROUP SURFACE AT ALL, and that is the third answer to this question.
      The sequence is worth keeping because each attempt was measured and each
      one failed for a different reason: a tinted TRAY moved every row's
      background toward its own ink (text contrast fell on all six themes); a
@@ -1030,6 +1061,20 @@
    A terminal pane paints its own black and a web pane paints somebody's site —
    there the tab joins a colour it does not match. The fix when that matters is
    to read the ACTIVE PANE's background rather than the theme's. */
+/* The held rows. A pill, rounded both ends — deliberately NOT the tab's shape:
+   selection runs into the pane and loses its right-hand corners, and that
+   difference is what keeps two filled rows from reading as the same thing. */
+.navtree-tab-row[data-pinned="true"]:not([data-active="true"]) {
+  background-color: var(--nt-pinned);
+  border-radius: var(--nt-pill);
+}
+/* Hover goes UP the same ladder rather than across it. `--nt-hover` is an --fg
+   wash, which on a pinned row would step back down toward the rail — pointing
+   at a held row would make it look less held. */
+.navtree-tab-row[data-pinned="true"]:not([data-active="true"]):hover {
+  background-color: color-mix(in srgb, var(--bg-pane-face) 72%, var(--nt-surface));
+}
+
 .navtree-tab-row[data-active="true"] {
   background-color: var(--bg-pane-face);
   border-radius: var(--nt-pill) 0 0 var(--nt-pill);
@@ -1802,7 +1847,10 @@
    pinned block from running into the rest, and nothing else. */
 .navtree-pin-divider {
   height: 0;
-  margin: 9px 0;
+  /* NO GAP EITHER. The spacing was the last thing still saying "these rows are
+     different" from between them instead of on them; with the rows filled it is
+     a hole in the list for no reason. */
+  margin: 0;
 }
 
 /* …AND THE MARK'S TRACK IS RESERVED ON A PINNED ROW, so the pin cannot move.
@@ -1827,39 +1875,15 @@
    width for its name, and a row with ANY indicator lines up with every other
    row that has one. */
 
-/* THE PIN IS AN INDICATOR AGAIN, and this reverses a reversal rather than
-   forgetting one. It was made hover-only on an explicit premise, quoted from
-   the comment that did it: "the seam is a real 1px rule now, and with it drawn,
-   position genuinely is the designation". That rule has since been deleted —
-   it was a line BETWEEN two blocks used to say something about ONE of them, and
-   three attempts at drawing it were each reported in turn — so the premise is
-   simply no longer true. Position says "pinned" only to someone who already
-   knows the list is sorted that way.
-
-   WHAT WAS TRIED IN BETWEEN, and why neither worked. A 3px tick in the row's
-   left track: free, but outside the icon column, so it ragged the rail's left
-   edge — the only thing holding a workspace together now that the group has no
-   surface. A ring, then a plate, on the chip: measured invisible, and not
-   fixable by tuning, because the tile is transparent and a 20px glyph fills a
-   24px box. There is no room on that object for a second mark.
-
-   The cost is real and is accepted rather than denied: 18px of name width, on
-   exactly the rows pinned because they matter. It is charged only to those rows
-   — the track reservation below already exists for this — and pinned rows are
-   few by construction.
-
-   --fg-faint at rest, --accent on hover. A lit pin and an unlit one are
-   different things when both are visible: lit means "clicking unpins". */
+/* THE PIN IS AN ACTION AGAIN — and this time position really does say it,
+   because the ROW now carries the mark (see --nt-pinned). The pin was tried as
+   a resting indicator when nothing else did the job; it works, but it costs
+   18px of name width on exactly the rows pinned because they matter, and a
+   fill costs nothing. Its accent colour stays, because a LIT pin and an unlit
+   one are different things when both are revealed: lit means "clicking
+   unpins". */
 .navtree-tab-row > .navtree-tab-rail > .navtree-pin.is-pinned {
-  flex: 0 0 18px;
-  width: 18px;
-  opacity: 0.85;
-  visibility: visible;
-}
-.navtree-tab-row:hover > .navtree-tab-rail > .navtree-pin.is-pinned,
-.navtree-tab-row:has(:focus-visible) > .navtree-tab-rail > .navtree-pin.is-pinned {
   color: var(--accent);
-  opacity: 1;
 }
 
 /* ─── Sheet pane list (mobile: tab row expands into its panes) ───────── */

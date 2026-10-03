@@ -2465,6 +2465,8 @@ function TabRow({
       // went deliberately — see RowMark. The row's state is now told exactly
       // once, by the 10px mark at its right edge.
       data-child={parent ? 'true' : undefined}
+      // The row IS the pinned mark now — see --nt-pinned in NavTree.css.
+      data-pinned={tab.pinned ? 'true' : undefined}
       data-unread={tab.unread ? 'true' : undefined}
       data-pressing={pressing ? 'true' : undefined}
       {...(!isEditing
