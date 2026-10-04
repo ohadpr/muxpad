@@ -1973,10 +1973,18 @@ printable_base() {
 # of seconds to boot inside the fresh pane, so the send polls until accepted.
 cmd_agent_new() {
   reset_flags workspace cwd name model mode backend
-  parse_flags workspace cwd name model mode backend -- "$@"
+  # `--detached` is BARE — parse_flags only knows --k=v and --k v, and would
+  # reject a valueless flag — so strip it here, the same way the mode flags are
+  # pre-stripped further down.
+  FLAG_detached=''
+  local _argv=() _a
+  for _a in "$@"; do
+    if [ "$_a" = "--detached" ]; then FLAG_detached=1; else _argv+=("$_a"); fi
+  done
+  parse_flags workspace cwd name model mode backend -- ${_argv+"${_argv[@]}"}
   local message="${POSITIONAL[0]:-}"
   if [ -z "$message" ]; then
-    echo 'usage: muxpad agent new [--workspace=<id>] [--cwd=<dir>] [--name=<tab name>] [--model=<model>] [--mode=chat|agent] [--backend=claude|codex|cursor|pick] "first message"' >&2
+    echo 'usage: muxpad agent new [--workspace=<id>] [--cwd=<dir>] [--name=<tab name>] [--model=<model>] [--mode=chat|agent] [--backend=claude|codex|cursor|pick] [--detached] "first message"' >&2
     exit 1
   fi
   # Agent mode (see agent-modes.ts): 'chat' overlays muxpad's terse, decisive
@@ -2074,7 +2082,16 @@ cmd_agent_new() {
   # share its parent's decay clock, so a worker cannot outlive the chat it was
   # spawned to serve. The server resolves pane→tab and silently drops the link
   # if that tab is gone, so a spawn never fails over provenance.
-  [ -n "${MUXPAD_PANE_ID:-}" ] && body+=",\"spawned_by_pane\":$(json_string "$MUXPAD_PANE_ID")"
+  # …UNLESS --detached. A launcher sometimes wants a peer rather than a worker:
+  # a full agent that outlives the chat that started it, with its own clock and
+  # its own place in the sidebar. Without this the only way out was an UPDATE
+  # against the live database, because PATCH does not take the field either.
+  # `spawned_by: null` is explicit — the server tells it apart from absent.
+  if [ -n "${FLAG_detached:-}" ]; then
+    body+=',"spawned_by":null'
+  else
+    [ -n "${MUXPAD_PANE_ID:-}" ] && body+=",\"spawned_by_pane\":$(json_string "$MUXPAD_PANE_ID")"
+  fi
   body+='}'
   local tab_json tab_id tab_slug
   tab_json="$(http_request POST /api/tabs "$body")"
