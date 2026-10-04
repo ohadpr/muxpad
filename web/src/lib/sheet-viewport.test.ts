@@ -1,7 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { MIN_SHEET_HEIGHT, SHEET_BOTTOM_MARGIN, sheetMaxHeight } from './sheet-viewport';
+import {
+  MIN_SHEET_HEIGHT,
+  SHEET_BOTTOM_MARGIN,
+  SHEET_SETTLE_MS,
+  sheetMaxHeight,
+} from './sheet-viewport';
 
 /**
  * The mobile nav sheet under a software keyboard.
@@ -195,5 +200,47 @@ describe('the nav sheet opens to the full available height', () => {
     // min-height beats a max-height in CSS.
     expect(decl('min-height')).toContain('--mns-avail-h');
     expect(decl('min-height')).toMatch(/^min\(/);
+  });
+});
+
+/**
+ * …AND WHEN IT IS MEASURED, which is the other half of "sometimes it's half".
+ *
+ * The sheet sizes itself to the VISIBLE viewport on purpose, so its rows cannot
+ * end up stranded under a keyboard. That makes the measurement's TIMING
+ * load-bearing: the instant you open this sheet is very often the instant a
+ * keyboard is going away, because you were typing in the composer and reached
+ * for the workspace bar. iOS fires the visualViewport `resize` only at the END
+ * of its keyboard animation, so one measurement at open reads a viewport still
+ * ~300px short and nothing afterwards corrects it.
+ *
+ * Reproduced live at 393×852: 782px of panel with no keyboard, 473px with one,
+ * recovering to 782px when the keyboard is dismissed WHILE the sheet is open —
+ * which is why it only ever went wrong on the open itself.
+ */
+describe('the viewport is re-measured across the keyboard animation', () => {
+  const SRC = readFileSync(
+    join(import.meta.dirname, '..', 'components', 'MobileNavSwitcher.tsx'),
+    'utf8',
+  );
+  const code = SRC.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
+  it('opening tracks for a window — it does not take a single reading', () => {
+    // The effect's last statement before subscribing is what runs on OPEN. A
+    // bare `apply()` there is the bug: correct exactly when no keyboard is
+    // moving, which is most of the time, which is what made it intermittent.
+    expect(code).toMatch(/trackUntil\(Date\.now\(\) \+ SHEET_SETTLE_MS\);\s*\n\s*vv\.addEventListener\('resize'/);
+  });
+
+  it('uses the same settle window for focus changes, from one constant', () => {
+    // Both paths exist for the identical reason; two numbers would drift.
+    expect(code.match(/trackUntil\(Date\.now\(\) \+ SHEET_SETTLE_MS\)/g)).toHaveLength(2);
+    expect(code).not.toMatch(/trackUntil\(Date\.now\(\) \+ \d+\)/);
+  });
+
+  it('the window outlasts a keyboard animation', () => {
+    // iOS keyboard transitions are ~250-350ms. A window shorter than that
+    // reinstates the bug while looking like it has a fix.
+    expect(SHEET_SETTLE_MS).toBeGreaterThanOrEqual(500);
   });
 });

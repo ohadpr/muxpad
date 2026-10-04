@@ -2,7 +2,7 @@ import { type PaneStatus, rollupStatus } from '@muxpad/shared';
 import { useRouterState } from '@tanstack/react-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { announceOverlayOpen, onOtherOverlayOpen } from '../lib/overlays';
-import { SHEET_BOTTOM_MARGIN, sheetMaxHeight } from '../lib/sheet-viewport';
+import { SHEET_BOTTOM_MARGIN, SHEET_SETTLE_MS, sheetMaxHeight } from '../lib/sheet-viewport';
 import { useTabs } from '../tabs';
 import { useWorkspaces, visibleWorkspaces } from '../workspaces';
 import { NavTree } from './NavTree';
@@ -111,9 +111,24 @@ export function MobileNavSwitcher({ activeWorkspaceSlug }: Props) {
     };
     const onFocusChange = () => {
       if (tracking !== null) cancelAnimationFrame(tracking);
-      trackUntil(Date.now() + 600);
+      trackUntil(Date.now() + SHEET_SETTLE_MS);
     };
-    apply();
+    // TRACK ON OPEN, not a single measurement — this is the "sometimes it's
+    // half the screen" bug.
+    //
+    // `apply()` once at open latches whatever the viewport happens to be at
+    // that instant, and the instant you open this sheet is very often the
+    // instant a keyboard is going away: you were typing in the composer, you
+    // reach for the workspace bar. iOS fires the visualViewport `resize` only
+    // at the END of its keyboard animation, so the one measurement reads a
+    // viewport still ~300px short and nothing afterwards corrects it. Measured
+    // on a 393×852 phone: 782px with no keyboard, 473px with one — and a
+    // reported screenshot at 417px with no keyboard in sight.
+    //
+    // The recovery already existed for focus changes; it just was not used for
+    // the open itself. 600ms covers the keyboard animation, and `apply` is
+    // idempotent — it writes the same number once the viewport settles.
+    trackUntil(Date.now() + SHEET_SETTLE_MS);
     vv.addEventListener('resize', apply);
     vv.addEventListener('scroll', apply);
     document.addEventListener('focusin', onFocusChange);
