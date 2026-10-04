@@ -338,6 +338,26 @@ describe('the chat clock on the wire', () => {
       expect(child.spawned_by).toBe(parent.id);
     });
 
+    it('an EXPLICIT null detaches, even when called from inside a pane', async () => {
+      // `muxpad agent new --detached`. Absent means "inherit the calling pane";
+      // null means "I am a peer, not a worker". The two used to collapse
+      // through `??`, so a launcher inside a pane could not create a top-level
+      // chat at all — PATCH does not take the field either, and the only way
+      // out was an UPDATE against the live database. Someone had to do exactly
+      // that to detach a chat they had just launched.
+      const parent = await newTab('parent');
+      const pane = new PaneStore(db).create({
+        tab_id: parent.id,
+        shell: '/bin/zsh',
+        cwd: '/tmp',
+      });
+      const child = await newTab('loner', { spawned_by_pane: pane.id, spawned_by: null });
+      expect(child.spawned_by).toBeUndefined();
+      // …and the control: the same call WITHOUT the null still nests.
+      const worker = await newTab('worker', { spawned_by_pane: pane.id });
+      expect(worker.spawned_by).toBe(parent.id);
+    });
+
     it('drops an unresolvable parent instead of refusing to spawn', async () => {
       // A worker must not fail to exist because the chat that asked for it has
       // since been deleted. It becomes a root with a clock of its own.

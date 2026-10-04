@@ -92,7 +92,10 @@ export function tabsRoutes(deps: {
         // wearing $MUXPAD_PANE_ID) knows only its pane, and making every such
         // caller do its own pane→tab lookup is how one of them ends up not
         // doing it.
-        spawned_by: z.string().optional(),
+        // NULLABLE, so a caller inside a pane can say "no parent" explicitly.
+        // See the resolution below: absent inherits the calling pane, null does
+        // not.
+        spawned_by: z.string().nullable().optional(),
         spawned_by_pane: z.string().optional(),
       })
       .parse(await c.req.json().catch(() => ({})));
@@ -104,7 +107,13 @@ export function tabsRoutes(deps: {
     const spawnedByPaneTab = body.spawned_by_pane
       ? panes.getById(body.spawned_by_pane)?.tab_id
       : undefined;
-    const parentId = body.spawned_by ?? spawnedByPaneTab;
+    // EXPLICIT null MEANS "NO PARENT", and it is distinguished from absent on
+    // purpose. `??` collapsed the two, so a caller inside a pane had no way to
+    // say "this is a top-level chat" — `muxpad agent new` always stamped the
+    // calling pane, PATCH does not accept the field, and the only way out was
+    // an UPDATE against the live SQLite. Reported after someone had to do
+    // exactly that to detach a chat they had just launched.
+    const parentId = body.spawned_by !== undefined ? body.spawned_by : spawnedByPaneTab;
     const spawned_by = parentId && tabs.getById(parentId) ? parentId : null;
     /**
      * WHERE A SPAWN LANDS IS ITS PARENT'S BUSINESS, and nobody else's.
