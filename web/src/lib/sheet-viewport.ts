@@ -67,3 +67,21 @@ export function sheetMaxHeight(
  * `- 48px` in MobileNavSwitcher.css; exported so the two cannot drift.
  */
 export const SHEET_BOTTOM_MARGIN = 24;
+
+/**
+ * How long to keep re-measuring the viewport after the sheet opens, or after
+ * focus moves.
+ *
+ * iOS fires the visualViewport `resize` only at the END of its keyboard
+ * animation, so a single measurement taken at either moment can read a viewport
+ * that is still ~300px short — and because the sheet sizes itself to the
+ * VISIBLE viewport (so its rows cannot be stranded under a keyboard), that one
+ * reading latches a half-height panel with nothing left to correct it.
+ *
+ * Measured on a 393×852 phone: 782px of panel with no keyboard, 473px with one.
+ * A screenshot of the bug showed 417px with no keyboard on screen at all.
+ *
+ * 600ms covers the animation with room to spare, and re-measuring is free: the
+ * write is idempotent once the viewport settles.
+ */
+export const SHEET_SETTLE_MS = 600;
