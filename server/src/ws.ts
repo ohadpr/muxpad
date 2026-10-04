@@ -15,6 +15,7 @@ import { recordModelCatalog } from './agent-model-catalog.js';
 import {
   type ResumeRepair,
   describeRepair,
+  locateAnyTranscript,
   repairAllResumeTargets,
   repairPaneResume,
 } from './agent-resume-repair.js';
@@ -2143,7 +2144,49 @@ export function attachWsServer(deps: {
                 : {}),
             });
           }
-          const sid = session?.current_sid ?? null;
+          // ── THE RESUME TARGET MUST ACTUALLY HAVE A TRANSCRIPT ──────────
+          //
+          // `current_sid` is re-pointed by `recordSessionId` the instant the
+          // SessionStart hook names a session. That is right in the normal
+          // case and wrong whenever the named session then writes NOTHING — an
+          // interrupted first turn, a probe, a runner that died — because the
+          // pointer now names a file that will never exist while the real
+          // conversation sits in `lineage`.
+          //
+          // The repair for this already exists and already runs, at boot and on
+          // respawn. Neither reaches a pane that drifts while it is simply
+          // sitting open, which is precisely when somebody is looking at it:
+          // observed on a 130 MB conversation whose pane had chased three
+          // successive sids with no file, showing an empty chat on every device
+          // and surviving every client-side remedy, because the fault was here.
+          //
+          // So the same repair runs at BIND, the moment of harm, and only when
+          // the sid fails to resolve — which is rare, and costs one stat per
+          // candidate when it happens. It rewrites `current_sid` and the pane's
+          // `startup_cmd` together, so the next respawn cannot re-break it.
+          let session2 = session;
+          const bound = session?.current_sid ?? null;
+          if (bound && !locateAnyTranscript(bound)) {
+            const repaired = repairPaneResume(deps.db, chatPaneId);
+            if (repaired) {
+              announceRepairs([repaired], 'chat-bind');
+              session2 = agents.getByPane(chatPaneId);
+            } else {
+              // NOTHING TO RECOVER, and this is the case that cost hours: the
+              // pane renders an empty chat that is indistinguishable from a new
+              // one, with no toast, no error and no log line. Say it once, here,
+              // with the sid in hand.
+              console.warn(
+                `[chat] pane ${chatPaneId}: no transcript for current_sid ${bound} ` +
+                  'and no recoverable sid in its history — the chat will render empty',
+              );
+              send({
+                t: 'notice',
+                message: `No transcript found for this chat's session (${bound.slice(0, 8)}…). Its history could not be recovered.`,
+              });
+            }
+          }
+          const sid = session2?.current_sid ?? null;
           if (sid === tailSid) return;
           tail?.close();
           tail = null;
@@ -2157,7 +2200,7 @@ export function attachWsServer(deps: {
             // transcript — the runner writes a muxpad-owned normalized log
             // instead. Point the tail at that log with the identity normalizer;
             // Claude keeps its ~/.claude file + schema translation unchanged.
-            const nonClaude = session?.assistant && session.assistant !== 'claude';
+            const nonClaude = session2?.assistant && session2.assistant !== 'claude';
             tail = new TranscriptTail(sid, {
               tailBytes: CHAT_HISTORY_TAIL_BYTES,
               onEvents: (events, phase) => send({ t: 'events', phase, events }),
