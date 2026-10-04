@@ -153,7 +153,25 @@
     calc(100dvh - var(--mns-panel-top) - 24px),
     var(--mns-avail-h, calc(100dvh - var(--mns-panel-top) - 24px))
   );
-  /* …AND A FLOOR, which is the half-height complaint.
+  /* …AND THE FLOOR IS THE SAME NUMBER, which is the half-height complaint,
+     reported twice.
+
+     It was 68% of AVAILABLE, and available is already the viewport minus the
+     chrome above the panel minus the bottom margin — so the floor compounded:
+     measured at 430×900 it resolved to 564px, 63% of the screen, and on a real
+     phone with safe-area insets it lands nearer 58%. Two thirds of a number
+     that is itself five sixths of the screen is not two thirds of the screen,
+     and a reader seeing it half-full calls it half.
+
+     So the sheet claims ALL of the available height, every time. The panel
+     scrolls internally, so a tall sheet with little in it costs nothing but
+     space that was already going to be scrim — and the alternative is a panel
+     whose height depends on how many workspaces you happen to have left
+     folded, which is why this looked inconsistent as well as small.
+
+     The old comment is kept below because the reasoning for the CAP is still
+     exactly right, and the min()/max() pairing it describes is why a floor can
+     be raised to the ceiling safely at all.
      The cap was never what limited this panel — on an 844px phone it computes
      to roughly 727px, 86% of the screen. The panel has a `max-height` and no
      `height`, so it HUGS ITS CONTENT, and the content is short: the sheet
@@ -172,7 +190,7 @@
      min-height beats a max-height in CSS. That is how you get a panel taller
      than the screen with its last rows unreachable. */
   min-height: min(
-    calc((100dvh - var(--mns-panel-top) - 24px) * 0.68),
+    calc(100dvh - var(--mns-panel-top) - 24px),
     var(--mns-avail-h, calc(100dvh - var(--mns-panel-top) - 24px))
   );
   /* Chrome surface — the panel is an extension of the bar it hangs
