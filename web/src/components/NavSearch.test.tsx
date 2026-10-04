@@ -154,3 +154,60 @@ it('does not overwrite a healed corpus with the older focus-request result', asy
   type('deleteme');
   expect(host.querySelector('[role="option"]')).toBeNull();
 });
+
+/**
+ * THE SHEET MUST NOT SUMMON A KEYBOARD TO BE READ.
+ *
+ * Reported as "sometimes it's all the screen, sometimes it's half". The sheet
+ * reveals its search box every time it opens, and the reveal-focus below fired
+ * on every open — so iOS raised the keyboard, `visualViewport.height` halved,
+ * and the panel sized itself to the visible viewport exactly as it is designed
+ * to (so its rows cannot end up under the keyboard). The sheet was correctly
+ * sizing to a screen that was correctly half covered. Hence "sometimes": full
+ * height whenever the keyboard happened not to come up.
+ *
+ * The desktop rail never showed it, because there the box is permanent chrome —
+ * `wasOpen` starts true and the reveal never happens.
+ */
+describe('reveal-focus is a pointer affordance, not a touch one', () => {
+  const mount = (variant: 'sidebar' | 'sheet', box: boolean) => {
+    const h = document.createElement('div');
+    document.body.appendChild(h);
+    const r = createRoot(h);
+    act(() => r.render(<NavSearch variant={variant} box={box}>tree</NavSearch>));
+    return {
+      h,
+      r,
+      focused: () => h.querySelector('input') === document.activeElement,
+      reveal: () =>
+        act(() => r.render(<NavSearch variant={variant} box={true}>tree</NavSearch>)),
+    };
+  };
+
+  it('does NOT focus when the sheet reveals its box', () => {
+    const s = mount('sheet', false);
+    s.reveal();
+    expect(s.focused()).toBe(false);
+    act(() => s.r.unmount());
+    s.h.remove();
+  });
+
+  it('still focuses when the SIDEBAR reveals one — the pointer case is unchanged', () => {
+    const s = mount('sidebar', false);
+    s.reveal();
+    expect(s.focused()).toBe(true);
+    act(() => s.r.unmount());
+    s.h.remove();
+  });
+
+  it('never focuses on mount, on either surface', () => {
+    // The original bug this effect was written for: a caret and an accent ring
+    // on the desktop rail on every app load.
+    for (const v of ['sidebar', 'sheet'] as const) {
+      const s = mount(v, true);
+      expect(s.focused()).toBe(false);
+      act(() => s.r.unmount());
+      s.h.remove();
+    }
+  });
+});
