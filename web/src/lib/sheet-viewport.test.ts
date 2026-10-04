@@ -143,3 +143,57 @@ describe('the sheet’s search box clears the touch floor', () => {
     expect(Number(body.match(/font-size:\s*(\d+)px/)?.[1])).toBeGreaterThanOrEqual(16);
   });
 });
+
+/**
+ * HOW TALL THE SHEET OPENS — reported twice as "it takes half the screen".
+ *
+ * The cap was never the problem: at 430×900 it resolves to 830px, 92% of the
+ * screen. The panel has no `height`, so it HUGS ITS CONTENT, and the content is
+ * short whenever workspaces are left folded. A floor was added for that, at 68%
+ * — but of AVAILABLE, which is already the viewport minus the chrome above the
+ * panel minus the bottom margin. Measured: `min-height: 564px` against a 900px
+ * viewport, 63% of the screen, and nearer 58% on a phone with safe-area insets.
+ * Two thirds of five sixths is not two thirds, and a reader seeing it half-full
+ * calls it half.
+ *
+ * So the floor IS the ceiling: the sheet claims all the available height every
+ * time. The panel scrolls internally, so a tall sheet with little in it costs
+ * only space that was going to be scrim — and the alternative is a panel whose
+ * height depends on how many groups you happen to have left folded, which is
+ * inconsistent as well as small.
+ */
+describe('the nav sheet opens to the full available height', () => {
+  const CSS = readFileSync(
+    join(import.meta.dirname, '..', 'components', 'MobileNavSwitcher.css'),
+    'utf8',
+  );
+  const flat = CSS.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\s+/g, ' ');
+  const panel = flat.match(/\.mns-panel \{([^}]*)\}/)?.[1] ?? '';
+  const decl = (prop: string) =>
+    panel.match(new RegExp(`(?:^|;)\\s*${prop}:\\s*([^;]+)`))?.[1]?.trim() ?? '';
+
+  it('has both a floor and a ceiling — a cap alone lets it hug short content', () => {
+    expect(decl('max-height')).not.toBe('');
+    expect(decl('min-height')).not.toBe('');
+  });
+
+  it('and they are the SAME expression, so height cannot depend on fold state', () => {
+    expect(decl('min-height')).toBe(decl('max-height'));
+  });
+
+  it('carries no fraction — that is how it became 63% of the screen', () => {
+    // A factor here multiplies a number that is ALREADY a fraction of the
+    // viewport, which is the whole bug. If a future change wants a shorter
+    // sheet it has to say so against the viewport, not against the cap.
+    expect(decl('min-height')).not.toMatch(/\*\s*0?\.\d/);
+  });
+
+  it('still clamps to the live visual viewport, so a keyboard cannot orphan rows', () => {
+    // The reason the floor can safely equal the ceiling at all: both terms go
+    // through the same `min()` against `--mns-avail-h`, so a floor can never
+    // exceed the space that actually exists. A bare `68dvh` floor could, and a
+    // min-height beats a max-height in CSS.
+    expect(decl('min-height')).toContain('--mns-avail-h');
+    expect(decl('min-height')).toMatch(/^min\(/);
+  });
+});
