@@ -349,17 +349,41 @@ export class TranscriptTail {
       win = Math.min(win * 2, maxWin);
     }
     const from = size - win;
-    if (nl === -1 || win >= size) {
-      // Window reaches the file start (or is one unterminated line) →
-      // treat as a full read from 0.
-      const full = win >= size ? buf : this.readBytes(0, size);
-      if (!full) {
-        this.initialized = false;
-        return;
-      }
+    if (nl === -1 && win < size) {
+      // NO NEWLINE IN THE WHOLE WINDOW, on a file bigger than the window.
+      //
+      // This used to `readBytes(0, size)` — the ENTIRE transcript — and that is
+      // the one thing windowing exists to prevent. `maxWin` is 8 × 128 KB, so
+      // this fires whenever a transcript's final record exceeds 1 MB, and these
+      // files already contain such records: the pane this was found on has six
+      // lines over 1 MB in a 130 MB transcript. One of them landing last would
+      // have shipped 130 MB through a websocket on every open.
+      //
+      // There is nothing useful to show here either way: the window holds the
+      // TAIL of one record whose beginning is outside it, so it cannot be
+      // parsed, and reading from 0 only buys a record so large the client
+      // cannot render it. So history is empty and the tail goes live from EOF —
+      // the chat is thin rather than hung, and it says so.
+      //
+      // `carry` is deliberately NOT seeded with the partial: it is the back
+      // half of a record, and gluing the next append onto it would manufacture
+      // one corrupt line instead of dropping one unreadable one.
+      console.warn(
+        `[transcript] ${this.path}: no record boundary in the last ${win} bytes of ${size} — ` +
+          'history skipped, tailing live (a single record exceeds the window)',
+      );
+      this.historyStart = size;
+      this.offset = size;
+      this.carry = '';
+      this.emit([], 'history');
+      return;
+    }
+    if (win >= size) {
+      // The window reaches the file start — `buf` already holds the whole file,
+      // which is bounded by maxWin, so this is a genuine full read.
       this.historyStart = 0;
       this.offset = size;
-      const parts = full.toString('utf8').split('\n');
+      const parts = buf.toString('utf8').split('\n');
       this.carry = parts.pop() ?? '';
       this.emit(parts, 'history');
       return;
