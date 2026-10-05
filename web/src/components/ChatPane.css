@@ -873,6 +873,12 @@
 .chat-sysnote-cron .chat-sysnote-text {
   font-variant-numeric: tabular-nums;
 }
+/* A batch of sub-chat reports landing. The same quiet pill as a cron fire, and
+   for the same reason: it states who started this turn — workers you spawned,
+   not you — which is a fact about the message rather than an alert. */
+.chat-sysnote-report .chat-sysnote-icon {
+  color: var(--chat-accent);
+}
 
 /* ── Diffs ─────────────────────────────────────────────────────────────── */
 .chat-diff {

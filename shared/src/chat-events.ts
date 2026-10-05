@@ -6,6 +6,7 @@
 // See docs/plans/2026-07-01-web-chat-session-switching.md.
 
 import { parseCronMarker } from './cron.js';
+import { parseSpawnDelivery } from './spawn-delivery.js';
 import type { AgentMode } from './types.js';
 
 export interface StructuredPatchHunk {
@@ -91,7 +92,7 @@ export interface NoticeEvent extends Base {
    *  for, so its scratchpad must never be promoted into a bubble. Without a
    *  transcript-level marker a reload cannot tell a stopped turn from a
    *  silent one, and the two halves of the guard would disagree. */
-  variant: 'task' | 'reminder' | 'cron' | 'interrupted';
+  variant: 'task' | 'reminder' | 'cron' | 'interrupted' | 'report';
   text: string;
   /** Secondary line, e.g. a task-notification's status. */
   detail?: string;
@@ -478,6 +479,34 @@ export function expandCronFire(text: string, id: string, ts: number | null): Cha
 }
 
 /**
+ * A batch of finished sub-chat reports arrives as `<muxpad-report …>…</…>` +
+ * the reports themselves. Same split as `expandCronFire`, for the same reason:
+ * the parent's transcript should read "⇤ 3 sub-chats reported" followed by what
+ * they said, not a wall of XML — and a human did not type any of it.
+ *
+ * Returns null for anything that isn't a delivery.
+ */
+export function expandSpawnDelivery(
+  text: string,
+  id: string,
+  ts: number | null,
+): ChatEvent[] | null {
+  const parsed = parseSpawnDelivery(text);
+  if (!parsed) return null;
+  const { marker, body } = parsed;
+  const notice: NoticeEvent = {
+    kind: 'notice',
+    // Distinct id from the bubble's — they are two React rows.
+    id: `${id}:report`,
+    ts,
+    variant: 'report',
+    text: `${marker.count} sub-chat${marker.count === 1 ? '' : 's'} reported`,
+  };
+  const reports = body.trim();
+  return reports ? [notice, { kind: 'user', id, ts, text: reports }] : [notice];
+}
+
+/**
  * Post-process an ALREADY-normalized event (the codex/cursor muxpad log,
  * whose lines are ChatEvents on disk). Today its only job is splitting a cron
  * fire out of a user bubble — the Claude path gets the same treatment inside
@@ -485,7 +514,10 @@ export function expandCronFire(text: string, id: string, ts: number | null): Cha
  */
 export function expandChatEvent(event: ChatEvent): ChatEvent[] {
   if (event.kind !== 'user') return [event];
-  return expandCronFire(event.text, event.id, event.ts) ?? [event];
+  return (
+    expandCronFire(event.text, event.id, event.ts) ??
+    expandSpawnDelivery(event.text, event.id, event.ts) ?? [event]
+  );
 }
 
 /**
@@ -580,6 +612,9 @@ export function normalizeTranscriptLine(line: unknown): ChatEvent[] {
       // prompt, never raw XML in a bubble.
       const cron = expandCronFire(content, id, ts);
       if (cron) return cron;
+      // …and so is a batch of sub-chat reports.
+      const reports = expandSpawnDelivery(content, id, ts);
+      if (reports) return reports;
       return [{ kind: 'user', id, ts, text: content }];
     }
     if (Array.isArray(content)) {

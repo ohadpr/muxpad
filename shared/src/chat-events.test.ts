@@ -5,6 +5,8 @@ import {
   REPLY_ACK,
   REPLY_TOOL_NAME,
   blockText,
+  expandChatEvent,
+  expandSpawnDelivery,
   isAgentLaunchTool,
   isInterruptMarker,
   needsReplyFallback,
@@ -13,6 +15,7 @@ import {
   subagentLabel,
   taskNotificationToolUseId,
 } from './chat-events.js';
+import { renderSpawnDelivery } from './spawn-delivery.js';
 
 const TS = '2026-07-01T10:00:00.000Z';
 const MS = Date.parse(TS);
@@ -503,5 +506,50 @@ describe('needsReplyFallback — the guard, as one rule', () => {
   it('does not fire for a turn the user stopped, or one that failed', () => {
     expect(turn({ interrupted: true })).toBe(false);
     expect(turn({ failed: true })).toBe(false);
+  });
+});
+
+describe('THE JOIN in a transcript — a delivery is not a person typing', () => {
+  const text = renderSpawnDelivery([
+    { tabId: 't1', name: 'research auth', state: 'ok', report: 'Found three call sites.' },
+    { tabId: 't2', name: 'build ui', state: 'crashed', report: null },
+  ]);
+
+  it('splits the marker off into a chip, never a wall of XML', () => {
+    const out = expandSpawnDelivery(text, 'u1', MS);
+    expect(kinds(out ?? [])).toEqual(['notice', 'user']);
+    const notice = out?.[0] as { variant: string; text: string };
+    expect(notice.variant).toBe('report');
+    expect(notice.text).toBe('2 sub-chats reported');
+    // The bubble carries the reports and NOT the marker.
+    expect((out?.[1] as { text: string }).text).not.toContain('<muxpad-report');
+    expect((out?.[1] as { text: string }).text).toContain('Found three call sites.');
+  });
+
+  it('says "1 sub-chat" for one', () => {
+    const one = renderSpawnDelivery([{ tabId: 't1', name: 'x', state: 'ok', report: 'y' }]);
+    const out = expandSpawnDelivery(one, 'u1', MS);
+    expect((out?.[0] as { text: string }).text).toBe('1 sub-chat reported');
+  });
+
+  it('reaches BOTH transcript roads — claude JSONL and the normalized log', () => {
+    // The two backends must render a delivery identically; a fix wired to one
+    // road only is the shape of bug `expandChatEvent` exists to prevent.
+    const viaClaude = normalizeTranscriptLine({
+      type: 'user',
+      uuid: 'u1',
+      timestamp: TS,
+      message: { role: 'user', content: text },
+    });
+    expect(kinds(viaClaude)).toEqual(['notice', 'user']);
+    const viaLog = expandChatEvent({ kind: 'user', id: 'u1', ts: MS, text });
+    expect(kinds(viaLog)).toEqual(['notice', 'user']);
+  });
+
+  it('leaves an ordinary user message alone', () => {
+    expect(expandSpawnDelivery('what happened to the build?', 'u1', MS)).toBeNull();
+    expect(kinds(expandChatEvent({ kind: 'user', id: 'u1', ts: MS, text: 'hi' }))).toEqual([
+      'user',
+    ]);
   });
 });

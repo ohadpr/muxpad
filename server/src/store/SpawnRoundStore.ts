@@ -28,6 +28,14 @@ export interface SpawnRound {
   report: string | null;
   report_state: string | null;
   artifacts: string[];
+  /**
+   * When this round's result was put into the PARENT's conversation.
+   *
+   * Null means "not yet", which is exactly the queue `ReportDelivery` drains —
+   * so a round that never had a result to deliver must not sit NULL forever.
+   * See `abandon`.
+   */
+  delivered_at: number | null;
 }
 
 interface RawRound {
@@ -38,6 +46,7 @@ interface RawRound {
   report: string | null;
   report_state: string | null;
   artifacts: string | null;
+  delivered_at: number | null;
 }
 
 function toRound(r: RawRound): SpawnRound {
@@ -57,10 +66,22 @@ function toRound(r: RawRound): SpawnRound {
     report: r.report,
     report_state: r.report_state,
     artifacts,
+    delivered_at: r.delivered_at,
   };
 }
 
-const COLUMNS = 'id, tab_id, started_at, ended_at, report, report_state, artifacts';
+const COLUMNS = 'id, tab_id, started_at, ended_at, report, report_state, artifacts, delivered_at';
+/**
+ * The same list, qualified for the joined queries below.
+ *
+ * DERIVED, not typed out again. Both parent-scoped queries need `r.`-prefixed
+ * columns, and spelling them by hand is how `delivered_at` would reach
+ * `toRound` as `undefined` the next time a column is added here — the
+ * two-surfaces-one-value defect this corpus keeps paying for.
+ */
+const R_COLUMNS = COLUMNS.split(', ')
+  .map((c) => `r.${c}`)
+  .join(', ');
 
 export class SpawnRoundStore {
   constructor(private readonly db: Database.Database) {}
@@ -155,7 +176,8 @@ export class SpawnRoundStore {
     if (!last) return false;
     this.db
       .prepare(
-        'UPDATE spawn_rounds SET ended_at = NULL, report = NULL, report_state = NULL WHERE id = ?',
+        `UPDATE spawn_rounds SET ended_at = NULL, report = NULL, report_state = NULL,
+            delivered_at = NULL WHERE id = ?`,
       )
       .run(last.id);
     return true;
@@ -230,6 +252,110 @@ export class SpawnRoundStore {
   }
 
   /**
+   * Rounds of `parentTabId`'s children whose RESULT IS WAITING to be delivered.
+   *
+   * Finished (`ended_at`), carrying something to say, and never delivered. The
+   * "something to say" clause is `report IS NOT NULL OR report_state IS NOT
+   * NULL` and it is what keeps the queue honest: a round can close with neither
+   * — a worker whose summary is still being generated, one whose generation
+   * failed outright — and delivering a nameless empty section to the parent
+   * would be noise with a marker on it. Such a round stays NULL here and is
+   * picked up when its result lands (or abandoned by the caller).
+   *
+   * Oldest first, because that is the order the parent's message lists them in
+   * and the order a reader expects a batch to have happened in.
+   */
+  undeliveredByParent(parentTabId: string): SpawnRound[] {
+    const rows = this.db
+      .prepare(
+        `SELECT ${R_COLUMNS}
+           FROM spawn_rounds r JOIN tabs t ON t.id = r.tab_id
+          WHERE t.spawned_by = ?
+            -- A tab that is its own parent would be handed its own report,
+            -- which opens a round, which reports, which is handed back: a
+            -- genuine infinite loop rather than a cosmetic oddity. spawned_by
+            -- is not a foreign key and nothing constrains it, so the guard is
+            -- here rather than assumed.
+            AND t.id <> t.spawned_by
+            AND r.ended_at IS NOT NULL
+            AND r.delivered_at IS NULL
+            AND (r.report IS NOT NULL OR r.report_state IS NOT NULL)
+          ORDER BY r.ended_at ASC, r.started_at ASC`,
+      )
+      .all(parentTabId) as RawRound[];
+    return rows.map(toRound);
+  }
+
+  /**
+   * How many of `parentTabId`'s children are STILL MID-ROUND.
+   *
+   * The batch barrier: while this is above zero the fan-out has not landed, so
+   * a sibling that just finished waits rather than sending a message of its
+   * own. An open round is the right signal and a pane's `status` is not — the
+   * round spans the whole job (a worker pausing between two turns is not
+   * finished), which is the distinction `JOB_SETTLE_MS` exists to draw.
+   *
+   * NOT A LIVENESS CHECK, and the caller must not treat it as one: a worker
+   * whose runner died mid-round leaves its round open forever, so a barrier
+   * built on this alone would hold its siblings' reports for good. The hold is
+   * bounded in time for exactly that case — see `BATCH_MAX_HOLD_MS`.
+   */
+  openRoundCountByParent(parentTabId: string): number {
+    return (
+      this.db
+        .prepare(
+          `SELECT COUNT(*) AS n
+             FROM spawn_rounds r JOIN tabs t ON t.id = r.tab_id
+            WHERE t.spawned_by = ? AND t.id <> t.spawned_by AND r.ended_at IS NULL`,
+        )
+        .get(parentTabId) as { n: number }
+    ).n;
+  }
+
+  /**
+   * Stamp these rounds delivered. Returns how many rows moved.
+   *
+   * Scoped to rows that are still NULL so a double call cannot re-stamp (and
+   * cannot report a second success for the same work). The caller stamps BEFORE
+   * it sends and reverts on refusal — see `undeliver` — because of the two ways
+   * a non-transactional send can go wrong, delivering a batch twice is much the
+   * worse one.
+   */
+  markDelivered(ids: readonly string[], at: number): number {
+    if (ids.length === 0) return 0;
+    const stmt = this.db.prepare(
+      'UPDATE spawn_rounds SET delivered_at = ? WHERE id = ? AND delivered_at IS NULL',
+    );
+    return this.db.transaction(() => {
+      let n = 0;
+      for (const id of ids) n += stmt.run(at, id).changes;
+      return n;
+    })();
+  }
+
+  /**
+   * Undo `markDelivered` — the send was refused, so it never arrived.
+   *
+   * SCOPED TO THE STAMP IT IS UNDOING (`at`), not a blanket clear by id. A bare
+   * `delivered_at = NULL WHERE id = ?` would resurrect a round that had been
+   * delivered for real at some earlier moment, re-sending a result the parent
+   * already acted on — the one failure this feature must not have. Matching the
+   * stamp makes the call an exact inverse of the write that preceded it, so it
+   * can only ever undo its own work.
+   */
+  undeliver(ids: readonly string[], at: number): number {
+    if (ids.length === 0) return 0;
+    const stmt = this.db.prepare(
+      'UPDATE spawn_rounds SET delivered_at = NULL WHERE id = ? AND delivered_at = ?',
+    );
+    return this.db.transaction(() => {
+      let n = 0;
+      for (const id of ids) n += stmt.run(id, at).changes;
+      return n;
+    })();
+  }
+
+  /**
    * Every round of every child of `parentTabId`, keyed by child.
    *
    * ONE query for a whole conversation rather than one per card: a parent with
@@ -239,7 +365,7 @@ export class SpawnRoundStore {
   listByParent(parentTabId: string): Map<string, SpawnRound[]> {
     const rows = this.db
       .prepare(
-        `SELECT r.id, r.tab_id, r.started_at, r.ended_at, r.report, r.report_state, r.artifacts
+        `SELECT ${R_COLUMNS}
            FROM spawn_rounds r JOIN tabs t ON t.id = r.tab_id
           WHERE t.spawned_by = ?
           ORDER BY r.started_at ASC`,

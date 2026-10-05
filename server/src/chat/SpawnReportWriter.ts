@@ -54,6 +54,7 @@ export class SpawnReportWriter {
   private readonly events: EventBus;
   private readonly cache: PtydCache;
   private readonly model: SpawnReportModel;
+  private readonly onReport: ((tabId: string) => void) | undefined;
   private readonly taskModel: SpawnTaskModel;
   private readonly glossary: () => readonly string[];
   private readonly inFlight = new Set<string>();
@@ -86,11 +87,24 @@ export class SpawnReportWriter {
     model?: SpawnReportModel;
     /** Test seam for the task label — the same bare one-shot by default. */
     taskModel?: SpawnTaskModel;
+    /**
+     * A child's result is FINAL — deliver it to the parent (ReportDelivery).
+     *
+     * Hung off `deliver` rather than off `onFinished`, because `onFinished`
+     * fires before the report exists: the summary is a model call up to thirty
+     * seconds behind it, and a delivery triggered there would hand the parent
+     * an empty section. `deliver` is the one funnel both the turn-end path and
+     * the boot sweep pass through, so wiring it here covers both.
+     *
+     * Must never throw — see the class note.
+     */
+    onReport?: (tabId: string) => void;
   }) {
     this.db = opts.db;
     this.events = opts.events;
     this.cache = opts.cache;
     this.model = opts.model ?? agentSdkSpawnReportModel;
+    this.onReport = opts.onReport;
     this.taskModel = opts.taskModel ?? opts.model ?? agentSdkSpawnReportModel;
     // The SAME vocabulary the headline generator
     // use, for a sharper version of the same reason: a cheap model summarising
@@ -278,6 +292,17 @@ export class SpawnReportWriter {
       type: 'tab.updated',
       tab: decorateTab(this.cache, this.db, tab),
     });
+    // AFTER the row is written and the clients know. The delivery reads the
+    // round back out of the database (it does not take the text from here), so
+    // the write above is its input — and a parent that starts a turn before its
+    // own sidebar has the child's card would be reacting to something the user
+    // cannot yet see.
+    try {
+      this.onReport?.(tabId);
+    } catch (err) {
+      // A report that landed is worth more than its delivery. The sweep retries.
+      console.error('[spawn-report] delivery hand-off failed', err);
+    }
   }
 
   /**

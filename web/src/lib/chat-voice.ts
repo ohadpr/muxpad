@@ -104,18 +104,26 @@ export function chatVoiceActive(opts: ChatVoiceOpts): boolean {
 
 /**
  * A `user` event that a PERSON (or another agent's `muxpad agent send`) caused
- * — as opposed to a cron fire, which is also a user-role message but which
- * nobody is sitting there waiting on.
+ * — as opposed to the messages MUXPAD injects, which are also user-role but
+ * which nobody is sitting there waiting on.
  *
- * A cron fire is split by the normalizer into an adjacent pair: a `notice` with
- * variant 'cron' immediately followed by its prompt bubble (see expandCronFire).
- * That adjacency is the only signal in the event stream, and it is the same one
- * ws.ts reads off the raw text, so the two agree.
+ * Each of those is split by the normalizer into an adjacent pair: a `notice`
+ * carrying the marker, immediately followed by the bubble it delivered (see
+ * `expandCronFire` and `expandSpawnDelivery`). That adjacency is the only signal
+ * in the event stream, and it is the same division `isMachineMessage` draws off
+ * the raw text server-side, so the two agree.
+ *
+ * THE SET IS THE THING THAT GETS FORGOTTEN — this read `variant === 'cron'` and
+ * nothing else, so when the join landed, a batch of sub-chat reports counted as
+ * a person starting a turn. In Chat mode that promotes the reply to a bubble
+ * addressed to a reader who never asked anything.
  */
+const MACHINE_TURN_VARIANTS = new Set(['cron', 'report']);
+
 function isHumanTurnStart(events: readonly ChatEvent[], i: number): boolean {
   if (events[i]?.kind !== 'user') return false;
   const prev = events[i - 1];
-  return !(prev?.kind === 'notice' && prev.variant === 'cron');
+  return !(prev?.kind === 'notice' && MACHINE_TURN_VARIANTS.has(prev.variant));
 }
 
 /**
