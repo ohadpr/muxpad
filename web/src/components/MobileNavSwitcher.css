@@ -124,75 +124,48 @@
   z-index: 1101;
   display: flex;
   flex-direction: column;
-  /* dvh, NOT svh. `svh` is the SMALLEST viewport — the height you get with the
+  /* ─── HOW TALL, in one place ──────────────────────────────────────────
+     ONE custom property, read by both `min-height` and `max-height`, because
+     the two must be the same number and the bug they caused when they were not
+     is recorded below. A floor lower than the cap lets the panel hug its
+     content, so its height tracked how many workspaces you had left folded.
+
+     85%, NOT 100%: the remaining strip is the dismiss target. The panel used to
+     claim everything, which is correct for reading and wrong for leaving —
+     there was nowhere to tap that was not a row. 85% of the available height
+     leaves ~130px on a 393×852 phone, a comfortable target, and the scrim
+     underneath already closes the sheet.
+
+     THE FRACTION IS ON THE SCREEN TERM ONLY, which is the distinction that
+     matters. When a keyboard is up, `--mns-avail-h` is the binding term and the
+     panel takes ALL of it — space is scarce there and a dismiss strip is not
+     worth a row. A fraction applied to both would shrink an already-shrunken
+     viewport, which is the compounding that made this read as half-height:
+     68% of a number that is itself five sixths of the screen is 56%.
+
+     dvh, NOT svh. `svh` is the SMALLEST viewport — the height you get with the
      browser chrome fully expanded — so the panel permanently sized itself for
      the worst case and never used the space a collapsed URL bar hands back. On
      an iPhone that is ~140px, which is why this read as "limited to half the
-     screen" while the same panel measures 89% of a chromeless 844px viewport.
-     The usual objection to `dvh` — that it resizes as the URL bar animates —
-     does not apply here: the page behind a modal dropdown does not scroll, so
-     nothing makes the bar collapse while the panel is open. And the real cap is
-     the visual-viewport one below, which is live and exact; this term is the
-     fallback for browsers without `visualViewport`.
+     screen" even before the floor was wrong.
 
-     The bottom margin leaves a band of scrim so "tap outside to dismiss" always
-     has somewhere to land — 24px, down from 48. The chrome bar ABOVE the panel
-     is deliberately left undimmed and closes it too (see .mns-scrim), so this
-     band is the second way out, not the only one, and it does not need to be a
-     comfortable target on its own.
+     AND CLAMPED TO THE LIVE VISUAL VIEWPORT (`--mns-avail-h`, written by
+     MobileNavSwitcher.tsx). A software keyboard shrinks the VISUAL viewport
+     while the sheet is open; svh/dvh are LAYOUT units and do not move, so
+     without this the panel keeps its full height, `.navtree-scroll` gets no
+     overflow, and every row below the keyboard line is unreachable rather than
+     merely off-screen. The fallback keeps the cap at the layout value on
+     browsers with no visualViewport.
 
-     …and `min()` with --mns-avail-h, which MobileNavSwitcher.tsx sets from
-     the VISUAL viewport while the sheet is open. svh is a LAYOUT unit and
-     the software keyboard does not shrink the layout viewport (iOS Safari
-     always; Chrome since interactive-widget defaulted to resizes-visual), so
-     without this the panel keeps its full height, .navtree-scroll gets no
-     overflow, and every result row below the keyboard line is unreachable
-     rather than merely off-screen. The fallback keeps the cap at the svh
-     value on browsers with no visualViewport. */
-  max-height: min(
-    calc(100dvh - var(--mns-panel-top) - 24px),
-    var(--mns-avail-h, calc(100dvh - var(--mns-panel-top) - 24px))
+     `min()` throughout, so the clamp can never be exceeded: a min-height beats
+     a max-height in CSS, and that is how you get a panel taller than the
+     screen with its last rows unreachable. */
+  --mns-h: min(
+    calc((100dvh - var(--mns-panel-top) - 24px) * 0.85),
+    var(--mns-avail-h, calc((100dvh - var(--mns-panel-top) - 24px) * 0.85))
   );
-  /* …AND THE FLOOR IS THE SAME NUMBER, which is the half-height complaint,
-     reported twice.
-
-     It was 68% of AVAILABLE, and available is already the viewport minus the
-     chrome above the panel minus the bottom margin — so the floor compounded:
-     measured at 430×900 it resolved to 564px, 63% of the screen, and on a real
-     phone with safe-area insets it lands nearer 58%. Two thirds of a number
-     that is itself five sixths of the screen is not two thirds of the screen,
-     and a reader seeing it half-full calls it half.
-
-     So the sheet claims ALL of the available height, every time. The panel
-     scrolls internally, so a tall sheet with little in it costs nothing but
-     space that was already going to be scrim — and the alternative is a panel
-     whose height depends on how many workspaces you happen to have left
-     folded, which is why this looked inconsistent as well as small.
-
-     The old comment is kept below because the reasoning for the CAP is still
-     exactly right, and the min()/max() pairing it describes is why a floor can
-     be raised to the ceiling safely at all.
-     The cap was never what limited this panel — on an 844px phone it computes
-     to roughly 727px, 86% of the screen. The panel has a `max-height` and no
-     `height`, so it HUGS ITS CONTENT, and the content is short: the sheet
-     inherits each workspace's collapsed state, so a typical open is one
-     expanded workspace of half a dozen rows. That measures out near half the
-     viewport, which is exactly what it looked like.
-
-     So the panel now claims a floor as well as a ceiling. Two thirds of the
-     available height, never more than the cap — a sheet that always opens to a
-     usable size, rather than one whose height depends on how many groups you
-     happen to have left folded. Scrolling inside it is unchanged; this only
-     stops it from choosing to be small.
-
-     `min()` with the same cap terms, not a bare `68dvh`: on a short viewport —
-     landscape, or a keyboard up — a fixed floor would exceed the ceiling, and a
-     min-height beats a max-height in CSS. That is how you get a panel taller
-     than the screen with its last rows unreachable. */
-  min-height: min(
-    calc(100dvh - var(--mns-panel-top) - 24px),
-    var(--mns-avail-h, calc(100dvh - var(--mns-panel-top) - 24px))
-  );
+  max-height: var(--mns-h);
+  min-height: var(--mns-h);
   /* Chrome surface — the panel is an extension of the bar it hangs
      from, and gives the bg-elev workspace cards the same figure/ground
      contrast the desktop sidebar has. */

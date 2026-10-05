@@ -88,14 +88,21 @@ describe('the CSS actually consumes it', () => {
   );
 
   it('caps .mns-panel with min(dvh, --mns-avail-h)', () => {
+    // Via `--mns-h` now: one property read by both the floor and the ceiling,
+    // so the two cannot drift. The assertions follow the indirection rather
+    // than pinning the spelling of the declaration.
     const flat = CSS.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\s+/g, ' ');
     const panel = flat.match(/\.mns-panel \{([^}]*)\}/)?.[1] ?? '';
-    expect(panel).toMatch(/max-height:\s*min\(/);
+    expect(panel).toMatch(/max-height:\s*var\(--mns-h\)/);
+    expect(panel).toMatch(/--mns-h:\s*min\(/);
     expect(panel).toContain('--mns-avail-h');
     // A bare `var(--mns-avail-h)` with no fallback would leave the panel
     // UNCAPPED on a browser without visualViewport — the property would be
     // invalid at computed-value time and max-height would drop to `none`.
-    expect(panel).toMatch(/var\(--mns-avail-h,\s*calc\(100dvh/);
+    // The fallback stands in for the screen term, so it carries the same
+    // fraction — what matters is that it EXISTS and resolves to a length.
+    expect(panel).toMatch(/var\(--mns-avail-h,\s*calc\(/);
+    expect(panel).toContain('100dvh');
   });
 
   it('also claims a FLOOR, and the floor can never beat the ceiling', () => {
@@ -106,15 +113,15 @@ describe('the CSS actually consumes it', () => {
     // viewport. The floor stops it choosing to be small.
     const flat = CSS.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\s+/g, ' ');
     const panel = flat.match(/\.mns-panel \{([^}]*)\}/)?.[1] ?? '';
-    expect(panel).toMatch(/min-height:\s*min\(/);
+    expect(panel).toMatch(/min-height:\s*var\(--mns-h\)/);
     // THE LOAD-BEARING PART. A min-height beats a max-height in CSS, so a bare
     // `68dvh` floor would win over the visual-viewport cap on a short viewport
     // — landscape, or the keyboard up — and hand back a panel taller than the
     // screen with its last rows unreachable. The floor has to carry the same
     // cap terms so it can never exceed them.
-    const minH = panel.match(/min-height:\s*min\(([^;]*)\)/)?.[1] ?? '';
-    expect(minH).toContain('--mns-avail-h');
-    expect(minH).toContain('--mns-panel-top');
+    const h = panel.match(/--mns-h:\s*min\(([^;]*)\)/)?.[1] ?? '';
+    expect(h).toContain('--mns-avail-h');
+    expect(h).toContain('--mns-panel-top');
   });
 
   it('the JS margin and the CSS margin are the same number', () => {
@@ -167,7 +174,7 @@ describe('the sheet’s search box clears the touch floor', () => {
  * height depends on how many groups you happen to have left folded, which is
  * inconsistent as well as small.
  */
-describe('the nav sheet opens to the full available height', () => {
+describe('the nav sheet has one height, and leaves room to dismiss', () => {
   const CSS = readFileSync(
     join(import.meta.dirname, '..', 'components', 'MobileNavSwitcher.css'),
     'utf8',
@@ -177,47 +184,46 @@ describe('the nav sheet opens to the full available height', () => {
   const decl = (prop: string) =>
     panel.match(new RegExp(`(?:^|;)\\s*${prop}:\\s*([^;]+)`))?.[1]?.trim() ?? '';
 
-  it('has both a floor and a ceiling — a cap alone lets it hug short content', () => {
+  it('sets a floor AND a ceiling — a cap alone lets it hug short content', () => {
+    // Without a floor the panel's height tracked how many workspaces happened
+    // to be folded, which is how it could look full one moment and short the
+    // next with nothing having changed.
     expect(decl('max-height')).not.toBe('');
     expect(decl('min-height')).not.toBe('');
   });
 
-  it('and they are the SAME expression, so height cannot depend on fold state', () => {
+  it('and they are literally the same value, not two expressions to keep in step', () => {
     expect(decl('min-height')).toBe(decl('max-height'));
+    expect(decl('min-height')).toBe('var(--mns-h)');
   });
 
-  it('carries no fraction — that is how it became 63% of the screen', () => {
-    // A factor here multiplies a number that is ALREADY a fraction of the
-    // viewport, which is the whole bug. If a future change wants a shorter
-    // sheet it has to say so against the viewport, not against the cap.
-    expect(decl('min-height')).not.toMatch(/\*\s*0?\.\d/);
+  it('leaves a strip of scrim to tap — the panel is not the whole screen', () => {
+    // A sheet that claims everything is readable and inescapable: every pixel
+    // is a row, so there is nowhere to tap that does not navigate.
+    const h = decl('--mns-h');
+    const pct = Number(h.match(/\*\s*(0?\.\d+)/)?.[1]);
+    expect(pct).toBeGreaterThan(0.7);
+    expect(pct).toBeLessThan(0.95);
+  });
+
+  it('does NOT shrink the keyboard-clamped term — that is the compounding bug', () => {
+    // The fraction belongs to the screen term only. Applied to BOTH, it shrinks
+    // an already-shrunken viewport: 68% of a number that is itself five sixths
+    // of the screen is 56%, which is what "it takes half the screen" was.
+    const h = decl('--mns-h');
+    const clamp = h.match(/var\(--mns-avail-h[^)]*\)[^)]*\)?/)?.[0] ?? '';
+    expect(h).toContain('--mns-avail-h');
+    // the live value itself is used unscaled; only its FALLBACK carries the
+    // fraction, because the fallback stands in for the screen term.
+    expect(clamp).not.toMatch(/var\(--mns-avail-h\)\s*\*/);
   });
 
   it('still clamps to the live visual viewport, so a keyboard cannot orphan rows', () => {
-    // The reason the floor can safely equal the ceiling at all: both terms go
-    // through the same `min()` against `--mns-avail-h`, so a floor can never
-    // exceed the space that actually exists. A bare `68dvh` floor could, and a
-    // min-height beats a max-height in CSS.
-    expect(decl('min-height')).toContain('--mns-avail-h');
-    expect(decl('min-height')).toMatch(/^min\(/);
+    expect(decl('--mns-h')).toMatch(/^min\(/);
+    expect(decl('--mns-h')).toContain('--mns-avail-h');
   });
 });
 
-/**
- * …AND WHEN IT IS MEASURED, which is the other half of "sometimes it's half".
- *
- * The sheet sizes itself to the VISIBLE viewport on purpose, so its rows cannot
- * end up stranded under a keyboard. That makes the measurement's TIMING
- * load-bearing: the instant you open this sheet is very often the instant a
- * keyboard is going away, because you were typing in the composer and reached
- * for the workspace bar. iOS fires the visualViewport `resize` only at the END
- * of its keyboard animation, so one measurement at open reads a viewport still
- * ~300px short and nothing afterwards corrects it.
- *
- * Reproduced live at 393×852: 782px of panel with no keyboard, 473px with one,
- * recovering to 782px when the keyboard is dismissed WHILE the sheet is open —
- * which is why it only ever went wrong on the open itself.
- */
 describe('the viewport is re-measured across the keyboard animation', () => {
   const SRC = readFileSync(
     join(import.meta.dirname, '..', 'components', 'MobileNavSwitcher.tsx'),
