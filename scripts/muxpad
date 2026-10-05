@@ -739,6 +739,206 @@ json_string() {
   printf '%s' "$1" | jq -Rs .
 }
 
+# ─── slack ─────────────────────────────────────────────────────────────────
+#
+# OUTBOUND ONLY. Every call here is an HTTPS request FROM this machine TO
+# slack.com. Slack is never given a URL, muxpad opens no socket for it, and no
+# inbound surface is created — which matters because this runs on a personal
+# laptop on a tailnet, and the alternative (an Events API webhook on the public
+# tunnel) would mean a public endpoint taking company Slack traffic with
+# signature verification as the only thing in front of it.
+#
+# TWO TOKENS, AND THE SPLIT IS THE POINT.
+#   SLACK_USER_TOKEN  (xoxp-) reads. It is the only token that can SEARCH at all
+#                     — `search:read` is user-scope only — and the only one that
+#                     sees your DMs and the private channels you are in without
+#                     being invited anywhere.
+#   SLACK_BOT_TOKEN   (xoxb-) writes, as "muxpad". Attributable, and obviously
+#                     not you.
+#
+# Posting with the USER token puts your name and avatar on the message: there is
+# no bot badge, and the audit log says you said it. So it is behind `--as-me`,
+# typed per command. An agent that decides on its own to post in #eng cannot do
+# it under your name by accident; it has to be asked for. Everything else about
+# this surface is ambient, and that one thing is not.
+SLACK_SECRETS="${SLACK_SECRETS:-$HOME/.claude/secrets/slack.env}"
+
+slack_load() {
+  require_jq
+  if [ -f "$SLACK_SECRETS" ]; then
+    # shellcheck disable=SC1090
+    set -a; . "$SLACK_SECRETS"; set +a
+  fi
+  if [ -z "${SLACK_USER_TOKEN:-}" ] && [ -z "${SLACK_BOT_TOKEN:-}" ]; then
+    cat >&2 <<EOF
+muxpad: no Slack token. Put one (or both) in $SLACK_SECRETS:
+
+  SLACK_USER_TOKEN=xoxp-...   # reading + search; sees what you see
+  SLACK_BOT_TOKEN=xoxb-...    # posting as "muxpad"
+
+Create the app at https://api.slack.com/apps (From scratch, your workspace).
+User scopes: search:read channels:history channels:read groups:history
+groups:read im:history im:read im:write mpim:history mpim:read chat:write
+users:read. A company workspace may route the install to an admin.
+EOF
+    exit 1
+  fi
+}
+
+# One Slack Web API call. `$1` method, `$2` token, rest are form fields.
+# Slack answers 200 with {"ok":false,"error":"..."} for application errors, so
+# the status code is not the check — `ok` is.
+slack_api() {
+  local method="$1" token="$2"; shift 2
+  [ -n "$token" ] || { echo "muxpad: slack: no token for $method" >&2; exit 1; }
+  local args=(--silent --show-error --max-time 30
+    -H "Authorization: Bearer $token"
+    -H 'Content-Type: application/x-www-form-urlencoded; charset=utf-8')
+  local f
+  for f in "$@"; do args+=(--data-urlencode "$f"); done
+  local out
+  out="$(curl "${args[@]}" "https://slack.com/api/$method")" || {
+    echo "muxpad: slack: $method request failed" >&2; exit 1; }
+  if [ "$(printf '%s' "$out" | jq -r '.ok // false')" != "true" ]; then
+    local err; err="$(printf '%s' "$out" | jq -r '.error // "unknown"')"
+    echo "muxpad: slack: $method → $err" >&2
+    # The two that are worth explaining rather than echoing.
+    case "$err" in
+      not_in_channel) echo "  the bot is not in that channel — /invite @muxpad there, or read with the user token" >&2 ;;
+      missing_scope|not_allowed_token_type)
+        echo "  the token lacks the scope for this call — see the scope list in 'muxpad slack' usage" >&2 ;;
+    esac
+    exit 1
+  fi
+  printf '%s' "$out"
+}
+
+# `#name`, `@user` or a raw ID → a conversation id. Raw ids pass through
+# untouched, which is what makes the lookup skippable on a hot path.
+slack_channel_id() {
+  local ref="$1"
+  case "$ref" in
+    C*|D*|G*) printf '%s' "$ref"; return ;;
+  esac
+  local tok="${SLACK_USER_TOKEN:-$SLACK_BOT_TOKEN}"
+  case "$ref" in
+    @*)
+      local name="${ref#@}" uid
+      uid="$(slack_api users.list "$tok" 'limit=1000' \
+        | jq -r --arg n "$name" '.members[] | select(.name==$n or .profile.display_name==$n or .real_name==$n) | .id' | head -1)"
+      [ -n "$uid" ] || { echo "muxpad: slack: no user '@$name'" >&2; exit 1; }
+      slack_api conversations.open "$tok" "users=$uid" | jq -r '.channel.id'
+      ;;
+    *)
+      local name="${ref#\#}"
+      slack_api conversations.list "$tok" 'limit=1000' \
+        'types=public_channel,private_channel' \
+        | jq -r --arg n "$name" '.channels[] | select(.name==$n) | .id' | head -1 \
+        | grep . || { echo "muxpad: slack: no channel '#$name' visible to this token" >&2; exit 1; }
+      ;;
+  esac
+}
+
+# `2h`, `30m`, `3d` → an epoch seconds floor. Anything else is passed through as
+# an epoch, so a caller can pin an exact point.
+slack_since_epoch() {
+  local v="$1" n unit now; now="$(date +%s)"
+  n="${v%[smhd]}"; unit="${v##*[0-9]}"
+  case "$unit" in
+    s) printf '%s' "$((now - n))" ;;
+    m) printf '%s' "$((now - n * 60))" ;;
+    h) printf '%s' "$((now - n * 3600))" ;;
+    d) printf '%s' "$((now - n * 86400))" ;;
+    *) printf '%s' "$v" ;;
+  esac
+}
+
+cmd_slack_read() {
+  slack_load
+  local ref="${1:-}"; shift || true
+  [ -n "$ref" ] || { echo 'usage: muxpad slack read <#channel|@user|ID> [--since=2h] [--limit=50]' >&2; exit 1; }
+  reset_flags since limit
+  parse_flags since limit -- "$@"
+  local tok="${SLACK_USER_TOKEN:-$SLACK_BOT_TOKEN}"
+  local id; id="$(slack_channel_id "$ref")"
+  local fields=("channel=$id" "limit=${FLAG_limit:-50}")
+  [ -n "${FLAG_since:-}" ] && fields+=("oldest=$(slack_since_epoch "$FLAG_since")")
+  # Oldest-first, which is reading order; Slack returns newest-first.
+  slack_api conversations.history "$tok" "${fields[@]}" \
+    | jq -r '.messages | reverse | .[] | "\(.ts | tonumber | strftime("%m-%d %H:%M"))  \(.user // .bot_id // "?")  \(.text // "" | gsub("\n"; " ⏎ "))"'
+}
+
+cmd_slack_search() {
+  slack_load
+  [ -n "${SLACK_USER_TOKEN:-}" ] || {
+    echo 'muxpad: slack search needs SLACK_USER_TOKEN — search:read is a user scope; bot tokens cannot search at all' >&2
+    exit 1; }
+  local q="${1:-}"; shift || true
+  [ -n "$q" ] || { echo 'usage: muxpad slack search "<query>" [--limit=20]' >&2; exit 1; }
+  reset_flags limit
+  parse_flags limit -- "$@"
+  slack_api search.messages "$SLACK_USER_TOKEN" "query=$q" "count=${FLAG_limit:-20}" \
+    | jq -r '.messages.matches[] | "\(.ts | tonumber | strftime("%m-%d %H:%M"))  #\(.channel.name)  \(.username // .user)  \(.text // "" | gsub("\n"; " ⏎ "))"'
+}
+
+cmd_slack_post() {
+  slack_load
+  local ref="${1:-}" text="${2:-}"; shift 2 2>/dev/null || true
+  [ -n "$ref" ] && [ -n "$text" ] || {
+    echo 'usage: muxpad slack post <#channel|@user|ID> "<text>" [--as-me]' >&2; exit 1; }
+  local as_me='' a
+  for a in "$@"; do [ "$a" = "--as-me" ] && as_me=1; done
+  local tok
+  if [ -n "$as_me" ]; then
+    tok="${SLACK_USER_TOKEN:-}"
+    [ -n "$tok" ] || { echo 'muxpad: --as-me needs SLACK_USER_TOKEN' >&2; exit 1; }
+  else
+    tok="${SLACK_BOT_TOKEN:-}"
+    [ -n "$tok" ] || {
+      cat >&2 <<'EOF'
+muxpad: no SLACK_BOT_TOKEN, so there is no way to post as "muxpad".
+Posting with your user token puts YOUR name on the message — if that is what
+you want, say so explicitly with --as-me.
+EOF
+      exit 1; }
+  fi
+  local id; id="$(slack_channel_id "$ref")"
+  slack_api chat.postMessage "$tok" "channel=$id" "text=$text" >/dev/null
+  echo "sent to $ref${as_me:+ (as you)}"
+}
+
+cmd_slack_channels() {
+  slack_load
+  local tok="${SLACK_USER_TOKEN:-$SLACK_BOT_TOKEN}"
+  slack_api conversations.list "$tok" 'limit=1000' 'types=public_channel,private_channel' \
+    | jq -r '.channels[] | select(.is_archived|not) | "\(.id)  \(if .is_private then "🔒" else "# " end) \(.name)"' | sort -k3
+}
+
+cmd_slack() {
+  case "${1:-}" in
+    read) cmd_slack_read "${@:2}" ;;
+    search) cmd_slack_search "${@:2}" ;;
+    post) cmd_slack_post "${@:2}" ;;
+    channels) cmd_slack_channels ;;
+    *)
+      cat >&2 <<EOF
+usage:
+  muxpad slack read <#channel|@user|ID> [--since=2h] [--limit=50]
+  muxpad slack search "<query>" [--limit=20]     (needs SLACK_USER_TOKEN)
+  muxpad slack post <#channel|@user|ID> "<text>" [--as-me]
+  muxpad slack channels
+
+Tokens live in $SLACK_SECRETS:
+  SLACK_USER_TOKEN=xoxp-...   reading + search, sees what you see
+  SLACK_BOT_TOKEN=xoxb-...    posting as "muxpad"
+
+Posting uses the BOT token unless you pass --as-me, which posts under your own
+name with no bot badge — the audit log will say you said it.
+EOF
+      exit 1 ;;
+  esac
+}
+
 # ─── workspace ─────────────────────────────────────────────────────────────
 
 cmd_workspace_new() {
@@ -3826,6 +4026,7 @@ case "$VERB" in
   agent) cmd_agent "${ARGS[@]:1}" ;;
   cron) cmd_cron "${ARGS[@]:1}" ;;
   search) cmd_search "${ARGS[@]:1}" ;;
+  slack) cmd_slack "${ARGS[@]:1}" ;;
   publish) cmd_publish "${ARGS[@]:1}" ;;
   _agent-hook) cmd_agent_hook ;;
   # Internal: print which tailscale binary this script would use, or nothing.
