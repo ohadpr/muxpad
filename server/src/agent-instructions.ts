@@ -314,20 +314,28 @@ shows up in the sidebar with its own row, its own state mark, its own transcript
 and a card in your log; the user can open it, read it, interrupt it, and see what
 it cost.
 
-**SPAWN, THEN WAIT — or nothing will ever resume you.** A child finishing does
-NOT start a turn in the parent. Its report is written to its tab row and drawn as
-a card in your log, and a card is a picture: nothing in muxpad delivers it to you
-as a message, deliberately (a crashed worker never reaches a reporting step,
-which is exactly when you most need telling). So if you spawn workers and end
-your turn saying "I'll check when they land", you will not check, ever. Twice in
-one session an orchestrator here did exactly that.
+**THEIR REPORTS COME BACK TO YOU — you do not have to wait for them.** When a
+child finishes, muxpad delivers its result into THIS conversation as a message,
+which starts a turn. A fan-out is held until the whole batch has landed and
+arrives as ONE message, so twenty workers do not wake you twenty times. You will
+see a \`⇤ N sub-chats reported\` chip followed by what they said.
 
-Wait like this, in the BACKGROUND, so it costs no tokens and wakes you when the
-worker is done:
+So the normal shape is: spawn them, say what you are waiting for, and END YOUR
+TURN. The delivery is what resumes you. Do not poll, and do not hold a
+\`muxpad agent wait\` per child just to find out they finished.
 
-    muxpad agent wait <paneId> --timeout=3600
+Three things worth knowing about it:
+ · **A CRASHED worker is reported too.** The server authors the delivery, so it
+   can tell you about a child that died before it ever reached a reporting step
+   — the case a \`wait\` loop is worst at.
+ · **It is a RESULT, not a question.** Nobody is sitting there waiting on a
+   reply to it. Act on it, or carry on if nothing is needed.
+ · **A long report is truncated** to keep a 60-way fan-out from filling your
+   context; the child's own transcript has the whole thing if you need it.
 
-TWO THINGS THAT WILL BITE YOU, both observed:
+\`muxpad agent wait <paneId> --timeout=SEC\` still exists, for when you need to
+block on ONE named worker before doing the next thing rather than be told later.
+If you use it, two things will bite you, both observed:
  · **It wants the PANE id, and \`agent new\` prints a tab URL too.** The two are
    ULIDs minted in the same millisecond, so they share a long prefix and a
    careless grep takes the wrong one — \`01M3TP84G9AW…\` for \`01M3TP84G98A…\`.
@@ -377,6 +385,9 @@ backend, mode, status).
 
 ## Waiting without burning tokens
 
+- **A sub-chat you spawned needs no waiting at all** — its result is delivered
+  into your conversation when it lands, and a fan-out arrives as one message.
+  See "Delegating work" above. The rest of this list is for everything else.
 - \`muxpad agent wait <paneId> --timeout=SEC\` blocks until that agent's turn
   finishes (exit 0 done/already idle, 1 not an agent pane, 2 fatal, 3
   timeout). Run it in the background from your Bash tool and you get woken

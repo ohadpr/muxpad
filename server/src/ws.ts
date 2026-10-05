@@ -4,8 +4,8 @@ import {
   type AgentMode,
   BASELINE_AGENT_MODE,
   isBootstrapTabName,
+  isMachineMessage,
   modeForBackend,
-  parseCronMarker,
   sanitizeAgentStatus,
 } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
@@ -712,9 +712,15 @@ export function attachWsServer(deps: {
     if (!first || first.done) return null;
     return { qid: first.value[0], questions: first.value[1] };
   };
-  // A message that carries a cron fire marker was written by the scheduler,
-  // not typed by anyone. One predicate, shared by both relay paths.
-  const isHumanMessage = (text: string) => parseCronMarker(text) === null;
+  // Was this typed by a person? One predicate, shared by both relay paths.
+  //
+  // NOT `parseCronMarker(text) === null`, which is what this was. The question
+  // is "is a PERSON typing", and cron stopped being the only thing muxpad
+  // injects the moment the join landed: a batch of sub-chat reports arriving
+  // would have read as the user's own keystrokes, which suppresses the push for
+  // the very turn they are waiting on and defers a due cron behind `quiet_mins`.
+  // `isMachineMessage` owns the list so the next injected type cannot miss it.
+  const isHumanMessage = (text: string) => !isMachineMessage(text);
   const agentRunners = new Map<string, AgentRunnerConn>();
   /**
    * Publish the pane's subagent count to the cache — the number `GET /api/panes`

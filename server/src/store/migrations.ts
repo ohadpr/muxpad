@@ -1209,6 +1209,42 @@ const MIGRATIONS: Migration[] = [
       END;
     `,
   },
+  {
+    // THE JOIN — `spawn_rounds.delivered_at`: has this child's result been put
+    // into its parent's conversation yet?
+    //
+    // `apply` rather than `sql` for migration 36's first reason: SQLite has no
+    // `ADD COLUMN IF NOT EXISTS`, and the idempotency test re-runs every
+    // migration with the version rows deleted.
+    //
+    // ─── THE BACKFILL IS THE WHOLE POINT OF THIS MIGRATION ──────────────────
+    // Every round that already ended is stamped DELIVERED, and it is the one
+    // line here that cannot be left out. `delivered_at IS NULL` is the queue
+    // the new sweeper drains, so without this the first boot after the upgrade
+    // would read 181 finished historical rounds as a pending backlog and flush
+    // every one of them into its parent — the three big orchestrators would
+    // each be handed a message reporting on dozens of workers that finished
+    // days ago, and a cron or two would fire on top of it.
+    //
+    // Stamped with `ended_at` (not `now`) so the column reads as what it is: a
+    // fact about when the round's result was settled. An unfinished round is
+    // left NULL — it has produced nothing to deliver, and it becomes eligible
+    // the normal way when it closes.
+    version: 38,
+    apply: (db) => {
+      const cols = db.prepare('PRAGMA table_info(spawn_rounds)').all() as Array<{ name: string }>;
+      // THE BACKFILL IS INSIDE THE ADD, and that placement is the careful part.
+      // Run unconditionally it would also fire on a RE-RUN (the idempotency
+      // test's second pass, or a restore from backup that lost schema_version)
+      // — and by then the column is live, so every round legitimately WAITING
+      // to be delivered would be stamped as already delivered and its report
+      // lost silently. The column existing is proof the backfill already ran.
+      if (!cols.some((c) => c.name === 'delivered_at')) {
+        db.exec('ALTER TABLE spawn_rounds ADD COLUMN delivered_at INTEGER');
+        db.exec('UPDATE spawn_rounds SET delivered_at = ended_at WHERE ended_at IS NOT NULL');
+      }
+    },
+  },
 ];
 
 /** Highest version in the migration list. Exported so a test can assert the

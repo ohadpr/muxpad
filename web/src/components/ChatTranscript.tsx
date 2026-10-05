@@ -827,6 +827,10 @@ const NOTICE_ICON: Record<NoticeEvent['variant'], string> = {
   reminder: 'ⓘ',
   cron: '⏱',
   interrupted: '⏹',
+  // THE JOIN: results arriving from sub-chats this conversation spawned. An
+  // inward arrow, because the direction is the whole fact — every other notice
+  // is about this chat, and this one is about work that happened elsewhere.
+  report: '⇤',
 };
 
 /** Time-of-day for a cron chip, in the VIEWER's zone. The cron's own zone is
