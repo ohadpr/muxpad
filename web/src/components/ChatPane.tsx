@@ -186,6 +186,7 @@ import {
   liveStatusLabel,
   runningChildren,
   sessionModelLabel,
+  workingRowLabel,
 } from '../lib/live-status';
 import { isMobileLayout } from '../lib/mobile-layout';
 import { useDismissable } from '../lib/use-dismissable';
@@ -3972,10 +3973,12 @@ export function ChatPane({
     !agentNative && lastEvent?.kind === 'tool_use' && !toolIndex.resultFor.has(lastEvent.toolUseId);
   const agentWorking = Boolean((sending || streamingText || pendingTool) && session?.current_sid);
 
-  // What the working row says. Bare dots read as "maybe stuck" during a long
-  // silent tool call — name the OLDEST still-unresolved tool.
+  // What the working row says — see `workingRowLabel`. NULL when no tool is
+  // running: the dots carry "something is coming, here", and the bar above the
+  // composer owns the word. Two surfaces said `Working…` a hundred pixels
+  // apart until the decision moved next to the bar's own.
   const unresolvedTool = agentWorking ? (toolIndex.unresolvedTools[0] ?? null) : null;
-  const workingLabel = unresolvedTool ? `Running ${unresolvedTool.name}…` : 'Working…';
+  const workingLabel = workingRowLabel(unresolvedTool?.name);
 
   // The live roster is the union of two sources, and they cover each other's
   // blind spot:
@@ -4294,7 +4297,9 @@ export function ChatPane({
                       <i />
                       <i />
                     </span>
-                    <span className="chat-working-label">{workingLabel}</span>
+                    {workingLabel ? (
+                      <span className="chat-working-label">{workingLabel}</span>
+                    ) : null}
                   </div>
                 )}
               </div>

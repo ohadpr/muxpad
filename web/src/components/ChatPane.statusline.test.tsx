@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, describe, expect, it } from 'vitest';
-import { liveStatusLabel, sessionModelLabel } from '../lib/live-status';
+import { liveStatusLabel, sessionModelLabel, workingRowLabel } from '../lib/live-status';
 import { SessionBar } from './ChatStart';
 
 /**
@@ -351,5 +351,48 @@ describe('a model id is shortened for the line and kept whole in the menu', () =
     ]) {
       expect(sessionModelLabel(id).length).toBeLessThanOrEqual(Math.max(id.length, 1));
     }
+  });
+});
+
+/**
+ * THE TWO WORKING LABELS, and why only one of them carries the word.
+ *
+ * Reported as "this double working indication is a bit annoying": the bar above
+ * the composer read `Working…` and the row in the log read `Working…`, a hundred
+ * pixels apart, saying the identical thing. They were two ternaries in two files
+ * with nothing connecting them — which is how it happened and why it survived.
+ *
+ * They are not interchangeable. The BAR is fixed: it survives scrolling away and
+ * text streaming, and it carries the agent counts. The ROW is positional: it
+ * sits where the reply will land and is the only surface that can name the tool
+ * currently running, which the bar's 180px budget could not hold anyway.
+ */
+describe('only one surface says the word', () => {
+  it('the row says nothing when there is no tool — the dots carry it', () => {
+    expect(workingRowLabel(null)).toBeNull();
+    expect(workingRowLabel(undefined)).toBeNull();
+    expect(workingRowLabel('')).toBeNull();
+  });
+
+  it('…and the BAR says it in exactly that case, so the fact is never lost', () => {
+    // The division of labour, asserted as a pair rather than as two beliefs.
+    expect(workingRowLabel(null)).toBeNull();
+    expect(liveStatusLabel({ chats: 0, turnActive: true })).toBe('Working…');
+  });
+
+  it('the row names the tool — the one thing the bar cannot fit', () => {
+    expect(workingRowLabel('Bash')).toBe('Running Bash…');
+  });
+
+  it('and they never both speak at once', () => {
+    // With a tool running the row is specific and the bar is generic; with no
+    // tool the row is silent. Neither case repeats a string.
+    const row = workingRowLabel('Bash');
+    const bar = liveStatusLabel({ chats: 0, turnActive: true });
+    expect(row).not.toBe(bar);
+  });
+
+  it('the bar still prefers counts, which beat the word outright', () => {
+    expect(liveStatusLabel({ chats: 2, turnActive: true })).toBe('2 agents');
   });
 });
