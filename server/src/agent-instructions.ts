@@ -73,6 +73,26 @@ list. Capabilities worth knowing:
   APPS ARE PRIVATE (tailnet only) — never publish an app's data or suggest
   exposing it; \`publish\` is for static artifacts you MEAN to be public.
 
+- \`muxpad slack\` — the company Slack, read/write, from any pane and any
+  harness. \`slack read <#channel|@user> [--since=2h]\`, \`slack search
+  "<query>"\`, \`slack post <#channel|@user> "<text>" [--as-me]\`,
+  \`slack channels\`.
+
+  **ONLY WHEN ASKED.** Reading reaches the user's DMs and every private channel
+  they are in — it is their whole working life, not a public corpus. Go when a
+  task actually needs it ("what did Nadav say about X", "post the result to
+  #eng"); do not browse it for context nobody requested.
+
+  **\`--as-me\` POSTS UNDER THE USER'S OWN NAME**, with no bot badge, and the
+  audit log records them as the author. Without it you post as "muxpad", which
+  is obviously a machine and is the right default for anything you decided to
+  send. Only pass \`--as-me\` when the user has asked for a message to come
+  from THEM — never to make a message look more credible, and never because a
+  channel feels like it wants a human.
+
+  Reading never needs the bot invited anywhere; posting as muxpad does
+  (\`/invite @muxpad\`), and the error says so when it bites.
+
 ## Scheduling — \`muxpad cron\` is the ONLY scheduler on this machine
 
 **Anything that should happen LATER — once or repeatedly — is a \`muxpad
