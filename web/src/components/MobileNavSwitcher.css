@@ -130,11 +130,11 @@
      is recorded below. A floor lower than the cap lets the panel hug its
      content, so its height tracked how many workspaces you had left folded.
 
-     85%, NOT 100%: the remaining strip is the dismiss target. The panel used to
+     75%, NOT 100%: the remaining strip is the dismiss target. The panel used to
      claim everything, which is correct for reading and wrong for leaving —
-     there was nowhere to tap that was not a row. 85% of the available height
-     leaves ~130px on a 393×852 phone, a comfortable target, and the scrim
-     underneath already closes the sheet.
+     there was nowhere to tap that was not a row. 75% of the available height
+     leaves ~180px on a 393×852 phone, which is a thumb-sized target rather than
+     a sliver, and the scrim underneath already closes the sheet.
 
      THE FRACTION IS ON THE SCREEN TERM ONLY, which is the distinction that
      matters. When a keyboard is up, `--mns-avail-h` is the binding term and the
@@ -161,8 +161,8 @@
      a max-height in CSS, and that is how you get a panel taller than the
      screen with its last rows unreachable. */
   --mns-h: min(
-    calc((100dvh - var(--mns-panel-top) - 24px) * 0.85),
-    var(--mns-avail-h, calc((100dvh - var(--mns-panel-top) - 24px) * 0.85))
+    calc((100dvh - var(--mns-panel-top) - 24px) * 0.75),
+    var(--mns-avail-h, calc((100dvh - var(--mns-panel-top) - 24px) * 0.75))
   );
   max-height: var(--mns-h);
   min-height: var(--mns-h);
