@@ -14,7 +14,31 @@
 
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# ROOT is the repo this script lives in, and it must survive being SYMLINKED.
+#
+# `dirname "$BASH_SOURCE"` alone gives the directory of the LINK, not of the
+# script — so a symlink at ~/.local/bin/muxpad (the obvious way to put this on
+# PATH for ssh, and for anything that does not inherit a pane's environment)
+# made ROOT resolve to ~/.local. Everything that reads a repo path then pointed
+# at a directory with nothing in it, and the failure landed as far from the
+# cause as it could: every agent pane died at boot with "runner not built
+# (~/.local/server/dist/agent-runner/index.js missing)", muxpad retried, gave
+# up, and reported "automatic restarts failed" — a message about agents, from a
+# symlink.
+#
+# Walk the chain to the real file. `readlink` without -f because macOS's does
+# not have it; the loop is the portable form and terminates because a symlink
+# cycle would have failed to exec in the first place.
+_src="${BASH_SOURCE[0]}"
+while [ -L "$_src" ]; do
+  _tgt="$(readlink "$_src")"
+  case "$_tgt" in
+    /*) _src="$_tgt" ;;
+    *) _src="$(cd "$(dirname "$_src")" && pwd)/$_tgt" ;;
+  esac
+done
+ROOT="$(cd "$(dirname "$_src")/.." && pwd)"
+unset _src _tgt
 DATA_DIR="${MUXPAD_DATA_DIR:-$HOME/.muxpad}"
 PID_FILE="$DATA_DIR/server.pid"
 LOG_FILE="$DATA_DIR/server.log"
