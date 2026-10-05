@@ -769,6 +769,33 @@ slack_load() {
     # shellcheck disable=SC1090
     set -a; . "$SLACK_SECRETS"; set +a
   fi
+  # CHECK THE PREFIX, because Slack's own error for the wrong kind is
+  # `not_allowed_token_type` on whatever call you happened to make first —
+  # which names the method, not the mistake, and sends you looking at scopes.
+  # The app-level token (`xapp-`) is the trap: it sits on the Basic Information
+  # page next to the OAuth ones, it is the only token you need for Socket Mode,
+  # and it is useless for every Web API call there is.
+  slack_check_token() {
+    local name="$1" val="$2" want="$3"
+    [ -n "$val" ] || return 0
+    case "$val" in
+      "$want"*) return 0 ;;
+      xapp-*)
+        cat >&2 <<EOF
+muxpad: $name holds an APP-LEVEL token (xapp-…). That one is for Socket Mode
+only — it cannot make Web API calls, which is every call this command makes.
+Take the token from OAuth & Permissions, not Basic Information:
+  "User OAuth Token"      xoxp-…  → SLACK_USER_TOKEN
+  "Bot User OAuth Token"  xoxb-…  → SLACK_BOT_TOKEN
+EOF
+        exit 1 ;;
+      *)
+        echo "muxpad: $name should start with $want (got ${val%%-*}-…)" >&2
+        exit 1 ;;
+    esac
+  }
+  slack_check_token SLACK_USER_TOKEN "${SLACK_USER_TOKEN:-}" xoxp-
+  slack_check_token SLACK_BOT_TOKEN "${SLACK_BOT_TOKEN:-}" xoxb-
   if [ -z "${SLACK_USER_TOKEN:-}" ] && [ -z "${SLACK_BOT_TOKEN:-}" ]; then
     cat >&2 <<EOF
 muxpad: no Slack token. Put one (or both) in $SLACK_SECRETS:
