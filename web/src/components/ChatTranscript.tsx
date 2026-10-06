@@ -17,6 +17,7 @@ import {
   type NoticeEvent,
   type ToolResultEvent,
   type ToolUseEvent,
+  parseCronMarker,
   summarizeToolInput,
 } from '@muxpad/shared';
 import {
@@ -939,6 +940,40 @@ function MediaGallery({
         );
       })}
     </div>
+  );
+}
+
+/**
+ * A message WAITING in the durable queue, as a preview.
+ *
+ * Why it is not just `<UserText>`: a queued message is the RAW text that will
+ * be delivered, and a cron fire's raw text begins with its marker block. The
+ * transcript never shows that — `expandCronFire` splits it off on the way in —
+ * but the queue preview had no such step, so a scheduled fire sat in the log
+ * as a bubble full of `<muxpad-cron id="…">` XML until it ran. Observed on a
+ * once-a-minute cron, which is the case that makes it unmissable.
+ *
+ * Same split, same reason: the chip says which schedule is waiting, and a
+ * FOLDED cron keeps its plumbing out of sight here too — it would be odd for a
+ * message to be noisy in the queue and quiet a second later.
+ */
+export function QueuedText({
+  text,
+  onOpenImage,
+}: {
+  text: string;
+  onOpenImage?: OpenMedia | undefined;
+}) {
+  const fire = parseCronMarker(text);
+  if (!fire) return <UserText text={text} onOpenImage={onOpenImage} />;
+  const body = fire.marker.fold ? '' : fire.body.trim();
+  return (
+    <>
+      <span className="chat-queued-cron">
+        <span aria-hidden="true">⏱</span> {fire.marker.name}
+      </span>
+      {body ? <UserText text={body} onOpenImage={onOpenImage} /> : null}
+    </>
   );
 }
 

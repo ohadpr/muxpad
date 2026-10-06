@@ -1,8 +1,9 @@
 import type { ChatEvent } from '@muxpad/shared';
+import { renderCronMarker } from '@muxpad/shared';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, describe, expect, it } from 'vitest';
-import { ChatRow } from './ChatTranscript';
+import { ChatRow, QueuedText } from './ChatTranscript';
 
 /**
  * A notice with something folded behind it — a quiet cron's prompt.
@@ -63,5 +64,51 @@ describe('a foldable notice', () => {
     // Folding the plumbing must not fold the fact that something ran.
     const host = mount(notice('plumbing'));
     expect(host.querySelector('.chat-sysnote-text')?.textContent).toBe('nw-close');
+  });
+});
+
+describe('a queued message that is a cron fire', () => {
+  const fire = (fold: boolean, prompt = 'Run: bash progress.sh') =>
+    renderCronMarker(
+      { id: 'c1', name: 'cards-demo', at: 1, missed: 0, ...(fold ? { fold: true } : {}) },
+      prompt,
+    );
+
+  it('NEVER shows the raw marker — the bug this exists for', () => {
+    // A queued message is the raw text that will be delivered, and a fire's raw
+    // text starts with its marker. Seen in the log as a bubble full of
+    // `<muxpad-cron id="…">` for the whole minute before it ran.
+    const host = document.createElement('div');
+    document.body.append(host);
+    act(() => {
+      createRoot(host).render(<QueuedText text={fire(false)} />);
+    });
+    expect(host.textContent).not.toContain('muxpad-cron');
+    expect(host.textContent).not.toContain('<');
+    // …and it still says which schedule is waiting, plus what it will run.
+    expect(host.querySelector('.chat-queued-cron')?.textContent).toContain('cards-demo');
+    expect(host.textContent).toContain('Run: bash progress.sh');
+  });
+
+  it('keeps a FOLDED cron quiet in the queue too', () => {
+    // It would be odd for a message to be noisy while queued and quiet a
+    // second later when it runs.
+    const host = document.createElement('div');
+    document.body.append(host);
+    act(() => {
+      createRoot(host).render(<QueuedText text={fire(true)} />);
+    });
+    expect(host.querySelector('.chat-queued-cron')?.textContent).toContain('cards-demo');
+    expect(host.textContent).not.toContain('Run: bash');
+  });
+
+  it('leaves an ordinary queued message completely alone', () => {
+    const host = document.createElement('div');
+    document.body.append(host);
+    act(() => {
+      createRoot(host).render(<QueuedText text="just a message I typed" />);
+    });
+    expect(host.querySelector('.chat-queued-cron')).toBeNull();
+    expect(host.textContent).toBe('just a message I typed');
   });
 });

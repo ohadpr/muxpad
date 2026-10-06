@@ -5,18 +5,44 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 10px 12px 2px;
-  /* The stack is bounded. Cards are pinned, so a tall one cannot be scrolled
-     past — without a ceiling a single verbose card would leave no transcript. */
-  max-height: 46vh;
+  /* Matches the composer pill's own width and gutters, so the stack reads as
+     one object with the thing below it rather than as a floating slab. */
+  max-width: 768px;
+  margin: 0 auto 8px;
+  padding: 0 2px;
+  /* The stack is bounded. Cards are pinned above the composer, so a tall one
+     cannot be scrolled past — without a ceiling a single verbose card would
+     push the conversation off the top of its own pane. */
+  max-height: 42vh;
   overflow-y: auto;
-  flex: 0 0 auto;
+  /* The scrollbar is noise on something that is already a quiet strip; the
+     fade below says "more above" more clearly than a 4px gutter does. */
+  scrollbar-width: none;
+}
+.chat-cards::-webkit-scrollbar {
+  display: none;
+}
+/* Only when there IS something above: a fade on a stack that fits would clip
+   the first card's own top edge for no reason. */
+.chat-cards.-over {
+  mask-image: linear-gradient(to bottom, transparent 0, #000 22px);
 }
 .chat-card {
+  /* NEVER SHRINK. A flex item's default is `flex-shrink: 1`, so once the stack
+     hits its max-height the cards are squeezed instead of the stack scrolling —
+     and since a card clips its own overflow, the bottom one loses its last line
+     mid-sentence and reads as a broken card. Measured: scrollHeight ===
+     clientHeight === the cap, i.e. no overflow to scroll, the content simply
+     crushed. With this, the stack overflows honestly and scrolls. */
+  flex: 0 0 auto;
   border: 1px solid var(--chat-border);
   border-radius: 10px;
   background: var(--chat-elev);
   overflow: hidden;
+  /* It floats over the log now, so it needs to sit ON something — without a
+     shadow the transcript scrolls visibly underneath an edge that looks like
+     it should have stopped it. */
+  box-shadow: 0 6px 18px -12px rgba(0, 0, 0, 0.5);
 }
 .chat-card-head {
   display: flex;

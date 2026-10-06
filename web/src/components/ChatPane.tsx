@@ -155,6 +155,7 @@ import {
   type OpenMedia,
   type PendingQuestion,
   QuestionCard,
+  QueuedText,
   RosterSpinner,
   SpawnWorkBody,
   type ToolDetail,
@@ -4257,11 +4258,6 @@ export function ChatPane({
             </button>
           </output>
         ) : null}
-        {/* The pinned cards — ABOVE the scroller, deliberately. A card is the
-          value that must not scroll away; inside `.chat-scroll` it would be
-          just another message at the top of the log, which is where the old
-          one already was. */}
-        <ChatCards tabId={tabId} />
         {/* tabIndex=0 because a keydown listener on an element only fires when
           focus is inside it, and this was a plain div: focus sat on <body>, the
           listener never saw a key, and PageDown moved the log 0px. The chat had
@@ -4393,7 +4389,7 @@ export function ChatPane({
                   </button>
                 </div>
                 <div className="chat-bubble chat-bubble-queued" dir="auto">
-                  <UserText text={q.text} onOpenImage={setOpenImage} />
+                  <QueuedText text={q.text} onOpenImage={setOpenImage} />
                 </div>
               </div>
             ))}
@@ -4461,6 +4457,23 @@ export function ChatPane({
         ) : null}
         {session?.current_sid ? (
           <div className="chat-composer-wrap" ref={composerRef}>
+            {/* ── THE PINNED CARDS, GLUED TO THE BOTTOM ──────────────────────
+              Inside the composer wrap rather than above the scroller, and that
+              placement does three jobs at once.
+              WHERE YOUR EYE IS. A chat is read at the bottom — that is where
+              new messages land and where you are already looking while typing.
+              At the top of the log a card is as far from the conversation as it
+              is possible to be, and four of them push the thing you are reading
+              a third of the way off screen.
+              THE KEYBOARD, FREE. The wrap already rides
+              `--chat-keyboard-inset`, so the cards lift with the composer on
+              iOS instead of hiding behind the software keyboard.
+              THE RESERVE, FREE. `composerH` is measured from THIS wrap, and the
+              scroller reserves exactly that much at its foot — so a card stack
+              that grows pushes the log up by precisely its own height, with no
+              second measurement to keep in step. That is the whole reason it is
+              a child here and not a sibling pinned at `bottom: composerH`. */}
+            <ChatCards tabId={tabId} />
             {notice ? (
               <div className={`chat-notice${notice.tone === 'danger' ? ' -danger' : ''}`}>
                 {notice.text}
