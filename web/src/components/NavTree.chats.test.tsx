@@ -186,7 +186,7 @@ describe('groupChats', () => {
 });
 
 describe('doneChatCount — the number in the done header', () => {
-  it('counts the CHATS you will find at the drawer\'s TOP level', () => {
+  it("counts the CHATS you will find at the drawer's TOP level", () => {
     // One decayed top-level chat, plus a live parent with three delivered
     // agents. The agents are behind their own disclosure and have their own
     // number, so this one is 1 — and the invariant is unchanged: the header's

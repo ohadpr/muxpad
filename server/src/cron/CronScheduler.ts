@@ -357,7 +357,13 @@ export class CronScheduler {
     missed: number,
     now: number,
   ): Promise<CronFireResult> {
-    const marker: CronMarker = { id: cron.id, name: cron.name, at: dueAt, missed };
+    const marker: CronMarker = {
+      id: cron.id,
+      name: cron.name,
+      at: dueAt,
+      missed,
+      ...(cron.fold ? { fold: true } : {}),
+    };
     const text = renderCronMarker(marker, cron.prompt);
     return cron.target_kind === 'new-tab'
       ? this.fireNewTab(cron, text, now)

@@ -307,7 +307,10 @@ describe('a single oversized record cannot drag the whole file through the socke
     // — exactly the shape that triggered it.
     const tailBytes = 1024; // cap is 8 KB
     const head = userLine('u1', 'early') + assistantLine('a1', 'also early');
-    writeFileSync(file, `${head}${JSON.stringify({ type: 'user', uuid: 'huge', message: { role: 'user', content: 'x'.repeat(20_000) } })}`);
+    writeFileSync(
+      file,
+      `${head}${JSON.stringify({ type: 'user', uuid: 'huge', message: { role: 'user', content: 'x'.repeat(20_000) } })}`,
+    );
 
     const events: Array<{ e: ChatEvent; phase: string }> = [];
     const tail = new TranscriptTail(BIG_SID, {
@@ -328,7 +331,14 @@ describe('a single oversized record cannot drag the whole file through the socke
     // The pane is thin, not broken: the unreadable record is dropped and the
     // conversation continues from the next newline.
     const tailBytes = 1024;
-    writeFileSync(file, JSON.stringify({ type: 'user', uuid: 'huge', message: { role: 'user', content: 'x'.repeat(20_000) } }));
+    writeFileSync(
+      file,
+      JSON.stringify({
+        type: 'user',
+        uuid: 'huge',
+        message: { role: 'user', content: 'x'.repeat(20_000) },
+      }),
+    );
     const events: Array<{ e: ChatEvent; phase: string }> = [];
     const tail = new TranscriptTail(BIG_SID, {
       dir,

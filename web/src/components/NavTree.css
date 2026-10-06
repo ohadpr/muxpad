@@ -71,7 +71,7 @@
    so neither surface has to know about the other. */
 .navtree {
   --nt-surface: var(--bg-tabbar);
-/* PINNED IS A HUE ON THE NAME, and the channel is the whole argument.
+  /* PINNED IS A HUE ON THE NAME, and the channel is the whole argument.
      SELECTION OWNS THE ROW'S BOX — a fill, with a funnel that runs into the
      pane. Every earlier design for this mark was also on that box: a rule under
      the block, a tick at its edge, a ring on the chip, and finally a fill that
@@ -537,7 +537,6 @@
      StateChip.test pins that for exactly this reason. */
   background-color: var(--nt-surface);
 }
-
 
 /* ─── THE ACTIVE WORKSPACE: AN EDGE, NOT A FILL ─────────────────────────────
    It was `accent 16%` over the same surface, and the active ROW is the accent
@@ -1111,13 +1110,10 @@
   top: -18px;
   bottom: -18px;
   width: 18px;
-  background-image:
-    radial-gradient(circle at 0% 0%, transparent 18px, var(--bg-pane-face) 18px),
+  background-image: radial-gradient(circle at 0% 0%, transparent 18px, var(--bg-pane-face) 18px),
     radial-gradient(circle at 0% 100%, transparent 18px, var(--bg-pane-face) 18px);
   background-size: 18px 18px;
-  background-position:
-    right top,
-    right bottom;
+  background-position: right top, right bottom;
   background-repeat: no-repeat;
   pointer-events: none;
 }

@@ -96,6 +96,13 @@ export interface NoticeEvent extends Base {
   text: string;
   /** Secondary line, e.g. a task-notification's status. */
   detail?: string;
+  /**
+   * Content folded behind a caret — present only when there IS something to
+   * unfold. A quiet cron's prompt lives here instead of in a bubble of its own:
+   * the fire stays in the log and stays inspectable, while the plumbing it
+   * injected stops taking up the conversation.
+   */
+  body?: string;
   /** For a task-notification: the parent Task/Agent tool-use id it reports on.
    *  Lets the live roster match a subagent's FINISH to its launch reliably —
    *  a background agent's own tool_result is only the immediate launch ack. */
@@ -463,6 +470,26 @@ export function expandCronFire(text: string, id: string, ts: number | null): Cha
   const parsed = parseCronMarker(text);
   if (!parsed) return null;
   const { marker, body } = parsed;
+  // A FOLDED cron tucks its prompt into the chip rather than following it with a
+  // bubble: one row that says a schedule fired, with a caret for the plumbing.
+  // The agent's REPLY is untouched — it is an ordinary message — which is what
+  // keeps a failed fire visible without a special case for failure.
+  if (marker.fold) {
+    const prompt = body.trim();
+    return [
+      {
+        kind: 'notice',
+        id: `${id}:cron`,
+        ts,
+        variant: 'cron',
+        text: marker.name,
+        ...(marker.missed > 0
+          ? { detail: `${marker.missed} missed fire${marker.missed === 1 ? '' : 's'} collapsed` }
+          : {}),
+        ...(prompt ? { body: prompt } : {}),
+      },
+    ];
+  }
   const notice: NoticeEvent = {
     kind: 'notice',
     // Distinct id from the user bubble's — they are two React rows.

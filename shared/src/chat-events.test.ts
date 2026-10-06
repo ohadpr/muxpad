@@ -15,6 +15,7 @@ import {
   subagentLabel,
   taskNotificationToolUseId,
 } from './chat-events.js';
+import { renderCronMarker } from './cron.js';
 import { renderSpawnDelivery } from './spawn-delivery.js';
 
 const TS = '2026-07-01T10:00:00.000Z';
@@ -551,5 +552,37 @@ describe('THE JOIN in a transcript — a delivery is not a person typing', () =>
     expect(kinds(expandChatEvent({ kind: 'user', id: 'u1', ts: MS, text: 'hi' }))).toEqual([
       'user',
     ]);
+  });
+});
+
+describe('a folded cron fire in the transcript', () => {
+  const fire = (fold: boolean) =>
+    renderCronMarker(
+      { id: 'c1', name: 'nw-close', at: MS, missed: 0, ...(fold ? { fold: true } : {}) },
+      'Run: python3 scripts/nw_oneline.py CLOSE — then write the market card.',
+    );
+
+  it('collapses to ONE row carrying the prompt, not a chip plus a bubble', () => {
+    const out = expandChatEvent({ kind: 'user', id: 'u1', ts: MS, text: fire(true) });
+    expect(kinds(out)).toEqual(['notice']);
+    const n = out[0] as { variant: string; text: string; body?: string };
+    expect(n.variant).toBe('cron');
+    expect(n.text).toBe('nw-close');
+    // The plumbing is still THERE — folded, not discarded. A fire you cannot
+    // inspect is a fire you cannot debug.
+    expect(n.body).toContain('nw_oneline.py CLOSE');
+  });
+
+  it('leaves an ordinary fire exactly as it was', () => {
+    const out = expandChatEvent({ kind: 'user', id: 'u1', ts: MS, text: fire(false) });
+    expect(kinds(out)).toEqual(['notice', 'user']);
+    expect((out[0] as { body?: string }).body).toBeUndefined();
+  });
+
+  it('a folded fire with no prompt is just the row', () => {
+    const text = renderCronMarker({ id: 'c1', name: 'n', at: MS, missed: 0, fold: true }, '');
+    const out = expandChatEvent({ kind: 'user', id: 'u1', ts: MS, text });
+    expect(kinds(out)).toEqual(['notice']);
+    expect((out[0] as { body?: string }).body).toBeUndefined();
   });
 });

@@ -873,6 +873,38 @@
 .chat-sysnote-cron .chat-sysnote-text {
   font-variant-numeric: tabular-nums;
 }
+/* A notice with something folded behind it. Same pill, now pressable — the
+   caret is the only thing that changes, because the row is still a statement
+   about what happened and not a control that does something. */
+.chat-sysnote.-foldable {
+  cursor: pointer;
+  border: 0;
+  font: inherit;
+  text-align: left;
+}
+.chat-sysnote.-foldable:hover {
+  background: color-mix(in srgb, var(--chat-border-strong) 70%, transparent);
+}
+.chat-sysnote-chevron {
+  margin-left: 2px;
+  color: var(--chat-faint);
+  font-size: 11px;
+}
+/* The unfolded plumbing: quiet, monospace, and scrollable rather than wrapping
+   a 400-character prompt across the whole log. */
+.chat-sysnote-body {
+  margin: 5px 0 0;
+  padding: 8px 10px;
+  max-height: 220px;
+  overflow: auto;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--chat-fg) 5%, var(--chat-bg));
+  color: var(--chat-dim);
+  font-family: var(--chrome-font, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
 /* A batch of sub-chat reports landing. The same quiet pill as a cron fire, and
    for the same reason: it states who started this turn — workers you spawned,
    not you — which is a fact about the message rather than an alert. */

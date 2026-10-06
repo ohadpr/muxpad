@@ -235,7 +235,9 @@ describe('the viewport is re-measured across the keyboard animation', () => {
     // The effect's last statement before subscribing is what runs on OPEN. A
     // bare `apply()` there is the bug: correct exactly when no keyboard is
     // moving, which is most of the time, which is what made it intermittent.
-    expect(code).toMatch(/trackUntil\(Date\.now\(\) \+ SHEET_SETTLE_MS\);\s*\n\s*vv\.addEventListener\('resize'/);
+    expect(code).toMatch(
+      /trackUntil\(Date\.now\(\) \+ SHEET_SETTLE_MS\);\s*\n\s*vv\.addEventListener\('resize'/,
+    );
   });
 
   it('uses the same settle window for focus changes, from one constant', () => {
