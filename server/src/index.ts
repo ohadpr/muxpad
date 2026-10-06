@@ -8,6 +8,12 @@ import { createAgentBridge } from './agent-bridge.js';
 import { ensureAgentNotes, migrateAgentFileEdits } from './agent-files.js';
 import { INSTRUCTIONS_MIGRATION, seedAgentInstructions } from './agent-instructions.js';
 import { CHAT_MODE_MIGRATION, retireLegacyChatModeFile, seedChatMode } from './agent-modes.js';
+import {
+  AppHealTracker,
+  HEAL_MAX_ATTEMPTS,
+  HEAL_MIN_STRIKES,
+  shouldHealApp,
+} from './apps/AppHeal.js';
 import { createAppRegistry, startAppReconciler } from './apps/AppRegistry.js';
 import { createAppStatusProbe } from './apps/AppStatus.js';
 import { adoptServePanes } from './apps/adopt-serve-panes.js';
@@ -887,6 +893,72 @@ const stopIdleBrowsers = async () => {
     console.error('[browser] idle stop failed', err);
   }
 };
+// ─── AN APP THAT WENT UNREACHABLE SHOULD COME BACK ──────────────────────────
+// `reconcile` heals exactly one failure — the pane ROW is gone — and runs only
+// at boot and on a ptyd reconnect. An app whose row is alive while the process
+// behind it is dead reads `unreachable` and nothing ever looks again, so it
+// stays that way. Measured before this: 8 apps unreachable at once, three of
+// them for days, and a request to a dead browser host hanging for 30s.
+//
+// Timid on purpose — the decision, the strike count and the attempt budget all
+// live in apps/AppHeal.ts with the reasoning. The sweep below is plumbing: it
+// observes, asks, restarts, and says so.
+const appHeal = new AppHealTracker();
+const healUnreachableApps = async () => {
+  try {
+    const apps = new AppStore(db).list();
+    const live = new Set(apps.map((a) => a.id));
+    // Drop records for apps that no longer exist, so the map cannot grow with
+    // every app ever deleted.
+    for (const id of appHeal.known()) if (!live.has(id)) appHeal.forget(id);
+    const statuses = await appStatus.statusMany(apps);
+    for (const app of statuses) {
+      const rec = appHeal.noteState(app.id, app.state);
+      if (
+        !shouldHealApp({
+          state: app.state,
+          strikes: rec.strikes,
+          attempts: rec.attempts,
+          minStrikes: HEAL_MIN_STRIKES,
+          maxAttempts: HEAL_MAX_ATTEMPTS,
+        })
+      ) {
+        // Out of attempts and still down: say so ONCE, then leave it to a human.
+        if (
+          app.state === 'unreachable' &&
+          rec.attempts >= HEAL_MAX_ATTEMPTS &&
+          appHeal.announceGiveUp(app.id)
+        ) {
+          console.warn(
+            `[apps] ${app.slug}: still unreachable after ${HEAL_MAX_ATTEMPTS} restarts — leaving it alone`,
+          );
+        }
+        continue;
+      }
+      appHeal.noteAttempt(app.id);
+      console.log(
+        `[apps] ${app.slug}: unreachable for ${rec.strikes} checks — restarting (attempt ${rec.attempts + 1}/${HEAL_MAX_ATTEMPTS})`,
+      );
+      try {
+        // stop() disables and tears the pane down; start() re-enables and
+        // rebuilds it. The pair, rather than materialize(), because the pane
+        // row still EXISTS here — that is the whole condition — and
+        // materialize is a no-op when it does.
+        await appRegistry.stop(app.id);
+        await appRegistry.start(app.id);
+        // A stale "unreachable" cached for the next 3s would make the Hosted
+        // view show a failure for an app that is already coming back.
+        appStatus.invalidate(app.id);
+      } catch (err) {
+        console.error(`[apps] ${app.slug}: restart failed`, err);
+      }
+    }
+  } catch (err) {
+    console.error('[apps] heal sweep failed', err);
+  }
+};
+setInterval(() => void healUnreachableApps(), REAP_EVERY_MS).unref();
+
 setInterval(() => void stopIdleBrowsers(), REAP_EVERY_MS).unref();
 
 setInterval(() => void reapSessionBrowsers(), REAP_EVERY_MS).unref();
