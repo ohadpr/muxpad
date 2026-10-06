@@ -1,0 +1,95 @@
+/* ── Pinned chat cards ────────────────────────────────────────────────────
+   Above the transcript and OUTSIDE its scroller: a card is the value that
+   must not scroll away, which is the whole reason it is not a message. */
+.chat-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 2px;
+  /* The stack is bounded. Cards are pinned, so a tall one cannot be scrolled
+     past — without a ceiling a single verbose card would leave no transcript. */
+  max-height: 46vh;
+  overflow-y: auto;
+  flex: 0 0 auto;
+}
+.chat-card {
+  border: 1px solid var(--chat-border);
+  border-radius: 10px;
+  background: var(--chat-elev);
+  overflow: hidden;
+}
+.chat-card-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 8px 6px 12px;
+  border-bottom: 1px solid var(--chat-border);
+  /* A whisper of accent so the card reads as muxpad's own chrome rather than
+     as something the agent drew — the content below is the agent's. */
+  background: color-mix(in srgb, var(--chat-accent) 4%, var(--chat-elev));
+}
+.chat-card-name {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  /* Hue, not weight — the same channel the pinned nav rows use, so a card's
+     name and a pinned chat read as one language. */
+  color: color-mix(in srgb, var(--chat-accent) 75%, var(--chat-fg));
+}
+.chat-card-age {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--chat-faint);
+  font-variant-numeric: tabular-nums;
+}
+/* Overdue is the signal the cadence exists for: the interesting failure is not
+   a wrong value, it is a writer that stopped. Warm, not red — nothing is
+   broken, something merely stopped arriving. */
+.chat-card-age.-stale {
+  color: var(--status-working, #8a6410);
+}
+.chat-card-x {
+  border: 0;
+  background: transparent;
+  color: var(--chat-faint);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 5px;
+}
+.chat-card-x:hover {
+  background: var(--chat-border);
+  color: var(--chat-fg);
+}
+.chat-card-body {
+  padding: 10px 13px;
+}
+.chat-card-body.-flush {
+  padding: 0;
+}
+.chat-card-text {
+  white-space: pre-wrap;
+  overflow-x: auto;
+  font-family: var(--chrome-font, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--chat-dim);
+}
+.chat-card-md {
+  font-size: 13.5px;
+}
+.chat-card-md > :first-child {
+  margin-top: 0;
+}
+.chat-card-md > :last-child {
+  margin-bottom: 0;
+}
+/* The sandboxed html card. Height is driven by the frame's own measurement —
+   see ChatCards.tsx for why the parent cannot do it. */
+.chat-card-frame {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: transparent;
+}

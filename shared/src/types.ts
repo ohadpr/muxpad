@@ -766,7 +766,18 @@ export const AgentTurnEventSchema = z.object({
   queue_id: z.string().optional(),
 });
 
+// A chat's CARDS changed (set, cleared, or one went stale enough to redraw).
+// Thin on purpose, exactly like `agent_session.updated` above: tab_id only, and
+// the client re-fetches /api/tabs/:id/cards. A card's content is free-form and
+// can be tens of KB, so putting it on the bus would push it at every connected
+// device on every write — including the ones not looking at that chat.
+export const CardsUpdatedEventSchema = z.object({
+  type: z.literal('cards.updated'),
+  tab_id: z.string(),
+});
+
 export const MuxpadEventSchema = z.discriminatedUnion('type', [
+  CardsUpdatedEventSchema,
   PaneAddedEventSchema,
   PaneRemovedEventSchema,
   PaneUpdatedEventSchema,

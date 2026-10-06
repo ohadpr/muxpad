@@ -990,6 +990,134 @@ EOF
   esac
 }
 
+# ─── card ──────────────────────────────────────────────────────────────────
+#
+# Named persistent blocks pinned at the top of a chat. The chat defaults to the
+# one you are in (MUXPAD_TAB_ID, which ptyd puts in every pane's environment),
+# so a writer inside a conversation names no id at all.
+
+card_tab() {
+  local tab="${FLAG_tab:-${MUXPAD_TAB_ID:-}}"
+  if [ -z "$tab" ]; then
+    echo "muxpad: --tab=<id> required (no MUXPAD_TAB_ID in env)" >&2
+    exit 1
+  fi
+  printf '%s' "$tab"
+}
+
+# Duration → ms. Accepts 30s / 15m / 6h / 1d, or a bare number of seconds.
+card_every_ms() {
+  local v="$1" n unit
+  n="${v%[smhd]}"
+  unit="${v#"$n"}"
+  case "$n" in ''|*[!0-9]*) echo "muxpad: --every must look like 30s, 15m, 6h or 1d" >&2; exit 1 ;; esac
+  case "$unit" in
+    s|'') echo $(( n * 1000 )) ;;
+    m)    echo $(( n * 60000 )) ;;
+    h)    echo $(( n * 3600000 )) ;;
+    d)    echo $(( n * 86400000 )) ;;
+    *)    echo "muxpad: --every must look like 30s, 15m, 6h or 1d" >&2; exit 1 ;;
+  esac
+}
+
+cmd_card_set() {
+  reset_flags tab format every
+  parse_flags tab format every -- "$@"
+  require_jq
+  local name="${POSITIONAL[0]:-}"
+  if [ -z "$name" ]; then
+    echo "usage: muxpad card set <name> \"<content>\"   (or pipe the content in)" >&2
+    exit 1
+  fi
+  local content
+  if [ "${#POSITIONAL[@]}" -ge 2 ]; then
+    content="${POSITIONAL[1]}"
+  elif [ ! -t 0 ]; then
+    # Piped/redirected: the only sane way to pass a block of html.
+    content="$(cat)"
+  else
+    echo "muxpad: no content (pass it as an argument or pipe it in)" >&2
+    exit 1
+  fi
+  local body
+  body="$(jq -n --arg c "$content" '{content:$c}')"
+  if [ -n "${FLAG_format:-}" ]; then
+    case "$FLAG_format" in
+      text|markdown|md|html) : ;;
+      *) echo "muxpad: --format must be text, markdown or html" >&2; exit 1 ;;
+    esac
+    local fmt="$FLAG_format"
+    [ "$fmt" = "md" ] && fmt="markdown"
+    body="$(printf '%s' "$body" | jq --arg f "$fmt" '. + {format:$f}')"
+  fi
+  if [ -n "${FLAG_every:-}" ]; then
+    if [ "$FLAG_every" = "none" ]; then
+      body="$(printf '%s' "$body" | jq '. + {every_ms:null}')"
+    else
+      body="$(printf '%s' "$body" | jq --argjson e "$(card_every_ms "$FLAG_every")" '. + {every_ms:$e}')"
+    fi
+  fi
+  http_request PUT "/api/tabs/$(card_tab)/cards/$name" "$body" >/dev/null
+  printf '%s✓%s card %s\n' "$C_GREEN" "$C_RESET" "$name"
+}
+
+cmd_card_get() {
+  reset_flags tab
+  parse_flags tab -- "$@"
+  require_jq
+  local name="${POSITIONAL[0]:-}"
+  [ -z "$name" ] && { echo "usage: muxpad card get <name>" >&2; exit 1; }
+  # The CONTENT, bare — this is the read half of read-modify-write, so it must
+  # pipe into an editor without a wrapper to strip.
+  http_request GET "/api/tabs/$(card_tab)/cards/$name" | jq -r '.content'
+}
+
+cmd_card_list() {
+  reset_flags tab
+  parse_flags tab -- "$@"
+  require_jq
+  http_request GET "/api/tabs/$(card_tab)/cards" \
+    | jq -r '.cards[] | [.name, .format, (.content | gsub("\\s+";" ") | .[0:60])] | @tsv' \
+    | awk -F'\t' 'BEGIN{printf "%-16s %-9s %s\n","NAME","FORMAT","CONTENT"} {printf "%-16s %-9s %s\n",$1,$2,$3}'
+}
+
+cmd_card_clear() {
+  reset_flags tab
+  parse_flags tab -- "$@"
+  local name="${POSITIONAL[0]:-}"
+  [ -z "$name" ] && { echo "usage: muxpad card clear <name>" >&2; exit 1; }
+  http_request DELETE "/api/tabs/$(card_tab)/cards/$name" >/dev/null
+  printf '%s✓%s cleared %s\n' "$C_GREEN" "$C_RESET" "$name"
+}
+
+cmd_card() {
+  case "${1:-}" in
+    set)   cmd_card_set "${@:2}" ;;
+    get)   cmd_card_get "${@:2}" ;;
+    list)  cmd_card_list "${@:2}" ;;
+    clear) cmd_card_clear "${@:2}" ;;
+    *)
+      cat >&2 <<'EOF'
+usage:
+  muxpad card set <name> "<content>" [--format=text|markdown|html] [--every=1d]
+  muxpad card set <name> --format=html < page.html
+  muxpad card get <name>              # the content, bare — for read-modify-write
+  muxpad card list
+  muxpad card clear <name>
+
+A card is a named block pinned at the top of this chat. Setting the same name
+again REPLACES it — that is the point: a card is the current value, where the
+transcript is the history.
+
+--every says how often you intend to rewrite it (30s/15m/6h/1d, or `none`).
+muxpad marks the card overdue if you stop, which is the failure nobody notices.
+
+The chat defaults to the one you are in; pass --tab=<id> for another.
+EOF
+      exit 1 ;;
+  esac
+}
+
 # ─── workspace ─────────────────────────────────────────────────────────────
 
 cmd_workspace_new() {
@@ -3922,6 +4050,16 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
   cron pause|resume <id|name>        stop/start firing (resume re-anchors, so a
                                      long pause doesn't replay)
   cron rm <id|name>                  delete it
+  card set <name> "<content>"        pin a named block at the top of this chat
+          [--format=text|markdown|html] [--every=1d] [--tab=<id>]
+                                     Setting the same name again REPLACES it —
+                                     a card is the current value, where the
+                                     transcript is the history. --every says how
+                                     often you mean to rewrite it, so muxpad can
+                                     mark it overdue when you stop.
+  card get <name>                    the content, bare (read-modify-write)
+  card list                          every card in this chat
+  card clear <name>                  remove one
   app add --url=<url> [--name=<n>] [--slug=<s>] [--cwd=<dir>]
           [--no-start] [--no-autostart] -- <command...>
                                      register a local web server muxpad keeps
@@ -4078,6 +4216,7 @@ case "$VERB" in
   cron) cmd_cron "${ARGS[@]:1}" ;;
   search) cmd_search "${ARGS[@]:1}" ;;
   slack) cmd_slack "${ARGS[@]:1}" ;;
+  card) cmd_card "${ARGS[@]:1}" ;;
   publish) cmd_publish "${ARGS[@]:1}" ;;
   _agent-hook) cmd_agent_hook ;;
   # Internal: print which tailscale binary this script would use, or nothing.

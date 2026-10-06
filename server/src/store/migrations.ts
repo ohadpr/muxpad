@@ -1245,6 +1245,36 @@ const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    // CHAT CARDS — named persistent blocks pinned at the top of a conversation.
+    // See shared/src/cards.ts for what they are and why muxpad does not decide
+    // their content.
+    //
+    // UNIQUE (tab_id, name) is the whole semantics: `card set build` twice
+    // updates one card rather than growing a list, so the name is an identity
+    // and the write is an upsert. Without it a chatty writer would stack a new
+    // card per update — which is the transcript behaviour cards exist to
+    // replace.
+    //
+    // ON DELETE CASCADE because a card is part of its chat and means nothing
+    // without it. Unlike attachments (migration 37) there are no FILES behind a
+    // card, so the cascade is the whole cleanup — no queue, no sweeper.
+    version: 39,
+    sql: `
+      CREATE TABLE IF NOT EXISTS tab_cards (
+        id         TEXT PRIMARY KEY,
+        tab_id     TEXT NOT NULL REFERENCES tabs(id) ON DELETE CASCADE,
+        name       TEXT NOT NULL,
+        content    TEXT NOT NULL,
+        format     TEXT NOT NULL DEFAULT 'text',
+        every_ms   INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        UNIQUE (tab_id, name)
+      );
+      CREATE INDEX IF NOT EXISTS tab_cards_by_tab ON tab_cards (tab_id, created_at);
+    `,
+  },
 ];
 
 /** Highest version in the migration list. Exported so a test can assert the
