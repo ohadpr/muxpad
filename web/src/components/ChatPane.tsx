@@ -150,6 +150,7 @@ import {
   ChatMentionContext,
   ChatRow,
   ImageModal,
+  type MediaItem,
   type OpenMedia,
   type PendingQuestion,
   QuestionCard,
@@ -1437,11 +1438,12 @@ export function ChatPane({
   // Tool calls collapse to a one-line summary; tapping opens this modal with the
   // full command + output. null = closed.
   const [openTool, setOpenTool] = useState<ToolDetail | null>(null);
-  // A pasted image opened full-size in a lightbox from history. null = closed.
+  // Media opened full-size in a lightbox. Carries the whole SET the click came
+  // from plus the index, so the modal's arrows have somewhere to go — see
+  // OpenMedia. null = closed.
   const [openImage, setOpenImage] = useState<{
-    url: string;
-    name: string;
-    video: boolean;
+    items: MediaItem[];
+    index: number;
   } | null>(null);
   // Floating "jump to latest" arrow — shown only when scrolled up off the bottom.
   const [showScrollDown, setShowScrollDown] = useState(false);
@@ -4441,9 +4443,9 @@ export function ChatPane({
         {openTool ? <ToolModal detail={openTool} onClose={() => setOpenTool(null)} /> : null}
         {openImage ? (
           <ImageModal
-            url={openImage.url}
-            name={openImage.name}
-            video={openImage.video}
+            items={openImage.items}
+            index={openImage.index}
+            onIndex={(i) => setOpenImage((o) => (o ? { ...o, index: i } : o))}
             onClose={() => setOpenImage(null)}
           />
         ) : null}
