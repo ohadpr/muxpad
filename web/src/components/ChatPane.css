@@ -1549,10 +1549,82 @@
 /* Lightbox: reuse the modal backdrop/scrim but center a bare full-size image. */
 .chat-img-backdrop {
   align-items: center;
-  padding: 24px;
+  /* The padding moved to `.chat-img-stage`, which is what gets measured — with
+     it here too the image would be fitted to a box 48px wider than its own. */
   /* A zoomed image is bigger than the viewport — clip the overflow instead of
      letting it spill / add scrollbars. */
   overflow: hidden;
+}
+/* The stage: the box the image is fitted INTO, and the thing ZoomableImage
+   measures. It exists so the image's room and the nav's room are one layout
+   decision rather than two — the arrows sit under the picture, and the picture
+   gets whatever is left, so a gallery never pushes its own controls off-screen.
+   `min-height: 0` lets the image shrink inside the column instead of
+   overflowing it, which is the default for a flex child and the whole reason a
+   fitted image can still hang off the bottom. */
+.chat-img-stage {
+  /* PINNED TO THE BACKDROP, not sized by its contents. A stage that grows with
+     the image is a stage the image cannot be fitted to: `computeFit` measured
+     it, so the picture defined its own limit and overflowed the viewport by
+     whatever it liked (measured: 118px below the fold). */
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 0;
+  padding: 24px;
+}
+/* The box the image is actually measured against: whatever the stage has left
+   after the nav. `min-height: 0` is load-bearing — a flex child defaults to
+   min-height:auto and refuses to shrink below its content, which is the exact
+   mechanism that let a tall image push past the bottom edge. */
+.chat-img-frame {
+  display: grid;
+  flex: 1 1 auto;
+  place-items: center;
+  min-width: 0;
+  min-height: 0;
+}
+/* Nav under the picture: tappable, out of the image's way, and never over it —
+   an arrow floating on top of a photo covers the part you opened it to see. */
+.chat-img-nav {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 14px;
+  padding: 4px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.45);
+}
+.chat-img-arrow {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #fff;
+  font-size: 26px;
+  line-height: 1;
+  cursor: pointer;
+}
+.chat-img-arrow:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+.chat-img-count {
+  min-width: 46px;
+  color: #fff;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  opacity: 0.85;
 }
 .chat-img-full {
   position: relative;
