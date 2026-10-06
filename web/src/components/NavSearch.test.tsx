@@ -174,13 +174,25 @@ describe('reveal-focus is a pointer affordance, not a touch one', () => {
     const h = document.createElement('div');
     document.body.appendChild(h);
     const r = createRoot(h);
-    act(() => r.render(<NavSearch variant={variant} box={box}>tree</NavSearch>));
+    act(() =>
+      r.render(
+        <NavSearch variant={variant} box={box}>
+          tree
+        </NavSearch>,
+      ),
+    );
     return {
       h,
       r,
       focused: () => h.querySelector('input') === document.activeElement,
       reveal: () =>
-        act(() => r.render(<NavSearch variant={variant} box={true}>tree</NavSearch>)),
+        act(() =>
+          r.render(
+            <NavSearch variant={variant} box={true}>
+              tree
+            </NavSearch>,
+          ),
+        ),
     };
   };
 

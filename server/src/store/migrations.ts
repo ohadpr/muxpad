@@ -1275,6 +1275,32 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS tab_cards_by_tab ON tab_cards (tab_id, created_at);
     `,
   },
+  {
+    // FOLDED CRONS — render the delivered prompt collapsed behind a caret.
+    //
+    // A cron that refreshes a card injects the same plumbing every fire ("run
+    // this, write the result there") and nobody reads it twice; 22 fires in the
+    // Investing chat are 22 copies of one instruction.
+    //
+    // Named `fold`, NOT `quiet`: `crons.quiet_mins` already means "do not barge
+    // into a live conversation", and two unrelated quiets on one row is a trap
+    // for whoever reads this schema next. The flag is the AUTHOR's
+    // because only they know whether the prompt is plumbing or content.
+    //
+    // It hides the prompt and nothing else — the agent's reply is an ordinary
+    // message and stays visible, which is what keeps a failed fire from
+    // vanishing without needing a special case for failure.
+    //
+    // `apply`, not `sql`: SQLite has no ADD COLUMN IF NOT EXISTS and the
+    // idempotency test re-runs every migration with the version rows deleted.
+    version: 40,
+    apply: (db) => {
+      const cols = db.prepare('PRAGMA table_info(crons)').all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === 'fold')) {
+        db.exec('ALTER TABLE crons ADD COLUMN fold INTEGER NOT NULL DEFAULT 0');
+      }
+    },
+  },
 ];
 
 /** Highest version in the migration list. Exported so a test can assert the

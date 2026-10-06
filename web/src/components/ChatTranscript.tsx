@@ -1042,21 +1042,49 @@ function NoticeCard({
 }) {
   const at = event.variant === 'cron' ? fireTime(event.ts) : '';
   const detail = event.detail ?? (at || undefined);
+  const [open, setOpen] = useState(false);
+  // A quiet cron folds the prompt it delivered in here. The row becomes a
+  // BUTTON only when there is something to unfold — a caret on a row that does
+  // nothing is worse than no caret.
+  const body = event.body;
+  const head = (
+    <>
+      <span className="chat-sysnote-icon" aria-hidden="true">
+        {NOTICE_ICON[event.variant]}
+      </span>
+      <span className="chat-sysnote-text">
+        <HighlightedText text={event.text} hl={hl} />
+      </span>
+      {detail ? <span className="chat-sysnote-detail">{detail}</span> : null}
+      {body ? (
+        <span className="chat-sysnote-chevron" aria-hidden="true">
+          {open ? '⌄' : '›'}
+        </span>
+      ) : null}
+    </>
+  );
   return (
     <div
       className="chat-turn chat-turn-notice"
       data-eid={anchorId}
       data-search-hit={hl && hl.length > 0 ? 'true' : undefined}
     >
-      <div className={`chat-sysnote chat-sysnote-${event.variant}`} title={event.text}>
-        <span className="chat-sysnote-icon" aria-hidden="true">
-          {NOTICE_ICON[event.variant]}
-        </span>
-        <span className="chat-sysnote-text">
-          <HighlightedText text={event.text} hl={hl} />
-        </span>
-        {detail ? <span className="chat-sysnote-detail">{detail}</span> : null}
-      </div>
+      {body ? (
+        <button
+          type="button"
+          className={`chat-sysnote chat-sysnote-${event.variant} -foldable`}
+          title={open ? 'Hide what it ran' : 'Show what it ran'}
+          aria-expanded={open}
+          onClick={() => setOpen((o) => !o)}
+        >
+          {head}
+        </button>
+      ) : (
+        <div className={`chat-sysnote chat-sysnote-${event.variant}`} title={event.text}>
+          {head}
+        </div>
+      )}
+      {body && open ? <pre className="chat-sysnote-body">{body}</pre> : null}
     </div>
   );
 }

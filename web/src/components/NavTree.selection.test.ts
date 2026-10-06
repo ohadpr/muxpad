@@ -731,9 +731,9 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     expect(decl(label, 'text-transform')).toBe('uppercase');
     expect(Number.parseFloat(decl(label, 'font-size'))).toBeLessThan(13);
     expect(decl(label, 'color')).toBe('var(--fg-dim)');
-    expect(decl(ruleBody(NAV_CSS, '.navtree-ws-row[data-active="true"] .navtree-name-text'), 'color')).toBe(
-      'var(--fg)',
-    );
+    expect(
+      decl(ruleBody(NAV_CSS, '.navtree-ws-row[data-active="true"] .navtree-name-text'), 'color'),
+    ).toBe('var(--fg)');
 
     // Air is now the whole separating device, so it has to be a real amount.
     expect(
@@ -774,7 +774,8 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     expect(strip(CHIP_CSS)).not.toMatch(/data-phase="pinned"/);
     for (const r of rules(NAV_CSS)) {
       const onTheBox = r.selectors.some((sel) => /\[data-pinned="true"\]$/.test(sel));
-      if (onTheBox) expect({ sel: r.selectors, body: r.body }).toEqual({ sel: r.selectors, body: '' });
+      if (onTheBox)
+        expect({ sel: r.selectors, body: r.body }).toEqual({ sel: r.selectors, body: '' });
     }
 
     // HUE, not lightness, and that is the point rather than a flourish: the
@@ -790,8 +791,12 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     // and `[data-active="true"] .navtree-name-text` is (0,3,0) — exactly the
     // same specificity — so the only thing keeping the hue is source order.
     const sels = rules(NAV_CSS).flatMap((r, i) => r.selectors.map((sel) => ({ sel, i })));
-    const activeInk = sels.find((x) => x.sel === '.navtree-tab-row[data-active="true"] .navtree-name-text');
-    const pinnedInk = sels.find((x) => x.sel === '.navtree-tab-row[data-pinned="true"] .navtree-name-text');
+    const activeInk = sels.find(
+      (x) => x.sel === '.navtree-tab-row[data-active="true"] .navtree-name-text',
+    );
+    const pinnedInk = sels.find(
+      (x) => x.sel === '.navtree-tab-row[data-pinned="true"] .navtree-name-text',
+    );
     expect(pinnedInk && activeInk && pinnedInk.i > activeInk.i).toBe(true);
 
     // And it stays readable on both grounds it can land on, everywhere. The

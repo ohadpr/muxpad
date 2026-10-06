@@ -134,6 +134,12 @@ A cron can write a card like anything else — it is just a scheduled caller, it
 does not own the card, and several schedules may share one (read it with
 \`card get\`, edit your part, write it back).
 
+A cron whose prompt is pure plumbing — "run this, write that card" — should be
+created with \`--fold\`, so the fire shows as one collapsed row with a caret
+instead of pasting the same instruction into the log every time. It folds the
+PROMPT only: whatever the agent replies stays visible, which is what keeps a
+failed fire from disappearing.
+
 ## Scheduling — \`muxpad cron\` is the ONLY scheduler on this machine
 
 **Anything that should happen LATER — once or repeatedly — is a \`muxpad

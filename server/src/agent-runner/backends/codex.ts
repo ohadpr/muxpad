@@ -125,7 +125,10 @@ export function gitWritableDirs(cwd: string): string[] {
  */
 export function writableRootsArgs(dirs: readonly string[]): string[] {
   if (dirs.length === 0) return [];
-  return ['-c', `sandbox_workspace_write.writable_roots=[${dirs.map((d) => JSON.stringify(d)).join(', ')}]`];
+  return [
+    '-c',
+    `sandbox_workspace_write.writable_roots=[${dirs.map((d) => JSON.stringify(d)).join(', ')}]`,
+  ];
 }
 
 export function killDescendants(pid: number): void {

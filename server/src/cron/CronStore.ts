@@ -29,6 +29,7 @@ interface CronRow {
   mode: string | null;
   enabled: number;
   once: number;
+  fold: number;
   catchup: string;
   overlap: string;
   on_context: string;
@@ -65,6 +66,8 @@ export interface CronCreateInput {
   /** The NOMINAL next slot. `create` adds this cron's deterministic jitter and
    *  stores the sum — every reader sees when it will actually fire. */
   next_due_at: number;
+  /** Render the delivered PROMPT collapsed behind a caret. See CronMarker. */
+  fold?: boolean;
   /** Fire once, then retire. Omitted means "infer from the schedule" — see
    *  `isDatedSchedule`. Pass it to override the inference either way. */
   once?: boolean;
@@ -87,8 +90,8 @@ export class CronStore {
            id, name, schedule, tz, prompt, target_kind, target_pane, workspace_id,
            cwd, model, backend, mode, enabled, catchup, overlap, on_context,
            quiet_mins, jitter_ms, max_open, close_when_done, open_tabs, next_due_at,
-           last_fire_at, last_status, fail_streak, created_at, once
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, '[]', ?, NULL, NULL, 0, ?, ?)`,
+           last_fire_at, last_status, fail_streak, created_at, once, fold
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, '[]', ?, NULL, NULL, 0, ?, ?, ?)`,
       )
       .run(
         id,
@@ -116,6 +119,7 @@ export class CronStore {
         // always meant "once" here — this just stops it being a convention
         // somebody has to remember to clean up after.
         (input.once ?? isDatedSchedule(input.schedule)) ? 1 : 0,
+        input.fold ? 1 : 0,
       );
     return this.getById(id) as Cron;
   }
@@ -350,6 +354,7 @@ function rowToCron(r: CronRow): Cron {
     mode: r.mode,
     enabled: r.enabled === 1,
     once: r.once === 1,
+    fold: r.fold === 1,
     catchup: r.catchup === 'skip' || r.catchup === 'all' ? r.catchup : 'once',
     overlap: r.overlap === 'queue' ? 'queue' : 'skip',
     on_context:

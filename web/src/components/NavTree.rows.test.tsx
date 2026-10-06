@@ -219,9 +219,9 @@ describe('opening the done drawer shows a delivered child as a hollow dot', () =
       tab('b', { spawned_by: 'root', done: true, done_reason: 'delivered', clock: null }),
     ]);
     act(() => box.querySelector<HTMLButtonElement>('.navtree-done-head')?.click());
-    expect([...box.querySelectorAll<HTMLButtonElement>('.navtree-done-head')][1]?.textContent).toContain(
-      '2 sub-chats',
-    );
+    expect(
+      [...box.querySelectorAll<HTMLButtonElement>('.navtree-done-head')][1]?.textContent,
+    ).toContain('2 sub-chats');
   });
 
   it('a DECAYED top-level chat still fills the drawer', () => {
