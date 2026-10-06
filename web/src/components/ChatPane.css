@@ -876,6 +876,18 @@
 /* A notice with something folded behind it. Same pill, now pressable — the
    caret is the only thing that changes, because the row is still a statement
    about what happened and not a control that does something. */
+/* The schedule behind a message still sitting in the queue. Same ⏱ as the
+   transcript's fire chip and the nav row's clock, so "this is a cron" is one
+   mark everywhere rather than three. */
+.chat-queued-cron {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  margin-bottom: 4px;
+  color: var(--chat-faint);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
 .chat-sysnote.-foldable {
   cursor: pointer;
   border: 0;

@@ -196,6 +196,36 @@ export function ChatCards({ tabId }: { tabId: string | null | undefined }) {
     return () => clearInterval(t);
   }, [cards.length]);
 
+  // ── WHICH END GETS CUT WHEN THERE ARE TOO MANY ────────────────────────────
+  // The stack is bounded, so past a few cards something has to go off screen.
+  // Glued to the bottom, the end that must stay is the BOTTOM one: it is
+  // against the composer, it is where the eye already is, and it is where the
+  // cron-driven card sits. Left alone, a scroller shows its TOP and clips the
+  // last card mid-line, which reads as a broken card rather than a full stack.
+  const stackRef = useRef<HTMLDivElement>(null);
+  const [over, setOver] = useState(false);
+  useEffect(() => {
+    const el = stackRef.current;
+    if (!el) return;
+    const fit = () => {
+      const o = el.scrollHeight > el.clientHeight + 1;
+      setOver(o);
+      // Pin to the bottom. Not a one-off: a card growing taller (an html card
+      // re-measuring itself) changes scrollHeight after this runs.
+      if (o) el.scrollTop = el.scrollHeight;
+    };
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(el);
+    for (const child of el.children) ro.observe(child);
+    return () => ro.disconnect();
+    // KEYED ON THE CARDS, not []. The stack renders nothing when there are
+    // none, so on the first pass the ref is null and this bails — and with no
+    // dependencies it would never run again, leaving the observer unattached
+    // for the entire session. It also has to re-observe when the card NODES
+    // change, since a watcher bound to replaced children is watching nothing.
+  }, [cards]);
+
   const dismiss = useCallback(
     (name: string) => {
       if (!tabId) return;
@@ -214,7 +244,7 @@ export function ChatCards({ tabId }: { tabId: string | null | undefined }) {
 
   if (cards.length === 0) return null;
   return (
-    <div className="chat-cards">
+    <div className={`chat-cards${over ? ' -over' : ''}`} ref={stackRef}>
       {cards.map((card) => {
         const stale = cardIsStale(card, now);
         return (
