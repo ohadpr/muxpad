@@ -1,7 +1,7 @@
 import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { mkdirSync } from 'node:fs';
 import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { sweepAttachments } from './attachment-reaper.js';
@@ -50,13 +50,9 @@ describe('the attachment reaper', () => {
     dir = mkdtempSync(join(tmpdir(), 'att-reaper-'));
     mkdirSync(join(dir, 'attachments'), { recursive: true });
     db = openDb(join(dir, 'db.sqlite'));
-    db.prepare('INSERT INTO workspaces (id, slug, name, created_at, updated_at) VALUES (?,?,?,?,?)').run(
-      'w1',
-      'w1',
-      'W',
-      NOW,
-      NOW,
-    );
+    db.prepare(
+      'INSERT INTO workspaces (id, slug, name, created_at, updated_at) VALUES (?,?,?,?,?)',
+    ).run('w1', 'w1', 'W', NOW, NOW);
     db.prepare(
       'INSERT INTO tabs (id, slug, name, layout, workspace_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?)',
     ).run('t1', 't1', 'T', 'p1', 'w1', NOW, NOW);
