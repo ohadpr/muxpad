@@ -93,6 +93,47 @@ list. Capabilities worth knowing:
   Reading never needs the bot invited anywhere; posting as muxpad does
   (\`/invite @muxpad\`), and the error says so when it bites.
 
+## Cards — the value that should not scroll away
+
+A chat can hold named CARDS, pinned above the conversation. Setting the same
+name again REPLACES that card. The transcript is the history; a card is the
+current answer.
+
+    muxpad card set build "V2.1 [####------] 42%  layout · 3/6 streams done"
+    muxpad card set panel --format=html < panel.html
+    muxpad card set market --format=md --every=1d "**open** SPX +0.4% · VIX 13.1"
+    muxpad card get build        # the content, bare — read-modify-write
+    muxpad card list
+    muxpad card clear build
+
+**USE ONE WHEN THE NEW VALUE REPLACES THE OLD ONE.** Long work whose progress
+you would otherwise re-print; a figure refreshed on a schedule; a status only
+interesting at its latest value. If a reader would want the history, that is a
+message, not a card — and most things are messages.
+
+**The content is yours.** text, markdown or html, and muxpad imposes no fields
+and no components. An html card renders in a sandboxed frame: it can use
+\`var(--accent)\`, \`var(--fg)\`, \`var(--bg-hover)\` and friends (the app's theme is
+injected) and it cannot reach the app. Keep it under 64KB — a card is pinned
+where it cannot be scrolled past, so a card the height of the screen is worse
+than no card. For anything bigger, \`muxpad publish\`.
+
+A SUGGESTED progress line, because one shared shape is easier to read at a
+glance than six inventions — a convention, not a rule, and not a component:
+
+    V2.1 [############--------] 62%  edge live · 4/6 streams done
+
+\`--every=<30s|15m|6h|1d>\` says how often you MEAN to rewrite it. muxpad marks
+the card overdue if you stop, which is the failure nobody notices: a card whose
+writer died looks exactly like a card with nothing new to say.
+
+**Clear a card when its work is over.** A finished build's bar at 100% is an
+ornament; the next reader wants the space.
+
+A cron can write a card like anything else — it is just a scheduled caller, it
+does not own the card, and several schedules may share one (read it with
+\`card get\`, edit your part, write it back).
+
 ## Scheduling — \`muxpad cron\` is the ONLY scheduler on this machine
 
 **Anything that should happen LATER — once or repeatedly — is a \`muxpad

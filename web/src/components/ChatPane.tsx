@@ -127,6 +127,7 @@ import { useVoice } from '../lib/voice/use-voice';
 import { AgentBackendLogo, backendFromAssistant } from './AgentLogos';
 import { BrowserCard } from './BrowserCard';
 import { useBrowsers } from './BrowserCards';
+import { ChatCards } from './ChatCards';
 import { ChatDraft, type ChatDraftHandle } from './ChatDraft';
 import { HighlightedText, Markdown } from './ChatMarkdown';
 import { ChatMentionCard, ChatMentionPicker, ChatMentionPill } from './ChatMentionPicker';
@@ -646,11 +647,15 @@ const NO_TERMS: readonly string[] = [];
  */
 export function ChatPane({
   paneId,
+  tabId,
   active,
   agentNative = false,
   pendingPick = false,
 }: {
   paneId: string;
+  /** The chat this pane IS — cards hang off the tab, not the pane, because a
+   *  conversation survives its pane being respawned under it. */
+  tabId: string;
   active: boolean;
   /** Pane runs `muxpad agent` (durable startup_cmd marker). */
   agentNative?: boolean;
@@ -4252,6 +4257,11 @@ export function ChatPane({
             </button>
           </output>
         ) : null}
+        {/* The pinned cards — ABOVE the scroller, deliberately. A card is the
+          value that must not scroll away; inside `.chat-scroll` it would be
+          just another message at the top of the log, which is where the old
+          one already was. */}
+        <ChatCards tabId={tabId} />
         {/* tabIndex=0 because a keydown listener on an element only fires when
           focus is inside it, and this was a plain div: focus sat on <body>, the
           listener never saw a key, and PageDown moved the log 0px. The chat had

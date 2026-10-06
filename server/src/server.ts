@@ -18,6 +18,7 @@ import { agentSessionsRoutes } from './routes/agent-sessions.js';
 import { appsRoutes } from './routes/apps.js';
 import { attachmentsRoutes } from './routes/attachments.js';
 import { browserProxyRoutes, browsersRoutes } from './routes/browsers.js';
+import { cardsRoutes } from './routes/cards.js';
 import { cronsRoutes } from './routes/crons.js';
 import { eventsRoutes } from './routes/events.js';
 import { openRoutes } from './routes/open.js';
@@ -189,6 +190,9 @@ export function createApp(deps: AppDeps): Hono {
   app.route('/api/workspaces', workspacesRoutes(resolved));
   app.route('/api/tabs', tabsRoutes(resolved));
   app.route('/api/tabs', panesTabScopedRoutes(resolved));
+  // Chat cards — named persistent blocks pinned in a conversation. Tab-scoped
+  // because a card belongs to a chat; see routes/cards.ts.
+  app.route('/api/tabs', cardsRoutes(resolved));
   app.route('/api/panes', panesScopedRoutes(resolved));
   app.route('/api/panes', paneIoRoutes(resolved));
   app.route('/api/panes', attachmentsRoutes(resolved));
