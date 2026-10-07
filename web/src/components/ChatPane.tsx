@@ -18,6 +18,7 @@ import {
   isAgentLaunchTool,
   subagentLabel,
   summarizeToolInput,
+  withMentionContext,
 } from '@muxpad/shared';
 import { useNavigate } from '@tanstack/react-router';
 import {
@@ -56,6 +57,7 @@ import { browserOpenIntent, injectBrowserMoments } from '../lib/browser-card';
 import {
   type DirectedWork,
   addDirected,
+  directedIsStale,
   loadDirected,
   removeDirected,
   syncReported,
@@ -77,10 +79,10 @@ import {
   directTo,
   hitsFor,
   interleaveSpawnCards,
+  mentionedChats,
   nextMentionRun,
   nextSearchLimit,
   parseDirectMarker,
-  parseDirective,
   parseMentions,
   parseReportMarker,
   rankMentions,
@@ -2111,55 +2113,14 @@ export function ChatPane({
     inputRef.current?.focus();
   };
 
-  /**
-   * Hand a request to ANOTHER chat's agent, and leave a card here saying so.
-   *
-   * Does not touch this pane's socket: the point of `@Name do this` is that the
-   * work happens over there and this chat stays free. The card goes up
-   * optimistically (the user's sentence must not vanish while a request is in
-   * flight) and is taken back if the request could not be delivered.
-   */
-  const directWork = (
-    target: MentionChat,
-    /** The request as the user wrote it, for the card's second line. Taken from
-     *  the parsed directive rather than re-derived by stripping the name out of
-     *  the draft: the token in the draft is whatever the chat was CALLED when it
-     *  was picked, which after a rename is not its name any more. */
-    request: string,
-    /** What the other agent is sent — prose plus any attachment paths. */
-    outgoing: string,
-    /** The composer's state, to hand back untouched if this never leaves. */
-    restore: { text: string; chips: readonly { path: string; name: string; previewUrl: string }[] },
-  ) => {
-    const id =
-      globalThis.crypto?.randomUUID?.().slice(0, 8) ?? Math.random().toString(36).slice(2, 10);
-    const entry: DirectedWork = {
-      id,
-      at: Date.now(),
-      tabId: target.tabId,
-      tabSlug: target.tabSlug,
-      workspaceSlug: target.workspaceSlug,
-      // The card shows the REQUEST as the user wrote it: attachment paths are
-      // for the agent to read, not for the log to quote back.
-      body: request,
-      chip: target.chip,
-    };
-    setDirected(addDirected(paneId, entry));
-    void directTo(
-      target,
-      { id, from: myChat?.tabName ?? 'another chat', pane: paneId },
-      outgoing,
-    ).then((res) => {
-      if (res.ok) return;
-      setDirected(removeDirected(paneId, id));
-      setNotice({ text: res.message, tone: 'info' });
-      // Give the composer back rather than lose it — the same contract as a send
-      // into a dead socket. Only if it is still empty: the user may have started
-      // typing something else while this was in flight.
-      setInput((cur) => (cur.trim() ? cur : restore.text));
-      if (restore.chips.length) setChips((prev) => (prev.length ? prev : [...restore.chips]));
-    });
-  };
+  // `directWork` lived here: it sent a leading `@Name <text>` to that chat and
+  // put a pending card in this one. Removed with the routing rule it served —
+  // a mention is CONTEXT now (see the send path below and
+  // shared/src/chat-context.ts), and handing work to another chat is something
+  // you ask for, which the agent does with `muxpad agent send`.
+  //
+  // The CARDS and their report parsing stay: old cards must still render, and
+  // an agent-initiated `<muxpad-direct>` message still draws one.
 
   const sendMessage = () => {
     const text = input.trim();
@@ -2185,40 +2146,27 @@ export function ChatPane({
       setInput('');
       return;
     }
-    // `@Name <text>` at the head of the draft goes to THAT chat instead of this
-    // one. Checked before the socket, because this path does not use it — and
-    // deliberately after the question card above, which owns the composer while
-    // it is up.
+    // ── A MENTION IS CONTEXT, NEVER A ROUTE ────────────────────────────────
+    // A leading `@Name` used to send the rest of the draft to THAT chat instead
+    // of this one. Reported by the user who hit it: "I wrote you a message and
+    // mentioned another tab, and what you did was take what I wrote and send it
+    // to that tab."
     //
-    // `input`, not `text`: a pick is anchored at an offset into the draft, and
-    // the trim would shift every one of them by the leading whitespace.
-    // `parseDirective` trims for itself.
-    const directive = parseDirective(input, corpus, livePicks);
-    if (directive && !directive.target) {
-      // The chat the user PICKED is gone from the corpus. Do not guess another
-      // one with the same name, and do not send it here either — keep the draft
-      // and say why, so they can pick again.
-      setNotice({
-        text: `@${directive.missing.name} isn't available any more — pick the chat again.`,
-        tone: 'info',
-      });
-      return;
-    }
-    if (directive) {
-      directWork(
-        directive.target,
-        directive.body,
-        composeOutgoingMessage(directive.body, attachmentPaths),
-        {
-          text,
-          chips,
-        },
-      );
-      setInput('');
-      clearChips();
-      return;
-    }
-    const outgoing = composeOutgoingMessage(text, attachmentPaths);
+    // One rule can only ever do one thing with a mention, and that rule picked
+    // the rarest one. The common intent is the opposite — here is a chat, it is
+    // relevant, work out what to do about it — and the agent reading the message
+    // CAN work that out: read its tail, summarise it, search it, ask it
+    // something, or notice that the sentence only needed the name. It also fails
+    // expensively: the words go somewhere nobody is looking, and the sender
+    // learns about it when something else answers.
+    //
+    // So the message always stays here, and instead it carries the handles for
+    // whatever it mentioned — ids rather than the characters `@Investing`, which
+    // are guesswork the moment two chats are called "Main". Directing work is
+    // still possible and is now something you ASK for; the agent has
+    // `muxpad agent send`.
+    const mentioned = mentionedChats(input, corpus, livePicks);
+    const outgoing = withMentionContext(composeOutgoingMessage(text, attachmentPaths), mentioned);
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       // Don't fire into a dead socket (the browser would drop it silently).
@@ -4336,13 +4284,19 @@ export function ChatPane({
               // retirement never reached it either. The tab id is the durable
               // handle; the snapshot is the fallback while there is no corpus.
               const live = corpusById.get(d.tabId);
+              // A card that spins forever is the failure this state exists for:
+              // the answer is a MODEL doing as it was asked, so a target that
+              // was busy, misread the instruction, crashed, or simply answered
+              // in prose without copying the marker left the card turning for
+              // the rest of the week.
+              const stale = directedIsStale(d);
               return (
                 <ChatMentionCard
                   key={d.id}
                   chat={live?.chip ?? d.chip}
                   sub={d.body}
-                  working={!d.reportedAt}
-                  state={d.reportedAt ? 'reported' : undefined}
+                  working={!d.reportedAt && !stale}
+                  state={d.reportedAt ? 'reported' : stale ? 'no answer' : undefined}
                   onOpen={() => openChat(live ?? d)}
                 />
               );

@@ -13,4 +13,5 @@ export * from './chat-clock.js';
 export * from './agent-pane.js';
 export * from './build-id.js';
 export * from './cards.js';
+export * from './chat-context.js';
 export * from './spawn-delivery.js';
