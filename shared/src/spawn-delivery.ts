@@ -56,7 +56,17 @@ export interface SpawnDeliveryMarker {
   from: string[];
 }
 
-const REPORT_OPEN = /^\s*<muxpad-report\b([^>]*)>([\s\S]*?)<\/muxpad-report>\s*/;
+/**
+ * `<muxpad-delivery>`, NOT `<muxpad-report>`.
+ *
+ * The directed-mention round trip (web/src/lib/chat-mention.ts) already owns
+ * `<muxpad-report>` for a different thing — one chat answering another — and
+ * its parser is TOLERANT BY CONSTRUCTION: it requires only a leading tag, so a
+ * batch of sub-chat reports matched it and would have rendered as "a report
+ * from t1,t2". Two features sharing a tag name is a trap whichever way the
+ * ordering happens to fall today.
+ */
+const REPORT_OPEN = /^\s*<muxpad-delivery\b([^>]*)>([\s\S]*?)<\/muxpad-delivery>\s*/;
 
 function attr(attrs: string, name: string): string | null {
   const m = attrs.match(new RegExp(`\\b${name}="([^"]*)"`));
@@ -130,7 +140,7 @@ export function renderSpawnDelivery(entries: readonly SpawnDeliveryEntry[]): str
       return `${head}\n\n${text}${links}`;
     })
     .join('\n\n');
-  return `<muxpad-report count="${n}" from="${ids}">\n${note}\n</muxpad-report>\n\n${body}`;
+  return `<muxpad-delivery count="${n}" from="${ids}">\n${note}\n</muxpad-delivery>\n\n${body}`;
 }
 
 /**

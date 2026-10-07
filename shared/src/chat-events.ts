@@ -506,7 +506,7 @@ export function expandCronFire(text: string, id: string, ts: number | null): Cha
 }
 
 /**
- * A batch of finished sub-chat reports arrives as `<muxpad-report …>…</…>` +
+ * A batch of finished sub-chat reports arrives as `<muxpad-delivery …>…</…>` +
  * the reports themselves. Same split as `expandCronFire`, for the same reason:
  * the parent's transcript should read "⇤ 3 sub-chats reported" followed by what
  * they said, not a wall of XML — and a human did not type any of it.
