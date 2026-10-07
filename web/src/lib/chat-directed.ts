@@ -61,6 +61,30 @@ const KEY = (paneId: string) => `muxpad.directed.${paneId}`;
 const MAX_CARDS = 12;
 const MAX_AGE_MS = 7 * 86_400_000;
 
+/**
+ * How long a card spins before it admits nothing is coming.
+ *
+ * It had no such limit: `working={!d.reportedAt}` spun until a report arrived,
+ * and a report is a MODEL doing as it was asked — so a target that was busy,
+ * that misread the instruction, that crashed, or that simply answered in prose
+ * without copying the marker left a card turning for the rest of the week.
+ * Reported as "a card pointing at the other chat but it's just spinning doing
+ * nothing", which is exactly what it was.
+ *
+ * Fifteen minutes is past any real answer and well short of leaving it there
+ * all day. The card stays — it is a true record that something was asked — it
+ * just stops pretending to be in progress.
+ */
+export const DIRECTED_WAIT_MS = 15 * 60_000;
+
+/** Nothing came back, and nothing is going to. */
+export function directedIsStale(
+  d: Pick<DirectedWork, 'at' | 'reportedAt'>,
+  now: number = Date.now(),
+): boolean {
+  return !d.reportedAt && now - d.at > DIRECTED_WAIT_MS;
+}
+
 export function loadDirected(paneId: string, now: number = Date.now()): DirectedWork[] {
   let raw: string | null = null;
   try {
@@ -102,7 +126,7 @@ export function addDirected(paneId: string, item: DirectedWork): DirectedWork[] 
   return next;
 }
 
-/** Drop a card whose request never left (a refused or unreachable target). */
+/** Drop a card: a request that never left, or one the user has dismissed. */
 export function removeDirected(paneId: string, id: string): DirectedWork[] {
   const next = loadDirected(paneId).filter((d) => d.id !== id);
   save(paneId, next);

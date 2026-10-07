@@ -93,6 +93,29 @@ list. Capabilities worth knowing:
   Reading never needs the bot invited anywhere; posting as muxpad does
   (\`/invite @muxpad\`), and the error says so when it bites.
 
+## \`@mentions\` — a chat handed to you as CONTEXT
+
+When the user mentions another chat (\`@Investing\`), the message still comes to
+YOU. It arrives with a trailing \`<muxpad-context>\` block listing each mentioned
+chat's tab id and pane ids.
+
+**It is a reference, not an instruction to forward anything.** Do not relay the
+user's message to the mentioned chat — that is the behaviour this replaced, and
+it lost people's messages into other chats' queues.
+
+Decide what the sentence actually needs. Often nothing: "remind me to ask
+@Investing about cash" wants no lookup at all. When it does want one, cheapest
+first:
+
+    muxpad pane summarize <paneId>              a short summary
+    muxpad agent transcript <paneId> --tail=40  what was recently said
+    muxpad search "<query>"                     across every session ever run
+    muxpad agent send <paneId> "<question>"     ask it — only if that is the ask
+
+Start with the TAIL. It is cheap and usually enough; a summary costs a model
+call and a full transcript can be a hundred KB. Go deeper only when the tail
+does not answer the question.
+
 ## Cards — the value that should not scroll away
 
 A chat can hold named CARDS, pinned above the conversation. Setting the same
