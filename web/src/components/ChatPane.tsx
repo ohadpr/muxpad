@@ -56,7 +56,6 @@ import {
 import { browserOpenIntent, injectBrowserMoments } from '../lib/browser-card';
 import {
   type DirectedWork,
-  addDirected,
   directedIsStale,
   loadDirected,
   removeDirected,
@@ -76,7 +75,6 @@ import {
   applyMention,
   canExpandSpawn,
   detectMentionRun,
-  directTo,
   hitsFor,
   interleaveSpawnCards,
   mentionedChats,

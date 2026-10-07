@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { withMentionContext } from './chat-context.js';
 import {
   type ChatEvent,
   LAUNCH_ACK_RE,
@@ -584,5 +585,38 @@ describe('a folded cron fire in the transcript', () => {
     const out = expandChatEvent({ kind: 'user', id: 'u1', ts: MS, text });
     expect(kinds(out)).toEqual(['notice']);
     expect((out[0] as { body?: string }).body).toBeUndefined();
+  });
+});
+
+describe("an @mention's handles are for the agent, not the reader", () => {
+  const typed = 'what did @Investing decide about cash?';
+  const sent = withMentionContext(typed, [{ name: 'Investing', tabId: 'T1', paneIds: ['P1'] }]);
+
+  it('shows the sentence that was typed, not the block', () => {
+    // Without this the handles print under every mention — muxpad's plumbing
+    // shown to the person it was hidden from, exactly as the cron marker did in
+    // the queue preview.
+    const out = expandChatEvent({ kind: 'user', id: 'u1', ts: MS, text: sent });
+    expect(kinds(out)).toEqual(['user']);
+    const shown = (out[0] as { text: string }).text;
+    expect(shown).toBe(typed);
+    expect(shown).not.toContain('muxpad-context');
+    expect(shown).not.toContain('P1');
+  });
+
+  it('strips on the claude road too', () => {
+    const out = normalizeTranscriptLine({
+      type: 'user',
+      uuid: 'u1',
+      timestamp: TS,
+      message: { role: 'user', content: sent },
+    });
+    expect((out[0] as { text: string }).text).toBe(typed);
+  });
+
+  it('leaves a message with no mentions untouched, object and all', () => {
+    // Identity matters: a plain message must not be rebuilt on every render.
+    const e = { kind: 'user' as const, id: 'u1', ts: MS, text: 'plain' };
+    expect(expandChatEvent(e)[0]).toBe(e);
   });
 });
