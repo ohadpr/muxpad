@@ -523,7 +523,7 @@ describe('THE JOIN in a transcript — a delivery is not a person typing', () =>
     expect(notice.variant).toBe('report');
     expect(notice.text).toBe('2 sub-chats reported');
     // The bubble carries the reports and NOT the marker.
-    expect((out?.[1] as { text: string }).text).not.toContain('<muxpad-report');
+    expect((out?.[1] as { text: string }).text).not.toContain('<muxpad-delivery');
     expect((out?.[1] as { text: string }).text).toContain('Found three call sites.');
   });
 

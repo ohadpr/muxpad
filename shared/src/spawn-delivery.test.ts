@@ -33,7 +33,7 @@ describe('the spawn delivery marker', () => {
     // reply to it instead of acting on it.
     const text = renderSpawnDelivery([entry()]);
     expect(text).toMatch(/not a human asking a question/);
-    expect(text.startsWith('<muxpad-report')).toBe(true);
+    expect(text.startsWith('<muxpad-delivery')).toBe(true);
   });
 
   it('names a crashed worker as crashed', () => {
@@ -59,11 +59,11 @@ describe('the spawn delivery marker', () => {
 
   it('returns null for ordinary text, and for a merely-mentioned tag', () => {
     expect(parseSpawnDelivery('just a message')).toBeNull();
-    expect(parseSpawnDelivery('look at <muxpad-report count="1">x</muxpad-report>')).toBeNull();
+    expect(parseSpawnDelivery('look at <muxpad-delivery count="1">x</muxpad-delivery>')).toBeNull();
   });
 
   it('returns null for a marker with no count', () => {
-    expect(parseSpawnDelivery('<muxpad-report from="t1">x</muxpad-report>\n\nbody')).toBeNull();
+    expect(parseSpawnDelivery('<muxpad-delivery from="t1">x</muxpad-delivery>\n\nbody')).toBeNull();
   });
 
   describe('the body budget — a 65-way fan-out is not a context window', () => {
@@ -115,5 +115,24 @@ describe('isMachineMessage', () => {
   it('leaves a person alone', () => {
     expect(isMachineMessage('what happened to the build?')).toBe(false);
     expect(isMachineMessage('')).toBe(false);
+  });
+});
+
+describe('it does not collide with the directed-mention report', () => {
+  it('uses a tag of its own', () => {
+    // `<muxpad-report>` belongs to chat-mention.ts (one chat answering another),
+    // and that parser requires only a leading tag — so sharing the name meant a
+    // batch of sub-chat reports rendered as "a report from t1,t2".
+    const text = renderSpawnDelivery([entry()]);
+    expect(text).toContain('<muxpad-delivery');
+    expect(text).not.toContain('<muxpad-report');
+  });
+
+  it('still refuses to claim a directed report', () => {
+    // The guard that was already here, kept: the other side's marker has an
+    // `id` and no `count`, and must stay none of our business.
+    const theirs =
+      '<muxpad-report id="r1" from="Investing" pane="p1"></muxpad-report>\n\nthe answer';
+    expect(parseSpawnDelivery(theirs)).toBeNull();
   });
 });
