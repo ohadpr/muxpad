@@ -706,3 +706,23 @@ a.chat-mention-card-artifact:hover {
   font-size: 12px;
   color: var(--chat-faint);
 }
+
+/* Dismiss on a directed card that nothing answered — it is the only record of
+   that request, so it cannot simply expire, but it must be clearable. */
+.chat-mention-card-x {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  /* No fallback hex: this sheet names no colour of its own — the card borrows
+     the app's channel or it borrows nothing (see the test that enforces it). */
+  color: var(--chat-faint);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+.chat-mention-card-x:hover {
+  background: var(--chat-border);
+  color: var(--chat-fg);
+}
