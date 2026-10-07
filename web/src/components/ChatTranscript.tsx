@@ -18,6 +18,7 @@ import {
   type ToolResultEvent,
   type ToolUseEvent,
   parseCronMarker,
+  stripMentionContext,
   summarizeToolInput,
 } from '@muxpad/shared';
 import {
@@ -382,7 +383,7 @@ export const ChatRow = memo(function ChatRow({
 // as a clickable thumbnail (loaded over HTTP so it works from any device) while
 // keeping the surrounding prose; the raw path stays in the title for reference.
 export function UserText({
-  text,
+  text: raw,
   onOpenImage,
   hl,
 }: {
@@ -390,6 +391,18 @@ export function UserText({
   onOpenImage?: OpenMedia | undefined;
   hl?: readonly string[] | undefined;
 }) {
+  // ─── THE ONE PLACE RAW OUTGOING TEXT BECOMES A BUBBLE ───────────────────
+  // An `@mention` appends a `<muxpad-context>` block carrying the handles for
+  // the chats it referenced. The AGENT needs them; the reader does not — they
+  // typed "what did @Investing decide?" and that is what their bubble must say.
+  //
+  // Stripped HERE because three different inputs reach this component and two
+  // of them never pass through the transcript normalizer: the optimistic echo
+  // (the server's turn-start text, shown in the seconds before the transcript
+  // catches up) and the queued preview (the raw message still waiting to go).
+  // Patching each site is how one gets missed — the optimistic one already had
+  // been.
+  const text = stripMentionContext(raw);
   const parts = splitMessageAttachments(text);
   if (parts.length === 1 && parts[0]?.kind === 'text') return <MentionedText text={text} hl={hl} />;
   return (
@@ -965,6 +978,8 @@ export function QueuedText({
   onOpenImage?: OpenMedia | undefined;
 }) {
   const fire = parseCronMarker(text);
+  // The queue holds the RAW outgoing message; `UserText` strips the mention
+  // handles out of it, as it does for every other bubble.
   if (!fire) return <UserText text={text} onOpenImage={onOpenImage} />;
   const body = fire.marker.fold ? '' : fire.body.trim();
   return (

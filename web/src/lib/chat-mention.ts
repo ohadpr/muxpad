@@ -1197,6 +1197,22 @@ export function parseDirective(
 
 // ── The markers ──────────────────────────────────────────────────────────────
 //
+// ─── THE SENDING HALF IS DORMANT ────────────────────────────────────────────
+// `parseDirective`, `directTo` and `renderDirectMarker` below have NO caller in
+// the app. A leading `@Name <text>` used to route the draft to that chat; it is
+// context now (shared/src/chat-context.ts has the why), so nothing in the
+// composer reaches them.
+//
+// They are kept, rather than deleted, because the RECEIVING half is live and
+// they are one feature: `parseDirectMarker` and `parseReportMarker` still render
+// a `<muxpad-direct>` message and the `<muxpad-report>` that answers it, which
+// is what an agent-initiated direction (`muxpad agent send`) draws. Re-enabling
+// the send side is a call to `directTo` from an explicit gesture — a picker
+// action, say — and not a rebuild.
+//
+// If you are reading this because grep said these were used: they are not. The
+// tests are the only callers.
+//
 // A directed message and its answer are REAL delivered messages: muxpad never
 // writes an agent's transcript, it tails the file the harness owns. So each one
 // carries a delimited block that is at once a genuine instruction to the agent

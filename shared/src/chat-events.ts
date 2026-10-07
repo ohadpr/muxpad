@@ -5,6 +5,7 @@
 //
 // See docs/plans/2026-07-01-web-chat-session-switching.md.
 
+import { stripMentionContext } from './chat-context.js';
 import { parseCronMarker } from './cron.js';
 import { parseSpawnDelivery } from './spawn-delivery.js';
 import type { AgentMode } from './types.js';
@@ -543,8 +544,26 @@ export function expandChatEvent(event: ChatEvent): ChatEvent[] {
   if (event.kind !== 'user') return [event];
   return (
     expandCronFire(event.text, event.id, event.ts) ??
-    expandSpawnDelivery(event.text, event.id, event.ts) ?? [event]
+    expandSpawnDelivery(event.text, event.id, event.ts) ?? [forDisplay(event)]
   );
+}
+
+/**
+ * A user message as the READER should see it.
+ *
+ * Strips the `<muxpad-context>` block an `@mention` appends — the handles for
+ * the chats the message referenced. The AGENT needs them (it reads the harness's
+ * own transcript, not this), and the reader does not: they typed
+ * "what did @Investing decide?" and that is what their bubble must say, with the
+ * mention rendering as a chip the way it always has.
+ *
+ * Without this the block is simply printed under every mention, which is the
+ * same defect the cron marker had in the queue preview — muxpad's plumbing
+ * shown to the person it was hidden from.
+ */
+function forDisplay(event: ChatEvent & { kind: 'user' }): ChatEvent {
+  const shown = stripMentionContext(event.text);
+  return shown === event.text ? event : { ...event, text: shown };
 }
 
 /**
@@ -642,7 +661,9 @@ export function normalizeTranscriptLine(line: unknown): ChatEvent[] {
       // …and so is a batch of sub-chat reports.
       const reports = expandSpawnDelivery(content, id, ts);
       if (reports) return reports;
-      return [{ kind: 'user', id, ts, text: content }];
+      // An `@mention`'s handles are for the agent, not the reader — see
+      // `forDisplay`.
+      return [{ kind: 'user', id, ts, text: stripMentionContext(content) }];
     }
     if (Array.isArray(content)) {
       const out: ChatEvent[] = [];

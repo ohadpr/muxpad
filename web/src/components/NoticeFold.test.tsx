@@ -1,9 +1,9 @@
 import type { ChatEvent } from '@muxpad/shared';
-import { renderCronMarker } from '@muxpad/shared';
+import { renderCronMarker, withMentionContext } from '@muxpad/shared';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, describe, expect, it } from 'vitest';
-import { ChatRow, QueuedText } from './ChatTranscript';
+import { ChatRow, QueuedText, UserText } from './ChatTranscript';
 
 /**
  * A notice with something folded behind it — a quiet cron's prompt.
@@ -110,5 +110,45 @@ describe('a queued message that is a cron fire', () => {
     });
     expect(host.querySelector('.chat-queued-cron')).toBeNull();
     expect(host.textContent).toBe('just a message I typed');
+  });
+});
+
+describe("a mention's handles never reach the reader", () => {
+  const typed = 'what did @Investing decide?';
+  const sent = withMentionContext(typed, [{ name: 'Investing', tabId: 'T1', paneIds: ['P1'] }]);
+
+  const render = (node: React.ReactNode) => {
+    const host = document.createElement('div');
+    document.body.append(host);
+    act(() => {
+      createRoot(host).render(node);
+    });
+    return host;
+  };
+
+  it('strips them from a plain bubble', () => {
+    const host = render(<UserText text={sent} />);
+    expect(host.textContent).toBe(typed);
+    expect(host.textContent).not.toContain('muxpad-context');
+  });
+
+  it('strips them from a QUEUED bubble', () => {
+    // The queue holds the raw outgoing message.
+    const host = render(<QueuedText text={sent} />);
+    expect(host.textContent).not.toContain('muxpad-context');
+    expect(host.textContent).not.toContain('P1');
+  });
+
+  it('is the choke point, so the optimistic echo is covered too', () => {
+    // The optimistic bubble renders the server's turn-start text — raw, and
+    // never through the transcript normalizer. It had the leak; stripping in
+    // UserText is what closes it without a third patch.
+    const host = render(<UserText text={sent} />);
+    expect(host.textContent).not.toContain('tab T1');
+  });
+
+  it('leaves an ordinary message exactly as typed', () => {
+    const host = render(<UserText text="just a message" />);
+    expect(host.textContent).toBe('just a message');
   });
 });
