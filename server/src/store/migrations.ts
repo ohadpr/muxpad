@@ -1301,6 +1301,32 @@ const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    // PARKED PANES — `panes.parked_at`: muxpad stopped this chat's process on
+    // purpose, and will start it again when something needs it.
+    //
+    // The lazy-START policy has been in PaneStore.listAgentPanes from the
+    // beginning ("an idle chat starts when its next send is queued, because
+    // keeping every historical chat resident is what put 103 panes on this
+    // machine"). Nothing ever implemented the other half, so every chat ever
+    // opened stayed resident: measured here, 124 runners holding 125 harness
+    // processes, 13.8 GB, of which 71 runners — about 8 GB — belonged to chats
+    // untouched for three days or more.
+    //
+    // WHY A COLUMN AND NOT AN INFERENCE. "No pty" alone cannot tell PARKED from
+    // DIED, and the two must not be confused: a dead runner is announced as
+    // "agent process died — restarting (attempt 1/3)" and spends one of three
+    // attempts before the pane is declared broken. Reviving a parked chat
+    // through that path would lie to the reader and burn the budget that exists
+    // to stop a crash loop.
+    version: 41,
+    apply: (db) => {
+      const cols = db.prepare('PRAGMA table_info(panes)').all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === 'parked_at')) {
+        db.exec('ALTER TABLE panes ADD COLUMN parked_at INTEGER');
+      }
+    },
+  },
 ];
 
 /** Highest version in the migration list. Exported so a test can assert the
