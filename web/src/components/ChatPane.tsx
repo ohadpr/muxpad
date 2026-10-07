@@ -4267,40 +4267,59 @@ export function ChatPane({
                 onAnswer={(answers) => answerQuestion(question.qid, answers)}
               />
             ) : null}
-            {/* Work this chat DIRECTED at another one. Live furniture at the foot
-              of the log, beside the pending queue, because that is what it is:
-              a request in flight somewhere else. The spinner is the same 10px
-              mark as everywhere else, and it stops when the report lands (which
-              is read off the transcript, not watched for). */}
-            {directed.map((d) => {
-              // LIVE FIRST, snapshot second. `d.chip` is frozen at send time so
-              // the card can draw on the first paint after a reload, before
-              // `/api/tabs/all` has answered — that is still why it is stored.
-              // But it was also the ONLY thing ever rendered, and the comment
-              // claiming "the corpus refreshes it when it arrives" had no
-              // implementing code: directing work to a done chat left a
-              // done-looking card for as long as the card lived, even though the
-              // message had just revived its recipient, and a rename or a
-              // retirement never reached it either. The tab id is the durable
-              // handle; the snapshot is the fallback while there is no corpus.
-              const live = corpusById.get(d.tabId);
-              // A card that spins forever is the failure this state exists for:
-              // the answer is a MODEL doing as it was asked, so a target that
-              // was busy, misread the instruction, crashed, or simply answered
-              // in prose without copying the marker left the card turning for
-              // the rest of the week.
-              const stale = directedIsStale(d);
-              return (
-                <ChatMentionCard
-                  key={d.id}
-                  chat={live?.chip ?? d.chip}
-                  sub={d.body}
-                  working={!d.reportedAt && !stale}
-                  state={d.reportedAt ? 'reported' : stale ? 'no answer' : undefined}
-                  onOpen={() => openChat(live ?? d)}
-                />
-              );
-            })}
+            {/* Work this chat DIRECTED at another one. Furniture at the foot of
+              the log, beside the pending queue, because that is what it is: a
+              request IN FLIGHT somewhere else.
+              IN FLIGHT IS THE WHOLE LICENCE, and it was not being enforced. A
+              card stayed pinned after its report landed — reported, answered,
+              done, and still sitting between the last message and the composer
+              forever. Reported as "still have this weird thing fixed at the
+              bottom". The answer is a real message in the transcript, which is
+              where it belongs and where it already was; the card had nothing
+              left to say.
+              This is the same conclusion the spawn cards reached (see the note
+              on `interleaveSpawnCards` above): anything that outlives its moment
+              has to move into the log, because a pinned card cannot scroll away
+              and so must keep earning its place forever.
+              A card nothing ever answered STAYS — it is the only record that the
+              request was made, since a direction is not written to this chat's
+              transcript — but it says "no answer" and can be dismissed. */}
+            {directed
+              .filter((d) => !d.reportedAt)
+              .map((d) => {
+                // LIVE FIRST, snapshot second. `d.chip` is frozen at send time so
+                // the card can draw on the first paint after a reload, before
+                // `/api/tabs/all` has answered — that is still why it is stored.
+                // But it was also the ONLY thing ever rendered, and the comment
+                // claiming "the corpus refreshes it when it arrives" had no
+                // implementing code: directing work to a done chat left a
+                // done-looking card for as long as the card lived, even though the
+                // message had just revived its recipient, and a rename or a
+                // retirement never reached it either. The tab id is the durable
+                // handle; the snapshot is the fallback while there is no corpus.
+                const live = corpusById.get(d.tabId);
+                // A card that spins forever is the failure this state exists for:
+                // the answer is a MODEL doing as it was asked, so a target that
+                // was busy, misread the instruction, crashed, or simply answered
+                // in prose without copying the marker left the card turning for
+                // the rest of the week.
+                const stale = directedIsStale(d);
+                return (
+                  <ChatMentionCard
+                    key={d.id}
+                    chat={live?.chip ?? d.chip}
+                    sub={d.body}
+                    working={!stale}
+                    {...(stale ? { state: 'no answer' } : {})}
+                    onOpen={() => openChat(live ?? d)}
+                    // Dismissible only once it is clearly over: a live request
+                    // vanishing under your hand would lose the sentence you sent.
+                    {...(stale
+                      ? { onDismiss: () => setDirected(removeDirected(paneId, d.id)) }
+                      : {})}
+                  />
+                );
+              })}
             {/* Work this chat SPAWNED used to be a block RIGHT HERE — one card
               per live child, pinned above the composer for as long as the child
               ran. It is in the transcript now, at the moment of the spawn (see
