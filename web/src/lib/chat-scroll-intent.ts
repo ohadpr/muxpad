@@ -595,9 +595,35 @@ export function recordFor(
  * How near the top the reader must be before we page older history in.
  *
  * Not zero, because a reader arriving at the top wants the next batch already
- * on its way rather than a stall when they hit the edge.
+ * on its way rather than a stall when they hit the edge. The floor is for a
+ * viewport so short that 1.5 of them is still a flick.
  */
-export const TOP_PAGE_ZONE_PX = 240;
+export const TOP_PAGE_ZONE_MIN_PX = 240;
+
+/**
+ * …AND IT HAS TO BE MEASURED IN VIEWPORTS, NOT PIXELS.
+ *
+ * This was a flat 240px — a third of a laptop viewport — and the comment above
+ * already said what it was for. It could not do that job: at any real scrolling
+ * speed 240px goes past in a frame or two, so the reader reaches the edge long
+ * before the page arrives. Then the prepend lands, the anchor compensation
+ * correctly holds them on the content they were reading, and because they were
+ * AT the edge that correction is the whole height of the batch.
+ *
+ * Measured on an idle chat: asked for scrollTop 0, and two seconds later sat at
+ * 2,048 of a 2,805px document — thrown 2.7 screens back down from the top they
+ * had just reached. Nothing was wrong with the compensation; the request simply
+ * started too late for it to be invisible. Reported as "scrolling up is a bit
+ * buggy and icky".
+ *
+ * A screen and a half gives the round trip time to complete while there is
+ * still content above the reader, so the prepend lands in space they cannot
+ * see and the correction is nothing they can feel. It is the same reason a map
+ * fetches the tiles just outside the window.
+ */
+export function topPageZone(clientHeight: number): number {
+  return Math.max(TOP_PAGE_ZONE_MIN_PX, Math.round(clientHeight * 1.5));
+}
 
 /** Why we are asking for older history, or `no`. */
 export type PageOlderReason = 'no' | 'fill-viewport' | 'top-zone';
@@ -652,5 +678,5 @@ export function shouldPageOlder(opts: {
   if (!opts.placed) return 'no';
   // A reader at the end is not paging history.
   if (opts.phase === 'FOLLOWING') return 'no';
-  return opts.geo.scrollTop < TOP_PAGE_ZONE_PX ? 'top-zone' : 'no';
+  return opts.geo.scrollTop < topPageZone(opts.geo.clientHeight) ? 'top-zone' : 'no';
 }

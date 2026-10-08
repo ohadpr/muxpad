@@ -187,7 +187,7 @@ import {
 } from '../lib/chat-scroll';
 import { ChatScrollController, FOLLOW_THRESHOLD_PX } from '../lib/chat-scroll-controller';
 import { ANCHOR_ATTR, domScrollSurface } from '../lib/chat-scroll-dom';
-import { TOP_PAGE_ZONE_PX, shouldPageOlder } from '../lib/chat-scroll-intent';
+import { shouldPageOlder, topPageZone } from '../lib/chat-scroll-intent';
 import { companionTextForImagePaste, splitClipboard } from '../lib/clipboard-detect';
 import { trackKeyboardInset } from '../lib/keyboard-inset';
 import {
@@ -3081,7 +3081,7 @@ export function ChatPane({
     // just-shown pane reports scrollTop 0 while it settles and paging on that
     // prepended a batch of history on every tab visit).
     if (
-      el.scrollTop < TOP_PAGE_ZONE_PX &&
+      el.scrollTop < topPageZone(el.clientHeight) &&
       events.length > 0 &&
       // THE BUDGET. This path is the one that ran away: it pages whenever the
       // reader is near the top, and its only limit was reaching the start of
