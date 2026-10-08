@@ -24,6 +24,8 @@ Three nested containers:
 - **Tab.** Inside a workspace, a single mosaic layout. Tabs render either as a split mosaic or as a strip of pane-tabs.
 - **Pane.** A leaf of the mosaic. A pane is `shell` (a PTY on the host) or `url` (an iframe), and it shows one of three **faces**: `terminal`, `web`, or `chat`. A shell pane running an agent can be flipped between its terminal face (the runner's activity log) and its chat face (the conversation) in place.
 
+A chat opens at the newest message and pages history in as you scroll up, bounded — a long conversation never drags its whole transcript into the page, and rows you cannot see cost no layout. Opening at the bottom rather than at a restored pixel offset is deliberate: a semantic anchor costs one fetch and a geometric one costs as many as it takes to find.
+
 Multiple browser tabs or devices can attach to the same workspace, or the same pane, simultaneously and stay in sync. Tabs can be dragged between workspaces, and a pane can be pulled out into a tab of its own — with an undo toast, because both are easy to do by accident.
 
 <p align="center">
@@ -39,7 +41,7 @@ A pane can hold a **chat-native agent session**: the conversation renders as HTM
 </p>
 
 - **Universal instructions.** muxpad writes `~/.muxpad/agent-instructions.md` on every boot and injects it into every session on every backend, so `muxpad search`, `muxpad publish` and `muxpad cron` are capabilities the agent knows it has. `CLAUDE.md` only reaches Claude; this is how the other two learn. Your own additions go in `~/.muxpad/agent-notes.md`, which muxpad creates once and never touches again. Claude gets it through the SDK's native system-prompt append; codex and cursor have no append surface, so it is prepended as a delimited block to the first message of each new session.
-- **Two modes.** `deep` is the baseline — the harness as it ships, plus the instructions above. `do` overlays a short "be decisive and terse" contract from `~/.muxpad/do-mode.md`. Switching mid-session is honest about its limits: no harness can rewrite a live system prompt, so the switch takes effect properly on the next respawn and is announced in-conversation until then.
+- **Two modes.** **Agent mode** is the harness exactly as it ships, plus the instructions above — you pick the backend, folder and model at launch. **Chat mode** overlays a short "be decisive, result-first, delegate the legwork" contract from `~/.muxpad/chat-mode.md`, and is what a new tab opens as. Both are agent-powered; the names describe the *arrangement*, not the engine. Switching mid-session is honest about its limits: no harness can rewrite a live system prompt, so a switch updates the row, rewrites the startup command for the next respawn, and delivers the contract as a one-time note until then — which a long session can drift from. If the mode matters, open a new pane in it.
 - **Questions come back as chips** (claude backend only). `ask_user` is registered by the Claude backend alone — `codex` and `cursor` expose no question tool — and an agent that calls it parks the pane in `blocked` and renders tappable options. Answering resolves the blocked tool call.
 - **Background subagents are tracked.** The roster is server-owned, and an entry leaves when its subagent reports done or its runner dies, not on a decay timer — because a background subagent can sit silent in one tool call for a minute while plainly alive. It lives in memory on the runner's connection (bounded, oldest evicted), so unlike the session itself it does not survive a main-server restart.
 - **A terminal Claude session can be adopted.** `muxpad claude [args…]` launches the real CLI in a pane, passes your flags straight through, and registers the session so the same conversation can be read and driven from the web chat.
@@ -49,6 +51,23 @@ A pane can hold a **chat-native agent session**: the conversation renders as HTM
 </p>
 
 Nothing about any of that is specific to code. The question above is a shipping contract; the agent that asked it has never opened a file in a repo.
+
+## Pinned cards
+
+A chat can hold **named blocks pinned above the composer** — the current value of something, where the transcript is its history.
+
+```bash
+muxpad card set market "🔴 −0.61% · stocks -0.36% vs SPY -0.24% · ✅ no action" --every=1d
+muxpad card set build --format=html < status.html
+muxpad card list
+muxpad card clear market
+```
+
+Setting the same name **replaces** it, which is the whole point: a card is an answer, not a log. `--every` declares how often you intend to rewrite it, and muxpad marks the card **overdue** when you stop — the failure nobody notices otherwise.
+
+A card is one row: a dotted leader runs from the value to its age, the dots drift slowly toward it like tape through a machine, and their colour fades across the declared cadence so freshness is readable without being read. An `html` card renders in a sandboxed frame with no `allow-same-origin`, so agent-written markup cannot reach muxpad; the frame measures itself and posts its height out, because a parent cannot measure a frame it is isolated from.
+
+**A card is also a destination.** `muxpad cron new --card=<name>` says a schedule's output goes *there* rather than into the conversation — so a fire that updates its card and says nothing renders nothing at all: no chip, no fold. The card's own freshness is the "did it run" signal, and anything the agent actually says (an error, a refusal) breaks the silence and brings the row back. That is the difference between a quiet job and an invisible one.
 
 ## Status: one word per pane
 
@@ -86,6 +105,7 @@ The second line of a tab row is a one-line **headline** describing what that con
 ## Memory, and things that outlive a tab
 
 - **`muxpad search`** — agent sessions are mirrored into `~/.muxpad/archive/` and indexed into an SQLite **FTS5** table. All three backends, plus Claude's subagent sidechains, plus sessions muxpad never launched: a 15-minute sweep walks `~/.claude/projects` as well as muxpad's own logs, so a `muxpad claude` TUI pane and a session you started by hand both end up in there. Nothing in the archive is ever pruned or overwritten — when a source is rewritten by a `/compact`, the current mirror is sealed as `<sid>.v1.jsonl` (then `.v2`, and so on) and a fresh one starts at byte 0. (It is append-only *from the moment archiving first saw a file*; history a source discarded before that is gone.) `muxpad search "query"` is a real FTS5 MATCH with snippets, falling back to a phrase match on bad syntax; `--sessions` lists sessions. CLI only — there is no search UI in the browser.
+- **Chats that nobody is using stop costing anything.** A conversation untouched for three days (or a retired sub-chat after an hour) has its process stopped, and the next message, cron fire or open starts it again. Nothing is lost: the conversation is on disk and the model API is stateless, so a resident process buys no warm context — a revival costs a couple of seconds of boot. Measured on one machine: 124 runners and 15.2 GB down to 21 and 3.3 GB.
 - **`muxpad app`** — a long-running local web server muxpad keeps alive with no tab of its own. An app is a supervised pane in a hidden workspace: ptyd owns the process, so it survives a main-server restart; the command restarts on crash; the state you see is *measured* (`starting`, `running`, `unreachable`, `stopped`, `gave up`), not assumed.
 
 ## Publishing something someone else can open
@@ -135,7 +155,7 @@ muxpad cron run pr-sweep     # fire it now; test before you trust it
 muxpad cron list             # schedule, next due, last run, failure streak
 ```
 
-`--at` takes a cron expression or a phrase (`daily at 09:00`, `every 30m`); `--tz` pins an IANA zone. A fire lands either in an existing pane (`--pane`) or in a fresh agent tab per run (`--new-tab`), which is what most recurring jobs want. Because `next_due_at` is persisted, the scheduler survives every restart and **catches up** after downtime: `--catchup=once` (default) collapses everything missed into one fire whose cron marker carries `missed="N"`, `all` replays them through the pane's queue in order, `skip` drops them but records the outage in the run history rather than going silent. `--overlap`, `--quiet`, `--max-open` and `--on-context` cover the rest of the awkward cases (a fire arriving mid-turn, a fire arriving while you are typing, a fire arriving past 80% context fill). Three consecutive failures disable a cron and push a notification.
+`--at` takes a cron expression or a phrase (`daily at 09:00`, `every 30m`); `--tz` pins an IANA zone. `--card=<name>` declares where the output belongs (see [Pinned cards](#pinned-cards)) and `--silent` says the agent's reply is plumbing too — a pure card refresher wants both, and the injected prompt is folded out of the log for every fire regardless, because an instruction a schedule handed the agent is never something a person said. A fire lands either in an existing pane (`--pane`) or in a fresh agent tab per run (`--new-tab`), which is what most recurring jobs want. Because `next_due_at` is persisted, the scheduler survives every restart and **catches up** after downtime: `--catchup=once` (default) collapses everything missed into one fire whose cron marker carries `missed="N"`, `all` replays them through the pane's queue in order, `skip` drops them but records the outage in the run history rather than going silent. `--overlap`, `--quiet`, `--max-open` and `--on-context` cover the rest of the awkward cases (a fire arriving mid-turn, a fire arriving while you are typing, a fire arriving past 80% context fill). Three consecutive failures disable a cron and push a notification.
 
 The reason this exists rather than leaning on a harness's own scheduler: those fire inside one session's context, expire after about a week, lose every fire that came due while the machine was asleep, and are invisible from anywhere else. muxpad's is in SQLite, never expires, and is editable from any pane.
 
@@ -280,6 +300,10 @@ muxpad agent new --name='vat rules' "audit the eu-vat rule table for gaps"
 
 # Same verb, no code involved
 muxpad agent new --name='returns quotes' "compare the two returns quotes on total cost"
+
+# Read, search and post in Slack — outbound only, your tokens
+muxpad slack read '#eng' --since=2h
+muxpad slack post @andrey "the PR feedback, from me" --as-me
 
 # Put a finished thing on a URL and print the link
 muxpad publish ./report --name=market-teardown
