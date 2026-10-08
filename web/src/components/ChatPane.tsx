@@ -98,9 +98,10 @@ import {
   actionRunExpanded,
   applyChatVoice,
   chatVoiceActive,
+  coalesceCronFires,
   foldCronTurns,
   foldsAsActionRun,
-  isPrivateReasoning,
+  isAction,
   lastTurnStartId,
   toggleActionRun,
 } from '../lib/chat-voice';
@@ -3079,7 +3080,9 @@ export function ChatPane({
   // SCHEDULE whose author said its output is plumbing — so the fold applies in
   // agent mode too, where the voice does not run at all.
   const voiced = useMemo(
-    () => foldCronTurns(applyChatVoice(events, voiceOpts)),
+    // …then ONE chip per quiet stretch rather than one per fire. Last, because
+    // it has to see the result of the fold to know which stretches are silent.
+    () => coalesceCronFires(foldCronTurns(applyChatVoice(events, voiceOpts))),
     [events, voiceOpts],
   );
 
@@ -3624,16 +3627,8 @@ export function ChatPane({
     // whole mechanism — deliberation goes where tool calls go, one tap from
     // being read in full, and only a deliberate `reply` breaks the run as a
     // real message.
-    const isAction = (e: ChatEvent) =>
-      !isAgentLaunch(e) &&
-      (e.kind === 'tool_use' ||
-        e.kind === 'tool_result' ||
-        e.kind === 'thinking' ||
-        // A folded cron's injected instruction. A real delivered message, but
-        // nobody typed it and nobody rereads it, so it belongs in the run with
-        // the work it caused rather than as a bubble of its own.
-        (e.kind === 'user' && e.folded === true) ||
-        isPrivateReasoning(e));
+    // `isAction` lives in chat-voice.ts beside the rest of the fold rules —
+    // coalesceCronFires asks the same question of the same events.
     // Fold from TWO actions up — except a run carrying Chat mode's demoted
     // prose, which folds even alone. The rule lives in chat-voice.ts
     // (foldsAsActionRun) next to the demotion that creates those events, so
