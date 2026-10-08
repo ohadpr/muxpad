@@ -754,40 +754,70 @@ export type LogEntry<T> = { kind: 'entry'; node: T } | { kind: 'card'; card: Spa
 /**
  * Place the spawn cards into the log, each at the moment its child started.
  *
- * ── WHY AN UNPLACEABLE CARD RENDERS NOWHERE ─────────────────────────────────
+ * ── A CARD IS PLACEABLE ONLY INSIDE THE LOADED WINDOW ───────────────────────
  * The cards and the transcript come from two different places at two different
- * speeds: the cards are built from the sidebar corpus and one small HTTP call,
- * both of which answer in tens of milliseconds, while the transcript streams in
- * over the websocket. So for the first beat of every chat open, `entries` is
- * EMPTY and every card is unplaceable.
+ * speeds — the cards from the sidebar corpus and one small HTTP call, the
+ * transcript streamed over the websocket and paged in on demand. So at any
+ * moment the log covers a WINDOW of time, and a card whose moment falls outside
+ * it cannot be put anywhere honest.
  *
- * The tail loop below used to take them all. That is what produced the reported
- * symptom: "I see all the historic agents it launched stacked at the bottom,
- * scrolling is weird, and only after a few moments does it resolve into the
- * proper chat history." Thirty cards landed at the reader's feet, then jumped
- * to their real positions a second later, moving the document under them.
+ * Both ends of that were wrong, and each produced the same complaint a
+ * different way round.
  *
- * A card whose moment is not in the document yet cannot be placed, and the tail
- * is the WORST available guess — it is the one place the reader is looking. So
- * an unplaceable card waits: `anchored` tracks whether any dated entry was seen
- * at all, and until one is, no cards are emitted.
+ * THE TAIL: with no entries at all, the placement loop never ran and the final
+ * flush took every card. "I see all the historic agents it launched stacked at
+ * the bottom… only after a few moments does it resolve into the proper chat
+ * history."
  *
- * The cost is a chat whose transcript is genuinely empty but which spawned
- * children — there the cards never appear. That is rare, recoverable (they are
- * in the sidebar), and far cheaper than relocating thirty rows under a reader
- * on every open.
+ * THE HEAD: a card older than the OLDEST loaded message satisfies
+ * `card.at <= entry.at` against the very first entry, so every one of them
+ * piles up there. Measured on a chat that opened with 38 rows: 24 of them were
+ * cards, in one unbroken run starting at index 1. Scrolling up ran straight
+ * into it — "I bumped into a ton of cards and suddenly a load button appeared".
+ * Opening at the bottom made this worse rather than causing it: the window got
+ * small and the pile did not.
  *
- * The tail loop is still right for cards NEWER than the last entry: a spawn
- * that just happened belongs after everything, and there the bottom is not a
- * guess, it is the answer.
+ * So a card renders only where its moment is actually represented:
+ *
+ *   older than the first loaded entry  → wait, unless there IS no more history
+ *                                        to load, in which case it genuinely
+ *                                        predates the conversation and belongs
+ *                                        at the head
+ *   inside the window                  → in its place, which is the point
+ *   newer than the last entry          → the tail, where the bottom is the
+ *                                        answer rather than a guess
+ *
+ * The cost is that a card waits until you have paged back to its moment. That
+ * is the honest version of what it was already doing badly: it was never
+ * showing you *when* the child started, it was showing you a pile at whichever
+ * edge happened to be nearest.
  */
 export function interleaveSpawnCards<T>(
   entries: readonly { at: number | null; node: T }[],
   cards: readonly SpawnCard[],
+  opts?: { hasMoreOlder?: boolean; floor?: number | null },
 ): LogEntry<T>[] {
   const out: LogEntry<T>[] = [];
+  // ── THE WINDOW'S LOWER EDGE IS THE TRANSCRIPT'S, NOT THIS LIST'S ──────────
+  // `entries` has already had browser moments injected into it by the caller,
+  // and a browser opening is dated from whenever it opened — which can be older
+  // than every message loaded. Deriving the floor from the first dated entry
+  // therefore read that moment's timestamp and let every card through, which is
+  // how the 24-card wall survived the first attempt at this.
+  //
+  // So the caller passes the oldest loaded TRANSCRIPT time explicitly. Falling
+  // back to the first dated entry keeps the function honest for callers that
+  // inject nothing.
+  const floor =
+    opts?.hasMoreOlder === false
+      ? null
+      : (opts?.floor ?? entries.find((e) => e.at !== null)?.at ?? null);
   let i = 0;
   let anchored = false;
+  // Skip past anything below the window rather than flushing it at the head.
+  if (floor !== null) {
+    while (i < cards.length && (cards[i] as SpawnCard).at < floor) i++;
+  }
   for (const entry of entries) {
     if (entry.at !== null) {
       anchored = true;

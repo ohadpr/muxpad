@@ -3786,6 +3786,14 @@ export function ChatPane({
             />
           )),
           spawnedCards,
+          // The window's lower edge, taken from the TRANSCRIPT rather than from
+          // the list above — which has browser moments in it by now, and a
+          // browser opening can be older than every message loaded. A card
+          // below this edge is not placeable until history pages back to its
+          // moment, UNLESS the server has said there is none earlier, in which
+          // case it genuinely predates the conversation and belongs at the
+          // head. See interleaveSpawnCards.
+          { hasMoreOlder, floor: items.find((e) => e.at !== null)?.at ?? null },
         ).map((x) => {
           if (x.kind === 'entry') return x.node;
           const kid = x.card.chat;
