@@ -38,6 +38,7 @@ import {
   parseMentions,
   parseReportMarker,
 } from '../lib/chat-mention';
+import { fireTime } from '../lib/chat-voice';
 import type { SpawnWork } from '../lib/spawn-work';
 import { HighlightedText, Markdown } from './ChatMarkdown';
 import { ChatMentionCard, ChatMentionPill } from './ChatMentionPicker';
@@ -1079,13 +1080,6 @@ const NOTICE_ICON: Record<NoticeEvent['variant'], string> = {
   // is about this chat, and this one is about work that happened elsewhere.
   report: '⇤',
 };
-
-/** Time-of-day for a cron chip, in the VIEWER's zone. The cron's own zone is
- *  the scheduling truth, but this line answers "when did this land for me". */
-function fireTime(ts: number | null): string {
-  if (ts === null) return '';
-  return new Date(ts).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-}
 
 /** Harness control message (background-task update / session reminder), or a
  *  muxpad cron fire — "⏱ pr-sweep · 09:00" ahead of the prompt it delivered. */

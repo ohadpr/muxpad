@@ -36,6 +36,7 @@ import {
   type AgentMode,
   type ChatEvent,
   backendSupportsChatMode,
+  isAgentLaunchTool,
   needsReplyFallback,
 } from '@muxpad/shared';
 
@@ -289,7 +290,7 @@ export function applyChatVoice(events: readonly ChatEvent[], opts: ChatVoiceOpts
  * that looked like: an hourly schedule printing the word "closed" into the
  * conversation six times a day, which is the exact output this exists to hide.
  */
-function cronFireIsFolded(events: readonly ChatEvent[], i: number): boolean {
+export function cronFireIsFolded(events: readonly ChatEvent[], i: number): boolean {
   const next = events[i + 1];
   return !(next?.kind === 'user' && next.folded !== true);
 }
@@ -319,6 +320,123 @@ export function foldCronTurns(events: readonly ChatEvent[]): ChatEvent[] {
     return { ...e, voice: 'private' as const };
   });
   return changed ? out : (events as ChatEvent[]);
+}
+
+/**
+ * Does this event belong INSIDE a collapsed "N actions" run, rather than
+ * getting a row of its own?
+ *
+ * Lifted out of ChatPane's renderer so the fold rules all sit in one file: the
+ * coalescer below has to ask exactly this question to know whether a stretch of
+ * transcript is silent, and a second, slightly-different copy of it in a lib
+ * would decide a chip was unnecessary over something the reader can plainly see.
+ */
+export function isAction(e: ChatEvent): boolean {
+  // Agent launches break runs like prose does, so each renders as its own
+  // launch bubble rather than being buried in "5 actions · Agent ×5".
+  if (e.kind === 'tool_use' && isAgentLaunchTool(e.name)) return false;
+  return (
+    e.kind === 'tool_use' ||
+    e.kind === 'tool_result' ||
+    e.kind === 'thinking' ||
+    // A folded cron's injected instruction. A real delivered message, but
+    // nobody typed it and nobody rereads it, so it belongs in the run with the
+    // work it caused rather than as a bubble of its own.
+    (e.kind === 'user' && e.folded === true) ||
+    isPrivateReasoning(e)
+  );
+}
+
+/** Time-of-day in the VIEWER's zone. The cron's own zone is the scheduling
+ *  truth; this answers "when did it land for me". Shared with NoticeCard so a
+ *  coalesced chip and a lone one cannot format the same instant two ways. */
+export function fireTime(ts: number | null): string {
+  if (ts === null) return '';
+  return new Date(ts).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+}
+
+/**
+ * ONE CHIP PER QUIET STRETCH, NOT ONE PER FIRE.
+ *
+ * ── THE COMPLAINT, WHICH IS ABOUT A RATE ────────────────────────────────────
+ * "An hourly refresh is going to cause 24 chips a day — that's crazy versus a
+ * daily cron which produces a chip a day, which is reasonable."
+ *
+ * Both of those are the same code. `--fold` says the fire's PROMPT is plumbing
+ * and the fold then demotes the whole turn, so a card-refresh cron already
+ * costs no bubble and no tool row — but it still costs a chip and a collapsed
+ * run, every single fire, because a `notice` is not an action and therefore
+ * breaks the run either side of it. 24 fires is 48 rows, in a chat whose actual
+ * content is one card that updates in place.
+ *
+ * ── WHY COALESCING AND NOT A "SILENT" FLAG ──────────────────────────────────
+ * The obvious alternative is a per-cron switch that emits no chip at all. It is
+ * worse on both counts: a schedule with no trace in the chat is unauditable
+ * exactly when it breaks, and it asks the author to re-declare something they
+ * already said — `--fold` IS the statement that this fire is plumbing. The
+ * primitive is right; what was wrong is that plumbing cost a row per occurrence
+ * instead of a row per stretch.
+ *
+ * ── THE RULE ────────────────────────────────────────────────────────────────
+ * Consecutive folded fires with nothing VISIBLE between them keep the first
+ * chip and drop the rest; the survivor says how many and when the last one
+ * landed. Dropping the notices also merges what used to be N separate action
+ * runs into one, because the chips were the only thing separating them — so the
+ * whole quiet stretch collapses to two rows however long it runs.
+ *
+ * What ends a stretch is precisely what a reader can SEE: a person typing, a
+ * deliberate `reply`, a different schedule, a promoted fallback, any notice
+ * that is not another folded fire of the same cron. So the fire that actually
+ * says something keeps its own chip, directly above the message it explains,
+ * which is the one case the chip was always for.
+ *
+ * Two fires are never merged across a NAME boundary — a chip that averaged two
+ * schedules together would be answering a question nobody asked — and a fire
+ * carrying its own `detail` (missed fires collapsed into it) is left alone,
+ * since that detail is the unusual thing worth a row.
+ */
+export function coalesceCronFires(events: readonly ChatEvent[]): ChatEvent[] {
+  /** The chip currently absorbing fires, if a quiet stretch is open. */
+  let open: { at: number; name: string; fires: number; lastTs: number | null } | null = null;
+  const absorbed = new Set<number>();
+  const counts = new Map<number, { fires: number; lastTs: number | null }>();
+
+  for (let i = 0; i < events.length; i++) {
+    const e = events[i] as ChatEvent;
+    const quietFire =
+      e.kind === 'notice' && e.variant === 'cron' && !e.detail && cronFireIsFolded(events, i);
+    if (quietFire && e.kind === 'notice') {
+      if (open && open.name === e.text) {
+        absorbed.add(i);
+        open.fires++;
+        open.lastTs = e.ts;
+        counts.set(open.at, { fires: open.fires, lastTs: open.lastTs });
+      } else {
+        open = { at: i, name: e.text, fires: 1, lastTs: e.ts };
+      }
+      continue;
+    }
+    // Plumbing keeps the stretch open — that is the whole point of it being
+    // plumbing. Anything the reader can see closes it.
+    if (!isAction(e)) open = null;
+  }
+
+  if (absorbed.size === 0) return events as ChatEvent[];
+  // One pass, by ORIGINAL index — the counts are keyed on it, and a filter-then-map
+  // would have to find each survivor's old position again.
+  const out: ChatEvent[] = [];
+  for (let i = 0; i < events.length; i++) {
+    if (absorbed.has(i)) continue;
+    const e = events[i] as ChatEvent;
+    const c = counts.get(i);
+    if (!c || e.kind !== 'notice') {
+      out.push(e);
+      continue;
+    }
+    const last = fireTime(c.lastTs);
+    out.push({ ...e, detail: last ? `${c.fires} fires · last ${last}` : `${c.fires} fires` });
+  }
+  return out;
 }
 
 export function isPrivateReasoning(e: ChatEvent): boolean {
