@@ -539,6 +539,12 @@ export function tabsRoutes(deps: {
     const lifecycle = tabLifecycle(deps.db, t.id, Date.now());
     return c.json({
       ...t,
+      // WHICH WORKSPACE THIS TAB IS IN, said out loud. The column exists on the
+      // row and was being dropped on the way out, so a caller holding a pane id
+      // could reach its tab and then had nowhere to go. `muxpad slack` needs
+      // exactly this hop — a pane's workspace is a fact the SERVER knows, and
+      // asking the pane to assert its own is how a guard gets talked out of.
+      workspace_id: tabs.getWorkspaceId(t.id),
       done: lifecycle.done,
       ...(lifecycle.done_reason ? { done_reason: lifecycle.done_reason } : {}),
       clock: lifecycle.clock,

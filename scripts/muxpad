@@ -787,7 +787,7 @@ json_string() {
 #
 #   · every message is prefixed 🤖, so the reader knows a machine composed it
 #     even though you sent it;
-#   · sending is ALLOWLISTED BY PROJECT (see slack_guard_cwd), so a project
+#   · sending is ALLOWLISTED BY PROJECT (see slack_guard_workspace), so a project
 #     holding personal files cannot message a work surface at all.
 #
 # SLACK_BOT_TOKEN is not read anywhere below. A line for it in the secrets file
@@ -950,71 +950,87 @@ cmd_slack_search() {
     | jq -r '.messages.matches[] | "\(.ts | tonumber | strftime("%m-%d %H:%M"))  #\(.channel.name)  \(.username // .user)  \(.text // "" | gsub("\n"; " ⏎ "))"'
 }
 
-# ─── WHERE A SLACK MESSAGE MAY BE SENT FROM ─────────────────────────────────
+# ─── WHICH WORKSPACE MAY SEND A SLACK MESSAGE ──────────────────────────────
 #
 # "Never allow a project that is using personal files/data to send slack
 #  messages, never ever ever ever. It should fail."
 #
-# AN ALLOWLIST, NOT A DENYLIST. A denylist fails OPEN for everything nobody
-# thought of, and the personal tree gains folders — health, investing, land,
-# notes, reading are already in there. The only shape that honours "never ever"
-# is: Slack is refused unless this project has been named as one that may use
-# it. A new folder is silent by default, which is the safe direction.
+# THE DIRECTORY WAS THE WRONG THING TO ASK. The first version of this gated on
+# `pwd`, and it was wrong for the way the tool is actually used: "not all my
+# trayo chats run in that directory — I just tell the agent what directory
+# stuff is in, so the agent can be running in ~". A cwd check would have
+# refused real work chats and permitted a personal one that happened to be
+# started somewhere allowed. It measured the wrong thing confidently.
 #
-# One absolute path per line in $SLACK_ALLOW, blanks and #comments ignored. A
-# missing file means NOTHING may post, which is the correct reading of a guard
-# whose job is to fail.
-SLACK_ALLOW="${MUXPAD_DATA_DIR:-$HOME/.muxpad}/slack-allowed-roots"
+# The boundary that MATCHES HOW THINGS ARE ORGANISED is the workspace: personal
+# chats live in Personal, work chats live in Trayo. So that is what is gated.
+#
+# AND THE WORKSPACE IS RESOLVED FROM THE SERVER, not read from the environment.
+# `MUXPAD_WORKSPACE_ID` is right there in every pane's env and would have been
+# one line — but it is a value the caller can simply set, and a guard that asks
+# the thing it is guarding to state its own identity is a guard in name only.
+# The server knows which workspace a pane is in; the pane cannot edit that.
+#
+# One workspace NAME or slug per line in $SLACK_ALLOW; blanks and #comments
+# ignored. A missing file means nothing may post.
+SLACK_ALLOW="${MUXPAD_DATA_DIR:-$HOME/.muxpad}/slack-allowed-workspaces"
 
-slack_guard_cwd() {
-  local here
-  # -P so a symlinked path cannot smuggle a personal directory in under an
-  # allowed name.
-  here="$(pwd -P 2>/dev/null || true)"
-  [ -n "$here" ] || { echo 'muxpad: slack: cannot determine the working directory — refusing to post' >&2; exit 1; }
+# Case-fold, so "trayo" and "Trayo" are the same intent in the allowlist.
+slack_lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
+slack_guard_workspace() {
+  local pane="${MUXPAD_PANE_ID:-}"
+  if [ -z "$pane" ]; then
+    echo 'muxpad: slack: posting works only from inside a muxpad pane — there is no workspace to check out here' >&2
+    exit 1
+  fi
   if [ ! -f "$SLACK_ALLOW" ]; then
     cat >&2 <<EOF
-muxpad: slack: no project is allowed to post yet.
+muxpad: slack: no workspace is allowed to post yet.
 
-Slack sending is allowlisted, because a project holding personal files must
-never be able to message a work surface. Nothing posts until you say which
-projects may:
+Slack sending is allowlisted by WORKSPACE, so a personal chat can never message
+a work surface. Nothing posts until you say which workspaces may:
 
-  echo '/absolute/path/to/a/work/repo' >> $SLACK_ALLOW
+  echo 'Trayo' >> $SLACK_ALLOW
 
 Reading and searching are unaffected.
 EOF
     exit 1
   fi
 
-  local root real ok=''
-  while IFS= read -r root || [ -n "$root" ]; do
-    case "$root" in ''|'#'*) continue ;; esac
-    root="${root%/}"
-    # RESOLVE THE ROOT THE SAME WAY AS THE CWD, or the comparison is between
-    # two different spellings of the same directory and never matches. On macOS
-    # /tmp IS /private/tmp, and a Dropbox path can be symlinked too — measured:
-    # every one of four test directories was refused, including the one that
-    # was supposed to be allowed, purely because `pwd -P` had resolved one side
-    # and the file had not resolved the other.
-    real="$(cd "$root" 2>/dev/null && pwd -P 2>/dev/null || printf '%s' "$root")"
-    # Prefix match on a path BOUNDARY: /work must not allow /work-personal.
-    case "$here" in "$real"|"$real"/*) ok=1; break ;; esac
+  # pane → tab → workspace, every hop answered by the server.
+  local tab ws name slug
+  tab="$(http_request GET "/api/panes/$pane" | jq -r '.tab_id // empty')"
+  [ -n "$tab" ] || { echo "muxpad: slack: cannot resolve pane $pane — refusing to post" >&2; exit 1; }
+  ws="$(http_request GET "/api/tabs/$tab" | jq -r '.workspace_id // empty')"
+  [ -n "$ws" ] || { echo "muxpad: slack: cannot resolve the workspace — refusing to post" >&2; exit 1; }
+  local wsjson; wsjson="$(http_request GET '/api/workspaces?all=1')"
+  name="$(printf '%s' "$wsjson" | jq -r --arg id "$ws" '.[] | select(.id==$id) | .name // empty')"
+  slug="$(printf '%s' "$wsjson" | jq -r --arg id "$ws" '.[] | select(.id==$id) | .slug // empty')"
+
+  local entry ok=''
+  while IFS= read -r entry || [ -n "$entry" ]; do
+    case "$entry" in ''|'#'*) continue ;; esac
+    # Trim surrounding whitespace; match the name or the slug, case-insensitively
+    # on the name because "trayo" and "Trayo" are the same intent.
+    entry="$(printf '%s' "$entry" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    [ -n "$entry" ] || continue
+    if [ "$entry" = "$slug" ] || [ "$(slack_lower "$entry")" = "$(slack_lower "$name")" ]; then ok=1; break; fi
   done < "$SLACK_ALLOW"
 
   [ -n "$ok" ] && return 0
   cat >&2 <<EOF
-muxpad: slack: refusing to post from $here
+muxpad: slack: refusing to post from the "${name:-?}" workspace.
 
-This project is not on the Slack allowlist, so it is treated as one that may
-hold personal data. That is deliberate and it fails closed: a project is silent
-until it is named in
+Only workspaces named in
 
   $SLACK_ALLOW
 
-If this really is a work project, add its root there. Do NOT add a directory
-that contains personal files to make one message go out.
+may send. This one is not, so it is treated as one that may hold personal data.
+That is deliberate and it fails closed.
+
+If this is work, add the workspace there — do NOT move the chat, and do not
+post from a different pane to get around it.
 EOF
   exit 1
 }
@@ -1029,7 +1045,7 @@ cmd_slack_post() {
   # Slack.
   # Second: a refusal must not depend on getting the arguments right, or on
   # there being a token to fail on instead.
-  slack_guard_cwd
+  slack_guard_workspace
   slack_load
   local ref="${1:-}" text="${2:-}"; shift 2 2>/dev/null || true
   [ -n "$ref" ] && [ -n "$text" ] || {
@@ -1071,7 +1087,7 @@ cmd_slack_post() {
 # Delete a message muxpad posted. Only yours exist now, so only your token is
 # ever needed — Slack lets a token delete its own messages.
 cmd_slack_unpost() {
-  slack_guard_cwd
+  slack_guard_workspace
   slack_load
   local id="${1:-}" ts="${2:-}"
   [ -n "$id" ] && [ -n "$ts" ] || {
