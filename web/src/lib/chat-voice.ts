@@ -396,45 +396,99 @@ export function fireTime(ts: number | null): string {
  * since that detail is the unusual thing worth a row.
  */
 export function coalesceCronFires(events: readonly ChatEvent[]): ChatEvent[] {
-  /** The chip currently absorbing fires, if a quiet stretch is open. */
-  let open: { at: number; name: string; fires: number; lastTs: number | null } | null = null;
-  /** The actions seen since that chip — see the `foldsAsActionRun` check below. */
-  let since: ChatEvent[] = [];
-  const absorbed = new Set<number>();
-  const counts = new Map<number, { fires: number; lastTs: number | null }>();
-
+  // ── PASS 1: find the fires, and decide for each whether its TURN was silent.
+  // Deciding per TURN rather than as we walk is what keeps a fire that spoke
+  // from being swallowed. Judged on the way past, the last fire of a run is
+  // absorbed before anyone knows what it went on to say — and then its message
+  // appears with no chip above it, which is the one case the chip exists for.
+  const fires: number[] = [];
   for (let i = 0; i < events.length; i++) {
     const e = events[i] as ChatEvent;
     if (e.kind === 'notice' && e.variant === 'cron' && !e.detail && cronFireIsFolded(events, i)) {
-      // Actions are plumbing only when they actually COLLAPSE. A run that does
-      // not meet `foldsAsActionRun` is rendered inline, as visible rows — so
-      // absorbing the chip above it would leave work on screen with nothing
-      // saying a schedule caused it. Rare (a fire's own demoted prose folds a
-      // run of one), but the predicate is cheap and the alternative is a rule
-      // that is right by luck.
-      const quiet = since.length === 0 || foldsAsActionRun(since);
-      if (open && open.name === e.text && quiet) {
-        absorbed.add(i);
-        open.fires++;
-        open.lastTs = e.ts;
-        counts.set(open.at, { fires: open.fires, lastTs: open.lastTs });
-      } else {
-        open = { at: i, name: e.text, fires: 1, lastTs: e.ts };
-      }
-      since = [];
-      continue;
+      fires.push(i);
     }
-    // Anything the reader can see closes the stretch.
-    if (isAction(e)) since.push(e);
-    else {
-      open = null;
-      since = [];
+  }
+  if (fires.length === 0) return events as ChatEvent[];
+
+  /**
+   * Did the turn starting at fire `n` produce nothing a reader can see?
+   *
+   * Its span runs to the next fire, or to the end. "Nothing visible" means
+   * every event in it is an action AND the run of them actually COLLAPSES — a
+   * run that fails `foldsAsActionRun` is rendered inline as visible rows, so
+   * absorbing the chip above it would leave work on screen with nothing saying
+   * a schedule caused it.
+   */
+  /** The events between fire `n` and the next fire (or the end). */
+  const between = (n: number): ChatEvent[] => {
+    const from = fires[n] as number;
+    const to = n + 1 < fires.length ? (fires[n + 1] as number) : events.length;
+    return events.slice(from + 1, to) as ChatEvent[];
+  };
+
+  /**
+   * TWO DIFFERENT QUESTIONS, and collapsing them into one got this wrong in
+   * both directions — first a stretch that stopped a chip early, then one that
+   * swallowed a person's message whole.
+   *
+   * `sep` asks whether anything VISIBLE lies between two fires. That is about
+   * adjacency: a reader's message sitting between them means the later chip has
+   * to stay where it is, or it ends up above text nobody has read yet.
+   */
+  const sep = (n: number): boolean => {
+    const span = between(n);
+    if (!span.every(isAction)) return false;
+    // A run that fails `foldsAsActionRun` renders INLINE as visible rows, so
+    // absorbing the chip above it would leave work on screen with nothing
+    // saying a schedule caused it.
+    return span.length === 0 || foldsAsActionRun(span);
+  };
+
+  /**
+   * …and `mute` asks whether a fire's own turn said anything. Same span, one
+   * difference: a real user message ENDS the turn without counting against it.
+   * Somebody typing is not this schedule's output, and whatever follows belongs
+   * to them.
+   *
+   * This is the half that keeps a fire that SPOKE from being swallowed. Judged
+   * only on the way past, the last fire of a run is absorbed before anyone
+   * knows what it goes on to say — and its message then appears with no chip
+   * above it, which is the one case the chip exists for.
+   */
+  const mute = (n: number): boolean => {
+    for (const e of between(n)) {
+      if (e.kind === 'user' && e.folded !== true) return true;
+      if (!isAction(e)) return false;
     }
+    return true;
+  };
+
+  const absorbed = new Set<number>();
+  const counts = new Map<number, { fires: number; names: string[]; lastTs: number | null }>();
+  let n = 0;
+  while (n < fires.length) {
+    const head = fires[n] as number;
+    const headEv = events[head] as Extract<ChatEvent, { kind: 'notice' }>;
+    const group = { fires: 1, names: [headEv.text], lastTs: headEv.ts };
+    let m = n;
+    // `sep(m)`: nothing visible separates this fire from the next.
+    // `mute(m + 1)`: the next one has no message of its own to be left chipless.
+    while (m + 1 < fires.length && sep(m) && mute(m + 1)) {
+      m++;
+      const idx = fires[m] as number;
+      const ev = events[idx] as Extract<ChatEvent, { kind: 'notice' }>;
+      absorbed.add(idx);
+      group.fires++;
+      group.lastTs = ev.ts;
+      if (!group.names.includes(ev.text)) group.names.push(ev.text);
+    }
+    if (group.fires > 1) counts.set(head, group);
+    n = m + 1;
   }
 
   if (absorbed.size === 0) return events as ChatEvent[];
-  // One pass, by ORIGINAL index — the counts are keyed on it, and a filter-then-map
-  // would have to find each survivor's old position again.
+  // One pass, by ORIGINAL index — the counts are keyed on it, and a
+  // filter-then-map would have to find each survivor's old position again.
   const out: ChatEvent[] = [];
   for (let i = 0; i < events.length; i++) {
     if (absorbed.has(i)) continue;
@@ -445,7 +499,12 @@ export function coalesceCronFires(events: readonly ChatEvent[]): ChatEvent[] {
       continue;
     }
     const last = fireTime(c.lastTs);
-    out.push({ ...e, detail: last ? `${c.fires} fires · last ${last}` : `${c.fires} fires` });
+    // Name the schedules while naming them still fits — two is a list, four is
+    // a count. Past that the chip says how many there were and the run says
+    // which.
+    const text = c.names.length <= 2 ? c.names.join(' · ') : `${c.names.length} schedules`;
+    const detail = last ? `${c.fires} fires · last ${last}` : `${c.fires} fires`;
+    out.push({ ...e, text, detail });
   }
   return out;
 }

@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en" data-theme="dracula">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>muxpad · working indicator, round 5 — wide and unbounded</title>
+<style>
+  :root{--bg:#282a36;--elev:#21222c;--fg:#f8f8f2;--dim:#b8b8b0;--faint:#6272a4;
+    --border:#44475a;--accent:#bd93f9;--cyan:#8be9fd;--pink:#ff79c6;--good:#50fa7b;--warn:#e8b34b;
+    --mono:ui-monospace,SFMono-Regular,Menlo,monospace;--c:var(--faint)}
+  *{box-sizing:border-box}
+  body{margin:0;padding:28px 20px 110px;background:var(--bg);color:var(--fg);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
+  .wrap{max-width:1040px;margin:0 auto}
+  h1{font-size:22px;margin:0 0 10px;letter-spacing:-.015em}
+  .sub{color:var(--dim);font-size:14.5px;margin:0 0 8px;max-width:80ch}
+  .sub b{color:var(--fg)}
+  code{font:12.5px var(--mono);color:var(--accent)}
+  .controls{position:sticky;top:0;z-index:40;display:flex;gap:8px;align-items:center;flex-wrap:wrap;
+    margin:22px 0 26px;padding:12px 0 14px;background:linear-gradient(to bottom,var(--bg) 74%,transparent)}
+  .controls button{font:inherit;font-size:13px;padding:6px 12px;border-radius:999px;cursor:pointer;
+    border:1px solid var(--border);background:var(--elev);color:var(--dim)}
+  .controls button.on{border-color:var(--accent);color:var(--fg);
+    background:color-mix(in srgb,var(--accent) 16%,var(--elev))}
+  .controls .note{color:var(--faint);font-size:12.5px}
+  body.big .ind{zoom:2.4}
+  body.tint{--c:var(--accent)}
+
+  .card{border:1px solid var(--border);border-radius:12px;background:var(--elev);
+    overflow:hidden;margin-bottom:14px}
+  .card.-win{border-color:color-mix(in srgb,var(--good) 45%,var(--border))}
+  .stageRow{display:flex;align-items:center;gap:14px;padding:26px 18px;min-height:104px;
+    background:var(--bg);border-bottom:1px solid var(--border)}
+  .lbl{font-size:12px;color:var(--faint)}
+  .meta{padding:13px 16px 16px}
+  .meta h3{margin:0;font-size:15px;letter-spacing:-.01em}
+  .meta h3 span{color:var(--faint);font:600 10.5px/1 var(--mono);letter-spacing:.08em;
+    text-transform:uppercase;margin-right:8px}
+  .meta p{margin:7px 0 0;font-size:13px;line-height:1.55;color:var(--dim)}
+  .meta p b{color:var(--fg)}
+  .tags{margin-top:10px;display:flex;gap:6px;flex-wrap:wrap}
+  .t{font:600 10px/1 var(--mono);padding:4px 7px;border-radius:5px;letter-spacing:.04em}
+  .t.-cheap{color:var(--good);background:color-mix(in srgb,var(--good) 15%,transparent)}
+  .t.-mid{color:var(--warn);background:color-mix(in srgb,var(--warn) 15%,transparent)}
+  .t.-idea{color:var(--cyan);background:color-mix(in srgb,var(--cyan) 15%,transparent)}
+  .t.-w{color:var(--pink);background:color-mix(in srgb,var(--pink) 15%,transparent)}
+
+  .ind{display:inline-flex;align-items:center;flex:0 0 auto}
+  .ind svg{display:block;overflow:visible}
+
+  /* ══ 1 · DRIFT — a wide moiré FIELD with no edge anywhere ═══════════
+     Not a disc. A 120×20 band whose own opacity falls off to nothing at
+     every edge, so it has no boundary to be constrained by. */
+  .drift{width:120px;height:20px;position:relative;overflow:hidden;
+    -webkit-mask:radial-gradient(120% 150% at 50% 50%,#000 25%,transparent 72%);
+            mask:radial-gradient(120% 150% at 50% 50%,#000 25%,transparent 72%)}
+  .drift i{position:absolute;inset:-80%;opacity:.5;
+    background:repeating-linear-gradient(0deg,var(--c) 0 .8px,transparent .8px 2.3px)}
+  .drift i:nth-child(1){animation:driftA 13s linear infinite}
+  .drift i:nth-child(2){animation:driftB 17s linear infinite}
+  @keyframes driftA{to{transform:rotate(360deg)}}
+  @keyframes driftB{to{transform:rotate(-360deg) scale(1.08)}}
+
+  /* ══ 2 · FILAMENT ══════════════════════════════════════════════════ */
+  .fil path{fill:none;stroke-linecap:round;stroke-width:1.6}
+  .fil .a{stroke:var(--c)}
+  .fil .b{stroke:var(--c);opacity:.4}
+  .fil .c{stroke:var(--cyan);opacity:.5;stroke-width:1.1}
+
+  /* ══ 3 · AURORA ════════════════════════════════════════════════════ */
+  .aur{width:116px;height:22px;position:relative;overflow:hidden;
+    -webkit-mask:linear-gradient(90deg,transparent,#000 18%,#000 82%,transparent);
+            mask:linear-gradient(90deg,transparent,#000 18%,#000 82%,transparent)}
+  .aur i{position:absolute;top:50%;left:-30%;width:160%;height:3px;margin-top:-1.5px;
+    border-radius:50%;filter:blur(3.5px);opacity:.75}
+  .aur i:nth-child(1){background:linear-gradient(90deg,transparent,var(--accent),transparent);
+    animation:aurA 5.5s ease-in-out infinite}
+  .aur i:nth-child(2){background:linear-gradient(90deg,transparent,var(--cyan),transparent);
+    animation:aurB 7.3s ease-in-out infinite}
+  .aur i:nth-child(3){background:linear-gradient(90deg,transparent,var(--pink),transparent);
+    animation:aurC 9.1s ease-in-out infinite;opacity:.45}
+  @keyframes aurA{0%,100%{transform:translate(-14%,-4px) scaleY(1)}50%{transform:translate(12%,5px) scaleY(2.1)}}
+  @keyframes aurB{0%,100%{transform:translate(10%,4px) scaleY(1.7)}50%{transform:translate(-12%,-5px) scaleY(1)}}
+  @keyframes aurC{0%,100%{transform:translate(-6%,2px) scaleY(1.3)}50%{transform:translate(14%,-3px) scaleY(2.4)}}
+
+  /* ══ 4 · WIND ══════════════════════════════════════════════════════ */
+  .wind path{fill:none;stroke:var(--c);stroke-linecap:round;stroke-width:1.1}
+
+  .foot{margin-top:34px;padding:18px 20px;border-radius:12px;
+    background:color-mix(in srgb,var(--good) 8%,var(--elev));
+    border:1px solid color-mix(in srgb,var(--good) 30%,var(--border))}
+  .foot h2{margin:0 0 10px;font-size:16px}
+  .foot p{margin:0 0 11px;font-size:14px;color:var(--dim)}
+  .foot p:last-child{margin:0}
+  .foot b{color:var(--fg)}
+  @media (prefers-reduced-motion:reduce){.ind *,.ind{animation:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Round 5 — wide, and with no edge to be inside of</h1>
+<p class="sub">Everything so far lived in a little box: a disc, a 26px square, a glyph slot. These
+  are <b>90–120px wide and have no boundary at all</b> — each one fades to nothing at its own edges
+  rather than stopping at one, so there is no shape containing it and nothing reads as a widget.
+  They sit in the row like weather, not like a control.</p>
+
+<div class="controls">
+  <button id="big">Zoom 2.4×</button>
+  <button id="tint">Tint accent</button>
+  <span class="note">watch the EDGES — none of them has one</span>
+</div>
+
+<div class="card -win">
+  <div class="stageRow">
+    <span class="ind drift"><i></i><i></i></span>
+    <span class="lbl">Bash · 14s</span>
+  </div>
+  <div class="meta"><h3><span>01</span>Drift</h3>
+    <p>Round 4's moiré, taken out of its disc and spread across 120px — then masked so its own
+      intensity falls to zero in every direction. <b>There is no circle, no rectangle, no edge</b>:
+      the interference simply thins out and stops existing, and the swirls wander across the band on
+      a 13s/17s beat that never lands twice.</p>
+    <p>Still two divs and two keyframes. <b>No JS, no SVG, no canvas</b> — the cheapest thing in
+      five rounds, and now the least contained.</p>
+    <div class="tags"><span class="t -cheap">transform only · 0 JS</span><span class="t -w">120×20</span><span class="t -idea">no boundary</span><span class="t -idea">emergent</span></div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="stageRow">
+    <span class="ind fil">
+      <svg width="116" height="22" viewBox="0 0 116 22" aria-hidden="true" id="fil">
+        <path class="b"></path><path class="c"></path><path class="a"></path>
+      </svg>
+    </span>
+    <span class="lbl">Bash · 14s</span>
+  </div>
+  <div class="meta"><h3><span>02</span>Filament</h3>
+    <p>Three open strands writhing across the full width, each driven by layered sines at
+      incommensurate frequencies, their ends tapering away to nothing. Nothing anchors them and
+      nothing contains them — <b>they are a thing moving through the row</b>, not a thing placed
+      in it.</p>
+    <div class="tags"><span class="t -mid">JS · 3 paths/frame</span><span class="t -w">116×22</span><span class="t -idea">no boundary</span></div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="stageRow">
+    <span class="ind aur"><i></i><i></i><i></i></span>
+    <span class="lbl">Bash · 14s</span>
+  </div>
+  <div class="meta"><h3><span>03</span>Aurora</h3>
+    <p>Three blurred ribbons of light at different periods, sliding and stretching through each
+      other, masked to nothing at both ends. No line, no dot, <b>no discernible object at all</b> —
+      just coloured light that happens to be brighter in some places.</p>
+    <p>The only one here that is not monochrome, which is either the point or the problem.</p>
+    <div class="tags"><span class="t -mid">blur filter</span><span class="t -w">116×22</span><span class="t -idea">no boundary</span></div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="stageRow">
+    <span class="ind wind">
+      <svg width="116" height="22" viewBox="0 0 116 22" aria-hidden="true" id="wind"></svg>
+    </span>
+    <span class="lbl">Bash · 14s</span>
+  </div>
+  <div class="meta"><h3><span>04</span>Wind</h3>
+    <p>Fourteen short streaks riding a slowly-turning flow field, fading in and out as they travel
+      so the field has no beginning and no end. It reads as <b>a current you are looking at a piece
+      of</b> — the most literally "unconstrained" reading of the brief.</p>
+    <div class="tags"><span class="t -mid">JS · 14 streaks</span><span class="t -w">116×22</span><span class="t -idea">no boundary</span></div>
+  </div>
+</div>
+
+<div class="foot">
+  <h2>Shipping 01 Drift</h2>
+  <p>It is the only one that is <b>unbounded and free</b> at the same time: no element has an edge,
+    the pattern is emergent rather than drawn, and it costs two divs and two keyframes — no JS, no
+    SVG, no canvas, nothing per frame. In a cockpit where several panes can be working at once that
+    ratio decides it.</p>
+  <p>Going in now.</p>
+</div>
+
+</div>
+<script>
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const raf = (fn) => { if (!reduce) requestAnimationFrame(function l(t){ fn(t); requestAnimationFrame(l); }); };
+
+/* ── 02 FILAMENT ─────────────────────────────────────────────────────── */
+{
+  const svg = document.getElementById('fil');
+  const paths = [...svg.querySelectorAll('path')];
+  const W = 116, H = 22, N = 40;
+  raf((t) => {
+    paths.forEach((p, k) => {
+      const ph = k * 2.1, sp = 1 + k * 0.17;
+      let d = '';
+      for (let i = 0; i <= N; i++) {
+        const x = (i / N) * W;
+        // taper to nothing at both ends — no edge, just absence
+        const env = Math.sin((i / N) * Math.PI) ** 1.4;
+        const y = H / 2
+          + Math.sin(x / 19 + t / 1300 * sp + ph) * 5.2 * env
+          + Math.sin(x / 7.3 - t / 900 * sp + ph) * 2.4 * env
+          + Math.sin(x / 31 + t / 2100 + ph) * 3.1 * env;
+        d += (i ? 'L' : 'M') + x.toFixed(1) + ',' + y.toFixed(2);
+      }
+      p.setAttribute('d', d);
+    });
+  });
+}
+
+/* ── 04 WIND ─────────────────────────────────────────────────────────── */
+{
+  const svg = document.getElementById('wind');
+  const W = 116, H = 22, N = 14;
+  const streaks = [];
+  for (let i = 0; i < N; i++) {
+    const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    svg.append(p);
+    streaks.push({ el: p, x: Math.random() * W, y: Math.random() * H,
+                   life: Math.random(), speed: 0.5 + Math.random() * 0.8 });
+  }
+  const field = (x, y, k) => Math.sin(x / 26 + k) * 0.9 + Math.cos(y / 9 - k * 0.6) * 0.75;
+  raf((t) => {
+    const k = t / 2600;
+    for (const s of streaks) {
+      const trail = [];
+      let x = s.x, y = s.y;
+      for (let i = 0; i < 7; i++) {
+        trail.push([x, y]);
+        const a = field(x, y, k);
+        x += Math.cos(a) * 2.0 + 1.1; y += Math.sin(a) * 1.3;
+      }
+      s.el.setAttribute('d', trail.map((p, i) =>
+        (i ? 'L' : 'M') + p[0].toFixed(1) + ',' + p[1].toFixed(2)).join(''));
+      // fade in and out so the field has no start and no end
+      s.life += 0.006;
+      if (s.life > 1) { s.life = 0; s.x = -8 + Math.random() * 12; s.y = Math.random() * H; }
+      s.el.setAttribute('opacity', (Math.sin(s.life * Math.PI) * 0.8).toFixed(3));
+      const a = field(s.x, s.y, k);
+      s.x += Math.cos(a) * s.speed * 0.5 + 0.34;
+      s.y += Math.sin(a) * s.speed * 0.3;
+      if (s.x > W + 10) { s.x = -8; s.y = Math.random() * H; s.life = 0; }
+    }
+  });
+}
+
+for (const [id, cls] of [['big','big'], ['tint','tint']]) {
+  const el = document.getElementById(id);
+  el.onclick = () => el.classList.toggle('on', document.body.classList.toggle(cls));
+}
+</script>
+</body>
+</html>
