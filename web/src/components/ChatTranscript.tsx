@@ -1115,7 +1115,12 @@ function NoticeCard({
   );
   return (
     <div
-      className="chat-turn chat-turn-notice"
+      // `-folded` when there is something under the pill. `.chat-turn` is a flex
+      // ROW, so the disclosure below was laid out BESIDE the pill and stretched
+      // it into a giant ellipse — the pill has `border-radius: 999px` and a flex
+      // item stretches to the row's height by default. Reported with a
+      // screenshot of exactly that circle.
+      className={`chat-turn chat-turn-notice${body ? ' -folded' : ''}`}
       data-eid={anchorId}
       data-search-hit={hl && hl.length > 0 ? 'true' : undefined}
     >

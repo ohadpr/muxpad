@@ -818,6 +818,19 @@
 .chat-turn-notice {
   justify-content: center;
 }
+/* A notice with something folded under it STACKS. `.chat-turn` is a flex row,
+   so without this the disclosure sits beside the pill and the pill — being a
+   flex item with `border-radius: 999px` — stretches to the row's height and
+   renders as a circle. */
+.chat-turn-notice.-folded {
+  flex-direction: column;
+  align-items: center;
+}
+/* …and the disclosure is readable width, not pill width. */
+.chat-turn-notice.-folded .chat-sysnote-body {
+  width: 100%;
+  max-width: 680px;
+}
 .chat-sysnote {
   display: inline-flex;
   gap: 8px;

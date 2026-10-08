@@ -98,6 +98,7 @@ import {
   actionRunExpanded,
   applyChatVoice,
   chatVoiceActive,
+  foldCronTurns,
   foldsAsActionRun,
   isPrivateReasoning,
   lastTurnStartId,
@@ -3073,7 +3074,14 @@ export function ChatPane({
     [mode, sending, session?.assistant, closedTurnStartId],
   );
   const voiceOn = chatVoiceActive(voiceOpts);
-  const voiced = useMemo(() => applyChatVoice(events, voiceOpts), [events, voiceOpts]);
+  // Chat mode's voice first, then the cron fold. Two different claims about the
+  // same events: the voice is about this PANE's mode, the fold is about a
+  // SCHEDULE whose author said its output is plumbing — so the fold applies in
+  // agent mode too, where the voice does not run at all.
+  const voiced = useMemo(
+    () => foldCronTurns(applyChatVoice(events, voiceOpts)),
+    [events, voiceOpts],
+  );
 
   // ── SPOKEN voice (GPT-Live) ────────────────────────────────────────────────
   //

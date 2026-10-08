@@ -248,6 +248,57 @@ export function applyChatVoice(events: readonly ChatEvent[], opts: ChatVoiceOpts
 /** Is this event one the chat shows as a MESSAGE, or private machinery that
  *  belongs in a folded action run? One predicate so the fold and the render
  *  can't disagree about a given row. */
+/**
+ * A FOLDED cron's whole turn is plumbing, not just its prompt.
+ *
+ * `--fold` hides the instruction the schedule injected. It did not hide what
+ * the agent then DID about it, so an hourly job still printed a tool row and a
+ * one-word reply into the conversation every time it ran: six rows a day saying
+ * "closed", in a chat whose actual content is one card. Reported as wanting
+ * "all these instructions folded into a default collapsed list, just like chat
+ * mode does for things the agent does which are not meant to communicate to us".
+ *
+ * That machinery already exists — `voice: 'private'` drops an assistant message
+ * into the "N actions" run beside the tool calls — and chat mode already applies
+ * it to any turn a human did not start. It simply never ran here, because an
+ * agent-mode pane does not apply the chat voice at all. The author of a folded
+ * cron has said this output is plumbing; that is a statement about the SCHEDULE,
+ * not about the pane's mode, so it holds either way.
+ *
+ * The turn is the span from the fire to the next thing a person or another
+ * schedule started — the same segmentation `applyChatVoice` uses, and the same
+ * adjacency (`notice` then its bubble) that identifies a fire at all.
+ */
+export function foldCronTurns(events: readonly ChatEvent[]): ChatEvent[] {
+  let inFold = false;
+  let changed = false;
+  const out = events.map((e, i) => {
+    // A folded fire is a `cron` notice carrying its prompt in `body` — an
+    // UNfolded one is followed by a visible bubble instead, and must be left
+    // exactly as it is.
+    if (e.kind === 'notice') {
+      inFold = e.variant === 'cron' && typeof e.body === 'string' && e.body.length > 0;
+      return e;
+    }
+    // Any other turn start ends the fold: a person typing, a different
+    // schedule, a message delivered from another chat.
+    if (e.kind === 'user') {
+      const prev = events[i - 1];
+      const belongsToFire = prev?.kind === 'notice' && prev.variant === 'cron';
+      if (!belongsToFire) inFold = false;
+      return e;
+    }
+    if (!inFold || e.kind !== 'assistant' || e.voice === 'reply') return e;
+    // `reply` is exempt above: a cron that deliberately called the reply tool
+    // was told to say something, and folding that would hide the one part the
+    // author meant you to read.
+    if (e.voice === 'private') return e;
+    changed = true;
+    return { ...e, voice: 'private' as const };
+  });
+  return changed ? out : (events as ChatEvent[]);
+}
+
 export function isPrivateReasoning(e: ChatEvent): boolean {
   return e.kind === 'assistant' && e.voice === 'private';
 }
