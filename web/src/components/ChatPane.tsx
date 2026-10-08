@@ -3778,13 +3778,20 @@ export function ChatPane({
           // spawn-card interleave — and the file it lives in — never has to
           // know browsers exist. A browser opening and an agent getting stuck
           // are two moments in the log, not a status light above it.
-          injectBrowserMoments(items, browserMoments, (moment) => (
-            <BrowserCard
-              key={`browser:${moment.profile}:${moment.at}:${moment.kind}`}
-              moment={moment}
-              onOpen={(mode) => openBrowser(moment.browser, mode, browserOpenIntent(moment))}
-            />
-          )),
+          injectBrowserMoments(
+            items,
+            browserMoments,
+            (moment) => (
+              <BrowserCard
+                key={`browser:${moment.profile}:${moment.at}:${moment.kind}`}
+                moment={moment}
+                onOpen={(mode) => openBrowser(moment.browser, mode, browserOpenIntent(moment))}
+              />
+            ),
+            // The same window floor the cards get — a browser opened before the
+            // oldest loaded message is not placeable either.
+            { floor: items.find((e) => e.at !== null)?.at ?? null },
+          ),
           spawnedCards,
           // The window's lower edge, taken from the TRANSCRIPT rather than from
           // the list above — which has browser moments in it by now, and a
