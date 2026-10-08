@@ -183,11 +183,17 @@ A cron can write a card like anything else — it is just a scheduled caller, it
 does not own the card, and several schedules may share one (read it with
 \`card get\`, edit your part, write it back).
 
-A cron whose prompt is pure plumbing — "run this, write that card" — should be
-created with \`--fold\`, so the fire shows as one collapsed row with a caret
-instead of pasting the same instruction into the log every time. It folds the
-PROMPT only: whatever the agent replies stays visible, which is what keeps a
-failed fire from disappearing.
+**The injected PROMPT is folded for every fire, automatically.** You never need
+a flag for that — "run this, write that card" is an instruction a schedule
+handed the agent, not something a person said, and it collapses in with the tool
+calls it caused.
+
+\`--silent\` is a second, narrower thing: it folds the agent's REPLY away too.
+Use it only when the reply is noise — a card-refresh job whose whole output is
+the word "closed". **Do not use it on a job whose reply is the deliverable**: a
+schedule that prints a market snapshot and pushes it will have that snapshot
+hidden, which is the opposite of why it exists. (\`--fold\` is the old spelling
+of the same flag, from when it meant the prompt.)
 
 ## Scheduling — \`muxpad cron\` is the ONLY scheduler on this machine
 

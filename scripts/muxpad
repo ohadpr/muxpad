@@ -3017,7 +3017,7 @@ cmd_cron_new() {
       --pane) target=pane ;;
       --pane=*) target=pane; pane_ref="${a#--pane=}" ;;
       --new-tab) target=new-tab ;;
-      --fold) fold_flag=1 ;;
+      --silent|--fold) fold_flag=1 ;;
       --no-close) close_flag=false ;;
       --close) close_flag=true ;;
       --on-context=*) on_context="${a#--on-context=}" ;;
@@ -3091,8 +3091,16 @@ USAGE
     case "$max_open" in (*[!0-9]*|'') echo "muxpad: --max-open must be a whole number" >&2; exit 1 ;; esac
     body+=",\"max_open\":$max_open"
   fi
-  # --fold hides the PROMPT behind a caret in the transcript. Not --quiet:
-  # that already means quiet_mins, a different thing entirely.
+  # --silent demotes the fire's OUTPUT into the collapsed run. The injected
+  # PROMPT is folded for every fire now, flag or no flag — it is an instruction
+  # a schedule handed the agent, never something a person said — so this flag is
+  # only about what the agent then says back.
+  #
+  # `--fold` is the old spelling and still sets the same field. It is kept
+  # working rather than removed because crons already exist carrying it; the
+  # name was accurate when it meant "fold the prompt" and stopped being so when
+  # the prompt started folding unconditionally. Not --quiet: that is quiet_mins,
+  # a different thing entirely.
   [ -n "$fold_flag" ] && body+=",\"fold\":true"
   [ -n "$close_flag" ] && body+=",\"close_when_done\":$close_flag"
   body+='}'
@@ -4138,11 +4146,16 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                      value = THIS pane. --new-tab spawns a
                                      fresh agent tab per fire (clean context)
                                      and closes it when the run finishes.
-  cron new … --fold                  render the delivered PROMPT collapsed behind
-                                     a caret, for a schedule whose message is
-                                     plumbing you never read (e.g. one that just
-                                     refreshes a card). The agent's reply stays
-                                     visible, so a failed fire still speaks up.
+  cron new … --silent                the agent's REPLY is plumbing too, so fold
+                                     it in with the tool calls. For a job whose
+                                     only real output is a card or a push — the
+                                     "closed" it says back is noise.
+                                     Do NOT use it on a job whose reply is the
+                                     deliverable: it will hide the thing you
+                                     wanted. The injected prompt is folded for
+                                     every fire regardless; this is only about
+                                     what the agent says back.
+                                     (--fold is the old spelling, same field.)
                                      Not --quiet, which is quiet_mins.
   cron list                          name, schedule, target, next due, last run,
                                      last status, failure streak
