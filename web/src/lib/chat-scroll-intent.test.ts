@@ -5,6 +5,7 @@ import {
   SEEK_PAGE_BUDGET,
   type ScrollInput,
   type ScrollState,
+  TOP_PAGE_ZONE_MIN_PX,
   alreadyThere,
   canSeek,
   intentFor,
@@ -14,6 +15,7 @@ import {
   scrollEventIsTheReader,
   shouldPageOlder,
   targetFor,
+  topPageZone,
 } from './chat-scroll-intent';
 
 /** A parked memory — the case with something to lose. */
@@ -639,5 +641,40 @@ describe('shouldPageOlder', () => {
   it('never pages a pane it cannot measure, or one with no session yet', () => {
     expect(shouldPageOlder({ ...base, phase: 'ANCHORED', measurable: false })).toBe('no');
     expect(shouldPageOlder({ ...base, phase: 'ANCHORED', sessionBound: false })).toBe('no');
+  });
+});
+
+describe('the top zone is measured in viewports', () => {
+  it('scales with the viewport, so the fetch starts before the edge', () => {
+    // A flat 240px is a third of a laptop viewport and goes past in a frame or
+    // two of real scrolling, so the reader reaches the edge before the page
+    // arrives — and then the anchor compensation, working correctly, moves them
+    // by the whole height of the batch. Measured: asked for scrollTop 0, landed
+    // at 2,048 of a 2,805px document.
+    expect(topPageZone(757)).toBe(1136);
+    expect(topPageZone(1200)).toBe(1800);
+  });
+
+  it('never drops below the floor on a very short pane', () => {
+    // 1.5 viewports of a 100px pane is still a flick.
+    expect(topPageZone(100)).toBe(TOP_PAGE_ZONE_MIN_PX);
+    expect(topPageZone(0)).toBe(TOP_PAGE_ZONE_MIN_PX);
+  });
+
+  it('asks for a page from a screen and a half up, not at the edge', () => {
+    const geo = (scrollTop: number) => ({ scrollTop, scrollHeight: 20000, clientHeight: 800 });
+    const base = {
+      phase: 'ANCHORED' as const,
+      placed: true,
+      measurable: true,
+      hasMoreOlder: true,
+      loadingOlder: false,
+      haveEvents: true,
+      sessionBound: true,
+    };
+    // 1,000px from the top: inside 1.5 viewports, so the round trip starts now.
+    expect(shouldPageOlder({ ...base, geo: geo(1000) })).toBe('top-zone');
+    // …and under the old flat 240 it would not have.
+    expect(shouldPageOlder({ ...base, geo: geo(2000) })).toBe('no');
   });
 });
