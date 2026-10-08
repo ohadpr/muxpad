@@ -304,8 +304,10 @@ muxpad agent new --name='returns quotes' "compare the two returns quotes on tota
 # Read, search and post in Slack — always as you, 🤖-prefixed, allowlisted
 muxpad slack read '#eng' --since=2h
 muxpad slack post @andrey "the PR feedback"
-#   → refuses unless this project is named in ~/.muxpad/slack-allowed-roots,
-#     so a project holding personal files can never message a work surface
+#   → refuses unless this chat's WORKSPACE is named in
+#     ~/.muxpad/slack-allowed-workspaces, so a personal chat can never message
+#     a work surface. The workspace is resolved server-side from the pane id,
+#     so neither `cd` nor MUXPAD_WORKSPACE_ID can talk it round.
 
 # Put a finished thing on a URL and print the link
 muxpad publish ./report --name=market-teardown

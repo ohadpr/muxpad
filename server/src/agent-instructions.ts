@@ -96,17 +96,21 @@ list. Capabilities worth knowing:
   under the user's name is right about where it lands and who owns it; it is
   not a claim that they typed it, and the reader is owed that distinction.
 
-  **3 · SENDING IS ALLOWLISTED BY PROJECT, AND IT FAILS CLOSED.** A project
-  must be named in \`~/.muxpad/slack-allowed-roots\` before it can post at
-  all. This exists so that a project holding personal files — notes, health,
-  finances — can NEVER message a work surface, and it is an allowlist precisely
-  because a denylist fails open for every folder nobody thought of.
+  **3 · SENDING IS ALLOWLISTED BY WORKSPACE, AND IT FAILS CLOSED.** The chat's
+  workspace must be named in \`~/.muxpad/slack-allowed-workspaces\` before it
+  can post at all — so a chat in a personal workspace can NEVER message a work
+  surface. An allowlist, because a denylist fails open for everything nobody
+  thought of.
 
-  If you are refused, **that is the system working**. Do not add the directory
-  you are standing in to the allowlist to get one message out, do not cd
-  somewhere permitted and send from there, and do not look for another route.
-  Tell the user you were refused and why; the allowlist is theirs to change,
-  not yours.
+  The workspace is resolved from the SERVER using this pane's id. Setting
+  \`MUXPAD_WORKSPACE_ID\` does nothing, and neither does \`cd\` — the check
+  is not about which directory you are in, because a chat is often told where
+  its files are rather than started there.
+
+  If you are refused, **that is the system working**. Do not post from another
+  pane, do not edit the allowlist, do not reach for \`curl\` and the token
+  file. Tell the user you were refused and which workspace you are in; the
+  allowlist is theirs to change, not yours.
 
   Reading and searching are NOT gated — the risk being managed is personal data
   going OUT.

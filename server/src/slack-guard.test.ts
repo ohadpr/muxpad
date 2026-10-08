@@ -4,33 +4,75 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 
 const execFileAsync = promisify(execFile);
 const MUXPAD = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'muxpad');
 const SRC = readFileSync(MUXPAD, 'utf8');
 
 /**
- * SLACK SENDING IS ALLOWLISTED BY PROJECT, AND IT FAILS CLOSED.
+ * SLACK SENDING IS ALLOWLISTED BY WORKSPACE, AND IT FAILS CLOSED.
  *
  * "Never allow a project that is using personal files/data to send slack
  *  messages, never ever ever ever. It should fail."
  *
- * An allowlist rather than a denylist, because a denylist fails OPEN for
- * everything nobody thought of — and the personal tree already holds health,
- * investing, land, notes and reading, and gains folders. A project is silent
- * until it is named.
+ * ── THE DIRECTORY WAS THE WRONG THING TO ASK ────────────────────────────────
+ * The first version gated on `pwd`, and it was wrong for how the tool is used:
+ * "not all my trayo chats run in that directory — I just tell the agent what
+ * directory stuff is in, so the agent can be running in ~". That check would
+ * have refused real work chats and allowed a personal one that happened to
+ * start somewhere permitted. It measured the wrong thing confidently, which is
+ * the worst way for a guard to be wrong.
  *
- * These run the real script with its real guard. No network: every case here
- * is refused before any API call, and the allowed case fails later on a
- * channel that does not exist, which is itself the proof it got past the gate.
+ * Workspaces are how the chats are actually organised, so that is the boundary.
+ *
+ * ── AND THE WORKSPACE COMES FROM THE SERVER ─────────────────────────────────
+ * `MUXPAD_WORKSPACE_ID` is in every pane's environment and would have been one
+ * line. It is also a value the caller can set, and a guard that asks the thing
+ * it is guarding to state its own identity is a guard in name only. The pane id
+ * is resolved pane → tab → workspace over the API; the pane cannot edit that
+ * answer. The spoof case below is the point of the whole design.
+ *
+ * These need a running server, so they are skipped without one rather than
+ * reported as passes.
  */
-let dir: string;
-let data: string;
-const run = (cwd: string) =>
-  execFileAsync(MUXPAD, ['slack', 'post', '#nope', 'hi'], {
-    cwd,
-    env: { ...process.env, MUXPAD_DATA_DIR: data, SLACK_SECRETS: '/dev/null' },
+const API = `http://127.0.0.1:${process.env.MUXPAD_PORT ?? 7777}`;
+let up = false;
+let personalPane = '';
+let allowedPane = '';
+let allowedName = '';
+
+beforeAll(async () => {
+  try {
+    const panes = (await fetch(`${API}/api/panes`).then((r) => r.json())) as Array<{
+      id: string;
+      tab_id: string;
+    }>;
+    const wss = (await fetch(`${API}/api/workspaces?all=1`).then((r) => r.json())) as Array<{
+      id: string;
+      name: string;
+    }>;
+    for (const p of panes) {
+      const tab = (await fetch(`${API}/api/tabs/${p.tab_id}`).then((r) => r.json())) as {
+        workspace_id?: string;
+      };
+      const ws = wss.find((w) => w.id === tab.workspace_id);
+      if (!ws) continue;
+      if (!personalPane && ws.name === 'Personal') personalPane = p.id;
+      if (!allowedPane && ws.name !== 'Personal' && !ws.name.startsWith('·')) {
+        allowedPane = p.id;
+        allowedName = ws.name;
+      }
+    }
+    up = !!personalPane && !!allowedPane;
+  } catch {
+    up = false;
+  }
+});
+
+const post = (env: Record<string, string>) =>
+  execFileAsync(MUXPAD, ['slack', 'post', '#definitely-not-a-channel', 'hi'], {
+    env: { ...process.env, SLACK_SECRETS: '/dev/null', ...env },
   }).then(
     (r) => ({ code: 0, out: r.stdout + r.stderr }),
     (e: { code?: number; stdout?: string; stderr?: string }) => ({
@@ -39,70 +81,40 @@ const run = (cwd: string) =>
     }),
   );
 
-beforeAll(() => {
-  dir = mkdtempSync(join(tmpdir(), 'slackguard-'));
-  data = mkdtempSync(join(tmpdir(), 'slackdata-'));
-  for (const d of ['work', 'work/sub', 'work-personal', 'personal']) {
-    mkdirSync(join(dir, d), { recursive: true });
-  }
-});
-afterAll(() => {
-  rmSync(dir, { recursive: true, force: true });
-  rmSync(data, { recursive: true, force: true });
-});
+describe('the Slack workspace allowlist', () => {
+  it('refuses outside a muxpad pane — there is no workspace to check', async () => {
+    const env = { ...process.env } as Record<string, string>;
+    delete env.MUXPAD_PANE_ID;
+    const r = await execFileAsync(MUXPAD, ['slack', 'post', '#x', 'hi'], {
+      env: { ...env, SLACK_SECRETS: '/dev/null' },
+    }).catch((e: { stderr?: string }) => ({ stderr: e.stderr ?? '' }));
+    expect(('stderr' in r ? r.stderr : '') as string).toContain('only from inside a muxpad pane');
+  });
 
-describe('the Slack project allowlist', () => {
-  it('refuses EVERYTHING when no allowlist exists', async () => {
-    rmSync(join(data, 'slack-allowed-roots'), { force: true });
-    const r = await run(join(dir, 'work'));
+  it('refuses a pane in a workspace that is not allowed', async ({ skip }) => {
+    if (!up) skip();
+    const r = await post({ MUXPAD_PANE_ID: personalPane });
     expect(r.code).not.toBe(0);
-    expect(r.out).toContain('no project is allowed to post yet');
+    expect(r.out).toContain('refusing to post from the "Personal" workspace');
   });
 
-  it('allows a named root and its subdirectories', async () => {
-    writeFileSync(join(data, 'slack-allowed-roots'), `${join(dir, 'work')}\n`);
-    for (const d of ['work', 'work/sub']) {
-      const r = await run(join(dir, d));
-      // Past the gate — it now fails on the channel, which is the proof.
-      expect(r.out, d).not.toContain('refusing to post');
-      expect(r.out, d).not.toContain('no project is allowed');
-    }
+  it('lets an allowed workspace through to the API', async ({ skip }) => {
+    if (!up) skip();
+    // Past the gate — it now fails on the channel, which is the proof.
+    const r = await post({ MUXPAD_PANE_ID: allowedPane });
+    expect(r.out, `workspace ${allowedName}`).not.toContain('refusing to post');
+    expect(r.out).not.toContain('no workspace is allowed');
   });
 
-  it('refuses a LOOKALIKE sibling — the match is on a path boundary', async () => {
-    // `/work` must not admit `/work-personal`. A plain prefix test would.
-    writeFileSync(join(data, 'slack-allowed-roots'), `${join(dir, 'work')}\n`);
-    const r = await run(join(dir, 'work-personal'));
+  it('CANNOT be talked out of it by setting MUXPAD_WORKSPACE_ID', async ({ skip }) => {
+    if (!up) skip();
+    // The whole reason the workspace is resolved server-side from the pane id.
+    const r = await post({
+      MUXPAD_PANE_ID: personalPane,
+      MUXPAD_WORKSPACE_ID: 'whatever-the-agent-likes',
+    });
     expect(r.code).not.toBe(0);
-    expect(r.out).toContain('refusing to post');
-  });
-
-  it('refuses the PARENT of an allowed root', async () => {
-    writeFileSync(join(data, 'slack-allowed-roots'), `${join(dir, 'work')}\n`);
-    const r = await run(dir);
-    expect(r.code).not.toBe(0);
-  });
-
-  it('refuses an unlisted project outright', async () => {
-    writeFileSync(join(data, 'slack-allowed-roots'), `${join(dir, 'work')}\n`);
-    const r = await run(join(dir, 'personal'));
-    expect(r.code).not.toBe(0);
-    expect(r.out).toContain('refusing to post');
-  });
-
-  it('resolves BOTH sides of the comparison the same way', async () => {
-    // On macOS /tmp is /private/tmp. The cwd goes through `pwd -P` and the
-    // allowlist entry must too, or the two spellings never match — measured:
-    // all four test directories refused, including the allowed one.
-    writeFileSync(join(data, 'slack-allowed-roots'), `${join(dir, 'work')}\n`);
-    const r = await run(join(dir, 'work'));
-    expect(r.out).not.toContain('refusing to post');
-  });
-
-  it('ignores blanks and comments in the file', async () => {
-    writeFileSync(join(data, 'slack-allowed-roots'), `# a comment\n\n   \n${join(dir, 'work')}\n`);
-    const r = await run(join(dir, 'work'));
-    expect(r.out).not.toContain('refusing to post');
+    expect(r.out).toContain('refusing to post from the "Personal" workspace');
   });
 });
 
@@ -138,13 +150,13 @@ describe('one identity, and it says a machine wrote it', () => {
       .split('\n')
       .filter((l) => !l.trim().startsWith('#'))
       .join('\n');
-    const guard = body.indexOf('slack_guard_cwd');
+    const guard = body.indexOf('slack_guard_workspace');
     expect(guard).toBeGreaterThan(-1);
     expect(guard).toBeLessThan(body.indexOf('slack_load'));
     expect(guard).toBeLessThan(body.indexOf('usage: muxpad slack post'));
   });
 
   it('guards unpost too', () => {
-    expect(SRC.slice(SRC.indexOf('cmd_slack_unpost() {'))).toContain('slack_guard_cwd');
+    expect(SRC.slice(SRC.indexOf('cmd_slack_unpost() {'))).toContain('slack_guard_workspace');
   });
 });
