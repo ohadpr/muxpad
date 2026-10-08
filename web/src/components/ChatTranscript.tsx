@@ -263,8 +263,16 @@ export function ActionGroup({
   // argument as the line above, extended to a folded cron whose whole turn was
   // "read this, run nothing, say closed".
   const notesOnly = events.every((e) => e.kind === 'assistant' || e.kind === 'user');
+  // …and NAME it for what is in it. `notesOnly` used to hardcode "note", which
+  // was right while the only thing that could be alone in a run was demoted
+  // prose. Now that every cron's injected prompt is folded, a fire whose turn
+  // ran nothing at all — one that died at the weekly limit, say — is a run of
+  // one PROMPT, and the header called it a note. The reader opens it expecting
+  // something the agent thought and finds an instruction it was handed.
+  const promptsOnly = notesOnly && events.every((e) => e.kind === 'user');
+  const noun = promptsOnly ? 'prompt' : 'note';
   const countLabel = notesOnly
-    ? `${actions === 1 ? 'note' : `${actions} notes`}`
+    ? `${actions === 1 ? noun : `${actions} ${noun}s`}`
     : `${actions} action${actions === 1 ? '' : 's'}`;
   return (
     <div className="chat-turn chat-turn-assistant" data-eid={anchorId}>
