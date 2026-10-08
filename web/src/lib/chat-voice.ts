@@ -270,37 +270,16 @@ export function applyChatVoice(events: readonly ChatEvent[], opts: ChatVoiceOpts
  * schedule started — the same segmentation `applyChatVoice` uses, and the same
  * adjacency (`notice` then its bubble) that identifies a fire at all.
  */
-/**
- * Is the fire announced by the `cron` notice at `i` a FOLDED one?
- *
- * Read off the bubble that follows, because that is where the fact now lives.
- * `expandCronFire` emits one of three shapes, and only the middle one is new:
- *
- *   unfolded          [notice, user]                  ← a visible prompt bubble
- *   folded + prompt   [notice, user {folded: true}]   ← the prompt, collapsed
- *   folded, no prompt [notice]                        ← nothing to collapse
- *
- * So the question is answered by ABSENCE: a fire is folded unless it is
- * followed by a bubble that is not marked folded.
- *
- * This asked the notice's own `body` instead, which was true when the chip
- * carried the prompt behind a caret. Making the chip a mark moved the prompt
- * into the following bubble and left the notice with no `body` at all — so the
- * test read false for every fire and the fold silently stopped running. What
- * that looked like: an hourly schedule printing the word "closed" into the
- * conversation six times a day, which is the exact output this exists to hide.
- */
-export function cronFireIsFolded(events: readonly ChatEvent[], i: number): boolean {
-  const next = events[i + 1];
-  return !(next?.kind === 'user' && next.folded !== true);
-}
 
 export function foldCronTurns(events: readonly ChatEvent[]): ChatEvent[] {
   let inFold = false;
   let changed = false;
   const out = events.map((e, i) => {
     if (e.kind === 'notice') {
-      inFold = e.variant === 'cron' && cronFireIsFolded(events, i);
+      // The flag rides on the notice now — see NoticeEvent.fold. It used to be
+      // read off the SHAPE of the next event, which stopped being able to tell
+      // the two apart the moment every fire's prompt became folded.
+      inFold = e.kind === 'notice' && e.variant === 'cron' && e.fold === true;
       return e;
     }
     // Any other turn start ends the fold: a person typing, a different
@@ -404,7 +383,11 @@ export function coalesceCronFires(events: readonly ChatEvent[]): ChatEvent[] {
   const fires: number[] = [];
   for (let i = 0; i < events.length; i++) {
     const e = events[i] as ChatEvent;
-    if (e.kind === 'notice' && e.variant === 'cron' && !e.detail && cronFireIsFolded(events, i)) {
+    // EVERY cron notice is a candidate now, folded or not. `sep` and `mute`
+    // below do the real work — they ask whether anything VISIBLE happened, and a
+    // fire that produced nothing visible has nothing to anchor a chip to
+    // whatever its flag says.
+    if (e.kind === 'notice' && e.variant === 'cron' && !e.detail) {
       fires.push(i);
     }
   }
@@ -531,7 +514,24 @@ const MIN_GROUP = 2;
  * visible right under the reply.
  */
 export function foldsAsActionRun(run: readonly ChatEvent[]): boolean {
-  return run.length >= MIN_GROUP || run.some(isPrivateReasoning);
+  return run.length >= MIN_GROUP || run.some(isPrivateReasoning) || run.some(isCronPrompt);
+}
+
+/**
+ * A cron's injected prompt — the second exception to the length rule, and for
+ * the same reason as the first.
+ *
+ * A lone tool row inline is a nicety. A lone INJECTED PROMPT inline is six
+ * lines of "Run: python3 … On error print+push 'NW close snapshot failed'"
+ * printed into the conversation, which is the exact thing folding it was for.
+ *
+ * It takes a turn that produced nothing else to hit this: the fire, its prompt,
+ * and then no tool calls at all. Observed on a fire that died at the weekly
+ * limit — the run was one event long, so the length rule rendered it inline and
+ * the prompt came back.
+ */
+function isCronPrompt(e: ChatEvent): boolean {
+  return e.kind === 'user' && e.folded === true;
 }
 
 /**

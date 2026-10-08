@@ -115,9 +115,25 @@ describe('coalesceCronFires', () => {
     expect(chips(out)[0]?.detail).toMatch(/^4 fires/);
   });
 
-  it('leaves an UNFOLDED fire alone — its prompt is a visible bubble', () => {
+  it('coalesces by what was SAID, not by the flag', () => {
+    // The old rule kept unfolded fires apart because their prompts were visible
+    // bubbles. Every prompt is folded now — it is an instruction a schedule
+    // injected, not something a person said — so two unfolded fires that
+    // produced nothing visible have nothing to anchor two chips to.
     const out = run([...fire('nw-hourly', false), tool(), ...fire('nw-hourly', false)]);
-    expect(chips(out)).toHaveLength(2);
+    expect(chips(out)).toHaveLength(1);
+  });
+
+  it('…and an UNFOLDED fire that SPOKE still keeps its own chip', () => {
+    // `nw-close` is deliberately not folded because its reply is worth reading.
+    // That reply is what anchors the chip — the flag never was.
+    const out = run([
+      ...fire('nw-hourly', false),
+      tool(),
+      ...fire('nw-close', false),
+      reply('CLOSE · SPX −0.4%'),
+    ]);
+    expect(chips(out).map((c) => c.text)).toEqual(['nw-hourly', 'nw-close']);
   });
 
   it('leaves a fire that collapsed MISSED fires alone', () => {

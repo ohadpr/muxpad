@@ -114,6 +114,19 @@ export interface NoticeEvent extends Base {
    * injected stops taking up the conversation.
    */
   body?: string;
+  /**
+   * For a 'cron' notice: did its schedule declare its OUTPUT plumbing
+   * (`--fold`)?
+   *
+   * Carried explicitly because it used to be inferred from the SHAPE of what
+   * followed — a folded fire emitted a `folded` bubble, an unfolded one a plain
+   * bubble, so "was this folded" was answered by looking at the next event. Now
+   * that every fire's prompt is folded (see `expandCronFire`) the shapes are
+   * identical and the shape-reading would be a predicate that always says yes.
+   * The flag is a fact about the SCHEDULE; it belongs on the event, not in a
+   * silhouette.
+   */
+  fold?: boolean;
   /** For a task-notification: the parent Task/Agent tool-use id it reports on.
    *  Lets the live roster match a subagent's FINISH to its launch reliably —
    *  a background agent's own tool_result is only the immediate launch ack. */
@@ -481,29 +494,30 @@ export function expandCronFire(text: string, id: string, ts: number | null): Cha
   const parsed = parseCronMarker(text);
   if (!parsed) return null;
   const { marker, body } = parsed;
-  // A FOLDED cron tucks its prompt into the chip rather than following it with a
-  // bubble: one row that says a schedule fired, with a caret for the plumbing.
-  // The agent's REPLY is untouched — it is an ordinary message — which is what
-  // keeps a failed fire visible without a special case for failure.
-  if (marker.fold) {
-    // The chip is a MARK, not a control. It says a schedule fired, and that is
-    // all it says — the prompt goes into the same collapsed run as the tool
-    // calls the fire produced, because it is the same kind of thing. It used to
-    // hang behind a caret on the chip, which gave one fire two separate folds
-    // and made the mark clickable for no reason a reader would guess.
-    const prompt = body.trim();
-    const notice: NoticeEvent = {
-      kind: 'notice',
-      id: `${id}:cron`,
-      ts,
-      variant: 'cron',
-      text: marker.name,
-      ...(marker.missed > 0
-        ? { detail: `${marker.missed} missed fire${marker.missed === 1 ? '' : 's'} collapsed` }
-        : {}),
-    };
-    return prompt ? [notice, { kind: 'user', id, ts, text: prompt, folded: true }] : [notice];
-  }
+  // ─── THE INJECTED PROMPT IS ALWAYS PLUMBING ──────────────────────────────
+  // This used to branch: a `--fold` cron collapsed its prompt, an ordinary one
+  // printed it as a bubble. That put the flag on the wrong axis, and the
+  // Investing chat shows it — `nw-close` is deliberately NOT folded because its
+  // reply is worth reading, and the result is six lines of
+  //
+  //   "Run: python3 scripts/nw_oneline.py CLOSE — then PRINT that exact line as
+  //    your chat reply AND send it as a PushNotification… On error print+push
+  //    'NW close snapshot failed'."
+  //
+  // sitting above the answer. Nobody has ever re-read that. It is an
+  // instruction a schedule injected, not something a person said, and that is
+  // true whatever the flag says.
+  //
+  // AND MUXPAD ALREADY EDITS THIS MESSAGE. The `<muxpad-cron …>` marker is the
+  // first half of the very same injected string and is hidden from display
+  // without anybody calling it a rewrite of history. Folding the second half is
+  // the same act on the same message, not a new category — which is why this
+  // needs no lookup of what the flag was at delivery time, and why it cleans up
+  // the back-scroll without re-rendering a single word anybody wrote.
+  //
+  // What `--fold` still controls is the turn's OUTPUT: whether the agent's own
+  // prose is demoted too (see foldCronTurns). Prompt and output were two
+  // decisions wearing one flag.
   const notice: NoticeEvent = {
     kind: 'notice',
     // Distinct id from the user bubble's — they are two React rows.
@@ -511,12 +525,17 @@ export function expandCronFire(text: string, id: string, ts: number | null): Cha
     ts,
     variant: 'cron',
     text: marker.name,
+    ...(marker.fold ? { fold: true } : {}),
     ...(marker.missed > 0
       ? { detail: `${marker.missed} missed fire${marker.missed === 1 ? '' : 's'} collapsed` }
       : {}),
   };
+  // The chip is a MARK, not a control: it says a schedule fired and nothing
+  // else. The prompt joins the same collapsed run as the tool calls the fire
+  // produced, because it is the same kind of thing — it used to hang behind a
+  // caret on the chip, which gave one fire two separate disclosures.
   const prompt = body.trim();
-  return prompt ? [notice, { kind: 'user', id, ts, text: prompt }] : [notice];
+  return prompt ? [notice, { kind: 'user', id, ts, text: prompt, folded: true }] : [notice];
 }
 
 /**
