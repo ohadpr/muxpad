@@ -4262,8 +4262,10 @@ export function ChatPane({
                     className="chat-msg chat-working"
                     aria-label={`${assistantLabel(session?.assistant)} is working`}
                   >
+                    {/* Two gratings, not three dots — see .chat-typing. The
+                      swirls are interference between them; neither layer
+                      contains a single curve. */}
                     <span className="chat-typing" aria-hidden="true">
-                      <i />
                       <i />
                       <i />
                     </span>

@@ -92,10 +92,27 @@ describe('coalesceCronFires', () => {
     expect(chips(out)[0]?.detail).toMatch(/^2 fires/);
   });
 
-  it('never merges two different schedules into one chip', () => {
-    // Averaging two schedules together answers a question nobody asked.
+  it('MERGES different schedules, and names them while naming them fits', () => {
+    // This used to keep them apart, on the argument that a chip averaging two
+    // schedules answers a question nobody asked. In a chat whose entire output
+    // is a card, three schedules taking turns produced six rows of plumbing
+    // between two messages — and the reader's question there is not "which
+    // schedule" but "why is there machinery here".
     const out = run([...quiet('nw-hourly'), ...quiet('pr-sweep')]);
-    expect(chips(out).map((c) => c.text)).toEqual(['nw-hourly', 'pr-sweep']);
+    expect(chips(out)).toHaveLength(1);
+    expect(chips(out)[0]?.text).toBe('nw-hourly · pr-sweep');
+  });
+
+  it('counts them instead of listing them once a list stops fitting', () => {
+    const out = run([
+      ...quiet('nw-open'),
+      ...quiet('nw-hourly'),
+      ...quiet('nw-close'),
+      ...quiet('pr-sweep'),
+    ]);
+    expect(chips(out)).toHaveLength(1);
+    expect(chips(out)[0]?.text).toBe('4 schedules');
+    expect(chips(out)[0]?.detail).toMatch(/^4 fires/);
   });
 
   it('leaves an UNFOLDED fire alone — its prompt is a visible bubble', () => {
@@ -145,5 +162,46 @@ describe('coalesceCronFires — what counts as "nothing visible"', () => {
       ...fire('nw-hourly', true, ''),
     ]);
     expect(chips(out)).toHaveLength(1);
+  });
+});
+
+describe('coalesceCronFires — the two questions that are not the same question', () => {
+  it('a message BETWEEN two fires keeps the later chip where it is', () => {
+    // Adjacency, not silence. Merging across a person's message puts the chip
+    // above text they have not read yet and leaves everything after it
+    // unexplained.
+    const out = run([
+      ...quiet('nw-hourly'),
+      ...quiet('nw-hourly'),
+      user('hey'),
+      prose('hi'),
+      ...quiet('nw-open'),
+      ...quiet('nw-hourly'),
+    ]);
+    expect(chips(out)).toHaveLength(2);
+    expect(chips(out)[0]?.detail).toMatch(/^2 fires/);
+    expect(chips(out)[1]?.detail).toMatch(/^2 fires/);
+  });
+
+  it('a fire that spoke stays separate even with only plumbing before it', () => {
+    // The other direction: nothing visible separates them, but the later fire
+    // has a reply of its own, so its chip has to sit above that reply.
+    const out = run([...quiet(), ...quiet(), ...fire('nw-close'), reply('CLOSE · SPX −0.4%')]);
+    expect(chips(out).map((c) => c.text)).toEqual(['nw-hourly', 'nw-close']);
+    expect(chips(out)[0]?.detail).toMatch(/^2 fires/);
+  });
+
+  it('the real Investing morning becomes ONE row', () => {
+    // The reported shape: three schedules taking turns, six rows of plumbing
+    // between two messages, in a chat whose entire output is one card.
+    const out = run([
+      ...quiet('nw-hourly'),
+      ...quiet('nw-open'),
+      ...quiet('nw-hourly'),
+      ...quiet('nw-hourly'),
+    ]);
+    expect(chips(out)).toHaveLength(1);
+    expect(chips(out)[0]?.text).toBe('nw-hourly · nw-open');
+    expect(chips(out)[0]?.detail).toMatch(/^4 fires/);
   });
 });

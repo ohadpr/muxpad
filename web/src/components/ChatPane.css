@@ -435,39 +435,73 @@
   }
 }
 
-/* Working indicator (bouncing dots) shown before the first token arrives. */
+/* ── THE WORKING INDICATOR — a field, not a widget ──────────────────────────
+   Shown before the first token arrives.
+
+   WHAT IT REPLACED, and why none of the obvious replacements won. Three
+   bouncing dots are the universal answer and say nothing a hundred other apps
+   are not already saying. Four rounds of alternatives — orbits, comets,
+   epicycles, a split-flap, a double pendulum, a strip chart — were all the same
+   genre underneath: a small object, inside a small box, moving on a loop. You
+   can feel the box even when you cannot see it.
+
+   So this one has no box. It is a 120×20 band of two counter-rotating line
+   gratings whose own intensity is masked to zero in every direction: there is
+   no circle, no square and no edge anywhere — the pattern simply thins out and
+   stops existing. It sits in the row like weather rather than like a control.
+
+   EVERY SWIRL IS EMERGENT. Nothing is drawn but straight lines 0.8px apart;
+   the moving shapes are interference between the two layers and exist in
+   neither of them. The periods are 13s and 17s, which share no factor, so the
+   beat runs ~221s and never lands in the same place twice — and two panes that
+   started at different moments show visibly different patterns, which no
+   spinner can do (two of those are always identical).
+
+   AND IT COSTS NOTHING. Two elements, two keyframes, `transform` only — no JS,
+   no SVG, no canvas, no filter, nothing per frame. In a cockpit where several
+   panes can be working at once that ratio is what decided it over the
+   prettier options. */
 .chat-working {
   display: flex;
   align-items: center;
   min-height: 1.3em;
 }
 .chat-typing {
-  display: inline-flex;
-  gap: 4px;
+  position: relative;
+  width: 120px;
+  height: 20px;
+  overflow: hidden;
+  /* THE REASON THERE IS NO EDGE. Without this the band is a visible rectangle
+     of hatching and the whole point is lost. */
+  -webkit-mask: radial-gradient(120% 150% at 50% 50%, #000 25%, transparent 72%);
+  mask: radial-gradient(120% 150% at 50% 50%, #000 25%, transparent 72%);
 }
+/* `inset: -80%` so the gratings are far larger than the window they are seen
+   through — a layer rotating about its own centre must overhang on every side
+   or its own corners sweep into view. */
 .chat-typing i {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--chat-faint);
-  animation: chat-bounce 1.2s ease-in-out infinite;
+  position: absolute;
+  inset: -80%;
+  opacity: 0.5;
+  background: repeating-linear-gradient(0deg, var(--chat-faint) 0 0.8px, transparent 0.8px 2.3px);
 }
+.chat-typing i:nth-child(1) {
+  animation: chat-drift-a 13s linear infinite;
+}
+/* Counter-rotating, and scaled slightly: identical layers at mirrored angles
+   produce a symmetric figure, which reads as a drawn object. The scale breaks
+   the symmetry so the interference wanders instead. */
 .chat-typing i:nth-child(2) {
-  animation-delay: 0.15s;
+  animation: chat-drift-b 17s linear infinite;
 }
-.chat-typing i:nth-child(3) {
-  animation-delay: 0.3s;
-}
-@keyframes chat-bounce {
-  0%,
-  60%,
-  100% {
-    transform: translateY(0);
-    opacity: 0.5;
+@keyframes chat-drift-a {
+  to {
+    transform: rotate(360deg);
   }
-  30% {
-    transform: translateY(-4px);
-    opacity: 1;
+}
+@keyframes chat-drift-b {
+  to {
+    transform: rotate(-360deg) scale(1.08);
   }
 }
 @media (prefers-reduced-motion: reduce) {
