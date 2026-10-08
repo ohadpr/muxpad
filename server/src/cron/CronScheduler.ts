@@ -363,6 +363,7 @@ export class CronScheduler {
       at: dueAt,
       missed,
       ...(cron.fold ? { fold: true } : {}),
+      ...(cron.card ? { card: cron.card } : {}),
     };
     const text = renderCronMarker(marker, cron.prompt);
     return cron.target_kind === 'new-tab'

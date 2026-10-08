@@ -519,7 +519,7 @@ describe('migrations v21 — agent modes + the living sidebar', () => {
       .prepare('SELECT version FROM schema_version ORDER BY version DESC LIMIT 1')
       .get() as { version: number };
     expect(v.version).toBe(LATEST_SCHEMA_VERSION);
-    expect(LATEST_SCHEMA_VERSION).toBe(41);
+    expect(LATEST_SCHEMA_VERSION).toBe(42);
   });
 });
 
@@ -1500,5 +1500,42 @@ describe('v38 — the join: spawn_rounds.delivered_at', () => {
       db.prepare('PRAGMA table_info(spawn_rounds)').all() as Array<{ name: string }>
     ).filter((c) => c.name === 'delivered_at');
     expect(cols).toHaveLength(1);
+  });
+});
+
+describe('migration 42 — a cron declares where its OUTPUT goes', () => {
+  it('adds crons.card, nullable, defaulting to none', () => {
+    // NULL rather than '': a cron that writes no card is the common case and
+    // must stay distinguishable from one whose card name was cleared.
+    const db = new Database(':memory:');
+    runMigrations(db);
+    const col = (
+      db.prepare('PRAGMA table_info(crons)').all() as Array<{
+        name: string;
+        type: string;
+        notnull: number;
+        dflt_value: unknown;
+      }>
+    ).find((c) => c.name === 'card');
+    expect(col).toBeTruthy();
+    expect(col?.type).toBe('TEXT');
+    expect(col?.notnull).toBe(0);
+    expect(col?.dflt_value).toBeNull();
+  });
+
+  it('leaves every existing cron with no card', () => {
+    // The chat stays the default destination. This changes nothing for a job
+    // that never said otherwise — including the ones already on disk.
+    const db = new Database(':memory:');
+    runMigrations(db, { upTo: 41 });
+    db.prepare(
+      `INSERT INTO crons (id, name, schedule, tz, prompt, target_kind, enabled, catchup,
+         overlap, on_context, quiet_mins, jitter_ms, max_open, close_when_done, open_tabs,
+         next_due_at, fail_streak, created_at, once, fold)
+       VALUES ('c1','old','0 9 * * *','UTC','go','pane',1,'once','skip','fire',0,0,1,0,'[]',0,0,0,0,0)`,
+    ).run();
+    runMigrations(db);
+    const row = db.prepare('SELECT card FROM crons WHERE id = ?').get('c1') as { card: unknown };
+    expect(row.card).toBeNull();
   });
 });
