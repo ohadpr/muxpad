@@ -180,19 +180,26 @@ describe('the session line sits outside the composer pill', () => {
   // second prop and biome split it across lines, which silently made this slice
   // empty and the assertions below vacuous. What the test is about is the ORDER
   // of things inside the wrap, and that survives formatting.
+  // From the wrap to the END of the component. It used to stop at
+  // `chat-composer-main`, which silently excluded everything after the pill —
+  // so when the session line moved BELOW the composer the slice no longer
+  // contained it at all. Both markers below occur exactly once, so comparing
+  // their order over the whole region says precisely what this test means.
   const WRAP = SRC.slice(
     SRC.indexOf('className="chat-composer-wrap"'),
-    SRC.indexOf('<div className="chat-composer-main">'),
+    SRC.indexOf('// Everything that draws an ALREADY-ARRIVED message'),
   );
 
-  it('renders the bar as a SIBLING of the pill, before it opens', () => {
+  it('renders the bar as a SIBLING of the pill, UNDER it', () => {
     // A slice that missed its anchor makes every assertion below vacuously
     // true, which is how this test passed while saying nothing.
     expect(WRAP.length).toBeGreaterThan(100);
     expect(WRAP).toContain('<SessionBar');
-    // Order is the assertion: the strip is emitted before the pill's own
-    // element, so it cannot be a child of it.
-    expect(WRAP.indexOf('<SessionBar')).toBeLessThan(
+    // Order is the assertion, and it reversed deliberately: the line is
+    // reference, not conversation, so it sits BELOW the pill rather than
+    // between the pill and the last message. Still a sibling — never a child —
+    // which is what keeps it out of the pill's own layout.
+    expect(WRAP.indexOf('<SessionBar')).toBeGreaterThan(
       WRAP.indexOf('<div className="chat-composer">'),
     );
   });
