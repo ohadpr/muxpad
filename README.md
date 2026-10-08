@@ -301,9 +301,11 @@ muxpad agent new --name='vat rules' "audit the eu-vat rule table for gaps"
 # Same verb, no code involved
 muxpad agent new --name='returns quotes' "compare the two returns quotes on total cost"
 
-# Read, search and post in Slack — outbound only, your tokens
+# Read, search and post in Slack — always as you, 🤖-prefixed, allowlisted
 muxpad slack read '#eng' --since=2h
-muxpad slack post @andrey "the PR feedback, from me" --as-me
+muxpad slack post @andrey "the PR feedback"
+#   → refuses unless this project is named in ~/.muxpad/slack-allowed-roots,
+#     so a project holding personal files can never message a work surface
 
 # Put a finished thing on a URL and print the link
 muxpad publish ./report --name=market-teardown
