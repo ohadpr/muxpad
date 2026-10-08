@@ -580,10 +580,26 @@ describe('a folded cron fire in the transcript', () => {
     expect(p.text).toContain('nw_oneline.py CLOSE');
   });
 
-  it('an UNfolded fire emits an ordinary, unflagged bubble', () => {
+  it('folds an UNfolded fire\u2019s prompt too — the prompt is never the point', () => {
+    // This used to assert the opposite, on the rule that `--fold` decided
+    // whether the prompt showed. That put the flag on the wrong axis: `nw-close`
+    // is deliberately unfolded because its REPLY is worth reading, and the
+    // result was six lines of "Run: python3 … On error print+push 'NW close
+    // snapshot failed'" above the answer. The prompt is an instruction a
+    // schedule injected, not something a person said, whatever the flag says.
     const out = expandChatEvent({ kind: 'user', id: 'u1', ts: MS, text: fire(false) });
     expect(kinds(out)).toEqual(['notice', 'user']);
-    expect((out[1] as { folded?: boolean }).folded).toBeUndefined();
+    expect((out[1] as { folded?: boolean }).folded).toBe(true);
+  });
+
+  it('puts the flag on the NOTICE, since the shapes no longer differ', () => {
+    // Both fires emit [notice, folded bubble] now, so "was this folded" cannot
+    // be read off the silhouette any more — and a predicate that tried would
+    // always answer yes. `--fold` now means only: demote the turn's OUTPUT.
+    const folded = expandChatEvent({ kind: 'user', id: 'u1', ts: MS, text: fire(true) });
+    const plain = expandChatEvent({ kind: 'user', id: 'u2', ts: MS, text: fire(false) });
+    expect((folded[0] as { fold?: boolean }).fold).toBe(true);
+    expect((plain[0] as { fold?: boolean }).fold).toBeUndefined();
   });
 
   it('a folded fire with no prompt is just the row', () => {

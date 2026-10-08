@@ -1,6 +1,6 @@
 import { type ChatEvent, expandCronFire, renderCronMarker } from '@muxpad/shared';
 import { describe, expect, it } from 'vitest';
-import { foldCronTurns, isPrivateReasoning } from './chat-voice';
+import { foldCronTurns, foldsAsActionRun, isPrivateReasoning } from './chat-voice';
 
 /**
  * A folded cron's WHOLE turn is plumbing, not just its prompt.
@@ -119,5 +119,45 @@ describe('foldCronTurns', () => {
     const task: ChatEvent = { kind: 'notice', id: id(), ts: 0, variant: 'task', text: 'x' };
     const out = foldCronTurns([task, prose('visible')]);
     expect(hidden(out, 'visible')).toBe(false);
+  });
+});
+
+describe('the injected prompt is plumbing whatever the flag says', () => {
+  it('folds an UNFOLDED fire’s prompt too', () => {
+    // Reported looking at `nw-close`: six lines of "Run: python3 … On error
+    // print+push 'NW close snapshot failed'" above the answer. Nobody re-reads
+    // the instruction a schedule injected.
+    const [, bubble] = fire(false, 'Run: python3 scripts/nw_oneline.py CLOSE');
+    expect(bubble).toMatchObject({ kind: 'user', folded: true });
+  });
+
+  it('still leaves an unfolded fire’s REPLY visible', () => {
+    // The whole point of not folding `nw-close` is that it says something worth
+    // reading. Prompt and output were two decisions wearing one flag.
+    const out = foldCronTurns([...fire(false), tool(), prose('CLOSE 10/7 · −$24K')]);
+    expect(isPrivateReasoning(out[out.length - 1] as ChatEvent)).toBe(false);
+  });
+
+  it('carries the flag on the notice instead of inferring it from the shape', () => {
+    // Both shapes are identical now, so a predicate that read the next event
+    // would always answer "folded". The flag is a fact about the SCHEDULE.
+    expect(fire(true)[0]).toMatchObject({ kind: 'notice', variant: 'cron', fold: true });
+    expect(fire(false)[0]).not.toHaveProperty('fold');
+  });
+});
+
+describe('a fire whose turn produced nothing else', () => {
+  it('still folds its prompt, even as a run of one', () => {
+    // The length rule renders a lone action inline, which brought the whole
+    // prompt back as a visible row. Observed on a fire that died at the weekly
+    // limit: chip, then six lines of "Run: python3 … On error print+push".
+    const [notice, prompt] = fire(true, 'Run: python3 scripts/nw_oneline.py OPEN');
+    expect(notice).toBeTruthy();
+    expect(foldsAsActionRun([prompt as ChatEvent])).toBe(true);
+  });
+
+  it('…while a lone ordinary tool row still renders inline', () => {
+    // The exception is for injected prompts, not a general "always fold".
+    expect(foldsAsActionRun([tool()])).toBe(false);
   });
 });
