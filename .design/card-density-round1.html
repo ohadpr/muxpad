@@ -1,0 +1,428 @@
+<!doctype html>
+<html lang="en" data-theme="dracula">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>muxpad · pinned card density — 5 ways to stop paying 34px for a label</title>
+<style>
+  :root {
+    --bg: #282a36;
+    --bg-chrome: #21222c;
+    --elev: #21222c;
+    --fg: #f8f8f2;
+    --dim: #b8b8b0;
+    --faint: #6272a4;
+    --border: #44475a;
+    --accent: #bd93f9;
+    --warn: #e8b34b;
+    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 28px 20px 80px;
+    background: var(--bg);
+    color: var(--fg);
+    font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+  .wrap { max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 21px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  .sub { color: var(--dim); margin: 0 0 4px; font-size: 14px; }
+  .sub b { color: var(--fg); }
+  .controls {
+    position: sticky; top: 0; z-index: 10;
+    display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+    margin: 20px 0 28px; padding: 10px 0;
+    background: linear-gradient(to bottom, var(--bg) 70%, transparent);
+  }
+  .controls button {
+    font: inherit; font-size: 13px;
+    padding: 6px 12px; border-radius: 999px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--elev); color: var(--dim);
+  }
+  .controls button.on { border-color: var(--accent); color: var(--fg);
+    background: color-mix(in srgb, var(--accent) 16%, var(--elev)); }
+  .controls .note { color: var(--faint); font-size: 12.5px; margin-left: 4px; }
+
+  section { margin: 0 0 40px; padding: 0 0 32px; border-bottom: 1px solid var(--border); }
+  section:last-of-type { border-bottom: 0; }
+  .head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
+  .tag {
+    font: 600 11px/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 4px 7px; border-radius: 5px;
+    background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent);
+  }
+  h2 { font-size: 17px; margin: 0; letter-spacing: -0.01em; }
+  .saves { font: 600 12px/1 var(--mono); color: #50fa7b; }
+  .saves.-part { color: var(--warn); }
+  .why { color: var(--dim); font-size: 13.5px; margin: 8px 0 2px; max-width: 72ch; }
+  .cost { color: var(--faint); font-size: 13px; margin: 4px 0 18px; max-width: 72ch; }
+  .cost b { color: var(--warn); font-weight: 600; }
+
+  /* ── the mock pane ─────────────────────────────────────────────────── */
+  .pane {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px; width: 100%; transition: max-width 180ms ease;
+  }
+  body.mobile .pane { max-width: 430px; }
+  .stack { display: flex; flex-direction: column; gap: 8px; }
+  .composer {
+    margin-top: 10px; display: flex; align-items: center; gap: 10px;
+    height: 44px; padding: 0 8px 0 14px; border-radius: 26px;
+    background: color-mix(in srgb, var(--elev) 92%, var(--fg));
+    border: 1px solid color-mix(in srgb, var(--fg) 12%, var(--border));
+    color: var(--faint); font-size: 14px;
+    box-shadow: 0 10px 30px -10px rgba(0,0,0,.45);
+  }
+  .composer .send { margin-left: auto; width: 28px; height: 28px; border-radius: 50%;
+    background: var(--accent); }
+  .pane { overflow-x: clip; }
+  .hs { font: 600 11.5px/1 var(--mono); color: var(--faint); white-space: nowrap; }
+  .hs b { color: var(--fg); font-weight: 600; }
+
+  /* ── shared card bits ──────────────────────────────────────────────── */
+  .c {
+    border: 1px solid var(--border); border-radius: 10px; background: var(--elev);
+    overflow: hidden; box-shadow: 0 6px 18px -12px rgba(0,0,0,.5);
+  }
+  .name { font: 600 12px/1 system-ui; letter-spacing: .02em;
+    color: color-mix(in srgb, var(--accent) 75%, var(--fg)); }
+  .age { font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+  .age.-stale { color: var(--warn); }
+  .chev { display:inline-block; color: var(--faint); font-size: 13px; line-height:1;
+    transform: rotate(90deg); }
+  .txt { font: 13px/1.5 system-ui; color: var(--dim); }
+  .txt.-multi { white-space: pre-line; }
+
+  /* ── 0 · TODAY ─────────────────────────────────────────────────────── */
+  .t0-head { display:flex; width:100%; align-items:center; gap:9px;
+    padding: 7px 10px 7px 9px; border:0; border-bottom:1px solid var(--border);
+    background: color-mix(in srgb, var(--accent) 4%, var(--elev)); }
+  .t0-head .age { margin-left:auto; }
+  .t0-body { padding: 10px 13px; }
+
+  /* ── A · INLINE ────────────────────────────────────────────────────── */
+  .a-row { display:flex; align-items:baseline; gap:9px; padding: 8px 11px 8px 9px; }
+  .a-row .chev { align-self:center; }
+  .a-row .name { flex:0 0 auto; }
+  .a-row .txt { flex:1 1 auto; min-width:0; }
+  .a-row .age { flex:0 0 auto; margin-left:auto; padding-left:8px; }
+  .a-row.-multi { align-items:flex-start; flex-wrap:wrap; }
+  .a-row.-multi .txt { flex-basis:100%; order:3; margin-top:2px; }
+
+  /* ── B · REVEAL ────────────────────────────────────────────────────── */
+  .b { position:relative; padding: 9px 12px 9px 14px; }
+  .b::before { content:''; position:absolute; left:0; top:0; bottom:0; width:3px;
+    background: color-mix(in srgb, var(--accent) 60%, transparent); }
+  .b.-stale::before { background: var(--warn); }
+  .b-meta { position:absolute; right:8px; top:50%; transform:translateY(-50%);
+    display:flex; gap:7px; align-items:center;
+    padding: 3px 8px; border-radius:999px;
+    background: color-mix(in srgb, var(--bg) 86%, transparent);
+    backdrop-filter: blur(6px);
+    opacity:0; transition: opacity 130ms ease; pointer-events:none; }
+  .b:hover .b-meta { opacity:1; }
+  .b-dot { position:absolute; right:10px; top:10px; width:5px; height:5px; border-radius:50%;
+    background: var(--warn); opacity:0; }
+  .b.-stale .b-dot { opacity:1; }
+
+  /* ── C · NOTCH ─────────────────────────────────────────────────────── */
+  .c-notch { position:relative; padding: 13px 12px 10px; overflow:visible; }
+  .c-notch .name, .c-notch .age { position:absolute; top:-7px; font-size:10.5px;
+    background: var(--bg); padding: 0 6px; line-height:1.3; }
+  .c-notch .name { left: 10px; }
+  .c-notch .age { right: 10px; }
+
+  /* ── D · RAIL ──────────────────────────────────────────────────────── */
+  .d { display:flex; align-items:stretch; }
+  .d-rail { flex:0 0 26px; display:flex; align-items:center; justify-content:center;
+    border-right:1px solid var(--border);
+    background: color-mix(in srgb, var(--accent) 7%, var(--elev)); }
+  .d-rail .name { writing-mode: vertical-rl; transform: rotate(180deg);
+    letter-spacing:.06em; font-size:10.5px; }
+  .d-main { flex:1 1 auto; min-width:0; padding: 9px 12px; position:relative; }
+  .d-main .age { position:absolute; right:10px; bottom:7px; font-size:10.5px; opacity:.75; }
+
+  /* ── E · MONOGRAM ──────────────────────────────────────────────────── */
+  .e { display:flex; align-items:center; gap:10px; padding: 9px 10px 9px 11px; }
+  .e-mono { flex:0 0 auto; width:20px; height:20px; border-radius:6px;
+    display:grid; place-items:center;
+    font: 700 10.5px/1 var(--mono); letter-spacing:0;
+    color: var(--accent); background: color-mix(in srgb, var(--accent) 17%, transparent); }
+  .e.-stale .e-mono { color: var(--warn); background: color-mix(in srgb, var(--warn) 20%, transparent); }
+  .e .txt { flex:1 1 auto; min-width:0; }
+
+  /* ── F · WELDED ────────────────────────────────────────────────────── */
+  .f-weld { margin-bottom: -14px; }
+  .f-weld .c {
+    border-bottom-left-radius: 0; border-bottom-right-radius: 0; border-bottom: 0;
+    margin: 0 10px; box-shadow: none;
+    background: color-mix(in srgb, var(--elev) 92%, var(--fg));
+    border-color: color-mix(in srgb, var(--fg) 12%, var(--border));
+  }
+  .f-row { display:flex; align-items:center; gap:9px; padding: 7px 12px 9px; }
+  .f-row .name { flex:0 0 auto; }
+  .f-row .txt { flex:1 1 auto; min-width:0; }
+  .f-row .age { flex:0 0 auto; }
+  .f-weld + .composer { position:relative; z-index:1; }
+
+  .verdict { background: color-mix(in srgb, var(--accent) 9%, var(--elev));
+    border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+    border-radius: 10px; padding: 16px 18px; margin-top: 8px; }
+  .verdict h2 { margin-bottom: 8px; }
+  .verdict p { margin: 0 0 10px; color: var(--dim); font-size: 14px; }
+  .verdict p:last-child { margin-bottom: 0; }
+  .verdict b { color: var(--fg); }
+  code { font: 12.5px var(--mono); color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Pinned cards: five ways to stop paying 34px for a label</h1>
+<p class="sub">Measured on the live Investing chat: the card is <b>78px</b> tall — a
+  <b>34px</b> header and a <b>42px</b> body. For a one-line card, <b>44% of it is chrome</b>,
+  and the header says two things you mostly already know.</p>
+<p class="sub">Each option below is shown three ways, because they fail differently:
+  <b>one line</b> (the complaint), <b>three lines</b> (does it still work?), and
+  <b>two stacked</b> (does the stack stay readable?).</p>
+
+<div class="controls">
+  <button id="w-desk" class="on">Pane width 764px</button>
+  <button id="w-mob">Phone 430px</button>
+  <span class="note">heights are measured live — resize and watch them</span>
+</div>
+
+<!-- ───────────────────────── 0 · TODAY ───────────────────────── -->
+<section>
+  <div class="head"><span class="tag" style="background:color-mix(in srgb,#ff5555 18%,transparent);color:#ff5555">today</span>
+    <h2>What it does now</h2><span class="saves" style="color:#ff5555">+34px, always</span></div>
+  <p class="hs" data-hs></p>
+  <p class="why">A full header row carrying a chevron, the name and the age, with a rule under it.</p>
+  <p class="cost">For a one-line card the header is <b>as tall as the content</b>.</p>
+  <div class="pane">
+    <div class="stack">
+      <div class="c ruler" data-h="">
+        <div class="t0-head"><span class="chev">›</span><span class="name">market</span><span class="age">7h ago</span></div>
+        <div class="t0-body"><div class="txt">🔴 CLOSE 10/7 · −0.61% · 📉 stocks -0.36% vs SPY -0.24% · ✅ no action</div></div>
+      </div>
+      <div class="c ruler" data-h="">
+        <div class="t0-head"><span class="chev">›</span><span class="name">build</span><span class="age -stale">2d ago · overdue</span></div>
+        <div class="t0-body"><div class="txt -multi">v2.1.4 · 118/140 passed
+packaging darwin-arm64 — 3m 12s elapsed
+blocked: notarization credentials expired</div></div>
+      </div>
+    </div>
+    <div class="composer">Message Claude…<div class="send"></div></div>
+  </div>
+</section>
+
+<!-- ───────────────────────── A · INLINE ───────────────────────── -->
+<section>
+  <div class="head"><span class="tag">a</span><h2>Inline — the name is a prefix, not a row</h2>
+    <span class="saves">−34px on one-liners</span></div>
+  <p class="hs" data-hs></p>
+  <p class="why">Chevron, name, content and age share one line. When content wraps past one line
+    it drops to its own row and the name stays up top as a label — so a long card degrades into
+    roughly what exists today, and a short one costs a single row.</p>
+  <p class="cost">Cost: the name and the age <b>eat horizontal room from the content</b>, which is
+    exactly the dimension a one-line market card is already fighting for on a phone.</p>
+  <div class="pane">
+    <div class="stack">
+      <div class="c ruler" data-h="">
+        <div class="a-row"><span class="chev">›</span><span class="name">market</span>
+          <span class="txt">🔴 CLOSE 10/7 · −0.61% · 📉 stocks -0.36% vs SPY -0.24% · ✅ no action</span><span class="age">7h</span></div>
+      </div>
+      <div class="c ruler" data-h="">
+        <div class="a-row -multi"><span class="chev">›</span><span class="name">build</span>
+          <span class="age -stale">2d · overdue</span>
+          <span class="txt -multi">v2.1.4 · 118/140 passed
+packaging darwin-arm64 — 3m 12s elapsed
+blocked: notarization credentials expired</span></div>
+      </div>
+    </div>
+    <div class="composer">Message Claude…<div class="send"></div></div>
+  </div>
+</section>
+
+<!-- ───────────────────────── B · REVEAL ───────────────────────── -->
+<section>
+  <div class="head"><span class="tag">b</span><h2>Reveal — no chrome at rest</h2>
+    <span class="saves">−34px always</span></div>
+  <p class="hs" data-hs></p>
+  <p class="why">The card is <em>only</em> its content, with a 3px accent rail down the left edge
+    saying "this is pinned, not a message". Name and age fade in on hover. The rail turns amber
+    when the writer has gone overdue, and a dot appears, so the one fact worth interrupting you
+    for still reaches you without a row.</p>
+  <p class="cost">Cost: <b>no hover on a phone</b> — the name becomes long-press-only, and the
+    stack of a multi-card chat turns into anonymous blocks. Hover over the cards to see it.</p>
+  <div class="pane">
+    <div class="stack">
+      <div class="c b ruler" data-h="">
+        <div class="txt">🔴 CLOSE 10/7 · −0.61% · 📉 stocks -0.36% vs SPY -0.24% · ✅ no action</div>
+        <div class="b-meta"><span class="name">market</span><span class="age">7h ago</span></div>
+      </div>
+      <div class="c b -stale ruler" data-h="">
+        <span class="b-dot"></span>
+        <div class="txt -multi">v2.1.4 · 118/140 passed
+packaging darwin-arm64 — 3m 12s elapsed
+blocked: notarization credentials expired</div>
+        <div class="b-meta"><span class="name">build</span><span class="age -stale">2d · overdue</span></div>
+      </div>
+    </div>
+    <div class="composer">Message Claude…<div class="send"></div></div>
+  </div>
+</section>
+
+<!-- ───────────────────────── C · NOTCH ───────────────────────── -->
+<section>
+  <div class="head"><span class="tag">c</span><h2>Notch — the label rides on the border</h2>
+    <span class="saves -part">−27px</span></div>
+  <p class="hs" data-hs></p>
+  <p class="why">A fieldset legend. The name and age sit <em>on</em> the card's top border line,
+    interrupting it, so they occupy a line that already existed. Both stay visible at all times,
+    on every device, with no hover and no tap.</p>
+  <p class="cost">Cost: small type (10.5px), and the labels need a background matching whatever is
+    behind the card — which <b>breaks the moment the transcript scrolls underneath</b>, since the
+    card floats over the log.</p>
+  <div class="pane">
+    <div class="stack" style="padding-top:4px; gap:14px">
+      <div class="c c-notch ruler" data-h="">
+        <span class="name">market</span><span class="age">7h ago</span>
+        <div class="txt">🔴 CLOSE 10/7 · −0.61% · 📉 stocks -0.36% vs SPY -0.24% · ✅ no action</div>
+      </div>
+      <div class="c c-notch ruler" data-h="">
+        <span class="name">build</span><span class="age -stale">2d ago · overdue</span>
+        <div class="txt -multi">v2.1.4 · 118/140 passed
+packaging darwin-arm64 — 3m 12s elapsed
+blocked: notarization credentials expired</div>
+      </div>
+    </div>
+    <div class="composer">Message Claude…<div class="send"></div></div>
+  </div>
+</section>
+
+<!-- ───────────────────────── D · RAIL ───────────────────────── -->
+<section>
+  <div class="head"><span class="tag">d</span><h2>Rail — turn the chrome sideways</h2>
+    <span class="saves">−34px vertical</span></div>
+  <p class="hs" data-hs></p>
+  <p class="why">Spend the scarce dimension you have (width) instead of the one you don't (height).
+    A 26px gutter holds the name vertically; the age tucks into the content's bottom-right.
+    Scales perfectly — a card is as tall as its content and not one pixel more.</p>
+  <p class="cost">Cost: <b>26px of every line's width, forever</b>, and rotated text is genuinely
+    slower to read. On a 430px phone that is 6% of the pane gone to a label.</p>
+  <div class="pane">
+    <div class="stack">
+      <div class="c d ruler" data-h="">
+        <div class="d-rail"><span class="name">market</span></div>
+        <div class="d-main"><div class="txt">🔴 CLOSE 10/7 · −0.61% · 📉 stocks -0.36% vs SPY -0.24% · ✅ no action</div></div>
+      </div>
+      <div class="c d ruler" data-h="">
+        <div class="d-rail"><span class="name">build</span></div>
+        <div class="d-main"><div class="txt -multi">v2.1.4 · 118/140 passed
+packaging darwin-arm64 — 3m 12s elapsed
+blocked: notarization credentials expired</div><span class="age -stale">2d · overdue</span></div>
+      </div>
+    </div>
+    <div class="composer">Message Claude…<div class="send"></div></div>
+  </div>
+</section>
+
+<!-- ───────────────────────── E · MONOGRAM ───────────────────────── -->
+<section>
+  <div class="head"><span class="tag">e</span><h2>Monogram — the name shrinks to a chip</h2>
+    <span class="saves">−34px always</span></div>
+  <p class="hs" data-hs></p>
+  <p class="why">A 20px square carrying the card's first letters, inline with the content. It is
+    the identity, the collapse toggle and the staleness signal in one object: amber when overdue.
+    Full name and age on tap or hover. Costs ~30px of width and zero height.</p>
+  <p class="cost">Cost: <b><code>mk</code> is not <code>market</code></b> — with two cards you learn
+    the glyphs, with six you are decoding. And the age disappears from view entirely.</p>
+  <div class="pane">
+    <div class="stack">
+      <div class="c e ruler" data-h="" title="market · 7h ago">
+        <span class="e-mono">mk</span>
+        <div class="txt">🔴 CLOSE 10/7 · −0.61% · 📉 stocks -0.36% vs SPY -0.24% · ✅ no action</div>
+      </div>
+      <div class="c e -stale ruler" data-h="" title="build · 2d ago · overdue">
+        <span class="e-mono">bd</span>
+        <div class="txt -multi">v2.1.4 · 118/140 passed
+packaging darwin-arm64 — 3m 12s elapsed
+blocked: notarization credentials expired</div>
+      </div>
+    </div>
+    <div class="composer">Message Claude…<div class="send"></div></div>
+  </div>
+</section>
+
+<!-- ───────────────────────── F · WELDED ───────────────────────── -->
+<section>
+  <div class="head"><span class="tag">f</span><h2>Welded — the card is the composer's top edge</h2>
+    <span class="saves">−34px, and −8px of gap</span></div>
+  <p class="hs" data-hs></p>
+  <p class="why">Not a separate object at all. The card shares the composer's surface and border,
+    sitting on its top edge like a toolbar — so it costs its content line and nothing else: no
+    second border, no shadow, no gap between two floating slabs. The name is inline, dimmed,
+    because it is a label on a strip you already know is pinned.</p>
+  <p class="cost">Cost: it stops reading as "a thing an agent wrote" and starts reading as
+    muxpad's own chrome — and <b>it only works for one or two cards</b>; a stack of six welded to
+    the composer is a wall.</p>
+  <div class="pane">
+    <div class="f-weld">
+      <div class="c ruler" data-h="">
+        <div class="f-row"><span class="name" style="opacity:.8">market</span>
+          <span class="txt">🔴 CLOSE 10/7 · −0.61% · 📉 stocks -0.36% vs SPY -0.24% · ✅ no action</span>
+          <span class="age">7h</span></div>
+      </div>
+    </div>
+    <div class="composer">Message Claude…<div class="send"></div></div>
+  </div>
+</section>
+
+<section style="border-bottom:0">
+  <div class="verdict">
+    <h2>If you want a recommendation</h2>
+    <p><b>A (inline), with C's instinct as the fallback.</b> It is the only one that removes the
+      whole row while keeping the name and the staleness permanently visible, on every device, with
+      no hover and no decoding — and it degrades honestly: the moment content needs two lines it
+      becomes what you have today, which is the right shape for a card that big.</p>
+    <p>The real question is what the header is <em>for</em>. The name matters when a chat has
+      several cards; the age only matters when it has gone wrong. So the strongest version is
+      <b>A with the age suppressed until it is overdue</b> — then a healthy one-line card is one
+      line with a name on it, and the moment a writer stops, the card grows its warning back.</p>
+    <p><b>D</b> is the only one that is correct at every content height, and I would still not ship
+      it: 26px of every phone line is a steep standing charge for a label you read twice a day.
+      <b>B</b> and <b>E</b> both trade a fact you can see for a gesture you must perform, which is
+      the wrong trade for a surface whose entire job is being glanceable.</p>
+  </div>
+</section>
+
+</div>
+<script>
+  const LABELS = ['one line', 'three lines'];
+  const measure = () => {
+    for (const sec of document.querySelectorAll('section')) {
+      const slot = sec.querySelector('[data-hs]');
+      if (!slot) continue;
+      const hs = [...sec.querySelectorAll('.ruler')].map((r, i) =>
+        `${LABELS[i] ?? 'card ' + (i + 1)} <b>${Math.round(r.getBoundingClientRect().height)}px</b>`);
+      slot.innerHTML = hs.join(' &nbsp;·&nbsp; ');
+    }
+  };
+  const desk = document.getElementById('w-desk');
+  const mob = document.getElementById('w-mob');
+  const set = (mobile) => {
+    document.body.classList.toggle('mobile', mobile);
+    desk.classList.toggle('on', !mobile);
+    mob.classList.toggle('on', mobile);
+    requestAnimationFrame(() => setTimeout(measure, 200));
+  };
+  desk.onclick = () => set(false);
+  mob.onclick = () => set(true);
+  addEventListener('load', measure);
+  addEventListener('resize', measure);
+  measure();
+</script>
+</body>
+</html>
