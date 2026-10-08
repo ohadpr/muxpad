@@ -187,24 +187,23 @@ describe('pinned chat cards', () => {
     expect(host.querySelector('.chat-card')?.className).toContain('-stale');
   });
 
-  it('shows NO age at all until there is something to report', async () => {
-    // The age is the row's only true noise: it says nothing until it says the
-    // writer stopped. A card a minute past its cadence is not news.
+  it('always shows the age, pinned to the right edge', async () => {
+    // Suppressed until overdue once, on the argument that the rail carries
+    // freshness as colour. A colour ramp says something is getting old; it does
+    // not say it is four hours old, which is a number you read off a market
+    // card. Asked for back explicitly.
     const day = 86_400_000;
     const host = await mount([card({ every_ms: day, updated_at: Date.now() - day - 60_000 })]);
-    expect(host.querySelector('.chat-card-age')).toBeNull();
+    const age = host.querySelector('.chat-card-age');
+    expect(age).not.toBeNull();
+    // Not overdue — it is merely a minute past cadence — so no warning.
+    expect(age?.className).not.toContain('-stale');
     expect(host.querySelector('.chat-card')?.className).not.toContain('-stale');
   });
 
-  it('shows the age again once you OPEN the card', async () => {
-    // Suppressed, not discarded — if you are inspecting a card you want to know
-    // how old it is, and that is exactly the moment there is room for it.
+  it('shows it on a card with no declared cadence too', async () => {
     const host = await mount([card({ every_ms: null })]);
-    expect(host.querySelector('.chat-card-age')).toBeNull();
-    await act(async () => {
-      (host.querySelector('.chat-card-row') as HTMLButtonElement).click();
-    });
-    expect(host.querySelector('.chat-card-age')).not.toBeNull();
+    expect(host.querySelector('.chat-card-age')?.textContent).toMatch(/ago$/);
   });
 
   it('a card with no declared cadence is never overdue', async () => {
