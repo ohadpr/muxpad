@@ -67,8 +67,14 @@ describe('the four states', () => {
     expect(phase(drive({ t: 'shown', mem: parked() }), loaded)).toBe('ANCHORED');
   });
 
-  it('SEEKING when it names one that is not, and history remains', () => {
-    expect(phase(drive({ t: 'shown', mem: parked() }), missing)).toBe('SEEKING');
+  it('SEEKING only for a HIT that is not loaded — never for a restore', () => {
+    // A restore used to seek too, which is what made reopening a chat you had
+    // scrolled back in cost up to eight socket round trips before it settled.
+    // The two intents look alike and are not: a hit is a destination the reader
+    // just asked for by name, and paging to reach it IS the request; a restore
+    // is a convenience, and no chat app pays for one.
+    expect(phase(drive({ t: 'search-jump' }), missing)).toBe('SEEKING');
+    expect(phase(drive({ t: 'shown', mem: parked() }), missing)).toBe('IDLE');
   });
 
   it('IDLE when the message is unreachable — history exhausted', () => {
@@ -90,8 +96,8 @@ describe('the four states', () => {
 describe('the seek budget', () => {
   const missing = { rowLoaded: false, hasMoreOlder: true };
 
-  it('is bounded — a lost anchor must not drag a whole transcript over the wire', () => {
-    let s = drive({ t: 'shown', mem: parked() });
+  it('is bounded — a lost hit must not drag a whole transcript over the wire', () => {
+    let s = drive({ t: 'search-jump' });
     let sent = 0;
     while (canSeek(s, missing)) {
       sent++;
@@ -102,12 +108,12 @@ describe('the seek budget', () => {
   });
 
   it('stops the moment the row arrives', () => {
-    const s = drive({ t: 'shown', mem: parked() }, { t: 'sought' });
+    const s = drive({ t: 'search-jump' }, { t: 'sought' });
     expect(canSeek(s, { rowLoaded: true, hasMoreOlder: true })).toBe(false);
   });
 
   it('never asks when the server has said there is no more history', () => {
-    const s = drive({ t: 'shown', mem: parked() });
+    const s = drive({ t: 'search-jump' });
     expect(canSeek(s, { rowLoaded: false, hasMoreOlder: false })).toBe(false);
   });
 
@@ -116,13 +122,22 @@ describe('the seek budget', () => {
     expect(canSeek(IDLE_STATE, missing)).toBe(false);
   });
 
+  it('never asks for a RESTORE, however lost its anchor', () => {
+    // The whole point of the change: a restored pixel position costs N fetches
+    // to honour and is worth none of them. Slack, Discord, WhatsApp and
+    // Telegram all open at the bottom or at a server-known unread marker.
+    expect(canSeek(drive({ t: 'shown', mem: parked() }), missing)).toBe(false);
+  });
+
   // ── The measured bug this replaces ────────────────────────────────────────
   // The old counter was a local of the restore effect, and the effect re-ran on
   // every visibility transition — a browser-tab switch, an iOS backgrounding, a
   // screen unlock. So three tab switches spent 24 `load-older` round trips
   // (~3 MB) hunting the same unreachable message, not 8.
   it('is NOT re-spent on every visibility flip', () => {
-    let s = drive({ t: 'shown', mem: parked() });
+    // A hit survives a flip (see `shown`), so the budget must too — three tab
+    // switches once spent 24 round trips (~3 MB) hunting the same message.
+    let s = drive({ t: 'search-jump' });
     let sent = 0;
     for (let flip = 0; flip < 4; flip++) {
       while (canSeek(s, missing)) {
@@ -137,11 +152,11 @@ describe('the seek budget', () => {
   });
 
   it('…but a fresh mount is a fresh visit', () => {
-    let s = drive({ t: 'shown', mem: parked() });
+    let s = drive({ t: 'search-jump' });
     for (let i = 0; i < SEEK_PAGE_BUDGET; i++) s = next(s, { t: 'sought' });
     expect(canSeek(s, missing)).toBe(false);
     s = next(s, { t: 'mounted' });
-    s = next(s, { t: 'shown', mem: parked() });
+    s = next(s, { t: 'search-jump' });
     expect(canSeek(s, missing)).toBe(true);
   });
 
