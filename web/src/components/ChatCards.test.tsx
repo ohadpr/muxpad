@@ -83,14 +83,51 @@ describe('pinned chat cards', () => {
     expect(host.querySelector('.chat-cards')).toBeNull();
   });
 
-  it('renders a text card as ONE ROW — name, value, no header', async () => {
+  it('renders a text card as ONE ROW — value only, no header, no name', async () => {
     // 44% of a one-line card used to be a header saying its name and its age.
-    // The name moves into the row beside the value; the header is gone.
+    // Both are gone from the row: the header entirely, and the name whenever
+    // there is nothing to tell this card apart from.
     const host = await mount([card({ content: 'V2.1 [███░░] 62%' })]);
-    expect(host.querySelector('.chat-card-name')?.textContent).toBe('build');
     expect(host.querySelector('.chat-card-value')?.textContent).toBe('V2.1 [███░░] 62%');
+    expect(host.querySelector('.chat-card-name')).toBeNull();
     // No separate body until somebody opens it.
     expect(host.querySelector('.chat-card-body')).toBeNull();
+  });
+
+  it('brings the name BACK as soon as there are two cards', async () => {
+    // With one card the name labels the only thing in the strip, and on a 430px
+    // phone costs the tail of the value. With two it is the only thing saying
+    // which row is which.
+    const host = await mount([card({ name: 'build' }), card({ id: 'c2', name: 'market' })]);
+    const names = [...host.querySelectorAll('.chat-card-name')].map((e) => e.textContent);
+    expect(names).toEqual(['build', 'market']);
+  });
+
+  it('shows the name on the one card you OPEN', async () => {
+    // Never lost, only deferred: inspecting a card is exactly when you want to
+    // know which one it is.
+    const host = await mount([card({ name: 'build' })]);
+    expect(host.querySelector('.chat-card-name')).toBeNull();
+    await act(async () => {
+      (host.querySelector('.chat-card-row') as HTMLButtonElement).click();
+    });
+    expect(host.querySelector('.chat-card-name')?.textContent).toBe('build');
+  });
+
+  it('drives the rail from FRESHNESS, not just from staleness', async () => {
+    // The row carries no timestamp any more, so the rail is the readout: a
+    // number on the element, interpolated by the stylesheet, rather than three
+    // named buckets. Half a cadence old is half fresh.
+    const day = 86_400_000;
+    const host = await mount([card({ every_ms: day, updated_at: Date.now() - day / 2 })]);
+    const fresh = (host.querySelector('.chat-card') as HTMLElement).style.getPropertyValue(
+      '--card-fresh',
+    );
+    expect(Number(fresh)).toBeGreaterThan(0.4);
+    expect(Number(fresh)).toBeLessThan(0.6);
+    // And the rail is a real element, not a pseudo — the only thing left saying
+    // how current a card is must be something a test can actually look at.
+    expect(host.querySelector('.chat-card-rail')).not.toBeNull();
   });
 
   it('puts html in a SANDBOXED frame that cannot reach muxpad', async () => {
@@ -202,9 +239,10 @@ describe('pinned chat cards', () => {
     const host = await mount([
       card({ name: 'build', content: 'v2.1.4', every_ms: day, updated_at: Date.now() - day * 3 }),
     ]);
-    expect(host.querySelector('.chat-card-name')?.textContent).toBe('build');
     expect(host.querySelector('.chat-card-value')?.textContent).toBe('v2.1.4');
     expect(host.querySelector('.chat-card-age')?.className).toContain('-stale');
+    // …and the row still names itself on demand, via its title.
+    expect(host.querySelector('.chat-card-row')?.getAttribute('title')).toContain('build');
   });
 
   it('an html card keeps its body — there is no one line of a frame', async () => {
@@ -213,7 +251,7 @@ describe('pinned chat cards', () => {
     const host = await mount([card({ name: 'market', format: 'html', content: '<b>x</b>' })]);
     expect(host.querySelector('iframe')).not.toBeNull();
     expect(host.querySelector('.chat-card-value')).toBeNull();
-    expect(host.querySelector('.chat-card-name')?.textContent).toBe('market');
+    expect(host.querySelector('.chat-card-row')?.getAttribute('title')).toContain('market');
   });
 
   it('lays a markdown card out INLINE, in the row', async () => {

@@ -96,3 +96,36 @@ export function cardIsStale(card: Pick<ChatCard, 'every_ms' | 'updated_at'>, now
   if (card.every_ms === null || card.every_ms <= 0) return false;
   return now - card.updated_at > card.every_ms * CARD_STALE_GRACE;
 }
+
+/**
+ * How FRESH a card is, 1 → 0, for the rail that replaced its timestamp.
+ *
+ * The compact row used to carry the writer's own words for this — "NOW 10/8" —
+ * and on a 430px phone those nine characters cost the tail of the line
+ * ("stocks -0.4…" truncated mid-number). But a card is the CURRENT value by
+ * construction, so "NOW" is the only state it can ever be in, and the date is
+ * the date you are already having.
+ *
+ * Freshness still has to be answerable, so the rail answers it: full accent on
+ * arrival, fading toward the faint end as the card approaches its declared
+ * cadence, amber once `cardIsStale`. A gauge in 2.5px of width instead of nine
+ * characters of the row — and unlike a timestamp it is readable without being
+ * read.
+ *
+ * Returns 1 for a card with NO declared cadence. Not "unknown, so dim it": a
+ * writer that never promised to come back is not late, and fading it would
+ * invent a decay with no period to measure against. It is the same reasoning
+ * `cardIsStale` uses to return false for that case.
+ */
+export function cardFreshness(
+  card: Pick<ChatCard, 'every_ms' | 'updated_at'>,
+  now: number,
+): number {
+  if (card.every_ms === null || card.every_ms <= 0) return 1;
+  const age = now - card.updated_at;
+  if (age <= 0) return 1;
+  // Across one full cadence, not across the stale grace: by the time a card is
+  // DUE it should already look like it is waiting, which is the state the grace
+  // period exists to be tolerant of.
+  return Math.max(0, Math.min(1, 1 - age / card.every_ms));
+}
