@@ -75,46 +75,41 @@ list. Capabilities worth knowing:
 
 - \`muxpad slack\` — the company Slack, read/write, from any pane and any
   harness. \`slack read <#channel|@user> [--since=2h]\`, \`slack search
-  "<query>"\`, \`slack post <#channel|@user> "<text>" [--as-me|--as-bot]\`,
-  \`slack unpost <channelID> <ts> [--as-me]\`, \`slack channels\`.
+  "<query>"\`, \`slack post <#channel|@user> "<text>"\`,
+  \`slack unpost <channelID> <ts>\`, \`slack channels\`.
 
   **ONLY WHEN ASKED.** Reading reaches the user's DMs and every private channel
   they are in — it is their whole working life, not a public corpus. Go when a
   task actually needs it ("what did Nadav say about X", "post the result to
   #eng"); do not browse it for context nobody requested.
 
-  **IDENTITY FOLLOWS AUTHORSHIP.** Not the channel, not the flag you happened
-  to remember, and not whether the user said the words "as me":
+  **THREE RULES, AND THEY ARE ENFORCED, NOT TRUSTED TO YOU.**
 
-  - A message the USER told you to send is THEIRS → \`--as-me\`. "Send Andrey
-    the PR feedback", "tell Nadav it shipped", "reply to that thread" — all of
-    these are the user talking to someone, and they belong under the user's own
-    name in the user's own conversation.
-  - A notification YOU decided to emit is MUXPAD'S → \`--as-bot\`. A cron
-    result, a build failure, a report nobody asked you to deliver by hand.
+  **1 · Every message goes out as the USER.** There is no bot identity any more
+  and no flag to ask for one. A bot DM does not land in the user's conversation
+  with that person — it lands in THEIR separate DM with "muxpad", which the
+  user cannot see and, if the timestamp is lost, cannot delete. So a message
+  muxpad sends is a message the user sent: their name, their conversation,
+  their audit log. \`SLACK_BOT_TOKEN\` is not read anywhere.
 
-  The old rule here said to use the bot unless the user explicitly asked for a
-  message "from them", and that is how "send Andrey a PR review message" went
-  out as the bot. **It did not land in the user's DM with Andrey.** It landed in
-  Andrey's separate DM with "muxpad" — a conversation the user cannot see, and
-  could not even delete afterwards. A DM is not one place that two identities
-  can both post into; it is two different places.
+  **2 · Every message is prefixed 🤖.** Added by the CLI, not by you. Sending
+  under the user's name is right about where it lands and who owns it; it is
+  not a claim that they typed it, and the reader is owed that distinction.
 
-  So **a DM now REFUSES to send without \`--as-me\` or \`--as-bot\`**, and the
-  error says which does what. A channel still defaults to the bot: a post in
-  \`#eng\` is visible to everyone and obviously a machine, so the stakes are
-  the ordinary ones.
+  **3 · SENDING IS ALLOWLISTED BY PROJECT, AND IT FAILS CLOSED.** A project
+  must be named in \`~/.muxpad/slack-allowed-roots\` before it can post at
+  all. This exists so that a project holding personal files — notes, health,
+  finances — can NEVER message a work surface, and it is an allowlist precisely
+  because a denylist fails open for every folder nobody thought of.
 
-  Never pass \`--as-me\` to make a message look more credible, or because a
-  channel feels like it wants a human. And never silently switch identity after
-  a failure — if the one you were told to use cannot post, say so and stop.
+  If you are refused, **that is the system working**. Do not add the directory
+  you are standing in to the allowlist to get one message out, do not cd
+  somewhere permitted and send from there, and do not look for another route.
+  Tell the user you were refused and why; the allowlist is theirs to change,
+  not yours.
 
-  **REPORT WHAT YOU SENT, AND WHERE.** \`post\` prints the identity, the
-  conversation id and the message ts; pass all three on when you confirm. "Sent
-  to @andrey" names neither of the two things that go wrong. The ts is also the
-  only handle \`muxpad slack unpost\` takes — Slack's delete needs it, and
-  recovering a forgotten one needs history scope the bot does not have, so a ts
-  you did not keep is a message you cannot take back.
+  Reading and searching are NOT gated — the risk being managed is personal data
+  going OUT.
 
   Reading never needs the bot invited anywhere; posting as muxpad does
   (\`/invite @muxpad\`), and the error says so when it bites.

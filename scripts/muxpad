@@ -772,19 +772,26 @@ json_string() {
 # tunnel) would mean a public endpoint taking company Slack traffic with
 # signature verification as the only thing in front of it.
 #
-# TWO TOKENS, AND THE SPLIT IS THE POINT.
-#   SLACK_USER_TOKEN  (xoxp-) reads. It is the only token that can SEARCH at all
-#                     — `search:read` is user-scope only — and the only one that
-#                     sees your DMs and the private channels you are in without
-#                     being invited anywhere.
-#   SLACK_BOT_TOKEN   (xoxb-) writes, as "muxpad". Attributable, and obviously
-#                     not you.
+# ONE TOKEN. SLACK_USER_TOKEN (xoxp-), and nothing else is read.
 #
-# Posting with the USER token puts your name and avatar on the message: there is
-# no bot badge, and the audit log says you said it. So it is behind `--as-me`,
-# typed per command. An agent that decides on its own to post in #eng cannot do
-# it under your name by accident; it has to be asked for. Everything else about
-# this surface is ambient, and that one thing is not.
+# It was two, split so that writes could go out as an obviously-not-you bot. The
+# split is gone, and the reason is that a bot DM does not land where you think:
+# "send Andrey a PR review message" went to ANDREY'S SEPARATE CONVERSATION WITH
+# MUXPAD, which the sender could not see, and which could not be deleted because
+# the ts had been thrown away. A bot identity is only honest in a channel, and
+# the cost of having it available at all was that a DM could silently use it.
+#
+# So every message is yours: your name, your conversation, your audit log. Two
+# things make that safe rather than reckless, and both are enforced here rather
+# than asked of the caller —
+#
+#   · every message is prefixed 🤖, so the reader knows a machine composed it
+#     even though you sent it;
+#   · sending is ALLOWLISTED BY PROJECT (see slack_guard_cwd), so a project
+#     holding personal files cannot message a work surface at all.
+#
+# SLACK_BOT_TOKEN is not read anywhere below. A line for it in the secrets file
+# is inert and can be deleted.
 SLACK_SECRETS="${SLACK_SECRETS:-$HOME/.claude/secrets/slack.env}"
 
 slack_load() {
@@ -810,7 +817,6 @@ muxpad: $name holds an APP-LEVEL token (xapp-…). That one is for Socket Mode
 only — it cannot make Web API calls, which is every call this command makes.
 Take the token from OAuth & Permissions, not Basic Information:
   "User OAuth Token"      xoxp-…  → SLACK_USER_TOKEN
-  "Bot User OAuth Token"  xoxb-…  → SLACK_BOT_TOKEN
 EOF
         exit 1 ;;
       *)
@@ -819,13 +825,11 @@ EOF
     esac
   }
   slack_check_token SLACK_USER_TOKEN "${SLACK_USER_TOKEN:-}" xoxp-
-  slack_check_token SLACK_BOT_TOKEN "${SLACK_BOT_TOKEN:-}" xoxb-
-  if [ -z "${SLACK_USER_TOKEN:-}" ] && [ -z "${SLACK_BOT_TOKEN:-}" ]; then
+  if [ -z "${SLACK_USER_TOKEN:-}" ]; then
     cat >&2 <<EOF
-muxpad: no Slack token. Put one (or both) in $SLACK_SECRETS:
+muxpad: no Slack token. Put it in $SLACK_SECRETS:
 
-  SLACK_USER_TOKEN=xoxp-...   # reading + search; sees what you see
-  SLACK_BOT_TOKEN=xoxb-...    # posting as "muxpad"
+  SLACK_USER_TOKEN=xoxp-...   # everything: read, search and post as you
 
 Create the app at https://api.slack.com/apps (From scratch, your workspace).
 User scopes: search:read channels:history channels:read groups:history
@@ -923,7 +927,7 @@ cmd_slack_read() {
   [ -n "$ref" ] || { echo 'usage: muxpad slack read <#channel|@user|ID> [--since=2h] [--limit=50]' >&2; exit 1; }
   reset_flags since limit
   parse_flags since limit -- "$@"
-  local tok="${SLACK_USER_TOKEN:-$SLACK_BOT_TOKEN}"
+  local tok="${SLACK_USER_TOKEN:-}"
   # Same token for the lookup and the read — see slack_channel_id.
   local id; id="$(slack_channel_id "$tok" "$ref")"
   local fields=("channel=$id" "limit=${FLAG_limit:-50}")
@@ -946,58 +950,112 @@ cmd_slack_search() {
     | jq -r '.messages.matches[] | "\(.ts | tonumber | strftime("%m-%d %H:%M"))  #\(.channel.name)  \(.username // .user)  \(.text // "" | gsub("\n"; " ⏎ "))"'
 }
 
-cmd_slack_post() {
-  slack_load
-  local ref="${1:-}" text="${2:-}"; shift 2 2>/dev/null || true
-  [ -n "$ref" ] && [ -n "$text" ] || {
-    echo 'usage: muxpad slack post <#channel|@user|ID> "<text>" [--as-me|--as-bot]' >&2; exit 1; }
-  local as_me='' as_bot='' a
-  for a in "$@"; do
-    case "$a" in --as-me) as_me=1 ;; --as-bot) as_bot=1 ;; esac
-  done
-  [ -n "$as_me" ] && [ -n "$as_bot" ] && {
-    echo 'muxpad: pass --as-me or --as-bot, not both' >&2; exit 1; }
+# ─── WHERE A SLACK MESSAGE MAY BE SENT FROM ─────────────────────────────────
+#
+# "Never allow a project that is using personal files/data to send slack
+#  messages, never ever ever ever. It should fail."
+#
+# AN ALLOWLIST, NOT A DENYLIST. A denylist fails OPEN for everything nobody
+# thought of, and the personal tree gains folders — health, investing, land,
+# notes, reading are already in there. The only shape that honours "never ever"
+# is: Slack is refused unless this project has been named as one that may use
+# it. A new folder is silent by default, which is the safe direction.
+#
+# One absolute path per line in $SLACK_ALLOW, blanks and #comments ignored. A
+# missing file means NOTHING may post, which is the correct reading of a guard
+# whose job is to fail.
+SLACK_ALLOW="${MUXPAD_DATA_DIR:-$HOME/.muxpad}/slack-allowed-roots"
 
-  # ─── A DM HAS NO SAFE DEFAULT IDENTITY ───────────────────────────────────
-  # Posting as the bot into `@andrey` does not land in the user's DM with
-  # Andrey — it lands in ANDREY'S SEPARATE DM WITH MUXPAD, a conversation the
-  # user cannot see and may never learn about. That happened: "send Andrey a PR
-  # review message" became a bot message in a conversation the sender could not
-  # read, and because the ts was discarded it could not even be deleted
-  # afterwards.
-  #
-  # A channel is different — a bot post in #eng is visible to everyone and
-  # obviously a machine — so the bot stays the default there. For a DM the two
-  # identities go to two different places, and guessing is what caused the
-  # incident, so this asks.
-  local is_dm=''
-  case "$ref" in @*|D*) is_dm=1 ;; esac
-  if [ -n "$is_dm" ] && [ -z "$as_me" ] && [ -z "$as_bot" ]; then
+slack_guard_cwd() {
+  local here
+  # -P so a symlinked path cannot smuggle a personal directory in under an
+  # allowed name.
+  here="$(pwd -P 2>/dev/null || true)"
+  [ -n "$here" ] || { echo 'muxpad: slack: cannot determine the working directory — refusing to post' >&2; exit 1; }
+
+  if [ ! -f "$SLACK_ALLOW" ]; then
     cat >&2 <<EOF
-muxpad: a DM needs an explicit identity — the two go to different places.
+muxpad: slack: no project is allowed to post yet.
 
-  --as-me    posts into YOUR conversation with $ref, under your own name.
-             This is what "send $ref a message" almost always means.
-  --as-bot   posts into $ref's separate DM with "muxpad" — a conversation you
-             cannot see. Only for notifications you are originating.
+Slack sending is allowlisted, because a project holding personal files must
+never be able to message a work surface. Nothing posts until you say which
+projects may:
+
+  echo '/absolute/path/to/a/work/repo' >> $SLACK_ALLOW
+
+Reading and searching are unaffected.
 EOF
     exit 1
   fi
 
-  local tok who
-  if [ -n "$as_me" ]; then
-    tok="${SLACK_USER_TOKEN:-}" who="you"
-    [ -n "$tok" ] || { echo 'muxpad: --as-me needs SLACK_USER_TOKEN' >&2; exit 1; }
-  else
-    tok="${SLACK_BOT_TOKEN:-}" who="muxpad (bot)"
-    [ -n "$tok" ] || {
-      cat >&2 <<'EOF'
-muxpad: no SLACK_BOT_TOKEN, so there is no way to post as "muxpad".
-Posting with your user token puts YOUR name on the message — if that is what
-you want, say so explicitly with --as-me.
+  local root real ok=''
+  while IFS= read -r root || [ -n "$root" ]; do
+    case "$root" in ''|'#'*) continue ;; esac
+    root="${root%/}"
+    # RESOLVE THE ROOT THE SAME WAY AS THE CWD, or the comparison is between
+    # two different spellings of the same directory and never matches. On macOS
+    # /tmp IS /private/tmp, and a Dropbox path can be symlinked too — measured:
+    # every one of four test directories was refused, including the one that
+    # was supposed to be allowed, purely because `pwd -P` had resolved one side
+    # and the file had not resolved the other.
+    real="$(cd "$root" 2>/dev/null && pwd -P 2>/dev/null || printf '%s' "$root")"
+    # Prefix match on a path BOUNDARY: /work must not allow /work-personal.
+    case "$here" in "$real"|"$real"/*) ok=1; break ;; esac
+  done < "$SLACK_ALLOW"
+
+  [ -n "$ok" ] && return 0
+  cat >&2 <<EOF
+muxpad: slack: refusing to post from $here
+
+This project is not on the Slack allowlist, so it is treated as one that may
+hold personal data. That is deliberate and it fails closed: a project is silent
+until it is named in
+
+  $SLACK_ALLOW
+
+If this really is a work project, add its root there. Do NOT add a directory
+that contains personal files to make one message go out.
 EOF
-      exit 1; }
-  fi
+  exit 1
+}
+
+cmd_slack_post() {
+  # ── THE GUARD RUNS FIRST. BEFORE THE CREDENTIALS ARE EVEN READ. ──────────
+  # Before `slack_load`, before the usage check. Two reasons, and the first is
+  # the one that matters: `slack_load` SOURCES the secrets file, and a project
+  # that is not allowed to post has no business having the token in its
+  # environment at all. Loading it and then refusing is the wrong order of
+  # operations for a guard whose whole job is that this project must not reach
+  # Slack.
+  # Second: a refusal must not depend on getting the arguments right, or on
+  # there being a token to fail on instead.
+  slack_guard_cwd
+  slack_load
+  local ref="${1:-}" text="${2:-}"; shift 2 2>/dev/null || true
+  [ -n "$ref" ] && [ -n "$text" ] || {
+    echo 'usage: muxpad slack post <#channel|@user|ID> "<text>"' >&2; exit 1; }
+
+  # ── ALWAYS AS YOU. THERE IS NO OTHER IDENTITY. ───────────────────────────
+  # The bot was the default once, and "send Andrey a PR review message" went to
+  # ANDREY'S SEPARATE DM WITH MUXPAD — a conversation the sender could not see
+  # and, because the ts was discarded, could not delete. Then the flag was
+  # split and a DM had to name an identity. This removes the choice: a message
+  # muxpad sends is a message YOU sent, under your name, in your conversation,
+  # in your audit log.
+  #
+  # SLACK_BOT_TOKEN is deliberately not read anywhere in this script any more.
+  local tok="${SLACK_USER_TOKEN:-}"
+  [ -n "$tok" ] || { echo 'muxpad: slack: needs SLACK_USER_TOKEN' >&2; exit 1; }
+
+  # ── AND IT SAYS A MACHINE WROTE IT ───────────────────────────────────────
+  # Posting under your name is the right call for where it lands and who owns
+  # it; it is not a claim that you typed it. The robot is the disclosure, and
+  # it is added here rather than asked of the caller because a rule every
+  # caller has to remember is a rule that gets forgotten.
+  case "$text" in
+    "🤖"*) ;;
+    *) text="🤖 $text" ;;
+  esac
 
   # Same token resolves the conversation and posts into it — see
   # slack_channel_id for what it cost to learn that.
@@ -1005,43 +1063,28 @@ EOF
   local out ts
   out="$(slack_api chat.postMessage "$tok" "channel=$id" "text=$text")"
   ts="$(printf '%s' "$out" | jq -r '.ts // empty')"
-
-  # ─── SAY WHO SENT IT, WHERE, AND KEEP THE HANDLE ─────────────────────────
-  # "sent to @andrey" was true and useless: it named neither the identity nor
-  # the conversation, which were the two things that went wrong. And the
-  # response was thrown away, so the message could not be deleted afterwards —
-  # `chat.delete` needs the ts, and recovering one needs history scope the bot
-  # does not have. The ts is the undo handle; print it.
-  echo "sent as ${who} → ${ref}  [${id} ${ts:-?}]"
-  [ -n "$ts" ] && echo "undo: muxpad slack unpost ${id} ${ts}${as_me:+ --as-me}"
+  echo "sent as you → ${ref}  [${id} ${ts:-?}]"
+  [ -n "$ts" ] && echo "undo: muxpad slack unpost ${id} ${ts}"
   return 0
 }
 
-# Delete a message muxpad posted. The identity MUST match the one that posted
-# it: Slack lets a token delete its own messages, so a bot message needs the bot
-# token and a user message needs the user token. That is why the hint printed by
-# `post` carries `--as-me` through.
+# Delete a message muxpad posted. Only yours exist now, so only your token is
+# ever needed — Slack lets a token delete its own messages.
 cmd_slack_unpost() {
+  slack_guard_cwd
   slack_load
-  local id="${1:-}" ts="${2:-}"; shift 2 2>/dev/null || true
+  local id="${1:-}" ts="${2:-}"
   [ -n "$id" ] && [ -n "$ts" ] || {
-    echo 'usage: muxpad slack unpost <channelID> <ts> [--as-me]' >&2; exit 1; }
-  local as_me='' a
-  for a in "$@"; do [ "$a" = "--as-me" ] && as_me=1; done
-  local tok who
-  if [ -n "$as_me" ]; then
-    tok="${SLACK_USER_TOKEN:-}" who="you"
-  else
-    tok="${SLACK_BOT_TOKEN:-}" who="muxpad (bot)"
-  fi
-  [ -n "$tok" ] || { echo 'muxpad: no token for that identity' >&2; exit 1; }
+    echo 'usage: muxpad slack unpost <channelID> <ts>' >&2; exit 1; }
+  local tok="${SLACK_USER_TOKEN:-}"
+  [ -n "$tok" ] || { echo 'muxpad: slack: needs SLACK_USER_TOKEN' >&2; exit 1; }
   slack_api chat.delete "$tok" "channel=$id" "ts=$ts" >/dev/null
-  echo "deleted ${who}'s message ${ts} in ${id}"
+  echo "deleted your message ${ts} in ${id}"
 }
 
 cmd_slack_channels() {
   slack_load
-  local tok="${SLACK_USER_TOKEN:-$SLACK_BOT_TOKEN}"
+  local tok="${SLACK_USER_TOKEN:-}"
   slack_api conversations.list "$tok" 'limit=1000' 'types=public_channel,private_channel' \
     | jq -r '.channels[] | select(.is_archived|not) | "\(.id)  \(if .is_private then "🔒" else "# " end) \(.name)"' | sort -k3
 }
@@ -1058,24 +1101,24 @@ cmd_slack() {
 usage:
   muxpad slack read <#channel|@user|ID> [--since=2h] [--limit=50]
   muxpad slack search "<query>" [--limit=20]     (needs SLACK_USER_TOKEN)
-  muxpad slack post <#channel|@user|ID> "<text>" [--as-me|--as-bot]
-  muxpad slack unpost <channelID> <ts> [--as-me]
+  muxpad slack post <#channel|@user|ID> "<text>"
+  muxpad slack unpost <channelID> <ts>
   muxpad slack channels
 
-Tokens live in $SLACK_SECRETS:
-  SLACK_USER_TOKEN=xoxp-...   reading + search, sees what you see
-  SLACK_BOT_TOKEN=xoxb-...    posting as "muxpad"
+One token, in $SLACK_SECRETS:
+  SLACK_USER_TOKEN=xoxp-...   everything. SLACK_BOT_TOKEN is no longer read.
 
-IDENTITY FOLLOWS AUTHORSHIP, not the channel and not the flag you remembered:
-  a message the USER told you to send is theirs      --as-me
-  a notification YOU decided to emit is muxpad's     --as-bot (or the default)
+EVERY MESSAGE GOES OUT AS YOU, in your own conversation and your own audit log
+— there is no bot identity any more, because a bot DM lands in the recipient's
+separate conversation with "muxpad", which you cannot see. Each one is prefixed
+with 🤖 so the reader knows a machine composed it.
 
-A DM requires you to say which — the two identities land in two DIFFERENT
-conversations, and the bot one is invisible to you. A channel defaults to the
-bot, which is visible to everyone and obviously a machine.
+AND SENDING IS ALLOWLISTED BY PROJECT. A project that is not named in
+slack-allowed-roots cannot post at all, so one holding personal files can never
+message a work surface. Reading and searching are unaffected.
 
-'post' prints the identity, the conversation id and the ts, and the ts is the
-only way to delete the message afterwards.
+'post' prints the conversation id and the ts; the ts is the only way to delete
+the message afterwards.
 EOF
       exit 1 ;;
   esac

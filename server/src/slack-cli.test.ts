@@ -72,23 +72,14 @@ describe('slack identity', () => {
     }
   });
 
-  it('refuses a DM without an explicit identity', async () => {
-    // The two identities land in two DIFFERENT conversations, so there is no
-    // safe default — guessing is exactly what caused the incident. A channel
-    // keeps the bot default: visible to everyone, obviously a machine.
-    await expect(
-      execFileAsync(MUXPAD_BIN, ['slack', 'post', '@someone', 'hi']),
-    ).rejects.toMatchObject({
-      stderr: expect.stringContaining('a DM needs an explicit identity'),
-    });
-  });
-
-  it('will not take both identities at once', async () => {
-    await expect(
-      execFileAsync(MUXPAD_BIN, ['slack', 'post', '#eng', 'hi', '--as-me', '--as-bot']),
-    ).rejects.toMatchObject({
-      stderr: expect.stringContaining('not both'),
-    });
+  it('has no identity to choose any more — every message is the user', () => {
+    // This file used to pin that a DM REFUSED without an explicit `--as-me` or
+    // `--as-bot`, which was the right fix while both identities existed. They
+    // do not: a bot DM lands in the recipient's separate conversation with
+    // "muxpad", invisible to the sender, so the option was removed rather than
+    // guarded. See slack-guard.test.ts for what replaced it.
+    expect(fn('cmd_slack_post')).not.toContain('as_bot');
+    expect(fn('cmd_slack_post')).toMatch(/tok="\$\{SLACK_USER_TOKEN:-\}"/);
   });
 
   it('keeps the ts, because it is the only undo handle', () => {
@@ -105,14 +96,14 @@ describe('slack identity', () => {
     // "sent to @andrey" was true and useless — it named neither of the two
     // things that went wrong.
     const body = fn('cmd_slack_post');
-    expect(body).toMatch(/sent as \$\{who\} → \$\{ref\}/);
+    expect(body).toMatch(/sent as you → \$\{ref\}/);
     expect(body).toMatch(/\$\{id\}/);
   });
 
-  it('deletes with the identity that posted', () => {
-    // Slack only lets a token delete its own messages, so the undo hint carries
-    // --as-me through from the post that produced it.
-    expect(fn('cmd_slack_unpost')).toMatch(/as_me/);
-    expect(fn('cmd_slack_post')).toMatch(/\$\{as_me:\+ --as-me\}/);
+  it('deletes with the one identity there is', () => {
+    // Slack only lets a token delete its own messages. With a single identity
+    // there is nothing to carry through — which is the simplification, not an
+    // omission.
+    expect(fn('cmd_slack_unpost')).toMatch(/tok="\$\{SLACK_USER_TOKEN:-\}"/);
   });
 });
