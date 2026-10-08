@@ -126,6 +126,7 @@ import { NO_ROUNDS, loadSpawnRounds } from '../lib/spawn-rounds';
 import { type SpawnWork, fetchSpawnWork } from '../lib/spawn-work';
 import type { AgentLink } from '../lib/voice/session';
 import { useVoice } from '../lib/voice/use-voice';
+import { workingVariantFor } from '../lib/working-variant';
 import { AgentBackendLogo, backendFromAssistant } from './AgentLogos';
 import { BrowserCard } from './BrowserCard';
 import { useBrowsers } from './BrowserCards';
@@ -165,6 +166,7 @@ import {
   ToolRow,
   UserText,
 } from './ChatTranscript';
+import { ChatWorking } from './ChatWorking';
 import { CopyablePre } from './CopyablePre';
 import { FromAgentMessage } from './FromAgentMessage';
 import { SvgAgentGlyph, SvgGlobe, SvgTerminalGlyph } from './PaneWebSwitch';
@@ -2674,6 +2676,11 @@ export function ChatPane({
     [mode, sending, session?.assistant, closedTurnStartId],
   );
   const voiceOn = chatVoiceActive(voiceOpts);
+  // ONE VARIANT PER TURN. Keyed on the turn's own start event rather than
+  // advanced on mount: the indicator unmounts the moment the first token
+  // streams and remounts if the stream clears, so a mount-time pick would
+  // re-roll inside a single turn — the one moment anybody is looking at it.
+  const workingVariant = useMemo(() => workingVariantFor(lastTurnStart), [lastTurnStart]);
   // Chat mode's voice first, then the cron fold. Two different claims about the
   // same events: the voice is about this PANE's mode, the fold is about a
   // SCHEDULE whose author said its output is plumbing — so the fold applies in
@@ -4272,13 +4279,7 @@ export function ChatPane({
                     className="chat-msg chat-working"
                     aria-label={`${assistantLabel(session?.assistant)} is working`}
                   >
-                    {/* A ball and its shadow — see .chat-typing. The shadow is
-                      not decoration: spreading as the ball rises is what makes
-                      the height mean something. */}
-                    <span className="chat-typing" aria-hidden="true">
-                      <u />
-                      <i />
-                    </span>
+                    <ChatWorking variant={workingVariant} />
                     {workingLabel ? (
                       <span className="chat-working-label">{workingLabel}</span>
                     ) : null}
