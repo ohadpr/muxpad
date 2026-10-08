@@ -2,6 +2,7 @@ import type { ChatClock, SpawnRound } from '@muxpad/shared';
 import type { MentionedChat } from '@muxpad/shared';
 import { type ArchiveSearchHit, req } from '../api';
 import type { ChatChipChat } from '../components/ChatChip';
+import { canFlushTail, windowStart } from './log-window';
 import {
   type SearchableTab,
   type WorkspaceTabs,
@@ -812,15 +813,11 @@ export function interleaveSpawnCards<T>(
     opts?.hasMoreOlder === false
       ? null
       : (opts?.floor ?? entries.find((e) => e.at !== null)?.at ?? null);
-  let i = 0;
-  let anchored = false;
-  // Skip past anything below the window rather than flushing it at the head.
-  if (floor !== null) {
-    while (i < cards.length && (cards[i] as SpawnCard).at < floor) i++;
-  }
+  // The shared rule — see lib/log-window, which exists because this was written
+  // three times and was wrong at an edge each time.
+  let i = windowStart(cards, floor);
   for (const entry of entries) {
     if (entry.at !== null) {
-      anchored = true;
       while (i < cards.length && (cards[i] as SpawnCard).at <= entry.at) {
         out.push({ kind: 'card', card: cards[i++] as SpawnCard });
       }
@@ -828,8 +825,9 @@ export function interleaveSpawnCards<T>(
     out.push({ kind: 'entry', node: entry.node });
   }
   // Only once the log has a timeline to hang them on — see above.
-  if (anchored)
+  if (canFlushTail(entries)) {
     for (; i < cards.length; i++) out.push({ kind: 'card', card: cards[i] as SpawnCard });
+  }
   return out;
 }
 
