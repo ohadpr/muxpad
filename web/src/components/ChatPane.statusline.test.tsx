@@ -213,19 +213,22 @@ describe('the session line sits outside the composer pill', () => {
     expect(decl('.chat-status-bar', 'background')).toBeNull();
   });
 
-  it('owns the gap to the pill itself, and spends less than the pill used to', () => {
-    // Inside the pill, the pill's 6px row gap held the strip off the input. Out
-    // of it, the strip's own bottom margin is the only thing that can — so this
-    // margin is now REQUIRED to be non-zero (the inverse of what the composer
-    // test asserts for the in-pill arrangement it replaced).
+  it('owns the gap to the pill, on the side the pill is actually on', () => {
+    // THE SIDE IS THE ASSERTION. Inside the pill, the pill's row gap held the
+    // strip off the input; outside and ABOVE it, the strip's own bottom margin
+    // did. The strip then moved BELOW the composer and the margin stayed where
+    // it was, which is a gap facing nothing — 6px of dead space under the line
+    // and the line pressed against the pill. Pinning "non-zero" could not catch
+    // that, because the wrong side is also non-zero.
     const margin = (decl('.chat-status-bar', 'margin') ?? '').split(/\s+/);
+    const above = Number((margin[0] ?? '').replace('px', ''));
     const below = Number((margin[2] ?? '').replace('px', ''));
-    expect(below).toBeGreaterThan(0);
-    // And the bar must not have grown on the way out. The strip's total cost is
-    // its line plus that gap; in the pill it was its line plus the pill's row
-    // gap. Same line, so the gap is the whole comparison.
-    const pillGap = px(decl('.chat-composer', 'gap'));
-    expect(below).toBeLessThanOrEqual(pillGap);
+    expect(above).toBeGreaterThan(0);
+    expect(below).toBe(0);
+    // And it stays a GAP, never a box again: the arrangement this replaced cost
+    // 37px of a 119px bar in border, background and padding. The strip's whole
+    // cost is its one line plus this.
+    expect(above).toBeLessThanOrEqual(16);
   });
 
   it('cannot move the composer, because its height is not a variable', () => {

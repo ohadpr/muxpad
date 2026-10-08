@@ -269,15 +269,37 @@ export function applyChatVoice(events: readonly ChatEvent[], opts: ChatVoiceOpts
  * schedule started — the same segmentation `applyChatVoice` uses, and the same
  * adjacency (`notice` then its bubble) that identifies a fire at all.
  */
+/**
+ * Is the fire announced by the `cron` notice at `i` a FOLDED one?
+ *
+ * Read off the bubble that follows, because that is where the fact now lives.
+ * `expandCronFire` emits one of three shapes, and only the middle one is new:
+ *
+ *   unfolded          [notice, user]                  ← a visible prompt bubble
+ *   folded + prompt   [notice, user {folded: true}]   ← the prompt, collapsed
+ *   folded, no prompt [notice]                        ← nothing to collapse
+ *
+ * So the question is answered by ABSENCE: a fire is folded unless it is
+ * followed by a bubble that is not marked folded.
+ *
+ * This asked the notice's own `body` instead, which was true when the chip
+ * carried the prompt behind a caret. Making the chip a mark moved the prompt
+ * into the following bubble and left the notice with no `body` at all — so the
+ * test read false for every fire and the fold silently stopped running. What
+ * that looked like: an hourly schedule printing the word "closed" into the
+ * conversation six times a day, which is the exact output this exists to hide.
+ */
+function cronFireIsFolded(events: readonly ChatEvent[], i: number): boolean {
+  const next = events[i + 1];
+  return !(next?.kind === 'user' && next.folded !== true);
+}
+
 export function foldCronTurns(events: readonly ChatEvent[]): ChatEvent[] {
   let inFold = false;
   let changed = false;
   const out = events.map((e, i) => {
-    // A folded fire is a `cron` notice carrying its prompt in `body` — an
-    // UNfolded one is followed by a visible bubble instead, and must be left
-    // exactly as it is.
     if (e.kind === 'notice') {
-      inFold = e.variant === 'cron' && typeof e.body === 'string' && e.body.length > 0;
+      inFold = e.variant === 'cron' && cronFireIsFolded(events, i);
       return e;
     }
     // Any other turn start ends the fold: a person typing, a different
