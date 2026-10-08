@@ -1604,7 +1604,50 @@ describe('interleaveSpawnCards', () => {
     expect(shape(interleaveSpawnCards(entries, []))).toEqual(['msg-1', 'msg-2', 'msg-3']);
   });
 
-  it('draws every card even when there are no entries at all', () => {
-    expect(shape(interleaveSpawnCards([], [card('a', 1), card('b', 2)]))).toEqual(['[a]', '[b]']);
+  it('draws NOTHING when there are no entries at all', () => {
+    // This asserted the opposite, and the opposite was the bug. With no
+    // entries there is no timeline to place a card against, and the tail is the
+    // worst available guess because it is where the reader is looking — see
+    // `interleaveSpawnCards` and the describe block below.
+    expect(shape(interleaveSpawnCards([], [card('a', 1), card('b', 2)]))).toEqual([]);
+  });
+});
+
+describe('spawn cards during the beat before the transcript lands', () => {
+  const card = (at: number) => ({ at, chat: { tabId: `t${at}` } }) as never;
+
+  it('renders NOTHING when the log has no timeline yet', () => {
+    // The cards come from the sidebar corpus (instant); the transcript streams
+    // over the websocket (not instant). For that beat every card is
+    // unplaceable, and the tail — where the reader is looking — is the worst
+    // available guess. Reported as "all the historic agents stacked at the
+    // bottom… only then it gets resolved into the proper chat history".
+    const out = interleaveSpawnCards([], [card(1), card(2), card(3)]);
+    expect(out).toEqual([]);
+  });
+
+  it('also renders nothing when entries exist but none is dated', () => {
+    // An undated entry anchors nothing, so it cannot place a card either.
+    const out = interleaveSpawnCards([{ at: null, node: 'x' }], [card(1)]);
+    expect(out).toEqual([{ kind: 'entry', node: 'x' }]);
+  });
+
+  it('places them the moment ONE dated entry exists', () => {
+    const out = interleaveSpawnCards([{ at: 10, node: 'a' }], [card(5), card(50)]);
+    expect(out).toEqual([
+      { kind: 'card', card: card(5) },
+      { kind: 'entry', node: 'a' },
+      { kind: 'card', card: card(50) },
+    ]);
+  });
+
+  it('still puts a card NEWER than everything at the end', () => {
+    // There the bottom is not a guess, it is the answer — a spawn that just
+    // happened belongs after everything.
+    const out = interleaveSpawnCards([{ at: 10, node: 'a' }], [card(99)]);
+    expect(out).toEqual([
+      { kind: 'entry', node: 'a' },
+      { kind: 'card', card: card(99) },
+    ]);
   });
 });

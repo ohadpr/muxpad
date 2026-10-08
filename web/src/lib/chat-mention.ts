@@ -752,29 +752,34 @@ export function liveSpawnedChildren(
 export type LogEntry<T> = { kind: 'entry'; node: T } | { kind: 'card'; card: SpawnCard };
 
 /**
- * Interleave the spawn cards into a conversation's entries, by TIME.
+ * Place the spawn cards into the log, each at the moment its child started.
  *
- * `entries` are the transcript's top-level rows in the order they are rendered,
- * each with the epoch ms it happened at (`null` for a row whose transcript line
- * carried no parseable timestamp). `cards` are `spawnCards`' output — ascending
- * by spawn time.
+ * ── WHY AN UNPLACEABLE CARD RENDERS NOWHERE ─────────────────────────────────
+ * The cards and the transcript come from two different places at two different
+ * speeds: the cards are built from the sidebar corpus and one small HTTP call,
+ * both of which answer in tens of milliseconds, while the transcript streams in
+ * over the websocket. So for the first beat of every chat open, `entries` is
+ * EMPTY and every card is unplaceable.
  *
- * A card is emitted before the first entry that happened AFTER it, which is what
- * "where the spawn happened" means when the spawn itself is not a transcript
- * line: the tool call that created the child is somewhere in the turn, and the
- * card lands between that turn and whatever came next. Cards older than the
- * oldest loaded entry come out at the top (they belong further back than the
- * history window reaches, and the top is where "further back" is); cards newer
- * than the last entry come out at the bottom, which is where a spawn that just
- * happened belongs.
+ * The tail loop below used to take them all. That is what produced the reported
+ * symptom: "I see all the historic agents it launched stacked at the bottom,
+ * scrolling is weird, and only after a few moments does it resolve into the
+ * proper chat history." Thirty cards landed at the reader's feet, then jumped
+ * to their real positions a second later, moving the document under them.
  *
- * An entry with NO time is not a boundary — it cannot say whether the spawn came
- * before or after it, and guessing would put the card in a different place on
- * the next reload.
+ * A card whose moment is not in the document yet cannot be placed, and the tail
+ * is the WORST available guess — it is the one place the reader is looking. So
+ * an unplaceable card waits: `anchored` tracks whether any dated entry was seen
+ * at all, and until one is, no cards are emitted.
  *
- * Pure and generic over the node type on purpose: placement is the half of this
- * that can be wrong, and it is worth being able to test it against `['a','b']`
- * rather than a mounted 6,000-line component.
+ * The cost is a chat whose transcript is genuinely empty but which spawned
+ * children — there the cards never appear. That is rare, recoverable (they are
+ * in the sidebar), and far cheaper than relocating thirty rows under a reader
+ * on every open.
+ *
+ * The tail loop is still right for cards NEWER than the last entry: a spawn
+ * that just happened belongs after everything, and there the bottom is not a
+ * guess, it is the answer.
  */
 export function interleaveSpawnCards<T>(
   entries: readonly { at: number | null; node: T }[],
@@ -782,15 +787,19 @@ export function interleaveSpawnCards<T>(
 ): LogEntry<T>[] {
   const out: LogEntry<T>[] = [];
   let i = 0;
+  let anchored = false;
   for (const entry of entries) {
     if (entry.at !== null) {
+      anchored = true;
       while (i < cards.length && (cards[i] as SpawnCard).at <= entry.at) {
         out.push({ kind: 'card', card: cards[i++] as SpawnCard });
       }
     }
     out.push({ kind: 'entry', node: entry.node });
   }
-  for (; i < cards.length; i++) out.push({ kind: 'card', card: cards[i] as SpawnCard });
+  // Only once the log has a timeline to hang them on — see above.
+  if (anchored)
+    for (; i < cards.length; i++) out.push({ kind: 'card', card: cards[i] as SpawnCard });
   return out;
 }
 
