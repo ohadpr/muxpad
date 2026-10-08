@@ -4427,7 +4427,19 @@ export function ChatPane({
           />
         ) : null}
         {session?.current_sid ? (
-          <div className="chat-composer-wrap" ref={composerRef}>
+          <div
+            className="chat-composer-wrap"
+            ref={composerRef}
+            // The wrap's measured height, published for the one thing that has
+            // to know it in CSS: the mention picker opens UPWARD from here, and
+            // without this it has no idea how much room is above it (see
+            // ChatMentionPicker.css).
+            style={
+              composerH
+                ? ({ '--chat-composer-h': `${composerH}px` } as React.CSSProperties)
+                : undefined
+            }
+          >
             {/* ── THE PINNED CARDS, GLUED TO THE BOTTOM ──────────────────────
               Inside the composer wrap rather than above the scroller, and that
               placement does three jobs at once.
