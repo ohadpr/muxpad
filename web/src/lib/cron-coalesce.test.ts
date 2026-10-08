@@ -81,7 +81,7 @@ describe('coalesceCronFires', () => {
   it('a fire that SPOKE keeps its own chip, above what it said', () => {
     // The one case the chip was always for: something appeared in the
     // conversation and you need to know a schedule put it there.
-    const out = run([...quiet(), ...quiet(), ...fire('nw-close'), reply('CLOSE 10/7 · −$26K')]);
+    const out = run([...quiet(), ...quiet(), ...fire('nw-close'), reply('CLOSE · SPX −0.4%')]);
     const names = chips(out).map((c) => c.text);
     expect(names).toEqual(['nw-hourly', 'nw-close']);
   });
