@@ -43,6 +43,7 @@ import {
   next,
   phase,
   recordFor,
+  restoreUnreachable,
   scrollEventIsTheReader,
   targetFor,
 } from './chat-scroll-intent';
@@ -154,6 +155,19 @@ export class ChatScrollController {
   /** May we ask for another page of history to reach the current intent? */
   wantsOlder(hasMoreOlder: boolean): boolean {
     return canSeek(this.state, { rowLoaded: this.rowLoaded(), hasMoreOlder });
+  }
+
+  /**
+   * A restore that can never land — see `restoreUnreachable`.
+   *
+   * The caller converts it to "open at the newest message". It is asked on
+   * every commit rather than once at mount, because the row may arrive: a tail
+   * that happens to contain the remembered anchor satisfies the restore
+   * normally, and only when the events have settled without it does the reader
+   * belong at the end.
+   */
+  strandedRestore(hasMoreOlder: boolean): boolean {
+    return restoreUnreachable(this.state, { rowLoaded: this.rowLoaded(), hasMoreOlder });
   }
 
   private rowLoaded(): boolean {

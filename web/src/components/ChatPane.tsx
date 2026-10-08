@@ -106,6 +106,7 @@ import {
   lastTurnStartId,
   toggleActionRun,
 } from '../lib/chat-voice';
+import { canAutoPageHistory, showLoadEarlier } from '../lib/history-budget';
 import { NO_SENDERS, loadInboundSenders, matchInboundSenders } from '../lib/inbound-senders';
 import { showFolderChip } from '../lib/nav-row-affordances';
 import { type WorkspaceTabs, paneIndex } from '../lib/nav-search';
@@ -1441,6 +1442,9 @@ export function ChatPane({
   const hasMoreOlderRef = useRef(true);
   hasMoreOlderRef.current = hasMoreOlder;
   const [loadingOlder, setLoadingOlder] = useState(false);
+  // How many times the reader has asked to go back further than the automatic
+  // budget — see lib/history-budget. Each ask grants another whole budget.
+  const [olderGrants, setOlderGrants] = useState(0);
   const loadingOlderRef = useRef(false);
   // The in-flight request's safety-net timer — cleared when `older-done` lands
   // (or on unmount/pane switch) so a stale timer can't fire into a LATER
@@ -2582,8 +2586,23 @@ export function ChatPane({
       haveEvents: events.length > 0,
       sessionBound: !!session?.current_sid,
     });
-    if (why !== 'no') requestOlder();
-  }, [active, events, loadingOlder, hasMoreOlder, session?.current_sid]);
+    // THE SAME BUDGET AS `onScroll`, AND FOR THE SAME REASON. This effect pages
+    // for two causes: content that does not overflow (so no scroll event will
+    // ever come) and a reader parked in the top zone. The second is the runaway
+    // — it re-runs on every events commit, so each answered page immediately
+    // asks for the next, with nothing but the start of the transcript to stop
+    // it. Gating only `onScroll` left this path wide open: measured at 2,906
+    // rows and 449 screens from a chat that had just opened with 38.
+    //
+    // The 'fill-viewport' cause is deliberately NOT gated. A viewport with nothing
+    // in it is not a reader digging through history, it is a chat that cannot be
+    // read or scrolled at all, and the budget must not be able to produce that.
+    if (why === 'no') return;
+    if (why === 'top-zone' && !canAutoPageHistory({ loaded: events.length, grants: olderGrants })) {
+      return;
+    }
+    requestOlder();
+  }, [active, events, loadingOlder, hasMoreOlder, olderGrants, session?.current_sid]);
 
   // ── THE SEEK ──────────────────────────────────────────────────────────────
   // The controller owns the budget and says when a page is worth asking for; the
@@ -2608,8 +2627,19 @@ export function ChatPane({
   // burst of commits cannot produce a burst of requests.
   useEffect(() => {
     if (!active || loadingOlder) return;
-    if (!scroll.current?.wantsOlder(hasMoreOlder)) return;
-    if (requestOlder()) scroll.current.dispatch({ t: 'sought' });
+    const c = scroll.current;
+    if (!c) return;
+    // A RESTORE THAT CANNOT LAND OPENS AT THE NEWEST MESSAGE. Without this the
+    // intent is merely unsatisfied and therefore silent — `place` computes no
+    // target, writes no scrollTop, and a fresh list leaves the reader at the
+    // TOP of whatever loaded rather than in the conversation. Checked on every
+    // commit, not once at mount, because the anchor may yet arrive in the tail.
+    if (c.strandedRestore(hasMoreOlder)) {
+      c.dispatch({ t: 'jump-to-latest' });
+      return;
+    }
+    if (!c.wantsOlder(hasMoreOlder)) return;
+    if (requestOlder()) c.dispatch({ t: 'sought' });
   });
 
   /** @returns whether a request actually went out — the anchor seek spends its
@@ -3053,6 +3083,11 @@ export function ChatPane({
     if (
       el.scrollTop < TOP_PAGE_ZONE_PX &&
       events.length > 0 &&
+      // THE BUDGET. This path is the one that ran away: it pages whenever the
+      // reader is near the top, and its only limit was reaching the start of
+      // the transcript. Measured at 1,775 rows / 202,971 px and still climbing.
+      // Past the budget the reader gets a button instead — see `showLoadEarlier`.
+      canAutoPageHistory({ loaded: events.length, grants: olderGrants }) &&
       scroll.current?.phase(hasMoreOlderRef.current) !== 'FOLLOWING'
     ) {
       requestOlder();
@@ -4244,6 +4279,32 @@ export function ChatPane({
           aria-label="Conversation"
         >
           <div className="chat-list">
+            {/* ── THE END OF THE AUTOMATIC BUDGET ────────────────────────────
+              Not an error and not a spinner: the history is all still there,
+              muxpad has simply stopped dragging it in on its own. One click
+              grants another whole budget rather than a single page — a reader
+              who has said "further back" once is digging, and six clicks to
+              cross what the scroll used to cross by itself is the friction this
+              is trying not to add. See lib/history-budget. */}
+            {showLoadEarlier({
+              loaded: events.length,
+              grants: olderGrants,
+              hasMoreOlder,
+            }) ? (
+              <div className="chat-earlier">
+                <button
+                  type="button"
+                  className="chat-earlier-btn"
+                  onClick={() => {
+                    setOlderGrants((n) => n + 1);
+                    requestOlder();
+                  }}
+                  disabled={loadingOlder}
+                >
+                  {loadingOlder ? 'Loading…' : 'Load earlier messages'}
+                </button>
+              </div>
+            ) : null}
             {body}
             {optimisticUser ? (
               <div className="chat-turn chat-turn-user">

@@ -340,8 +340,44 @@ export function canSeek(
   opts: { rowLoaded: boolean; hasMoreOlder: boolean },
 ): boolean {
   if (opts.rowLoaded) return false;
-  if (state.intent.at !== 'row' && state.intent.at !== 'hit') return false;
+  // ── A HIT, NOT A RESTORE ──────────────────────────────────────────────────
+  // This used to seek for `row` too, which is the intent a RESTORE produces —
+  // so reopening a chat you had scrolled back in spent up to eight socket round
+  // trips (~1 MB) hunting for a pixel position before it settled. Measured as
+  // the single biggest cause of "opening a chat feels stuck".
+  //
+  // The two intents look alike and are not. A `hit` is a destination the reader
+  // just asked for by name: paging to reach it is the request. A `row` from a
+  // restore is a convenience, and no chat app pays for that one — Slack,
+  // Discord, WhatsApp and Telegram all open at the bottom or at a server-known
+  // unread marker, never at a restored pixel offset, for exactly this reason: a
+  // geometric position costs N fetches to honour and a semantic one costs zero.
+  //
+  // So a restore is now free or it does not happen: if the row is already
+  // loaded the reader lands on it, and if it is not they open at the newest
+  // message (see `place`, which converts an unreachable restore to `end`).
+  // Scrolling up still loads history on demand — that path is `onScroll`, and
+  // it is bounded separately by lib/history-budget.
+  if (state.intent.at !== 'hit') return false;
   return opts.hasMoreOlder && state.pages < SEEK_PAGE_BUDGET;
+}
+
+/**
+ * Is this intent one we will never be able to satisfy?
+ *
+ * A restore naming a row that is not loaded, now that a restore does not page
+ * for one. Left alone it is not merely unsatisfied, it is SILENT: `place`
+ * computes no target, writes no scrollTop, and the reader is left wherever the
+ * browser put them on mount — which for a fresh list is the TOP of a hundred
+ * screens of history, not the conversation.
+ */
+export function restoreUnreachable(
+  state: ScrollState,
+  opts: { rowLoaded: boolean; hasMoreOlder: boolean },
+): boolean {
+  if (opts.rowLoaded) return false;
+  if (state.intent.at !== 'row') return false;
+  return !canSeek(state, opts);
 }
 
 /** Live geometry of the scroll container. Plain numbers, so this is testable. */
