@@ -871,7 +871,7 @@ slack_channel_id() {
   case "$ref" in
     C*|D*|G*) printf '%s' "$ref"; return ;;
   esac
-  local tok="${SLACK_USER_TOKEN:-$SLACK_BOT_TOKEN}"
+  local tok="${2:-${SLACK_USER_TOKEN:-$SLACK_BOT_TOKEN}}"
   case "$ref" in
     @*)
       local name="${ref#@}" uid
@@ -953,7 +953,7 @@ you want, say so explicitly with --as-me.
 EOF
       exit 1; }
   fi
-  local id; id="$(slack_channel_id "$ref")"
+  local id; id="$(slack_channel_id "$ref" "$tok")"
   slack_api chat.postMessage "$tok" "channel=$id" "text=$text" >/dev/null
   echo "sent to $ref${as_me:+ (as you)}"
 }

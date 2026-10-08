@@ -1,4 +1,5 @@
-import { type ChatCard, cardIsStale } from '@muxpad/shared';
+import { type ChatCard, cardFreshness, cardIsStale } from '@muxpad/shared';
+import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { subscribe, subscribeResync } from '../events';
 import { isCardOpen, toggleCardOpen, useCardOpen } from '../lib/card-open';
@@ -230,6 +231,16 @@ export function ChatCards({ tabId }: { tabId: string | null | undefined }) {
       {cards.map((card) => {
         const stale = cardIsStale(card, now);
         const open = isCardOpen(opened, tabId, card.name);
+        // THE NAME IS ONLY WORTH ITS WIDTH WHEN THERE IS SOMETHING TO TELL IT
+        // APART FROM. With one card it is a label on the only thing in the
+        // strip — and on a 430px phone those seven characters cost the tail of
+        // the value, which is the part you actually came to read ("stocks
+        // -0.4…", truncated mid-number). With several, it is the only thing
+        // that says which row is which, so it comes back.
+        //
+        // The name is never LOST either way: opening a card shows it, and it is
+        // the row's title.
+        const showName = cards.length > 1 || open;
         // An html card is a sandboxed frame — there is no "one line" of it to
         // put in the row, so it always keeps a body underneath. Text and
         // markdown ride IN the row until somebody opens them.
@@ -243,7 +254,12 @@ export function ChatCards({ tabId }: { tabId: string | null | undefined }) {
           <section
             className={`chat-card${stale ? ' -stale' : ''}${open ? ' -open' : ''}`}
             key={card.id}
+            // The rail IS the freshness readout now that the row carries no
+            // timestamp — see cardFreshness. A number, not a class, so it is a
+            // continuous fade rather than three buckets somebody has to name.
+            style={{ '--card-fresh': cardFreshness(card, now) } as React.CSSProperties}
           >
+            <span className="chat-card-rail" aria-hidden="true" />
             {/* THE WHOLE ROW IS THE CONTROL. This is a phone surface first, and
               the × it replaced was a 15px glyph with 5px of padding — under
               every touch-target guideline there is, and sitting right next to
@@ -257,7 +273,7 @@ export function ChatCards({ tabId }: { tabId: string | null | undefined }) {
               }}
               title={open ? `Collapse ${card.name}` : `Expand ${card.name}`}
             >
-              <span className="chat-card-name">{card.name}</span>
+              {showName ? <span className="chat-card-name">{card.name}</span> : null}
               {inline ? (
                 // One line, ellipsized — never wrapped. A compact card that
                 // silently becomes two rows on a narrow pane has given back

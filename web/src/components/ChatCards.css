@@ -57,23 +57,41 @@
   background: color-mix(in srgb, var(--chat-elev) 72%, transparent);
   overflow: hidden;
 }
-/* THE RAIL — the entire "this is pinned" signal, and the staleness signal, in
+/* THE RAIL — the entire "this is pinned" signal AND the freshness readout, in
    one 2.5px element that costs no height at any content size. Inset 4px top and
-   bottom so it reads as a mark on the row rather than a border of it. */
-.chat-card::before {
-  content: "";
+   bottom so it reads as a mark on the row rather than a border of it.
+
+   A REAL ELEMENT, not `::before`. The gauge below is the only thing left saying
+   how current a card is, now that the row carries no timestamp — and a
+   pseudo-element's computed style cannot be read reliably (measured: three
+   different `--card-fresh` values and a `-stale` class all reported the same
+   colour, lagging a read behind). A value no test can see is a value that stops
+   working quietly, which is exactly the failure this gauge exists to surface.
+
+   `--card-fresh` runs 1 → 0 across the card's declared cadence (see
+   cardFreshness): full accent on arrival, fading toward faint as the next write
+   comes due. Continuous rather than three named buckets, because the question
+   is continuous — and unlike a timestamp it is readable without being read. The
+   `, 1` fallback keeps a card with no cadence at full strength: a writer that
+   never promised to come back is not late. */
+.chat-card-rail {
   position: absolute;
   left: 0;
   top: 4px;
   bottom: 4px;
   width: 2.5px;
   border-radius: 2px;
-  background: color-mix(in srgb, var(--chat-accent) 55%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--chat-accent) calc(55% * var(--card-fresh, 1)),
+    color-mix(in srgb, var(--chat-faint) 40%, transparent)
+  );
+  transition: background 600ms linear;
 }
 /* Overdue is the signal the cadence exists for: the interesting failure is not
    a wrong value, it is a writer that stopped. The rail carries it too, so a
    stalled card is visible from the corner of your eye without reading a word. */
-.chat-card.-stale::before {
+.chat-card.-stale .chat-card-rail {
   background: var(--status-working, #8a6410);
 }
 /* The row: the whole control, and the whole card when nothing is open. */

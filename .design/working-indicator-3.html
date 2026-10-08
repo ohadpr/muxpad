@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="en" data-theme="dracula">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>muxpad · working indicator, round 3 — make it mean something</title>
+<style>
+  :root {
+    --bg: #282a36; --elev: #21222c;
+    --fg: #f8f8f2; --dim: #b8b8b0; --faint: #6272a4;
+    --border: #44475a; --accent: #bd93f9; --cyan: #8be9fd; --pink: #ff79c6;
+    --good: #50fa7b; --warn: #e8b34b;
+    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+    --c: var(--faint);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 28px 20px 110px; background: var(--bg); color: var(--fg);
+    font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  .wrap { max-width: 1040px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 10px; letter-spacing: -.015em; }
+  .sub { color: var(--dim); font-size: 14.5px; margin: 0 0 8px; max-width: 80ch; }
+  .sub b { color: var(--fg); }
+  code { font: 12.5px var(--mono); color: var(--accent); }
+
+  .controls { position: sticky; top: 0; z-index: 40; display: flex; gap: 8px;
+    align-items: center; flex-wrap: wrap; margin: 22px 0 28px; padding: 12px 0 14px;
+    background: linear-gradient(to bottom, var(--bg) 74%, transparent); }
+  .controls button { font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 999px;
+    cursor: pointer; border: 1px solid var(--border); background: var(--elev); color: var(--dim); }
+  .controls button.on { border-color: var(--accent); color: var(--fg);
+    background: color-mix(in srgb, var(--accent) 16%, var(--elev)); }
+  .controls .note { color: var(--faint); font-size: 12.5px; }
+  body.slow .ind *, body.slow .ind { animation-duration: 7s !important; }
+  body.big .ind { zoom: 3; }
+  body.tint { --c: var(--accent); }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
+  .card { border: 1px solid var(--border); border-radius: 12px; background: var(--elev); overflow: hidden; }
+  .card.-hero { grid-column: 1 / -1; border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+  .stageRow { display: flex; align-items: center; gap: 12px; padding: 22px 16px;
+    min-height: 92px; background: var(--bg); border-bottom: 1px solid var(--border); }
+  .lbl { font-size: 12px; color: var(--faint); }
+  .meta { padding: 12px 15px 15px; }
+  .meta h3 { margin: 0; font-size: 14.5px; letter-spacing: -.01em; }
+  .meta h3 span { color: var(--faint); font: 600 10.5px/1 var(--mono); letter-spacing: .08em;
+    text-transform: uppercase; margin-right: 8px; }
+  .meta p { margin: 6px 0 0; font-size: 12.5px; line-height: 1.55; color: var(--dim); }
+  .meta p b { color: var(--fg); }
+  .tags { margin-top: 9px; display: flex; gap: 6px; flex-wrap: wrap; }
+  .t { font: 600 10px/1 var(--mono); padding: 4px 7px; border-radius: 5px; letter-spacing: .04em; }
+  .t.-cheap { color: var(--good); background: color-mix(in srgb, var(--good) 15%, transparent); }
+  .t.-mid { color: var(--warn); background: color-mix(in srgb, var(--warn) 15%, transparent); }
+  .t.-dear { color: #ff5555; background: color-mix(in srgb, #ff5555 15%, transparent); }
+  .t.-idea { color: var(--cyan); background: color-mix(in srgb, var(--cyan) 15%, transparent); }
+  .t.-w { color: var(--pink); background: color-mix(in srgb, var(--pink) 15%, transparent); }
+
+  .ind { display: inline-flex; align-items: center; flex: 0 0 auto; }
+  .ind svg { display: block; }
+  @keyframes spin { to { transform: rotate(360deg) } }
+
+  /* ══ 1 · TELEMETRY ═══════════════════════════════════════════════════
+     A 64px window onto a long pre-generated trace that slides left. No JS
+     per frame — the whole animation is one translate on one <g>. */
+  .tel { width: 64px; height: 18px; }
+  .tel svg { overflow: hidden; }
+  .tel .scroll { animation: telScroll 7s linear infinite; }
+  @keyframes telScroll { to { transform: translateX(-192px) } }
+  .tel .trace { fill: none; stroke: var(--c); stroke-width: 1.4;
+                stroke-linejoin: round; stroke-linecap: round; }
+  .tel .base { stroke: color-mix(in srgb, var(--c) 22%, transparent); stroke-width: 1;
+               stroke-dasharray: 1 3; }
+  .tel .head { fill: var(--cyan); }
+  .tel .fade { fill: url(#telfade); }
+
+  /* ══ 2 · SPLIT-FLAP ══════════════════════════════════════════════════ */
+  .flap { height: 18px; gap: 2px; font: 700 11px/18px var(--mono); }
+  .flap b { position: relative; display: block; width: 10px; height: 18px; overflow: hidden;
+            border-radius: 2px; background: color-mix(in srgb, var(--c) 13%, transparent);
+            color: var(--fg); text-align: center; }
+  .flap b s { display: block; text-decoration: none; animation: flapRoll 1.1s steps(9) infinite; }
+  .flap b:nth-child(2) s { animation-duration: 1.4s }
+  .flap b:nth-child(3) s { animation-duration: .9s }
+  .flap b:nth-child(4) s { animation-duration: 1.7s }
+  .flap b::after { content: ''; position: absolute; left: 0; right: 0; top: 50%; height: 1px;
+                   background: rgba(0,0,0,.45); }
+  @keyframes flapRoll { to { transform: translateY(-162px) } }
+
+  /* ══ 3 · WARP ════════════════════════════════════════════════════════ */
+  .warp { width: 56px; height: 18px; position: relative; overflow: hidden; }
+  .warp i { position: absolute; top: 50%; left: 50%; height: 1.5px; border-radius: 1px;
+            background: linear-gradient(90deg, transparent, var(--c));
+            animation: warp 1.6s cubic-bezier(.55,0,.9,.6) infinite; }
+  .warp i:nth-child(1){ --y:-6px; animation-delay:-.1s }
+  .warp i:nth-child(2){ --y:-3px; animation-delay:-.5s }
+  .warp i:nth-child(3){ --y: 0px; animation-delay:-.9s }
+  .warp i:nth-child(4){ --y: 3px; animation-delay:-1.3s }
+  .warp i:nth-child(5){ --y: 6px; animation-delay:-.3s }
+  .warp i:nth-child(6){ --y:-1.5px; animation-delay:-1.1s }
+  .warp i:nth-child(7){ --y: 4.5px; animation-delay:-.7s }
+  @keyframes warp {
+    0%   { width: 2px;  transform: translate(0, var(--y));            opacity: 0 }
+    18%  { opacity: 1 }
+    100% { width: 22px; transform: translate(28px, var(--y));          opacity: 0 }
+  }
+
+  /* ══ 4 · CHAOS (double pendulum) ═════════════════════════════════════ */
+  .chaos { width: 30px; height: 30px; }
+  .chaos .rod { stroke: color-mix(in srgb, var(--c) 45%, transparent); stroke-width: 1.2;
+                stroke-linecap: round; }
+  .chaos .bob { fill: var(--c); }
+  .chaos .trail { fill: none; stroke: var(--cyan); stroke-width: 1; stroke-linecap: round;
+                  stroke-linejoin: round; opacity: .75; }
+
+  /* ══ 5 · BRAILLE WAVE ════════════════════════════════════════════════ */
+  .brl { height: 18px; font: 13px/18px var(--mono); letter-spacing: 0; color: var(--c);
+         width: 56px; overflow: hidden; }
+  .brl s { display: block; text-decoration: none; white-space: pre;
+           animation: brlRoll 2.4s steps(24) infinite; }
+  @keyframes brlRoll { to { transform: translateX(-192px) } }
+
+  /* ══ 6 · HELIX ═══════════════════════════════════════════════════════ */
+  .helix { width: 54px; height: 18px; position: relative; }
+  .helix i { position: absolute; top: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px;
+             border-radius: 50%; background: var(--c); animation: hx 1.9s linear infinite; }
+  .helix i.b { animation-name: hx2 }
+  @keyframes hx  { 0%{transform:translate(0,-6px) scale(.5);opacity:.35}
+                   25%{transform:translate(13px,0) scale(1);opacity:1}
+                   50%{transform:translate(27px,6px) scale(.5);opacity:.35}
+                   75%{transform:translate(40px,0) scale(1);opacity:1}
+                   100%{transform:translate(54px,-6px) scale(.5);opacity:.35} }
+  @keyframes hx2 { 0%{transform:translate(0,6px) scale(.5);opacity:.35}
+                   25%{transform:translate(13px,0) scale(1);opacity:1}
+                   50%{transform:translate(27px,-6px) scale(.5);opacity:.35}
+                   75%{transform:translate(40px,0) scale(1);opacity:1}
+                   100%{transform:translate(54px,6px) scale(.5);opacity:.35} }
+
+  /* ══ 7 · INCHWORM ════════════════════════════════════════════════════ */
+  .worm { width: 44px; height: 18px; position: relative; }
+  .worm i { position: absolute; top: 50%; height: 5px; margin-top: -2.5px; border-radius: 3px;
+            background: var(--c); animation: worm 1.5s cubic-bezier(.65,0,.35,1) infinite; }
+  @keyframes worm {
+    0%   { left: 0;    width: 5px;  opacity: .6 }
+    35%  { left: 0;    width: 26px; opacity: 1 }
+    65%  { left: 21px; width: 5px;  opacity: 1 }
+    100% { left: 39px; width: 5px;  opacity: .6 }
+  }
+
+  .foot { margin-top: 36px; padding: 18px 20px; border-radius: 12px;
+    background: color-mix(in srgb, var(--accent) 8%, var(--elev));
+    border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border)); }
+  .foot h2 { margin: 0 0 10px; font-size: 16px }
+  .foot p { margin: 0 0 11px; font-size: 14px; color: var(--dim) }
+  .foot p:last-child { margin: 0 }
+  .foot b { color: var(--fg) }
+
+  @media (prefers-reduced-motion: reduce) { .ind *, .ind { animation: none !important } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Round 3 — make it mean something</h1>
+<p class="sub">Rounds 1 and 2 were both <em>abstract shapes that move</em>. With width to spend, a
+  third option opens that neither had: the indicator can stop being decorative and
+  <b>become a readout</b> — something whose motion is caused by what the agent is doing rather than
+  by a timer. Number 01 is that idea. The rest are the maximalist swings.</p>
+<p class="sub">Widths here run 30–64px against today's 26px. <b>Zoom 3×</b> and <b>Slow motion</b>
+  are on the bar.</p>
+
+<div class="controls">
+  <button id="slow">Slow motion</button>
+  <button id="big">Zoom 3×</button>
+  <button id="tint">Tint accent</button>
+  <span class="note">all stop under prefers-reduced-motion</span>
+</div>
+
+<div class="grid">
+
+  <div class="card -hero">
+    <div class="stageRow">
+      <span class="ind tel">
+        <svg width="64" height="18" viewBox="0 0 64 18" aria-hidden="true">
+          <defs>
+            <linearGradient id="telfade" x1="0" x2="1">
+              <stop offset="0" stop-color="#282a36" stop-opacity="1"/>
+              <stop offset="1" stop-color="#282a36" stop-opacity="0"/>
+            </linearGradient>
+            <clipPath id="telclip"><rect x="0" y="0" width="64" height="18"/></clipPath>
+          </defs>
+          <g clip-path="url(#telclip)">
+            <line class="base" x1="0" y1="9" x2="64" y2="9"/>
+            <g class="scroll"><path class="trace" data-tel></path></g>
+            <rect class="fade" x="0" y="0" width="14" height="18"/>
+            <circle class="head" cx="56" cy="9" r="1.9"/>
+          </g>
+        </svg>
+      </span>
+      <span class="lbl">Bash · 14s</span>
+    </div>
+    <div class="meta"><h3><span>01</span>Telemetry</h3>
+      <p>A 64px window onto a trace sliding past a bright head, fading out at the left edge. It
+        reads as a strip chart because it <em>is</em> one — and that is the point:
+        <b>this one can be driven by something real.</b> Swap the pre-generated path for a rolling
+        buffer of tokens-per-second, or a tick per tool call, and the indicator stops saying
+        "something is happening" and starts saying <em>what, and how fast</em>.</p>
+      <p>Spiky means a burst of tool calls; flat means a long silent model call; the head stalling
+        is a stall. You would be able to tell a wedged turn from a thinking one <b>without reading
+        anything</b>, which is the thing no spinner anywhere can do. As drawn here it is
+        pre-generated and costs one CSS translate — the real version costs a path rewrite per
+        second, which is nothing.</p>
+      <div class="tags"><span class="t -cheap">one transform</span><span class="t -w">64px</span><span class="t -idea">can carry real data</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="stageRow">
+      <span class="ind flap" id="flap"></span>
+      <span class="lbl">Bash · 14s</span>
+    </div>
+    <div class="meta"><h3><span>02</span>Split-flap</h3>
+      <p>A departure board, mid-flip, forever. Four drums rolling glyphs behind a hairline seam at
+        the fold, each at its own speed so they never land together. Mechanical and tactile in a way
+        no circle is — and it rhymes with the fact that <b>muxpad is a terminal cockpit</b>, not a
+        chat app with a terminal in it.</p>
+      <p>The obvious next move: let them settle on the tool's actual name, then roll again when the
+        tool changes.</p>
+      <div class="tags"><span class="t -cheap">steps() transform</span><span class="t -w">46px</span><span class="t -idea">could spell the tool</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="stageRow">
+      <span class="ind warp"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+      <span class="lbl">Bash · 14s</span>
+    </div>
+    <div class="meta"><h3><span>03</span>Warp</h3>
+      <p>Streaks accelerating out of a point and stretching as they go — the width is animated, so
+        each one <b>elongates into its own motion blur</b> exactly the way a long exposure does.
+        Seven of them on offset delays, so the field never pulses in unison.</p>
+      <p>The only one here with a sense of <em>speed</em> rather than effort.</p>
+      <div class="tags"><span class="t -mid">animates width</span><span class="t -w">56px</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="stageRow">
+      <span class="ind chaos">
+        <svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true">
+          <path class="trail" data-trail></path>
+          <line class="rod" data-rod1/><line class="rod" data-rod2/>
+          <circle class="bob" data-bob1 r="1.8"/><circle class="bob" data-bob2 r="2.3"/>
+        </svg>
+      </span>
+      <span class="lbl">Bash · 14s</span>
+    </div>
+    <div class="meta"><h3><span>04</span>Chaos</h3>
+      <p>A real double pendulum, integrated every frame, dragging a decaying trail. Not
+        quasi-periodic like the epicycles — <b>genuinely chaotic</b>: it is sensitive to initial
+        conditions, so two of them diverge exponentially and no run is ever repeatable, even in
+        principle.</p>
+      <p>It is hypnotic, and it is the single most likely thing on this page to get someone to ask
+        what it is. It needs a physics step per frame, which at 30px is absurd and I enjoy that.</p>
+      <div class="tags"><span class="t -dear">JS integrator · 60fps</span><span class="t -w">30px</span><span class="t -idea">truly chaotic</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="stageRow">
+      <span class="ind brl" id="brl"></span>
+      <span class="lbl">Bash · 14s</span>
+    </div>
+    <div class="meta"><h3><span>05</span>Braille wave</h3>
+      <p>A sine wave rendered in Unicode braille cells, scrolling. Braille is a 2×4 dot matrix per
+        character, so a line of it is <b>a 4-pixel-tall bitmap display made of text</b> — which is
+        how terminal plotting libraries draw graphs, and it is the most muxpad-native idea here.</p>
+      <p>It inherits the chat font, scales with text, and copies as characters.</p>
+      <div class="tags"><span class="t -cheap">steps() transform</span><span class="t -w">56px</span><span class="t -idea">terminal-native</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="stageRow">
+      <span class="ind helix">
+        <i></i><i class="b"></i><i></i><i class="b"></i><i></i><i class="b"></i>
+      </span>
+      <span class="lbl">Bash · 14s</span>
+    </div>
+    <div class="meta"><h3><span>06</span>Helix</h3>
+      <p>Two counter-phase dot trains crossing, each dot scaling and fading as it passes through
+        the far side — flat circles reading as a strand twisting in depth. It <b>travels left to
+        right</b>, so unlike everything circular it has a direction, which suits a thing that is
+        getting somewhere.</p>
+      <div class="tags"><span class="t -cheap">transform + opacity</span><span class="t -w">54px</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="stageRow">
+      <span class="ind worm"><i></i></span>
+      <span class="lbl">Bash · 14s</span>
+    </div>
+    <div class="meta"><h3><span>07</span>Inchworm</h3>
+      <p>One pill. It anchors its tail, stretches its head forward, then pulls its tail up to meet
+        it — and loops. <b>A single element</b> with four keyframes, and it is the only thing in
+        three rounds with a personality rather than a mechanism.</p>
+      <p>The risk is exactly that: it is cute, and cute wears out faster than quiet.</p>
+      <div class="tags"><span class="t -mid">animates width/left</span><span class="t -w">44px</span><span class="t -idea">one element</span></div>
+    </div>
+  </div>
+
+</div>
+
+<div class="foot">
+  <h2>Where I actually land</h2>
+  <p><b>01 Telemetry, and it is not close.</b> Everything in three rounds has been a shape that
+    moves because a timer says so — this is the only one where the motion could be
+    <em>caused by the work</em>. A trace fed by tokens-per-second and tool-call ticks would let you
+    tell a bursty turn from a long silent model call from a wedged one, from across the room, with
+    nothing to read. That is a genuinely new capability wearing an animation's clothes, and it costs
+    one CSS translate until you decide to feed it.</p>
+  <p><b>For pure spectacle: 04 Chaos.</b> A double pendulum at 30px is a ridiculous thing to ship
+    and the only honest answer to "crazier" — it is not quasi-periodic like the epicycles, it is
+    actually chaotic, and two of them diverge exponentially rather than merely drifting.</p>
+  <p><b>05 Braille</b> is the one most native to what muxpad is, and it is nearly free. <b>02
+    Split-flap</b> is the most fun that could also carry information — let the drums settle on the
+    tool's name. If you want none of this, round 2's composer halo is still the answer that costs
+    no pixels at all.</p>
+</div>
+
+</div>
+<script>
+  // ── 01 Telemetry: a long trace, generated once. Three 64px windows laid end
+  //    to end so the -192px scroll loops seamlessly.
+  {
+    const W = 192, H = 18, STEP = 3;
+    let d = '', prev = 9;
+    const pts = [];
+    for (let x = 0; x <= W; x += STEP) {
+      // bursty: mostly quiet, occasional spikes — what tool-call traffic looks like
+      const burst = Math.sin(x / 17) > 0.72 || Math.sin(x / 7 + 2) > 0.88;
+      const target = burst ? 9 + (Math.random() - 0.5) * 13 : 9 + (Math.random() - 0.5) * 2.4;
+      prev = prev + (target - prev) * 0.55;
+      pts.push([x, Math.max(1.6, Math.min(H - 1.6, prev))]);
+    }
+    // close the loop so the seam is invisible
+    pts[pts.length - 1][1] = pts[0][1];
+    d = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ',' + p[1].toFixed(2)).join('');
+    const full = d + d.replace(/M[\d.]+,[\d.]+/, (m, o) => m).replace(/([ML])([\d.]+)/g,
+      (_, c, x) => c + (parseFloat(x) + W).toFixed(1)).replace(/^M/, 'L');
+    for (const el of document.querySelectorAll('[data-tel]')) el.setAttribute('d', full);
+  }
+
+  // ── 02 Split-flap: four drums of glyphs.
+  {
+    const GLYPHS = '8A3F0K9D2';
+    const host = document.getElementById('flap');
+    for (let i = 0; i < 4; i++) {
+      const b = document.createElement('b'), s = document.createElement('s');
+      // the strip is the alphabet twice, so steps() can roll past the end
+      s.textContent = (GLYPHS + GLYPHS).split('').join('\n');
+      b.append(s); host.append(b);
+    }
+  }
+
+  // ── 05 Braille: a sine, 2 dots wide and 4 tall per cell.
+  {
+    // Braille is a 2-wide × 4-tall dot matrix per character, so a row of it is a
+    // 4px-tall bitmap made of text — which is exactly how terminal plotting
+    // libraries draw. ONE wave, not two: OR-ing a second phase into the same
+    // cell filled nearly every dot and the result read as noise rather than a
+    // curve. Observed: ⠴⢎⣉⣉⡱⠶⠶ where a wave was intended.
+    const DOTS = [[0x01, 0x02, 0x04, 0x40], [0x08, 0x10, 0x20, 0x80]];
+    const N = 48, CELLS_PER_PERIOD = 8;
+    let out = '';
+    for (let c = 0; c < N; c++) {
+      let bits = 0;
+      for (let col = 0; col < 2; col++) {
+        const x = c * 2 + col;
+        // The period divides N exactly, so the doubled strip below joins with no
+        // step at the seam.
+        const y = Math.round(1.5 + 1.5 * Math.sin((x / (CELLS_PER_PERIOD * 2)) * Math.PI * 2));
+        bits |= DOTS[col][Math.max(0, Math.min(3, y))];
+      }
+      out += String.fromCharCode(0x2800 + bits);
+    }
+    const el = document.getElementById('brl');
+    const s = document.createElement('s');
+    s.textContent = out + out;   // doubled so the scroll loops
+    el.append(s);
+  }
+
+  // ── 04 Chaos: a real double pendulum, RK-free Euler at small dt.
+  {
+    const svg = document.querySelector('.chaos');
+    const rod1 = svg.querySelector('[data-rod1]'), rod2 = svg.querySelector('[data-rod2]');
+    const bob1 = svg.querySelector('[data-bob1]'), bob2 = svg.querySelector('[data-bob2]');
+    const trail = svg.querySelector('[data-trail]');
+    const OX = 15, OY = 11, L1 = 7, L2 = 7, g = 9.81;
+    let a1 = 2.3, a2 = 2.9, v1 = 0, v2 = 0;
+    const hist = [];
+    const tick = () => {
+      for (let k = 0; k < 6; k++) {          // substeps keep Euler stable
+        const dt = 0.006;
+        const d = 2 - Math.cos(2 * (a1 - a2));
+        const n1 = -3 * g * Math.sin(a1) - g * Math.sin(a1 - 2 * a2)
+                 - 2 * Math.sin(a1 - a2) * (v2 * v2 + v1 * v1 * Math.cos(a1 - a2));
+        const n2 = 2 * Math.sin(a1 - a2) * (2 * v1 * v1 + 2 * g * Math.cos(a1)
+                 + v2 * v2 * Math.cos(a1 - a2));
+        v1 += (n1 / d) * dt; v2 += (n2 / d) * dt;
+        v1 *= 0.9999; v2 *= 0.9999;
+        a1 += v1 * dt; a2 += v2 * dt;
+      }
+      const x1 = OX + L1 * Math.sin(a1), y1 = OY + L1 * Math.cos(a1);
+      const x2 = x1 + L2 * Math.sin(a2), y2 = y1 + L2 * Math.cos(a2);
+      rod1.setAttribute('x1', OX); rod1.setAttribute('y1', OY);
+      rod1.setAttribute('x2', x1); rod1.setAttribute('y2', y1);
+      rod2.setAttribute('x1', x1); rod2.setAttribute('y1', y1);
+      rod2.setAttribute('x2', x2); rod2.setAttribute('y2', y2);
+      bob1.setAttribute('cx', x1); bob1.setAttribute('cy', y1);
+      bob2.setAttribute('cx', x2); bob2.setAttribute('cy', y2);
+      hist.push([x2, y2]); if (hist.length > 46) hist.shift();
+      trail.setAttribute('d', hist.map((p, i) =>
+        (i ? 'L' : 'M') + p[0].toFixed(2) + ',' + p[1].toFixed(2)).join(''));
+      raf = requestAnimationFrame(tick);
+    };
+    let raf;
+    if (!matchMedia('(prefers-reduced-motion: reduce)').matches) tick();
+  }
+
+  for (const [id, cls] of [['slow','slow'], ['big','big'], ['tint','tint']]) {
+    const el = document.getElementById(id);
+    el.onclick = () => el.classList.toggle('on', document.body.classList.toggle(cls));
+  }
+</script>
+</body>
+</html>
