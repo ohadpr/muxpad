@@ -99,6 +99,7 @@ import {
   applyChatVoice,
   chatVoiceActive,
   coalesceCronFires,
+  dropSilentCardFires,
   foldCronTurns,
   foldsAsActionRun,
   isAction,
@@ -2688,7 +2689,7 @@ export function ChatPane({
   const voiced = useMemo(
     // …then ONE chip per quiet stretch rather than one per fire. Last, because
     // it has to see the result of the fold to know which stretches are silent.
-    () => coalesceCronFires(foldCronTurns(applyChatVoice(events, voiceOpts))),
+    () => coalesceCronFires(dropSilentCardFires(foldCronTurns(applyChatVoice(events, voiceOpts)))),
     [events, voiceOpts],
   );
 

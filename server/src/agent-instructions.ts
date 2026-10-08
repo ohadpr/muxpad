@@ -183,6 +183,23 @@ A cron can write a card like anything else — it is just a scheduled caller, it
 does not own the card, and several schedules may share one (read it with
 \`card get\`, edit your part, write it back).
 
+**\`--card=<name>\` says where a job's output GOES**, which is a different fact
+from where it runs. A fire that updated its card and said nothing renders
+NOTHING in the chat — no chip, no fold — because the conversation was never
+where its result belonged. The card's own freshness rail is the "did it run"
+signal, attached to the thing it is about rather than six screens up the log.
+
+A pure card refresher wants BOTH flags, and they mean different things:
+
+    muxpad cron new --name=nw-hourly --at='0 7-12 * * 1-5' --pane \\
+      --card=market --silent "refresh the market card"
+
+\`--card\` is the destination; \`--silent\` is the statement that the agent's
+reply ("ok", "closed") is noise. Without \`--silent\` that reply is a visible
+message and the fire keeps its row — correctly, since something was said. Be
+deliberate about \`--silent\`: it demotes ERRORS too, so a job that fails
+quietly fails invisibly, and the card going overdue is what tells you.
+
 **The injected PROMPT is folded for every fire, automatically.** You never need
 a flag for that — "run this, write that card" is an instruction a schedule
 handed the agent, not something a person said, and it collapses in with the tool

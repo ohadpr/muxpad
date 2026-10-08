@@ -89,6 +89,10 @@ export function cronsRoutes(deps: {
         /** Omitted = infer from the schedule (see isDatedSchedule). */
         once: z.boolean().optional(),
         fold: z.boolean().optional(),
+        /** The card this job writes — see CronMarker.card. Bounded to the same
+         *  shape a card name takes; the store does not validate it against an
+         *  existing card because a cron may legitimately create one. */
+        card: z.string().min(1).max(40).optional(),
       })
       .safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json(bad(parsed.error.issues[0]?.message ?? 'invalid body'), 400);
@@ -170,6 +174,7 @@ export function cronsRoutes(deps: {
       // ("yes I do want this annually") and must not read as "not stated".
       ...(body.once === undefined ? {} : { once: body.once }),
       ...(body.fold === undefined ? {} : { fold: body.fold }),
+      ...(body.card === undefined ? {} : { card: body.card }),
       next_due_at: nextAfter(schedule, tz, now),
     });
     emitCronTabUpdate(deps, cron.target_pane);

@@ -1327,6 +1327,37 @@ const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    // A CRON'S OUTPUT TARGET — `crons.card`.
+    //
+    // ── WHAT WAS WRONG WITH THE OLD PRIMITIVE ────────────────────────────────
+    // A cron already said WHERE IT RUNS (`target_kind`, `target_pane`). It had
+    // no way to say WHERE ITS OUTPUT GOES, so that fact was being encoded with
+    // a rendering flag — `--fold`, which meant "hide the prompt", then meant
+    // "hide the reply", and had to be re-explained each time. The author was
+    // being asked to reason about transcript rendering when the thing they
+    // actually know is "this job's output is the `market` card".
+    //
+    // With a declared card the rule writes itself: a fire that updated its card
+    // and said nothing has nothing to tell the conversation, so it renders
+    // nothing. The card's own freshness rail is the liveness signal, attached
+    // to the thing it is about, and anything the agent DOES say breaks the
+    // silence and brings the chip back — including a failure, which is the case
+    // the audit trail exists for.
+    //
+    // NULL, not '': a cron that writes no card is the common case and must be
+    // distinguishable from one whose card name was cleared.
+    //
+    // `apply`, not `sql`: SQLite has no ADD COLUMN IF NOT EXISTS and the
+    // idempotency test re-runs every migration with the version rows deleted.
+    version: 42,
+    apply: (db) => {
+      const cols = db.prepare('PRAGMA table_info(crons)').all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === 'card')) {
+        db.exec('ALTER TABLE crons ADD COLUMN card TEXT');
+      }
+    },
+  },
 ];
 
 /** Highest version in the migration list. Exported so a test can assert the

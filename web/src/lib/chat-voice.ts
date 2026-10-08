@@ -335,6 +335,66 @@ export function fireTime(ts: number | null): string {
 }
 
 /**
+ * A FIRE WHOSE OUTPUT IS A CARD, AND WHICH SAID NOTHING, RENDERS NOTHING.
+ *
+ * ── THE PRIMITIVE THIS FIXES ────────────────────────────────────────────────
+ * A cron already said where it RUNS. It could not say where its OUTPUT GOES, so
+ * that fact was being expressed with a rendering flag — which is why the flag
+ * kept needing re-explaining, and why a card refresher still cost a chip and a
+ * fold per quiet stretch in a chat whose entire content is the card. The
+ * author's actual knowledge is "this job's output is the `market` card";
+ * `--card` lets them say it, and then the rule writes itself.
+ *
+ * ── WHY DROPPING IS NOT THE DISAPPEARANCE THIS CODEBASE AVOIDS ──────────────
+ * "Collapse, never drop" has been the rule everywhere else, and it still is for
+ * anything anybody SAID. What goes here is muxpad's own annotation (the chip is
+ * synthesised from a marker, not a message), muxpad's own injected prompt, and
+ * the tool calls of a turn that produced no words at all. The harness
+ * transcript and the FTS archive are untouched — `muxpad agent transcript` and
+ * `muxpad search` still find every one of them.
+ *
+ * And the liveness signal does not go away, it moves somewhere better: the
+ * card's freshness rail fades across its cadence and turns amber when the
+ * writer stops. "Did it run?" is answered on the thing you are looking at
+ * rather than by a chip six screens up the log.
+ *
+ * ── THE SILENCE IS LOAD-BEARING ─────────────────────────────────────────────
+ * Only a turn that said NOTHING is dropped. Anything the agent actually emits —
+ * an error, a refusal, "credentials expired" — is a visible event, which breaks
+ * the span and brings the chip and the message back. The fire that breaks is
+ * the one that speaks, which is exactly the case an audit trail exists for.
+ */
+export function dropSilentCardFires(events: readonly ChatEvent[]): ChatEvent[] {
+  const drop = new Set<number>();
+  for (let i = 0; i < events.length; i++) {
+    const e = events[i] as ChatEvent;
+    if (e.kind !== 'notice' || e.variant !== 'cron' || !e.card) continue;
+    // A fire that collapsed MISSED fires has something unusual to report and
+    // keeps its row whatever its output target is.
+    if (e.detail) continue;
+    const span: number[] = [];
+    let silent = true;
+    for (let j = i + 1; j < events.length; j++) {
+      const n = events[j] as ChatEvent;
+      // The next fire, or a person typing, ends this turn. Neither counts
+      // against it — somebody else's message is not this job's output.
+      if (n.kind === 'notice' && n.variant === 'cron') break;
+      if (n.kind === 'user' && n.folded !== true) break;
+      if (!isAction(n)) {
+        silent = false;
+        break;
+      }
+      span.push(j);
+    }
+    if (!silent) continue;
+    drop.add(i);
+    for (const j of span) drop.add(j);
+  }
+  if (drop.size === 0) return events as ChatEvent[];
+  return events.filter((_, i) => !drop.has(i));
+}
+
+/**
  * ONE CHIP PER QUIET STRETCH, NOT ONE PER FIRE.
  *
  * ── THE COMPLAINT, WHICH IS ABOUT A RATE ────────────────────────────────────

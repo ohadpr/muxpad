@@ -127,6 +127,17 @@ export interface NoticeEvent extends Base {
    * silhouette.
    */
   fold?: boolean;
+  /**
+   * For a 'cron' notice: the card this job declared as its output.
+   *
+   * Present means the conversation is not where this job's result belongs — so
+   * a fire that wrote its card and said nothing is dropped from the rendered
+   * log entirely (see `dropSilentCardFires`). Carried on the event for the same
+   * reason as `fold`: it is a fact about the SCHEDULE, and inferring it from
+   * the shape of what follows is how four previous bugs in this feature
+   * started.
+   */
+  card?: string;
   /** For a task-notification: the parent Task/Agent tool-use id it reports on.
    *  Lets the live roster match a subagent's FINISH to its launch reliably —
    *  a background agent's own tool_result is only the immediate launch ack. */
@@ -526,6 +537,7 @@ export function expandCronFire(text: string, id: string, ts: number | null): Cha
     variant: 'cron',
     text: marker.name,
     ...(marker.fold ? { fold: true } : {}),
+    ...(marker.card ? { card: marker.card } : {}),
     ...(marker.missed > 0
       ? { detail: `${marker.missed} missed fire${marker.missed === 1 ? '' : 's'} collapsed` }
       : {}),

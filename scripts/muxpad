@@ -3011,13 +3011,14 @@ cmd_cron_new() {
   # Pre-strip the flags parse_flags can't take: BARE mode flags (it would eat
   # the next argument as their value) and hyphenated names (it evals
   # FLAG_<name>=, and `FLAG_on-context` is not a legal shell variable).
-  local a rest=() target='' pane_ref='' close_flag='' on_context='' max_open='' fold_flag=''
+  local a rest=() target='' pane_ref='' close_flag='' on_context='' max_open='' fold_flag='' card_name=''
   for a in "$@"; do
     case "$a" in
       --pane) target=pane ;;
       --pane=*) target=pane; pane_ref="${a#--pane=}" ;;
       --new-tab) target=new-tab ;;
       --silent|--fold) fold_flag=1 ;;
+      --card=*) card_name="${1#*=}" ;;
       --no-close) close_flag=false ;;
       --close) close_flag=true ;;
       --on-context=*) on_context="${a#--on-context=}" ;;
@@ -3102,6 +3103,10 @@ USAGE
   # the prompt started folding unconditionally. Not --quiet: that is quiet_mins,
   # a different thing entirely.
   [ -n "$fold_flag" ] && body+=",\"fold\":true"
+  # --card declares WHERE THE OUTPUT GOES, which is a different fact from where
+  # the job runs. A fire that updated its card and said nothing renders nothing
+  # in the conversation; the card's freshness rail is the liveness signal.
+  [ -n "$card_name" ] && body+=",\"card\":\"$card_name\""
   [ -n "$close_flag" ] && body+=",\"close_when_done\":$close_flag"
   body+='}'
   local res
@@ -4146,6 +4151,15 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                      value = THIS pane. --new-tab spawns a
                                      fresh agent tab per fire (clean context)
                                      and closes it when the run finishes.
+  cron new … --card=<name>           THIS JOB'S OUTPUT IS THAT CARD. A fire that
+                                     updates it and says nothing renders NOTHING
+                                     in the chat — no chip, no fold. The card's
+                                     own freshness rail is the "did it run"
+                                     signal, and anything the agent actually
+                                     says (an error, a refusal) breaks the
+                                     silence and brings the row back.
+                                     This is the flag you want for a card
+                                     refresher; --silent only quietens it.
   cron new … --silent                the agent's REPLY is plumbing too, so fold
                                      it in with the tool calls. For a job whose
                                      only real output is a card or a push — the
