@@ -176,12 +176,19 @@ describe('the session line cannot become two lines', () => {
 
 describe('the session line sits outside the composer pill', () => {
   /** The composer's own markup — the pill and everything inside it. */
+  // Anchored on the CLASS NAME, not on `<div className=…`: the wrap grew a
+  // second prop and biome split it across lines, which silently made this slice
+  // empty and the assertions below vacuous. What the test is about is the ORDER
+  // of things inside the wrap, and that survives formatting.
   const WRAP = SRC.slice(
-    SRC.indexOf('<div className="chat-composer-wrap"'),
+    SRC.indexOf('className="chat-composer-wrap"'),
     SRC.indexOf('<div className="chat-composer-main">'),
   );
 
   it('renders the bar as a SIBLING of the pill, before it opens', () => {
+    // A slice that missed its anchor makes every assertion below vacuously
+    // true, which is how this test passed while saying nothing.
+    expect(WRAP.length).toBeGreaterThan(100);
     expect(WRAP).toContain('<SessionBar');
     // Order is the assertion: the strip is emitted before the pill's own
     // element, so it cannot be a child of it.

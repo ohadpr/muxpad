@@ -272,3 +272,24 @@ export function readDraft(el: HTMLElement, sel: Selection | null): DraftState {
     caret: inside ? offsetOf(el, node, sel?.focusOffset ?? 0) : text.length,
   };
 }
+
+/**
+ * Which side of a chip a click at `clientX` means.
+ *
+ * The chip is `inert` and `contenteditable=false`, so the browser has no caret
+ * position in it and collapses every click to the one before the element —
+ * measured in Chromium at both edges. That is why a mention could not be
+ * edited: you could never put the caret AFTER the name, and Backspace before a
+ * chip deletes what is before the chip, so the only way to remove one was to
+ * clear the whole draft.
+ *
+ * Pure and exported so the rule is testable without layout: jsdom has none, and
+ * a decision hidden in a DOM handler is a decision nobody checks. The midpoint
+ * is the convention every editor with atomic tokens uses.
+ */
+export function chipClickSide(
+  rect: { left: number; width: number },
+  clientX: number,
+): 'before' | 'after' {
+  return clientX > rect.left + rect.width / 2 ? 'after' : 'before';
+}
