@@ -398,15 +398,22 @@ export function fireTime(ts: number | null): string {
 export function coalesceCronFires(events: readonly ChatEvent[]): ChatEvent[] {
   /** The chip currently absorbing fires, if a quiet stretch is open. */
   let open: { at: number; name: string; fires: number; lastTs: number | null } | null = null;
+  /** The actions seen since that chip — see the `foldsAsActionRun` check below. */
+  let since: ChatEvent[] = [];
   const absorbed = new Set<number>();
   const counts = new Map<number, { fires: number; lastTs: number | null }>();
 
   for (let i = 0; i < events.length; i++) {
     const e = events[i] as ChatEvent;
-    const quietFire =
-      e.kind === 'notice' && e.variant === 'cron' && !e.detail && cronFireIsFolded(events, i);
-    if (quietFire && e.kind === 'notice') {
-      if (open && open.name === e.text) {
+    if (e.kind === 'notice' && e.variant === 'cron' && !e.detail && cronFireIsFolded(events, i)) {
+      // Actions are plumbing only when they actually COLLAPSE. A run that does
+      // not meet `foldsAsActionRun` is rendered inline, as visible rows — so
+      // absorbing the chip above it would leave work on screen with nothing
+      // saying a schedule caused it. Rare (a fire's own demoted prose folds a
+      // run of one), but the predicate is cheap and the alternative is a rule
+      // that is right by luck.
+      const quiet = since.length === 0 || foldsAsActionRun(since);
+      if (open && open.name === e.text && quiet) {
         absorbed.add(i);
         open.fires++;
         open.lastTs = e.ts;
@@ -414,11 +421,15 @@ export function coalesceCronFires(events: readonly ChatEvent[]): ChatEvent[] {
       } else {
         open = { at: i, name: e.text, fires: 1, lastTs: e.ts };
       }
+      since = [];
       continue;
     }
-    // Plumbing keeps the stretch open — that is the whole point of it being
-    // plumbing. Anything the reader can see closes it.
-    if (!isAction(e)) open = null;
+    // Anything the reader can see closes the stretch.
+    if (isAction(e)) since.push(e);
+    else {
+      open = null;
+      since = [];
+    }
   }
 
   if (absorbed.size === 0) return events as ChatEvent[];

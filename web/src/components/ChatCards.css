@@ -67,6 +67,13 @@
 .chat-card-head:hover {
   background: color-mix(in srgb, var(--chat-accent) 9%, var(--chat-elev));
 }
+/* INSIDE, not around. `.chat-card` clips its overflow, so a default outline on
+   the header is drawn and then cut off by the card's own rounded edge — the one
+   row that most needs a visible focus state would show half of one. */
+.chat-card-head:focus-visible {
+  outline: 0;
+  box-shadow: inset 0 0 0 2px var(--chat-accent);
+}
 /* Collapsed, the header IS the card — so it keeps no rule under it to divide
    itself from a body that is not there. */
 .chat-card.-shut .chat-card-head {

@@ -2645,6 +2645,46 @@ export function ChatPane({
   /** The terms to light up. Stable per jump, because `ChatRow` is memoised on
    *  it and a fresh array every render would re-parse the message's markdown on
    *  every subagent progress frame. */
+  // CHAT MODE'S VOICE. In Chat mode the agent's plain text is a private
+  // scratchpad and its `reply` calls are the conversation; this decides which
+  // events are messages and which fold into the "N actions" rows. Presentation
+  // ONLY — `events` (and the transcript, and the archive) still hold every
+  // word, which is what makes the fold auditable rather than a disappearance.
+  //
+  // `sending` is the live-turn signal: it goes true synchronously on send and
+  // on turn-start, false on turn-done, so the guard's promotion lands exactly
+  // when the turn closes rather than flickering mid-turn.
+  //
+  // It is not enough on its own. `sending` says a turn is RUNNING; the voice
+  // needs to know whether the last segment IS that turn, and for a beat at the
+  // start of every turn it isn't — the flag is a socket frame (or an
+  // optimistic send), the user's message is a transcript line that has to be
+  // written, tailed and normalised first. The latch below closes that gap:
+  // while nothing is running, the last segment is by definition finished, so
+  // record which one it is; while a turn runs the value is FROZEN, and the
+  // voice compares against it to tell "the running turn hasn't written
+  // anything yet" from "the last segment is the running turn". See
+  // closedTurnStartId in chat-voice.ts for the measured symptom.
+  const lastTurnStart = useMemo(() => lastTurnStartId(events), [events]);
+  const closedTurnStart = useRef<string | null>(null);
+  if (!sending) closedTurnStart.current = lastTurnStart;
+  const closedTurnStartId = closedTurnStart.current;
+  const voiceOpts = useMemo(
+    () => ({ mode, turnActive: sending, assistant: session?.assistant, closedTurnStartId }),
+    [mode, sending, session?.assistant, closedTurnStartId],
+  );
+  const voiceOn = chatVoiceActive(voiceOpts);
+  // Chat mode's voice first, then the cron fold. Two different claims about the
+  // same events: the voice is about this PANE's mode, the fold is about a
+  // SCHEDULE whose author said its output is plumbing — so the fold applies in
+  // agent mode too, where the voice does not run at all.
+  const voiced = useMemo(
+    // …then ONE chip per quiet stretch rather than one per fire. Last, because
+    // it has to see the result of the fold to know which stretches are silent.
+    () => coalesceCronFires(foldCronTurns(applyChatVoice(events, voiceOpts))),
+    [events, voiceOpts],
+  );
+
   const jumpTerms = useMemo(() => (jump ? queryTerms(jump.query) : NO_TERMS), [jump]);
 
   /**
@@ -2659,8 +2699,17 @@ export function ChatPane({
   const jumpTargetId = useMemo(() => {
     if (!jump || jumpTerms.length === 0) return null;
     if (!scrollMemorySidMatches(jump.sid, renderedSid.current)) return null;
-    return pickSearchTarget(events, { terms: jumpTerms, ts: jump.ts });
-  }, [jump, jumpTerms, events]);
+    // `voiced`, NOT `events`. The pick has to name a row that is actually
+    // RENDERED, and the voice pipeline above drops some: a sign-off folded away
+    // after a reply, and now every cron chip absorbed into a coalesced stretch.
+    // Naming one of those produces an anchor with no `data-eid` in the
+    // document, which does not read as "not found" — it sends the client
+    // paging backwards through history hunting for a message that is already
+    // loaded. A cron notice's text is its NAME, so searching "nw-hourly" hits
+    // this squarely, and the newest-wins tie-break picks an absorbed one by
+    // preference.
+    return pickSearchTarget(voiced, { terms: jumpTerms, ts: jump.ts });
+  }, [jump, jumpTerms, voiced]);
 
   const clearJump = useCallback(() => {
     // The reader owns the scroll again, and where they are now is what the
@@ -3045,46 +3094,6 @@ export function ChatPane({
       setOptimisticUser(null);
     }
   }, [events, optimisticUser]);
-
-  // CHAT MODE'S VOICE. In Chat mode the agent's plain text is a private
-  // scratchpad and its `reply` calls are the conversation; this decides which
-  // events are messages and which fold into the "N actions" rows. Presentation
-  // ONLY — `events` (and the transcript, and the archive) still hold every
-  // word, which is what makes the fold auditable rather than a disappearance.
-  //
-  // `sending` is the live-turn signal: it goes true synchronously on send and
-  // on turn-start, false on turn-done, so the guard's promotion lands exactly
-  // when the turn closes rather than flickering mid-turn.
-  //
-  // It is not enough on its own. `sending` says a turn is RUNNING; the voice
-  // needs to know whether the last segment IS that turn, and for a beat at the
-  // start of every turn it isn't — the flag is a socket frame (or an
-  // optimistic send), the user's message is a transcript line that has to be
-  // written, tailed and normalised first. The latch below closes that gap:
-  // while nothing is running, the last segment is by definition finished, so
-  // record which one it is; while a turn runs the value is FROZEN, and the
-  // voice compares against it to tell "the running turn hasn't written
-  // anything yet" from "the last segment is the running turn". See
-  // closedTurnStartId in chat-voice.ts for the measured symptom.
-  const lastTurnStart = useMemo(() => lastTurnStartId(events), [events]);
-  const closedTurnStart = useRef<string | null>(null);
-  if (!sending) closedTurnStart.current = lastTurnStart;
-  const closedTurnStartId = closedTurnStart.current;
-  const voiceOpts = useMemo(
-    () => ({ mode, turnActive: sending, assistant: session?.assistant, closedTurnStartId }),
-    [mode, sending, session?.assistant, closedTurnStartId],
-  );
-  const voiceOn = chatVoiceActive(voiceOpts);
-  // Chat mode's voice first, then the cron fold. Two different claims about the
-  // same events: the voice is about this PANE's mode, the fold is about a
-  // SCHEDULE whose author said its output is plumbing — so the fold applies in
-  // agent mode too, where the voice does not run at all.
-  const voiced = useMemo(
-    // …then ONE chip per quiet stretch rather than one per fire. Last, because
-    // it has to see the result of the fold to know which stretches are silent.
-    () => coalesceCronFires(foldCronTurns(applyChatVoice(events, voiceOpts))),
-    [events, voiceOpts],
-  );
 
   // ── SPOKEN voice (GPT-Live) ────────────────────────────────────────────────
   //

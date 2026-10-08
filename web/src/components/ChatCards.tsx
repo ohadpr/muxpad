@@ -241,7 +241,9 @@ export function ChatCards({ tabId }: { tabId: string | null | undefined }) {
               type="button"
               className="chat-card-head"
               aria-expanded={!shut}
-              onClick={() => tabId && toggleCardCollapsed(tabId, card.name)}
+              onClick={() => {
+                if (tabId) toggleCardCollapsed(tabId, card.name);
+              }}
               title={shut ? `Expand ${card.name}` : `Collapse ${card.name}`}
             >
               <span className={`chat-card-chevron${shut ? '' : ' is-open'}`} aria-hidden="true">

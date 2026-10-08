@@ -127,3 +127,23 @@ describe('coalesceCronFires', () => {
     expect(after.length).toBeGreaterThan(6);
   });
 });
+
+describe('coalesceCronFires — what counts as "nothing visible"', () => {
+  it('does NOT absorb across a run that renders inline', () => {
+    // Actions are plumbing only when they actually collapse. A lone tool row
+    // (no demoted prose, so `foldsAsActionRun` is false) is rendered as a
+    // VISIBLE row — absorbing the chip above it would leave work on screen with
+    // nothing saying a schedule caused it.
+    const out = run([...fire('nw-hourly', true, ''), tool(), ...fire('nw-hourly', true, '')]);
+    expect(chips(out)).toHaveLength(2);
+  });
+
+  it('absorbs back-to-back fires that did nothing at all', () => {
+    const out = run([
+      ...fire('nw-hourly', true, ''),
+      ...fire('nw-hourly', true, ''),
+      ...fire('nw-hourly', true, ''),
+    ]);
+    expect(chips(out)).toHaveLength(1);
+  });
+});
