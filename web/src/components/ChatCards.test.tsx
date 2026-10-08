@@ -125,9 +125,9 @@ describe('pinned chat cards', () => {
     );
     expect(Number(fresh)).toBeGreaterThan(0.4);
     expect(Number(fresh)).toBeLessThan(0.6);
-    // And the rail is a real element, not a pseudo — the only thing left saying
-    // how current a card is must be something a test can actually look at.
-    expect(host.querySelector('.chat-card-rail')).not.toBeNull();
+    // And the leader is a real element, not a pseudo — the only thing left
+    // saying how current a card is must be something a test can look at.
+    expect(host.querySelector('.chat-card-leader')).not.toBeNull();
   });
 
   it('puts html in a SANDBOXED frame that cannot reach muxpad', async () => {
@@ -312,5 +312,32 @@ describe('pinned chat cards', () => {
     // A card blanking because of one dropped request is a worse lie than a
     // card a few seconds stale.
     expect(host.querySelector('.chat-card-value')?.textContent).toBe('good');
+  });
+});
+
+describe('the tape', () => {
+  it('runs a leader from the value to the age', async () => {
+    const host = await mount([card({ content: 'V2.1 62%' })]);
+    const row = host.querySelector('.chat-card-row');
+    const kids = [...(row?.children ?? [])].map((e) => e.className);
+    // Order matters: value, then the dots, then the age. A leader after the age
+    // is just a decoration trailing off the end of the row.
+    expect(kids).toEqual(['chat-card-value', 'chat-card-leader', 'chat-card-age']);
+  });
+
+  it('drops the leader when the card is OPEN', async () => {
+    // Opened, the value moves to its own block below and the row is just a name
+    // and an age — there is no gap for a leader to lead across.
+    const host = await mount([card()]);
+    await act(async () => {
+      (host.querySelector('.chat-card-row') as HTMLButtonElement).click();
+    });
+    expect(host.querySelector('.chat-card-leader')).toBeNull();
+  });
+
+  it('has no leader on an html card either', async () => {
+    // Same reason: an iframe has no one-line value, so the row never had a gap.
+    const host = await mount([card({ format: 'html', content: '<b>x</b>' })]);
+    expect(host.querySelector('.chat-card-leader')).toBeNull();
   });
 });

@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>muxpad · the pinned card — five treatments</title>
+<style>
+  :root{
+    --bg:#edecf7; --elev:#fff; --fg:#1d1d26; --dim:#4a4a5a; --faint:#8b89a3;
+    --border:#d8d6ea; --accent:#6c4fd8; --bubble:#dedce9;
+    --good:#18794e; --bad:#c0392b; --warn:#8a6410;
+    --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  body.dark{
+    --bg:#282a36; --elev:#21222c; --fg:#f8f8f2; --dim:#b8b8b0; --faint:#6272a4;
+    --border:#44475a; --accent:#bd93f9; --bubble:#3a3c4e;
+    --good:#50fa7b; --bad:#ff5555; --warn:#e8b34b;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:26px 18px 90px;background:var(--bg);color:var(--fg);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
+  .wrap{max-width:900px;margin:0 auto}
+  h1{font-size:21px;margin:0 0 8px;letter-spacing:-.015em}
+  .sub{color:var(--dim);font-size:14px;margin:0 0 6px;max-width:76ch}
+  .sub b{color:var(--fg)}
+  code{font:12.5px var(--mono);color:var(--accent)}
+
+  .controls{position:sticky;top:0;z-index:30;display:flex;gap:8px;align-items:center;
+    flex-wrap:wrap;margin:20px 0 24px;padding:11px 0 13px;
+    background:linear-gradient(to bottom,var(--bg) 74%,transparent)}
+  .controls button{font:inherit;font-size:13px;padding:6px 12px;border-radius:999px;
+    cursor:pointer;border:1px solid var(--border);background:var(--elev);color:var(--dim)}
+  .controls button.on{border-color:var(--accent);color:var(--accent);
+    background:color-mix(in srgb,var(--accent) 12%,var(--elev))}
+  .controls .note{color:var(--faint);font-size:12.5px}
+  body.narrow .pane{max-width:430px}
+
+  section{margin:0 0 30px;padding:0 0 26px;border-bottom:1px solid var(--border)}
+  section:last-of-type{border-bottom:0}
+  .head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+  h2{font-size:16px;margin:0;letter-spacing:-.01em}
+  h2 .k{font:600 10.5px/1 var(--mono);color:var(--faint);letter-spacing:.08em;
+    text-transform:uppercase;margin-right:8px}
+  .why{color:var(--dim);font-size:13px;margin:8px 0 0;max-width:76ch}
+  .why b{color:var(--fg)}
+  .pill{display:inline-block;font:600 10px/1 var(--mono);padding:4px 7px;border-radius:5px;
+    letter-spacing:.04em;margin:9px 6px 0 0;color:var(--faint);
+    background:color-mix(in srgb,var(--faint) 13%,transparent)}
+
+  /* the mock pane */
+  .pane{margin-top:14px;transition:max-width .2s ease}
+  .fold{font:13px var(--mono);color:var(--faint);margin:0 0 14px}
+  .fold b{color:var(--dim)}
+  .composer{margin-top:9px;display:flex;align-items:center;gap:10px;height:46px;
+    padding:0 10px 0 16px;border-radius:26px;background:#f4f3fb;
+    border:1px solid #e4e2f1;color:var(--faint);font-size:14px}
+  body.dark .composer{background:color-mix(in srgb,var(--elev) 92%,var(--fg));
+    border-color:color-mix(in srgb,var(--fg) 12%,var(--border))}
+  .composer .send{margin-left:auto;width:30px;height:30px;border-radius:50%;
+    background:color-mix(in srgb,var(--faint) 22%,transparent)}
+
+  /* shared atoms */
+  .nm{font-size:12px;font-weight:600;letter-spacing:.02em;
+    color:color-mix(in srgb,var(--accent) 52%,var(--faint));flex:0 0 auto}
+  .ag{font-size:11.5px;color:var(--faint);font-variant-numeric:tabular-nums;
+    flex:0 0 auto;margin-left:auto;padding-left:10px}
+  .vl{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    font-size:13px;line-height:1.5;color:var(--dim)}
+
+  /* ══ 0 · TODAY ═══════════════════════════════════════════════════ */
+  .t0{position:relative;display:flex;align-items:baseline;gap:9px;
+    padding:7px 10px 7px 13px;border-radius:7px;
+    background:color-mix(in srgb,var(--elev) 72%,transparent)}
+  .t0::before{content:'';position:absolute;left:0;top:4px;bottom:4px;width:2.5px;
+    border-radius:2px;background:color-mix(in srgb,var(--accent) 55%,transparent)}
+
+  /* ══ A · LEDGER ══════════════════════════════════════════════════ */
+  .A{display:flex;align-items:baseline;gap:10px;padding:7px 2px 8px;
+    border-top:1px solid color-mix(in srgb,var(--faint) 28%,transparent);
+    background:none}
+  .A .vl{font-family:var(--mono);font-size:12.5px;color:var(--fg);
+    font-variant-numeric:tabular-nums}
+  .A .ag{font-family:var(--mono);font-size:11px;letter-spacing:.02em}
+  .A .dot{flex:0 0 auto;width:5px;height:5px;border-radius:50%;
+    background:var(--accent);align-self:center}
+
+  /* ══ B · TAPE ════════════════════════════════════════════════════ */
+  .B{display:flex;align-items:baseline;gap:8px;padding:9px 14px;border-radius:4px;
+    background:color-mix(in srgb,#fffdf7 94%, var(--accent));
+    border:1px solid color-mix(in srgb,var(--accent) 14%,transparent);
+    box-shadow:0 1px 0 color-mix(in srgb,var(--accent) 8%,transparent)}
+  body.dark .B{background:color-mix(in srgb,var(--elev) 88%,var(--warn))}
+  .B .vl{flex:0 1 auto;font-size:13px;color:var(--fg)}
+  .B .lead{flex:1 1 auto;min-width:14px;height:1em;
+    background-image:radial-gradient(circle,color-mix(in srgb,var(--faint) 55%,transparent) 1px,transparent 1px);
+    background-size:5px 5px;background-position:0 .78em;background-repeat:repeat-x}
+  .B .ag{margin-left:0;padding-left:0;font-family:var(--mono)}
+
+  /* ══ C · GLASS ═══════════════════════════════════════════════════ */
+  .C{display:flex;align-items:baseline;gap:10px;padding:9px 14px;border-radius:14px;
+    background:color-mix(in srgb,var(--elev) 55%,transparent);
+    backdrop-filter:blur(14px) saturate(1.3);
+    -webkit-backdrop-filter:blur(14px) saturate(1.3);
+    border:1px solid color-mix(in srgb,var(--elev) 70%,transparent);
+    box-shadow:0 1px 2px color-mix(in srgb,var(--fg) 5%,transparent)}
+  .C .vl{color:var(--fg)}
+
+  /* ══ D · WELL ════════════════════════════════════════════════════ */
+  .D{display:flex;align-items:baseline;gap:10px;padding:9px 14px;border-radius:9px;
+    background:color-mix(in srgb,var(--bg) 88%,var(--fg));
+    box-shadow:inset 0 1px 2px color-mix(in srgb,var(--fg) 12%,transparent),
+               inset 0 0 0 1px color-mix(in srgb,var(--fg) 5%,transparent)}
+  body.dark .D{background:color-mix(in srgb,#000 32%,var(--bg))}
+  .D .vl{color:var(--fg)}
+
+  /* ══ E · SIGNAL ══════════════════════════════════════════════════ */
+  .E{display:flex;align-items:stretch;border-radius:9px;overflow:hidden;
+    background:var(--elev);
+    box-shadow:0 1px 2px color-mix(in srgb,var(--fg) 7%,transparent)}
+  .E .flag{flex:0 0 auto;width:30px;display:grid;place-items:center;font-size:13px;
+    background:color-mix(in srgb,var(--bad) 13%,transparent)}
+  .E.-up .flag{background:color-mix(in srgb,var(--good) 13%,transparent)}
+  .E .body{flex:1 1 auto;min-width:0;display:flex;align-items:baseline;gap:9px;
+    padding:8px 12px 8px 11px}
+  .E .big{flex:0 0 auto;font:600 14px/1.3 var(--mono);color:var(--bad);
+    font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+  .E.-up .big{color:var(--good)}
+  .E .rest{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;
+    white-space:nowrap;font-size:12.5px;color:var(--faint)}
+
+  .verdict{background:var(--elev);border:1px solid var(--accent);border-radius:11px;
+    padding:16px 18px;margin-top:22px}
+  .verdict p{margin:0 0 10px;font-size:14px;color:var(--dim)}
+  .verdict p:last-child{margin:0}
+  .verdict b{color:var(--fg)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>The pinned card — five treatments</h1>
+<p class="sub">The shape is settled: one row, 34px, value left, age hard right. What is not settled
+  is what it looks like — right now it is <b>a white bar with a rounded rectangle under it</b>, and
+  the composer is also a white bar with rounded corners, so the two read as a pair of inputs rather
+  than as a value and a text field.</p>
+<p class="sub">Each is shown with the fold above and the composer below, because <b>the
+  relationship to the composer is the actual problem</b>. Light first — it is the theme in use.</p>
+
+<div class="controls">
+  <button id="dark">Dark</button>
+  <button id="narrow">Phone width</button>
+  <span class="note">judge the card against the composer, not on its own</span>
+</div>
+
+<section>
+  <div class="head"><h2><span class="k">now</span>Rail + white bar</h2></div>
+  <p class="why">Two stacked light bars with rounded corners. The rail is the only thing saying
+    "this is not another input", and at 2.5px it is doing a lot of work alone.</p>
+  <div class="pane">
+    <div class="fold"><span>›</span> <b>31 actions</b> &nbsp;Bash ×14 · prompt ×8 · notes ×8</div>
+    <div class="t0"><span class="vl">🔴 −$46K (-1.14%) · 📉 stocks -1.19% vs SPY -0.47% · ✅ no action</span><span class="ag">20m ago</span></div>
+    <div class="composer">Message Claude…<span class="send"></span></div>
+  </div>
+</section>
+
+<section>
+  <div class="head"><h2><span class="k">a</span>Ledger</h2></div>
+  <p class="why">No surface at all — a hairline rule and monospace figures, like the last line of a
+    terminal. <b>It stops competing with the composer by refusing to be a box</b>, and tabular
+    numerals mean the digits never jitter as the value updates. The most muxpad-native of the five
+    and the quietest.</p>
+  <p class="why">Risk: with nothing behind it, the transcript scrolls right up to it.</p>
+  <span class="pill">no surface</span><span class="pill">tabular figures</span>
+  <div class="pane">
+    <div class="fold"><span>›</span> <b>31 actions</b> &nbsp;Bash ×14 · prompt ×8 · notes ×8</div>
+    <div class="A"><span class="dot"></span><span class="vl">🔴 −$46K (-1.14%) · stocks -1.19% vs SPY -0.47% · ✅ no action</span><span class="ag">20m ago</span></div>
+    <div class="composer">Message Claude…<span class="send"></span></div>
+  </div>
+</section>
+
+<section>
+  <div class="head"><h2><span class="k">b</span>Tape</h2></div>
+  <p class="why">A paper receipt: warm off-white, square-ish corners, and a <b>dotted leader</b>
+    running from the value to the age the way a contents page does. The leader is the trick — it
+    ties the two ends together so the gap reads as deliberate rather than as empty space.</p>
+  <p class="why">Risk: the warm tint is a second accent colour in a purple app.</p>
+  <span class="pill">dotted leader</span><span class="pill">warm paper</span>
+  <div class="pane">
+    <div class="fold"><span>›</span> <b>31 actions</b> &nbsp;Bash ×14 · prompt ×8 · notes ×8</div>
+    <div class="B"><span class="vl">🔴 −$46K (-1.14%) · stocks -1.19% vs SPY -0.47%</span><span class="lead"></span><span class="ag">20m ago</span></div>
+    <div class="composer">Message Claude…<span class="send"></span></div>
+  </div>
+</section>
+
+<section>
+  <div class="head"><h2><span class="k">c</span>Glass</h2></div>
+  <p class="why">Translucent with a backdrop blur, so the transcript shows through it. It reads as
+    something <b>floating over</b> the conversation rather than inserted into it — which is exactly
+    what a pinned card is. Rounded to 14px so it echoes the composer's pill without matching it.</p>
+  <p class="why">Risk: <code>backdrop-filter</code> is the most expensive thing on this page, and
+    legibility depends on whatever happens to scroll underneath.</p>
+  <span class="pill">backdrop blur</span><span class="pill">floats</span>
+  <div class="pane">
+    <div class="fold"><span>›</span> <b>31 actions</b> &nbsp;Bash ×14 · prompt ×8 · notes ×8</div>
+    <div class="C"><span class="vl">🔴 −$46K (-1.14%) · stocks -1.19% vs SPY -0.47% · ✅ no action</span><span class="ag">20m ago</span></div>
+    <div class="composer">Message Claude…<span class="send"></span></div>
+  </div>
+</section>
+
+<section>
+  <div class="head"><h2><span class="k">d</span>Well</h2></div>
+  <p class="why">Recessed instead of raised: an inner shadow makes it a <b>slot cut into the
+    background</b>, while the composer below is lifted off it. That one inversion is the whole idea
+    — the two stop looking alike because they are on opposite sides of the surface.</p>
+  <p class="why">Risk: inset shadows read as "disabled input" in a lot of design languages.</p>
+  <span class="pill">inset, not raised</span><span class="pill">opposes the composer</span>
+  <div class="pane">
+    <div class="fold"><span>›</span> <b>31 actions</b> &nbsp;Bash ×14 · prompt ×8 · notes ×8</div>
+    <div class="D"><span class="vl">🔴 −$46K (-1.14%) · stocks -1.19% vs SPY -0.47% · ✅ no action</span><span class="ag">20m ago</span></div>
+    <div class="composer">Message Claude…<span class="send"></span></div>
+  </div>
+</section>
+
+<section>
+  <div class="head"><h2><span class="k">e</span>Signal</h2></div>
+  <p class="why">The only one that treats the content as DATA rather than as a string. A tinted flag
+    carries the status glyph, the headline number gets <b>its own size, weight and semantic
+    colour</b>, and the rest drops to a supporting grey. Suddenly there is a hierarchy: you read
+    −$46K first and everything else second, which is the order you actually want it in.</p>
+  <p class="why">Risk: it only works for a card whose first token IS a headline. A build card or a
+    PR card would need the same shape to degrade gracefully — shown below.</p>
+  <span class="pill">type hierarchy</span><span class="pill">semantic colour</span><span class="pill">needs structure</span>
+  <div class="pane">
+    <div class="fold"><span>›</span> <b>31 actions</b> &nbsp;Bash ×14 · prompt ×8 · notes ×8</div>
+    <div class="E">
+      <span class="flag">🔴</span>
+      <span class="body"><span class="big">−$46K</span><span class="rest">-1.14% · stocks -1.19% vs SPY -0.47% · ✅ no action</span><span class="ag">20m ago</span></span>
+    </div>
+    <div style="height:8px"></div>
+    <div class="E -up">
+      <span class="flag">🟢</span>
+      <span class="body"><span class="big">+$11K</span><span class="rest">+0.27% · stocks +0.44% vs SPY +0.55% · ✅ no action</span><span class="ag">6h ago</span></span>
+    </div>
+    <div style="height:8px"></div>
+    <div class="E -up">
+      <span class="flag">✅</span>
+      <span class="body"><span class="big" style="color:var(--fg)">118/140</span><span class="rest">v2.1.4 · packaging darwin-arm64</span><span class="ag">3m ago</span></span>
+    </div>
+    <div class="composer">Message Claude…<span class="send"></span></div>
+  </div>
+</section>
+
+<div class="verdict">
+  <p><b>My pick: A Ledger.</b> The problem is that the card and the composer look like two of the
+    same thing, and A is the only one that solves it by <em>subtraction</em> — no surface, no
+    border, no shadow, so there is nothing left to compare. It is also the only one whose figures
+    stop jittering when the value changes, which on a number that updates hourly is worth more than
+    it sounds.</p>
+  <p><b>If you want it to look designed rather than quiet: E Signal.</b> It is the only one that
+    gives the content a hierarchy instead of treating it as one grey string, and that is a real
+    improvement rather than a finish. The cost is that it needs the card's first token to be a
+    headline — which your market card has and a freeform one would not.</p>
+  <p><b>D Well</b> is the cheapest real fix if you like the current shape and only want it to stop
+    rhyming with the composer. <b>C Glass</b> is the prettiest and the most expensive. <b>B Tape</b>
+    is the one I would not ship: the dotted leader is lovely and the warm paper is a second accent
+    colour this app does not have.</p>
+</div>
+
+</div>
+<script>
+  for (const [id, cls] of [['dark','dark'], ['narrow','narrow']]) {
+    const el = document.getElementById(id);
+    el.onclick = () => el.classList.toggle('on', document.body.classList.toggle(cls));
+  }
+</script>
+</body>
+</html>
