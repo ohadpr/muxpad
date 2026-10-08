@@ -4240,7 +4240,17 @@ export function ChatPane({
             {optimisticUser ? (
               <div className="chat-turn chat-turn-user">
                 <div className="chat-bubble" dir="auto">
-                  <UserText text={optimisticUser} onOpenImage={setOpenImage} />
+                  {/* `QueuedText`, NOT `UserText`. This echo is the RAW outgoing
+                    message, and a cron fire's raw text begins with its marker —
+                    so a fire drained from the queue rendered a bubble full of
+                    `<muxpad-cron id="…" fold="1">` XML for the length of its
+                    turn. The comment at the `turn-start` handler said "a turn
+                    nobody started carries no text and sets nothing", and that
+                    stopped being true when the queue drain began stamping the
+                    text it relayed.
+                    Same component the queue preview already uses, for the same
+                    reason: the two are the same thing seen a second apart. */}
+                  <QueuedText text={optimisticUser} onOpenImage={setOpenImage} />
                 </div>
               </div>
             ) : null}

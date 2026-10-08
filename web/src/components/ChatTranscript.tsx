@@ -966,7 +966,8 @@ function MediaGallery({
 }
 
 /**
- * A message WAITING in the durable queue, as a preview.
+ * A message that has not been rendered from the transcript yet — the durable
+ * QUEUE's preview, and the optimistic echo of a turn that has just started.
  *
  * Why it is not just `<UserText>`: a queued message is the RAW text that will
  * be delivered, and a cron fire's raw text begins with its marker block. The
@@ -978,6 +979,14 @@ function MediaGallery({
  * Same split, same reason: the chip says which schedule is waiting, and a
  * FOLDED cron keeps its plumbing out of sight here too — it would be odd for a
  * message to be noisy in the queue and quiet a second later.
+ *
+ * THE OPTIMISTIC ECHO IS THE SAME PROBLEM ONE SECOND LATER. A send that was
+ * parked renders from `turn-start.text` while the runner writes it to disk, and
+ * that handler used `UserText` on the reasoning that "a turn nobody started (a
+ * cron fire, a wakeup) carries no text". The queue drain stamps the text it
+ * relays, so a folded fire showed its whole marker block for the length of its
+ * turn — the exact bubble this function was written to prevent, in the one
+ * place it was not called.
  */
 export function QueuedText({
   text,
