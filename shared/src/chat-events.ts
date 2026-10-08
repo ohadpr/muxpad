@@ -33,6 +33,16 @@ interface Base {
 export interface UserTextEvent extends Base {
   kind: 'user';
   text: string;
+  /**
+   * This "message" is PLUMBING — a folded cron's injected instruction.
+   *
+   * It is a real delivered message (muxpad does not write the transcript, it
+   * tails the harness's own file) so it cannot simply be dropped; but nobody
+   * typed it and nobody rereads it, so it belongs in the collapsed run with the
+   * tool calls rather than as a bubble or behind a second, separate caret on
+   * the chip. See `expandCronFire`.
+   */
+  folded?: boolean;
 }
 export interface AssistantTextEvent extends Base {
   kind: 'assistant';
@@ -476,20 +486,23 @@ export function expandCronFire(text: string, id: string, ts: number | null): Cha
   // The agent's REPLY is untouched — it is an ordinary message — which is what
   // keeps a failed fire visible without a special case for failure.
   if (marker.fold) {
+    // The chip is a MARK, not a control. It says a schedule fired, and that is
+    // all it says — the prompt goes into the same collapsed run as the tool
+    // calls the fire produced, because it is the same kind of thing. It used to
+    // hang behind a caret on the chip, which gave one fire two separate folds
+    // and made the mark clickable for no reason a reader would guess.
     const prompt = body.trim();
-    return [
-      {
-        kind: 'notice',
-        id: `${id}:cron`,
-        ts,
-        variant: 'cron',
-        text: marker.name,
-        ...(marker.missed > 0
-          ? { detail: `${marker.missed} missed fire${marker.missed === 1 ? '' : 's'} collapsed` }
-          : {}),
-        ...(prompt ? { body: prompt } : {}),
-      },
-    ];
+    const notice: NoticeEvent = {
+      kind: 'notice',
+      id: `${id}:cron`,
+      ts,
+      variant: 'cron',
+      text: marker.name,
+      ...(marker.missed > 0
+        ? { detail: `${marker.missed} missed fire${marker.missed === 1 ? '' : 's'} collapsed` }
+        : {}),
+    };
+    return prompt ? [notice, { kind: 'user', id, ts, text: prompt, folded: true }] : [notice];
   }
   const notice: NoticeEvent = {
     kind: 'notice',

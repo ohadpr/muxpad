@@ -563,21 +563,27 @@ describe('a folded cron fire in the transcript', () => {
       'Run: python3 scripts/nw_oneline.py CLOSE — then write the market card.',
     );
 
-  it('collapses to ONE row carrying the prompt, not a chip plus a bubble', () => {
+  it('emits a plain chip plus a FOLDABLE prompt, not a chip with a caret', () => {
+    // The prompt rides into the same collapsed run as the tool calls the fire
+    // produced — it is the same kind of thing. Hanging it behind a caret on the
+    // chip gave one fire two separate folds and made the mark pressable.
     const out = expandChatEvent({ kind: 'user', id: 'u1', ts: MS, text: fire(true) });
-    expect(kinds(out)).toEqual(['notice']);
+    expect(kinds(out)).toEqual(['notice', 'user']);
     const n = out[0] as { variant: string; text: string; body?: string };
     expect(n.variant).toBe('cron');
     expect(n.text).toBe('nw-close');
+    expect(n.body).toBeUndefined();
     // The plumbing is still THERE — folded, not discarded. A fire you cannot
     // inspect is a fire you cannot debug.
-    expect(n.body).toContain('nw_oneline.py CLOSE');
+    const p = out[1] as { text: string; folded?: boolean };
+    expect(p.folded).toBe(true);
+    expect(p.text).toContain('nw_oneline.py CLOSE');
   });
 
-  it('leaves an ordinary fire exactly as it was', () => {
+  it('an UNfolded fire emits an ordinary, unflagged bubble', () => {
     const out = expandChatEvent({ kind: 'user', id: 'u1', ts: MS, text: fire(false) });
     expect(kinds(out)).toEqual(['notice', 'user']);
-    expect((out[0] as { body?: string }).body).toBeUndefined();
+    expect((out[1] as { folded?: boolean }).folded).toBeUndefined();
   });
 
   it('a folded fire with no prompt is just the row', () => {

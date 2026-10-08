@@ -3629,6 +3629,10 @@ export function ChatPane({
       (e.kind === 'tool_use' ||
         e.kind === 'tool_result' ||
         e.kind === 'thinking' ||
+        // A folded cron's injected instruction. A real delivered message, but
+        // nobody typed it and nobody rereads it, so it belongs in the run with
+        // the work it caused rather than as a bubble of its own.
+        (e.kind === 'user' && e.folded === true) ||
         isPrivateReasoning(e));
     // Fold from TWO actions up — except a run carrying Chat mode's demoted
     // prose, which folds even alone. The rule lives in chat-voice.ts
@@ -4500,45 +4504,20 @@ export function ChatPane({
                 onHover={setMentionCursor}
               />
             ) : null}
-            {/* A SIBLING OF THE PILL, above it — not a child of it.
-
-                It has now been wrong in both directions, so both are written
-                down. As its own floating strip it was a second OBJECT: its own
-                border, its own background, a 10px gap, 37px of a 119px bar for a
-                line you read and almost never press. Moved onto the pill's
-                surface to pay that back, it became chrome inside the thing you
-                type in — "it's all too tight there" — and, worse, it sat above
-                the input INSIDE a bottom-anchored pill, so the one time it
-                mattered (a long model id and a folder name at 390px, wrapping)
-                it SHOVED THE COMPOSER DOWN.
-
-                Out here it costs the same as it did on the pill: one 16px line
-                plus the 6px that separates it, where the pill's own row gap used
-                to spend the same 6px on it. Its height is a constant in the
-                stylesheet and it can no longer wrap (ChatPane.statusline.test.tsx
-                pins both), so it cannot move the composer whatever it says. It
-                stays inside `.chat-composer-wrap` deliberately: the wrap is what
-                `composerRef` measures, and `.chat-composer-reserve` holds that
-                height clear at the foot of the log — a strip positioned outside
-                the measurement would float over the last message instead. */}
-            <SessionBar
-              paneId={paneId}
-              folder={folder}
-              status={agentStatus}
-              {...(session?.assistant ? { assistant: session.assistant } : {})}
-              liveLabel={liveLabel}
-              agents={rosterAgents}
-              onOpenChat={openChat}
-              mode={mode}
-              send={(obj) => {
-                const sock = wsRef.current;
-                if (!sock || sock.readyState !== WebSocket.OPEN) {
-                  setNotice({ text: 'Not connected — try again in a moment.', tone: 'info' });
-                  return;
-                }
-                sock.send(JSON.stringify(obj));
-              }}
-            />
+            {/* ── THE SESSION LINE — folder, model, live state ───────────────────
+              UNDER the composer now, not above it. It is reference, not
+              conversation: you look at it when you wonder which folder or model
+              this chat is on, and the rest of the time it should be the furthest
+              thing from the message you are reading. Above the pill it sat
+              between the last message and the composer, which is the most
+              valuable strip in the pane.
+              It stays inside `.chat-composer-wrap` either way: the wrap is what
+              `composerRef` measures, and `.chat-composer-reserve` holds that
+              height clear at the foot of the log — a strip positioned outside
+              the measurement would float over the last message instead. Its
+              height is a constant in the stylesheet and it cannot wrap
+              (ChatPane.statusline.test.tsx pins both), so it cannot move the
+              composer whatever it says. */}
             <div className="chat-composer">
               {/* No `capture` attribute, deliberately: with one, iOS goes straight
                 to the camera. Without it — and with an `accept` that is not
@@ -4730,6 +4709,24 @@ export function ChatPane({
                 </div>
               ) : null}
             </div>
+            <SessionBar
+              paneId={paneId}
+              folder={folder}
+              status={agentStatus}
+              {...(session?.assistant ? { assistant: session.assistant } : {})}
+              liveLabel={liveLabel}
+              agents={rosterAgents}
+              onOpenChat={openChat}
+              mode={mode}
+              send={(obj) => {
+                const sock = wsRef.current;
+                if (!sock || sock.readyState !== WebSocket.OPEN) {
+                  setNotice({ text: 'Not connected — try again in a moment.', tone: 'info' });
+                  return;
+                }
+                sock.send(JSON.stringify(obj));
+              }}
+            />
           </div>
         ) : null}
       </div>

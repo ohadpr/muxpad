@@ -236,7 +236,12 @@ export function ActionGroup({
             // deliberately not.
             e.kind === 'assistant'
             ? 'notes'
-            : 'result';
+            : // A folded cron's instruction, named for the same reason: the
+              // header must say the prompt is in there rather than let it
+              // vanish.
+              e.kind === 'user'
+              ? 'prompt'
+              : 'result';
     counts.set(name, (counts.get(name) ?? 0) + 1);
     if (e.kind === 'tool_result' && !e.ok) failed++;
   }
@@ -253,7 +258,10 @@ export function ActionGroup({
   // whole design in the reader's head while the mechanism underneath was
   // correct. Name it for what it is; the count returns the moment a real
   // action joins the run.
-  const notesOnly = events.every((e) => e.kind === 'assistant');
+  // A run of ONLY prose and injected instructions did no WORK either — the same
+  // argument as the line above, extended to a folded cron whose whole turn was
+  // "read this, run nothing, say closed".
+  const notesOnly = events.every((e) => e.kind === 'assistant' || e.kind === 'user');
   const countLabel = notesOnly
     ? `${actions === 1 ? 'note' : `${actions} notes`}`
     : `${actions} action${actions === 1 ? '' : 's'}`;
@@ -1092,54 +1100,27 @@ function NoticeCard({
 }) {
   const at = event.variant === 'cron' ? fireTime(event.ts) : '';
   const detail = event.detail ?? (at || undefined);
-  const [open, setOpen] = useState(false);
-  // A quiet cron folds the prompt it delivered in here. The row becomes a
-  // BUTTON only when there is something to unfold — a caret on a row that does
-  // nothing is worse than no caret.
-  const body = event.body;
-  const head = (
-    <>
-      <span className="chat-sysnote-icon" aria-hidden="true">
-        {NOTICE_ICON[event.variant]}
-      </span>
-      <span className="chat-sysnote-text">
-        <HighlightedText text={event.text} hl={hl} />
-      </span>
-      {detail ? <span className="chat-sysnote-detail">{detail}</span> : null}
-      {body ? (
-        <span className="chat-sysnote-chevron" aria-hidden="true">
-          {open ? '⌄' : '›'}
-        </span>
-      ) : null}
-    </>
-  );
+  // A NOTICE IS A MARK, NOT A CONTROL. It briefly carried a caret that revealed
+  // a folded cron's prompt, which gave one fire two separate folds — a caret on
+  // the chip and the "N actions" run right under it — and made a label look
+  // pressable for a reason no reader would guess. The prompt folds in with the
+  // tool calls instead (see `expandCronFire`); this went back to saying one
+  // thing.
   return (
     <div
-      // `-folded` when there is something under the pill. `.chat-turn` is a flex
-      // ROW, so the disclosure below was laid out BESIDE the pill and stretched
-      // it into a giant ellipse — the pill has `border-radius: 999px` and a flex
-      // item stretches to the row's height by default. Reported with a
-      // screenshot of exactly that circle.
-      className={`chat-turn chat-turn-notice${body ? ' -folded' : ''}`}
+      className="chat-turn chat-turn-notice"
       data-eid={anchorId}
       data-search-hit={hl && hl.length > 0 ? 'true' : undefined}
     >
-      {body ? (
-        <button
-          type="button"
-          className={`chat-sysnote chat-sysnote-${event.variant} -foldable`}
-          title={open ? 'Hide what it ran' : 'Show what it ran'}
-          aria-expanded={open}
-          onClick={() => setOpen((o) => !o)}
-        >
-          {head}
-        </button>
-      ) : (
-        <div className={`chat-sysnote chat-sysnote-${event.variant}`} title={event.text}>
-          {head}
-        </div>
-      )}
-      {body && open ? <pre className="chat-sysnote-body">{body}</pre> : null}
+      <div className={`chat-sysnote chat-sysnote-${event.variant}`} title={event.text}>
+        <span className="chat-sysnote-icon" aria-hidden="true">
+          {NOTICE_ICON[event.variant]}
+        </span>
+        <span className="chat-sysnote-text">
+          <HighlightedText text={event.text} hl={hl} />
+        </span>
+        {detail ? <span className="chat-sysnote-detail">{detail}</span> : null}
+      </div>
     </div>
   );
 }
