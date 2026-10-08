@@ -51,49 +51,78 @@
      mid-sentence and reads as broken. With this, the stack overflows honestly
      and scrolls. */
   flex: 0 0 auto;
-  border-radius: 7px;
-  /* A hint of surface, not a slab: enough to separate the row from the
-     transcript scrolling behind it, not enough to be a box. */
-  background: color-mix(in srgb, var(--chat-elev) 72%, transparent);
+  /* ROUNDED, BUT NOT THE COMPOSER'S 26px PILL. The card and the composer sat
+     stacked as two pale rounded bars and read as a pair of inputs; 11px keeps
+     them related without letting them rhyme. */
+  border-radius: 11px;
+  /* A WARM SURFACE, not a neutral one. The whole app is cool purple, so a card
+     tinted a few percent toward warm paper separates from the transcript by
+     TEMPERATURE rather than by another border — and it stops being the same
+     colour as the text field underneath it.
+     Mixed from the accent rather than hardcoded, so it follows the theme: the
+     dark build lands on a warm-grey instead of a cream. */
+  background: color-mix(in srgb, var(--chat-elev) 93%, var(--status-working, #8a6410));
+  border: 1px solid color-mix(in srgb, var(--chat-accent) 13%, transparent);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--chat-accent) 7%, transparent);
   overflow: hidden;
 }
-/* THE RAIL — the entire "this is pinned" signal AND the freshness readout, in
-   one 2.5px element that costs no height at any content size. Inset 4px top and
-   bottom so it reads as a mark on the row rather than a border of it.
+/* Overdue turns the whole edge warm, which is the signal the rail used to
+   carry. A tape has no rail. */
+.chat-card.-stale {
+  border-color: color-mix(in srgb, var(--status-working, #8a6410) 40%, transparent);
+}
+/* ── THE LEADER — the dotted run between the value and the age ─────────────
+   A contents page runs dots from the chapter to the page number, and that is
+   exactly the relationship here: it ties the two ends of the row together so
+   the gap reads as deliberate rather than as empty space. It also gives the
+   card a texture that is not another rectangle.
 
-   A REAL ELEMENT, not `::before`. The gauge below is the only thing left saying
-   how current a card is, now that the row carries no timestamp — and a
-   pseudo-element's computed style cannot be read reliably (measured: three
-   different `--card-fresh` values and a `-stale` class all reported the same
-   colour, lagging a read behind). A value no test can see is a value that stops
-   working quietly, which is exactly the failure this gauge exists to surface.
+   AND THE DOTS DRIFT. Slowly — one 5px step every 2.4s — toward the age, like
+   tape feeding through a machine. It is the one piece of motion on a surface
+   whose whole job is to sit still, and it is what makes the card read as LIVE
+   rather than as a value someone pasted there. Barely perceptible head-on;
+   unmistakable out of the corner of your eye, which is where this card is.
 
-   `--card-fresh` runs 1 → 0 across the card's declared cadence (see
-   cardFreshness): full accent on arrival, fading toward faint as the next write
-   comes due. Continuous rather than three named buckets, because the question
-   is continuous — and unlike a timestamp it is readable without being read. The
-   `, 1` fallback keeps a card with no cadence at full strength: a writer that
-   never promised to come back is not late. */
-.chat-card-rail {
-  position: absolute;
-  left: 0;
-  top: 4px;
-  bottom: 4px;
-  width: 2.5px;
-  border-radius: 2px;
-  background: color-mix(
-    in srgb,
-    var(--chat-accent) calc(55% * var(--card-fresh, 1)),
-    color-mix(in srgb, var(--chat-faint) 40%, transparent)
+   `background-position` is paint, not layout, so it costs the same class as a
+   marching dash and never reflows the row.
+
+   The dot colour carries freshness, which the rail used to: full strength on
+   arrival, fading toward nothing as the next write comes due. Two signals, one
+   object — the thing that ties the row together is also the thing that says how
+   current it is. */
+.chat-card-leader {
+  flex: 1 1 auto;
+  min-width: 16px;
+  align-self: center;
+  height: 1em;
+  background-image: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--chat-faint) calc(60% * var(--card-fresh, 1)), transparent) 1px,
+    transparent 1px
   );
-  transition: background 600ms linear;
+  background-size: 5px 5px;
+  background-repeat: repeat-x;
+  background-position: 0 center;
+  animation: chat-card-feed 2.4s linear infinite;
 }
-/* Overdue is the signal the cadence exists for: the interesting failure is not
-   a wrong value, it is a writer that stopped. The rail carries it too, so a
-   stalled card is visible from the corner of your eye without reading a word. */
-.chat-card.-stale .chat-card-rail {
-  background: var(--status-working, #8a6410);
+@keyframes chat-card-feed {
+  to {
+    background-position: 5px center;
+  }
 }
+.chat-card.-stale .chat-card-leader {
+  background-image: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--status-working, #8a6410) 55%, transparent) 1px,
+    transparent 1px
+  );
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-card-leader {
+    animation: none;
+  }
+}
+
 /* The row: the whole control, and the whole card when nothing is open. */
 .chat-card-row {
   display: flex;
@@ -132,7 +161,12 @@
    rest. The child rule is what makes a markdown card lay out inline: `Markdown`
    emits block elements, and one `<p>` would otherwise break the row. */
 .chat-card-value {
-  flex: 1 1 auto;
+  /* `flex: 0 1 auto`, not `1 1`: the LEADER takes the row's slack now, so the
+     value is sized by its content and only shrinks when there is genuinely not
+     enough room. `min-width: 0` is what lets the ellipsis happen at all — a
+     flex item's default min-width is `auto`, which refuses to shrink below its
+     content and overflows the row instead of truncating in it. */
+  flex: 0 1 auto;
   min-width: 0;
   font-size: 13px;
   line-height: 1.5;
@@ -147,8 +181,7 @@
 }
 .chat-card-age {
   flex: 0 0 auto;
-  margin-left: auto;
-  padding-left: 8px;
+  padding-left: 10px;
   font-size: 11.5px;
   color: var(--chat-faint);
   font-variant-numeric: tabular-nums;

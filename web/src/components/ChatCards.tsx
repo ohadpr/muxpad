@@ -266,7 +266,6 @@ export function ChatCards({ tabId }: { tabId: string | null | undefined }) {
             // continuous fade rather than three buckets somebody has to name.
             style={{ '--card-fresh': cardFreshness(card, now) } as React.CSSProperties}
           >
-            <span className="chat-card-rail" aria-hidden="true" />
             {/* THE WHOLE ROW IS THE CONTROL. This is a phone surface first, and
               the × it replaced was a 15px glyph with 5px of padding — under
               every touch-target guideline there is, and sitting right next to
@@ -289,6 +288,11 @@ export function ChatCards({ tabId }: { tabId: string | null | undefined }) {
                   {card.format === 'markdown' ? <Markdown text={card.content} /> : card.content}
                 </span>
               ) : null}
+              {/* The dotted run from the value to the age — see the css. It
+                takes the row's slack, which is why the age needs no
+                `margin-left: auto` any more, and its dots carry freshness and
+                drift toward the age as they do it. */}
+              {inline ? <span className="chat-card-leader" aria-hidden="true" /> : null}
               <span className={`chat-card-age${stale ? ' -stale' : ''}`}>
                 {ago(now - card.updated_at)}
                 {stale ? ' · overdue' : ''}
