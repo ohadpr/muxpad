@@ -75,20 +75,46 @@ list. Capabilities worth knowing:
 
 - \`muxpad slack\` — the company Slack, read/write, from any pane and any
   harness. \`slack read <#channel|@user> [--since=2h]\`, \`slack search
-  "<query>"\`, \`slack post <#channel|@user> "<text>" [--as-me]\`,
-  \`slack channels\`.
+  "<query>"\`, \`slack post <#channel|@user> "<text>" [--as-me|--as-bot]\`,
+  \`slack unpost <channelID> <ts> [--as-me]\`, \`slack channels\`.
 
   **ONLY WHEN ASKED.** Reading reaches the user's DMs and every private channel
   they are in — it is their whole working life, not a public corpus. Go when a
   task actually needs it ("what did Nadav say about X", "post the result to
   #eng"); do not browse it for context nobody requested.
 
-  **\`--as-me\` POSTS UNDER THE USER'S OWN NAME**, with no bot badge, and the
-  audit log records them as the author. Without it you post as "muxpad", which
-  is obviously a machine and is the right default for anything you decided to
-  send. Only pass \`--as-me\` when the user has asked for a message to come
-  from THEM — never to make a message look more credible, and never because a
-  channel feels like it wants a human.
+  **IDENTITY FOLLOWS AUTHORSHIP.** Not the channel, not the flag you happened
+  to remember, and not whether the user said the words "as me":
+
+  - A message the USER told you to send is THEIRS → \`--as-me\`. "Send Andrey
+    the PR feedback", "tell Nadav it shipped", "reply to that thread" — all of
+    these are the user talking to someone, and they belong under the user's own
+    name in the user's own conversation.
+  - A notification YOU decided to emit is MUXPAD'S → \`--as-bot\`. A cron
+    result, a build failure, a report nobody asked you to deliver by hand.
+
+  The old rule here said to use the bot unless the user explicitly asked for a
+  message "from them", and that is how "send Andrey a PR review message" went
+  out as the bot. **It did not land in the user's DM with Andrey.** It landed in
+  Andrey's separate DM with "muxpad" — a conversation the user cannot see, and
+  could not even delete afterwards. A DM is not one place that two identities
+  can both post into; it is two different places.
+
+  So **a DM now REFUSES to send without \`--as-me\` or \`--as-bot\`**, and the
+  error says which does what. A channel still defaults to the bot: a post in
+  \`#eng\` is visible to everyone and obviously a machine, so the stakes are
+  the ordinary ones.
+
+  Never pass \`--as-me\` to make a message look more credible, or because a
+  channel feels like it wants a human. And never silently switch identity after
+  a failure — if the one you were told to use cannot post, say so and stop.
+
+  **REPORT WHAT YOU SENT, AND WHERE.** \`post\` prints the identity, the
+  conversation id and the message ts; pass all three on when you confirm. "Sent
+  to @andrey" names neither of the two things that go wrong. The ts is also the
+  only handle \`muxpad slack unpost\` takes — Slack's delete needs it, and
+  recovering a forgotten one needs history scope the bot does not have, so a ts
+  you did not keep is a message you cannot take back.
 
   Reading never needs the bot invited anywhere; posting as muxpad does
   (\`/invite @muxpad\`), and the error says so when it bites.
