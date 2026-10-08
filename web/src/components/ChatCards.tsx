@@ -246,10 +246,17 @@ export function ChatCards({ tabId }: { tabId: string | null | undefined }) {
         // markdown ride IN the row until somebody opens them.
         const inline = !open && card.format !== 'html';
         const body = open || card.format === 'html';
-        // The age is the row's only true noise: it says nothing until it says
-        // the writer stopped. So it appears when it has something to report,
-        // and when you have opened the card and are actually inspecting it.
-        const showAge = stale || open;
+        // ALWAYS, AND HARD RIGHT. This was suppressed until a card went overdue,
+        // on the argument that the age is noise until it is news — the rail
+        // carries freshness as colour, so the text was redundant. Asked for
+        // back: "put the 'how long ago did this update' on the right edge of
+        // the container." A colour ramp tells you something is getting old; it
+        // does not tell you it is four hours old, and that is a number you read
+        // off a market card.
+        //
+        // Pinned to the far edge rather than trailing the value: the gap
+        // between them is slack the value gets to use, and the age never moves
+        // as the content changes length.
         return (
           <section
             className={`chat-card${stale ? ' -stale' : ''}${open ? ' -open' : ''}`}
@@ -282,12 +289,10 @@ export function ChatCards({ tabId }: { tabId: string | null | undefined }) {
                   {card.format === 'markdown' ? <Markdown text={card.content} /> : card.content}
                 </span>
               ) : null}
-              {showAge ? (
-                <span className={`chat-card-age${stale ? ' -stale' : ''}`}>
-                  {ago(now - card.updated_at)}
-                  {stale ? ' · overdue' : ''}
-                </span>
-              ) : null}
+              <span className={`chat-card-age${stale ? ' -stale' : ''}`}>
+                {ago(now - card.updated_at)}
+                {stale ? ' · overdue' : ''}
+              </span>
             </button>
             {/* Unmounted, not hidden. An html card is a sandboxed iframe that
               re-measures itself and re-posts its height; left mounted behind
