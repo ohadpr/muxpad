@@ -1874,9 +1874,17 @@
      of way out at the pane's. */
   width: 100%;
   max-width: 768px;
-  /* The 6px is the whole separation between this line and the pill now that the
-     pill's row gap no longer reaches it. */
-  margin: 0 auto 6px;
+  /* THE GAP IS ON TOP, because the strip is UNDER the pill now. It was written
+     bottom-first when the strip floated ABOVE the input, and the move left the
+     number on the side facing nothing: 6px of dead space below the line and the
+     line itself jammed against the pill it had just been moved out of.
+     Reported as "the folder model working bar needs to be pushed down more from
+     the input box."
+     10px rather than the old 6: a 6px gap under a bordered, shadowed pill does
+     not read the same as 6px under a bare input edge — the shadow eats it. This
+     is the strip's ENTIRE cost besides its one line of text; it is not allowed
+     to grow into a box again (ChatPane.statusline.test.tsx caps it). */
+  margin: 10px auto 0;
   padding-right: 2px;
   /* Menus escape via position:absolute on .chat-status-menu; segment buttons
      clip their own labels so long model names can't paint over the live cell. */
