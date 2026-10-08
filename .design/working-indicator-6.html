@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>muxpad · working indicator, round 6 — small and alive</title>
+<style>
+  :root{
+    --bg:#edecf7; --elev:#fff; --fg:#1d1d26; --dim:#4a4a5a; --faint:#8b89a3;
+    --border:#d8d6ea; --accent:#6c4fd8; --bubble:#dedce9;
+    --good:#18794e; --bad:#c0392b; --warn:#8a6410;
+    --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+    --c:var(--faint);
+  }
+  body.dark{
+    --bg:#282a36; --elev:#21222c; --fg:#f8f8f2; --dim:#b8b8b0; --faint:#6272a4;
+    --border:#44475a; --accent:#bd93f9; --bubble:#3a3c4e;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:26px 18px 90px;background:var(--bg);color:var(--fg);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
+  .wrap{max-width:960px;margin:0 auto}
+  h1{font-size:21px;margin:0 0 8px;letter-spacing:-.015em}
+  .sub{color:var(--dim);font-size:14px;margin:0 0 6px;max-width:78ch}
+  .sub b{color:var(--fg)}
+  code{font:12.5px var(--mono);color:var(--accent)}
+
+  .controls{position:sticky;top:0;z-index:30;display:flex;gap:8px;align-items:center;
+    flex-wrap:wrap;margin:20px 0 24px;padding:11px 0 13px;
+    background:linear-gradient(to bottom,var(--bg) 74%,transparent)}
+  .controls button{font:inherit;font-size:13px;padding:6px 12px;border-radius:999px;
+    cursor:pointer;border:1px solid var(--border);background:var(--elev);color:var(--dim)}
+  .controls button.on{border-color:var(--accent);color:var(--accent);
+    background:color-mix(in srgb,var(--accent) 12%,var(--elev))}
+  .controls .note{color:var(--faint);font-size:12.5px}
+  body.zoom .stage .ind{zoom:4}
+
+  .grid{display:grid;grid-template-columns:1fr;gap:12px}
+  @media(min-width:720px){.grid{grid-template-columns:1fr 1fr}}
+  .card{border:1px solid var(--border);border-radius:12px;background:var(--elev);overflow:hidden}
+  .card.-pick{border-color:var(--accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 18%,transparent)}
+  .card.-old{opacity:.95}
+  .stage{background:var(--bg);padding:20px 16px;border-bottom:1px solid var(--border);
+    min-height:74px;display:flex;align-items:center;gap:11px}
+  .lbl{font-size:12px;color:var(--faint)}
+  .meta{padding:11px 14px 14px}
+  .meta h3{margin:0;font-size:14px}
+  .meta h3 .k{font:600 10.5px/1 var(--mono);color:var(--faint);
+    letter-spacing:.08em;text-transform:uppercase;margin-right:8px}
+  .meta p{margin:6px 0 0;font-size:12.5px;line-height:1.5;color:var(--dim)}
+  .meta p b{color:var(--fg)}
+  .pill{display:inline-block;font:600 10px/1 var(--mono);padding:4px 7px;
+    border-radius:5px;letter-spacing:.04em;margin:8px 6px 0 0}
+  .pill.-y{color:var(--good);background:color-mix(in srgb,var(--good) 13%,transparent)}
+  .pill.-n{color:var(--bad);background:color-mix(in srgb,var(--bad) 11%,transparent)}
+
+  .ind{display:inline-flex;align-items:center;flex:0 0 auto}
+
+  /* ══ 0 · the moiré that is in there now ═══════════════════════════ */
+  .moire{width:120px;height:20px;position:relative;overflow:hidden;
+    -webkit-mask:radial-gradient(120% 150% at 50% 50%,#000 25%,transparent 72%);
+            mask:radial-gradient(120% 150% at 50% 50%,#000 25%,transparent 72%)}
+  .moire i{position:absolute;inset:-80%;opacity:.5;
+    background:repeating-linear-gradient(0deg,var(--c) 0 .8px,transparent .8px 2.3px)}
+  .moire i:nth-child(1){animation:mA 13s linear infinite}
+  .moire i:nth-child(2){animation:mB 17s linear infinite}
+  @keyframes mA{to{transform:rotate(360deg)}}
+  @keyframes mB{to{transform:rotate(-360deg) scale(1.08)}}
+
+  /* ══ 1 · BOUNCE — squash, stretch, anticipation ═══════════════════ */
+  .bounce{width:26px;height:18px;position:relative}
+  .bounce b{position:absolute;left:9px;bottom:3px;width:8px;height:8px;border-radius:50%;
+    background:var(--accent);transform-origin:50% 100%;
+    animation:bnc 1.15s cubic-bezier(.3,0,.7,1) infinite}
+  .bounce u{position:absolute;left:9px;bottom:1px;width:8px;height:2.5px;border-radius:50%;
+    background:var(--accent);opacity:.2;transform-origin:50% 50%;
+    animation:bncShadow 1.15s cubic-bezier(.3,0,.7,1) infinite}
+  @keyframes bnc{
+    0%   {transform:translateY(0)      scale(1.18,.78)}
+    12%  {transform:translateY(-2px)   scale(.86,1.2)}
+    48%  {transform:translateY(-11px)  scale(1,1)}
+    88%  {transform:translateY(-2px)   scale(.9,1.14)}
+    100% {transform:translateY(0)      scale(1.18,.78)}
+  }
+  @keyframes bncShadow{
+    0%,100%{transform:scale(1.25,1);opacity:.26}
+    48%    {transform:scale(.5,1);opacity:.08}
+  }
+
+  /* ══ 2 · MUNCHER ═════════════════════════════════════════════════ */
+  .munch{width:46px;height:16px;position:relative;overflow:hidden}
+  .munch .pac{position:absolute;left:0;top:50%;width:13px;height:13px;margin-top:-6.5px;
+    animation:munchGo 2.2s linear infinite}
+  .munch .pac svg{display:block}
+  .munch .jaw{transform-origin:50% 50%;animation:chomp .34s ease-in-out infinite alternate}
+  .munch i{position:absolute;top:50%;width:3.5px;height:3.5px;margin-top:-1.75px;
+    border-radius:50%;background:var(--c);animation:eaten 2.2s linear infinite}
+  .munch i:nth-child(2){left:19px;animation-delay:-1.42s}
+  .munch i:nth-child(3){left:29px;animation-delay:-1.1s}
+  .munch i:nth-child(4){left:39px;animation-delay:-.78s}
+  @keyframes munchGo{0%{transform:translateX(0)}100%{transform:translateX(46px)}}
+  @keyframes chomp{from{transform:rotate(0)}to{transform:rotate(-34deg)}}
+  @keyframes eaten{0%,62%{opacity:1}66%,100%{opacity:0}}
+
+  /* ══ 3 · BLINK ═══════════════════════════════════════════════════ */
+  .blink{width:24px;height:16px;position:relative}
+  .blink .eye{position:absolute;top:50%;width:9px;height:9px;margin-top:-4.5px;
+    border-radius:50%;background:var(--elev);border:1.2px solid var(--c);
+    overflow:hidden;animation:lid 4.1s ease-in-out infinite}
+  .blink .eye:nth-child(1){left:0}
+  .blink .eye:nth-child(2){left:13px;animation-delay:.07s}
+  .blink .eye s{position:absolute;top:1.6px;width:3.4px;height:3.4px;border-radius:50%;
+    background:var(--fg);text-decoration:none;left:2.2px;
+    animation:glance 4.1s ease-in-out infinite}
+  @keyframes lid{0%,92%,100%{transform:scaleY(1)}95%{transform:scaleY(.08)}}
+  @keyframes glance{
+    0%,22%{transform:translateX(0)}
+    32%,52%{transform:translateX(2.6px)}
+    62%,82%{transform:translateX(-1.4px)}
+    92%,100%{transform:translateX(0)}
+  }
+
+  /* ══ 4 · HOP (leapfrog) ══════════════════════════════════════════ */
+  .hop{width:30px;height:16px;position:relative}
+  .hop i{position:absolute;bottom:3px;width:6px;height:6px;border-radius:50%;
+    background:var(--accent);animation:leap 1.5s cubic-bezier(.45,0,.55,1) infinite}
+  .hop i:nth-child(1){left:0}
+  .hop i:nth-child(2){left:12px;animation-delay:-.5s}
+  .hop i:nth-child(3){left:24px;animation-delay:-1s}
+  @keyframes leap{
+    0%,55%{transform:translate(0,0) scale(1)}
+    72%   {transform:translate(-12px,-9px) scale(1.05)}
+    88%,100%{transform:translate(-24px,0) scale(1)}
+  }
+
+  /* ══ 5 · WOBBLE ══════════════════════════════════════════════════ */
+  .wob{width:20px;height:18px;display:flex;align-items:flex-end;justify-content:center}
+  .wob b{width:13px;height:13px;background:var(--accent);
+    animation:jelly 1.45s cubic-bezier(.34,1.56,.64,1) infinite}
+  @keyframes jelly{
+    0%  {border-radius:50% 50% 50% 50%/50% 50% 50% 50%;transform:scale(1,1)}
+    25% {border-radius:58% 42% 44% 56%/52% 56% 44% 48%;transform:scale(1.14,.86)}
+    50% {border-radius:42% 58% 56% 44%/44% 48% 52% 56%;transform:scale(.88,1.12)}
+    75% {border-radius:54% 46% 48% 52%/56% 44% 56% 44%;transform:scale(1.08,.94)}
+    100%{border-radius:50% 50% 50% 50%/50% 50% 50% 50%;transform:scale(1,1)}
+  }
+
+  /* ══ 6 · STRIDE ══════════════════════════════════════════════════ */
+  .stride{width:22px;height:18px;position:relative}
+  .stride .bar{position:absolute;left:9px;top:1px;width:2.6px;height:11px;border-radius:2px;
+    background:var(--accent);animation:strideBody 1s ease-in-out infinite}
+  .stride .leg{position:absolute;left:9px;top:11px;width:2.2px;height:5px;border-radius:2px;
+    background:var(--accent);transform-origin:50% 0;
+    animation:strideLeg 1s ease-in-out infinite}
+  .stride .leg:nth-of-type(2){animation-delay:-.5s;opacity:.65}
+  @keyframes strideBody{0%,100%{transform:translateY(0)}50%{transform:translateY(-1.4px)}}
+  @keyframes strideLeg{0%{transform:rotate(26deg)}50%{transform:rotate(-26deg)}100%{transform:rotate(26deg)}}
+
+  .foot{margin-top:28px;padding:16px 18px;border-radius:11px;background:var(--elev);
+    border:1px solid var(--accent)}
+  .foot h2{margin:0 0 8px;font-size:16px}
+  .foot p{margin:0 0 10px;font-size:14px;color:var(--dim)}
+  .foot p:last-child{margin:0}
+  .foot b{color:var(--fg)}
+  @media (prefers-reduced-motion:reduce){.ind *{animation:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Round 6 — small, and alive</h1>
+<p class="sub">I picked the moiré after judging it <b>at 3× zoom on a dark background</b>. Your
+  theme is light and you see it at 1×, where 0.8px lines on a 2.3px pitch alias into a grey smudge
+  — it reads as a rendering artifact, and it spends 120px saying nothing. That is on me; this page
+  is <b>light-first and at real size</b>, with zoom as the option rather than the default.</p>
+<p class="sub">Everything below is <b>20–46px</b> instead of 120, and aims at character rather than
+  spectacle: squash and stretch, anticipation, overshoot — the things that make a shape read as
+  alive rather than as a loop.</p>
+
+<div class="controls">
+  <button id="dark">Dark theme</button>
+  <button id="zoom">Zoom 4×</button>
+  <span class="note">judge them at 1× — that is where the last one failed</span>
+</div>
+
+<div class="grid">
+
+  <div class="card -old">
+    <div class="stage"><span class="ind moire"><i></i><i></i></span></div>
+    <div class="meta"><h3><span class="k">now</span>Moiré</h3>
+      <p>At 4× it is genuinely lovely. At 1× on light it is <b>grey hatching</b> — the swirls are
+        below the pixel grid, so the interference never resolves and you get texture instead of
+        motion. 120px wide for that.</p>
+      <span class="pill -n">120px</span><span class="pill -n">aliases at 1×</span>
+    </div>
+  </div>
+
+  <div class="card -pick">
+    <div class="stage"><span class="ind bounce"><u></u><b></b></span><span class="lbl">Bash · 14s</span></div>
+    <div class="meta"><h3><span class="k">01</span>Bounce</h3>
+      <p>One dot, doing the oldest trick in animation properly: it <b>squashes on landing,
+        stretches on the way up, hangs at the top</b>, and its shadow spreads and fades as it
+        rises. Nothing about that is a loop you notice — it reads as weight.</p>
+      <p>26px. Two elements. The shadow is what sells it; without it this is a dot moving up
+        and down.</p>
+      <span class="pill -y">26px</span><span class="pill -y">transform only</span><span class="pill -y">reads at 1×</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="stage">
+      <span class="ind munch">
+        <span class="pac"><svg width="13" height="13" viewBox="0 0 13 13">
+          <path class="jaw" fill="var(--accent)"
+            d="M6.5 6.5 L13 2.2 A6.5 6.5 0 1 0 13 10.8 Z"/>
+        </svg></span>
+        <i></i><i></i><i></i>
+      </span>
+      <span class="lbl">Bash · 14s</span>
+    </div>
+    <div class="meta"><h3><span class="k">02</span>Muncher</h3>
+      <p>Chomps its way along a line of dots, which vanish as it reaches them and come back behind
+        it. The most <b>overtly playful</b> thing here and the only one that is funny.</p>
+      <p>46px, so it costs width — and it is a strong flavour. Charming on day one; ask yourself
+        about day ninety.</p>
+      <span class="pill -n">46px</span><span class="pill -y">genuinely playful</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="stage">
+      <span class="ind blink"><span class="eye"><s></s></span><span class="eye"><s></s></span></span>
+      <span class="lbl">Bash · 14s</span>
+    </div>
+    <div class="meta"><h3><span class="k">03</span>Eyes</h3>
+      <p>Two eyes that glance around and blink every four seconds. <b>Nothing reads as alive
+        faster than a blink</b> — and the pupils moving left and right is exactly the gesture for
+        "looking at something".</p>
+      <p>24px. The risk is that it is a face, and a face in your chat is a bigger personality
+        decision than an animation.</p>
+      <span class="pill -y">24px</span><span class="pill -n">it's a face</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="stage"><span class="ind hop"><i></i><i></i><i></i></span><span class="lbl">Bash · 14s</span></div>
+    <div class="meta"><h3><span class="k">04</span>Leapfrog</h3>
+      <p>Your three dots — except the back one <b>jumps over the other two</b> and lands in front,
+        forever. Same furniture as today, completely different behaviour, and it reads instantly
+        because the arc is a real arc.</p>
+      <span class="pill -y">30px</span><span class="pill -y">familiar</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="stage"><span class="ind wob"><b></b></span><span class="lbl">Bash · 14s</span></div>
+    <div class="meta"><h3><span class="k">05</span>Jelly</h3>
+      <p>A blob wobbling through four asymmetric <code>border-radius</code> states on a springy
+        curve, so it <b>overshoots and settles</b> like something with surface tension. One
+        element, 20px — the smallest thing here.</p>
+      <span class="pill -y">20px</span><span class="pill -y">one element</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="stage"><span class="ind stride"><span class="bar"></span><span class="leg"></span><span class="leg"></span></span><span class="lbl">Bash · 14s</span></div>
+    <div class="meta"><h3><span class="k">06</span>Walker</h3>
+      <p>The text caret, with legs, walking on the spot — the body bobs on the off-beat the way a
+        real gait does. <b>It is the cursor that is about to appear anyway</b>, which makes it the
+        most on-brand of the six.</p>
+      <span class="pill -y">22px</span><span class="pill -y">becomes the caret</span>
+    </div>
+  </div>
+
+</div>
+
+<div class="foot">
+  <h2>Shipping 01 Bounce</h2>
+  <p>It is the one that is <b>alive without being a character</b>. The muncher and the eyes both
+    introduce a personality that has to stay funny for months; a bouncing ball is just physics, and
+    physics does not get old. It reads perfectly at 1× in both themes, costs 26px instead of 120,
+    and is two elements animating nothing but <code>transform</code>.</p>
+  <p>The shadow is the part that matters — spreading and fading as the ball rises is what makes it
+    read as weight rather than as a dot sliding up a line. <b>Leapfrog</b> is the safe second if
+    you want to keep the three dots you know.</p>
+</div>
+
+</div>
+<script>
+  for (const [id, cls] of [['dark','dark'], ['zoom','zoom']]) {
+    const el = document.getElementById(id);
+    el.onclick = () => el.classList.toggle('on', document.body.classList.toggle(cls));
+  }
+</script>
+</body>
+</html>
