@@ -435,106 +435,13 @@
   }
 }
 
-/* ── THE WORKING INDICATOR — a ball with weight ─────────────────────────────
-   Shown before the first token arrives.
-
-   WHAT CAME BEFORE, AND WHY IT WAS WRONG. Three bouncing dots are the universal
-   answer and say nothing a hundred other apps are not already saying. Six rounds
-   of alternatives followed — orbits, epicycles, a double pendulum, a tesseract,
-   a Verlet whip, a strip chart, a 120px moiré field — and the moiré actually
-   shipped, on the strength of looking superb AT 3× ZOOM ON A DARK BACKGROUND.
-   The app is used on a LIGHT theme at 1×, where 0.8px lines on a 2.3px pitch
-   alias into grey hatching: the interference never resolves, you get texture
-   instead of motion, and it reads as a rendering artifact. Reported as "this
-   just takes up a full line and is meh", which was exactly right.
-
-   The lesson is in the method, not the taste: judge a 1× element at 1×, in the
-   theme it will live in.
-
-   SO: ONE BALL, WITH WEIGHT. It squashes on landing, stretches on the way up,
-   hangs at the top, and squashes again — the oldest trick in animation, which
-   works because it is not describing motion, it is describing MASS. Nothing
-   about it reads as a loop; it reads as a thing that has to come back down.
-
-   THE SHADOW IS NOT DECORATION. It spreads and fades as the ball rises and
-   snaps tight and dark as it lands. Without it this is a dot sliding up and
-   down a line; with it the dot is somewhere, and the height means something.
-
-   26px instead of 120, two elements, `transform` and `opacity` only — no JS, no
-   SVG, no mask, nothing per frame. Several panes can be working at once. */
+/* The working indicator itself moved to ChatWorking.css — there are ten of them
+   now, one per turn, and they were a third of this file. This keeps only the row
+   they sit in. */
 .chat-working {
   display: flex;
   align-items: center;
   min-height: 1.3em;
-}
-.chat-typing {
-  position: relative;
-  width: 26px;
-  height: 18px;
-}
-/* The ball. `transform-origin: 50% 100%` so a squash flattens it against the
-   ground rather than shrinking it toward its own middle — that one line is the
-   difference between landing and deflating. */
-.chat-typing i {
-  position: absolute;
-  left: 9px;
-  bottom: 3px;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--chat-accent);
-  transform-origin: 50% 100%;
-  animation: chat-bounce 1.15s cubic-bezier(0.3, 0, 0.7, 1) infinite;
-}
-/* …and its shadow, which is the half that sells it. */
-.chat-typing u {
-  position: absolute;
-  left: 9px;
-  bottom: 1px;
-  width: 8px;
-  height: 2.5px;
-  border-radius: 50%;
-  background: var(--chat-accent);
-  opacity: 0.2;
-  animation: chat-bounce-shadow 1.15s cubic-bezier(0.3, 0, 0.7, 1) infinite;
-}
-/* The keyframes are not symmetric on purpose: 12% → 48% is the rise, 48% → 88%
-   the fall, and the long slow middle is the HANG at the top. An even split
-   reads as a metronome. */
-@keyframes chat-bounce {
-  0% {
-    transform: translateY(0) scale(1.18, 0.78);
-  }
-  12% {
-    transform: translateY(-2px) scale(0.86, 1.2);
-  }
-  48% {
-    transform: translateY(-11px) scale(1, 1);
-  }
-  88% {
-    transform: translateY(-2px) scale(0.9, 1.14);
-  }
-  100% {
-    transform: translateY(0) scale(1.18, 0.78);
-  }
-}
-@keyframes chat-bounce-shadow {
-  0%,
-  100% {
-    transform: scale(1.25, 1);
-    opacity: 0.26;
-  }
-  48% {
-    transform: scale(0.5, 1);
-    opacity: 0.08;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .chat-cursor,
-  .chat-typing i,
-  .chat-typing u {
-    animation: none;
-  }
 }
 /* Context next to the dots — names the tool during long silent calls. */
 .chat-working-label {

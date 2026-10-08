@@ -1,0 +1,368 @@
+/* ── THE WORKING INDICATOR, ×10 ─────────────────────────────────────────────
+   One per turn; see working-variant.ts for the rotation and ChatWorking.tsx for
+   what each one is.
+
+   HOUSE RULES, which every variant below obeys:
+     · ≤46px wide, ≤18px tall. It must not own a line. The one this replaced was
+       a 120px moiré field.
+     · Legible at 1× IN A LIGHT THEME. That moiré was chosen at 3× zoom on dark,
+       where it is lovely and where its 0.8px hatching has not yet aliased into
+       grey mush. Judge a 1× element at 1×.
+     · `transform` and `opacity` only. Several panes can be working at once, so
+       nothing here may touch layout or paint.
+     · A static frame under `prefers-reduced-motion` — never `display: none`,
+       which would change the row's height.
+
+   THE SPRITE-STRIP TRICK, used by braille/ascii/glider/tetris/matrix: a line of
+   N frames in a monospace face, windowed to `1ch` and translated by `-Nch` with
+   `steps(N)`. `ch` is exactly one glyph in a monospace font, so the window can
+   never drift out of phase with the strip whatever the renderer does — which a
+   px window absolutely can. */
+
+.chat-typing {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  height: 18px;
+  color: var(--chat-accent);
+}
+.chat-typing s {
+  text-decoration: none;
+  white-space: pre;
+  font: 13px / 18px var(--chrome-font, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+/* ══ 1 · BRAILLE — the canonical CLI spinner ══════════════════════════════ */
+.chat-typing.-braille {
+  width: 1ch;
+  overflow: hidden;
+}
+.chat-typing.-braille s {
+  animation: ct-strip8 0.8s steps(8) infinite;
+}
+@keyframes ct-strip8 {
+  to {
+    transform: translateX(-8ch);
+  }
+}
+
+/* ══ 2 · ASCII — the original, from before Unicode ════════════════════════ */
+.chat-typing.-ascii {
+  width: 1ch;
+  overflow: hidden;
+}
+.chat-typing.-ascii s {
+  animation: ct-strip4 0.5s steps(4) infinite;
+}
+@keyframes ct-strip4 {
+  to {
+    transform: translateX(-4ch);
+  }
+}
+
+/* ══ 3 · INVADER — two frames, 11×8, 1978 ════════════════════════════════ */
+.chat-typing.-invader svg {
+  display: block;
+  overflow: visible;
+}
+.chat-typing.-invader rect {
+  fill: var(--chat-accent);
+}
+/* steps(1) on a 2-state opacity is a hard cut: a sprite that CROSSFADES is a
+   sprite that looks wrong, because the arms would be in both places at once. */
+.chat-typing.-invader .f1 {
+  animation: ct-frameA 0.9s steps(1) infinite;
+}
+.chat-typing.-invader .f2 {
+  animation: ct-frameB 0.9s steps(1) infinite;
+}
+@keyframes ct-frameA {
+  0%,
+  49.9% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes ct-frameB {
+  0%,
+  49.9% {
+    opacity: 0;
+  }
+  50%,
+  100% {
+    opacity: 1;
+  }
+}
+
+/* ══ 4 · PONG ════════════════════════════════════════════════════════════ */
+.chat-typing.-pong {
+  width: 34px;
+}
+.chat-typing.-pong .p {
+  position: absolute;
+  top: 50%;
+  width: 2px;
+  height: 7px;
+  margin-top: -3.5px;
+  border-radius: 1px;
+  background: var(--chat-accent);
+  opacity: 0.75;
+}
+.chat-typing.-pong .l {
+  left: 0;
+  animation: ct-paddle 1.3s ease-in-out infinite;
+}
+/* The right paddle is the same motion half a rally later, which is what makes
+   the two look like they are TRACKING the ball rather than oscillating: there
+   is no logic here, just three animations that agree about where the ball is. */
+.chat-typing.-pong .r {
+  right: 0;
+  animation: ct-paddle 1.3s ease-in-out infinite;
+  animation-delay: -0.65s;
+}
+.chat-typing.-pong .ball {
+  position: absolute;
+  top: 50%;
+  left: 4px;
+  width: 3px;
+  height: 3px;
+  margin-top: -1.5px;
+  border-radius: 1px;
+  background: var(--chat-accent);
+  animation: ct-ball-x 1.3s linear infinite, ct-ball-y 0.52s ease-in-out infinite alternate;
+}
+@keyframes ct-paddle {
+  0%,
+  100% {
+    transform: translateY(-3px);
+  }
+  50% {
+    transform: translateY(3px);
+  }
+}
+@keyframes ct-ball-x {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  50% {
+    transform: translateX(24px);
+  }
+}
+@keyframes ct-ball-y {
+  from {
+    margin-top: -5.5px;
+  }
+  to {
+    margin-top: 2.5px;
+  }
+}
+
+/* ══ 5 · GLIDER — Conway, four generations ═══════════════════════════════ */
+/* A glider returns to its own shape every 4 generations, one cell diagonally
+   displaced. So: steps(4) through the frames, and a 4×-slower translate that
+   carries it one cell per cycle — the pattern's real period, not an effect. */
+.chat-typing.-glider {
+  width: 12px;
+  overflow: hidden;
+}
+.chat-typing.-glider .gwrap {
+  display: block;
+  animation: ct-glide 3.2s linear infinite;
+}
+.chat-typing.-glider s {
+  display: block;
+  width: 1ch;
+  overflow: hidden;
+  animation: ct-strip4 0.8s steps(4) infinite;
+  font-size: 15px;
+}
+@keyframes ct-glide {
+  from {
+    transform: translate(-4px, 4px);
+  }
+  to {
+    transform: translate(8px, -8px);
+  }
+}
+
+/* ══ 6 · SNAKE — four segments on one path ═══════════════════════════════ */
+/* `offset-path` is the whole trick: every segment runs the SAME animation a
+   little behind, so the body follows the head for free. No per-segment
+   choreography, and it stays correct if the path changes. */
+.chat-typing.-snake {
+  width: 32px;
+  height: 18px;
+}
+.chat-typing.-snake i {
+  position: absolute;
+  width: 4px;
+  height: 4px;
+  margin: -2px 0 0 -2px;
+  border-radius: 1px;
+  background: var(--chat-accent);
+  offset-path: path("M4,4 L28,4 L28,14 L4,14 Z");
+  animation: ct-slither 1.8s linear infinite;
+}
+.chat-typing.-snake .pellet {
+  position: absolute;
+  left: 15px;
+  top: 7px;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--chat-accent);
+  opacity: 0.45;
+  animation: ct-pellet 1.8s steps(1) infinite;
+}
+@keyframes ct-slither {
+  to {
+    offset-distance: 100%;
+  }
+}
+@keyframes ct-pellet {
+  0%,
+  28% {
+    opacity: 0.45;
+  }
+  30%,
+  100% {
+    opacity: 0;
+  }
+}
+
+/* ══ 7 · TETRIS — a piece falling and locking ════════════════════════════ */
+.chat-typing.-tetris {
+  width: 1ch;
+  overflow: hidden;
+}
+.chat-typing.-tetris s {
+  animation: ct-strip4 1.1s steps(4) infinite;
+  font-size: 15px;
+}
+
+/* ══ 8 · MATRIX — three columns, three speeds ════════════════════════════ */
+.chat-typing.-matrix {
+  width: 3ch;
+  height: 18px;
+  overflow: hidden;
+  -webkit-mask: linear-gradient(#000 35%, transparent);
+  mask: linear-gradient(#000 35%, transparent);
+}
+.chat-typing.-matrix s {
+  position: absolute;
+  top: -18px;
+  width: 1ch;
+  font-size: 11px;
+  line-height: 11px;
+  /* Vertical, which a strip of characters is not by default. */
+  writing-mode: vertical-rl;
+  text-orientation: upright;
+}
+.chat-typing.-matrix .c1 {
+  left: 0;
+  animation: ct-rain 1.6s linear infinite;
+}
+.chat-typing.-matrix .c2 {
+  left: 1ch;
+  animation: ct-rain 2.3s linear infinite;
+  opacity: 0.7;
+}
+.chat-typing.-matrix .c3 {
+  left: 2ch;
+  animation: ct-rain 1.9s linear infinite;
+  opacity: 0.85;
+  animation-delay: -0.8s;
+}
+@keyframes ct-rain {
+  to {
+    transform: translateY(100px);
+  }
+}
+
+/* ══ 9 · BINARY — eight bits, actually counting ══════════════════════════ */
+/* Bit n toggles at half the rate of bit n−1. That is not a stylisation of a
+   binary counter, it IS one — so eight `steps(2)` animations with doubling
+   durations produce a real count up, with no logic anywhere. */
+.chat-typing.-binary {
+  width: 26px;
+  gap: 1.5px;
+  display: inline-flex;
+  align-items: center;
+}
+.chat-typing.-binary i {
+  width: 2px;
+  height: 8px;
+  border-radius: 1px;
+  background: var(--chat-accent);
+  opacity: 0.16;
+}
+.chat-typing.-binary .b0 {
+  animation: ct-bit 0.14s steps(2) infinite;
+}
+.chat-typing.-binary .b1 {
+  animation: ct-bit 0.28s steps(2) infinite;
+}
+.chat-typing.-binary .b2 {
+  animation: ct-bit 0.56s steps(2) infinite;
+}
+.chat-typing.-binary .b3 {
+  animation: ct-bit 1.12s steps(2) infinite;
+}
+.chat-typing.-binary .b4 {
+  animation: ct-bit 2.24s steps(2) infinite;
+}
+.chat-typing.-binary .b5 {
+  animation: ct-bit 4.48s steps(2) infinite;
+}
+.chat-typing.-binary .b6 {
+  animation: ct-bit 8.96s steps(2) infinite;
+}
+.chat-typing.-binary .b7 {
+  animation: ct-bit 17.92s steps(2) infinite;
+}
+@keyframes ct-bit {
+  from {
+    opacity: 0.16;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* ══ 10 · PROMPT — $ and a block cursor ══════════════════════════════════ */
+.chat-typing.-prompt {
+  gap: 3px;
+}
+.chat-typing.-prompt .ps1 {
+  opacity: 0.6;
+}
+.chat-typing.-prompt .cur {
+  width: 6px;
+  height: 12px;
+  background: var(--chat-accent);
+  /* steps(1) — a terminal cursor is a square wave. Fading one in and out is the
+     single most common way to get this wrong. */
+  animation: ct-blink 1.06s steps(1) infinite;
+}
+@keyframes ct-blink {
+  0%,
+  49.9% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-typing *,
+  .chat-typing {
+    animation: none !important;
+  }
+}
