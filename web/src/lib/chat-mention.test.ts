@@ -1538,12 +1538,16 @@ describe('interleaveSpawnCards', () => {
     ]);
   });
 
-  it('a spawn older than the loaded history lands at the top', () => {
-    // Its turn is further back than the window reaches, and the top is where
-    // "further back" is. Loading older messages moves it into its own slot —
-    // which is the same join, not a card drifting.
-    expect(shape(interleaveSpawnCards(entries, [card('kid', 1)]))).toEqual([
-      '[kid]',
+  it('a spawn older than the loaded history WAITS, rather than landing at the top', () => {
+    // This asserted the opposite, on the argument that "its turn is further back
+    // than the window reaches, and the top is where further back is". Sound for
+    // ONE card and wrong at scale: with 65 children, 24 of them piled into a
+    // 38-row window in a single unbroken run at index 1, and scrolling up ran
+    // straight into the wall. The top was not telling you "further back", it was
+    // telling you "we could not place these".
+    //
+    // Paging back to its moment places it properly — same join, no pile.
+    expect(shape(interleaveSpawnCards(entries, [card('kid', 1)], { hasMoreOlder: true }))).toEqual([
       'msg-1',
       'msg-2',
       'msg-3',
@@ -1593,11 +1597,11 @@ describe('interleaveSpawnCards', () => {
       { at: null, node: 'undated' },
       { at: 300, node: 'msg-3' },
     ];
-    expect(shape(interleaveSpawnCards(mixed, [card('kid', 250)]))).toEqual([
-      'undated',
-      '[kid]',
-      'msg-3',
-    ]);
+    // `hasMoreOlder: false` so the window has no lower edge — this is about the
+    // undated entry alone, and leaving the floor in would test two rules at once.
+    expect(shape(interleaveSpawnCards(mixed, [card('kid', 250)], { hasMoreOlder: false }))).toEqual(
+      ['undated', '[kid]', 'msg-3'],
+    );
   });
 
   it('is the entries themselves when there is nothing spawned', () => {
@@ -1633,7 +1637,9 @@ describe('spawn cards during the beat before the transcript lands', () => {
   });
 
   it('places them the moment ONE dated entry exists', () => {
-    const out = interleaveSpawnCards([{ at: 10, node: 'a' }], [card(5), card(50)]);
+    const out = interleaveSpawnCards([{ at: 10, node: 'a' }], [card(5), card(50)], {
+      hasMoreOlder: false,
+    });
     expect(out).toEqual([
       { kind: 'card', card: card(5) },
       { kind: 'entry', node: 'a' },
@@ -1649,5 +1655,87 @@ describe('spawn cards during the beat before the transcript lands', () => {
       { kind: 'entry', node: 'a' },
       { kind: 'card', card: card(99) },
     ]);
+  });
+});
+
+describe('spawn cards outside the loaded window', () => {
+  const card = (at: number) => ({ at, chat: { tabId: `t${at}` } }) as never;
+  const entry = (at: number, node: string) => ({ at, node });
+
+  it('does not pile cards older than the window at the HEAD', () => {
+    // Measured on a chat that opened with 38 rows: 24 of them were spawn cards,
+    // in one unbroken run starting at index 1, because every card older than the
+    // oldest loaded message satisfies `card.at <= entry.at` against the first
+    // entry. Scrolling up ran straight into the pile.
+    const out = interleaveSpawnCards(
+      [entry(100, 'a'), entry(200, 'b')],
+      [card(1), card(2), card(3), card(150)],
+      { hasMoreOlder: true },
+    );
+    expect(out).toEqual([
+      { kind: 'entry', node: 'a' },
+      { kind: 'card', card: card(150) },
+      { kind: 'entry', node: 'b' },
+    ]);
+  });
+
+  it('DOES place them at the head once there is no more history', () => {
+    // Then they are not outside the window, they genuinely predate the
+    // conversation — and hiding them would make them unreachable forever.
+    const out = interleaveSpawnCards([entry(100, 'a')], [card(1), card(2)], {
+      hasMoreOlder: false,
+    });
+    expect(out).toEqual([
+      { kind: 'card', card: card(1) },
+      { kind: 'card', card: card(2) },
+      { kind: 'entry', node: 'a' },
+    ]);
+  });
+
+  it('still places a card inside the window, and one after it', () => {
+    const out = interleaveSpawnCards([entry(100, 'a')], [card(50), card(999)], {
+      hasMoreOlder: false,
+    });
+    expect(out).toEqual([
+      { kind: 'card', card: card(50) },
+      { kind: 'entry', node: 'a' },
+      { kind: 'card', card: card(999) },
+    ]);
+  });
+
+  it('defaults to the cautious edge when nothing is said', () => {
+    // No opts = assume there may be more history. A card that turns out to
+    // predate everything appears one page later; the alternative is the pile.
+    const out = interleaveSpawnCards([entry(100, 'a')], [card(1)]);
+    expect(out).toEqual([{ kind: 'entry', node: 'a' }]);
+  });
+});
+
+describe('the window floor comes from the transcript, not the rendered list', () => {
+  const card = (at: number) => ({ at, chat: { tabId: `t${at}` } }) as never;
+
+  it('ignores an injected moment older than every loaded message', () => {
+    // The caller injects browser moments before calling this, and a browser
+    // opening is dated from whenever it opened — which can predate every message
+    // in the window. Reading the floor off the first dated ENTRY therefore read
+    // that moment and let every card through: the measured 24-card wall survived
+    // the first attempt at this fix for exactly that reason.
+    const entries = [
+      { at: 1, node: 'browser-opened-ages-ago' },
+      { at: 500, node: 'oldest-loaded-message' },
+    ];
+    const out = interleaveSpawnCards(entries, [card(10), card(600)], {
+      hasMoreOlder: true,
+      floor: 500,
+    });
+    expect(out.filter((x) => x.kind === 'card')).toEqual([{ kind: 'card', card: card(600) }]);
+  });
+
+  it('falls back to the first dated entry when no floor is given', () => {
+    // Keeps the function honest for a caller that injects nothing.
+    const out = interleaveSpawnCards([{ at: 500, node: 'a' }], [card(10)], {
+      hasMoreOlder: true,
+    });
+    expect(out.filter((x) => x.kind === 'card')).toEqual([]);
   });
 });
