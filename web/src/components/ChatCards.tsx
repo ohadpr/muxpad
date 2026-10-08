@@ -204,6 +204,7 @@ export function ChatCards({ tabId }: { tabId: string | null | undefined }) {
   // last card mid-line, which reads as a broken card rather than a full stack.
   const stackRef = useRef<HTMLDivElement>(null);
   const [over, setOver] = useState(false);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `cards` is deliberately a dependency the body does not read. The stack renders nothing when there are none, so on the first pass the ref is null and this bails — with no dependency it would never run again, for the whole session, and the overflow fade and bottom-pin would silently never work. It also has to re-observe when the card NODES are replaced.
   useEffect(() => {
     const el = stackRef.current;
     if (!el) return;
@@ -219,11 +220,6 @@ export function ChatCards({ tabId }: { tabId: string | null | undefined }) {
     ro.observe(el);
     for (const child of el.children) ro.observe(child);
     return () => ro.disconnect();
-    // KEYED ON THE CARDS, not []. The stack renders nothing when there are
-    // none, so on the first pass the ref is null and this bails — and with no
-    // dependencies it would never run again, leaving the observer unattached
-    // for the entire session. It also has to re-observe when the card NODES
-    // change, since a watcher bound to replaced children is watching nothing.
   }, [cards]);
 
   const dismiss = useCallback(
