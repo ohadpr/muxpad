@@ -1,0 +1,144 @@
+/* ── Pinned chat cards ────────────────────────────────────────────────────
+   Above the transcript and OUTSIDE its scroller: a card is the value that
+   must not scroll away, which is the whole reason it is not a message. */
+.chat-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* Matches the composer pill's own width and gutters, so the stack reads as
+     one object with the thing below it rather than as a floating slab. */
+  max-width: 768px;
+  margin: 0 auto 8px;
+  padding: 0 2px;
+  /* The stack is bounded. Cards are pinned above the composer, so a tall one
+     cannot be scrolled past — without a ceiling a single verbose card would
+     push the conversation off the top of its own pane. */
+  max-height: 42vh;
+  overflow-y: auto;
+  /* The scrollbar is noise on something that is already a quiet strip; the
+     fade below says "more above" more clearly than a 4px gutter does. */
+  scrollbar-width: none;
+}
+.chat-cards::-webkit-scrollbar {
+  display: none;
+}
+/* Only when there IS something above: a fade on a stack that fits would clip
+   the first card's own top edge for no reason. */
+.chat-cards.-over {
+  mask-image: linear-gradient(to bottom, transparent 0, #000 22px);
+}
+.chat-card {
+  /* NEVER SHRINK. A flex item's default is `flex-shrink: 1`, so once the stack
+     hits its max-height the cards are squeezed instead of the stack scrolling —
+     and since a card clips its own overflow, the bottom one loses its last line
+     mid-sentence and reads as a broken card. Measured: scrollHeight ===
+     clientHeight === the cap, i.e. no overflow to scroll, the content simply
+     crushed. With this, the stack overflows honestly and scrolls. */
+  flex: 0 0 auto;
+  border: 1px solid var(--chat-border);
+  border-radius: 10px;
+  background: var(--chat-elev);
+  overflow: hidden;
+  /* It floats over the log now, so it needs to sit ON something — without a
+     shadow the transcript scrolls visibly underneath an edge that looks like
+     it should have stopped it. */
+  box-shadow: 0 6px 18px -12px rgba(0, 0, 0, 0.5);
+}
+/* THE HEADER IS THE TOGGLE. It is a real <button> spanning the full width of
+   the card, which on a phone is the difference between a control you can hit
+   and one you aim at: the × it replaced was a 15px glyph with 5px of padding.
+   The button resets are explicit because a <button> brings its own font,
+   background and alignment and would otherwise centre this row. */
+.chat-card-head {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 10px 7px 9px;
+  border: 0;
+  border-bottom: 1px solid var(--chat-border);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  /* A whisper of accent so the card reads as muxpad's own chrome rather than
+     as something the agent drew — the content below is the agent's. */
+  background: color-mix(in srgb, var(--chat-accent) 4%, var(--chat-elev));
+}
+.chat-card-head:hover {
+  background: color-mix(in srgb, var(--chat-accent) 9%, var(--chat-elev));
+}
+/* INSIDE, not around. `.chat-card` clips its overflow, so a default outline on
+   the header is drawn and then cut off by the card's own rounded edge — the one
+   row that most needs a visible focus state would show half of one. */
+.chat-card-head:focus-visible {
+  outline: 0;
+  box-shadow: inset 0 0 0 2px var(--chat-accent);
+}
+/* Collapsed, the header IS the card — so it keeps no rule under it to divide
+   itself from a body that is not there. */
+.chat-card.-shut .chat-card-head {
+  border-bottom: 0;
+}
+/* Same glyph and the same rotation as the transcript's "N actions" fold, so a
+   collapsed card and a collapsed action run read as one gesture. */
+.chat-card-chevron {
+  display: inline-block;
+  color: var(--chat-faint);
+  font-size: 13px;
+  line-height: 1;
+  transition: transform 120ms ease;
+}
+.chat-card-chevron.is-open {
+  transform: rotate(90deg);
+}
+.chat-card-name {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  /* Hue, not weight — the same channel the pinned nav rows use, so a card's
+     name and a pinned chat read as one language. */
+  color: color-mix(in srgb, var(--chat-accent) 75%, var(--chat-fg));
+}
+.chat-card-age {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--chat-faint);
+  font-variant-numeric: tabular-nums;
+}
+/* Overdue is the signal the cadence exists for: the interesting failure is not
+   a wrong value, it is a writer that stopped. Warm, not red — nothing is
+   broken, something merely stopped arriving. */
+.chat-card-age.-stale {
+  color: var(--status-working, #8a6410);
+}
+.chat-card-body {
+  padding: 10px 13px;
+}
+.chat-card-body.-flush {
+  padding: 0;
+}
+.chat-card-text {
+  white-space: pre-wrap;
+  overflow-x: auto;
+  font-family: var(--chrome-font, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--chat-dim);
+}
+.chat-card-md {
+  font-size: 13.5px;
+}
+.chat-card-md > :first-child {
+  margin-top: 0;
+}
+.chat-card-md > :last-child {
+  margin-bottom: 0;
+}
+/* The sandboxed html card. Height is driven by the frame's own measurement —
+   see ChatCards.tsx for why the parent cannot do it. */
+.chat-card-frame {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: transparent;
+}

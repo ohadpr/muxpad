@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import { withMentionContext } from './chat-context.js';
 import {
   type ChatEvent,
   LAUNCH_ACK_RE,
   REPLY_ACK,
   REPLY_TOOL_NAME,
   blockText,
+  expandChatEvent,
+  expandSpawnDelivery,
   isAgentLaunchTool,
   isInterruptMarker,
   needsReplyFallback,
@@ -13,6 +16,8 @@ import {
   subagentLabel,
   taskNotificationToolUseId,
 } from './chat-events.js';
+import { renderCronMarker } from './cron.js';
+import { renderSpawnDelivery } from './spawn-delivery.js';
 
 const TS = '2026-07-01T10:00:00.000Z';
 const MS = Date.parse(TS);
@@ -503,5 +508,121 @@ describe('needsReplyFallback — the guard, as one rule', () => {
   it('does not fire for a turn the user stopped, or one that failed', () => {
     expect(turn({ interrupted: true })).toBe(false);
     expect(turn({ failed: true })).toBe(false);
+  });
+});
+
+describe('THE JOIN in a transcript — a delivery is not a person typing', () => {
+  const text = renderSpawnDelivery([
+    { tabId: 't1', name: 'research auth', state: 'ok', report: 'Found three call sites.' },
+    { tabId: 't2', name: 'build ui', state: 'crashed', report: null },
+  ]);
+
+  it('splits the marker off into a chip, never a wall of XML', () => {
+    const out = expandSpawnDelivery(text, 'u1', MS);
+    expect(kinds(out ?? [])).toEqual(['notice', 'user']);
+    const notice = out?.[0] as { variant: string; text: string };
+    expect(notice.variant).toBe('report');
+    expect(notice.text).toBe('2 sub-chats reported');
+    // The bubble carries the reports and NOT the marker.
+    expect((out?.[1] as { text: string }).text).not.toContain('<muxpad-delivery');
+    expect((out?.[1] as { text: string }).text).toContain('Found three call sites.');
+  });
+
+  it('says "1 sub-chat" for one', () => {
+    const one = renderSpawnDelivery([{ tabId: 't1', name: 'x', state: 'ok', report: 'y' }]);
+    const out = expandSpawnDelivery(one, 'u1', MS);
+    expect((out?.[0] as { text: string }).text).toBe('1 sub-chat reported');
+  });
+
+  it('reaches BOTH transcript roads — claude JSONL and the normalized log', () => {
+    // The two backends must render a delivery identically; a fix wired to one
+    // road only is the shape of bug `expandChatEvent` exists to prevent.
+    const viaClaude = normalizeTranscriptLine({
+      type: 'user',
+      uuid: 'u1',
+      timestamp: TS,
+      message: { role: 'user', content: text },
+    });
+    expect(kinds(viaClaude)).toEqual(['notice', 'user']);
+    const viaLog = expandChatEvent({ kind: 'user', id: 'u1', ts: MS, text });
+    expect(kinds(viaLog)).toEqual(['notice', 'user']);
+  });
+
+  it('leaves an ordinary user message alone', () => {
+    expect(expandSpawnDelivery('what happened to the build?', 'u1', MS)).toBeNull();
+    expect(kinds(expandChatEvent({ kind: 'user', id: 'u1', ts: MS, text: 'hi' }))).toEqual([
+      'user',
+    ]);
+  });
+});
+
+describe('a folded cron fire in the transcript', () => {
+  const fire = (fold: boolean) =>
+    renderCronMarker(
+      { id: 'c1', name: 'nw-close', at: MS, missed: 0, ...(fold ? { fold: true } : {}) },
+      'Run: python3 scripts/nw_oneline.py CLOSE — then write the market card.',
+    );
+
+  it('emits a plain chip plus a FOLDABLE prompt, not a chip with a caret', () => {
+    // The prompt rides into the same collapsed run as the tool calls the fire
+    // produced — it is the same kind of thing. Hanging it behind a caret on the
+    // chip gave one fire two separate folds and made the mark pressable.
+    const out = expandChatEvent({ kind: 'user', id: 'u1', ts: MS, text: fire(true) });
+    expect(kinds(out)).toEqual(['notice', 'user']);
+    const n = out[0] as { variant: string; text: string; body?: string };
+    expect(n.variant).toBe('cron');
+    expect(n.text).toBe('nw-close');
+    expect(n.body).toBeUndefined();
+    // The plumbing is still THERE — folded, not discarded. A fire you cannot
+    // inspect is a fire you cannot debug.
+    const p = out[1] as { text: string; folded?: boolean };
+    expect(p.folded).toBe(true);
+    expect(p.text).toContain('nw_oneline.py CLOSE');
+  });
+
+  it('an UNfolded fire emits an ordinary, unflagged bubble', () => {
+    const out = expandChatEvent({ kind: 'user', id: 'u1', ts: MS, text: fire(false) });
+    expect(kinds(out)).toEqual(['notice', 'user']);
+    expect((out[1] as { folded?: boolean }).folded).toBeUndefined();
+  });
+
+  it('a folded fire with no prompt is just the row', () => {
+    const text = renderCronMarker({ id: 'c1', name: 'n', at: MS, missed: 0, fold: true }, '');
+    const out = expandChatEvent({ kind: 'user', id: 'u1', ts: MS, text });
+    expect(kinds(out)).toEqual(['notice']);
+    expect((out[0] as { body?: string }).body).toBeUndefined();
+  });
+});
+
+describe("an @mention's handles are for the agent, not the reader", () => {
+  const typed = 'what did @Investing decide about cash?';
+  const sent = withMentionContext(typed, [{ name: 'Investing', tabId: 'T1', paneIds: ['P1'] }]);
+
+  it('shows the sentence that was typed, not the block', () => {
+    // Without this the handles print under every mention — muxpad's plumbing
+    // shown to the person it was hidden from, exactly as the cron marker did in
+    // the queue preview.
+    const out = expandChatEvent({ kind: 'user', id: 'u1', ts: MS, text: sent });
+    expect(kinds(out)).toEqual(['user']);
+    const shown = (out[0] as { text: string }).text;
+    expect(shown).toBe(typed);
+    expect(shown).not.toContain('muxpad-context');
+    expect(shown).not.toContain('P1');
+  });
+
+  it('strips on the claude road too', () => {
+    const out = normalizeTranscriptLine({
+      type: 'user',
+      uuid: 'u1',
+      timestamp: TS,
+      message: { role: 'user', content: sent },
+    });
+    expect((out[0] as { text: string }).text).toBe(typed);
+  });
+
+  it('leaves a message with no mentions untouched, object and all', () => {
+    // Identity matters: a plain message must not be rebuilt on every render.
+    const e = { kind: 'user' as const, id: 'u1', ts: MS, text: 'plain' };
+    expect(expandChatEvent(e)[0]).toBe(e);
   });
 });

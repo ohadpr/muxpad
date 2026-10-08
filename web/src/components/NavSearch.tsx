@@ -302,7 +302,20 @@ export function NavSearch({
   // biome-ignore lint/correctness/useExhaustiveDependencies: keyed to the box OPENING/CLOSING; `query` is what this resets, so depending on it would clear the field on every keystroke.
   useEffect(() => {
     if (box) {
-      if (!wasOpen.current) inputRef.current?.focus();
+      // NOT ON THE SHEET, and this is the "sometimes it is half the screen"
+      // bug rather than a preference. The sheet reveals its box every time it
+      // opens, so this fired on every open, iOS raised the keyboard, and
+      // `visualViewport.height` halved — and the panel sizes itself to the
+      // visible viewport precisely so its rows cannot end up under the
+      // keyboard. The sheet was therefore correctly sizing to a screen that
+      // was correctly half covered, which is why it looked intermittent: full
+      // height whenever the keyboard happened not to come up.
+      //
+      // A touch surface should not summon a keyboard to be READ. Opening the
+      // switcher is "show me my workspaces"; typing is a second, deliberate
+      // tap on the field. The same reasoning already keeps `/` and ⌘K
+      // sidebar-only a few lines down — "the sheet is a touch surface".
+      if (!wasOpen.current && variant === 'sidebar') inputRef.current?.focus();
       wasOpen.current = true;
       return;
     }
@@ -312,7 +325,7 @@ export function NavSearch({
       setCursor(0);
       setFound(NO_MENTION_SEARCH);
     }
-  }, [box]);
+  }, [box, variant]);
 
   const clear = () => {
     setQuery('');

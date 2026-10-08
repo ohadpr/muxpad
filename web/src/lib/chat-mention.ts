@@ -1,4 +1,5 @@
 import type { ChatClock, SpawnRound } from '@muxpad/shared';
+import type { MentionedChat } from '@muxpad/shared';
 import { type ArchiveSearchHit, req } from '../api';
 import type { ChatChipChat } from '../components/ChatChip';
 import {
@@ -1040,6 +1041,58 @@ export type MentionSegment =
  * but the segment keeps the text as written, so nothing the user typed is
  * rewritten by the renderer.
  */
+/**
+ * Every chat this draft mentions, resolved to handles, in order and deduped.
+ *
+ * What goes out with the message so the agent gets IDS rather than the
+ * characters `@Investing` — see shared/src/chat-context.ts for why a mention is
+ * a reference now and not a route.
+ *
+ * AN EXPLICIT PICK OUTRANKS THE NAME, the same way `parseDirective` had it: if
+ * the user chose a chat in the picker and its token is still in the draft, that
+ * is the chat, even when another one has since taken the same name. Re-reading
+ * the text is the fallback for a mention typed by hand.
+ *
+ * Deduped because "@Main ... @Main again" is one chat, and a block that lists it
+ * twice invites the reader to think there are two.
+ */
+export function mentionedChats(
+  text: string,
+  corpus: readonly MentionChat[],
+  picks: readonly MentionPick[] = [],
+): MentionedChat[] {
+  const out: MentionedChat[] = [];
+  const seen = new Set<string>();
+  const add = (name: string, chat: MentionChat | undefined) => {
+    if (!chat || seen.has(chat.tabId)) return;
+    seen.add(chat.tabId);
+    out.push({ name, tabId: chat.tabId, paneIds: chat.paneIds });
+  };
+  // Picks first: an anchored choice is the strongest evidence there is.
+  const lower = text.toLowerCase();
+  // …and the OFFSETS they consumed, because one token must resolve ONCE. Two
+  // chats can share a name, so a pick saying "@Main is T3" followed by a
+  // name-pass that reads the same `@Main` as T2 puts both in the list — the
+  // picked one and the one the pick existed to overrule.
+  const claimed = new Set<number>();
+  for (const p of picks) {
+    if (!p.name || !tokenAt(lower, p.start, p.name.toLowerCase())) continue;
+    claimed.add(p.start);
+    add(
+      p.name,
+      corpus.find((c) => c.tabId === p.tabId),
+    );
+  }
+  // Offsets are tracked by walking the segments, which is the only way to know
+  // WHERE a mention was — `parseMentions` returns them in order but not placed.
+  let pos = 0;
+  for (const seg of parseMentions(text, corpus)) {
+    if (seg.kind === 'mention' && !claimed.has(pos)) add(seg.chat.tabName, seg.chat);
+    pos += seg.text.length;
+  }
+  return out;
+}
+
 export function parseMentions(text: string, corpus: readonly MentionChat[]): MentionSegment[] {
   if (!text.includes('@') || corpus.length === 0) return [{ kind: 'text', text }];
   const ordered = byNameLength(corpus);
@@ -1143,6 +1196,22 @@ export function parseDirective(
 }
 
 // ── The markers ──────────────────────────────────────────────────────────────
+//
+// ─── THE SENDING HALF IS DORMANT ────────────────────────────────────────────
+// `parseDirective`, `directTo` and `renderDirectMarker` below have NO caller in
+// the app. A leading `@Name <text>` used to route the draft to that chat; it is
+// context now (shared/src/chat-context.ts has the why), so nothing in the
+// composer reaches them.
+//
+// They are kept, rather than deleted, because the RECEIVING half is live and
+// they are one feature: `parseDirectMarker` and `parseReportMarker` still render
+// a `<muxpad-direct>` message and the `<muxpad-report>` that answers it, which
+// is what an agent-initiated direction (`muxpad agent send`) draws. Re-enabling
+// the send side is a call to `directTo` from an explicit gesture — a picker
+// action, say — and not a rebuild.
+//
+// If you are reading this because grep said these were used: they are not. The
+// tests are the only callers.
 //
 // A directed message and its answer are REAL delivered messages: muxpad never
 // writes an agent's transcript, it tails the file the harness owns. So each one

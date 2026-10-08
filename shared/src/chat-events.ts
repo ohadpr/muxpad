@@ -5,7 +5,9 @@
 //
 // See docs/plans/2026-07-01-web-chat-session-switching.md.
 
+import { stripMentionContext } from './chat-context.js';
 import { parseCronMarker } from './cron.js';
+import { parseSpawnDelivery } from './spawn-delivery.js';
 import type { AgentMode } from './types.js';
 
 export interface StructuredPatchHunk {
@@ -31,6 +33,16 @@ interface Base {
 export interface UserTextEvent extends Base {
   kind: 'user';
   text: string;
+  /**
+   * This "message" is PLUMBING — a folded cron's injected instruction.
+   *
+   * It is a real delivered message (muxpad does not write the transcript, it
+   * tails the harness's own file) so it cannot simply be dropped; but nobody
+   * typed it and nobody rereads it, so it belongs in the collapsed run with the
+   * tool calls rather than as a bubble or behind a second, separate caret on
+   * the chip. See `expandCronFire`.
+   */
+  folded?: boolean;
 }
 export interface AssistantTextEvent extends Base {
   kind: 'assistant';
@@ -91,10 +103,17 @@ export interface NoticeEvent extends Base {
    *  for, so its scratchpad must never be promoted into a bubble. Without a
    *  transcript-level marker a reload cannot tell a stopped turn from a
    *  silent one, and the two halves of the guard would disagree. */
-  variant: 'task' | 'reminder' | 'cron' | 'interrupted';
+  variant: 'task' | 'reminder' | 'cron' | 'interrupted' | 'report';
   text: string;
   /** Secondary line, e.g. a task-notification's status. */
   detail?: string;
+  /**
+   * Content folded behind a caret — present only when there IS something to
+   * unfold. A quiet cron's prompt lives here instead of in a bubble of its own:
+   * the fire stays in the log and stays inspectable, while the plumbing it
+   * injected stops taking up the conversation.
+   */
+  body?: string;
   /** For a task-notification: the parent Task/Agent tool-use id it reports on.
    *  Lets the live roster match a subagent's FINISH to its launch reliably —
    *  a background agent's own tool_result is only the immediate launch ack. */
@@ -462,6 +481,29 @@ export function expandCronFire(text: string, id: string, ts: number | null): Cha
   const parsed = parseCronMarker(text);
   if (!parsed) return null;
   const { marker, body } = parsed;
+  // A FOLDED cron tucks its prompt into the chip rather than following it with a
+  // bubble: one row that says a schedule fired, with a caret for the plumbing.
+  // The agent's REPLY is untouched — it is an ordinary message — which is what
+  // keeps a failed fire visible without a special case for failure.
+  if (marker.fold) {
+    // The chip is a MARK, not a control. It says a schedule fired, and that is
+    // all it says — the prompt goes into the same collapsed run as the tool
+    // calls the fire produced, because it is the same kind of thing. It used to
+    // hang behind a caret on the chip, which gave one fire two separate folds
+    // and made the mark clickable for no reason a reader would guess.
+    const prompt = body.trim();
+    const notice: NoticeEvent = {
+      kind: 'notice',
+      id: `${id}:cron`,
+      ts,
+      variant: 'cron',
+      text: marker.name,
+      ...(marker.missed > 0
+        ? { detail: `${marker.missed} missed fire${marker.missed === 1 ? '' : 's'} collapsed` }
+        : {}),
+    };
+    return prompt ? [notice, { kind: 'user', id, ts, text: prompt, folded: true }] : [notice];
+  }
   const notice: NoticeEvent = {
     kind: 'notice',
     // Distinct id from the user bubble's — they are two React rows.
@@ -478,6 +520,34 @@ export function expandCronFire(text: string, id: string, ts: number | null): Cha
 }
 
 /**
+ * A batch of finished sub-chat reports arrives as `<muxpad-delivery …>…</…>` +
+ * the reports themselves. Same split as `expandCronFire`, for the same reason:
+ * the parent's transcript should read "⇤ 3 sub-chats reported" followed by what
+ * they said, not a wall of XML — and a human did not type any of it.
+ *
+ * Returns null for anything that isn't a delivery.
+ */
+export function expandSpawnDelivery(
+  text: string,
+  id: string,
+  ts: number | null,
+): ChatEvent[] | null {
+  const parsed = parseSpawnDelivery(text);
+  if (!parsed) return null;
+  const { marker, body } = parsed;
+  const notice: NoticeEvent = {
+    kind: 'notice',
+    // Distinct id from the bubble's — they are two React rows.
+    id: `${id}:report`,
+    ts,
+    variant: 'report',
+    text: `${marker.count} sub-chat${marker.count === 1 ? '' : 's'} reported`,
+  };
+  const reports = body.trim();
+  return reports ? [notice, { kind: 'user', id, ts, text: reports }] : [notice];
+}
+
+/**
  * Post-process an ALREADY-normalized event (the codex/cursor muxpad log,
  * whose lines are ChatEvents on disk). Today its only job is splitting a cron
  * fire out of a user bubble — the Claude path gets the same treatment inside
@@ -485,7 +555,28 @@ export function expandCronFire(text: string, id: string, ts: number | null): Cha
  */
 export function expandChatEvent(event: ChatEvent): ChatEvent[] {
   if (event.kind !== 'user') return [event];
-  return expandCronFire(event.text, event.id, event.ts) ?? [event];
+  return (
+    expandCronFire(event.text, event.id, event.ts) ??
+    expandSpawnDelivery(event.text, event.id, event.ts) ?? [forDisplay(event)]
+  );
+}
+
+/**
+ * A user message as the READER should see it.
+ *
+ * Strips the `<muxpad-context>` block an `@mention` appends — the handles for
+ * the chats the message referenced. The AGENT needs them (it reads the harness's
+ * own transcript, not this), and the reader does not: they typed
+ * "what did @Investing decide?" and that is what their bubble must say, with the
+ * mention rendering as a chip the way it always has.
+ *
+ * Without this the block is simply printed under every mention, which is the
+ * same defect the cron marker had in the queue preview — muxpad's plumbing
+ * shown to the person it was hidden from.
+ */
+function forDisplay(event: ChatEvent & { kind: 'user' }): ChatEvent {
+  const shown = stripMentionContext(event.text);
+  return shown === event.text ? event : { ...event, text: shown };
 }
 
 /**
@@ -580,7 +671,12 @@ export function normalizeTranscriptLine(line: unknown): ChatEvent[] {
       // prompt, never raw XML in a bubble.
       const cron = expandCronFire(content, id, ts);
       if (cron) return cron;
-      return [{ kind: 'user', id, ts, text: content }];
+      // …and so is a batch of sub-chat reports.
+      const reports = expandSpawnDelivery(content, id, ts);
+      if (reports) return reports;
+      // An `@mention`'s handles are for the agent, not the reader — see
+      // `forDisplay`.
+      return [{ kind: 'user', id, ts, text: stripMentionContext(content) }];
     }
     if (Array.isArray(content)) {
       const out: ChatEvent[] = [];

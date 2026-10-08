@@ -73,6 +73,96 @@ list. Capabilities worth knowing:
   APPS ARE PRIVATE (tailnet only) — never publish an app's data or suggest
   exposing it; \`publish\` is for static artifacts you MEAN to be public.
 
+- \`muxpad slack\` — the company Slack, read/write, from any pane and any
+  harness. \`slack read <#channel|@user> [--since=2h]\`, \`slack search
+  "<query>"\`, \`slack post <#channel|@user> "<text>" [--as-me]\`,
+  \`slack channels\`.
+
+  **ONLY WHEN ASKED.** Reading reaches the user's DMs and every private channel
+  they are in — it is their whole working life, not a public corpus. Go when a
+  task actually needs it ("what did Nadav say about X", "post the result to
+  #eng"); do not browse it for context nobody requested.
+
+  **\`--as-me\` POSTS UNDER THE USER'S OWN NAME**, with no bot badge, and the
+  audit log records them as the author. Without it you post as "muxpad", which
+  is obviously a machine and is the right default for anything you decided to
+  send. Only pass \`--as-me\` when the user has asked for a message to come
+  from THEM — never to make a message look more credible, and never because a
+  channel feels like it wants a human.
+
+  Reading never needs the bot invited anywhere; posting as muxpad does
+  (\`/invite @muxpad\`), and the error says so when it bites.
+
+## \`@mentions\` — a chat handed to you as CONTEXT
+
+When the user mentions another chat (\`@Investing\`), the message still comes to
+YOU. It arrives with a trailing \`<muxpad-context>\` block listing each mentioned
+chat's tab id and pane ids.
+
+**It is a reference, not an instruction to forward anything.** Do not relay the
+user's message to the mentioned chat — that is the behaviour this replaced, and
+it lost people's messages into other chats' queues.
+
+Decide what the sentence actually needs. Often nothing: "remind me to ask
+@Investing about cash" wants no lookup at all. When it does want one, cheapest
+first:
+
+    muxpad pane summarize <paneId>              a short summary
+    muxpad agent transcript <paneId> --tail=40  what was recently said
+    muxpad search "<query>"                     across every session ever run
+    muxpad agent send <paneId> "<question>"     ask it — only if that is the ask
+
+Start with the TAIL. It is cheap and usually enough; a summary costs a model
+call and a full transcript can be a hundred KB. Go deeper only when the tail
+does not answer the question.
+
+## Cards — the value that should not scroll away
+
+A chat can hold named CARDS, pinned above the conversation. Setting the same
+name again REPLACES that card. The transcript is the history; a card is the
+current answer.
+
+    muxpad card set build "V2.1 [####------] 42%  layout · 3/6 streams done"
+    muxpad card set panel --format=html < panel.html
+    muxpad card set market --format=md --every=1d "**open** SPX +0.4% · VIX 13.1"
+    muxpad card get build        # the content, bare — read-modify-write
+    muxpad card list
+    muxpad card clear build
+
+**USE ONE WHEN THE NEW VALUE REPLACES THE OLD ONE.** Long work whose progress
+you would otherwise re-print; a figure refreshed on a schedule; a status only
+interesting at its latest value. If a reader would want the history, that is a
+message, not a card — and most things are messages.
+
+**The content is yours.** text, markdown or html, and muxpad imposes no fields
+and no components. An html card renders in a sandboxed frame: it can use
+\`var(--accent)\`, \`var(--fg)\`, \`var(--bg-hover)\` and friends (the app's theme is
+injected) and it cannot reach the app. Keep it under 64KB — a card is pinned
+where it cannot be scrolled past, so a card the height of the screen is worse
+than no card. For anything bigger, \`muxpad publish\`.
+
+A SUGGESTED progress line, because one shared shape is easier to read at a
+glance than six inventions — a convention, not a rule, and not a component:
+
+    V2.1 [############--------] 62%  edge live · 4/6 streams done
+
+\`--every=<30s|15m|6h|1d>\` says how often you MEAN to rewrite it. muxpad marks
+the card overdue if you stop, which is the failure nobody notices: a card whose
+writer died looks exactly like a card with nothing new to say.
+
+**Clear a card when its work is over.** A finished build's bar at 100% is an
+ornament; the next reader wants the space.
+
+A cron can write a card like anything else — it is just a scheduled caller, it
+does not own the card, and several schedules may share one (read it with
+\`card get\`, edit your part, write it back).
+
+A cron whose prompt is pure plumbing — "run this, write that card" — should be
+created with \`--fold\`, so the fire shows as one collapsed row with a caret
+instead of pasting the same instruction into the log every time. It folds the
+PROMPT only: whatever the agent replies stays visible, which is what keeps a
+failed fire from disappearing.
+
 ## Scheduling — \`muxpad cron\` is the ONLY scheduler on this machine
 
 **Anything that should happen LATER — once or repeatedly — is a \`muxpad
@@ -294,20 +384,28 @@ shows up in the sidebar with its own row, its own state mark, its own transcript
 and a card in your log; the user can open it, read it, interrupt it, and see what
 it cost.
 
-**SPAWN, THEN WAIT — or nothing will ever resume you.** A child finishing does
-NOT start a turn in the parent. Its report is written to its tab row and drawn as
-a card in your log, and a card is a picture: nothing in muxpad delivers it to you
-as a message, deliberately (a crashed worker never reaches a reporting step,
-which is exactly when you most need telling). So if you spawn workers and end
-your turn saying "I'll check when they land", you will not check, ever. Twice in
-one session an orchestrator here did exactly that.
+**THEIR REPORTS COME BACK TO YOU — you do not have to wait for them.** When a
+child finishes, muxpad delivers its result into THIS conversation as a message,
+which starts a turn. A fan-out is held until the whole batch has landed and
+arrives as ONE message, so twenty workers do not wake you twenty times. You will
+see a \`⇤ N sub-chats reported\` chip followed by what they said.
 
-Wait like this, in the BACKGROUND, so it costs no tokens and wakes you when the
-worker is done:
+So the normal shape is: spawn them, say what you are waiting for, and END YOUR
+TURN. The delivery is what resumes you. Do not poll, and do not hold a
+\`muxpad agent wait\` per child just to find out they finished.
 
-    muxpad agent wait <paneId> --timeout=3600
+Three things worth knowing about it:
+ · **A CRASHED worker is reported too.** The server authors the delivery, so it
+   can tell you about a child that died before it ever reached a reporting step
+   — the case a \`wait\` loop is worst at.
+ · **It is a RESULT, not a question.** Nobody is sitting there waiting on a
+   reply to it. Act on it, or carry on if nothing is needed.
+ · **A long report is truncated** to keep a 60-way fan-out from filling your
+   context; the child's own transcript has the whole thing if you need it.
 
-TWO THINGS THAT WILL BITE YOU, both observed:
+\`muxpad agent wait <paneId> --timeout=SEC\` still exists, for when you need to
+block on ONE named worker before doing the next thing rather than be told later.
+If you use it, two things will bite you, both observed:
  · **It wants the PANE id, and \`agent new\` prints a tab URL too.** The two are
    ULIDs minted in the same millisecond, so they share a long prefix and a
    careless grep takes the wrong one — \`01M3TP84G9AW…\` for \`01M3TP84G98A…\`.
@@ -357,6 +455,9 @@ backend, mode, status).
 
 ## Waiting without burning tokens
 
+- **A sub-chat you spawned needs no waiting at all** — its result is delivered
+  into your conversation when it lands, and a fan-out arrives as one message.
+  See "Delegating work" above. The rest of this list is for everything else.
 - \`muxpad agent wait <paneId> --timeout=SEC\` blocks until that agent's turn
   finishes (exit 0 done/already idle, 1 not an agent pane, 2 fatal, 3
   timeout). Run it in the background from your Bash tool and you get woken

@@ -4,8 +4,8 @@ import {
   type AgentMode,
   BASELINE_AGENT_MODE,
   isBootstrapTabName,
+  isMachineMessage,
   modeForBackend,
-  parseCronMarker,
   sanitizeAgentStatus,
 } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
@@ -13,8 +13,15 @@ import { WebSocket, WebSocketServer } from 'ws';
 import type { AgentBridge } from './agent-bridge.js';
 import { recordModelCatalog } from './agent-model-catalog.js';
 import {
+  PARK_AFTER_MS,
+  PARK_RETIRED_AFTER_MS,
+  PARK_SWEEP_MS,
+  shouldParkPane,
+} from './agent-park.js';
+import {
   type ResumeRepair,
   describeRepair,
+  locateAnyTranscript,
   repairAllResumeTargets,
   repairPaneResume,
 } from './agent-resume-repair.js';
@@ -711,9 +718,15 @@ export function attachWsServer(deps: {
     if (!first || first.done) return null;
     return { qid: first.value[0], questions: first.value[1] };
   };
-  // A message that carries a cron fire marker was written by the scheduler,
-  // not typed by anyone. One predicate, shared by both relay paths.
-  const isHumanMessage = (text: string) => parseCronMarker(text) === null;
+  // Was this typed by a person? One predicate, shared by both relay paths.
+  //
+  // NOT `parseCronMarker(text) === null`, which is what this was. The question
+  // is "is a PERSON typing", and cron stopped being the only thing muxpad
+  // injects the moment the join landed: a batch of sub-chat reports arriving
+  // would have read as the user's own keystrokes, which suppresses the push for
+  // the very turn they are waiting on and defers a due cron behind `quiet_mins`.
+  // `isMachineMessage` owns the list so the next injected type cannot miss it.
+  const isHumanMessage = (text: string) => !isMachineMessage(text);
   const agentRunners = new Map<string, AgentRunnerConn>();
   /**
    * Publish the pane's subagent count to the cache — the number `GET /api/panes`
@@ -870,6 +883,49 @@ export function attachWsServer(deps: {
     `agent exited — automatic restarts failed; see ~/.muxpad/agent-logs/${paneId}.log, then rerun \`muxpad agent\` from the pane's terminal face`;
   // Single-flight: a slow ptyd must not stack overlapping sweeps.
   let sweepInFlight = false;
+  /**
+   * Give this pane a process. Shared by the DEAD path and the PARKED one.
+   *
+   * Extracted so the two can differ in everything that matters — what the
+   * reader is told, and whether an attempt is spent — while the act of starting
+   * a process stays one piece of code. They used to be the same path, which is
+   * why reviving a parked chat announced "agent process died".
+   */
+  const spawnAgentPane = async (paneId: string): Promise<void> => {
+    try {
+      try {
+        await deps.ptyd.killPane(paneId);
+      } catch {
+        // pane not in ptyd (reboot-orphaned, or parked) — ensurePane spawns it
+      }
+      // Both probes awaited RPCs. Deletion, archival, or conversion in that gap
+      // revokes our ownership; never resurrect their stale row. This also picks
+      // up a resume repair or move made during the wait.
+      const fresh = panes.getById(paneId);
+      if (
+        !fresh ||
+        fresh.kind !== 'shell' ||
+        !fresh.startup_cmd?.startsWith('muxpad agent') ||
+        tabs.clockRow(fresh.tab_id)?.retired_at !== null
+      )
+        return;
+      const workspaceId = tabs.getWorkspaceId(fresh.tab_id);
+      await deps.ptyd.ensurePane({
+        id: fresh.id,
+        shell: fresh.shell ?? process.env.SHELL ?? '/bin/zsh',
+        startup_cmd: fresh.startup_cmd,
+        cwd: safeCwd(fresh.cwd),
+        env: fresh.env,
+        tab_id: fresh.tab_id,
+        ...(workspaceId !== undefined ? { workspace_id: workspaceId } : {}),
+      });
+    } catch {
+      // ptyd unreachable — for the dead path the attempt is spent and the next
+      // sweep retries after the cooldown; for a revival the next sweep simply
+      // tries again, since nothing was counted.
+    }
+  };
+
   const sweepDeadRunners = async () => {
     if (sweepInFlight) return;
     sweepInFlight = true;
@@ -1005,6 +1061,21 @@ export function attachWsServer(deps: {
             });
           }
         }
+        // ─── PARKED IS NOT DEAD ────────────────────────────────────────
+        // muxpad stopped this one on purpose (agent-park.ts) and something now
+        // wants it: a queued send, or somebody opening the chat. That is a
+        // REVIVAL, and it must not borrow the death path's two behaviours —
+        // telling the reader "agent process died", and spending one of the
+        // three attempts that exist to stop a genuinely broken command looping.
+        //
+        // `unpark` answers "was it parked" and clears the flag in one statement,
+        // so this cannot fire twice for one waking.
+        if (panes.unpark(pane.id)) {
+          bcastToPane(pane.id, { t: 'notice', message: 'waking this chat…' });
+          emitPaneUpdated(pane.id);
+          await spawnAgentPane(pane.id);
+          continue;
+        }
         st.lastAt = Date.now();
         st.attempts += 1;
         respawns.set(pane.id, st);
@@ -1037,43 +1108,70 @@ export function attachWsServer(deps: {
           t: 'notice',
           message: `agent process died — restarting (attempt ${st.attempts}/${RESPAWN_MAX_ATTEMPTS})…`,
         });
-        try {
-          try {
-            await deps.ptyd.killPane(pane.id);
-          } catch {
-            // pane not in ptyd (reboot-orphaned) — ensurePane spawns it fresh
-          }
-          // Both probes awaited RPCs. Deletion, archival, or conversion in
-          // that gap revokes our ownership; never resurrect their stale row.
-          // This also picks up a resume repair or move made during the wait.
-          const fresh = panes.getById(pane.id);
-          if (
-            !fresh ||
-            fresh.kind !== 'shell' ||
-            !fresh.startup_cmd?.startsWith('muxpad agent') ||
-            tabs.clockRow(fresh.tab_id)?.retired_at !== null
-          )
-            continue;
-          const workspaceId = tabs.getWorkspaceId(fresh.tab_id);
-          await deps.ptyd.ensurePane({
-            id: fresh.id,
-            shell: fresh.shell ?? process.env.SHELL ?? '/bin/zsh',
-            startup_cmd: fresh.startup_cmd,
-            cwd: safeCwd(fresh.cwd),
-            env: fresh.env,
-            tab_id: fresh.tab_id,
-            ...(workspaceId !== undefined ? { workspace_id: workspaceId } : {}),
-          });
-        } catch {
-          // ptyd unreachable — the attempt is spent; the next sweep retries
-          // after the cooldown.
-        }
+        await spawnAgentPane(pane.id);
       }
     } finally {
       sweepInFlight = false;
     }
   };
   const respawnSweep = setInterval(() => void sweepDeadRunners(), RESPAWN_SWEEP_MS);
+
+  /**
+   * Stop the process of a chat nobody has touched in days — the other half of
+   * the lazy-start policy (agent-park.ts has the argument and the numbers).
+   *
+   * HERE, and not in index.ts with the other sweeps, for one reason: the
+   * decision needs to know who has a chat OPEN, and that is `chatClients` —
+   * live websockets, which only this module can see. Parking a chat somebody is
+   * reading would be the one unforgivable version of this feature.
+   *
+   * Nothing new is needed to bring them back. `listAgentPanes` already starts a
+   * pane that has queued work, and the sweep above already starts one somebody
+   * is watching; the only change was teaching that path to tell a parked pane
+   * from a dead one.
+   */
+  const sweepParkedPanes = async (): Promise<void> => {
+    try {
+      const now = Date.now();
+      for (const c of panes.listParkCandidates()) {
+        if (
+          !shouldParkPane({
+            status: c.status,
+            watched: chatClients.has(c.pane.id),
+            queued: c.queued,
+            openRounds: c.openRounds,
+            isSubChat: c.isSubChat,
+            retired: c.retired,
+            // The cache's own five-state answer, not a second opinion about
+            // what `blocked` means — `blocked` is "a question awaits you, or a
+            // BEL rang", and that definition lives there (see getStatus).
+            blocked: deps.cache.getStatus(c.pane.id, false) === 'blocked',
+            parked: c.parked,
+            idleMs: c.lastActivityAt === null ? null : now - c.lastActivityAt,
+            idleThresholdMs: PARK_AFTER_MS,
+            retiredThresholdMs: PARK_RETIRED_AFTER_MS,
+          })
+        )
+          continue;
+        // A runner that is connected right now is told nothing: killing the pty
+        // takes its socket with it, and the runner's own exit path is what the
+        // registry already handles for any pane that goes away.
+        try {
+          await deps.ptyd.killPane(c.pane.id);
+        } catch {
+          // Already gone, or ptyd is unreachable. Marking it parked anyway is
+          // right in both cases: there is no process, which is the state this
+          // records, and a pane wrongly marked is un-marked by the first thing
+          // that wants it.
+        }
+        panes.park(c.pane.id, now);
+        emitPaneUpdated(c.pane.id);
+      }
+    } catch (err) {
+      console.error('[park] sweep failed', err);
+    }
+  };
+  const parkSweep = setInterval(() => void sweepParkedPanes(), PARK_SWEEP_MS);
 
   /**
    * Unlist subagents that stopped making progress. See {@link reapStalledEntries}
@@ -2003,6 +2101,14 @@ export function attachWsServer(deps: {
         }
         clients.add(send);
         deps.onChatPresence?.(chatPaneId, clients.size);
+        // OPENING a parked chat should wake it, not make you wait for the next
+        // sweep. The sweep is what does the waking — it is the one place that
+        // knows how — but it runs on a 20s timer, and twenty seconds of a chat
+        // that looks dead is how a feature meant to save memory gets reported
+        // as a bug. Sending already nudges it for the same reason; this is the
+        // other way in. Cheap: the sweep is single-flight and a pane with a
+        // live runner falls out of it immediately.
+        if (panes.isParked(chatPaneId)) void sweepDeadRunners();
         const unregister = () => {
           clients.delete(send);
           const remaining = clients.size;
@@ -2143,7 +2249,49 @@ export function attachWsServer(deps: {
                 : {}),
             });
           }
-          const sid = session?.current_sid ?? null;
+          // ── THE RESUME TARGET MUST ACTUALLY HAVE A TRANSCRIPT ──────────
+          //
+          // `current_sid` is re-pointed by `recordSessionId` the instant the
+          // SessionStart hook names a session. That is right in the normal
+          // case and wrong whenever the named session then writes NOTHING — an
+          // interrupted first turn, a probe, a runner that died — because the
+          // pointer now names a file that will never exist while the real
+          // conversation sits in `lineage`.
+          //
+          // The repair for this already exists and already runs, at boot and on
+          // respawn. Neither reaches a pane that drifts while it is simply
+          // sitting open, which is precisely when somebody is looking at it:
+          // observed on a 130 MB conversation whose pane had chased three
+          // successive sids with no file, showing an empty chat on every device
+          // and surviving every client-side remedy, because the fault was here.
+          //
+          // So the same repair runs at BIND, the moment of harm, and only when
+          // the sid fails to resolve — which is rare, and costs one stat per
+          // candidate when it happens. It rewrites `current_sid` and the pane's
+          // `startup_cmd` together, so the next respawn cannot re-break it.
+          let session2 = session;
+          const bound = session?.current_sid ?? null;
+          if (bound && !locateAnyTranscript(bound)) {
+            const repaired = repairPaneResume(deps.db, chatPaneId);
+            if (repaired) {
+              announceRepairs([repaired], 'chat-bind');
+              session2 = agents.getByPane(chatPaneId);
+            } else {
+              // NOTHING TO RECOVER, and this is the case that cost hours: the
+              // pane renders an empty chat that is indistinguishable from a new
+              // one, with no toast, no error and no log line. Say it once, here,
+              // with the sid in hand.
+              console.warn(
+                `[chat] pane ${chatPaneId}: no transcript for current_sid ${bound} ` +
+                  'and no recoverable sid in its history — the chat will render empty',
+              );
+              send({
+                t: 'notice',
+                message: `No transcript found for this chat's session (${bound.slice(0, 8)}…). Its history could not be recovered.`,
+              });
+            }
+          }
+          const sid = session2?.current_sid ?? null;
           if (sid === tailSid) return;
           tail?.close();
           tail = null;
@@ -2157,7 +2305,7 @@ export function attachWsServer(deps: {
             // transcript — the runner writes a muxpad-owned normalized log
             // instead. Point the tail at that log with the identity normalizer;
             // Claude keeps its ~/.claude file + schema translation unchanged.
-            const nonClaude = session?.assistant && session.assistant !== 'claude';
+            const nonClaude = session2?.assistant && session2.assistant !== 'claude';
             tail = new TranscriptTail(sid, {
               tailBytes: CHAT_HISTORY_TAIL_BYTES,
               onEvents: (events, phase) => send({ t: 'events', phase, events }),
@@ -2418,6 +2566,7 @@ export function attachWsServer(deps: {
       new Promise<void>((resolve) => {
         clearInterval(heartbeat);
         clearInterval(respawnSweep);
+        clearInterval(parkSweep);
         clearInterval(stallSweep);
         for (const paneId of [...probation.keys()]) clearProbation(paneId);
         for (const client of wss.clients) {

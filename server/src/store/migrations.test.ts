@@ -519,7 +519,7 @@ describe('migrations v21 — agent modes + the living sidebar', () => {
       .prepare('SELECT version FROM schema_version ORDER BY version DESC LIMIT 1')
       .get() as { version: number };
     expect(v.version).toBe(LATEST_SCHEMA_VERSION);
-    expect(LATEST_SCHEMA_VERSION).toBe(36);
+    expect(LATEST_SCHEMA_VERSION).toBe(41);
   });
 });
 
@@ -1414,5 +1414,91 @@ describe('migrations v34 — the workers that finished before rounds existed', (
     const mine = rounds(db).filter((r) => (r as { tab_id: string }).tab_id === 'done1');
     expect(mine).toHaveLength(1);
     expect(mine[0]).toMatchObject({ started_at: 111, ended_at: 222 });
+  });
+});
+
+describe('v38 — the join: spawn_rounds.delivered_at', () => {
+  /** A database at v37: rounds exist, nothing knows about delivery. */
+  function v37(): Database.Database {
+    const db = new Database(':memory:');
+    runMigrations(db, { upTo: 37 });
+    db.prepare(
+      'INSERT INTO workspaces (id, slug, name, created_at, updated_at) VALUES (?,?,?,?,?)',
+    ).run('w1', 'w1', 'W', 1, 1);
+    const tab = (id: string, parent: string | null) =>
+      db
+        .prepare(
+          `INSERT INTO tabs (id, slug, name, layout, workspace_id, created_at, updated_at, spawned_by)
+           VALUES (?,?,?,?,?,?,?,?)`,
+        )
+        .run(id, id, id, JSON.stringify(`p-${id}`), 'w1', 1, 1, parent);
+    tab('parent', null);
+    tab('kid', 'parent');
+    tab('kid2', 'parent');
+    // Two finished rounds — the history — and one still running.
+    db.prepare(
+      `INSERT INTO spawn_rounds (id, tab_id, started_at, ended_at, report, report_state)
+       VALUES ('r1','kid',100,200,'old news','ok')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO spawn_rounds (id, tab_id, started_at, ended_at, report, report_state)
+       VALUES ('r2','kid2',300,400,'also old','ok')`,
+    ).run();
+    db.prepare("INSERT INTO spawn_rounds (id, tab_id, started_at) VALUES ('r3','kid',500)").run();
+    return db;
+  }
+
+  const stamp = (db: Database.Database, id: string) =>
+    (
+      db.prepare('SELECT delivered_at FROM spawn_rounds WHERE id = ?').get(id) as {
+        delivered_at: number | null;
+      }
+    ).delivered_at;
+
+  it('BACKFILLS EVERY FINISHED ROUND AS DELIVERED', () => {
+    // The one line of this migration that cannot be left out. `delivered_at IS
+    // NULL` is the queue the sweeper drains, so without the backfill the first
+    // boot after the upgrade reads all 181 finished historical rounds on the
+    // real install as a pending backlog — and hands each of the three big
+    // orchestrators a message reporting on dozens of workers that finished days
+    // ago.
+    const db = v37();
+    runMigrations(db);
+    expect(stamp(db, 'r1')).toBe(200); // its own ended_at, not "now"
+    expect(stamp(db, 'r2')).toBe(400);
+  });
+
+  it('leaves an UNFINISHED round null — it has produced nothing to deliver', () => {
+    const db = v37();
+    runMigrations(db);
+    expect(stamp(db, 'r3')).toBeNull();
+  });
+
+  it('A RE-RUN DOES NOT STEAL A PENDING DELIVERY', () => {
+    // The backfill sits inside the ADD COLUMN branch, and this is why. A second
+    // pass — the idempotency check below, or a restore from backup that lost
+    // schema_version — happens when the column is already LIVE, so a round
+    // waiting to be delivered would be stamped "already delivered" and its
+    // report lost with no trace. The column existing is proof the backfill has
+    // already run, so the re-run must leave the queue alone.
+    const db = v37();
+    runMigrations(db);
+    // r1 is now a round whose result is genuinely pending delivery.
+    db.prepare('UPDATE spawn_rounds SET delivered_at = NULL WHERE id = ?').run('r1');
+    db.prepare('DELETE FROM schema_version WHERE version >= 38').run();
+    expect(() => runMigrations(db)).not.toThrow();
+    expect(stamp(db, 'r1')).toBeNull(); // still owed — NOT swallowed
+    expect(stamp(db, 'r2')).toBe(400); // untouched
+  });
+
+  it('adds the column once, not twice', () => {
+    const db = v37();
+    runMigrations(db);
+    db.prepare('DELETE FROM schema_version WHERE version >= 38').run();
+    expect(() => runMigrations(db)).not.toThrow();
+    const cols = (
+      db.prepare('PRAGMA table_info(spawn_rounds)').all() as Array<{ name: string }>
+    ).filter((c) => c.name === 'delivered_at');
+    expect(cols).toHaveLength(1);
   });
 });

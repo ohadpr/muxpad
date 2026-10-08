@@ -138,6 +138,43 @@ describe('dead-runner sweep vs a ptyd outage', () => {
     chat.sock.close();
   });
 
+  it('a PARKED pane wakes — it does not "die"', async () => {
+    // muxpad stopped this one on purpose (agent-park.ts). The sweep is still
+    // what starts it again, but the two must not share a voice: telling a
+    // reader "agent process died — restarting (attempt 1/3)" about a chat
+    // muxpad itself put to sleep is a lie, and spending one of the three
+    // attempts that exist to stop a crash loop is a real cost.
+    const { db, handle, port, paneId } = await boot();
+    const chat = await openChat(port, paneId);
+    new PaneStore(db).park(paneId, Date.now());
+
+    await handle.sweepDeadRunners();
+    await settle();
+
+    expect(chat.restarts()).toHaveLength(0);
+    const waking = chat.frames.filter(
+      (f) => typeof f.message === 'string' && /waking/i.test(f.message),
+    );
+    expect(waking).toHaveLength(1);
+    // …and the flag is cleared, so the next sweep is an ordinary one rather
+    // than a second announcement of the same waking.
+    expect(new PaneStore(db).isParked(paneId)).toBe(false);
+    chat.sock.close();
+  });
+
+  it('says it once — a second sweep is not a second waking', async () => {
+    const { db, handle, port, paneId } = await boot();
+    const chat = await openChat(port, paneId);
+    new PaneStore(db).park(paneId, Date.now());
+    await handle.sweepDeadRunners();
+    await settle();
+    const after = chat.frames.filter(
+      (f) => typeof f.message === 'string' && /waking/i.test(f.message),
+    ).length;
+    expect(after).toBe(1);
+    chat.sock.close();
+  });
+
   it('burns no attempt, says nothing, and keeps the queue when ptyd is unreachable', async () => {
     const { db, handle, ptyd, port, paneId } = await boot();
     const chat = await openChat(port, paneId);

@@ -24,6 +24,7 @@ interface PaneRow {
   unread: number;
   mode: string | null;
   created_at: number;
+  parked_at: number | null;
 }
 
 export class PaneStore {
@@ -137,6 +138,99 @@ export class PaneStore {
    * all. Measured on this machine at the time of the change: 35 live agent
    * tabs, 0 of them unretired sub-chats.
    */
+  /**
+   * Agent panes that are CANDIDATES for parking — the mirror of
+   * `listAgentPanes`, which answers "which panes need a process".
+   *
+   * Returns the facts the decision needs (see agent-park.ts) in one query
+   * rather than a lookup per pane: on this machine the sweep would otherwise be
+   * five round trips times a hundred-odd panes, every ten minutes, to park
+   * nothing most of the time.
+   *
+   * `watched` is deliberately NOT here. Who has a chat open is a fact about
+   * live websockets, which only ws.ts knows; the caller supplies it.
+   */
+  listParkCandidates(): Array<{
+    pane: PaneSpec;
+    status: string | null;
+    queued: number;
+    openRounds: number;
+    isSubChat: boolean;
+    parked: boolean;
+    lastActivityAt: number | null;
+    retired: boolean;
+  }> {
+    const rows = this.db
+      .prepare(
+        `SELECT p.*,
+                s.status AS _status,
+                (SELECT COUNT(*) FROM agent_queue q WHERE q.pane_id = p.id) AS _queued,
+                (SELECT COUNT(*) FROM spawn_rounds r
+                  WHERE r.tab_id = p.tab_id AND r.ended_at IS NULL) AS _rounds,
+                (t.spawned_by IS NOT NULL) AS _sub,
+                t.last_activity_at AS _active,
+                t.retired_at AS _retired
+           FROM panes p
+           JOIN tabs t ON t.id = p.tab_id
+      LEFT JOIN agent_sessions s ON s.pane_id = p.id
+          -- RETIRED TABS ARE INCLUDED, and they are the point. A chat that has
+          -- left the live list is finished by definition, yet nothing ever
+          -- stopped its process: measured here, 84 of 123 runners belonged to
+          -- retired tabs. listAgentPanes excludes them precisely because they
+          -- must not be auto-started, which is the same fact read the other way
+          -- round — they are the safest thing on the machine to stop.
+          WHERE p.startup_cmd LIKE 'muxpad agent%'`,
+      )
+      .all() as Array<
+      PaneRow & {
+        _status: string | null;
+        _queued: number;
+        _rounds: number;
+        _sub: number;
+        _active: number | null;
+        _retired: number | null;
+      }
+    >;
+    return rows.map((r) => ({
+      pane: this.row(r) as PaneSpec,
+      status: r._status,
+      queued: r._queued,
+      openRounds: r._rounds,
+      isSubChat: r._sub === 1,
+      parked: r.parked_at !== null,
+      lastActivityAt: r._active,
+      retired: r._retired !== null,
+    }));
+  }
+
+  /** muxpad stopped this pane's process on purpose. */
+  park(id: string, at: number = Date.now()): void {
+    this.db.prepare('UPDATE panes SET parked_at = ? WHERE id = ?').run(at, id);
+  }
+
+  /**
+   * …and it is wanted again. Returns true if it WAS parked, which is what lets
+   * the caller say "waking" exactly once rather than on every sweep.
+   */
+  unpark(id: string): boolean {
+    // `AND parked_at IS NOT NULL` is load-bearing: SQLite counts rows MATCHED,
+    // not rows whose value changed, so without it this reports true for a pane
+    // that was never parked — and the caller uses the answer to decide whether
+    // to say "waking", which would then be said on every ordinary send.
+    return (
+      this.db
+        .prepare('UPDATE panes SET parked_at = NULL WHERE id = ? AND parked_at IS NOT NULL')
+        .run(id).changes > 0
+    );
+  }
+
+  isParked(id: string): boolean {
+    const r = this.db.prepare('SELECT parked_at FROM panes WHERE id = ?').get(id) as
+      | { parked_at: number | null }
+      | undefined;
+    return !!r && r.parked_at !== null;
+  }
+
   listAgentPanes(): PaneSpec[] {
     const rows = this.db
       .prepare(

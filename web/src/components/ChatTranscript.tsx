@@ -17,9 +17,20 @@ import {
   type NoticeEvent,
   type ToolResultEvent,
   type ToolUseEvent,
+  parseCronMarker,
+  stripMentionContext,
   summarizeToolInput,
 } from '@muxpad/shared';
-import { createContext, memo, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  createContext,
+  memo,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { type MessagePart, splitMessageAttachments } from '../lib/attachments';
 import {
   type MentionChat,
@@ -27,6 +38,7 @@ import {
   parseMentions,
   parseReportMarker,
 } from '../lib/chat-mention';
+import { fireTime } from '../lib/chat-voice';
 import type { SpawnWork } from '../lib/spawn-work';
 import { HighlightedText, Markdown } from './ChatMarkdown';
 import { ChatMentionCard, ChatMentionPill } from './ChatMentionPicker';
@@ -35,7 +47,16 @@ import { FromAgentMessage } from './FromAgentMessage';
 import { SvgAgentGlyph } from './PaneWebSwitch';
 
 /** Open a full-screen image or video. Lives here with the media it opens. */
-export type OpenMedia = (m: { url: string; name: string; video: boolean }) => void;
+/** One openable attachment. */
+export type MediaItem = { url: string; name: string; video: boolean };
+/**
+ * Open the lightbox on a SET, at an index.
+ *
+ * Not a single item: a message with three screenshots used to open the one you
+ * tapped and dead-end there, so the whole gallery travels with the request and
+ * the modal can step through it.
+ */
+export type OpenMedia = (m: { items: MediaItem[]; index: number }) => void;
 
 /** A question card the agent is waiting on. */
 export type PendingQuestion = { qid: string; questions: AgentQuestion[] };
@@ -216,7 +237,12 @@ export function ActionGroup({
             // deliberately not.
             e.kind === 'assistant'
             ? 'notes'
-            : 'result';
+            : // A folded cron's instruction, named for the same reason: the
+              // header must say the prompt is in there rather than let it
+              // vanish.
+              e.kind === 'user'
+              ? 'prompt'
+              : 'result';
     counts.set(name, (counts.get(name) ?? 0) + 1);
     if (e.kind === 'tool_result' && !e.ok) failed++;
   }
@@ -233,7 +259,10 @@ export function ActionGroup({
   // whole design in the reader's head while the mechanism underneath was
   // correct. Name it for what it is; the count returns the moment a real
   // action joins the run.
-  const notesOnly = events.every((e) => e.kind === 'assistant');
+  // A run of ONLY prose and injected instructions did no WORK either — the same
+  // argument as the line above, extended to a folded cron whose whole turn was
+  // "read this, run nothing, say closed".
+  const notesOnly = events.every((e) => e.kind === 'assistant' || e.kind === 'user');
   const countLabel = notesOnly
     ? `${actions === 1 ? 'note' : `${actions} notes`}`
     : `${actions} action${actions === 1 ? '' : 's'}`;
@@ -363,7 +392,7 @@ export const ChatRow = memo(function ChatRow({
 // as a clickable thumbnail (loaded over HTTP so it works from any device) while
 // keeping the surrounding prose; the raw path stays in the title for reference.
 export function UserText({
-  text,
+  text: raw,
   onOpenImage,
   hl,
 }: {
@@ -371,6 +400,18 @@ export function UserText({
   onOpenImage?: OpenMedia | undefined;
   hl?: readonly string[] | undefined;
 }) {
+  // ─── THE ONE PLACE RAW OUTGOING TEXT BECOMES A BUBBLE ───────────────────
+  // An `@mention` appends a `<muxpad-context>` block carrying the handles for
+  // the chats it referenced. The AGENT needs them; the reader does not — they
+  // typed "what did @Investing decide?" and that is what their bubble must say.
+  //
+  // Stripped HERE because three different inputs reach this component and two
+  // of them never pass through the transcript normalizer: the optimistic echo
+  // (the server's turn-start text, shown in the seconds before the transcript
+  // catches up) and the queued preview (the raw message still waiting to go).
+  // Patching each site is how one gets missed — the optimistic one already had
+  // been.
+  const text = stripMentionContext(raw);
   const parts = splitMessageAttachments(text);
   if (parts.length === 1 && parts[0]?.kind === 'text') return <MentionedText text={text} hl={hl} />;
   return (
@@ -458,35 +499,113 @@ function AssistantText({
   );
 }
 
-// Full-size pasted image in a lightbox; mirrors ToolModal's dismiss behaviour
-// (Escape, backdrop scrim, close button).
+/**
+ * Full-size media in a lightbox; mirrors ToolModal's dismiss behaviour
+ * (Escape, backdrop scrim, close button).
+ *
+ * IT OWNS A GALLERY, NOT AN IMAGE. A message with three screenshots used to
+ * open whichever one you tapped and then dead-end: to see the next you closed,
+ * found the thumbnail, tapped again. So the modal takes the whole set and an
+ * index, and the arrows (and ← → and swipe) move inside it.
+ */
 export function ImageModal({
-  url,
-  name,
-  video,
+  items,
+  index,
+  onIndex,
   onClose,
 }: {
-  url: string;
-  name: string;
-  video: boolean;
+  items: MediaItem[];
+  index: number;
+  onIndex: (i: number) => void;
   onClose: () => void;
 }) {
+  const many = items.length > 1;
+  // Clamped rather than trusted: the caller's index and the caller's list are
+  // two pieces of state and a stale pair must not render a blank modal.
+  const at = Math.min(Math.max(index, 0), Math.max(items.length - 1, 0));
+  const item = items[at];
+  const go = useCallback(
+    (delta: number) => {
+      if (items.length < 2) return;
+      // Wraps. With a handful of images the end of the set is not a wall worth
+      // enforcing, and wrapping means the arrows never go dead.
+      onIndex((at + delta + items.length) % items.length);
+    },
+    [at, items.length, onIndex],
+  );
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
+      else if (e.key === 'ArrowRight') go(1);
+      else if (e.key === 'ArrowLeft') go(-1);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [onClose, go]);
+  if (!item) return null;
   return (
     <div className="chat-modal-backdrop chat-img-backdrop">
       <button type="button" className="chat-modal-scrim" aria-label="Close" onClick={onClose} />
-      {video ? (
-        // biome-ignore lint/a11y/useMediaCaption: user-shared clip, no track available
-        <video className="chat-img-full" src={url} controls autoPlay playsInline />
-      ) : (
-        <ZoomableImage url={url} name={name} />
-      )}
+      <div className="chat-img-stage">
+        {/* The FRAME is what the image is measured against, and it has a size of
+            its own: `flex: 1; min-height: 0` inside a stage that is pinned to
+            the backdrop. Without it the stage was sized BY the image and
+            `computeFit` then measured the stage — the image defining the box it
+            was supposed to fit inside, which resolved to "no constraint at all"
+            and hung 118px below the viewport. It also keeps the nav's height
+            out of the image's budget, so the controls can never be pushed off
+            the bottom by a tall picture. */}
+        <div className="chat-img-frame">
+          {item.video ? (
+            // biome-ignore lint/a11y/useMediaCaption: user-shared clip, no track available
+            <video
+              // KEYED ON THE URL so stepping between two clips reloads the
+              // element: React would otherwise reuse it and keep playing the
+              // old source's buffer against the new src.
+              key={item.url}
+              className="chat-img-full"
+              src={item.url}
+              controls
+              autoPlay
+              playsInline
+            />
+          ) : (
+            <ZoomableImage
+              // Same reason, plus: the key resets zoom and pan, so you never
+              // arrive at the next image already scrolled into its corner.
+              key={item.url}
+              url={item.url}
+              name={item.name}
+              onSwipe={many ? go : undefined}
+            />
+          )}
+        </div>
+        {many ? (
+          <div className="chat-img-nav">
+            <button
+              type="button"
+              className="chat-img-arrow"
+              onClick={() => go(-1)}
+              aria-label="Previous image"
+              title="Previous (←)"
+            >
+              ‹
+            </button>
+            <span className="chat-img-count" aria-live="polite">
+              {at + 1} / {items.length}
+            </span>
+            <button
+              type="button"
+              className="chat-img-arrow"
+              onClick={() => go(1)}
+              aria-label="Next image"
+              title="Next (→)"
+            >
+              ›
+            </button>
+          </div>
+        ) : null}
+      </div>
       <button
         type="button"
         className="chat-img-close"
@@ -511,12 +630,30 @@ export function ImageModal({
  * when you zoom in), whereas resizing the element makes the browser
  * re-rasterize from the full-resolution source — sharp up to the image's real
  * pixels. Pan still rides `transform: translate` (translation never blurs).
+ *
+ * ─── IT FITS THE STAGE, NOT THE WINDOW ──────────────────────────────────────
+ * This measured `window.innerWidth/innerHeight`, and the backdrop it lives in
+ * is `position: absolute; inset: 0` — scoped to the CHAT PANE. With a sidebar
+ * open, or in a split, the pane is hundreds of pixels narrower than the window,
+ * so a "fitted" image was computed too large and hung off the right and bottom
+ * edges with no way to see the rest: reported as a full-size screenshot opening
+ * cut off. The stage is measured directly, and observed, so a pane resize or a
+ * sidebar toggle re-fits instead of going stale.
  */
-function ZoomableImage({ url, name }: { url: string; name: string }) {
+function ZoomableImage({
+  url,
+  name,
+  onSwipe,
+}: {
+  url: string;
+  name: string;
+  /** Step the gallery. Absent for a lone image — then a swipe does nothing. */
+  onSwipe?: ((delta: number) => void) | undefined;
+}) {
   const [scale, setScale] = useState(1);
   const [pos, setPos] = useState({ x: 0, y: 0 });
   // The contained fit size at scale 1 (px), computed from the natural size and
-  // the viewport — the base the zoom multiplies. null until the image loads.
+  // the STAGE — the base the zoom multiplies. null until the image loads.
   const [fit, setFit] = useState<{ w: number; h: number } | null>(null);
   const sRef = useRef(scale);
   sRef.current = scale;
@@ -526,7 +663,7 @@ function ZoomableImage({ url, name }: { url: string; name: string }) {
   fitRef.current = fit;
   const imgRef = useRef<HTMLImageElement>(null);
   const g = useRef({
-    mode: 'none' as 'none' | 'pan' | 'pinch',
+    mode: 'none' as 'none' | 'pan' | 'pinch' | 'swipe',
     startDist: 0,
     startScale: 1,
     startX: 0,
@@ -534,35 +671,61 @@ function ZoomableImage({ url, name }: { url: string; name: string }) {
     startCX: 0,
     startCY: 0,
     lastTap: 0,
+    swipeDX: 0,
   });
   const MAX = 5;
+
+  /** The box the image must fit inside: the stage, minus its own padding. */
+  const stageBox = () => {
+    const stage = imgRef.current?.parentElement;
+    if (stage) {
+      // clientWidth/Height exclude borders and scrollbars and include padding,
+      // so the padding comes off explicitly rather than as a guessed constant.
+      const cs = getComputedStyle(stage);
+      const w =
+        stage.clientWidth - Number.parseFloat(cs.paddingLeft) - Number.parseFloat(cs.paddingRight);
+      const h =
+        stage.clientHeight - Number.parseFloat(cs.paddingTop) - Number.parseFloat(cs.paddingBottom);
+      if (w > 0 && h > 0) return { w, h };
+    }
+    // The stage has no layout yet (first paint). The window is wrong — that is
+    // the bug above — but it is the only number available, and one frame later
+    // the observer corrects it.
+    return { w: window.innerWidth, h: window.innerHeight };
+  };
 
   const computeFit = () => {
     const img = imgRef.current;
     if (!img || !img.naturalWidth) return;
-    const pad = 48;
-    const r = Math.min(
-      (window.innerWidth - pad) / img.naturalWidth,
-      (window.innerHeight - pad) / img.naturalHeight,
-      1,
-    );
+    const box = stageBox();
+    const r = Math.min(box.w / img.naturalWidth, box.h / img.naturalHeight, 1);
     setFit({ w: Math.round(img.naturalWidth * r), h: Math.round(img.naturalHeight * r) });
   };
   // biome-ignore lint/correctness/useExhaustiveDependencies: one-time listener set up on mount; every value it acts on is read through a live ref, so re-subscribing on each change would detach and reattach for nothing
   useEffect(() => {
     computeFit();
     window.addEventListener('resize', computeFit);
-    return () => window.removeEventListener('resize', computeFit);
+    // A pane resize, a sidebar toggle or a split drag changes the stage without
+    // changing the window, and `resize` says nothing about any of them.
+    const stage = imgRef.current?.parentElement;
+    const ro = stage ? new ResizeObserver(() => computeFit()) : null;
+    if (stage && ro) ro.observe(stage);
+    return () => {
+      window.removeEventListener('resize', computeFit);
+      ro?.disconnect();
+    };
   }, []);
 
   const clampScale = (s: number) => Math.min(MAX, Math.max(1, s));
   // Pan bound: how far the (scaled) image can move before its edge enters the
-  // viewport — i.e. the overflow beyond the viewport, per axis.
+  // stage — i.e. the overflow beyond the stage, per axis. Measured against the
+  // same box the fit uses, for the same reason.
   const clampXY = (x: number, y: number, s: number) => {
     const f = fitRef.current;
     if (!f) return { x: 0, y: 0 };
-    const maxX = Math.max(0, (f.w * s - window.innerWidth) / 2);
-    const maxY = Math.max(0, (f.h * s - window.innerHeight) / 2);
+    const box = stageBox();
+    const maxX = Math.max(0, (f.w * s - box.w) / 2);
+    const maxY = Math.max(0, (f.h * s - box.h) / 2);
     return { x: Math.max(-maxX, Math.min(maxX, x)), y: Math.max(-maxY, Math.min(maxY, y)) };
   };
   const apply = (s: number, x: number, y: number) => {
@@ -589,6 +752,9 @@ function ZoomableImage({ url, name }: { url: string; name: string }) {
   const dist = (a: React.Touch, b: React.Touch) =>
     Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
 
+  /** A swipe only exists at 1x — above it, one finger is panning the image. */
+  const SWIPE_PX = 60;
+
   const onTouchStart = (e: React.TouchEvent) => {
     const gs = g.current;
     if (e.touches.length === 2) {
@@ -612,7 +778,8 @@ function ZoomableImage({ url, name }: { url: string; name: string }) {
         return;
       }
       gs.lastTap = now;
-      gs.mode = sRef.current > 1 ? 'pan' : 'none';
+      gs.mode = sRef.current > 1 ? 'pan' : 'swipe';
+      gs.swipeDX = 0;
       gs.startX = pRef.current.x;
       gs.startY = pRef.current.y;
       gs.startCX = a.clientX;
@@ -636,10 +803,24 @@ function ZoomableImage({ url, name }: { url: string; name: string }) {
         gs.startX + (a.clientX - gs.startCX),
         gs.startY + (a.clientY - gs.startCY),
       );
+    } else if (gs.mode === 'swipe' && e.touches.length === 1) {
+      const a = e.touches[0];
+      if (!a) return;
+      const dx = a.clientX - gs.startCX;
+      const dy = a.clientY - gs.startCY;
+      // Horizontal intent only: a mostly-vertical drag is a scroll gesture and
+      // must not flick to the next picture.
+      gs.swipeDX = Math.abs(dx) > Math.abs(dy) ? dx : 0;
     }
   };
   const onTouchEnd = (e: React.TouchEvent) => {
-    if (e.touches.length === 0) g.current.mode = 'none';
+    const gs = g.current;
+    if (gs.mode === 'swipe' && Math.abs(gs.swipeDX) >= SWIPE_PX) {
+      // Swipe LEFT (negative dx) means "bring the next one in from the right".
+      onSwipe?.(gs.swipeDX < 0 ? 1 : -1);
+      gs.swipeDX = 0;
+    }
+    if (e.touches.length === 0) gs.mode = 'none';
     // Pinched back to 1 → snap the pan to center.
     if (sRef.current <= 1 && (pRef.current.x !== 0 || pRef.current.y !== 0)) {
       setPos({ x: 0, y: 0 });
@@ -722,10 +903,17 @@ function ZoomableImage({ url, name }: { url: string; name: string }) {
  *  screenful per artifact. */
 function MediaGallery({
   items,
+  all,
+  offset,
   onOpen,
 }: {
   items: { media: 'image' | 'video'; url: string; name: string }[];
-  onOpen: (m: { url: string; name: string; video: boolean }) => void;
+  /** Every image in the MESSAGE — what the lightbox navigates. See the note in
+   *  `renderMessageParts` for why this is not `items`. */
+  all: MediaItem[];
+  /** Index of `items[0]` within `all`. */
+  offset: number;
+  onOpen: OpenMedia;
 }) {
   if (items.length === 1) {
     const it = items[0];
@@ -736,7 +924,7 @@ function MediaGallery({
         type="button"
         className={`chat-img-thumb${video ? ' -video' : ''}`}
         title={it.name}
-        onClick={() => onOpen({ url: it.url, name: it.name, video })}
+        onClick={() => onOpen({ items: all, index: offset })}
       >
         {video ? (
           <video src={it.url} preload="metadata" muted playsInline />
@@ -762,7 +950,7 @@ function MediaGallery({
             type="button"
             className={`chat-gallery-item${video ? ' -video' : ''}`}
             title={it.name}
-            onClick={() => onOpen({ url: it.url, name: it.name, video })}
+            onClick={() => onOpen({ items: all, index: offset + i })}
           >
             {video ? (
               <video src={it.url} preload="metadata" muted playsInline />
@@ -774,6 +962,42 @@ function MediaGallery({
         );
       })}
     </div>
+  );
+}
+
+/**
+ * A message WAITING in the durable queue, as a preview.
+ *
+ * Why it is not just `<UserText>`: a queued message is the RAW text that will
+ * be delivered, and a cron fire's raw text begins with its marker block. The
+ * transcript never shows that — `expandCronFire` splits it off on the way in —
+ * but the queue preview had no such step, so a scheduled fire sat in the log
+ * as a bubble full of `<muxpad-cron id="…">` XML until it ran. Observed on a
+ * once-a-minute cron, which is the case that makes it unmissable.
+ *
+ * Same split, same reason: the chip says which schedule is waiting, and a
+ * FOLDED cron keeps its plumbing out of sight here too — it would be odd for a
+ * message to be noisy in the queue and quiet a second later.
+ */
+export function QueuedText({
+  text,
+  onOpenImage,
+}: {
+  text: string;
+  onOpenImage?: OpenMedia | undefined;
+}) {
+  const fire = parseCronMarker(text);
+  // The queue holds the RAW outgoing message; `UserText` strips the mention
+  // handles out of it, as it does for every other bubble.
+  if (!fire) return <UserText text={text} onOpenImage={onOpenImage} />;
+  const body = fire.marker.fold ? '' : fire.body.trim();
+  return (
+    <>
+      <span className="chat-queued-cron">
+        <span aria-hidden="true">⏱</span> {fire.marker.name}
+      </span>
+      {body ? <UserText text={body} onOpenImage={onOpenImage} /> : null}
+    </>
   );
 }
 
@@ -795,18 +1019,42 @@ function FileChip({ name, url }: { name: string; url: string }) {
 function renderMessageParts(
   parts: MessagePart[],
   renderText: (text: string, key: string) => React.ReactNode,
-  onOpen: (m: { url: string; name: string; video: boolean }) => void,
+  onOpen: OpenMedia,
 ): React.ReactNode[] {
   const out: React.ReactNode[] = [];
+  // EVERY image in the message, in order — the set the lightbox steps through.
+  //
+  // Not the contiguous run below, and that distinction is the whole of "when
+  // several images are shared let me click between them". A gallery is flushed
+  // by any text part, so three screenshots with a sentence between them render
+  // as three SEPARATE one-item galleries — each of which, grouped by itself,
+  // would open a lightbox with nothing to navigate to. Measured on a real
+  // message: 3 thumbnails, 0 galleries. Layout still groups by run (that is a
+  // layout question); navigation groups by message.
+  const all: MediaItem[] = parts
+    .filter((p): p is Extract<MessagePart, { kind: 'media' }> => p.kind === 'media')
+    .map((p) => ({ url: p.url, name: p.name, video: p.media === 'video' }));
+  let seen = 0;
   let media: { media: 'image' | 'video'; url: string; name: string }[] = [];
   const flush = () => {
     if (media.length === 0) return;
-    out.push(<MediaGallery key={`gal-${out.length}`} items={media} onOpen={onOpen} />);
+    out.push(
+      <MediaGallery
+        key={`gal-${out.length}`}
+        items={media}
+        all={all}
+        // Where this run starts in the message-wide set, so the lightbox opens
+        // on the thumbnail you actually tapped.
+        offset={seen - media.length}
+        onOpen={onOpen}
+      />,
+    );
     media = [];
   };
   for (const [i, part] of parts.entries()) {
     if (part.kind === 'media') {
       media.push({ media: part.media, url: part.url, name: part.name });
+      seen++;
     } else {
       flush();
       if (part.kind === 'file')
@@ -827,14 +1075,11 @@ const NOTICE_ICON: Record<NoticeEvent['variant'], string> = {
   reminder: 'ⓘ',
   cron: '⏱',
   interrupted: '⏹',
+  // THE JOIN: results arriving from sub-chats this conversation spawned. An
+  // inward arrow, because the direction is the whole fact — every other notice
+  // is about this chat, and this one is about work that happened elsewhere.
+  report: '⇤',
 };
-
-/** Time-of-day for a cron chip, in the VIEWER's zone. The cron's own zone is
- *  the scheduling truth, but this line answers "when did this land for me". */
-function fireTime(ts: number | null): string {
-  if (ts === null) return '';
-  return new Date(ts).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-}
 
 /** Harness control message (background-task update / session reminder), or a
  *  muxpad cron fire — "⏱ pr-sweep · 09:00" ahead of the prompt it delivered. */
@@ -849,6 +1094,12 @@ function NoticeCard({
 }) {
   const at = event.variant === 'cron' ? fireTime(event.ts) : '';
   const detail = event.detail ?? (at || undefined);
+  // A NOTICE IS A MARK, NOT A CONTROL. It briefly carried a caret that revealed
+  // a folded cron's prompt, which gave one fire two separate folds — a caret on
+  // the chip and the "N actions" run right under it — and made a label look
+  // pressable for a reason no reader would guess. The prompt folds in with the
+  // tool calls instead (see `expandCronFire`); this went back to saying one
+  // thing.
   return (
     <div
       className="chat-turn chat-turn-notice"

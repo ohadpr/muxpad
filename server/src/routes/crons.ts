@@ -88,6 +88,7 @@ export function cronsRoutes(deps: {
         close_when_done: z.boolean().optional(),
         /** Omitted = infer from the schedule (see isDatedSchedule). */
         once: z.boolean().optional(),
+        fold: z.boolean().optional(),
       })
       .safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json(bad(parsed.error.issues[0]?.message ?? 'invalid body'), 400);
@@ -168,6 +169,7 @@ export function cronsRoutes(deps: {
       // schedule — and `?? undefined` matters: `once: false` is a real answer
       // ("yes I do want this annually") and must not read as "not stated".
       ...(body.once === undefined ? {} : { once: body.once }),
+      ...(body.fold === undefined ? {} : { fold: body.fold }),
       next_due_at: nextAfter(schedule, tz, now),
     });
     emitCronTabUpdate(deps, cron.target_pane);

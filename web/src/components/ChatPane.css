@@ -818,6 +818,19 @@
 .chat-turn-notice {
   justify-content: center;
 }
+/* A notice with something folded under it STACKS. `.chat-turn` is a flex row,
+   so without this the disclosure sits beside the pill and the pill — being a
+   flex item with `border-radius: 999px` — stretches to the row's height and
+   renders as a circle. */
+.chat-turn-notice.-folded {
+  flex-direction: column;
+  align-items: center;
+}
+/* …and the disclosure is readable width, not pill width. */
+.chat-turn-notice.-folded .chat-sysnote-body {
+  width: 100%;
+  max-width: 680px;
+}
 .chat-sysnote {
   display: inline-flex;
   gap: 8px;
@@ -872,6 +885,56 @@
 }
 .chat-sysnote-cron .chat-sysnote-text {
   font-variant-numeric: tabular-nums;
+}
+/* A notice with something folded behind it. Same pill, now pressable — the
+   caret is the only thing that changes, because the row is still a statement
+   about what happened and not a control that does something. */
+/* The schedule behind a message still sitting in the queue. Same ⏱ as the
+   transcript's fire chip and the nav row's clock, so "this is a cron" is one
+   mark everywhere rather than three. */
+.chat-queued-cron {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  margin-bottom: 4px;
+  color: var(--chat-faint);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+.chat-sysnote.-foldable {
+  cursor: pointer;
+  border: 0;
+  font: inherit;
+  text-align: left;
+}
+.chat-sysnote.-foldable:hover {
+  background: color-mix(in srgb, var(--chat-border-strong) 70%, transparent);
+}
+.chat-sysnote-chevron {
+  margin-left: 2px;
+  color: var(--chat-faint);
+  font-size: 11px;
+}
+/* The unfolded plumbing: quiet, monospace, and scrollable rather than wrapping
+   a 400-character prompt across the whole log. */
+.chat-sysnote-body {
+  margin: 5px 0 0;
+  padding: 8px 10px;
+  max-height: 220px;
+  overflow: auto;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--chat-fg) 5%, var(--chat-bg));
+  color: var(--chat-dim);
+  font-family: var(--chrome-font, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+/* A batch of sub-chat reports landing. The same quiet pill as a cron fire, and
+   for the same reason: it states who started this turn — workers you spawned,
+   not you — which is a fact about the message rather than an alert. */
+.chat-sysnote-report .chat-sysnote-icon {
+  color: var(--chat-accent);
 }
 
 /* ── Diffs ─────────────────────────────────────────────────────────────── */
@@ -1543,10 +1606,82 @@
 /* Lightbox: reuse the modal backdrop/scrim but center a bare full-size image. */
 .chat-img-backdrop {
   align-items: center;
-  padding: 24px;
+  /* The padding moved to `.chat-img-stage`, which is what gets measured — with
+     it here too the image would be fitted to a box 48px wider than its own. */
   /* A zoomed image is bigger than the viewport — clip the overflow instead of
      letting it spill / add scrollbars. */
   overflow: hidden;
+}
+/* The stage: the box the image is fitted INTO, and the thing ZoomableImage
+   measures. It exists so the image's room and the nav's room are one layout
+   decision rather than two — the arrows sit under the picture, and the picture
+   gets whatever is left, so a gallery never pushes its own controls off-screen.
+   `min-height: 0` lets the image shrink inside the column instead of
+   overflowing it, which is the default for a flex child and the whole reason a
+   fitted image can still hang off the bottom. */
+.chat-img-stage {
+  /* PINNED TO THE BACKDROP, not sized by its contents. A stage that grows with
+     the image is a stage the image cannot be fitted to: `computeFit` measured
+     it, so the picture defined its own limit and overflowed the viewport by
+     whatever it liked (measured: 118px below the fold). */
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 0;
+  padding: 24px;
+}
+/* The box the image is actually measured against: whatever the stage has left
+   after the nav. `min-height: 0` is load-bearing — a flex child defaults to
+   min-height:auto and refuses to shrink below its content, which is the exact
+   mechanism that let a tall image push past the bottom edge. */
+.chat-img-frame {
+  display: grid;
+  flex: 1 1 auto;
+  place-items: center;
+  min-width: 0;
+  min-height: 0;
+}
+/* Nav under the picture: tappable, out of the image's way, and never over it —
+   an arrow floating on top of a photo covers the part you opened it to see. */
+.chat-img-nav {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 14px;
+  padding: 4px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.45);
+}
+.chat-img-arrow {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #fff;
+  font-size: 26px;
+  line-height: 1;
+  cursor: pointer;
+}
+.chat-img-arrow:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+.chat-img-count {
+  min-width: 46px;
+  color: #fff;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  opacity: 0.85;
 }
 .chat-img-full {
   position: relative;
@@ -1739,9 +1874,17 @@
      of way out at the pane's. */
   width: 100%;
   max-width: 768px;
-  /* The 6px is the whole separation between this line and the pill now that the
-     pill's row gap no longer reaches it. */
-  margin: 0 auto 6px;
+  /* THE GAP IS ON TOP, because the strip is UNDER the pill now. It was written
+     bottom-first when the strip floated ABOVE the input, and the move left the
+     number on the side facing nothing: 6px of dead space below the line and the
+     line itself jammed against the pill it had just been moved out of.
+     Reported as "the folder model working bar needs to be pushed down more from
+     the input box."
+     16px, after two passes at it: the pill carries a real drop shadow, and a
+     gap under a shadow has to clear the shadow before it starts reading as a
+     gap at all. This is the strip's ENTIRE cost besides its one line of text;
+     it is not allowed to grow into a box again (both css tests cap it). */
+  margin: 16px auto 0;
   padding-right: 2px;
   /* Menus escape via position:absolute on .chat-status-menu; segment buttons
      clip their own labels so long model names can't paint over the live cell. */

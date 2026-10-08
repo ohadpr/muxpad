@@ -97,3 +97,23 @@ describe('rendering a fire in the transcript', () => {
     expect(out[0]).toMatchObject({ detail: '4 missed fires collapsed' });
   });
 });
+
+describe('a FOLDED cron fire', () => {
+  const marker = { id: 'c1', name: 'nw-close', at: 123, missed: 0, fold: true };
+
+  it('round-trips the flag', () => {
+    const text = renderCronMarker(marker, 'run the script and write the card');
+    expect(text).toContain('fold="1"');
+    const parsed = parseCronMarker(text);
+    expect(parsed?.marker.fold).toBe(true);
+    expect(parsed?.body.trim()).toBe('run the script and write the card');
+  });
+
+  it('is absent — not false — on an ordinary fire', () => {
+    // The attribute is omitted rather than written `fold="0"`, so an older
+    // reader sees exactly what it saw before.
+    const text = renderCronMarker({ id: 'c1', name: 'n', at: null, missed: 0 }, 'go');
+    expect(text).not.toContain('fold');
+    expect(parseCronMarker(text)?.marker.fold).toBeUndefined();
+  });
+});

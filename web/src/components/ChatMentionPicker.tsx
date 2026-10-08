@@ -249,10 +249,14 @@ export function ChatMentionCard({
   anchorId,
   onToggleExpanded,
   onOpen,
+  onDismiss,
 }: {
   chat: ChatChipChat & { headline?: string | null };
   /** One line under the name — the request, when there is no body. */
   sub?: string | undefined;
+  /** Shows a dismiss ×. Only for a card that is the sole record of something —
+   *  see the button. */
+  onDismiss?: (() => void) | undefined;
   /** The other chat is still on it: the same 10px mark as everywhere else. */
   working?: boolean | undefined;
   /**
@@ -380,6 +384,14 @@ export function ChatMentionCard({
           <span className="chat-mention-card-state" data-state="note">
             {state}
           </span>
+        ) : null}
+        {onDismiss ? (
+          // Only where the card is the ONLY record of something — a directed
+          // request nothing ever answered. Everywhere else a card is a
+          // transcript entry and dismissing it would be deleting history.
+          <button type="button" className="chat-mention-card-x" title="Dismiss" onClick={onDismiss}>
+            ×<span className="chat-mention-card-sr">Dismiss</span>
+          </button>
         ) : null}
         {onToggleExpanded ? (
           <button

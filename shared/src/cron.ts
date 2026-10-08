@@ -49,6 +49,8 @@ export const CronSchema = z.object({
    *  written before it still says 'do'/'deep' and still means the same thing. */
   mode: z.string().nullable(),
   enabled: z.boolean(),
+  /** Render the delivered prompt collapsed behind a caret. */
+  fold: z.boolean().default(false),
   /**
    * Fire ONCE, then retire.
    *
@@ -105,6 +107,19 @@ export interface CronMarker {
   at: number | null;
   /** Fires collapsed into this one by `catchup=once`. 0 for a normal fire. */
   missed: number;
+  /**
+   * Render the delivered PROMPT collapsed, behind a caret.
+   *
+   * A cron whose job is to refresh a card injects the same block of plumbing
+   * every fire — "run this script, then write the result to that card" — and
+   * nobody reads it twice. Declared by the cron's author because only they know
+   * whether the prompt is plumbing or something worth seeing.
+   *
+   * It hides the PROMPT and nothing else. Whatever the agent says in reply is
+   * an ordinary message and stays visible, which is what keeps a failed run
+   * from disappearing: the run that breaks is the one that says so.
+   */
+  fold?: boolean;
 }
 
 const CRON_OPEN = /^\s*<muxpad-cron\b([^>]*)>([\s\S]*?)<\/muxpad-cron>\s*/;
@@ -122,11 +137,12 @@ function attr(attrs: string, name: string): string | null {
 export function renderCronMarker(marker: CronMarker, prompt: string): string {
   const missed = marker.missed > 0 ? ` missed="${marker.missed}"` : '';
   const at = marker.at !== null ? ` at="${marker.at}"` : '';
+  const fold = marker.fold ? ' fold="1"' : '';
   const note =
     marker.missed > 0
       ? `Delivered by the muxpad cron "${marker.name}" — a scheduled job, not a human. ${marker.missed} earlier fire(s) were missed while muxpad was offline and are collapsed into this one.`
       : `Delivered by the muxpad cron "${marker.name}" — a scheduled job, not a human.`;
-  return `<muxpad-cron id="${marker.id}" name="${marker.name}"${at}${missed}>\n${note}\n</muxpad-cron>\n\n${prompt}`;
+  return `<muxpad-cron id="${marker.id}" name="${marker.name}"${at}${missed}${fold}>\n${note}\n</muxpad-cron>\n\n${prompt}`;
 }
 
 /**
@@ -146,7 +162,11 @@ export function parseCronMarker(text: string): { marker: CronMarker; body: strin
   const missedRaw = attr(attrs, 'missed');
   const at = atRaw !== null && /^\d+$/.test(atRaw) ? Number(atRaw) : null;
   const missed = missedRaw !== null && /^\d+$/.test(missedRaw) ? Number(missedRaw) : 0;
-  return { marker: { id, name, at, missed }, body: text.slice(m[0].length) };
+  const fold = attr(attrs, 'fold') === '1';
+  return {
+    marker: { id, name, at, missed, ...(fold ? { fold: true } : {}) },
+    body: text.slice(m[0].length),
+  };
 }
 
 /** Does this queued/injected message belong to `cronId`? The overlap check's

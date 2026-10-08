@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryTerms } from './search-highlight';
 import {
@@ -138,5 +140,28 @@ describe('jumpMayBeOlder — is paging backwards worth it?', () => {
   it('yes when nothing loaded has a timestamp either', () => {
     expect(jumpMayBeOlder([ev('a', null, 'x')], 1000)).toBe(true);
     expect(jumpMayBeOlder([], 1000)).toBe(true);
+  });
+});
+
+describe('the jump target must be a row that is RENDERED', () => {
+  const src = readFileSync(join(__dirname, '../components/ChatPane.tsx'), 'utf8');
+
+  it('picks from `voiced`, never from the raw `events`', () => {
+    // The voice pipeline DROPS events: a sign-off folded away after a reply,
+    // and every cron chip absorbed into a coalesced quiet stretch. An id from
+    // the raw list can therefore name a row with no `data-eid` in the document
+    // — which does not read as "not found", it sends the client paging
+    // backwards through history hunting for a message already loaded. A cron
+    // notice's text is its NAME, so searching a schedule's name hits this
+    // squarely, and the newest-wins tie-break prefers an absorbed one.
+    //
+    // Asserted against the source because the pick happens inside a memo in a
+    // 4,700-line component with a live socket. This is the one line that
+    // matters and it is one line.
+    const call = src.match(/pickSearchTarget\(\s*(\w+)/);
+    expect(call?.[1]).toBe('voiced');
+    // …and the declaration has to come FIRST. `voiced` is a `const` in the same
+    // scope: declared below this memo it is a TDZ crash, not a stale value.
+    expect(src.indexOf('const voiced =')).toBeLessThan(src.indexOf('pickSearchTarget('));
   });
 });

@@ -104,6 +104,33 @@ export function gitWritableDirs(cwd: string): string[] {
 // still alive, so its ppid tree is intact — we walk it with `pgrep -P` (macOS +
 // Linux) BEFORE signalling the child, and SIGKILL leaves-first. Best-effort; the
 // caller signals the child (codex/cursor) itself so it can still exit cleanly.
+/**
+ * How writable dirs reach codex — as a CONFIG key, never as `--add-dir`.
+ *
+ * `codex exec` accepts `--add-dir`; `codex exec resume` does NOT. Its usage is
+ * `resume --json --skip-git-repo-check --config <key=value> <SESSION_ID>
+ * [PROMPT]`, so a resumed turn that needed a writable dir died on
+ * `unexpected argument '--add-dir' found` and fell through to the fresh-thread
+ * fallback — the pane came back with no memory of its own conversation, and the
+ * only trace was one dim line in a log nobody reads.
+ *
+ * `--config` is accepted by BOTH subcommands and `writable_roots` is the
+ * documented equivalent: codex's own sandbox preamble reads "the sandbox
+ * permits reading files, and editing files in `cwd` and `writable_roots`". One
+ * spelling that works on both paths is the point — a flag only the fresh path
+ * understands is exactly how this broke.
+ *
+ * The value is TOML; JSON.stringify gives correctly quoted and escaped strings
+ * for the paths, which may contain spaces.
+ */
+export function writableRootsArgs(dirs: readonly string[]): string[] {
+  if (dirs.length === 0) return [];
+  return [
+    '-c',
+    `sandbox_workspace_write.writable_roots=[${dirs.map((d) => JSON.stringify(d)).join(', ')}]`,
+  ];
+}
+
 export function killDescendants(pid: number): void {
   const descendants: number[] = [];
   const walk = (p: number) => {
@@ -290,7 +317,24 @@ export function createCodexBackend(
       'approval_policy="never"',
     ];
     // Make the worktree's external git dir writable so commits work in-place.
-    for (const dir of extraWritableDirs) common.push('--add-dir', dir);
+    //
+    // AS A CONFIG KEY, NOT `--add-dir`, and that is a bug fix rather than a
+    // preference. `codex exec` accepts `--add-dir`; `codex exec resume` does
+    // NOT — its usage line is `resume --json --skip-git-repo-check --config
+    // <key=value> <SESSION_ID> [PROMPT]`. So every resumed turn that needed a
+    // writable dir died on `unexpected argument '--add-dir' found` and fell
+    // through to the fallback below, which starts a FRESH codex thread. The
+    // pane came back with no memory of its own conversation, and the only
+    // trace was one dim line in a log nobody reads. Seen on this machine 18
+    // times across 5 panes — including a chat that was simply respawned and
+    // silently lost a long design brief.
+    //
+    // `--config` is accepted by both subcommands, and `writable_roots` is the
+    // documented equivalent: codex's own sandbox preamble reads "the sandbox
+    // permits reading files, and editing files in `cwd` and `writable_roots`".
+    // One spelling that works on both paths is the whole point — a flag only
+    // the fresh path understands is how this broke in the first place.
+    common.push(...writableRootsArgs(extraWritableDirs));
     if (model) common.push('-m', model);
     return [...head, ...common, finalPrompt];
   }
