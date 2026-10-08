@@ -1,6 +1,7 @@
 import { type ChatCard, cardIsStale } from '@muxpad/shared';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { subscribe, subscribeResync } from '../events';
+import { isCardCollapsed, toggleCardCollapsed, useCardCollapse } from '../lib/card-collapse';
 import './ChatCards.css';
 import { Markdown } from './ChatMarkdown';
 
@@ -159,6 +160,7 @@ export function ChatCards({ tabId }: { tabId: string | null | undefined }) {
   // ago" forever is worse than no timestamp, and staleness is the signal the
   // cadence exists for.
   const [now, setNow] = useState(() => Date.now());
+  const collapsed = useCardCollapse();
 
   const load = useCallback(() => {
     if (!tabId) {
@@ -204,7 +206,7 @@ export function ChatCards({ tabId }: { tabId: string | null | undefined }) {
   // last card mid-line, which reads as a broken card rather than a full stack.
   const stackRef = useRef<HTMLDivElement>(null);
   const [over, setOver] = useState(false);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `cards` is deliberately a dependency the body does not read. The stack renders nothing when there are none, so on the first pass the ref is null and this bails — with no dependency it would never run again, for the whole session, and the overflow fade and bottom-pin would silently never work. It also has to re-observe when the card NODES are replaced.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `cards` and `collapsed` are deliberately dependencies the body does not read. The stack renders nothing when there are none, so on the first pass the ref is null and this bails — with no dependency it would never run again, for the whole session, and the overflow fade and bottom-pin would silently never work. It also has to re-observe when the card NODES are replaced.
   useEffect(() => {
     const el = stackRef.current;
     if (!el) return;
@@ -220,50 +222,46 @@ export function ChatCards({ tabId }: { tabId: string | null | undefined }) {
     ro.observe(el);
     for (const child of el.children) ro.observe(child);
     return () => ro.disconnect();
-  }, [cards]);
-
-  const dismiss = useCallback(
-    (name: string) => {
-      if (!tabId) return;
-      // Optimistic: the card is gone from the stack immediately, and the event
-      // that follows confirms it. A pinned block that lingers after you dismiss
-      // it reads as a broken button.
-      setCards((cs) => cs.filter((c) => c.name !== name));
-      void fetch(`/api/tabs/${encodeURIComponent(tabId)}/cards/${encodeURIComponent(name)}`, {
-        method: 'DELETE',
-      }).then((r) => {
-        if (!r.ok) load();
-      });
-    },
-    [tabId, load],
-  );
+  }, [cards, collapsed]);
 
   if (cards.length === 0) return null;
   return (
     <div className={`chat-cards${over ? ' -over' : ''}`} ref={stackRef}>
       {cards.map((card) => {
         const stale = cardIsStale(card, now);
+        const shut = isCardCollapsed(collapsed, tabId, card.name);
         return (
-          <section className="chat-card" key={card.id}>
-            <header className="chat-card-head">
+          <section className={`chat-card${shut ? ' -shut' : ''}`} key={card.id}>
+            {/* THE WHOLE HEADER IS THE CONTROL, not a 15px glyph at one end of
+              it. This is a phone surface first, and the old × was a 5px-padded
+              character — below every touch-target guideline there is, sitting
+              next to the thing it would have destroyed. A full-width row is
+              impossible to miss and has nothing to mis-hit. */}
+            <button
+              type="button"
+              className="chat-card-head"
+              aria-expanded={!shut}
+              onClick={() => tabId && toggleCardCollapsed(tabId, card.name)}
+              title={shut ? `Expand ${card.name}` : `Collapse ${card.name}`}
+            >
+              <span className={`chat-card-chevron${shut ? '' : ' is-open'}`} aria-hidden="true">
+                ›
+              </span>
               <span className="chat-card-name">{card.name}</span>
               <span className={`chat-card-age${stale ? ' -stale' : ''}`}>
                 {ago(now - card.updated_at)}
                 {stale ? ' · overdue' : ''}
               </span>
-              <button
-                type="button"
-                className="chat-card-x"
-                onClick={() => dismiss(card.name)}
-                aria-label={`Dismiss ${card.name}`}
-                title="Dismiss"
-              >
-                ×
-              </button>
-            </header>
-            <div className={`chat-card-body${card.format === 'html' ? ' -flush' : ''}`}>
-              <CardBody card={card} />
-            </div>
+            </button>
+            {/* Unmounted, not hidden. An html card is a sandboxed iframe that
+              re-measures itself and re-posts its height; left mounted behind
+              `display:none` it would keep a frame alive and keep reporting a
+              height for something nobody can see. */}
+            {shut ? null : (
+              <div className={`chat-card-body${card.format === 'html' ? ' -flush' : ''}`}>
+                <CardBody card={card} />
+              </div>
+            )}
           </section>
         );
       })}

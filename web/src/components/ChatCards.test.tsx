@@ -12,6 +12,7 @@ vi.mock('../events', () => ({
   subscribeResync: () => () => {},
 }));
 
+import { __reloadCardCollapse } from '../lib/card-collapse';
 import { ChatCards } from './ChatCards';
 
 /**
@@ -60,6 +61,8 @@ async function mount(cards: ChatCard[], tabId: string | null = 't1') {
 beforeEach(() => {
   fetched = [];
   handlers.clear();
+  localStorage.clear();
+  __reloadCardCollapse();
   vi.stubGlobal(
     'ResizeObserver',
     class {
@@ -151,15 +154,78 @@ describe('pinned chat cards', () => {
     expect(host.querySelector('.chat-card-age')?.className).not.toContain('-stale');
   });
 
-  it('dismisses optimistically and DELETEs', async () => {
+  it('COLLAPSES rather than deleting — and never asks the server to', async () => {
+    // The only control a reader had used to be the destructive one. A card
+    // belongs to whoever writes it: pressing × on a market card did not mean
+    // "retire this schedule's output", and the next fire recreated it anyway —
+    // a button that appeared to work and then undid itself.
+    const host = await mount([card({ name: 'build' })]);
+    const head = host.querySelector('.chat-card-head') as HTMLButtonElement;
+    expect(head.getAttribute('aria-expanded')).toBe('true');
+    await act(async () => {
+      head.click();
+    });
+    expect(fetched.some((f) => f.startsWith('DELETE'))).toBe(false);
+    // The card stays — it is the BODY that goes.
+    expect(host.querySelector('.chat-card')).not.toBeNull();
+    expect(host.querySelector('.chat-card-body')).toBeNull();
+    expect(host.querySelector('.chat-card-head')?.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('keeps saying what it is while collapsed', async () => {
+    // A collapsed card that showed only a chevron would be a card you cannot
+    // find again. The header still carries the name, the age, and the thing
+    // worth interrupting you for: that the writer stopped.
+    const day = 86_400_000;
+    const host = await mount([
+      card({ name: 'build', every_ms: day, updated_at: Date.now() - day * 3 }),
+    ]);
+    await act(async () => {
+      (host.querySelector('.chat-card-head') as HTMLButtonElement).click();
+    });
+    expect(host.querySelector('.chat-card-name')?.textContent).toBe('build');
+    expect(host.querySelector('.chat-card-age')?.className).toContain('-stale');
+  });
+
+  it('unmounts a collapsed html card\u2019s frame', async () => {
+    // Not merely hidden: the frame re-measures itself and posts its height, so
+    // one left mounted behind display:none keeps reporting for something nobody
+    // can see.
+    const host = await mount([card({ name: 'market', format: 'html', content: '<b>x</b>' })]);
+    expect(host.querySelector('iframe')).not.toBeNull();
+    await act(async () => {
+      (host.querySelector('.chat-card-head') as HTMLButtonElement).click();
+    });
+    expect(host.querySelector('iframe')).toBeNull();
+  });
+
+  it('remembers the collapse across a remount', async () => {
+    // It is a view preference, so it lives in localStorage like the nav tree's
+    // expansion — a card you put away stays away when you come back to the tab.
     const host = await mount([card({ name: 'build' })]);
     await act(async () => {
-      (host.querySelector('.chat-card-x') as HTMLButtonElement).click();
+      (host.querySelector('.chat-card-head') as HTMLButtonElement).click();
     });
-    expect(fetched.some((f) => f.startsWith('DELETE') && f.endsWith('/cards/build'))).toBe(true);
-    // Gone from the stack immediately — a pinned block that lingers after you
-    // dismiss it reads as a broken button.
-    expect(host.querySelector('.chat-card')).toBeNull();
+    document.body.innerHTML = '';
+    // Drop the module's memory and re-read storage — a page load, not a
+    // remount. Without this the test would pass on the in-memory copy alone.
+    __reloadCardCollapse();
+    const again = await mount([card({ name: 'build' })]);
+    expect(again.querySelector('.chat-card-body')).toBeNull();
+  });
+
+  it('collapses by NAME, so a rewritten card stays put away', async () => {
+    // `TabCardStore.set` upserts on (tab_id, name); a clear-and-recreate mints
+    // a new row id. Keyed on the id, that would silently re-expand a card the
+    // reader had deliberately collapsed.
+    const host = await mount([card({ name: 'build' })]);
+    await act(async () => {
+      (host.querySelector('.chat-card-head') as HTMLButtonElement).click();
+    });
+    document.body.innerHTML = '';
+    __reloadCardCollapse();
+    const again = await mount([card({ id: 'a-brand-new-row', name: 'build' })]);
+    expect(again.querySelector('.chat-card-body')).toBeNull();
   });
 
   it('asks for nothing when the pane has no chat yet', async () => {
