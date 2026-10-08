@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 
 /**
- * Which pinned cards this reader has collapsed.
+ * Which pinned cards this reader has opened up.
  *
  * ── WHY COLLAPSE REPLACED DISMISS ───────────────────────────────────────────
  * The card's header carried an × that DELETED it — the only control a reader
@@ -12,34 +12,43 @@ import { useEffect, useState } from 'react';
  * "I am not looking at this right now", and the next fire would have silently
  * recreated it anyway — a button that appears to work and then undoes itself.
  *
- * So the reader gets the non-destructive control instead: collapse to the
- * header row, which still says the card's name, its age, and whether it has
- * gone overdue. Removing a card is `muxpad card clear`, by the thing that put
- * it there.
+ * Removing a card is `muxpad card clear`, by the thing that put it there.
+ *
+ * ── THE DEFAULT FLIPPED, AND THAT IS WHY THIS IS v2 ─────────────────────────
+ * This used to record which cards were COLLAPSED, because a card was open by
+ * default and shut on request. The row layout inverts that: a card is one line
+ * with its value ellipsized, and opening it is the deliberate act. So the set
+ * now records which cards are OPEN.
+ *
+ * The storage key had to change with it. A v1 entry means "this reader
+ * collapsed this card"; read under v2 it would mean "this reader expanded this
+ * card" — precisely backwards, and silently so, on exactly the cards somebody
+ * had bothered to put away. A new key lets the old value be ignored rather than
+ * misread.
  *
  * ── WHY LOCAL, AND NOT A COLUMN ─────────────────────────────────────────────
- * Collapsed-ness is a VIEW preference, not content: two people (or a phone and
- * a desktop) can reasonably disagree about whether the build card is in the way
- * right now, and neither answer should overwrite the other. localStorage is the
- * same scope the nav tree's expansion, settings and last-visited already use.
+ * Openness is a VIEW preference, not content: a phone and a desktop can
+ * reasonably disagree about whether the build card is worth its full height
+ * right now, and neither answer should overwrite the other. Same localStorage
+ * scope the nav tree's expansion, settings and last-visited already use.
  *
  * Keyed on tab + NAME, not on the card's row id. `TabCardStore.set` upserts on
  * (tab_id, name), so the name is the card's identity across every rewrite; the
  * id survives an update but not a clear-and-recreate, which would silently
- * re-expand a card the reader had put away.
+ * reset a card the reader had opened.
  */
-const KEY = 'muxpad.cardCollapse.v1';
+const KEY = 'muxpad.cardOpen.v2';
 
-/** tabId/name -> collapsed. Only EXPLICIT collapses are stored; the default is
- *  expanded, because a card nobody asked to hide is a card you want to read. */
-export type CardCollapseState = Record<string, boolean>;
+/** tabId/name -> open. Only EXPLICIT opens are stored; the default is the
+ *  compact row, because that is the whole point of the layout. */
+export type CardOpenState = Record<string, boolean>;
 
 export function cardKey(tabId: string, name: string): string {
   return `${tabId}/${name}`;
 }
 
-export function isCardCollapsed(
-  state: CardCollapseState,
+export function isCardOpen(
+  state: CardOpenState,
   tabId: string | null | undefined,
   name: string,
 ): boolean {
@@ -47,16 +56,16 @@ export function isCardCollapsed(
   return state[cardKey(tabId, name)] === true;
 }
 
-function read(): CardCollapseState {
+function read(): CardOpenState {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw) as unknown;
     if (!parsed || typeof parsed !== 'object') return {};
-    const out: CardCollapseState = {};
+    const out: CardOpenState = {};
     for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
       // Only `true` is worth keeping — `false` is the default, and storing it
-      // would grow this forever with every card anyone ever expanded again.
+      // would grow this forever with every card anyone ever closed again.
       if (v === true) out[k] = true;
     }
     return out;
@@ -65,10 +74,10 @@ function read(): CardCollapseState {
   }
 }
 
-let current: CardCollapseState = typeof window === 'undefined' ? {} : read();
-const listeners = new Set<(s: CardCollapseState) => void>();
+let current: CardOpenState = typeof window === 'undefined' ? {} : read();
+const listeners = new Set<(s: CardOpenState) => void>();
 
-export function toggleCardCollapsed(tabId: string, name: string): void {
+export function toggleCardOpen(tabId: string, name: string): void {
   const k = cardKey(tabId, name);
   const next = { ...current };
   if (next[k]) delete next[k];
@@ -83,8 +92,8 @@ export function toggleCardCollapsed(tabId: string, name: string): void {
   for (const fn of listeners) fn(current);
 }
 
-export function useCardCollapse(): CardCollapseState {
-  const [state, setState] = useState<CardCollapseState>(current);
+export function useCardOpen(): CardOpenState {
+  const [state, setState] = useState<CardOpenState>(current);
   useEffect(() => {
     listeners.add(setState);
     return () => {
@@ -99,7 +108,7 @@ export function useCardCollapse(): CardCollapseState {
  * exactly what a page load does. Re-READS rather than blanking, so a test can
  * distinguish "the module remembered it" from "the storage did".
  */
-export function __reloadCardCollapse(): void {
+export function __reloadCardOpen(): void {
   listeners.clear();
   current = read();
 }

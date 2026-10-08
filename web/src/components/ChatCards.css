@@ -4,7 +4,9 @@
 .chat-cards {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  /* 4px, not 8: these are lines now, not slabs, and a slab's gap between two
+     one-line rows reads as four unrelated objects instead of one list. */
+  gap: 4px;
   /* Matches the composer pill's own width and gutters, so the stack reads as
      one object with the thing below it rather than as a floating slab. */
   max-width: 768px;
@@ -27,93 +29,123 @@
 .chat-cards.-over {
   mask-image: linear-gradient(to bottom, transparent 0, #000 22px);
 }
+/* ── A CARD IS A LINE, NOT A SLAB ──────────────────────────────────────────
+   The border, the filled background, the drop shadow and the 34px header row
+   were all doing ONE job between them — "this is pinned, not a message" — and
+   for a one-line card that cost 44% of its own height. Measured on the live
+   Investing chat: 78px total, 34 of it header, for one line of value.
+
+   The rail below does that whole job in 2.5px of WIDTH. A card is now a row:
+   rail, name, value, and the age only when the age has something to say. Four
+   cards went 324px → 146px.
+
+   What this trades away, stated plainly: a card no longer ANNOUNCES itself. It
+   is present rather than loud. If something ever needs to be unmissable it
+   should not be a card, it should be a message — which is a sharper line
+   between the two than the border was drawing. */
 .chat-card {
+  position: relative;
   /* NEVER SHRINK. A flex item's default is `flex-shrink: 1`, so once the stack
      hits its max-height the cards are squeezed instead of the stack scrolling —
      and since a card clips its own overflow, the bottom one loses its last line
-     mid-sentence and reads as a broken card. Measured: scrollHeight ===
-     clientHeight === the cap, i.e. no overflow to scroll, the content simply
-     crushed. With this, the stack overflows honestly and scrolls. */
+     mid-sentence and reads as broken. With this, the stack overflows honestly
+     and scrolls. */
   flex: 0 0 auto;
-  border: 1px solid var(--chat-border);
-  border-radius: 10px;
-  background: var(--chat-elev);
+  border-radius: 7px;
+  /* A hint of surface, not a slab: enough to separate the row from the
+     transcript scrolling behind it, not enough to be a box. */
+  background: color-mix(in srgb, var(--chat-elev) 72%, transparent);
   overflow: hidden;
-  /* It floats over the log now, so it needs to sit ON something — without a
-     shadow the transcript scrolls visibly underneath an edge that looks like
-     it should have stopped it. */
-  box-shadow: 0 6px 18px -12px rgba(0, 0, 0, 0.5);
 }
-/* THE HEADER IS THE TOGGLE. It is a real <button> spanning the full width of
-   the card, which on a phone is the difference between a control you can hit
-   and one you aim at: the × it replaced was a 15px glyph with 5px of padding.
-   The button resets are explicit because a <button> brings its own font,
-   background and alignment and would otherwise centre this row. */
-.chat-card-head {
+/* THE RAIL — the entire "this is pinned" signal, and the staleness signal, in
+   one 2.5px element that costs no height at any content size. Inset 4px top and
+   bottom so it reads as a mark on the row rather than a border of it. */
+.chat-card::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 2.5px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--chat-accent) 55%, transparent);
+}
+/* Overdue is the signal the cadence exists for: the interesting failure is not
+   a wrong value, it is a writer that stopped. The rail carries it too, so a
+   stalled card is visible from the corner of your eye without reading a word. */
+.chat-card.-stale::before {
+  background: var(--status-working, #8a6410);
+}
+/* The row: the whole control, and the whole card when nothing is open. */
+.chat-card-row {
   display: flex;
   width: 100%;
-  align-items: center;
+  align-items: baseline;
   gap: 9px;
-  padding: 7px 10px 7px 9px;
+  padding: 7px 10px 7px 13px;
   border: 0;
-  border-bottom: 1px solid var(--chat-border);
+  background: transparent;
   text-align: left;
   font: inherit;
   cursor: pointer;
-  /* A whisper of accent so the card reads as muxpad's own chrome rather than
-     as something the agent drew — the content below is the agent's. */
-  background: color-mix(in srgb, var(--chat-accent) 4%, var(--chat-elev));
 }
-.chat-card-head:hover {
-  background: color-mix(in srgb, var(--chat-accent) 9%, var(--chat-elev));
+.chat-card-row:hover {
+  background: color-mix(in srgb, var(--chat-fg) 4%, transparent);
 }
-/* INSIDE, not around. `.chat-card` clips its overflow, so a default outline on
-   the header is drawn and then cut off by the card's own rounded edge — the one
-   row that most needs a visible focus state would show half of one. */
-.chat-card-head:focus-visible {
+/* INSIDE, not around. `.chat-card` clips its overflow, so a default outline is
+   drawn and then cut off by the card's own rounded edge — half a focus ring on
+   the one row that most needs one. */
+.chat-card-row:focus-visible {
   outline: 0;
   box-shadow: inset 0 0 0 2px var(--chat-accent);
 }
-/* Collapsed, the header IS the card — so it keeps no rule under it to divide
-   itself from a body that is not there. */
-.chat-card.-shut .chat-card-head {
-  border-bottom: 0;
-}
-/* Same glyph and the same rotation as the transcript's "N actions" fold, so a
-   collapsed card and a collapsed action run read as one gesture. */
-.chat-card-chevron {
-  display: inline-block;
-  color: var(--chat-faint);
-  font-size: 13px;
-  line-height: 1;
-  transition: transform 120ms ease;
-}
-.chat-card-chevron.is-open {
-  transform: rotate(90deg);
-}
 .chat-card-name {
+  flex: 0 0 auto;
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.02em;
-  /* Hue, not weight — the same channel the pinned nav rows use, so a card's
-     name and a pinned chat read as one language. */
-  color: color-mix(in srgb, var(--chat-accent) 75%, var(--chat-fg));
+  /* Quieter than it was: the name is a label on a line whose VALUE is the
+     thing you came to read, so it must not out-shout the content beside it. */
+  color: color-mix(in srgb, var(--chat-accent) 52%, var(--chat-faint));
+}
+/* ONE LINE, ELLIPSIZED, NEVER WRAPPED. A compact card that silently becomes a
+   two-row card on a narrow pane has given back exactly the height this layout
+   exists to save — so the overflow is cut and the row is tappable to see the
+   rest. The child rule is what makes a markdown card lay out inline: `Markdown`
+   emits block elements, and one `<p>` would otherwise break the row. */
+.chat-card-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--chat-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-card-value > * {
+  display: inline;
+  margin: 0;
 }
 .chat-card-age {
+  flex: 0 0 auto;
   margin-left: auto;
+  padding-left: 8px;
   font-size: 11.5px;
   color: var(--chat-faint);
   font-variant-numeric: tabular-nums;
 }
-/* Overdue is the signal the cadence exists for: the interesting failure is not
-   a wrong value, it is a writer that stopped. Warm, not red — nothing is
-   broken, something merely stopped arriving. */
+/* Warm, not red — nothing is broken, something merely stopped arriving. */
 .chat-card-age.-stale {
   color: var(--status-working, #8a6410);
 }
+/* The opened body sits under the row, inset past the rail so the two read as
+   one object. No top border: the row above it is not a header any more. */
 .chat-card-body {
-  padding: 10px 13px;
+  padding: 0 13px 10px;
 }
+/* …except an html card, which never had a row to sit under — it is the one
+   format with no single line to show, so it keeps its own top padding. */
 .chat-card-body.-flush {
   padding: 0;
 }

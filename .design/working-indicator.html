@@ -1,0 +1,467 @@
+<!doctype html>
+<html lang="en" data-theme="dracula">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>muxpad · working indicator, round 2 — stop making a spinner</title>
+<style>
+  :root {
+    --bg: #282a36; --elev: #21222c;
+    --fg: #f8f8f2; --dim: #b8b8b0; --faint: #6272a4;
+    --border: #44475a; --accent: #bd93f9; --cyan: #8be9fd;
+    --good: #50fa7b; --warn: #e8b34b;
+    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+    --c: var(--faint);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 28px 20px 110px;
+    background: var(--bg); color: var(--fg);
+    font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+  .wrap { max-width: 1000px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 10px; letter-spacing: -.015em; }
+  .sub { color: var(--dim); font-size: 14.5px; margin: 0 0 8px; max-width: 80ch; }
+  .sub b { color: var(--fg); }
+  code { font: 12.5px var(--mono); color: var(--accent); }
+
+  .controls {
+    position: sticky; top: 0; z-index: 40;
+    display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+    margin: 22px 0 28px; padding: 12px 0 14px;
+    background: linear-gradient(to bottom, var(--bg) 74%, transparent);
+  }
+  .controls button {
+    font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 999px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--elev); color: var(--dim);
+  }
+  .controls button.on { border-color: var(--accent); color: var(--fg);
+    background: color-mix(in srgb, var(--accent) 16%, var(--elev)); }
+  .controls .note { color: var(--faint); font-size: 12.5px; }
+  body.slow .ind *, body.slow .ind, body.slow .shimmerLbl, body.slow .pill::before {
+    animation-duration: 6s !important;
+  }
+  body.big .ind { zoom: 3; }
+  body.tint { --c: var(--accent); }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); gap: 14px; }
+  .card { border: 1px solid var(--border); border-radius: 12px; background: var(--elev); overflow: hidden; }
+  .card.-hero { grid-column: 1 / -1; border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+  .stageRow {
+    display: flex; align-items: center; gap: 10px;
+    padding: 22px 16px; min-height: 92px; background: var(--bg);
+    border-bottom: 1px solid var(--border);
+  }
+  .lbl { font-size: 12px; color: var(--faint); }
+  .meta { padding: 12px 15px 15px; }
+  .meta h3 { margin: 0; font-size: 14.5px; letter-spacing: -.01em; }
+  .meta h3 span { color: var(--faint); font: 600 10.5px/1 var(--mono);
+    letter-spacing: .08em; text-transform: uppercase; margin-right: 8px; }
+  .meta p { margin: 6px 0 0; font-size: 12.5px; line-height: 1.55; color: var(--dim); }
+  .meta p b { color: var(--fg); }
+  .tags { margin-top: 9px; display: flex; gap: 6px; flex-wrap: wrap; }
+  .t { font: 600 10px/1 var(--mono); padding: 4px 7px; border-radius: 5px; letter-spacing: .04em; }
+  .t.-cheap { color: var(--good); background: color-mix(in srgb, var(--good) 15%, transparent); }
+  .t.-mid { color: var(--warn); background: color-mix(in srgb, var(--warn) 15%, transparent); }
+  .t.-dear { color: #ff5555; background: color-mix(in srgb, #ff5555 15%, transparent); }
+  .t.-idea { color: var(--cyan); background: color-mix(in srgb, var(--cyan) 15%, transparent); }
+
+  .ind { display: inline-flex; align-items: center; flex: 0 0 auto; }
+  .ind svg { display: block; overflow: visible; }
+  @keyframes spin { to { transform: rotate(360deg) } }
+  @keyframes spinb { to { transform: rotate(-360deg) } }
+
+  /* ══ 1 · EPICYCLES ═══════════════════════════════════════════════════
+     Every pivot is a ZERO-SIZE point, so no box ever rotates and the
+     footprint is the 26px the outer span declares, at any angle. */
+  .epi { width: 26px; height: 26px; position: relative; }
+  .epi .p { position: absolute; left: 50%; top: 50%; width: 0; height: 0; }
+  .epi .p .p { left: 0; top: 0; }
+  .epi .a1 { animation: spin 3.1s linear infinite; }
+  .epi .a2 { animation: spinb 1.23s linear infinite; }
+  .epi .a3 { animation: spin .47s linear infinite; }
+  /* The second one is the SAME animation started 1.37s earlier — which is what
+     a second pane beginning its turn a moment later actually looks like. The
+     two were identical without this, because CSS starts every animation at page
+     load: a demo of drift that had nothing to drift from. */
+  .epi.-lag .a1, .epi.-lag .a2, .epi.-lag .a3 { animation-delay: -1.37s; }
+  .epi .arm { position: absolute; left: 0; top: 0; height: 1px; transform-origin: 0 50%;
+              background: linear-gradient(90deg, transparent,
+                          color-mix(in srgb, var(--c) 55%, transparent)); }
+  .epi .r1 { width: 8px } .epi .r2 { width: 5px } .epi .r3 { width: 3px }
+  .epi .ring { position: absolute; left: -8px; top: -8px; width: 16px; height: 16px;
+               border: 1px solid color-mix(in srgb, var(--c) 18%, transparent); border-radius: 50%; }
+  .epi .tip { position: absolute; left: 0; top: 0; width: 4.5px; height: 4.5px; margin: -2.25px;
+              border-radius: 50%; background: var(--c);
+              box-shadow: 0 0 7px color-mix(in srgb, var(--c) 75%, transparent); }
+
+  /* ══ 2 · LISSAJOUS ═══════════════════════════════════════════════════ */
+  .liss path { fill: none; stroke: var(--c); stroke-width: 1.6; stroke-linecap: round; }
+  .liss .ghost { opacity: .18; }
+  .liss .live { stroke-dasharray: 22 92; animation: lissDash 2.6s linear infinite; }
+  @keyframes lissDash { to { stroke-dashoffset: -114 } }
+
+  /* ══ 3 · MURMURATION ═════════════════════════════════════════════════ */
+  .mur { width: 26px; height: 18px; position: relative; }
+  .mur .p { position: absolute; left: 50%; top: 50%; width: 0; height: 0; }
+  .mur .p i { position: absolute; width: 3.5px; height: 3.5px; margin: -1.75px;
+              border-radius: 50%; background: var(--c);
+              animation: murFade 2.3s ease-in-out infinite; }
+  .mur .p:nth-child(1) { animation: spin  1.7s linear infinite }
+  .mur .p:nth-child(2) { animation: spin  2.3s linear infinite }
+  .mur .p:nth-child(3) { animation: spinb 1.9s linear infinite }
+  .mur .p:nth-child(4) { animation: spin  3.1s linear infinite }
+  .mur .p:nth-child(5) { animation: spinb 2.9s linear infinite }
+  .mur .p:nth-child(6) { animation: spin  1.3s linear infinite }
+  .mur .p:nth-child(7) { animation: spinb 3.7s linear infinite }
+  .mur .p:nth-child(1) i { transform: translate(7px,0) }
+  .mur .p:nth-child(2) i { transform: translate(5px,0); animation-delay:-.3s }
+  .mur .p:nth-child(3) i { transform: translate(8px,0); animation-delay:-.6s }
+  .mur .p:nth-child(4) i { transform: translate(4px,0); animation-delay:-.9s }
+  .mur .p:nth-child(5) i { transform: translate(6.5px,0); animation-delay:-1.2s }
+  .mur .p:nth-child(6) i { transform: translate(3px,0); animation-delay:-1.5s }
+  .mur .p:nth-child(7) i { transform: translate(7.5px,0); animation-delay:-1.8s }
+  @keyframes murFade { 0%,100% { opacity:.3 } 50% { opacity:1 } }
+
+  /* ══ 4 · INK ═════════════════════════════════════════════════════════ */
+  .ink path { fill: var(--c); }
+
+  /* ══ 5 · COMET ═══════════════════════════════════════════════════════ */
+  .tail { width: 20px; height: 20px; position: relative; }
+  .tail svg { position: absolute; inset: 0; animation: spin 1.4s linear infinite; }
+  .tail circle { fill: none; stroke-linecap: round; stroke-width: 2.4; }
+
+  /* ══ 6 · BRAID ═══════════════════════════════════════════════════════ */
+  .braid path { fill: none; stroke-width: 1.8; stroke-linecap: round;
+                stroke-dasharray: 9 15; animation: braidDash 1.5s linear infinite; }
+  .braid .s1 { stroke: var(--c) }
+  .braid .s2 { stroke: var(--c); opacity: .62; animation-delay: -.5s }
+  .braid .s3 { stroke: var(--c); opacity: .34; animation-delay: -1s }
+  @keyframes braidDash { to { stroke-dashoffset: -24 } }
+
+  /* ══ 7 · LIFE ════════════════════════════════════════════════════════ */
+  .life { width: 22px; height: 22px; display: grid;
+          grid-template: repeat(7, 1fr) / repeat(7, 1fr); gap: .5px; }
+  .life u { border-radius: 1px; background: var(--c); opacity: 0;
+            transition: opacity 180ms linear; }
+  .life u.on { opacity: .92 }
+
+  /* ══ 8 · THE LABEL IS THE INDICATOR ══════════════════════════════════ */
+  .shimmerLbl {
+    font-size: 12px; font-weight: 500;
+    background: linear-gradient(100deg,
+      var(--faint) 0%, var(--faint) 38%,
+      color-mix(in srgb, var(--accent) 85%, var(--fg)) 50%,
+      var(--faint) 62%, var(--faint) 100%);
+    background-size: 280% 100%;
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent; color: transparent;
+    animation: shimmer 2.4s cubic-bezier(.5,0,.5,1) infinite;
+  }
+  @keyframes shimmer { 0% { background-position: 180% 0 } 100% { background-position: -80% 0 } }
+
+  /* ══ 9 · THE COMPOSER IS THE INDICATOR ═══════════════════════════════ */
+  .pillDemo { width: 100%; max-width: 440px; }
+  .pillCap { font: 11.5px/1.4 var(--mono); color: var(--faint); margin: 0 0 7px; }
+  .pill {
+    position: relative; display: flex; align-items: center; gap: 10px;
+    height: 44px; padding: 0 8px 0 16px; border-radius: 26px;
+    background: color-mix(in srgb, var(--elev) 92%, var(--fg));
+    color: var(--faint); font-size: 14px;
+  }
+  .pill .send { margin-left: auto; width: 28px; height: 28px; border-radius: 50%; background: var(--accent); }
+  .pill::before {
+    content: ''; position: absolute; inset: -1.5px; border-radius: 27.5px; padding: 1.5px;
+    background: conic-gradient(from 0deg,
+      transparent 0deg, transparent 215deg,
+      color-mix(in srgb, var(--accent) 80%, transparent) 318deg,
+      var(--cyan) 352deg, transparent 360deg);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+            mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor; mask-composite: exclude;
+    animation: spin 2.2s linear infinite;
+  }
+  .pill.-idle::before { content: none }
+  .pill.-idle { border: 1px solid color-mix(in srgb, var(--fg) 12%, var(--border)) }
+
+  .foot { margin-top: 36px; padding: 18px 20px; border-radius: 12px;
+    background: color-mix(in srgb, var(--accent) 8%, var(--elev));
+    border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border)); }
+  .foot h2 { margin: 0 0 10px; font-size: 16px }
+  .foot p { margin: 0 0 11px; font-size: 14px; color: var(--dim) }
+  .foot p:last-child { margin: 0 }
+  .foot b { color: var(--fg) }
+
+  @media (prefers-reduced-motion: reduce) {
+    .ind *, .ind, .shimmerLbl, .pill::before { animation: none !important }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Round 2 — stop making a spinner</h1>
+<p class="sub">Round 1 was nine variations on <em>a small thing moving in a loop</em>. That is the
+  whole genre, and the genre was the problem. Three different swings here:
+  <b>motion that is quasi-periodic</b> (no common period, so it never reads as a loop),
+  <b>motion that draws</b> (a curve being made rather than a shape being spun), and
+  <b>no glyph at all</b> — the indicator becomes a property of something already on screen.</p>
+<p class="sub">Hit <b>Zoom 3×</b> and <b>Slow motion</b> together. At 26px most of this is felt
+  rather than read, which is the point — but you should see what you are buying.</p>
+
+<div class="controls">
+  <button id="slow">Slow motion</button>
+  <button id="big">Zoom 3×</button>
+  <button id="tint">Tint accent</button>
+  <span class="note">all stop under prefers-reduced-motion</span>
+</div>
+
+<div class="grid">
+
+  <div class="card -hero">
+    <div class="stageRow">
+      <span class="ind epi">
+        <span class="p a1"><span class="ring"></span><span class="arm r1"></span>
+          <span class="p" style="transform:translate(8px,0)"><span class="p a2"><span class="arm r2"></span>
+            <span class="p" style="transform:translate(5px,0)"><span class="p a3"><span class="arm r3"></span>
+              <span class="p" style="transform:translate(3px,0)"><span class="tip"></span></span>
+            </span></span></span></span>
+        </span>
+      </span>
+      <span class="lbl">Bash · 14s</span>
+      <span class="ind epi -lag" style="margin-left:26px">
+        <span class="p a1"><span class="ring"></span><span class="arm r1"></span>
+          <span class="p" style="transform:translate(8px,0)"><span class="p a2"><span class="arm r2"></span>
+            <span class="p" style="transform:translate(5px,0)"><span class="p a3"><span class="arm r3"></span>
+              <span class="p" style="transform:translate(3px,0)"><span class="tip"></span></span>
+            </span></span></span></span>
+        </span>
+      </span>
+      <span class="lbl">a second pane, started 1.4s later — they never line up again</span>
+    </div>
+    <div class="meta"><h3><span>01</span>Epicycles</h3>
+      <p>Three arms on three arms: a 3.1s wheel carrying a 1.23s wheel carrying a 0.47s wheel, with
+        a glowing tip on the end. This is how a Fourier series draws — and because those periods
+        share no common factor, <b>the tip never retraces its own path</b>. The combined cycle is
+        minutes long. The second one above is the same animation started 1.4s later, and in a cycle
+        minutes long <b>that offset never comes back around</b> — two busy panes are permanently,
+        visibly out of step. No spinner in the world does that; two of those are always identical.</p>
+      <p>It is also quietly the right metaphor: nested rotations composing into something that
+        looks nothing like rotation.</p>
+      <div class="tags"><span class="t -cheap">transform only</span><span class="t -cheap">pure CSS</span><span class="t -idea">never repeats</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="stageRow">
+      <span class="ind liss">
+        <svg width="26" height="18" viewBox="-13 -9 26 18" aria-hidden="true">
+          <path class="ghost" data-liss></path>
+          <path class="live"  data-liss></path>
+        </svg>
+      </span>
+      <span class="lbl">Bash · 14s</span>
+    </div>
+    <div class="meta"><h3><span>02</span>Lissajous</h3>
+      <p>A bright segment running a 3:2 Lissajous figure over a ghost of the whole curve. The path
+        is generated parametrically at load rather than drawn by hand — <b>change two integers and
+        it is a different knot</b>. It reads as a trace being followed, not an object spinning.</p>
+      <div class="tags"><span class="t -mid">stroke-dashoffset</span><span class="t -cheap">no per-frame JS</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="stageRow">
+      <span class="ind mur">
+        <span class="p"><i></i></span><span class="p"><i></i></span><span class="p"><i></i></span>
+        <span class="p"><i></i></span><span class="p"><i></i></span><span class="p"><i></i></span>
+        <span class="p"><i></i></span>
+      </span>
+      <span class="lbl">Bash · 14s</span>
+    </div>
+    <div class="meta"><h3><span>03</span>Murmuration</h3>
+      <p>Seven dots, seven radii, seven periods sharing no factor — 1.3s to 3.7s. They clump, smear
+        into an arc, scatter, and gather somewhere else. <b>There is no loop to catch</b>: the
+        combined period runs to minutes. It feels alive rather than mechanical, and it is seven
+        divs and one keyframe.</p>
+      <div class="tags"><span class="t -cheap">transform + opacity</span><span class="t -idea">never repeats</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="stageRow">
+      <span class="ind ink">
+        <svg width="24" height="18" viewBox="0 0 24 18" aria-hidden="true">
+          <path d="M4,9 C4,5 8,3.5 12,3.5 C16,3.5 20,5 20,9 C20,13 16,14.5 12,14.5 C8,14.5 4,13 4,9 Z">
+            <animate attributeName="d" dur="3.4s" repeatCount="indefinite"
+              calcMode="spline" keyTimes="0;0.25;0.5;0.75;1"
+              keySplines=".45 0 .55 1;.45 0 .55 1;.45 0 .55 1;.45 0 .55 1"
+              values="M4,9 C4,5 8,3.5 12,3.5 C16,3.5 20,5 20,9 C20,13 16,14.5 12,14.5 C8,14.5 4,13 4,9 Z;
+                      M6,9 C6,4 9,2.5 12,2.5 C15,2.5 22,6 22,9 C22,12 15,15.5 12,15.5 C9,15.5 6,14 6,9 Z;
+                      M2,9 C2,6 9,4.5 12,4.5 C15,4.5 18,6 18,9 C18,12 15,13.5 12,13.5 C9,13.5 2,12 2,9 Z;
+                      M5,9 C5,5.5 8,2.8 12,2.8 C16,2.8 21,5.5 21,9 C21,12.5 16,15.2 12,15.2 C8,15.2 5,12.5 5,9 Z;
+                      M4,9 C4,5 8,3.5 12,3.5 C16,3.5 20,5 20,9 C20,13 16,14.5 12,14.5 C8,14.5 4,13 4,9 Z"/>
+          </path>
+        </svg>
+      </span>
+      <span class="lbl">Bash · 14s</span>
+    </div>
+    <div class="meta"><h3><span>04</span>Ink</h3>
+      <p>One shape genuinely morphing — real Bézier interpolation between four blobs, not a blur
+        filter faking surface tension. It leans and breathes like a drop held in a field.
+        Declarative SMIL, so <b>no JavaScript and no filter</b>, which is exactly what round 1's
+        gooey version could not say.</p>
+      <div class="tags"><span class="t -mid">path morph</span><span class="t -cheap">no JS</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="stageRow">
+      <span class="ind tail">
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
+          <defs><linearGradient id="tailg" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%"   stop-color="var(--c)" stop-opacity="0"/>
+            <stop offset="70%"  stop-color="var(--c)" stop-opacity=".55"/>
+            <stop offset="100%" stop-color="var(--c)" stop-opacity="1"/>
+          </linearGradient></defs>
+          <circle cx="10" cy="10" r="7.5" stroke="url(#tailg)" stroke-dasharray="33 14"/>
+        </svg>
+      </span>
+      <span class="lbl">Bash · 14s</span>
+    </div>
+    <div class="meta"><h3><span>05</span>Comet</h3>
+      <p>Round 1's comet done properly: the arc is stroked with a gradient so the tail
+        <b>fades to nothing instead of being chopped off</b>, with a bright head. The most
+        conservative thing here, and the one that would look at home tomorrow.</p>
+      <div class="tags"><span class="t -cheap">transform only</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="stageRow">
+      <span class="ind braid">
+        <svg width="26" height="14" viewBox="0 0 26 14" aria-hidden="true">
+          <path class="s1" d="M0,7 C4,1 9,1 13,7 C17,13 22,13 26,7"/>
+          <path class="s2" d="M0,7 C4,13 9,13 13,7 C17,1 22,1 26,7"/>
+          <path class="s3" d="M0,7 C5,7 8,7 13,7 C18,7 21,7 26,7"/>
+        </svg>
+      </span>
+      <span class="lbl">Bash · 14s</span>
+    </div>
+    <div class="meta"><h3><span>06</span>Braid</h3>
+      <p>Three strands weaving a channel, dashes marching along each at different phases — the eye
+        reads <b>something flowing through</b> rather than something turning. The only one here with
+        a direction, which suits a thing that is making progress.</p>
+      <div class="tags"><span class="t -mid">stroke-dashoffset</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="stageRow">
+      <span class="ind life" id="life"></span>
+      <span class="lbl">Bash · 14s</span>
+    </div>
+    <div class="meta"><h3><span>07</span>Life</h3>
+      <p>An actual cellular automaton — 7×7 Conway on a wrapped torus, reseeded when it stalls or
+        dies out. It is <b>genuinely computing something</b> while telling you something is being
+        computed, and no two moments are alike.</p>
+      <p>I love it and I would not ship it: it needs a JS tick, and several panes can be working at
+        once.</p>
+      <div class="tags"><span class="t -dear">JS tick · 6fps</span><span class="t -idea">actually computing</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="stageRow">
+      <span class="shimmerLbl">Bash · 14s</span>
+    </div>
+    <div class="meta"><h3><span>08</span>No glyph — the label is the indicator</h3>
+      <p>Delete the spinner. A highlight sweeps through the words that are already there, so the
+        thing telling you <em>what</em> is happening <b>is</b> the thing telling you it is still
+        happening. Footprint: zero. One <code>background-clip: text</code> and a keyframe.</p>
+      <p>The catch is real — with no tool to name there is no label, so this needs a fallback word
+        (<em>thinking</em>) for the quiet stretches.</p>
+      <div class="tags"><span class="t -cheap">background-position</span><span class="t -idea">zero footprint</span></div>
+    </div>
+  </div>
+
+  <div class="card -hero">
+    <div class="stageRow" style="flex-direction:column; align-items:stretch; gap:16px">
+      <div class="pillDemo"><p class="pillCap">working</p>
+        <div class="pill"><span>Message Claude…</span><span class="send"></span></div></div>
+      <div class="pillDemo"><p class="pillCap">idle — the ordinary hairline</p>
+        <div class="pill -idle"><span>Message Claude…</span><span class="send"></span></div></div>
+    </div>
+    <div class="meta"><h3><span>09</span>No glyph — the composer is the indicator</h3>
+      <p>The biggest swing here. A light travels the composer's own border while a turn runs; at
+        rest it is the ordinary hairline. <b>No new element, no new space</b>, and it is impossible
+        to miss because it is wrapped around the thing you are already looking at.</p>
+      <p>It also answers a question the dots never could — <em>is this pane busy?</em> — from the
+        corner of your eye, with nothing to read. The dots live at the bottom of the transcript and
+        scroll away with it; the composer never moves.</p>
+      <div class="tags"><span class="t -cheap">transform only</span><span class="t -idea">zero footprint</span><span class="t -idea">seen peripherally</span></div>
+    </div>
+  </div>
+
+</div>
+
+<div class="foot">
+  <h2>What I would actually do</h2>
+  <p><b>09 the composer halo, with 08 the shimmering label — together, and no glyph at all.</b>
+    They are not two options, they are one idea: the indicator stops being an object you add and
+    becomes a property of things already on screen. The halo says <em>this pane is working</em> from
+    across the room; the shimmer says <em>and here is what it is doing</em> when you look. Nothing
+    is added, nothing takes space, and the row stops having a little mascot in it.</p>
+  <p><b>If it must be a glyph: 01 Epicycles.</b> It is the only thing in either round that is not a
+    loop — the periods share no common factor, so the tip never retraces its path and two working
+    panes visibly drift apart. That is hard to un-notice once you have seen it, and it costs three
+    nested transforms.</p>
+  <p><b>03 Murmuration</b> is the same trick with a softer face, and the one I would take if the
+    epicycle arms read as too mechanical. <b>07 Life</b> is the most fun and the least shippable.</p>
+</div>
+
+</div>
+<script>
+  // ── Lissajous: generated, not hand-drawn. a:b = 3:2, phase π/2.
+  {
+    const A = 12, B = 8, a = 3, b = 2, d = Math.PI / 2, N = 240;
+    let p = '';
+    for (let i = 0; i <= N; i++) {
+      const t = (i / N) * Math.PI * 2;
+      p += (i ? 'L' : 'M') + (A * Math.sin(a * t + d)).toFixed(2) + ',' + (B * Math.sin(b * t)).toFixed(2);
+    }
+    p += 'Z';
+    for (const el of document.querySelectorAll('[data-liss]')) el.setAttribute('d', p);
+  }
+
+  // ── Life: 7×7 torus, reseeded when it stalls or dies.
+  {
+    const N = 7, host = document.getElementById('life'), cells = [];
+    for (let i = 0; i < N * N; i++) { const u = document.createElement('u'); host.append(u); cells.push(u); }
+    let g = [];
+    const seed = () => { g = Array.from({ length: N * N }, () => (Math.random() < 0.38 ? 1 : 0)); };
+    const at = (x, y) => g[((y + N) % N) * N + ((x + N) % N)];
+    const step = () => {
+      const next = g.map((_, i) => {
+        const x = i % N, y = (i / N) | 0;
+        let n = 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (dx || dy) n += at(x + dx, y + dy);
+        return at(x, y) ? (n === 2 || n === 3 ? 1 : 0) : (n === 3 ? 1 : 0);
+      });
+      const alive = next.reduce((s, v) => s + v, 0);
+      const same = next.every((v, i) => v === g[i]);
+      g = next;
+      if (alive < 3 || same) seed();
+    };
+    const paint = () => cells.forEach((u, i) => u.classList.toggle('on', !!g[i]));
+    seed(); paint();
+    if (!matchMedia('(prefers-reduced-motion: reduce)').matches) setInterval(() => { step(); paint(); }, 170);
+  }
+
+  for (const [id, cls] of [['slow', 'slow'], ['big', 'big'], ['tint', 'tint']]) {
+    const el = document.getElementById(id);
+    el.onclick = () => el.classList.toggle('on', document.body.classList.toggle(cls));
+  }
+</script>
+</body>
+</html>

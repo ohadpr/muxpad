@@ -1,7 +1,7 @@
 import { type ChatCard, cardIsStale } from '@muxpad/shared';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { subscribe, subscribeResync } from '../events';
-import { isCardCollapsed, toggleCardCollapsed, useCardCollapse } from '../lib/card-collapse';
+import { isCardOpen, toggleCardOpen, useCardOpen } from '../lib/card-open';
 import './ChatCards.css';
 import { Markdown } from './ChatMarkdown';
 
@@ -160,7 +160,7 @@ export function ChatCards({ tabId }: { tabId: string | null | undefined }) {
   // ago" forever is worse than no timestamp, and staleness is the signal the
   // cadence exists for.
   const [now, setNow] = useState(() => Date.now());
-  const collapsed = useCardCollapse();
+  const opened = useCardOpen();
 
   const load = useCallback(() => {
     if (!tabId) {
@@ -206,7 +206,7 @@ export function ChatCards({ tabId }: { tabId: string | null | undefined }) {
   // last card mid-line, which reads as a broken card rather than a full stack.
   const stackRef = useRef<HTMLDivElement>(null);
   const [over, setOver] = useState(false);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `cards` and `collapsed` are deliberately dependencies the body does not read. The stack renders nothing when there are none, so on the first pass the ref is null and this bails — with no dependency it would never run again, for the whole session, and the overflow fade and bottom-pin would silently never work. It also has to re-observe when the card NODES are replaced.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `cards` and `opened` are deliberately dependencies the body does not read. The stack renders nothing when there are none, so on the first pass the ref is null and this bails — with no dependency it would never run again, for the whole session, and the overflow fade and bottom-pin would silently never work. It also has to re-observe when the card NODES are replaced.
   useEffect(() => {
     const el = stackRef.current;
     if (!el) return;
@@ -222,48 +222,66 @@ export function ChatCards({ tabId }: { tabId: string | null | undefined }) {
     ro.observe(el);
     for (const child of el.children) ro.observe(child);
     return () => ro.disconnect();
-  }, [cards, collapsed]);
+  }, [cards, opened]);
 
   if (cards.length === 0) return null;
   return (
     <div className={`chat-cards${over ? ' -over' : ''}`} ref={stackRef}>
       {cards.map((card) => {
         const stale = cardIsStale(card, now);
-        const shut = isCardCollapsed(collapsed, tabId, card.name);
+        const open = isCardOpen(opened, tabId, card.name);
+        // An html card is a sandboxed frame — there is no "one line" of it to
+        // put in the row, so it always keeps a body underneath. Text and
+        // markdown ride IN the row until somebody opens them.
+        const inline = !open && card.format !== 'html';
+        const body = open || card.format === 'html';
+        // The age is the row's only true noise: it says nothing until it says
+        // the writer stopped. So it appears when it has something to report,
+        // and when you have opened the card and are actually inspecting it.
+        const showAge = stale || open;
         return (
-          <section className={`chat-card${shut ? ' -shut' : ''}`} key={card.id}>
-            {/* THE WHOLE HEADER IS THE CONTROL, not a 15px glyph at one end of
-              it. This is a phone surface first, and the old × was a 5px-padded
-              character — below every touch-target guideline there is, sitting
-              next to the thing it would have destroyed. A full-width row is
-              impossible to miss and has nothing to mis-hit. */}
+          <section
+            className={`chat-card${stale ? ' -stale' : ''}${open ? ' -open' : ''}`}
+            key={card.id}
+          >
+            {/* THE WHOLE ROW IS THE CONTROL. This is a phone surface first, and
+              the × it replaced was a 15px glyph with 5px of padding — under
+              every touch-target guideline there is, and sitting right next to
+              the thing it destroyed. A full-width row has nothing to mis-hit. */}
             <button
               type="button"
-              className="chat-card-head"
-              aria-expanded={!shut}
+              className="chat-card-row"
+              aria-expanded={open}
               onClick={() => {
-                if (tabId) toggleCardCollapsed(tabId, card.name);
+                if (tabId) toggleCardOpen(tabId, card.name);
               }}
-              title={shut ? `Expand ${card.name}` : `Collapse ${card.name}`}
+              title={open ? `Collapse ${card.name}` : `Expand ${card.name}`}
             >
-              <span className={`chat-card-chevron${shut ? '' : ' is-open'}`} aria-hidden="true">
-                ›
-              </span>
               <span className="chat-card-name">{card.name}</span>
-              <span className={`chat-card-age${stale ? ' -stale' : ''}`}>
-                {ago(now - card.updated_at)}
-                {stale ? ' · overdue' : ''}
-              </span>
+              {inline ? (
+                // One line, ellipsized — never wrapped. A compact card that
+                // silently becomes two rows on a narrow pane has given back
+                // exactly the height this layout exists to save.
+                <span className="chat-card-value">
+                  {card.format === 'markdown' ? <Markdown text={card.content} /> : card.content}
+                </span>
+              ) : null}
+              {showAge ? (
+                <span className={`chat-card-age${stale ? ' -stale' : ''}`}>
+                  {ago(now - card.updated_at)}
+                  {stale ? ' · overdue' : ''}
+                </span>
+              ) : null}
             </button>
             {/* Unmounted, not hidden. An html card is a sandboxed iframe that
               re-measures itself and re-posts its height; left mounted behind
               `display:none` it would keep a frame alive and keep reporting a
               height for something nobody can see. */}
-            {shut ? null : (
+            {body ? (
               <div className={`chat-card-body${card.format === 'html' ? ' -flush' : ''}`}>
                 <CardBody card={card} />
               </div>
-            )}
+            ) : null}
           </section>
         );
       })}
