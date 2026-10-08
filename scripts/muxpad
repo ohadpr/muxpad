@@ -866,12 +866,25 @@ slack_api() {
 
 # `#name`, `@user` or a raw ID → a conversation id. Raw ids pass through
 # untouched, which is what makes the lookup skippable on a hot path.
+#
+# THE TOKEN IS REQUIRED, AND IT IS FIRST. It used to default to
+# `${SLACK_USER_TOKEN:-$SLACK_BOT_TOKEN}`, which silently disagreed with the
+# caller: `cmd_slack_post` picked the BOT token to post with, then resolved
+# `@andrey` with the USER token — opening the user's own DM, whose id the bot
+# cannot post into. The result was `channel_not_found` on a channel that very
+# much existed.
+#
+# A default was the bug. An id resolved with one identity and used with another
+# is meaningless in general — Slack conversation ids are per-identity for DMs —
+# so there is no sensible default to have, and making it a required first
+# argument turns a silent mismatch into a syntax error at the call site.
 slack_channel_id() {
-  local ref="$1"
+  local tok="${1:-}" ref="${2:-}"
+  [ -n "$tok" ] && [ -n "$ref" ] || {
+    echo 'muxpad: internal: slack_channel_id needs <token> <ref>' >&2; exit 1; }
   case "$ref" in
     C*|D*|G*) printf '%s' "$ref"; return ;;
   esac
-  local tok="${2:-${SLACK_USER_TOKEN:-$SLACK_BOT_TOKEN}}"
   case "$ref" in
     @*)
       local name="${ref#@}" uid
@@ -911,7 +924,8 @@ cmd_slack_read() {
   reset_flags since limit
   parse_flags since limit -- "$@"
   local tok="${SLACK_USER_TOKEN:-$SLACK_BOT_TOKEN}"
-  local id; id="$(slack_channel_id "$ref")"
+  # Same token for the lookup and the read — see slack_channel_id.
+  local id; id="$(slack_channel_id "$tok" "$ref")"
   local fields=("channel=$id" "limit=${FLAG_limit:-50}")
   [ -n "${FLAG_since:-}" ] && fields+=("oldest=$(slack_since_epoch "$FLAG_since")")
   # Oldest-first, which is reading order; Slack returns newest-first.
@@ -936,15 +950,46 @@ cmd_slack_post() {
   slack_load
   local ref="${1:-}" text="${2:-}"; shift 2 2>/dev/null || true
   [ -n "$ref" ] && [ -n "$text" ] || {
-    echo 'usage: muxpad slack post <#channel|@user|ID> "<text>" [--as-me]' >&2; exit 1; }
-  local as_me='' a
-  for a in "$@"; do [ "$a" = "--as-me" ] && as_me=1; done
-  local tok
+    echo 'usage: muxpad slack post <#channel|@user|ID> "<text>" [--as-me|--as-bot]' >&2; exit 1; }
+  local as_me='' as_bot='' a
+  for a in "$@"; do
+    case "$a" in --as-me) as_me=1 ;; --as-bot) as_bot=1 ;; esac
+  done
+  [ -n "$as_me" ] && [ -n "$as_bot" ] && {
+    echo 'muxpad: pass --as-me or --as-bot, not both' >&2; exit 1; }
+
+  # ─── A DM HAS NO SAFE DEFAULT IDENTITY ───────────────────────────────────
+  # Posting as the bot into `@andrey` does not land in the user's DM with
+  # Andrey — it lands in ANDREY'S SEPARATE DM WITH MUXPAD, a conversation the
+  # user cannot see and may never learn about. That happened: "send Andrey a PR
+  # review message" became a bot message in a conversation the sender could not
+  # read, and because the ts was discarded it could not even be deleted
+  # afterwards.
+  #
+  # A channel is different — a bot post in #eng is visible to everyone and
+  # obviously a machine — so the bot stays the default there. For a DM the two
+  # identities go to two different places, and guessing is what caused the
+  # incident, so this asks.
+  local is_dm=''
+  case "$ref" in @*|D*) is_dm=1 ;; esac
+  if [ -n "$is_dm" ] && [ -z "$as_me" ] && [ -z "$as_bot" ]; then
+    cat >&2 <<EOF
+muxpad: a DM needs an explicit identity — the two go to different places.
+
+  --as-me    posts into YOUR conversation with $ref, under your own name.
+             This is what "send $ref a message" almost always means.
+  --as-bot   posts into $ref's separate DM with "muxpad" — a conversation you
+             cannot see. Only for notifications you are originating.
+EOF
+    exit 1
+  fi
+
+  local tok who
   if [ -n "$as_me" ]; then
-    tok="${SLACK_USER_TOKEN:-}"
+    tok="${SLACK_USER_TOKEN:-}" who="you"
     [ -n "$tok" ] || { echo 'muxpad: --as-me needs SLACK_USER_TOKEN' >&2; exit 1; }
   else
-    tok="${SLACK_BOT_TOKEN:-}"
+    tok="${SLACK_BOT_TOKEN:-}" who="muxpad (bot)"
     [ -n "$tok" ] || {
       cat >&2 <<'EOF'
 muxpad: no SLACK_BOT_TOKEN, so there is no way to post as "muxpad".
@@ -953,9 +998,45 @@ you want, say so explicitly with --as-me.
 EOF
       exit 1; }
   fi
-  local id; id="$(slack_channel_id "$ref" "$tok")"
-  slack_api chat.postMessage "$tok" "channel=$id" "text=$text" >/dev/null
-  echo "sent to $ref${as_me:+ (as you)}"
+
+  # Same token resolves the conversation and posts into it — see
+  # slack_channel_id for what it cost to learn that.
+  local id; id="$(slack_channel_id "$tok" "$ref")"
+  local out ts
+  out="$(slack_api chat.postMessage "$tok" "channel=$id" "text=$text")"
+  ts="$(printf '%s' "$out" | jq -r '.ts // empty')"
+
+  # ─── SAY WHO SENT IT, WHERE, AND KEEP THE HANDLE ─────────────────────────
+  # "sent to @andrey" was true and useless: it named neither the identity nor
+  # the conversation, which were the two things that went wrong. And the
+  # response was thrown away, so the message could not be deleted afterwards —
+  # `chat.delete` needs the ts, and recovering one needs history scope the bot
+  # does not have. The ts is the undo handle; print it.
+  echo "sent as ${who} → ${ref}  [${id} ${ts:-?}]"
+  [ -n "$ts" ] && echo "undo: muxpad slack unpost ${id} ${ts}${as_me:+ --as-me}"
+  return 0
+}
+
+# Delete a message muxpad posted. The identity MUST match the one that posted
+# it: Slack lets a token delete its own messages, so a bot message needs the bot
+# token and a user message needs the user token. That is why the hint printed by
+# `post` carries `--as-me` through.
+cmd_slack_unpost() {
+  slack_load
+  local id="${1:-}" ts="${2:-}"; shift 2 2>/dev/null || true
+  [ -n "$id" ] && [ -n "$ts" ] || {
+    echo 'usage: muxpad slack unpost <channelID> <ts> [--as-me]' >&2; exit 1; }
+  local as_me='' a
+  for a in "$@"; do [ "$a" = "--as-me" ] && as_me=1; done
+  local tok who
+  if [ -n "$as_me" ]; then
+    tok="${SLACK_USER_TOKEN:-}" who="you"
+  else
+    tok="${SLACK_BOT_TOKEN:-}" who="muxpad (bot)"
+  fi
+  [ -n "$tok" ] || { echo 'muxpad: no token for that identity' >&2; exit 1; }
+  slack_api chat.delete "$tok" "channel=$id" "ts=$ts" >/dev/null
+  echo "deleted ${who}'s message ${ts} in ${id}"
 }
 
 cmd_slack_channels() {
@@ -970,21 +1051,31 @@ cmd_slack() {
     read) cmd_slack_read "${@:2}" ;;
     search) cmd_slack_search "${@:2}" ;;
     post) cmd_slack_post "${@:2}" ;;
+    unpost) cmd_slack_unpost "${@:2}" ;;
     channels) cmd_slack_channels ;;
     *)
       cat >&2 <<EOF
 usage:
   muxpad slack read <#channel|@user|ID> [--since=2h] [--limit=50]
   muxpad slack search "<query>" [--limit=20]     (needs SLACK_USER_TOKEN)
-  muxpad slack post <#channel|@user|ID> "<text>" [--as-me]
+  muxpad slack post <#channel|@user|ID> "<text>" [--as-me|--as-bot]
+  muxpad slack unpost <channelID> <ts> [--as-me]
   muxpad slack channels
 
 Tokens live in $SLACK_SECRETS:
   SLACK_USER_TOKEN=xoxp-...   reading + search, sees what you see
   SLACK_BOT_TOKEN=xoxb-...    posting as "muxpad"
 
-Posting uses the BOT token unless you pass --as-me, which posts under your own
-name with no bot badge — the audit log will say you said it.
+IDENTITY FOLLOWS AUTHORSHIP, not the channel and not the flag you remembered:
+  a message the USER told you to send is theirs      --as-me
+  a notification YOU decided to emit is muxpad's     --as-bot (or the default)
+
+A DM requires you to say which — the two identities land in two DIFFERENT
+conversations, and the bot one is invisible to you. A channel defaults to the
+bot, which is visible to everyone and obviously a machine.
+
+'post' prints the identity, the conversation id and the ts, and the ts is the
+only way to delete the message afterwards.
 EOF
       exit 1 ;;
   esac
