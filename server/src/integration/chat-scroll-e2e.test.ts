@@ -562,7 +562,25 @@ describe('chat scroll position across a hide/show', () => {
     const returned = await topMessage(page);
     // eslint-disable-next-line no-console
     console.log('[reload] parked', parked, '→', returned, await scrollState(page));
-    expect(returned?.tag).toBe(parked?.tag);
+    // ── THE CONTRACT CHANGED UNDER THIS TEST ──────────────────────────────
+    // It asserted an EXACT return, and that was right while a restore would
+    // page history to reach its row. It no longer does: `canSeek` seeks for a
+    // search HIT and not for a restore, because paging up to eight socket
+    // round trips (~1 MB) to honour a remembered pixel position was measured
+    // as the single biggest cause of "opening a chat feels stuck", and no
+    // chat app pays it — Slack, Discord, WhatsApp and Telegram all open at the
+    // bottom or at a server-known unread marker.
+    //
+    // So a restore is free or it does not happen: land on the row if it is in
+    // the opening window, otherwise open at the newest message. This park is
+    // DEEPER than that window by construction, so the property left to hold is
+    // the DIRECTION of the miss — toward the tail, never deeper into history,
+    // which is the reported symptom. Same assertion as the budget test below.
+    //
+    // The shallow case still returns exactly, and is covered by "comes back to
+    // the SAME message" above.
+    expect(returned).not.toBeNull();
+    expect(msgIndex(returned!.tag)).toBeGreaterThanOrEqual(msgIndex(parked!.tag));
   }, 180_000);
 
   // ── Round four ────────────────────────────────────────────────────────────
@@ -611,7 +629,25 @@ describe('chat scroll position across a hide/show', () => {
     const returned = await topMessage(reopened);
     // eslint-disable-next-line no-console
     console.log('[cold open] parked', parked, '→', returned, await scrollState(reopened));
-    expect(returned?.tag).toBe(parked?.tag);
+    // ── THE CONTRACT CHANGED UNDER THIS TEST ──────────────────────────────
+    // It asserted an EXACT return, and that was right while a restore would
+    // page history to reach its row. It no longer does: `canSeek` seeks for a
+    // search HIT and not for a restore, because paging up to eight socket
+    // round trips (~1 MB) to honour a remembered pixel position was measured
+    // as the single biggest cause of "opening a chat feels stuck", and no
+    // chat app pays it — Slack, Discord, WhatsApp and Telegram all open at the
+    // bottom or at a server-known unread marker.
+    //
+    // So a restore is free or it does not happen: land on the row if it is in
+    // the opening window, otherwise open at the newest message. This park is
+    // DEEPER than that window by construction, so the property left to hold is
+    // the DIRECTION of the miss — toward the tail, never deeper into history,
+    // which is the reported symptom. Same assertion as the budget test below.
+    //
+    // The shallow case still returns exactly, and is covered by "comes back to
+    // the SAME message" above.
+    expect(returned).not.toBeNull();
+    expect(msgIndex(returned!.tag)).toBeGreaterThanOrEqual(msgIndex(parked!.tag));
   }, 240_000);
 
   it('a caught-up reader cold-opens at the NEWEST message, which is not a reset', async (t) => {
@@ -734,7 +770,19 @@ describe('chat scroll position across a hide/show', () => {
       returned,
       await scrollState(page),
     );
-    expect(returned?.tag).toBe(parked?.tag);
+    // ── WHAT THIS STILL PROVES, AFTER THE CONTRACT CHANGED ────────────────
+    // The exact return is gone for a park outside the opening window — a
+    // restore no longer pages history to reach its row (see `canSeek`, and
+    // the note on the reload test above). This transcript's records are fat
+    // on purpose, so the initial window is under a screenful and twelve wheel
+    // notches is already outside it.
+    //
+    // The DEFECT this test exists for is untouched by that, because it was
+    // never about exactness: a remembered RATIO re-applied against a document
+    // growing from a burst of prepends dragged the reader DEEPER on every
+    // batch. Direction is the whole property, and it is still asserted.
+    expect(returned).not.toBeNull();
+    expect(msgIndex(returned!.tag)).toBeGreaterThanOrEqual(msgIndex(parked!.tag));
   }, 240_000);
 
   it('degrades toward the TAIL, never deeper into history, past the seek budget', async (t) => {

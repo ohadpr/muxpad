@@ -236,6 +236,19 @@ describe.each(ENGINES)('ANCHORED — $name', ({ paysAnchoring }) => {
     expect(sim.rowOffset('m15')).toBe(before + 120);
   });
 
+  it('believes a SCROLLBAR DRAG, which produces no input events', () => {
+    // A drag fires no wheel, no touch and no key — and nor does a middle-click
+    // autoscroll or a click in the scrollbar track. The first cut of the input
+    // signal dropped all of them; a probe that moved `scrollTop` directly
+    // recorded no position at all. With the document standing still there is
+    // nothing for an engine to have compensated, so the arithmetic is sound.
+    const before = sim.rowOffset('m15');
+    sim.scrollTopSilently(sim.scrollTop - 120);
+    c.place();
+    drainScroll(sim, c);
+    expect(sim.rowOffset('m15')).toBe(before + 120);
+  });
+
   it('still holds them put when ONLY the prepend happens', () => {
     // The other side of the same branch: no gesture, so nothing to reconcile,
     // and the row must not move at all.
@@ -1121,5 +1134,55 @@ describe('giving up on a hit is a fact about the search, not a default', () => {
     expect(c.spentSeekBudget()).toBe(true);
     c.dispatch({ t: 'search-jump' });
     expect(c.spentSeekBudget()).toBe(false);
+  });
+});
+
+/**
+ * A RESTORE MUST NOT GIVE UP BEFORE THERE IS ANYTHING TO LOOK IN.
+ *
+ * `strandedRestore` converts "this restore can never land" into "open at the
+ * newest message", and the caller asks it on EVERY commit — including the
+ * first, when the list is still empty. So a reload declared the restore
+ * unreachable before a single row existed, pinned the reader to the bottom,
+ * and then rendered the row they wanted a moment later.
+ *
+ * Measured on a reload of a real chat before the fix: the remembered row came
+ * back as row 15 of 29 with `caughtUp: false` in the record, and the reader
+ * was at the very bottom. It had not failed to find the row — it had given up
+ * before looking. After: the same message at the top, at offset -523 against
+ * a recorded -523.
+ */
+describe('a restore arriving before its transcript', () => {
+  it('is not stranded while the list is empty', () => {
+    const sim = new SimScroller([], { furnitureBelow: 0 });
+    const c = new ChatScrollController(sim);
+    c.dispatch({ t: 'mounted' });
+    c.dispatch({ t: 'shown', mem: PARKED('m15', -60) });
+    // Nothing has rendered. Absence here is not evidence of absence.
+    expect(c.strandedRestore(true)).toBe(false);
+    expect(c.strandedRestore(false)).toBe(false);
+  });
+
+  it('lands once the tail carrying the row arrives', () => {
+    const sim = new SimScroller([], { furnitureBelow: 0 });
+    const c = new ChatScrollController(sim);
+    c.dispatch({ t: 'mounted' });
+    c.dispatch({ t: 'shown', mem: PARKED('m15', -60) });
+    sim.append(simRows(40));
+    c.place();
+    drainScroll(sim, c);
+    expect(c.strandedRestore(true)).toBe(false);
+    expect(sim.rowOffset('m15')).toBe(-60);
+  });
+
+  it('IS stranded once rows exist and the row is not among them', () => {
+    // The other half: the opening tail arrived in one commit and the row is
+    // not in it, so the reader belongs at the newest message rather than
+    // wherever an unplaced list happens to start.
+    const sim = new SimScroller(simRows(10), { furnitureBelow: 0 });
+    const c = new ChatScrollController(sim);
+    c.dispatch({ t: 'mounted' });
+    c.dispatch({ t: 'shown', mem: PARKED('nope-not-here', -60) });
+    expect(c.strandedRestore(true)).toBe(true);
   });
 });
