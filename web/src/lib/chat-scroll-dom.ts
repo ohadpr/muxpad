@@ -84,7 +84,75 @@ function anchorRows(el: HTMLElement): HTMLElement[] {
  */
 export function domScrollSurface(getEl: () => HTMLElement | null): ScrollSurface {
   const viewportTop = (el: HTMLElement) => el.getBoundingClientRect().top;
+  /**
+   * The reader's own movement, accumulated from INPUT and read by `place()`.
+   *
+   * Listening for it is the only way to know it. A prepend and a gesture
+   * arriving in the same frame add up inside one `scrollTop`, and the engine's
+   * share of that sum is anything from nothing to all of it depending on
+   * browser and version — so the sum cannot be taken apart afterwards. It was
+   * tried: the old rule believed the reader only when the document had not
+   * moved, which is never true on the frames where history lands, so scrolling
+   * up handed back about one frame in twelve.
+   *
+   * Listeners are attached lazily on first read and are passive, so none of
+   * this can delay a scroll.
+   */
+  let readerIntent = 0;
+  let wired: HTMLElement | null = null;
+  let lastTouchY: number | null = null;
+  const wire = (el: HTMLElement) => {
+    if (wired === el) return;
+    wired = el;
+    el.addEventListener(
+      'wheel',
+      (e) => {
+        readerIntent += (e as WheelEvent).deltaY;
+      },
+      { passive: true },
+    );
+    el.addEventListener(
+      'touchstart',
+      (e) => {
+        const t = (e as TouchEvent).touches[0];
+        lastTouchY = t ? t.clientY : null;
+      },
+      { passive: true },
+    );
+    el.addEventListener(
+      'touchmove',
+      (e) => {
+        const t = (e as TouchEvent).touches[0];
+        if (!t) return;
+        // A finger moving DOWN scrolls the content UP, hence the negation.
+        if (lastTouchY !== null) readerIntent -= t.clientY - lastTouchY;
+        lastTouchY = t.clientY;
+      },
+      { passive: true },
+    );
+    el.addEventListener(
+      'touchend',
+      () => {
+        lastTouchY = null;
+      },
+      { passive: true },
+    );
+    // The keys that scroll. The exact pixel amount is the engine's business;
+    // what `place()` needs is the SIGN and that it was a person.
+    el.addEventListener('keydown', (e) => {
+      const k = (e as KeyboardEvent).key;
+      if (k === 'ArrowUp' || k === 'PageUp' || k === 'Home') readerIntent -= 40;
+      else if (k === 'ArrowDown' || k === 'PageDown' || k === 'End') readerIntent += 40;
+    });
+  };
   return {
+    takeReaderIntent(): number {
+      const el = getEl();
+      if (el) wire(el);
+      const d = readerIntent;
+      readerIntent = 0;
+      return d;
+    },
     geometry(): ScrollGeometry {
       const el = getEl();
       if (!el) return { scrollTop: 0, scrollHeight: 0, clientHeight: 0 };
