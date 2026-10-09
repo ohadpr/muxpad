@@ -117,3 +117,50 @@ describe('a card-writing cron', () => {
     expect(out).toContainEqual(mine);
   });
 });
+
+/**
+ * A FAILED FIRE IS NEVER SILENT.
+ *
+ * This held for free while a cron's prose was visible: a job that errored
+ * explained itself, and the explanation broke the span. When every cron turn's
+ * prose became machinery it stopped holding, and the comment promising it
+ * stayed — measured, a card fire whose script was missing rendered ZERO rows
+ * after saying "the card script is missing". The job failed, said so, and the
+ * chat showed nothing.
+ */
+describe('a card fire that failed', () => {
+  const failed = () => ({
+    kind: 'tool_result' as const,
+    id: id(),
+    ts: 0,
+    toolUseId: 'x',
+    ok: false,
+    text: 'scripts/market_card.sh: not found',
+  });
+
+  it('keeps its row even when the agent said nothing about it', () => {
+    // The machine's own account, not the model's — and the case a
+    // disappearing row is actually a bug rather than a tidy-up.
+    const out = run([...fire({ card: 'market' }), tool(), failed()]);
+    expect(out.length).toBeGreaterThan(0);
+  });
+
+  it('keeps it when the agent DID explain, now that prose is folded', () => {
+    const out = run([...fire({ card: 'market' }), tool(), failed(), prose('could not update it')]);
+    expect(out.length).toBeGreaterThan(0);
+  });
+
+  it('still drops the ordinary quiet success beside it', () => {
+    const out = run([
+      ...fire({ card: 'market' }),
+      tool(),
+      failed(),
+      ...fire({ card: 'market' }),
+      tool(),
+      prose(),
+    ]);
+    // The failed one survives; the clean one does not.
+    const chips = out.filter((e) => e.kind === 'notice');
+    expect(chips).toHaveLength(1);
+  });
+});

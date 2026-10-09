@@ -975,9 +975,23 @@ EOF
     exit 1
   fi
   [ "$text" = "-" ] && text="$(cat)"
-  # Trailing newline only; the marker must survive being embedded in whatever
-  # else the command printed.
-  printf '<muxpad-said>%s</muxpad-said>\n' "$text"
+  # ── THE KEY IS WHY THIS IS NOT JUST A printf ─────────────────────────────
+  # Without one, any output CONTAINING the marker became a message: `cat` a
+  # file that mentions it, run the tests, fetch a page — or `grep -rn
+  # muxpad-said .` while working on this feature, which prints it several
+  # times and would have said every one of them out loud.
+  #
+  # It is not a secret. An agent is allowed to speak and anything running as
+  # this user can read the key file. It is what makes text that MENTIONS the
+  # marker distinguishable from an invocation of it.
+  require_api_url
+  require_jq
+  local key
+  key="$(http_request GET /api/say/key | jq -r '.key // empty')"
+  [ -n "$key" ] || { echo 'muxpad: say: the server did not issue a key' >&2; exit 1; }
+  # The closing tag carries the key too, so a message that quotes the marker
+  # cannot truncate itself.
+  printf '<muxpad-said k="%s">%s</muxpad-said:%s>\n' "$key" "$text" "$key"
 }
 
 # ─── card ──────────────────────────────────────────────────────────────────

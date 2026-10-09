@@ -376,11 +376,23 @@ export function fireTime(ts: number | null): string {
  * writer stops. "Did it run?" is answered on the thing you are looking at
  * rather than by a chip six screens up the log.
  *
- * ── THE SILENCE IS LOAD-BEARING ─────────────────────────────────────────────
- * Only a turn that said NOTHING is dropped. Anything the agent actually emits —
- * an error, a refusal, "credentials expired" — is a visible event, which breaks
- * the span and brings the chip and the message back. The fire that breaks is
- * the one that speaks, which is exactly the case an audit trail exists for.
+ * ── THE SILENCE IS LOAD-BEARING, AND IT STOPPED BEING ───────────────────────
+ * Only a turn that said NOTHING is dropped. That used to follow from prose
+ * being visible: a fire that hit an error explained itself, the explanation
+ * was an ordinary message, and the span was no longer silent.
+ *
+ * Then every cron turn's prose became machinery, and this comment quietly
+ * became false. Measured after that change: a card fire whose script was
+ * missing, which then said "the card script is missing — I could not update
+ * it", rendered ZERO rows. The job failed, said so, and the chat showed
+ * nothing. Found by an adversarial review of the change that caused it.
+ *
+ * So a FAILED tool result now breaks the span by itself, without needing
+ * anybody to say anything about it. That is the right signal anyway: it is the
+ * machine's own account of what happened rather than the model's, and a job
+ * that fails silently is the one case where a disappearing row is a bug rather
+ * than a tidy-up. A fire that wants to explain the failure in words uses
+ * `muxpad say`, which also breaks it.
  */
 export function dropSilentCardFires(events: readonly ChatEvent[]): ChatEvent[] {
   const drop = new Set<number>();
@@ -398,6 +410,12 @@ export function dropSilentCardFires(events: readonly ChatEvent[]): ChatEvent[] {
       // against it — somebody else's message is not this job's output.
       if (n.kind === 'notice' && n.variant === 'cron') break;
       if (n.kind === 'user' && n.folded !== true) break;
+      // A failure is never silent, whatever the model did or did not say
+      // about it — see the header.
+      if (n.kind === 'tool_result' && n.ok === false) {
+        silent = false;
+        break;
+      }
       if (!isAction(n)) {
         silent = false;
         break;
