@@ -74,6 +74,7 @@
 // retries happen entirely after the user is already looking at their new chat.
 import type Database from 'better-sqlite3';
 import type { EventBus } from './events.js';
+import { withPaneKey } from './pane-key.js';
 import { clearProvisionError, setProvisionError } from './pane-provision-state.js';
 import { type PtydCache, decoratePane } from './ptyd-cache.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
@@ -187,7 +188,10 @@ export function provisionPane(
     onAsked: () => void,
   ): Promise<{ ok: true } | { ok: false; why: string }> => {
     try {
-      await deps.ptyd.ensurePane(spec);
+      // Folded in HERE rather than at every caller that builds a spec: this is
+      // the one function that hands a spec to ptyd, so it is the one place
+      // that can promise a pane is always told its own key.
+      await deps.ptyd.ensurePane({ ...spec, env: withPaneKey(spec.env, spec.id) });
     } catch (err) {
       onAsked();
       return { ok: false, why: reason(err) };

@@ -1,8 +1,7 @@
 import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { callerPane } from '../caller-pane.js';
-import type { PtydClient } from '../ptyd-client/PtydClient.js';
+import { verifyPaneKey } from '../pane-key.js';
 import * as slack from '../slack-api.js';
 import { SlackError } from '../slack-api.js';
 import {
@@ -28,8 +27,9 @@ import { WorkspaceStore } from '../store/WorkspaceStore.js';
  *   · it identified itself with `$MUXPAD_PANE_ID`, a variable the caller sets.
  *     `MUXPAD_PANE_ID=<a Trayo pane> muxpad slack post …` walked through.
  *
- * So the token lives here and never leaves, and the caller's identity comes
- * from its process ancestry (see caller-pane.ts), which it cannot choose.
+ * So the token lives here and never leaves, and the caller proves which pane
+ * it is with a key the server minted for that pane and handed over at spawn
+ * (see pane-key.ts). It cannot name a pane it is not in.
  *
  * READ IS GATED LIKE POST. The first version gated only sending, reasoning
  * that the risk is data going out — but a personal chat could run
@@ -39,7 +39,6 @@ import { WorkspaceStore } from '../store/WorkspaceStore.js';
 
 interface Deps {
   db: Database.Database;
-  ptyd: PtydClient;
   dataDir: string;
 }
 
@@ -63,26 +62,28 @@ export function slackRoutes(deps: Deps): Hono {
    * cases where nobody has said this may happen.
    */
   async function authorize(
-    pidRaw: unknown,
+    paneId: unknown,
+    paneKey: unknown,
   ): Promise<
     { ok: true; token: string } | { ok: false; status: 403 | 400; body: ReturnType<typeof refusal> }
   > {
-    const pid = Number(pidRaw);
-    if (!Number.isInteger(pid) || pid <= 1)
+    if (typeof paneId !== 'string' || !paneId)
       return {
         ok: false,
         status: 400,
-        body: refusal('no caller pid — this works only from inside a muxpad pane'),
+        body: refusal('no caller pane — this works only from inside a muxpad pane'),
       };
 
-    const paneId = await callerPane(pid, { panePids: () => deps.ptyd.panePids() });
-    if (!paneId)
+    // THE KEY, NOT THE CLAIM. `$MUXPAD_PANE_ID` is a value the caller sets;
+    // the key beside it is one the server minted for that pane and handed
+    // over at spawn, so naming somebody else's pane does not survive here.
+    if (!verifyPaneKey(paneId, typeof paneKey === 'string' ? paneKey : null))
       return {
         ok: false,
         status: 403,
         body: refusal(
-          'cannot tell which pane this call came from, so there is no workspace to check',
-          'the caller must be running inside a muxpad pane; its identity is taken from its process ancestry, not from MUXPAD_PANE_ID',
+          'this pane cannot prove which workspace it is in',
+          'A pane started before muxpad issued per-pane keys has none, and nothing can put one into a running process. Restart this pane (or open a new one) and try again. Setting MUXPAD_PANE_ID by hand will not help — the key is what is checked.',
         ),
       };
 
@@ -134,9 +135,14 @@ export function slackRoutes(deps: Deps): Hono {
 
   app.post('/post', async (c) => {
     const body = z
-      .object({ pid: z.number(), ref: z.string().min(1), text: z.string().min(1) })
+      .object({
+        pane: z.string(),
+        key: z.string(),
+        ref: z.string().min(1),
+        text: z.string().min(1),
+      })
       .parse(await c.req.json());
-    const auth = await authorize(body.pid);
+    const auth = await authorize(body.pane, body.key);
     if (!auth.ok) return c.json(auth.body, auth.status);
     const r = await relay(() => slack.post(auth.token, body.ref, body.text));
     return r.ok ? c.json(r.value) : c.json(r.body, 502);
@@ -144,9 +150,14 @@ export function slackRoutes(deps: Deps): Hono {
 
   app.post('/unpost', async (c) => {
     const body = z
-      .object({ pid: z.number(), channel: z.string().min(1), ts: z.string().min(1) })
+      .object({
+        pane: z.string(),
+        key: z.string(),
+        channel: z.string().min(1),
+        ts: z.string().min(1),
+      })
       .parse(await c.req.json());
-    const auth = await authorize(body.pid);
+    const auth = await authorize(body.pane, body.key);
     if (!auth.ok) return c.json(auth.body, auth.status);
     const r = await relay(() => slack.unpost(auth.token, body.channel, body.ts));
     return r.ok ? c.json({ ok: true }) : c.json(r.body, 502);
@@ -154,7 +165,7 @@ export function slackRoutes(deps: Deps): Hono {
 
   app.get('/read', async (c) => {
     const q = c.req.query();
-    const auth = await authorize(Number(q.pid));
+    const auth = await authorize(q.pane, q.key);
     if (!auth.ok) return c.json(auth.body, auth.status);
     const r = await relay(() =>
       slack.read(auth.token, q.ref ?? '', {
@@ -167,7 +178,7 @@ export function slackRoutes(deps: Deps): Hono {
 
   app.get('/search', async (c) => {
     const q = c.req.query();
-    const auth = await authorize(Number(q.pid));
+    const auth = await authorize(q.pane, q.key);
     if (!auth.ok) return c.json(auth.body, auth.status);
     const r = await relay(() =>
       slack.search(auth.token, q.q ?? '', q.limit ? Number(q.limit) : 20),
@@ -176,7 +187,7 @@ export function slackRoutes(deps: Deps): Hono {
   });
 
   app.get('/channels', async (c) => {
-    const auth = await authorize(Number(c.req.query('pid')));
+    const auth = await authorize(c.req.query('pane'), c.req.query('key'));
     if (!auth.ok) return c.json(auth.body, auth.status);
     const r = await relay(() => slack.channels(auth.token));
     return r.ok ? c.json({ channels: r.value }) : c.json(r.body, 502);

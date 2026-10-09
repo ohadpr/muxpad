@@ -79,20 +79,28 @@ Three things make that hold rather than merely ask:
   it and call Slack directly. `muxpad slack` is a thin client now; the token
   lives in `~/.muxpad/secrets.json`, written `0600` and refused on read if it is
   not `0600` any more.
-- **The caller cannot say who it is.** The server works out which pane a call
-  came from by walking the calling process's ancestry up to a live pane's shell.
-  A process cannot choose its parent, so `MUXPAD_PANE_ID` and a `cd` are both
-  worth nothing. (The controlling terminal would have been the obvious answer
-  and is useless here: in an agent pane `ps -o tty=` answers `??`, because the
-  runner is detached from the pty.)
+- **The caller cannot just say who it is.** `$MUXPAD_PANE_ID` is a value any
+  caller can set, so beside it every pane gets `$MUXPAD_PANE_KEY` — minted by
+  the server for that pane and handed over in its spawn environment. Naming
+  somebody else's pane does not get past the key, and a `cd` is worth nothing
+  either way. A pane started before keys existed has none and fails closed;
+  using Slack from it costs a restart of that pane.
 - **An agent cannot grant itself anything.** The switch and the credential are
   both browser-only — the server refuses either change on a request with no
   `Origin` header, which the CLI and the agent runner never send.
 
-Honest about the limit: everything here runs as one uid, so none of it stops a
-process that is actively trying. It stops a *helpful* agent reaching for a tool
-that is in arm's reach, which is the thing that actually goes wrong. The only
-airtight version is a broker under a second OS user.
+Honest about the limits, of which there are two. The key is a bearer token: it
+sits in a pane's environment, so anything that prints its environment into a
+transcript puts it somewhere another pane can read. And everything here runs as
+one uid, so none of it stops a process that is actively trying. It stops a
+*helpful* agent reaching for a tool in arm's reach, which is the thing that
+actually goes wrong. The airtight version is a broker under a second OS user.
+
+(The first design proved identity by walking the caller's process ancestry,
+which cannot be forged at all. It needed pane pids — a fact only the pty daemon
+has — and reaching them meant a protocol change, which restarts the daemon that
+owns every terminal on the machine. Not a price worth paying to beat an
+accident.)
 
 ## Pinned cards
 

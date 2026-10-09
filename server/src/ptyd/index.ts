@@ -257,12 +257,6 @@ function attachControl(
         ws.send(encodeResponse(msg.id, { cmd: pm.getForegroundCommand(id) }));
         return;
       }
-      if (msg.method === 'panePids') {
-        // Raw pids only. The ancestry walk that turns one into "this caller is
-        // in pane X" is the MAIN SERVER's job — see the protocol comment.
-        ws.send(encodeResponse(msg.id, { entries: pm.pids() }));
-        return;
-      }
       if (msg.method === 'markSeen') {
         const { id } = msg.params as { id: string };
         // Idempotent: optional-chain handles the unknown-id case as a no-op.
