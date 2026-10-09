@@ -86,6 +86,23 @@ export interface CtrlMethods {
   closePtyClients: { params: IdParams; result: { ok: true } };
   /** Live pane ids — the server's straggler reconcile on (re)connect. */
   listPanes: { params: Record<string, never>; result: { ok: true; ids: string[] } };
+  /**
+   * Every live pane's SHELL PID. The one fact only ptyd has, and the basis for
+   * answering "which pane is this process actually running in" without taking
+   * the caller's word for it — a `muxpad` invocation sends its own pid and the
+   * main server walks the ancestry up to one of these.
+   *
+   * RAW PIDS, and the walk stays on the SERVER. ptyd could answer
+   * `whichPane(pid)` in one hop and it would be tidier, but then the matching
+   * policy — how many hops, what to do about a reparented process, whether a
+   * pane's grandchild counts — would live in the daemon, and tuning any of it
+   * would need a ptyd restart, which kills every terminal on the machine.
+   * ptyd reports; the server decides.
+   *
+   * Additive: an older ptyd answers `unknown method`, which the caller treats
+   * as "cannot identify callers" and fails closed.
+   */
+  panePids: { params: Record<string, never>; result: { entries: Array<{ id: string; pid: number }> } };
 }
 
 export type CtrlPushEvent =

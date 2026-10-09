@@ -15,10 +15,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const patchWorkspace = vi.fn();
 const workspaceAgentInstructions = vi.fn();
+const slackToken = vi.fn();
+const setSlackToken = vi.fn();
+const clearSlackToken = vi.fn();
 vi.mock('../api', () => ({
   api: {
     patchWorkspace: (...a: unknown[]) => patchWorkspace(...a),
     workspaceAgentInstructions: (...a: unknown[]) => workspaceAgentInstructions(...a),
+    slackToken: (...a: unknown[]) => slackToken(...a),
+    setSlackToken: (...a: unknown[]) => setSlackToken(...a),
+    clearSlackToken: (...a: unknown[]) => clearSlackToken(...a),
   },
 }));
 vi.mock('../workspaces', () => ({ refreshWorkspaces: () => Promise.resolve([]) }));
@@ -40,6 +46,9 @@ let root: ReturnType<typeof createRoot>;
 beforeEach(() => {
   patchWorkspace.mockReset().mockResolvedValue({});
   workspaceAgentInstructions.mockReset().mockResolvedValue({ text: 'COMPOSED' });
+  slackToken.mockReset().mockResolvedValue({ set: false, hint: null });
+  setSlackToken.mockReset().mockResolvedValue({ set: true, hint: 'xoxp-…4f2a' });
+  clearSlackToken.mockReset().mockResolvedValue({ set: false });
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);
@@ -133,5 +142,68 @@ describe('the preview', () => {
     await act(async () => (host.querySelector('.ws-settings__pvh') as HTMLButtonElement).click());
     expect(workspaceAgentInstructions).toHaveBeenCalledWith('w1');
     expect(host.querySelector('.ws-settings__pv')?.textContent).toBe('COMPOSED');
+  });
+});
+
+/**
+ * THE CREDENTIAL FIELD IS WRITE-ONLY, and the panel is the only way in.
+ *
+ * It used to be a line in a dotfile that the CLI sourced into whichever pane
+ * asked, so a refused chat could read it and bypass muxpad entirely. The
+ * server holds it now. What this component must get right is narrow: never
+ * render the token, and never offer the field somewhere the capability is off
+ * — a credential prompt under a switch that is off is an invitation to paste
+ * a company token into a personal workspace.
+ */
+describe('the Slack credential', () => {
+  const cred = () => host.querySelector('.ws-settings__cred');
+
+  it('is not offered at all while the capability is off', async () => {
+    await mount({ slack: false });
+    expect(cred()).toBeNull();
+  });
+
+  it('appears once the capability is on', async () => {
+    await mount({ slack: true });
+    expect(cred()).not.toBeNull();
+    expect(cred()?.querySelector('input')?.getAttribute('type')).toBe('password');
+  });
+
+  it('saves a pasted token and clears the field', async () => {
+    await mount({ slack: true });
+    const input = cred()?.querySelector('input') as HTMLInputElement;
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    await act(async () => {
+      setter?.call(input, '  xoxp-abc  ');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => (cred()?.querySelector('button') as HTMLButtonElement).click());
+    // Trimmed: a token pasted out of a web page arrives with whitespace, and
+    // Slack rejects it with an error about auth rather than about spaces.
+    expect(setSlackToken).toHaveBeenCalledWith('xoxp-abc');
+  });
+
+  it('shows only the tail of a stored one, never the token', async () => {
+    slackToken.mockResolvedValue({ set: true, hint: 'xoxp-…4f2a' });
+    await mount({ slack: true });
+    await act(async () => {});
+    expect(cred()?.textContent).toContain('xoxp-…4f2a');
+    expect(cred()?.querySelector('input')).toBeNull();
+  });
+
+  it('surfaces the server’s refusal rather than swallowing it', async () => {
+    // The wrong KIND of token is the common mistake — the app-level `xapp-`
+    // sits next to the right one on Slack's own page — and the server's
+    // message is the only thing that explains it.
+    setSlackToken.mockRejectedValue(new Error('that is an app-level token (xapp-…)'));
+    await mount({ slack: true });
+    const input = cred()?.querySelector('input') as HTMLInputElement;
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    await act(async () => {
+      setter?.call(input, 'xapp-1');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => (cred()?.querySelector('button') as HTMLButtonElement).click());
+    expect(host.querySelector('.ws-settings__err')?.textContent).toContain('app-level token');
   });
 });

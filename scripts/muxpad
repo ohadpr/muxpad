@@ -765,316 +765,142 @@ json_string() {
 
 # ─── slack ─────────────────────────────────────────────────────────────────
 #
-# OUTBOUND ONLY. Every call here is an HTTPS request FROM this machine TO
-# slack.com. Slack is never given a URL, muxpad opens no socket for it, and no
-# inbound surface is created — which matters because this runs on a personal
-# laptop on a tailnet, and the alternative (an Events API webhook on the public
-# tunnel) would mean a public endpoint taking company Slack traffic with
-# signature verification as the only thing in front of it.
+# A THIN CLIENT. Every call below is one request to the muxpad server, which
+# holds the token and decides whether the call happens. Nothing here reads a
+# credential, and there is no file to read one from.
 #
-# ONE TOKEN. SLACK_USER_TOKEN (xoxp-), and nothing else is read.
+# ── WHAT THIS REPLACED, AND WHY ────────────────────────────────────────────
+# This section used to source ~/.claude/secrets/slack.env and talk to
+# slack.com directly, with a workspace check in front of it. Both halves of
+# that were wrong, and in the same way: they asked the caller to be honest.
 #
-# It was two, split so that writes could go out as an obviously-not-you bot. The
-# split is gone, and the reason is that a bot DM does not land where you think:
-# "send Andrey a PR review message" went to ANDREY'S SEPARATE CONVERSATION WITH
-# MUXPAD, which the sender could not see, and which could not be deleted because
-# the ts had been thrown away. A bot identity is only honest in a channel, and
-# the cost of having it available at all was that a DM could silently use it.
+#   · the token was in a file any pane could read. A chat that was REFUSED
+#     could `cat` it and curl Slack itself, so the check only ever stopped an
+#     agent that wanted to be stopped;
+#   · the check identified the caller by $MUXPAD_PANE_ID — a variable the
+#     caller sets. `MUXPAD_PANE_ID=<a work pane> muxpad slack post …` from a
+#     personal chat walked straight through. The commit that added the check
+#     was pleased with itself for not trusting $MUXPAD_WORKSPACE_ID and then
+#     trusted the thing it was resolving it with.
 #
-# So every message is yours: your name, your conversation, your audit log. Two
-# things make that safe rather than reckless, and both are enforced here rather
-# than asked of the caller —
+# Now the server is told our PID and nothing else about who we are. It walks
+# the process ancestry to find which pane we are really running in, and a
+# process cannot choose its parent.
 #
-#   · every message is prefixed 🤖, so the reader knows a machine composed it
-#     even though you sent it;
-#   · Slack is a WORKSPACE CAPABILITY (see slack_guard_workspace), off unless
-#     switched on in the UI, so a workspace holding personal files cannot read
-#     or message a work surface at all.
-#
-# SLACK_BOT_TOKEN is not read anywhere below. A line for it in the secrets file
-# is inert and can be deleted.
-SLACK_SECRETS="${SLACK_SECRETS:-$HOME/.claude/secrets/slack.env}"
+# ONE IDENTITY: every message goes out as YOU, prefixed 🤖 by the server so the
+# reader knows a machine composed it. There is no bot token anywhere any more —
+# a bot DM lands in the recipient's separate conversation with "muxpad", which
+# you cannot see and, with the ts lost, cannot delete.
 
-slack_load() {
+# Our own pid, which is the only thing the server needs from us. `$$` in a
+# subshell is still the SCRIPT's pid in bash/zsh, which is what we want: it is
+# a real process in the pane's ancestry.
+slack_pid() { printf '%s' "$$"; }
+
+# The server speaks HTTP; its refusals carry a message and sometimes a detail,
+# and both are worth printing — one says what happened, the other says what to
+# do about it.
+slack_call() {
   require_jq
-  if [ -f "$SLACK_SECRETS" ]; then
-    # shellcheck disable=SC1090
-    set -a; . "$SLACK_SECRETS"; set +a
+  local method="$1" path="$2" body="${3:-}"
+  local tmp status
+  tmp="$(mktemp)"
+  if [ -n "$body" ]; then
+    status="$(curl -sS -o "$tmp" -w '%{http_code}' -X "$method" \
+      -H 'content-type: application/json' --data "$body" \
+      "${MUXPAD_API_URL%/}$path")"
+  else
+    status="$(curl -sS -o "$tmp" -w '%{http_code}' -X "$method" "${MUXPAD_API_URL%/}$path")"
   fi
-  # CHECK THE PREFIX, because Slack's own error for the wrong kind is
-  # `not_allowed_token_type` on whatever call you happened to make first —
-  # which names the method, not the mistake, and sends you looking at scopes.
-  # The app-level token (`xapp-`) is the trap: it sits on the Basic Information
-  # page next to the OAuth ones, it is the only token you need for Socket Mode,
-  # and it is useless for every Web API call there is.
-  slack_check_token() {
-    local name="$1" val="$2" want="$3"
-    [ -n "$val" ] || return 0
-    case "$val" in
-      "$want"*) return 0 ;;
-      xapp-*)
-        cat >&2 <<EOF
-muxpad: $name holds an APP-LEVEL token (xapp-…). That one is for Socket Mode
-only — it cannot make Web API calls, which is every call this command makes.
-Take the token from OAuth & Permissions, not Basic Information:
-  "User OAuth Token"      xoxp-…  → SLACK_USER_TOKEN
-EOF
-        exit 1 ;;
-      *)
-        echo "muxpad: $name should start with $want (got ${val%%-*}-…)" >&2
-        exit 1 ;;
-    esac
-  }
-  slack_check_token SLACK_USER_TOKEN "${SLACK_USER_TOKEN:-}" xoxp-
-  if [ -z "${SLACK_USER_TOKEN:-}" ]; then
-    cat >&2 <<EOF
-muxpad: no Slack token. Put it in $SLACK_SECRETS:
-
-  SLACK_USER_TOKEN=xoxp-...   # everything: read, search and post as you
-
-Create the app at https://api.slack.com/apps (From scratch, your workspace).
-User scopes: search:read channels:history channels:read groups:history
-groups:read im:history im:read im:write mpim:history mpim:read chat:write
-users:read. A company workspace may route the install to an admin.
-EOF
+  if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
+    {
+      printf 'muxpad: slack: %s\n' "$(jq -r '.error.message // "request failed"' "$tmp" 2>/dev/null)"
+      local detail; detail="$(jq -r '.error.detail // empty' "$tmp" 2>/dev/null)"
+      [ -n "$detail" ] && printf '\n%s\n' "$detail"
+    } >&2
+    rm -f "$tmp"
     exit 1
   fi
+  cat "$tmp"
+  rm -f "$tmp"
 }
 
-# One Slack Web API call. `$1` method, `$2` token, rest are form fields.
-# Slack answers 200 with {"ok":false,"error":"..."} for application errors, so
-# the status code is not the check — `ok` is.
-slack_api() {
-  local method="$1" token="$2"; shift 2
-  [ -n "$token" ] || { echo "muxpad: slack: no token for $method" >&2; exit 1; }
-  local args=(--silent --show-error --max-time 30
-    -H "Authorization: Bearer $token"
-    -H 'Content-Type: application/x-www-form-urlencoded; charset=utf-8')
-  local f
-  for f in "$@"; do args+=(--data-urlencode "$f"); done
-  local out
-  out="$(curl "${args[@]}" "https://slack.com/api/$method")" || {
-    echo "muxpad: slack: $method request failed" >&2; exit 1; }
-  if [ "$(printf '%s' "$out" | jq -r '.ok // false')" != "true" ]; then
-    local err; err="$(printf '%s' "$out" | jq -r '.error // "unknown"')"
-    echo "muxpad: slack: $method → $err" >&2
-    # The two that are worth explaining rather than echoing.
-    case "$err" in
-      not_in_channel) echo "  the bot is not in that channel — /invite @muxpad there, or read with the user token" >&2 ;;
-      missing_scope|not_allowed_token_type)
-        echo "  the token lacks the scope for this call — see the scope list in 'muxpad slack' usage" >&2 ;;
-    esac
-    exit 1
-  fi
-  printf '%s' "$out"
+slack_require_pane() {
+  [ -n "${MUXPAD_API_URL:-}" ] || {
+    echo 'muxpad: slack: works only from inside a muxpad pane' >&2; exit 1; }
 }
 
-# `#name`, `@user` or a raw ID → a conversation id. Raw ids pass through
-# untouched, which is what makes the lookup skippable on a hot path.
-#
-# THE TOKEN IS REQUIRED, AND IT IS FIRST. It used to default to
-# `${SLACK_USER_TOKEN:-$SLACK_BOT_TOKEN}`, which silently disagreed with the
-# caller: `cmd_slack_post` picked the BOT token to post with, then resolved
-# `@andrey` with the USER token — opening the user's own DM, whose id the bot
-# cannot post into. The result was `channel_not_found` on a channel that very
-# much existed.
-#
-# A default was the bug. An id resolved with one identity and used with another
-# is meaningless in general — Slack conversation ids are per-identity for DMs —
-# so there is no sensible default to have, and making it a required first
-# argument turns a silent mismatch into a syntax error at the call site.
-slack_channel_id() {
-  local tok="${1:-}" ref="${2:-}"
-  [ -n "$tok" ] && [ -n "$ref" ] || {
-    echo 'muxpad: internal: slack_channel_id needs <token> <ref>' >&2; exit 1; }
-  case "$ref" in
-    C*|D*|G*) printf '%s' "$ref"; return ;;
-  esac
-  case "$ref" in
-    @*)
-      local name="${ref#@}" uid
-      uid="$(slack_api users.list "$tok" 'limit=1000' \
-        | jq -r --arg n "$name" '.members[] | select(.name==$n or .profile.display_name==$n or .real_name==$n) | .id' | head -1)"
-      [ -n "$uid" ] || { echo "muxpad: slack: no user '@$name'" >&2; exit 1; }
-      slack_api conversations.open "$tok" "users=$uid" | jq -r '.channel.id'
-      ;;
-    *)
-      local name="${ref#\#}"
-      slack_api conversations.list "$tok" 'limit=1000' \
-        'types=public_channel,private_channel' \
-        | jq -r --arg n "$name" '.channels[] | select(.name==$n) | .id' | head -1 \
-        | grep . || { echo "muxpad: slack: no channel '#$name' visible to this token" >&2; exit 1; }
-      ;;
-  esac
-}
-
-# `2h`, `30m`, `3d` → an epoch seconds floor. Anything else is passed through as
-# an epoch, so a caller can pin an exact point.
+# "2h" / "90m" / "3d" → an epoch second, for --since.
 slack_since_epoch() {
-  local v="$1" n unit now; now="$(date +%s)"
-  n="${v%[smhd]}"; unit="${v##*[0-9]}"
+  local v="$1" n unit now
+  n="${v%[smhd]}"; unit="${v#"$n"}"
+  case "$n" in ''|*[!0-9]*) echo "muxpad: --since must look like 30m, 2h or 3d" >&2; exit 1 ;; esac
+  now="$(date +%s)"
   case "$unit" in
-    s) printf '%s' "$((now - n))" ;;
-    m) printf '%s' "$((now - n * 60))" ;;
-    h) printf '%s' "$((now - n * 3600))" ;;
-    d) printf '%s' "$((now - n * 86400))" ;;
-    *) printf '%s' "$v" ;;
+    s) echo $(( now - n )) ;;
+    m) echo $(( now - n * 60 )) ;;
+    h|'') echo $(( now - n * 3600 )) ;;
+    d) echo $(( now - n * 86400 )) ;;
   esac
 }
 
 cmd_slack_read() {
-  slack_guard_workspace
-  slack_load
+  slack_require_pane
   local ref="${1:-}"; shift || true
   [ -n "$ref" ] || { echo 'usage: muxpad slack read <#channel|@user|ID> [--since=2h] [--limit=50]' >&2; exit 1; }
   reset_flags since limit
   parse_flags since limit -- "$@"
-  local tok="${SLACK_USER_TOKEN:-}"
-  # Same token for the lookup and the read — see slack_channel_id.
-  local id; id="$(slack_channel_id "$tok" "$ref")"
-  local fields=("channel=$id" "limit=${FLAG_limit:-50}")
-  [ -n "${FLAG_since:-}" ] && fields+=("oldest=$(slack_since_epoch "$FLAG_since")")
-  # Oldest-first, which is reading order; Slack returns newest-first.
-  slack_api conversations.history "$tok" "${fields[@]}" \
-    | jq -r '.messages | reverse | .[] | "\(.ts | tonumber | strftime("%m-%d %H:%M"))  \(.user // .bot_id // "?")  \(.text // "" | gsub("\n"; " ⏎ "))"'
+  local q="pid=$(slack_pid)&ref=$(printf '%s' "$ref" | jq -sRr @uri)&limit=${FLAG_limit:-50}"
+  [ -n "${FLAG_since:-}" ] && q="$q&oldest=$(slack_since_epoch "$FLAG_since")"
+  slack_call GET "/api/slack/read?$q" \
+    | jq -r '.messages[] | "\(.ts | tonumber | strftime("%m-%d %H:%M"))  \(.who)  \(.text | gsub("\n"; " ⏎ "))"'
 }
 
 cmd_slack_search() {
-  slack_guard_workspace
-  slack_load
-  [ -n "${SLACK_USER_TOKEN:-}" ] || {
-    echo 'muxpad: slack search needs SLACK_USER_TOKEN — search:read is a user scope; bot tokens cannot search at all' >&2
-    exit 1; }
-  local q="${1:-}"; shift || true
-  [ -n "$q" ] || { echo 'usage: muxpad slack search "<query>" [--limit=20]' >&2; exit 1; }
+  slack_require_pane
+  local query="${1:-}"; shift || true
+  [ -n "$query" ] || { echo 'usage: muxpad slack search "<query>" [--limit=20]' >&2; exit 1; }
   reset_flags limit
   parse_flags limit -- "$@"
-  slack_api search.messages "$SLACK_USER_TOKEN" "query=$q" "count=${FLAG_limit:-20}" \
-    | jq -r '.messages.matches[] | "\(.ts | tonumber | strftime("%m-%d %H:%M"))  #\(.channel.name)  \(.username // .user)  \(.text // "" | gsub("\n"; " ⏎ "))"'
-}
-
-# ─── WHICH WORKSPACE MAY USE SLACK AT ALL ──────────────────────────────────
-#
-# "Never allow a project that is using personal files/data to send slack
-#  messages, never ever ever ever. It should fail."
-#
-# THE DIRECTORY WAS THE WRONG QUESTION. The first version gated on `pwd`, and
-# that was wrong for how the tool is used: "not all my trayo chats run in that
-# directory — I just tell the agent where stuff is, so it can be running in ~".
-# It would have refused real work chats and allowed a personal one started
-# somewhere permitted: a precise answer to the wrong question, which is worse
-# than a vague one because it looks like it is working.
-#
-# Workspaces are how the chats are actually organised, so that is the boundary.
-# The switch lives on the workspace row and is edited in the UI — not in a file
-# here, so there is one place to look and nothing can disagree with itself.
-#
-# READ IS GATED TOO, which it was not at first. The reasoning then was "the risk
-# is personal data going OUT" — but a personal chat could run `slack channels`
-# and list every private channel in the company. Slack is a work surface; a
-# workspace either touches it or it does not.
-#
-# AND THE WORKSPACE IS RESOLVED FROM THE SERVER. `MUXPAD_WORKSPACE_ID` is in
-# every pane's environment and would have been one line — and it is a value the
-# caller can set. A guard that asks the thing it is guarding to state its own
-# identity is a guard in name only.
-slack_guard_workspace() {
-  local pane="${MUXPAD_PANE_ID:-}"
-  if [ -z "$pane" ]; then
-    echo 'muxpad: slack: works only from inside a muxpad pane — there is no workspace to check out here' >&2
-    exit 1
-  fi
-  local tab ws
-  tab="$(http_request GET "/api/panes/$pane" | jq -r '.tab_id // empty')"
-  [ -n "$tab" ] || { echo "muxpad: slack: cannot resolve pane $pane — refusing" >&2; exit 1; }
-  ws="$(http_request GET "/api/tabs/$tab" | jq -r '.workspace_id // empty')"
-  [ -n "$ws" ] || { echo 'muxpad: slack: cannot resolve the workspace — refusing' >&2; exit 1; }
-  local wj; wj="$(http_request GET "/api/workspaces/$ws")"
-  local on name
-  on="$(printf '%s' "$wj" | jq -r '.slack // false')"
-  name="$(printf '%s' "$wj" | jq -r '.name // "?"')"
-  [ "$on" = "true" ] && return 0
-  cat >&2 <<EOF
-muxpad: slack: the "$name" workspace does not have Slack enabled.
-
-This fails closed on purpose: a workspace holding personal chats must never be
-able to read or message a work surface. Turn it on, if it belongs on, in the
-muxpad UI — the workspace's ⋯ menu → Settings → Capabilities.
-
-It cannot be enabled from the CLI, because the CLI is what agents drive.
-EOF
-  exit 1
+  local q="pid=$(slack_pid)&q=$(printf '%s' "$query" | jq -sRr @uri)&limit=${FLAG_limit:-20}"
+  slack_call GET "/api/slack/search?$q" \
+    | jq -r '.messages[] | "\(.ts | tonumber | strftime("%m-%d %H:%M"))  #\(.channel // "?")  \(.who)  \(.text | gsub("\n"; " ⏎ "))"'
 }
 
 cmd_slack_post() {
-  # ── THE GUARD RUNS FIRST. BEFORE THE CREDENTIALS ARE EVEN READ. ──────────
-  # Before `slack_load`, before the usage check. Two reasons, and the first is
-  # the one that matters: `slack_load` SOURCES the secrets file, and a project
-  # that is not allowed to post has no business having the token in its
-  # environment at all. Loading it and then refusing is the wrong order of
-  # operations for a guard whose whole job is that this project must not reach
-  # Slack.
-  # Second: a refusal must not depend on getting the arguments right, or on
-  # there being a token to fail on instead.
-  slack_guard_workspace
-  slack_load
-  local ref="${1:-}" text="${2:-}"; shift 2 2>/dev/null || true
+  slack_require_pane
+  local ref="${1:-}" text="${2:-}"
   [ -n "$ref" ] && [ -n "$text" ] || {
     echo 'usage: muxpad slack post <#channel|@user|ID> "<text>"' >&2; exit 1; }
-
-  # ── ALWAYS AS YOU. THERE IS NO OTHER IDENTITY. ───────────────────────────
-  # The bot was the default once, and "send Andrey a PR review message" went to
-  # ANDREY'S SEPARATE DM WITH MUXPAD — a conversation the sender could not see
-  # and, because the ts was discarded, could not delete. Then the flag was
-  # split and a DM had to name an identity. This removes the choice: a message
-  # muxpad sends is a message YOU sent, under your name, in your conversation,
-  # in your audit log.
-  #
-  # SLACK_BOT_TOKEN is deliberately not read anywhere in this script any more.
-  local tok="${SLACK_USER_TOKEN:-}"
-  [ -n "$tok" ] || { echo 'muxpad: slack: needs SLACK_USER_TOKEN' >&2; exit 1; }
-
-  # ── AND IT SAYS A MACHINE WROTE IT ───────────────────────────────────────
-  # Posting under your name is the right call for where it lands and who owns
-  # it; it is not a claim that you typed it. The robot is the disclosure, and
-  # it is added here rather than asked of the caller because a rule every
-  # caller has to remember is a rule that gets forgotten.
-  case "$text" in
-    "🤖"*) ;;
-    *) text="🤖 $text" ;;
-  esac
-
-  # Same token resolves the conversation and posts into it — see
-  # slack_channel_id for what it cost to learn that.
-  local id; id="$(slack_channel_id "$tok" "$ref")"
-  local out ts
-  out="$(slack_api chat.postMessage "$tok" "channel=$id" "text=$text")"
-  ts="$(printf '%s' "$out" | jq -r '.ts // empty')"
+  # The 🤖 prefix is added by the SERVER, not here. A disclosure every caller
+  # has to remember is a disclosure that gets forgotten, and this script is no
+  # longer the only thing that can post.
+  local body out
+  body="$(jq -nc --argjson pid "$(slack_pid)" --arg ref "$ref" --arg text "$text" \
+    '{pid: $pid, ref: $ref, text: $text}')"
+  out="$(slack_call POST /api/slack/post "$body")"
+  local id ts
+  id="$(printf '%s' "$out" | jq -r '.channel')"
+  ts="$(printf '%s' "$out" | jq -r '.ts')"
   echo "sent as you → ${ref}  [${id} ${ts:-?}]"
   [ -n "$ts" ] && echo "undo: muxpad slack unpost ${id} ${ts}"
-  return 0
 }
 
-# Delete a message muxpad posted. Only yours exist now, so only your token is
-# ever needed — Slack lets a token delete its own messages.
 cmd_slack_unpost() {
-  slack_guard_workspace
-  slack_load
+  slack_require_pane
   local id="${1:-}" ts="${2:-}"
   [ -n "$id" ] && [ -n "$ts" ] || {
     echo 'usage: muxpad slack unpost <channelID> <ts>' >&2; exit 1; }
-  local tok="${SLACK_USER_TOKEN:-}"
-  [ -n "$tok" ] || { echo 'muxpad: slack: needs SLACK_USER_TOKEN' >&2; exit 1; }
-  slack_api chat.delete "$tok" "channel=$id" "ts=$ts" >/dev/null
+  slack_call POST /api/slack/unpost \
+    "$(jq -nc --argjson pid "$(slack_pid)" --arg c "$id" --arg ts "$ts" \
+      '{pid: $pid, channel: $c, ts: $ts}')" >/dev/null
   echo "deleted your message ${ts} in ${id}"
 }
 
 cmd_slack_channels() {
-  slack_guard_workspace
-  slack_load
-  local tok="${SLACK_USER_TOKEN:-}"
-  slack_api conversations.list "$tok" 'limit=1000' 'types=public_channel,private_channel' \
-    | jq -r '.channels[] | select(.is_archived|not) | "\(.id)  \(if .is_private then "🔒" else "# " end) \(.name)"' | sort -k3
+  slack_require_pane
+  slack_call GET "/api/slack/channels?pid=$(slack_pid)" \
+    | jq -r '.channels[] | "\(.id)  \(if .private then "🔒" else "# " end) \(.name)"'
 }
 
 cmd_slack() {
@@ -1085,28 +911,31 @@ cmd_slack() {
     unpost) cmd_slack_unpost "${@:2}" ;;
     channels) cmd_slack_channels ;;
     *)
-      cat >&2 <<EOF
+      cat >&2 <<'EOF'
 usage:
   muxpad slack read <#channel|@user|ID> [--since=2h] [--limit=50]
-  muxpad slack search "<query>" [--limit=20]     (needs SLACK_USER_TOKEN)
+  muxpad slack search "<query>" [--limit=20]
   muxpad slack post <#channel|@user|ID> "<text>"
   muxpad slack unpost <channelID> <ts>
   muxpad slack channels
 
-One token, in $SLACK_SECRETS:
-  SLACK_USER_TOKEN=xoxp-...   everything. SLACK_BOT_TOKEN is no longer read.
+THE TOKEN IS NOT HERE. The muxpad server holds it; this command asks the
+server to act and never sees a credential. Set it in the UI: the workspace
+row's settings button → Slack. There is nothing to put in a dotfile and
+nothing for this script to read.
 
-EVERY MESSAGE GOES OUT AS YOU, in your own conversation and your own audit log
-— there is no bot identity any more, because a bot DM lands in the recipient's
-separate conversation with "muxpad", which you cannot see. Each one is prefixed
-with 🤖 so the reader knows a machine composed it.
+EVERY MESSAGE GOES OUT AS YOU, in your own conversation and your own audit
+log — there is no bot identity, because a bot DM lands in the recipient's
+separate conversation with "muxpad", which you cannot see. Each one is
+prefixed 🤖 by the server so the reader knows a machine composed it.
 
-AND SENDING IS ALLOWLISTED BY PROJECT. A project that is not named in
-slack-allowed-roots cannot post at all, so one holding personal files can never
-message a work surface. Reading and searching are unaffected.
+AND THE WHOLE SURFACE IS GATED BY WORKSPACE — read, search and post alike. A
+workspace with Slack switched off cannot touch Slack at all. Which workspace
+you are in is resolved from your PROCESS ANCESTRY by the server, so neither
+`cd` nor MUXPAD_PANE_ID nor MUXPAD_WORKSPACE_ID can talk it round.
 
-'post' prints the conversation id and the ts; the ts is the only way to delete
-the message afterwards.
+'post' prints the conversation id and the ts; the ts is the only way to
+delete the message afterwards.
 EOF
       exit 1 ;;
   esac

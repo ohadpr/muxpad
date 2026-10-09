@@ -162,6 +162,19 @@ export const api = {
   workspaceAgentInstructions: (id: string) =>
     req<{ text: string }>(`/api/workspaces/${id}/agent-instructions`),
 
+  /** Whether a Slack credential is stored, and four characters of its tail.
+   *  Never the token — it is write-only by design. */
+  slackToken: () =>
+    req<{ set: boolean; hint: string | null; problem?: string }>('/api/slack/token'),
+
+  setSlackToken: (token: string) =>
+    req<{ set: boolean; hint: string | null }>('/api/slack/token', {
+      method: 'PUT',
+      body: JSON.stringify({ token }),
+    }),
+
+  clearSlackToken: () => req<{ set: boolean }>('/api/slack/token', { method: 'DELETE' }),
+
   deleteWorkspace: (id: string) => req<void>(`/api/workspaces/${id}`, { method: 'DELETE' }),
 
   reorderWorkspaces: (ids: string[]) =>

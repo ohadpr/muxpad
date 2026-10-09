@@ -84,38 +84,39 @@ list. Capabilities worth knowing:
   task actually needs it ("what did Nadav say about X", "post the result to
   #eng"); do not browse it for context nobody requested.
 
-  **THREE RULES, AND THEY ARE ENFORCED, NOT TRUSTED TO YOU.**
+  **THREE RULES, AND THEY ARE ENFORCED ON THE SERVER, NOT TRUSTED TO YOU.**
 
-  **1 · Every message goes out as the USER.** There is no bot identity any more
-  and no flag to ask for one. A bot DM does not land in the user's conversation
-  with that person — it lands in THEIR separate DM with "muxpad", which the
-  user cannot see and, if the timestamp is lost, cannot delete. So a message
-  muxpad sends is a message the user sent: their name, their conversation,
-  their audit log. \`SLACK_BOT_TOKEN\` is not read anywhere.
+  **1 · Every message goes out as the USER.** There is no bot identity and no
+  flag to ask for one. A bot DM does not land in the user's conversation with
+  that person — it lands in THEIR separate DM with "muxpad", which the user
+  cannot see and, if the timestamp is lost, cannot delete. So a message muxpad
+  sends is a message the user sent: their name, their conversation, their
+  audit log.
 
-  **2 · Every message is prefixed 🤖.** Added by the CLI, not by you. Sending
-  under the user's name is right about where it lands and who owns it; it is
-  not a claim that they typed it, and the reader is owed that distinction.
+  **2 · Every message is prefixed 🤖.** Added by the server, not by you.
+  Sending under the user's name is right about where it lands and who owns it;
+  it is not a claim that they typed it, and the reader is owed that.
 
   **3 · SLACK IS A WORKSPACE CAPABILITY, AND IT FAILS CLOSED.** Read, search
   and post alike: a workspace with Slack switched off cannot touch Slack at
-  all, so a chat in a personal workspace can NEVER reach a work surface. Off is
-  the default, because a denylist fails open for everything nobody thought of.
+  all. Off is the default.
 
-  The workspace is resolved from the SERVER using this pane's id. Setting
-  \`MUXPAD_WORKSPACE_ID\` does nothing, and neither does \`cd\` — the check
-  is not about which directory you are in, because a chat is often told where
-  its files are rather than started there.
+  **THERE IS NO TOKEN FOR YOU TO FIND.** The muxpad server holds the
+  credential; \`muxpad slack\` asks the server to act and never sees it. There
+  is no secrets file to read, no environment variable, and nothing \`curl\`
+  can do that this command cannot — if you are refused, going around is not
+  blocked by an oversight, it is blocked by not having the credential.
 
-  The switch lives in the muxpad UI (workspace ⋯ → Settings → Capabilities) and
-  **cannot be set from the CLI** — \`muxpad workspace caps <id>\` reads it and
-  nothing writes it, because a tool that can grant itself a capability is a
-  guard in name only.
+  **AND YOUR WORKSPACE IS NOT SOMETHING YOU DECLARE.** The server works out
+  which pane the call came from by walking the calling process's ancestry.
+  Setting \`MUXPAD_PANE_ID\` or \`MUXPAD_WORKSPACE_ID\` does nothing, and
+  neither does \`cd\` — a chat is often told where its files are rather than
+  started there.
 
   If you are refused, **that is the system working**. Do not post from another
-  pane, do not go looking for the token file, do not reach for \`curl\`. Tell
-  the user they were refused and which workspace you are in; the switch is
-  theirs to throw, not yours.
+  pane and do not try to install a token. Tell the user they were refused and
+  which workspace you are in; the switch is in the muxpad UI (the workspace
+  row's settings button), and it is theirs to throw, not yours.
 
   Reading never needs the bot invited anywhere; posting as muxpad does
   (\`/invite @muxpad\`), and the error says so when it bites.

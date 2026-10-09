@@ -273,3 +273,61 @@
     transition: none;
   }
 }
+
+/* The credential row: a password field and a button, or the tail of the one
+   that is stored and a way to remove it. Indented under the toggle it belongs
+   to, because it is a property of that switch and not a third setting. */
+.ws-settings__cred {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 0 47px;
+  font-size: 12px;
+}
+
+.ws-settings__cred input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 6px 9px;
+  border: 1px solid var(--border, #292e42);
+  border-radius: 7px;
+  background: var(--bg-elev, #1f2335);
+  color: inherit;
+  font: 12px var(--chrome-font, ui-monospace, Menlo, monospace);
+}
+
+.ws-settings__cred input:focus {
+  outline: 0;
+  border-color: var(--accent, #7aa2f7);
+}
+
+.ws-settings__cred code {
+  font: 12px var(--chrome-font, ui-monospace, Menlo, monospace);
+  color: var(--fg-dim, #a9b1d6);
+}
+
+.ws-settings__credok {
+  flex: 1 1 auto;
+  color: var(--fg-faint, #565f89);
+}
+
+.ws-settings__cred button {
+  flex: none;
+  padding: 5px 11px;
+  border: 1px solid var(--border, #292e42);
+  border-radius: 7px;
+  background: var(--bg-elev, #1f2335);
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ws-settings__cred button:hover:not(:disabled) {
+  border-color: var(--accent, #7aa2f7);
+  color: var(--accent, #7aa2f7);
+}
+
+.ws-settings__cred button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}

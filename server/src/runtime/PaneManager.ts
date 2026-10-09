@@ -337,6 +337,16 @@ export class PaneManager {
     return r;
   }
 
+  /** Every live pane's shell pid. See `panePids` in the ptyd protocol. */
+  pids(): Array<{ id: string; pid: number }> {
+    const out: Array<{ id: string; pid: number }> = [];
+    for (const id of this.ids()) {
+      const pid = this.get(id)?.pid;
+      if (typeof pid === 'number' && pid > 0) out.push({ id, pid });
+    }
+    return out;
+  }
+
   has(id: string): boolean {
     return this.runtimes.has(id);
   }

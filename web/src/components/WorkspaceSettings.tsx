@@ -42,6 +42,8 @@ export function WorkspaceSettings({ workspace, onClose }: WorkspaceSettingsProps
   const [saved, setSaved] = useState<'clean' | 'saving' | 'saved'>('clean');
   const [err, setErr] = useState<string | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
+  const [token, setToken] = useState<{ set: boolean; hint: string | null } | null>(null);
+  const [tokenDraft, setTokenDraft] = useState('');
   const [previewOpen, setPreviewOpen] = useState(false);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
@@ -70,6 +72,21 @@ export function WorkspaceSettings({ workspace, onClose }: WorkspaceSettingsProps
       setPreview(null);
     }
   }, [workspace.id]);
+
+  // Whether a credential exists is a property of the INSTALL, not of this
+  // workspace — one Slack identity, N workspaces allowed to use it. Loaded
+  // whenever the panel opens so the switch can say what turning it on will
+  // actually get you.
+  const loadToken = useCallback(async () => {
+    try {
+      setToken(await api.slackToken());
+    } catch {
+      setToken(null);
+    }
+  }, []);
+  useEffect(() => {
+    void loadToken();
+  }, [loadToken]);
 
   // Only while open — this is the whole composed prompt, tens of kilobytes.
   useEffect(() => {
@@ -176,6 +193,61 @@ export function WorkspaceSettings({ workspace, onClose }: WorkspaceSettingsProps
                 <small>read, search and post as you</small>
               </span>
             </button>
+
+            {/* THE CREDENTIAL, and it is write-only.
+                It used to be a line in ~/.claude/secrets/slack.env that the
+                CLI sourced into whichever pane asked — so a refused chat could
+                read it and go round muxpad entirely. The server holds it now;
+                this field is the only way in and there is no way back out. The
+                tail is shown because somebody rotating a token needs to tell
+                two apart, and that is all it is for. */}
+            {slack && (
+              <div className="ws-settings__cred">
+                {token?.set ? (
+                  <>
+                    <code>{token.hint}</code>
+                    <span className="ws-settings__credok">stored on the server</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void api
+                          .clearSlackToken()
+                          .then(loadToken)
+                          .catch((e) => setErr(String(e)));
+                      }}
+                    >
+                      Remove
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <input
+                      type="password"
+                      spellCheck={false}
+                      placeholder="xoxp-… user token"
+                      value={tokenDraft}
+                      onChange={(e) => setTokenDraft(e.target.value)}
+                    />
+                    <button
+                      type="button"
+                      disabled={!tokenDraft.trim()}
+                      onClick={() => {
+                        setErr(null);
+                        void api
+                          .setSlackToken(tokenDraft.trim())
+                          .then(() => {
+                            setTokenDraft('');
+                            return loadToken();
+                          })
+                          .catch((e) => setErr(e instanceof Error ? e.message : String(e)));
+                      }}
+                    >
+                      Save
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
           </section>
 
           <section className="ws-settings__row">
