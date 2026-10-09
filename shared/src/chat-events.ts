@@ -115,30 +115,12 @@ export interface NoticeEvent extends Base {
    */
   body?: string;
   /**
-   * For a 'cron' notice: did its schedule declare that its REPLY is the
-   * deliverable (`--speak`)?
-   *
-   * Absent — the common case — means the turn is machinery and its prose folds
-   * in with the tool calls. That is the inverse of the flag this replaces, and
-   * the inversion is the fix: a schedule spoke unless its author remembered
-   * `--silent`, and no schedule on this machine has anything to say.
-   *
-   * Carried explicitly because it used to be inferred from the SHAPE of what
-   * followed — a folded fire emitted a `folded` bubble, an unfolded one a plain
-   * bubble, so the question was answered by looking at the next event. Now that
-   * every fire's prompt is folded (see `expandCronFire`) the shapes are
-   * identical and the shape-reading would be a predicate that always says yes.
-   * The flag is a fact about the SCHEDULE; it belongs on the event, not in a
-   * silhouette.
-   */
-  speak?: boolean;
-  /**
    * For a 'cron' notice: the card this job declared as its output.
    *
    * Present means the conversation is not where this job's result belongs — so
    * a fire that wrote its card and said nothing is dropped from the rendered
    * log entirely (see `dropSilentCardFires`). Carried on the event for the same
-   * reason as `speak`: it is a fact about the SCHEDULE, and inferring it from
+   * reason the fire's own flags were: it is a fact about the SCHEDULE, and inferring it from
    * the shape of what follows is how four previous bugs in this feature
    * started.
    */
@@ -187,6 +169,55 @@ export const REPLY_ACK = 'Delivered to the user. [muxpad-reply]';
 
 export function isReplyTool(name: string | undefined | null): boolean {
   return name === REPLY_TOOL_NAME;
+}
+
+/**
+ * `muxpad say` — AGENT MODE'S WAY OF ADDRESSING THE PERSON.
+ *
+ * Chat mode has the `reply` tool: an agent that means to speak to you calls it,
+ * and `voice: 'reply'` is exempt from every fold in the product. Agent mode is
+ * the harness exactly as it ships and registers no muxpad tools at all, so it
+ * had no way to make that distinction — which is why a cron's output in an
+ * agent pane was all-or-nothing, and why the first two attempts at fixing it
+ * were a flag on the schedule and then a list of acknowledgement words.
+ *
+ * So the CLI carries it. `muxpad say "…"` prints this marker, the marker lands
+ * in the Bash tool_result like any other output, and the normalizer lifts it
+ * out as an assistant message with `voice: 'reply'`.
+ *
+ * RIDING THE TRANSCRIPT RATHER THAN A TABLE OF ITS OWN. The alternative was a
+ * server-side store the client fetches and injects, like browser moments — a
+ * new table, a new route, and placement logic that has already been the source
+ * of three separate bugs about things piling at the wrong edge of a
+ * partially-loaded log. A marker in the transcript is at the right position
+ * with the right timestamp by construction, works on every backend because
+ * every backend's transcript goes through this file, and is the same mechanism
+ * `<muxpad-cron>` and `<muxpad-delivery>` already use.
+ */
+const SAID_RE = /<muxpad-said>([\s\S]*?)<\/muxpad-said>/g;
+
+/** What `muxpad say` prints. Exported so the CLI test can assert the shape
+ *  against the parser rather than against a copy of it. */
+export function renderSaid(text: string): string {
+  return `<muxpad-said>${text}</muxpad-said>`;
+}
+
+/**
+ * Pull any spoken blocks out of a tool result.
+ *
+ * `rest` is what is left for the tool_result row itself — a command that said
+ * something and also printed its own output keeps the output, and one that
+ * only said something leaves nothing, so no empty result row is rendered.
+ */
+export function splitSaid(text: string): { said: string[]; rest: string } {
+  if (!text.includes('<muxpad-said>')) return { said: [], rest: text };
+  const said: string[] = [];
+  const rest = text.replace(SAID_RE, (_m, body: string) => {
+    const t = body.trim();
+    if (t) said.push(t);
+    return '';
+  });
+  return { said, rest: rest.trim() };
 }
 
 /**
@@ -541,7 +572,6 @@ export function expandCronFire(text: string, id: string, ts: number | null): Cha
     ts,
     variant: 'cron',
     text: marker.name,
-    ...(marker.speak ? { speak: true } : {}),
     ...(marker.card ? { card: marker.card } : {}),
     ...(marker.missed > 0
       ? { detail: `${marker.missed} missed fire${marker.missed === 1 ? '' : 's'} collapsed` }
@@ -590,6 +620,27 @@ export function expandSpawnDelivery(
  * `normalizeTranscriptLine`, so both backends render a fire identically.
  */
 export function expandChatEvent(event: ChatEvent): ChatEvent[] {
+  // `muxpad say` reaches this path too — codex and cursor write their tool
+  // results here already normalized, so the lift has to happen on both roads
+  // or the same command speaks on one backend and is swallowed on another.
+  if (event.kind === 'tool_result') {
+    const { said, rest } = splitSaid(event.text ?? '');
+    if (said.length === 0) return [event];
+    const { text: _dropped, ...bare } = event;
+    const row: ChatEvent = rest ? { ...event, text: rest } : bare;
+    return [
+      row,
+      ...said.map(
+        (spoken, k): ChatEvent => ({
+          kind: 'assistant',
+          id: `${event.id}:said${k}`,
+          ts: event.ts,
+          text: spoken,
+          voice: 'reply',
+        }),
+      ),
+    ];
+  }
   if (event.kind !== 'user') return [event];
   return (
     expandCronFire(event.text, event.id, event.ts) ??
@@ -745,14 +796,27 @@ export function normalizeTranscriptLine(line: unknown): ChatEvent[] {
           // a tool row, so keeping this would put an orphan "result" row under
           // every reply. See REPLY_ACK for why the match is on a sentinel.
           if (text.trim() === REPLY_ACK) return;
+          // `muxpad say` rides out in a command's stdout. Lift it into a real
+          // message so it survives every fold; what the command printed BESIDES
+          // the marker stays on the tool row where it belongs.
+          const { said, rest } = splitSaid(text);
           out.push({
             kind: 'tool_result',
             id: `${uuid}:${i}`,
             ts,
             toolUseId: typeof b.tool_use_id === 'string' ? b.tool_use_id : '',
             ok: b.is_error !== true,
-            ...(text ? { text } : {}),
+            ...(rest ? { text: rest } : {}),
             ...(diff ? { diff } : {}),
+          });
+          said.forEach((spoken, k) => {
+            out.push({
+              kind: 'assistant',
+              id: `${uuid}:${i}:said${k}`,
+              ts,
+              text: spoken,
+              voice: 'reply',
+            });
           });
         }
       });

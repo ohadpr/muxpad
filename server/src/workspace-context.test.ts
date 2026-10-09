@@ -53,7 +53,8 @@ describe('per-workspace instructions', () => {
   });
 
   it('appends the workspace text after muxpad’s own', () => {
-    const out = readAgentInstructions(dir, { slack: true, instructions: 'Prefer pnpm here.' }) ?? '';
+    const out =
+      readAgentInstructions(dir, { slack: true, instructions: 'Prefer pnpm here.' }) ?? '';
     expect(out).toContain('Prefer pnpm here.');
     expect(out.indexOf('muxpad publish')).toBeLessThan(out.indexOf('Prefer pnpm here.'));
   });

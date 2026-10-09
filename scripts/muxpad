@@ -941,6 +941,45 @@ EOF
   esac
 }
 
+# ─── say ───────────────────────────────────────────────────────────────────
+#
+# ADDRESS THE PERSON. Everything an agent does inside a scheduled fire is
+# machinery and renders as a collapsed run — the injected prompt, the tool
+# calls, and whatever prose the model produced on its way to being done. This
+# is how a fire says the one thing that was worth saying.
+#
+# It works by PRINTING A MARKER. The text goes to stdout wrapped in
+# <muxpad-said>…</muxpad-said>, lands in the tool result for whatever shell
+# call produced it, and the transcript normalizer lifts it out as a real
+# message with `voice: 'reply'` — the same voice Chat mode's `reply` tool
+# produces, and already exempt from every fold in the product.
+#
+# No API call, no state. That is deliberate: the alternative was a server-side
+# store the client fetches and interleaves, like browser moments, which means
+# a table, a route, and placement logic that has already caused three separate
+# bugs about things piling at the wrong edge of a partially-loaded log. A
+# marker in the transcript is at the right position with the right timestamp
+# by construction.
+cmd_say() {
+  local text="${1:-}"
+  if [ -z "$text" ]; then
+    cat >&2 <<'EOF'
+usage: muxpad say "<text>"
+
+Renders <text> as a message in this chat. Inside a cron fire that is the ONLY
+thing that renders — everything else the fire does is folded away — so say the
+thing the person needs and nothing else.
+
+Reads stdin with `-`:  some-command | muxpad say -
+EOF
+    exit 1
+  fi
+  [ "$text" = "-" ] && text="$(cat)"
+  # Trailing newline only; the marker must survive being embedded in whatever
+  # else the command printed.
+  printf '<muxpad-said>%s</muxpad-said>\n' "$text"
+}
+
 # ─── card ──────────────────────────────────────────────────────────────────
 #
 # Named persistent blocks pinned at the top of a chat. The chat defaults to the
@@ -2923,14 +2962,13 @@ cmd_cron_new() {
   # Pre-strip the flags parse_flags can't take: BARE mode flags (it would eat
   # the next argument as their value) and hyphenated names (it evals
   # FLAG_<name>=, and `FLAG_on-context` is not a legal shell variable).
-  local a rest=() target='' pane_ref='' close_flag='' on_context='' max_open='' fold_flag='' speak_flag='' card_name=''
+  local a rest=() target='' pane_ref='' close_flag='' on_context='' max_open='' legacy_voice_flag='' card_name=''
   for a in "$@"; do
     case "$a" in
       --pane) target=pane ;;
       --pane=*) target=pane; pane_ref="${a#--pane=}" ;;
       --new-tab) target=new-tab ;;
-      --silent|--fold) fold_flag=1 ;;
-      --speak) speak_flag=1 ;;
+      --silent|--fold|--speak) legacy_voice_flag=1 ;;
       --card=*) card_name="${1#*=}" ;;
       --no-close) close_flag=false ;;
       --close) close_flag=true ;;
@@ -3005,23 +3043,19 @@ USAGE
     case "$max_open" in (*[!0-9]*|'') echo "muxpad: --max-open must be a whole number" >&2; exit 1 ;; esac
     body+=",\"max_open\":$max_open"
   fi
-  # ── A SCHEDULE'S TURN IS MACHINERY UNLESS IT SAYS OTHERWISE ──────────────
-  # --speak means the agent's REPLY is the deliverable: show it as prose. The
-  # default is silent, and that default is the point — every schedule here
-  # delivers through a card or a push notification and replies with whatever
-  # token its prompt asked for in place of an answer ("Reply with nothing but
-  # ok"), so the common case was three rows of nothing per fire.
+  # ── A SCHEDULE'S TURN IS MACHINERY, FULL STOP ───────────────────────────
+  # There is no flag for this any more. A fire's injected prompt, its tool
+  # calls and its prose are all folded into the collapsed run; the one thing
+  # that surfaces is what the agent deliberately said with `muxpad say`.
   #
-  # Chat mode has always had this rule — a turn no human started is not a
-  # message — and it simply never ran in an agent-mode pane. The flag exists
-  # because agent mode has no `reply` tool, so a genuinely chatty cron there
-  # needs some way to say "this one is for you".
+  # Two flags came before and both were wrong the same way: they asked the
+  # SCHEDULE a question only the FIRE can answer. `net-watch` is "silent unless
+  # a trigger fires" — declared quiet it hides the one message that matters,
+  # declared speaking it prints "net: no" every weekday.
   #
-  # --silent / --fold are the old spelling of the OPPOSITE default and are now
-  # no-ops: they asked for what you already get. Accepted rather than removed
-  # because scripts and crons already pass them.
-  [ -n "$speak_flag" ] && body+=",\"speak\":true"
-  : "${fold_flag:-}"
+  # --silent / --fold / --speak are accepted and ignored, because crons and
+  # scripts already pass them.
+  : "${legacy_voice_flag:-}"
   # --card declares WHERE THE OUTPUT GOES, which is a different fact from where
   # the job runs. A fire that updated its card and said nothing renders nothing
   # in the conversation; the card's freshness rail is the liveness signal.
@@ -4079,21 +4113,17 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                      silence and brings the row back.
                                      This is the flag you want for a card
                                      refresher.
-  cron new … --speak                 THE AGENT'S REPLY IS THE DELIVERABLE, so
-                                     show it as prose. Without it a fire's
-                                     chat reply folds in with its tool calls,
-                                     because a turn no human started is not a
-                                     message — which is what Chat mode has
-                                     always done, and what agent-mode panes
-                                     now do too.
-                                     You want this only for a job that reports
-                                     to the CHAT. A job that writes a card or
-                                     sends a push has already delivered, and
-                                     the "ok" it says back is noise.
-                                     The injected prompt folds for every fire
-                                     regardless; this is only about the reply.
-                                     (--silent / --fold asked for what is now
-                                     the default and are accepted no-ops.)
+  say "<text>"                       SAY SOMETHING TO THE PERSON. Everything a
+                                     scheduled fire does is machinery — its
+                                     prompt, its tool calls, its prose all
+                                     fold into the collapsed run. This is the
+                                     exception, and the only one: what you
+                                     pass here renders as a message in the
+                                     chat. Use it when THIS run has something
+                                     the person needs; stay quiet otherwise.
+                                     (In Chat mode the `reply` tool does the
+                                     same thing. Agent mode has no muxpad
+                                     tools, so it has this instead.)
   cron list                          name, schedule, target, next due, last run,
                                      last status, failure streak
   cron show <id|name>                one schedule in full + its run history
@@ -4253,6 +4283,7 @@ case "$VERB" in
   restart) cmd_restart "${ARGS[@]:1}" ;;
   status) cmd_status ;;
   logs) cmd_logs "${ARGS[@]:1}" ;;
+  say) cmd_say "${ARGS[@]:1}" ;;
   workspace) cmd_workspace "${ARGS[@]:1}" ;;
   tab) cmd_tab "${ARGS[@]:1}" ;;
   pane) cmd_pane "${ARGS[@]:1}" ;;

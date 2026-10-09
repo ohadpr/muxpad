@@ -21,12 +21,9 @@ const id = () => `e${++n}`;
 /** `speak` defaults FALSE, like a real schedule: a cron's turn is machinery
  *  unless its author declared the reply to be the deliverable. The argument
  *  used to be `folded = true`, the same switch upside down — see cron-fold. */
-const fire = (name: string, speak = false, prompt = 'Are the markets open?'): ChatEvent[] => {
+const fire = (name: string, _unused = false, prompt = 'Are the markets open?'): ChatEvent[] => {
   const out = expandCronFire(
-    renderCronMarker(
-      { id: `c${++n}`, name, at: null, missed: 0, ...(speak ? { speak: true } : {}) },
-      prompt,
-    ),
+    renderCronMarker({ id: `c${++n}`, name, at: null, missed: 0 }, prompt),
     id(),
     Date.UTC(2026, 9, 7, 17, 25),
   );
@@ -145,7 +142,7 @@ describe('coalesceCronFires', () => {
   it('leaves a fire that collapsed MISSED fires alone', () => {
     // That detail is the unusual thing, and it is the thing worth a row.
     const missed = expandCronFire(
-      renderCronMarker({ id: 'cm', name: 'nw-hourly', at: null, missed: 3, speak: true }, 'go'),
+      renderCronMarker({ id: 'cm', name: 'nw-hourly', at: null, missed: 3 }, 'go'),
       id(),
       0,
     );

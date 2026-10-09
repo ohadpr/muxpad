@@ -102,7 +102,10 @@ export interface CtrlMethods {
    * Additive: an older ptyd answers `unknown method`, which the caller treats
    * as "cannot identify callers" and fails closed.
    */
-  panePids: { params: Record<string, never>; result: { entries: Array<{ id: string; pid: number }> } };
+  panePids: {
+    params: Record<string, never>;
+    result: { entries: Array<{ id: string; pid: number }> };
+  };
 }
 
 export type CtrlPushEvent =

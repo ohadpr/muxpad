@@ -25,26 +25,18 @@ import { foldCronTurns, foldsAsActionRun, isPrivateReasoning } from './chat-voic
  */
 let n = 0;
 const id = () => `e${++n}`;
-/**
- * NAMED, NOT A BOOLEAN. The flag these fixtures pass used to be `fold` and now
- * it is `speak`, which is the same switch upside down — so every `quietFire()`
- * in this file silently changed meaning. A boolean argument whose sense can
- * invert under you is one rename away from a suite that passes while asserting
- * the opposite of what it says.
- */
-const makeFire = (speak: boolean, prompt: string): ChatEvent[] => {
-  const text = renderCronMarker(
-    { id: `c${++n}`, name: 'nw-hourly', at: null, missed: 0, ...(speak ? { speak: true } : {}) },
-    prompt,
+/** Every fire is the same now — the schedule carries no speech flag at all.
+ *  A fire with something to tell you says it with `muxpad say`, which arrives
+ *  as a `reply`-voiced message and was already exempt from every fold. */
+const fire = (prompt = 'Are the markets open?'): ChatEvent[] => {
+  const out = expandCronFire(
+    renderCronMarker({ id: `c${++n}`, name: 'nw-hourly', at: null, missed: 0 }, prompt),
+    id(),
+    0,
   );
-  const out = expandCronFire(text, id(), 0);
   if (!out) throw new Error('fixture is not a cron fire');
   return out;
 };
-/** The default: a schedule's turn is machinery. */
-const quietFire = (prompt = 'Are the markets open?') => makeFire(false, prompt);
-/** `--speak`: this one's reply is the deliverable. */
-const speakingFire = (prompt = 'Are the markets open?') => makeFire(true, prompt);
 const prose = (text = 'closed'): ChatEvent => ({ kind: 'assistant', id: id(), ts: 0, text });
 const reply = (text: string): ChatEvent => ({
   kind: 'assistant',
@@ -77,21 +69,23 @@ describe('foldCronTurns', () => {
     // plus a `folded` bubble and the notice carries no body at all. Read off a
     // hand-built notice, the fold never engaged and an hourly job printed
     // "closed" into the conversation six times a day.
-    const out = foldCronTurns([...quietFire(), tool(), prose('closed')]);
+    const out = foldCronTurns([...fire(), tool(), prose('closed')]);
     expect(hidden(out, 'closed')).toBe(true);
   });
 
   it('folds a fire that carried no prompt at all', () => {
     // `expandCronFire` emits a lone notice for this one — no bubble to read the
     // answer off, so "folded" has to be the default a cron notice falls back to.
-    const out = foldCronTurns([...quietFire(''), prose('closed')]);
+    const out = foldCronTurns([...fire(''), prose('closed')]);
     expect(hidden(out, 'closed')).toBe(true);
   });
 
-  it('leaves a SPEAKING fire’s prose alone', () => {
-    // `--speak` is the author saying this reply is the deliverable.
-    const out = foldCronTurns([...speakingFire(), tool(), prose('NET closed at $318, down 2%.')]);
-    expect(hidden(out, 'NET closed at $318, down 2%.')).toBe(false);
+  it('leaves what the fire SAID alone', () => {
+    // `muxpad say` arrives as a reply-voiced message — the same exemption the
+    // `reply` tool gets in Chat mode, reached through the CLI because agent
+    // mode registers no muxpad tools.
+    const out = foldCronTurns([...fire(), tool(), reply('NET $318 — down 10%, that is the level')]);
+    expect(hidden(out, 'NET $318 — down 10%, that is the level')).toBe(false);
   });
 
   /**
@@ -105,14 +99,14 @@ describe('foldCronTurns', () => {
    */
   it('hides a quiet fire’s prose whatever the words are', () => {
     for (const text of ['ok', 'closed', 'NET $318', 'no fills today — spread widened']) {
-      const out = foldCronTurns([...quietFire(), tool(), prose(text)]);
+      const out = foldCronTurns([...fire(), tool(), prose(text)]);
       expect(hidden(out, text), text).toBe(true);
     }
   });
 
-  it('shows a speaking fire’s prose whatever the words are', () => {
+  it('shows what it SAID whatever the words are', () => {
     for (const text of ['ok', 'closed', 'NET $318', 'no fills today — spread widened']) {
-      const out = foldCronTurns([...speakingFire(), tool(), prose(text)]);
+      const out = foldCronTurns([...fire(), tool(), reply(text)]);
       expect(hidden(out, text), text).toBe(false);
     }
   });
@@ -125,7 +119,7 @@ describe('foldCronTurns', () => {
   });
 
   it('stops at the next human turn', () => {
-    const out = foldCronTurns([...quietFire(), prose('closed'), user('hey'), prose('hello!')]);
+    const out = foldCronTurns([...fire(), prose('closed'), user('hey'), prose('hello!')]);
     expect(hidden(out, 'closed')).toBe(true);
     expect(hidden(out, 'hello!')).toBe(false);
   });
@@ -133,14 +127,14 @@ describe('foldCronTurns', () => {
   it("does not let a cron's own prompt bubble end the fold", () => {
     // The bubble adjacent to a fire belongs to the fire; a bubble elsewhere is
     // a person and ends it.
-    const out = foldCronTurns([...quietFire(), prose('closed')]);
+    const out = foldCronTurns([...fire(), prose('closed')]);
     expect(hidden(out, 'closed')).toBe(true);
   });
 
   it('NEVER folds a deliberate reply', () => {
     // A cron told to say something was told to say it; hiding that would hide
     // the one part its author meant you to read.
-    const out = foldCronTurns([...quietFire(), reply('SPX +0.4%')]);
+    const out = foldCronTurns([...fire(), reply('SPX +0.4%')]);
     expect(out.at(-1)).toMatchObject({ voice: 'reply' });
   });
 
@@ -151,7 +145,7 @@ describe('foldCronTurns', () => {
   });
 
   it('a second fire re-opens the fold', () => {
-    const out = foldCronTurns([...quietFire(), prose('a'), ...quietFire(), prose('b')]);
+    const out = foldCronTurns([...fire(), prose('a'), ...fire(), prose('b')]);
     expect(hidden(out, 'a')).toBe(true);
     expect(hidden(out, 'b')).toBe(true);
   });
@@ -168,22 +162,26 @@ describe('the injected prompt is plumbing whatever the flag says', () => {
     // Reported looking at `nw-close`: six lines of "Run: python3 … On error
     // print+push 'NW close snapshot failed'" above the answer. Nobody re-reads
     // the instruction a schedule injected.
-    const [, bubble] = speakingFire('Run: python3 scripts/nw_oneline.py CLOSE');
+    const [, bubble] = fire('Run: python3 scripts/nw_oneline.py CLOSE');
     expect(bubble).toMatchObject({ kind: 'user', folded: true });
   });
 
-  it('still leaves an unfolded fire’s REPLY visible', () => {
-    // The whole point of not folding `nw-close` is that it says something worth
-    // reading. Prompt and output were two decisions wearing one flag.
-    const out = foldCronTurns([...speakingFire(), tool(), prose('CLOSE 10/7 · −$24K')]);
-    expect(isPrivateReasoning(out[out.length - 1] as ChatEvent)).toBe(false);
+  it('folds the fire’s own PROSE, and only `say` gets through', () => {
+    // Prompt and output were two decisions wearing one flag, and then a second
+    // flag. Both are gone: the prompt always folds, the prose always folds,
+    // and what the fire deliberately SAID is the one thing that is neither.
+    const quiet = foldCronTurns([...fire(), tool(), prose('CLOSE 10/7 · −$24K')]);
+    expect(isPrivateReasoning(quiet[quiet.length - 1] as ChatEvent)).toBe(true);
+
+    const spoken = foldCronTurns([...fire(), tool(), reply('CLOSE 10/7 · −$24K')]);
+    expect(isPrivateReasoning(spoken[spoken.length - 1] as ChatEvent)).toBe(false);
   });
 
-  it('carries the flag on the notice instead of inferring it from the shape', () => {
-    // Both shapes are identical now, so a predicate that read the next event
-    // would always answer "folded". The flag is a fact about the SCHEDULE.
-    expect(speakingFire()[0]).toMatchObject({ kind: 'notice', variant: 'cron', speak: true });
-    expect(quietFire()[0]).not.toHaveProperty('speak');
+  it('carries no speech flag on the notice at all', () => {
+    // There were two, in succession, and both asked the schedule a question
+    // only the fire can answer. See the header.
+    expect(fire()[0]).not.toHaveProperty('speak');
+    expect(fire()[0]).not.toHaveProperty('fold');
   });
 });
 
@@ -192,7 +190,7 @@ describe('a fire whose turn produced nothing else', () => {
     // The length rule renders a lone action inline, which brought the whole
     // prompt back as a visible row. Observed on a fire that died at the weekly
     // limit: chip, then six lines of "Run: python3 … On error print+push".
-    const [notice, prompt] = quietFire('Run: python3 scripts/nw_oneline.py OPEN');
+    const [notice, prompt] = fire('Run: python3 scripts/nw_oneline.py OPEN');
     expect(notice).toBeTruthy();
     expect(foldsAsActionRun([prompt as ChatEvent])).toBe(true);
   });

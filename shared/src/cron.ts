@@ -53,8 +53,8 @@ export const CronSchema = z.object({
    *  migration 44 for why the default was the bug and `speak` is the replacement.
    *  Kept so a row written before the change still parses. */
   fold: z.boolean().default(false),
-  /** The agent's reply IS the deliverable — show it as prose. Off by default:
-   *  a schedule's turn is machinery unless its author says otherwise. */
+  /** DEAD, like `fold` beside it. Both were flags on the SCHEDULE answering a
+   *  question that belongs to the fire — see `muxpad say`. */
   speak: z.boolean().default(false),
   /** The card this job writes, if any — see CronMarker.card. A fire that
    *  updated it and said nothing renders nothing in the conversation. */
@@ -116,24 +116,6 @@ export interface CronMarker {
   /** Fires collapsed into this one by `catchup=once`. 0 for a normal fire. */
   missed: number;
   /**
-   * THE AGENT'S REPLY IS THE DELIVERABLE — render it as prose.
-   *
-   * Off by default, and that default is the whole point. This was `fold`, the
-   * other way up: a cron spoke unless its author remembered `--silent`. Every
-   * schedule on this machine delivers through a card or a push notification and
-   * replies with whatever token its prompt asked for in place of an answer, so
-   * the common case was three rows of nothing per fire — ⏱ chip, "3 actions",
-   * "ok" — and the rare case was the one you had to opt out of.
-   *
-   * Chat mode has always had the general rule: a turn no human started is not a
-   * message. It simply never ran in an agent-mode pane, which is why this was
-   * only ever broken in half the product.
-   *
-   * Not the prompt: that folds for every fire regardless, because an instruction
-   * a schedule handed the agent is never something a person said.
-   */
-  speak?: boolean;
-  /**
    * THE CARD THIS JOB WRITES — and therefore where its output GOES.
    *
    * A cron already said where it RUNS (`target_kind`, `target_pane`). It could
@@ -168,7 +150,6 @@ function attr(attrs: string, name: string): string | null {
 export function renderCronMarker(marker: CronMarker, prompt: string): string {
   const missed = marker.missed > 0 ? ` missed="${marker.missed}"` : '';
   const at = marker.at !== null ? ` at="${marker.at}"` : '';
-  const speak = marker.speak ? ' speak="1"' : '';
   // Stamped per fire, like `fold`. A card added to a schedule later does not
   // retroactively silence the fires that were conversational at the time —
   // which is right: they were.
@@ -177,7 +158,7 @@ export function renderCronMarker(marker: CronMarker, prompt: string): string {
     marker.missed > 0
       ? `Delivered by the muxpad cron "${marker.name}" — a scheduled job, not a human. ${marker.missed} earlier fire(s) were missed while muxpad was offline and are collapsed into this one.`
       : `Delivered by the muxpad cron "${marker.name}" — a scheduled job, not a human.`;
-  return `<muxpad-cron id="${marker.id}" name="${marker.name}"${at}${missed}${speak}${card}>\n${note}\n</muxpad-cron>\n\n${prompt}`;
+  return `<muxpad-cron id="${marker.id}" name="${marker.name}"${at}${missed}${card}>\n${note}\n</muxpad-cron>\n\n${prompt}`;
 }
 
 /**
@@ -197,11 +178,6 @@ export function parseCronMarker(text: string): { marker: CronMarker; body: strin
   const missedRaw = attr(attrs, 'missed');
   const at = atRaw !== null && /^\d+$/.test(atRaw) ? Number(atRaw) : null;
   const missed = missedRaw !== null && /^\d+$/.test(missedRaw) ? Number(missedRaw) : 0;
-  // `fold="1"` is not read: a fire rendered before migration 44 said the
-  // opposite thing with the opposite default, and guessing which it meant is
-  // worse than treating an old fire as silent — which is what it almost
-  // certainly was.
-  const speak = attr(attrs, 'speak') === '1';
   const card = attr(attrs, 'card');
   return {
     marker: {
@@ -209,7 +185,6 @@ export function parseCronMarker(text: string): { marker: CronMarker; body: strin
       name,
       at,
       missed,
-      ...(speak ? { speak: true } : {}),
       ...(card ? { card } : {}),
     },
     body: text.slice(m[0].length),

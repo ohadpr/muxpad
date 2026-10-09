@@ -264,27 +264,25 @@ export function applyChatVoice(events: readonly ChatEvent[], opts: ChatVoiceOpts
  * default was wrong only in the half of the product that had no opinion, and
  * the Investing chat is an agent session.
  *
- * ── WHY A FLAG AND NOT JUST THE SAME RULE ──────────────────────────────────
- * Chat mode's escape hatch is the `reply` tool: an agent that means to address
- * the person calls it, and `voice: 'reply'` is exempt everywhere. AGENT MODE
- * HAS NO REPLY TOOL AT ALL — it is registered only for Chat (see claude.ts,
- * "AGENT MODE IS RAW") — so applying the rule unconditionally would leave a
- * genuinely chatty cron in an agent pane with no way to speak.
+ * ── THE ESCAPE HATCH IS PER FIRE, NOT PER SCHEDULE ─────────────────────────
+ * Chat mode's is the `reply` tool: an agent that means to address the person
+ * calls it, and `voice: 'reply'` is exempt everywhere. Agent mode registers no
+ * muxpad tools at all ("AGENT MODE IS RAW" — claude.ts), so it gets the same
+ * distinction through the CLI: `muxpad say` prints a marker that the
+ * normalizer lifts into a `reply`-voiced message. Nothing here special-cases
+ * it; it was already exempt.
  *
- * So the schedule declares it, and the default is the inverse of what it was.
- * `--speak` means the reply IS the deliverable. Everything else is machinery,
- * which is what a schedule's output nearly always is: it writes a card, or it
- * pushes a notification, and the chat reply is whatever token the prompt asked
- * for in its place.
+ * ── TWO WRONG ANSWERS CAME FIRST, AND THEY WERE WRONG THE SAME WAY ─────────
+ * `--fold` (then `--speak`) put the switch on the SCHEDULE, and a schedule
+ * cannot answer the question. `net-watch` is "silent unless a trigger fires":
+ * declared quiet it hides the one message that matters, declared speaking it
+ * prints "net: no" every weekday. Only the fire knows.
  *
- * ── WHAT THIS REPLACED, AND WHY THAT WAS WRONG ─────────────────────────────
- * First `--fold`, defaulting to false: every cron spoke unless its author
- * remembered the flag, and none of them had anything to say. Then — worse — a
- * hardcoded list of acknowledgement words ("ok", "done", "closed") matched
- * against the reply text, so that an unfolded cron saying nothing would fold
- * itself. That is overfitting a guess about English onto a question the
- * schedule's author can simply answer, and it would have been wrong the first
- * time a job replied "no change since yesterday" or "NET $318".
+ * Worse was the attempt in between — a hardcoded list of acknowledgement words
+ * ("ok", "done", "closed") matched against the reply text, so a chatty cron
+ * saying nothing would fold itself. Overfitting a guess about English onto a
+ * question the agent can simply answer outright, and wrong the first time a
+ * job replies "no change since yesterday".
  *
  * The turn is the span from the fire to the next thing a person or another
  * schedule started — the same segmentation `applyChatVoice` uses, and the same
@@ -299,7 +297,7 @@ export function foldCronTurns(events: readonly ChatEvent[]): ChatEvent[] {
       // The flag rides on the notice — see NoticeEvent.speak. It used to be
       // read off the SHAPE of the next event, which stopped being able to tell
       // the two apart the moment every fire's prompt became folded.
-      quiet = e.variant === 'cron' && e.speak !== true;
+      quiet = e.variant === 'cron';
       return e;
     }
     // Any other turn start ends it: a person typing, a different schedule, a

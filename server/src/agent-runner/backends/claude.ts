@@ -26,7 +26,6 @@ import {
 } from '@muxpad/shared';
 import { z } from 'zod';
 import { readAgentInstructions } from '../../agent-instructions.js';
-import { workspaceAgentContextSync } from '../workspace-context.js';
 import { readChatModeOverlay, wrapModeNote } from '../../agent-modes.js';
 import { findTranscript } from '../../chat/TranscriptReader.js';
 import { bold, dim } from '../ansi.js';
@@ -42,6 +41,7 @@ import {
 } from '../reversibility.js';
 import { markSessionCleared, markSessionTurned, sessionHadTurn } from '../session-marks.js';
 import { SubagentRoster } from '../subagent-roster.js';
+import { workspaceAgentContextSync } from '../workspace-context.js';
 import type { AgentBackend, BackendOptions, RunnerHost } from './types.js';
 
 // Default model for a FRESH agent chat with no explicit `--model` pin: muxpad
