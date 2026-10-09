@@ -27,11 +27,13 @@ import { panesScopedRoutes, panesTabScopedRoutes } from './routes/panes.js';
 import { publishRoutes } from './routes/publish.js';
 import { pushRoutes } from './routes/push.js';
 import { archiveRoutes, searchRoutes } from './routes/search.js';
+import { slackRoutes } from './routes/slack.js';
 import { summaryRoutes } from './routes/summary.js';
 import { tabsRoutes } from './routes/tabs.js';
 import { voiceRoutes } from './routes/voice.js';
 import { workspacesRoutes } from './routes/workspaces.js';
 import { sameOriginGuard } from './same-origin.js';
+import { migrateLegacySlackEnv } from './slack-secrets.js';
 import type { TabActivity } from './tab-activity.js';
 import type { VoiceSessionManager } from './voice/VoiceSessionManager.js';
 
@@ -188,6 +190,16 @@ export function createApp(deps: AppDeps): Hono {
     return c.body(null, 204);
   });
   app.route('/api/workspaces', workspacesRoutes(resolved));
+  // Slack lives on the SERVER now, not in the CLI: this process holds the
+  // token and decides, and the caller's identity comes from its process
+  // ancestry rather than from an environment variable it can set.
+  // ONE explicit migration, here and nowhere else — a read path that deletes
+  // a file is how the author's own Slack token got destroyed by a unit test.
+  migrateLegacySlackEnv(resolved.dataDir);
+  app.route(
+    '/api/slack',
+    slackRoutes({ db: resolved.db, ptyd: resolved.ptyd, dataDir: resolved.dataDir }),
+  );
   app.route('/api/tabs', tabsRoutes(resolved));
   app.route('/api/tabs', panesTabScopedRoutes(resolved));
   // Chat cards — named persistent blocks pinned in a conversation. Tab-scoped

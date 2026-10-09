@@ -155,6 +155,17 @@ export function releasePtyHandle(process: unknown, onError?: (err: unknown) => v
 
 export class PaneRuntime extends EventEmitter {
   private process: pty.IPty | null = null;
+
+  /**
+   * The shell's pid, or null before it is spawned / after it exits.
+   *
+   * Exposed because it is the one fact that identifies a caller honestly: a
+   * process claiming to be in this pane either IS a descendant of this pid or
+   * it is lying, and it cannot forge its own ancestry. See `panePids`.
+   */
+  get pid(): number | null {
+    return this.process?.pid ?? null;
+  }
   /** The pty master descriptor, so it can be disowned when the shell dies. */
   private ptyFd = -1;
   private buffer = new RingBuffer(RING_CAPACITY);

@@ -103,6 +103,17 @@ export class PtydClient extends EventEmitter {
   /**
    * @throws Error('ptyd disconnected') if the socket isn't OPEN.
    */
+  /** Every live pane's shell pid. Empty on an older ptyd that lacks the RPC —
+   *  the caller must treat that as "cannot identify callers" and fail closed. */
+  async panePids(): Promise<Array<{ id: string; pid: number }>> {
+    try {
+      const r = await this.call('panePids', {});
+      return r.entries;
+    } catch {
+      return [];
+    }
+  }
+
   async hasPane(id: string): Promise<boolean> {
     const r = await this.call('hasPane', { id });
     return r.has;
