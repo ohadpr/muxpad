@@ -1390,33 +1390,25 @@ const MIGRATIONS: Migration[] = [
     },
   },
   {
-    // A CRON IS MACHINERY UNLESS IT SAYS OTHERWISE — `crons.speak`.
+    // `crons.speak`, ADDED AND IMMEDIATELY RETIRED — kept because migrations
+    // are append-only and this one may have run before the idea was dropped.
     //
-    // `crons.fold` meant "the agent's reply is plumbing too", and it defaulted
-    // to FALSE: every cron spoke in the chat unless its author remembered a
-    // flag. In practice none of them have anything to say — their output is a
-    // card, or a push notification, and the chat reply is whatever token the
-    // prompt asked for in its place ("Reply with nothing but ok"). Four
-    // schedules in one chat, three of them leaving ⏱ chip + "3 actions" + "ok"
-    // behind on every fire.
+    // It was the inverse of `crons.fold`, with the right default: a schedule
+    // is machinery unless it says otherwise. The default was right and the
+    // AXIS was wrong. Both flags asked the SCHEDULE a question only the FIRE
+    // can answer — `net-watch` is "silent unless a trigger fires", so declared
+    // quiet it hides the one message that matters and declared speaking it
+    // prints "net: no" every weekday.
     //
-    // Chat mode already had the general rule and has had it all along: a turn
-    // no human started is not a message (`applyChatVoice`, `isHumanTurnStart`).
-    // It never ran here because an agent-mode pane does not apply the chat
-    // voice at all — so the default was wrong only in the half of the product
-    // that had no opinion.
+    // What replaced it is `muxpad say`: the fire prints a marker, the
+    // normalizer lifts it into a `reply`-voiced message, and that voice was
+    // already exempt from every fold in the product. Chat mode has had exactly
+    // this since it shipped, as the `reply` TOOL; agent mode registers no
+    // muxpad tools, so it reaches the same thing through the CLI.
     //
-    // A NEW COLUMN RATHER THAN FLIPPING THE OLD ONE'S POLARITY. `fold` keeps
-    // its meaning and stops being read; `speak` is the inverse with the right
-    // default. A column whose sense silently inverted is a trap for every
-    // future reader of a row written on either side of the change.
-    //
-    // DEFAULT 0 means every existing cron goes quiet, which is the intended
-    // effect and not a side effect: the ones on this machine all deliver
-    // through a card or a push. A schedule whose reply IS the deliverable
-    // declares `--speak`, and nothing is lost meanwhile — the prose is in the
-    // fire's collapsed run, one click away, exactly where a folded cron's has
-    // always been.
+    // Neither column is read any more. They are left in place rather than
+    // dropped: SQLite column drops are a table rebuild, and a dead column
+    // costs nothing but a comment.
     version: 44,
     apply: (db) => {
       const cols = db.prepare('PRAGMA table_info(crons)').all() as Array<{ name: string }>;

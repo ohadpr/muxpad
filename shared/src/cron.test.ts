@@ -98,31 +98,21 @@ describe('rendering a fire in the transcript', () => {
   });
 });
 
-describe('a SPEAKING cron fire', () => {
-  const marker = { id: 'c1', name: 'nw-close', at: 123, missed: 0, speak: true };
-
-  it('round-trips the flag', () => {
-    const text = renderCronMarker(marker, 'run the script and write the card');
-    expect(text).toContain('speak="1"');
-    const parsed = parseCronMarker(text);
-    expect(parsed?.marker.speak).toBe(true);
-    expect(parsed?.body.trim()).toBe('run the script and write the card');
-  });
-
-  it('is absent — not false — on an ordinary fire, which is the quiet one', () => {
-    // The attribute is omitted rather than written `speak="0"`. Ordinary now
-    // means SILENT: this replaced `fold`, which was the same switch the other
-    // way up and defaulted every schedule into speaking.
+describe('what a fire carries, and what it no longer does', () => {
+  it('carries no speech flag at all — see `muxpad say`', () => {
+    // `fold` then `speak` were both flags on the SCHEDULE answering a question
+    // that belongs to the FIRE: this one time, does the agent have something
+    // to tell you? A schedule cannot answer that in advance, which is why
+    // `net-watch` ("silent unless a trigger fires") could not be expressed by
+    // either of them. The fire says it itself now, with `muxpad say`.
     const text = renderCronMarker({ id: 'c1', name: 'n', at: null, missed: 0 }, 'go');
     expect(text).not.toContain('speak');
-    expect(parseCronMarker(text)?.marker.speak).toBeUndefined();
+    expect(text).not.toContain('fold');
   });
 
   it('ignores a pre-migration fire’s fold="1" rather than guessing', () => {
-    // A fire rendered before migration 44 carries the opposite flag with the
-    // opposite default. Reading it would mean deciding what an old row meant,
-    // and an old fire was almost certainly one nobody wanted to hear from.
     const old = '<muxpad-cron id="c1" name="n" fold="1">\n-\n</muxpad-cron>\n\ngo';
-    expect(parseCronMarker(old)?.marker.speak).toBeUndefined();
+    expect(parseCronMarker(old)?.marker).toMatchObject({ id: 'c1', name: 'n' });
+    expect(parseCronMarker(old)?.body.trim()).toBe('go');
   });
 });

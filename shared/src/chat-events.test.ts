@@ -557,9 +557,9 @@ describe('THE JOIN in a transcript — a delivery is not a person typing', () =>
 });
 
 describe('a cron fire in the transcript', () => {
-  const fire = (speak: boolean) =>
+  const fire = (_unused = false) =>
     renderCronMarker(
-      { id: 'c1', name: 'nw-close', at: MS, missed: 0, ...(speak ? { speak: true } : {}) },
+      { id: 'c1', name: 'nw-close', at: MS, missed: 0 },
       'Run: python3 scripts/nw_oneline.py CLOSE — then write the market card.',
     );
 
@@ -598,12 +598,14 @@ describe('a cron fire in the transcript', () => {
     // always answer yes. `--fold` now means only: demote the turn's OUTPUT.
     const folded = expandChatEvent({ kind: 'user', id: 'u1', ts: MS, text: fire(true) });
     const plain = expandChatEvent({ kind: 'user', id: 'u2', ts: MS, text: fire(false) });
-    expect((folded[0] as { speak?: boolean }).speak).toBe(true);
+    // No flag either way any more: every fire is machinery, and a fire with
+    // something to say says it with `muxpad say`.
+    expect((folded[0] as { speak?: boolean }).speak).toBeUndefined();
     expect((plain[0] as { speak?: boolean }).speak).toBeUndefined();
   });
 
   it('a folded fire with no prompt is just the row', () => {
-    const text = renderCronMarker({ id: 'c1', name: 'n', at: MS, missed: 0, speak: true }, '');
+    const text = renderCronMarker({ id: 'c1', name: 'n', at: MS, missed: 0 }, '');
     const out = expandChatEvent({ kind: 'user', id: 'u1', ts: MS, text });
     expect(kinds(out)).toEqual(['notice']);
     expect((out[0] as { body?: string }).body).toBeUndefined();

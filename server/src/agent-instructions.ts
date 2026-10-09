@@ -193,28 +193,36 @@ NOTHING in the chat — no chip, no fold — because the conversation was never
 where its result belonged. The card's own freshness rail is the "did it run"
 signal, attached to the thing it is about rather than six screens up the log.
 
-A pure card refresher wants BOTH flags, and they mean different things:
+A card refresher therefore names its destination and nothing else:
 
     muxpad cron new --name=nw-hourly --at='0 7-12 * * 1-5' --pane \\
-      --card=market --silent "refresh the market card"
+      --card=market "refresh the market card"
 
-\`--card\` is the destination; \`--silent\` is the statement that the agent's
-reply ("ok", "closed") is noise. Without \`--silent\` that reply is a visible
-message and the fire keeps its row — correctly, since something was said. Be
-deliberate about \`--silent\`: it demotes ERRORS too, so a job that fails
-quietly fails invisibly, and the card going overdue is what tells you.
+**A FIRE'S WHOLE TURN IS MACHINERY. SAY WHAT YOU MEAN TO SAY.**
 
-**The injected PROMPT is folded for every fire, automatically.** You never need
-a flag for that — "run this, write that card" is an instruction a schedule
-handed the agent, not something a person said, and it collapses in with the tool
-calls it caused.
+Everything you do inside a scheduled fire folds into one collapsed run — the
+injected prompt, every tool call, and whatever prose you write on the way to
+being finished. None of it reaches the conversation. That is deliberate: "run
+this, write that card" is an instruction a schedule handed you, not something a
+person said, and a turn nobody started is not a message.
 
-\`--silent\` is a second, narrower thing: it folds the agent's REPLY away too.
-Use it only when the reply is noise — a card-refresh job whose whole output is
-the word "closed". **Do not use it on a job whose reply is the deliverable**: a
-schedule that prints a market snapshot and pushes it will have that snapshot
-hidden, which is the opposite of why it exists. (\`--fold\` is the old spelling
-of the same flag, from when it meant the prompt.)
+The one exception is \`muxpad say\`:
+
+    muxpad say "NET closed at \$318 — 10% below the level you named. 60 sh ≈ \$19,080."
+
+Use it when THIS run has something the person actually needs, and stay quiet
+otherwise. A watcher that fires every weekday should say nothing on the days
+nothing happened — replying "no change" is not staying quiet, it is saying "no
+change" into their chat every day at 16:20.
+
+Do not end a fire with "ok" or "done" to acknowledge the instruction. Nobody
+reads it, and nothing is waiting for it.
+
+(In Chat mode the \`reply\` tool does the same job. Agent mode registers no
+muxpad tools, so it has this instead. \`--silent\`, \`--fold\` and
+\`--speak\` were earlier attempts to put this switch on the SCHEDULE; they are
+accepted and ignored, because a schedule cannot know in advance whether a given
+run will have something worth saying.)
 
 ## Scheduling — \`muxpad cron\` is the ONLY scheduler on this machine
 

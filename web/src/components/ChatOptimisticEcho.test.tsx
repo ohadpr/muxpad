@@ -34,9 +34,9 @@ afterEach(() => {
   document.body.innerHTML = '';
 });
 
-const fire = (speak: boolean) =>
+const fire = (_unused = false) =>
   renderCronMarker(
-    { id: '01M4CECK8AMG2SBKSJEFF0MVYK', name: 'nw-hourly', at: 1791482627209, missed: 0, speak },
+    { id: '01M4CECK8AMG2SBKSJEFF0MVYK', name: 'nw-hourly', at: 1791482627209, missed: 0 },
     'Are the US markets open right now?',
   );
 
