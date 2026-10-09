@@ -52,6 +52,48 @@ A pane can hold a **chat-native agent session**: the conversation renders as HTM
 
 Nothing about any of that is specific to code. The question above is a shipping contract; the agent that asked it has never opened a file in a repo.
 
+## What a workspace tells its agents, and what it lets them do
+
+Every agent in a workspace is handed muxpad's own instructions plus whatever
+that workspace adds — house conventions, where things live, what never to point
+at prod. Free text, edited from the workspace row's settings button, picked up
+when a pane launches. The CLI reads and writes it too (`muxpad workspace
+instructions <id>`), because an agent maintaining its own workspace's notes is
+the point.
+
+**Capabilities are the other half, and they are not the same kind of thing.**
+A capability is off until you switch it on, and a capability that is off is not
+merely refused at the call — the whole section is stripped from the
+instructions, so an agent is never told about a tool it cannot use. Advertising
+something to exactly the contexts that must never have it is how an agent comes
+to attempt it.
+
+Slack is the first one. A workspace with it off cannot read, search or post —
+not just post, because a chat full of personal files listing every private
+channel in the company is the same leak pointed the other way.
+
+Three things make that hold rather than merely ask:
+
+- **The credential never leaves the server.** It used to be a line in a dotfile
+  that the CLI sourced into whichever pane asked, so a refused chat could read
+  it and call Slack directly. `muxpad slack` is a thin client now; the token
+  lives in `~/.muxpad/secrets.json`, written `0600` and refused on read if it is
+  not `0600` any more.
+- **The caller cannot say who it is.** The server works out which pane a call
+  came from by walking the calling process's ancestry up to a live pane's shell.
+  A process cannot choose its parent, so `MUXPAD_PANE_ID` and a `cd` are both
+  worth nothing. (The controlling terminal would have been the obvious answer
+  and is useless here: in an agent pane `ps -o tty=` answers `??`, because the
+  runner is detached from the pty.)
+- **An agent cannot grant itself anything.** The switch and the credential are
+  both browser-only — the server refuses either change on a request with no
+  `Origin` header, which the CLI and the agent runner never send.
+
+Honest about the limit: everything here runs as one uid, so none of it stops a
+process that is actively trying. It stops a *helpful* agent reaching for a tool
+that is in arm's reach, which is the thing that actually goes wrong. The only
+airtight version is a broker under a second OS user.
+
 ## Pinned cards
 
 A chat can hold **named blocks pinned above the composer** — the current value of something, where the transcript is its history.
@@ -155,7 +197,11 @@ muxpad cron run pr-sweep     # fire it now; test before you trust it
 muxpad cron list             # schedule, next due, last run, failure streak
 ```
 
-`--at` takes a cron expression or a phrase (`daily at 09:00`, `every 30m`); `--tz` pins an IANA zone. `--card=<name>` declares where the output belongs (see [Pinned cards](#pinned-cards)) and `--silent` says the agent's reply is plumbing too — a pure card refresher wants both, and the injected prompt is folded out of the log for every fire regardless, because an instruction a schedule handed the agent is never something a person said. A fire lands either in an existing pane (`--pane`) or in a fresh agent tab per run (`--new-tab`), which is what most recurring jobs want. Because `next_due_at` is persisted, the scheduler survives every restart and **catches up** after downtime: `--catchup=once` (default) collapses everything missed into one fire whose cron marker carries `missed="N"`, `all` replays them through the pane's queue in order, `skip` drops them but records the outage in the run history rather than going silent. `--overlap`, `--quiet`, `--max-open` and `--on-context` cover the rest of the awkward cases (a fire arriving mid-turn, a fire arriving while you are typing, a fire arriving past 80% context fill). Three consecutive failures disable a cron and push a notification.
+`--at` takes a cron expression or a phrase (`daily at 09:00`, `every 30m`); `--tz` pins an IANA zone. `--card=<name>` declares where the output belongs (see [Pinned cards](#pinned-cards)).
+
+**A schedule's turn is machinery unless it says otherwise.** A fire's prompt is folded out of the log — an instruction a schedule handed the agent is never something a person said — and so is the agent's reply, unless the cron was created with `--speak`. That default is the right way round because a job's real output is nearly always somewhere else: it writes a card, or it pushes a notification, and the chat reply is whatever token its prompt asked for in place of an answer. Four schedules in one chat here, three of them leaving a chip, a collapsed run and the word "ok" behind on every fire. `--speak` is for the rare job that reports *to the conversation*.
+
+This is the same rule Chat mode has always applied to any turn a human did not start; it now holds in Agent mode too, where it is a flag rather than automatic because Agent mode has no `reply` tool for a cron to opt in with. A fire lands either in an existing pane (`--pane`) or in a fresh agent tab per run (`--new-tab`), which is what most recurring jobs want. Because `next_due_at` is persisted, the scheduler survives every restart and **catches up** after downtime: `--catchup=once` (default) collapses everything missed into one fire whose cron marker carries `missed="N"`, `all` replays them through the pane's queue in order, `skip` drops them but records the outage in the run history rather than going silent. `--overlap`, `--quiet`, `--max-open` and `--on-context` cover the rest of the awkward cases (a fire arriving mid-turn, a fire arriving while you are typing, a fire arriving past 80% context fill). Three consecutive failures disable a cron and push a notification.
 
 The reason this exists rather than leaning on a harness's own scheduler: those fire inside one session's context, expire after about a week, lose every fire that came due while the machine was asleep, and are invisible from anywhere else. muxpad's is in SQLite, never expires, and is editable from any pane.
 
@@ -247,6 +293,8 @@ Read this section before you point it at anything.
 
 **There is no authentication.** Reachability is authorization. Bind to an interface you actually trust — typically your Tailscale IPv4 — and never to `0.0.0.0` on an unfiltered network. Anyone who can reach the port can open a WebSocket into a live shell. Note that `pnpm serve` falls back to `0.0.0.0` when there is no `MUXPAD_HOST` and no Tailscale; set it explicitly.
 
+**A workspace's capabilities are a boundary against mistakes, not against malice.** See [capabilities](#what-a-workspace-tells-its-agents-and-what-it-lets-them-do). Credentials live in the server process and are identified by process ancestry rather than by anything the caller says, which is enough to stop an agent wandering into a tool it should not have. It is not a sandbox: same uid, same home directory, same everything.
+
 **Artifacts are public on purpose** — see [Publishing](#publishing-something-someone-else-can-open) for the shape of it. The security-relevant parts: the artifact listener is a *second* listener on its own port, carrying no API, no WebSocket and no directory listings, with a root that deliberately 404s; the access control on a published artifact is that its slug is unguessable (random slugs are 8 hex characters), and a named slug is a URL you are choosing to hand out; every response is sandboxed by CSP *without* `allow-same-origin`, so one artifact cannot read another's storage on the shared origin. Publishing something is publishing it — check what is in the directory.
 
 One practical wrinkle: `tailscale funnel` puts the artifact listener on **:8443**, and plenty of real networks block outbound to non-standard HTTPS ports — so a discovered funnel link works for you and fails for the person you sent it to. That is what `MUXPAD_PUBLIC_BASE_URL` (a permanent domain) and `muxpad publish --set-base` (an ephemeral tunnel on :443) are for; `publish --base` shows which origin links are currently built from and whether it is answering.
@@ -303,11 +351,12 @@ muxpad agent new --name='returns quotes' "compare the two returns quotes on tota
 
 # Read, search and post in Slack — always as you, 🤖-prefixed, off by default
 muxpad slack read '#eng' --since=2h
-muxpad slack post @andrey "the PR feedback"
+muxpad slack post @teammate "the PR feedback"
 #   → refuses unless this chat's WORKSPACE has Slack switched on in the UI, so a
-#     personal chat can never read or message a work surface. The workspace is
-#     resolved server-side from the pane id, so neither `cd` nor
-#     MUXPAD_WORKSPACE_ID can talk it round — and the switch cannot be thrown
+#     personal chat can never read or message a work surface. This command holds
+#     no credential: the server does, and it works out which workspace you are
+#     in from your process ancestry — so neither `cd` nor MUXPAD_PANE_ID nor
+#     MUXPAD_WORKSPACE_ID can talk it round, and the switch cannot be thrown
 #     from the CLI, because the CLI is what agents drive.
 
 # Per-workspace agent instructions (readable AND writable from a chat)
@@ -343,6 +392,11 @@ web/      React + Vite + TanStack Router + xterm.js + react-mosaic-component
 ```
 
 ## Hack on it
+
+CI runs five independent checks on every push — typecheck, lint, and the
+shared / web / server suites. What they do and do not cover (they are
+deliberately not a browser regression gate) is written up in
+[`.github/ci.md`](.github/ci.md).
 
 ```bash
 pnpm install
