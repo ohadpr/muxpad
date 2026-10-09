@@ -148,11 +148,19 @@ export const api = {
 
   getWorkspace: (id: string) => req<Workspace>(`/api/workspaces/${id}`),
 
-  patchWorkspace: (id: string, patch: { name?: string; slug?: string }) =>
+  patchWorkspace: (
+    id: string,
+    patch: { name?: string; slug?: string; instructions?: string; slack?: boolean },
+  ) =>
     req<Workspace>(`/api/workspaces/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(patch),
     }),
+
+  /** The composed text an agent launched in this workspace is handed. The
+   *  server composes it with the same function the backends call. */
+  workspaceAgentInstructions: (id: string) =>
+    req<{ text: string }>(`/api/workspaces/${id}/agent-instructions`),
 
   deleteWorkspace: (id: string) => req<void>(`/api/workspaces/${id}`, { method: 'DELETE' }),
 

@@ -1,3 +1,4 @@
+import { workspaceAgentContextSync } from '../workspace-context.js';
 // Codex backend — drives OpenAI's `codex` CLI in headless JSON mode
 // (`codex exec --json`, resumed by thread_id). Unlike Claude's persistent SDK
 // session, this is SPAWN-PER-TURN: each user message runs one `codex exec`
@@ -300,7 +301,7 @@ export function createCodexBackend(
     // Agent mode is by definition the harness exactly as it ships.
     const finalPrompt = resuming
       ? prompt
-      : withSessionPreamble(prompt, readAgentInstructions(), null);
+      : withSessionPreamble(prompt, readAgentInstructions(undefined, workspaceAgentContextSync()), null);
     const head = resuming ? ['exec', 'resume', sessionRef as string] : ['exec'];
     const common = [
       '--json',

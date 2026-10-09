@@ -2364,6 +2364,17 @@
   opacity: 1;
 }
 
+/* THE WORKSPACE'S SETTINGS BUTTON — hover-revealed like the ×, because it is
+   rarely wanted, but NOT danger-coloured: `.navtree-close:hover` paints every
+   member of this cluster the × 's red, and a red sliders icon reads as "this
+   will break something". It inherits the reservation rule above by not being
+   `.navtree-ws-add`, which is deliberate: settings is the rare control and the
+   "+" is the constant one. */
+.navtree-ws-row > .navtree-tab-controls > .navtree-ws-settings:hover {
+  color: var(--accent);
+  background: var(--bg-hover);
+}
+
 /* Constructive, so it goes to the accent on hover rather than to the × 's
    danger red. */
 .navtree-ws-row > .navtree-tab-controls > .navtree-ws-add:hover {

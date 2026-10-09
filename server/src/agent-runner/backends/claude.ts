@@ -26,6 +26,7 @@ import {
 } from '@muxpad/shared';
 import { z } from 'zod';
 import { readAgentInstructions } from '../../agent-instructions.js';
+import { workspaceAgentContextSync } from '../workspace-context.js';
 import { readChatModeOverlay, wrapModeNote } from '../../agent-modes.js';
 import { findTranscript } from '../../chat/TranscriptReader.js';
 import { bold, dim } from '../ansi.js';
@@ -1156,8 +1157,10 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
   // sessions alike — it's session-level system-prompt material, not a
   // message. Agent mode contributes nothing, so an Agent-mode pane's prompt
   // is byte-for-byte what it was before modes existed.
+  // The workspace decides which capabilities are described at all — see
+  // readAgentInstructions. Fetched once per runner and cached.
   const muxpadSystemPrompt = claudeSystemPromptOption(
-    readAgentInstructions(),
+    readAgentInstructions(undefined, workspaceAgentContextSync()),
     readChatModeOverlay(currentMode),
   );
 

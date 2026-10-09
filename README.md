@@ -301,13 +301,19 @@ muxpad agent new --name='vat rules' "audit the eu-vat rule table for gaps"
 # Same verb, no code involved
 muxpad agent new --name='returns quotes' "compare the two returns quotes on total cost"
 
-# Read, search and post in Slack — always as you, 🤖-prefixed, allowlisted
+# Read, search and post in Slack — always as you, 🤖-prefixed, off by default
 muxpad slack read '#eng' --since=2h
 muxpad slack post @andrey "the PR feedback"
-#   → refuses unless this chat's WORKSPACE is named in
-#     ~/.muxpad/slack-allowed-workspaces, so a personal chat can never message
-#     a work surface. The workspace is resolved server-side from the pane id,
-#     so neither `cd` nor MUXPAD_WORKSPACE_ID can talk it round.
+#   → refuses unless this chat's WORKSPACE has Slack switched on in the UI, so a
+#     personal chat can never read or message a work surface. The workspace is
+#     resolved server-side from the pane id, so neither `cd` nor
+#     MUXPAD_WORKSPACE_ID can talk it round — and the switch cannot be thrown
+#     from the CLI, because the CLI is what agents drive.
+
+# Per-workspace agent instructions (readable AND writable from a chat)
+muxpad workspace instructions <id>                  # print
+muxpad workspace instructions <id> - < notes.md     # replace
+muxpad workspace caps <id>                          # read-only; UI changes them
 
 # Put a finished thing on a URL and print the link
 muxpad publish ./report --name=market-teardown

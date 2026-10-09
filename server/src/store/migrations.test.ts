@@ -519,7 +519,36 @@ describe('migrations v21 — agent modes + the living sidebar', () => {
       .prepare('SELECT version FROM schema_version ORDER BY version DESC LIMIT 1')
       .get() as { version: number };
     expect(v.version).toBe(LATEST_SCHEMA_VERSION);
-    expect(LATEST_SCHEMA_VERSION).toBe(42);
+    expect(LATEST_SCHEMA_VERSION).toBe(43);
+  });
+
+  /**
+   * 43 — per-workspace instructions, and Slack as a capability.
+   *
+   * `slack` MUST default to 0 for rows that already exist. Every workspace on
+   * every machine predates this column, and a capability column that backfilled
+   * to "on" would hand the company Slack to the personal workspace of every
+   * install at once. The default is the whole security property.
+   */
+  it('adds workspace instructions and a Slack capability that defaults OFF', () => {
+    const db = new Database(':memory:');
+    runMigrations(db);
+    db.prepare(
+      "INSERT INTO workspaces (id, name, slug, position, created_at, updated_at) VALUES ('w1','W','w',0,0,0)",
+    ).run();
+    const row = db.prepare('SELECT instructions, slack FROM workspaces WHERE id = ?').get('w1') as {
+      instructions: string | null;
+      slack: number;
+    };
+    expect(row.instructions).toBeNull();
+    expect(row.slack).toBe(0);
+
+    // Idempotent — ALTER TABLE on an existing column throws, so re-running has
+    // to be guarded, and this is the assertion that it is.
+    runMigrations(db);
+    expect(
+      (db.prepare('SELECT slack FROM workspaces WHERE id = ?').get('w1') as { slack: number }).slack,
+    ).toBe(0);
   });
 });
 

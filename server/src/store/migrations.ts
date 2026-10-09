@@ -1358,6 +1358,37 @@ const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    // PER-WORKSPACE INSTRUCTIONS AND CAPABILITIES — `workspaces.instructions`,
+    // `workspaces.slack`.
+    //
+    // `readAgentInstructions(dataDir)` took a directory and nothing else, so
+    // every agent in every workspace received byte-identical text — including
+    // the Slack section. A Personal chat was told it had the company Slack and
+    // found out otherwise only when it tried to use it: a capability advertised
+    // to exactly the contexts that must never have it.
+    //
+    // `instructions` is free text appended for agents in this workspace.
+    // `slack` is a CAPABILITY, default 0, and it does two things at once: the
+    // CLI refuses when it is off, and the Slack section is omitted from the
+    // instructions entirely, so nothing is dangled in front of an agent that
+    // cannot use it.
+    //
+    // It replaces the slack-allowed-workspaces file. One place to look, and a
+    // row cannot disagree with itself the way a file and a UI can.
+    version: 43,
+    apply: (db) => {
+      const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === 'instructions')) {
+        db.exec('ALTER TABLE workspaces ADD COLUMN instructions TEXT');
+      }
+      if (!cols.some((c) => c.name === 'slack')) {
+        // DEFAULT 0 — every existing workspace starts with Slack off, which is
+        // the only safe migration for a capability gate.
+        db.exec('ALTER TABLE workspaces ADD COLUMN slack INTEGER NOT NULL DEFAULT 0');
+      }
+    },
+  },
 ];
 
 /** Highest version in the migration list. Exported so a test can assert the
