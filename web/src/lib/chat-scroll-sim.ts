@@ -255,6 +255,17 @@ export class SimScroller implements ScrollSurface {
     return this;
   }
 
+  /**
+   * The reader moving with no INPUT event to show for it — a scrollbar drag,
+   * a middle-click autoscroll, a click in the track. The position changes and
+   * nothing announces it.
+   */
+  scrollTopSilently(value: number): this {
+    this.assign(value);
+    this.pending++;
+    return this;
+  }
+
   readerScrollsBy(delta: number): this {
     return this.readerScrollsTo(this.scrollTop + delta);
   }

@@ -194,6 +194,23 @@ export class ChatScrollController {
    * belong at the end.
    */
   strandedRestore(hasMoreOlder: boolean): boolean {
+    // ── NOT BEFORE THERE IS A TRANSCRIPT TO BE ABSENT FROM ─────────────────
+    // The docstring above promised "only when the events have settled without
+    // it", and nothing enforced it. The caller runs on EVERY commit including
+    // the first, when the list is empty — so a restore was declared
+    // unreachable before a single row existed, converted to "open at the
+    // newest message", and the reader was pinned to the bottom a moment
+    // before the row they wanted rendered.
+    //
+    // Measured on a reload of a real chat: the remembered row came back as
+    // row 15 of 29, `caughtUp: false` in the record, and the reader was at the
+    // very bottom. The restore had not failed to find it — it had given up
+    // before looking.
+    //
+    // An empty list is not evidence of absence. One rendered row is enough to
+    // make the question meaningful, because the opening tail arrives in one
+    // commit.
+    if (this.surface.anchorHere() === null) return false;
     return restoreUnreachable(this.state, { rowLoaded: this.rowLoaded(), hasMoreOlder });
   }
 
@@ -269,9 +286,7 @@ export class ChatScrollController {
       this.sawTop !== null &&
       before.scrollTop < this.sawTop &&
       before.scrollTop >= before.scrollHeight - before.clientHeight;
-    const intentPx = this.surface.takeReaderIntent();
-    const readerMoved =
-      reconcileReader && this.state.placed && Math.abs(intentPx) > 1 && !clampedShrink;
+    const fromInput = this.surface.takeReaderIntent();
     /**
      * How far the document moved UNDER the reader, which is knowable on every
      * engine because it is a fact about content rather than about scrolling:
@@ -285,6 +300,28 @@ export class ChatScrollController {
       oldBox && this.wasDocumentTop !== null
         ? oldBox.top + before.scrollTop - this.wasDocumentTop
         : 0;
+    /**
+     * ── AND THE INPUT IS NOT THE ONLY WAY TO SCROLL ──────────────────────
+     * Dragging the SCROLLBAR fires no wheel, no touch and no key — and nor
+     * does a middle-click autoscroll or a click in the scrollbar track. An
+     * input-only rule drops all of them, which the first version of this fix
+     * did: a probe that moved `scrollTop` directly, the way a scrollbar drag
+     * does, recorded no position at all.
+     *
+     * The rule it replaced was not wrong, it was INCOMPLETE: when nothing
+     * arrived above the reader there is nothing for the engine to compensate,
+     * so any movement must be theirs and plain arithmetic settles it. It only
+     * failed when a prepend landed in the same frame — which is exactly the
+     * case the input signal answers.
+     *
+     * So: believe the input when there is some, and fall back to the
+     * arithmetic when the document stood still. Each covers the other's gap.
+     */
+    const stillDocument = Math.abs(shift) <= 1;
+    const fromGeometry = this.sawTop === null ? 0 : before.scrollTop - this.sawTop;
+    const intentPx = Math.abs(fromInput) > 1 ? fromInput : stillDocument ? fromGeometry : 0;
+    const readerMoved =
+      reconcileReader && this.state.placed && Math.abs(intentPx) > 1 && !clampedShrink;
 
     // We have looked. Everything below is about what we found; this is true
     // either way, including when the answer is "we do not know where the reader
