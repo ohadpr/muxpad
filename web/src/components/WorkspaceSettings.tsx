@@ -121,7 +121,7 @@ export function WorkspaceSettings({ workspace, onClose }: WorkspaceSettingsProps
           <span className="ws-settings__swatch" aria-hidden="true" />
           <span className="ws-settings__title">
             {workspace.name}
-            <small>workspace settings</small>
+            <small>workspace</small>
           </span>
           <span className="ws-settings__state" data-state={saved}>
             {saved === 'saving' ? 'Saving…' : saved === 'saved' ? 'Saved' : ''}
@@ -134,15 +134,19 @@ export function WorkspaceSettings({ workspace, onClose }: WorkspaceSettingsProps
         <div className="ws-settings__body">
           <section className="ws-settings__row">
             <div className="ws-settings__rh">
-              <h3>Instructions for agents here</h3>
+              <h3>Instructions</h3>
               <span className="ws-settings__hint">
                 {workspace.tab_count} {workspace.tab_count === 1 ? 'chat' : 'chats'}
               </span>
             </div>
+            {/* ONE SENTENCE. This read as three sentences of documentation —
+                where it is added, which file it is the other half of, when it
+                is picked up — and a settings panel is not where somebody reads
+                documentation. What they need before typing is: who sees this,
+                and when. The rest is in the preview at the bottom, which shows
+                the actual thing rather than describing it. */}
             <p className="ws-settings__desc">
-              Added after muxpad's own instructions, for every agent in this workspace, on every
-              backend. The per-workspace half of <code>~/.muxpad/agent-notes.md</code>. Picked up
-              when a pane launches, so an already-running agent keeps what it started with.
+              Given to every agent in this workspace, from the moment it starts.
             </p>
             <textarea
               spellCheck={false}
@@ -161,9 +165,7 @@ export function WorkspaceSettings({ workspace, onClose }: WorkspaceSettingsProps
               <h3>Capabilities</h3>
             </div>
             <p className="ws-settings__desc">
-              Off everywhere until switched on here. A capability that is off is not merely refused
-              — <b>it is not mentioned in the instructions at all</b>, so an agent is never told
-              about something it cannot use.
+              Off until you turn them on. An agent is never told about one it does not have.
             </p>
             <button
               type="button"
@@ -173,11 +175,13 @@ export function WorkspaceSettings({ workspace, onClose }: WorkspaceSettingsProps
               aria-pressed={slack}
             >
               <span className="ws-settings__track" aria-hidden="true" />
-              <span className="ws-settings__tlabel">Slack — read, search and post</span>
+              <span className="ws-settings__tlabel">
+                Slack
+                <small>read, search and post</small>
+              </span>
             </button>
             <p className="ws-settings__locked">
-              Changeable <b>here only</b>. The CLI cannot throw this switch, because the CLI is what
-              agents drive — and an agent that can grant itself Slack makes the guard decoration.
+              Only you can change this, and only from here — an agent cannot grant itself Slack.
             </p>
           </section>
 
@@ -191,7 +195,7 @@ export function WorkspaceSettings({ workspace, onClose }: WorkspaceSettingsProps
               <span className="ws-settings__car" data-open={previewOpen ? 'true' : undefined}>
                 ▸
               </span>
-              what an agent launched here is handed
+              Preview what agents are told
             </button>
             {previewOpen && <pre className="ws-settings__pv">{preview ?? 'loading…'}</pre>}
           </section>
