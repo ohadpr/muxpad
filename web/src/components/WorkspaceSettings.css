@@ -123,25 +123,18 @@
   padding-bottom: 0;
 }
 
-.ws-settings__rh {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.ws-settings__rh h3 {
+.ws-settings__row h3 {
   margin: 0;
-  font-size: 13.5px;
+  font-size: 13px;
+  font-weight: 600;
 }
 
-.ws-settings__hint {
-  margin-left: auto;
-  font-size: 12px;
-  color: var(--fg-faint, #565f89);
-}
-
+/* UNDER the control, not above it. A one-line gloss above a textarea is read
+   as a label and delays the box; below, it is read as a footnote and the box
+   is the first thing the eye lands on — which is right, because typing in it
+   is the only reason anyone opened this. */
 .ws-settings__desc {
-  margin: 5px 0 0;
+  margin: 7px 0 0;
   font-size: 12.5px;
   line-height: 1.55;
   color: var(--fg-dim, #a9b1d6);
@@ -230,22 +223,6 @@
 .ws-settings__tlabel small {
   font-size: 11.5px;
   color: var(--fg-faint, #565f89);
-}
-
-.ws-settings__locked {
-  margin-top: 10px;
-  padding: 9px 11px;
-  border-radius: 9px;
-  font-size: 12px;
-  line-height: 1.5;
-  /* A quiet inset with one accent rule down its edge, not a yellow warning
-     card: this is a statement about where the control lives, not an alarm —
-     and muxpad has no warning palette to borrow, so inventing `--warn-bg`
-     meant inventing a colour that followed no theme. */
-  background: var(--bg, #1a1b26);
-  border: 1px solid var(--border, #292e42);
-  border-left: 2px solid var(--accent, #7aa2f7);
-  color: var(--fg-dim, #a9b1d6);
 }
 
 .ws-settings__pvh {
