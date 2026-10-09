@@ -50,20 +50,30 @@ describe('the Slack CLI reads no credential', () => {
   });
 });
 
-describe('the Slack CLI makes no claim about which pane it is', () => {
-  const section = CODE.slice(CODE.indexOf('slack_pid()'), CODE.indexOf('cmd_slack() {'));
-
-  it('sends its own pid and nothing else identifying', () => {
-    expect(section).toContain('printf \'%s\' "$$"');
-    expect(section).not.toContain('MUXPAD_PANE_ID');
-    expect(section).not.toContain('MUXPAD_WORKSPACE_ID');
-  });
-
-  it('every verb sends one', () => {
+describe('the Slack CLI cannot simply assert which pane it is', () => {
+  it('presents the key beside the id, never the id alone', () => {
+    // The id is a value any caller can set — that was the hole. The key is
+    // one the server minted for THIS pane and put in its spawn environment.
     for (const verb of ['read', 'search', 'post', 'unpost', 'channels']) {
       const body = CODE.slice(CODE.indexOf(`cmd_slack_${verb}() {`));
-      expect(body.slice(0, body.indexOf('\n}\n')), verb).toContain('slack_pid');
+      const fn = body.slice(0, body.indexOf('\n}\n'));
+      expect(fn, verb).toContain('MUXPAD_PANE_KEY');
     }
+  });
+
+  it('fails closed, with instructions, when the pane has no key', () => {
+    // Panes older than the feature have none and cannot be given one while
+    // running. "Restart this pane" is the only useful thing to say.
+    const body = CODE.slice(CODE.indexOf('slack_ident() {'));
+    const fn = body.slice(0, body.indexOf('\n}\n'));
+    expect(fn).toContain('MUXPAD_PANE_KEY');
+    expect(fn).toMatch(/exit 1/);
+    expect(SRC).toMatch(/Restart this pane, or open a new/);
+  });
+
+  it('never sends the workspace id — that is the caller grading its own paper', () => {
+    const section = CODE.slice(CODE.indexOf('slack_ident()'), CODE.indexOf('cmd_slack() {'));
+    expect(section).not.toContain('MUXPAD_WORKSPACE_ID');
   });
 });
 

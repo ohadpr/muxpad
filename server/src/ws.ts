@@ -38,6 +38,7 @@ import {
 import { TranscriptTail, identityNormalize, muxpadLocate } from './chat/TranscriptReader.js';
 import { agentPaneHasMessages } from './chat/has-messages.js';
 import type { EventBus } from './events.js';
+import { withPaneKey } from './pane-key.js';
 import { clearProvisionError, provisionError } from './pane-provision.js';
 import { hasProjectContext } from './project-root.js';
 import { type PtydCache, decoratePane, decorateTab } from './ptyd-cache.js';
@@ -915,7 +916,7 @@ export function attachWsServer(deps: {
         shell: fresh.shell ?? process.env.SHELL ?? '/bin/zsh',
         startup_cmd: fresh.startup_cmd,
         cwd: safeCwd(fresh.cwd),
-        env: fresh.env,
+        env: withPaneKey(fresh.env, fresh.id),
         tab_id: fresh.tab_id,
         ...(workspaceId !== undefined ? { workspace_id: workspaceId } : {}),
       });
@@ -2522,7 +2523,7 @@ export function attachWsServer(deps: {
           shell: pane.shell ?? process.env.SHELL ?? '/bin/zsh',
           startup_cmd: pane.startup_cmd,
           cwd: safeCwd(pane.cwd),
-          env: pane.env,
+          env: withPaneKey(pane.env, pane.id),
           tab_id: pane.tab_id,
           ...(workspaceId !== undefined ? { workspace_id: workspaceId } : {}),
         })

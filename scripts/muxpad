@@ -783,19 +783,39 @@ json_string() {
 #     was pleased with itself for not trusting $MUXPAD_WORKSPACE_ID and then
 #     trusted the thing it was resolving it with.
 #
-# Now the server is told our PID and nothing else about who we are. It walks
-# the process ancestry to find which pane we are really running in, and a
-# process cannot choose its parent.
+# Now we present the pane id AND the key the server minted for that pane and
+# handed over when it was spawned. Naming somebody else's pane does not get
+# past the key. (An earlier version walked the process ancestry instead, which
+# could not be forged at all — but it needed pane pids, which only ptyd knows,
+# and a ptyd protocol change restarts the daemon that owns every terminal on
+# this machine. Too expensive for the threat, which is a helpful agent rather
+# than an adversary.)
 #
 # ONE IDENTITY: every message goes out as YOU, prefixed 🤖 by the server so the
 # reader knows a machine composed it. There is no bot token anywhere any more —
 # a bot DM lands in the recipient's separate conversation with "muxpad", which
 # you cannot see and, with the ts lost, cannot delete.
 
-# Our own pid, which is the only thing the server needs from us. `$$` in a
-# subshell is still the SCRIPT's pid in bash/zsh, which is what we want: it is
-# a real process in the pane's ancestry.
-slack_pid() { printf '%s' "$$"; }
+# WHO WE ARE, and we cannot simply assert it. `$MUXPAD_PANE_ID` is a value any
+# caller can set — that was the hole: a personal chat naming a work pane's id
+# walked straight through the workspace check. Beside it the server puts
+# `$MUXPAD_PANE_KEY`, minted for THIS pane and handed over when it was
+# spawned, so the id is only believed when the key agrees with it.
+#
+# A pane started before muxpad issued keys has none, and nothing can put one
+# into a running process. It fails closed and the server's refusal says to
+# restart the pane.
+slack_ident() {
+  [ -n "${MUXPAD_PANE_ID:-}" ] && [ -n "${MUXPAD_PANE_KEY:-}" ] && return 0
+  cat >&2 <<'EOF'
+muxpad: slack: this pane cannot prove which workspace it is in.
+
+Panes started before muxpad issued per-pane keys have none, and one cannot be
+added to a process that is already running. Restart this pane, or open a new
+one, and try again.
+EOF
+  exit 1
+}
 
 # The server speaks HTTP; its refusals carry a message and sometimes a detail,
 # and both are worth printing — one says what happened, the other says what to
@@ -828,6 +848,7 @@ slack_call() {
 slack_require_pane() {
   [ -n "${MUXPAD_API_URL:-}" ] || {
     echo 'muxpad: slack: works only from inside a muxpad pane' >&2; exit 1; }
+  slack_ident
 }
 
 # "2h" / "90m" / "3d" → an epoch second, for --since.
@@ -850,7 +871,7 @@ cmd_slack_read() {
   [ -n "$ref" ] || { echo 'usage: muxpad slack read <#channel|@user|ID> [--since=2h] [--limit=50]' >&2; exit 1; }
   reset_flags since limit
   parse_flags since limit -- "$@"
-  local q="pid=$(slack_pid)&ref=$(printf '%s' "$ref" | jq -sRr @uri)&limit=${FLAG_limit:-50}"
+  local q="pane=$MUXPAD_PANE_ID&key=$MUXPAD_PANE_KEY&ref=$(printf '%s' "$ref" | jq -sRr @uri)&limit=${FLAG_limit:-50}"
   [ -n "${FLAG_since:-}" ] && q="$q&oldest=$(slack_since_epoch "$FLAG_since")"
   slack_call GET "/api/slack/read?$q" \
     | jq -r '.messages[] | "\(.ts | tonumber | strftime("%m-%d %H:%M"))  \(.who)  \(.text | gsub("\n"; " ⏎ "))"'
@@ -862,7 +883,7 @@ cmd_slack_search() {
   [ -n "$query" ] || { echo 'usage: muxpad slack search "<query>" [--limit=20]' >&2; exit 1; }
   reset_flags limit
   parse_flags limit -- "$@"
-  local q="pid=$(slack_pid)&q=$(printf '%s' "$query" | jq -sRr @uri)&limit=${FLAG_limit:-20}"
+  local q="pane=$MUXPAD_PANE_ID&key=$MUXPAD_PANE_KEY&q=$(printf '%s' "$query" | jq -sRr @uri)&limit=${FLAG_limit:-20}"
   slack_call GET "/api/slack/search?$q" \
     | jq -r '.messages[] | "\(.ts | tonumber | strftime("%m-%d %H:%M"))  #\(.channel // "?")  \(.who)  \(.text | gsub("\n"; " ⏎ "))"'
 }
@@ -876,8 +897,8 @@ cmd_slack_post() {
   # has to remember is a disclosure that gets forgotten, and this script is no
   # longer the only thing that can post.
   local body out
-  body="$(jq -nc --argjson pid "$(slack_pid)" --arg ref "$ref" --arg text "$text" \
-    '{pid: $pid, ref: $ref, text: $text}')"
+  body="$(jq -nc --arg pane "$MUXPAD_PANE_ID" --arg key "$MUXPAD_PANE_KEY" --arg ref "$ref" --arg text "$text" \
+    '{pane: $pane, key: $key, ref: $ref, text: $text}')"
   out="$(slack_call POST /api/slack/post "$body")"
   local id ts
   id="$(printf '%s' "$out" | jq -r '.channel')"
@@ -892,14 +913,14 @@ cmd_slack_unpost() {
   [ -n "$id" ] && [ -n "$ts" ] || {
     echo 'usage: muxpad slack unpost <channelID> <ts>' >&2; exit 1; }
   slack_call POST /api/slack/unpost \
-    "$(jq -nc --argjson pid "$(slack_pid)" --arg c "$id" --arg ts "$ts" \
-      '{pid: $pid, channel: $c, ts: $ts}')" >/dev/null
+    "$(jq -nc --arg pane "$MUXPAD_PANE_ID" --arg key "$MUXPAD_PANE_KEY" --arg c "$id" --arg ts "$ts" \
+      '{pane: $pane, key: $key, channel: $c, ts: $ts}')" >/dev/null
   echo "deleted your message ${ts} in ${id}"
 }
 
 cmd_slack_channels() {
   slack_require_pane
-  slack_call GET "/api/slack/channels?pid=$(slack_pid)" \
+  slack_call GET "/api/slack/channels?pane=$MUXPAD_PANE_ID&key=$MUXPAD_PANE_KEY" \
     | jq -r '.channels[] | "\(.id)  \(if .private then "🔒" else "# " end) \(.name)"'
 }
 

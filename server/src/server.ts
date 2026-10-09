@@ -11,6 +11,7 @@ import { browserHostEntry } from './browser/hostEntry.js';
 import type { CronScheduler } from './cron/CronScheduler.js';
 import { EventBus } from './events.js';
 import { type Funnel, localFunnel } from './funnel.js';
+import { initPaneKeys } from './pane-key.js';
 import type { PtydCache } from './ptyd-cache.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
 import type { Presence, PushService } from './push.js';
@@ -198,6 +199,9 @@ export function createApp(deps: AppDeps): Hono {
   // `muxpad say` — the key that tells an invocation from a mention of one.
   // Set before any transcript is read, because a reader with no key leaves the
   // marker as raw tool output rather than guessing.
+  // Per-pane keys, so a `muxpad` invocation can prove which pane it is in
+  // without ptyd being asked anything — see pane-key.ts.
+  initPaneKeys(resolved.dataDir);
   const theSayKey = readOrCreateSayKey(resolved.dataDir);
   setSayKey(theSayKey);
   app.get('/api/say/key', (c) => c.json({ key: theSayKey }));
@@ -205,10 +209,7 @@ export function createApp(deps: AppDeps): Hono {
   // ONE explicit migration, here and nowhere else — a read path that deletes
   // a file is how the author's own Slack token got destroyed by a unit test.
   migrateLegacySlackEnv(resolved.dataDir);
-  app.route(
-    '/api/slack',
-    slackRoutes({ db: resolved.db, ptyd: resolved.ptyd, dataDir: resolved.dataDir }),
-  );
+  app.route('/api/slack', slackRoutes({ db: resolved.db, dataDir: resolved.dataDir }));
   app.route('/api/tabs', tabsRoutes(resolved));
   app.route('/api/tabs', panesTabScopedRoutes(resolved));
   // Chat cards — named persistent blocks pinned in a conversation. Tab-scoped
