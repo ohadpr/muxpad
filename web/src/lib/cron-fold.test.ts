@@ -77,10 +77,50 @@ describe('foldCronTurns', () => {
     expect(hidden(out, 'closed')).toBe(true);
   });
 
-  it('leaves an UNFOLDED fire completely alone', () => {
+  it('leaves an UNFOLDED fire’s REAL prose alone', () => {
     // Its author did not ask for this; its prompt is visible and so is its work.
-    const out = foldCronTurns([...fire(false), tool(), prose('closed')]);
-    expect(hidden(out, 'closed')).toBe(false);
+    // The stand-in used to be the word "closed", which is now read as an
+    // acknowledgement (see below) — so this was asserting the rule it meant to
+    // with a word that no longer carries any.
+    const out = foldCronTurns([...fire(false), tool(), prose('NET closed at $318, down 2%.')]);
+    expect(hidden(out, 'NET closed at $318, down 2%.')).toBe(false);
+  });
+
+  /**
+   * AN ACKNOWLEDGEMENT IS NOT A REPLY, EVEN UNFOLDED.
+   *
+   * "The investing window experienced something related to the cron making its
+   * way to the main chat window." `nw-open` is declared `fold=false`, so the
+   * fold was working exactly as specified; what it let through was
+   *
+   *     ⏱ nw-open 07:03   › 3 actions prompt · Bash · PushNotification   ok
+   *
+   * three rows whose total content is that a schedule ran. The job's real
+   * output was a push; "ok" is the word its own prompt asked for. Three of the
+   * four crons in that chat are written that way, so `--fold` on each of them
+   * fixes today and not tomorrow.
+   */
+  it('demotes a bare acknowledgement from an unfolded fire', () => {
+    for (const ack of ['ok', 'OK.', 'done', 'closed', 'nothing to report', 'net: no']) {
+      const out = foldCronTurns([...fire(false), tool(), prose(ack)]);
+      expect(hidden(out, ack), ack).toBe(true);
+    }
+  });
+
+  it('does not eat a SHORT message that says something', () => {
+    // The tempting rule was "short and wordless". "NET $318" is two words and
+    // is the entire point of the message that contains it.
+    for (const real of ['NET $318', 'no fills today — spread widened', 'closed early (half day)']) {
+      const out = foldCronTurns([...fire(false), tool(), prose(real)]);
+      expect(hidden(out, real), real).toBe(false);
+    }
+  });
+
+  it('never touches the same word from a person’s turn', () => {
+    // "ok" typed at a human is a reply to a human. The rule applies only
+    // inside a fire, which is why the fire-tracking is separate from the fold.
+    const out = foldCronTurns([user('ship it'), prose('ok')]);
+    expect(hidden(out, 'ok')).toBe(false);
   });
 
   it('stops at the next human turn', () => {
