@@ -271,15 +271,69 @@ export function applyChatVoice(events: readonly ChatEvent[], opts: ChatVoiceOpts
  * adjacency (`notice` then its bubble) that identifies a fire at all.
  */
 
+/**
+ * AN ACKNOWLEDGEMENT IS NOT A REPLY, EVEN FROM AN UNFOLDED CRON.
+ *
+ * Reported as the cron "making its way to the main chat window". The cause was
+ * not a bug in the fold — `nw-open` is declared `fold=false`, so muxpad showed
+ * its turn, faithfully. What it showed was:
+ *
+ *     ⏱ nw-open 07:03      › 3 actions  prompt · Bash · PushNotification      ok
+ *
+ * Three rows whose total information is that a schedule ran. The job's real
+ * output was a push notification; the chat reply is the word the PROMPT asked
+ * for — "Reply with nothing but ok". Three of the four crons in that chat are
+ * written this way, so it is a pattern, not one misconfigured job, and telling
+ * the user to add `--fold` to each of them fixes today and not tomorrow.
+ *
+ * AN EXPLICIT LIST, NOT A HEURISTIC. Short-and-wordless was the tempting rule
+ * and it is the wrong one: "NET $318" is two words and is the entire point of
+ * the message that contains it. These are the tokens a prompt asks for when it
+ * wants the agent to say nothing — they carry no information that the chip does
+ * not already carry, and anything outside the list is treated as prose. Being
+ * able to read the list and know exactly what it eats is worth more here than
+ * catching every phrasing.
+ *
+ * This only ever applies INSIDE a cron fire. The same word typed in answer to a
+ * person is a reply to a person.
+ */
+const CRON_ACKS = new Set([
+  'ok',
+  'okay',
+  'done',
+  'none',
+  'nothing',
+  'noop',
+  'no',
+  'n/a',
+  'closed',
+  'nothing to report',
+  'no change',
+]);
+
+function isCronAcknowledgement(text: string): boolean {
+  const t = text
+    .trim()
+    .toLowerCase()
+    .replace(/[.!…]+$/, '');
+  if (CRON_ACKS.has(t)) return true;
+  // `net-watch` answers "net: no" — a named job reporting its own nothing.
+  const named = t.match(/^[\w-]{1,16}:\s*(.+)$/);
+  return named ? CRON_ACKS.has(named[1] as string) : false;
+}
+
 export function foldCronTurns(events: readonly ChatEvent[]): ChatEvent[] {
   let inFold = false;
+  let inFire = false;
   let changed = false;
   const out = events.map((e, i) => {
     if (e.kind === 'notice') {
       // The flag rides on the notice now — see NoticeEvent.fold. It used to be
       // read off the SHAPE of the next event, which stopped being able to tell
       // the two apart the moment every fire's prompt became folded.
-      inFold = e.kind === 'notice' && e.variant === 'cron' && e.fold === true;
+      const isFire = e.variant === 'cron';
+      inFold = isFire && e.fold === true;
+      inFire = isFire;
       return e;
     }
     // Any other turn start ends the fold: a person typing, a different
@@ -287,10 +341,15 @@ export function foldCronTurns(events: readonly ChatEvent[]): ChatEvent[] {
     if (e.kind === 'user') {
       const prev = events[i - 1];
       const belongsToFire = prev?.kind === 'notice' && prev.variant === 'cron';
-      if (!belongsToFire) inFold = false;
+      if (!belongsToFire) {
+        inFold = false;
+        inFire = false;
+      }
       return e;
     }
-    if (!inFold || e.kind !== 'assistant' || e.voice === 'reply') return e;
+    if (e.kind !== 'assistant' || e.voice === 'reply') return e;
+    // Folded: the whole turn is plumbing. Unfolded: only an acknowledgement is.
+    if (!inFold && !(inFire && isCronAcknowledgement(e.text ?? ''))) return e;
     // `reply` is exempt above: a cron that deliberately called the reply tool
     // was told to say something, and folding that would hide the one part the
     // author meant you to read.
