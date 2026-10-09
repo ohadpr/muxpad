@@ -1,10 +1,26 @@
 /*
  * The workspace settings panel.
  *
- * Deliberately NOT the big take-the-wheel modal: this is a short form, so it
- * is sized to its content and scrolls only when the preview is open. Everything
- * reads off the chat theme variables so it follows dark mode without a second
- * palette.
+ * Deliberately NOT the big take-the-wheel modal: this is a short form, so it is
+ * sized to its content and scrolls only when the preview is open.
+ *
+ * ── IT READS THE APP'S TOKENS, NOT THE CHAT'S ───────────────────────────────
+ * The first version was written against `--chat-panel` / `--chat-dim` /
+ * `--chat-border`, copied from BrowserModal. Those are declared ON `.chat-pane`
+ * and this panel is mounted from the NAV TREE, so not one of them resolved —
+ * every declaration silently fell through to its fallback, and the fallbacks
+ * were light-theme literals. The result on a dark theme was a white card with
+ * invisible headings, which is what "css is all over the place" was looking at.
+ *
+ * So: the app-level tokens from styles.css (`--bg-chrome`, `--fg`, `--border`,
+ * `--status-ready`, …), which are declared on :root for every theme and are
+ * therefore in scope wherever this mounts. Fallbacks are the DARK palette, not
+ * a light one, so the failure mode if a token ever goes missing is a panel that
+ * looks slightly off rather than one that cannot be read.
+ *
+ * And `color` is set on the panel. Nothing else here did, so the headings took
+ * the app's light ink onto that white card and vanished — a card that sets a
+ * background without setting an ink is only half a surface.
  */
 
 .ws-settings {
@@ -27,8 +43,10 @@
   max-height: 88vh;
   display: flex;
   flex-direction: column;
-  background: var(--chat-panel, #fff);
-  border: 1px solid var(--chat-border-strong, #c2c2d0);
+  background: var(--bg-chrome, #16161e);
+  color: var(--fg, #c0caf5);
+  font-family: var(--ui-font, system-ui, sans-serif);
+  border: 1px solid var(--border-strong, #3b4261);
   border-radius: 14px;
   overflow: hidden;
   box-shadow: 0 22px 60px rgba(0, 0, 0, 0.45);
@@ -40,15 +58,15 @@
   align-items: center;
   gap: 10px;
   padding: 11px 12px 11px 15px;
-  background: var(--bg-elev, #f4f4f8);
-  border-bottom: 1px solid var(--chat-border, #d6d6e0);
+  background: var(--bg-tabbar, #060611);
+  border-bottom: 1px solid var(--border, #292e42);
 }
 
 .ws-settings__swatch {
   width: 9px;
   height: 9px;
   border-radius: 3px;
-  background: var(--accent, #6c4fd8);
+  background: var(--accent, #7aa2f7);
 }
 
 .ws-settings__title {
@@ -60,7 +78,7 @@
   margin-left: 7px;
   font-size: 12px;
   font-weight: 400;
-  color: var(--chat-faint, #8b89a3);
+  color: var(--fg-faint, #565f89);
 }
 
 /* Reserves its width so the bar does not twitch when "Saving…" appears. */
@@ -69,12 +87,12 @@
   min-width: 56px;
   text-align: right;
   font-size: 11.5px;
-  color: var(--chat-faint, #8b89a3);
+  color: var(--fg-faint, #565f89);
   transition: opacity 0.15s;
 }
 
 .ws-settings__state[data-state="saved"] {
-  color: var(--good, #18794e);
+  color: var(--status-ready, #49c07d);
 }
 
 .ws-settings__close {
@@ -83,7 +101,7 @@
   cursor: pointer;
   padding: 2px 4px;
   font-size: 13px;
-  color: var(--chat-dim, #6b6b7a);
+  color: var(--fg-dim, #a9b1d6);
 }
 
 .ws-settings__body {
@@ -93,7 +111,7 @@
 
 .ws-settings__row {
   padding: 14px 0;
-  border-bottom: 1px solid var(--chat-border, #d6d6e0);
+  border-bottom: 1px solid var(--border, #292e42);
 }
 
 .ws-settings__row:first-child {
@@ -119,20 +137,20 @@
 .ws-settings__hint {
   margin-left: auto;
   font-size: 12px;
-  color: var(--chat-faint, #8b89a3);
+  color: var(--fg-faint, #565f89);
 }
 
 .ws-settings__desc {
   margin: 5px 0 0;
   font-size: 12.5px;
   line-height: 1.55;
-  color: var(--chat-dim, #6b6b7a);
+  color: var(--fg-dim, #a9b1d6);
   max-width: 70ch;
 }
 
 .ws-settings__desc code {
   font-size: 12px;
-  font-family: var(--mono, ui-monospace, Menlo, monospace);
+  font-family: var(--chrome-font, ui-monospace, Menlo, monospace);
 }
 
 .ws-settings textarea {
@@ -141,16 +159,16 @@
   min-height: 92px;
   resize: vertical;
   padding: 10px 12px;
-  border: 1px solid var(--chat-border, #d6d6e0);
+  border: 1px solid var(--border, #292e42);
   border-radius: 9px;
-  background: var(--bg-elev, #fbfaff);
+  background: var(--bg-elev, #1f2335);
   color: inherit;
-  font: 12.5px / 1.6 var(--mono, ui-monospace, Menlo, monospace);
+  font: 12.5px / 1.6 var(--chrome-font, ui-monospace, Menlo, monospace);
 }
 
 .ws-settings textarea:focus {
   outline: 0;
-  border-color: var(--accent, #6c4fd8);
+  border-color: var(--accent, #7aa2f7);
 }
 
 .ws-settings__toggle {
@@ -169,7 +187,7 @@
   width: 38px;
   height: 22px;
   border-radius: 999px;
-  background: var(--chat-border-strong, #d6d3e8);
+  background: var(--border-strong, #3b4261);
   position: relative;
   transition: background 0.15s;
 }
@@ -182,21 +200,36 @@
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  background: var(--fg, #c0caf5);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
   transition: transform 0.15s;
 }
 
 .ws-settings__toggle[data-on] .ws-settings__track {
-  background: var(--good, #18794e);
+  background: var(--status-ready, #49c07d);
 }
 
+/* On, the knob takes the page background rather than the ink: against a light
+   green track it reads as a hole in the track instead of a second bright
+   object sitting on top of one. */
 .ws-settings__toggle[data-on] .ws-settings__track::after {
+  background: var(--bg, #1a1b26);
   transform: translateX(16px);
 }
 
 .ws-settings__tlabel {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
   font-size: 13px;
+}
+
+/* The capability is "Slack"; what it lets an agent do is a gloss, not part of
+   the name. Written as one string it read as a four-item label beside a
+   two-state switch. */
+.ws-settings__tlabel small {
+  font-size: 11.5px;
+  color: var(--fg-faint, #565f89);
 }
 
 .ws-settings__locked {
@@ -205,9 +238,14 @@
   border-radius: 9px;
   font-size: 12px;
   line-height: 1.5;
-  background: var(--warn-bg, #f7f2e4);
-  border: 1px solid var(--warn-border, #e6d9b4);
-  color: var(--warn-fg, #6b5618);
+  /* A quiet inset with one accent rule down its edge, not a yellow warning
+     card: this is a statement about where the control lives, not an alarm —
+     and muxpad has no warning palette to borrow, so inventing `--warn-bg`
+     meant inventing a colour that followed no theme. */
+  background: var(--bg, #1a1b26);
+  border: 1px solid var(--border, #292e42);
+  border-left: 2px solid var(--accent, #7aa2f7);
+  color: var(--fg-dim, #a9b1d6);
 }
 
 .ws-settings__pvh {
@@ -219,8 +257,8 @@
   background: none;
   padding: 0;
   cursor: pointer;
-  font: 11.5px var(--mono, ui-monospace, Menlo, monospace);
-  color: var(--chat-faint, #8b89a3);
+  font-size: 12px;
+  color: var(--fg-faint, #565f89);
 }
 
 .ws-settings__car {
@@ -234,11 +272,11 @@
 .ws-settings__pv {
   margin: 10px 0 0;
   padding: 11px;
-  border: 1px solid var(--chat-border, #d6d6e0);
+  border: 1px solid var(--border, #292e42);
   border-radius: 9px;
-  background: var(--bg-elev, #fbfaff);
-  color: var(--chat-dim, #6b6b7a);
-  font: 11.5px / 1.6 var(--mono, ui-monospace, Menlo, monospace);
+  background: var(--bg-elev, #1f2335);
+  color: var(--fg-dim, #a9b1d6);
+  font: 11.5px / 1.6 var(--chrome-font, ui-monospace, Menlo, monospace);
   white-space: pre-wrap;
   max-height: 260px;
   overflow: auto;
@@ -247,7 +285,7 @@
 .ws-settings__err {
   margin: 12px 0 0;
   font-size: 12.5px;
-  color: var(--bad, #c0392b);
+  color: var(--danger, #f7768e);
 }
 
 @media (prefers-reduced-motion: reduce) {
