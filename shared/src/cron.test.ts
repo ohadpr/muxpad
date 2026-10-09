@@ -98,22 +98,31 @@ describe('rendering a fire in the transcript', () => {
   });
 });
 
-describe('a FOLDED cron fire', () => {
-  const marker = { id: 'c1', name: 'nw-close', at: 123, missed: 0, fold: true };
+describe('a SPEAKING cron fire', () => {
+  const marker = { id: 'c1', name: 'nw-close', at: 123, missed: 0, speak: true };
 
   it('round-trips the flag', () => {
     const text = renderCronMarker(marker, 'run the script and write the card');
-    expect(text).toContain('fold="1"');
+    expect(text).toContain('speak="1"');
     const parsed = parseCronMarker(text);
-    expect(parsed?.marker.fold).toBe(true);
+    expect(parsed?.marker.speak).toBe(true);
     expect(parsed?.body.trim()).toBe('run the script and write the card');
   });
 
-  it('is absent — not false — on an ordinary fire', () => {
-    // The attribute is omitted rather than written `fold="0"`, so an older
-    // reader sees exactly what it saw before.
+  it('is absent — not false — on an ordinary fire, which is the quiet one', () => {
+    // The attribute is omitted rather than written `speak="0"`. Ordinary now
+    // means SILENT: this replaced `fold`, which was the same switch the other
+    // way up and defaulted every schedule into speaking.
     const text = renderCronMarker({ id: 'c1', name: 'n', at: null, missed: 0 }, 'go');
-    expect(text).not.toContain('fold');
-    expect(parseCronMarker(text)?.marker.fold).toBeUndefined();
+    expect(text).not.toContain('speak');
+    expect(parseCronMarker(text)?.marker.speak).toBeUndefined();
+  });
+
+  it('ignores a pre-migration fire’s fold="1" rather than guessing', () => {
+    // A fire rendered before migration 44 carries the opposite flag with the
+    // opposite default. Reading it would mean deciding what an old row meant,
+    // and an old fire was almost certainly one nobody wanted to hear from.
+    const old = '<muxpad-cron id="c1" name="n" fold="1">\n-\n</muxpad-cron>\n\ngo';
+    expect(parseCronMarker(old)?.marker.speak).toBeUndefined();
   });
 });

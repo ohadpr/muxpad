@@ -34,9 +34,9 @@ afterEach(() => {
   document.body.innerHTML = '';
 });
 
-const fire = (fold: boolean) =>
+const fire = (speak: boolean) =>
   renderCronMarker(
-    { id: '01M4CECK8AMG2SBKSJEFF0MVYK', name: 'nw-hourly', at: 1791482627209, missed: 0, fold },
+    { id: '01M4CECK8AMG2SBKSJEFF0MVYK', name: 'nw-hourly', at: 1791482627209, missed: 0, speak },
     'Are the US markets open right now?',
   );
 
@@ -48,17 +48,19 @@ describe('a cron fire previewed before its transcript line lands', () => {
     expect(host.querySelector('.chat-queued-cron')?.textContent).toContain('nw-hourly');
   });
 
-  it('keeps a FOLDED fire quiet here too', () => {
+  it('shows no prompt, for either kind, because that is what will render', () => {
     // It would be odd for a message to be noisy in the preview and silent a
-    // second later, when the real row renders as a chip plus a closed fold.
-    const host = render(<QueuedText text={fire(true)} />);
-    expect(host.textContent).not.toContain('markets open');
-  });
-
-  it('shows an UNFOLDED fire its prompt, because that is what will render', () => {
-    const host = render(<QueuedText text={fire(false)} />);
-    expect(host.textContent).toContain('markets open');
-    expect(host.textContent).not.toContain('muxpad-cron');
+    // second later. EVERY fire's prompt folds now — it is an instruction a
+    // schedule injected, never something a person said — so the echo is the
+    // chip alone whatever the schedule declared. This used to branch on the
+    // flag, back when one flag answered both "hide the prompt" and "hide the
+    // reply"; `--speak` answers only the second.
+    for (const speaks of [true, false]) {
+      const host = render(<QueuedText text={fire(speaks)} />);
+      expect(host.textContent).not.toContain('markets open');
+      expect(host.textContent).not.toContain('muxpad-cron');
+      expect(host.querySelector('.chat-queued-cron')?.textContent).toContain('nw-hourly');
+    }
   });
 
   it('leaves an ordinary message completely alone', () => {

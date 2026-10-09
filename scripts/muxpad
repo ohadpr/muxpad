@@ -2923,13 +2923,14 @@ cmd_cron_new() {
   # Pre-strip the flags parse_flags can't take: BARE mode flags (it would eat
   # the next argument as their value) and hyphenated names (it evals
   # FLAG_<name>=, and `FLAG_on-context` is not a legal shell variable).
-  local a rest=() target='' pane_ref='' close_flag='' on_context='' max_open='' fold_flag='' card_name=''
+  local a rest=() target='' pane_ref='' close_flag='' on_context='' max_open='' fold_flag='' speak_flag='' card_name=''
   for a in "$@"; do
     case "$a" in
       --pane) target=pane ;;
       --pane=*) target=pane; pane_ref="${a#--pane=}" ;;
       --new-tab) target=new-tab ;;
       --silent|--fold) fold_flag=1 ;;
+      --speak) speak_flag=1 ;;
       --card=*) card_name="${1#*=}" ;;
       --no-close) close_flag=false ;;
       --close) close_flag=true ;;
@@ -3004,17 +3005,23 @@ USAGE
     case "$max_open" in (*[!0-9]*|'') echo "muxpad: --max-open must be a whole number" >&2; exit 1 ;; esac
     body+=",\"max_open\":$max_open"
   fi
-  # --silent demotes the fire's OUTPUT into the collapsed run. The injected
-  # PROMPT is folded for every fire now, flag or no flag — it is an instruction
-  # a schedule handed the agent, never something a person said — so this flag is
-  # only about what the agent then says back.
+  # ── A SCHEDULE'S TURN IS MACHINERY UNLESS IT SAYS OTHERWISE ──────────────
+  # --speak means the agent's REPLY is the deliverable: show it as prose. The
+  # default is silent, and that default is the point — every schedule here
+  # delivers through a card or a push notification and replies with whatever
+  # token its prompt asked for in place of an answer ("Reply with nothing but
+  # ok"), so the common case was three rows of nothing per fire.
   #
-  # `--fold` is the old spelling and still sets the same field. It is kept
-  # working rather than removed because crons already exist carrying it; the
-  # name was accurate when it meant "fold the prompt" and stopped being so when
-  # the prompt started folding unconditionally. Not --quiet: that is quiet_mins,
-  # a different thing entirely.
-  [ -n "$fold_flag" ] && body+=",\"fold\":true"
+  # Chat mode has always had this rule — a turn no human started is not a
+  # message — and it simply never ran in an agent-mode pane. The flag exists
+  # because agent mode has no `reply` tool, so a genuinely chatty cron there
+  # needs some way to say "this one is for you".
+  #
+  # --silent / --fold are the old spelling of the OPPOSITE default and are now
+  # no-ops: they asked for what you already get. Accepted rather than removed
+  # because scripts and crons already pass them.
+  [ -n "$speak_flag" ] && body+=",\"speak\":true"
+  : "${fold_flag:-}"
   # --card declares WHERE THE OUTPUT GOES, which is a different fact from where
   # the job runs. A fire that updated its card and said nothing renders nothing
   # in the conversation; the card's freshness rail is the liveness signal.
@@ -4071,18 +4078,22 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                      says (an error, a refusal) breaks the
                                      silence and brings the row back.
                                      This is the flag you want for a card
-                                     refresher; --silent only quietens it.
-  cron new … --silent                the agent's REPLY is plumbing too, so fold
-                                     it in with the tool calls. For a job whose
-                                     only real output is a card or a push — the
-                                     "closed" it says back is noise.
-                                     Do NOT use it on a job whose reply is the
-                                     deliverable: it will hide the thing you
-                                     wanted. The injected prompt is folded for
-                                     every fire regardless; this is only about
-                                     what the agent says back.
-                                     (--fold is the old spelling, same field.)
-                                     Not --quiet, which is quiet_mins.
+                                     refresher.
+  cron new … --speak                 THE AGENT'S REPLY IS THE DELIVERABLE, so
+                                     show it as prose. Without it a fire's
+                                     chat reply folds in with its tool calls,
+                                     because a turn no human started is not a
+                                     message — which is what Chat mode has
+                                     always done, and what agent-mode panes
+                                     now do too.
+                                     You want this only for a job that reports
+                                     to the CHAT. A job that writes a card or
+                                     sends a push has already delivered, and
+                                     the "ok" it says back is noise.
+                                     The injected prompt folds for every fire
+                                     regardless; this is only about the reply.
+                                     (--silent / --fold asked for what is now
+                                     the default and are accepted no-ops.)
   cron list                          name, schedule, target, next due, last run,
                                      last status, failure streak
   cron show <id|name>                one schedule in full + its run history

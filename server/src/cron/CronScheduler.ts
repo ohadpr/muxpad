@@ -362,7 +362,7 @@ export class CronScheduler {
       name: cron.name,
       at: dueAt,
       missed,
-      ...(cron.fold ? { fold: true } : {}),
+      ...(cron.speak ? { speak: true } : {}),
       ...(cron.card ? { card: cron.card } : {}),
     };
     const text = renderCronMarker(marker, cron.prompt);

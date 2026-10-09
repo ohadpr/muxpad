@@ -519,7 +519,7 @@ describe('migrations v21 — agent modes + the living sidebar', () => {
       .prepare('SELECT version FROM schema_version ORDER BY version DESC LIMIT 1')
       .get() as { version: number };
     expect(v.version).toBe(LATEST_SCHEMA_VERSION);
-    expect(LATEST_SCHEMA_VERSION).toBe(43);
+    expect(LATEST_SCHEMA_VERSION).toBe(44);
   });
 
   /**
@@ -547,7 +547,8 @@ describe('migrations v21 — agent modes + the living sidebar', () => {
     // to be guarded, and this is the assertion that it is.
     runMigrations(db);
     expect(
-      (db.prepare('SELECT slack FROM workspaces WHERE id = ?').get('w1') as { slack: number }).slack,
+      (db.prepare('SELECT slack FROM workspaces WHERE id = ?').get('w1') as { slack: number })
+        .slack,
     ).toBe(0);
   });
 });

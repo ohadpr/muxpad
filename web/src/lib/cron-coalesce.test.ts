@@ -18,9 +18,15 @@ import { coalesceCronFires, foldCronTurns } from './chat-voice';
  */
 let n = 0;
 const id = () => `e${++n}`;
-const fire = (name: string, folded = true, prompt = 'Are the markets open?'): ChatEvent[] => {
+/** `speak` defaults FALSE, like a real schedule: a cron's turn is machinery
+ *  unless its author declared the reply to be the deliverable. The argument
+ *  used to be `folded = true`, the same switch upside down — see cron-fold. */
+const fire = (name: string, speak = false, prompt = 'Are the markets open?'): ChatEvent[] => {
   const out = expandCronFire(
-    renderCronMarker({ id: `c${++n}`, name, at: null, missed: 0, fold: folded }, prompt),
+    renderCronMarker(
+      { id: `c${++n}`, name, at: null, missed: 0, ...(speak ? { speak: true } : {}) },
+      prompt,
+    ),
     id(),
     Date.UTC(2026, 9, 7, 17, 25),
   );
@@ -120,7 +126,7 @@ describe('coalesceCronFires', () => {
     // bubbles. Every prompt is folded now — it is an instruction a schedule
     // injected, not something a person said — so two unfolded fires that
     // produced nothing visible have nothing to anchor two chips to.
-    const out = run([...fire('nw-hourly', false), tool(), ...fire('nw-hourly', false)]);
+    const out = run([...fire('nw-hourly', true), tool(), ...fire('nw-hourly', true)]);
     expect(chips(out)).toHaveLength(1);
   });
 
@@ -128,9 +134,9 @@ describe('coalesceCronFires', () => {
     // `nw-close` is deliberately not folded because its reply is worth reading.
     // That reply is what anchors the chip — the flag never was.
     const out = run([
-      ...fire('nw-hourly', false),
+      ...fire('nw-hourly', true),
       tool(),
-      ...fire('nw-close', false),
+      ...fire('nw-close', true),
       reply('CLOSE · SPX −0.4%'),
     ]);
     expect(chips(out).map((c) => c.text)).toEqual(['nw-hourly', 'nw-close']);
@@ -139,7 +145,7 @@ describe('coalesceCronFires', () => {
   it('leaves a fire that collapsed MISSED fires alone', () => {
     // That detail is the unusual thing, and it is the thing worth a row.
     const missed = expandCronFire(
-      renderCronMarker({ id: 'cm', name: 'nw-hourly', at: null, missed: 3, fold: true }, 'go'),
+      renderCronMarker({ id: 'cm', name: 'nw-hourly', at: null, missed: 3, speak: true }, 'go'),
       id(),
       0,
     );

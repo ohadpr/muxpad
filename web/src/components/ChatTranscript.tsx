@@ -1007,7 +1007,11 @@ export function QueuedText({
   // The queue holds the RAW outgoing message; `UserText` strips the mention
   // handles out of it, as it does for every other bubble.
   if (!fire) return <UserText text={text} onOpenImage={onOpenImage} />;
-  const body = fire.marker.fold ? '' : fire.body.trim();
+  // A queued fire shows its name and nothing else. The prompt is an
+  // instruction a schedule injected, and that is true for every fire now —
+  // this used to read `marker.fold`, back when one flag answered both "hide
+  // the prompt" and "hide the reply".
+  const body = '';
   return (
     <>
       <span className="chat-queued-cron">
