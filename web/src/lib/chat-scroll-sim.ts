@@ -156,6 +156,21 @@ export class SimScroller implements ScrollSurface {
     this.assign(value);
   }
 
+  /**
+   * The reader's half of a frame, which the simulator knows exactly because
+   * it is the thing that moved them. `grewAbove` deliberately does NOT record
+   * here: engine anchoring is not a gesture, and the whole point of taking
+   * this from input rather than from `scrollTop` is that the two are
+   * indistinguishable once they have been added together.
+   */
+  takeReaderIntent(): number {
+    const d = this.readerIntent;
+    this.readerIntent = 0;
+    return d;
+  }
+
+  private readerIntent = 0;
+
   // ── The document changing ─────────────────────────────────────────────────
 
   /** Older history arriving at the top. The commonest growth ABOVE a reader. */
@@ -234,6 +249,7 @@ export class SimScroller implements ScrollSurface {
 
   /** The reader, by any device. Produces a scroll event, like a real one. */
   readerScrollsTo(value: number): this {
+    this.readerIntent += value - this.scrollTop;
     this.assign(value);
     this.pending++;
     return this;

@@ -207,6 +207,45 @@ describe.each(ENGINES)('ANCHORED — $name', ({ paysAnchoring }) => {
     expect(sim.rowOffset('m15')).toBe(before);
   });
 
+  /**
+   * THE READER SCROLLING WHILE HISTORY LANDS, IN THE SAME FRAME.
+   *
+   * Reported as "scrolling up from the bottom is super buggy and janky and
+   * stuck". Measured in Chromium against a real chat: scrolling up at frame
+   * rate, roughly one frame in twelve moved the view NOT AT ALL, and every one
+   * of those frames carried a single write from `place()` of exactly the size
+   * of the step that had just been made. The gesture was being handed back.
+   *
+   * The cause is the reconcile guard: it believed a `scrollTop` change was the
+   * reader only when the anchor row had not moved in DOCUMENT space. A prepend
+   * moves it by definition — that is what a prepend is — so on exactly the
+   * frames where history arrives, a simultaneous gesture was attributed to
+   * layout and overwritten. Which is the worst possible frame to lose one on:
+   * paging history in is the thing scrolling up DOES.
+   */
+  it('keeps the reader’s gesture when a prepend lands in the same frame', () => {
+    const before = sim.rowOffset('m15');
+    // Both in one frame, no scroll event delivered in between — the ordering
+    // the simulator exists for.
+    sim.prepend(simRows(5, 400, 'old'));
+    sim.readerScrollsBy(-120);
+    c.place();
+    drainScroll(sim, c);
+    // The reader asked to move 120px up the document and must have got it:
+    // their row sits 120px lower in the viewport than it did.
+    expect(sim.rowOffset('m15')).toBe(before + 120);
+  });
+
+  it('still holds them put when ONLY the prepend happens', () => {
+    // The other side of the same branch: no gesture, so nothing to reconcile,
+    // and the row must not move at all.
+    const before = sim.rowOffset('m15');
+    sim.prepend(simRows(5, 400, 'old'));
+    c.place();
+    drainScroll(sim, c);
+    expect(sim.rowOffset('m15')).toBe(before);
+  });
+
   it('holds it through an image decoding above them', () => {
     const before = sim.rowOffset('m15');
     sim.resizeRow('m2', 1200);
