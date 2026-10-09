@@ -29,6 +29,7 @@ import {
   parseAgentMode,
   parseFrame,
 } from './protocol.js';
+import { workspaceAgentContext } from './workspace-context.js';
 
 // ARGV IS PARSED BEFORE ANYTHING ELSE HAPPENS — before the pane-env guard, so
 // `muxpad agent --help` answers from an ordinary shell too, and before a single
@@ -57,6 +58,13 @@ if (!paneId || !apiUrl) {
   );
   process.exit(1);
 }
+
+// PRIME THE WORKSPACE CONTEXT before any session is constructed. The backends
+// read it synchronously while building their system prompt (threading `await`
+// through three of them for one row that cannot change mid-session would be
+// worse), and until this resolves it answers "no capability" — so a slow or
+// failed fetch describes nothing rather than guessing. See workspace-context.ts.
+void workspaceAgentContext();
 
 // The flags, already parsed and validated (args.ts):
 //   --resume <ref>  the session to continue — written into the pane's

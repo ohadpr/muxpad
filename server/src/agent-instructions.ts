@@ -73,6 +73,7 @@ list. Capabilities worth knowing:
   APPS ARE PRIVATE (tailnet only) — never publish an app's data or suggest
   exposing it; \`publish\` is for static artifacts you MEAN to be public.
 
+<!--cap:slack-->
 - \`muxpad slack\` — the company Slack, read/write, from any pane and any
   harness. \`slack read <#channel|@user> [--since=2h]\`, \`slack search
   "<query>"\`, \`slack post <#channel|@user> "<text>"\`,
@@ -96,27 +97,30 @@ list. Capabilities worth knowing:
   under the user's name is right about where it lands and who owns it; it is
   not a claim that they typed it, and the reader is owed that distinction.
 
-  **3 · SENDING IS ALLOWLISTED BY WORKSPACE, AND IT FAILS CLOSED.** The chat's
-  workspace must be named in \`~/.muxpad/slack-allowed-workspaces\` before it
-  can post at all — so a chat in a personal workspace can NEVER message a work
-  surface. An allowlist, because a denylist fails open for everything nobody
-  thought of.
+  **3 · SLACK IS A WORKSPACE CAPABILITY, AND IT FAILS CLOSED.** Read, search
+  and post alike: a workspace with Slack switched off cannot touch Slack at
+  all, so a chat in a personal workspace can NEVER reach a work surface. Off is
+  the default, because a denylist fails open for everything nobody thought of.
 
   The workspace is resolved from the SERVER using this pane's id. Setting
   \`MUXPAD_WORKSPACE_ID\` does nothing, and neither does \`cd\` — the check
   is not about which directory you are in, because a chat is often told where
   its files are rather than started there.
 
-  If you are refused, **that is the system working**. Do not post from another
-  pane, do not edit the allowlist, do not reach for \`curl\` and the token
-  file. Tell the user you were refused and which workspace you are in; the
-  allowlist is theirs to change, not yours.
+  The switch lives in the muxpad UI (workspace ⋯ → Settings → Capabilities) and
+  **cannot be set from the CLI** — \`muxpad workspace caps <id>\` reads it and
+  nothing writes it, because a tool that can grant itself a capability is a
+  guard in name only.
 
-  Reading and searching are NOT gated — the risk being managed is personal data
-  going OUT.
+  If you are refused, **that is the system working**. Do not post from another
+  pane, do not go looking for the token file, do not reach for \`curl\`. Tell
+  the user they were refused and which workspace you are in; the switch is
+  theirs to throw, not yours.
 
   Reading never needs the bot invited anywhere; posting as muxpad does
   (\`/invite @muxpad\`), and the error says so when it bites.
+
+<!--/cap:slack-->
 
 ## \`@mentions\` — a chat handed to you as CONTEXT
 
@@ -578,14 +582,58 @@ export function seedAgentInstructions(dataDir: string): void {
  * own. The generated half is muxpad's and comes back on the next boot; opting
  * out of THAT is not a thing you do by deleting a file.
  */
-export function readAgentInstructions(dataDir: string = runnerDataDir()): string | null {
+/**
+ * What one workspace adds to, or removes from, the universal instructions.
+ *
+ * Both halves exist because this function used to take a directory and nothing
+ * else, so every agent everywhere received byte-identical text — including the
+ * Slack section, in workspaces that may not use Slack. A chat was told it had
+ * the company Slack and found out otherwise by trying.
+ */
+export interface WorkspaceAgentContext {
+  /** Free text appended for agents in this workspace. */
+  instructions?: string | null;
+  /**
+   * Is the Slack capability on here? When false the whole Slack section is
+   * removed — not softened, removed. A capability a chat cannot use should not
+   * be described to it, because describing it is how an agent comes to try.
+   */
+  slack?: boolean;
+}
+
+/** Everything between the capability fences, inclusive. */
+function stripCapability(text: string, cap: string): string {
+  const open = `<!--cap:${cap}-->`;
+  const close = `<!--/cap:${cap}-->`;
+  const a = text.indexOf(open);
+  const b = text.indexOf(close);
+  if (a < 0 || b < 0 || b < a) return text;
+  return (text.slice(0, a) + text.slice(b + close.length)).replace(/\n{3,}/g, '\n\n');
+}
+
+/** …and the fences themselves, once the decision is made to keep a section. */
+function dropFences(text: string): string {
+  return text.replace(/<!--\/?cap:[a-z-]+-->\n?/g, '');
+}
+
+export function readAgentInstructions(
+  dataDir: string = runnerDataDir(),
+  ws?: WorkspaceAgentContext,
+): string | null {
   let generated: string | null = null;
   try {
     generated = readFileSync(agentInstructionsPath(dataDir), 'utf8');
   } catch {
     generated = null;
   }
-  const parts = [generated, readAgentNotes(dataDir)]
+  if (generated) {
+    // DEFAULT OFF. `ws` undefined means nobody said, and for a capability gate
+    // "nobody said" has to mean no — a caller that has not been taught to pass
+    // the workspace must not silently hand out Slack.
+    if (!ws?.slack) generated = stripCapability(generated, 'slack');
+    generated = dropFences(generated);
+  }
+  const parts = [generated, ws?.instructions, readAgentNotes(dataDir)]
     .map((t) => t?.trim())
     .filter((t): t is string => !!t);
   return parts.length ? parts.join('\n\n') : null;

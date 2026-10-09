@@ -1,0 +1,260 @@
+/*
+ * The workspace settings panel.
+ *
+ * Deliberately NOT the big take-the-wheel modal: this is a short form, so it
+ * is sized to its content and scrolls only when the preview is open. Everything
+ * reads off the chat theme variables so it follows dark mode without a second
+ * palette.
+ */
+
+.ws-settings {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+}
+
+.ws-settings__scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.ws-settings__panel {
+  position: relative;
+  width: min(620px, 94vw);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--chat-panel, #fff);
+  border: 1px solid var(--chat-border-strong, #c2c2d0);
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.45);
+}
+
+.ws-settings__bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 12px 11px 15px;
+  background: var(--bg-elev, #f4f4f8);
+  border-bottom: 1px solid var(--chat-border, #d6d6e0);
+}
+
+.ws-settings__swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+  background: var(--accent, #6c4fd8);
+}
+
+.ws-settings__title {
+  font-size: 14px;
+  font-weight: 560;
+}
+
+.ws-settings__title small {
+  margin-left: 7px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--chat-faint, #8b89a3);
+}
+
+/* Reserves its width so the bar does not twitch when "Saving…" appears. */
+.ws-settings__state {
+  margin-left: auto;
+  min-width: 56px;
+  text-align: right;
+  font-size: 11.5px;
+  color: var(--chat-faint, #8b89a3);
+  transition: opacity 0.15s;
+}
+
+.ws-settings__state[data-state="saved"] {
+  color: var(--good, #18794e);
+}
+
+.ws-settings__close {
+  border: 0;
+  background: none;
+  cursor: pointer;
+  padding: 2px 4px;
+  font-size: 13px;
+  color: var(--chat-dim, #6b6b7a);
+}
+
+.ws-settings__body {
+  padding: 14px 16px 16px;
+  overflow: auto;
+}
+
+.ws-settings__row {
+  padding: 14px 0;
+  border-bottom: 1px solid var(--chat-border, #d6d6e0);
+}
+
+.ws-settings__row:first-child {
+  padding-top: 0;
+}
+
+.ws-settings__row:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.ws-settings__rh {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ws-settings__rh h3 {
+  margin: 0;
+  font-size: 13.5px;
+}
+
+.ws-settings__hint {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--chat-faint, #8b89a3);
+}
+
+.ws-settings__desc {
+  margin: 5px 0 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--chat-dim, #6b6b7a);
+  max-width: 70ch;
+}
+
+.ws-settings__desc code {
+  font-size: 12px;
+  font-family: var(--mono, ui-monospace, Menlo, monospace);
+}
+
+.ws-settings textarea {
+  width: 100%;
+  margin-top: 10px;
+  min-height: 92px;
+  resize: vertical;
+  padding: 10px 12px;
+  border: 1px solid var(--chat-border, #d6d6e0);
+  border-radius: 9px;
+  background: var(--bg-elev, #fbfaff);
+  color: inherit;
+  font: 12.5px / 1.6 var(--mono, ui-monospace, Menlo, monospace);
+}
+
+.ws-settings textarea:focus {
+  outline: 0;
+  border-color: var(--accent, #6c4fd8);
+}
+
+.ws-settings__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 12px;
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  color: inherit;
+}
+
+.ws-settings__track {
+  width: 38px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--chat-border-strong, #d6d3e8);
+  position: relative;
+  transition: background 0.15s;
+}
+
+.ws-settings__track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  transition: transform 0.15s;
+}
+
+.ws-settings__toggle[data-on] .ws-settings__track {
+  background: var(--good, #18794e);
+}
+
+.ws-settings__toggle[data-on] .ws-settings__track::after {
+  transform: translateX(16px);
+}
+
+.ws-settings__tlabel {
+  font-size: 13px;
+}
+
+.ws-settings__locked {
+  margin-top: 10px;
+  padding: 9px 11px;
+  border-radius: 9px;
+  font-size: 12px;
+  line-height: 1.5;
+  background: var(--warn-bg, #f7f2e4);
+  border: 1px solid var(--warn-border, #e6d9b4);
+  color: var(--warn-fg, #6b5618);
+}
+
+.ws-settings__pvh {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  font: 11.5px var(--mono, ui-monospace, Menlo, monospace);
+  color: var(--chat-faint, #8b89a3);
+}
+
+.ws-settings__car {
+  transition: transform 0.12s;
+}
+
+.ws-settings__car[data-open="true"] {
+  transform: rotate(90deg);
+}
+
+.ws-settings__pv {
+  margin: 10px 0 0;
+  padding: 11px;
+  border: 1px solid var(--chat-border, #d6d6e0);
+  border-radius: 9px;
+  background: var(--bg-elev, #fbfaff);
+  color: var(--chat-dim, #6b6b7a);
+  font: 11.5px / 1.6 var(--mono, ui-monospace, Menlo, monospace);
+  white-space: pre-wrap;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.ws-settings__err {
+  margin: 12px 0 0;
+  font-size: 12.5px;
+  color: var(--bad, #c0392b);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ws-settings__track,
+  .ws-settings__track::after,
+  .ws-settings__car,
+  .ws-settings__state {
+    transition: none;
+  }
+}

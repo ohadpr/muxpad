@@ -787,8 +787,9 @@ json_string() {
 #
 #   · every message is prefixed 🤖, so the reader knows a machine composed it
 #     even though you sent it;
-#   · sending is ALLOWLISTED BY PROJECT (see slack_guard_workspace), so a project
-#     holding personal files cannot message a work surface at all.
+#   · Slack is a WORKSPACE CAPABILITY (see slack_guard_workspace), off unless
+#     switched on in the UI, so a workspace holding personal files cannot read
+#     or message a work surface at all.
 #
 # SLACK_BOT_TOKEN is not read anywhere below. A line for it in the secrets file
 # is inert and can be deleted.
@@ -922,6 +923,7 @@ slack_since_epoch() {
 }
 
 cmd_slack_read() {
+  slack_guard_workspace
   slack_load
   local ref="${1:-}"; shift || true
   [ -n "$ref" ] || { echo 'usage: muxpad slack read <#channel|@user|ID> [--since=2h] [--limit=50]' >&2; exit 1; }
@@ -938,6 +940,7 @@ cmd_slack_read() {
 }
 
 cmd_slack_search() {
+  slack_guard_workspace
   slack_load
   [ -n "${SLACK_USER_TOKEN:-}" ] || {
     echo 'muxpad: slack search needs SLACK_USER_TOKEN — search:read is a user scope; bot tokens cannot search at all' >&2
@@ -950,87 +953,55 @@ cmd_slack_search() {
     | jq -r '.messages.matches[] | "\(.ts | tonumber | strftime("%m-%d %H:%M"))  #\(.channel.name)  \(.username // .user)  \(.text // "" | gsub("\n"; " ⏎ "))"'
 }
 
-# ─── WHICH WORKSPACE MAY SEND A SLACK MESSAGE ──────────────────────────────
+# ─── WHICH WORKSPACE MAY USE SLACK AT ALL ──────────────────────────────────
 #
 # "Never allow a project that is using personal files/data to send slack
 #  messages, never ever ever ever. It should fail."
 #
-# THE DIRECTORY WAS THE WRONG THING TO ASK. The first version of this gated on
-# `pwd`, and it was wrong for the way the tool is actually used: "not all my
-# trayo chats run in that directory — I just tell the agent what directory
-# stuff is in, so the agent can be running in ~". A cwd check would have
-# refused real work chats and permitted a personal one that happened to be
-# started somewhere allowed. It measured the wrong thing confidently.
+# THE DIRECTORY WAS THE WRONG QUESTION. The first version gated on `pwd`, and
+# that was wrong for how the tool is used: "not all my trayo chats run in that
+# directory — I just tell the agent where stuff is, so it can be running in ~".
+# It would have refused real work chats and allowed a personal one started
+# somewhere permitted: a precise answer to the wrong question, which is worse
+# than a vague one because it looks like it is working.
 #
-# The boundary that MATCHES HOW THINGS ARE ORGANISED is the workspace: personal
-# chats live in Personal, work chats live in Trayo. So that is what is gated.
+# Workspaces are how the chats are actually organised, so that is the boundary.
+# The switch lives on the workspace row and is edited in the UI — not in a file
+# here, so there is one place to look and nothing can disagree with itself.
 #
-# AND THE WORKSPACE IS RESOLVED FROM THE SERVER, not read from the environment.
-# `MUXPAD_WORKSPACE_ID` is right there in every pane's env and would have been
-# one line — but it is a value the caller can simply set, and a guard that asks
-# the thing it is guarding to state its own identity is a guard in name only.
-# The server knows which workspace a pane is in; the pane cannot edit that.
+# READ IS GATED TOO, which it was not at first. The reasoning then was "the risk
+# is personal data going OUT" — but a personal chat could run `slack channels`
+# and list every private channel in the company. Slack is a work surface; a
+# workspace either touches it or it does not.
 #
-# One workspace NAME or slug per line in $SLACK_ALLOW; blanks and #comments
-# ignored. A missing file means nothing may post.
-SLACK_ALLOW="${MUXPAD_DATA_DIR:-$HOME/.muxpad}/slack-allowed-workspaces"
-
-# Case-fold, so "trayo" and "Trayo" are the same intent in the allowlist.
-slack_lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
-
+# AND THE WORKSPACE IS RESOLVED FROM THE SERVER. `MUXPAD_WORKSPACE_ID` is in
+# every pane's environment and would have been one line — and it is a value the
+# caller can set. A guard that asks the thing it is guarding to state its own
+# identity is a guard in name only.
 slack_guard_workspace() {
   local pane="${MUXPAD_PANE_ID:-}"
   if [ -z "$pane" ]; then
-    echo 'muxpad: slack: posting works only from inside a muxpad pane — there is no workspace to check out here' >&2
+    echo 'muxpad: slack: works only from inside a muxpad pane — there is no workspace to check out here' >&2
     exit 1
   fi
-  if [ ! -f "$SLACK_ALLOW" ]; then
-    cat >&2 <<EOF
-muxpad: slack: no workspace is allowed to post yet.
-
-Slack sending is allowlisted by WORKSPACE, so a personal chat can never message
-a work surface. Nothing posts until you say which workspaces may:
-
-  echo 'Trayo' >> $SLACK_ALLOW
-
-Reading and searching are unaffected.
-EOF
-    exit 1
-  fi
-
-  # pane → tab → workspace, every hop answered by the server.
-  local tab ws name slug
+  local tab ws
   tab="$(http_request GET "/api/panes/$pane" | jq -r '.tab_id // empty')"
-  [ -n "$tab" ] || { echo "muxpad: slack: cannot resolve pane $pane — refusing to post" >&2; exit 1; }
+  [ -n "$tab" ] || { echo "muxpad: slack: cannot resolve pane $pane — refusing" >&2; exit 1; }
   ws="$(http_request GET "/api/tabs/$tab" | jq -r '.workspace_id // empty')"
-  [ -n "$ws" ] || { echo "muxpad: slack: cannot resolve the workspace — refusing to post" >&2; exit 1; }
-  local wsjson; wsjson="$(http_request GET '/api/workspaces?all=1')"
-  name="$(printf '%s' "$wsjson" | jq -r --arg id "$ws" '.[] | select(.id==$id) | .name // empty')"
-  slug="$(printf '%s' "$wsjson" | jq -r --arg id "$ws" '.[] | select(.id==$id) | .slug // empty')"
-
-  local entry ok=''
-  while IFS= read -r entry || [ -n "$entry" ]; do
-    case "$entry" in ''|'#'*) continue ;; esac
-    # Trim surrounding whitespace; match the name or the slug, case-insensitively
-    # on the name because "trayo" and "Trayo" are the same intent.
-    entry="$(printf '%s' "$entry" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
-    [ -n "$entry" ] || continue
-    if [ "$entry" = "$slug" ] || [ "$(slack_lower "$entry")" = "$(slack_lower "$name")" ]; then ok=1; break; fi
-  done < "$SLACK_ALLOW"
-
-  [ -n "$ok" ] && return 0
+  [ -n "$ws" ] || { echo 'muxpad: slack: cannot resolve the workspace — refusing' >&2; exit 1; }
+  local wj; wj="$(http_request GET "/api/workspaces/$ws")"
+  local on name
+  on="$(printf '%s' "$wj" | jq -r '.slack // false')"
+  name="$(printf '%s' "$wj" | jq -r '.name // "?"')"
+  [ "$on" = "true" ] && return 0
   cat >&2 <<EOF
-muxpad: slack: refusing to post from the "${name:-?}" workspace.
+muxpad: slack: the "$name" workspace does not have Slack enabled.
 
-Only workspaces named in
+This fails closed on purpose: a workspace holding personal chats must never be
+able to read or message a work surface. Turn it on, if it belongs on, in the
+muxpad UI — the workspace's ⋯ menu → Settings → Capabilities.
 
-  $SLACK_ALLOW
-
-may send. This one is not, so it is treated as one that may hold personal data.
-That is deliberate and it fails closed.
-
-If this is work, add the workspace there — do NOT move the chat, and do not
-post from a different pane to get around it.
+It cannot be enabled from the CLI, because the CLI is what agents drive.
 EOF
   exit 1
 }
@@ -1099,6 +1070,7 @@ cmd_slack_unpost() {
 }
 
 cmd_slack_channels() {
+  slack_guard_workspace
   slack_load
   local tok="${SLACK_USER_TOKEN:-}"
   slack_api conversations.list "$tok" 'limit=1000' 'types=public_channel,private_channel' \
@@ -1309,10 +1281,60 @@ cmd_workspace_delete() {
   fi
 }
 
+cmd_workspace_instructions() {
+  reset_flags
+  parse_flags -- "$@"
+  local id="${POSITIONAL[0]:-}"
+  if [ -z "$id" ]; then
+    echo 'usage: muxpad workspace instructions <id> [text|-]' >&2
+    echo '       with no text, prints the current instructions' >&2
+    exit 1
+  fi
+  require_jq
+  if [ "${#POSITIONAL[@]}" -lt 2 ]; then
+    http_request GET "/api/workspaces/$id" | jq -r '.instructions // ""'
+    return
+  fi
+  local text="${POSITIONAL[1]}"
+  # `-` reads stdin, because these are paragraphs and a shell argument is a bad
+  # place to keep paragraphs.
+  [ "$text" = "-" ] && text="$(cat)"
+  http_request PATCH "/api/workspaces/$id" "{\"instructions\":$(json_string "$text")}" >/dev/null
+  if [ "$JSON_OUTPUT" = "1" ]; then
+    printf '{"updated":"%s"}\n' "$id"
+  else
+    printf '%s✓%s workspace instructions updated — new agent panes pick them up at launch\n' "$C_GREEN" "$C_RESET"
+  fi
+}
+
+# READ-ONLY ON PURPOSE. Instructions are text an agent may usefully maintain;
+# capabilities are what an agent is ALLOWED to do, and a tool that can grant
+# itself a capability is a guard in name only. The server refuses a capability
+# PATCH that carries no browser Origin, so this is not the only line of defence
+# — it is the honest message in front of it.
+cmd_workspace_caps() {
+  reset_flags
+  parse_flags -- "$@"
+  local id="${POSITIONAL[0]:-}"
+  if [ -z "$id" ]; then
+    echo 'usage: muxpad workspace caps <id>' >&2
+    exit 1
+  fi
+  require_jq
+  local ws; ws="$(http_request GET "/api/workspaces/$id")"
+  if [ "$JSON_OUTPUT" = "1" ]; then
+    printf '%s' "$ws" | jq '{slack: (.slack // false)}'
+    return
+  fi
+  local on; on="$(printf '%s' "$ws" | jq -r '.slack // false')"
+  printf 'slack   %s\n' "$([ "$on" = "true" ] && echo on || echo off)"
+  printf '\n%scapabilities are changed in the UI only%s (workspace ⋯ → Settings → Capabilities).\n' "$C_DIM" "$C_RESET"
+}
+
 cmd_workspace() {
   local verb="${1:-}"
   if [ -z "$verb" ]; then
-    echo "usage: muxpad workspace {new|list|delete}" >&2
+    echo "usage: muxpad workspace {new|list|delete|instructions|caps}" >&2
     exit 1
   fi
   shift
@@ -1320,9 +1342,11 @@ cmd_workspace() {
     new) cmd_workspace_new "$@" ;;
     list) cmd_workspace_list "$@" ;;
     delete) cmd_workspace_delete "$@" ;;
+    instructions) cmd_workspace_instructions "$@" ;;
+    caps|capabilities) cmd_workspace_caps "$@" ;;
     *)
       echo "muxpad: unknown workspace verb '$verb'" >&2
-      echo "usage: muxpad workspace {new|list|delete}" >&2
+      echo "usage: muxpad workspace {new|list|delete|instructions|caps}" >&2
       exit 1
       ;;
   esac

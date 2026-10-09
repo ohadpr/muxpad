@@ -11,7 +11,7 @@ const MUXPAD = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'scr
 const SRC = readFileSync(MUXPAD, 'utf8');
 
 /**
- * SLACK SENDING IS ALLOWLISTED BY WORKSPACE, AND IT FAILS CLOSED.
+ * SLACK IS A WORKSPACE CAPABILITY, AND IT FAILS CLOSED.
  *
  * "Never allow a project that is using personal files/data to send slack
  *  messages, never ever ever ever. It should fail."
@@ -25,6 +25,14 @@ const SRC = readFileSync(MUXPAD, 'utf8');
  * the worst way for a guard to be wrong.
  *
  * Workspaces are how the chats are actually organised, so that is the boundary.
+ * The switch is a column on the workspace row, edited in the UI — not a file on
+ * disk, so there is one place to look and nothing can disagree with itself.
+ *
+ * ── AND READING IS GATED TOO ────────────────────────────────────────────────
+ * The first cut gated only `post`, reasoning that the risk is data going OUT.
+ * But a personal chat could run `slack channels` and list every private channel
+ * in the company. Slack is a work surface: a workspace either touches it or it
+ * does not.
  *
  * ── AND THE WORKSPACE COMES FROM THE SERVER ─────────────────────────────────
  * `MUXPAD_WORKSPACE_ID` is in every pane's environment and would have been one
@@ -37,10 +45,22 @@ const SRC = readFileSync(MUXPAD, 'utf8');
  * reported as passes.
  */
 const API = `http://127.0.0.1:${process.env.MUXPAD_PORT ?? 7777}`;
+
+/**
+ * THE FIXTURE READS THE CAPABILITY, it does not assume which workspace has it.
+ *
+ * The first version took "not named Personal" to mean "allowed", which was the
+ * file-based allowlist's semantics. The capability defaults OFF for every
+ * existing workspace — migration 43 adds the column with `DEFAULT 0` — so the
+ * through-the-gate case has nothing to run against until somebody throws the
+ * switch in the UI, and it skips rather than asserting the old meaning. That
+ * failure is how this was found: the real work workspace was refused, correctly.
+ */
+let offPane = '';
+let offName = '';
+let onPane = '';
+let onName = '';
 let up = false;
-let personalPane = '';
-let allowedPane = '';
-let allowedName = '';
 
 beforeAll(async () => {
   try {
@@ -51,6 +71,7 @@ beforeAll(async () => {
     const wss = (await fetch(`${API}/api/workspaces?all=1`).then((r) => r.json())) as Array<{
       id: string;
       name: string;
+      slack?: boolean;
     }>;
     for (const p of panes) {
       const tab = (await fetch(`${API}/api/tabs/${p.tab_id}`).then((r) => r.json())) as {
@@ -58,13 +79,17 @@ beforeAll(async () => {
       };
       const ws = wss.find((w) => w.id === tab.workspace_id);
       if (!ws) continue;
-      if (!personalPane && ws.name === 'Personal') personalPane = p.id;
-      if (!allowedPane && ws.name !== 'Personal' && !ws.name.startsWith('·')) {
-        allowedPane = p.id;
-        allowedName = ws.name;
+      if (ws.slack) {
+        if (!onPane) {
+          onPane = p.id;
+          onName = ws.name;
+        }
+      } else if (!offPane) {
+        offPane = p.id;
+        offName = ws.name;
       }
     }
-    up = !!personalPane && !!allowedPane;
+    up = !!offPane;
   } catch {
     up = false;
   }
@@ -81,40 +106,64 @@ const post = (env: Record<string, string>) =>
     }),
   );
 
-describe('the Slack workspace allowlist', () => {
+describe('the Slack workspace capability', () => {
   it('refuses outside a muxpad pane — there is no workspace to check', async () => {
-    const env = { ...process.env } as Record<string, string>;
-    delete env.MUXPAD_PANE_ID;
+    const { MUXPAD_PANE_ID: _omitted, ...env } = process.env as Record<string, string>;
     const r = await execFileAsync(MUXPAD, ['slack', 'post', '#x', 'hi'], {
       env: { ...env, SLACK_SECRETS: '/dev/null' },
     }).catch((e: { stderr?: string }) => ({ stderr: e.stderr ?? '' }));
     expect(('stderr' in r ? r.stderr : '') as string).toContain('only from inside a muxpad pane');
   });
 
-  it('refuses a pane in a workspace that is not allowed', async ({ skip }) => {
+  it('refuses a pane in a workspace without the capability', async ({ skip }) => {
     if (!up) skip();
-    const r = await post({ MUXPAD_PANE_ID: personalPane });
+    const r = await post({ MUXPAD_PANE_ID: offPane });
     expect(r.code).not.toBe(0);
-    expect(r.out).toContain('refusing to post from the "Personal" workspace');
+    expect(r.out).toContain(`the "${offName}" workspace does not have Slack enabled`);
   });
 
-  it('lets an allowed workspace through to the API', async ({ skip }) => {
-    if (!up) skip();
+  it('lets a workspace that HAS the capability through to the API', async ({ skip }) => {
+    // Skipped until some workspace is switched on — see the fixture comment.
+    if (!onPane) skip();
     // Past the gate — it now fails on the channel, which is the proof.
-    const r = await post({ MUXPAD_PANE_ID: allowedPane });
-    expect(r.out, `workspace ${allowedName}`).not.toContain('refusing to post');
-    expect(r.out).not.toContain('no workspace is allowed');
+    const r = await post({ MUXPAD_PANE_ID: onPane });
+    expect(r.out, `workspace ${onName}`).not.toContain('does not have Slack enabled');
   });
 
   it('CANNOT be talked out of it by setting MUXPAD_WORKSPACE_ID', async ({ skip }) => {
     if (!up) skip();
     // The whole reason the workspace is resolved server-side from the pane id.
     const r = await post({
-      MUXPAD_PANE_ID: personalPane,
+      MUXPAD_PANE_ID: offPane,
       MUXPAD_WORKSPACE_ID: 'whatever-the-agent-likes',
     });
     expect(r.code).not.toBe(0);
-    expect(r.out).toContain('refusing to post from the "Personal" workspace');
+    expect(r.out).toContain(`the "${offName}" workspace does not have Slack enabled`);
+  });
+
+  it('cannot be switched on from the CLI at all', () => {
+    // The CLI is what agents drive. An agent that can grant itself the
+    // capability is a guard in name only, so the write lives in the UI and the
+    // server refuses a capability PATCH with no browser Origin.
+    expect(SRC).not.toMatch(/slack["']?\s*:\s*(true|1)/);
+    expect(SRC).toContain('Settings → Capabilities');
+  });
+
+  it('gates reading and listing, not just posting', async ({ skip }) => {
+    if (!up) skip();
+    for (const argv of [
+      ['slack', 'channels'],
+      ['slack', 'search', 'anything'],
+      ['slack', 'read', '#general'],
+    ]) {
+      const r = await execFileAsync(MUXPAD, argv, {
+        env: { ...process.env, SLACK_SECRETS: '/dev/null', MUXPAD_PANE_ID: offPane },
+      }).then(
+        (x) => x.stdout + x.stderr,
+        (e: { stdout?: string; stderr?: string }) => (e.stdout ?? '') + (e.stderr ?? ''),
+      );
+      expect(r, argv.join(' ')).toContain('does not have Slack enabled');
+    }
   });
 });
 

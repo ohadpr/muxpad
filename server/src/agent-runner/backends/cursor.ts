@@ -13,6 +13,7 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import type { ChatEvent } from '@muxpad/shared';
+import { workspaceAgentContextSync } from '../workspace-context.js';
 import { readAgentInstructions } from '../../agent-instructions.js';
 import { appendTranscriptEvent, migrateTranscript } from '../../chat/TranscriptReader.js';
 import { bold, dim } from '../ansi.js';
@@ -193,7 +194,7 @@ export function createCursorBackend(
     // NO mode overlay: cursor is Agent-mode only — see currentMode above.
     const finalPrompt = resuming
       ? prompt
-      : withSessionPreamble(prompt, readAgentInstructions(), null);
+      : withSessionPreamble(prompt, readAgentInstructions(undefined, workspaceAgentContextSync()), null);
     if (resuming) args.push('--resume', sessionRef as string);
     if (model) args.push('--model', model);
     args.push(finalPrompt);
