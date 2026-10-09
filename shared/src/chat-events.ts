@@ -189,17 +189,44 @@ export function isReplyTool(name: string | undefined | null): boolean {
  * server-side store the client fetches and injects, like browser moments — a
  * new table, a new route, and placement logic that has already been the source
  * of three separate bugs about things piling at the wrong edge of a
- * partially-loaded log. A marker in the transcript is at the right position
- * with the right timestamp by construction, works on every backend because
- * every backend's transcript goes through this file, and is the same mechanism
- * `<muxpad-cron>` and `<muxpad-delivery>` already use.
+ * partially-loaded log. A marker in the transcript carries the tool result's
+ * own timestamp and sits where that result sits.
+ *
+ * ── AND IT IS KEYED, BECAUSE THE FIRST VERSION WAS NOT ─────────────────────
+ * Without a key, ANY tool output containing the marker speaks in the agent's
+ * voice: `cat` a file that mentions it, run the test suite, fetch a page — or,
+ * most pointedly, `grep -rn muxpad-said .` while working on this feature,
+ * which prints the literal three times and would have said all three out loud.
+ * An adversarial review found it by reading this repository's own fixtures.
+ *
+ * The key is a random per-install value the server mints once and the CLI asks
+ * for. It is NOT a security boundary — an agent may legitimately speak, so
+ * there is nothing to defend against — it exists so that text which merely
+ * CONTAINS the marker cannot be mistaken for an invocation of it. Per-install
+ * and stable rather than per-boot, because a transcript is re-read for months
+ * and a rotating key would un-say everything said before the last restart.
+ *
+ * The CLOSING tag carries it too, so a message quoting `</muxpad-said>` cannot
+ * truncate itself.
  */
-const SAID_RE = /<muxpad-said>([\s\S]*?)<\/muxpad-said>/g;
+let currentSayKey: string | null = null;
+
+/** Set once at server boot. Null means "do not lift" — the shape a caller
+ *  that has no key should get, rather than a guess. */
+export function setSayKey(key: string | null): void {
+  currentSayKey = key;
+}
+
+export function sayKey(): string | null {
+  return currentSayKey;
+}
+
+const KEY_RE = /^[a-f0-9]{16,64}$/;
 
 /** What `muxpad say` prints. Exported so the CLI test can assert the shape
  *  against the parser rather than against a copy of it. */
-export function renderSaid(text: string): string {
-  return `<muxpad-said>${text}</muxpad-said>`;
+export function renderSaid(text: string, key: string): string {
+  return `<muxpad-said k="${key}">${text}</muxpad-said:${key}>`;
 }
 
 /**
@@ -208,11 +235,20 @@ export function renderSaid(text: string): string {
  * `rest` is what is left for the tool_result row itself — a command that said
  * something and also printed its own output keeps the output, and one that
  * only said something leaves nothing, so no empty result row is rendered.
+ *
+ * A block whose key does not match is left exactly where it is: it is not a
+ * failed invocation, it is a piece of text that happens to look like one.
  */
-export function splitSaid(text: string): { said: string[]; rest: string } {
-  if (!text.includes('<muxpad-said>')) return { said: [], rest: text };
+export function splitSaid(
+  text: string,
+  key: string | null = currentSayKey,
+): { said: string[]; rest: string } {
+  if (!key || !KEY_RE.test(key) || !text.includes(`<muxpad-said k="${key}">`)) {
+    return { said: [], rest: text };
+  }
+  const re = new RegExp(`<muxpad-said k="${key}">([\\s\\S]*?)</muxpad-said:${key}>`, 'g');
   const said: string[] = [];
-  const rest = text.replace(SAID_RE, (_m, body: string) => {
+  const rest = text.replace(re, (_m, body: string) => {
     const t = body.trim();
     if (t) said.push(t);
     return '';

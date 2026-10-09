@@ -42,10 +42,21 @@ const SRC = readFileSync(
  * since yesterday".
  */
 describe('muxpad say', () => {
-  it('exists and prints the marker the normalizer looks for', () => {
+  it('exists and prints the KEYED marker the normalizer looks for', () => {
     expect(SRC).toContain('cmd_say()');
-    expect(SRC).toMatch(/printf '<muxpad-said>%s<\/muxpad-said>/);
     expect(SRC).toContain('say) cmd_say');
+    // Keyed on both ends. Unkeyed, any output containing the marker spoke —
+    // including `grep -rn muxpad-said .` run while working on this.
+    expect(SRC).toMatch(/<muxpad-said k="%s">%s<\/muxpad-said:%s>/);
+  });
+
+  it('gets the key from the server rather than inventing one', () => {
+    const body = SRC.slice(SRC.indexOf('cmd_say() {'));
+    const fn = body.slice(0, body.indexOf('\n}\n'));
+    expect(fn).toContain('/api/say/key');
+    // And fails loudly rather than printing an unkeyed marker that would be
+    // silently swallowed as ordinary tool output.
+    expect(fn).toMatch(/did not issue a key/);
   });
 
   it('reads stdin with `-`, because output is usually piped into it', () => {
