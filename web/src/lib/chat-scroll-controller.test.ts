@@ -1186,3 +1186,65 @@ describe('a restore arriving before its transcript', () => {
     expect(c.strandedRestore(true)).toBe(true);
   });
 });
+
+/**
+ * CHASING THE BOTTOM WHILE IT RUNS AWAY FROM YOU.
+ *
+ * "Sometimes when there are a bunch of pending messages in a chat I can't
+ * scroll down, at least on mobile, and the only way is clicking the down
+ * button." Queued messages and the reply they provoke append at the bottom on
+ * every commit, so a reader dragging downward is moving toward a target that
+ * is moving away — and every one of those commits calls `place()` while the
+ * drag is still in flight.
+ *
+ * The property that has to hold is that each drag is KEPT. If appends could
+ * cancel them the reader would be pinned, which is the report; if they are
+ * kept the reader closes on the bottom at the speed of their own thumb and
+ * the button is a convenience rather than the only way.
+ */
+describe('scrolling down while messages append', () => {
+  let sim: SimScroller;
+  let c: ChatScrollController;
+  beforeEach(() => {
+    sim = new SimScroller(simRows(40), { furnitureBelow: 100 });
+    c = new ChatScrollController(sim);
+    c.dispatch({ t: 'mounted' });
+    c.dispatch({ t: 'shown', mem: RETIRED });
+    // Park a long way up, then start pulling back down.
+    sim.readerScrollsTo(1000);
+    drainScroll(sim, c);
+  });
+
+  it('keeps every downward drag, even as rows land below on each commit', () => {
+    const start = sim.scrollTop;
+    let asked = 0;
+    for (let i = 0; i < 20; i++) {
+      sim.readerScrollsBy(300);
+      asked += 300;
+      // A pending message, then the agent's reply to it — two commits that
+      // both grow the document below the reader.
+      sim.append(simRows(1, 120, `q${i}-`));
+      c.place();
+      sim.append(simRows(1, 240, `a${i}-`));
+      c.place();
+      drainScroll(sim, c);
+    }
+    // Every pixel the reader asked for arrived. Appends below them must not
+    // move them at all, so this is exact rather than approximate.
+    expect(sim.scrollTop).toBe(start + asked);
+  });
+
+  it('and still reaches the end rather than stalling short of it', () => {
+    for (let i = 0; i < 60; i++) {
+      sim.readerScrollsBy(600);
+      sim.append(simRows(1, 150, `n${i}-`));
+      c.place();
+      drainScroll(sim, c);
+      if (sim.scrollTop >= sim.maxScrollTop) break;
+    }
+    expect(sim.scrollTop).toBe(sim.maxScrollTop);
+    // …and having arrived, they are FOLLOWING again, so the next message
+    // carries them with it instead of leaving them one row short forever.
+    expect(c.phase(false)).toBe('FOLLOWING');
+  });
+});
