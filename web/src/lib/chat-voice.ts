@@ -250,106 +250,67 @@ export function applyChatVoice(events: readonly ChatEvent[], opts: ChatVoiceOpts
  *  belongs in a folded action run? One predicate so the fold and the render
  *  can't disagree about a given row. */
 /**
- * A FOLDED cron's whole turn is plumbing, not just its prompt.
+ * A CRON'S TURN IS MACHINERY UNLESS THE SCHEDULE SAYS OTHERWISE.
  *
- * `--fold` hides the instruction the schedule injected. It did not hide what
- * the agent then DID about it, so an hourly job still printed a tool row and a
- * one-word reply into the conversation every time it ran: six rows a day saying
- * "closed", in a chat whose actual content is one card. Reported as wanting
- * "all these instructions folded into a default collapsed list, just like chat
- * mode does for things the agent does which are not meant to communicate to us".
+ * ── THE RULE ALREADY EXISTED. IT WAS BEHIND A MODE CHECK ───────────────────
+ * `applyChatVoice` demotes everything the model wrote as prose and promotes it
+ * back only inside a segment a HUMAN started — `isHumanTurnStart` explicitly
+ * excludes a `user` event preceded by a machine notice, which is exactly a
+ * cron fire. So in Chat mode a schedule's prose has always been plumbing, with
+ * no flag and no list of words.
  *
- * That machinery already exists — `voice: 'private'` drops an assistant message
- * into the "N actions" run beside the tool calls — and chat mode already applies
- * it to any turn a human did not start. It simply never ran here, because an
- * agent-mode pane does not apply the chat voice at all. The author of a folded
- * cron has said this output is plumbing; that is a statement about the SCHEDULE,
- * not about the pane's mode, so it holds either way.
+ * It never ran in an agent-mode pane, because `applyChatVoice` returns its
+ * input untouched when the voice is not in force. That is the whole bug: the
+ * default was wrong only in the half of the product that had no opinion, and
+ * the Investing chat is an agent session.
+ *
+ * ── WHY A FLAG AND NOT JUST THE SAME RULE ──────────────────────────────────
+ * Chat mode's escape hatch is the `reply` tool: an agent that means to address
+ * the person calls it, and `voice: 'reply'` is exempt everywhere. AGENT MODE
+ * HAS NO REPLY TOOL AT ALL — it is registered only for Chat (see claude.ts,
+ * "AGENT MODE IS RAW") — so applying the rule unconditionally would leave a
+ * genuinely chatty cron in an agent pane with no way to speak.
+ *
+ * So the schedule declares it, and the default is the inverse of what it was.
+ * `--speak` means the reply IS the deliverable. Everything else is machinery,
+ * which is what a schedule's output nearly always is: it writes a card, or it
+ * pushes a notification, and the chat reply is whatever token the prompt asked
+ * for in its place.
+ *
+ * ── WHAT THIS REPLACED, AND WHY THAT WAS WRONG ─────────────────────────────
+ * First `--fold`, defaulting to false: every cron spoke unless its author
+ * remembered the flag, and none of them had anything to say. Then — worse — a
+ * hardcoded list of acknowledgement words ("ok", "done", "closed") matched
+ * against the reply text, so that an unfolded cron saying nothing would fold
+ * itself. That is overfitting a guess about English onto a question the
+ * schedule's author can simply answer, and it would have been wrong the first
+ * time a job replied "no change since yesterday" or "NET $318".
  *
  * The turn is the span from the fire to the next thing a person or another
  * schedule started — the same segmentation `applyChatVoice` uses, and the same
  * adjacency (`notice` then its bubble) that identifies a fire at all.
  */
 
-/**
- * AN ACKNOWLEDGEMENT IS NOT A REPLY, EVEN FROM AN UNFOLDED CRON.
- *
- * Reported as the cron "making its way to the main chat window". The cause was
- * not a bug in the fold — `nw-open` is declared `fold=false`, so muxpad showed
- * its turn, faithfully. What it showed was:
- *
- *     ⏱ nw-open 07:03      › 3 actions  prompt · Bash · PushNotification      ok
- *
- * Three rows whose total information is that a schedule ran. The job's real
- * output was a push notification; the chat reply is the word the PROMPT asked
- * for — "Reply with nothing but ok". Three of the four crons in that chat are
- * written this way, so it is a pattern, not one misconfigured job, and telling
- * the user to add `--fold` to each of them fixes today and not tomorrow.
- *
- * AN EXPLICIT LIST, NOT A HEURISTIC. Short-and-wordless was the tempting rule
- * and it is the wrong one: "NET $318" is two words and is the entire point of
- * the message that contains it. These are the tokens a prompt asks for when it
- * wants the agent to say nothing — they carry no information that the chip does
- * not already carry, and anything outside the list is treated as prose. Being
- * able to read the list and know exactly what it eats is worth more here than
- * catching every phrasing.
- *
- * This only ever applies INSIDE a cron fire. The same word typed in answer to a
- * person is a reply to a person.
- */
-const CRON_ACKS = new Set([
-  'ok',
-  'okay',
-  'done',
-  'none',
-  'nothing',
-  'noop',
-  'no',
-  'n/a',
-  'closed',
-  'nothing to report',
-  'no change',
-]);
-
-function isCronAcknowledgement(text: string): boolean {
-  const t = text
-    .trim()
-    .toLowerCase()
-    .replace(/[.!…]+$/, '');
-  if (CRON_ACKS.has(t)) return true;
-  // `net-watch` answers "net: no" — a named job reporting its own nothing.
-  const named = t.match(/^[\w-]{1,16}:\s*(.+)$/);
-  return named ? CRON_ACKS.has(named[1] as string) : false;
-}
-
 export function foldCronTurns(events: readonly ChatEvent[]): ChatEvent[] {
-  let inFold = false;
-  let inFire = false;
+  let quiet = false;
   let changed = false;
   const out = events.map((e, i) => {
     if (e.kind === 'notice') {
-      // The flag rides on the notice now — see NoticeEvent.fold. It used to be
+      // The flag rides on the notice — see NoticeEvent.speak. It used to be
       // read off the SHAPE of the next event, which stopped being able to tell
       // the two apart the moment every fire's prompt became folded.
-      const isFire = e.variant === 'cron';
-      inFold = isFire && e.fold === true;
-      inFire = isFire;
+      quiet = e.variant === 'cron' && e.speak !== true;
       return e;
     }
-    // Any other turn start ends the fold: a person typing, a different
-    // schedule, a message delivered from another chat.
+    // Any other turn start ends it: a person typing, a different schedule, a
+    // message delivered from another chat.
     if (e.kind === 'user') {
       const prev = events[i - 1];
       const belongsToFire = prev?.kind === 'notice' && prev.variant === 'cron';
-      if (!belongsToFire) {
-        inFold = false;
-        inFire = false;
-      }
+      if (!belongsToFire) quiet = false;
       return e;
     }
-    if (e.kind !== 'assistant' || e.voice === 'reply') return e;
-    // Folded: the whole turn is plumbing. Unfolded: only an acknowledgement is.
-    if (!inFold && !(inFire && isCronAcknowledgement(e.text ?? ''))) return e;
+    if (!quiet || e.kind !== 'assistant' || e.voice === 'reply') return e;
     // `reply` is exempt above: a cron that deliberately called the reply tool
     // was told to say something, and folding that would hide the one part the
     // author meant you to read.

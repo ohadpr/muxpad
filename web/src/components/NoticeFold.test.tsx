@@ -69,9 +69,11 @@ describe('a queued message that is a cron fire', () => {
     });
     expect(host.textContent).not.toContain('muxpad-cron');
     expect(host.textContent).not.toContain('<');
-    // …and it still says which schedule is waiting, plus what it will run.
+    // …and it still says WHICH schedule is waiting. Not what it will run:
+    // every fire's prompt folds now, so showing it here would make the queued
+    // preview noisier than the row it turns into a second later.
     expect(host.querySelector('.chat-queued-cron')?.textContent).toContain('cards-demo');
-    expect(host.textContent).toContain('Run: bash progress.sh');
+    expect(host.textContent).not.toContain('Run: bash progress.sh');
   });
 
   it('keeps a FOLDED cron quiet in the queue too', () => {

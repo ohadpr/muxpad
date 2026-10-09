@@ -115,25 +115,30 @@ export interface NoticeEvent extends Base {
    */
   body?: string;
   /**
-   * For a 'cron' notice: did its schedule declare its OUTPUT plumbing
-   * (`--fold`)?
+   * For a 'cron' notice: did its schedule declare that its REPLY is the
+   * deliverable (`--speak`)?
+   *
+   * Absent — the common case — means the turn is machinery and its prose folds
+   * in with the tool calls. That is the inverse of the flag this replaces, and
+   * the inversion is the fix: a schedule spoke unless its author remembered
+   * `--silent`, and no schedule on this machine has anything to say.
    *
    * Carried explicitly because it used to be inferred from the SHAPE of what
    * followed — a folded fire emitted a `folded` bubble, an unfolded one a plain
-   * bubble, so "was this folded" was answered by looking at the next event. Now
-   * that every fire's prompt is folded (see `expandCronFire`) the shapes are
+   * bubble, so the question was answered by looking at the next event. Now that
+   * every fire's prompt is folded (see `expandCronFire`) the shapes are
    * identical and the shape-reading would be a predicate that always says yes.
    * The flag is a fact about the SCHEDULE; it belongs on the event, not in a
    * silhouette.
    */
-  fold?: boolean;
+  speak?: boolean;
   /**
    * For a 'cron' notice: the card this job declared as its output.
    *
    * Present means the conversation is not where this job's result belongs — so
    * a fire that wrote its card and said nothing is dropped from the rendered
    * log entirely (see `dropSilentCardFires`). Carried on the event for the same
-   * reason as `fold`: it is a fact about the SCHEDULE, and inferring it from
+   * reason as `speak`: it is a fact about the SCHEDULE, and inferring it from
    * the shape of what follows is how four previous bugs in this feature
    * started.
    */
@@ -536,7 +541,7 @@ export function expandCronFire(text: string, id: string, ts: number | null): Cha
     ts,
     variant: 'cron',
     text: marker.name,
-    ...(marker.fold ? { fold: true } : {}),
+    ...(marker.speak ? { speak: true } : {}),
     ...(marker.card ? { card: marker.card } : {}),
     ...(marker.missed > 0
       ? { detail: `${marker.missed} missed fire${marker.missed === 1 ? '' : 's'} collapsed` }

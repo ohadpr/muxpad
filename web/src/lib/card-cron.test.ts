@@ -15,7 +15,7 @@ import { coalesceCronFires, dropSilentCardFires, foldCronTurns } from './chat-vo
  */
 let n = 0;
 const id = () => `e${++n}`;
-const fire = (opts: { card?: string; fold?: boolean; prompt?: string; missed?: number } = {}) => {
+const fire = (opts: { card?: string; speak?: boolean; prompt?: string; missed?: number } = {}) => {
   const out = expandCronFire(
     renderCronMarker(
       {
@@ -23,7 +23,7 @@ const fire = (opts: { card?: string; fold?: boolean; prompt?: string; missed?: n
         name: 'nw-hourly',
         at: null,
         missed: opts.missed ?? 0,
-        ...(opts.fold ? { fold: true } : {}),
+        ...(opts.speak ? { speak: true } : {}),
         ...(opts.card ? { card: opts.card } : {}),
       },
       opts.prompt ?? 'refresh the card',
@@ -57,14 +57,13 @@ const run = (e: ChatEvent[]) => coalesceCronFires(dropSilentCardFires(foldCronTu
 
 describe('a card-writing cron', () => {
   it('leaves NOTHING in the chat when it updated the card and said nothing', () => {
-    const out = run([...fire({ card: 'market', fold: true }), tool(), prose('closed')]);
+    const out = run([...fire({ card: 'market' }), tool(), prose('closed')]);
     expect(out).toEqual([]);
   });
 
   it('a whole quiet morning of them is still nothing', () => {
     const events: ChatEvent[] = [];
-    for (let i = 0; i < 9; i++)
-      events.push(...fire({ card: 'market', fold: true }), tool(), prose());
+    for (let i = 0; i < 9; i++) events.push(...fire({ card: 'market' }), tool(), prose());
     expect(run(events)).toEqual([]);
   });
 
@@ -76,14 +75,14 @@ describe('a card-writing cron', () => {
     // wrong in the fixture is how you talk yourself into "the code is broken".
     const q = user('how are the markets?');
     const a = reply('down 0.4%');
-    const out = run([q, a, ...fire({ card: 'market', fold: true }), tool(), prose()]);
+    const out = run([q, a, ...fire({ card: 'market' }), tool(), prose()]);
     expect(out).toEqual([q, a]);
   });
 
   it('…and a person typing after a silent fire still gets their turn', () => {
     const q = user('wait, and SPY?');
     const a = reply('up 0.2%');
-    const out = run([...fire({ card: 'market', fold: true }), tool(), prose(), q, a]);
+    const out = run([...fire({ card: 'market' }), tool(), prose(), q, a]);
     expect(out).toEqual([q, a]);
   });
 
@@ -101,20 +100,20 @@ describe('a card-writing cron', () => {
 
   it('keeps a fire that collapsed MISSED fires, card or no card', () => {
     // That detail is the unusual thing, and it is the thing worth a row.
-    const out = run([...fire({ card: 'market', fold: true, missed: 3 }), tool(), prose()]);
+    const out = run([...fire({ card: 'market', missed: 3 }), tool(), prose()]);
     expect(out.some((e) => e.kind === 'notice')).toBe(true);
   });
 
   it('leaves a cron with NO declared card exactly as it was', () => {
     // The chat is still the default destination; this changes nothing for a job
     // that never said otherwise.
-    const out = run([...fire({ fold: true }), tool(), prose('closed')]);
+    const out = run([...fire(), tool(), prose('closed')]);
     expect(out.some((e) => e.kind === 'notice' && e.variant === 'cron')).toBe(true);
   });
 
   it('does not swallow a person who typed into the middle of it', () => {
     const mine = user('wait, what about SPY?');
-    const out = run([...fire({ card: 'market', fold: true }), tool(), mine, reply('up 0.2%')]);
+    const out = run([...fire({ card: 'market' }), tool(), mine, reply('up 0.2%')]);
     expect(out).toContainEqual(mine);
   });
 });

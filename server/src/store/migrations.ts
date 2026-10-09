@@ -1389,6 +1389,42 @@ const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    // A CRON IS MACHINERY UNLESS IT SAYS OTHERWISE — `crons.speak`.
+    //
+    // `crons.fold` meant "the agent's reply is plumbing too", and it defaulted
+    // to FALSE: every cron spoke in the chat unless its author remembered a
+    // flag. In practice none of them have anything to say — their output is a
+    // card, or a push notification, and the chat reply is whatever token the
+    // prompt asked for in its place ("Reply with nothing but ok"). Four
+    // schedules in one chat, three of them leaving ⏱ chip + "3 actions" + "ok"
+    // behind on every fire.
+    //
+    // Chat mode already had the general rule and has had it all along: a turn
+    // no human started is not a message (`applyChatVoice`, `isHumanTurnStart`).
+    // It never ran here because an agent-mode pane does not apply the chat
+    // voice at all — so the default was wrong only in the half of the product
+    // that had no opinion.
+    //
+    // A NEW COLUMN RATHER THAN FLIPPING THE OLD ONE'S POLARITY. `fold` keeps
+    // its meaning and stops being read; `speak` is the inverse with the right
+    // default. A column whose sense silently inverted is a trap for every
+    // future reader of a row written on either side of the change.
+    //
+    // DEFAULT 0 means every existing cron goes quiet, which is the intended
+    // effect and not a side effect: the ones on this machine all deliver
+    // through a card or a push. A schedule whose reply IS the deliverable
+    // declares `--speak`, and nothing is lost meanwhile — the prose is in the
+    // fire's collapsed run, one click away, exactly where a folded cron's has
+    // always been.
+    version: 44,
+    apply: (db) => {
+      const cols = db.prepare('PRAGMA table_info(crons)').all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === 'speak')) {
+        db.exec('ALTER TABLE crons ADD COLUMN speak INTEGER NOT NULL DEFAULT 0');
+      }
+    },
+  },
 ];
 
 /** Highest version in the migration list. Exported so a test can assert the
