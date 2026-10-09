@@ -131,42 +131,38 @@ export function WorkspaceSettings({ workspace, onClose }: WorkspaceSettingsProps
           </button>
         </div>
 
+        {/* FOUR LINES OF TEXT IN THE WHOLE PANEL, and that is the spec.
+            It had three sentences under the textarea explaining where the text
+            goes and which file it is the other half of, a paragraph under
+            Capabilities arguing its own design, and a note explaining why the
+            CLI cannot throw the switch. "The contents of this dialog are some
+            of the most confusing things i've ever read" — and the reason is
+            not that any one sentence was wrong, it is that a settings panel
+            was answering questions nobody standing in front of it is asking.
+
+            What a person needs here: what this box does, what the switch does.
+            Both fit on one line. Why the switch is UI-only belongs in the
+            CLI's refusal, where somebody actually hits it, and what the
+            instructions compose into belongs in the preview, which shows the
+            real text instead of describing it. */}
         <div className="ws-settings__body">
           <section className="ws-settings__row">
-            <div className="ws-settings__rh">
-              <h3>Instructions</h3>
-              <span className="ws-settings__hint">
-                {workspace.tab_count} {workspace.tab_count === 1 ? 'chat' : 'chats'}
-              </span>
-            </div>
-            {/* ONE SENTENCE. This read as three sentences of documentation —
-                where it is added, which file it is the other half of, when it
-                is picked up — and a settings panel is not where somebody reads
-                documentation. What they need before typing is: who sees this,
-                and when. The rest is in the preview at the bottom, which shows
-                the actual thing rather than describing it. */}
-            <p className="ws-settings__desc">
-              Given to every agent in this workspace, from the moment it starts.
-            </p>
+            <h3>Agent instructions</h3>
             <textarea
               spellCheck={false}
               value={text}
-              placeholder="Where things live, house conventions, what never to point at prod…"
+              placeholder="Where things live, house conventions, what never to touch…"
               onChange={(e) => {
                 setText(e.target.value);
                 setSaved('clean');
               }}
               onBlur={commitText}
             />
+            <p className="ws-settings__desc">Every agent in this workspace starts with these.</p>
           </section>
 
           <section className="ws-settings__row">
-            <div className="ws-settings__rh">
-              <h3>Capabilities</h3>
-            </div>
-            <p className="ws-settings__desc">
-              Off until you turn them on. An agent is never told about one it does not have.
-            </p>
+            <h3>Tools</h3>
             <button
               type="button"
               className="ws-settings__toggle"
@@ -177,12 +173,9 @@ export function WorkspaceSettings({ workspace, onClose }: WorkspaceSettingsProps
               <span className="ws-settings__track" aria-hidden="true" />
               <span className="ws-settings__tlabel">
                 Slack
-                <small>read, search and post</small>
+                <small>read, search and post as you</small>
               </span>
             </button>
-            <p className="ws-settings__locked">
-              Only you can change this, and only from here — an agent cannot grant itself Slack.
-            </p>
           </section>
 
           <section className="ws-settings__row">
