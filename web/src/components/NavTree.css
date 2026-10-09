@@ -358,6 +358,16 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* NEVER SIDEWAYS. This is a vertical list and there is nothing to the right
+     of it, but the ACTIVE tab deliberately bleeds `--nt-pad` past the group's
+     padding so it touches the pane (see .navtree-tab-row[data-active]) — and a
+     4px bleed in a box that was `overflow-x: visible` gave the scroller a 284px
+     scrollWidth against a 280px client, i.e. a real horizontal scrollbar for a
+     bleed that is exactly flush with the rail's edge and clips to nothing.
+     `clip` rather than `hidden` so this does not become a scrollport on the x
+     axis at all; `hidden` first for anything that does not know `clip`. */
+  overflow-x: hidden;
+  overflow-x: clip;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
   /* Tighter LEFT gutter than right: the left edge is dead margin, so trimming
