@@ -438,37 +438,43 @@
 /* The working indicator itself moved to ChatWorking.css — there are ten of them
    now, one per turn, and they were a third of this file. This keeps only the row
    they sit in. */
-/* ── RENDERING A LONG LOG WITHOUT PAYING FOR ALL OF IT ──────────────────────
-   `content-visibility: auto` lets the browser SKIP layout and paint for rows
-   that are off screen, while keeping every node in the DOM. That last part is
-   why it is here rather than a virtualised list: find-in-page still finds
-   history, the scroll anchors the controller depends on still resolve, and a
-   search jump can still scroll to a row it did not render — none of which
-   survive a windowing implementation without being rebuilt by hand.
+/* ── NO `content-visibility` ON THE LOG, AND WHY IT WAS REMOVED ─────────────
+   It was here, with `contain-intrinsic-size: auto 90px`, to let the browser
+   skip layout and paint for off-screen rows while keeping every node in the
+   DOM. Measured on a 1,775-row chat at the time: a full style-and-layout pass
+   went from 31.4ms to 10.9ms.
 
-   Measured on a real 1,775-row chat: a full style-and-layout pass went from
-   31.4 ms to 10.9 ms, with the document height unchanged to the pixel.
+   It is gone because it was the dominant cause of "scrolling up is chippy and
+   buggy". `auto` only remembers a row the browser has ALREADY rendered once,
+   and scrolling UP is a continuous supply of rows it never has: each one
+   resolves from the 90px guess to its real height ABOVE the reader, moving
+   them. Scrolling DOWN never showed it, because growth below nobody is growth
+   nobody feels — which is exactly why it went unnoticed for so long, and why
+   the 202,971px check that was supposed to guard it could not fail: it was
+   taken on a chat whose rows had all been measured already.
 
-   `contain-intrinsic-size: auto 90px` is the half that makes it safe. Without
-   the `auto`, every off-screen row is assumed to be exactly 90px and the
-   scrollbar lurches as real heights replace guesses. With it the browser
-   REMEMBERS each row's last rendered size and reuses it, so a row that has been
-   on screen once contributes its true height forever after; 90px is only the
-   first guess for one never yet rendered. That is the difference between this
-   being free and it being a jitter machine — measured at 202,971 px before and
-   202,971 px after. */
-.chat-list > * {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 90px;
-}
+   MEASURED over an identical flick sequence on the real Investing chat:
+
+     390x844   on   40 jolted frames, worst 150px, 11,427px of growth
+               off   0 jolted frames, worst   0px,      0px of growth
+     1280x757  on   10 jolted frames, worst 142px,  1,669px of growth
+
+   Mobile is worse only because the error scales with WIDTH: at 1280px a
+   message wraps to about 90-150px and the guess is nearly right; at 390px the
+   same message is 400-600px, so every row above the reader is a 300-500px
+   surprise. The defect is on both.
+
+   WHAT IT COSTS TO REMOVE, stated plainly: that 20ms. It is a far smaller
+   loss than it was when it was measured, because the history budget
+   (lib/history-budget) now caps an auto-paged chat at a few dozen rows rather
+   than the 1,775 the figure came from — these runs rendered 42 to 86. The
+   optimisation was sized for a list the budget no longer allows to exist. */
+
 /* ── "Load earlier messages" ──────────────────────────────────────────────── */
 .chat-earlier {
   display: flex;
   justify-content: center;
   padding: 10px 0 14px;
-  /* Never skipped: it is the control that un-skips everything above it, and a
-     row the browser declines to lay out cannot be clicked. */
-  content-visibility: visible;
 }
 .chat-earlier-btn {
   font: inherit;
