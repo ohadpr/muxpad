@@ -267,6 +267,8 @@ describe('scrollEventIsTheReader', () => {
         here: { id: 'evt#12', offset: -40 },
         was: here,
         placed: true,
+        documentShifted: false,
+        inputMoved: false,
       }),
     ).toBe(true);
   });
@@ -287,6 +289,8 @@ describe('scrollEventIsTheReader', () => {
         here: { id: 'evt#900', offset: -10 },
         was: here,
         placed: true,
+        documentShifted: false,
+        inputMoved: false,
       }),
     ).toBe(false);
   });
@@ -303,6 +307,8 @@ describe('scrollEventIsTheReader', () => {
         here,
         was: here, // …and the row did not move
         placed: true,
+        documentShifted: false,
+        inputMoved: false,
       }),
     ).toBe(false);
   });
@@ -322,6 +328,8 @@ describe('scrollEventIsTheReader', () => {
       here: { id: 'evt#12', offset: -40 },
       was: here,
       placed: true,
+      documentShifted: false,
+      inputMoved: false,
     });
     expect(gesture).toBe(true);
     // …and the very next burst is judged on its own merits, not on that history.
@@ -332,6 +340,8 @@ describe('scrollEventIsTheReader', () => {
         here: { id: 'evt#900', offset: -10 },
         was: { id: 'evt#12', offset: -40 },
         placed: true,
+        documentShifted: false,
+        inputMoved: false,
       }),
     ).toBe(false);
   });
@@ -349,6 +359,8 @@ describe('scrollEventIsTheReader', () => {
         here: { id: 'evt#300', offset: -8 },
         was: { id: 'evt#40', offset: -120 },
         placed: true,
+        documentShifted: false,
+        inputMoved: false,
       }),
     ).toBe(true);
   });
@@ -367,13 +379,75 @@ describe('scrollEventIsTheReader', () => {
         here: { id: 'evt#1', offset: 0 },
         was: here,
         placed: false,
+        documentShifted: false,
+        inputMoved: false,
       }),
     ).toBe(false);
   });
 
   it('does not guess when there is nothing anchorable to compare', () => {
     expect(
-      scrollEventIsTheReader({ wrote: 5000, scrollTop: 1, here: null, was: here, placed: true }),
+      scrollEventIsTheReader({
+        wrote: 5000,
+        scrollTop: 1,
+        here: null,
+        was: here,
+        placed: true,
+        documentShifted: false,
+        inputMoved: false,
+      }),
+    ).toBe(false);
+  });
+
+  /**
+   * ── THE TWO FACTS THAT MAKE THIS AGREE WITH `place()` ────────────────────
+   * Both entry points must reach the same verdict for the same frame. They did
+   * not: this predicate read "the anchor row sits somewhere new" as a gesture,
+   * and PARTIAL anchoring produces exactly that with nobody touching anything
+   * — the engine pays some of a prepend and the remainder shows up as
+   * displacement. Measured, one frame landed at 2000 delivered commit-first
+   * and 2450 delivered scroll-first.
+   */
+  it('does not blame the reader when the document moved under them', () => {
+    expect(
+      scrollEventIsTheReader({
+        wrote: 5000,
+        scrollTop: 3800,
+        here: { id: 'evt#12', offset: -40 },
+        was: here,
+        placed: true,
+        documentShifted: true,
+        inputMoved: false,
+      }),
+    ).toBe(false);
+  });
+
+  it('…unless their own input says they did, which outranks the inference', () => {
+    expect(
+      scrollEventIsTheReader({
+        wrote: 5000,
+        scrollTop: 3800,
+        here: { id: 'evt#12', offset: -40 },
+        was: here,
+        placed: true,
+        documentShifted: true,
+        inputMoved: true,
+      }),
+    ).toBe(true);
+  });
+
+  it('still refuses before anything has been placed, whatever the input says', () => {
+    // An iOS resume resets overflow scroll and fires a scroll reporting 0.
+    expect(
+      scrollEventIsTheReader({
+        wrote: null,
+        scrollTop: 0,
+        here: { id: 'evt#1', offset: 0 },
+        was: here,
+        placed: false,
+        documentShifted: false,
+        inputMoved: true,
+      }),
     ).toBe(false);
   });
 });
