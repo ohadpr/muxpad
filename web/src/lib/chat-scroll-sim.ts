@@ -163,6 +163,40 @@ export class SimScroller implements ScrollSurface {
    * this from input rather than from `scrollTop` is that the two are
    * indistinguishable once they have been added together.
    */
+  /**
+   * Motion the simulator is TOLD about, because the thing being modelled is a
+   * lifecycle and not a number: contact, then the glide that outlives it.
+   * `fling()` drives both.
+   */
+  inMotion(): boolean {
+    return this.motion;
+  }
+
+  private motion = false;
+
+  /** A finger lands. Nothing may insert above the reader until it settles. */
+  touchDown(): this {
+    this.motion = true;
+    return this;
+  }
+
+  /**
+   * The reader glides: movement with NO input event behind it, which is what
+   * a momentum fling is after the finger lifts.
+   */
+  glideBy(delta: number): this {
+    this.motion = true;
+    this.assign(this.scrollTop + delta);
+    this.pending++;
+    return this;
+  }
+
+  /** The glide stops — `scrollend`, or the quiet timer expiring. */
+  motionEnds(): this {
+    this.motion = false;
+    return this;
+  }
+
   takeReaderIntent(): number {
     const d = this.readerIntent;
     this.readerIntent = 0;

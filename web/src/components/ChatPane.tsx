@@ -1739,12 +1739,30 @@ export function ChatPane({
         if (fresh.length) {
           for (const e of fresh) byId.current.add(e.id);
           if (msg.phase === 'older') {
+            // ── NOT WHILE THE READER IS STILL MOVING ──────────────────────
+            // A momentum glide fires no input of any kind — only `scroll` —
+            // so a prepend landing inside one cannot be told apart from the
+            // reader's own travel. Measured in the simulator, it ERASES the
+            // glide at every engine anchoring fraction: nothing, half, and in
+            // full alike. On a phone that is the reported "scrolling up is
+            // chippy and buggy", because scrolling up is precisely what asks
+            // for these pages.
+            //
+            // No discriminator can recover it — the engine's share and the
+            // reader's arrive summed into one number. So the collision is not
+            // resolved, it is PREVENTED: the rows wait in a buffer, the
+            // document stands still for the whole gesture, and they land in
+            // one commit once the motion is over. See `inMotion`.
+            //
             // The batch is chronological and entirely before the current head,
-            // so prepend it wholesale. No geometry is captured: the reader's
-            // place is held by their intent (a message id), which the commit
-            // subscription re-satisfies against the document as it is AFTER the
-            // prepend. Capturing heights across a commit is what made the old
-            // compensation wrong whenever a live append landed in the same one.
+            // so it prepends wholesale whenever it does land. No geometry is
+            // captured: the reader's place is held by their intent (a message
+            // id), which the commit subscription re-satisfies against the
+            // document as it is AFTER the prepend.
+            if (scroll.current?.readerIsMoving()) {
+              deferredOlder.current = [...fresh, ...deferredOlder.current];
+              return;
+            }
             ordered.current = [...fresh, ...ordered.current];
           } else {
             ordered.current = [...ordered.current, ...fresh];
@@ -2598,6 +2616,12 @@ export function ChatPane({
     // in it is not a reader digging through history, it is a chat that cannot be
     // read or scrolled at all, and the budget must not be able to produce that.
     if (why === 'no') return;
+    // NOTHING MORE WHILE A PAGE IS WAITING TO LAND. Deferring insertion during
+    // a gesture (see `deferredOlder`) leaves the reader near the top with
+    // nothing pushing them down, so this condition stays true and every pass
+    // asks again — measured, one glide flushed 127,000px and the chat reached
+    // 1,162 rows. The buffer is the back-pressure.
+    if (deferredOlder.current.length > 0) return;
     if (why === 'top-zone' && !canAutoPageHistory({ loaded: events.length, grants: olderGrants })) {
       return;
     }
@@ -2638,6 +2662,7 @@ export function ChatPane({
       c.dispatch({ t: 'jump-to-latest' });
       return;
     }
+    if (deferredOlder.current.length > 0) return;
     if (!c.wantsOlder(hasMoreOlder)) return;
     if (requestOlder()) c.dispatch({ t: 'sought' });
   });
@@ -3083,6 +3108,9 @@ export function ChatPane({
     if (
       el.scrollTop < topPageZone(el.clientHeight) &&
       events.length > 0 &&
+      // Back-pressure: a page already waiting on the reader's gesture is a
+      // page we have, so asking for another buys nothing and costs a flush.
+      deferredOlder.current.length === 0 &&
       // THE BUDGET. This path is the one that ran away: it pages whenever the
       // reader is near the top, and its only limit was reaching the start of
       // the transcript. Measured at 1,775 rows / 202,971 px and still climbing.
@@ -3093,6 +3121,33 @@ export function ChatPane({
       requestOlder();
     }
   };
+
+  /**
+   * Older pages that arrived while the reader was mid-gesture, oldest first.
+   * Flushed by the effect below the moment their motion settles.
+   */
+  const deferredOlder = useRef<ChatEvent[]>([]);
+
+  /**
+   * Land the buffered history once the gesture is over.
+   *
+   * Polled rather than driven by an event, because the thing being waited for
+   * is the ABSENCE of one: `scrollend` is not on every engine, so motion ends
+   * on a quiet timer, and nothing fires when a timer expires. A 60ms tick is
+   * two or three frames of latency on a buffer that is usually empty.
+   */
+  useEffect(() => {
+    if (!active) return;
+    const id = window.setInterval(() => {
+      if (deferredOlder.current.length === 0) return;
+      if (scroll.current?.readerIsMoving()) return;
+      const held = deferredOlder.current;
+      deferredOlder.current = [];
+      ordered.current = [...held, ...ordered.current];
+      setEvents(ordered.current);
+    }, 60);
+    return () => window.clearInterval(id);
+  }, [active]);
 
   const scrollToBottom = () => {
     setShowScrollDown(false);

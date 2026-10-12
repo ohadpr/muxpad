@@ -84,6 +84,25 @@ export interface ScrollSurface {
   setScrollTop(value: number): void;
 
   /**
+   * Is the reader's own motion still in flight — a finger on the glass, or the
+   * glide that follows it?
+   *
+   * ── WHY ANYTHING NEEDS TO ASK ─────────────────────────────────────────────
+   * A momentum glide fires NO wheel, NO touchmove and NO key for up to a
+   * second or two after the finger lifts — only `scroll`. So the reader's
+   * input is silent for the part of the gesture that covers the most distance,
+   * and scrolling UP is exactly when older history arrives. A prepend landing
+   * in that window is indistinguishable from the reader's own movement, and
+   * measured in the simulator it ERASES the glide at every engine payment
+   * fraction — nothing, half and in full alike.
+   *
+   * The answer is not a better discriminator. It is to stop creating the
+   * collision: history is not inserted while this is true, so the document
+   * stands still for the whole gesture and plain arithmetic settles who moved.
+   */
+  inMotion(): boolean;
+
+  /**
    * How far the READER has asked to move since this was last called, in
    * pixels, and zero if they have not touched anything.
    *
@@ -177,6 +196,17 @@ export class ChatScrollController {
   /** The row under the viewport top right now. */
   anchorHere(): Anchor | null {
     return this.surface.anchorHere();
+  }
+
+  /**
+   * Is the reader's own motion still in flight?
+   *
+   * The caller holds older history back while this is true — see `inMotion` on
+   * the surface for why a prepend landing inside a glide cannot be told from
+   * the glide itself.
+   */
+  readerIsMoving(): boolean {
+    return this.surface.inMotion();
   }
 
   /** May we ask for another page of history to reach the current intent? */
