@@ -88,6 +88,13 @@ export function cronsRoutes(deps: {
         close_when_done: z.boolean().optional(),
         /** Omitted = infer from the schedule (see isDatedSchedule). */
         once: z.boolean().optional(),
+        /** DEAD, both of them. Accepted so an older caller does not 400; see
+         *  `muxpad say` for what replaced the idea. */
+        fold: z.boolean().optional(),
+        /** The card this job writes — see CronMarker.card. Bounded to the same
+         *  shape a card name takes; the store does not validate it against an
+         *  existing card because a cron may legitimately create one. */
+        card: z.string().min(1).max(40).optional(),
       })
       .safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json(bad(parsed.error.issues[0]?.message ?? 'invalid body'), 400);
@@ -168,6 +175,8 @@ export function cronsRoutes(deps: {
       // schedule — and `?? undefined` matters: `once: false` is a real answer
       // ("yes I do want this annually") and must not read as "not stated".
       ...(body.once === undefined ? {} : { once: body.once }),
+      ...(body.fold === undefined ? {} : { fold: body.fold }),
+      ...(body.card === undefined ? {} : { card: body.card }),
       next_due_at: nextAfter(schedule, tz, now),
     });
     emitCronTabUpdate(deps, cron.target_pane);

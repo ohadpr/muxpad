@@ -30,10 +30,22 @@ jobs:
             command: pnpm --dir shared exec vitest run
           - check: web tests (jsdom)
             command: pnpm --dir web exec vitest run
-          - check: server tests (serial)
-            # Parallel file execution intermittently times out ~9 integration
-            # tests under load; they pass serially. Do not increase timeouts.
-            command: pnpm --dir server exec vitest run --no-file-parallelism
+          # SHARDED, and serial WITHIN a shard. Parallel file execution
+          # intermittently times out ~9 integration tests under load and they
+          # pass serially, so `--no-file-parallelism` stays — but the whole
+          # suite run serially is ~14 min on a fast laptop and overran the
+          # 20-minute job ceiling on a CI runner, which GitHub reports as
+          # "cancelled" rather than a timeout and so read as a flake for days.
+          # Sharding cuts the wall clock without touching the execution model;
+          # do not fix this by raising the ceiling instead.
+          - check: server tests 1/4
+            command: pnpm --dir server exec vitest run --no-file-parallelism --shard=1/4
+          - check: server tests 2/4
+            command: pnpm --dir server exec vitest run --no-file-parallelism --shard=2/4
+          - check: server tests 3/4
+            command: pnpm --dir server exec vitest run --no-file-parallelism --shard=3/4
+          - check: server tests 4/4
+            command: pnpm --dir server exec vitest run --no-file-parallelism --shard=4/4
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4

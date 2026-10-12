@@ -1,6 +1,8 @@
 import type { ChatClock, SpawnRound } from '@muxpad/shared';
+import type { MentionedChat } from '@muxpad/shared';
 import { type ArchiveSearchHit, req } from '../api';
 import type { ChatChipChat } from '../components/ChatChip';
+import { canFlushTail, windowStart } from './log-window';
 import {
   type SearchableTab,
   type WorkspaceTabs,
@@ -751,36 +753,69 @@ export function liveSpawnedChildren(
 export type LogEntry<T> = { kind: 'entry'; node: T } | { kind: 'card'; card: SpawnCard };
 
 /**
- * Interleave the spawn cards into a conversation's entries, by TIME.
+ * Place the spawn cards into the log, each at the moment its child started.
  *
- * `entries` are the transcript's top-level rows in the order they are rendered,
- * each with the epoch ms it happened at (`null` for a row whose transcript line
- * carried no parseable timestamp). `cards` are `spawnCards`' output — ascending
- * by spawn time.
+ * ── A CARD IS PLACEABLE ONLY INSIDE THE LOADED WINDOW ───────────────────────
+ * The cards and the transcript come from two different places at two different
+ * speeds — the cards from the sidebar corpus and one small HTTP call, the
+ * transcript streamed over the websocket and paged in on demand. So at any
+ * moment the log covers a WINDOW of time, and a card whose moment falls outside
+ * it cannot be put anywhere honest.
  *
- * A card is emitted before the first entry that happened AFTER it, which is what
- * "where the spawn happened" means when the spawn itself is not a transcript
- * line: the tool call that created the child is somewhere in the turn, and the
- * card lands between that turn and whatever came next. Cards older than the
- * oldest loaded entry come out at the top (they belong further back than the
- * history window reaches, and the top is where "further back" is); cards newer
- * than the last entry come out at the bottom, which is where a spawn that just
- * happened belongs.
+ * Both ends of that were wrong, and each produced the same complaint a
+ * different way round.
  *
- * An entry with NO time is not a boundary — it cannot say whether the spawn came
- * before or after it, and guessing would put the card in a different place on
- * the next reload.
+ * THE TAIL: with no entries at all, the placement loop never ran and the final
+ * flush took every card. "I see all the historic agents it launched stacked at
+ * the bottom… only after a few moments does it resolve into the proper chat
+ * history."
  *
- * Pure and generic over the node type on purpose: placement is the half of this
- * that can be wrong, and it is worth being able to test it against `['a','b']`
- * rather than a mounted 6,000-line component.
+ * THE HEAD: a card older than the OLDEST loaded message satisfies
+ * `card.at <= entry.at` against the very first entry, so every one of them
+ * piles up there. Measured on a chat that opened with 38 rows: 24 of them were
+ * cards, in one unbroken run starting at index 1. Scrolling up ran straight
+ * into it — "I bumped into a ton of cards and suddenly a load button appeared".
+ * Opening at the bottom made this worse rather than causing it: the window got
+ * small and the pile did not.
+ *
+ * So a card renders only where its moment is actually represented:
+ *
+ *   older than the first loaded entry  → wait, unless there IS no more history
+ *                                        to load, in which case it genuinely
+ *                                        predates the conversation and belongs
+ *                                        at the head
+ *   inside the window                  → in its place, which is the point
+ *   newer than the last entry          → the tail, where the bottom is the
+ *                                        answer rather than a guess
+ *
+ * The cost is that a card waits until you have paged back to its moment. That
+ * is the honest version of what it was already doing badly: it was never
+ * showing you *when* the child started, it was showing you a pile at whichever
+ * edge happened to be nearest.
  */
 export function interleaveSpawnCards<T>(
   entries: readonly { at: number | null; node: T }[],
   cards: readonly SpawnCard[],
+  opts?: { hasMoreOlder?: boolean; floor?: number | null },
 ): LogEntry<T>[] {
   const out: LogEntry<T>[] = [];
-  let i = 0;
+  // ── THE WINDOW'S LOWER EDGE IS THE TRANSCRIPT'S, NOT THIS LIST'S ──────────
+  // `entries` has already had browser moments injected into it by the caller,
+  // and a browser opening is dated from whenever it opened — which can be older
+  // than every message loaded. Deriving the floor from the first dated entry
+  // therefore read that moment's timestamp and let every card through, which is
+  // how the 24-card wall survived the first attempt at this.
+  //
+  // So the caller passes the oldest loaded TRANSCRIPT time explicitly. Falling
+  // back to the first dated entry keeps the function honest for callers that
+  // inject nothing.
+  const floor =
+    opts?.hasMoreOlder === false
+      ? null
+      : (opts?.floor ?? entries.find((e) => e.at !== null)?.at ?? null);
+  // The shared rule — see lib/log-window, which exists because this was written
+  // three times and was wrong at an edge each time.
+  let i = windowStart(cards, floor);
   for (const entry of entries) {
     if (entry.at !== null) {
       while (i < cards.length && (cards[i] as SpawnCard).at <= entry.at) {
@@ -789,7 +824,10 @@ export function interleaveSpawnCards<T>(
     }
     out.push({ kind: 'entry', node: entry.node });
   }
-  for (; i < cards.length; i++) out.push({ kind: 'card', card: cards[i] as SpawnCard });
+  // Only once the log has a timeline to hang them on — see above.
+  if (canFlushTail(entries)) {
+    for (; i < cards.length; i++) out.push({ kind: 'card', card: cards[i] as SpawnCard });
+  }
   return out;
 }
 
@@ -1040,6 +1078,58 @@ export type MentionSegment =
  * but the segment keeps the text as written, so nothing the user typed is
  * rewritten by the renderer.
  */
+/**
+ * Every chat this draft mentions, resolved to handles, in order and deduped.
+ *
+ * What goes out with the message so the agent gets IDS rather than the
+ * characters `@Investing` — see shared/src/chat-context.ts for why a mention is
+ * a reference now and not a route.
+ *
+ * AN EXPLICIT PICK OUTRANKS THE NAME, the same way `parseDirective` had it: if
+ * the user chose a chat in the picker and its token is still in the draft, that
+ * is the chat, even when another one has since taken the same name. Re-reading
+ * the text is the fallback for a mention typed by hand.
+ *
+ * Deduped because "@Main ... @Main again" is one chat, and a block that lists it
+ * twice invites the reader to think there are two.
+ */
+export function mentionedChats(
+  text: string,
+  corpus: readonly MentionChat[],
+  picks: readonly MentionPick[] = [],
+): MentionedChat[] {
+  const out: MentionedChat[] = [];
+  const seen = new Set<string>();
+  const add = (name: string, chat: MentionChat | undefined) => {
+    if (!chat || seen.has(chat.tabId)) return;
+    seen.add(chat.tabId);
+    out.push({ name, tabId: chat.tabId, paneIds: chat.paneIds });
+  };
+  // Picks first: an anchored choice is the strongest evidence there is.
+  const lower = text.toLowerCase();
+  // …and the OFFSETS they consumed, because one token must resolve ONCE. Two
+  // chats can share a name, so a pick saying "@Main is T3" followed by a
+  // name-pass that reads the same `@Main` as T2 puts both in the list — the
+  // picked one and the one the pick existed to overrule.
+  const claimed = new Set<number>();
+  for (const p of picks) {
+    if (!p.name || !tokenAt(lower, p.start, p.name.toLowerCase())) continue;
+    claimed.add(p.start);
+    add(
+      p.name,
+      corpus.find((c) => c.tabId === p.tabId),
+    );
+  }
+  // Offsets are tracked by walking the segments, which is the only way to know
+  // WHERE a mention was — `parseMentions` returns them in order but not placed.
+  let pos = 0;
+  for (const seg of parseMentions(text, corpus)) {
+    if (seg.kind === 'mention' && !claimed.has(pos)) add(seg.chat.tabName, seg.chat);
+    pos += seg.text.length;
+  }
+  return out;
+}
+
 export function parseMentions(text: string, corpus: readonly MentionChat[]): MentionSegment[] {
   if (!text.includes('@') || corpus.length === 0) return [{ kind: 'text', text }];
   const ordered = byNameLength(corpus);
@@ -1143,6 +1233,22 @@ export function parseDirective(
 }
 
 // ── The markers ──────────────────────────────────────────────────────────────
+//
+// ─── THE SENDING HALF IS DORMANT ────────────────────────────────────────────
+// `parseDirective`, `directTo` and `renderDirectMarker` below have NO caller in
+// the app. A leading `@Name <text>` used to route the draft to that chat; it is
+// context now (shared/src/chat-context.ts has the why), so nothing in the
+// composer reaches them.
+//
+// They are kept, rather than deleted, because the RECEIVING half is live and
+// they are one feature: `parseDirectMarker` and `parseReportMarker` still render
+// a `<muxpad-direct>` message and the `<muxpad-report>` that answers it, which
+// is what an agent-initiated direction (`muxpad agent send`) draws. Re-enabling
+// the send side is a call to `directTo` from an explicit gesture — a picker
+// action, say — and not a rebuild.
+//
+// If you are reading this because grep said these were used: they are not. The
+// tests are the only callers.
 //
 // A directed message and its answer are REAL delivered messages: muxpad never
 // writes an agent's transcript, it tails the file the harness owns. So each one

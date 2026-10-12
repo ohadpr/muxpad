@@ -1,3 +1,4 @@
+import { setSayKey } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import type { AgentBridge } from './agent-bridge.js';
@@ -10,6 +11,7 @@ import { browserHostEntry } from './browser/hostEntry.js';
 import type { CronScheduler } from './cron/CronScheduler.js';
 import { EventBus } from './events.js';
 import { type Funnel, localFunnel } from './funnel.js';
+import { initPaneKeys } from './pane-key.js';
 import type { PtydCache } from './ptyd-cache.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
 import type { Presence, PushService } from './push.js';
@@ -18,6 +20,7 @@ import { agentSessionsRoutes } from './routes/agent-sessions.js';
 import { appsRoutes } from './routes/apps.js';
 import { attachmentsRoutes } from './routes/attachments.js';
 import { browserProxyRoutes, browsersRoutes } from './routes/browsers.js';
+import { cardsRoutes } from './routes/cards.js';
 import { cronsRoutes } from './routes/crons.js';
 import { eventsRoutes } from './routes/events.js';
 import { openRoutes } from './routes/open.js';
@@ -26,11 +29,14 @@ import { panesScopedRoutes, panesTabScopedRoutes } from './routes/panes.js';
 import { publishRoutes } from './routes/publish.js';
 import { pushRoutes } from './routes/push.js';
 import { archiveRoutes, searchRoutes } from './routes/search.js';
+import { slackRoutes } from './routes/slack.js';
 import { summaryRoutes } from './routes/summary.js';
 import { tabsRoutes } from './routes/tabs.js';
 import { voiceRoutes } from './routes/voice.js';
 import { workspacesRoutes } from './routes/workspaces.js';
 import { sameOriginGuard } from './same-origin.js';
+import { readOrCreateSayKey } from './say-key.js';
+import { migrateLegacySlackEnv } from './slack-secrets.js';
 import type { TabActivity } from './tab-activity.js';
 import type { VoiceSessionManager } from './voice/VoiceSessionManager.js';
 
@@ -187,8 +193,28 @@ export function createApp(deps: AppDeps): Hono {
     return c.body(null, 204);
   });
   app.route('/api/workspaces', workspacesRoutes(resolved));
+  // Slack lives on the SERVER now, not in the CLI: this process holds the
+  // token and decides, and the caller's identity comes from its process
+  // ancestry rather than from an environment variable it can set.
+  // `muxpad say` — the key that tells an invocation from a mention of one.
+  // Set before any transcript is read, because a reader with no key leaves the
+  // marker as raw tool output rather than guessing.
+  // Per-pane keys, so a `muxpad` invocation can prove which pane it is in
+  // without ptyd being asked anything — see pane-key.ts.
+  initPaneKeys(resolved.dataDir);
+  const theSayKey = readOrCreateSayKey(resolved.dataDir);
+  setSayKey(theSayKey);
+  app.get('/api/say/key', (c) => c.json({ key: theSayKey }));
+
+  // ONE explicit migration, here and nowhere else — a read path that deletes
+  // a file is how the author's own Slack token got destroyed by a unit test.
+  migrateLegacySlackEnv(resolved.dataDir);
+  app.route('/api/slack', slackRoutes({ db: resolved.db, dataDir: resolved.dataDir }));
   app.route('/api/tabs', tabsRoutes(resolved));
   app.route('/api/tabs', panesTabScopedRoutes(resolved));
+  // Chat cards — named persistent blocks pinned in a conversation. Tab-scoped
+  // because a card belongs to a chat; see routes/cards.ts.
+  app.route('/api/tabs', cardsRoutes(resolved));
   app.route('/api/panes', panesScopedRoutes(resolved));
   app.route('/api/panes', paneIoRoutes(resolved));
   app.route('/api/panes', attachmentsRoutes(resolved));

@@ -105,6 +105,7 @@ export function BrowserModal({
     <div className="browser-modal" data-testid="browser-modal">
       {/* biome-ignore lint/a11y/useKeyWithClickEvents: Escape is handled on the document above. */}
       <div className="browser-modal__scrim" onClick={onClose} />
+      {/* biome-ignore lint/a11y/useSemanticElements: <dialog> brings its own top layer, backdrop and focus trap; this modal frames a cross-origin iframe, binds Escape on the document because focus lives inside it, and hands the wheel back on close. */}
       <div className="browser-modal__panel" role="dialog" aria-label={`browser · ${data.profile}`}>
         <div className="browser-modal__bar">
           <span className="browser-modal__title">browser · {data.profile}</span>

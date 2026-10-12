@@ -36,6 +36,7 @@ import {
   type AgentMode,
   type ChatEvent,
   backendSupportsChatMode,
+  isAgentLaunchTool,
   needsReplyFallback,
 } from '@muxpad/shared';
 
@@ -104,18 +105,26 @@ export function chatVoiceActive(opts: ChatVoiceOpts): boolean {
 
 /**
  * A `user` event that a PERSON (or another agent's `muxpad agent send`) caused
- * — as opposed to a cron fire, which is also a user-role message but which
- * nobody is sitting there waiting on.
+ * — as opposed to the messages MUXPAD injects, which are also user-role but
+ * which nobody is sitting there waiting on.
  *
- * A cron fire is split by the normalizer into an adjacent pair: a `notice` with
- * variant 'cron' immediately followed by its prompt bubble (see expandCronFire).
- * That adjacency is the only signal in the event stream, and it is the same one
- * ws.ts reads off the raw text, so the two agree.
+ * Each of those is split by the normalizer into an adjacent pair: a `notice`
+ * carrying the marker, immediately followed by the bubble it delivered (see
+ * `expandCronFire` and `expandSpawnDelivery`). That adjacency is the only signal
+ * in the event stream, and it is the same division `isMachineMessage` draws off
+ * the raw text server-side, so the two agree.
+ *
+ * THE SET IS THE THING THAT GETS FORGOTTEN — this read `variant === 'cron'` and
+ * nothing else, so when the join landed, a batch of sub-chat reports counted as
+ * a person starting a turn. In Chat mode that promotes the reply to a bubble
+ * addressed to a reader who never asked anything.
  */
+const MACHINE_TURN_VARIANTS = new Set(['cron', 'report']);
+
 function isHumanTurnStart(events: readonly ChatEvent[], i: number): boolean {
   if (events[i]?.kind !== 'user') return false;
   const prev = events[i - 1];
-  return !(prev?.kind === 'notice' && prev.variant === 'cron');
+  return !(prev?.kind === 'notice' && MACHINE_TURN_VARIANTS.has(prev.variant));
 }
 
 /**
@@ -240,6 +249,345 @@ export function applyChatVoice(events: readonly ChatEvent[], opts: ChatVoiceOpts
 /** Is this event one the chat shows as a MESSAGE, or private machinery that
  *  belongs in a folded action run? One predicate so the fold and the render
  *  can't disagree about a given row. */
+/**
+ * A CRON'S TURN IS MACHINERY UNLESS THE SCHEDULE SAYS OTHERWISE.
+ *
+ * ── THE RULE ALREADY EXISTED. IT WAS BEHIND A MODE CHECK ───────────────────
+ * `applyChatVoice` demotes everything the model wrote as prose and promotes it
+ * back only inside a segment a HUMAN started — `isHumanTurnStart` explicitly
+ * excludes a `user` event preceded by a machine notice, which is exactly a
+ * cron fire. So in Chat mode a schedule's prose has always been plumbing, with
+ * no flag and no list of words.
+ *
+ * It never ran in an agent-mode pane, because `applyChatVoice` returns its
+ * input untouched when the voice is not in force. That is the whole bug: the
+ * default was wrong only in the half of the product that had no opinion, and
+ * the Investing chat is an agent session.
+ *
+ * ── THE ESCAPE HATCH IS PER FIRE, NOT PER SCHEDULE ─────────────────────────
+ * Chat mode's is the `reply` tool: an agent that means to address the person
+ * calls it, and `voice: 'reply'` is exempt everywhere. Agent mode registers no
+ * muxpad tools at all ("AGENT MODE IS RAW" — claude.ts), so it gets the same
+ * distinction through the CLI: `muxpad say` prints a marker that the
+ * normalizer lifts into a `reply`-voiced message. Nothing here special-cases
+ * it; it was already exempt.
+ *
+ * ── TWO WRONG ANSWERS CAME FIRST, AND THEY WERE WRONG THE SAME WAY ─────────
+ * `--fold` (then `--speak`) put the switch on the SCHEDULE, and a schedule
+ * cannot answer the question. `net-watch` is "silent unless a trigger fires":
+ * declared quiet it hides the one message that matters, declared speaking it
+ * prints "net: no" every weekday. Only the fire knows.
+ *
+ * Worse was the attempt in between — a hardcoded list of acknowledgement words
+ * ("ok", "done", "closed") matched against the reply text, so a chatty cron
+ * saying nothing would fold itself. Overfitting a guess about English onto a
+ * question the agent can simply answer outright, and wrong the first time a
+ * job replies "no change since yesterday".
+ *
+ * The turn is the span from the fire to the next thing a person or another
+ * schedule started — the same segmentation `applyChatVoice` uses, and the same
+ * adjacency (`notice` then its bubble) that identifies a fire at all.
+ */
+
+export function foldCronTurns(events: readonly ChatEvent[]): ChatEvent[] {
+  let quiet = false;
+  let changed = false;
+  const out = events.map((e, i) => {
+    if (e.kind === 'notice') {
+      // The flag rides on the notice — see NoticeEvent.speak. It used to be
+      // read off the SHAPE of the next event, which stopped being able to tell
+      // the two apart the moment every fire's prompt became folded.
+      quiet = e.variant === 'cron';
+      return e;
+    }
+    // Any other turn start ends it: a person typing, a different schedule, a
+    // message delivered from another chat.
+    if (e.kind === 'user') {
+      const prev = events[i - 1];
+      const belongsToFire = prev?.kind === 'notice' && prev.variant === 'cron';
+      if (!belongsToFire) quiet = false;
+      return e;
+    }
+    if (!quiet || e.kind !== 'assistant' || e.voice === 'reply') return e;
+    // `reply` is exempt above: a cron that deliberately called the reply tool
+    // was told to say something, and folding that would hide the one part the
+    // author meant you to read.
+    if (e.voice === 'private') return e;
+    changed = true;
+    return { ...e, voice: 'private' as const };
+  });
+  return changed ? out : (events as ChatEvent[]);
+}
+
+/**
+ * Does this event belong INSIDE a collapsed "N actions" run, rather than
+ * getting a row of its own?
+ *
+ * Lifted out of ChatPane's renderer so the fold rules all sit in one file: the
+ * coalescer below has to ask exactly this question to know whether a stretch of
+ * transcript is silent, and a second, slightly-different copy of it in a lib
+ * would decide a chip was unnecessary over something the reader can plainly see.
+ */
+export function isAction(e: ChatEvent): boolean {
+  // Agent launches break runs like prose does, so each renders as its own
+  // launch bubble rather than being buried in "5 actions · Agent ×5".
+  if (e.kind === 'tool_use' && isAgentLaunchTool(e.name)) return false;
+  return (
+    e.kind === 'tool_use' ||
+    e.kind === 'tool_result' ||
+    e.kind === 'thinking' ||
+    // A folded cron's injected instruction. A real delivered message, but
+    // nobody typed it and nobody rereads it, so it belongs in the run with the
+    // work it caused rather than as a bubble of its own.
+    (e.kind === 'user' && e.folded === true) ||
+    isPrivateReasoning(e)
+  );
+}
+
+/** Time-of-day in the VIEWER's zone. The cron's own zone is the scheduling
+ *  truth; this answers "when did it land for me". Shared with NoticeCard so a
+ *  coalesced chip and a lone one cannot format the same instant two ways. */
+export function fireTime(ts: number | null): string {
+  if (ts === null) return '';
+  return new Date(ts).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+}
+
+/**
+ * A FIRE WHOSE OUTPUT IS A CARD, AND WHICH SAID NOTHING, RENDERS NOTHING.
+ *
+ * ── THE PRIMITIVE THIS FIXES ────────────────────────────────────────────────
+ * A cron already said where it RUNS. It could not say where its OUTPUT GOES, so
+ * that fact was being expressed with a rendering flag — which is why the flag
+ * kept needing re-explaining, and why a card refresher still cost a chip and a
+ * fold per quiet stretch in a chat whose entire content is the card. The
+ * author's actual knowledge is "this job's output is the `market` card";
+ * `--card` lets them say it, and then the rule writes itself.
+ *
+ * ── WHY DROPPING IS NOT THE DISAPPEARANCE THIS CODEBASE AVOIDS ──────────────
+ * "Collapse, never drop" has been the rule everywhere else, and it still is for
+ * anything anybody SAID. What goes here is muxpad's own annotation (the chip is
+ * synthesised from a marker, not a message), muxpad's own injected prompt, and
+ * the tool calls of a turn that produced no words at all. The harness
+ * transcript and the FTS archive are untouched — `muxpad agent transcript` and
+ * `muxpad search` still find every one of them.
+ *
+ * And the liveness signal does not go away, it moves somewhere better: the
+ * card's freshness rail fades across its cadence and turns amber when the
+ * writer stops. "Did it run?" is answered on the thing you are looking at
+ * rather than by a chip six screens up the log.
+ *
+ * ── THE SILENCE IS LOAD-BEARING, AND IT STOPPED BEING ───────────────────────
+ * Only a turn that said NOTHING is dropped. That used to follow from prose
+ * being visible: a fire that hit an error explained itself, the explanation
+ * was an ordinary message, and the span was no longer silent.
+ *
+ * Then every cron turn's prose became machinery, and this comment quietly
+ * became false. Measured after that change: a card fire whose script was
+ * missing, which then said "the card script is missing — I could not update
+ * it", rendered ZERO rows. The job failed, said so, and the chat showed
+ * nothing. Found by an adversarial review of the change that caused it.
+ *
+ * So a FAILED tool result now breaks the span by itself, without needing
+ * anybody to say anything about it. That is the right signal anyway: it is the
+ * machine's own account of what happened rather than the model's, and a job
+ * that fails silently is the one case where a disappearing row is a bug rather
+ * than a tidy-up. A fire that wants to explain the failure in words uses
+ * `muxpad say`, which also breaks it.
+ */
+export function dropSilentCardFires(events: readonly ChatEvent[]): ChatEvent[] {
+  const drop = new Set<number>();
+  for (let i = 0; i < events.length; i++) {
+    const e = events[i] as ChatEvent;
+    if (e.kind !== 'notice' || e.variant !== 'cron' || !e.card) continue;
+    // A fire that collapsed MISSED fires has something unusual to report and
+    // keeps its row whatever its output target is.
+    if (e.detail) continue;
+    const span: number[] = [];
+    let silent = true;
+    for (let j = i + 1; j < events.length; j++) {
+      const n = events[j] as ChatEvent;
+      // The next fire, or a person typing, ends this turn. Neither counts
+      // against it — somebody else's message is not this job's output.
+      if (n.kind === 'notice' && n.variant === 'cron') break;
+      if (n.kind === 'user' && n.folded !== true) break;
+      // A failure is never silent, whatever the model did or did not say
+      // about it — see the header.
+      if (n.kind === 'tool_result' && n.ok === false) {
+        silent = false;
+        break;
+      }
+      if (!isAction(n)) {
+        silent = false;
+        break;
+      }
+      span.push(j);
+    }
+    if (!silent) continue;
+    drop.add(i);
+    for (const j of span) drop.add(j);
+  }
+  if (drop.size === 0) return events as ChatEvent[];
+  return events.filter((_, i) => !drop.has(i));
+}
+
+/**
+ * ONE CHIP PER QUIET STRETCH, NOT ONE PER FIRE.
+ *
+ * ── THE COMPLAINT, WHICH IS ABOUT A RATE ────────────────────────────────────
+ * "An hourly refresh is going to cause 24 chips a day — that's crazy versus a
+ * daily cron which produces a chip a day, which is reasonable."
+ *
+ * Both of those are the same code. `--fold` says the fire's PROMPT is plumbing
+ * and the fold then demotes the whole turn, so a card-refresh cron already
+ * costs no bubble and no tool row — but it still costs a chip and a collapsed
+ * run, every single fire, because a `notice` is not an action and therefore
+ * breaks the run either side of it. 24 fires is 48 rows, in a chat whose actual
+ * content is one card that updates in place.
+ *
+ * ── WHY COALESCING AND NOT A "SILENT" FLAG ──────────────────────────────────
+ * The obvious alternative is a per-cron switch that emits no chip at all. It is
+ * worse on both counts: a schedule with no trace in the chat is unauditable
+ * exactly when it breaks, and it asks the author to re-declare something they
+ * already said — `--fold` IS the statement that this fire is plumbing. The
+ * primitive is right; what was wrong is that plumbing cost a row per occurrence
+ * instead of a row per stretch.
+ *
+ * ── THE RULE ────────────────────────────────────────────────────────────────
+ * Consecutive folded fires with nothing VISIBLE between them keep the first
+ * chip and drop the rest; the survivor says how many and when the last one
+ * landed. Dropping the notices also merges what used to be N separate action
+ * runs into one, because the chips were the only thing separating them — so the
+ * whole quiet stretch collapses to two rows however long it runs.
+ *
+ * What ends a stretch is precisely what a reader can SEE: a person typing, a
+ * deliberate `reply`, a different schedule, a promoted fallback, any notice
+ * that is not another folded fire of the same cron. So the fire that actually
+ * says something keeps its own chip, directly above the message it explains,
+ * which is the one case the chip was always for.
+ *
+ * Two fires are never merged across a NAME boundary — a chip that averaged two
+ * schedules together would be answering a question nobody asked — and a fire
+ * carrying its own `detail` (missed fires collapsed into it) is left alone,
+ * since that detail is the unusual thing worth a row.
+ */
+export function coalesceCronFires(events: readonly ChatEvent[]): ChatEvent[] {
+  // ── PASS 1: find the fires, and decide for each whether its TURN was silent.
+  // Deciding per TURN rather than as we walk is what keeps a fire that spoke
+  // from being swallowed. Judged on the way past, the last fire of a run is
+  // absorbed before anyone knows what it went on to say — and then its message
+  // appears with no chip above it, which is the one case the chip exists for.
+  const fires: number[] = [];
+  for (let i = 0; i < events.length; i++) {
+    const e = events[i] as ChatEvent;
+    // EVERY cron notice is a candidate now, folded or not. `sep` and `mute`
+    // below do the real work — they ask whether anything VISIBLE happened, and a
+    // fire that produced nothing visible has nothing to anchor a chip to
+    // whatever its flag says.
+    if (e.kind === 'notice' && e.variant === 'cron' && !e.detail) {
+      fires.push(i);
+    }
+  }
+  if (fires.length === 0) return events as ChatEvent[];
+
+  /**
+   * Did the turn starting at fire `n` produce nothing a reader can see?
+   *
+   * Its span runs to the next fire, or to the end. "Nothing visible" means
+   * every event in it is an action AND the run of them actually COLLAPSES — a
+   * run that fails `foldsAsActionRun` is rendered inline as visible rows, so
+   * absorbing the chip above it would leave work on screen with nothing saying
+   * a schedule caused it.
+   */
+  /** The events between fire `n` and the next fire (or the end). */
+  const between = (n: number): ChatEvent[] => {
+    const from = fires[n] as number;
+    const to = n + 1 < fires.length ? (fires[n + 1] as number) : events.length;
+    return events.slice(from + 1, to) as ChatEvent[];
+  };
+
+  /**
+   * TWO DIFFERENT QUESTIONS, and collapsing them into one got this wrong in
+   * both directions — first a stretch that stopped a chip early, then one that
+   * swallowed a person's message whole.
+   *
+   * `sep` asks whether anything VISIBLE lies between two fires. That is about
+   * adjacency: a reader's message sitting between them means the later chip has
+   * to stay where it is, or it ends up above text nobody has read yet.
+   */
+  const sep = (n: number): boolean => {
+    const span = between(n);
+    if (!span.every(isAction)) return false;
+    // A run that fails `foldsAsActionRun` renders INLINE as visible rows, so
+    // absorbing the chip above it would leave work on screen with nothing
+    // saying a schedule caused it.
+    return span.length === 0 || foldsAsActionRun(span);
+  };
+
+  /**
+   * …and `mute` asks whether a fire's own turn said anything. Same span, one
+   * difference: a real user message ENDS the turn without counting against it.
+   * Somebody typing is not this schedule's output, and whatever follows belongs
+   * to them.
+   *
+   * This is the half that keeps a fire that SPOKE from being swallowed. Judged
+   * only on the way past, the last fire of a run is absorbed before anyone
+   * knows what it goes on to say — and its message then appears with no chip
+   * above it, which is the one case the chip exists for.
+   */
+  const mute = (n: number): boolean => {
+    for (const e of between(n)) {
+      if (e.kind === 'user' && e.folded !== true) return true;
+      if (!isAction(e)) return false;
+    }
+    return true;
+  };
+
+  const absorbed = new Set<number>();
+  const counts = new Map<number, { fires: number; names: string[]; lastTs: number | null }>();
+  let n = 0;
+  while (n < fires.length) {
+    const head = fires[n] as number;
+    const headEv = events[head] as Extract<ChatEvent, { kind: 'notice' }>;
+    const group = { fires: 1, names: [headEv.text], lastTs: headEv.ts };
+    let m = n;
+    // `sep(m)`: nothing visible separates this fire from the next.
+    // `mute(m + 1)`: the next one has no message of its own to be left chipless.
+    while (m + 1 < fires.length && sep(m) && mute(m + 1)) {
+      m++;
+      const idx = fires[m] as number;
+      const ev = events[idx] as Extract<ChatEvent, { kind: 'notice' }>;
+      absorbed.add(idx);
+      group.fires++;
+      group.lastTs = ev.ts;
+      if (!group.names.includes(ev.text)) group.names.push(ev.text);
+    }
+    if (group.fires > 1) counts.set(head, group);
+    n = m + 1;
+  }
+
+  if (absorbed.size === 0) return events as ChatEvent[];
+  // One pass, by ORIGINAL index — the counts are keyed on it, and a
+  // filter-then-map would have to find each survivor's old position again.
+  const out: ChatEvent[] = [];
+  for (let i = 0; i < events.length; i++) {
+    if (absorbed.has(i)) continue;
+    const e = events[i] as ChatEvent;
+    const c = counts.get(i);
+    if (!c || e.kind !== 'notice') {
+      out.push(e);
+      continue;
+    }
+    const last = fireTime(c.lastTs);
+    // Name the schedules while naming them still fits — two is a list, four is
+    // a count. Past that the chip says how many there were and the run says
+    // which.
+    const text = c.names.length <= 2 ? c.names.join(' · ') : `${c.names.length} schedules`;
+    const detail = last ? `${c.fires} fires · last ${last}` : `${c.fires} fires`;
+    out.push({ ...e, text, detail });
+  }
+  return out;
+}
+
 export function isPrivateReasoning(e: ChatEvent): boolean {
   return e.kind === 'assistant' && e.voice === 'private';
 }
@@ -262,7 +610,24 @@ const MIN_GROUP = 2;
  * visible right under the reply.
  */
 export function foldsAsActionRun(run: readonly ChatEvent[]): boolean {
-  return run.length >= MIN_GROUP || run.some(isPrivateReasoning);
+  return run.length >= MIN_GROUP || run.some(isPrivateReasoning) || run.some(isCronPrompt);
+}
+
+/**
+ * A cron's injected prompt — the second exception to the length rule, and for
+ * the same reason as the first.
+ *
+ * A lone tool row inline is a nicety. A lone INJECTED PROMPT inline is six
+ * lines of "Run: python3 … On error print+push 'NW close snapshot failed'"
+ * printed into the conversation, which is the exact thing folding it was for.
+ *
+ * It takes a turn that produced nothing else to hit this: the fire, its prompt,
+ * and then no tool calls at all. Observed on a fire that died at the weekly
+ * limit — the run was one event long, so the length rule rendered it inline and
+ * the prompt came back.
+ */
+function isCronPrompt(e: ChatEvent): boolean {
+  return e.kind === 'user' && e.folded === true;
 }
 
 /**

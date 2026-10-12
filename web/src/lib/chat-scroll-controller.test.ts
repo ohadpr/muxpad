@@ -207,6 +207,58 @@ describe.each(ENGINES)('ANCHORED — $name', ({ paysAnchoring }) => {
     expect(sim.rowOffset('m15')).toBe(before);
   });
 
+  /**
+   * THE READER SCROLLING WHILE HISTORY LANDS, IN THE SAME FRAME.
+   *
+   * Reported as "scrolling up from the bottom is super buggy and janky and
+   * stuck". Measured in Chromium against a real chat: scrolling up at frame
+   * rate, roughly one frame in twelve moved the view NOT AT ALL, and every one
+   * of those frames carried a single write from `place()` of exactly the size
+   * of the step that had just been made. The gesture was being handed back.
+   *
+   * The cause is the reconcile guard: it believed a `scrollTop` change was the
+   * reader only when the anchor row had not moved in DOCUMENT space. A prepend
+   * moves it by definition — that is what a prepend is — so on exactly the
+   * frames where history arrives, a simultaneous gesture was attributed to
+   * layout and overwritten. Which is the worst possible frame to lose one on:
+   * paging history in is the thing scrolling up DOES.
+   */
+  it('keeps the reader’s gesture when a prepend lands in the same frame', () => {
+    const before = sim.rowOffset('m15');
+    // Both in one frame, no scroll event delivered in between — the ordering
+    // the simulator exists for.
+    sim.prepend(simRows(5, 400, 'old'));
+    sim.readerScrollsBy(-120);
+    c.place();
+    drainScroll(sim, c);
+    // The reader asked to move 120px up the document and must have got it:
+    // their row sits 120px lower in the viewport than it did.
+    expect(sim.rowOffset('m15')).toBe(before + 120);
+  });
+
+  it('believes a SCROLLBAR DRAG, which produces no input events', () => {
+    // A drag fires no wheel, no touch and no key — and nor does a middle-click
+    // autoscroll or a click in the scrollbar track. The first cut of the input
+    // signal dropped all of them; a probe that moved `scrollTop` directly
+    // recorded no position at all. With the document standing still there is
+    // nothing for an engine to have compensated, so the arithmetic is sound.
+    const before = sim.rowOffset('m15');
+    sim.scrollTopSilently(sim.scrollTop - 120);
+    c.place();
+    drainScroll(sim, c);
+    expect(sim.rowOffset('m15')).toBe(before + 120);
+  });
+
+  it('still holds them put when ONLY the prepend happens', () => {
+    // The other side of the same branch: no gesture, so nothing to reconcile,
+    // and the row must not move at all.
+    const before = sim.rowOffset('m15');
+    sim.prepend(simRows(5, 400, 'old'));
+    c.place();
+    drainScroll(sim, c);
+    expect(sim.rowOffset('m15')).toBe(before);
+  });
+
   it('holds it through an image decoding above them', () => {
     const before = sim.rowOffset('m15');
     sim.resizeRow('m2', 1200);
@@ -419,12 +471,38 @@ describe('SEEKING — the message is not loaded', () => {
   // 185,753px document (turn 40) applied to the 13,044px tail landed on turn
   // 296, the opposite end of the chat.
   it('does not move the reader at all while it cannot find the message', () => {
+    // Still true, and it matters more now: the restore no longer pages, so an
+    // unreachable anchor must not invent a position either. A ratio fallback
+    // used to guess here — 0.0363 of a 185,753px document applied to the
+    // 13,044px tail landed on turn 296, the opposite end of the chat.
     sim.readerScrollsTo(500);
     drainScroll(sim, c);
     const where = sim.scrollTop;
     c.dispatch({ t: 'shown', mem: PARKED('ancient', -120) });
     expect(sim.scrollTop).toBe(where);
-    expect(c.phase(true)).toBe('SEEKING');
+    // …and it reports itself STRANDED rather than seeking, which is the caller's
+    // cue to open at the newest message instead.
+    expect(c.phase(true)).toBe('IDLE');
+    expect(c.strandedRestore(true)).toBe(true);
+  });
+
+  it('a stranded restore is not silent — the caller can land it at the end', () => {
+    // Without this the intent is merely unsatisfied: `place` computes no target,
+    // writes no scrollTop, and a fresh list leaves the reader at the TOP of
+    // whatever loaded rather than in the conversation.
+    c.dispatch({ t: 'shown', mem: PARKED('ancient', -120) });
+    expect(c.strandedRestore(true)).toBe(true);
+    c.dispatch({ t: 'jump-to-latest' });
+    drainScroll(sim, c);
+    expect(c.phase(true)).toBe('FOLLOWING');
+    expect(c.strandedRestore(true)).toBe(false);
+  });
+
+  it('is NOT stranded while the anchor could still arrive in the tail', () => {
+    // Asked on every commit rather than once at mount: a tail that happens to
+    // contain the remembered anchor satisfies the restore normally.
+    c.dispatch({ t: 'shown', mem: PARKED('tail5', -40) });
+    expect(c.strandedRestore(true)).toBe(false);
   });
 
   it('places the reader the moment the message arrives', () => {
@@ -436,8 +514,19 @@ describe('SEEKING — the message is not loaded', () => {
     expect(c.phase(true)).toBe('ANCHORED');
   });
 
-  it('asks for pages, bounded, and stops', () => {
+  it('asks for NO pages at all — a restore is free or it does not happen', () => {
+    // It used to spend the whole budget here, which is up to eight socket round
+    // trips (~1 MB) before a reopened chat settled. Measured as the single
+    // biggest cause of "opening a chat feels stuck".
     c.dispatch({ t: 'shown', mem: PARKED('ancient') });
+    expect(c.wantsOlder(true)).toBe(false);
+  });
+
+  it('…but a SEARCH still pages for its destination, bounded', () => {
+    // The budget did not go away, it moved to the intent that earns it: a hit
+    // is a place the reader asked for by name, and paging to reach it is the
+    // request rather than a convenience.
+    c.dispatch({ t: 'search-jump' });
     let asked = 0;
     while (c.wantsOlder(true)) {
       asked++;
@@ -445,11 +534,10 @@ describe('SEEKING — the message is not loaded', () => {
       if (asked > 100) throw new Error('unbounded');
     }
     expect(asked).toBe(SEEK_PAGE_BUDGET);
-    expect(c.phase(true)).toBe('IDLE');
   });
 
   it('spends nothing when the server has said there is no more history', () => {
-    c.dispatch({ t: 'shown', mem: PARKED('ancient') });
+    c.dispatch({ t: 'search-jump' });
     expect(c.wantsOlder(false)).toBe(false);
   });
 
@@ -458,17 +546,22 @@ describe('SEEKING — the message is not loaded', () => {
   // up, the reader's real parked message must still be in the store — otherwise
   // the next open starts from a worse position than this one did, which is what
   // made the landing point walk 4% -> 72% over eight reloads.
-  it('leaves the stored record untouched when it gives up', () => {
-    const original = PARKED('ancient', -120);
-    c.dispatch({ t: 'shown', mem: original });
+  it('leaves the stored record untouched when a SEARCH gives up', () => {
+    // Unchanged in substance — only the intent that spends the budget moved. A
+    // search that cannot reach its hit must not overwrite where the reader was
+    // reading, or the next open starts from a worse position than this one did.
+    c.dispatch({ t: 'shown', mem: PARKED('ancient', -120) });
+    c.dispatch({ t: 'search-jump' });
     // The reader is somewhere else entirely — in the tail, where the document
     // opened — for the whole seek.
     while (c.wantsOlder(true)) c.dispatch({ t: 'sought' });
     expect(sim.anchorHere()?.id).not.toBe('ancient');
-    // …and the record STILL names the message they parked on. Not the row the
-    // mechanism ended up sitting on, which is what the old retirement wrote and
-    // what made every subsequent open start from a worse position than this one.
-    expect(c.record('s1')).toEqual(original);
+    // NOTHING is written, which is how the stored memory survives: `record`
+    // returning null means "no update", so whatever the reader parked on is
+    // still what the next open reads. Writing the row the mechanism ended up
+    // sitting on is what the old retirement did, and what made every subsequent
+    // open start from a worse position than this one.
+    expect(c.record('s1')).toBeNull();
   });
 });
 
@@ -480,42 +573,51 @@ describe('SEEKING — the message is not loaded', () => {
 // reader from 4% to 67%.
 describe('re-entry is idempotent', () => {
   function openOnce(mem: ChatScrollMem | null, reachable: boolean) {
-    // A fresh mount opens on the tail, exactly as the server serves it.
-    const sim = new SimScroller(simRows(20, 200, 'tail'), { furnitureBelow: 100 });
+    // ── "IN REACH" NOW MEANS "IN THE TAIL" ───────────────────────────────────
+    // A restore no longer pages for a lost anchor, so this used to drive the
+    // seek and prepend the row on page 3. The property being tested is
+    // unchanged and still worth holding — re-entry is idempotent, and does not
+    // walk — but "reachable" is now about what the server served, not about how
+    // far we are willing to dig for it.
+    const sim = new SimScroller(
+      reachable
+        ? [...simRows(10, 200, 'tail'), { id: 'parked', height: 300 }, ...simRows(9, 200, 'late')]
+        : simRows(20, 200, 'tail'),
+      { furnitureBelow: 100 },
+    );
     const c = new ChatScrollController(sim);
     c.dispatch({ t: 'mounted' });
     c.dispatch({ t: 'shown', mem });
-    // The seek runs to exhaustion, paging in history that does (or does not)
-    // contain the anchor.
-    let pages = 0;
-    while (c.wantsOlder(true)) {
-      c.dispatch({ t: 'sought' });
-      sim.prepend(
-        reachable && pages === 2
-          ? [{ id: 'parked', height: 300 }, ...simRows(3, 200, `p${pages}-`)]
-          : simRows(4, 200, `p${pages}-`),
-      );
-      c.place();
-      drainScroll(sim, c);
-      pages++;
-    }
+    // An unreachable restore lands at the end rather than hanging unsatisfied.
+    if (c.strandedRestore(true)) c.dispatch({ t: 'jump-to-latest' });
+    c.place();
+    drainScroll(sim, c);
     return { sim, c, landedOn: sim.anchorHere()?.id ?? null, stored: c.record('s1') };
   }
 
-  it('lands on the same row every time, when the message is out of reach', () => {
+  it('lands in the same place every time, when the message is out of reach', () => {
+    // ── THE PROPERTY, AND THE HALF OF IT THAT CHANGED ───────────────────────
+    // What this has always protected is that re-entry does not WALK: the old
+    // retirement wrote whatever row the mechanism ended up on, and the landing
+    // point drifted 4% → 72% over eight reloads.
+    //
+    // It no longer protects "the memory still names the parked message". That
+    // was right while an unreachable anchor was something we kept trying for.
+    // Now we take the reader to the newest message instead, and recording that
+    // honestly is the point — a stored position we did not honour would send
+    // the next open hunting for it again.
     let mem: ChatScrollMem | null = PARKED('parked', -120);
     const landings: (string | null)[] = [];
     for (let open = 0; open < 8; open++) {
       const r = openOnce(mem, false);
       landings.push(r.landedOn);
-      // Whatever the mechanism stored is what the next open reads. If it stored
-      // nothing, the original memory stands — which is the point.
       mem = r.stored ?? mem;
     }
     expect(new Set(landings).size).toBe(1);
-    // …and the memory still names the message the reader actually parked on,
-    // eight opens later.
-    expect(mem?.anchorId).toBe('parked');
+    // Caught up, with no anchor — "you are at the end", which is where we put
+    // them. Not some arbitrary row the mechanism happened to stop on.
+    expect(mem?.caughtUp).toBe(true);
+    expect(mem?.anchorId).toBeNull();
   });
 
   it('lands on the message itself every time, when it IS in reach', () => {
@@ -1032,5 +1134,117 @@ describe('giving up on a hit is a fact about the search, not a default', () => {
     expect(c.spentSeekBudget()).toBe(true);
     c.dispatch({ t: 'search-jump' });
     expect(c.spentSeekBudget()).toBe(false);
+  });
+});
+
+/**
+ * A RESTORE MUST NOT GIVE UP BEFORE THERE IS ANYTHING TO LOOK IN.
+ *
+ * `strandedRestore` converts "this restore can never land" into "open at the
+ * newest message", and the caller asks it on EVERY commit — including the
+ * first, when the list is still empty. So a reload declared the restore
+ * unreachable before a single row existed, pinned the reader to the bottom,
+ * and then rendered the row they wanted a moment later.
+ *
+ * Measured on a reload of a real chat before the fix: the remembered row came
+ * back as row 15 of 29 with `caughtUp: false` in the record, and the reader
+ * was at the very bottom. It had not failed to find the row — it had given up
+ * before looking. After: the same message at the top, at offset -523 against
+ * a recorded -523.
+ */
+describe('a restore arriving before its transcript', () => {
+  it('is not stranded while the list is empty', () => {
+    const sim = new SimScroller([], { furnitureBelow: 0 });
+    const c = new ChatScrollController(sim);
+    c.dispatch({ t: 'mounted' });
+    c.dispatch({ t: 'shown', mem: PARKED('m15', -60) });
+    // Nothing has rendered. Absence here is not evidence of absence.
+    expect(c.strandedRestore(true)).toBe(false);
+    expect(c.strandedRestore(false)).toBe(false);
+  });
+
+  it('lands once the tail carrying the row arrives', () => {
+    const sim = new SimScroller([], { furnitureBelow: 0 });
+    const c = new ChatScrollController(sim);
+    c.dispatch({ t: 'mounted' });
+    c.dispatch({ t: 'shown', mem: PARKED('m15', -60) });
+    sim.append(simRows(40));
+    c.place();
+    drainScroll(sim, c);
+    expect(c.strandedRestore(true)).toBe(false);
+    expect(sim.rowOffset('m15')).toBe(-60);
+  });
+
+  it('IS stranded once rows exist and the row is not among them', () => {
+    // The other half: the opening tail arrived in one commit and the row is
+    // not in it, so the reader belongs at the newest message rather than
+    // wherever an unplaced list happens to start.
+    const sim = new SimScroller(simRows(10), { furnitureBelow: 0 });
+    const c = new ChatScrollController(sim);
+    c.dispatch({ t: 'mounted' });
+    c.dispatch({ t: 'shown', mem: PARKED('nope-not-here', -60) });
+    expect(c.strandedRestore(true)).toBe(true);
+  });
+});
+
+/**
+ * CHASING THE BOTTOM WHILE IT RUNS AWAY FROM YOU.
+ *
+ * "Sometimes when there are a bunch of pending messages in a chat I can't
+ * scroll down, at least on mobile, and the only way is clicking the down
+ * button." Queued messages and the reply they provoke append at the bottom on
+ * every commit, so a reader dragging downward is moving toward a target that
+ * is moving away — and every one of those commits calls `place()` while the
+ * drag is still in flight.
+ *
+ * The property that has to hold is that each drag is KEPT. If appends could
+ * cancel them the reader would be pinned, which is the report; if they are
+ * kept the reader closes on the bottom at the speed of their own thumb and
+ * the button is a convenience rather than the only way.
+ */
+describe('scrolling down while messages append', () => {
+  let sim: SimScroller;
+  let c: ChatScrollController;
+  beforeEach(() => {
+    sim = new SimScroller(simRows(40), { furnitureBelow: 100 });
+    c = new ChatScrollController(sim);
+    c.dispatch({ t: 'mounted' });
+    c.dispatch({ t: 'shown', mem: RETIRED });
+    // Park a long way up, then start pulling back down.
+    sim.readerScrollsTo(1000);
+    drainScroll(sim, c);
+  });
+
+  it('keeps every downward drag, even as rows land below on each commit', () => {
+    const start = sim.scrollTop;
+    let asked = 0;
+    for (let i = 0; i < 20; i++) {
+      sim.readerScrollsBy(300);
+      asked += 300;
+      // A pending message, then the agent's reply to it — two commits that
+      // both grow the document below the reader.
+      sim.append(simRows(1, 120, `q${i}-`));
+      c.place();
+      sim.append(simRows(1, 240, `a${i}-`));
+      c.place();
+      drainScroll(sim, c);
+    }
+    // Every pixel the reader asked for arrived. Appends below them must not
+    // move them at all, so this is exact rather than approximate.
+    expect(sim.scrollTop).toBe(start + asked);
+  });
+
+  it('and still reaches the end rather than stalling short of it', () => {
+    for (let i = 0; i < 60; i++) {
+      sim.readerScrollsBy(600);
+      sim.append(simRows(1, 150, `n${i}-`));
+      c.place();
+      drainScroll(sim, c);
+      if (sim.scrollTop >= sim.maxScrollTop) break;
+    }
+    expect(sim.scrollTop).toBe(sim.maxScrollTop);
+    // …and having arrived, they are FOLLOWING again, so the next message
+    // carries them with it instead of leaving them one row short forever.
+    expect(c.phase(false)).toBe('FOLLOWING');
   });
 });

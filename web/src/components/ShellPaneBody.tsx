@@ -221,6 +221,7 @@ export function ShellPaneBody({
         <div className="shell-pane-face" hidden={!showChat}>
           <ChatPane
             paneId={pane.id}
+            tabId={pane.tab_id}
             // REAL visibility, not merely "the chat face is selected". The
             // keep-alive stack hides this pane with display:none at four
             // layers (app shell → workspace → tab → pane slot) without

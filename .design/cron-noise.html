@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>muxpad · the cron rows in Investing — what is left, and the one decision</title>
+<style>
+  :root{
+    --bg:#edecf7; --elev:#fff; --fg:#1d1d26; --dim:#4a4a5a; --faint:#8b89a3;
+    --border:#d8d6ea; --accent:#6c4fd8; --bubble:#dedce9;
+    --good:#18794e; --warn:#8a6410; --bad:#c0392b;
+    --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:26px 18px 90px;background:var(--bg);color:var(--fg);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
+  .wrap{max-width:900px;margin:0 auto}
+  h1{font-size:21px;margin:0 0 8px;letter-spacing:-.015em}
+  .sub{color:var(--dim);font-size:14px;margin:0 0 6px;max-width:76ch}
+  .sub b{color:var(--fg)}
+  code{font:12.5px var(--mono);color:var(--accent)}
+
+  section{margin:0 0 30px;padding:0 0 26px;border-bottom:1px solid var(--border)}
+  section:last-of-type{border-bottom:0}
+  .head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+  h2{font-size:16.5px;margin:0;letter-spacing:-.01em}
+  .tag{font:600 10.5px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;
+    padding:4px 7px;border-radius:5px}
+  .tag.-fixed{color:var(--good);background:#18794e1f}
+  .tag.-ask{color:var(--accent);background:#6c4fd81f}
+  .tag.-bad{color:var(--bad);background:#c0392b1a}
+  .why{color:var(--dim);font-size:13.5px;margin:9px 0 0;max-width:76ch}
+  .why b{color:var(--fg)}
+  .count{font:600 12px/1 var(--mono);color:var(--faint);margin:10px 0 0}
+  .count b{color:var(--fg)}
+
+  .pane{background:var(--bg);border:1px solid var(--border);border-radius:12px;
+    padding:14px;margin-top:14px}
+  .pane.-wide{background:#fff}
+  .bubble{background:var(--bubble);border-radius:16px;padding:11px 15px;
+    font-size:13.5px;line-height:1.5;margin:0 0 12px auto;max-width:78%}
+  .bubble.-raw{font:11.5px/1.5 var(--mono);color:#6b2d2d;background:#f6dcdc;
+    white-space:pre-wrap;word-break:break-all}
+  .tool{font:12.5px var(--mono);color:var(--faint);margin:0 0 12px;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tool b{color:var(--dim);font-family:inherit}
+  .say{font-size:14px;margin:0 0 12px}
+  .chip{display:inline-flex;align-items:center;gap:8px;margin:0 auto 12px;
+    padding:5px 7px 5px 11px;border-radius:999px;background:#ddd9f3;
+    font-size:12.5px;color:var(--dim);width:max-content}
+  .chipRow{display:flex;justify-content:center}
+  .chip .t{font-weight:500}
+  .chip .d{background:#cdc6ee;border-radius:999px;padding:3px 8px;font-size:11.5px}
+  .fold{font:13px var(--mono);color:var(--faint);margin:0 0 12px}
+  .fold b{color:var(--dim)}
+  .fold .car{margin-right:7px}
+  .card{display:flex;align-items:baseline;gap:9px;padding:7px 10px 7px 13px;
+    border-radius:7px;background:#fff;position:relative;margin-top:4px;font-size:13px}
+  .card::before{content:'';position:absolute;left:0;top:4px;bottom:4px;width:2.5px;
+    border-radius:2px;background:#6c4fd88c}
+  .composer{margin-top:10px;display:flex;align-items:center;height:42px;
+    padding:0 14px;border-radius:24px;background:#f4f3fb;border:1px solid #e2e0f0;
+    color:var(--faint);font-size:14px}
+
+  .opt{display:grid;grid-template-columns:1fr;gap:14px;margin-top:16px}
+  @media(min-width:760px){.opt{grid-template-columns:1fr 1fr}}
+  .o{border:1px solid var(--border);border-radius:11px;background:var(--elev);overflow:hidden}
+  .o.-pick{border-color:#6c4fd8;box-shadow:0 0 0 2px #6c4fd82e}
+  .o h3{margin:0;padding:11px 14px 0;font-size:14px}
+  .o h3 .k{font:600 10.5px/1 var(--mono);color:var(--faint);margin-right:7px}
+  .o .body{padding:4px 14px 14px}
+  .o p{margin:7px 0 0;font-size:12.5px;line-height:1.5;color:var(--dim)}
+  .o p b{color:var(--fg)}
+  .o .demo{background:var(--bg);margin:11px 0 0;padding:12px;border-radius:9px}
+  .pill{display:inline-block;font:600 10px/1 var(--mono);padding:4px 7px;border-radius:5px;
+    letter-spacing:.04em;margin:9px 7px 0 0}
+  .pill.-y{color:var(--good);background:#18794e1a}
+  .pill.-n{color:var(--bad);background:#c0392b14}
+
+  .ask{background:#fff;border:1px solid #6c4fd8;border-radius:11px;padding:16px 18px;margin-top:20px}
+  .ask h2{margin:0 0 8px}
+  .ask p{margin:0 0 10px;font-size:14px;color:var(--dim)}
+  .ask p:last-child{margin:0}
+  .ask b{color:var(--fg)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>The Investing chat — what was noise, what is left, and the one call I need you to make</h1>
+<p class="sub">Three different things were stacked on top of each other in that screenshot. One was
+  a plain bug and is fixed. One is the fold working as designed. The third is a <b>decision</b>,
+  because fixing it breaks a rule I have been defending all week.</p>
+
+<!-- ───────────── 1 ───────────── -->
+<section>
+  <div class="head"><span class="tag -fixed">fixed</span>
+    <h2>The raw <code>&lt;muxpad-cron&gt;</code> bubble was a bug</h2></div>
+  <p class="why">That block of XML at the bottom of your screenshot should never have existed. A
+    fire drained from the queue renders an <b>optimistic echo</b> while the runner writes it to
+    disk — and that one render path was the only place in muxpad that did not split the marker off
+    first. The transcript does it, the queue preview does it; the echo used the raw text.</p>
+  <p class="why">Its handler even says why it was missed: <em>"a turn nobody started (a cron fire, a
+    wakeup) carries no text and sets nothing."</em> True when written, false once the queue drain
+    started stamping the text it relays. It now goes through the same component as the queue — and
+    for a folded fire that means <b>nothing renders at all</b>.</p>
+  <div class="pane">
+    <div class="bubble -raw">&lt;muxpad-cron id="01M4CECK8AMG2SBKSJEFF0MVYK" name="nw-hourly" at="1791482627209" fold="1"&gt;
+Delivered by the muxpad cron "nw-hourly" — a scheduled job, not a human.
+&lt;/muxpad-cron&gt;
+
+Are the US markets open right now? If yes: run scripts/market_card.sh NOW…</div>
+    <div style="text-align:center;font:12px var(--mono);color:var(--faint);margin:2px 0 10px">↓ now ↓</div>
+    <div style="text-align:center;font:12px var(--mono);color:var(--faint);padding:8px 0">(nothing — it is a folded fire)</div>
+  </div>
+</section>
+
+<!-- ───────────── 2 ───────────── -->
+<section>
+  <div class="head"><span class="tag -ask">the decision</span>
+    <h2>The two loud fires are <em>older than the</em> <code>--fold</code> <em>flag</em></h2></div>
+  <p class="why">The 03:13 and 03:18 rows print their whole prompt, their tool call and their
+    "closed" — six rows for two fires. Every <em>newer</em> fire of that same schedule is silent.
+    The difference is not the schedule; it is <b>when the message was delivered</b>. Each fire
+    stores a copy of the fold flag as it was at that moment, and <code>nw-hourly</code> was not
+    folded yet.</p>
+  <p class="why">I have twice told you this was correct, on the principle that <b>muxpad renders a
+    message as it was delivered</b> — it tails the harness's transcript, it does not rewrite
+    history. I still think that principle is right. But it is producing a chat where the same
+    schedule looks like two different things, and the stored flag is a <b>copy of a fact that lives
+    in the crons table</b> — which is the exact defect shape that has bitten this feature four
+    times already.</p>
+
+  <div class="count">today: <b>6 rows</b> for those two fires · 1 chip + 1 fold for the other seven</div>
+
+  <div class="opt">
+    <div class="o -pick">
+      <h3><span class="k">A</span>Resolve fold live, from the cron</h3>
+      <div class="body">
+        <p>Ask the crons table whether <code>nw-hourly</code> is folded <b>now</b>, and ignore the
+          copy frozen into each message. Turning <code>--fold</code> on cleans up the back-scroll;
+          turning it off reveals it again.</p>
+        <p><b>The cost:</b> the transcript stops being a photograph. A row you remember reading can
+          change shape later. That is the rule I have been defending — and the thing being changed
+          is only <em>how loudly</em> muxpad's own plumbing is drawn, never what anyone said.</p>
+        <div class="demo">
+          <div class="chipRow"><span class="chip"><span aria-hidden="true">⏱</span>
+            <span class="t">nw-hourly · nw-open</span><span class="d">9 fires · last 11:04 AM</span></span></div>
+          <div class="fold"><span class="car">›</span><b>31 actions</b> &nbsp;Bash ×13 · prompt ×9 · notes ×9</div>
+        </div>
+        <span class="pill -y">6 rows → 0</span><span class="pill -y">one rule, not two</span><span class="pill -n">history re-renders</span>
+      </div>
+    </div>
+
+    <div class="o">
+      <h3><span class="k">B</span>Leave history alone; collapse it by age</h3>
+      <div class="body">
+        <p>Keep the stored flag authoritative, but fold <b>any</b> cron turn older than the current
+          session into a single quiet marker regardless of its flag — recent fires keep whatever
+          shape they were delivered in.</p>
+        <p><b>The cost:</b> two rules instead of one, and the boundary moves on its own. A fire you
+          were reading five minutes ago looks different after a reload.</p>
+        <div class="demo">
+          <div class="chipRow"><span class="chip"><span aria-hidden="true">⏱</span>
+            <span class="t">earlier today</span><span class="d">9 fires · 2 unfolded</span></span></div>
+          <div class="fold"><span class="car">›</span><b>37 actions</b></div>
+        </div>
+        <span class="pill -y">history still a photo</span><span class="pill -n">two rules</span><span class="pill -n">boundary drifts</span>
+      </div>
+    </div>
+
+    <div class="o">
+      <h3><span class="k">C</span>Rewrite the two stored markers, once</h3>
+      <div class="body">
+        <p>A one-off repair that stamps <code>fold="1"</code> into the two historical messages, so
+          every fire of a folded schedule agrees. No code changes at all after that.</p>
+        <p><b>The cost:</b> it edits the harness's own transcript on disk — the file muxpad is
+          supposed to only ever read. And it fixes today, not the next schedule you fold.</p>
+        <span class="pill -y">zero new code</span><span class="pill -n">writes the transcript</span><span class="pill -n">not a rule</span>
+      </div>
+    </div>
+
+    <div class="o">
+      <h3><span class="k">D</span>Do nothing</h3>
+      <div class="body">
+        <p>Six rows, once, scrolling further up the chat every day. In a week they are off screen
+          and the chat is clean below them.</p>
+        <p><b>The cost:</b> nothing, if you can ignore them — but you have now raised this three
+          times, which is the real argument against.</p>
+        <span class="pill -y">free</span><span class="pill -n">you keep seeing it</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────── 3 ───────────── -->
+<section>
+  <div class="head"><span class="tag -fixed">working</span><h2>What the chat looks like once this is settled</h2></div>
+  <p class="why">With A, the Investing chat between two real messages is <b>two rows</b> — one chip
+    naming the schedules and one closed fold holding every prompt, tool call and "closed". The card
+    carries the answer; the conversation carries the conversation.</p>
+  <div class="pane -wide">
+    <div class="say">…while your stocks were down a third of a percent. Without that split you'd be
+      looking at −$24K wondering what went wrong in the portfolio.</div>
+    <div class="chipRow"><span class="chip"><span aria-hidden="true">⏱</span>
+      <span class="t">nw-hourly · nw-open</span><span class="d">9 fires · last 11:04 AM</span></span></div>
+    <div class="fold"><span class="car">›</span><b>31 actions</b> &nbsp;Bash ×13 · prompt ×9 · notes ×9</div>
+    <div class="card">🔴 −$55K (-1.37%) · 📉 stocks -1.33% vs SPY -0.67% · ✅ no action</div>
+    <div class="composer">Message Claude…</div>
+  </div>
+</section>
+
+<div class="ask">
+  <h2>What I need from you</h2>
+  <p><b>Which of A–D.</b> I would ship <b>A</b>: it is one rule rather than two, it fixes every
+    schedule you fold from now on rather than today's two rows, and the only thing it re-renders is
+    muxpad's own plumbing — never a word anybody wrote.</p>
+  <p>Say "A" and I will build it. The raw-XML bug is already fixed and committed either way.</p>
+</div>
+
+</div>
+</body>
+</html>

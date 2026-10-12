@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>muxpad · per-workspace instructions & capabilities</title>
+<style>
+  :root{
+    --bg:#edecf7; --elev:#fff; --fg:#1d1d26; --dim:#4a4a5a; --faint:#8b89a3;
+    --border:#d8d6ea; --accent:#6c4fd8; --good:#18794e; --bad:#c0392b; --warn:#8a6410;
+    --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:26px 18px 90px;background:var(--bg);color:var(--fg);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
+  .wrap{max-width:980px;margin:0 auto}
+  h1{font-size:21px;margin:0 0 8px;letter-spacing:-.015em}
+  .sub{color:var(--dim);font-size:14px;margin:0 0 6px;max-width:78ch}
+  .sub b{color:var(--fg)}
+  code{font:12.5px var(--mono);color:var(--accent)}
+  h2{font-size:16.5px;margin:30px 0 4px}
+  .why{color:var(--dim);font-size:13.5px;margin:8px 0 0;max-width:78ch}
+  .why b{color:var(--fg)}
+
+  /* ── the mocked panel ── */
+  .panel{background:var(--elev);border:1px solid var(--border);border-radius:14px;
+    box-shadow:0 10px 30px -18px rgba(0,0,0,.4);overflow:hidden;margin-top:16px}
+  .ptop{display:flex;align-items:center;gap:10px;padding:13px 16px;
+    border-bottom:1px solid var(--border);background:#faf9fe}
+  .sw{width:9px;height:9px;border-radius:3px;background:var(--accent)}
+  .ptitle{font-weight:600;font-size:14px}
+  .ptitle small{color:var(--faint);font-weight:400;margin-left:7px;font-size:12px}
+  .pbody{padding:16px}
+  .row{padding:14px 0;border-bottom:1px solid var(--border)}
+  .row:last-child{border-bottom:0;padding-bottom:0}
+  .rh{display:flex;align-items:center;gap:10px}
+  .rh h3{margin:0;font-size:13.5px}
+  .rh .hint{margin-left:auto;font-size:12px;color:var(--faint)}
+  .desc{margin:5px 0 0;font-size:12.5px;color:var(--dim);max-width:70ch}
+  textarea{width:100%;margin-top:10px;min-height:92px;resize:vertical;padding:10px 12px;
+    border:1px solid var(--border);border-radius:9px;background:#fbfaff;color:var(--fg);
+    font:12.5px/1.6 var(--mono)}
+  textarea:focus{outline:0;border-color:var(--accent)}
+
+  .toggle{display:inline-flex;align-items:center;gap:9px;cursor:pointer}
+  .tr{width:38px;height:22px;border-radius:999px;background:#d6d3e8;position:relative;
+    transition:background .15s}
+  .tr::after{content:'';position:absolute;top:2px;left:2px;width:18px;height:18px;
+    border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.3);transition:transform .15s}
+  .toggle.on .tr{background:var(--good)}
+  .toggle.on .tr::after{transform:translateX(16px)}
+  .tlabel{font-size:13px}
+
+  .locked{margin-top:10px;padding:10px 12px;border-radius:9px;font-size:12.5px;
+    background:#f7f2e4;border:1px solid #e6d9b4;color:#6b5618}
+  .locked b{color:#4e3f0f}
+
+  .preview{margin-top:12px;border:1px solid var(--border);border-radius:9px;overflow:hidden}
+  .pvh{display:flex;align-items:center;gap:8px;padding:8px 12px;background:#f6f5fb;
+    font:11.5px var(--mono);color:var(--faint);cursor:pointer}
+  .pvh .car{transition:transform .12s}
+  .preview.open .pvh .car{transform:rotate(90deg)}
+  .pv{display:none;padding:12px;font:11.5px/1.65 var(--mono);white-space:pre-wrap;
+    background:#fbfaff;color:var(--dim);max-height:260px;overflow:auto}
+  .preview.open .pv{display:block}
+  .pv .on{color:var(--good)} .pv .off{color:var(--bad);text-decoration:line-through;opacity:.65}
+  .pv .ours{color:var(--faint)} .pv .yours{color:var(--accent)}
+
+  .two{display:grid;grid-template-columns:1fr;gap:16px}
+  @media(min-width:880px){.two{grid-template-columns:1fr 1fr}}
+
+  .note{margin-top:28px;padding:16px 18px;border-radius:11px;background:var(--elev);
+    border:1px solid var(--accent)}
+  .note h3{margin:0 0 8px;font-size:15px}
+  .note p{margin:0 0 10px;font-size:13.5px;color:var(--dim)}
+  .note p:last-child{margin:0}
+  .note b{color:var(--fg)}
+  table{border-collapse:collapse;width:100%;margin-top:12px;font-size:13px}
+  th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--border);vertical-align:top}
+  th{font:600 11px/1 var(--mono);color:var(--faint);letter-spacing:.06em;text-transform:uppercase}
+  td.y{color:var(--good)} td.n{color:var(--bad)} td.m{color:var(--warn)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Per-workspace instructions, and capabilities that are off by default</h1>
+<p class="sub">Right now <code>readAgentInstructions(dataDir)</code> takes a directory and nothing
+  else — so every agent in every workspace gets byte-identical text, <b>including the Slack
+  section</b>. A Personal chat is told it has company Slack and only finds out otherwise when it
+  tries. This is the panel that fixes that.</p>
+<p class="sub">Reached from the workspace row in the nav (⋯ → Settings) or the breadcrumb. Shown
+  below for both of your real workspaces, because the difference between them is the whole point.</p>
+
+<div class="two">
+
+  <!-- ── TRAYO ───────────────────────────────────────────────── -->
+  <div>
+    <h2>Trayo</h2>
+    <div class="panel">
+      <div class="ptop"><span class="sw"></span><span class="ptitle">Trayo<small>workspace settings</small></span></div>
+      <div class="pbody">
+
+        <div class="row">
+          <div class="rh"><h3>Instructions for agents here</h3><span class="hint">4 chats</span></div>
+          <p class="desc">Added after muxpad's own instructions, for every agent in this workspace,
+            on every backend. This is the per-workspace half of
+            <code>~/.muxpad/agent-notes.md</code>.</p>
+          <textarea spellcheck="false">The API lives in trayo-api, the console in self-serve-ui.
+Staging is behind the tailnet; never point a test at prod.
+Prefer pnpm. Lint before you claim something builds.</textarea>
+        </div>
+
+        <div class="row">
+          <div class="rh"><h3>Capabilities</h3></div>
+          <p class="desc">Off everywhere until switched on here. A capability that is off is not
+            merely refused — <b>it is not mentioned in the instructions at all</b>, so an agent is
+            never told about something it cannot use.</p>
+
+          <div style="margin-top:12px">
+            <span class="toggle on"><span class="tr"></span>
+              <span class="tlabel"><b>Slack</b> — read, search and post</span></span>
+            <p class="desc" style="margin-top:7px">Posts go out as you, prefixed 🤖. The workspace is
+              resolved server-side from the pane id, so neither <code>cd</code> nor
+              <code>MUXPAD_WORKSPACE_ID</code> can talk it round.</p>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="preview open">
+            <div class="pvh"><span class="car">›</span> what an agent in this workspace actually receives</div>
+<div class="pv"><span class="ours">── muxpad's generated instructions ──
+  muxpad search / publish / cron / card / app / pane / agent …</span>
+<span class="on">  muxpad slack — read, search and post   ← included, because Slack is ON</span>
+<span class="yours">── Trayo ──
+  The API lives in trayo-api, the console in self-serve-ui.
+  Staging is behind the tailnet; never point a test at prod.
+  Prefer pnpm. Lint before you claim something builds.</span>
+<span class="ours">── your agent-notes.md ──
+  (the machine-wide notes, unchanged)</span></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ── PERSONAL ─────────────────────────────────────────────── -->
+  <div>
+    <h2>Personal</h2>
+    <div class="panel">
+      <div class="ptop"><span class="sw" style="background:#b9b5d4"></span><span class="ptitle">Personal<small>workspace settings</small></span></div>
+      <div class="pbody">
+
+        <div class="row">
+          <div class="rh"><h3>Instructions for agents here</h3><span class="hint">31 chats</span></div>
+          <p class="desc">Added after muxpad's own instructions, for every agent in this workspace,
+            on every backend.</p>
+          <textarea spellcheck="false">Investing notes live in ohados/investing; the card is the output.
+Never push to a public repo from here without asking.</textarea>
+        </div>
+
+        <div class="row">
+          <div class="rh"><h3>Capabilities</h3></div>
+          <p class="desc">Off everywhere until switched on here.</p>
+
+          <div style="margin-top:12px">
+            <span class="toggle"><span class="tr"></span>
+              <span class="tlabel"><b>Slack</b> — read, search and post</span></span>
+            <div class="locked">
+              <b>Off, and silent.</b> Agents in this workspace are not told Slack exists, and the
+              CLI refuses read <em>and</em> post. A chat here holds notes, health and finances —
+              which is exactly the context that must never reach a work surface.
+            </div>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="preview open">
+            <div class="pvh"><span class="car">›</span> what an agent in this workspace actually receives</div>
+<div class="pv"><span class="ours">── muxpad's generated instructions ──
+  muxpad search / publish / cron / card / app / pane / agent …</span>
+<span class="off">  muxpad slack — read, search and post   ← OMITTED, because Slack is off</span>
+<span class="yours">── Personal ──
+  Investing notes live in ohados/investing; the card is the output.
+  Never push to a public repo from here without asking.</span>
+<span class="ours">── your agent-notes.md ──
+  (the machine-wide notes, unchanged)</span></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="note">
+  <h3>What this replaces, and what it costs</h3>
+  <p>The <code>slack-allowed-workspaces</code> file is gone — the toggle <em>is</em> the
+    allowlist, stored on the workspace row, so there is one place to look and the UI cannot
+    disagree with the file. Reading gets gated the same way as posting, which it is not today: a
+    Personal pane can currently run <code>muxpad slack channels</code> and list every private
+    channel you are in.</p>
+  <p><b>The one real change underneath:</b> <code>readAgentInstructions()</code> takes no context
+    today — that is why every agent gets the same text. It needs the pane's workspace, which all
+    three backends already know, so it is threadable. It is the first time that file stops being
+    one global blob, which is worth saying out loud because everything downstream assumes it is.</p>
+</div>
+
+<div class="note" style="border-color:var(--warn)">
+  <h3>And the key — what actually stops a Personal chat finding it</h3>
+  <p>Nothing above does. The guard is in the CLI; the token is in a file, and every pane runs as
+    the <b>same uid</b> you do. An agent asked to post from a Personal chat can read
+    <code>~/.claude/secrets/slack.env</code> and <code>curl</code> Slack directly. I verified that.</p>
+  <table>
+    <tr><th>approach</th><th>stops a determined agent?</th><th>why</th></tr>
+    <tr><td>chmod / hide the file</td><td class="n">no</td><td>same uid — it can read anything you can</td></tr>
+    <tr><td>server holds it, CLI calls an API</td><td class="n">no</td><td>the token is still in a file the server reads, and in its environment</td></tr>
+    <tr><td>macOS Keychain ACL</td><td class="n">no</td><td>the ACL binds to the requesting <em>binary</em>, and both sides are <code>node</code></td></tr>
+    <tr><td>env var on the server process</td><td class="n">no</td><td><code>ps eww</code> shows your own processes' environment</td></tr>
+    <tr><td><b>separate OS user</b></td><td class="y">yes</td><td>the only real boundary on one machine: a broker daemon owns the token as another uid, and muxpad asks it to post</td></tr>
+  </table>
+  <p style="margin-top:12px">So the honest answer to "make it impossible" is <b>a second uid</b>, and
+    everything short of that is making it harder and louder rather than impossible. The toggle above
+    is worth doing regardless — it removes the temptation and the accident, which is the realistic
+    risk — but it should not be described as a sandbox.</p>
+</div>
+
+</div>
+<script>
+  for (const t of document.querySelectorAll('.toggle')) {
+    t.onclick = () => t.classList.toggle('on');
+  }
+  for (const p of document.querySelectorAll('.preview')) {
+    p.querySelector('.pvh').onclick = () => p.classList.toggle('open');
+  }
+</script>
+</body>
+</html>

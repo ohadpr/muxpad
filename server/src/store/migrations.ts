@@ -1172,6 +1172,251 @@ const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    // ORPHANED ATTACHMENT FILES, and the trigger that stops them being made.
+    //
+    // `attachments.pane_id` is `ON DELETE CASCADE`, so deleting a pane — or a
+    // tab, or a workspace, which cascade into panes — removes the attachment
+    // ROWS. Nothing has ever removed the FILES. Measured on a real install:
+    // 1493 files on disk against 794 rows, so 699 files and 348 MB that no
+    // query can reach and no sweep collected, growing with every chat deleted.
+    //
+    // A TRIGGER, not a call in each delete path, for the same reason
+    // `pending_pane_kills` exists: the cascade is SQLite's and the application
+    // never sees it. PaneStore.delete is not the chokepoint — a `DELETE FROM
+    // tabs` reaches panes without passing through it, and a workspace delete
+    // reaches them through two cascades. A trigger on the attachments row is
+    // the only place every path converges.
+    //
+    // The unlink itself is deferred rather than done here: a trigger cannot
+    // touch the filesystem, and it must not try — the DELETE has to commit
+    // whether or not a file can be removed. The sweeper owns the retry, same
+    // division of labour as the kill queue.
+    version: 37,
+    // IF NOT EXISTS on both, because the idempotency test re-runs every
+    // migration with the version rows deleted ("a restore from backup is one
+    // step from running it") — and it caught this one bare.
+    sql: `
+      CREATE TABLE IF NOT EXISTS pending_attachment_unlinks (
+        path       TEXT PRIMARY KEY,
+        created_at INTEGER NOT NULL
+      );
+      CREATE TRIGGER IF NOT EXISTS attachments_unlink_on_delete
+      AFTER DELETE ON attachments
+      BEGIN
+        INSERT OR IGNORE INTO pending_attachment_unlinks (path, created_at)
+        VALUES (OLD.path, CAST(strftime('%s','now') AS INTEGER) * 1000);
+      END;
+    `,
+  },
+  {
+    // THE JOIN — `spawn_rounds.delivered_at`: has this child's result been put
+    // into its parent's conversation yet?
+    //
+    // `apply` rather than `sql` for migration 36's first reason: SQLite has no
+    // `ADD COLUMN IF NOT EXISTS`, and the idempotency test re-runs every
+    // migration with the version rows deleted.
+    //
+    // ─── THE BACKFILL IS THE WHOLE POINT OF THIS MIGRATION ──────────────────
+    // Every round that already ended is stamped DELIVERED, and it is the one
+    // line here that cannot be left out. `delivered_at IS NULL` is the queue
+    // the new sweeper drains, so without this the first boot after the upgrade
+    // would read 181 finished historical rounds as a pending backlog and flush
+    // every one of them into its parent — the three big orchestrators would
+    // each be handed a message reporting on dozens of workers that finished
+    // days ago, and a cron or two would fire on top of it.
+    //
+    // Stamped with `ended_at` (not `now`) so the column reads as what it is: a
+    // fact about when the round's result was settled. An unfinished round is
+    // left NULL — it has produced nothing to deliver, and it becomes eligible
+    // the normal way when it closes.
+    version: 38,
+    apply: (db) => {
+      const cols = db.prepare('PRAGMA table_info(spawn_rounds)').all() as Array<{ name: string }>;
+      // THE BACKFILL IS INSIDE THE ADD, and that placement is the careful part.
+      // Run unconditionally it would also fire on a RE-RUN (the idempotency
+      // test's second pass, or a restore from backup that lost schema_version)
+      // — and by then the column is live, so every round legitimately WAITING
+      // to be delivered would be stamped as already delivered and its report
+      // lost silently. The column existing is proof the backfill already ran.
+      if (!cols.some((c) => c.name === 'delivered_at')) {
+        db.exec('ALTER TABLE spawn_rounds ADD COLUMN delivered_at INTEGER');
+        db.exec('UPDATE spawn_rounds SET delivered_at = ended_at WHERE ended_at IS NOT NULL');
+      }
+    },
+  },
+  {
+    // CHAT CARDS — named persistent blocks pinned at the top of a conversation.
+    // See shared/src/cards.ts for what they are and why muxpad does not decide
+    // their content.
+    //
+    // UNIQUE (tab_id, name) is the whole semantics: `card set build` twice
+    // updates one card rather than growing a list, so the name is an identity
+    // and the write is an upsert. Without it a chatty writer would stack a new
+    // card per update — which is the transcript behaviour cards exist to
+    // replace.
+    //
+    // ON DELETE CASCADE because a card is part of its chat and means nothing
+    // without it. Unlike attachments (migration 37) there are no FILES behind a
+    // card, so the cascade is the whole cleanup — no queue, no sweeper.
+    version: 39,
+    sql: `
+      CREATE TABLE IF NOT EXISTS tab_cards (
+        id         TEXT PRIMARY KEY,
+        tab_id     TEXT NOT NULL REFERENCES tabs(id) ON DELETE CASCADE,
+        name       TEXT NOT NULL,
+        content    TEXT NOT NULL,
+        format     TEXT NOT NULL DEFAULT 'text',
+        every_ms   INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        UNIQUE (tab_id, name)
+      );
+      CREATE INDEX IF NOT EXISTS tab_cards_by_tab ON tab_cards (tab_id, created_at);
+    `,
+  },
+  {
+    // FOLDED CRONS — render the delivered prompt collapsed behind a caret.
+    //
+    // A cron that refreshes a card injects the same plumbing every fire ("run
+    // this, write the result there") and nobody reads it twice; 22 fires in the
+    // Investing chat are 22 copies of one instruction.
+    //
+    // Named `fold`, NOT `quiet`: `crons.quiet_mins` already means "do not barge
+    // into a live conversation", and two unrelated quiets on one row is a trap
+    // for whoever reads this schema next. The flag is the AUTHOR's
+    // because only they know whether the prompt is plumbing or content.
+    //
+    // It hides the prompt and nothing else — the agent's reply is an ordinary
+    // message and stays visible, which is what keeps a failed fire from
+    // vanishing without needing a special case for failure.
+    //
+    // `apply`, not `sql`: SQLite has no ADD COLUMN IF NOT EXISTS and the
+    // idempotency test re-runs every migration with the version rows deleted.
+    version: 40,
+    apply: (db) => {
+      const cols = db.prepare('PRAGMA table_info(crons)').all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === 'fold')) {
+        db.exec('ALTER TABLE crons ADD COLUMN fold INTEGER NOT NULL DEFAULT 0');
+      }
+    },
+  },
+  {
+    // PARKED PANES — `panes.parked_at`: muxpad stopped this chat's process on
+    // purpose, and will start it again when something needs it.
+    //
+    // The lazy-START policy has been in PaneStore.listAgentPanes from the
+    // beginning ("an idle chat starts when its next send is queued, because
+    // keeping every historical chat resident is what put 103 panes on this
+    // machine"). Nothing ever implemented the other half, so every chat ever
+    // opened stayed resident: measured here, 124 runners holding 125 harness
+    // processes, 13.8 GB, of which 71 runners — about 8 GB — belonged to chats
+    // untouched for three days or more.
+    //
+    // WHY A COLUMN AND NOT AN INFERENCE. "No pty" alone cannot tell PARKED from
+    // DIED, and the two must not be confused: a dead runner is announced as
+    // "agent process died — restarting (attempt 1/3)" and spends one of three
+    // attempts before the pane is declared broken. Reviving a parked chat
+    // through that path would lie to the reader and burn the budget that exists
+    // to stop a crash loop.
+    version: 41,
+    apply: (db) => {
+      const cols = db.prepare('PRAGMA table_info(panes)').all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === 'parked_at')) {
+        db.exec('ALTER TABLE panes ADD COLUMN parked_at INTEGER');
+      }
+    },
+  },
+  {
+    // A CRON'S OUTPUT TARGET — `crons.card`.
+    //
+    // ── WHAT WAS WRONG WITH THE OLD PRIMITIVE ────────────────────────────────
+    // A cron already said WHERE IT RUNS (`target_kind`, `target_pane`). It had
+    // no way to say WHERE ITS OUTPUT GOES, so that fact was being encoded with
+    // a rendering flag — `--fold`, which meant "hide the prompt", then meant
+    // "hide the reply", and had to be re-explained each time. The author was
+    // being asked to reason about transcript rendering when the thing they
+    // actually know is "this job's output is the `market` card".
+    //
+    // With a declared card the rule writes itself: a fire that updated its card
+    // and said nothing has nothing to tell the conversation, so it renders
+    // nothing. The card's own freshness rail is the liveness signal, attached
+    // to the thing it is about, and anything the agent DOES say breaks the
+    // silence and brings the chip back — including a failure, which is the case
+    // the audit trail exists for.
+    //
+    // NULL, not '': a cron that writes no card is the common case and must be
+    // distinguishable from one whose card name was cleared.
+    //
+    // `apply`, not `sql`: SQLite has no ADD COLUMN IF NOT EXISTS and the
+    // idempotency test re-runs every migration with the version rows deleted.
+    version: 42,
+    apply: (db) => {
+      const cols = db.prepare('PRAGMA table_info(crons)').all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === 'card')) {
+        db.exec('ALTER TABLE crons ADD COLUMN card TEXT');
+      }
+    },
+  },
+  {
+    // PER-WORKSPACE INSTRUCTIONS AND CAPABILITIES — `workspaces.instructions`,
+    // `workspaces.slack`.
+    //
+    // `readAgentInstructions(dataDir)` took a directory and nothing else, so
+    // every agent in every workspace received byte-identical text — including
+    // the Slack section. A Personal chat was told it had the company Slack and
+    // found out otherwise only when it tried to use it: a capability advertised
+    // to exactly the contexts that must never have it.
+    //
+    // `instructions` is free text appended for agents in this workspace.
+    // `slack` is a CAPABILITY, default 0, and it does two things at once: the
+    // CLI refuses when it is off, and the Slack section is omitted from the
+    // instructions entirely, so nothing is dangled in front of an agent that
+    // cannot use it.
+    //
+    // It replaces the slack-allowed-workspaces file. One place to look, and a
+    // row cannot disagree with itself the way a file and a UI can.
+    version: 43,
+    apply: (db) => {
+      const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === 'instructions')) {
+        db.exec('ALTER TABLE workspaces ADD COLUMN instructions TEXT');
+      }
+      if (!cols.some((c) => c.name === 'slack')) {
+        // DEFAULT 0 — every existing workspace starts with Slack off, which is
+        // the only safe migration for a capability gate.
+        db.exec('ALTER TABLE workspaces ADD COLUMN slack INTEGER NOT NULL DEFAULT 0');
+      }
+    },
+  },
+  {
+    // `crons.speak`, ADDED AND IMMEDIATELY RETIRED — kept because migrations
+    // are append-only and this one may have run before the idea was dropped.
+    //
+    // It was the inverse of `crons.fold`, with the right default: a schedule
+    // is machinery unless it says otherwise. The default was right and the
+    // AXIS was wrong. Both flags asked the SCHEDULE a question only the FIRE
+    // can answer — `net-watch` is "silent unless a trigger fires", so declared
+    // quiet it hides the one message that matters and declared speaking it
+    // prints "net: no" every weekday.
+    //
+    // What replaced it is `muxpad say`: the fire prints a marker, the
+    // normalizer lifts it into a `reply`-voiced message, and that voice was
+    // already exempt from every fold in the product. Chat mode has had exactly
+    // this since it shipped, as the `reply` TOOL; agent mode registers no
+    // muxpad tools, so it reaches the same thing through the CLI.
+    //
+    // Neither column is read any more. They are left in place rather than
+    // dropped: SQLite column drops are a table rebuild, and a dead column
+    // costs nothing but a comment.
+    version: 44,
+    apply: (db) => {
+      const cols = db.prepare('PRAGMA table_info(crons)').all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === 'speak')) {
+        db.exec('ALTER TABLE crons ADD COLUMN speak INTEGER NOT NULL DEFAULT 0');
+      }
+    },
+  },
 ];
 
 /** Highest version in the migration list. Exported so a test can assert the

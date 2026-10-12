@@ -655,6 +655,20 @@ export const WorkspaceSchema = z.object({
   status: PaneStatusSchema.optional(),
   // Sum of live background subagents across the whole workspace.
   agents: z.number().int().nonnegative().optional(),
+  /**
+   * Free text appended to muxpad's own instructions for every agent in this
+   * workspace, on every backend. The per-workspace half of agent-notes.md.
+   */
+  instructions: z.string().nullable().optional(),
+  /**
+   * CAPABILITY: may agents here use Slack at all — read, search AND post?
+   *
+   * Off by default, and it does two jobs. The CLI refuses when it is off, and
+   * the Slack section is omitted from the instructions entirely, so a chat that
+   * cannot use Slack is never told it exists. Advertising a capability to
+   * exactly the contexts that must not have it is how an agent ends up trying.
+   */
+  slack: z.boolean().optional(),
 });
 export type Workspace = z.infer<typeof WorkspaceSchema>;
 
@@ -766,7 +780,18 @@ export const AgentTurnEventSchema = z.object({
   queue_id: z.string().optional(),
 });
 
+// A chat's CARDS changed (set, cleared, or one went stale enough to redraw).
+// Thin on purpose, exactly like `agent_session.updated` above: tab_id only, and
+// the client re-fetches /api/tabs/:id/cards. A card's content is free-form and
+// can be tens of KB, so putting it on the bus would push it at every connected
+// device on every write — including the ones not looking at that chat.
+export const CardsUpdatedEventSchema = z.object({
+  type: z.literal('cards.updated'),
+  tab_id: z.string(),
+});
+
 export const MuxpadEventSchema = z.discriminatedUnion('type', [
+  CardsUpdatedEventSchema,
   PaneAddedEventSchema,
   PaneRemovedEventSchema,
   PaneUpdatedEventSchema,

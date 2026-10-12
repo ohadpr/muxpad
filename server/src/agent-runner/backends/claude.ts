@@ -41,6 +41,7 @@ import {
 } from '../reversibility.js';
 import { markSessionCleared, markSessionTurned, sessionHadTurn } from '../session-marks.js';
 import { SubagentRoster } from '../subagent-roster.js';
+import { workspaceAgentContextSync } from '../workspace-context.js';
 import type { AgentBackend, BackendOptions, RunnerHost } from './types.js';
 
 // Default model for a FRESH agent chat with no explicit `--model` pin: muxpad
@@ -1156,8 +1157,10 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
   // sessions alike — it's session-level system-prompt material, not a
   // message. Agent mode contributes nothing, so an Agent-mode pane's prompt
   // is byte-for-byte what it was before modes existed.
+  // The workspace decides which capabilities are described at all — see
+  // readAgentInstructions. Fetched once per runner and cached.
   const muxpadSystemPrompt = claudeSystemPromptOption(
-    readAgentInstructions(),
+    readAgentInstructions(undefined, workspaceAgentContextSync()),
     readChatModeOverlay(currentMode),
   );
 

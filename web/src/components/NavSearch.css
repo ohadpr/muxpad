@@ -16,9 +16,16 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  /* Sits between the brand hairline and the tree, matching the scroller's
-     own left/right insets so the box lines up with the rows under it. */
-  margin: 6px 8px 2px 4px;
+  /* Sits between the brand hairline and the tree, on the SAME left and right
+     edges as the rows under it — which is what the old value said it was doing
+     and was doing backwards. A row's inset is the scroller's (`--nt-pad` on the
+     left, nothing on the right) plus the group's (`--nt-pad` both sides), so it
+     is 8 left and 4 right; this box had 4 left and 8 right, mirroring the list
+     instead of matching it, and the mismatch doubled into an 8px disagreement
+     at the right edge. Reported as "the search bar doesn't have equal margins".
+     Derived from the token rather than written as literals, because this is the
+     second surface deriving the list's gutter and the first one drifted. */
+  margin: 6px var(--nt-pad) 2px calc(var(--nt-pad) * 2);
   padding: 0 8px;
   border: 1px solid var(--border);
   border-radius: 7px;

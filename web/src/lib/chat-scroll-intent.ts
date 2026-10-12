@@ -340,8 +340,44 @@ export function canSeek(
   opts: { rowLoaded: boolean; hasMoreOlder: boolean },
 ): boolean {
   if (opts.rowLoaded) return false;
-  if (state.intent.at !== 'row' && state.intent.at !== 'hit') return false;
+  // ── A HIT, NOT A RESTORE ──────────────────────────────────────────────────
+  // This used to seek for `row` too, which is the intent a RESTORE produces —
+  // so reopening a chat you had scrolled back in spent up to eight socket round
+  // trips (~1 MB) hunting for a pixel position before it settled. Measured as
+  // the single biggest cause of "opening a chat feels stuck".
+  //
+  // The two intents look alike and are not. A `hit` is a destination the reader
+  // just asked for by name: paging to reach it is the request. A `row` from a
+  // restore is a convenience, and no chat app pays for that one — Slack,
+  // Discord, WhatsApp and Telegram all open at the bottom or at a server-known
+  // unread marker, never at a restored pixel offset, for exactly this reason: a
+  // geometric position costs N fetches to honour and a semantic one costs zero.
+  //
+  // So a restore is now free or it does not happen: if the row is already
+  // loaded the reader lands on it, and if it is not they open at the newest
+  // message (see `place`, which converts an unreachable restore to `end`).
+  // Scrolling up still loads history on demand — that path is `onScroll`, and
+  // it is bounded separately by lib/history-budget.
+  if (state.intent.at !== 'hit') return false;
   return opts.hasMoreOlder && state.pages < SEEK_PAGE_BUDGET;
+}
+
+/**
+ * Is this intent one we will never be able to satisfy?
+ *
+ * A restore naming a row that is not loaded, now that a restore does not page
+ * for one. Left alone it is not merely unsatisfied, it is SILENT: `place`
+ * computes no target, writes no scrollTop, and the reader is left wherever the
+ * browser put them on mount — which for a fresh list is the TOP of a hundred
+ * screens of history, not the conversation.
+ */
+export function restoreUnreachable(
+  state: ScrollState,
+  opts: { rowLoaded: boolean; hasMoreOlder: boolean },
+): boolean {
+  if (opts.rowLoaded) return false;
+  if (state.intent.at !== 'row') return false;
+  return !canSeek(state, opts);
 }
 
 /** Live geometry of the scroll container. Plain numbers, so this is testable. */
@@ -494,6 +530,22 @@ export function scrollEventIsTheReader(opts: {
   was: Anchor | null;
   /** `ScrollState.placed` — have we had a chance to place anyone yet? */
   placed: boolean;
+  /**
+   * Has the document moved UNDER the reader since the last settle — anything
+   * inserted or resized above them?
+   *
+   * Without this, a row whose viewport offset changed read as a gesture, and
+   * that is precisely what PARTIAL anchoring produces with nobody touching
+   * anything: the engine pays some of a prepend and the rest shows up as the
+   * anchor row sitting somewhere new. Measured — one frame delivered
+   * commit-first landed at 2000 and scroll-first at 2450, the same frame
+   * reaching two answers because the two entry points weighed different
+   * evidence. The event order was choosing between erasing the reader's
+   * movement and persisting the layout's.
+   */
+  documentShifted: boolean;
+  /** Did the reader's own INPUT say they moved? Settles it outright. */
+  inputMoved: boolean;
 }): boolean {
   // Nothing has been placed since this pane became visible, so there is no "where
   // we put them" for the reader to have moved away FROM. An iOS resume resets
@@ -504,9 +556,15 @@ export function scrollEventIsTheReader(opts: {
   if (!opts.placed) return false;
   // Our own write arriving.
   if (opts.wrote !== null && Math.abs(opts.scrollTop - opts.wrote) <= TARGET_EPSILON) return false;
+  // Input is direct evidence and outranks every inference below it.
+  if (opts.inputMoved) return true;
   // Nothing anchorable to compare — only reachable transiently mid-relayout.
   // Don't guess; the next event will have geometry.
   if (!opts.here) return false;
+  // The document moved under them and nothing says they did. Whatever the
+  // rows look like now is the engine's doing, in whole or in part, and a
+  // position derived from it is layout drift rather than an intent.
+  if (opts.documentShifted) return false;
   // The document moved under a stationary reader.
   if (
     opts.was &&
@@ -559,9 +617,35 @@ export function recordFor(
  * How near the top the reader must be before we page older history in.
  *
  * Not zero, because a reader arriving at the top wants the next batch already
- * on its way rather than a stall when they hit the edge.
+ * on its way rather than a stall when they hit the edge. The floor is for a
+ * viewport so short that 1.5 of them is still a flick.
  */
-export const TOP_PAGE_ZONE_PX = 240;
+export const TOP_PAGE_ZONE_MIN_PX = 240;
+
+/**
+ * …AND IT HAS TO BE MEASURED IN VIEWPORTS, NOT PIXELS.
+ *
+ * This was a flat 240px — a third of a laptop viewport — and the comment above
+ * already said what it was for. It could not do that job: at any real scrolling
+ * speed 240px goes past in a frame or two, so the reader reaches the edge long
+ * before the page arrives. Then the prepend lands, the anchor compensation
+ * correctly holds them on the content they were reading, and because they were
+ * AT the edge that correction is the whole height of the batch.
+ *
+ * Measured on an idle chat: asked for scrollTop 0, and two seconds later sat at
+ * 2,048 of a 2,805px document — thrown 2.7 screens back down from the top they
+ * had just reached. Nothing was wrong with the compensation; the request simply
+ * started too late for it to be invisible. Reported as "scrolling up is a bit
+ * buggy and icky".
+ *
+ * A screen and a half gives the round trip time to complete while there is
+ * still content above the reader, so the prepend lands in space they cannot
+ * see and the correction is nothing they can feel. It is the same reason a map
+ * fetches the tiles just outside the window.
+ */
+export function topPageZone(clientHeight: number): number {
+  return Math.max(TOP_PAGE_ZONE_MIN_PX, Math.round(clientHeight * 1.5));
+}
 
 /** Why we are asking for older history, or `no`. */
 export type PageOlderReason = 'no' | 'fill-viewport' | 'top-zone';
@@ -616,5 +700,5 @@ export function shouldPageOlder(opts: {
   if (!opts.placed) return 'no';
   // A reader at the end is not paging history.
   if (opts.phase === 'FOLLOWING') return 'no';
-  return opts.geo.scrollTop < TOP_PAGE_ZONE_PX ? 'top-zone' : 'no';
+  return opts.geo.scrollTop < topPageZone(opts.geo.clientHeight) ? 'top-zone' : 'no';
 }

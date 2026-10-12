@@ -156,6 +156,55 @@ export class SimScroller implements ScrollSurface {
     this.assign(value);
   }
 
+  /**
+   * The reader's half of a frame, which the simulator knows exactly because
+   * it is the thing that moved them. `grewAbove` deliberately does NOT record
+   * here: engine anchoring is not a gesture, and the whole point of taking
+   * this from input rather than from `scrollTop` is that the two are
+   * indistinguishable once they have been added together.
+   */
+  /**
+   * Motion the simulator is TOLD about, because the thing being modelled is a
+   * lifecycle and not a number: contact, then the glide that outlives it.
+   * `fling()` drives both.
+   */
+  inMotion(): boolean {
+    return this.motion;
+  }
+
+  private motion = false;
+
+  /** A finger lands. Nothing may insert above the reader until it settles. */
+  touchDown(): this {
+    this.motion = true;
+    return this;
+  }
+
+  /**
+   * The reader glides: movement with NO input event behind it, which is what
+   * a momentum fling is after the finger lifts.
+   */
+  glideBy(delta: number): this {
+    this.motion = true;
+    this.assign(this.scrollTop + delta);
+    this.pending++;
+    return this;
+  }
+
+  /** The glide stops — `scrollend`, or the quiet timer expiring. */
+  motionEnds(): this {
+    this.motion = false;
+    return this;
+  }
+
+  takeReaderIntent(): number {
+    const d = this.readerIntent;
+    this.readerIntent = 0;
+    return d;
+  }
+
+  private readerIntent = 0;
+
   // ── The document changing ─────────────────────────────────────────────────
 
   /** Older history arriving at the top. The commonest growth ABOVE a reader. */
@@ -234,6 +283,18 @@ export class SimScroller implements ScrollSurface {
 
   /** The reader, by any device. Produces a scroll event, like a real one. */
   readerScrollsTo(value: number): this {
+    this.readerIntent += value - this.scrollTop;
+    this.assign(value);
+    this.pending++;
+    return this;
+  }
+
+  /**
+   * The reader moving with no INPUT event to show for it — a scrollbar drag,
+   * a middle-click autoscroll, a click in the track. The position changes and
+   * nothing announces it.
+   */
+  scrollTopSilently(value: number): this {
     this.assign(value);
     this.pending++;
     return this;

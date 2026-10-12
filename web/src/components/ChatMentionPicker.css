@@ -24,7 +24,28 @@
   z-index: 6;
   max-width: 768px;
   margin: 0 auto 6px;
-  max-height: min(46vh, 320px);
+  /* ─── IT MUST NOT GROW PAST THE TOP OF THE SCREEN ────────────────────────
+     It opens UPWARD from the composer (`bottom: 100%`), and `min(46vh, 320px)`
+     knows nothing about where the composer is — so on a phone, with the
+     keyboard up and little room above, the list simply ran off the top and the
+     first rows sat under the status bar (the clock and the carrier), unreadable
+     and untappable.
+     The third term is the real bound: everything above the composer, less the
+     notch. `--chat-composer-h` is the wrap's measured height (ChatPane
+     publishes it) and `--chat-keyboard-inset` is how far the composer itself
+     has been lifted by the software keyboard; both are 0 or absent on desktop,
+     where this resolves to the 320px it always was. */
+  max-height: min(
+    46vh,
+    320px,
+    calc(
+      100dvh -
+      var(--chat-composer-h, 96px) -
+      var(--chat-keyboard-inset, 0px) -
+      env(safe-area-inset-top, 0px) -
+      16px
+    )
+  );
   overflow-y: auto;
   overscroll-behavior: contain;
   background: var(--chat-elev);
@@ -705,4 +726,24 @@ a.chat-mention-card-artifact:hover {
   margin-top: 8px;
   font-size: 12px;
   color: var(--chat-faint);
+}
+
+/* Dismiss on a directed card that nothing answered — it is the only record of
+   that request, so it cannot simply expire, but it must be clearable. */
+.chat-mention-card-x {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  /* No fallback hex: this sheet names no colour of its own — the card borrows
+     the app's channel or it borrows nothing (see the test that enforces it). */
+  color: var(--chat-faint);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+.chat-mention-card-x:hover {
+  background: var(--chat-border);
+  color: var(--chat-fg);
 }

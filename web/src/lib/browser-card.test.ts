@@ -727,3 +727,47 @@ describe('the picture on the card', () => {
     expect(browserShotUrl('a b', 1)).toBe('/api/browsers/a%20b/shot/1');
   });
 });
+
+describe('browser moments outside the loaded window', () => {
+  const moment = (at: number) => ({ at, profile: `p${at}`, kind: 'opened' }) as never;
+  const render = (m: { at: number }) => `[browser:${m.at}]`;
+  const shape = (out: { node: unknown }[]) => out.map((e) => e.node);
+
+  it('does not pile moments older than the window at the head', () => {
+    // Measured on the Trayo chat: three browser cards at indices 0, 1 and 2,
+    // above every message in the window. "It acts real weird once I try to
+    // scroll past the cards representing browser automation."
+    const out = injectBrowserMoments(
+      [{ at: 500, node: 'msg' }],
+      [moment(1), moment(2), moment(600)],
+      render,
+      { floor: 500 },
+    );
+    expect(shape(out)).toEqual(['msg', '[browser:600]']);
+  });
+
+  it('places them once history has paged back to their moment', () => {
+    const out = injectBrowserMoments(
+      [
+        { at: 1, node: 'older' },
+        { at: 500, node: 'msg' },
+      ],
+      [moment(2)],
+      render,
+      { floor: 1 },
+    );
+    expect(shape(out)).toEqual(['older', '[browser:2]', 'msg']);
+  });
+
+  it('keeps them all when there is no earlier history', () => {
+    const out = injectBrowserMoments([{ at: 500, node: 'msg' }], [moment(1)], render, {
+      floor: null,
+    });
+    expect(shape(out)).toEqual(['[browser:1]', 'msg']);
+  });
+
+  it('flushes nothing at the tail before the log has a timeline', () => {
+    // The same edge that put thirty spawn cards at the reader's feet.
+    expect(shape(injectBrowserMoments([], [moment(1)], render))).toEqual([]);
+  });
+});

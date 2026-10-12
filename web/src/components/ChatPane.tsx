@@ -18,6 +18,7 @@ import {
   isAgentLaunchTool,
   subagentLabel,
   summarizeToolInput,
+  withMentionContext,
 } from '@muxpad/shared';
 import { useNavigate } from '@tanstack/react-router';
 import {
@@ -55,7 +56,7 @@ import {
 import { browserOpenIntent, injectBrowserMoments } from '../lib/browser-card';
 import {
   type DirectedWork,
-  addDirected,
+  directedIsStale,
   loadDirected,
   removeDirected,
   syncReported,
@@ -74,13 +75,12 @@ import {
   applyMention,
   canExpandSpawn,
   detectMentionRun,
-  directTo,
   hitsFor,
   interleaveSpawnCards,
+  mentionedChats,
   nextMentionRun,
   nextSearchLimit,
   parseDirectMarker,
-  parseDirective,
   parseMentions,
   parseReportMarker,
   rankMentions,
@@ -98,11 +98,15 @@ import {
   actionRunExpanded,
   applyChatVoice,
   chatVoiceActive,
+  coalesceCronFires,
+  dropSilentCardFires,
+  foldCronTurns,
   foldsAsActionRun,
-  isPrivateReasoning,
+  isAction,
   lastTurnStartId,
   toggleActionRun,
 } from '../lib/chat-voice';
+import { canAutoPageHistory, showLoadEarlier } from '../lib/history-budget';
 import { NO_SENDERS, loadInboundSenders, matchInboundSenders } from '../lib/inbound-senders';
 import { showFolderChip } from '../lib/nav-row-affordances';
 import { type WorkspaceTabs, paneIndex } from '../lib/nav-search';
@@ -124,9 +128,11 @@ import { NO_ROUNDS, loadSpawnRounds } from '../lib/spawn-rounds';
 import { type SpawnWork, fetchSpawnWork } from '../lib/spawn-work';
 import type { AgentLink } from '../lib/voice/session';
 import { useVoice } from '../lib/voice/use-voice';
+import { workingVariantFor } from '../lib/working-variant';
 import { AgentBackendLogo, backendFromAssistant } from './AgentLogos';
 import { BrowserCard } from './BrowserCard';
 import { useBrowsers } from './BrowserCards';
+import { ChatCards } from './ChatCards';
 import { ChatDraft, type ChatDraftHandle } from './ChatDraft';
 import { HighlightedText, Markdown } from './ChatMarkdown';
 import { ChatMentionCard, ChatMentionPicker, ChatMentionPill } from './ChatMentionPicker';
@@ -150,9 +156,11 @@ import {
   ChatMentionContext,
   ChatRow,
   ImageModal,
+  type MediaItem,
   type OpenMedia,
   type PendingQuestion,
   QuestionCard,
+  QueuedText,
   RosterSpinner,
   SpawnWorkBody,
   type ToolDetail,
@@ -160,6 +168,7 @@ import {
   ToolRow,
   UserText,
 } from './ChatTranscript';
+import { ChatWorking } from './ChatWorking';
 import { CopyablePre } from './CopyablePre';
 import { FromAgentMessage } from './FromAgentMessage';
 import { SvgAgentGlyph, SvgGlobe, SvgTerminalGlyph } from './PaneWebSwitch';
@@ -178,7 +187,7 @@ import {
 } from '../lib/chat-scroll';
 import { ChatScrollController, FOLLOW_THRESHOLD_PX } from '../lib/chat-scroll-controller';
 import { ANCHOR_ATTR, domScrollSurface } from '../lib/chat-scroll-dom';
-import { TOP_PAGE_ZONE_PX, shouldPageOlder } from '../lib/chat-scroll-intent';
+import { shouldPageOlder, topPageZone } from '../lib/chat-scroll-intent';
 import { companionTextForImagePaste, splitClipboard } from '../lib/clipboard-detect';
 import { trackKeyboardInset } from '../lib/keyboard-inset';
 import {
@@ -186,6 +195,7 @@ import {
   liveStatusLabel,
   runningChildren,
   sessionModelLabel,
+  workingRowLabel,
 } from '../lib/live-status';
 import { isMobileLayout } from '../lib/mobile-layout';
 import { useDismissable } from '../lib/use-dismissable';
@@ -644,11 +654,15 @@ const NO_TERMS: readonly string[] = [];
  */
 export function ChatPane({
   paneId,
+  tabId,
   active,
   agentNative = false,
   pendingPick = false,
 }: {
   paneId: string;
+  /** The chat this pane IS — cards hang off the tab, not the pane, because a
+   *  conversation survives its pane being respawned under it. */
+  tabId: string;
   active: boolean;
   /** Pane runs `muxpad agent` (durable startup_cmd marker). */
   agentNative?: boolean;
@@ -1428,6 +1442,9 @@ export function ChatPane({
   const hasMoreOlderRef = useRef(true);
   hasMoreOlderRef.current = hasMoreOlder;
   const [loadingOlder, setLoadingOlder] = useState(false);
+  // How many times the reader has asked to go back further than the automatic
+  // budget — see lib/history-budget. Each ask grants another whole budget.
+  const [olderGrants, setOlderGrants] = useState(0);
   const loadingOlderRef = useRef(false);
   // The in-flight request's safety-net timer — cleared when `older-done` lands
   // (or on unmount/pane switch) so a stale timer can't fire into a LATER
@@ -1436,11 +1453,12 @@ export function ChatPane({
   // Tool calls collapse to a one-line summary; tapping opens this modal with the
   // full command + output. null = closed.
   const [openTool, setOpenTool] = useState<ToolDetail | null>(null);
-  // A pasted image opened full-size in a lightbox from history. null = closed.
+  // Media opened full-size in a lightbox. Carries the whole SET the click came
+  // from plus the index, so the modal's arrows have somewhere to go — see
+  // OpenMedia. null = closed.
   const [openImage, setOpenImage] = useState<{
-    url: string;
-    name: string;
-    video: boolean;
+    items: MediaItem[];
+    index: number;
   } | null>(null);
   // Floating "jump to latest" arrow — shown only when scrolled up off the bottom.
   const [showScrollDown, setShowScrollDown] = useState(false);
@@ -1721,12 +1739,30 @@ export function ChatPane({
         if (fresh.length) {
           for (const e of fresh) byId.current.add(e.id);
           if (msg.phase === 'older') {
+            // ── NOT WHILE THE READER IS STILL MOVING ──────────────────────
+            // A momentum glide fires no input of any kind — only `scroll` —
+            // so a prepend landing inside one cannot be told apart from the
+            // reader's own travel. Measured in the simulator, it ERASES the
+            // glide at every engine anchoring fraction: nothing, half, and in
+            // full alike. On a phone that is the reported "scrolling up is
+            // chippy and buggy", because scrolling up is precisely what asks
+            // for these pages.
+            //
+            // No discriminator can recover it — the engine's share and the
+            // reader's arrive summed into one number. So the collision is not
+            // resolved, it is PREVENTED: the rows wait in a buffer, the
+            // document stands still for the whole gesture, and they land in
+            // one commit once the motion is over. See `inMotion`.
+            //
             // The batch is chronological and entirely before the current head,
-            // so prepend it wholesale. No geometry is captured: the reader's
-            // place is held by their intent (a message id), which the commit
-            // subscription re-satisfies against the document as it is AFTER the
-            // prepend. Capturing heights across a commit is what made the old
-            // compensation wrong whenever a live append landed in the same one.
+            // so it prepends wholesale whenever it does land. No geometry is
+            // captured: the reader's place is held by their intent (a message
+            // id), which the commit subscription re-satisfies against the
+            // document as it is AFTER the prepend.
+            if (scroll.current?.readerIsMoving()) {
+              deferredOlder.current = [...fresh, ...deferredOlder.current];
+              return;
+            }
             ordered.current = [...fresh, ...ordered.current];
           } else {
             ordered.current = [...ordered.current, ...fresh];
@@ -2102,55 +2138,14 @@ export function ChatPane({
     inputRef.current?.focus();
   };
 
-  /**
-   * Hand a request to ANOTHER chat's agent, and leave a card here saying so.
-   *
-   * Does not touch this pane's socket: the point of `@Name do this` is that the
-   * work happens over there and this chat stays free. The card goes up
-   * optimistically (the user's sentence must not vanish while a request is in
-   * flight) and is taken back if the request could not be delivered.
-   */
-  const directWork = (
-    target: MentionChat,
-    /** The request as the user wrote it, for the card's second line. Taken from
-     *  the parsed directive rather than re-derived by stripping the name out of
-     *  the draft: the token in the draft is whatever the chat was CALLED when it
-     *  was picked, which after a rename is not its name any more. */
-    request: string,
-    /** What the other agent is sent — prose plus any attachment paths. */
-    outgoing: string,
-    /** The composer's state, to hand back untouched if this never leaves. */
-    restore: { text: string; chips: readonly { path: string; name: string; previewUrl: string }[] },
-  ) => {
-    const id =
-      globalThis.crypto?.randomUUID?.().slice(0, 8) ?? Math.random().toString(36).slice(2, 10);
-    const entry: DirectedWork = {
-      id,
-      at: Date.now(),
-      tabId: target.tabId,
-      tabSlug: target.tabSlug,
-      workspaceSlug: target.workspaceSlug,
-      // The card shows the REQUEST as the user wrote it: attachment paths are
-      // for the agent to read, not for the log to quote back.
-      body: request,
-      chip: target.chip,
-    };
-    setDirected(addDirected(paneId, entry));
-    void directTo(
-      target,
-      { id, from: myChat?.tabName ?? 'another chat', pane: paneId },
-      outgoing,
-    ).then((res) => {
-      if (res.ok) return;
-      setDirected(removeDirected(paneId, id));
-      setNotice({ text: res.message, tone: 'info' });
-      // Give the composer back rather than lose it — the same contract as a send
-      // into a dead socket. Only if it is still empty: the user may have started
-      // typing something else while this was in flight.
-      setInput((cur) => (cur.trim() ? cur : restore.text));
-      if (restore.chips.length) setChips((prev) => (prev.length ? prev : [...restore.chips]));
-    });
-  };
+  // `directWork` lived here: it sent a leading `@Name <text>` to that chat and
+  // put a pending card in this one. Removed with the routing rule it served —
+  // a mention is CONTEXT now (see the send path below and
+  // shared/src/chat-context.ts), and handing work to another chat is something
+  // you ask for, which the agent does with `muxpad agent send`.
+  //
+  // The CARDS and their report parsing stay: old cards must still render, and
+  // an agent-initiated `<muxpad-direct>` message still draws one.
 
   const sendMessage = () => {
     const text = input.trim();
@@ -2176,40 +2171,27 @@ export function ChatPane({
       setInput('');
       return;
     }
-    // `@Name <text>` at the head of the draft goes to THAT chat instead of this
-    // one. Checked before the socket, because this path does not use it — and
-    // deliberately after the question card above, which owns the composer while
-    // it is up.
+    // ── A MENTION IS CONTEXT, NEVER A ROUTE ────────────────────────────────
+    // A leading `@Name` used to send the rest of the draft to THAT chat instead
+    // of this one. Reported by the user who hit it: "I wrote you a message and
+    // mentioned another tab, and what you did was take what I wrote and send it
+    // to that tab."
     //
-    // `input`, not `text`: a pick is anchored at an offset into the draft, and
-    // the trim would shift every one of them by the leading whitespace.
-    // `parseDirective` trims for itself.
-    const directive = parseDirective(input, corpus, livePicks);
-    if (directive && !directive.target) {
-      // The chat the user PICKED is gone from the corpus. Do not guess another
-      // one with the same name, and do not send it here either — keep the draft
-      // and say why, so they can pick again.
-      setNotice({
-        text: `@${directive.missing.name} isn't available any more — pick the chat again.`,
-        tone: 'info',
-      });
-      return;
-    }
-    if (directive) {
-      directWork(
-        directive.target,
-        directive.body,
-        composeOutgoingMessage(directive.body, attachmentPaths),
-        {
-          text,
-          chips,
-        },
-      );
-      setInput('');
-      clearChips();
-      return;
-    }
-    const outgoing = composeOutgoingMessage(text, attachmentPaths);
+    // One rule can only ever do one thing with a mention, and that rule picked
+    // the rarest one. The common intent is the opposite — here is a chat, it is
+    // relevant, work out what to do about it — and the agent reading the message
+    // CAN work that out: read its tail, summarise it, search it, ask it
+    // something, or notice that the sentence only needed the name. It also fails
+    // expensively: the words go somewhere nobody is looking, and the sender
+    // learns about it when something else answers.
+    //
+    // So the message always stays here, and instead it carries the handles for
+    // whatever it mentioned — ids rather than the characters `@Investing`, which
+    // are guesswork the moment two chats are called "Main". Directing work is
+    // still possible and is now something you ASK for; the agent has
+    // `muxpad agent send`.
+    const mentioned = mentionedChats(input, corpus, livePicks);
+    const outgoing = withMentionContext(composeOutgoingMessage(text, attachmentPaths), mentioned);
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       // Don't fire into a dead socket (the browser would drop it silently).
@@ -2622,8 +2604,29 @@ export function ChatPane({
       haveEvents: events.length > 0,
       sessionBound: !!session?.current_sid,
     });
-    if (why !== 'no') requestOlder();
-  }, [active, events, loadingOlder, hasMoreOlder, session?.current_sid]);
+    // THE SAME BUDGET AS `onScroll`, AND FOR THE SAME REASON. This effect pages
+    // for two causes: content that does not overflow (so no scroll event will
+    // ever come) and a reader parked in the top zone. The second is the runaway
+    // — it re-runs on every events commit, so each answered page immediately
+    // asks for the next, with nothing but the start of the transcript to stop
+    // it. Gating only `onScroll` left this path wide open: measured at 2,906
+    // rows and 449 screens from a chat that had just opened with 38.
+    //
+    // The 'fill-viewport' cause is deliberately NOT gated. A viewport with nothing
+    // in it is not a reader digging through history, it is a chat that cannot be
+    // read or scrolled at all, and the budget must not be able to produce that.
+    if (why === 'no') return;
+    // NOTHING MORE WHILE A PAGE IS WAITING TO LAND. Deferring insertion during
+    // a gesture (see `deferredOlder`) leaves the reader near the top with
+    // nothing pushing them down, so this condition stays true and every pass
+    // asks again — measured, one glide flushed 127,000px and the chat reached
+    // 1,162 rows. The buffer is the back-pressure.
+    if (deferredOlder.current.length > 0) return;
+    if (why === 'top-zone' && !canAutoPageHistory({ loaded: events.length, grants: olderGrants })) {
+      return;
+    }
+    requestOlder();
+  }, [active, events, loadingOlder, hasMoreOlder, olderGrants, session?.current_sid]);
 
   // ── THE SEEK ──────────────────────────────────────────────────────────────
   // The controller owns the budget and says when a page is worth asking for; the
@@ -2648,8 +2651,20 @@ export function ChatPane({
   // burst of commits cannot produce a burst of requests.
   useEffect(() => {
     if (!active || loadingOlder) return;
-    if (!scroll.current?.wantsOlder(hasMoreOlder)) return;
-    if (requestOlder()) scroll.current.dispatch({ t: 'sought' });
+    const c = scroll.current;
+    if (!c) return;
+    // A RESTORE THAT CANNOT LAND OPENS AT THE NEWEST MESSAGE. Without this the
+    // intent is merely unsatisfied and therefore silent — `place` computes no
+    // target, writes no scrollTop, and a fresh list leaves the reader at the
+    // TOP of whatever loaded rather than in the conversation. Checked on every
+    // commit, not once at mount, because the anchor may yet arrive in the tail.
+    if (c.strandedRestore(hasMoreOlder)) {
+      c.dispatch({ t: 'jump-to-latest' });
+      return;
+    }
+    if (deferredOlder.current.length > 0) return;
+    if (!c.wantsOlder(hasMoreOlder)) return;
+    if (requestOlder()) c.dispatch({ t: 'sought' });
   });
 
   /** @returns whether a request actually went out — the anchor seek spends its
@@ -2688,6 +2703,51 @@ export function ChatPane({
   /** The terms to light up. Stable per jump, because `ChatRow` is memoised on
    *  it and a fresh array every render would re-parse the message's markdown on
    *  every subagent progress frame. */
+  // CHAT MODE'S VOICE. In Chat mode the agent's plain text is a private
+  // scratchpad and its `reply` calls are the conversation; this decides which
+  // events are messages and which fold into the "N actions" rows. Presentation
+  // ONLY — `events` (and the transcript, and the archive) still hold every
+  // word, which is what makes the fold auditable rather than a disappearance.
+  //
+  // `sending` is the live-turn signal: it goes true synchronously on send and
+  // on turn-start, false on turn-done, so the guard's promotion lands exactly
+  // when the turn closes rather than flickering mid-turn.
+  //
+  // It is not enough on its own. `sending` says a turn is RUNNING; the voice
+  // needs to know whether the last segment IS that turn, and for a beat at the
+  // start of every turn it isn't — the flag is a socket frame (or an
+  // optimistic send), the user's message is a transcript line that has to be
+  // written, tailed and normalised first. The latch below closes that gap:
+  // while nothing is running, the last segment is by definition finished, so
+  // record which one it is; while a turn runs the value is FROZEN, and the
+  // voice compares against it to tell "the running turn hasn't written
+  // anything yet" from "the last segment is the running turn". See
+  // closedTurnStartId in chat-voice.ts for the measured symptom.
+  const lastTurnStart = useMemo(() => lastTurnStartId(events), [events]);
+  const closedTurnStart = useRef<string | null>(null);
+  if (!sending) closedTurnStart.current = lastTurnStart;
+  const closedTurnStartId = closedTurnStart.current;
+  const voiceOpts = useMemo(
+    () => ({ mode, turnActive: sending, assistant: session?.assistant, closedTurnStartId }),
+    [mode, sending, session?.assistant, closedTurnStartId],
+  );
+  const voiceOn = chatVoiceActive(voiceOpts);
+  // ONE VARIANT PER TURN. Keyed on the turn's own start event rather than
+  // advanced on mount: the indicator unmounts the moment the first token
+  // streams and remounts if the stream clears, so a mount-time pick would
+  // re-roll inside a single turn — the one moment anybody is looking at it.
+  const workingVariant = useMemo(() => workingVariantFor(lastTurnStart), [lastTurnStart]);
+  // Chat mode's voice first, then the cron fold. Two different claims about the
+  // same events: the voice is about this PANE's mode, the fold is about a
+  // SCHEDULE whose author said its output is plumbing — so the fold applies in
+  // agent mode too, where the voice does not run at all.
+  const voiced = useMemo(
+    // …then ONE chip per quiet stretch rather than one per fire. Last, because
+    // it has to see the result of the fold to know which stretches are silent.
+    () => coalesceCronFires(dropSilentCardFires(foldCronTurns(applyChatVoice(events, voiceOpts)))),
+    [events, voiceOpts],
+  );
+
   const jumpTerms = useMemo(() => (jump ? queryTerms(jump.query) : NO_TERMS), [jump]);
 
   /**
@@ -2702,8 +2762,17 @@ export function ChatPane({
   const jumpTargetId = useMemo(() => {
     if (!jump || jumpTerms.length === 0) return null;
     if (!scrollMemorySidMatches(jump.sid, renderedSid.current)) return null;
-    return pickSearchTarget(events, { terms: jumpTerms, ts: jump.ts });
-  }, [jump, jumpTerms, events]);
+    // `voiced`, NOT `events`. The pick has to name a row that is actually
+    // RENDERED, and the voice pipeline above drops some: a sign-off folded away
+    // after a reply, and now every cron chip absorbed into a coalesced stretch.
+    // Naming one of those produces an anchor with no `data-eid` in the
+    // document, which does not read as "not found" — it sends the client
+    // paging backwards through history hunting for a message that is already
+    // loaded. A cron notice's text is its NAME, so searching "nw-hourly" hits
+    // this squarely, and the newest-wins tie-break picks an absorbed one by
+    // preference.
+    return pickSearchTarget(voiced, { terms: jumpTerms, ts: jump.ts });
+  }, [jump, jumpTerms, voiced]);
 
   const clearJump = useCallback(() => {
     // The reader owns the scroll again, and where they are now is what the
@@ -3037,13 +3106,48 @@ export function ChatPane({
     // just-shown pane reports scrollTop 0 while it settles and paging on that
     // prepended a batch of history on every tab visit).
     if (
-      el.scrollTop < TOP_PAGE_ZONE_PX &&
+      el.scrollTop < topPageZone(el.clientHeight) &&
       events.length > 0 &&
+      // Back-pressure: a page already waiting on the reader's gesture is a
+      // page we have, so asking for another buys nothing and costs a flush.
+      deferredOlder.current.length === 0 &&
+      // THE BUDGET. This path is the one that ran away: it pages whenever the
+      // reader is near the top, and its only limit was reaching the start of
+      // the transcript. Measured at 1,775 rows / 202,971 px and still climbing.
+      // Past the budget the reader gets a button instead — see `showLoadEarlier`.
+      canAutoPageHistory({ loaded: events.length, grants: olderGrants }) &&
       scroll.current?.phase(hasMoreOlderRef.current) !== 'FOLLOWING'
     ) {
       requestOlder();
     }
   };
+
+  /**
+   * Older pages that arrived while the reader was mid-gesture, oldest first.
+   * Flushed by the effect below the moment their motion settles.
+   */
+  const deferredOlder = useRef<ChatEvent[]>([]);
+
+  /**
+   * Land the buffered history once the gesture is over.
+   *
+   * Polled rather than driven by an event, because the thing being waited for
+   * is the ABSENCE of one: `scrollend` is not on every engine, so motion ends
+   * on a quiet timer, and nothing fires when a timer expires. A 60ms tick is
+   * two or three frames of latency on a buffer that is usually empty.
+   */
+  useEffect(() => {
+    if (!active) return;
+    const id = window.setInterval(() => {
+      if (deferredOlder.current.length === 0) return;
+      if (scroll.current?.readerIsMoving()) return;
+      const held = deferredOlder.current;
+      deferredOlder.current = [];
+      ordered.current = [...held, ...ordered.current];
+      setEvents(ordered.current);
+    }, 60);
+    return () => window.clearInterval(id);
+  }, [active]);
 
   const scrollToBottom = () => {
     setShowScrollDown(false);
@@ -3088,37 +3192,6 @@ export function ChatPane({
       setOptimisticUser(null);
     }
   }, [events, optimisticUser]);
-
-  // CHAT MODE'S VOICE. In Chat mode the agent's plain text is a private
-  // scratchpad and its `reply` calls are the conversation; this decides which
-  // events are messages and which fold into the "N actions" rows. Presentation
-  // ONLY — `events` (and the transcript, and the archive) still hold every
-  // word, which is what makes the fold auditable rather than a disappearance.
-  //
-  // `sending` is the live-turn signal: it goes true synchronously on send and
-  // on turn-start, false on turn-done, so the guard's promotion lands exactly
-  // when the turn closes rather than flickering mid-turn.
-  //
-  // It is not enough on its own. `sending` says a turn is RUNNING; the voice
-  // needs to know whether the last segment IS that turn, and for a beat at the
-  // start of every turn it isn't — the flag is a socket frame (or an
-  // optimistic send), the user's message is a transcript line that has to be
-  // written, tailed and normalised first. The latch below closes that gap:
-  // while nothing is running, the last segment is by definition finished, so
-  // record which one it is; while a turn runs the value is FROZEN, and the
-  // voice compares against it to tell "the running turn hasn't written
-  // anything yet" from "the last segment is the running turn". See
-  // closedTurnStartId in chat-voice.ts for the measured symptom.
-  const lastTurnStart = useMemo(() => lastTurnStartId(events), [events]);
-  const closedTurnStart = useRef<string | null>(null);
-  if (!sending) closedTurnStart.current = lastTurnStart;
-  const closedTurnStartId = closedTurnStart.current;
-  const voiceOpts = useMemo(
-    () => ({ mode, turnActive: sending, assistant: session?.assistant, closedTurnStartId }),
-    [mode, sending, session?.assistant, closedTurnStartId],
-  );
-  const voiceOn = chatVoiceActive(voiceOpts);
-  const voiced = useMemo(() => applyChatVoice(events, voiceOpts), [events, voiceOpts]);
 
   // ── SPOKEN voice (GPT-Live) ────────────────────────────────────────────────
   //
@@ -3661,12 +3734,8 @@ export function ChatPane({
     // whole mechanism — deliberation goes where tool calls go, one tap from
     // being read in full, and only a deliberate `reply` breaks the run as a
     // real message.
-    const isAction = (e: ChatEvent) =>
-      !isAgentLaunch(e) &&
-      (e.kind === 'tool_use' ||
-        e.kind === 'tool_result' ||
-        e.kind === 'thinking' ||
-        isPrivateReasoning(e));
+    // `isAction` lives in chat-voice.ts beside the rest of the fold rules —
+    // coalesceCronFires asks the same question of the same events.
     // Fold from TWO actions up — except a run carrying Chat mode's demoted
     // prose, which folds even alone. The rule lives in chat-voice.ts
     // (foldsAsActionRun) next to the demotion that creates those events, so
@@ -3764,14 +3833,29 @@ export function ChatPane({
           // spawn-card interleave — and the file it lives in — never has to
           // know browsers exist. A browser opening and an agent getting stuck
           // are two moments in the log, not a status light above it.
-          injectBrowserMoments(items, browserMoments, (moment) => (
-            <BrowserCard
-              key={`browser:${moment.profile}:${moment.at}:${moment.kind}`}
-              moment={moment}
-              onOpen={(mode) => openBrowser(moment.browser, mode, browserOpenIntent(moment))}
-            />
-          )),
+          injectBrowserMoments(
+            items,
+            browserMoments,
+            (moment) => (
+              <BrowserCard
+                key={`browser:${moment.profile}:${moment.at}:${moment.kind}`}
+                moment={moment}
+                onOpen={(mode) => openBrowser(moment.browser, mode, browserOpenIntent(moment))}
+              />
+            ),
+            // The same window floor the cards get — a browser opened before the
+            // oldest loaded message is not placeable either.
+            { floor: items.find((e) => e.at !== null)?.at ?? null },
+          ),
           spawnedCards,
+          // The window's lower edge, taken from the TRANSCRIPT rather than from
+          // the list above — which has browser moments in it by now, and a
+          // browser opening can be older than every message loaded. A card
+          // below this edge is not placeable until history pages back to its
+          // moment, UNLESS the server has said there is none earlier, in which
+          // case it genuinely predates the conversation and belongs at the
+          // head. See interleaveSpawnCards.
+          { hasMoreOlder, floor: items.find((e) => e.at !== null)?.at ?? null },
         ).map((x) => {
           if (x.kind === 'entry') return x.node;
           const kid = x.card.chat;
@@ -3907,6 +3991,10 @@ export function ChatPane({
     optimisticUser,
     sending,
     loadingOlder,
+    // Read by the spawn-card interleave below, to decide whether a card older
+    // than the loaded window can be placed yet. It was missing, so a card
+    // could sit at the wrong edge until some other dependency changed.
+    hasMoreOlder,
     expandedGroups,
     jumpTargetId,
     jumpTerms,
@@ -3972,10 +4060,12 @@ export function ChatPane({
     !agentNative && lastEvent?.kind === 'tool_use' && !toolIndex.resultFor.has(lastEvent.toolUseId);
   const agentWorking = Boolean((sending || streamingText || pendingTool) && session?.current_sid);
 
-  // What the working row says. Bare dots read as "maybe stuck" during a long
-  // silent tool call — name the OLDEST still-unresolved tool.
+  // What the working row says — see `workingRowLabel`. NULL when no tool is
+  // running: the dots carry "something is coming, here", and the bar above the
+  // composer owns the word. Two surfaces said `Working…` a hundred pixels
+  // apart until the decision moved next to the bar's own.
   const unresolvedTool = agentWorking ? (toolIndex.unresolvedTools[0] ?? null) : null;
-  const workingLabel = unresolvedTool ? `Running ${unresolvedTool.name}…` : 'Working…';
+  const workingLabel = workingRowLabel(unresolvedTool?.name);
 
   // The live roster is the union of two sources, and they cover each other's
   // blind spot:
@@ -4263,11 +4353,47 @@ export function ChatPane({
           aria-label="Conversation"
         >
           <div className="chat-list">
+            {/* ── THE END OF THE AUTOMATIC BUDGET ────────────────────────────
+              Not an error and not a spinner: the history is all still there,
+              muxpad has simply stopped dragging it in on its own. One click
+              grants another whole budget rather than a single page — a reader
+              who has said "further back" once is digging, and six clicks to
+              cross what the scroll used to cross by itself is the friction this
+              is trying not to add. See lib/history-budget. */}
+            {showLoadEarlier({
+              loaded: events.length,
+              grants: olderGrants,
+              hasMoreOlder,
+            }) ? (
+              <div className="chat-earlier">
+                <button
+                  type="button"
+                  className="chat-earlier-btn"
+                  onClick={() => {
+                    setOlderGrants((n) => n + 1);
+                    requestOlder();
+                  }}
+                  disabled={loadingOlder}
+                >
+                  {loadingOlder ? 'Loading…' : 'Load earlier messages'}
+                </button>
+              </div>
+            ) : null}
             {body}
             {optimisticUser ? (
               <div className="chat-turn chat-turn-user">
                 <div className="chat-bubble" dir="auto">
-                  <UserText text={optimisticUser} onOpenImage={setOpenImage} />
+                  {/* `QueuedText`, NOT `UserText`. This echo is the RAW outgoing
+                    message, and a cron fire's raw text begins with its marker —
+                    so a fire drained from the queue rendered a bubble full of
+                    `<muxpad-cron id="…" fold="1">` XML for the length of its
+                    turn. The comment at the `turn-start` handler said "a turn
+                    nobody started carries no text and sets nothing", and that
+                    stopped being true when the queue drain began stamping the
+                    text it relayed.
+                    Same component the queue preview already uses, for the same
+                    reason: the two are the same thing seen a second apart. */}
+                  <QueuedText text={optimisticUser} onOpenImage={setOpenImage} />
                 </div>
               </div>
             ) : null}
@@ -4289,12 +4415,10 @@ export function ChatPane({
                     className="chat-msg chat-working"
                     aria-label={`${assistantLabel(session?.assistant)} is working`}
                   >
-                    <span className="chat-typing" aria-hidden="true">
-                      <i />
-                      <i />
-                      <i />
-                    </span>
-                    <span className="chat-working-label">{workingLabel}</span>
+                    <ChatWorking variant={workingVariant} />
+                    {workingLabel ? (
+                      <span className="chat-working-label">{workingLabel}</span>
+                    ) : null}
                   </div>
                 )}
               </div>
@@ -4306,34 +4430,59 @@ export function ChatPane({
                 onAnswer={(answers) => answerQuestion(question.qid, answers)}
               />
             ) : null}
-            {/* Work this chat DIRECTED at another one. Live furniture at the foot
-              of the log, beside the pending queue, because that is what it is:
-              a request in flight somewhere else. The spinner is the same 10px
-              mark as everywhere else, and it stops when the report lands (which
-              is read off the transcript, not watched for). */}
-            {directed.map((d) => {
-              // LIVE FIRST, snapshot second. `d.chip` is frozen at send time so
-              // the card can draw on the first paint after a reload, before
-              // `/api/tabs/all` has answered — that is still why it is stored.
-              // But it was also the ONLY thing ever rendered, and the comment
-              // claiming "the corpus refreshes it when it arrives" had no
-              // implementing code: directing work to a done chat left a
-              // done-looking card for as long as the card lived, even though the
-              // message had just revived its recipient, and a rename or a
-              // retirement never reached it either. The tab id is the durable
-              // handle; the snapshot is the fallback while there is no corpus.
-              const live = corpusById.get(d.tabId);
-              return (
-                <ChatMentionCard
-                  key={d.id}
-                  chat={live?.chip ?? d.chip}
-                  sub={d.body}
-                  working={!d.reportedAt}
-                  state={d.reportedAt ? 'reported' : undefined}
-                  onOpen={() => openChat(live ?? d)}
-                />
-              );
-            })}
+            {/* Work this chat DIRECTED at another one. Furniture at the foot of
+              the log, beside the pending queue, because that is what it is: a
+              request IN FLIGHT somewhere else.
+              IN FLIGHT IS THE WHOLE LICENCE, and it was not being enforced. A
+              card stayed pinned after its report landed — reported, answered,
+              done, and still sitting between the last message and the composer
+              forever. Reported as "still have this weird thing fixed at the
+              bottom". The answer is a real message in the transcript, which is
+              where it belongs and where it already was; the card had nothing
+              left to say.
+              This is the same conclusion the spawn cards reached (see the note
+              on `interleaveSpawnCards` above): anything that outlives its moment
+              has to move into the log, because a pinned card cannot scroll away
+              and so must keep earning its place forever.
+              A card nothing ever answered STAYS — it is the only record that the
+              request was made, since a direction is not written to this chat's
+              transcript — but it says "no answer" and can be dismissed. */}
+            {directed
+              .filter((d) => !d.reportedAt)
+              .map((d) => {
+                // LIVE FIRST, snapshot second. `d.chip` is frozen at send time so
+                // the card can draw on the first paint after a reload, before
+                // `/api/tabs/all` has answered — that is still why it is stored.
+                // But it was also the ONLY thing ever rendered, and the comment
+                // claiming "the corpus refreshes it when it arrives" had no
+                // implementing code: directing work to a done chat left a
+                // done-looking card for as long as the card lived, even though the
+                // message had just revived its recipient, and a rename or a
+                // retirement never reached it either. The tab id is the durable
+                // handle; the snapshot is the fallback while there is no corpus.
+                const live = corpusById.get(d.tabId);
+                // A card that spins forever is the failure this state exists for:
+                // the answer is a MODEL doing as it was asked, so a target that
+                // was busy, misread the instruction, crashed, or simply answered
+                // in prose without copying the marker left the card turning for
+                // the rest of the week.
+                const stale = directedIsStale(d);
+                return (
+                  <ChatMentionCard
+                    key={d.id}
+                    chat={live?.chip ?? d.chip}
+                    sub={d.body}
+                    working={!stale}
+                    {...(stale ? { state: 'no answer' } : {})}
+                    onOpen={() => openChat(live ?? d)}
+                    // Dismissible only once it is clearly over: a live request
+                    // vanishing under your hand would lose the sentence you sent.
+                    {...(stale
+                      ? { onDismiss: () => setDirected(removeDirected(paneId, d.id)) }
+                      : {})}
+                  />
+                );
+              })}
             {/* Work this chat SPAWNED used to be a block RIGHT HERE — one card
               per live child, pinned above the composer for as long as the child
               ran. It is in the transcript now, at the moment of the spawn (see
@@ -4376,7 +4525,7 @@ export function ChatPane({
                   </button>
                 </div>
                 <div className="chat-bubble chat-bubble-queued" dir="auto">
-                  <UserText text={q.text} onOpenImage={setOpenImage} />
+                  <QueuedText text={q.text} onOpenImage={setOpenImage} />
                 </div>
               </div>
             ))}
@@ -4436,14 +4585,43 @@ export function ChatPane({
         {openTool ? <ToolModal detail={openTool} onClose={() => setOpenTool(null)} /> : null}
         {openImage ? (
           <ImageModal
-            url={openImage.url}
-            name={openImage.name}
-            video={openImage.video}
+            items={openImage.items}
+            index={openImage.index}
+            onIndex={(i) => setOpenImage((o) => (o ? { ...o, index: i } : o))}
             onClose={() => setOpenImage(null)}
           />
         ) : null}
         {session?.current_sid ? (
-          <div className="chat-composer-wrap" ref={composerRef}>
+          <div
+            className="chat-composer-wrap"
+            ref={composerRef}
+            // The wrap's measured height, published for the one thing that has
+            // to know it in CSS: the mention picker opens UPWARD from here, and
+            // without this it has no idea how much room is above it (see
+            // ChatMentionPicker.css).
+            style={
+              composerH
+                ? ({ '--chat-composer-h': `${composerH}px` } as React.CSSProperties)
+                : undefined
+            }
+          >
+            {/* ── THE PINNED CARDS, GLUED TO THE BOTTOM ──────────────────────
+              Inside the composer wrap rather than above the scroller, and that
+              placement does three jobs at once.
+              WHERE YOUR EYE IS. A chat is read at the bottom — that is where
+              new messages land and where you are already looking while typing.
+              At the top of the log a card is as far from the conversation as it
+              is possible to be, and four of them push the thing you are reading
+              a third of the way off screen.
+              THE KEYBOARD, FREE. The wrap already rides
+              `--chat-keyboard-inset`, so the cards lift with the composer on
+              iOS instead of hiding behind the software keyboard.
+              THE RESERVE, FREE. `composerH` is measured from THIS wrap, and the
+              scroller reserves exactly that much at its foot — so a card stack
+              that grows pushes the log up by precisely its own height, with no
+              second measurement to keep in step. That is the whole reason it is
+              a child here and not a sibling pinned at `bottom: composerH`. */}
+            <ChatCards tabId={tabId} />
             {notice ? (
               <div className={`chat-notice${notice.tone === 'danger' ? ' -danger' : ''}`}>
                 {notice.text}
@@ -4479,45 +4657,20 @@ export function ChatPane({
                 onHover={setMentionCursor}
               />
             ) : null}
-            {/* A SIBLING OF THE PILL, above it — not a child of it.
-
-                It has now been wrong in both directions, so both are written
-                down. As its own floating strip it was a second OBJECT: its own
-                border, its own background, a 10px gap, 37px of a 119px bar for a
-                line you read and almost never press. Moved onto the pill's
-                surface to pay that back, it became chrome inside the thing you
-                type in — "it's all too tight there" — and, worse, it sat above
-                the input INSIDE a bottom-anchored pill, so the one time it
-                mattered (a long model id and a folder name at 390px, wrapping)
-                it SHOVED THE COMPOSER DOWN.
-
-                Out here it costs the same as it did on the pill: one 16px line
-                plus the 6px that separates it, where the pill's own row gap used
-                to spend the same 6px on it. Its height is a constant in the
-                stylesheet and it can no longer wrap (ChatPane.statusline.test.tsx
-                pins both), so it cannot move the composer whatever it says. It
-                stays inside `.chat-composer-wrap` deliberately: the wrap is what
-                `composerRef` measures, and `.chat-composer-reserve` holds that
-                height clear at the foot of the log — a strip positioned outside
-                the measurement would float over the last message instead. */}
-            <SessionBar
-              paneId={paneId}
-              folder={folder}
-              status={agentStatus}
-              {...(session?.assistant ? { assistant: session.assistant } : {})}
-              liveLabel={liveLabel}
-              agents={rosterAgents}
-              onOpenChat={openChat}
-              mode={mode}
-              send={(obj) => {
-                const sock = wsRef.current;
-                if (!sock || sock.readyState !== WebSocket.OPEN) {
-                  setNotice({ text: 'Not connected — try again in a moment.', tone: 'info' });
-                  return;
-                }
-                sock.send(JSON.stringify(obj));
-              }}
-            />
+            {/* ── THE SESSION LINE — folder, model, live state ───────────────────
+              UNDER the composer now, not above it. It is reference, not
+              conversation: you look at it when you wonder which folder or model
+              this chat is on, and the rest of the time it should be the furthest
+              thing from the message you are reading. Above the pill it sat
+              between the last message and the composer, which is the most
+              valuable strip in the pane.
+              It stays inside `.chat-composer-wrap` either way: the wrap is what
+              `composerRef` measures, and `.chat-composer-reserve` holds that
+              height clear at the foot of the log — a strip positioned outside
+              the measurement would float over the last message instead. Its
+              height is a constant in the stylesheet and it cannot wrap
+              (ChatPane.statusline.test.tsx pins both), so it cannot move the
+              composer whatever it says. */}
             <div className="chat-composer">
               {/* No `capture` attribute, deliberately: with one, iOS goes straight
                 to the camera. Without it — and with an `accept` that is not
@@ -4709,6 +4862,24 @@ export function ChatPane({
                 </div>
               ) : null}
             </div>
+            <SessionBar
+              paneId={paneId}
+              folder={folder}
+              status={agentStatus}
+              {...(session?.assistant ? { assistant: session.assistant } : {})}
+              liveLabel={liveLabel}
+              agents={rosterAgents}
+              onOpenChat={openChat}
+              mode={mode}
+              send={(obj) => {
+                const sock = wsRef.current;
+                if (!sock || sock.readyState !== WebSocket.OPEN) {
+                  setNotice({ text: 'Not connected — try again in a moment.', tone: 'info' });
+                  return;
+                }
+                sock.send(JSON.stringify(obj));
+              }}
+            />
           </div>
         ) : null}
       </div>

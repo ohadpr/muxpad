@@ -27,7 +27,6 @@ import { useAllChats } from '../lib/use-all-chats';
 import { useDismissable } from '../lib/use-dismissable';
 import { applyTabOrder, insertTabRow, refreshTabs, useTabs } from '../tabs';
 import { useLongPress } from '../use-long-press';
-import { MAX_QUICK_SWITCH_TABS, useTabQuickSwitch } from '../use-tab-quickswitch';
 import {
   applyWorkspaceOrder,
   refreshWorkspaces,
@@ -39,6 +38,7 @@ import { NavSearch } from './NavSearch';
 import { NewTabButton } from './NewTabButton';
 import { StateChip } from './StateChip';
 import { SwipeRow } from './SwipeRow';
+import { WorkspaceSettings } from './WorkspaceSettings';
 import { SvgClose } from './icons';
 import './NavTree.css';
 // The flat 'recent' view's own rules. A separate sheet for the same reason
@@ -252,7 +252,7 @@ interface NavTreeProps {
  *   variant="sidebar" — the desktop left rail (SidebarTree below). A dense
  *     file navigator: collapsible workspace groups, indented tab rows carrying
  *     a headline, a schedule and a state word, hover-revealed pin/close,
- *     double-click rename, Ctrl+1…9 quick-switch, drag-to-reorder.
+ *     double-click rename, drag-to-reorder.
  *   variant="sheet"   — the mobile drop-down panel (SheetRail below). NOT the
  *     same tree at thumb height: a flat, one-line-per-chat rail whose only
  *     permanent mark is a dot on the chats that are waiting on you.
@@ -953,6 +953,7 @@ function WorkspaceNode({
    * "+ New chat", ON THE HEADER. The destination is the row the button is drawn
    * on, so there is nothing to ask and nothing to label.
    */
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const createHere = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -1129,6 +1130,27 @@ function WorkspaceNode({
                 about the old top button — "it's hard to see" — so this one does
                 not hide, it just sits at the weight of the rest of the row's
                 chrome and comes up on hover. */}
+            {/* SETTINGS, in the row's own control cluster. The per-workspace
+                instructions and the capability switches are properties OF A
+                WORKSPACE, so the workspace row is where they belong — and the
+                Slack switch has to live on a browser surface specifically,
+                because the server refuses a capability change that arrives
+                without an `Origin` header. There is no CLI route to it on
+                purpose: an agent that can grant itself Slack makes the guard
+                decoration. */}
+            <button
+              type="button"
+              className="navtree-close navtree-ws-settings"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setSettingsOpen(true);
+              }}
+              title={`${workspace.name} settings`}
+              aria-label={`Settings for ${workspace.name}`}
+            >
+              <SvgSliders />
+            </button>
             <button
               type="button"
               className="navtree-close navtree-ws-add"
@@ -1170,6 +1192,9 @@ function WorkspaceNode({
           setEditing={setEditing}
           onNavigate={onNavigate}
         />
+      )}
+      {settingsOpen && (
+        <WorkspaceSettings workspace={workspace} onClose={() => setSettingsOpen(false)} />
       )}
     </div>
   );
@@ -1274,10 +1299,13 @@ export function TabList({
   const liveGroups = grouped.live;
   const doneGroups = grouped.done;
   const doneCount = doneChatCount(doneGroups);
+  const subGroups = grouped.doneSubs;
+  const subCount = subGroups.reduce((n, g) => n + g.children.length, 0);
   // COLLAPSED by default. A chat crossing into done should be something you
   // notice leaving the live list, not something that re-opens a drawer of
   // fourteen finished chats under it.
   const [doneOpen, setDoneOpen] = useState(false);
+  const [subsOpen, setSubsOpen] = useState(false);
 
   // Drag-to-reorder is PINNED-ONLY (see lib/tab-drag for why). The hook is
   // fed just the pinned ids, so an unpinned row can neither be dragged into
@@ -1354,62 +1382,6 @@ export function TabList({
     }
   };
 
-  // Ctrl+1…9 quick-switch parity with the top-nav TabBar. Only the
-  // sidebar wires it (the sheet is touch; TabBar owns it in top mode).
-  // tabCount 0 disables the inactive instances without breaking the
-  // rules of hooks.
-  //
-  // The number↔tab mapping is FROZEN for as long as the badges are up.
-  // Before the living sidebar, tab order was the stable manual `position`,
-  // so indexing the live list was safe. Now the unpinned block re-sorts on
-  // attention/busy/recency and the 5s poll can re-derive it mid-keystroke —
-  // so a build going busy between "I read the 3" and "I pressed Ctrl+3"
-  // would land you on a different tab. Snapshotting on Ctrl-down means the
-  // number you see is the number you get, every time.
-  //
-  // (Across separate holds the unpinned numbers still move — that's the
-  // feature working. PINNING is what buys a number that means the same
-  // thing tomorrow, since pinned tabs never re-sort.)
-  // Numbered in the order they are DRAWN, and only the rows that are actually
-  // drawn: the top-level live chats. A number that addressed a row folded away
-  // inside the done group would be a badge you cannot see attached to a chat
-  // you did not ask for.
-  const quickEnabled = variant === 'sidebar' && isActiveWorkspace;
-  const quickTargets = liveGroups.map((g) => g.chat);
-  const [quickIds, setQuickIds] = useState<string[]>([]);
-  // "Were the badges up as of the last render?" — read before it's written
-  // below, which is exactly the question the tabCount arg needs answered.
-  const quickHeld = useRef(false);
-  const showQuickNumbers = useTabQuickSwitch({
-    // While the badges are UP, the accepted range is the snapshot's, not the
-    // live list's: a tab closed mid-hold would otherwise shrink the range and
-    // make a badge you can still see stop responding, and a tab created
-    // mid-hold would widen it past the snapshot — swallowing the chord from
-    // the focused terminal to switch to nothing.
-    tabCount: quickEnabled ? (quickHeld.current ? quickIds.length : quickTargets.length) : 0,
-    onSwitch: (i) => {
-      // Resolve against the FROZEN snapshot, then look the tab up by id —
-      // never by live index. A tab deleted mid-hold simply no-ops.
-      const id = quickIds[i];
-      const t = id ? tabs.find((x) => x.id === id) : undefined;
-      if (!t) return;
-      void navigate({
-        to: '/w/$wsSlug/t/$tabSlug',
-        params: { wsSlug: workspace.slug, tabSlug: t.slug },
-      });
-    },
-  });
-  quickHeld.current = showQuickNumbers;
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `quickTargets` is deliberately NOT a dependency — re-snapshotting while the badges are up is the exact bug this prevents.
-  useEffect(() => {
-    setQuickIds(showQuickNumbers ? quickTargets.map((t) => t.id) : []);
-  }, [showQuickNumbers]);
-  /** The frozen badge number for a tab (1–9), or undefined if it has none. */
-  const quickNumberFor = (id: string): number | undefined => {
-    const i = quickIds.indexOf(id);
-    return i >= 0 && i < MAX_QUICK_SWITCH_TABS ? i + 1 : undefined;
-  };
-
   /**
    * The event is OPTIONAL because three surfaces archive and only one of them
    * has a click to stop: the desktop ×, the long-press menu, and the sheet's
@@ -1441,7 +1413,6 @@ export function TabList({
       {...(parent ? { parent } : {})}
       workspace={workspace}
       isActiveTab={isActiveWorkspace && t.slug === activeTabSlug}
-      quickNumber={showQuickNumbers && quickEnabled ? quickNumberFor(t.id) : undefined}
       variant={variant}
       isEditing={editing?.kind === 'tab' && editing.id === t.id}
       setEditing={setEditing}
@@ -1460,8 +1431,18 @@ export function TabList({
     />
   );
   const renderGroup = (g: ChatGroup) => (
-    <Fragment key={g.chat.id}>
-      {renderRow(g.chat)}
+    <Fragment key={`${g.chat.id}${g.contextOnly ? ':subs' : ''}`}>
+      {g.contextOnly ? (
+        /* A LABEL, not a row. The parent may be live with a row of its own
+           above, or done with one beside these — either way a second clickable
+           copy of it here would be a chat appearing twice in one list, and the
+           live one would go on lighting up as it worked. */
+        <div className="navtree-done-parent" aria-hidden="true">
+          {g.chat.name}
+        </div>
+      ) : (
+        renderRow(g.chat)
+      )}
       {g.children.map((k) => renderRow(k, g.chat))}
     </Fragment>
   );
@@ -1490,7 +1471,7 @@ export function TabList({
           Shaped like the workspace header one step quieter: a section head,
           not a third kind of label, and no count badge (the number is the
           label). */}
-      {doneGroups.length > 0 ? (
+      {doneGroups.length > 0 || subCount > 0 ? (
         <>
           <button
             type="button"
@@ -1502,6 +1483,32 @@ export function TabList({
             {doneCount} done
           </button>
           {doneOpen ? doneGroups.map(renderGroup) : null}
+          {/* ─── AND THE AGENTS' WORK, one level further in ──────────────────
+              Delivered sub-chats were IN the list above and filled it with
+              machine-named work nobody recognised: on this install, 104 of them
+              against 28 chats actually abandoned, so the thing the drawer is
+              for was buried under the thing it is not. Reported as the archive
+              filling with unfamiliar stuff.
+              They are not deleted from it — that fixed the noise by removing
+              the only place they could be found. They are one disclosure
+              further in, and NEVER at the top: this sits below the chats you
+              archived yourself, costs one line when shut, and is shut by
+              default even when the drawer above it is open. Two clicks to a
+              place you only go when you are looking for it. */}
+          {doneOpen && subCount > 0 ? (
+            <>
+              <button
+                type="button"
+                className="navtree-done-head -subs"
+                onClick={() => setSubsOpen((o) => !o)}
+                aria-expanded={subsOpen}
+              >
+                <SvgCaret open={subsOpen} />
+                {subCount} sub-chat{subCount === 1 ? '' : 's'}
+              </button>
+              {subsOpen ? subGroups.map(renderGroup) : null}
+            </>
+          ) : null}
         </>
       ) : null}
     </div>
@@ -1706,8 +1713,6 @@ interface TabRowProps {
    * that do not need it are not charged for it.
    */
   workspaceLabel?: string | undefined;
-  /** 1–9 chip shown while Ctrl is held (sidebar quick-switch); else undefined. */
-  quickNumber: number | undefined;
   variant: NavTreeVariant;
   isEditing: boolean;
   setEditing: (e: Editing) => void;
@@ -1735,6 +1740,8 @@ interface TabRowProps {
 export interface ChatGroup {
   chat: Tab;
   children: Tab[];
+  /** The parent is a LABEL here, not a row — see `doneSubs`. */
+  contextOnly?: boolean;
   /**
    * This group is in the DONE list only to say whose retired sub-chats these
    * are. `chat` itself is live and has its own row up in the list above, so it
@@ -1781,6 +1788,20 @@ export interface ChatGroup {
 export function groupChats(tabs: Tab[]): {
   live: ChatGroup[];
   done: ChatGroup[];
+  /**
+   * Delivered sub-chats, grouped under the chat that spawned them, for the
+   * drawer's own second disclosure.
+   *
+   * SEPARATE FROM `done`, which is the whole point. They were in it, and the
+   * drawer filled with machine-named work nobody recognised — 104 of them
+   * against 28 chats actually abandoned, so the thing the drawer is FOR was
+   * buried under the thing it is not. They were then dropped entirely, which
+   * fixed the noise by removing the only place they could be found.
+   *
+   * This is the third answer: still in the drawer, never at the top of it, and
+   * behind a disclosure of their own. Shut, they cost one line.
+   */
+  doneSubs: ChatGroup[];
 } {
   const byId = new Map(tabs.map((t) => [t.id, t]));
   /**
@@ -1843,8 +1864,16 @@ export function groupChats(tabs: Tab[]): {
   }
   const live: ChatGroup[] = [];
   const done: ChatGroup[] = [];
+  const doneSubs: ChatGroup[] = [];
   for (const chat of tops) {
     const children = childrenOf.get(chat.id) ?? [];
+    // Delivered children go to the drawer's sub-chat section WHATEVER their
+    // parent is doing — it may be live above, or done beside them. The group
+    // carries the parent only to name whose work this was; `contextOnly` marks
+    // it as a label rather than a row, because the parent is not the thing
+    // being listed here and may already have a real row elsewhere.
+    const delivered = children.filter((k) => isChatRetired(k));
+    if (delivered.length > 0) doneSubs.push({ chat, children: delivered, contextOnly: true });
     // THE DONE DRAWER HOLDS TOP-LEVEL CHATS ONLY. A sub-chat retires the moment
     // it delivers, so with forty spawned agents the drawer was forty rows of
     // finished errands under a label, and the chats you actually abandoned were
@@ -1852,9 +1881,8 @@ export function groupChats(tabs: Tab[]): {
     // already came back to the parent as a card in its conversation, which is
     // where you would look for it, and `@` still finds the chat by name.
     //
-    // This is also what deleted `contextOnly` — a group whose parent was drawn
-    // as a bare label because its real row was still live above. That existed
-    // only to head a list of delivered sub-chats, and there is no such list now.
+    // `contextOnly` groups are built above, for the drawer's own sub-chat
+    // disclosure — not for this list. Nothing here lists a sub-chat.
     if (isChatDone(chat)) {
       done.push({ chat, children: [] });
       // …BUT A CHILD THAT IS STILL WORKING OUTLIVES IT, as a top-level row.
@@ -1877,7 +1905,7 @@ export function groupChats(tabs: Tab[]): {
     }
     live.push({ chat, children: children.filter((k) => !isChatRetired(k)) });
   }
-  return { live, done };
+  return { live, done, doneSubs };
 }
 
 /**
@@ -1889,7 +1917,7 @@ export function groupChats(tabs: Tab[]): {
  * number has to be what you will find when you open it.
  */
 export function doneChatCount(groups: readonly ChatGroup[]): number {
-  return groups.reduce((n, g) => n + g.children.length + 1, 0);
+  return groups.reduce((n, g) => n + g.children.length + (g.contextOnly ? 0 : 1), 0);
 }
 
 /**
@@ -2012,7 +2040,6 @@ function TabRow({
   workspace,
   isActiveTab,
   workspaceLabel,
-  quickNumber,
   variant,
   isEditing,
   setEditing,
@@ -2527,11 +2554,6 @@ function TabRow({
         >
           {/* Line one: the name, and the chip that qualifies it. */}
           <span className="navtree-tab-titleline">
-            {quickNumber !== undefined && (
-              <span className="navtree-quicknum" aria-hidden="true">
-                {quickNumber}
-              </span>
-            )}
             {/* dir="auto" on the TEXT, never on the row — see
                 .navtree-name-text in NavTree.css for why alignment stays
                 pinned left while direction follows the string.
@@ -2553,6 +2575,24 @@ function TabRow({
                 there was no rhythm to run an eye down. One line, one height,
                 one glance; the sentence is a hover away. */}
         </Link>
+      )}
+      {/* ─── THE FUNNEL, AS A REAL ELEMENT ──────────────────────────────────
+          The two concave fillets that flare the pane's surface into the active
+          row. They lived in `::after` — and so does the tree elbow on a
+          SUB-CHAT row, at higher specificity. An active sub-chat therefore got
+          one box carrying half of each rule: the elbow's `left`/`top`/`width`
+          over the fillet's `right`, `bottom: -18px` and radial gradients,
+          which painted the blob hanging below and left of the row.
+          Reported as "the active chat rounded indicator thing is bust".
+
+          A row has two pseudo-elements and three decorations wanting them —
+          `::before` is the state track and the child's trunk, `::after` is the
+          elbow. The third one gets a node of its own rather than a fourth
+          qualifier in a cascade that has already produced this bug twice (see
+          the fillet comment in NavTree.css for the first). It renders only on
+          the row you are in. */}
+      {isActiveTab && variant === 'sidebar' && (
+        <span className="navtree-tab-funnel" aria-hidden="true" />
       )}
       {/* ─── THE TRAILING RAIL — ONE CELL, ONE COLUMN ──────────────────────
           Everything a row says on its right, in one flex box, right-aligned,
@@ -2958,6 +2998,28 @@ function SvgSearchGlyph() {
     >
       <circle cx="11" cy="11" r="7" />
       <path d="m20 20-3.2-3.2" />
+    </svg>
+  );
+}
+
+/** Sliders, not a gear: the app's own gear is the global settings button in
+ *  the chrome, and two gears a few pixels apart would be the same control
+ *  twice. */
+function SvgSliders() {
+  return (
+    <svg
+      width="17"
+      height="17"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      aria-hidden="true"
+    >
+      <path d="M4 7h11M19 7h1M4 17h5M13 17h7" />
+      <circle cx="17" cy="7" r="2" />
+      <circle cx="11" cy="17" r="2" />
     </svg>
   );
 }
