@@ -81,7 +81,7 @@ list. Capabilities worth knowing:
 
   **ONLY WHEN ASKED.** Reading reaches the user's DMs and every private channel
   they are in — it is their whole working life, not a public corpus. Go when a
-  task actually needs it ("what did Nadav say about X", "post the result to
+  task actually needs it ("what did a teammate say about X", "post the result to
   #eng"); do not browse it for context nobody requested.
 
   **THREE RULES, AND THEY ARE ENFORCED ON THE SERVER, NOT TRUSTED TO YOU.**
