@@ -530,6 +530,22 @@ export function scrollEventIsTheReader(opts: {
   was: Anchor | null;
   /** `ScrollState.placed` — have we had a chance to place anyone yet? */
   placed: boolean;
+  /**
+   * Has the document moved UNDER the reader since the last settle — anything
+   * inserted or resized above them?
+   *
+   * Without this, a row whose viewport offset changed read as a gesture, and
+   * that is precisely what PARTIAL anchoring produces with nobody touching
+   * anything: the engine pays some of a prepend and the rest shows up as the
+   * anchor row sitting somewhere new. Measured — one frame delivered
+   * commit-first landed at 2000 and scroll-first at 2450, the same frame
+   * reaching two answers because the two entry points weighed different
+   * evidence. The event order was choosing between erasing the reader's
+   * movement and persisting the layout's.
+   */
+  documentShifted: boolean;
+  /** Did the reader's own INPUT say they moved? Settles it outright. */
+  inputMoved: boolean;
 }): boolean {
   // Nothing has been placed since this pane became visible, so there is no "where
   // we put them" for the reader to have moved away FROM. An iOS resume resets
@@ -540,9 +556,15 @@ export function scrollEventIsTheReader(opts: {
   if (!opts.placed) return false;
   // Our own write arriving.
   if (opts.wrote !== null && Math.abs(opts.scrollTop - opts.wrote) <= TARGET_EPSILON) return false;
+  // Input is direct evidence and outranks every inference below it.
+  if (opts.inputMoved) return true;
   // Nothing anchorable to compare — only reachable transiently mid-relayout.
   // Don't guess; the next event will have geometry.
   if (!opts.here) return false;
+  // The document moved under them and nothing says they did. Whatever the
+  // rows look like now is the engine's doing, in whole or in part, and a
+  // position derived from it is layout drift rather than an intent.
+  if (opts.documentShifted) return false;
   // The document moved under a stationary reader.
   if (
     opts.was &&

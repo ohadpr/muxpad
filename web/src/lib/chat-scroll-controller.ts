@@ -144,6 +144,22 @@ export class ChatScrollController {
   /** The row under the viewport top as of the last event or write. */
   private was: Anchor | null = null;
   /**
+   * The reader's own travel since the last settle, in pixels.
+   *
+   * ── ONE OBSERVATION, READ BY BOTH ENTRY POINTS ────────────────────────────
+   * `place()` and `onScroll()` both have to answer "did the reader move?", and
+   * they used to answer it from different evidence: `place()` from input and
+   * the document's stillness, `onScroll()` from whether the anchor row's
+   * offset had changed. Partial anchoring changes that offset with nobody
+   * touching anything, so the same frame reached 2000 delivered commit-first
+   * and 2450 delivered scroll-first.
+   *
+   * `takeReaderIntent()` CONSUMES, so whichever arrived first used to eat the
+   * evidence the other needed. It accumulates here instead and is cleared only
+   * by `settled()`, so the order of delivery cannot change the answer.
+   */
+  private intentSinceSettle = 0;
+  /**
    * The `scrollTop` we last OBSERVED, whoever moved it. null = never looked.
    *
    * Only one question needs it, and only about a reader event: which WAY did
@@ -291,10 +307,17 @@ export class ChatScrollController {
    * new events. Idempotent by construction: `targetFor` computes an absolute
    * position from live geometry, so calling this twice in a row writes once.
    */
+  /** Fold anything the reader has done into the shared observation. Called by
+   *  every entry point, before either of them decides anything. */
+  private observe(): void {
+    this.intentSinceSettle += this.surface.takeReaderIntent();
+  }
+
   place(reconcileReader = true): void {
     // Nothing to read — a hidden or mid-relayout pane. We have NOT looked, so
     // the gate stays shut.
     if (this.hidden || !this.surface.measurable()) return;
+    this.observe();
     const before = this.surface.geometry();
     const oldBox = this.was ? this.surface.rowBox(this.was.id) : null;
     /**
@@ -316,7 +339,7 @@ export class ChatScrollController {
       this.sawTop !== null &&
       before.scrollTop < this.sawTop &&
       before.scrollTop >= before.scrollHeight - before.clientHeight;
-    const fromInput = this.surface.takeReaderIntent();
+    const fromInput = this.intentSinceSettle;
     /**
      * How far the document moved UNDER the reader, which is knowable on every
      * engine because it is a fact about content rather than about scrolling:
@@ -433,6 +456,8 @@ export class ChatScrollController {
    * would compare against a position that no longer exists and read as a gesture.
    */
   private settled(): void {
+    // The reader's travel has been accounted for by whoever just acted on it.
+    this.intentSinceSettle = 0;
     this.was = this.surface.anchorHere();
     this.sawTop = this.surface.geometry().scrollTop;
     this.wasDocumentTop = this.was ? this.was.offset + this.sawTop : null;
@@ -448,6 +473,7 @@ export class ChatScrollController {
    */
   onScroll(): boolean {
     if (this.hidden || !this.surface.measurable()) return false;
+    this.observe();
     const geo = this.surface.geometry();
     // Captured BEFORE anything can refresh it, and refreshed for every event —
     // the reader's and the engine's alike. An engine adjustment that goes
@@ -457,12 +483,19 @@ export class ChatScrollController {
     const prevTop = this.sawTop;
     this.sawTop = geo.scrollTop;
     const here = this.surface.anchorHere();
+    // The same two facts `place()` weighs, so neither entry point can reach a
+    // conclusion the other would not. See `intentSinceSettle`.
+    const oldBox = this.was ? this.surface.rowBox(this.was.id) : null;
+    const shift =
+      oldBox && this.wasDocumentTop !== null ? oldBox.top + geo.scrollTop - this.wasDocumentTop : 0;
     const isReader = scrollEventIsTheReader({
       wrote: this.wrote,
       scrollTop: geo.scrollTop,
       here,
       was: this.was,
       placed: this.state.placed,
+      documentShifted: Math.abs(shift) > 1,
+      inputMoved: Math.abs(this.intentSinceSettle) > 1,
     });
     // `was` is refreshed by `place()`, and only by `place()` — including on the
     // reader path below, which goes through `dispatch`. An earlier draft
