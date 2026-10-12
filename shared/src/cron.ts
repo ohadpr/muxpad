@@ -49,6 +49,16 @@ export const CronSchema = z.object({
    *  written before it still says 'do'/'deep' and still means the same thing. */
   mode: z.string().nullable(),
   enabled: z.boolean(),
+  /** DEAD. Was "the agent's reply is plumbing too", defaulting to false — see
+   *  migration 44 for why the default was the bug and `speak` is the replacement.
+   *  Kept so a row written before the change still parses. */
+  fold: z.boolean().default(false),
+  /** DEAD, like `fold` beside it. Both were flags on the SCHEDULE answering a
+   *  question that belongs to the fire — see `muxpad say`. */
+  speak: z.boolean().default(false),
+  /** The card this job writes, if any — see CronMarker.card. A fire that
+   *  updated it and said nothing renders nothing in the conversation. */
+  card: z.string().nullable().default(null),
   /**
    * Fire ONCE, then retire.
    *
@@ -105,6 +115,24 @@ export interface CronMarker {
   at: number | null;
   /** Fires collapsed into this one by `catchup=once`. 0 for a normal fire. */
   missed: number;
+  /**
+   * THE CARD THIS JOB WRITES — and therefore where its output GOES.
+   *
+   * A cron already said where it RUNS (`target_kind`, `target_pane`). It could
+   * not say where its output belongs, so that fact was being encoded with a
+   * rendering flag, which is why the flag kept needing re-explaining: the
+   * author was asked to reason about transcript rendering when what they know
+   * is "this job's output is the `market` card".
+   *
+   * With this declared the rule writes itself. A fire that updated its card and
+   * said nothing has nothing to tell the CONVERSATION, so it renders nothing at
+   * all — no chip, no fold. The card's own freshness rail is the liveness
+   * signal, attached to the thing it is about rather than six screens up the
+   * log. And anything the agent actually says breaks the silence and brings the
+   * chip back, which covers the case the audit trail exists for: the fire that
+   * broke is the one that speaks.
+   */
+  card?: string;
 }
 
 const CRON_OPEN = /^\s*<muxpad-cron\b([^>]*)>([\s\S]*?)<\/muxpad-cron>\s*/;
@@ -122,11 +150,15 @@ function attr(attrs: string, name: string): string | null {
 export function renderCronMarker(marker: CronMarker, prompt: string): string {
   const missed = marker.missed > 0 ? ` missed="${marker.missed}"` : '';
   const at = marker.at !== null ? ` at="${marker.at}"` : '';
+  // Stamped per fire, like `fold`. A card added to a schedule later does not
+  // retroactively silence the fires that were conversational at the time —
+  // which is right: they were.
+  const card = marker.card ? ` card="${marker.card}"` : '';
   const note =
     marker.missed > 0
       ? `Delivered by the muxpad cron "${marker.name}" — a scheduled job, not a human. ${marker.missed} earlier fire(s) were missed while muxpad was offline and are collapsed into this one.`
       : `Delivered by the muxpad cron "${marker.name}" — a scheduled job, not a human.`;
-  return `<muxpad-cron id="${marker.id}" name="${marker.name}"${at}${missed}>\n${note}\n</muxpad-cron>\n\n${prompt}`;
+  return `<muxpad-cron id="${marker.id}" name="${marker.name}"${at}${missed}${card}>\n${note}\n</muxpad-cron>\n\n${prompt}`;
 }
 
 /**
@@ -146,7 +178,17 @@ export function parseCronMarker(text: string): { marker: CronMarker; body: strin
   const missedRaw = attr(attrs, 'missed');
   const at = atRaw !== null && /^\d+$/.test(atRaw) ? Number(atRaw) : null;
   const missed = missedRaw !== null && /^\d+$/.test(missedRaw) ? Number(missedRaw) : 0;
-  return { marker: { id, name, at, missed }, body: text.slice(m[0].length) };
+  const card = attr(attrs, 'card');
+  return {
+    marker: {
+      id,
+      name,
+      at,
+      missed,
+      ...(card ? { card } : {}),
+    },
+    body: text.slice(m[0].length),
+  };
 }
 
 /** Does this queued/injected message belong to `cronId`? The overlap check's

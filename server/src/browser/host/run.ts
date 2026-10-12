@@ -32,6 +32,7 @@ import { emulationParams } from '../MobileEmulation.js';
 import { isBrowsingUrl } from '../PageAttachment.js';
 import { clearStaleProfileLock } from '../ProfileLock.js';
 import { ScreencastSession } from '../ScreencastSession.js';
+import { type HeartbeatSocket, heartbeatRound } from '../SocketHeartbeat.js';
 import { stampViewer } from '../ViewerBuild.js';
 import { VIEWER_HTML } from './viewer.js';
 
@@ -445,6 +446,52 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
       if (viewers.size === 0) stopWatching();
     });
   });
+
+  // ─── THE HEARTBEAT, AND THE 64 GB IT EXISTS FOR ─────────────────────────────
+  // Both sets above shrink on ONE event: the socket's 'close'. A WebSocket
+  // severed abruptly — the agent's runner killed, a pane respawned, a viewer
+  // tab crashed, a tailnet blip — does not fire 'close' until the OS gives up
+  // on the connection, which can be hours and in practice was never.
+  //
+  // That is not merely untidy here, because `agentSockets.size` is what `/idle`
+  // reports and the server's idle-stop refuses to stop any browser with a
+  // client attached. One ghost socket therefore pins a Chrome FOREVER: it reads
+  // as "in use" at every sweep, is never stopped, and so never restarts. Found
+  // on this install as 84 processes across 6 profiles, the oldest running four
+  // days, with macOS putting up "your system has run out of application
+  // memory" — while the server's own log showed the idle sweep working
+  // perfectly on the sessions whose sockets had closed cleanly.
+  //
+  // The fix is the one ws.ts already uses for the same reason (see its
+  // HEARTBEAT_MS note): ping everyone on an interval, and terminate anyone who
+  // did not answer the previous round. `terminate()` fires 'close', so the
+  // existing handlers do the bookkeeping — this adds no second source of truth
+  // about who is attached.
+  //
+  // 30s, not ws.ts's 15s: detection inside ~60s is far tighter than the 20
+  // minute idle threshold it feeds, and the extra slack makes a false positive
+  // on a briefly-blocked client less likely. A wrong answer here costs one
+  // reconnect; the bug it replaces cost the machine.
+  const HOST_HEARTBEAT_MS = 30_000;
+  const markAlive = (socket: WsSocket) => {
+    const live = socket as WsSocket & HeartbeatSocket;
+    live.isAlive = true;
+    socket.on('pong', () => {
+      live.isAlive = true;
+    });
+  };
+  agentWss.on('connection', markAlive);
+  wss.on('connection', markAlive);
+  const heartbeat = setInterval(() => {
+    const gone =
+      heartbeatRound(agentWss.clients as Set<WsSocket & HeartbeatSocket>) +
+      heartbeatRound(wss.clients as Set<WsSocket & HeartbeatSocket>);
+    // Said out loud, because a browser that WAS immortal going quiet is the
+    // thing anyone debugging this next will be looking for.
+    if (gone > 0) log(`[host] dropped ${gone} dead socket(s) — they stopped answering pings`);
+  }, HOST_HEARTBEAT_MS);
+  // Never hold the process open for a ping.
+  heartbeat.unref?.();
 
   /**
    * Every text field's box, so the viewer can answer a tap without asking.
@@ -884,6 +931,7 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
       }
       await screencast.stop().catch(() => {});
       cdp.close();
+      clearInterval(heartbeat);
       for (const socket of agentWss.clients) socket.terminate();
       agentWss.close();
       wss.close();

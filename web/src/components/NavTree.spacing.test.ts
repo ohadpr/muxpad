@@ -1106,3 +1106,120 @@ describe('the row’s right-hand side holds one thing at a time', () => {
     );
   });
 });
+
+/**
+ * THE RAIL'S HORIZONTAL GUTTER, WHICH TWO SURFACES WERE DERIVING SEPARATELY.
+ *
+ * A row's inset is composed: the scroller's padding, plus the group's. The
+ * search box is not in the group, so it restates the sum in its own margin —
+ * and it restated it BACKWARDS, 4 left / 8 right against the rows' 8 / 4. Its
+ * comment said it was "matching the scroller's own left/right insets so the box
+ * lines up with the rows under it", which is the tell: the rule that says what
+ * it is for is the rule that stopped doing it. Measured in Chromium at 280px:
+ * search 4…272, rows 8…276. Reported as "the search bar doesn't have equal
+ * margins".
+ *
+ * Asserted as ARITHMETIC against the same tokens, not as a literal pair, so the
+ * two cannot drift apart again when the gutter changes.
+ */
+describe('the search box sits on the rows’ own edges', () => {
+  const SEARCH_CSS = css('NavSearch.css');
+  const scroll = ruleBody(NAV_CSS, '.navtree-scroll');
+  const group = ruleBody(NAV_CSS, '.navtree-group');
+  const search = ruleBody(SEARCH_CSS, '.navsearch');
+
+  const rowInset = (which: 'left' | 'right') =>
+    resolve(side(decl(scroll, 'padding'), which), BASE) +
+    resolve(side(decl(group, 'padding'), which), BASE);
+
+  it.each(['left', 'right'] as const)('matches the rows on the %s', (which) => {
+    expect(resolve(side(decl(search, 'margin'), which), BASE)).toBe(rowInset(which));
+  });
+
+  it('and the rows are where they were — this moved the box, not the list', () => {
+    expect([rowInset('left'), rowInset('right')]).toEqual([8, 4]);
+  });
+});
+
+/**
+ * THE RAIL NEVER SCROLLS SIDEWAYS.
+ *
+ * The ACTIVE tab deliberately bleeds `--nt-pad` past the group's padding so it
+ * touches the pane rather than stopping a hair short of it — and with the
+ * scroller's x axis left visible, that 4px bleed was a real horizontal
+ * scrollbar: measured scrollWidth 284 against clientWidth 280, and
+ * `scrollLeft = 50` landing at 4 instead of 0. The bleed is exactly flush with
+ * the rail's edge, so clipping it costs nothing visible (checked: the active
+ * row's right edge is 280 with the clip, same as without).
+ *
+ * `clip`, not `hidden`, so there is no x-axis scrollport to script or rubber-
+ * band at all — with `hidden` the overflow is still scrollable programmatically
+ * and still a scroll container, which is how an "unscrollable" list ends up
+ * 4px off to one side.
+ */
+describe('nothing in the rail scrolls sideways', () => {
+  const scroll = ruleBody(NAV_CSS, '.navtree-scroll');
+
+  it('clips the x axis', () => {
+    expect(decl(scroll, 'overflow-x')).toBe('clip');
+  });
+
+  it('keeps a `hidden` ahead of it for engines that do not know `clip`', () => {
+    const all = [...scroll.matchAll(/(?:^|;)\s*overflow-x:\s*([^;]+)/g)].map((m) =>
+      (m[1] as string).trim(),
+    );
+    expect(all).toEqual(['hidden', 'clip']);
+  });
+
+  it('still bleeds the active row out to the rail edge — the clip is flush', () => {
+    const active = ruleBody(NAV_CSS, '.navtree-tab-row[data-active="true"]');
+    const group = ruleBody(NAV_CSS, '.navtree-group');
+    expect(resolve(decl(active, 'margin-right'), BASE)).toBe(
+      -resolve(side(decl(group, 'padding'), 'right'), BASE),
+    );
+  });
+});
+
+/**
+ * THE ACTIVE ROW'S FUNNEL IS A NODE, NOT A THIRD CLAIM ON `::after`.
+ *
+ * The two concave fillets that flare the pane's surface into the row you are
+ * in lived in `::after` — and so does the tree elbow on a SUB-CHAT row, at
+ * higher specificity (`.navtree .navtree-tab-row[data-child]` is (0,3,0)
+ * against (0,2,0)). The child rule therefore won, but it only sets
+ * `left`/`top`/`width`/`border-top`, so the box kept the fillet's `right`,
+ * `bottom: -18px` and radial gradients and painted a blob below and left of
+ * the row. Reported as "the active chat rounded indicator thing is bust".
+ *
+ * This file's own fillet comment is the record of the FIRST time two things
+ * were given one pseudo-element — `::before`, shared with StateChip's left
+ * track, where the over-constrained box silently dropped `right`. Same defect,
+ * same file, one pseudo along.
+ */
+describe('the active row’s funnel', () => {
+  it('is its own element, so nothing can win it on specificity', () => {
+    expect(rules(NAV_CSS).some((r) => r.selectors.includes('.navtree-tab-funnel'))).toBe(true);
+  });
+
+  it('leaves `::after` to the sub-chat elbow alone', () => {
+    const afterOwners = rules(NAV_CSS)
+      .flatMap((r) => r.selectors)
+      .filter((sel) => sel.includes('.navtree-tab-row') && sel.endsWith('::after'));
+    // Only the child elbow and the drag drop-edge marker, which never coexist
+    // with each other; crucially, nothing keyed on `data-active`.
+    expect(afterOwners.some((sel) => sel.includes('data-active'))).toBe(false);
+  });
+
+  it('still overhangs by the full fillet radius at both ends', () => {
+    // 18px, not 11: a fillet is a square minus a quarter-disc, so only ~21% of
+    // its box is ink and a smaller one is a crescent nobody can see.
+    const body = ruleBody(NAV_CSS, '.navtree-tab-funnel');
+    expect(decl(body, 'top')).toBe('-18px');
+    expect(decl(body, 'bottom')).toBe('-18px');
+    expect(decl(body, 'width')).toBe('18px');
+  });
+
+  it('never eats a click', () => {
+    expect(decl(ruleBody(NAV_CSS, '.navtree-tab-funnel'), 'pointer-events')).toBe('none');
+  });
+});

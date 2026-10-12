@@ -155,6 +155,7 @@ export function releasePtyHandle(process: unknown, onError?: (err: unknown) => v
 
 export class PaneRuntime extends EventEmitter {
   private process: pty.IPty | null = null;
+
   /** The pty master descriptor, so it can be disowned when the shell dies. */
   private ptyFd = -1;
   private buffer = new RingBuffer(RING_CAPACITY);

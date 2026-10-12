@@ -43,6 +43,7 @@ import {
   next,
   phase,
   recordFor,
+  restoreUnreachable,
   scrollEventIsTheReader,
   targetFor,
 } from './chat-scroll-intent';
@@ -81,6 +82,52 @@ export interface ScrollSurface {
 
   /** Assign `scrollTop`. The ONLY place this happens. */
   setScrollTop(value: number): void;
+
+  /**
+   * Is the reader's own motion still in flight — a finger on the glass, or the
+   * glide that follows it?
+   *
+   * ── WHY ANYTHING NEEDS TO ASK ─────────────────────────────────────────────
+   * A momentum glide fires NO wheel, NO touchmove and NO key for up to a
+   * second or two after the finger lifts — only `scroll`. So the reader's
+   * input is silent for the part of the gesture that covers the most distance,
+   * and scrolling UP is exactly when older history arrives. A prepend landing
+   * in that window is indistinguishable from the reader's own movement, and
+   * measured in the simulator it ERASES the glide at every engine payment
+   * fraction — nothing, half and in full alike.
+   *
+   * The answer is not a better discriminator. It is to stop creating the
+   * collision: history is not inserted while this is true, so the document
+   * stands still for the whole gesture and plain arithmetic settles who moved.
+   */
+  inMotion(): boolean;
+
+  /**
+   * How far the READER has asked to move since this was last called, in
+   * pixels, and zero if they have not touched anything.
+   *
+   * ── WHY THIS CANNOT BE INFERRED FROM `scrollTop` ──────────────────────────
+   * It was, and the inference is impossible rather than merely hard. When a
+   * prepend of `P` lands, the engine compensates by some `E` in `[0, P]` —
+   * nothing (iOS 26 and earlier), all of it (Chromium, Safari 27), or any
+   * fraction in between, which is a real observed Chromium behaviour and has
+   * its own test. The reader meanwhile moves by `D`. All `place()` can see is
+   * `E + D`, and two unknowns do not come out of one number.
+   *
+   * The old guard resolved it by believing the reader only when the document
+   * had not moved at all — which is never true on the frames where history
+   * arrives, so a gesture landing in the same frame as a prepend was filed as
+   * layout and handed straight back. Measured in Chromium on a real chat:
+   * about one frame in twelve of a scroll-up moved the view not at all, each
+   * carrying a `place()` write of exactly the step just made. Reported as
+   * "scrolling up from the bottom is super buggy and janky and stuck".
+   *
+   * So the reader's half is OBSERVED instead: wheel deltas, touch drags, and
+   * the keys that scroll. `E` never has to be known.
+   *
+   * Reading it CONSUMES it, so one gesture is attributed once.
+   */
+  takeReaderIntent(): number;
 }
 
 /**
@@ -96,6 +143,22 @@ export class ChatScrollController {
   private wrote: number | null = null;
   /** The row under the viewport top as of the last event or write. */
   private was: Anchor | null = null;
+  /**
+   * The reader's own travel since the last settle, in pixels.
+   *
+   * ── ONE OBSERVATION, READ BY BOTH ENTRY POINTS ────────────────────────────
+   * `place()` and `onScroll()` both have to answer "did the reader move?", and
+   * they used to answer it from different evidence: `place()` from input and
+   * the document's stillness, `onScroll()` from whether the anchor row's
+   * offset had changed. Partial anchoring changes that offset with nobody
+   * touching anything, so the same frame reached 2000 delivered commit-first
+   * and 2450 delivered scroll-first.
+   *
+   * `takeReaderIntent()` CONSUMES, so whichever arrived first used to eat the
+   * evidence the other needed. It accumulates here instead and is cleared only
+   * by `settled()`, so the order of delivery cannot change the answer.
+   */
+  private intentSinceSettle = 0;
   /**
    * The `scrollTop` we last OBSERVED, whoever moved it. null = never looked.
    *
@@ -151,9 +214,50 @@ export class ChatScrollController {
     return this.surface.anchorHere();
   }
 
+  /**
+   * Is the reader's own motion still in flight?
+   *
+   * The caller holds older history back while this is true — see `inMotion` on
+   * the surface for why a prepend landing inside a glide cannot be told from
+   * the glide itself.
+   */
+  readerIsMoving(): boolean {
+    return this.surface.inMotion();
+  }
+
   /** May we ask for another page of history to reach the current intent? */
   wantsOlder(hasMoreOlder: boolean): boolean {
     return canSeek(this.state, { rowLoaded: this.rowLoaded(), hasMoreOlder });
+  }
+
+  /**
+   * A restore that can never land — see `restoreUnreachable`.
+   *
+   * The caller converts it to "open at the newest message". It is asked on
+   * every commit rather than once at mount, because the row may arrive: a tail
+   * that happens to contain the remembered anchor satisfies the restore
+   * normally, and only when the events have settled without it does the reader
+   * belong at the end.
+   */
+  strandedRestore(hasMoreOlder: boolean): boolean {
+    // ── NOT BEFORE THERE IS A TRANSCRIPT TO BE ABSENT FROM ─────────────────
+    // The docstring above promised "only when the events have settled without
+    // it", and nothing enforced it. The caller runs on EVERY commit including
+    // the first, when the list is empty — so a restore was declared
+    // unreachable before a single row existed, converted to "open at the
+    // newest message", and the reader was pinned to the bottom a moment
+    // before the row they wanted rendered.
+    //
+    // Measured on a reload of a real chat: the remembered row came back as
+    // row 15 of 29, `caughtUp: false` in the record, and the reader was at the
+    // very bottom. The restore had not failed to find it — it had given up
+    // before looking.
+    //
+    // An empty list is not evidence of absence. One rendered row is enough to
+    // make the question meaningful, because the opening tail arrives in one
+    // commit.
+    if (this.surface.anchorHere() === null) return false;
+    return restoreUnreachable(this.state, { rowLoaded: this.rowLoaded(), hasMoreOlder });
   }
 
   private rowLoaded(): boolean {
@@ -203,31 +307,75 @@ export class ChatScrollController {
    * new events. Idempotent by construction: `targetFor` computes an absolute
    * position from live geometry, so calling this twice in a row writes once.
    */
+  /** Fold anything the reader has done into the shared observation. Called by
+   *  every entry point, before either of them decides anything. */
+  private observe(): void {
+    this.intentSinceSettle += this.surface.takeReaderIntent();
+  }
+
   place(reconcileReader = true): void {
     // Nothing to read — a hidden or mid-relayout pane. We have NOT looked, so
     // the gate stays shut.
     if (this.hidden || !this.surface.measurable()) return;
+    this.observe();
     const before = this.surface.geometry();
     const oldBox = this.was ? this.surface.rowBox(this.was.id) : null;
-    // A streaming commit may beat the native scroll event. If scrollTop moved
-    // while the old row stayed at the same document coordinate, the movement
-    // was not compensation for a prepend. Reconcile it before overwriting it.
-    // A shrink clamped to the new maximum is layout, not evidence of a gesture.
-    if (
-      reconcileReader &&
-      this.state.placed &&
+    /**
+     * A streaming commit may beat the native scroll event, so `place()` has to
+     * decide whether a `scrollTop` it did not write was the READER or the
+     * engine compensating for a prepend — and overwrite only the second.
+     *
+     * ── HOW MUCH THE DOCUMENT MOVED, WHICH IS KNOWABLE ────────────────────
+     * The anchor row's DOCUMENT coordinate shifts by exactly what was inserted
+     * above it. That is true on every engine, because it is a fact about the
+     * content rather than about scrolling.
+     */
+    /**
+     * The reader's half of this frame, OBSERVED rather than inferred — see
+     * `takeReaderIntent` for why the inference is impossible and what it cost.
+     * A shrink clamped to the new maximum is layout, not a gesture.
+     */
+    const clampedShrink =
       this.sawTop !== null &&
-      before.scrollTop !== this.sawTop &&
-      oldBox &&
-      this.wasDocumentTop !== null &&
-      Math.abs(oldBox.top + before.scrollTop - this.wasDocumentTop) <= 1 &&
-      !(
-        before.scrollTop < this.sawTop &&
-        before.scrollTop >= before.scrollHeight - before.clientHeight
-      )
-    ) {
-      if (this.onScroll()) this.pendingReader = true;
-    }
+      before.scrollTop < this.sawTop &&
+      before.scrollTop >= before.scrollHeight - before.clientHeight;
+    const fromInput = this.intentSinceSettle;
+    /**
+     * How far the document moved UNDER the reader, which is knowable on every
+     * engine because it is a fact about content rather than about scrolling:
+     * the anchor row's DOCUMENT coordinate shifts by exactly what was inserted
+     * above it. Content appended BELOW does not move it, and so does not
+     * appear here — which is the difference between a prepend, which the
+     * reader must be carried through, and an append, which must not move them
+     * at all.
+     */
+    const shift =
+      oldBox && this.wasDocumentTop !== null
+        ? oldBox.top + before.scrollTop - this.wasDocumentTop
+        : 0;
+    /**
+     * ── AND THE INPUT IS NOT THE ONLY WAY TO SCROLL ──────────────────────
+     * Dragging the SCROLLBAR fires no wheel, no touch and no key — and nor
+     * does a middle-click autoscroll or a click in the scrollbar track. An
+     * input-only rule drops all of them, which the first version of this fix
+     * did: a probe that moved `scrollTop` directly, the way a scrollbar drag
+     * does, recorded no position at all.
+     *
+     * The rule it replaced was not wrong, it was INCOMPLETE: when nothing
+     * arrived above the reader there is nothing for the engine to compensate,
+     * so any movement must be theirs and plain arithmetic settles it. It only
+     * failed when a prepend landed in the same frame — which is exactly the
+     * case the input signal answers.
+     *
+     * So: believe the input when there is some, and fall back to the
+     * arithmetic when the document stood still. Each covers the other's gap.
+     */
+    const stillDocument = Math.abs(shift) <= 1;
+    const fromGeometry = this.sawTop === null ? 0 : before.scrollTop - this.sawTop;
+    const intentPx = Math.abs(fromInput) > 1 ? fromInput : stillDocument ? fromGeometry : 0;
+    const readerMoved =
+      reconcileReader && this.state.placed && Math.abs(intentPx) > 1 && !clampedShrink;
+
     // We have looked. Everything below is about what we found; this is true
     // either way, including when the answer is "we do not know where the reader
     // belongs yet". See the `measured` input.
@@ -244,18 +392,54 @@ export class ChatScrollController {
       this.settled();
       return;
     }
-    if (alreadyThere(target, geo.scrollTop)) {
-      // Already true. Do NOT write — this is the whole double-pay defence, and
-      // it is what makes one owner safe next to an engine that is also an owner:
-      // where scroll anchoring has already put the row back, the target we
-      // compute equals the current position and we stay out of the way. Where it
-      // paid nothing (every iPhone on iOS 26 or earlier), the branch below pays
-      // in full. Same arithmetic, no feature test, no double payment.
-      this.settled();
-      return;
+    /**
+     * ── PAY THE SHIFT FIRST, THEN THE GESTURE ────────────────────────────
+     * `target` is where the reader's row belongs with whatever the engine did
+     * not pay made up — an absolute position, which is why the same arithmetic
+     * serves an engine that pays nothing, one that pays in full, and one that
+     * pays a fraction. The gesture then applies ON TOP of that.
+     *
+     * The order is the point. Reconciling first — asking "where is the reader
+     * now?" before the prepend is compensated — reads an anchor that is still
+     * displaced by everything the engine has not paid, and files THAT as the
+     * reader's chosen position. On an engine that pays nothing, that is the
+     * entire prepend: a 2000px jump recorded as intent.
+     */
+    /**
+     * Where the reader belongs when they have just moved: WHERE THEY WERE,
+     * carried through whatever arrived above them, plus the gesture. Absolute,
+     * so it is the same answer on an engine that pays anchoring in full, one
+     * that pays nothing, and one that pays a fraction.
+     *
+     * NOT `target + intentPx`. `target` answers the OLD intent, and while the
+     * reader is following the tail that intent is "the end" — so an append of
+     * 200px landing in the same frame as an upward nudge would re-follow to
+     * the new end and then back off by the nudge, carrying the reader 200px
+     * down the document they were trying to leave. Their position is a fact;
+     * only what moved above them is a correction.
+     */
+    const want = readerMoved && this.sawTop !== null ? this.sawTop + shift + intentPx : target;
+    if (!alreadyThere(want, geo.scrollTop)) {
+      // Not already true, so pay. Where scroll anchoring has already put the
+      // row back, the target equals the current position and we stay out of
+      // the way — the double-pay defence, with no feature test.
+      this.wrote = want;
+      this.surface.setScrollTop(want);
     }
-    this.wrote = target;
-    this.surface.setScrollTop(target);
+    if (readerMoved) {
+      // The reader is the authority: whatever they are looking at NOW is the
+      // intent, including "the end", which is how following is regained. Read
+      // after the write above, so the row recorded is the one they can see
+      // rather than one the engine still owes for.
+      this.wrote = null;
+      const after = this.surface.geometry();
+      this.state = next(this.state, {
+        t: 'reader-moved',
+        here: this.surface.anchorHere(),
+        atEnd: this.followingAfter(after, this.sawTop),
+      });
+      this.pendingReader = true;
+    }
     this.settled();
   }
 
@@ -272,6 +456,8 @@ export class ChatScrollController {
    * would compare against a position that no longer exists and read as a gesture.
    */
   private settled(): void {
+    // The reader's travel has been accounted for by whoever just acted on it.
+    this.intentSinceSettle = 0;
     this.was = this.surface.anchorHere();
     this.sawTop = this.surface.geometry().scrollTop;
     this.wasDocumentTop = this.was ? this.was.offset + this.sawTop : null;
@@ -287,6 +473,7 @@ export class ChatScrollController {
    */
   onScroll(): boolean {
     if (this.hidden || !this.surface.measurable()) return false;
+    this.observe();
     const geo = this.surface.geometry();
     // Captured BEFORE anything can refresh it, and refreshed for every event —
     // the reader's and the engine's alike. An engine adjustment that goes
@@ -296,12 +483,19 @@ export class ChatScrollController {
     const prevTop = this.sawTop;
     this.sawTop = geo.scrollTop;
     const here = this.surface.anchorHere();
+    // The same two facts `place()` weighs, so neither entry point can reach a
+    // conclusion the other would not. See `intentSinceSettle`.
+    const oldBox = this.was ? this.surface.rowBox(this.was.id) : null;
+    const shift =
+      oldBox && this.wasDocumentTop !== null ? oldBox.top + geo.scrollTop - this.wasDocumentTop : 0;
     const isReader = scrollEventIsTheReader({
       wrote: this.wrote,
       scrollTop: geo.scrollTop,
       here,
       was: this.was,
       placed: this.state.placed,
+      documentShifted: Math.abs(shift) > 1,
+      inputMoved: Math.abs(this.intentSinceSettle) > 1,
     });
     // `was` is refreshed by `place()`, and only by `place()` — including on the
     // reader path below, which goes through `dispatch`. An earlier draft

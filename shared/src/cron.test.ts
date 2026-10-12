@@ -97,3 +97,22 @@ describe('rendering a fire in the transcript', () => {
     expect(out[0]).toMatchObject({ detail: '4 missed fires collapsed' });
   });
 });
+
+describe('what a fire carries, and what it no longer does', () => {
+  it('carries no speech flag at all — see `muxpad say`', () => {
+    // `fold` then `speak` were both flags on the SCHEDULE answering a question
+    // that belongs to the FIRE: this one time, does the agent have something
+    // to tell you? A schedule cannot answer that in advance, which is why
+    // `net-watch` ("silent unless a trigger fires") could not be expressed by
+    // either of them. The fire says it itself now, with `muxpad say`.
+    const text = renderCronMarker({ id: 'c1', name: 'n', at: null, missed: 0 }, 'go');
+    expect(text).not.toContain('speak');
+    expect(text).not.toContain('fold');
+  });
+
+  it('ignores a pre-migration fire’s fold="1" rather than guessing', () => {
+    const old = '<muxpad-cron id="c1" name="n" fold="1">\n-\n</muxpad-cron>\n\ngo';
+    expect(parseCronMarker(old)?.marker).toMatchObject({ id: 'c1', name: 'n' });
+    expect(parseCronMarker(old)?.body.trim()).toBe('go');
+  });
+});

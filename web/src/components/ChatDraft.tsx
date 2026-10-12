@@ -14,6 +14,7 @@ import {
   DRAFT_TOKEN_ATTR,
   type DraftNode,
   caretRange,
+  chipClickSide,
   draftChipSignature,
   draftNodes,
   readDraft,
@@ -295,6 +296,60 @@ export const ChatDraft = forwardRef<ChatDraftHandle, ChatDraftProps>(function Ch
         {...aria}
         onInput={() => emit(onChange)}
         onKeyUp={() => emit(onCaret)}
+        // ─── A CLICK ON A CHIP PUTS THE CARET BESIDE IT ────────────────────
+        // The chip is `inert` and `contenteditable=false`, so the browser has
+        // no caret position in it and collapses a click to the nearest one it
+        // does have — which is ALWAYS the position before the element. Measured
+        // in Chromium: clicking the left edge and the right edge of a chip both
+        // land before it.
+        //
+        // That is why the mention could not be edited. You could never get the
+        // caret after the name, and Backspace before a chip deletes what is
+        // before the chip, so the only way to remove a mention was to clear the
+        // whole draft — reported exactly that way. Backspace itself was never
+        // broken: with the caret correctly placed after a chip it eats the whole
+        // mention, which is what `contenteditable=false` is there for.
+        //
+        // So the side is chosen from WHERE in the chip you clicked, which is the
+        // behaviour every editor with atomic tokens has and the one the chip's
+        // own comment already promised ("clicking a chip means put the caret
+        // here"). `mousedown` rather than `click`: the browser sets its own
+        // (wrong) selection between them, and overriding after that makes the
+        // caret visibly jump.
+        onMouseDown={(e) => {
+          // HIT-TEST BY COORDINATES, not by `e.target`. The chip is `inert`, so
+          // it receives no pointer events at all — the event's target is the
+          // editable itself and `closest('.chat-draft-chip')` finds nothing.
+          // (`elementFromPoint` is no help for the same reason.) So the rects
+          // are checked directly, which is a handful of boxes per click.
+          const root = elRef.current;
+          if (!root) return;
+          let host: HTMLElement | null = null;
+          for (const c of root.querySelectorAll<HTMLElement>('.chat-draft-chip')) {
+            const b = c.getBoundingClientRect();
+            if (
+              e.clientX >= b.left &&
+              e.clientX <= b.right &&
+              e.clientY >= b.top &&
+              e.clientY <= b.bottom
+            ) {
+              host = c;
+              break;
+            }
+          }
+          if (!host) return;
+          e.preventDefault();
+          const after = chipClickSide(host.getBoundingClientRect(), e.clientX) === 'after';
+          const range = document.createRange();
+          if (after) range.setStartAfter(host);
+          else range.setStartBefore(host);
+          range.collapse(true);
+          const sel = window.getSelection();
+          sel?.removeAllRanges();
+          sel?.addRange(range);
+          elRef.current?.focus();
+          emit(onCaret);
+        }}
         onClick={() => emit(onCaret)}
         onKeyDown={onKeyDown}
         onPaste={onPaste}

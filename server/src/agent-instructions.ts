@@ -73,6 +73,157 @@ list. Capabilities worth knowing:
   APPS ARE PRIVATE (tailnet only) — never publish an app's data or suggest
   exposing it; \`publish\` is for static artifacts you MEAN to be public.
 
+<!--cap:slack-->
+- \`muxpad slack\` — the company Slack, read/write, from any pane and any
+  harness. \`slack read <#channel|@user> [--since=2h]\`, \`slack search
+  "<query>"\`, \`slack post <#channel|@user> "<text>"\`,
+  \`slack unpost <channelID> <ts>\`, \`slack channels\`.
+
+  **ONLY WHEN ASKED.** Reading reaches the user's DMs and every private channel
+  they are in — it is their whole working life, not a public corpus. Go when a
+  task actually needs it ("what did a teammate say about X", "post the result to
+  #eng"); do not browse it for context nobody requested.
+
+  **THREE RULES, AND THEY ARE ENFORCED ON THE SERVER, NOT TRUSTED TO YOU.**
+
+  **1 · Every message goes out as the USER.** There is no bot identity and no
+  flag to ask for one. A bot DM does not land in the user's conversation with
+  that person — it lands in THEIR separate DM with "muxpad", which the user
+  cannot see and, if the timestamp is lost, cannot delete. So a message muxpad
+  sends is a message the user sent: their name, their conversation, their
+  audit log.
+
+  **2 · Every message is prefixed 🤖.** Added by the server, not by you.
+  Sending under the user's name is right about where it lands and who owns it;
+  it is not a claim that they typed it, and the reader is owed that.
+
+  **3 · SLACK IS A WORKSPACE CAPABILITY, AND IT FAILS CLOSED.** Read, search
+  and post alike: a workspace with Slack switched off cannot touch Slack at
+  all. Off is the default.
+
+  **THERE IS NO TOKEN FOR YOU TO FIND.** The muxpad server holds the
+  credential; \`muxpad slack\` asks the server to act and never sees it. There
+  is no secrets file to read, no environment variable, and nothing \`curl\`
+  can do that this command cannot — if you are refused, going around is not
+  blocked by an oversight, it is blocked by not having the credential.
+
+  **AND YOUR WORKSPACE IS NOT SOMETHING YOU DECLARE.** The server works out
+  which pane the call came from by walking the calling process's ancestry.
+  Setting \`MUXPAD_PANE_ID\` or \`MUXPAD_WORKSPACE_ID\` does nothing, and
+  neither does \`cd\` — a chat is often told where its files are rather than
+  started there.
+
+  If you are refused, **that is the system working**. Do not post from another
+  pane and do not try to install a token. Tell the user they were refused and
+  which workspace you are in; the switch is in the muxpad UI (the workspace
+  row's settings button), and it is theirs to throw, not yours.
+
+  Reading never needs the bot invited anywhere; posting as muxpad does
+  (\`/invite @muxpad\`), and the error says so when it bites.
+
+<!--/cap:slack-->
+
+## \`@mentions\` — a chat handed to you as CONTEXT
+
+When the user mentions another chat (\`@Investing\`), the message still comes to
+YOU. It arrives with a trailing \`<muxpad-context>\` block listing each mentioned
+chat's tab id and pane ids.
+
+**It is a reference, not an instruction to forward anything.** Do not relay the
+user's message to the mentioned chat — that is the behaviour this replaced, and
+it lost people's messages into other chats' queues.
+
+Decide what the sentence actually needs. Often nothing: "remind me to ask
+@Investing about cash" wants no lookup at all. When it does want one, cheapest
+first:
+
+    muxpad pane summarize <paneId>              a short summary
+    muxpad agent transcript <paneId> --tail=40  what was recently said
+    muxpad search "<query>"                     across every session ever run
+    muxpad agent send <paneId> "<question>"     ask it — only if that is the ask
+
+Start with the TAIL. It is cheap and usually enough; a summary costs a model
+call and a full transcript can be a hundred KB. Go deeper only when the tail
+does not answer the question.
+
+## Cards — the value that should not scroll away
+
+A chat can hold named CARDS, pinned above the conversation. Setting the same
+name again REPLACES that card. The transcript is the history; a card is the
+current answer.
+
+    muxpad card set build "V2.1 [####------] 42%  layout · 3/6 streams done"
+    muxpad card set panel --format=html < panel.html
+    muxpad card set market --format=md --every=1d "**open** SPX +0.4% · VIX 13.1"
+    muxpad card get build        # the content, bare — read-modify-write
+    muxpad card list
+    muxpad card clear build
+
+**USE ONE WHEN THE NEW VALUE REPLACES THE OLD ONE.** Long work whose progress
+you would otherwise re-print; a figure refreshed on a schedule; a status only
+interesting at its latest value. If a reader would want the history, that is a
+message, not a card — and most things are messages.
+
+**The content is yours.** text, markdown or html, and muxpad imposes no fields
+and no components. An html card renders in a sandboxed frame: it can use
+\`var(--accent)\`, \`var(--fg)\`, \`var(--bg-hover)\` and friends (the app's theme is
+injected) and it cannot reach the app. Keep it under 64KB — a card is pinned
+where it cannot be scrolled past, so a card the height of the screen is worse
+than no card. For anything bigger, \`muxpad publish\`.
+
+A SUGGESTED progress line, because one shared shape is easier to read at a
+glance than six inventions — a convention, not a rule, and not a component:
+
+    V2.1 [############--------] 62%  edge live · 4/6 streams done
+
+\`--every=<30s|15m|6h|1d>\` says how often you MEAN to rewrite it. muxpad marks
+the card overdue if you stop, which is the failure nobody notices: a card whose
+writer died looks exactly like a card with nothing new to say.
+
+**Clear a card when its work is over.** A finished build's bar at 100% is an
+ornament; the next reader wants the space.
+
+A cron can write a card like anything else — it is just a scheduled caller, it
+does not own the card, and several schedules may share one (read it with
+\`card get\`, edit your part, write it back).
+
+**\`--card=<name>\` says where a job's output GOES**, which is a different fact
+from where it runs. A fire that updated its card and said nothing renders
+NOTHING in the chat — no chip, no fold — because the conversation was never
+where its result belonged. The card's own freshness rail is the "did it run"
+signal, attached to the thing it is about rather than six screens up the log.
+
+A card refresher therefore names its destination and nothing else:
+
+    muxpad cron new --name=nw-hourly --at='0 7-12 * * 1-5' --pane \\
+      --card=market "refresh the market card"
+
+**A FIRE'S WHOLE TURN IS MACHINERY. SAY WHAT YOU MEAN TO SAY.**
+
+Everything you do inside a scheduled fire folds into one collapsed run — the
+injected prompt, every tool call, and whatever prose you write on the way to
+being finished. None of it reaches the conversation. That is deliberate: "run
+this, write that card" is an instruction a schedule handed you, not something a
+person said, and a turn nobody started is not a message.
+
+The one exception is \`muxpad say\`:
+
+    muxpad say "NET closed at \$318 — 10% below the level you named. 60 sh ≈ \$19,080."
+
+Use it when THIS run has something the person actually needs, and stay quiet
+otherwise. A watcher that fires every weekday should say nothing on the days
+nothing happened — replying "no change" is not staying quiet, it is saying "no
+change" into their chat every day at 16:20.
+
+Do not end a fire with "ok" or "done" to acknowledge the instruction. Nobody
+reads it, and nothing is waiting for it.
+
+(In Chat mode the \`reply\` tool does the same job. Agent mode registers no
+muxpad tools, so it has this instead. \`--silent\`, \`--fold\` and
+\`--speak\` were earlier attempts to put this switch on the SCHEDULE; they are
+accepted and ignored, because a schedule cannot know in advance whether a given
+run will have something worth saying.)
+
 ## Scheduling — \`muxpad cron\` is the ONLY scheduler on this machine
 
 **Anything that should happen LATER — once or repeatedly — is a \`muxpad
@@ -294,20 +445,28 @@ shows up in the sidebar with its own row, its own state mark, its own transcript
 and a card in your log; the user can open it, read it, interrupt it, and see what
 it cost.
 
-**SPAWN, THEN WAIT — or nothing will ever resume you.** A child finishing does
-NOT start a turn in the parent. Its report is written to its tab row and drawn as
-a card in your log, and a card is a picture: nothing in muxpad delivers it to you
-as a message, deliberately (a crashed worker never reaches a reporting step,
-which is exactly when you most need telling). So if you spawn workers and end
-your turn saying "I'll check when they land", you will not check, ever. Twice in
-one session an orchestrator here did exactly that.
+**THEIR REPORTS COME BACK TO YOU — you do not have to wait for them.** When a
+child finishes, muxpad delivers its result into THIS conversation as a message,
+which starts a turn. A fan-out is held until the whole batch has landed and
+arrives as ONE message, so twenty workers do not wake you twenty times. You will
+see a \`⇤ N sub-chats reported\` chip followed by what they said.
 
-Wait like this, in the BACKGROUND, so it costs no tokens and wakes you when the
-worker is done:
+So the normal shape is: spawn them, say what you are waiting for, and END YOUR
+TURN. The delivery is what resumes you. Do not poll, and do not hold a
+\`muxpad agent wait\` per child just to find out they finished.
 
-    muxpad agent wait <paneId> --timeout=3600
+Three things worth knowing about it:
+ · **A CRASHED worker is reported too.** The server authors the delivery, so it
+   can tell you about a child that died before it ever reached a reporting step
+   — the case a \`wait\` loop is worst at.
+ · **It is a RESULT, not a question.** Nobody is sitting there waiting on a
+   reply to it. Act on it, or carry on if nothing is needed.
+ · **A long report is truncated** to keep a 60-way fan-out from filling your
+   context; the child's own transcript has the whole thing if you need it.
 
-TWO THINGS THAT WILL BITE YOU, both observed:
+\`muxpad agent wait <paneId> --timeout=SEC\` still exists, for when you need to
+block on ONE named worker before doing the next thing rather than be told later.
+If you use it, two things will bite you, both observed:
  · **It wants the PANE id, and \`agent new\` prints a tab URL too.** The two are
    ULIDs minted in the same millisecond, so they share a long prefix and a
    careless grep takes the wrong one — \`01M3TP84G9AW…\` for \`01M3TP84G98A…\`.
@@ -357,6 +516,9 @@ backend, mode, status).
 
 ## Waiting without burning tokens
 
+- **A sub-chat you spawned needs no waiting at all** — its result is delivered
+  into your conversation when it lands, and a fan-out arrives as one message.
+  See "Delegating work" above. The rest of this list is for everything else.
 - \`muxpad agent wait <paneId> --timeout=SEC\` blocks until that agent's turn
   finishes (exit 0 done/already idle, 1 not an agent pane, 2 fatal, 3
   timeout). Run it in the background from your Bash tool and you get woken
@@ -429,14 +591,58 @@ export function seedAgentInstructions(dataDir: string): void {
  * own. The generated half is muxpad's and comes back on the next boot; opting
  * out of THAT is not a thing you do by deleting a file.
  */
-export function readAgentInstructions(dataDir: string = runnerDataDir()): string | null {
+/**
+ * What one workspace adds to, or removes from, the universal instructions.
+ *
+ * Both halves exist because this function used to take a directory and nothing
+ * else, so every agent everywhere received byte-identical text — including the
+ * Slack section, in workspaces that may not use Slack. A chat was told it had
+ * the company Slack and found out otherwise by trying.
+ */
+export interface WorkspaceAgentContext {
+  /** Free text appended for agents in this workspace. */
+  instructions?: string | null;
+  /**
+   * Is the Slack capability on here? When false the whole Slack section is
+   * removed — not softened, removed. A capability a chat cannot use should not
+   * be described to it, because describing it is how an agent comes to try.
+   */
+  slack?: boolean;
+}
+
+/** Everything between the capability fences, inclusive. */
+function stripCapability(text: string, cap: string): string {
+  const open = `<!--cap:${cap}-->`;
+  const close = `<!--/cap:${cap}-->`;
+  const a = text.indexOf(open);
+  const b = text.indexOf(close);
+  if (a < 0 || b < 0 || b < a) return text;
+  return (text.slice(0, a) + text.slice(b + close.length)).replace(/\n{3,}/g, '\n\n');
+}
+
+/** …and the fences themselves, once the decision is made to keep a section. */
+function dropFences(text: string): string {
+  return text.replace(/<!--\/?cap:[a-z-]+-->\n?/g, '');
+}
+
+export function readAgentInstructions(
+  dataDir: string = runnerDataDir(),
+  ws?: WorkspaceAgentContext,
+): string | null {
   let generated: string | null = null;
   try {
     generated = readFileSync(agentInstructionsPath(dataDir), 'utf8');
   } catch {
     generated = null;
   }
-  const parts = [generated, readAgentNotes(dataDir)]
+  if (generated) {
+    // DEFAULT OFF. `ws` undefined means nobody said, and for a capability gate
+    // "nobody said" has to mean no — a caller that has not been taught to pass
+    // the workspace must not silently hand out Slack.
+    if (!ws?.slack) generated = stripCapability(generated, 'slack');
+    generated = dropFences(generated);
+  }
+  const parts = [generated, ws?.instructions, readAgentNotes(dataDir)]
     .map((t) => t?.trim())
     .filter((t): t is string => !!t);
   return parts.length ? parts.join('\n\n') : null;

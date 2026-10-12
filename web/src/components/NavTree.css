@@ -71,7 +71,7 @@
    so neither surface has to know about the other. */
 .navtree {
   --nt-surface: var(--bg-tabbar);
-/* PINNED IS A HUE ON THE NAME, and the channel is the whole argument.
+  /* PINNED IS A HUE ON THE NAME, and the channel is the whole argument.
      SELECTION OWNS THE ROW'S BOX — a fill, with a funnel that runs into the
      pane. Every earlier design for this mark was also on that box: a rule under
      the block, a tick at its edge, a ring on the chip, and finally a fill that
@@ -358,6 +358,16 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* NEVER SIDEWAYS. This is a vertical list and there is nothing to the right
+     of it, but the ACTIVE tab deliberately bleeds `--nt-pad` past the group's
+     padding so it touches the pane (see .navtree-tab-row[data-active]) — and a
+     4px bleed in a box that was `overflow-x: visible` gave the scroller a 284px
+     scrollWidth against a 280px client, i.e. a real horizontal scrollbar for a
+     bleed that is exactly flush with the rail's edge and clips to nothing.
+     `clip` rather than `hidden` so this does not become a scrollport on the x
+     axis at all; `hidden` first for anything that does not know `clip`. */
+  overflow-x: hidden;
+  overflow-x: clip;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
   /* Tighter LEFT gutter than right: the left edge is dead margin, so trimming
@@ -537,7 +547,6 @@
      StateChip.test pins that for exactly this reason. */
   background-color: var(--nt-surface);
 }
-
 
 /* ─── THE ACTIVE WORKSPACE: AN EDGE, NOT A FILL ─────────────────────────────
    It was `accent 16%` over the same surface, and the active ROW is the accent
@@ -1102,22 +1111,30 @@
 
    So: one box spanning the row plus 18px of overhang top and bottom, with the
    two quarter-discs as background LAYERS pinned to its corners. The middle band
-   is deliberately unpainted — the row's own fill is already there. */
-.navtree-tab-row[data-active="true"]::after {
-  content: "";
+   is deliberately unpainted — the row's own fill is already there.
+
+   ── AND IT IS A REAL ELEMENT NOW, FOR THE SAME REASON ONE LAYER BACK ──────
+   `::after` is also the SUB-CHAT elbow, at higher specificity
+   (`.navtree .navtree-tab-row[data-child]` beats `.navtree-tab-row[data-active]`).
+   An active sub-chat got one box carrying half of each rule — the elbow's
+   `left`/`top`/`width` over this rule's `right`, `bottom: -18px` and
+   gradients — which painted a blob below and left of the row. Reported as
+   "the active chat rounded indicator thing is bust".
+
+   The paragraph above is this file's own account of the FIRST time two things
+   were given one pseudo-element. Rather than write a third qualifier, the
+   funnel is a node: `.navtree-tab-funnel`, rendered only on the active row. */
+.navtree-tab-funnel {
   position: absolute;
   right: calc(var(--nt-pad) * -1);
   left: auto;
   top: -18px;
   bottom: -18px;
   width: 18px;
-  background-image:
-    radial-gradient(circle at 0% 0%, transparent 18px, var(--bg-pane-face) 18px),
+  background-image: radial-gradient(circle at 0% 0%, transparent 18px, var(--bg-pane-face) 18px),
     radial-gradient(circle at 0% 100%, transparent 18px, var(--bg-pane-face) 18px);
   background-size: 18px 18px;
-  background-position:
-    right top,
-    right bottom;
+  background-position: right top, right bottom;
   background-repeat: no-repeat;
   pointer-events: none;
 }
@@ -1155,7 +1172,7 @@
      · .chatchip-dot and its hollow ring, forced to --accent-fg. The dot is
        --clock now, on every row including this one, which is the whole point of
        the chip being one component. A2's, drawn and not touched.
-     · .navtree-quicknum, .navtree-close, the pinned pin, .navtree-cron and its
+     · .navtree-close, the pinned pin, .navtree-cron and its
        glyph's opacity bump, .navtree-tab-headline, .navtree-pane-expander,
        .navtree-ws-count.
      · all four .navtree-mark state hues, plus the reduced-motion arm. The four
@@ -1451,6 +1468,33 @@
   color: var(--fg-dim);
 }
 
+/* The nested disclosure: the agents' work, inside the drawer and under the
+   chats you archived yourself. One step further in than the head above it and
+   one step quieter, so the nesting is legible without a second kind of
+   control — it IS the done head, indented. */
+.navtree-done-head.-subs {
+  padding-top: 6px;
+  padding-left: calc(var(--nt-pad) + var(--nt-indent) * 2);
+  font-size: 12px;
+}
+
+/* Whose work these were. The parent is NOT drawn as a row: it may be live with
+   a row of its own above, or done with one beside these, and either way a
+   second clickable copy would be one chat appearing twice in a list. No chip,
+   no state mark, no hover, no hit target — and `aria-hidden`, because each
+   sub-chat's own title already names its parent and a decorative label between
+   rows is one more thing between the reader and the list. */
+.navtree-done-parent {
+  padding: 8px var(--nt-air) 2px calc(var(--nt-pad) + var(--nt-indent) * 2);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--fg-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
 /* A done chat's row is quieter still — it has left the live list, and the only
    reason it is on screen at all is that you opened the drawer to look. The
    chip already says it (a dashed outline round a ghosted emoji); this stops
@@ -1487,26 +1531,6 @@
 /* No schedule: no width AND no gutter. Most rows are this one. */
 .navtree-tab-rail:empty {
   margin-left: 0;
-}
-
-/* Ctrl-held quick-switch chip (sidebar only) — same accent chip language
-   as the top TabBar's numbers. Soft accent fill + medium weight: present as a
-   hint while Ctrl is held, not a loud solid pill. */
-.navtree-quicknum {
-  flex: 0 0 auto;
-  min-width: 14px;
-  height: 14px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 3px;
-  border-radius: 3px;
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-  color: var(--accent);
-  font-family: var(--chrome-font);
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 1;
 }
 
 /* ─── Schedule mark (◷ 07:00) ─────────────────────────────────────────────
@@ -2341,6 +2365,17 @@
   opacity: 1;
 }
 
+/* THE WORKSPACE'S SETTINGS BUTTON — hover-revealed like the ×, because it is
+   rarely wanted, but NOT danger-coloured: `.navtree-close:hover` paints every
+   member of this cluster the × 's red, and a red sliders icon reads as "this
+   will break something". It inherits the reservation rule above by not being
+   `.navtree-ws-add`, which is deliberate: settings is the rare control and the
+   "+" is the constant one. */
+.navtree-ws-row > .navtree-tab-controls > .navtree-ws-settings:hover {
+  color: var(--accent);
+  background: var(--bg-hover);
+}
+
 /* Constructive, so it goes to the accent on hover rather than to the × 's
    danger red. */
 .navtree-ws-row > .navtree-tab-controls > .navtree-ws-add:hover {
@@ -2777,8 +2812,13 @@ body.sidenav-resizing iframe {
    The header component is shared and already unscoped; these two rules only
    move it onto the sheet's leading edge, so its caret lines up with the emoji
    column instead of the desktop rail's narrower one. */
-.navtree[data-variant="sheet"] .navtree-done-head {
+.navtree[data-variant="sheet"] .navtree-done-head,
+.navtree[data-variant="sheet"] .navtree-done-parent {
   padding-inline-start: var(--nt-rail-lead);
+}
+/* …except the nested one, which has to stay visibly nested. */
+.navtree[data-variant="sheet"] .navtree-done-head.-subs {
+  padding-inline-start: calc(var(--nt-rail-lead) + var(--nt-indent));
 }
 /* A done chat is quieter, same as desktop. The shared rule cannot reach these
    rows: it is a SIBLING selector, and on this surface every row is wrapped in

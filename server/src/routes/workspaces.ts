@@ -2,6 +2,7 @@ import { type PaneStatus, rollupStatus } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { readAgentInstructions } from '../agent-instructions.js';
 import type { EventBus } from '../events.js';
 import { type PtydCache, decorateWorkspace } from '../ptyd-cache.js';
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
@@ -78,17 +79,85 @@ export function workspacesRoutes(deps: {
     return c.json(decorateWorkspace(deps.cache, deps.db, w));
   });
 
+  /**
+   * EXACTLY what an agent launched in this workspace will be handed.
+   *
+   * The settings panel previews it, and the preview is composed by the same
+   * function the backends call rather than reassembled here. A mocked preview
+   * is worse than none: it is a second place to derive one value, which is the
+   * defect this codebase keeps paying for.
+   */
+  app.get('/:id/agent-instructions', (c) => {
+    const w = workspaces.getById(c.req.param('id'));
+    if (!w) return c.json({ error: { code: 'not_found', message: 'workspace not found' } }, 404);
+    return c.json({
+      text:
+        readAgentInstructions(undefined, {
+          slack: !!w.slack,
+          instructions: w.instructions ?? null,
+        }) ?? '',
+    });
+  });
+
   app.patch('/:id', async (c) => {
     const body = z
-      .object({ name: z.string().optional(), slug: z.string().optional() })
+      .object({
+        name: z.string().optional(),
+        slug: z.string().optional(),
+        /** Per-workspace agent instructions. Empty string clears them. */
+        instructions: z.string().max(20_000).nullable().optional(),
+        /** The Slack CAPABILITY. Browser-only — see the guard below. */
+        slack: z.boolean().optional(),
+      })
       .parse(await c.req.json());
+    const id = c.req.param('id');
+
+    // ── A CAPABILITY MUST NOT BE SELF-GRANTABLE ──────────────────────────────
+    // Everything else on this route is editable from the CLI, which is the
+    // point of having a CLI. The Slack switch is not, because the CLI is what
+    // AGENTS drive — and an agent in a workspace that may not use Slack being
+    // able to turn Slack on for itself is not a weaker control, it is no
+    // control at all. The whole guard would be decoration.
+    //
+    // The distinction available here is the one `same-origin.ts` already
+    // draws: a browser attaches `Origin` to every request, and the CLI and the
+    // agent runner send none. So "came from the UI" is checkable, and that is
+    // what the switch requires.
+    //
+    // Honest about its limit: `curl -H 'Origin: …'` defeats this. It raises
+    // the bar from "an agent can do it while being helpful" to "an agent has
+    // to forge a header", which is a different kind of act and a visible one
+    // in the transcript. The only boundary that is not forgeable on a
+    // single-user box is a second OS user, and that is a separate decision.
+    if (body.slack !== undefined && !c.req.header('Origin')) {
+      return c.json(
+        {
+          error: {
+            code: 'ui_only',
+            message:
+              'the Slack capability can only be changed from the muxpad UI (workspace → settings), not from the CLI — an agent must not be able to grant itself Slack',
+          },
+        },
+        403,
+      );
+    }
+
     try {
-      const updated = workspaces.update(c.req.param('id'), body);
-      deps.events.emit({
-        type: 'workspace.updated',
-        workspace: decorateWorkspace(deps.cache, deps.db, updated),
-      });
-      return c.json(updated);
+      if (body.instructions !== undefined) {
+        workspaces.setInstructions(id, body.instructions === '' ? null : body.instructions);
+      }
+      if (body.slack !== undefined) workspaces.setSlack(id, body.slack);
+      workspaces.update(id, body);
+      // RE-READ, rather than trusting what `update` hands back. It composes its
+      // return value from the row it read on the way in — which was read before
+      // the two writes above — so it reports the OLD instructions and the OLD
+      // capability. The UI patches and then renders the response, so returning
+      // that would have shown a toggle flipping back on save.
+      const updated = workspaces.getById(id);
+      if (!updated) throw new Error('vanished');
+      const decorated = decorateWorkspace(deps.cache, deps.db, updated);
+      deps.events.emit({ type: 'workspace.updated', workspace: decorated });
+      return c.json(decorated);
     } catch {
       return c.json({ error: { code: 'not_found', message: 'workspace not found' } }, 404);
     }

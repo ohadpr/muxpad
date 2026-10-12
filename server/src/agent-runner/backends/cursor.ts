@@ -17,6 +17,7 @@ import { readAgentInstructions } from '../../agent-instructions.js';
 import { appendTranscriptEvent, migrateTranscript } from '../../chat/TranscriptReader.js';
 import { bold, dim } from '../ansi.js';
 import type { AgentMode, RunnerFrame } from '../protocol.js';
+import { workspaceAgentContextSync } from '../workspace-context.js';
 import {
   type BackendDeps,
   type ModelFetch,
@@ -193,7 +194,11 @@ export function createCursorBackend(
     // NO mode overlay: cursor is Agent-mode only — see currentMode above.
     const finalPrompt = resuming
       ? prompt
-      : withSessionPreamble(prompt, readAgentInstructions(), null);
+      : withSessionPreamble(
+          prompt,
+          readAgentInstructions(undefined, workspaceAgentContextSync()),
+          null,
+        );
     if (resuming) args.push('--resume', sessionRef as string);
     if (model) args.push('--model', model);
     args.push(finalPrompt);

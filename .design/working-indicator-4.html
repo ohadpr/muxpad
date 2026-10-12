@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="en" data-theme="dracula">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>muxpad · working indicator, round 4 — the deep end</title>
+<style>
+  :root {
+    --bg:#282a36; --elev:#21222c; --fg:#f8f8f2; --dim:#b8b8b0; --faint:#6272a4;
+    --border:#44475a; --accent:#bd93f9; --cyan:#8be9fd; --pink:#ff79c6;
+    --good:#50fa7b; --warn:#e8b34b;
+    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+    --c: var(--faint);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:28px 20px 110px;background:var(--bg);color:var(--fg);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
+  .wrap{max-width:1040px;margin:0 auto}
+  h1{font-size:22px;margin:0 0 10px;letter-spacing:-.015em}
+  .sub{color:var(--dim);font-size:14.5px;margin:0 0 8px;max-width:80ch}
+  .sub b{color:var(--fg)}
+  code{font:12.5px var(--mono);color:var(--accent)}
+
+  .controls{position:sticky;top:0;z-index:40;display:flex;gap:8px;align-items:center;
+    flex-wrap:wrap;margin:22px 0 28px;padding:12px 0 14px;
+    background:linear-gradient(to bottom,var(--bg) 74%,transparent)}
+  .controls button{font:inherit;font-size:13px;padding:6px 12px;border-radius:999px;
+    cursor:pointer;border:1px solid var(--border);background:var(--elev);color:var(--dim)}
+  .controls button.on{border-color:var(--accent);color:var(--fg);
+    background:color-mix(in srgb,var(--accent) 16%,var(--elev))}
+  .controls .note{color:var(--faint);font-size:12.5px}
+  body.big .ind{zoom:3.2}
+  body.tint{--c:var(--accent)}
+  body.slow .ind,body.slow .ind *{animation-duration:8s!important}
+
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px}
+  .card{border:1px solid var(--border);border-radius:12px;background:var(--elev);overflow:hidden}
+  .card.-hero{grid-column:1/-1;border-color:color-mix(in srgb,var(--accent) 45%,var(--border))}
+  .stageRow{display:flex;align-items:center;gap:12px;padding:22px 16px;min-height:96px;
+    background:var(--bg);border-bottom:1px solid var(--border)}
+  .lbl{font-size:12px;color:var(--faint)}
+  .meta{padding:12px 15px 15px}
+  .meta h3{margin:0;font-size:14.5px;letter-spacing:-.01em}
+  .meta h3 span{color:var(--faint);font:600 10.5px/1 var(--mono);letter-spacing:.08em;
+    text-transform:uppercase;margin-right:8px}
+  .meta p{margin:6px 0 0;font-size:12.5px;line-height:1.55;color:var(--dim)}
+  .meta p b{color:var(--fg)}
+  .tags{margin-top:9px;display:flex;gap:6px;flex-wrap:wrap}
+  .t{font:600 10px/1 var(--mono);padding:4px 7px;border-radius:5px;letter-spacing:.04em}
+  .t.-cheap{color:var(--good);background:color-mix(in srgb,var(--good) 15%,transparent)}
+  .t.-mid{color:var(--warn);background:color-mix(in srgb,var(--warn) 15%,transparent)}
+  .t.-dear{color:#ff5555;background:color-mix(in srgb,#ff5555 15%,transparent)}
+  .t.-idea{color:var(--cyan);background:color-mix(in srgb,var(--cyan) 15%,transparent)}
+  .t.-w{color:var(--pink);background:color-mix(in srgb,var(--pink) 15%,transparent)}
+
+  .ind{display:inline-flex;align-items:center;flex:0 0 auto}
+  .ind svg{display:block}
+
+  /* ══ MOIRÉ — two gratings, one turning. Pure CSS, zero JS. ══════════ */
+  .moire{width:30px;height:30px;border-radius:50%;position:relative;overflow:hidden;
+    background:color-mix(in srgb,var(--c) 7%,transparent)}
+  .moire i{position:absolute;inset:-50%;
+    background:repeating-linear-gradient(0deg,var(--c) 0 .9px,transparent .9px 2.4px);
+    opacity:.55}
+  .moire i:nth-child(2){animation:moireSpin 9s linear infinite}
+  .moire i:nth-child(1){animation:moireSpin 11s linear infinite reverse}
+  /* The second instance is the SAME pair started earlier — which is what a pane
+     that began its turn a minute ago actually looks like. Without this both
+     start at page load and are pixel-identical, and a demo captioned "already
+     different" showed two of the same thing. (Round 2 made this exact mistake
+     with the epicycles; the fix is the same one.) */
+  .moire.-lag i:nth-child(1){animation-delay:-37s}
+  .moire.-lag i:nth-child(2){animation-delay:-23s}
+  @keyframes moireSpin{to{transform:rotate(360deg)}}
+
+  /* ══ DECODE — the tool name resolving out of noise ═══════════════════ */
+  .decode{font:700 12px/18px var(--mono);letter-spacing:.06em;color:var(--c);height:18px}
+  .decode b{color:var(--fg);font-weight:700}
+
+  /* ══ PHYLLOTAXIS ════════════════════════════════════════════════════ */
+  .phyl circle{fill:var(--c)}
+
+  /* ══ generic svg bits ═══════════════════════════════════════════════ */
+  .tess line{stroke:var(--c);stroke-width:.9;stroke-linecap:round}
+  .tess line.in{stroke:var(--cyan);opacity:.65}
+  .rope path{fill:none;stroke:var(--c);stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+  .rope circle{fill:var(--cyan)}
+  .bolt path{fill:none;stroke:var(--c);stroke-width:1.2;stroke-linecap:round;stroke-linejoin:round}
+  .bolt path.glow{stroke:var(--cyan);stroke-width:2.6;opacity:.22}
+  .flow circle{fill:var(--c)}
+
+  .foot{margin-top:36px;padding:18px 20px;border-radius:12px;
+    background:color-mix(in srgb,var(--accent) 8%,var(--elev));
+    border:1px solid color-mix(in srgb,var(--accent) 30%,var(--border))}
+  .foot h2{margin:0 0 10px;font-size:16px}
+  .foot p{margin:0 0 11px;font-size:14px;color:var(--dim)}
+  .foot p:last-child{margin:0}
+  .foot b{color:var(--fg)}
+  @media (prefers-reduced-motion:reduce){.ind *,.ind{animation:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Round 4 — the deep end</h1>
+<p class="sub">Three rounds of shapes, curves and readouts. This one goes after the thing none of
+  them had: <b>emergence</b> — patterns that nobody drew, that come out of a rule running. Two of
+  these are things you cannot author frame by frame even if you want to.</p>
+
+<div class="controls">
+  <button id="big">Zoom 3.2×</button>
+  <button id="tint">Tint accent</button>
+  <button id="slow">Slow CSS</button>
+  <span class="note">all stop under prefers-reduced-motion</span>
+</div>
+
+<div class="grid">
+
+  <div class="card -hero">
+    <div class="stageRow">
+      <span class="ind moire"><i></i><i></i></span>
+      <span class="lbl">Bash · 14s</span>
+      <span class="ind moire -lag" style="margin-left:22px"><i></i><i></i></span>
+      <span class="lbl">a pane that started earlier — a different point in the beat</span>
+    </div>
+    <div class="meta"><h3><span>01</span>Moiré</h3>
+      <p>Two line gratings at 0.9px, counter-rotating at 9s and 11s. Nothing is drawn but straight
+        lines — <b>every swirl you see is interference</b>, a pattern that exists in neither layer
+        and only in their overlap. It blooms, collapses to near-solid, and blooms somewhere else,
+        on a 99-second beat neither period has on its own — so two panes that started at
+        different moments are showing different patterns, as above.</p>
+      <p>And it is <b>two divs and one keyframe</b>. No JS, no SVG, no filter, no canvas — the
+        cheapest thing in four rounds and, at 3.2× zoom, the most alive. That ratio is the whole
+        argument for it.</p>
+      <div class="tags"><span class="t -cheap">transform only</span><span class="t -cheap">2 divs, 0 JS</span><span class="t -w">30px</span><span class="t -idea">emergent</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="stageRow">
+      <span class="ind tess">
+        <svg width="30" height="30" viewBox="-15 -15 30 30" aria-hidden="true" id="tess"></svg>
+      </span>
+      <span class="lbl">Bash · 14s</span>
+    </div>
+    <div class="meta"><h3><span>02</span>Tesseract</h3>
+      <p>A 4-dimensional hypercube, rotating in two independent planes at once — XW and YZ, which
+        have no 3D equivalent — projected to 3D, then to the screen. The inner cube appears to turn
+        itself inside out and swallow the outer one, because <b>it is doing exactly that</b>: in 4D
+        they are the same cube seen from two sides of a rotation you cannot picture.</p>
+      <p>Sixteen vertices, thirty-two edges, two matrix multiplies per frame. Nothing else here
+        makes you stop and work out what you are looking at.</p>
+      <div class="tags"><span class="t -mid">JS · 32 lines/frame</span><span class="t -w">30px</span><span class="t -idea">genuinely 4D</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="stageRow">
+      <span class="ind rope">
+        <svg width="46" height="26" viewBox="0 0 46 26" aria-hidden="true" id="rope">
+          <path></path><circle r="2.2"></circle>
+        </svg>
+      </span>
+      <span class="lbl">Bash · 14s</span>
+    </div>
+    <div class="meta"><h3><span>03</span>Whip</h3>
+      <p>Twelve Verlet points with distance constraints and a little gravity, anchored at the left
+        while the anchor itself traces a slow circle. The result is a rope that <b>cracks</b> — the
+        tip accelerates far past anything driving it, because the constraint solver pumps energy
+        down the chain exactly the way a real whip does.</p>
+      <p>No keyframe anywhere. The motion is a consequence, not a description, which is why it
+        never looks like it is on a loop.</p>
+      <div class="tags"><span class="t -mid">Verlet · 3 iters</span><span class="t -w">46px</span><span class="t -idea">emergent</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="stageRow">
+      <span class="ind bolt">
+        <svg width="40" height="24" viewBox="0 0 40 24" aria-hidden="true" id="bolt">
+          <path class="glow"></path><path class="main"></path>
+        </svg>
+      </span>
+      <span class="lbl">Bash · 14s</span>
+    </div>
+    <div class="meta"><h3><span>04</span>Arc</h3>
+      <p>Midpoint displacement, regenerated six times a second: a path is split, its middle kicked
+        sideways by a shrinking random amount, recursively. It is the standard way to make
+        lightning and it <b>never produces the same bolt twice</b> — with a soft glow pass
+        underneath for the discharge.</p>
+      <p>The most <em>aggressive</em> thing in four rounds. Which may be wrong for "please wait".</p>
+      <div class="tags"><span class="t -mid">JS · 6 Hz</span><span class="t -w">40px</span><span class="t -idea">never repeats</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="stageRow">
+      <span class="ind phyl">
+        <svg width="28" height="28" viewBox="-14 -14 28 28" aria-hidden="true" id="phyl"></svg>
+      </span>
+      <span class="lbl">Bash · 14s</span>
+    </div>
+    <div class="meta"><h3><span>05</span>Phyllotaxis</h3>
+      <p>Fifty-five dots placed at the golden angle, 137.5°, which is how a sunflower packs seeds
+        and the only angle that never lines up into spokes. A brightness wave runs outward through
+        them — and because the <b>spiral arms are emergent</b>, not drawn, the wave appears to
+        travel along arms that do not exist in the code.</p>
+      <p>Clean, mathematical, and quiet enough to live beside text.</p>
+      <div class="tags"><span class="t -cheap">one setProperty/frame</span><span class="t -w">28px</span><span class="t -idea">emergent</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="stageRow">
+      <span class="ind flow">
+        <svg width="56" height="22" viewBox="0 0 56 22" aria-hidden="true" id="flow"></svg>
+      </span>
+      <span class="lbl">Bash · 14s</span>
+    </div>
+    <div class="meta"><h3><span>06</span>Flow field</h3>
+      <p>Eighteen particles steered by a smooth vector field and recycled at the left edge when
+        they drift off. Nothing is choreographed — each one just reads the field where it happens
+        to be, so they <b>bunch into currents and thin out into eddies</b> on their own.</p>
+      <p>The closest thing here to watching weather.</p>
+      <div class="tags"><span class="t -mid">JS · 18 particles</span><span class="t -w">56px</span><span class="t -idea">emergent</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="stageRow">
+      <span class="ind decode" id="decode"></span>
+      <span class="lbl">— and no separate glyph at all</span>
+    </div>
+    <div class="meta"><h3><span>07</span>Decode</h3>
+      <p>No indicator. The tool's own name resolves out of noise, character by character, then
+        scrambles and resolves again as the tool changes. <b>The thing that tells you what is
+        happening is the thing that tells you it is still happening</b> — round 2's idea, with
+        teeth.</p>
+      <p>It is the only one that gets MORE informative the longer you look, and it costs a
+        <code>textContent</code> write at 20 Hz.</p>
+      <div class="tags"><span class="t -mid">JS · 20 Hz</span><span class="t -idea">zero footprint</span><span class="t -idea">carries the tool name</span></div>
+    </div>
+  </div>
+
+</div>
+
+<div class="foot">
+  <h2>Where I land, for the last time</h2>
+  <p><b>01 Moiré.</b> It is the only thing in four rounds where the striking part is not drawn by
+    anyone — two sets of straight lines, and every swirl is interference between them. It beats on a
+    99-second cycle, so it does not repeat in any sitting; two panes are visibly different within
+    seconds; and it is <b>two divs, one keyframe, no JS, no SVG, no filter</b>. Cheapest and wildest
+    at the same time, which does not usually happen.</p>
+  <p><b>02 Tesseract</b> is the one people will ask about. <b>03 Whip</b> is the one that feels
+    alive. <b>07 Decode</b> is the one that is actually useful, and the only one here I would ship
+    alongside rather than instead of something.</p>
+  <p>Honest note: <b>04 Arc</b> is the coolest-looking and the most wrong — lightning says
+    <em>something went bang</em>, and this element's whole job is to say <em>be patient</em>.</p>
+</div>
+
+</div>
+<script>
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const raf = (fn) => { if (!reduce) requestAnimationFrame(function l(t){ fn(t); requestAnimationFrame(l); }); };
+
+/* ── 02 TESSERACT ──────────────────────────────────────────────────────
+   16 vertices of a 4-cube; edges join vertices differing in ONE bit. */
+{
+  const svg = document.getElementById('tess');
+  const V = [];
+  for (let i = 0; i < 16; i++)
+    V.push([(i & 1 ? 1 : -1), (i & 2 ? 1 : -1), (i & 4 ? 1 : -1), (i & 8 ? 1 : -1)]);
+  const E = [];
+  for (let i = 0; i < 16; i++) for (let b = 0; b < 4; b++) { const j = i ^ (1 << b); if (j > i) E.push([i, j, b]); }
+  const lines = E.map(([, , b]) => {
+    const el = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    // the W-axis edges are the ones with no 3D meaning — tint them
+    if (b === 3) el.setAttribute('class', 'in');
+    svg.append(el); return el;
+  });
+  raf((t) => {
+    const a = t / 1700, b = t / 2600;            // two INDEPENDENT 4D planes
+    const ca = Math.cos(a), sa = Math.sin(a), cb = Math.cos(b), sb = Math.sin(b);
+    const P = V.map(([x, y, z, w]) => {
+      let X = x * ca - w * sa, W = x * sa + w * ca;   // XW rotation
+      let Y = y * cb - z * sb, Z = y * sb + z * cb;   // YZ rotation
+      const k4 = 1.9 / (2.6 - W);  X *= k4; Y *= k4; Z *= k4;   // 4D → 3D
+      const k3 = 9.5 / (2.9 - Z);
+      return [X * k3, Y * k3];
+    });
+    E.forEach(([i, j], n) => {
+      const l = lines[n], p = P[i], q = P[j];
+      l.setAttribute('x1', p[0].toFixed(2)); l.setAttribute('y1', p[1].toFixed(2));
+      l.setAttribute('x2', q[0].toFixed(2)); l.setAttribute('y2', q[1].toFixed(2));
+    });
+  });
+}
+
+/* ── 03 WHIP — Verlet chain, anchor on a slow circle. ─────────────────── */
+{
+  const svg = document.getElementById('rope');
+  const path = svg.querySelector('path'), tip = svg.querySelector('circle');
+  const N = 12, SEG = 3.2;
+  const p = [], q = [];
+  for (let i = 0; i < N; i++) { p.push([4 + i * SEG, 13]); q.push([4 + i * SEG, 13]); }
+  raf((t) => {
+    for (let i = 1; i < N; i++) {              // integrate
+      const vx = (p[i][0] - q[i][0]) * 0.94, vy = (p[i][1] - q[i][1]) * 0.94;
+      q[i] = [p[i][0], p[i][1]];
+      p[i] = [p[i][0] + vx, p[i][1] + vy + 0.055];
+    }
+    p[0] = [7 + Math.cos(t / 520) * 3.2, 13 + Math.sin(t / 340) * 5.4];   // driven anchor
+    for (let k = 0; k < 3; k++)                // satisfy constraints
+      for (let i = 0; i < N - 1; i++) {
+        const dx = p[i + 1][0] - p[i][0], dy = p[i + 1][1] - p[i][1];
+        const d = Math.hypot(dx, dy) || 1e-6, f = (d - SEG) / d;
+        const w = i === 0 ? 1 : 0.5;
+        if (i !== 0) { p[i][0] += dx * f * 0.5; p[i][1] += dy * f * 0.5; }
+        p[i + 1][0] -= dx * f * w; p[i + 1][1] -= dy * f * w;
+      }
+    path.setAttribute('d', p.map((v, i) => (i ? 'L' : 'M') + v[0].toFixed(2) + ',' + v[1].toFixed(2)).join(''));
+    tip.setAttribute('cx', p[N - 1][0].toFixed(2)); tip.setAttribute('cy', p[N - 1][1].toFixed(2));
+  });
+}
+
+/* ── 04 ARC — midpoint displacement, 6 Hz. ────────────────────────────── */
+{
+  const svg = document.getElementById('bolt');
+  const main = svg.querySelector('.main'), glow = svg.querySelector('.glow');
+  const build = () => {
+    let pts = [[2, 12], [38, 12]];
+    for (let depth = 0, amp = 7; depth < 5; depth++, amp *= 0.56) {
+      const next = [pts[0]];
+      for (let i = 0; i < pts.length - 1; i++) {
+        const a = pts[i], b = pts[i + 1];
+        next.push([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2 + (Math.random() - 0.5) * amp], b);
+      }
+      pts = next;
+    }
+    const d = pts.map((v, i) => (i ? 'L' : 'M') + v[0].toFixed(1) + ',' +
+      Math.max(2, Math.min(22, v[1])).toFixed(1)).join('');
+    main.setAttribute('d', d); glow.setAttribute('d', d);
+  };
+  build(); if (!reduce) setInterval(build, 165);
+}
+
+/* ── 05 PHYLLOTAXIS — golden angle + an outward brightness wave. ──────── */
+{
+  const svg = document.getElementById('phyl');
+  const N = 55, GOLD = Math.PI * (3 - Math.sqrt(5));
+  const dots = [];
+  for (let i = 0; i < N; i++) {
+    const r = 1.7 * Math.sqrt(i), a = i * GOLD;
+    const c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    c.setAttribute('cx', (r * Math.cos(a)).toFixed(2));
+    c.setAttribute('cy', (r * Math.sin(a)).toFixed(2));
+    c.setAttribute('r', (0.6 + r * 0.055).toFixed(2));
+    svg.append(c); dots.push([c, r]);
+  }
+  raf((t) => {
+    const head = ((t / 900) % 1.7) * 13;
+    for (const [c, r] of dots) {
+      const d = Math.abs(r - head);
+      c.setAttribute('opacity', (0.18 + 0.82 * Math.max(0, 1 - d / 3.4)).toFixed(3));
+    }
+  });
+}
+
+/* ── 06 FLOW FIELD — 18 particles, one smooth vector field. ───────────── */
+{
+  const svg = document.getElementById('flow');
+  const W = 56, H = 22, N = 18;
+  const ps = [];
+  for (let i = 0; i < N; i++) {
+    const c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    c.setAttribute('r', (0.8 + Math.random() * 0.9).toFixed(2));
+    svg.append(c);
+    ps.push({ el: c, x: Math.random() * W, y: Math.random() * H, s: 0.5 + Math.random() * 0.7 });
+  }
+  raf((t) => {
+    const k = t / 2400;
+    for (const p of ps) {
+      // a smooth, slowly-turning field — no choreography, just "read it here"
+      const ang = Math.sin(p.x / 13 + k) * 1.1 + Math.cos(p.y / 8 - k * 0.7) * 0.9;
+      p.x += Math.cos(ang) * p.s * 0.9 + 0.45;
+      p.y += Math.sin(ang) * p.s * 0.55;
+      if (p.x > W + 2 || p.y < -2 || p.y > H + 2) { p.x = -2; p.y = Math.random() * H; }
+      p.el.setAttribute('cx', p.x.toFixed(2));
+      p.el.setAttribute('cy', p.y.toFixed(2));
+      p.el.setAttribute('opacity', (0.25 + 0.65 * Math.min(1, p.x / 10)).toFixed(2));
+    }
+  });
+}
+
+/* ── 07 DECODE — the tool name resolving out of noise. ────────────────── */
+{
+  const host = document.getElementById('decode');
+  const WORDS = ['Bash', 'Read', 'Grep', 'Edit', 'WebFetch', 'thinking'];
+  const NOISE = '!<>-_\\/[]{}—=+*^?#01';
+  let wi = 0, frame = 0, queue = [];
+  const set = (word) => {
+    const prev = host.textContent || '';
+    queue = [];
+    const len = Math.max(prev.length, word.length);
+    for (let i = 0; i < len; i++) {
+      queue.push({ to: word[i] || '', start: Math.floor(Math.random() * 14),
+                   end: Math.floor(Math.random() * 28) + 14, ch: '' });
+    }
+    frame = 0;
+  };
+  const tick = () => {
+    let done = 0, out = '';
+    for (const q of queue) {
+      if (frame >= q.end) { done++; out += '<b>' + q.to + '</b>'; }
+      else if (frame >= q.start) {
+        if (!q.ch || Math.random() < 0.3) q.ch = NOISE[(Math.random() * NOISE.length) | 0];
+        out += q.ch;
+      }
+    }
+    host.innerHTML = out;
+    frame++;
+    // `set` only re-seeds the queue — it does not drive it. Without the tick()
+    // here the whole thing resolved "Bash" once and then sat there forever,
+    // which looks exactly like a finished animation rather than a dead one.
+    if (done === queue.length) {
+      setTimeout(() => { set(WORDS[++wi % WORDS.length]); tick(); }, 1400);
+      return;
+    }
+    setTimeout(tick, 50);
+  };
+  set(WORDS[0]); if (!reduce) tick(); else host.textContent = WORDS[0];
+}
+
+for (const [id, cls] of [['big','big'], ['tint','tint'], ['slow','slow']]) {
+  const el = document.getElementById(id);
+  el.onclick = () => el.classList.toggle('on', document.body.classList.toggle(cls));
+}
+</script>
+</body>
+</html>

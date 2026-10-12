@@ -30,6 +30,14 @@ const cronChip = (): ChatEvent => ({
   variant: 'cron',
   text: 'pr-sweep',
 });
+/** THE JOIN's chip — `expandSpawnDelivery`'s half of the adjacent pair. */
+const reportChip = (): ChatEvent => ({
+  kind: 'notice',
+  id: id(),
+  ts: 0,
+  variant: 'report',
+  text: '3 sub-chats reported',
+});
 /** The harness's "[Request interrupted by user]", as the normalizer emits it. */
 const stopped = (): ChatEvent => ({
   kind: 'notice',
@@ -160,6 +168,18 @@ describe('THE GUARD — the render half', () => {
     // expandCronFire emits the chip and the prompt bubble adjacently; that
     // adjacency is the only provenance signal in the event stream.
     expect(voices([cronChip(), user('sweep the PRs'), prose('nothing to report')])).toEqual([
+      'notice',
+      'user',
+      'private',
+    ]);
+  });
+
+  it('does NOT fire for a SUB-CHAT REPORT turn either — same reason', () => {
+    // The set that got forgotten: this predicate read `variant === 'cron'` and
+    // nothing else, so when the join landed a batch of reports counted as a
+    // person starting a turn — promoting the reply into a bubble addressed to
+    // a reader who never asked anything.
+    expect(voices([reportChip(), user('## worker a\n\nfound it'), prose('acting on it')])).toEqual([
       'notice',
       'user',
       'private',

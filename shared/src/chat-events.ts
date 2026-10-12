@@ -5,7 +5,9 @@
 //
 // See docs/plans/2026-07-01-web-chat-session-switching.md.
 
+import { stripMentionContext } from './chat-context.js';
 import { parseCronMarker } from './cron.js';
+import { parseSpawnDelivery } from './spawn-delivery.js';
 import type { AgentMode } from './types.js';
 
 export interface StructuredPatchHunk {
@@ -31,6 +33,16 @@ interface Base {
 export interface UserTextEvent extends Base {
   kind: 'user';
   text: string;
+  /**
+   * This "message" is PLUMBING — a folded cron's injected instruction.
+   *
+   * It is a real delivered message (muxpad does not write the transcript, it
+   * tails the harness's own file) so it cannot simply be dropped; but nobody
+   * typed it and nobody rereads it, so it belongs in the collapsed run with the
+   * tool calls rather than as a bubble or behind a second, separate caret on
+   * the chip. See `expandCronFire`.
+   */
+  folded?: boolean;
 }
 export interface AssistantTextEvent extends Base {
   kind: 'assistant';
@@ -91,10 +103,28 @@ export interface NoticeEvent extends Base {
    *  for, so its scratchpad must never be promoted into a bubble. Without a
    *  transcript-level marker a reload cannot tell a stopped turn from a
    *  silent one, and the two halves of the guard would disagree. */
-  variant: 'task' | 'reminder' | 'cron' | 'interrupted';
+  variant: 'task' | 'reminder' | 'cron' | 'interrupted' | 'report';
   text: string;
   /** Secondary line, e.g. a task-notification's status. */
   detail?: string;
+  /**
+   * Content folded behind a caret — present only when there IS something to
+   * unfold. A quiet cron's prompt lives here instead of in a bubble of its own:
+   * the fire stays in the log and stays inspectable, while the plumbing it
+   * injected stops taking up the conversation.
+   */
+  body?: string;
+  /**
+   * For a 'cron' notice: the card this job declared as its output.
+   *
+   * Present means the conversation is not where this job's result belongs — so
+   * a fire that wrote its card and said nothing is dropped from the rendered
+   * log entirely (see `dropSilentCardFires`). Carried on the event for the same
+   * reason the fire's own flags were: it is a fact about the SCHEDULE, and inferring it from
+   * the shape of what follows is how four previous bugs in this feature
+   * started.
+   */
+  card?: string;
   /** For a task-notification: the parent Task/Agent tool-use id it reports on.
    *  Lets the live roster match a subagent's FINISH to its launch reliably —
    *  a background agent's own tool_result is only the immediate launch ack. */
@@ -139,6 +169,91 @@ export const REPLY_ACK = 'Delivered to the user. [muxpad-reply]';
 
 export function isReplyTool(name: string | undefined | null): boolean {
   return name === REPLY_TOOL_NAME;
+}
+
+/**
+ * `muxpad say` — AGENT MODE'S WAY OF ADDRESSING THE PERSON.
+ *
+ * Chat mode has the `reply` tool: an agent that means to speak to you calls it,
+ * and `voice: 'reply'` is exempt from every fold in the product. Agent mode is
+ * the harness exactly as it ships and registers no muxpad tools at all, so it
+ * had no way to make that distinction — which is why a cron's output in an
+ * agent pane was all-or-nothing, and why the first two attempts at fixing it
+ * were a flag on the schedule and then a list of acknowledgement words.
+ *
+ * So the CLI carries it. `muxpad say "…"` prints this marker, the marker lands
+ * in the Bash tool_result like any other output, and the normalizer lifts it
+ * out as an assistant message with `voice: 'reply'`.
+ *
+ * RIDING THE TRANSCRIPT RATHER THAN A TABLE OF ITS OWN. The alternative was a
+ * server-side store the client fetches and injects, like browser moments — a
+ * new table, a new route, and placement logic that has already been the source
+ * of three separate bugs about things piling at the wrong edge of a
+ * partially-loaded log. A marker in the transcript carries the tool result's
+ * own timestamp and sits where that result sits.
+ *
+ * ── AND IT IS KEYED, BECAUSE THE FIRST VERSION WAS NOT ─────────────────────
+ * Without a key, ANY tool output containing the marker speaks in the agent's
+ * voice: `cat` a file that mentions it, run the test suite, fetch a page — or,
+ * most pointedly, `grep -rn muxpad-said .` while working on this feature,
+ * which prints the literal three times and would have said all three out loud.
+ * An adversarial review found it by reading this repository's own fixtures.
+ *
+ * The key is a random per-install value the server mints once and the CLI asks
+ * for. It is NOT a security boundary — an agent may legitimately speak, so
+ * there is nothing to defend against — it exists so that text which merely
+ * CONTAINS the marker cannot be mistaken for an invocation of it. Per-install
+ * and stable rather than per-boot, because a transcript is re-read for months
+ * and a rotating key would un-say everything said before the last restart.
+ *
+ * The CLOSING tag carries it too, so a message quoting `</muxpad-said>` cannot
+ * truncate itself.
+ */
+let currentSayKey: string | null = null;
+
+/** Set once at server boot. Null means "do not lift" — the shape a caller
+ *  that has no key should get, rather than a guess. */
+export function setSayKey(key: string | null): void {
+  currentSayKey = key;
+}
+
+export function sayKey(): string | null {
+  return currentSayKey;
+}
+
+const KEY_RE = /^[a-f0-9]{16,64}$/;
+
+/** What `muxpad say` prints. Exported so the CLI test can assert the shape
+ *  against the parser rather than against a copy of it. */
+export function renderSaid(text: string, key: string): string {
+  return `<muxpad-said k="${key}">${text}</muxpad-said:${key}>`;
+}
+
+/**
+ * Pull any spoken blocks out of a tool result.
+ *
+ * `rest` is what is left for the tool_result row itself — a command that said
+ * something and also printed its own output keeps the output, and one that
+ * only said something leaves nothing, so no empty result row is rendered.
+ *
+ * A block whose key does not match is left exactly where it is: it is not a
+ * failed invocation, it is a piece of text that happens to look like one.
+ */
+export function splitSaid(
+  text: string,
+  key: string | null = currentSayKey,
+): { said: string[]; rest: string } {
+  if (!key || !KEY_RE.test(key) || !text.includes(`<muxpad-said k="${key}">`)) {
+    return { said: [], rest: text };
+  }
+  const re = new RegExp(`<muxpad-said k="${key}">([\\s\\S]*?)</muxpad-said:${key}>`, 'g');
+  const said: string[] = [];
+  const rest = text.replace(re, (_m, body: string) => {
+    const t = body.trim();
+    if (t) said.push(t);
+    return '';
+  });
+  return { said, rest: rest.trim() };
 }
 
 /**
@@ -462,6 +577,30 @@ export function expandCronFire(text: string, id: string, ts: number | null): Cha
   const parsed = parseCronMarker(text);
   if (!parsed) return null;
   const { marker, body } = parsed;
+  // ─── THE INJECTED PROMPT IS ALWAYS PLUMBING ──────────────────────────────
+  // This used to branch: a `--fold` cron collapsed its prompt, an ordinary one
+  // printed it as a bubble. That put the flag on the wrong axis, and the
+  // Investing chat shows it — `nw-close` is deliberately NOT folded because its
+  // reply is worth reading, and the result is six lines of
+  //
+  //   "Run: python3 scripts/nw_oneline.py CLOSE — then PRINT that exact line as
+  //    your chat reply AND send it as a PushNotification… On error print+push
+  //    'NW close snapshot failed'."
+  //
+  // sitting above the answer. Nobody has ever re-read that. It is an
+  // instruction a schedule injected, not something a person said, and that is
+  // true whatever the flag says.
+  //
+  // AND MUXPAD ALREADY EDITS THIS MESSAGE. The `<muxpad-cron …>` marker is the
+  // first half of the very same injected string and is hidden from display
+  // without anybody calling it a rewrite of history. Folding the second half is
+  // the same act on the same message, not a new category — which is why this
+  // needs no lookup of what the flag was at delivery time, and why it cleans up
+  // the back-scroll without re-rendering a single word anybody wrote.
+  //
+  // What `--fold` still controls is the turn's OUTPUT: whether the agent's own
+  // prose is demoted too (see foldCronTurns). Prompt and output were two
+  // decisions wearing one flag.
   const notice: NoticeEvent = {
     kind: 'notice',
     // Distinct id from the user bubble's — they are two React rows.
@@ -469,12 +608,45 @@ export function expandCronFire(text: string, id: string, ts: number | null): Cha
     ts,
     variant: 'cron',
     text: marker.name,
+    ...(marker.card ? { card: marker.card } : {}),
     ...(marker.missed > 0
       ? { detail: `${marker.missed} missed fire${marker.missed === 1 ? '' : 's'} collapsed` }
       : {}),
   };
+  // The chip is a MARK, not a control: it says a schedule fired and nothing
+  // else. The prompt joins the same collapsed run as the tool calls the fire
+  // produced, because it is the same kind of thing — it used to hang behind a
+  // caret on the chip, which gave one fire two separate disclosures.
   const prompt = body.trim();
-  return prompt ? [notice, { kind: 'user', id, ts, text: prompt }] : [notice];
+  return prompt ? [notice, { kind: 'user', id, ts, text: prompt, folded: true }] : [notice];
+}
+
+/**
+ * A batch of finished sub-chat reports arrives as `<muxpad-delivery …>…</…>` +
+ * the reports themselves. Same split as `expandCronFire`, for the same reason:
+ * the parent's transcript should read "⇤ 3 sub-chats reported" followed by what
+ * they said, not a wall of XML — and a human did not type any of it.
+ *
+ * Returns null for anything that isn't a delivery.
+ */
+export function expandSpawnDelivery(
+  text: string,
+  id: string,
+  ts: number | null,
+): ChatEvent[] | null {
+  const parsed = parseSpawnDelivery(text);
+  if (!parsed) return null;
+  const { marker, body } = parsed;
+  const notice: NoticeEvent = {
+    kind: 'notice',
+    // Distinct id from the bubble's — they are two React rows.
+    id: `${id}:report`,
+    ts,
+    variant: 'report',
+    text: `${marker.count} sub-chat${marker.count === 1 ? '' : 's'} reported`,
+  };
+  const reports = body.trim();
+  return reports ? [notice, { kind: 'user', id, ts, text: reports }] : [notice];
 }
 
 /**
@@ -484,8 +656,50 @@ export function expandCronFire(text: string, id: string, ts: number | null): Cha
  * `normalizeTranscriptLine`, so both backends render a fire identically.
  */
 export function expandChatEvent(event: ChatEvent): ChatEvent[] {
+  // `muxpad say` reaches this path too — codex and cursor write their tool
+  // results here already normalized, so the lift has to happen on both roads
+  // or the same command speaks on one backend and is swallowed on another.
+  if (event.kind === 'tool_result') {
+    const { said, rest } = splitSaid(event.text ?? '');
+    if (said.length === 0) return [event];
+    const { text: _dropped, ...bare } = event;
+    const row: ChatEvent = rest ? { ...event, text: rest } : bare;
+    return [
+      row,
+      ...said.map(
+        (spoken, k): ChatEvent => ({
+          kind: 'assistant',
+          id: `${event.id}:said${k}`,
+          ts: event.ts,
+          text: spoken,
+          voice: 'reply',
+        }),
+      ),
+    ];
+  }
   if (event.kind !== 'user') return [event];
-  return expandCronFire(event.text, event.id, event.ts) ?? [event];
+  return (
+    expandCronFire(event.text, event.id, event.ts) ??
+    expandSpawnDelivery(event.text, event.id, event.ts) ?? [forDisplay(event)]
+  );
+}
+
+/**
+ * A user message as the READER should see it.
+ *
+ * Strips the `<muxpad-context>` block an `@mention` appends — the handles for
+ * the chats the message referenced. The AGENT needs them (it reads the harness's
+ * own transcript, not this), and the reader does not: they typed
+ * "what did @Investing decide?" and that is what their bubble must say, with the
+ * mention rendering as a chip the way it always has.
+ *
+ * Without this the block is simply printed under every mention, which is the
+ * same defect the cron marker had in the queue preview — muxpad's plumbing
+ * shown to the person it was hidden from.
+ */
+function forDisplay(event: ChatEvent & { kind: 'user' }): ChatEvent {
+  const shown = stripMentionContext(event.text);
+  return shown === event.text ? event : { ...event, text: shown };
 }
 
 /**
@@ -580,7 +794,12 @@ export function normalizeTranscriptLine(line: unknown): ChatEvent[] {
       // prompt, never raw XML in a bubble.
       const cron = expandCronFire(content, id, ts);
       if (cron) return cron;
-      return [{ kind: 'user', id, ts, text: content }];
+      // …and so is a batch of sub-chat reports.
+      const reports = expandSpawnDelivery(content, id, ts);
+      if (reports) return reports;
+      // An `@mention`'s handles are for the agent, not the reader — see
+      // `forDisplay`.
+      return [{ kind: 'user', id, ts, text: stripMentionContext(content) }];
     }
     if (Array.isArray(content)) {
       const out: ChatEvent[] = [];
@@ -613,14 +832,27 @@ export function normalizeTranscriptLine(line: unknown): ChatEvent[] {
           // a tool row, so keeping this would put an orphan "result" row under
           // every reply. See REPLY_ACK for why the match is on a sentinel.
           if (text.trim() === REPLY_ACK) return;
+          // `muxpad say` rides out in a command's stdout. Lift it into a real
+          // message so it survives every fold; what the command printed BESIDES
+          // the marker stays on the tool row where it belongs.
+          const { said, rest } = splitSaid(text);
           out.push({
             kind: 'tool_result',
             id: `${uuid}:${i}`,
             ts,
             toolUseId: typeof b.tool_use_id === 'string' ? b.tool_use_id : '',
             ok: b.is_error !== true,
-            ...(text ? { text } : {}),
+            ...(rest ? { text: rest } : {}),
             ...(diff ? { diff } : {}),
+          });
+          said.forEach((spoken, k) => {
+            out.push({
+              kind: 'assistant',
+              id: `${uuid}:${i}:said${k}`,
+              ts,
+              text: spoken,
+              voice: 'reply',
+            });
           });
         }
       });

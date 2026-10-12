@@ -178,6 +178,7 @@ function TabDropdownItem({
       {/* The close affordance is rendered as a sibling visual (a <span>
           with click) to avoid nested-button HTML. stopPropagation in
           onClose keeps the row's onClick from also firing. */}
+      {/* biome-ignore lint/a11y/useSemanticElements: an <option> cannot hold an icon, a name and a state mark. */}
       <span
         role="button"
         tabIndex={0}

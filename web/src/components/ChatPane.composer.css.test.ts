@@ -79,18 +79,20 @@ describe('the status strip is a line, not a second object', () => {
     // margin and the composer's row gap — and having both is how a bar drifts
     // taller one nudge at a time.
     //
-    // Outside the pill again, the strip's OWN bottom margin is the only thing
-    // that can hold it off the pill — so what is asserted is that there is still
-    // exactly one separation and it is no bigger than the row gap it replaces.
+    // Below the pill now, so the one separation is the strip's TOP margin and
+    // the bottom one must be zero. The side is checked rather than assumed
+    // because the margin outlived two moves on the wrong side of the strip —
+    // see the same assertion in ChatPane.statusline.test.tsx, which owns the
+    // reasoning; this file owns the BUDGET the two of them add up to.
     const own = (decl('.chat-status-bar', 'margin') ?? '').split(/\s+/);
+    const above = Number((own[0] ?? '').replace('px', ''));
     const below = Number((own[2] ?? '').replace('px', ''));
-    const pillGap = Number((decl('.chat-composer', 'gap') ?? '').replace('px', ''));
-    expect(below).toBeGreaterThan(0);
-    expect(below).toBeLessThanOrEqual(pillGap);
+    expect(above).toBeGreaterThan(0);
+    expect(below).toBe(0);
     // And the line is FIXED, not a value its content can grow — which is what
     // makes this a budget rather than a hope. See ChatPane.statusline.test.tsx.
     const h = Number((decl('.chat-status-bar', 'height') ?? '').replace('px', ''));
-    expect(h + below).toBeLessThanOrEqual(24);
+    expect(h + above).toBeLessThanOrEqual(32);
   });
 });
 

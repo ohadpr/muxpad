@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
 import type { EventBus } from './events.js';
+import { withPaneKey } from './pane-key.js';
 import { type PtydCache, decoratePane } from './ptyd-cache.js';
 import type { PaneNotifier } from './push.js';
 import {
@@ -165,7 +166,7 @@ export function createServeSupervisor(deps: ServeSupervisorDeps): ServeSuperviso
       shell: pane.shell ?? defaultShell,
       startup_cmd: pane.startup_cmd,
       cwd: safeCwd(pane.cwd),
-      env: pane.env,
+      env: withPaneKey(pane.env, pane.id),
       tab_id: pane.tab_id,
       ...(workspaceId !== undefined ? { workspace_id: workspaceId } : {}),
     });

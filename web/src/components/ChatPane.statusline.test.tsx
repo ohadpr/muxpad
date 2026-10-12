@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, describe, expect, it } from 'vitest';
-import { liveStatusLabel, sessionModelLabel } from '../lib/live-status';
+import { liveStatusLabel, sessionModelLabel, workingRowLabel } from '../lib/live-status';
 import { SessionBar } from './ChatStart';
 
 /**
@@ -176,16 +176,30 @@ describe('the session line cannot become two lines', () => {
 
 describe('the session line sits outside the composer pill', () => {
   /** The composer's own markup — the pill and everything inside it. */
+  // Anchored on the CLASS NAME, not on `<div className=…`: the wrap grew a
+  // second prop and biome split it across lines, which silently made this slice
+  // empty and the assertions below vacuous. What the test is about is the ORDER
+  // of things inside the wrap, and that survives formatting.
+  // From the wrap to the END of the component. It used to stop at
+  // `chat-composer-main`, which silently excluded everything after the pill —
+  // so when the session line moved BELOW the composer the slice no longer
+  // contained it at all. Both markers below occur exactly once, so comparing
+  // their order over the whole region says precisely what this test means.
   const WRAP = SRC.slice(
-    SRC.indexOf('<div className="chat-composer-wrap"'),
-    SRC.indexOf('<div className="chat-composer-main">'),
+    SRC.indexOf('className="chat-composer-wrap"'),
+    SRC.indexOf('// Everything that draws an ALREADY-ARRIVED message'),
   );
 
-  it('renders the bar as a SIBLING of the pill, before it opens', () => {
+  it('renders the bar as a SIBLING of the pill, UNDER it', () => {
+    // A slice that missed its anchor makes every assertion below vacuously
+    // true, which is how this test passed while saying nothing.
+    expect(WRAP.length).toBeGreaterThan(100);
     expect(WRAP).toContain('<SessionBar');
-    // Order is the assertion: the strip is emitted before the pill's own
-    // element, so it cannot be a child of it.
-    expect(WRAP.indexOf('<SessionBar')).toBeLessThan(
+    // Order is the assertion, and it reversed deliberately: the line is
+    // reference, not conversation, so it sits BELOW the pill rather than
+    // between the pill and the last message. Still a sibling — never a child —
+    // which is what keeps it out of the pill's own layout.
+    expect(WRAP.indexOf('<SessionBar')).toBeGreaterThan(
       WRAP.indexOf('<div className="chat-composer">'),
     );
   });
@@ -199,19 +213,22 @@ describe('the session line sits outside the composer pill', () => {
     expect(decl('.chat-status-bar', 'background')).toBeNull();
   });
 
-  it('owns the gap to the pill itself, and spends less than the pill used to', () => {
-    // Inside the pill, the pill's 6px row gap held the strip off the input. Out
-    // of it, the strip's own bottom margin is the only thing that can — so this
-    // margin is now REQUIRED to be non-zero (the inverse of what the composer
-    // test asserts for the in-pill arrangement it replaced).
+  it('owns the gap to the pill, on the side the pill is actually on', () => {
+    // THE SIDE IS THE ASSERTION. Inside the pill, the pill's row gap held the
+    // strip off the input; outside and ABOVE it, the strip's own bottom margin
+    // did. The strip then moved BELOW the composer and the margin stayed where
+    // it was, which is a gap facing nothing — 6px of dead space under the line
+    // and the line pressed against the pill. Pinning "non-zero" could not catch
+    // that, because the wrong side is also non-zero.
     const margin = (decl('.chat-status-bar', 'margin') ?? '').split(/\s+/);
+    const above = Number((margin[0] ?? '').replace('px', ''));
     const below = Number((margin[2] ?? '').replace('px', ''));
-    expect(below).toBeGreaterThan(0);
-    // And the bar must not have grown on the way out. The strip's total cost is
-    // its line plus that gap; in the pill it was its line plus the pill's row
-    // gap. Same line, so the gap is the whole comparison.
-    const pillGap = px(decl('.chat-composer', 'gap'));
-    expect(below).toBeLessThanOrEqual(pillGap);
+    expect(above).toBeGreaterThan(0);
+    expect(below).toBe(0);
+    // And it stays a GAP, never a box again: the arrangement this replaced cost
+    // 37px of a 119px bar in border, background and padding. The strip's whole
+    // cost is its one line plus this.
+    expect(above).toBeLessThanOrEqual(16);
   });
 
   it('cannot move the composer, because its height is not a variable', () => {
@@ -351,5 +368,48 @@ describe('a model id is shortened for the line and kept whole in the menu', () =
     ]) {
       expect(sessionModelLabel(id).length).toBeLessThanOrEqual(Math.max(id.length, 1));
     }
+  });
+});
+
+/**
+ * THE TWO WORKING LABELS, and why only one of them carries the word.
+ *
+ * Reported as "this double working indication is a bit annoying": the bar above
+ * the composer read `Working…` and the row in the log read `Working…`, a hundred
+ * pixels apart, saying the identical thing. They were two ternaries in two files
+ * with nothing connecting them — which is how it happened and why it survived.
+ *
+ * They are not interchangeable. The BAR is fixed: it survives scrolling away and
+ * text streaming, and it carries the agent counts. The ROW is positional: it
+ * sits where the reply will land and is the only surface that can name the tool
+ * currently running, which the bar's 180px budget could not hold anyway.
+ */
+describe('only one surface says the word', () => {
+  it('the row says nothing when there is no tool — the dots carry it', () => {
+    expect(workingRowLabel(null)).toBeNull();
+    expect(workingRowLabel(undefined)).toBeNull();
+    expect(workingRowLabel('')).toBeNull();
+  });
+
+  it('…and the BAR says it in exactly that case, so the fact is never lost', () => {
+    // The division of labour, asserted as a pair rather than as two beliefs.
+    expect(workingRowLabel(null)).toBeNull();
+    expect(liveStatusLabel({ chats: 0, turnActive: true })).toBe('Working…');
+  });
+
+  it('the row names the tool — the one thing the bar cannot fit', () => {
+    expect(workingRowLabel('Bash')).toBe('Running Bash…');
+  });
+
+  it('and they never both speak at once', () => {
+    // With a tool running the row is specific and the bar is generic; with no
+    // tool the row is silent. Neither case repeats a string.
+    const row = workingRowLabel('Bash');
+    const bar = liveStatusLabel({ chats: 0, turnActive: true });
+    expect(row).not.toBe(bar);
+  });
+
+  it('the bar still prefers counts, which beat the word outright', () => {
+    expect(liveStatusLabel({ chats: 2, turnActive: true })).toBe('2 agents');
   });
 });

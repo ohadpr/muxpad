@@ -79,6 +79,40 @@ export function liveStatusLabel(opts: {
 }
 
 /**
+ * What the TRANSCRIPT's working row says — the dots at the foot of the log.
+ *
+ * ── IT LIVES HERE SO THE TWO LABELS CANNOT SAY THE SAME THING ──────────────
+ * Reported as "this double working indication is a bit annoying": the row above
+ * the composer read `Working…` and the row in the log read `Working…`, a
+ * hundred pixels apart. They were two ternaries in two files with nothing
+ * connecting them, which is the whole reason it happened.
+ *
+ * They are not redundant surfaces — each answers something the other cannot,
+ * and `liveStatusLabel` above already records the division:
+ *
+ *   THE BAR      is FIXED. It survives scrolling away, it survives text
+ *                streaming, and it carries the agent/subagent counts. It is
+ *                where "is this pane busy" lives, and it keeps the word.
+ *   THIS ROW     is POSITIONAL. It sits where the reply will appear, and it is
+ *                the only thing that can name the tool currently running.
+ *
+ * So this returns the tool and NOTHING ELSE. The animated dots already say
+ * "something is coming, here" — that is what dots mean in every chat ever
+ * built, and the row carries `aria-label="<assistant> is working"` for anyone
+ * not reading them. Repeating the bar's word underneath them adds no fact.
+ *
+ * THE TOOL NAME IS NOT OPTIONAL, and it is why this is a label rather than a
+ * deletion. Bare dots read as "maybe stuck" during a long silent tool call,
+ * which is exactly when a reader starts wondering — and the bar has a 180px
+ * width budget it cannot spend on `Running some_long_tool_name…`. Naming the
+ * oldest unresolved tool is the one thing only this row can do, so it is the
+ * only thing it says.
+ */
+export function workingRowLabel(toolName: string | null | undefined): string | null {
+  return toolName ? `Running ${toolName}…` : null;
+}
+
+/**
  * Is this child chat RUNNING, right now?
  *
  * ── ONE QUESTION, ONE ANSWER, AND IT IS THE SIDEBAR'S ──────────────────────

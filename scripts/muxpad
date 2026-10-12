@@ -14,7 +14,31 @@
 
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# ROOT is the repo this script lives in, and it must survive being SYMLINKED.
+#
+# `dirname "$BASH_SOURCE"` alone gives the directory of the LINK, not of the
+# script — so a symlink at ~/.local/bin/muxpad (the obvious way to put this on
+# PATH for ssh, and for anything that does not inherit a pane's environment)
+# made ROOT resolve to ~/.local. Everything that reads a repo path then pointed
+# at a directory with nothing in it, and the failure landed as far from the
+# cause as it could: every agent pane died at boot with "runner not built
+# (~/.local/server/dist/agent-runner/index.js missing)", muxpad retried, gave
+# up, and reported "automatic restarts failed" — a message about agents, from a
+# symlink.
+#
+# Walk the chain to the real file. `readlink` without -f because macOS's does
+# not have it; the loop is the portable form and terminates because a symlink
+# cycle would have failed to exec in the first place.
+_src="${BASH_SOURCE[0]}"
+while [ -L "$_src" ]; do
+  _tgt="$(readlink "$_src")"
+  case "$_tgt" in
+    /*) _src="$_tgt" ;;
+    *) _src="$(cd "$(dirname "$_src")" && pwd)/$_tgt" ;;
+  esac
+done
+ROOT="$(cd "$(dirname "$_src")/.." && pwd)"
+unset _src _tgt
 DATA_DIR="${MUXPAD_DATA_DIR:-$HOME/.muxpad}"
 PID_FILE="$DATA_DIR/server.pid"
 LOG_FILE="$DATA_DIR/server.log"
@@ -739,6 +763,386 @@ json_string() {
   printf '%s' "$1" | jq -Rs .
 }
 
+# ─── slack ─────────────────────────────────────────────────────────────────
+#
+# A THIN CLIENT. Every call below is one request to the muxpad server, which
+# holds the token and decides whether the call happens. Nothing here reads a
+# credential, and there is no file to read one from.
+#
+# ── WHAT THIS REPLACED, AND WHY ────────────────────────────────────────────
+# This section used to source ~/.claude/secrets/slack.env and talk to
+# slack.com directly, with a workspace check in front of it. Both halves of
+# that were wrong, and in the same way: they asked the caller to be honest.
+#
+#   · the token was in a file any pane could read. A chat that was REFUSED
+#     could `cat` it and curl Slack itself, so the check only ever stopped an
+#     agent that wanted to be stopped;
+#   · the check identified the caller by $MUXPAD_PANE_ID — a variable the
+#     caller sets. `MUXPAD_PANE_ID=<a work pane> muxpad slack post …` from a
+#     personal chat walked straight through. The commit that added the check
+#     was pleased with itself for not trusting $MUXPAD_WORKSPACE_ID and then
+#     trusted the thing it was resolving it with.
+#
+# Now we present the pane id AND the key the server minted for that pane and
+# handed over when it was spawned. Naming somebody else's pane does not get
+# past the key. (An earlier version walked the process ancestry instead, which
+# could not be forged at all — but it needed pane pids, which only ptyd knows,
+# and a ptyd protocol change restarts the daemon that owns every terminal on
+# this machine. Too expensive for the threat, which is a helpful agent rather
+# than an adversary.)
+#
+# ONE IDENTITY: every message goes out as YOU, prefixed 🤖 by the server so the
+# reader knows a machine composed it. There is no bot token anywhere any more —
+# a bot DM lands in the recipient's separate conversation with "muxpad", which
+# you cannot see and, with the ts lost, cannot delete.
+
+# WHO WE ARE, and we cannot simply assert it. `$MUXPAD_PANE_ID` is a value any
+# caller can set — that was the hole: a personal chat naming a work pane's id
+# walked straight through the workspace check. Beside it the server puts
+# `$MUXPAD_PANE_KEY`, minted for THIS pane and handed over when it was
+# spawned, so the id is only believed when the key agrees with it.
+#
+# A pane started before muxpad issued keys has none, and nothing can put one
+# into a running process. It fails closed and the server's refusal says to
+# restart the pane.
+slack_ident() {
+  [ -n "${MUXPAD_PANE_ID:-}" ] && [ -n "${MUXPAD_PANE_KEY:-}" ] && return 0
+  cat >&2 <<'EOF'
+muxpad: slack: this pane cannot prove which workspace it is in.
+
+Panes started before muxpad issued per-pane keys have none, and one cannot be
+added to a process that is already running. Restart this pane, or open a new
+one, and try again.
+EOF
+  exit 1
+}
+
+# The server speaks HTTP; its refusals carry a message and sometimes a detail,
+# and both are worth printing — one says what happened, the other says what to
+# do about it.
+slack_call() {
+  require_jq
+  local method="$1" path="$2" body="${3:-}"
+  local tmp status
+  tmp="$(mktemp)"
+  if [ -n "$body" ]; then
+    status="$(curl -sS -o "$tmp" -w '%{http_code}' -X "$method" \
+      -H 'content-type: application/json' --data "$body" \
+      "${MUXPAD_API_URL%/}$path")"
+  else
+    status="$(curl -sS -o "$tmp" -w '%{http_code}' -X "$method" "${MUXPAD_API_URL%/}$path")"
+  fi
+  if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
+    {
+      printf 'muxpad: slack: %s\n' "$(jq -r '.error.message // "request failed"' "$tmp" 2>/dev/null)"
+      local detail; detail="$(jq -r '.error.detail // empty' "$tmp" 2>/dev/null)"
+      [ -n "$detail" ] && printf '\n%s\n' "$detail"
+    } >&2
+    rm -f "$tmp"
+    exit 1
+  fi
+  cat "$tmp"
+  rm -f "$tmp"
+}
+
+slack_require_pane() {
+  [ -n "${MUXPAD_API_URL:-}" ] || {
+    echo 'muxpad: slack: works only from inside a muxpad pane' >&2; exit 1; }
+  slack_ident
+}
+
+# "2h" / "90m" / "3d" → an epoch second, for --since.
+slack_since_epoch() {
+  local v="$1" n unit now
+  n="${v%[smhd]}"; unit="${v#"$n"}"
+  case "$n" in ''|*[!0-9]*) echo "muxpad: --since must look like 30m, 2h or 3d" >&2; exit 1 ;; esac
+  now="$(date +%s)"
+  case "$unit" in
+    s) echo $(( now - n )) ;;
+    m) echo $(( now - n * 60 )) ;;
+    h|'') echo $(( now - n * 3600 )) ;;
+    d) echo $(( now - n * 86400 )) ;;
+  esac
+}
+
+cmd_slack_read() {
+  slack_require_pane
+  local ref="${1:-}"; shift || true
+  [ -n "$ref" ] || { echo 'usage: muxpad slack read <#channel|@user|ID> [--since=2h] [--limit=50]' >&2; exit 1; }
+  reset_flags since limit
+  parse_flags since limit -- "$@"
+  local q="pane=$MUXPAD_PANE_ID&key=$MUXPAD_PANE_KEY&ref=$(printf '%s' "$ref" | jq -sRr @uri)&limit=${FLAG_limit:-50}"
+  [ -n "${FLAG_since:-}" ] && q="$q&oldest=$(slack_since_epoch "$FLAG_since")"
+  slack_call GET "/api/slack/read?$q" \
+    | jq -r '.messages[] | "\(.ts | tonumber | strftime("%m-%d %H:%M"))  \(.who)  \(.text | gsub("\n"; " ⏎ "))"'
+}
+
+cmd_slack_search() {
+  slack_require_pane
+  local query="${1:-}"; shift || true
+  [ -n "$query" ] || { echo 'usage: muxpad slack search "<query>" [--limit=20]' >&2; exit 1; }
+  reset_flags limit
+  parse_flags limit -- "$@"
+  local q="pane=$MUXPAD_PANE_ID&key=$MUXPAD_PANE_KEY&q=$(printf '%s' "$query" | jq -sRr @uri)&limit=${FLAG_limit:-20}"
+  slack_call GET "/api/slack/search?$q" \
+    | jq -r '.messages[] | "\(.ts | tonumber | strftime("%m-%d %H:%M"))  #\(.channel // "?")  \(.who)  \(.text | gsub("\n"; " ⏎ "))"'
+}
+
+cmd_slack_post() {
+  slack_require_pane
+  local ref="${1:-}" text="${2:-}"
+  [ -n "$ref" ] && [ -n "$text" ] || {
+    echo 'usage: muxpad slack post <#channel|@user|ID> "<text>"' >&2; exit 1; }
+  # The 🤖 prefix is added by the SERVER, not here. A disclosure every caller
+  # has to remember is a disclosure that gets forgotten, and this script is no
+  # longer the only thing that can post.
+  local body out
+  body="$(jq -nc --arg pane "$MUXPAD_PANE_ID" --arg key "$MUXPAD_PANE_KEY" --arg ref "$ref" --arg text "$text" \
+    '{pane: $pane, key: $key, ref: $ref, text: $text}')"
+  out="$(slack_call POST /api/slack/post "$body")"
+  local id ts
+  id="$(printf '%s' "$out" | jq -r '.channel')"
+  ts="$(printf '%s' "$out" | jq -r '.ts')"
+  echo "sent as you → ${ref}  [${id} ${ts:-?}]"
+  [ -n "$ts" ] && echo "undo: muxpad slack unpost ${id} ${ts}"
+}
+
+cmd_slack_unpost() {
+  slack_require_pane
+  local id="${1:-}" ts="${2:-}"
+  [ -n "$id" ] && [ -n "$ts" ] || {
+    echo 'usage: muxpad slack unpost <channelID> <ts>' >&2; exit 1; }
+  slack_call POST /api/slack/unpost \
+    "$(jq -nc --arg pane "$MUXPAD_PANE_ID" --arg key "$MUXPAD_PANE_KEY" --arg c "$id" --arg ts "$ts" \
+      '{pane: $pane, key: $key, channel: $c, ts: $ts}')" >/dev/null
+  echo "deleted your message ${ts} in ${id}"
+}
+
+cmd_slack_channels() {
+  slack_require_pane
+  slack_call GET "/api/slack/channels?pane=$MUXPAD_PANE_ID&key=$MUXPAD_PANE_KEY" \
+    | jq -r '.channels[] | "\(.id)  \(if .private then "🔒" else "# " end) \(.name)"'
+}
+
+cmd_slack() {
+  case "${1:-}" in
+    read) cmd_slack_read "${@:2}" ;;
+    search) cmd_slack_search "${@:2}" ;;
+    post) cmd_slack_post "${@:2}" ;;
+    unpost) cmd_slack_unpost "${@:2}" ;;
+    channels) cmd_slack_channels ;;
+    *)
+      cat >&2 <<'EOF'
+usage:
+  muxpad slack read <#channel|@user|ID> [--since=2h] [--limit=50]
+  muxpad slack search "<query>" [--limit=20]
+  muxpad slack post <#channel|@user|ID> "<text>"
+  muxpad slack unpost <channelID> <ts>
+  muxpad slack channels
+
+THE TOKEN IS NOT HERE. The muxpad server holds it; this command asks the
+server to act and never sees a credential. Set it in the UI: the workspace
+row's settings button → Slack. There is nothing to put in a dotfile and
+nothing for this script to read.
+
+EVERY MESSAGE GOES OUT AS YOU, in your own conversation and your own audit
+log — there is no bot identity, because a bot DM lands in the recipient's
+separate conversation with "muxpad", which you cannot see. Each one is
+prefixed 🤖 by the server so the reader knows a machine composed it.
+
+AND THE WHOLE SURFACE IS GATED BY WORKSPACE — read, search and post alike. A
+workspace with Slack switched off cannot touch Slack at all. Which workspace
+you are in is resolved from your PROCESS ANCESTRY by the server, so neither
+`cd` nor MUXPAD_PANE_ID nor MUXPAD_WORKSPACE_ID can talk it round.
+
+'post' prints the conversation id and the ts; the ts is the only way to
+delete the message afterwards.
+EOF
+      exit 1 ;;
+  esac
+}
+
+# ─── say ───────────────────────────────────────────────────────────────────
+#
+# ADDRESS THE PERSON. Everything an agent does inside a scheduled fire is
+# machinery and renders as a collapsed run — the injected prompt, the tool
+# calls, and whatever prose the model produced on its way to being done. This
+# is how a fire says the one thing that was worth saying.
+#
+# It works by PRINTING A MARKER. The text goes to stdout wrapped in
+# <muxpad-said>…</muxpad-said>, lands in the tool result for whatever shell
+# call produced it, and the transcript normalizer lifts it out as a real
+# message with `voice: 'reply'` — the same voice Chat mode's `reply` tool
+# produces, and already exempt from every fold in the product.
+#
+# No API call, no state. That is deliberate: the alternative was a server-side
+# store the client fetches and interleaves, like browser moments, which means
+# a table, a route, and placement logic that has already caused three separate
+# bugs about things piling at the wrong edge of a partially-loaded log. A
+# marker in the transcript is at the right position with the right timestamp
+# by construction.
+cmd_say() {
+  local text="${1:-}"
+  if [ -z "$text" ]; then
+    cat >&2 <<'EOF'
+usage: muxpad say "<text>"
+
+Renders <text> as a message in this chat. Inside a cron fire that is the ONLY
+thing that renders — everything else the fire does is folded away — so say the
+thing the person needs and nothing else.
+
+Reads stdin with `-`:  some-command | muxpad say -
+EOF
+    exit 1
+  fi
+  [ "$text" = "-" ] && text="$(cat)"
+  # ── THE KEY IS WHY THIS IS NOT JUST A printf ─────────────────────────────
+  # Without one, any output CONTAINING the marker became a message: `cat` a
+  # file that mentions it, run the tests, fetch a page — or `grep -rn
+  # muxpad-said .` while working on this feature, which prints it several
+  # times and would have said every one of them out loud.
+  #
+  # It is not a secret. An agent is allowed to speak and anything running as
+  # this user can read the key file. It is what makes text that MENTIONS the
+  # marker distinguishable from an invocation of it.
+  require_api_url
+  require_jq
+  local key
+  key="$(http_request GET /api/say/key | jq -r '.key // empty')"
+  [ -n "$key" ] || { echo 'muxpad: say: the server did not issue a key' >&2; exit 1; }
+  # The closing tag carries the key too, so a message that quotes the marker
+  # cannot truncate itself.
+  printf '<muxpad-said k="%s">%s</muxpad-said:%s>\n' "$key" "$text" "$key"
+}
+
+# ─── card ──────────────────────────────────────────────────────────────────
+#
+# Named persistent blocks pinned at the top of a chat. The chat defaults to the
+# one you are in (MUXPAD_TAB_ID, which ptyd puts in every pane's environment),
+# so a writer inside a conversation names no id at all.
+
+card_tab() {
+  local tab="${FLAG_tab:-${MUXPAD_TAB_ID:-}}"
+  if [ -z "$tab" ]; then
+    echo "muxpad: --tab=<id> required (no MUXPAD_TAB_ID in env)" >&2
+    exit 1
+  fi
+  printf '%s' "$tab"
+}
+
+# Duration → ms. Accepts 30s / 15m / 6h / 1d, or a bare number of seconds.
+card_every_ms() {
+  local v="$1" n unit
+  n="${v%[smhd]}"
+  unit="${v#"$n"}"
+  case "$n" in ''|*[!0-9]*) echo "muxpad: --every must look like 30s, 15m, 6h or 1d" >&2; exit 1 ;; esac
+  case "$unit" in
+    s|'') echo $(( n * 1000 )) ;;
+    m)    echo $(( n * 60000 )) ;;
+    h)    echo $(( n * 3600000 )) ;;
+    d)    echo $(( n * 86400000 )) ;;
+    *)    echo "muxpad: --every must look like 30s, 15m, 6h or 1d" >&2; exit 1 ;;
+  esac
+}
+
+cmd_card_set() {
+  reset_flags tab format every
+  parse_flags tab format every -- "$@"
+  require_jq
+  local name="${POSITIONAL[0]:-}"
+  if [ -z "$name" ]; then
+    echo "usage: muxpad card set <name> \"<content>\"   (or pipe the content in)" >&2
+    exit 1
+  fi
+  local content
+  if [ "${#POSITIONAL[@]}" -ge 2 ]; then
+    content="${POSITIONAL[1]}"
+  elif [ ! -t 0 ]; then
+    # Piped/redirected: the only sane way to pass a block of html.
+    content="$(cat)"
+  else
+    echo "muxpad: no content (pass it as an argument or pipe it in)" >&2
+    exit 1
+  fi
+  local body
+  body="$(jq -n --arg c "$content" '{content:$c}')"
+  if [ -n "${FLAG_format:-}" ]; then
+    case "$FLAG_format" in
+      text|markdown|md|html) : ;;
+      *) echo "muxpad: --format must be text, markdown or html" >&2; exit 1 ;;
+    esac
+    local fmt="$FLAG_format"
+    [ "$fmt" = "md" ] && fmt="markdown"
+    body="$(printf '%s' "$body" | jq --arg f "$fmt" '. + {format:$f}')"
+  fi
+  if [ -n "${FLAG_every:-}" ]; then
+    if [ "$FLAG_every" = "none" ]; then
+      body="$(printf '%s' "$body" | jq '. + {every_ms:null}')"
+    else
+      body="$(printf '%s' "$body" | jq --argjson e "$(card_every_ms "$FLAG_every")" '. + {every_ms:$e}')"
+    fi
+  fi
+  http_request PUT "/api/tabs/$(card_tab)/cards/$name" "$body" >/dev/null
+  printf '%s✓%s card %s\n' "$C_GREEN" "$C_RESET" "$name"
+}
+
+cmd_card_get() {
+  reset_flags tab
+  parse_flags tab -- "$@"
+  require_jq
+  local name="${POSITIONAL[0]:-}"
+  [ -z "$name" ] && { echo "usage: muxpad card get <name>" >&2; exit 1; }
+  # The CONTENT, bare — this is the read half of read-modify-write, so it must
+  # pipe into an editor without a wrapper to strip.
+  http_request GET "/api/tabs/$(card_tab)/cards/$name" | jq -r '.content'
+}
+
+cmd_card_list() {
+  reset_flags tab
+  parse_flags tab -- "$@"
+  require_jq
+  http_request GET "/api/tabs/$(card_tab)/cards" \
+    | jq -r '.cards[] | [.name, .format, (.content | gsub("\\s+";" ") | .[0:60])] | @tsv' \
+    | awk -F'\t' 'BEGIN{printf "%-16s %-9s %s\n","NAME","FORMAT","CONTENT"} {printf "%-16s %-9s %s\n",$1,$2,$3}'
+}
+
+cmd_card_clear() {
+  reset_flags tab
+  parse_flags tab -- "$@"
+  local name="${POSITIONAL[0]:-}"
+  [ -z "$name" ] && { echo "usage: muxpad card clear <name>" >&2; exit 1; }
+  http_request DELETE "/api/tabs/$(card_tab)/cards/$name" >/dev/null
+  printf '%s✓%s cleared %s\n' "$C_GREEN" "$C_RESET" "$name"
+}
+
+cmd_card() {
+  case "${1:-}" in
+    set)   cmd_card_set "${@:2}" ;;
+    get)   cmd_card_get "${@:2}" ;;
+    list)  cmd_card_list "${@:2}" ;;
+    clear) cmd_card_clear "${@:2}" ;;
+    *)
+      cat >&2 <<'EOF'
+usage:
+  muxpad card set <name> "<content>" [--format=text|markdown|html] [--every=1d]
+  muxpad card set <name> --format=html < page.html
+  muxpad card get <name>              # the content, bare — for read-modify-write
+  muxpad card list
+  muxpad card clear <name>
+
+A card is a named block pinned at the top of this chat. Setting the same name
+again REPLACES it — that is the point: a card is the current value, where the
+transcript is the history.
+
+--every says how often you intend to rewrite it (30s/15m/6h/1d, or `none`).
+muxpad marks the card overdue if you stop, which is the failure nobody notices.
+
+The chat defaults to the one you are in; pass --tab=<id> for another.
+EOF
+      exit 1 ;;
+  esac
+}
+
 # ─── workspace ─────────────────────────────────────────────────────────────
 
 cmd_workspace_new() {
@@ -780,10 +1184,60 @@ cmd_workspace_delete() {
   fi
 }
 
+cmd_workspace_instructions() {
+  reset_flags
+  parse_flags -- "$@"
+  local id="${POSITIONAL[0]:-}"
+  if [ -z "$id" ]; then
+    echo 'usage: muxpad workspace instructions <id> [text|-]' >&2
+    echo '       with no text, prints the current instructions' >&2
+    exit 1
+  fi
+  require_jq
+  if [ "${#POSITIONAL[@]}" -lt 2 ]; then
+    http_request GET "/api/workspaces/$id" | jq -r '.instructions // ""'
+    return
+  fi
+  local text="${POSITIONAL[1]}"
+  # `-` reads stdin, because these are paragraphs and a shell argument is a bad
+  # place to keep paragraphs.
+  [ "$text" = "-" ] && text="$(cat)"
+  http_request PATCH "/api/workspaces/$id" "{\"instructions\":$(json_string "$text")}" >/dev/null
+  if [ "$JSON_OUTPUT" = "1" ]; then
+    printf '{"updated":"%s"}\n' "$id"
+  else
+    printf '%s✓%s workspace instructions updated — new agent panes pick them up at launch\n' "$C_GREEN" "$C_RESET"
+  fi
+}
+
+# READ-ONLY ON PURPOSE. Instructions are text an agent may usefully maintain;
+# capabilities are what an agent is ALLOWED to do, and a tool that can grant
+# itself a capability is a guard in name only. The server refuses a capability
+# PATCH that carries no browser Origin, so this is not the only line of defence
+# — it is the honest message in front of it.
+cmd_workspace_caps() {
+  reset_flags
+  parse_flags -- "$@"
+  local id="${POSITIONAL[0]:-}"
+  if [ -z "$id" ]; then
+    echo 'usage: muxpad workspace caps <id>' >&2
+    exit 1
+  fi
+  require_jq
+  local ws; ws="$(http_request GET "/api/workspaces/$id")"
+  if [ "$JSON_OUTPUT" = "1" ]; then
+    printf '%s' "$ws" | jq '{slack: (.slack // false)}'
+    return
+  fi
+  local on; on="$(printf '%s' "$ws" | jq -r '.slack // false')"
+  printf 'slack   %s\n' "$([ "$on" = "true" ] && echo on || echo off)"
+  printf '\n%scapabilities are changed in the UI only%s (workspace ⋯ → Settings → Capabilities).\n' "$C_DIM" "$C_RESET"
+}
+
 cmd_workspace() {
   local verb="${1:-}"
   if [ -z "$verb" ]; then
-    echo "usage: muxpad workspace {new|list|delete}" >&2
+    echo "usage: muxpad workspace {new|list|delete|instructions|caps}" >&2
     exit 1
   fi
   shift
@@ -791,9 +1245,11 @@ cmd_workspace() {
     new) cmd_workspace_new "$@" ;;
     list) cmd_workspace_list "$@" ;;
     delete) cmd_workspace_delete "$@" ;;
+    instructions) cmd_workspace_instructions "$@" ;;
+    caps|capabilities) cmd_workspace_caps "$@" ;;
     *)
       echo "muxpad: unknown workspace verb '$verb'" >&2
-      echo "usage: muxpad workspace {new|list|delete}" >&2
+      echo "usage: muxpad workspace {new|list|delete|instructions|caps}" >&2
       exit 1
       ;;
   esac
@@ -1973,10 +2429,18 @@ printable_base() {
 # of seconds to boot inside the fresh pane, so the send polls until accepted.
 cmd_agent_new() {
   reset_flags workspace cwd name model mode backend
-  parse_flags workspace cwd name model mode backend -- "$@"
+  # `--detached` is BARE — parse_flags only knows --k=v and --k v, and would
+  # reject a valueless flag — so strip it here, the same way the mode flags are
+  # pre-stripped further down.
+  FLAG_detached=''
+  local _argv=() _a
+  for _a in "$@"; do
+    if [ "$_a" = "--detached" ]; then FLAG_detached=1; else _argv+=("$_a"); fi
+  done
+  parse_flags workspace cwd name model mode backend -- ${_argv+"${_argv[@]}"}
   local message="${POSITIONAL[0]:-}"
   if [ -z "$message" ]; then
-    echo 'usage: muxpad agent new [--workspace=<id>] [--cwd=<dir>] [--name=<tab name>] [--model=<model>] [--mode=chat|agent] [--backend=claude|codex|cursor|pick] "first message"' >&2
+    echo 'usage: muxpad agent new [--workspace=<id>] [--cwd=<dir>] [--name=<tab name>] [--model=<model>] [--mode=chat|agent] [--backend=claude|codex|cursor|pick] [--detached] "first message"' >&2
     exit 1
   fi
   # Agent mode (see agent-modes.ts): 'chat' overlays muxpad's terse, decisive
@@ -2074,7 +2538,16 @@ cmd_agent_new() {
   # share its parent's decay clock, so a worker cannot outlive the chat it was
   # spawned to serve. The server resolves pane→tab and silently drops the link
   # if that tab is gone, so a spawn never fails over provenance.
-  [ -n "${MUXPAD_PANE_ID:-}" ] && body+=",\"spawned_by_pane\":$(json_string "$MUXPAD_PANE_ID")"
+  # …UNLESS --detached. A launcher sometimes wants a peer rather than a worker:
+  # a full agent that outlives the chat that started it, with its own clock and
+  # its own place in the sidebar. Without this the only way out was an UPDATE
+  # against the live database, because PATCH does not take the field either.
+  # `spawned_by: null` is explicit — the server tells it apart from absent.
+  if [ -n "${FLAG_detached:-}" ]; then
+    body+=',"spawned_by":null'
+  else
+    [ -n "${MUXPAD_PANE_ID:-}" ] && body+=",\"spawned_by_pane\":$(json_string "$MUXPAD_PANE_ID")"
+  fi
   body+='}'
   local tab_json tab_id tab_slug
   tab_json="$(http_request POST /api/tabs "$body")"
@@ -2524,12 +2997,14 @@ cmd_cron_new() {
   # Pre-strip the flags parse_flags can't take: BARE mode flags (it would eat
   # the next argument as their value) and hyphenated names (it evals
   # FLAG_<name>=, and `FLAG_on-context` is not a legal shell variable).
-  local a rest=() target='' pane_ref='' close_flag='' on_context='' max_open=''
+  local a rest=() target='' pane_ref='' close_flag='' on_context='' max_open='' legacy_voice_flag='' card_name=''
   for a in "$@"; do
     case "$a" in
       --pane) target=pane ;;
       --pane=*) target=pane; pane_ref="${a#--pane=}" ;;
       --new-tab) target=new-tab ;;
+      --silent|--fold|--speak) legacy_voice_flag=1 ;;
+      --card=*) card_name="${1#*=}" ;;
       --no-close) close_flag=false ;;
       --close) close_flag=true ;;
       --on-context=*) on_context="${a#--on-context=}" ;;
@@ -2603,6 +3078,23 @@ USAGE
     case "$max_open" in (*[!0-9]*|'') echo "muxpad: --max-open must be a whole number" >&2; exit 1 ;; esac
     body+=",\"max_open\":$max_open"
   fi
+  # ── A SCHEDULE'S TURN IS MACHINERY, FULL STOP ───────────────────────────
+  # There is no flag for this any more. A fire's injected prompt, its tool
+  # calls and its prose are all folded into the collapsed run; the one thing
+  # that surfaces is what the agent deliberately said with `muxpad say`.
+  #
+  # Two flags came before and both were wrong the same way: they asked the
+  # SCHEDULE a question only the FIRE can answer. `net-watch` is "silent unless
+  # a trigger fires" — declared quiet it hides the one message that matters,
+  # declared speaking it prints "net: no" every weekday.
+  #
+  # --silent / --fold / --speak are accepted and ignored, because crons and
+  # scripts already pass them.
+  : "${legacy_voice_flag:-}"
+  # --card declares WHERE THE OUTPUT GOES, which is a different fact from where
+  # the job runs. A fire that updated its card and said nothing renders nothing
+  # in the conversation; the card's freshness rail is the liveness signal.
+  [ -n "$card_name" ] && body+=",\"card\":\"$card_name\""
   [ -n "$close_flag" ] && body+=",\"close_when_done\":$close_flag"
   body+='}'
   local res
@@ -3647,6 +4139,26 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                      value = THIS pane. --new-tab spawns a
                                      fresh agent tab per fire (clean context)
                                      and closes it when the run finishes.
+  cron new … --card=<name>           THIS JOB'S OUTPUT IS THAT CARD. A fire that
+                                     updates it and says nothing renders NOTHING
+                                     in the chat — no chip, no fold. The card's
+                                     own freshness rail is the "did it run"
+                                     signal, and anything the agent actually
+                                     says (an error, a refusal) breaks the
+                                     silence and brings the row back.
+                                     This is the flag you want for a card
+                                     refresher.
+  say "<text>"                       SAY SOMETHING TO THE PERSON. Everything a
+                                     scheduled fire does is machinery — its
+                                     prompt, its tool calls, its prose all
+                                     fold into the collapsed run. This is the
+                                     exception, and the only one: what you
+                                     pass here renders as a message in the
+                                     chat. Use it when THIS run has something
+                                     the person needs; stay quiet otherwise.
+                                     (In Chat mode the `reply` tool does the
+                                     same thing. Agent mode has no muxpad
+                                     tools, so it has this instead.)
   cron list                          name, schedule, target, next due, last run,
                                      last status, failure streak
   cron show <id|name>                one schedule in full + its run history
@@ -3654,6 +4166,16 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
   cron pause|resume <id|name>        stop/start firing (resume re-anchors, so a
                                      long pause doesn't replay)
   cron rm <id|name>                  delete it
+  card set <name> "<content>"        pin a named block at the top of this chat
+          [--format=text|markdown|html] [--every=1d] [--tab=<id>]
+                                     Setting the same name again REPLACES it —
+                                     a card is the current value, where the
+                                     transcript is the history. --every says how
+                                     often you mean to rewrite it, so muxpad can
+                                     mark it overdue when you stop.
+  card get <name>                    the content, bare (read-modify-write)
+  card list                          every card in this chat
+  card clear <name>                  remove one
   app add --url=<url> [--name=<n>] [--slug=<s>] [--cwd=<dir>]
           [--no-start] [--no-autostart] -- <command...>
                                      register a local web server muxpad keeps
@@ -3796,6 +4318,7 @@ case "$VERB" in
   restart) cmd_restart "${ARGS[@]:1}" ;;
   status) cmd_status ;;
   logs) cmd_logs "${ARGS[@]:1}" ;;
+  say) cmd_say "${ARGS[@]:1}" ;;
   workspace) cmd_workspace "${ARGS[@]:1}" ;;
   tab) cmd_tab "${ARGS[@]:1}" ;;
   pane) cmd_pane "${ARGS[@]:1}" ;;
@@ -3809,6 +4332,8 @@ case "$VERB" in
   agent) cmd_agent "${ARGS[@]:1}" ;;
   cron) cmd_cron "${ARGS[@]:1}" ;;
   search) cmd_search "${ARGS[@]:1}" ;;
+  slack) cmd_slack "${ARGS[@]:1}" ;;
+  card) cmd_card "${ARGS[@]:1}" ;;
   publish) cmd_publish "${ARGS[@]:1}" ;;
   _agent-hook) cmd_agent_hook ;;
   # Internal: print which tailscale binary this script would use, or nothing.

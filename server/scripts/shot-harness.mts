@@ -14,17 +14,17 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import type { Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { serve, type ServerType } from '@hono/node-server';
+import { type ServerType, serve } from '@hono/node-server';
 import type { Tab } from '@muxpad/shared';
 import { WebSocket } from 'ws';
-import { recordModelCatalog } from '../src/agent-model-catalog.js';
 import { createAgentBridge } from '../src/agent-bridge.js';
+import { recordModelCatalog } from '../src/agent-model-catalog.js';
 import { EventBus } from '../src/events.js';
 import { PtydCache } from '../src/ptyd-cache.js';
 import { createApp } from '../src/server.js';
 import { mountStaticWeb } from '../src/static-assets.js';
-import { openDb } from '../src/store/db.js';
 import { WorkspaceStore } from '../src/store/WorkspaceStore.js';
+import { openDb } from '../src/store/db.js';
 import { spawnPtyd } from '../src/test-helpers/spawnPtyd.js';
 import { attachWsServer } from '../src/ws.js';
 
@@ -55,7 +55,7 @@ const wsServer = attachWsServer({
 });
 
 const base = `http://127.0.0.1:${port}`;
-const api = async <T>(path: string, init?: RequestInit): Promise<T> => {
+const api = async <T,>(path: string, init?: RequestInit): Promise<T> => {
   const res = await fetch(`${base}${path}`, {
     ...init,
     headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) },
@@ -104,7 +104,13 @@ await new Promise<void>((res, rej) => {
   runner.once('error', rej);
 });
 const say = (o: unknown) => runner.send(JSON.stringify(o));
-say({ t: 'hello', sid: '11111111-2222-3333-4444-555555555555', cwd: repo, pid: 1, turnActive: false });
+say({
+  t: 'hello',
+  sid: '11111111-2222-3333-4444-555555555555',
+  cwd: repo,
+  pid: 1,
+  turnActive: false,
+});
 say({
   t: 'status',
   model: 'opus',
@@ -141,7 +147,9 @@ setInterval(() => {
   });
 }, 250);
 
-process.stdout.write(`${JSON.stringify({ port, wsId, tabId: tab.id, tabSlug: tab.slug, paneId, tmp })}\n`);
+process.stdout.write(
+  `${JSON.stringify({ port, wsId, tabId: tab.id, tabSlug: tab.slug, paneId, tmp })}\n`,
+);
 
 const shutdown = async () => {
   try {

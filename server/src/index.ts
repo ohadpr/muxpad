@@ -1,5 +1,5 @@
 import { mkdirSync } from 'node:fs';
-import { rm } from 'node:fs/promises';
+import { readdir, rm } from 'node:fs/promises';
 import type { Server } from 'node:http';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,11 +8,18 @@ import { createAgentBridge } from './agent-bridge.js';
 import { ensureAgentNotes, migrateAgentFileEdits } from './agent-files.js';
 import { INSTRUCTIONS_MIGRATION, seedAgentInstructions } from './agent-instructions.js';
 import { CHAT_MODE_MIGRATION, retireLegacyChatModeFile, seedChatMode } from './agent-modes.js';
+import {
+  AppHealTracker,
+  HEAL_MAX_ATTEMPTS,
+  HEAL_MIN_STRIKES,
+  shouldHealApp,
+} from './apps/AppHeal.js';
 import { createAppRegistry, startAppReconciler } from './apps/AppRegistry.js';
 import { createAppStatusProbe } from './apps/AppStatus.js';
 import { adoptServePanes } from './apps/adopt-serve-panes.js';
 import { ArchiveDb } from './archive/ArchiveDb.js';
 import { Archiver } from './archive/Archiver.js';
+import { startAttachmentReaper } from './attachment-reaper.js';
 import { ensureBrowserApp, listBrowserApps } from './browser/BrowserApps.js';
 import { BrowserEvents } from './browser/BrowserEvents.js';
 import { BrowserOwner } from './browser/BrowserOwner.js';
@@ -22,7 +29,11 @@ import { parseBrowserProxyPath } from './browser/BrowserProxy.js';
 import { clearBrowserShots } from './browser/BrowserShots.js';
 import { BrowserWheel } from './browser/BrowserWheel.js';
 import { shouldStopIdleBrowser } from './browser/IdleStop.js';
-import { isDisposableSessionProfile, sessionBrowsersToReap } from './browser/SessionReaper.js';
+import {
+  isDisposableSessionProfile,
+  sessionBrowsersToReap,
+  strandedProfilesToRemove,
+} from './browser/SessionReaper.js';
 import { findChrome } from './browser/findChrome.js';
 import { browserHostEntry } from './browser/hostEntry.js';
 import { HeadlineWriter } from './chat/HeadlineWriter.js';
@@ -31,6 +42,7 @@ import { projectsDir } from './chat/TranscriptReader.js';
 import { paneAwaitsUser } from './chat/awaiting.js';
 import { glossaryCache } from './chat/glossary.js';
 import { sweepImplausibleHeadlines } from './chat/headline.js';
+import { ReportDelivery } from './chat/report-delivery.js';
 import { paneCarryover } from './chat/summarize.js';
 import { loadConfig, voiceApiKey } from './config.js';
 import { CronScheduler } from './cron/CronScheduler.js';
@@ -168,7 +180,22 @@ tabActivity.attach(ptyd);
 // whole of "i don't see the summary of the work of this card anywhere". It reads
 // the child's own transcript rather than asking the child for a summary, which
 // is what makes it survive a crash (chat/spawn-report.ts).
-const spawnReports = new SpawnReportWriter({ db, events, cache, dataDir: config.dataDir });
+// THE JOIN — a finished child's report, into the parent's conversation. Built
+// before the writer because the writer hands it the one signal it needs, and it
+// reaches `agentBridge` (declared below) through a lazy closure exactly as
+// `retireDeps` and the cron scheduler do: nothing calls it until the ws layer
+// is attached, so the reference is resolved long before it is read.
+const reportDelivery = new ReportDelivery({
+  db,
+  submitSend: (paneId, text) => agentBridge.submitSend(paneId, text),
+});
+const spawnReports = new SpawnReportWriter({
+  db,
+  events,
+  cache,
+  dataDir: config.dataDir,
+  onReport: reportDelivery.onReport,
+});
 const retireDeps = {
   db,
   cache,
@@ -561,6 +588,9 @@ const wsServer = attachWsServer({
 // Straggler prevention: retry pane kills that failed in transit, and (once
 // ptyd supports listPanes) kill any live pty whose DB row is gone.
 startPaneReaper({ db, ptyd, paneExists: (id) => paneStore.getById(id) !== null });
+// …and the same job for attachment FILES, whose rows are removed by a cascade
+// the application never sees. See attachment-reaper.ts.
+startAttachmentReaper({ db, dataDir: config.dataDir });
 
 // Supervision for `muxpad serve` panes. ws.ts's sweep only knows about agent
 // panes, so before this an app server whose pty vanished (ptyd restart, reboot)
@@ -701,28 +731,105 @@ const reapSessionBrowsers = async () => {
     // the catch below and reaps nothing, which is the safe direction.
     const apps = new AppStore(db);
     for (const profile of sessionBrowsersToReap(listBrowserApps(db), live)) {
-      const row = apps.getBySlug(browserAppSlug(profile));
-      if (!row) continue;
-      if (row.enabled) await appRegistry.stop(row.id);
-      // AND THEN REMOVE IT. Stopping alone left the row behind disabled, and the
-      // condition above used to skip disabled rows — so nothing ever looked at
-      // them again. `muxpad app list` grew one permanent row per agent session
-      // ever opened, ninety-nine of them, each still holding a port out of a
-      // hundred-port space and a profile directory on disk.
-      //
-      // A tab id is never reissued, so this session cannot come back and wants
-      // none of it. The name is checked before anything is deleted, because the
-      // adjacent directory holds every login on the machine.
-      if (!isDisposableSessionProfile(profile)) continue;
-      apps.delete(row.id);
-      new BrowserEvents(db).clear(profile);
-      new BrowserOwner(db).clear(profile);
-      clearBrowserShots(config.dataDir, profile);
-      await rm(browserProfileDir(config.dataDir, profile), { recursive: true, force: true });
-      console.log(`[browser] reaped '${profile}' — its tab is gone`);
+      // PER PROFILE, and this is a fix rather than a style. The try used to wrap
+      // the whole loop, so the first profile that failed to delete aborted every
+      // profile after it in that pass — and the thing that fails is a transient
+      // race, so it fired often: 24 times in this log.
+      try {
+        await reapOne(apps, profile);
+      } catch (err) {
+        console.error(`[browser] reap of '${profile}' failed — will retry`, err);
+      }
     }
   } catch (err) {
     console.error('[browser] reap failed', err);
+  }
+};
+
+/** One profile, so a failure is contained to it. Throws; the caller logs. */
+const reapOne = async (apps: AppStore, profile: string): Promise<void> => {
+  {
+    const row = apps.getBySlug(browserAppSlug(profile));
+    if (!row) return;
+    if (row.enabled) await appRegistry.stop(row.id);
+    // AND THEN REMOVE IT. Stopping alone left the row behind disabled, and the
+    // condition above used to skip disabled rows — so nothing ever looked at
+    // them again. `muxpad app list` grew one permanent row per agent session
+    // ever opened, ninety-nine of them, each still holding a port out of a
+    // hundred-port space and a profile directory on disk.
+    //
+    // A tab id is never reissued, so this session cannot come back and wants
+    // none of it. The name is checked before anything is deleted, because the
+    // adjacent directory holds every login on the machine.
+    if (!isDisposableSessionProfile(profile)) return;
+    // THE DIRECTORY FIRST, THE ROW SECOND, and the order is the whole bug.
+    // It was the other way round: the row was deleted and then the rm threw
+    // ENOTEMPTY, which left a directory with no row — and the sweep is driven
+    // BY the rows, so nothing would ever look at it again. Measured before
+    // this change: 48 profile directories against 28 rows, 42 of them
+    // unreachable, 147 MB. Deleting the row last makes a failure a RETRY: the
+    // row survives, the next sweep tries again, and the directory cannot be
+    // stranded.
+    //
+    // maxRetries because the failure is a race, not a corruption: Chrome is
+    // still writing into the profile it is being evicted from, so files
+    // reappear between readdir and rmdir. Node's rm retries exactly this.
+    await rm(browserProfileDir(config.dataDir, profile), {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 200,
+    });
+    apps.delete(row.id);
+    new BrowserEvents(db).clear(profile);
+    new BrowserOwner(db).clear(profile);
+    clearBrowserShots(config.dataDir, profile);
+    console.log(`[browser] reaped '${profile}' — its tab is gone`);
+  }
+};
+
+/**
+ * …AND THE ONES ALREADY STRANDED, which no row names.
+ *
+ * The sweep above walks APP ROWS, so a directory whose row is gone is invisible
+ * to it forever. The bug that made them is fixed (the row is deleted last now),
+ * but the ones it already made are still on disk: 42 of 48 directories, 147 MB,
+ * with nothing left pointing at them.
+ *
+ * Driven by the DIRECTORY listing rather than the rows, which is the only way
+ * to see them — the same reason the attachment reaper walks its directory.
+ * Every name goes through `isDisposableSessionProfile`, which is what stands
+ * between this and `browser-profiles/default`: the directory holding every
+ * login on the machine.
+ */
+const reapStrandedProfiles = async (): Promise<void> => {
+  try {
+    const root = join(config.dataDir, 'browser-profiles');
+    let names: string[];
+    try {
+      names = await readdir(root);
+    } catch {
+      return; // no browsers have ever run here
+    }
+    const known = new Set(listBrowserApps(db).map((a) => a.profile));
+    let freed = 0;
+    // The decision is pure and tested (SessionReaper); only the rm is here.
+    for (const name of strandedProfilesToRemove(names, known)) {
+      try {
+        await rm(join(root, name), {
+          recursive: true,
+          force: true,
+          maxRetries: 5,
+          retryDelay: 200,
+        });
+        freed++;
+      } catch (err) {
+        console.error(`[browser] stranded profile '${name}' not removed`, err);
+      }
+    }
+    if (freed) console.log(`[browser] removed ${freed} stranded profile(s)`);
+  } catch (err) {
+    console.error('[browser] stranded sweep failed', err);
   }
 };
 // ─── AND STOP THE ONES NOBODY IS USING ──────────────────────────────────────
@@ -786,10 +893,80 @@ const stopIdleBrowsers = async () => {
     console.error('[browser] idle stop failed', err);
   }
 };
+// ─── AN APP THAT WENT UNREACHABLE SHOULD COME BACK ──────────────────────────
+// `reconcile` heals exactly one failure — the pane ROW is gone — and runs only
+// at boot and on a ptyd reconnect. An app whose row is alive while the process
+// behind it is dead reads `unreachable` and nothing ever looks again, so it
+// stays that way. Measured before this: 8 apps unreachable at once, three of
+// them for days, and a request to a dead browser host hanging for 30s.
+//
+// Timid on purpose — the decision, the strike count and the attempt budget all
+// live in apps/AppHeal.ts with the reasoning. The sweep below is plumbing: it
+// observes, asks, restarts, and says so.
+const appHeal = new AppHealTracker();
+const healUnreachableApps = async () => {
+  try {
+    const apps = new AppStore(db).list();
+    const live = new Set(apps.map((a) => a.id));
+    // Drop records for apps that no longer exist, so the map cannot grow with
+    // every app ever deleted.
+    for (const id of appHeal.known()) if (!live.has(id)) appHeal.forget(id);
+    const statuses = await appStatus.statusMany(apps);
+    for (const app of statuses) {
+      const rec = appHeal.noteState(app.id, app.state);
+      if (
+        !shouldHealApp({
+          state: app.state,
+          strikes: rec.strikes,
+          attempts: rec.attempts,
+          minStrikes: HEAL_MIN_STRIKES,
+          maxAttempts: HEAL_MAX_ATTEMPTS,
+        })
+      ) {
+        // Out of attempts and still down: say so ONCE, then leave it to a human.
+        if (
+          app.state === 'unreachable' &&
+          rec.attempts >= HEAL_MAX_ATTEMPTS &&
+          appHeal.announceGiveUp(app.id)
+        ) {
+          console.warn(
+            `[apps] ${app.slug}: still unreachable after ${HEAL_MAX_ATTEMPTS} restarts — leaving it alone`,
+          );
+        }
+        continue;
+      }
+      appHeal.noteAttempt(app.id);
+      console.log(
+        `[apps] ${app.slug}: unreachable for ${rec.strikes} checks — restarting (attempt ${rec.attempts + 1}/${HEAL_MAX_ATTEMPTS})`,
+      );
+      try {
+        // stop() disables and tears the pane down; start() re-enables and
+        // rebuilds it. The pair, rather than materialize(), because the pane
+        // row still EXISTS here — that is the whole condition — and
+        // materialize is a no-op when it does.
+        await appRegistry.stop(app.id);
+        await appRegistry.start(app.id);
+        // A stale "unreachable" cached for the next 3s would make the Hosted
+        // view show a failure for an app that is already coming back.
+        appStatus.invalidate(app.id);
+      } catch (err) {
+        console.error(`[apps] ${app.slug}: restart failed`, err);
+      }
+    }
+  } catch (err) {
+    console.error('[apps] heal sweep failed', err);
+  }
+};
+setInterval(() => void healUnreachableApps(), REAP_EVERY_MS).unref();
+
 setInterval(() => void stopIdleBrowsers(), REAP_EVERY_MS).unref();
 
 setInterval(() => void reapSessionBrowsers(), REAP_EVERY_MS).unref();
 void reapSessionBrowsers();
+// Same timer, after the row-driven pass: anything it orphaned this round is
+// caught on the next one rather than waiting for a restart.
+setInterval(() => void reapStrandedProfiles(), REAP_EVERY_MS).unref();
+void reapStrandedProfiles();
 
 // Durable schedules. The tick starts only now, with the ws layer attached and
 // the runner registry live behind the bridge; its own 15s startup grace then
@@ -811,6 +988,15 @@ spawnReports.start();
 // in-process retry hangs off a turn ending, and none of their turns will ever
 // end again. Bounded to the most recent few — see `recoverStuck`.
 spawnReports.recoverStuck();
+
+// THE JOIN's drain. The interval is the liveness guarantee — a batch held
+// behind a worker whose runner died is only reachable from here, since the
+// nudge that would have flushed it will never fire again (see
+// BATCH_MAX_HOLD_MS). The immediate sweep catches a batch that was pending when
+// this process's predecessor went down: the queue is a column, not memory, so a
+// restart mid-fan-out resumes instead of dropping it.
+reportDelivery.start();
+reportDelivery.sweep();
 
 // One-time repair of headlines written before the shape check existed — the
 // generation that answered the conversation ("I'm not familiar with muxpad —

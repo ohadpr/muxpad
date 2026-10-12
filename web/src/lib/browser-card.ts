@@ -1,3 +1,4 @@
+import { canFlushTail, windowStart } from './log-window';
 /**
  * What a browser card says, and what its button does.
  *
@@ -398,9 +399,16 @@ export function injectBrowserMoments<T>(
   entries: readonly { at: number | null; node: T }[],
   moments: readonly BrowserMoment[],
   render: (moment: BrowserMoment) => T,
+  opts?: { floor?: number | null },
 ): { at: number | null; node: T }[] {
   const out: { at: number | null; node: T }[] = [];
-  let i = 0;
+  // Only what the window can hold — see lib/log-window. A browser opened before
+  // the oldest loaded message has no place in this document yet, and putting it
+  // at the top is not "further back", it is a pile at the nearest edge.
+  // Measured on a chat whose browser cards sat at indices 0, 1 and 2, above
+  // every message: "it acts real weird once I try to scroll past the cards
+  // representing browser automation."
+  let i = windowStart(moments, opts?.floor ?? null);
   for (const entry of entries) {
     if (entry.at !== null) {
       while (i < moments.length && (moments[i] as BrowserMoment).at <= entry.at) {
@@ -410,9 +418,12 @@ export function injectBrowserMoments<T>(
     }
     out.push(entry);
   }
-  for (; i < moments.length; i++) {
-    const moment = moments[i] as BrowserMoment;
-    out.push({ at: moment.at, node: render(moment) });
+  // …and nothing at the bottom until the log has a timeline to hang it on.
+  if (canFlushTail(entries)) {
+    for (; i < moments.length; i++) {
+      const moment = moments[i] as BrowserMoment;
+      out.push({ at: moment.at, node: render(moment) });
+    }
   }
   return out;
 }

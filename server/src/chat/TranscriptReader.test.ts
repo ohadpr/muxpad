@@ -275,3 +275,98 @@ describe('TranscriptReader — muxpad-owned log (codex/cursor backends)', () => 
     tail.close();
   });
 });
+
+/**
+ * THE WINDOW THAT WASN'T.
+ *
+ * `loadHistory` grows a tail window until it holds enough complete records,
+ * capped at `tailBytes * 8`. If it finds NO newline in that whole window it used
+ * to `readBytes(0, size)` — the entire transcript — which is the one outcome
+ * windowing exists to prevent.
+ *
+ * It fires whenever a transcript's last record is bigger than the cap. These
+ * files already contain such records: the conversation this was found on has six
+ * lines over 1 MB in a 130 MB file. One of them landing last would have shipped
+ * 130 MB through a websocket on every open, on every device.
+ */
+describe('a single oversized record cannot drag the whole file through the socket', () => {
+  let dir: string;
+  let file: string;
+  const BIG_SID = 'ffffffff-1111-2222-3333-444444444444';
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'tr-big-'));
+    const proj = join(dir, 'proj');
+    mkdirSync(proj);
+    file = join(proj, `${BIG_SID}.jsonl`);
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('skips history rather than reading the whole file, and tails live', () => {
+    // Real records, then one final record longer than the 8× cap, unterminated
+    // — exactly the shape that triggered it.
+    const tailBytes = 1024; // cap is 8 KB
+    const head = userLine('u1', 'early') + assistantLine('a1', 'also early');
+    writeFileSync(
+      file,
+      `${head}${JSON.stringify({ type: 'user', uuid: 'huge', message: { role: 'user', content: 'x'.repeat(20_000) } })}`,
+    );
+
+    const events: Array<{ e: ChatEvent; phase: string }> = [];
+    const tail = new TranscriptTail(BIG_SID, {
+      dir,
+      tailBytes,
+      onEvents: (es, phase) => {
+        for (const e of es) events.push({ e, phase });
+      },
+    });
+    tail.tick();
+
+    // No history at all — NOT the early records read from byte 0. Shipping them
+    // would mean having read everything in between.
+    expect(events).toEqual([]);
+  });
+
+  it('a later COMPLETE record still arrives live', () => {
+    // The pane is thin, not broken: the unreadable record is dropped and the
+    // conversation continues from the next newline.
+    const tailBytes = 1024;
+    writeFileSync(
+      file,
+      JSON.stringify({
+        type: 'user',
+        uuid: 'huge',
+        message: { role: 'user', content: 'x'.repeat(20_000) },
+      }),
+    );
+    const events: Array<{ e: ChatEvent; phase: string }> = [];
+    const tail = new TranscriptTail(BIG_SID, {
+      dir,
+      tailBytes,
+      onEvents: (es, phase) => {
+        for (const e of es) events.push({ e, phase });
+      },
+    });
+    tail.tick();
+    expect(events).toEqual([]);
+
+    appendFileSync(file, `\n${userLine('u2', 'after the monster')}`);
+    tail.tick();
+    expect(events.map((x) => x.e.kind)).toEqual(['user']);
+    expect(events.map((x) => x.phase)).toEqual(['live']);
+  });
+
+  it('a file SMALLER than the window is still read whole', () => {
+    // The guard must not catch the ordinary small-file case, which reaches the
+    // same branch by a different route (`win >= size`).
+    writeFileSync(file, userLine('u1', 'one') + assistantLine('a1', 'two'));
+    const events: ChatEvent[] = [];
+    const tail = new TranscriptTail(BIG_SID, {
+      dir,
+      tailBytes: 1024,
+      onEvents: (es) => events.push(...es),
+    });
+    tail.tick();
+    expect(events.map((e) => e.kind)).toEqual(['user', 'assistant']);
+  });
+});

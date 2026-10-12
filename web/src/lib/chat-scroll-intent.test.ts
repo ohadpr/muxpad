@@ -5,6 +5,7 @@ import {
   SEEK_PAGE_BUDGET,
   type ScrollInput,
   type ScrollState,
+  TOP_PAGE_ZONE_MIN_PX,
   alreadyThere,
   canSeek,
   intentFor,
@@ -14,6 +15,7 @@ import {
   scrollEventIsTheReader,
   shouldPageOlder,
   targetFor,
+  topPageZone,
 } from './chat-scroll-intent';
 
 /** A parked memory — the case with something to lose. */
@@ -67,8 +69,14 @@ describe('the four states', () => {
     expect(phase(drive({ t: 'shown', mem: parked() }), loaded)).toBe('ANCHORED');
   });
 
-  it('SEEKING when it names one that is not, and history remains', () => {
-    expect(phase(drive({ t: 'shown', mem: parked() }), missing)).toBe('SEEKING');
+  it('SEEKING only for a HIT that is not loaded — never for a restore', () => {
+    // A restore used to seek too, which is what made reopening a chat you had
+    // scrolled back in cost up to eight socket round trips before it settled.
+    // The two intents look alike and are not: a hit is a destination the reader
+    // just asked for by name, and paging to reach it IS the request; a restore
+    // is a convenience, and no chat app pays for one.
+    expect(phase(drive({ t: 'search-jump' }), missing)).toBe('SEEKING');
+    expect(phase(drive({ t: 'shown', mem: parked() }), missing)).toBe('IDLE');
   });
 
   it('IDLE when the message is unreachable — history exhausted', () => {
@@ -90,8 +98,8 @@ describe('the four states', () => {
 describe('the seek budget', () => {
   const missing = { rowLoaded: false, hasMoreOlder: true };
 
-  it('is bounded — a lost anchor must not drag a whole transcript over the wire', () => {
-    let s = drive({ t: 'shown', mem: parked() });
+  it('is bounded — a lost hit must not drag a whole transcript over the wire', () => {
+    let s = drive({ t: 'search-jump' });
     let sent = 0;
     while (canSeek(s, missing)) {
       sent++;
@@ -102,12 +110,12 @@ describe('the seek budget', () => {
   });
 
   it('stops the moment the row arrives', () => {
-    const s = drive({ t: 'shown', mem: parked() }, { t: 'sought' });
+    const s = drive({ t: 'search-jump' }, { t: 'sought' });
     expect(canSeek(s, { rowLoaded: true, hasMoreOlder: true })).toBe(false);
   });
 
   it('never asks when the server has said there is no more history', () => {
-    const s = drive({ t: 'shown', mem: parked() });
+    const s = drive({ t: 'search-jump' });
     expect(canSeek(s, { rowLoaded: false, hasMoreOlder: false })).toBe(false);
   });
 
@@ -116,13 +124,22 @@ describe('the seek budget', () => {
     expect(canSeek(IDLE_STATE, missing)).toBe(false);
   });
 
+  it('never asks for a RESTORE, however lost its anchor', () => {
+    // The whole point of the change: a restored pixel position costs N fetches
+    // to honour and is worth none of them. Slack, Discord, WhatsApp and
+    // Telegram all open at the bottom or at a server-known unread marker.
+    expect(canSeek(drive({ t: 'shown', mem: parked() }), missing)).toBe(false);
+  });
+
   // ── The measured bug this replaces ────────────────────────────────────────
   // The old counter was a local of the restore effect, and the effect re-ran on
   // every visibility transition — a browser-tab switch, an iOS backgrounding, a
   // screen unlock. So three tab switches spent 24 `load-older` round trips
   // (~3 MB) hunting the same unreachable message, not 8.
   it('is NOT re-spent on every visibility flip', () => {
-    let s = drive({ t: 'shown', mem: parked() });
+    // A hit survives a flip (see `shown`), so the budget must too — three tab
+    // switches once spent 24 round trips (~3 MB) hunting the same message.
+    let s = drive({ t: 'search-jump' });
     let sent = 0;
     for (let flip = 0; flip < 4; flip++) {
       while (canSeek(s, missing)) {
@@ -137,11 +154,11 @@ describe('the seek budget', () => {
   });
 
   it('…but a fresh mount is a fresh visit', () => {
-    let s = drive({ t: 'shown', mem: parked() });
+    let s = drive({ t: 'search-jump' });
     for (let i = 0; i < SEEK_PAGE_BUDGET; i++) s = next(s, { t: 'sought' });
     expect(canSeek(s, missing)).toBe(false);
     s = next(s, { t: 'mounted' });
-    s = next(s, { t: 'shown', mem: parked() });
+    s = next(s, { t: 'search-jump' });
     expect(canSeek(s, missing)).toBe(true);
   });
 
@@ -250,6 +267,8 @@ describe('scrollEventIsTheReader', () => {
         here: { id: 'evt#12', offset: -40 },
         was: here,
         placed: true,
+        documentShifted: false,
+        inputMoved: false,
       }),
     ).toBe(true);
   });
@@ -270,6 +289,8 @@ describe('scrollEventIsTheReader', () => {
         here: { id: 'evt#900', offset: -10 },
         was: here,
         placed: true,
+        documentShifted: false,
+        inputMoved: false,
       }),
     ).toBe(false);
   });
@@ -286,6 +307,8 @@ describe('scrollEventIsTheReader', () => {
         here,
         was: here, // …and the row did not move
         placed: true,
+        documentShifted: false,
+        inputMoved: false,
       }),
     ).toBe(false);
   });
@@ -305,6 +328,8 @@ describe('scrollEventIsTheReader', () => {
       here: { id: 'evt#12', offset: -40 },
       was: here,
       placed: true,
+      documentShifted: false,
+      inputMoved: false,
     });
     expect(gesture).toBe(true);
     // …and the very next burst is judged on its own merits, not on that history.
@@ -315,6 +340,8 @@ describe('scrollEventIsTheReader', () => {
         here: { id: 'evt#900', offset: -10 },
         was: { id: 'evt#12', offset: -40 },
         placed: true,
+        documentShifted: false,
+        inputMoved: false,
       }),
     ).toBe(false);
   });
@@ -332,6 +359,8 @@ describe('scrollEventIsTheReader', () => {
         here: { id: 'evt#300', offset: -8 },
         was: { id: 'evt#40', offset: -120 },
         placed: true,
+        documentShifted: false,
+        inputMoved: false,
       }),
     ).toBe(true);
   });
@@ -350,13 +379,75 @@ describe('scrollEventIsTheReader', () => {
         here: { id: 'evt#1', offset: 0 },
         was: here,
         placed: false,
+        documentShifted: false,
+        inputMoved: false,
       }),
     ).toBe(false);
   });
 
   it('does not guess when there is nothing anchorable to compare', () => {
     expect(
-      scrollEventIsTheReader({ wrote: 5000, scrollTop: 1, here: null, was: here, placed: true }),
+      scrollEventIsTheReader({
+        wrote: 5000,
+        scrollTop: 1,
+        here: null,
+        was: here,
+        placed: true,
+        documentShifted: false,
+        inputMoved: false,
+      }),
+    ).toBe(false);
+  });
+
+  /**
+   * ── THE TWO FACTS THAT MAKE THIS AGREE WITH `place()` ────────────────────
+   * Both entry points must reach the same verdict for the same frame. They did
+   * not: this predicate read "the anchor row sits somewhere new" as a gesture,
+   * and PARTIAL anchoring produces exactly that with nobody touching anything
+   * — the engine pays some of a prepend and the remainder shows up as
+   * displacement. Measured, one frame landed at 2000 delivered commit-first
+   * and 2450 delivered scroll-first.
+   */
+  it('does not blame the reader when the document moved under them', () => {
+    expect(
+      scrollEventIsTheReader({
+        wrote: 5000,
+        scrollTop: 3800,
+        here: { id: 'evt#12', offset: -40 },
+        was: here,
+        placed: true,
+        documentShifted: true,
+        inputMoved: false,
+      }),
+    ).toBe(false);
+  });
+
+  it('…unless their own input says they did, which outranks the inference', () => {
+    expect(
+      scrollEventIsTheReader({
+        wrote: 5000,
+        scrollTop: 3800,
+        here: { id: 'evt#12', offset: -40 },
+        was: here,
+        placed: true,
+        documentShifted: true,
+        inputMoved: true,
+      }),
+    ).toBe(true);
+  });
+
+  it('still refuses before anything has been placed, whatever the input says', () => {
+    // An iOS resume resets overflow scroll and fires a scroll reporting 0.
+    expect(
+      scrollEventIsTheReader({
+        wrote: null,
+        scrollTop: 0,
+        here: { id: 'evt#1', offset: 0 },
+        was: here,
+        placed: false,
+        documentShifted: false,
+        inputMoved: true,
+      }),
     ).toBe(false);
   });
 });
@@ -624,5 +715,40 @@ describe('shouldPageOlder', () => {
   it('never pages a pane it cannot measure, or one with no session yet', () => {
     expect(shouldPageOlder({ ...base, phase: 'ANCHORED', measurable: false })).toBe('no');
     expect(shouldPageOlder({ ...base, phase: 'ANCHORED', sessionBound: false })).toBe('no');
+  });
+});
+
+describe('the top zone is measured in viewports', () => {
+  it('scales with the viewport, so the fetch starts before the edge', () => {
+    // A flat 240px is a third of a laptop viewport and goes past in a frame or
+    // two of real scrolling, so the reader reaches the edge before the page
+    // arrives — and then the anchor compensation, working correctly, moves them
+    // by the whole height of the batch. Measured: asked for scrollTop 0, landed
+    // at 2,048 of a 2,805px document.
+    expect(topPageZone(757)).toBe(1136);
+    expect(topPageZone(1200)).toBe(1800);
+  });
+
+  it('never drops below the floor on a very short pane', () => {
+    // 1.5 viewports of a 100px pane is still a flick.
+    expect(topPageZone(100)).toBe(TOP_PAGE_ZONE_MIN_PX);
+    expect(topPageZone(0)).toBe(TOP_PAGE_ZONE_MIN_PX);
+  });
+
+  it('asks for a page from a screen and a half up, not at the edge', () => {
+    const geo = (scrollTop: number) => ({ scrollTop, scrollHeight: 20000, clientHeight: 800 });
+    const base = {
+      phase: 'ANCHORED' as const,
+      placed: true,
+      measurable: true,
+      hasMoreOlder: true,
+      loadingOlder: false,
+      haveEvents: true,
+      sessionBound: true,
+    };
+    // 1,000px from the top: inside 1.5 viewports, so the round trip starts now.
+    expect(shouldPageOlder({ ...base, geo: geo(1000) })).toBe('top-zone');
+    // …and under the old flat 240 it would not have.
+    expect(shouldPageOlder({ ...base, geo: geo(2000) })).toBe('no');
   });
 });
