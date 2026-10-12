@@ -2283,8 +2283,7 @@ export function attachWsServer(deps: {
               // one, with no toast, no error and no log line. Say it once, here,
               // with the sid in hand.
               console.warn(
-                `[chat] pane ${chatPaneId}: no transcript for current_sid ${bound} ` +
-                  'and no recoverable sid in its history — the chat will render empty',
+                `[chat] pane ${chatPaneId}: no transcript for current_sid ${bound} and no recoverable sid in its history — the chat will render empty`,
               );
               send({
                 t: 'notice',

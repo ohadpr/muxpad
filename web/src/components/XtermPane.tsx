@@ -1796,6 +1796,7 @@ export function XtermPane({
     >
       <div className="xterm-pane" ref={containerRef} />
       {reconnecting ? (
+        // biome-ignore lint/a11y/useSemanticElements: <output> is a form's computed result labelled by `for`; this is a live region announcing connection state, which is exactly role=status.
         <div className="xterm-reconnecting" role="status" aria-live="polite">
           <span className="xterm-reconnecting-dot" aria-hidden="true" />
           Reconnecting…

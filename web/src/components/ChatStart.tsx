@@ -753,6 +753,7 @@ export function SessionBar({
   const folderChipVisible = mode !== 'chat' && showFolderChip(folder);
   const folderPanel =
     folder && panel === 'folder' ? (
+      // biome-ignore lint/a11y/useSemanticElements: a <dialog> would take the top layer and trap focus; this is a popover anchored to its button and dismissed by clicking out.
       <div className="chat-status-menu chat-folder-menu" role="dialog">
         <div className="chat-folder-path">{folder.cwd}</div>
         {!folder.hasProject ? (
@@ -1039,6 +1040,7 @@ export function SessionBar({
             </div>
           )}
           {panel === 'live' && agents.length > 0 ? (
+            // biome-ignore lint/a11y/useSemanticElements: same — an anchored popover, not a modal that owns the screen.
             <div className="chat-status-menu chat-live-menu" role="dialog">
               {/* "Subagents" only while that is all there is. A child chat in
                   this list is not a subagent, and calling it one would teach the

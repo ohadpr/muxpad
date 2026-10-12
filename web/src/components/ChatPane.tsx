@@ -3991,6 +3991,10 @@ export function ChatPane({
     optimisticUser,
     sending,
     loadingOlder,
+    // Read by the spawn-card interleave below, to decide whether a card older
+    // than the loaded window can be placed yet. It was missing, so a card
+    // could sit at the wrong edge until some other dependency changed.
+    hasMoreOlder,
     expandedGroups,
     jumpTargetId,
     jumpTerms,

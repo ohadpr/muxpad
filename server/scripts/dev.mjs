@@ -17,8 +17,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const serverDir = path.resolve(__dirname, '..');
 
 const socketPath =
-  process.env.MUXPAD_PTYD_SOCKET ??
-  path.join(os.homedir(), '.muxpad', 'ptyd.sock');
+  process.env.MUXPAD_PTYD_SOCKET ?? path.join(os.homedir(), '.muxpad', 'ptyd.sock');
 
 mkdirSync(path.dirname(socketPath), { recursive: true });
 
@@ -42,11 +41,14 @@ function pipePrefixed(child, prefix) {
     };
     src.on('data', (chunk) => {
       buf += chunk.toString('utf8');
-      let idx;
-      while ((idx = buf.indexOf('\n')) !== -1) {
+      // Assignment lifted out of the condition: the lint rule is right that
+      // `while ((x = f()) !== -1)` reads as a comparison until you look twice.
+      let idx = buf.indexOf('\n');
+      while (idx !== -1) {
         const line = buf.slice(0, idx);
         buf = buf.slice(idx + 1);
         dst.write(`${prefix}${line}\n`);
+        idx = buf.indexOf('\n');
       }
     });
     // A child that exits mid-line (no trailing newline) would otherwise
@@ -67,22 +69,14 @@ const spawnOpts = {
 };
 
 // Spawn ptyd (no watch)
-const ptyd = spawn(
-  tsxBin,
-  ['src/ptyd/index.ts'],
-  { ...spawnOpts, env: sharedEnv },
-);
+const ptyd = spawn(tsxBin, ['src/ptyd/index.ts'], { ...spawnOpts, env: sharedEnv });
 pipePrefixed(ptyd, '[ptyd] ');
 
 // Spawn main server (with tsx watch)
-const muxpad = spawn(
-  tsxBin,
-  ['watch', '--include=../shared/dist', 'src/index.ts'],
-  {
-    ...spawnOpts,
-    env: { ...sharedEnv, MUXPAD_HOST: process.env.MUXPAD_HOST ?? '0.0.0.0' },
-  },
-);
+const muxpad = spawn(tsxBin, ['watch', '--include=../shared/dist', 'src/index.ts'], {
+  ...spawnOpts,
+  env: { ...sharedEnv, MUXPAD_HOST: process.env.MUXPAD_HOST ?? '0.0.0.0' },
+});
 pipePrefixed(muxpad, '[muxpad] ');
 
 let shuttingDown = false;
@@ -128,8 +122,6 @@ ptyd.on('exit', (code, signal) => {
 muxpad.on('exit', (code, signal) => {
   if (shuttingDown) return;
   const reason = signal ? `signal ${signal}` : `code ${code}`;
-  process.stderr.write(
-    `\n[dev] main server exited (${reason}); shutting down ptyd.\n`,
-  );
+  process.stderr.write(`\n[dev] main server exited (${reason}); shutting down ptyd.\n`);
   shutdown('SIGTERM', code ?? 1);
 });

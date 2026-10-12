@@ -127,6 +127,7 @@ export function WorkspaceSettings({ workspace, onClose }: WorkspaceSettingsProps
   return (
     <div
       className="ws-settings"
+      // biome-ignore lint/a11y/useSemanticElements: <dialog> would trap focus and own the top layer; this panel is dismissed by Escape (bound on the document) or by its scrim, and must not steal focus from the field being typed into.
       role="dialog"
       aria-modal="true"
       aria-label={`${workspace.name} settings`}

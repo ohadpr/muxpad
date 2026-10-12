@@ -56,6 +56,7 @@ export function ExternalOpenToasts({ currentTabId, paneLabel }: Props) {
   if (visible.length === 0) return null;
 
   return (
+    // biome-ignore lint/a11y/useSemanticElements: <section> is flow content with its own box; this is a fixed-position stack of transient notices, which is what role=region labels.
     <div className="external-open-toasts" role="region" aria-label="External URL requests">
       {visible.map((o) => (
         <ExternalOpenToast key={o.id} open={o} paneLabel={paneLabel} />
@@ -93,6 +94,7 @@ function ExternalOpenToast({
   const label = open.pane_id ? paneLabel(open.pane_id) : null;
 
   return (
+    // biome-ignore lint/a11y/useSemanticElements: <fieldset> is for grouped form controls; this groups a URL and two buttons in a toast.
     <div className="external-open-toast" role="group">
       <div className="external-open-toast-body">
         <div className="external-open-toast-origin">{label ?? 'A pane'} requested to open:</div>
