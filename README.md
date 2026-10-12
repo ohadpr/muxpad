@@ -55,9 +55,6 @@ A chat opens at the newest message and pages history in as you scroll up, bounde
 
 Multiple browser tabs or devices can attach to the same workspace, or the same pane, simultaneously and stay in sync. Tabs can be dragged between workspaces, and a pane can be pulled out into a tab of its own — with an undo toast, because both are easy to do by accident.
 
-<p align="center">
-  <img src="docs/mosaic.webp" alt="a tab holding a terminal pane and a web pane side by side" width="900" />
-</p>
 
 ## Agents
 
@@ -77,9 +74,6 @@ A pane can hold a **chat-native agent session**: the conversation renders as HTM
 - **Background subagents are tracked.** The roster is server-owned, and an entry leaves when its subagent reports done or its runner dies, not on a decay timer — because a background subagent can sit silent in one tool call for a minute while plainly alive. It lives in memory on the runner's connection (bounded, oldest evicted), so unlike the session itself it does not survive a main-server restart.
 - **A terminal Claude session can be adopted.** `muxpad claude [args…]` launches the real CLI in a pane, passes your flags straight through, and registers the session so the same conversation can be read and driven from the web chat.
 
-<p align="center">
-  <img src="docs/agent-question.webp" alt="an agent asking a multiple-choice question, rendered as tappable chips" width="900" />
-</p>
 
 Nothing about any of that is specific to code. The question above is a shipping contract; the agent that asked it has never opened a file in a repo.
 
@@ -175,9 +169,6 @@ Two honest caveats. For a pane with **no** agent runner attached, `working` is s
 
 The point of all of it is the loop below: a question arrives in a workspace you are not looking at, the collapsed row goes red, you follow it, you answer with one tap, and the pane leaves `blocked` on its own.
 
-<p align="center">
-  <img src="docs/demo.webp" alt="a question arrives in a collapsed workspace, is opened, and is answered with one tap" width="900" />
-</p>
 
 ### Headlines and icons
 
@@ -202,9 +193,6 @@ muxpad publish --list                            # slug, files, bytes, versions
 
 `publish` copies the file or directory into `~/.muxpad/public/` and prints the URL. **Republishing a named slug keeps the URL**: the previous copy rotates to `/<slug>@2/`, `@2` to `@3`, and the three most recent previous versions stay live — so the link already sitting in someone's inbox shows the new numbers, and the version you sent last month is still there to diff against. `--update=` refuses to *create*, which is the guard against accumulating near-identical slugs.
 
-<p align="center">
-  <img src="docs/publish.webp" alt="an agent publishing a report and reporting the URL back into the conversation" width="900" />
-</p>
 
 **What the link is:** a real public URL, served by a *second* listener on its own port — the one `tailscale funnel` is pointed at, so the funnel never touches the unauthenticated UI. Anyone who has the link can open it, with no tailnet and no account. That is the whole point of the feature, and it is also the thing to be careful about: the access control on an unnamed artifact is that its slug is unguessable, and a named slug is a URL you are choosing to hand out. Publishing something is publishing it — check what is in the directory.
 
@@ -212,16 +200,9 @@ muxpad publish --list                            # slug, files, bytes, versions
 
 > **`publish` turns the funnel on for you.** The artifact listener binds loopback, but if a `tailscale` binary is on the PATH the first `muxpad publish` runs `tailscale funnel --bg --https=8443` against it — no prompt, no confirmation. That is how the link becomes shareable, and it is worth knowing before the first time you run it. With no tailscale and nothing configured, `publish` still prints the loopback link on stdout and warns on **stderr** that it only works on this machine; take the warning seriously, because the link itself looks fine.
 
-<p align="center">
-  <img src="docs/artifact.webp" alt="a published report as the recipient sees it, on the public URL" width="860" />
-</p>
 
 Apps and artifacts surface together at **`/hosted`**, because "what am I hosting and is it up?" spans them — and separately, because an app can be stopped and an artifact cannot, and an artifact has a link worth copying and an app deliberately does not. Opening an app is a route, not a tab: closing it never touches the process.
 
-<p align="center">
-  <img src="docs/hosted.webp" alt="the Hosted view: private apps above, public artifacts below" width="440" />
-  <img src="docs/hosted-light.webp" alt="the same view in a light theme" width="440" />
-</p>
 
 ## Scheduling
 
@@ -279,10 +260,6 @@ muxpad runs on phones — iOS Safari and Chrome on Android. The mobile story is 
 
 The navigator is the same state rail in a panel that drops down from the chrome bar, so "what wants me?" is one tap from anywhere — including from workspaces you have collapsed. Open the row and you get the full conversation and a real composer, so a decision that arrived while you were out is a decision you can actually make.
 
-<p align="center">
-  <img src="docs/mobile-nav.webp" alt="the navigator sheet on a phone, showing the same state rail across five workspaces" width="270" />
-  <img src="docs/mobile-chat.webp" alt="the same agent question on a phone, with tappable options and the composer" width="270" />
-</p>
 
 For terminal panes: a single-finger **tap** goes through to the TUI's mouse reporting, so Claude Code clicks keep working, while a single-finger *drag* past a threshold scrolls the scrollback; two fingers always scroll, with no tap detection to lose. The composer bar above the keyboard sends the line and its CR as two writes ~50 ms apart, deliberately, so Claude Code's paste-coalescing doesn't swallow the newline; a row of keys above it produces what iOS keyboards can't: Esc, Tab, ↑, ↓, ^C and jump-to-bottom. Installed to the home screen it takes Web Push, so a blocked agent or a finished turn can buzz your phone; VAPID keys are generated into `~/.muxpad/vapid.json` on first use and there is nothing to configure.
 
