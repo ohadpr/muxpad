@@ -369,8 +369,7 @@ export class TranscriptTail {
       // half of a record, and gluing the next append onto it would manufacture
       // one corrupt line instead of dropping one unreadable one.
       console.warn(
-        `[transcript] ${this.path}: no record boundary in the last ${win} bytes of ${size} — ` +
-          'history skipped, tailing live (a single record exceeds the window)',
+        `[transcript] ${this.path}: no record boundary in the last ${win} bytes of ${size} — history skipped, tailing live (a single record exceeds the window)`,
       );
       this.historyStart = size;
       this.offset = size;

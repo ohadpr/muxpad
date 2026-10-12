@@ -16,6 +16,7 @@ export function MoveUndoToast() {
   useEffect(() => subscribeUndos(setEntries), []);
   if (entries.length === 0) return null;
   return (
+    // biome-ignore lint/a11y/useSemanticElements: <section> is flow content with its own box; this is a fixed-position toast stack.
     <div className="move-undo-toasts" role="region" aria-label="Undo move">
       {entries.map((e) => (
         <Toast key={e.id} entry={e} />
@@ -32,6 +33,7 @@ function Toast({ entry }: { entry: UndoEntry }) {
     void entry.run();
   };
   return (
+    // biome-ignore lint/a11y/useSemanticElements: <fieldset> is for grouped form controls; this groups a sentence and an Undo button.
     <div className="move-undo-toast" role="group">
       <span className="move-undo-toast-msg">{entry.message}</span>
       <button type="button" className="move-undo-toast-action" onClick={handleUndo}>

@@ -124,6 +124,7 @@ function px(rows: readonly string[]) {
   const out: React.ReactElement[] = [];
   rows.forEach((row, y) => {
     [...row].forEach((c, x) => {
+      // biome-ignore lint/suspicious/noArrayIndexKey: x and y are the rect's COORDINATES in a fixed sprite grid, not its position in a list that can reorder — the key is the thing itself.
       if (c !== ' ') out.push(<rect key={`${x}:${y}`} x={x} y={y} width="1" height="1" />);
     });
   });
