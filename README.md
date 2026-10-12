@@ -20,7 +20,7 @@ Half of what runs in here is a codebase. The other half is a market scan, a laun
 One person, one machine. No auth, no accounts, no multi-tenancy.
 
 <p align="center">
-  <img src="docs/tour.gif" alt="a tour: a chat with pinned cards, two sub-agents spawned and running, the rail showing both, and a jump to another workspace" width="960" />
+  <img src="docs/tour.gif" alt="a tour: a chat spawning two sub-agents that run in parallel, the rail nesting them under their parent, clicking into one to watch it write, and the workspace rolling their state up when collapsed" width="960" />
 </p>
 
 <table align="center">
@@ -62,7 +62,7 @@ A pane can hold a **chat-native agent session** — rendered as HTML, not a TUI 
 
 
 <p align="center">
-  <img src="docs/chat-light.webp" alt="an agent session in a codebase: reasoning, a tool-call row, the model chip and the subagent count" width="900" />
+  <img src="docs/chat-light.webp" alt="an agent session: a vendor table, two spawned sub-chats reporting back, and two pinned cards along the bottom" width="900" />
 </p>
 
 - **Universal instructions.** `~/.muxpad/agent-instructions.md` is rewritten on every boot and injected into every session on every backend, so an agent knows muxpad exists and can drive it. Your own standing notes go in `agent-notes.md`, which muxpad creates once and never touches.
@@ -158,7 +158,7 @@ The five are mutually exclusive and ranked in that order. A tab takes the highes
 The rail shows it as a 10px mark per row, and rolls it up to the workspace when a group is collapsed — so an agent working somewhere you cannot see still says so.
 
 <p align="center">
-  <img src="docs/state-rail.webp" alt="the rail: two workspaces, sub-chats nested under their parent, one chat selected" width="300" />
+  <img src="docs/state-rail.webp" alt="the rail: two workspaces with their chats listed under them" width="300" />
 </p>
 
 Two honest caveats. For a pane with **no** agent runner attached, `working` is still the old PTY-output heuristic — a `tail -f` will light it. And `working` deliberately stays true while a background subagent outlives the turn that launched it, so "is *this turn* finished?" is `muxpad agent wait`, not `working`.
