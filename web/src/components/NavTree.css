@@ -1111,9 +1111,20 @@
 
    So: one box spanning the row plus 18px of overhang top and bottom, with the
    two quarter-discs as background LAYERS pinned to its corners. The middle band
-   is deliberately unpainted — the row's own fill is already there. */
-.navtree-tab-row[data-active="true"]::after {
-  content: "";
+   is deliberately unpainted — the row's own fill is already there.
+
+   ── AND IT IS A REAL ELEMENT NOW, FOR THE SAME REASON ONE LAYER BACK ──────
+   `::after` is also the SUB-CHAT elbow, at higher specificity
+   (`.navtree .navtree-tab-row[data-child]` beats `.navtree-tab-row[data-active]`).
+   An active sub-chat got one box carrying half of each rule — the elbow's
+   `left`/`top`/`width` over this rule's `right`, `bottom: -18px` and
+   gradients — which painted a blob below and left of the row. Reported as
+   "the active chat rounded indicator thing is bust".
+
+   The paragraph above is this file's own account of the FIRST time two things
+   were given one pseudo-element. Rather than write a third qualifier, the
+   funnel is a node: `.navtree-tab-funnel`, rendered only on the active row. */
+.navtree-tab-funnel {
   position: absolute;
   right: calc(var(--nt-pad) * -1);
   left: auto;
@@ -1161,7 +1172,7 @@
      · .chatchip-dot and its hollow ring, forced to --accent-fg. The dot is
        --clock now, on every row including this one, which is the whole point of
        the chip being one component. A2's, drawn and not touched.
-     · .navtree-quicknum, .navtree-close, the pinned pin, .navtree-cron and its
+     · .navtree-close, the pinned pin, .navtree-cron and its
        glyph's opacity bump, .navtree-tab-headline, .navtree-pane-expander,
        .navtree-ws-count.
      · all four .navtree-mark state hues, plus the reduced-motion arm. The four
@@ -1520,26 +1531,6 @@
 /* No schedule: no width AND no gutter. Most rows are this one. */
 .navtree-tab-rail:empty {
   margin-left: 0;
-}
-
-/* Ctrl-held quick-switch chip (sidebar only) — same accent chip language
-   as the top TabBar's numbers. Soft accent fill + medium weight: present as a
-   hint while Ctrl is held, not a loud solid pill. */
-.navtree-quicknum {
-  flex: 0 0 auto;
-  min-width: 14px;
-  height: 14px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 3px;
-  border-radius: 3px;
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-  color: var(--accent);
-  font-family: var(--chrome-font);
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 1;
 }
 
 /* ─── Schedule mark (◷ 07:00) ─────────────────────────────────────────────

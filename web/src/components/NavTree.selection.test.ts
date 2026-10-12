@@ -526,7 +526,9 @@ describe('the ARITHMETIC — six themes, and the defect the TAB introduces', () 
     // and what carries it is the funnel.
     const selected = ruleBody(NAV_CSS, RAIL_ACTIVE);
     const hovered = ruleBody(NAV_CSS, '.navtree-tab-row:hover');
-    const fillet = ruleBody(NAV_CSS, `${RAIL_ACTIVE}::after`);
+    // Its own element, not a pseudo of the row — see the ownership test below
+    // for the two separate bugs that bought that.
+    const fillet = ruleBody(NAV_CSS, '.navtree-tab-funnel');
 
     // The shape, stated as the three things that make it one: it takes the
     // pane's own face, it loses its right-hand corners, and it reaches past the
@@ -654,7 +656,7 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     expect(NT_TOKENS['--nt-group-head']).toBeUndefined();
     expect(NT_TOKENS['--nt-trough']).toBeUndefined();
   });
-  it('the fillets are in ::after, because ::before is already somebody else’s', () => {
+  it('the fillets own their OWN element, because both pseudos are spoken for', () => {
     // THE BUG THIS EXISTS FOR, which was on screen and was reported as a pale
     // notch beside the selected row. StateChip.css reserves `::before` on EVERY
     // `.navtree-tab-row` as the 3px left state track, and pins it with
@@ -666,9 +668,18 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     // and one wrong is the signature, and it is invisible to any test that only
     // reads the rule it wrote.
     //
-    // So the invariant is ownership, not geometry: NavTree.css does not style
-    // `::before` on a tab row at all, and the fillet that replaced it declares
-    // `left: auto` so it can never be over-constrained again by a third party.
+    // It then happened a SECOND time, one pseudo along. The fillets moved to
+    // `::after` — which is also the sub-chat elbow, at higher specificity
+    // (`.navtree .navtree-tab-row[data-child]` is (0,3,0) against (0,2,0)).
+    // The child rule won but set only `left`/`top`/`width`/`border-top`, so
+    // the box kept the fillet's `right`, `bottom: -18px` and gradients and
+    // painted a blob below and left of the row. Reported as "the active chat
+    // rounded indicator thing is bust".
+    //
+    // So the invariant is OWNERSHIP, not geometry, and twice was enough: the
+    // funnel is a node of its own now. NavTree.css styles neither pseudo of a
+    // tab row for it, and it still declares `left: auto` so it can never be
+    // over-constrained by a third party either.
     const nav = NAV_CSS.replace(/\/\*[\s\S]*?\*\//g, '');
     const beforeOwners = (nav.match(/[^{}]*\{[^}]*\}/g) ?? [])
       .map((r) => r.slice(0, r.indexOf('{')).trim())
@@ -678,7 +689,13 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
       .filter((sel) => !sel.includes('[data-child="true"]'));
     expect(beforeOwners).toEqual([]);
 
-    const fillet = ruleBody(NAV_CSS, '.navtree-tab-row[data-active="true"]::after');
+    // …and nothing keyed on the active row claims `::after` either.
+    const afterOwners = (nav.match(/[^{}]*\{[^}]*\}/g) ?? [])
+      .map((r) => r.slice(0, r.indexOf('{')).trim())
+      .filter((sel) => /\.navtree-tab-row(?!-)[^,{]*::after/.test(sel));
+    expect(afterOwners.some((sel) => sel.includes('data-active'))).toBe(false);
+
+    const fillet = ruleBody(NAV_CSS, '.navtree-tab-funnel');
     expect(decl(fillet, 'left')).toBe('auto');
     expect(decl(fillet, 'right')).toContain('--nt-pad');
     // Both corners, one box: the overhang reaches 18px past the row at each end

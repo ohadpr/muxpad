@@ -27,7 +27,6 @@ import { useAllChats } from '../lib/use-all-chats';
 import { useDismissable } from '../lib/use-dismissable';
 import { applyTabOrder, insertTabRow, refreshTabs, useTabs } from '../tabs';
 import { useLongPress } from '../use-long-press';
-import { MAX_QUICK_SWITCH_TABS, useTabQuickSwitch } from '../use-tab-quickswitch';
 import {
   applyWorkspaceOrder,
   refreshWorkspaces,
@@ -253,7 +252,7 @@ interface NavTreeProps {
  *   variant="sidebar" — the desktop left rail (SidebarTree below). A dense
  *     file navigator: collapsible workspace groups, indented tab rows carrying
  *     a headline, a schedule and a state word, hover-revealed pin/close,
- *     double-click rename, Ctrl+1…9 quick-switch, drag-to-reorder.
+ *     double-click rename, drag-to-reorder.
  *   variant="sheet"   — the mobile drop-down panel (SheetRail below). NOT the
  *     same tree at thumb height: a flat, one-line-per-chat rail whose only
  *     permanent mark is a dot on the chats that are waiting on you.
@@ -1383,62 +1382,6 @@ export function TabList({
     }
   };
 
-  // Ctrl+1…9 quick-switch parity with the top-nav TabBar. Only the
-  // sidebar wires it (the sheet is touch; TabBar owns it in top mode).
-  // tabCount 0 disables the inactive instances without breaking the
-  // rules of hooks.
-  //
-  // The number↔tab mapping is FROZEN for as long as the badges are up.
-  // Before the living sidebar, tab order was the stable manual `position`,
-  // so indexing the live list was safe. Now the unpinned block re-sorts on
-  // attention/busy/recency and the 5s poll can re-derive it mid-keystroke —
-  // so a build going busy between "I read the 3" and "I pressed Ctrl+3"
-  // would land you on a different tab. Snapshotting on Ctrl-down means the
-  // number you see is the number you get, every time.
-  //
-  // (Across separate holds the unpinned numbers still move — that's the
-  // feature working. PINNING is what buys a number that means the same
-  // thing tomorrow, since pinned tabs never re-sort.)
-  // Numbered in the order they are DRAWN, and only the rows that are actually
-  // drawn: the top-level live chats. A number that addressed a row folded away
-  // inside the done group would be a badge you cannot see attached to a chat
-  // you did not ask for.
-  const quickEnabled = variant === 'sidebar' && isActiveWorkspace;
-  const quickTargets = liveGroups.map((g) => g.chat);
-  const [quickIds, setQuickIds] = useState<string[]>([]);
-  // "Were the badges up as of the last render?" — read before it's written
-  // below, which is exactly the question the tabCount arg needs answered.
-  const quickHeld = useRef(false);
-  const showQuickNumbers = useTabQuickSwitch({
-    // While the badges are UP, the accepted range is the snapshot's, not the
-    // live list's: a tab closed mid-hold would otherwise shrink the range and
-    // make a badge you can still see stop responding, and a tab created
-    // mid-hold would widen it past the snapshot — swallowing the chord from
-    // the focused terminal to switch to nothing.
-    tabCount: quickEnabled ? (quickHeld.current ? quickIds.length : quickTargets.length) : 0,
-    onSwitch: (i) => {
-      // Resolve against the FROZEN snapshot, then look the tab up by id —
-      // never by live index. A tab deleted mid-hold simply no-ops.
-      const id = quickIds[i];
-      const t = id ? tabs.find((x) => x.id === id) : undefined;
-      if (!t) return;
-      void navigate({
-        to: '/w/$wsSlug/t/$tabSlug',
-        params: { wsSlug: workspace.slug, tabSlug: t.slug },
-      });
-    },
-  });
-  quickHeld.current = showQuickNumbers;
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `quickTargets` is deliberately NOT a dependency — re-snapshotting while the badges are up is the exact bug this prevents.
-  useEffect(() => {
-    setQuickIds(showQuickNumbers ? quickTargets.map((t) => t.id) : []);
-  }, [showQuickNumbers]);
-  /** The frozen badge number for a tab (1–9), or undefined if it has none. */
-  const quickNumberFor = (id: string): number | undefined => {
-    const i = quickIds.indexOf(id);
-    return i >= 0 && i < MAX_QUICK_SWITCH_TABS ? i + 1 : undefined;
-  };
-
   /**
    * The event is OPTIONAL because three surfaces archive and only one of them
    * has a click to stop: the desktop ×, the long-press menu, and the sheet's
@@ -1470,7 +1413,6 @@ export function TabList({
       {...(parent ? { parent } : {})}
       workspace={workspace}
       isActiveTab={isActiveWorkspace && t.slug === activeTabSlug}
-      quickNumber={showQuickNumbers && quickEnabled ? quickNumberFor(t.id) : undefined}
       variant={variant}
       isEditing={editing?.kind === 'tab' && editing.id === t.id}
       setEditing={setEditing}
@@ -1771,8 +1713,6 @@ interface TabRowProps {
    * that do not need it are not charged for it.
    */
   workspaceLabel?: string | undefined;
-  /** 1–9 chip shown while Ctrl is held (sidebar quick-switch); else undefined. */
-  quickNumber: number | undefined;
   variant: NavTreeVariant;
   isEditing: boolean;
   setEditing: (e: Editing) => void;
@@ -2100,7 +2040,6 @@ function TabRow({
   workspace,
   isActiveTab,
   workspaceLabel,
-  quickNumber,
   variant,
   isEditing,
   setEditing,
@@ -2615,11 +2554,6 @@ function TabRow({
         >
           {/* Line one: the name, and the chip that qualifies it. */}
           <span className="navtree-tab-titleline">
-            {quickNumber !== undefined && (
-              <span className="navtree-quicknum" aria-hidden="true">
-                {quickNumber}
-              </span>
-            )}
             {/* dir="auto" on the TEXT, never on the row — see
                 .navtree-name-text in NavTree.css for why alignment stays
                 pinned left while direction follows the string.
@@ -2641,6 +2575,24 @@ function TabRow({
                 there was no rhythm to run an eye down. One line, one height,
                 one glance; the sentence is a hover away. */}
         </Link>
+      )}
+      {/* ─── THE FUNNEL, AS A REAL ELEMENT ──────────────────────────────────
+          The two concave fillets that flare the pane's surface into the active
+          row. They lived in `::after` — and so does the tree elbow on a
+          SUB-CHAT row, at higher specificity. An active sub-chat therefore got
+          one box carrying half of each rule: the elbow's `left`/`top`/`width`
+          over the fillet's `right`, `bottom: -18px` and radial gradients,
+          which painted the blob hanging below and left of the row.
+          Reported as "the active chat rounded indicator thing is bust".
+
+          A row has two pseudo-elements and three decorations wanting them —
+          `::before` is the state track and the child's trunk, `::after` is the
+          elbow. The third one gets a node of its own rather than a fourth
+          qualifier in a cascade that has already produced this bug twice (see
+          the fillet comment in NavTree.css for the first). It renders only on
+          the row you are in. */}
+      {isActiveTab && variant === 'sidebar' && (
+        <span className="navtree-tab-funnel" aria-hidden="true" />
       )}
       {/* ─── THE TRAILING RAIL — ONE CELL, ONE COLUMN ──────────────────────
           Everything a row says on its right, in one flex box, right-aligned,

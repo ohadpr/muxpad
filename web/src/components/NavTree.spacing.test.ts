@@ -1179,3 +1179,47 @@ describe('nothing in the rail scrolls sideways', () => {
     );
   });
 });
+
+/**
+ * THE ACTIVE ROW'S FUNNEL IS A NODE, NOT A THIRD CLAIM ON `::after`.
+ *
+ * The two concave fillets that flare the pane's surface into the row you are
+ * in lived in `::after` — and so does the tree elbow on a SUB-CHAT row, at
+ * higher specificity (`.navtree .navtree-tab-row[data-child]` is (0,3,0)
+ * against (0,2,0)). The child rule therefore won, but it only sets
+ * `left`/`top`/`width`/`border-top`, so the box kept the fillet's `right`,
+ * `bottom: -18px` and radial gradients and painted a blob below and left of
+ * the row. Reported as "the active chat rounded indicator thing is bust".
+ *
+ * This file's own fillet comment is the record of the FIRST time two things
+ * were given one pseudo-element — `::before`, shared with StateChip's left
+ * track, where the over-constrained box silently dropped `right`. Same defect,
+ * same file, one pseudo along.
+ */
+describe('the active row’s funnel', () => {
+  it('is its own element, so nothing can win it on specificity', () => {
+    expect(rules(NAV_CSS).some((r) => r.selectors.includes('.navtree-tab-funnel'))).toBe(true);
+  });
+
+  it('leaves `::after` to the sub-chat elbow alone', () => {
+    const afterOwners = rules(NAV_CSS)
+      .flatMap((r) => r.selectors)
+      .filter((sel) => sel.includes('.navtree-tab-row') && sel.endsWith('::after'));
+    // Only the child elbow and the drag drop-edge marker, which never coexist
+    // with each other; crucially, nothing keyed on `data-active`.
+    expect(afterOwners.some((sel) => sel.includes('data-active'))).toBe(false);
+  });
+
+  it('still overhangs by the full fillet radius at both ends', () => {
+    // 18px, not 11: a fillet is a square minus a quarter-disc, so only ~21% of
+    // its box is ink and a smaller one is a crescent nobody can see.
+    const body = ruleBody(NAV_CSS, '.navtree-tab-funnel');
+    expect(decl(body, 'top')).toBe('-18px');
+    expect(decl(body, 'bottom')).toBe('-18px');
+    expect(decl(body, 'width')).toBe('18px');
+  });
+
+  it('never eats a click', () => {
+    expect(decl(ruleBody(NAV_CSS, '.navtree-tab-funnel'), 'pointer-events')).toBe('none');
+  });
+});
