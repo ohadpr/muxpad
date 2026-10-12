@@ -6,6 +6,13 @@
 
 <h3 align="center">A browser-based cockpit for terminals and agents, on a box you keep around.</h3>
 
+<p align="center">
+  <a href="https://github.com/ohadpr/muxpad/actions/workflows/ci.yml"><img src="https://github.com/ohadpr/muxpad/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <img src="https://img.shields.io/badge/node-%E2%89%A522-5a5a5a" alt="Node 22+" />
+  <img src="https://img.shields.io/badge/license-MIT-5a5a5a" alt="MIT" />
+  <img src="https://img.shields.io/badge/auth-none%20(tailnet%20only)-b45309" alt="No authentication; bind to a trusted interface" />
+</p>
+
 Each browser tab is a workspace at a stable URL. Inside the workspace, named sub-tabs hold mosaic layouts of panes. A pane is a shell, a web page, or a chat with an agent. The PTYs and the agent sessions live on the server, not in the browser, so closing the laptop, switching to your phone, and coming back tomorrow shows the same session mid-run.
 
 Half of what runs in here is a codebase — a terminal, a test watcher, an agent editing files. The other half is not: a market scan that ends in a report you send someone, a launch plan, a vendor decision, the renewal you keep not dealing with. Same panes, same status model, same phone. Work that produces a document and work that produces a diff are the same shape from muxpad's side.
@@ -15,6 +22,26 @@ It is a personal tool. One person, one machine, no auth, no accounts, no multi-t
 <p align="center">
   <img src="docs/hero.webp" alt="muxpad: the state rail on the left showing five workspaces, a research agent mid-turn on the right" width="960" />
 </p>
+
+<table align="center">
+<tr><td>
+
+**Jump to** &nbsp;
+[Concepts](#concepts) ·
+[Agents](#agents) ·
+[Workspace rules](#what-a-workspace-tells-its-agents-and-what-it-lets-them-do) ·
+[Cards](#pinned-cards) ·
+[Status](#status-one-word-per-pane) ·
+[Publishing](#publishing-something-someone-else-can-open) ·
+[Scheduling](#scheduling) ·
+[Mobile](#mobile) ·
+[Install](#install) ·
+[**Trust model**](#trust-model) ·
+[CLI](#the-muxpad-cli) ·
+[Architecture](#architecture)
+
+</td></tr>
+</table>
 
 ## Concepts
 
@@ -137,7 +164,7 @@ The navigator renders that as a **state rail**: a coloured bar on the row's left
 
 <p align="center">
   <img src="docs/state-rail.webp" alt="the state rail: working, ready, blocked and idle rows" width="330" />
-  <img src="docs/state-rail-light.webp" alt="the same rail in a light theme" width="330" />
+  <img src="docs/state-rail-light.webp" alt="the same rail in a light theme: two workspaces, one chat selected" width="330" />
 </p>
 
 Two honest caveats. For a pane with **no** agent runner attached, `working` is still the old PTY-output heuristic — a `tail -f` will light it. And `working` deliberately stays true while a background subagent outlives the turn that launched it, so "is *this turn* finished?" is `muxpad agent wait`, not `working`.
