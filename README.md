@@ -20,7 +20,7 @@ Half of what runs in here is a codebase — a terminal, a test watcher, an agent
 It is a personal tool. One person, one machine, no auth, no accounts, no multi-tenancy anywhere in it.
 
 <p align="center">
-  <img src="docs/hero.webp" alt="muxpad: the state rail on the left showing five workspaces, a research agent mid-turn on the right" width="960" />
+  <img src="docs/hero-light.webp" alt="muxpad: the rail on the left with two workspaces, a vendor pricing teardown open on the right" width="960" />
 </p>
 
 <table align="center">
@@ -62,6 +62,10 @@ Multiple browser tabs or devices can attach to the same workspace, or the same p
 ## Agents
 
 A pane can hold a **chat-native agent session**: the conversation renders as HTML in the browser, not as a TUI in a terminal grid. Three backends are supported and each one is a real implementation of the same interface — `claude` (the Claude Agent SDK), `codex` (`codex exec`), and `cursor` (`cursor-agent`). Whichever is driving, the transcript, the tool-call rows, the model chip and the composer are the same UI. You pick the backend when you make an agent tab in the browser (or leave it pending and choose in the chat); `muxpad agent new` from the CLI is Claude, and `muxpad cron new --backend=` is the other way to start one of the others headlessly.
+
+<p align="center">
+  <img src="docs/streaming.gif" alt="a turn streaming in: the answer lands, the working indicator runs, the status line reads Working" width="900" />
+</p>
 
 <p align="center">
   <img src="docs/chat-light.webp" alt="an agent session in a codebase: reasoning, a tool-call row, the model chip and the subagent count" width="900" />
@@ -296,7 +300,7 @@ Mobile is for checking in on a session you started elsewhere. Long sessions stil
 - Five themes (three dark, two light) and a curated monospace font picker.
 
 <p align="center">
-  <img src="docs/hero-light.webp" alt="the same screen in one of the light themes" width="880" />
+  <img src="docs/hero.webp" alt="the same screen in one of the dark themes" width="880" />
 </p>
 
 ## Requirements
