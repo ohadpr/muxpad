@@ -287,29 +287,31 @@ export class SpawnRoundStore {
   }
 
   /**
-   * How many of `parentTabId`'s children are STILL MID-ROUND.
+   * When each of `parentTabId`'s children that is STILL MID-ROUND started.
    *
-   * The batch barrier: while this is above zero the fan-out has not landed, so
-   * a sibling that just finished waits rather than sending a message of its
-   * own. An open round is the right signal and a pane's `status` is not — the
-   * round spans the whole job (a worker pausing between two turns is not
-   * finished), which is the distinction `JOB_SETTLE_MS` exists to draw.
+   * The batch barrier's input: a sibling that just finished waits on the ones
+   * still working rather than sending a message of its own — but only on those
+   * from the SAME fan-out, which the caller decides from these start times (see
+   * `BATCH_SPAWN_WINDOW_MS`). An open round is the right signal and a pane's
+   * `status` is not — the round spans the whole job (a worker pausing between
+   * two turns is not finished), which is the distinction `JOB_SETTLE_MS`
+   * exists to draw.
    *
    * NOT A LIVENESS CHECK, and the caller must not treat it as one: a worker
    * whose runner died mid-round leaves its round open forever, so a barrier
    * built on this alone would hold its siblings' reports for good. The hold is
    * bounded in time for exactly that case — see `BATCH_MAX_HOLD_MS`.
    */
-  openRoundCountByParent(parentTabId: string): number {
+  openRoundStartsByParent(parentTabId: string): number[] {
     return (
       this.db
         .prepare(
-          `SELECT COUNT(*) AS n
+          `SELECT r.started_at AS started_at
              FROM spawn_rounds r JOIN tabs t ON t.id = r.tab_id
             WHERE t.spawned_by = ? AND t.id <> t.spawned_by AND r.ended_at IS NULL`,
         )
-        .get(parentTabId) as { n: number }
-    ).n;
+        .all(parentTabId) as Array<{ started_at: number }>
+    ).map((r) => r.started_at);
   }
 
   /**
