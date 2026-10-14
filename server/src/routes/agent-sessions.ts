@@ -112,7 +112,14 @@ export function agentSessionsRoutes(deps: {
    * recovery sweep should not have to tell a no-op from a failure.
    */
   app.post('/:paneId/stop', (c) => {
-    const stopped = deps.agentBridge?.stop(c.req.param('paneId')) ?? false;
+    const paneId = c.req.param('paneId');
+    // A PANE THAT DOES NOT EXIST IS NOT "ALREADY IDLE". Both used to answer
+    // `{stopped:false}`, so a typo'd pane id printed "no turn was running" and
+    // exited 0 — a recovery script would have reported success at stopping
+    // something it never reached.
+    if (!store.getByPane(paneId) && !new PaneStore(deps.db).getById(paneId))
+      return c.json({ error: { code: 'not_found', message: 'no such pane' } }, 404);
+    const stopped = deps.agentBridge?.stop(paneId) ?? false;
     return c.json({ stopped });
   });
 

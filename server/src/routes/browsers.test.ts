@@ -74,6 +74,9 @@ beforeEach(() => {
       chromePath: () => CHROME,
       tailnetHost: () => 'example-host.example-tailnet.ts.net',
       resumeAgent,
+      // The real deadline is 30s. Tests that exercise the never-ready path
+      // would otherwise sit out all of it, and a 30s test is a 30s shard.
+      cdpReadyTimeoutMs: 600,
     }),
   );
 });
@@ -403,12 +406,14 @@ describe('a browser starts when something reaches for it, not before', () => {
     try {
       const res = await app.request('/api/browsers/slowviewer/cdp/json/version');
       // It waits, then gives up honestly, rather than handing back a url that
-      // cannot be connected to.
+      // cannot be connected to. The wait itself is injected down to 600ms —
+      // the behaviour under test is "refuses rather than lying", not the
+      // length of the real deadline.
       expect(res.status).toBe(504);
     } finally {
       await close();
     }
-  }, 40_000);
+  });
 
   it('proxies the exact path, even for a profile called "cdp"', async () => {
     // Splitting the url on '/cdp' looks equivalent to trimming the prefix and
