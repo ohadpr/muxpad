@@ -359,6 +359,36 @@ const send = (o) => {
 }
 
 let buttons = 0
+
+/* ── ONE FINGER SCROLLS ─────────────────────────────────────────────────────
+ * On a phone the stream had no way to scroll the page it is showing. A finger
+ * drag went out as mousePressed → mouseMoved → mouseReleased, which is a DRAG
+ * on the remote page, and a wheel event does not exist on touch — so the view was
+ * stuck wherever the page happened to be, usually the top. Reported as "I'm
+ * unable to pan the view so I'm sort of stuck on the top".
+ *
+ * The idiom every mobile browser already teaches: a finger drag SCROLLS. So a
+ * touch press is not classified until it has done something:
+ *
+ *   moves past the slop  → scroll   (mouseWheel deltas, no click)
+ *   held without moving  → drag     (a real mousePressed, for sliders,
+ *                                    text selection, drag-and-drop)
+ *   lifts early, no move → tap      (press + release, i.e. a click)
+ *
+ * Which is the inverse of "hold to scroll", and deliberately: dragging to
+ * scroll is the gesture the hand already knows, so the rarer thing — a real
+ * drag — is what earns the deliberate hold.
+ *
+ * MOUSE AND PEN ARE UNTOUCHED. They have a wheel and they have no ambiguity;
+ * every path below is gated on pointerType === 'touch'.
+ */
+const TAP_SLOP = 8      // px on screen before a press becomes a scroll
+const HOLD_MS = 450     // press-and-hold that becomes a real drag
+let touch = null        // { id, phase, sx, sy, lx, ly, timer, down }
+
+const clearHold = () => { if (touch?.timer) { clearTimeout(touch.timer); touch.timer = null } }
+const endTouch = () => { clearHold(); touch = null }
+
 const onPointerDown = (e) => {
   e.preventDefault()
   // FOCUS INSIDE THE GESTURE. iOS raises a keyboard only for a focus() that
@@ -408,8 +438,26 @@ const onPointerDown = (e) => {
       reportKeyboard(hit)
     }
   }
-  buttons = 1
   img.setPointerCapture?.(e.pointerId)
+  if (e.pointerType === 'touch') {
+    // Nothing is sent yet: what this press MEANS is not known until it moves,
+    // is held, or lifts. Sending mousePressed here is what made every scroll
+    // attempt a drag.
+    const p0 = pt(e)
+    touch = { id: e.pointerId, phase: 'pending', sx: e.clientX, sy: e.clientY, lx: e.clientX, ly: e.clientY, down: p0, timer: null }
+    touch.timer = setTimeout(() => {
+      if (!touch || touch.phase !== 'pending') return
+      touch.phase = 'drag'
+      buttons = 1
+      if (touch.down) send({ t:'mouse', type:'mousePressed', ...touch.down, buttons:1, clickCount:1, modifiers:0 })
+      // Say so: the hold changed what the finger does, and an unannounced mode
+      // switch is indistinguishable from a bug.
+      msg.textContent = 'drag'
+      navigator.vibrate?.(8)
+    }, HOLD_MS)
+    return
+  }
+  buttons = 1
   const p = pt(e); if (p) send({ t:'mouse', type:'mousePressed', ...p, buttons:1, clickCount:e.detail||1, modifiers:mods(e) })
 }
 
@@ -427,12 +475,52 @@ for (const el of [img, sink]) {
 }
 
 const onPointerMove = (e) => {
+  if (e.pointerType === 'touch') {
+    if (!touch || e.pointerId !== touch.id) return
+    const dx = e.clientX - touch.lx
+    const dy = e.clientY - touch.ly
+    if (touch.phase === 'pending') {
+      if (Math.hypot(e.clientX - touch.sx, e.clientY - touch.sy) < TAP_SLOP) return
+      clearHold()
+      touch.phase = 'scroll'
+    }
+    if (touch.phase === 'scroll') {
+      touch.lx = e.clientX; touch.ly = e.clientY
+      const p = pt(e)
+      // Content follows the finger, so the wheel goes the other way: dragging
+      // UP (dy negative) scrolls the page DOWN (deltaY positive).
+      if (p) send({ t:'mouse', type:'mouseWheel', ...p, deltaX: -dx, deltaY: -dy, modifiers: 0 })
+      return
+    }
+    touch.lx = e.clientX; touch.ly = e.clientY
+    const p = pt(e); if (p) send({ t:'mouse', type:'mouseMoved', ...p, buttons, modifiers:0 })
+    return
+  }
   const p = pt(e); if (p) send({ t:'mouse', type:'mouseMoved', ...p, buttons, modifiers:mods(e) })
 }
 for (const el of [img, sink]) {
   el.addEventListener('pointermove', onPointerMove)
 }
 const release = (e) => {
+  if (e.pointerType === 'touch') {
+    if (!touch || e.pointerId !== touch.id) return
+    const p = pt(e) || touch.down
+    if (touch.phase === 'pending') {
+      // Lifted without moving and before the hold: an ordinary tap, which is a
+      // click — sent as a pair here because the press was withheld.
+      if (p) {
+        send({ t:'mouse', type:'mousePressed', ...p, buttons:1, clickCount:1, modifiers:0 })
+        send({ t:'mouse', type:'mouseReleased', ...p, buttons:0, clickCount:1, modifiers:0 })
+      }
+    } else if (touch.phase === 'drag') {
+      buttons = 0
+      if (p) send({ t:'mouse', type:'mouseReleased', ...p, buttons:0, clickCount:1, modifiers:0 })
+      if (msg.textContent === 'drag') msg.textContent = ''
+    }
+    // A scroll sends no click at all — that is the whole point.
+    endTouch()
+    return
+  }
   if (!buttons) return
   buttons = 0
   const p = pt(e); if (p) send({ t:'mouse', type:'mouseReleased', ...p, buttons:0, clickCount:1, modifiers:mods(e) })
