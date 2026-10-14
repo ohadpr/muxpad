@@ -761,7 +761,15 @@ handback.addEventListener('click', async () => {
     // Only when this IS the page. In the desktop modal the viewer is framed, and
     // navigating in there would load muxpad inside its own dialog.
     if (window.top === window) {
-      location.href = '/'
+      // BACK, not '/'. Going to the root drops you on whatever tab muxpad
+      // opens by default, which is almost never the one you left — reported as
+      // "it takes me back to some other tab, but not to the tab I was in".
+      // The viewer is reached BY NAVIGATING from that tab, so history already
+      // holds it. A direct deep link has no same-origin referrer and no
+      // history to go back to, and only that case falls through to the root.
+      const cameFromMuxpad = document.referrer && new URL(document.referrer).origin === location.origin
+      if (cameFromMuxpad && history.length > 1) history.back()
+      else location.href = '/'
     } else {
       // FRAMED: ASK THE MODAL TO CLOSE. It has its own close button, and the one
       // in here could not reach it — so on a desktop Done handed the wheel back

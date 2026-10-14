@@ -198,3 +198,31 @@ describe('asking for a person', () => {
     expect(attention.get('shopping')).toBeNull();
   });
 });
+
+describe('the wheel follows presence, not a promise to hand it back', () => {
+  /**
+   * The lease was a token you had to hand back, and the only control that did
+   * so lived inside the viewer — so closing the view left a human holding it
+   * for the rest of its ten minutes while the agent refused to work. "How can
+   * I be in control if I close the view?"
+   */
+  it('hands a human lease back once no viewer has been attached for the grace', () => {
+    wheel.take('shopping', { holder: 'human', by: 'viewer-shopping' });
+    expect(wheel.canDrive('shopping', 'agent')).toBe(false);
+    // Still within the grace: somebody fetching a 2FA code has not lost it.
+    expect(wheel.releaseIfUnattended('shopping', 30_000, 90_000)).toBe(false);
+    expect(wheel.canDrive('shopping', 'agent')).toBe(false);
+    // Gone long enough that nobody is coming back to it.
+    expect(wheel.releaseIfUnattended('shopping', 120_000, 90_000)).toBe(true);
+    expect(wheel.canDrive('shopping', 'agent')).toBe(true);
+  });
+
+  it('leaves an AGENT lease alone — it has no viewer, so an empty host means nothing', () => {
+    wheel.take('shopping', { holder: 'agent', by: 'pane-1' });
+    expect(wheel.releaseIfUnattended('shopping', 10 * 60_000, 90_000)).toBe(false);
+  });
+
+  it('is a no-op when nobody holds it', () => {
+    expect(wheel.releaseIfUnattended('shopping', 10 * 60_000, 90_000)).toBe(false);
+  });
+});
