@@ -2640,7 +2640,7 @@ function TabRow({
               aria-label={tab.pinned ? `Unpin tab ${tab.name}` : `Pin tab ${tab.name}`}
               aria-pressed={tab.pinned === true}
             >
-              <SvgPin size={12} filled={tab.pinned === true} />
+              <SvgPin size={14} filled={tab.pinned === true} />
             </button>
           ) : null}
           {affords.closeButton ? (
@@ -2651,7 +2651,7 @@ function TabRow({
               title="Archive — moves to done, a message brings it back"
               aria-label={`Archive chat ${tab.name}`}
             >
-              <SvgArchive size={13} />
+              <SvgArchive size={15} />
             </button>
           ) : null}
         </span>
@@ -2915,14 +2915,24 @@ function SvgPin({ size = 12, filled = false }: { size?: number; filled?: boolean
  *  gesture and need a control you can simply see and tap. */
 
 /**
- * ARCHIVE — an arrow going down into a tray. The row's one-click action.
+ * ARCHIVE — a box with a lid. Reported: "the archive icon can easily be clicked
+ * thinking it's the pin."
  *
- * Deliberately NOT a × and deliberately not the filing-box glyph (a lid over a
- * body): at 13px the box's lid and body collapse into two stacked bars and it
- * reads as a hamburger. The arrow carries the verb — something moves, and it
- * moves DOWN and out of the way, which is what the done group is.
+ * The previous glyph was an arrow going down into a tray, and the note here
+ * argued against the box because "at 13px the lid and body collapse into two
+ * stacked bars and it reads as a hamburger". That was true of THAT box: two
+ * outlined bars of equal weight, at 13px. The fix is not to avoid the shape,
+ * it is to draw it so the two parts cannot read as equals — a FILLED lid sitting
+ * on an outlined body, with a handle notch in the middle. Filled-on-outline is
+ * legible at this size in a way outline-on-outline is not.
+ *
+ * And the shape has to be maximally unlike a PIN, because that is the actual
+ * complaint: the pin is a thin diagonal needle, so the archive is a wide
+ * horizontal solid. Two marks that differ in weight, axis and silhouette do not
+ * get confused for each other at a glance — which the old pair, both thin
+ * strokes of the same colour two pixels apart, demonstrably did.
  */
-function SvgArchive({ size = 13 }: { size?: number }) {
+function SvgArchive({ size = 15 }: { size?: number }) {
   return (
     <svg
       width={size}
@@ -2930,16 +2940,17 @@ function SvgArchive({ size = 13 }: { size?: number }) {
       viewBox="0 0 16 16"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.6"
+      strokeWidth="1.5"
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"
     >
-      {/* The stroke down, and the head. */}
-      <path d="M8 2.5v6.5" />
-      <path d="M5.25 6.5 8 9.25 10.75 6.5" />
-      {/* The tray it lands in — open at the top, so the arrow goes INTO it. */}
-      <path d="M3 11.25v1.25a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-1.25" />
+      {/* The LID: solid, full width, unmistakably the heavy part. */}
+      <rect x="1.75" y="2.75" width="12.5" height="3.25" rx="1" fill="currentColor" stroke="none" />
+      {/* The BODY: outlined, narrower, clearly hanging under the lid. */}
+      <path d="M3 6.75v5.5a1.25 1.25 0 0 0 1.25 1.25h7.5A1.25 1.25 0 0 0 13 12.25v-5.5" />
+      {/* The HANDLE: the detail that stops the two edges reading as bars. */}
+      <path d="M6.5 9.25h3" />
     </svg>
   );
 }

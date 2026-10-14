@@ -114,6 +114,17 @@
      tooltip (see TabRow) and every row is now exactly this tall. */
   --nt-row-tab: 36px;
   --nt-hit: 24px; /* square hit target for the close button */
+  /* THE ROW'S ACTION BUTTONS — one size and one gap, in one place.
+     These were 18px boxes 2px apart carrying 12–13px glyphs, and the pin and
+     the archive ended up two small marks of the same weight and colour sitting
+     two pixels apart: reported as reaching for the pin and archiving the chat.
+     A gap you can see is most of the fix, so the gap is a token too rather
+     than a magic number repeated at four call sites. */
+  --nt-ctl: 20px;
+  --nt-ctl-gap: 6px;
+  /* The destructive one stands further off. A × that deletes a workspace and
+     every chat in it should not sit on the same rhythm as `+`. */
+  --nt-ctl-gap-danger: 11px;
   --nt-disc: 18px; /* disclosure chevron column — narrow; the glyph is tiny */
   /* Tab leading-icon column. Tuned so a tab's icon lands directly under the
      workspace NAME (one chevron-width step) — the icon itself is the
@@ -878,7 +889,12 @@
    — the same defect the reservation above fixes, just small enough to read as a
    twitch rather than a swap. A gap that appears is a gap that moves something. */
 .navtree-ws-row > .navtree-tab-controls > * + * {
-  margin-left: 2px;
+  margin-left: var(--nt-ctl-gap);
+}
+/* The × last in the group is the destructive one; give it its own air so the
+   hand does not arrive at it on the rhythm of the two beside it. */
+.navtree-ws-row > .navtree-tab-controls > .navtree-close:last-child {
+  margin-left: var(--nt-ctl-gap-danger);
 }
 
 /* Chat rows: charged in both states on the rows that RESERVE their slots, and
@@ -891,7 +907,7 @@
 /* Everything else keeps the gap only while the controls are actually out. */
 .navtree-tab-row:hover > .navtree-tab-rail > * + *,
 .navtree-tab-row:has(:focus-visible) > .navtree-tab-rail > * + * {
-  margin-left: 2px;
+  margin-left: var(--nt-ctl-gap);
 }
 .navtree-tab-row:hover > .navtree-tab-rail,
 .navtree-tab-row:has(:focus-visible) > .navtree-tab-rail,
@@ -1594,9 +1610,8 @@
      sits in a track BEFORE the status column. */
   flex: 0 0 0;
   width: 0;
-  /* 18px square when revealed — the exact box the strip tabs' × uses; the
-     row is taller, so it centers as an inset square (not a full-height slab). */
-  height: 18px;
+  /* A square when revealed, inset in a taller row (not a full-height slab). */
+  height: var(--nt-ctl);
   align-self: center;
   display: inline-flex;
   align-items: center;
@@ -1665,8 +1680,8 @@
 .navtree-tab-row:has(:focus-visible) .navtree-close,
 .navtree-close:active,
 .navtree-close:focus-visible {
-  flex-basis: 18px;
-  width: 18px;
+  flex-basis: var(--nt-ctl);
+  width: var(--nt-ctl);
   opacity: 1;
   visibility: visible;
 }
@@ -1727,8 +1742,13 @@
 }
 /* Same hover grammar as the strip tabs' ×: quiet hover square, danger-red
    glyph — "this deletes", consistent everywhere a close lives. */
+/* ON HOVER IT STOPS BEING A HINT. The background is what tells you WHICH of
+   the two you are actually on — the thing the report was about — so it is a
+   filled square with a visible edge rather than a wash that blends into the
+   row's own hover tint. */
 .navtree-close:hover {
   background: var(--bg-hover);
+  box-shadow: inset 0 0 0 1px var(--border);
   color: var(--danger);
   opacity: 1;
 }
@@ -1979,8 +1999,8 @@
    looking at holds focus, so `:focus-within` pinned its close button open. */
 .navtree-pane-row-wrap:hover .navtree-close,
 .navtree-pane-row-wrap:has(:focus-visible) .navtree-close {
-  flex-basis: 18px;
-  width: 18px;
+  flex-basis: var(--nt-ctl);
+  width: var(--nt-ctl);
   margin-left: 0;
   opacity: 1;
 }
@@ -2325,8 +2345,8 @@
    `:has(.navtree-pin.is-pinned)` outranked `.navtree-tab-row:hover` and the
    button stayed hidden on a row you were pointing at. */
 .navtree-ws-row > .navtree-tab-controls > .navtree-close:not(.navtree-ws-add) {
-  flex: 0 0 18px;
-  width: 18px;
+  flex: 0 0 var(--nt-ctl);
+  width: var(--nt-ctl);
 }
 
 /* Chat rows need no reservation at all now. Nothing in their rail is permanent
@@ -2354,8 +2374,8 @@
    — the same button, two opposite complaints). So: always there, at the weight
    of the rest of the row's chrome, full strength on hover. */
 .navtree-ws-row > .navtree-tab-controls > .navtree-ws-add {
-  flex: 0 0 18px;
-  width: 18px;
+  flex: 0 0 var(--nt-ctl);
+  width: var(--nt-ctl);
   opacity: 0.45;
   visibility: visible;
 }
