@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -216,5 +218,46 @@ describe('what the lightbox is given to navigate', () => {
     const arg = onOpenImage.mock.calls.at(-1)?.[0];
     expect(arg.items).toHaveLength(1);
     expect(arg.index).toBe(0);
+  });
+});
+
+/**
+ * The lightbox's pan bound, pinned at the CSS level — because that is where it
+ * broke and jsdom cannot see it.
+ *
+ * `clampXY` derives the horizontal pan bound from (image width - frame width),
+ * and the frame is `imgRef.current.parentElement`. The stage above it is a
+ * COLUMN flex container with `align-items: center`, so a frame that does not
+ * stretch is shrink-wrapped to its content — the image — and that subtraction
+ * is identically zero at every zoom level. Zoom worked, vertical panning
+ * worked (that axis is constrained by `flex: 1 1 auto` against a fixed-height
+ * stage), and horizontal panning was dead.
+ *
+ * Measured on a 360px stage at 2.5x: frame 895px / image 895px / a 180px drag
+ * giving `translate(0px, …)`, against frame 312px / image 780px / the same
+ * drag giving `translate(-180px, …)` once stretched.
+ *
+ * A layout assertion is impossible here (no layout in jsdom), and a unit test
+ * of `clampXY` would have to be handed the box it is supposed to measure —
+ * which is the very thing that was wrong. So the stylesheet is read directly:
+ * the rule is the fix, and deleting it is the regression.
+ */
+describe('the lightbox frame must not shrink-wrap to its image', () => {
+  it('.chat-img-frame stretches across the stage', () => {
+    const css = readFileSync(join(__dirname, 'ChatPane.css'), 'utf-8');
+    const block = css.slice(css.indexOf('.chat-img-frame {'));
+    const rule = block.slice(0, block.indexOf('}'));
+    expect(rule).toMatch(/align-self:\s*stretch/);
+  });
+
+  it('the stage it stretches against is still the centred column that requires it', () => {
+    // If the stage ever stops being a centred column, `align-self: stretch`
+    // becomes a no-op rather than a fix, and this pair should be re-read
+    // together rather than one of them quietly surviving the other.
+    const css = readFileSync(join(__dirname, 'ChatPane.css'), 'utf-8');
+    const block = css.slice(css.indexOf('.chat-img-stage {'));
+    const rule = block.slice(0, block.indexOf('}'));
+    expect(rule).toMatch(/flex-direction:\s*column/);
+    expect(rule).toMatch(/align-items:\s*center/);
   });
 });
