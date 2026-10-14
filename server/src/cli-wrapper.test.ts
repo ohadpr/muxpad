@@ -157,14 +157,17 @@ describe('scripts/muxpad HTTP wrapper', () => {
         MUXPAD_API_URL: `http://127.0.0.1:${port}`,
         MUXPAD_PANE_ID: paneId,
       };
-      // --help short-circuits before any session work, so this proves the
-      // argv reached the runner rather than the guard, without booting one.
-      const { stdout } = await execFileAsync(
+      // What this asserts is that the GUARD did not fire — not what happens
+      // afterwards. CI does not run `pnpm build`, so the runner's own usage
+      // text is not always there to print, and asserting on it made this test
+      // pass locally and fail in CI for a reason unrelated to the guard.
+      const out = await execFileAsync(
         MUXPAD_BIN,
         ['agent', '--mode', 'chat', '--resume', 'some-session-id', '--help'],
         { env, encoding: 'utf-8' },
-      );
-      expect(stdout).toContain('usage: muxpad agent');
+      ).catch((e: { stdout?: string; stderr?: string }) => e);
+      const both = `${out.stdout ?? ''}${out.stderr ?? ''}`;
+      expect(both).not.toContain('already has a running agent session');
     });
   });
 

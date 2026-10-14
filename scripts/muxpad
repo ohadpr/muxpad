@@ -3062,10 +3062,6 @@ cmd_agent() {
     echo "muxpad agent: must be run inside a muxpad pane (no MUXPAD_PANE_ID)" >&2
     exit 1
   fi
-  if [ ! -f "$runner" ]; then
-    echo "muxpad agent: runner not built ($runner missing) — run 'pnpm build' in $ROOT" >&2
-    exit 1
-  fi
   # A BARE `muxpad agent` INSIDE A PANE THAT ALREADY HAS A SESSION IS NOT A
   # QUESTION, IT IS A SESSION SWAP — and it reads like neither.
   #
@@ -3132,6 +3128,10 @@ cmd_agent() {
         esac
       fi ;;
   esac
+  if [ ! -f "$runner" ]; then
+    echo "muxpad agent: runner not built ($runner missing) — run 'pnpm build' in $ROOT" >&2
+    exit 1
+  fi
   exec node "$runner" "$@"
 }
 
