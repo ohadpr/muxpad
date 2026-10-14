@@ -907,6 +907,20 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
   // the turn-result guard below needs the count.
   // -------------------------------------------------------------------------
   let repliesThisTurn = 0;
+  /**
+   * Has this turn already streamed prose, so a NEW text block needs a blank
+   * line in front of it?
+   *
+   * The preview buffer is a raw concatenation of `text_delta`s, and the SDK
+   * emits one text block per paragraph the agent writes — with nothing between
+   * them. So two consecutive progress lines arrived as
+   * "…what the agent actually did." + "Got the user's asks…" and were drawn as
+   * one run-on sentence, "did.Got", for the whole time the turn was live. The
+   * landed events are separate and render correctly, so this was only ever
+   * visible in the preview — which is exactly where a reader watches a long
+   * turn, so it was visible most of the time.
+   */
+  let streamedTextThisTurn = false;
   // Reply tool calls currently being GENERATED, so their argument deltas can be
   // decoded into speakable text before the call runs (see reply-stream.ts).
   const replyBlocks = new ReplyBlockTracker();
@@ -1102,6 +1116,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
         interruptRequested = false;
         lastAssistantText = '';
         repliesThisTurn = 0;
+        streamedTextThisTurn = false;
         firstReplyText = '';
         currentTurnText = text;
         authFailureThisTurn = null;
@@ -1663,6 +1678,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
       interruptRequested = false;
       lastAssistantText = '';
       repliesThisTurn = 0;
+      streamedTextThisTurn = false;
       firstReplyText = '';
       // An autonomous turn has no text anyone is waiting on, so a re-exec has
       // nothing to put back — see the turn-result branch.
@@ -1761,6 +1777,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
               typeof evt.delta.text === 'string'
             ) {
               emit({ t: 'stream', delta: evt.delta.text });
+              streamedTextThisTurn = true;
             }
             // A `reply` being TYPED. Its text is a tool ARGUMENT, so it arrives
             // as `input_json_delta` — which this branch used to drop on the
@@ -1770,6 +1787,16 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
             // agent to finish the paragraph. See reply-stream.ts for the decoder
             // and the live-probed shapes.
             else if (evt.type === 'content_block_start' && typeof evt.index === 'number') {
+              // A NEW PARAGRAPH, said in the one channel the preview has. The
+              // buffer is a bare concatenation of deltas, so without this the
+              // previous block's full stop and this block's first word are
+              // adjacent characters. Only between TEXT blocks, and only once
+              // prose has actually started: a leading blank line, or one in
+              // front of a tool_use, would be a paragraph break around nothing.
+              const block = evt.content_block as { type?: string } | undefined;
+              if (block?.type === 'text' && streamedTextThisTurn) {
+                emit({ t: 'stream', delta: '\n\n' });
+              }
               replyBlocks.start(evt.index, evt.content_block);
             } else if (
               evt.type === 'content_block_delta' &&
