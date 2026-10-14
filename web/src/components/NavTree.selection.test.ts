@@ -323,8 +323,33 @@ describe('selection is the CONTENT SURFACE, not a colour on the list', () => {
     // The point of the change, and the thing most likely to be undone by
     // somebody "restoring" the highlight. With selection on the content surface
     // the accent is left to mean one thing only: a row that wants you.
+    //
+    // SPENDING it is the thing forbidden — painting the row with it. This used
+    // to be `not.toMatch(/--accent/)` on the whole rule body, which also caught
+    // the row RE-POINTING the token for its subtree. That is the opposite of
+    // spending: the rail re-points --fg/--accent/--status-* at rail values for
+    // its own island (a dark rail can sit inside a light theme), and the
+    // selected row — the one row painted in the PANE's colour — has to point
+    // them back, or a pinned name inside it is drawn in rail ink on pane
+    // background. So the guard names the properties that would be a SPEND.
     const body = ruleBody(NAV_CSS, RAIL_ACTIVE);
-    expect(body).not.toMatch(/--accent/);
+    for (const prop of [
+      'background',
+      'background-color',
+      'background-image',
+      'color',
+      'box-shadow',
+      'border-color',
+    ]) {
+      // Read the body directly: `decl` throws on an absent property, and most
+      // of these SHOULD be absent — "not declared at all" must pass, not error.
+      const spent = new RegExp(`(?:^|;)\\s*${prop}\\s*:[^;]*--accent`);
+      expect(body, `${prop} must not spend the accent`).not.toMatch(spent);
+    }
+    // And the only --accent mention left is the restoration itself.
+    const mentions = body.match(/--accent/g) ?? [];
+    expect(mentions.length).toBe(1);
+    expect(body).toMatch(/--accent:\s*var\(--pane-accent\)/);
   });
 
   it('the SHEET keeps the accent wash, because it has no pane to join', () => {
