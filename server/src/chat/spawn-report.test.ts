@@ -570,7 +570,32 @@ describe('maybeWriteSpawnReport — one attempt, and every failure is one', () =
     ).toBeNull();
   });
 
+  it('reports FAILED when a session exists but its transcript reads empty', async () => {
+    // THE SESSION-SWAP SHAPE, which used to be silent and is the whole reason
+    // this branch exists. A second runner mints a new sid, the pane's
+    // `current_sid` moves to it, and this read — which follows `current_sid` —
+    // lands on an empty transcript while the real conversation sits under the
+    // old id. The old code called that `ok`, wrote nothing, stamped nothing and
+    // logged nothing, so the parent's card said "No summary was generated for
+    // this one." over a worker that had died mid-tool-call, with no account of
+    // it anywhere. `failed` is the state that means "we tried and came back
+    // empty-handed", and it is also what earns the writer's one retry.
+    const tabId = new TabStore(db).create({ name: 'W', workspace_id: workspaceId, layout: 'p' }).id;
+    const paneId = new PaneStore(db).create({ tab_id: tabId }).id;
+    const sid = `sid-${paneId}`;
+    // Registered, but NO transcript file written for it.
+    new AgentSessionStore(db).register({ pane_id: paneId, assistant: 'codex', session_id: sid });
+    const write = await maybeWriteSpawnReport(db, tabId, paneId, async () => 'x', { now: 1 });
+    expect(write).toEqual({ report: null, state: 'failed' });
+    // And the attempt is on the clock, so a broken install cannot respawn a
+    // generation per finished turn forever.
+    expect(new TabStore(db).spawnReportAt(tabId)).toBe(1);
+  });
+
   it('writes nothing for a pane with no transcript at all', async () => {
+    // Still silent, and deliberately so: no session row means this worker was
+    // created and never ran. That is not a failure, and a red card over a tab
+    // that never started would be a worse lie than saying nothing.
     const tabId = new TabStore(db).create({ name: 'W', workspace_id: workspaceId, layout: 'p' }).id;
     const paneId = new PaneStore(db).create({ tab_id: tabId }).id;
     expect(await maybeWriteSpawnReport(db, tabId, paneId, async () => 'x', { now: 1 })).toBeNull();

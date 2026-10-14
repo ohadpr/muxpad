@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { AgentSessionStore } from '../store/AgentSessionStore.js';
 import { SpawnRoundStore } from '../store/SpawnRoundStore.js';
 import { type SpawnReportState, type SpawnReportWrite, TabStore } from '../store/TabStore.js';
 import { type HeadlineModel, agentSdkHeadlineModel, readRecentTurns } from './headline.js';
@@ -589,7 +590,43 @@ export async function maybeWriteSpawnReport(
   // A bounded tail read, not a model call — the expensive thing is still behind
   // the gate. The turn count the gate needs is only knowable from it.
   const { conversation, turns } = readRecentTurns(db, paneId);
-  if (!conversation) return fallback();
+  // A WORKER THAT FINISHED AND LEFT NO TRANSCRIPT IS A FAILURE, NOT A SUCCESS.
+  //
+  // This returned `fallback()` with no argument, and for an ordinary (not
+  // crashed, not awaiting) worker that resolves to state 'ok' — which the
+  // fallback reads as "nothing to say" and drops on the floor: no row, no
+  // stamp, no log line. The card then renders "No summary was generated for
+  // this one." and there is no account of why ANYWHERE, which is exactly the
+  // shape of the bug this comment comes from.
+  //
+  // It is also not a rare path. It is what a SESSION SWAP looks like from here:
+  // a second runner mints a new sid, the pane's `current_sid` moves to it, and
+  // this read — which follows `current_sid` — lands on a transcript with
+  // nothing in it while the real conversation sits under the old id. Measured
+  // on pane 01M4WFEFZWKVE6HESHY772P0F3, whose parent was told nothing at all
+  // about a worker that had died mid-tool-call ten minutes earlier.
+  //
+  // So: say so in the log, and put `failed` on the row, which is the state that
+  // already means "we tried and came back empty-handed" and which the card
+  // already knows how to render. `failed` is also what lets SpawnReportWriter
+  // retry once — and a transcript that was merely slow to flush is precisely
+  // the case a retry recovers.
+  //
+  // WHICH empty is it, though. A pane that never had a session at all has
+  // nothing to summarise and never did — a worker that was created and never
+  // ran is not a failure, and writing `failed` on it would put a red card over
+  // a tab that simply never started. A pane that HAS a session whose transcript
+  // reads empty is the other thing entirely, and it is the one worth shouting
+  // about. So the session row, not the emptiness, is what decides.
+  if (!conversation) {
+    const sess = new AgentSessionStore(db).getByPane(paneId);
+    if (!sess?.current_sid) return fallback();
+    console.warn(
+      `[spawn-report] no transcript for tab ${tabId} (pane ${paneId}, sid ${sess.current_sid.slice(0, 8)}) — the session may have been replaced mid-turn; reporting it as failed rather than silently writing nothing`,
+    );
+    if (writeTab()) tabs.touchSpawnReportAt(tabId, now);
+    return fallback([], true);
+  }
   // WHICH ROUND this report is for, so the interval can tell a new job from a
   // retry. The round is CLOSED by the time we get here (the turn-end closes it
   // synchronously, ahead of this call, which is the whole reason retirement
