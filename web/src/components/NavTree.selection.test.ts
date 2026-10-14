@@ -346,9 +346,16 @@ describe('selection is the CONTENT SURFACE, not a colour on the list', () => {
       const spent = new RegExp(`(?:^|;)\\s*${prop}\\s*:[^;]*--accent`);
       expect(body, `${prop} must not spend the accent`).not.toMatch(spent);
     }
-    // And the only --accent mention left is the restoration itself.
-    const mentions = body.match(/--accent/g) ?? [];
-    expect(mentions.length).toBe(1);
+    // And every remaining mention is a TOKEN being re-pointed, never a paint.
+    // The row restores --accent itself and then re-derives the tokens built
+    // from it (--nt-pinned-ink, --nt-sel, --nt-sel-hover), because a derived
+    // custom property is substituted where it is DECLARED: left on the rail's
+    // values, the selected pinned chat's name came out light purple on a
+    // near-white row.
+    for (const d of body.split(';')) {
+      if (!d.includes('--accent')) continue;
+      expect(d.trim(), `not a token declaration: ${d.trim()}`).toMatch(/^--[a-z0-9-]+\s*:/);
+    }
     expect(body).toMatch(/--accent:\s*var\(--pane-accent\)/);
   });
 
