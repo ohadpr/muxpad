@@ -6,6 +6,7 @@ import { useMediaQuery } from '../use-media-query';
 import { useWindowAttention } from '../use-window-attention';
 import { useWorkspaces, visibleWorkspaces } from '../workspaces';
 import { Brand } from './Brand';
+import { CommandPalette } from './CommandPalette';
 import { MobileNavSwitcher } from './MobileNavSwitcher';
 import { MoveUndoToast } from './MoveUndoToast';
 import { NavTree } from './NavTree';
@@ -66,6 +67,11 @@ export function AppLayout() {
 
   return (
     <div className="app-layout">
+      {/* Mounted once, above everything, and deliberately OUTSIDE the
+          workspace/sidebar branches below: ⌘K has to work on the workspace
+          picker and on mobile too, which is exactly where the rail's own
+          search field is not on screen to be focused. */}
+      <CommandPalette />
       {showTopBar && (
         <header className="ws-tabbar">
           <Brand asLink={true} responsive={true} markOnly={!!activeWorkspace} />
