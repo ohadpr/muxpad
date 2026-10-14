@@ -330,8 +330,17 @@
      re-derived here from the rail's values — and re-derived again on the
      selected row, which is painted in the pane's colour. This is the bug that
      made the selected PINNED chat's name light purple on a near-white row: the
-     mix was baked once, at `.navtree`, out of rail ink. */
-  --nt-pinned-ink: color-mix(in srgb, var(--accent) 75%, var(--fg));
+     mix was baked once, at `.navtree`, out of rail ink.
+
+     AND THE RAIL'S TINT IS WEAKER THAN THE PANE'S, which is not a tweak. 75%
+     accent reads as "the accent", and the deep rail is now in the accent's own
+     hue family — so a pinned name sat on a surface of nearly the same hue and
+     went muddy. It measured 7.3:1, which is the giveaway: the luminance was
+     fine and there was almost no CHROMA separation, so the number said pass
+     and the eye said no. Leaning the mix to the ink keeps "pinned" legible as
+     a tint without competing with the surface it sits on. The pane keeps 75%,
+     where the surface is not purple. */
+  --nt-pinned-ink: color-mix(in srgb, var(--accent) 40%, var(--fg));
   --nt-hover: color-mix(in srgb, var(--fg) 6%, transparent);
   --nt-sel: color-mix(in srgb, var(--accent) 20%, transparent);
   --nt-sel-hover: color-mix(in srgb, var(--accent) 26%, transparent);
@@ -1211,6 +1220,37 @@
   --status-blocked: var(--pane-status-blocked);
   --status-dead: var(--pane-status-dead);
   /* Re-derived, for the same reason and in the same order as the rail's. */
+  --nt-pinned-ink: color-mix(in srgb, var(--accent) 75%, var(--fg));
+  --nt-hover: color-mix(in srgb, var(--fg) 6%, transparent);
+  --nt-sel: color-mix(in srgb, var(--accent) 20%, transparent);
+  --nt-sel-hover: color-mix(in srgb, var(--accent) 26%, transparent);
+}
+
+/* ─── OVERLAYS LEAVE THE ISLAND TOO ────────────────────────────────────────
+   A popover, menu or dialog rendered INSIDE the rail paints itself on the
+   PANE's surface — `.settings-popover` and `.navtree-menu` are both
+   `background: var(--bg-elev)`, and WorkspaceSettings' panel is --bg-chrome —
+   but it inherits the rail's ink, which is white in a light theme. The result
+   is white text on a white popover: the settings menu's Theme / Font size /
+   Notifications labels and its theme <select> were effectively invisible.
+
+   Same rule as the selected row, for the same reason: paint yourself in the
+   pane's colours, wear the pane's ink. Anything new that opens inside the rail
+   and is not rail-coloured belongs in this list. */
+.navtree-menu,
+.settings-popover,
+.ws-settings__panel,
+.ws-settings__bar {
+  --fg: var(--pane-ink);
+  --fg-dim: var(--pane-ink-dim);
+  --fg-faint: var(--pane-ink-faint);
+  --border: var(--pane-border);
+  --border-strong: var(--pane-border);
+  --accent: var(--pane-accent);
+  --status-ready: var(--pane-status-ready);
+  --status-working: var(--pane-status-working);
+  --status-blocked: var(--pane-status-blocked);
+  --status-dead: var(--pane-status-dead);
   --nt-pinned-ink: color-mix(in srgb, var(--accent) 75%, var(--fg));
   --nt-hover: color-mix(in srgb, var(--fg) 6%, transparent);
   --nt-sel: color-mix(in srgb, var(--accent) 20%, transparent);
