@@ -938,7 +938,14 @@ describe('a revealed control never moves one that was already there', () => {
       NAV_CSS,
       '.navtree-ws-row > .navtree-tab-controls > .navtree-close:not(.navtree-ws-add)',
     );
-    expect(Number.parseFloat(decl(body, 'width'))).toBe(18);
+    // The SIZE is a token now (`--nt-ctl`), because the reservation and the
+    // reveal have to agree exactly and they used to do it by both spelling
+    // "18px" — four call sites of a number that had to match. What this test
+    // protects is the reservation existing at the same size as the reveal, so
+    // it asserts they name the same token rather than the same digits.
+    expect(decl(body, 'width')).toBe('var(--nt-ctl)');
+    const revealed = ruleBody(NAV_CSS, '.navtree-tab-row:hover .navtree-close');
+    expect(decl(revealed, 'width')).toBe('var(--nt-ctl)');
   });
 
   it('hides it with VISIBILITY, not opacity — a transparent button still takes the click', () => {
@@ -961,7 +968,7 @@ describe('a revealed control never moves one that was already there', () => {
       NAV_CSS,
       '.navtree-ws-row > .navtree-tab-controls > .navtree-close:not(.navtree-ws-add)',
     );
-    expect(Number.parseFloat(decl(body, 'width'))).toBe(18);
+    expect(decl(body, 'width')).toBe('var(--nt-ctl)');
     expect(body).not.toMatch(/visibility/);
   });
 
@@ -1032,7 +1039,7 @@ describe('the row’s right-hand side holds one thing at a time', () => {
   // rather than deleted.
   it('reveals the controls on hover or a KEYBOARD focus, never on a click', () => {
     const revealing = rules(NAV_CSS).filter(
-      (r) => r.atRules.length === 0 && /flex-basis:\s*18px/.test(r.body),
+      (r) => r.atRules.length === 0 && /flex-basis:\s*var\(--nt-ctl\)/.test(r.body),
     );
     expect(revealing.length).toBeGreaterThan(0);
     const tabArms = revealing
