@@ -435,11 +435,29 @@ export function landedThisTurn(ordered: readonly ChatEvent[], inFlightUser = fal
  */
 export function consumeStreamedText(preview: string, landed: string[]): string {
   if (!landed.length) return preview;
-  const joined = landed.join('');
-  if (joined && preview.startsWith(joined)) return preview.slice(joined.length);
+  // TWO JOINS, tried in order, because the stream gained a separator and old
+  // buffers did not. The runner now emits a blank line when a new TEXT block
+  // starts (backends/claude.ts) — without it the preview drew two paragraphs
+  // as one run-on sentence, "…actually did.Got the user's asks…". Landed
+  // blocks therefore line up with the buffer under '\n\n'; the bare join
+  // stays as the second try so a buffer captured before this — a mid-turn
+  // reconnect replaying the server's copy, say — still subtracts exactly
+  // rather than falling through to the lossy tail anchor.
+  for (const sep of ['\n\n', '']) {
+    const joined = landed.join(sep);
+    if (joined && preview.startsWith(joined))
+      return stripLeadingBreak(preview.slice(joined.length));
+  }
   const last = landed[landed.length - 1] as string;
   const idx = preview.lastIndexOf(last);
-  return idx >= 0 ? preview.slice(idx + last.length) : '';
+  return idx >= 0 ? stripLeadingBreak(preview.slice(idx + last.length)) : '';
+}
+
+/** The separator belongs BETWEEN blocks, so a remainder must never open with
+ *  one — that would push the live paragraph down by a blank line that closes
+ *  up again the moment it lands. */
+function stripLeadingBreak(s: string): string {
+  return s.startsWith('\n\n') ? s.slice(2) : s;
 }
 
 /**

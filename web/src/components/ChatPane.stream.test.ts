@@ -90,6 +90,27 @@ describe('the streaming preview', () => {
     expect(consumeStreamedText('oneTwothree', ['one', 'Two'])).toBe('three');
   });
 
+  it('subtracts blocks that the stream separated with a blank line', () => {
+    // THE RUN-ON BUG. The SDK emits one text block per paragraph and the
+    // preview buffer is a bare concatenation of deltas, so two progress lines
+    // arrived as "…actually did." + "Got the user's asks…" and were drawn as
+    // "did.Got" for as long as the turn was live. The runner now emits the
+    // blank line between text blocks; the subtraction has to line up with it.
+    expect(consumeStreamedText('one\n\nTwo\n\nthree', ['one', 'Two'])).toBe('three');
+  });
+
+  it('never opens the remainder with the separator', () => {
+    // A leading blank line would push the live paragraph down by one line and
+    // close it up again the moment the block landed.
+    expect(consumeStreamedText('one\n\nTwo', ['one'])).toBe('Two');
+  });
+
+  it('still subtracts an UNSEPARATED buffer exactly', () => {
+    // A mid-turn reconnect replays the server's copy, which may predate the
+    // separator. Falling through to the tail anchor there would be lossy.
+    expect(consumeStreamedText('oneTwothree', ['one', 'Two'])).toBe('three');
+  });
+
   it('keeps the tail-anchor fallback for normalization drift', () => {
     // The first block drifted (trailing space); only the last block matches.
     expect(consumeStreamedText('one Twothree', ['one', 'Two'])).toBe('three');
