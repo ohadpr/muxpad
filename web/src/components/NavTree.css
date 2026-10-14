@@ -332,15 +332,29 @@
      made the selected PINNED chat's name light purple on a near-white row: the
      mix was baked once, at `.navtree`, out of rail ink.
 
-     AND THE RAIL'S TINT IS WEAKER THAN THE PANE'S, which is not a tweak. 75%
-     accent reads as "the accent", and the deep rail is now in the accent's own
-     hue family — so a pinned name sat on a surface of nearly the same hue and
-     went muddy. It measured 7.3:1, which is the giveaway: the luminance was
-     fine and there was almost no CHROMA separation, so the number said pass
-     and the eye said no. Leaning the mix to the ink keeps "pinned" legible as
-     a tint without competing with the surface it sits on. The pane keeps 75%,
-     where the surface is not purple. */
-  --nt-pinned-ink: color-mix(in srgb, var(--accent) 40%, var(--fg));
+     AND THE RAIL'S TINT IS ITS OWN NUMBER, arrived at with two measurements
+     rather than one, because the first correction overshot.
+
+     The mark has to satisfy two things at once, and only one of them is a
+     contrast ratio:
+
+       · it must not read DIMMER than an ordinary name — a pinned chat is not
+         a de-emphasised one, and
+       · it must not read the SAME as one, or it says nothing.
+
+     Against this rail (plain names 9.25:1), measuring the mix at 40/55/65/75%
+     accent gives contrast 10.41 / 9.00 / 8.13 / 7.33 and ΔE from a plain name
+     18.7 / 27.8 / 34.7 / 41.8. The original 75% fails the first test: 7.3:1 is
+     DIMMER than the 9.25:1 beside it, so a pinned chat looked faded — which is
+     what "contrast not good" meant, and why the raw ratio passing was no
+     defence. 40% fails the second: ΔE 18.7 is too close to tell apart, which
+     is what "not strong enough" meant.
+
+     65% sits between: 8.13:1 is within a hair of the plain names' brightness,
+     and ΔE 34.7 is unmistakably a different colour. The PANE keeps 75% — its
+     surface is not in the accent's hue family, so neither failure applies
+     there. */
+  --nt-pinned-ink: color-mix(in srgb, var(--accent) 65%, var(--fg));
   --nt-hover: color-mix(in srgb, var(--fg) 6%, transparent);
   --nt-sel: color-mix(in srgb, var(--accent) 20%, transparent);
   --nt-sel-hover: color-mix(in srgb, var(--accent) 26%, transparent);
