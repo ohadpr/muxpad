@@ -70,7 +70,31 @@
    panel, visible as a seam the width of the header. One knob, set per variant,
    so neither surface has to know about the other. */
 .navtree {
-  --nt-surface: var(--bg-tabbar);
+  --nt-surface: var(--rail-surface);
+  /* ─── THE RAIL IS A TOKEN ISLAND ──────────────────────────────────────────
+     Everything below re-points the GENERIC ink tokens at the rail's own, for
+     this subtree only. That is the whole trick, and it is not a shortcut: this
+     file reads --fg, --fg-dim, --fg-faint, --border and --bg-hover directly in
+     about seventy places, and the rail now sits on a surface that may be the
+     opposite polarity to the page (a dark rail inside a light theme). Without
+     this, each of those seventy would have to learn about the rail separately
+     — and the ones that were missed would be invisible text, found one at a
+     time by eye.
+
+     Declared on `.navtree` rather than `.sidenav` so the MOBILE SHEET inherits
+     it too; the sheet overrides --nt-surface below and gets rail ink that
+     matches whatever surface it chose. */
+  --fg: var(--rail-ink);
+  --fg-dim: var(--rail-ink-dim);
+  --fg-faint: var(--rail-ink-faint);
+  --bg-hover: var(--rail-hover);
+  --border: var(--rail-border);
+  --border-strong: var(--rail-border);
+  --accent: var(--rail-accent);
+  --status-ready: var(--rail-status-ready);
+  --status-working: var(--rail-status-working);
+  --status-blocked: var(--rail-status-blocked);
+  --status-dead: var(--rail-status-dead);
   /* PINNED IS A HUE ON THE NAME, and the channel is the whole argument.
      SELECTION OWNS THE ROW'S BOX — a fill, with a funnel that runs into the
      pane. Every earlier design for this mark was also on that box: a rule under
@@ -1154,6 +1178,25 @@
   background-repeat: no-repeat;
   pointer-events: none;
 }
+/* ─── AND THE SELECTED ROW LEAVES THE ISLAND ───────────────────────────────
+   It is painted in the pane's face and its funnel flares that same surface
+   into the rail — the row IS the pane reaching in. So its ink has to be the
+   pane's ink. Without this the name, the state mark and the hover controls on
+   the one row that is NOT rail-coloured would still be drawn in rail ink, i.e.
+   white on near-white in every light theme. */
+.navtree-tab-row[data-active="true"] {
+  --fg: var(--pane-ink);
+  --fg-dim: var(--pane-ink-dim);
+  --fg-faint: var(--pane-ink-faint);
+  --border: var(--pane-border);
+  --border-strong: var(--pane-border);
+  --accent: var(--pane-accent);
+  --status-ready: var(--pane-status-ready);
+  --status-working: var(--pane-status-working);
+  --status-blocked: var(--pane-status-blocked);
+  --status-dead: var(--pane-status-dead);
+}
+
 .navtree-tab-row[data-active="true"] .navtree-name-text {
   color: var(--fg);
   font-weight: 640;
@@ -2428,6 +2471,20 @@
    Chrome surface + hairline divider — same plate language as the bar
    it replaces. */
 .sidenav {
+  /* THE SAME ISLAND AS `.navtree`, because the rail's chrome is not all inside
+     the tree: `.sidenav-brand` is a SIBLING of it, and on the deep rail the
+     wordmark measured 1.02:1 — invisible — until this rule existed. */
+  --fg: var(--rail-ink);
+  --fg-dim: var(--rail-ink-dim);
+  --fg-faint: var(--rail-ink-faint);
+  --bg-hover: var(--rail-hover);
+  --border: var(--rail-border);
+  --border-strong: var(--rail-border);
+  --accent: var(--rail-accent);
+  --status-ready: var(--rail-status-ready);
+  --status-working: var(--rail-status-working);
+  --status-blocked: var(--rail-status-blocked);
+  --status-dead: var(--rail-status-dead);
   /* flex-basis is overridden inline with the persisted/dragged width; this
      is just the fallback before React mounts. grow/shrink stay 0 so the rail
      holds whatever width the user dragged. Kept in step with
@@ -2447,7 +2504,14 @@
   /* The distinctly-darker "chrome board" token (same as the top tab bar /
      mobile strip), not --bg-chrome: the latter is only a hair off --bg, so
      the rail's empty space + footer blurred into the pane content behind it. */
-  background: var(--bg-tabbar);
+  background: var(--rail-surface);
+  /* THE SEAM, and only where a tonal step cannot do the job. Dark themes set
+     --rail-seam because two dark surfaces have nowhere to go from each other;
+     light themes set it transparent, where the step is 60+ points of L* and a
+     line would only cut the selected row's curves as they open into the pane.
+     Drawn as a box-shadow rather than a border so it costs no layout width —
+     the selected row still reaches x=280 and merges. */
+  box-shadow: inset -1px 0 0 0 var(--rail-seam);
   /* NO RIGHT HAIRLINE. It was the seam between rail and pane, and the selected
      row is now the place where those two are deliberately ONE surface — a 1px
      border runs straight through the join, which is the only part of it that

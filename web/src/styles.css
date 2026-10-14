@@ -37,6 +37,63 @@
      wash itself. The first two were written out by hand and the third is where
      the 5% comes from — three copies of one number is exactly how they drift. */
   --bg-pane-face: color-mix(in srgb, var(--accent) 5%, var(--bg));
+
+  /* ─── THE RAIL IS ITS OWN SURFACE ─────────────────────────────────────────
+     The sidebar and the pane used to be two shades of the same near-white —
+     measured ΔL* 2.7 between them in Alucard — so the eye got no edge to hold
+     and the two read as one field. (ΔL*, not a WCAG ratio: a ratio is built
+     for text on a background and compresses to nothing at the dark end, which
+     is why every dark theme scored ~1.05:1 no matter how far apart the
+     surfaces looked.)
+
+     So the rail declares its own surface AND ITS OWN INK, per theme. The ink
+     half is not optional: NavTree.css reads --fg/--fg-dim/--border directly in
+     about seventy places, and on a dark rail inside a light theme every one of
+     those would go invisible. The rail re-points those tokens at rail values
+     for its own subtree (see NavTree.css), and the SELECTED row — which is
+     painted in the pane's colour and merges into it — points them back.
+
+     A theme that declares none of these keeps exactly today's look: every
+     fallback below is the token the rail used before. */
+  --rail-surface: var(--bg-tabbar);
+  --rail-ink: var(--fg);
+  --rail-ink-dim: var(--fg-dim);
+  --rail-ink-faint: var(--fg-faint);
+  --rail-hover: var(--bg-hover);
+  --rail-border: var(--border);
+  /* The drawn edge. Dark themes need it because two dark surfaces cannot be
+     far apart in lightness — there is nothing below the pane to go to — so the
+     separation is drawn rather than toned. Light themes set it to transparent:
+     a 60-point tonal step needs no help, and a line there would cut the
+     selected row's curves where it merges into the pane. */
+  --rail-seam: transparent;
+  /* THE PANE'S OWN VALUES, kept reachable from inside the rail. Substitution
+     happens where a custom property is DECLARED, so these resolve against the
+     root's --fg/--border and survive the rail re-pointing those below. */
+  --pane-ink: var(--fg);
+  --pane-ink-dim: var(--fg-dim);
+  --pane-ink-faint: var(--fg-faint);
+  --pane-border: var(--border);
+  --pane-accent: var(--accent);
+  /* The accent HAS to be re-pointed too. It is not decoration here: a pinned
+     chat's name is a 75% accent tint and "+ New workspace" is solid accent, and
+     on a deep rail the page's accent measured 4.06:1 and 2.41:1 — both fail.
+     A theme that omits this keeps its page accent, which is correct for the
+     themes whose accent is already light. */
+  --rail-accent: var(--accent);
+  /* THE STATE MARKS TOO. A light theme picks dark state colours because they
+     sit on a light rail — #1a6b3d green, #8a6410 amber. On the deep rail those
+     measured 1.74–2.46:1, i.e. a status dot nobody can see, and the dot is the
+     one thing on a row that must read at a glance. Light themes therefore
+     declare rail-side states; dark themes already have bright ones. */
+  --rail-status-ready: var(--status-ready);
+  --rail-status-working: var(--status-working);
+  --rail-status-blocked: var(--status-blocked);
+  --rail-status-dead: var(--status-dead);
+  --pane-status-ready: var(--status-ready);
+  --pane-status-working: var(--status-working);
+  --pane-status-blocked: var(--status-blocked);
+  --pane-status-dead: var(--status-dead);
   --chrome-h: 36px;
   --chrome-pane-h: 28px;
   /* Thickness of the accent rail that signals "this is the active tab"
@@ -171,6 +228,16 @@
 
 /* Tokyo Night — saturated deep navy with a vivid blue accent. */
 [data-theme="tokyo-night"] {
+  --rail-accent: #8fb3ff;
+  /* Rail: lifted off the pane (a dark pane has nothing below it), with a seam
+     doing the separating that lightness cannot. */
+  --rail-surface: #313443;
+  --rail-ink: #ffffff;
+  --rail-ink-dim: #cdd3ea;
+  --rail-ink-faint: #949cbb;
+  --rail-hover: #ffffff14;
+  --rail-border: #ffffff26;
+  --rail-seam: #00000073;
   --bg: #1a1b26;
   --bg-elev: #1f2335;
   --bg-hover: #292e42;
@@ -199,6 +266,14 @@
 /* Dracula — grey-purple base with vivid purple/pink accents. The standout
    colorful dark. Different both in bg tint and accent hue. */
 [data-theme="dracula"] {
+  --rail-accent: #d0b3ff;
+  --rail-surface: #3a3d4f;
+  --rail-ink: #ffffff;
+  --rail-ink-dim: #dcdce4;
+  --rail-ink-faint: #a6abc8;
+  --rail-hover: #ffffff17;
+  --rail-border: #ffffff26;
+  --rail-seam: #00000073;
   --bg: #282a36;
   --bg-elev: #21222c;
   --bg-hover: #44475a;
@@ -238,6 +313,20 @@
    accent is Dracula's violet taken down only as far as white-on-it needs
    (6.38:1) — enough to stay violet rather than becoming indigo. */
 [data-theme="alucard"] {
+  --rail-status-ready: #4ecb86;
+  --rail-status-working: #f0bb55;
+  --rail-status-blocked: #ff7b73;
+  --rail-status-dead: #a39dba;
+  --rail-accent: #a98cff;
+  /* Rail: a decisive step toward the ink, so the pane reads as a separate
+     surface at last (ΔL* 78 against the pane, from 2.7). */
+  --rail-surface: #27203f;
+  --rail-ink: #ffffff;
+  --rail-ink-dim: #d6d0e8;
+  --rail-ink-faint: #a49dbe;
+  --rail-hover: #ffffff1a;
+  --rail-border: #ffffff2b;
+  --rail-seam: transparent;
   --bg: #f5f4fb;
   --bg-elev: #ffffff;
   --bg-hover: #e2ddf5;
@@ -283,6 +372,18 @@
 
 /* GitHub Light — crisp pure white. The "well-lit room" theme. */
 [data-theme="github-light"] {
+  --rail-status-ready: #4ecb86;
+  --rail-status-working: #f0bb55;
+  --rail-status-blocked: #ff7b73;
+  --rail-status-dead: #a39dba;
+  --rail-accent: #79b8ff;
+  --rail-surface: #22272e;
+  --rail-ink: #ffffff;
+  --rail-ink-dim: #cdd5df;
+  --rail-ink-faint: #9aa4b1;
+  --rail-hover: #ffffff1a;
+  --rail-border: #ffffff2b;
+  --rail-seam: transparent;
   --bg: #ffffff;
   --bg-elev: #ffffff;
   --bg-hover: #eaeef2;
@@ -337,6 +438,18 @@
    acme.ai: buttery off-white surfaces, near-black ink, saturated purple
    for primaries with a soft lavender tint for hovers and selections. */
 [data-theme="acme"] {
+  --rail-status-ready: #4ecb86;
+  --rail-status-working: #f0bb55;
+  --rail-status-blocked: #ff7b73;
+  --rail-status-dead: #a39dba;
+  --rail-accent: #b3a3ff;
+  --rail-surface: #241f33;
+  --rail-ink: #ffffff;
+  --rail-ink-dim: #dad5e4;
+  --rail-ink-faint: #a8a2bb;
+  --rail-hover: #ffffff1a;
+  --rail-border: #ffffff2b;
+  --rail-seam: transparent;
   --bg: #fdf6ea;
   --bg-elev: #fffdf6;
   --bg-hover: #f6ecd8;
@@ -382,6 +495,14 @@
    accent, soft cream foreground. The "night-time Acme" pairing rather
    than the inverted-light version. */
 [data-theme="acme-dark"] {
+  --rail-accent: #c3b0ff;
+  --rail-surface: #39276f;
+  --rail-ink: #ffffff;
+  --rail-ink-dim: #e2dcca;
+  --rail-ink-faint: #a9a494;
+  --rail-hover: #ffffff17;
+  --rail-border: #ffffff26;
+  --rail-seam: #00000073;
   --bg: #221547;
   --bg-elev: #2c1d5b;
   --bg-hover: #382670;
