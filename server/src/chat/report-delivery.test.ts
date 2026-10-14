@@ -6,7 +6,12 @@ import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SpawnRoundStore } from '../store/SpawnRoundStore.js';
 import { openDb } from '../store/db.js';
-import { BATCH_MAX_HOLD_MS, ReportDelivery, type SubmitSendResult } from './report-delivery.js';
+import {
+  BATCH_MAX_HOLD_MS,
+  BATCH_SPAWN_WINDOW_MS,
+  ReportDelivery,
+  type SubmitSendResult,
+} from './report-delivery.js';
 
 /**
  * THE JOIN. A finished sub-chat's result has never reached its parent's AGENT —
@@ -58,7 +63,12 @@ describe('report delivery — the join', () => {
   function child(
     id: string,
     parentId: string,
-    round: { ended?: number | null; report?: string | null; state?: string | null } = {},
+    round: {
+      started?: number;
+      ended?: number | null;
+      report?: string | null;
+      state?: string | null;
+    } = {},
   ): string {
     db.prepare(
       `INSERT INTO tabs (id, slug, name, layout, workspace_id, created_at, updated_at, spawned_by, spawn_task)
@@ -74,7 +84,7 @@ describe('report delivery — the join', () => {
     ).run(
       `r-${id}`,
       id,
-      NOW,
+      round.started ?? NOW,
       ended,
       round.report === undefined ? `report from ${id}` : round.report,
       round.state === undefined ? 'ok' : round.state,
@@ -160,6 +170,33 @@ describe('report delivery — the join', () => {
 
     expect(sent).toHaveLength(1);
     expect(parseSpawnDelivery(sent[0]?.text ?? '')?.marker.count).toBe(2);
+  });
+
+  it('does NOT hold a finished child behind a sibling from a LATER dispatch', () => {
+    // The real case: the parent spawned one worker, ended its turn, and eleven
+    // minutes later — asked something new — spawned another. The first closed
+    // its round 0.7 s after the second opened, and its report then sat behind a
+    // "batch" that was never one.
+    const p = parent('P');
+    child('first', p, { started: NOW - 11 * 60_000, ended: NOW + 700 });
+    child('later', p, { started: NOW, ended: null, report: null, state: null });
+
+    const r = make().sweep();
+    expect(r.delivered).toBe(1);
+    expect(parseSpawnDelivery(sent[0]?.text ?? '')?.marker.from).toEqual(['first']);
+    expect(delivered('later')).toBeNull();
+  });
+
+  it('still holds for a sibling spawned in the same burst', () => {
+    const p = parent('P');
+    child('done', p, { started: NOW });
+    child('working', p, {
+      started: NOW + BATCH_SPAWN_WINDOW_MS,
+      ended: null,
+      report: null,
+      state: null,
+    });
+    expect(make().sweep().held).toBe(1);
   });
 
   it('BREAKS THE HOLD past the ceiling — a wedged sibling must not eat the batch', () => {

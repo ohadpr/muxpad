@@ -33,7 +33,7 @@ import { TabStore } from '../store/TabStore.js';
 /**
  * HOW LONG A FINISHED CHILD'S REPORT WAITS for its siblings.
  *
- * The batch barrier is `openRoundCountByParent`, and that count is not a
+ * The batch barrier is `openRoundStartsByParent`, and an open round is not a
  * liveness check: a worker whose runner died mid-round leaves its round open
  * forever, so an unbounded barrier would hold its siblings' reports for good —
  * turning the feature into a strictly worse version of the silence it replaces.
@@ -46,6 +46,25 @@ import { TabStore } from '../store/TabStore.js';
  * much longer and a wedged worker costs the orchestrator its whole batch.
  */
 export const BATCH_MAX_HOLD_MS = 10 * 60_000;
+
+/**
+ * WHICH OPEN SIBLINGS ARE PART OF THE SAME BATCH.
+ *
+ * "Every child of this parent still mid-round" is not a batch. A parent that
+ * dispatches one worker, ends its turn, and dispatches another twelve minutes
+ * later — because the person asked it something new — has two jobs in flight,
+ * not one fan-out. Holding the first one's result behind the second is the
+ * barrier inventing a join nobody asked for. Observed: a finished worker's
+ * report sat undelivered behind a sibling the parent had spawned 0.7 s before
+ * the first one's round closed, eleven minutes after the first was started.
+ *
+ * A fan-out is spawned in one go — a burst of `muxpad agent new` inside one
+ * turn — so its rounds START close together. An open sibling therefore holds a
+ * finished round only if it started within this window of it. Five minutes
+ * covers a long sequentially-spawned fan-out (with the agent thinking between
+ * calls) while leaving a separate later dispatch out of it.
+ */
+export const BATCH_SPAWN_WINDOW_MS = 5 * 60_000;
 
 /** How often the sweep looks for a hold that has run out of patience. */
 export const DELIVERY_SWEEP_MS = 60_000;
@@ -217,7 +236,12 @@ export class ReportDelivery {
     if (!pane) return this.abandon(rounds, pending, 'parent has no agent pane');
 
     // ─── HAS THE BATCH LANDED? ──────────────────────────────────────────────
-    const stillWorking = rounds.openRoundCountByParent(parentTabId);
+    // Only siblings from the same fan-out hold it — see BATCH_SPAWN_WINDOW_MS.
+    const stillWorking = rounds
+      .openRoundStartsByParent(parentTabId)
+      .filter((s) =>
+        pending.some((r) => Math.abs(s - r.started_at) <= BATCH_SPAWN_WINDOW_MS),
+      ).length;
     if (stillWorking > 0) {
       const oldest = pending[0]?.ended_at ?? this.now();
       if (this.now() - oldest < BATCH_MAX_HOLD_MS)
