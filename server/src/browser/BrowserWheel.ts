@@ -177,6 +177,36 @@ export class BrowserWheel {
     this.globals.set(KEY_PREFIX + name, JSON.stringify({ ...current, expiresAt: 0 }));
     return true;
   }
+
+  /**
+   * NOBODY IS THERE ANY MORE — hand it back without being asked.
+   *
+   * The lease was a token you had to hand back, and the only control that did
+   * so lived inside the viewer. So closing the view left a human holding the
+   * wheel for the rest of its ten minutes, with the agent refusing to work and
+   * no way to fix it from outside. Reported, fairly, as "how can I be in
+   * control if I close the view".
+   *
+   * Possession follows PRESENCE instead: the sweep that already asks the host
+   * how many viewers are attached (index.ts) releases a human's lease once the
+   * last one has been gone for the grace period.
+   *
+   * The grace is what keeps the case the manual handback was protecting. The
+   * viewer deliberately does NOT release on `pagehide`, because iOS fires that
+   * when you switch apps and switching apps is what a login IS — going to read
+   * the code out of your email. A minute is long enough to fetch a code and
+   * come back (reconnecting re-asserts the lease) and short enough that a
+   * closed view stops blocking the agent.
+   *
+   * Only a HUMAN lease is released this way. An agent's lease has no viewer and
+   * its absence means nothing.
+   */
+  releaseIfUnattended(profile: string, emptyForMs: number, graceMs: number): boolean {
+    const current = this.holder(profile);
+    if (!current || current.holder !== 'human') return false;
+    if (emptyForMs < graceMs) return false;
+    return this.release(profile, current.by);
+  }
 }
 
 /**
