@@ -228,16 +228,18 @@
 
 /* Tokyo Night — saturated deep navy with a vivid blue accent. */
 [data-theme="tokyo-night"] {
-  --rail-accent: #8fb3ff;
-  /* Rail: lifted off the pane (a dark pane has nothing below it), with a seam
-     doing the separating that lightness cannot. */
+  /* The rail, as reviewed on the demo — these are its rendered values, not a
+     second guess at them. */
   --rail-surface: #313443;
-  --rail-ink: #ffffff;
-  --rail-ink-dim: #cdd3ea;
-  --rail-ink-faint: #949cbb;
-  --rail-hover: #ffffff14;
-  --rail-border: #ffffff26;
-  --rail-seam: #00000073;
+  --rail-ink: #c0caf5;
+  --rail-ink-dim: #a3acd1;
+  --rail-ink-faint: #7b82a0;
+  --rail-hover: #404355;
+  --rail-border: #484c5f;
+  --rail-seam: #4e5267;
+  --rail-accent: #8fb3ff;
+  --rail-status-ready: #49c07d;
+  --rail-status-working: #e8b34b;
   --bg: #1a1b26;
   --bg-elev: #1f2335;
   --bg-hover: #292e42;
@@ -266,14 +268,18 @@
 /* Dracula — grey-purple base with vivid purple/pink accents. The standout
    colorful dark. Different both in bg tint and accent hue. */
 [data-theme="dracula"] {
+  /* The rail, as reviewed on the demo — these are its rendered values, not a
+     second guess at them. */
+  --rail-surface: #454750;
+  --rail-ink: #f8f8f2;
+  --rail-ink-dim: #d4d5d2;
+  --rail-ink-faint: #a2a3a4;
+  --rail-hover: #575960;
+  --rail-border: #62636a;
+  --rail-seam: #696a71;
   --rail-accent: #d0b3ff;
-  --rail-surface: #3a3d4f;
-  --rail-ink: #ffffff;
-  --rail-ink-dim: #dcdce4;
-  --rail-ink-faint: #a6abc8;
-  --rail-hover: #ffffff17;
-  --rail-border: #ffffff26;
-  --rail-seam: #00000073;
+  --rail-status-ready: #50fa7b;
+  --rail-status-working: #f1fa8c;
   --bg: #282a36;
   --bg-elev: #21222c;
   --bg-hover: #44475a;
@@ -313,20 +319,20 @@
    accent is Dracula's violet taken down only as far as white-on-it needs
    (6.38:1) — enough to stay violet rather than becoming indigo. */
 [data-theme="alucard"] {
-  --rail-status-ready: #4ecb86;
-  --rail-status-working: #f0bb55;
-  --rail-status-blocked: #ff7b73;
-  --rail-status-dead: #a39dba;
+  /* The rail, as reviewed on the demo — these are its rendered values, not a
+     second guess at them. */
+  --rail-surface: #282340;
+  --rail-ink: #ffffff;
+  --rail-ink-dim: #cccad6;
+  --rail-ink-faint: #9794a5;
+  --rail-hover: #403c57;
+  --rail-border: #4d4962;
+  --rail-seam: transparent;
   --rail-accent: #a98cff;
+  --rail-status-ready: #98bca8;
+  --rail-status-working: #d0c19f;
   /* Rail: a decisive step toward the ink, so the pane reads as a separate
      surface at last (ΔL* 78 against the pane, from 2.7). */
-  --rail-surface: #27203f;
-  --rail-ink: #ffffff;
-  --rail-ink-dim: #d6d0e8;
-  --rail-ink-faint: #a49dbe;
-  --rail-hover: #ffffff1a;
-  --rail-border: #ffffff2b;
-  --rail-seam: transparent;
   --bg: #f5f4fb;
   --bg-elev: #ffffff;
   --bg-hover: #e2ddf5;
@@ -372,18 +378,18 @@
 
 /* GitHub Light — crisp pure white. The "well-lit room" theme. */
 [data-theme="github-light"] {
-  --rail-status-ready: #4ecb86;
-  --rail-status-working: #f0bb55;
-  --rail-status-blocked: #ff7b73;
-  --rail-status-dead: #a39dba;
-  --rail-accent: #79b8ff;
-  --rail-surface: #22272e;
+  /* The rail, as reviewed on the demo — these are its rendered values, not a
+     second guess at them. */
+  --rail-surface: #1d2834;
   --rail-ink: #ffffff;
-  --rail-ink-dim: #cdd5df;
-  --rail-ink-faint: #9aa4b1;
-  --rail-hover: #ffffff1a;
-  --rail-border: #ffffff2b;
+  --rail-ink-dim: #d2d4d6;
+  --rail-ink-faint: #979ca2;
+  --rail-hover: #39424d;
+  --rail-border: #464f59;
   --rail-seam: transparent;
+  --rail-accent: #79b8ff;
+  --rail-status-ready: #9bc3ae;
+  --rail-status-working: #d5c19d;
   --bg: #ffffff;
   --bg-elev: #ffffff;
   --bg-hover: #eaeef2;
@@ -438,18 +444,18 @@
    acme.ai: buttery off-white surfaces, near-black ink, saturated purple
    for primaries with a soft lavender tint for hovers and selections. */
 [data-theme="acme"] {
-  --rail-status-ready: #4ecb86;
-  --rail-status-working: #f0bb55;
-  --rail-status-blocked: #ff7b73;
-  --rail-status-dead: #a39dba;
-  --rail-accent: #b3a3ff;
-  --rail-surface: #241f33;
-  --rail-ink: #ffffff;
-  --rail-ink-dim: #dad5e4;
-  --rail-ink-faint: #a8a2bb;
-  --rail-hover: #ffffff1a;
-  --rail-border: #ffffff2b;
+  /* The rail, as reviewed on the demo — these are its rendered values, not a
+     second guess at them. */
+  --rail-surface: #141223;
+  --rail-ink: #fffdf6;
+  --rail-ink-dim: #cec8c2;
+  --rail-ink-faint: #928d8e;
+  --rail-hover: #302d3b;
+  --rail-border: #3e3b46;
   --rail-seam: transparent;
+  --rail-accent: #b3a3ff;
+  --rail-status-ready: #9bc3ae;
+  --rail-status-working: #d5c19d;
   --bg: #fdf6ea;
   --bg-elev: #fffdf6;
   --bg-hover: #f6ecd8;
@@ -495,14 +501,18 @@
    accent, soft cream foreground. The "night-time Acme" pairing rather
    than the inverted-light version. */
 [data-theme="acme-dark"] {
+  /* The rail, as reviewed on the demo — these are its rendered values, not a
+     second guess at them. */
+  --rail-surface: #3e325a;
+  --rail-ink: #ebe5d2;
+  --rail-ink-dim: #c8c1ba;
+  --rail-ink-faint: #988f99;
+  --rail-hover: #4f4466;
+  --rail-border: #5a4f6e;
+  --rail-seam: #615672;
   --rail-accent: #c3b0ff;
-  --rail-surface: #39276f;
-  --rail-ink: #ffffff;
-  --rail-ink-dim: #e2dcca;
-  --rail-ink-faint: #a9a494;
-  --rail-hover: #ffffff17;
-  --rail-border: #ffffff26;
-  --rail-seam: #00000073;
+  --rail-status-ready: #50fa7b;
+  --rail-status-working: #f5c85a;
   --bg: #221547;
   --bg-elev: #2c1d5b;
   --bg-hover: #382670;
