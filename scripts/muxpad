@@ -1094,7 +1094,27 @@ cmd_card_get() {
   [ -z "$name" ] && { echo "usage: muxpad card get <name>" >&2; exit 1; }
   # The CONTENT, bare — this is the read half of read-modify-write, so it must
   # pipe into an editor without a wrapper to strip.
-  http_request GET "/api/tabs/$(card_tab)/cards/$name" | jq -r '.content'
+  #
+  # A MISS SAYS SO, on stderr and with a non-zero exit. Printing an empty line
+  # for "no such card" is indistinguishable from a card that exists and is
+  # empty, and the difference is usually the thing you are trying to find out:
+  # cards are per-TAB, so reading one that a sub-chat pinned from the parent's
+  # pane is a miss, and it looked exactly like the card having been lost. Which
+  # is how a perfectly intact card got reported as a data-loss bug.
+  local _tab _body _content
+  _tab="$(card_tab)"
+  # `|| _body=''` OUTSIDE the substitution, not `|| true` inside it: a 404 makes
+  # http_request `exit 1`, which TERMINATES the subshell rather than failing a
+  # command in it, so an inner `|| true` never runs and the assignment itself
+  # carries the non-zero status straight into `set -e`. The miss then killed the
+  # script one line before the message explaining it.
+  _body="$(http_request GET "/api/tabs/$_tab/cards/$name" 2>/dev/null)" || _body=''
+  _content="$(printf '%s' "$_body" | jq -r '.content // empty' 2>/dev/null)" || _content=''
+  if [ -z "$_body" ] || [ -z "$_content" ]; then
+    echo "muxpad: no card '$name' on tab $_tab (cards are per-tab — try 'muxpad card list', or --tab=<id> for another tab's cards)" >&2
+    exit 1
+  fi
+  printf '%s\n' "$_content"
 }
 
 cmd_card_list() {
@@ -2917,11 +2937,37 @@ cmd_agent_wait() {
   done
 }
 
+# `--help` for an HTTP SUBCOMMAND, answered before the subcommand parses
+# anything. The dispatcher below routes `new|list|…` away from the runner's own
+# `--help` handling, so `muxpad agent new --help` used to reach cmd_agent_new's
+# strict flag parser and come back "muxpad: unknown flag --help" — which is the
+# reflex question answered with a refusal, and the thing that sends someone on
+# to type the BARE `muxpad agent` (see the guard below for what that used to do).
+agent_subcommand_usage() {
+  case "$1" in
+    new) echo 'usage: muxpad agent new [--workspace=<id>] [--cwd=<dir>] [--name=<tab name>] [--model=<model>] [--mode=chat|agent] [--backend=claude|codex|cursor|pick] [--detached] "first message"' ;;
+    list) echo 'usage: muxpad agent list' ;;
+    respawn) echo 'usage: muxpad agent respawn <paneId> | --all [--backend=<id>]' ;;
+    send) echo 'usage: muxpad agent send <paneId> "message"' ;;
+    transcript) echo 'usage: muxpad agent transcript <paneId> [--tail=N]' ;;
+    wait) echo 'usage: muxpad agent wait <paneId> [--timeout=SEC]' ;;
+  esac
+}
+
 cmd_agent() {
   # `muxpad agent new|list|respawn|send|transcript|wait …` are HTTP verbs;
   # anything else is the in-pane runner itself (including the server-written
   # `muxpad agent --resume <sid>`).
-  case "${1:-}" in
+  local _sub="${1:-}" _a
+  case "$_sub" in
+    new|list|respawn|send|transcript|wait)
+      for _a in "$@"; do
+        case "$_a" in
+          --help|-h) agent_subcommand_usage "$_sub"; exit 0 ;;
+        esac
+      done ;;
+  esac
+  case "$_sub" in
     new) shift; cmd_agent_new "$@"; return ;;
     list) shift; require_jq; cmd_agent_list "$@"; return ;;
     respawn) shift; cmd_agent_respawn "$@"; return ;;
@@ -2951,6 +2997,46 @@ cmd_agent() {
     echo "muxpad agent: runner not built ($runner missing) — run 'pnpm build' in $ROOT" >&2
     exit 1
   fi
+  # A BARE `muxpad agent` INSIDE A PANE THAT ALREADY HAS A SESSION IS NOT A
+  # QUESTION, IT IS A SESSION SWAP — and it reads like neither.
+  #
+  # args.ts hardened the argv it did not UNDERSTAND. Argv it understands
+  # perfectly is the hole that was left: no `--resume` parses cleanly and means
+  # "mint a brand-new session", so the bare command starts a second runner in a
+  # pane that already has one, the server's self-heal rewrite believes the new
+  # hello, and the live conversation is stranded under an id nothing points at.
+  # Measured on pane 01M4WFEFZWKVE6HESHY772P0F3: a sub-chat ran `muxpad agent`
+  # to read its usage, its in-flight tool call died with "the session ended
+  # before this call's result was recorded", the pane then read `idle` as though
+  # it had finished, and a later `agent send` reported success while delivering
+  # into the stranded session nobody was reading.
+  #
+  # The signal is the pane's OWN startup command: the server writes
+  # `--resume <sid>` into it the moment a session exists, so its presence means
+  # "this pane has a conversation" and its absence means a first boot or a
+  # pre-resume legacy pane (which must still be allowed to start, hence testing
+  # the row rather than refusing on any live pane). The server's own respawn
+  # replays that command WITH `--resume`, so it never trips this.
+  case " $* " in
+    *" --resume"*|*" --pick "*) ;;
+    *)
+      if [ -n "${MUXPAD_API_URL:-}" ] && command -v jq >/dev/null 2>&1; then
+        local _cmd
+        _cmd="$(http_request GET "/api/panes/$MUXPAD_PANE_ID" 2>/dev/null | jq -r '.startup_cmd // ""' 2>/dev/null || true)"
+        case "$_cmd" in
+          *--resume*)
+            {
+              echo "muxpad agent: this pane already has a running agent session."
+              echo "Starting another one here would strand the conversation you are in."
+              echo
+              echo "  To see what this command does:   muxpad agent --help"
+              echo "  To start a NEW agent elsewhere:  muxpad agent new \"first message\""
+              echo "  To talk to another pane:         muxpad agent send <paneId> \"message\""
+            } >&2
+            exit 1 ;;
+        esac
+      fi ;;
+  esac
   exec node "$runner" "$@"
 }
 
