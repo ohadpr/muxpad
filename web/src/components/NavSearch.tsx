@@ -1,5 +1,5 @@
 import { fallbackTabIcon } from '@muxpad/shared';
-import { Fragment, type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { Fragment, type ReactNode, useEffect, useId, useRef, useState } from 'react';
 import type { ArchiveSearchHit } from '../api';
 import type { NavTreeVariantName } from '../lib/nav-row-affordances';
 import { type SearchableTab, type TabMatch, snippetParts, splitHighlight } from '../lib/nav-search';

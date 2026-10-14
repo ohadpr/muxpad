@@ -229,6 +229,14 @@ export function browsersRoutes(deps: {
    * the right degradation for a convenience.
    */
   resumeAgent?: (paneId: string, text: string) => void;
+  /**
+   * How long discovery waits for BOTH listeners (Chrome, then the viewer)
+   * before giving up with a 504. Injectable only so the test that pins the
+   * never-ready case does not have to sit out the real one — a 30s test is a
+   * 30s shard, and the server suite's budget is already the tightest thing in
+   * CI.
+   */
+  cdpReadyTimeoutMs?: number;
 }) {
   const app = new Hono();
   const wheel = new BrowserWheel(deps.db);
@@ -477,7 +485,7 @@ export function browsersRoutes(deps: {
     if (path.replace(/\/$/, '') !== '/json/version')
       return c.json({ error: 'use the guarded CDP socket' }, 404);
     const upstream = `${state.cdpUrl}${path}`;
-    const deadline = Date.now() + 30_000;
+    const deadline = Date.now() + (deps.cdpReadyTimeoutMs ?? 30_000);
     /**
      * IS THE VIEWER LISTENING YET? Not "is Chrome", which is a different
      * process on a different port, and that distinction is the whole bug.
@@ -498,6 +506,9 @@ export function browsersRoutes(deps: {
      */
     const viewerReady = async (): Promise<boolean> => {
       try {
+        // HEAD, so there is no body to drain. The CDP probe below is a GET and
+        // its body IS drained on the not-ready path — an undrained response per
+        // 200ms tick is ~150 of them held open across a cold start.
         await fetch(state.viewerUrl, { method: 'HEAD' });
         return true;
       } catch {
@@ -507,7 +518,11 @@ export function browsersRoutes(deps: {
     for (;;) {
       try {
         const res = await fetch(upstream);
-        if (res.ok && (await viewerReady())) {
+        if (res.ok && !(await viewerReady())) {
+          // Chrome is up, the viewer is not. Drain this body before looping:
+          // the url it carries is useless until both are listening.
+          await res.arrayBuffer().catch(() => undefined);
+        } else if (res.ok) {
           // Never expose Chrome's unguarded socket to the MCP client.
           const payload = (await res.json()) as Record<string, unknown>;
           if (typeof payload.webSocketDebuggerUrl === 'string')

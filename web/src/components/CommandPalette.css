@@ -23,6 +23,16 @@
 }
 
 .cmdk-dialog {
+  /* UA RESET. A `<dialog>` is not a neutral box: the user-agent sheet gives it
+     `position: absolute`, `margin: auto`, a border and `padding: 1em`. The
+     padding is the visible one — it inset the field and the result rows by
+     16px, so the divider under the input stopped short of both edges and the
+     rows no longer lined up with the surface they sit on. `position: static`
+     hands placement back to the backdrop's flexbox, which is what centres it. */
+  position: static;
+  margin: 0;
+  padding: 0;
+  color: inherit;
   width: min(640px, 100%);
   max-height: min(60vh, 560px);
   display: flex;

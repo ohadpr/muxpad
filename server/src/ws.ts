@@ -910,8 +910,15 @@ export function attachWsServer(deps: {
     t.unref?.();
     probation.set(paneId, t);
   };
+  // `respawn`, NOT a bare `muxpad agent`. This said "rerun `muxpad agent` from
+  // the pane's terminal face", and on a pane that still carries `--resume` in
+  // its startup_cmd — which a dead pane does — that is advice to mint a SECOND
+  // session and strand the conversation the pane is there to hold. `respawn`
+  // replays the pane's own startup command, `--resume` and all, so it restarts
+  // the session instead of competing with it. scripts/muxpad's guard refuses
+  // the bare form and names this same command; the two have to agree.
   const agentExitedMessage = (paneId: string) =>
-    `agent exited — automatic restarts failed; see ~/.muxpad/agent-logs/${paneId}.log, then rerun \`muxpad agent\` from the pane's terminal face`;
+    `agent exited — automatic restarts failed; see ~/.muxpad/agent-logs/${paneId}.log, then run \`muxpad agent respawn ${paneId}\``;
   // Single-flight: a slow ptyd must not stack overlapping sweeps.
   let sweepInFlight = false;
   /**

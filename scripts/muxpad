@@ -1134,7 +1134,13 @@ cmd_card_get() {
   rm -f "$_err"
   # `// ""` not `// empty`: a present-but-empty card prints its empty line and
   # exits 0, which is what the read half of read-modify-write needs.
-  printf '%s\n' "$(printf '%s' "$_body" | jq -r '.content // ""')"
+  #
+  # PIPED, never `printf '%s\n' "$(…)"`. Command substitution strips ALL
+  # trailing newlines, so a card whose text ends in a blank line came back one
+  # line shorter — and this is the read half of a read-modify-write, so the
+  # next `card set` would have written the loss back. `jq -r` already ends its
+  # output with exactly one newline.
+  printf '%s' "$_body" | jq -r '.content // ""'
 }
 
 cmd_card_list() {
@@ -3081,39 +3087,48 @@ cmd_agent() {
   # the row rather than refusing on any live pane). The server's own respawn
   # replays that command WITH `--resume`, so it never trips this.
   #
-  # A DEAD PANE IS THE EXCEPTION, and getting this wrong would have been worse
-  # than the bug. When automatic restarts give up, the server tells the user in
-  # so many words to "rerun `muxpad agent` from the pane's terminal face"
-  # (ws.ts, agentExitedMessage) — and a dead pane still carries `--resume` in
-  # its startup_cmd, so an unconditional refusal would answer the server's own
-  # recovery instruction with "this pane already has a running agent session"
-  # about a pane whose agent is demonstrably not running, with no way past it.
-  # `status` is the runner-owned value (PtydCache.getStatus); only a pane that
-  # is NOT dead has a session left to strand.
+  # A DEAD PANE MUST STILL HAVE A WAY BACK, and the way back is NOT this
+  # command. When automatic restarts give up, the server used to say "rerun
+  # `muxpad agent` from the pane's terminal face" — which, on a pane that still
+  # carries `--resume`, is advice to run the exact command that strands
+  # conversations. Both ends now name `muxpad agent respawn <paneId>` instead:
+  # it replays the pane's OWN startup command, `--resume` and all, so it
+  # restarts the session rather than minting a rival to it.
+  #
+  # Two signals were tried here and both were wrong, which is worth recording.
+  # `status == "dead"` cannot work: `getStatus` returns 'blocked' and 'working'
+  # BEFORE it ever tests 'dead' (ptyd-cache.ts), so a dead pane that rang a BEL
+  # reads as blocked. `turn_active == null` cannot work either, and is worse —
+  # it is null during any RECONNECT (a `muxpad restart`, a ws blip), so a live
+  # conversation would be unprotected for exactly as long as its runner was
+  # away, which is the original bug on a timer. There is no cheap probe that
+  # separates "gone for good" from "gone for a second", so this does not try:
+  # it refuses, and points at the command that always does the right thing.
+  #
+  # `--pick` is NOT exempt. It was, and that was wrong twice over: a pick pane
+  # never carries `--resume` in its startup_cmd (0 of them do), so the
+  # exemption bought nothing — and `muxpad agent --pick` in a LIVE pane
+  # displaces the runner and kills its turn, which is the very thing this
+  # guard exists to prevent.
   case " $* " in
-    *" --resume"*|*" --pick "*) ;;
+    *" --resume"*) ;;
     *)
       if [ -n "${MUXPAD_API_URL:-}" ] && command -v jq >/dev/null 2>&1; then
-        local _row _cmd _status
+        local _row _cmd
         _row="$(http_request GET "/api/panes/$MUXPAD_PANE_ID" 2>/dev/null)" || _row=''
         _cmd="$(printf '%s' "$_row" | jq -r '.startup_cmd // ""' 2>/dev/null)" || _cmd=''
-        _status="$(printf '%s' "$_row" | jq -r '.status // ""' 2>/dev/null)" || _status=''
         case "$_cmd" in
           *--resume*)
-            if [ "$_status" = "dead" ]; then
-              : # the documented recovery path — let it through
-            else
             {
               echo "muxpad agent: this pane already has a running agent session."
               echo "Starting another one here would strand the conversation you are in."
               echo
               echo "  To see what this command does:   muxpad agent --help"
+              echo "  To RESTART this pane's agent:    muxpad agent respawn $MUXPAD_PANE_ID"
               echo "  To start a NEW agent elsewhere:  muxpad agent new \"first message\""
               echo "  To talk to another pane:         muxpad agent send <paneId> \"message\""
-              echo "  To restart THIS pane's session:  ${_cmd:-muxpad agent --resume <sid>}"
             } >&2
-            exit 1
-            fi ;;
+            exit 1 ;;
         esac
       fi ;;
   esac
