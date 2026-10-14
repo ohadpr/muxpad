@@ -606,26 +606,38 @@ export async function maybeWriteSpawnReport(
   // on pane 01M4WFEFZWKVE6HESHY772P0F3, whose parent was told nothing at all
   // about a worker that had died mid-tool-call ten minutes earlier.
   //
-  // So: say so in the log, and put `failed` on the row, which is the state that
-  // already means "we tried and came back empty-handed" and which the card
-  // already knows how to render. `failed` is also what lets SpawnReportWriter
-  // retry once — and a transcript that was merely slow to flush is precisely
-  // the case a retry recovers.
+  // So: SAY SO IN THE LOG, which is the part that was missing and the part that
+  // costs nothing to be wrong about.
   //
-  // WHICH empty is it, though. A pane that never had a session at all has
-  // nothing to summarise and never did — a worker that was created and never
-  // ran is not a failure, and writing `failed` on it would put a red card over
-  // a tab that simply never started. A pane that HAS a session whose transcript
-  // reads empty is the other thing entirely, and it is the one worth shouting
-  // about. So the session row, not the emptiness, is what decides.
+  // AND NOTHING ELSE. This first wrote `failed` on the row as well, and that
+  // was a mistake on two counts, both found in review:
+  //
+  //   · It cannot tell the dangerous empty from the ordinary ones. "Session
+  //     started, never spoke" is a real and harmless state (chat/has-messages),
+  //     and so are a `findTranscript` miss and a 64 KB tail that happens to be
+  //     one giant tool_result. Those would all have drawn a red card reading
+  //     "the work finished but its summary could not be generated", over
+  //     workers where nothing went wrong — and the gate below already has a
+  //     considered rule for exactly this input (`turns < 1 → false`), which
+  //     writing here would have inverted from six lines above it.
+  //   · Writing `failed` stamps the attempt clock, and the clock is what the
+  //     ONE retry and the 30-minute interval are measured against. A reopened
+  //     round keeps its original `started_at` (SpawnRoundStore.reopen), so a
+  //     single transient empty read — a slow flush — would spend the retry and
+  //     then refuse every later turn-end in that round, pinning a recoverable
+  //     worker to `failed` for half an hour.
+  //
+  // The silence this branch exists to fix was never the missing ROW; it was
+  // that nothing anywhere said why. One log line fixes that, and leaves the
+  // judgement to the gate that already knows how to make it.
   if (!conversation) {
-    const sess = new AgentSessionStore(db).getByPane(paneId);
-    if (!sess?.current_sid) return fallback();
-    console.warn(
-      `[spawn-report] no transcript for tab ${tabId} (pane ${paneId}, sid ${sess.current_sid.slice(0, 8)}) — the session may have been replaced mid-turn; reporting it as failed rather than silently writing nothing`,
-    );
-    if (writeTab()) tabs.touchSpawnReportAt(tabId, now);
-    return fallback([], true);
+    const sid = new AgentSessionStore(db).getByPane(paneId)?.current_sid;
+    if (sid) {
+      console.warn(
+        `[spawn-report] no transcript for tab ${tabId} (pane ${paneId}, sid ${sid.slice(0, 8)}) — nothing to summarise; if this worker did real work, its session was probably replaced mid-turn and the transcript is under its previous sid`,
+      );
+    }
+    return fallback();
   }
   // WHICH ROUND this report is for, so the interval can tell a new job from a
   // retry. The round is CLOSED by the time we get here (the turn-end closes it

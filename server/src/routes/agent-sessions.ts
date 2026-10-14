@@ -104,6 +104,19 @@ export function agentSessionsRoutes(deps: {
   });
 
   /**
+   * INTERRUPT the pane's in-flight turn — the Stop button over HTTP.
+   *
+   * 200 `{stopped:true}` when a turn was relayed a stop, 200 `{stopped:false}`
+   * when there was nothing running. Both are successes: "it was already idle"
+   * is the answer to "stop it", not an error, and a caller scripting a
+   * recovery sweep should not have to tell a no-op from a failure.
+   */
+  app.post('/:paneId/stop', (c) => {
+    const stopped = deps.agentBridge?.stop(c.req.param('paneId')) ?? false;
+    return c.json({ stopped });
+  });
+
+  /**
    * Note that a message arrived in this pane's chat, from another chat.
    *
    * Both ends are resolved pane → TAB here, because a chat is a tab: the

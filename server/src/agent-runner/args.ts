@@ -41,7 +41,7 @@ export const RUNNER_USAGE = `usage: muxpad agent [--backend claude|codex|cursor]
   not normally type it.
 
   Session-management subcommands (these do NOT start a runner):
-    muxpad agent new | list | respawn | send | transcript | wait`;
+    muxpad agent new | list | respawn | send | stop | transcript | wait`;
 
 export interface RunnerArgs {
   /** `--resume <ref>`: the session to continue (null = mint a fresh one). */

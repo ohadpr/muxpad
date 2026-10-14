@@ -819,6 +819,36 @@ export function attachWsServer(deps: {
       return conn && conn.lastHumanSendAt > 0 ? conn.lastHumanSendAt : null;
     };
     deps.agentBridge.slash = (paneId, cmd) => sendToRunner(paneId, { t: 'slash', cmd });
+    /**
+     * STOP A TURN FROM OUTSIDE THE BROWSER.
+     *
+     * The same `{ t: 'stop' }` the chat composer's Stop button relays, reached
+     * over HTTP instead of over a chat socket — because until this existed
+     * there was NO way to interrupt a wedged chat-mode turn except opening the
+     * UI. `muxpad pane send <id> --key=esc` reports success and does nothing
+     * here: it types Escape into the PTY, and a chat-mode pane's turn is owned
+     * by the runner, not by whatever the terminal face happens to be showing.
+     *
+     * That gap is a stall vector, not an inconvenience. A tool call into a dead
+     * browser broker never times out, so an orchestrated sub-chat can sit in
+     * `working` indefinitely with its parent waiting on it and no mechanism —
+     * CLI, cron or supervisor — able to break the deadlock from the outside.
+     *
+     * Mirrors the socket's own relay rule: a turn that is active OR a send
+     * relayed in the last 15s (turnActive lags a fresh send by a round trip).
+     * `false` means "nothing was running", which the caller reports as such
+     * rather than as a failure.
+     */
+    deps.agentBridge.stop = (paneId) => {
+      const conn = agentRunners.get(paneId);
+      if (!conn) return false;
+      const sendInFlight = Date.now() - conn.lastSendAt < 15_000;
+      if (!conn.turnActive && !sendInFlight) return false;
+      // A Stop ABANDONS the relayed send, exactly as the socket path does —
+      // leaving the stamp on would let the next autonomous turn wear it.
+      conn.pendingSendText = null;
+      return sendToRunner(paneId, { t: 'stop' });
+    };
     deps.agentBridge.blocked = (paneId) =>
       (agentRunners.get(paneId)?.pendingQuestions.size ?? 0) > 0;
   }
