@@ -1571,3 +1571,128 @@ it('waits for an existing takeover before submitting the login form', async () =
   expect(h.fetches.filter((f) => f.url.endsWith('/wheel/take'))).toHaveLength(1);
   expect(h.sent).toContainEqual({ t: 'fillLogin', username: 'person', password: 'secret' });
 });
+
+/**
+ * Touch gestures. The stream had no way to scroll the page it was showing on a
+ * phone: a finger drag went out as a DRAG on the remote page, and a wheel event
+ * does not exist on touch, so the view sat wherever the page was — usually the
+ * top. These pin the three readings of a press.
+ */
+describe('one finger scrolls, a hold drags, a tap clicks', () => {
+  const types = (h: Harness) => h.sent.filter((m) => m.t === 'mouse').map((m) => m.type as string);
+  /** Fire the press-and-hold timer. `tickTimers` runs INTERVALS; timeouts are
+   *  exposed for inspection, so the hold is driven by hand. A cleared timer is
+   *  replaced with a no-op by the stub, so firing it is always safe. */
+  const hold = (h: Harness) => {
+    for (const timer of h.timers.filter((x) => x.ms === 450)) timer.fn();
+  };
+
+  it('a drag scrolls, and never clicks', () => {
+    const h = ready(run());
+    h.el('screen').fire('pointerdown', {
+      clientX: 100,
+      clientY: 200,
+      button: 0,
+      pointerType: 'touch',
+      pointerId: 1,
+    });
+    // Nothing is committed on the press itself — that was the bug.
+    expect(types(h)).not.toContain('mousePressed');
+    h.el('screen').fire('pointermove', {
+      clientX: 100,
+      clientY: 160,
+      pointerType: 'touch',
+      pointerId: 1,
+    });
+    h.el('screen').fire('pointerup', {
+      clientX: 100,
+      clientY: 160,
+      pointerType: 'touch',
+      pointerId: 1,
+    });
+    expect(types(h)).toEqual(['mouseWheel']);
+    // Dragging UP scrolls the page DOWN: content follows the finger.
+    const wheel = h.sent.find((m) => m.type === 'mouseWheel') as Record<string, number>;
+    expect(wheel.deltaY).toBeGreaterThan(0);
+    expect(types(h)).not.toContain('mouseReleased');
+  });
+
+  it('a tap is still a click', () => {
+    const h = ready(run());
+    h.el('screen').fire('pointerdown', {
+      clientX: 100,
+      clientY: 200,
+      button: 0,
+      pointerType: 'touch',
+      pointerId: 1,
+    });
+    h.el('screen').fire('pointerup', {
+      clientX: 101,
+      clientY: 200,
+      pointerType: 'touch',
+      pointerId: 1,
+    });
+    expect(types(h)).toEqual(['mousePressed', 'mouseReleased']);
+  });
+
+  it('a press-and-hold becomes a real drag', () => {
+    const h = ready(run());
+    h.el('screen').fire('pointerdown', {
+      clientX: 100,
+      clientY: 200,
+      button: 0,
+      pointerType: 'touch',
+      pointerId: 1,
+    });
+    hold(h);
+    expect(types(h)).toEqual(['mousePressed']);
+    h.el('screen').fire('pointermove', {
+      clientX: 100,
+      clientY: 160,
+      pointerType: 'touch',
+      pointerId: 1,
+    });
+    h.el('screen').fire('pointerup', {
+      clientX: 100,
+      clientY: 160,
+      pointerType: 'touch',
+      pointerId: 1,
+    });
+    // A drag, not a scroll: moves go out as moves and the button is released.
+    expect(types(h)).toEqual(['mousePressed', 'mouseMoved', 'mouseReleased']);
+    expect(types(h)).not.toContain('mouseWheel');
+  });
+
+  it('moving first cancels the hold, so a scroll never turns into a drag', () => {
+    const h = ready(run());
+    h.el('screen').fire('pointerdown', {
+      clientX: 100,
+      clientY: 200,
+      button: 0,
+      pointerType: 'touch',
+      pointerId: 1,
+    });
+    h.el('screen').fire('pointermove', {
+      clientX: 100,
+      clientY: 150,
+      pointerType: 'touch',
+      pointerId: 1,
+    });
+    hold(h);
+    h.el('screen').fire('pointerup', {
+      clientX: 100,
+      clientY: 150,
+      pointerType: 'touch',
+      pointerId: 1,
+    });
+    expect(types(h)).not.toContain('mousePressed');
+  });
+
+  it('leaves the MOUSE alone — it has a wheel and no ambiguity', () => {
+    const h = ready(run());
+    h.el('screen').fire('pointerdown', { clientX: 100, clientY: 200, button: 0 });
+    h.el('screen').fire('pointermove', { clientX: 100, clientY: 160 });
+    h.el('screen').fire('pointerup', { clientX: 100, clientY: 160 });
+    expect(types(h)).toEqual(['mousePressed', 'mouseMoved', 'mouseReleased']);
+  });
+});
