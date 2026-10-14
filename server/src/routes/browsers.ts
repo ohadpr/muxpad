@@ -478,10 +478,36 @@ export function browsersRoutes(deps: {
       return c.json({ error: 'use the guarded CDP socket' }, 404);
     const upstream = `${state.cdpUrl}${path}`;
     const deadline = Date.now() + 30_000;
+    /**
+     * IS THE VIEWER LISTENING YET? Not "is Chrome", which is a different
+     * process on a different port, and that distinction is the whole bug.
+     *
+     * This route polls CHROME's debugging port and then hands back the
+     * VIEWER's `/agent-cdp` — the guarded socket (host/run.ts owns that
+     * upgrade). Chrome comes up first. So the window where Chrome answers
+     * `/json/version` and the viewer is still binding returns a perfectly
+     * valid-looking 200 whose `webSocketDebuggerUrl` points at a port nothing
+     * is accepting on, and the MCP client fails its very first call with
+     *
+     *   async initializeServer: WebSocket error:
+     *   connect ECONNREFUSED 127.0.0.1:95xx
+     *
+     * Retrying by hand worked, which is exactly what a startup race looks
+     * like. Any answer proves the listener is up — a 404 from the viewer's own
+     * handler is as good as a 200 here, and better than guessing a path.
+     */
+    const viewerReady = async (): Promise<boolean> => {
+      try {
+        await fetch(state.viewerUrl, { method: 'HEAD' });
+        return true;
+      } catch {
+        return false;
+      }
+    };
     for (;;) {
       try {
         const res = await fetch(upstream);
-        if (res.ok) {
+        if (res.ok && (await viewerReady())) {
           // Never expose Chrome's unguarded socket to the MCP client.
           const payload = (await res.json()) as Record<string, unknown>;
           if (typeof payload.webSocketDebuggerUrl === 'string')

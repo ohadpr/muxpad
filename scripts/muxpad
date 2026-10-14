@@ -1101,20 +1101,40 @@ cmd_card_get() {
   # cards are per-TAB, so reading one that a sub-chat pinned from the parent's
   # pane is a miss, and it looked exactly like the card having been lost. Which
   # is how a perfectly intact card got reported as a data-loss bug.
-  local _tab _body _content
+  # EXISTENCE IS NOT EMPTINESS. The miss is decided by whether the row came
+  # back at all, never by whether its text is empty: a card that exists and
+  # holds "" is a legitimate state — it is the first half of every
+  # read-modify-write that starts from scratch — and reporting it as "no card"
+  # with a non-zero exit breaks exactly that use. (`jq`'s `//` does not help
+  # here: it falls through on null, not on the empty string.)
+  local _tab _body _err _status
   _tab="$(card_tab)"
-  # `|| _body=''` OUTSIDE the substitution, not `|| true` inside it: a 404 makes
-  # http_request `exit 1`, which TERMINATES the subshell rather than failing a
-  # command in it, so an inner `|| true` never runs and the assignment itself
-  # carries the non-zero status straight into `set -e`. The miss then killed the
-  # script one line before the message explaining it.
-  _body="$(http_request GET "/api/tabs/$_tab/cards/$name" 2>/dev/null)" || _body=''
-  _content="$(printf '%s' "$_body" | jq -r '.content // empty' 2>/dev/null)" || _content=''
-  if [ -z "$_body" ] || [ -z "$_content" ]; then
-    echo "muxpad: no card '$name' on tab $_tab (cards are per-tab — try 'muxpad card list', or --tab=<id> for another tab's cards)" >&2
+  # Captured and REPLAYED rather than discarded. `2>/dev/null` on its own makes
+  # a 500, an unreachable server and a genuine miss look identical, so the one
+  # message this prints would be wrong for two of the three.
+  _err="$(mktemp)"
+  # `|| _status=$?` OUTSIDE the substitution, not `|| true` inside it: a non-2xx
+  # makes http_request `exit 1`, which TERMINATES the subshell rather than
+  # failing a command in it, so an inner `|| true` never runs and the assignment
+  # itself carries the non-zero status straight into `set -e`. The miss then
+  # killed the script one line before the message explaining it.
+  _status=0
+  _body="$(http_request GET "/api/tabs/$_tab/cards/$name" 2>"$_err")" || _status=$?
+  if [ "$_status" -ne 0 ]; then
+    if grep -q 'HTTP 404' "$_err" 2>/dev/null; then
+      echo "muxpad: no card '$name' on tab $_tab (cards are per-tab — try 'muxpad card list', or --tab=<id> for another tab's cards)" >&2
+    else
+      # Not a miss — the server said something else, and swallowing it would
+      # report a reachable-but-broken server as a missing card.
+      cat "$_err" >&2
+    fi
+    rm -f "$_err"
     exit 1
   fi
-  printf '%s\n' "$_content"
+  rm -f "$_err"
+  # `// ""` not `// empty`: a present-but-empty card prints its empty line and
+  # exits 0, which is what the read half of read-modify-write needs.
+  printf '%s\n' "$(printf '%s' "$_body" | jq -r '.content // ""')"
 }
 
 cmd_card_list() {
@@ -2937,6 +2957,42 @@ cmd_agent_wait() {
   done
 }
 
+# `muxpad agent stop <paneId>` — interrupt a turn from outside the browser.
+#
+# THE MISSING ESCAPE HATCH. `muxpad pane send <id> --key=esc` prints ✓ and does
+# nothing to a chat-mode pane: it types Escape into the PTY, and a chat-mode
+# turn belongs to the runner, not to the terminal face. So a wedged turn could
+# only be stopped by opening the web UI and clicking Stop — and a tool call
+# into a dead browser broker never times out, which is how an orchestrated
+# sub-chat sits in `working` for eighteen minutes with its parent waiting on it.
+cmd_agent_stop() {
+  reset_flags
+  parse_flags -- "$@"
+  if [ "${#POSITIONAL[@]}" -lt 1 ]; then
+    echo 'usage: muxpad agent stop <paneId>' >&2
+    exit 1
+  fi
+  require_api_url
+  require_jq
+  local pane_id="${POSITIONAL[0]}" tmp status stopped
+  tmp="$(mktemp)"
+  status="$(curl -sS -o "$tmp" -w '%{http_code}' -X POST \
+    "${MUXPAD_API_URL%/}/api/agent-sessions/$pane_id/stop" || echo 000)"
+  stopped="$(jq -r '.stopped // false' "$tmp" 2>/dev/null || echo false)"
+  rm -f "$tmp"
+  if [ "$status" != "200" ]; then
+    echo "muxpad: could not stop $pane_id (HTTP $status)" >&2
+    exit 1
+  fi
+  # "Nothing was running" is an ANSWER, not a failure — a recovery sweep over
+  # several panes must not have to tell a no-op from an error.
+  if [ "$stopped" = "true" ]; then
+    printf '%s✓%s turn interrupted (%s)\n' "$C_GREEN" "$C_RESET" "$pane_id"
+  else
+    printf 'no turn was running (%s)\n' "$pane_id"
+  fi
+}
+
 # `--help` for an HTTP SUBCOMMAND, answered before the subcommand parses
 # anything. The dispatcher below routes `new|list|…` away from the runner's own
 # `--help` handling, so `muxpad agent new --help` used to reach cmd_agent_new's
@@ -2949,6 +3005,7 @@ agent_subcommand_usage() {
     list) echo 'usage: muxpad agent list' ;;
     respawn) echo 'usage: muxpad agent respawn <paneId> | --all [--backend=<id>]' ;;
     send) echo 'usage: muxpad agent send <paneId> "message"' ;;
+    stop) echo 'usage: muxpad agent stop <paneId>' ;;
     transcript) echo 'usage: muxpad agent transcript <paneId> [--tail=N]' ;;
     wait) echo 'usage: muxpad agent wait <paneId> [--timeout=SEC]' ;;
   esac
@@ -2960,9 +3017,14 @@ cmd_agent() {
   # `muxpad agent --resume <sid>`).
   local _sub="${1:-}" _a
   case "$_sub" in
-    new|list|respawn|send|transcript|wait)
+    new|list|respawn|send|stop|transcript|wait)
+      # STOPS AT `--`, like every other argv scan should. Past the separator a
+      # token is DATA, and `muxpad agent send <pane> -- "--help"` is someone
+      # sending the literal text `--help` to a worker — printing usage and
+      # exiting 0 there would silently swallow the message instead.
       for _a in "$@"; do
         case "$_a" in
+          --) break ;;
           --help|-h) agent_subcommand_usage "$_sub"; exit 0 ;;
         esac
       done ;;
@@ -2972,6 +3034,7 @@ cmd_agent() {
     list) shift; require_jq; cmd_agent_list "$@"; return ;;
     respawn) shift; cmd_agent_respawn "$@"; return ;;
     send) shift; require_jq; cmd_agent_send "$@"; return ;;
+    stop) shift; require_jq; cmd_agent_stop "$@"; return ;;
     transcript) shift; require_jq; cmd_agent_transcript "$@"; return ;;
     wait) shift; require_jq; cmd_agent_wait "$@"; return ;;
   esac
@@ -3017,14 +3080,29 @@ cmd_agent() {
   # pre-resume legacy pane (which must still be allowed to start, hence testing
   # the row rather than refusing on any live pane). The server's own respawn
   # replays that command WITH `--resume`, so it never trips this.
+  #
+  # A DEAD PANE IS THE EXCEPTION, and getting this wrong would have been worse
+  # than the bug. When automatic restarts give up, the server tells the user in
+  # so many words to "rerun `muxpad agent` from the pane's terminal face"
+  # (ws.ts, agentExitedMessage) — and a dead pane still carries `--resume` in
+  # its startup_cmd, so an unconditional refusal would answer the server's own
+  # recovery instruction with "this pane already has a running agent session"
+  # about a pane whose agent is demonstrably not running, with no way past it.
+  # `status` is the runner-owned value (PtydCache.getStatus); only a pane that
+  # is NOT dead has a session left to strand.
   case " $* " in
     *" --resume"*|*" --pick "*) ;;
     *)
       if [ -n "${MUXPAD_API_URL:-}" ] && command -v jq >/dev/null 2>&1; then
-        local _cmd
-        _cmd="$(http_request GET "/api/panes/$MUXPAD_PANE_ID" 2>/dev/null | jq -r '.startup_cmd // ""' 2>/dev/null || true)"
+        local _row _cmd _status
+        _row="$(http_request GET "/api/panes/$MUXPAD_PANE_ID" 2>/dev/null)" || _row=''
+        _cmd="$(printf '%s' "$_row" | jq -r '.startup_cmd // ""' 2>/dev/null)" || _cmd=''
+        _status="$(printf '%s' "$_row" | jq -r '.status // ""' 2>/dev/null)" || _status=''
         case "$_cmd" in
           *--resume*)
+            if [ "$_status" = "dead" ]; then
+              : # the documented recovery path — let it through
+            else
             {
               echo "muxpad agent: this pane already has a running agent session."
               echo "Starting another one here would strand the conversation you are in."
@@ -3032,8 +3110,10 @@ cmd_agent() {
               echo "  To see what this command does:   muxpad agent --help"
               echo "  To start a NEW agent elsewhere:  muxpad agent new \"first message\""
               echo "  To talk to another pane:         muxpad agent send <paneId> \"message\""
+              echo "  To restart THIS pane's session:  ${_cmd:-muxpad agent --resume <sid>}"
             } >&2
-            exit 1 ;;
+            exit 1
+            fi ;;
         esac
       fi ;;
   esac
@@ -4168,6 +4248,7 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                      chat face; the terminal shows an activity
                                      log. Auto-resumes across ptyd restarts via
                                      the pane's saved startup command.
+  agent stop <paneId>                         interrupt an in-flight turn
   agent new [--workspace=<id>] [--cwd=<dir>] [--name=<tab name>] [--backend=<b>]
             [--model=<model>] [--mode=chat|agent] "message"
                                      create an agent tab, send the first

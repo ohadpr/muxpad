@@ -325,14 +325,32 @@ describe('a browser starts when something reaches for it, not before', () => {
    * machine, which is the memory complaint this subsystem exists to answer,
    * arriving from inside it.
    */
-  /** A stand-in for Chrome's HTTP side, on the port this profile was given. */
-  async function fakeChromeOn(cdpUrl: string) {
-    const server = createServer((_req, res) => {
+  /**
+   * Stand-ins for the TWO listeners discovery depends on: Chrome's HTTP side on
+   * the profile's cdp port, and the VIEWER on cdp+100, which is what actually
+   * serves the `/agent-cdp` socket the route hands back. Both, because the
+   * route waits for both — see the next test for why it has to.
+   */
+  async function fakeChromeOn(cdpUrl: string, { viewer = true } = {}) {
+    const chrome = createServer((_req, res) => {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ webSocketDebuggerUrl: 'ws://127.0.0.1:1/devtools/browser/abc' }));
     });
-    await new Promise<void>((r) => server.listen(Number(new URL(cdpUrl).port), '127.0.0.1', r));
-    return () => new Promise<void>((r) => server.close(() => r()));
+    const cdpPort = Number(new URL(cdpUrl).port);
+    await new Promise<void>((r) => chrome.listen(cdpPort, '127.0.0.1', r));
+    const servers = [chrome];
+    if (viewer) {
+      const v = createServer((_req, res) => {
+        res.writeHead(404);
+        res.end();
+      });
+      await new Promise<void>((r) => v.listen(cdpPort + 100, '127.0.0.1', r));
+      servers.push(v);
+    }
+    return () =>
+      Promise.all(servers.map((s) => new Promise<void>((r) => s.close(() => r())))).then(
+        () => undefined,
+      );
   }
 
   it('registers a row without launching anything', async () => {
@@ -362,6 +380,36 @@ describe('a browser starts when something reaches for it, not before', () => {
     }
   });
 
+  it('does NOT hand out a socket url before the VIEWER is listening', async () => {
+    // THE RACE, and the reason this route waits for two things.
+    //
+    // It polls CHROME's debugging port and then returns the VIEWER's
+    // `/agent-cdp` — a different process, on a different port, that comes up
+    // later. In the window between, Chrome answers /json/version happily and
+    // the route used to return a perfectly valid-looking 200 whose
+    // webSocketDebuggerUrl pointed at a port nothing was accepting on. The MCP
+    // client then failed its very first call with
+    //
+    //   async initializeServer: WebSocket error: connect ECONNREFUSED
+    //   127.0.0.1:95xx
+    //
+    // Observed on two panes in one session; retrying by hand worked, which is
+    // exactly what a startup race looks like from the outside.
+    const body = (await (
+      await post('/api/browsers', { profile: 'slowviewer', start: false })
+    ).json()) as { cdpUrl: string };
+    // Chrome only — no viewer.
+    const close = await fakeChromeOn(body.cdpUrl, { viewer: false });
+    try {
+      const res = await app.request('/api/browsers/slowviewer/cdp/json/version');
+      // It waits, then gives up honestly, rather than handing back a url that
+      // cannot be connected to.
+      expect(res.status).toBe(504);
+    } finally {
+      await close();
+    }
+  }, 40_000);
+
   it('proxies the exact path, even for a profile called "cdp"', async () => {
     // Splitting the url on '/cdp' looks equivalent to trimming the prefix and
     // is not: this profile makes the first match the wrong one, and the request
@@ -375,14 +423,19 @@ describe('a browser starts when something reaches for it, not before', () => {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end('{"webSocketDebuggerUrl":"ws://127.0.0.1:1/x"}');
     });
-    await new Promise<void>((r) =>
-      server.listen(Number(new URL(body.cdpUrl).port), '127.0.0.1', r),
-    );
+    const cdpPort = Number(new URL(body.cdpUrl).port);
+    await new Promise<void>((r) => server.listen(cdpPort, '127.0.0.1', r));
+    const viewer = createServer((_req, res) => {
+      res.writeHead(404);
+      res.end();
+    });
+    await new Promise<void>((r) => viewer.listen(cdpPort + 100, '127.0.0.1', r));
     try {
       await app.request('/api/browsers/cdp/cdp/json/version');
       expect(asked).toEqual(['/json/version']);
     } finally {
       await new Promise<void>((r) => server.close(() => r()));
+      await new Promise<void>((r) => viewer.close(() => r()));
     }
   });
 

@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type Database from 'better-sqlite3';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentSessionStore } from '../store/AgentSessionStore.js';
 import { PaneStore } from '../store/PaneStore.js';
 import { TabStore } from '../store/TabStore.js';
@@ -570,26 +570,35 @@ describe('maybeWriteSpawnReport — one attempt, and every failure is one', () =
     ).toBeNull();
   });
 
-  it('reports FAILED when a session exists but its transcript reads empty', async () => {
-    // THE SESSION-SWAP SHAPE, which used to be silent and is the whole reason
-    // this branch exists. A second runner mints a new sid, the pane's
+  it('SAYS SO IN THE LOG when a session exists but its transcript reads empty', async () => {
+    // THE SESSION-SWAP SHAPE: a second runner mints a new sid, the pane's
     // `current_sid` moves to it, and this read — which follows `current_sid` —
     // lands on an empty transcript while the real conversation sits under the
-    // old id. The old code called that `ok`, wrote nothing, stamped nothing and
-    // logged nothing, so the parent's card said "No summary was generated for
-    // this one." over a worker that had died mid-tool-call, with no account of
-    // it anywhere. `failed` is the state that means "we tried and came back
-    // empty-handed", and it is also what earns the writer's one retry.
+    // old id. Measured on pane 01M4WFEFZWKVE6HESHY772P0F3, whose parent was
+    // told nothing about a worker that had died mid-tool-call: no row, no
+    // stamp, and — the part that actually mattered — no line anywhere saying
+    // why, so the only way to find out was to re-run the generator by hand.
+    //
+    // It writes NOTHING, deliberately. An earlier version of this put `failed`
+    // on the row and could not tell this from "session started, never spoke";
+    // see the branch's comment for why the row is the gate's call, not ours.
     const tabId = new TabStore(db).create({ name: 'W', workspace_id: workspaceId, layout: 'p' }).id;
     const paneId = new PaneStore(db).create({ tab_id: tabId }).id;
     const sid = `sid-${paneId}`;
     // Registered, but NO transcript file written for it.
     new AgentSessionStore(db).register({ pane_id: paneId, assistant: 'codex', session_id: sid });
-    const write = await maybeWriteSpawnReport(db, tabId, paneId, async () => 'x', { now: 1 });
-    expect(write).toEqual({ report: null, state: 'failed' });
-    // And the attempt is on the clock, so a broken install cannot respawn a
-    // generation per finished turn forever.
-    expect(new TabStore(db).spawnReportAt(tabId)).toBe(1);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(
+        await maybeWriteSpawnReport(db, tabId, paneId, async () => 'x', { now: 1 }),
+      ).toBeNull();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('no transcript for tab'));
+    } finally {
+      warn.mockRestore();
+    }
+    // And the attempt clock is UNTOUCHED, so the one retry and the 30-minute
+    // interval are still there for a transcript that was merely slow to flush.
+    expect(new TabStore(db).spawnReportAt(tabId)).toBeNull();
   });
 
   it('writes nothing for a pane with no transcript at all', async () => {
