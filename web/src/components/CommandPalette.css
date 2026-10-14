@@ -1,0 +1,130 @@
+/*
+ * ⌘K palette. The ROWS are the rail's (NavSearch.css) — this file is only the
+ * surface they sit on: a backdrop, a dialog, a field and a divider.
+ *
+ * Deliberately NOT centred vertically. A dialog pinned to the middle of the
+ * viewport moves its own first row as the list grows, so the thing under the
+ * cursor walks up the screen while you type. Anchored near the top, the field
+ * and the first result stay put and only the tail of the list moves.
+ */
+
+.cmdk-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 12vh 16px 16px;
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+  /* Cheap on a static backdrop, and it separates the dialog from a busy
+     terminal behind it without needing a heavier scrim. */
+  backdrop-filter: blur(3px);
+}
+
+.cmdk-dialog {
+  width: min(640px, 100%);
+  max-height: min(60vh, 560px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  /* Two shadows: a tight one for the edge, a wide soft one for the lift. One
+     shadow doing both jobs reads as a smudge at this size. */
+  box-shadow: 0 1px 2px rgb(0 0 0 / 12%), 0 18px 48px rgb(0 0 0 / 28%);
+}
+
+.cmdk-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.cmdk-field-icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  color: var(--fg-faint);
+}
+
+.cmdk-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 15px;
+  line-height: 1.4;
+  outline: none;
+}
+
+.cmdk-input::placeholder {
+  color: var(--fg-faint);
+}
+
+.cmdk-hint {
+  flex: 0 0 auto;
+  font-size: 11px;
+  line-height: 1;
+  padding: 4px 6px;
+  color: var(--fg-faint);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font-family: inherit;
+}
+
+.cmdk-results {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px;
+}
+
+.cmdk-empty {
+  margin: 0;
+  padding: 18px 10px;
+  text-align: center;
+  color: var(--fg-faint);
+  font-size: 13px;
+}
+
+.cmdk-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 10px 4px;
+  color: var(--fg-faint);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.cmdk-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+/* The palette's rows are a touch roomier than the rail's: this is a surface
+   you are pointing at, not a column you are scanning past. */
+.cmdk-results .navsearch-row {
+  border-radius: 8px;
+  padding-block: 7px;
+}
+
+@media (max-width: 640px) {
+  .cmdk-backdrop {
+    padding-top: 6vh;
+  }
+
+  .cmdk-dialog {
+    max-height: 72vh;
+  }
+}
