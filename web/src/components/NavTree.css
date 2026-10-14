@@ -81,20 +81,11 @@
      — and the ones that were missed would be invisible text, found one at a
      time by eye.
 
-     Declared on `.navtree` rather than `.sidenav` so the MOBILE SHEET inherits
-     it too; the sheet overrides --nt-surface below and gets rail ink that
-     matches whatever surface it chose. */
-  --fg: var(--rail-ink);
-  --fg-dim: var(--rail-ink-dim);
-  --fg-faint: var(--rail-ink-faint);
-  --bg-hover: var(--rail-hover);
-  --border: var(--rail-border);
-  --border-strong: var(--rail-border);
-  --accent: var(--rail-accent);
-  --status-ready: var(--rail-status-ready);
-  --status-working: var(--rail-status-working);
-  --status-blocked: var(--rail-status-blocked);
-  --status-dead: var(--rail-status-dead);
+     SIDEBAR ONLY — see the rule just below this block. It was declared here,
+     on every `.navtree`, and that included the mobile SHEET, which keeps
+     --bg-chrome as its surface: the sheet inherited rail ink and drew white
+     text on a light sheet. Measured before the split: sheet surface #edecf7,
+     sheet --fg #ffffff. */
   /* PINNED IS A HUE ON THE NAME, and the channel is the whole argument.
      SELECTION OWNS THE ROW'S BOX — a fill, with a funnel that runs into the
      pane. Every earlier design for this mark was also on that box: a rule under
@@ -320,6 +311,30 @@
   font-family: var(--ui-font);
   font-size: 14px;
   color: var(--fg);
+}
+
+/* The island itself, scoped to the surface that actually needs it. */
+.navtree[data-variant="sidebar"] {
+  --fg: var(--rail-ink);
+  --fg-dim: var(--rail-ink-dim);
+  --fg-faint: var(--rail-ink-faint);
+  --bg-hover: var(--rail-hover);
+  --border: var(--rail-border);
+  --border-strong: var(--rail-border);
+  --accent: var(--rail-accent);
+  --status-ready: var(--rail-status-ready);
+  --status-working: var(--rail-status-working);
+  --status-blocked: var(--rail-status-blocked);
+  --status-dead: var(--rail-status-dead);
+  /* DERIVED TOKENS ARE SUBSTITUTED WHERE THEY ARE DECLARED, so these have to be
+     re-derived here from the rail's values — and re-derived again on the
+     selected row, which is painted in the pane's colour. This is the bug that
+     made the selected PINNED chat's name light purple on a near-white row: the
+     mix was baked once, at `.navtree`, out of rail ink. */
+  --nt-pinned-ink: color-mix(in srgb, var(--accent) 75%, var(--fg));
+  --nt-hover: color-mix(in srgb, var(--fg) 6%, transparent);
+  --nt-sel: color-mix(in srgb, var(--accent) 20%, transparent);
+  --nt-sel-hover: color-mix(in srgb, var(--accent) 26%, transparent);
 }
 /* ─── The MOBILE RAIL's own scale ─────────────────────────────────────────
    The sheet does not inherit the rail's three-step scale, because it no longer
@@ -1195,6 +1210,11 @@
   --status-working: var(--pane-status-working);
   --status-blocked: var(--pane-status-blocked);
   --status-dead: var(--pane-status-dead);
+  /* Re-derived, for the same reason and in the same order as the rail's. */
+  --nt-pinned-ink: color-mix(in srgb, var(--accent) 75%, var(--fg));
+  --nt-hover: color-mix(in srgb, var(--fg) 6%, transparent);
+  --nt-sel: color-mix(in srgb, var(--accent) 20%, transparent);
+  --nt-sel-hover: color-mix(in srgb, var(--accent) 26%, transparent);
 }
 
 .navtree-tab-row[data-active="true"] .navtree-name-text {
