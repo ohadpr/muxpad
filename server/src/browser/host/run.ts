@@ -18,6 +18,11 @@ import { browserLaunchSpec } from '../BrowserLaunch.js';
 import { browserViewerPort } from '../BrowserProfile.js';
 import { CdpConnection } from '../CdpConnection.js';
 import {
+  clearSelectMarkExpression,
+  selectAtExpression,
+  selectChoiceExpression,
+} from '../SelectProbe.js';
+import {
   type CdpCookie,
   type StorageState,
   cdpCookiesToStorageState,
@@ -550,6 +555,13 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
     }
   }
 
+/**
+ * Where the finger last was. `touchEnd` carries no point of its own, by the
+ * protocol, and the lift is exactly when "what did they just tap?" has to be
+ * answered.
+ */
+let lastTouch: { x: number; y: number } | null = null;
+
   async function handleInput(socket: WsSocket, raw: string) {
     let message: { t: string } & Record<string, unknown>;
     try {
@@ -586,6 +598,45 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
         // Not knowing is fine; the viewer keeps whatever it had.
       }
     };
+    /**
+     * DID THAT TAP LAND ON A NATIVE DROP-DOWN?
+     *
+     * A `<select>` popup is drawn by the browser, outside the page's own
+     * compositing, so `Page.startScreencast` never sees it: the click lands on
+     * a real element and NOTHING appears in the viewer. So the page is asked
+     * what the list contains and the viewer draws it — see SelectProbe.ts.
+     *
+     * Asked on the lift rather than the press, because that is when a real
+     * browser opens one, and asked at the same coordinates the click went to
+     * rather than from the focused element: a select is focusable but a tap on
+     * one that was ALREADY focused still has to open it.
+     */
+    const offerSelect = async (x: number, y: number) => {
+      try {
+        const r = (await cdp.send('Runtime.evaluate', {
+          expression: selectAtExpression(x, y),
+          returnByValue: true,
+        })) as unknown as { result?: { value?: string } };
+        const raw = r.result?.value;
+        if (!raw || socket.readyState !== 1) return;
+        const described = JSON.parse(raw) as {
+          options: unknown[];
+          multiple: boolean;
+          size: number;
+          label: string;
+        };
+        if (!Array.isArray(described.options) || described.options.length === 0) return;
+        // A multi-select and a `size > 1` list box are not popups — they render
+        // inside the page, so they are already on screen and already work. A
+        // sheet over one would be the only thing in the way.
+        if (described.multiple || described.size > 1) return;
+        socket.send(JSON.stringify({ t: 'select', ...described }));
+      } catch {
+        // A page that cannot be asked is a page with no drop-down, as far as
+        // the viewer is concerned. The click already went through.
+      }
+    };
+
     try {
       if (message.t === 'touch') {
         /**
@@ -607,8 +658,17 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
         if (!event) return;
         await cdp.send('Input.dispatchTouchEvent', event);
         // The lift is what makes a tap a tap, so it is also when to ask whether
-        // the page now has a text field focused.
-        if (event.type === 'touchEnd') void reportFocus();
+        // the page now has a text field focused — and whether the thing under
+        // the finger was a drop-down the viewer has to draw itself.
+        if (event.type === 'touchEnd') {
+          void reportFocus();
+          // touchEnd carries no point of its own, by the protocol. The last
+          // place the finger WAS is where the tap landed.
+          if (lastTouch) void offerSelect(lastTouch.x, lastTouch.y);
+        } else if (event.type === 'touchStart' || event.type === 'touchMove') {
+          const p = (event.touchPoints as Array<{ x: number; y: number }>)[0];
+          if (p) lastTouch = p;
+        }
       } else if (message.t === 'mouse') {
         await cdp.send('Input.dispatchMouseEvent', mouseEvent(message as unknown as MouseInput));
         // After a RELEASE, report whether the page now has a text field focused.
@@ -617,6 +677,7 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
         // a video stream is otherwise a tap into a picture.
         if (message.type === 'mouseReleased') {
           await reportFocus();
+          void offerSelect(Number(message.x), Number(message.y));
         }
         // Scrolling moves every box on the page.
         if (message.type === 'mouseWheel') void sendFieldBoxes(socket);
@@ -687,6 +748,23 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
           // A selector that does not resolve is not an error — the browser is
           // simply left where it was, which is the old behaviour.
         }
+      } else if (message.t === 'pick') {
+        // The answer to a drop-down the viewer drew. Applied with the events a
+        // controlled component needs — see applySelectChoice — and reported
+        // back so the viewer can say so rather than guess.
+        const ok = (await cdp.send('Runtime.evaluate', {
+          expression: selectChoiceExpression(String(message.value ?? '')),
+          returnByValue: true,
+        })) as unknown as { result?: { value?: boolean } };
+        if (socket.readyState === 1) {
+          socket.send(JSON.stringify({ t: 'picked', ok: Boolean(ok.result?.value) }));
+        }
+        // The chosen value can change what the form shows.
+        void sendFieldBoxes(socket);
+      } else if (message.t === 'unpick') {
+        // A sheet somebody dismissed. The stamp must not outlive it, or the
+        // next choice lands on the wrong element.
+        await cdp.send('Runtime.evaluate', { expression: clearSelectMarkExpression() });
       } else if (message.t === 'text') {
         // Whole strings, not keystrokes. A phone keyboard gives autocorrect,
         // dictation and emoji as composed text, and replaying that as synthetic

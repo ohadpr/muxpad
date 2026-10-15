@@ -133,6 +133,28 @@ export const VIEWER_HTML = String.raw`<!doctype html>
   #loginGo{flex:1;background:#3f5d8f;border:0;color:#fff;font-size:15px;padding:12px;border-radius:8px}
   #loginCancel{background:transparent;border:1px solid #33333f;color:#9a9aab;font-size:14px;padding:12px;border-radius:8px}
   #loginNote{font-size:11.5px;color:#7c7c8c;line-height:1.4}
+  /* THE DROP-DOWN SHEET. A native select popup is browser chrome, not page
+     content, so the screencast never carries it — see SelectProbe.ts. This is
+     that list, drawn here instead. Bottom-anchored because this is a phone
+     surface first and the bottom of the screen is where a thumb is. */
+  #pick{position:fixed;inset:0;background:#000a;display:flex;align-items:flex-end;justify-content:center;z-index:21}
+  #pick[hidden]{display:none}
+  #pickSheet{width:min(520px,100%);max-height:72vh;display:flex;flex-direction:column;
+    background:#17171f;border:1px solid #33333f;border-radius:14px 14px 0 0;
+    /* Clear of the home indicator, so the last option is not under it. */
+    padding-bottom:env(safe-area-inset-bottom,0)}
+  #pickTitle{flex:0 0 auto;padding:13px 16px 9px;font-size:12.5px;letter-spacing:.04em;
+    text-transform:uppercase;color:#8b8b9c;border-bottom:1px solid #26262f}
+  #pickList{flex:1 1 auto;overflow-y:auto;-webkit-overflow-scrolling:touch}
+  /* 48px of target, which is the whole reason this is a sheet and not a menu. */
+  .pickOpt{display:block;width:100%;min-height:48px;padding:13px 16px;border:0;
+    background:transparent;color:#e8e8f0;font-size:16px;text-align:left;line-height:1.3}
+  .pickOpt:disabled{color:#5c5c6b}
+  .pickOpt[aria-selected="true"]{color:#8fb6ff;font-weight:600}
+  .pickOpt[aria-selected="true"]::after{content:' ✓'}
+  .pickOpt:not(:disabled):active{background:#23232e}
+  #pickCancel{flex:0 0 auto;min-height:48px;border:0;border-top:1px solid #26262f;
+    background:transparent;color:#9a9aab;font-size:15px}
   #drop{position:fixed;inset:0;background:#000c;display:none;place-items:center;padding:20px;text-align:center}
   #drop.on{display:grid}
 </style>
@@ -197,6 +219,22 @@ export const VIEWER_HTML = String.raw`<!doctype html>
     </div>
     <div id="loginNote">Pick the site in your password manager — this form stands in for it.</div>
   </form>
+</div>
+<!--
+  THE DROP-DOWN SHEET.
+
+  A a <select> popup is drawn by the browser outside the page's compositing, so
+  Page.startScreencast never captures it: the tap lands on a real element and
+  nothing appears here at all. The list is read out of the page instead and
+  drawn by this, and the choice is applied back over CDP with the events a real
+  one would have produced. See SelectProbe.ts.
+-->
+<div id="pick" hidden>
+  <div id="pickSheet" role="dialog" aria-modal="true" aria-labelledby="pickTitle">
+    <div id="pickTitle">Choose</div>
+    <div id="pickList" role="listbox"></div>
+    <button type="button" id="pickCancel">Cancel</button>
+  </div>
 </div>
 <div id="drop"><div>The page is asking for a file.<br><br><input type="file" id="fpick"></div></div>
 <script>
@@ -305,6 +343,12 @@ function onSocketMessage(e) {
       return
     }
     if (m.t === 'filled') { if (!m.ok) msg.textContent = 'could not find the form to fill'; return }
+    // A tap landed on a native drop-down, whose popup the screencast cannot
+    // carry. Looked up through the handler's own hoisting the way the login
+    // report is: this arrives on a socket opened before the sheet's own
+    // declarations run.
+    if (m.t === 'select') { openPick(m); return }
+    if (m.t === 'picked') { if (!m.ok) msg.textContent = 'the drop-down went away'; return }
     if (m.t === 'revealed') { ringAt(m.rect); return }
     if (m.t === 'frame') { meta = m.meta }
     else if (m.t === 'fileChooser') { document.getElementById('drop').classList.add('on') }
@@ -1081,6 +1125,64 @@ if (window.innerWidth < 700) {
  * values into the page and closes; it never submits, because pressing the
  * button is the moment you notice it filled the wrong thing.
  */
+/* ── THE DROP-DOWN SHEET ───────────────────────────────────────────────────
+   The host says a tap landed on a native select and what is in it; this draws
+   the list. Nothing here guesses: the options, which one is on, and the title
+   all come from the page, and the answer goes back as a value for the page to
+   apply with its own events.
+
+   Dismissing is NOT free — a sheet nobody chose from leaves the element stamped
+   in the page, and the next choice would land on it. So cancel says so. */
+const pickWrap = document.getElementById('pick')
+const pickSheet = document.getElementById('pickSheet')
+const pickTitle = document.getElementById('pickTitle')
+const pickList = document.getElementById('pickList')
+const pickCancel = document.getElementById('pickCancel')
+let pickOpen = false
+
+const closePick = (tellPage) => {
+  if (!pickOpen) return
+  pickOpen = false
+  pickWrap.hidden = true
+  pickList.replaceChildren()
+  if (tellPage) send({ t: 'unpick' })
+}
+
+const openPick = (d) => {
+  const options = Array.isArray(d.options) ? d.options : []
+  if (!options.length) return
+  pickTitle.textContent = d.label ? String(d.label) : 'Choose'
+  pickList.replaceChildren()
+  for (const o of options) {
+    const b = document.createElement('button')
+    b.type = 'button'
+    b.className = 'pickOpt'
+    b.setAttribute('role', 'option')
+    // textContent, never innerHTML: an option label is page content, and this
+    // page can reach the host.
+    b.textContent = String(o.l == null ? '' : o.l)
+    if (o.selected) b.setAttribute('aria-selected', 'true')
+    if (o.disabled) b.disabled = true
+    b.addEventListener('click', () => {
+      send({ t: 'pick', value: String(o.v == null ? '' : o.v) })
+      closePick(false)
+    })
+    pickList.appendChild(b)
+  }
+  pickWrap.hidden = false
+  pickOpen = true
+  // The one that is already on, in view — a country list opens on "Albania"
+  // otherwise, however far down the current answer is.
+  const on = pickList.querySelector('[aria-selected="true"]')
+  if (on && on.scrollIntoView) on.scrollIntoView({ block: 'center' })
+}
+
+pickCancel.addEventListener('click', () => closePick(true))
+// The backdrop dismisses; the sheet itself must not.
+pickWrap.addEventListener('click', (e) => { if (e.target === pickWrap) closePick(true) })
+pickSheet.addEventListener('click', (e) => e.stopPropagation())
+window.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePick(true) })
+
 const loginPanel = document.getElementById('login')
 const loginBtn = document.getElementById('signin')
 const showLogin = (on) => {
