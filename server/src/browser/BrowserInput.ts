@@ -55,6 +55,38 @@ export function mouseEvent(input: MouseInput): Record<string, unknown> {
   return event;
 }
 
+export interface TouchInput {
+  type: 'touchStart' | 'touchMove' | 'touchEnd' | 'touchCancel';
+  x?: number;
+  y?: number;
+  modifiers?: number;
+}
+
+/**
+ * A finger, in CDP's terms. Null means "not a touch event this can send".
+ *
+ * THE LIFT CARRIES NO POINT. `touchEnd` is the one phase with an empty
+ * `touchPoints` list, by the protocol — the finger is gone, so there is nothing
+ * to describe. A guard that demanded finite coordinates for every phase
+ * therefore dropped every lift on the floor, and the consequence is not a
+ * missing event, it is a finger that goes down and NEVER COMES UP: no tap is
+ * ever recognised, so nothing can be focused and typing into a form does
+ * nothing, and a scroll gesture never completes. Measured against a real
+ * headless Chrome, where a touchStart/touchEnd pair focuses a text field and a
+ * touchStart with no end focuses nothing at all.
+ */
+export function touchEvent(input: TouchInput): Record<string, unknown> | null {
+  const lift = input.type === 'touchEnd' || input.type === 'touchCancel';
+  const x = Number(input.x);
+  const y = Number(input.y);
+  if (!lift && (!Number.isFinite(x) || !Number.isFinite(y))) return null;
+  return {
+    type: input.type,
+    touchPoints: lift ? [] : [{ x: Math.round(x), y: Math.round(y), radiusX: 2, radiusY: 2, force: 1 }],
+    modifiers: input.modifiers ?? 0,
+  };
+}
+
 /** Virtual key codes for the named keys that actually come up. */
 const VK: Record<string, number> = {
   Backspace: 8,

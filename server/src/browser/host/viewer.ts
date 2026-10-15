@@ -452,7 +452,12 @@ const onPointerDown = (e) => {
       reportKeyboard(hit)
     }
   }
-  img.setPointerCapture?.(e.pointerId)
+  // CAPTURE IS A NICETY; THE GESTURE IS THE POINT. setPointerCapture throws
+  // NotFoundError for a pointer the browser no longer considers active, and an
+  // exception here killed the handler before the relay below ever ran -- the
+  // finger did nothing at all. Losing capture only means a drag that leaves the
+  // image stops tracking.
+  try { img.setPointerCapture?.(e.pointerId) } catch {}
   if (e.pointerType === 'touch' && mobileOn) {
     // PHONE MODE RELAYS THE FINGER AS A FINGER. The page is under touch
     // emulation, so it does its own scrolling — both axes, nested scrollers,

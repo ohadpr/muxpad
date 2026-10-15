@@ -6,11 +6,13 @@ import { join } from 'node:path';
 import { WebSocketServer, type WebSocket as WsSocket } from 'ws';
 import { AgentCdpGate, bridgeAgentCdp } from '../AgentCdp.js';
 import {
-  type KeyInput,
-  type MouseInput,
   keyEvents,
+  type KeyInput,
   mouseEvent,
+  type MouseInput,
   probeEditable,
+  touchEvent,
+  type TouchInput,
 } from '../BrowserInput.js';
 import { browserLaunchSpec } from '../BrowserLaunch.js';
 import { browserViewerPort } from '../BrowserProfile.js';
@@ -95,6 +97,13 @@ export interface BrowserHost {
 }
 
 const CDP_READY_TIMEOUT_MS = 20_000;
+
+/**
+ * How long a tidy shutdown gets before the browser is killed anyway. Short on
+ * purpose: everything inside it is a courtesy, and a host that cannot finish is
+ * exactly the host whose Chrome must not be left running.
+ */
+const SHUTDOWN_BUDGET_MS = 5_000;
 
 /**
  * The page, stamped with its own build, once.
@@ -594,17 +603,12 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
          * which element the gesture belongs to. The viewer stops guessing what
          * a drag meant, which is the only way to stop guessing wrong.
          */
-        const type = String(message.type ?? '');
-        const x = Number(message.x);
-        const y = Number(message.y);
-        if (!Number.isFinite(x) || !Number.isFinite(y)) return;
-        await cdp.send('Input.dispatchTouchEvent', {
-          type,
-          // touchEnd carries no points, by the protocol: the finger is gone.
-          touchPoints: type === 'touchEnd' ? [] : [{ x, y, radiusX: 2, radiusY: 2, force: 1 }],
-          modifiers: Number(message.modifiers) || 0,
-        });
-        if (type === 'touchEnd') reportFocus();
+        const event = touchEvent(message as unknown as TouchInput);
+        if (!event) return;
+        await cdp.send('Input.dispatchTouchEvent', event);
+        // The lift is what makes a tap a tap, so it is also when to ask whether
+        // the page now has a text field focused.
+        if (event.type === 'touchEnd') void reportFocus();
       } else if (message.t === 'mouse') {
         await cdp.send('Input.dispatchMouseEvent', mouseEvent(message as unknown as MouseInput));
         // After a RELEASE, report whether the page now has a text field focused.
@@ -960,14 +964,39 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
           log(`[host] no last picture: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
-      await screencast.stop().catch(() => {});
-      cdp.close();
-      clearInterval(heartbeat);
-      for (const socket of agentWss.clients) socket.terminate();
-      agentWss.close();
-      wss.close();
-      await new Promise<void>((resolve) => http.close(() => resolve()));
-      chrome.kill();
+      // CHROME DIES NO MATTER WHAT HAPPENS ABOVE IT.
+      //
+      // This used to be the last statement of a sequence of awaits, which meant
+      // any one of them hanging left a live headless browser behind — and an
+      // orphan still holds the debugging port, so the NEXT host dials 9452,
+      // reaches a browser nobody owns, and serves a viewer that shows a picture
+      // of nothing and relays input into the void. Measured: nineteen orphans
+      // for one profile, a fresh one every thirty seconds, each leaked by a host
+      // that could not finish shutting down.
+      //
+      // The specific hang was `http.close()`, which waits for every connection
+      // to drain and therefore waits forever on an attached viewer — the VIEWER
+      // sockets were never terminated, only the agent's.
+      try {
+        await Promise.race([
+          (async () => {
+            await screencast.stop().catch(() => {});
+            cdp.close();
+            clearInterval(heartbeat);
+            for (const socket of agentWss.clients) socket.terminate();
+            for (const socket of wss.clients) socket.terminate();
+            agentWss.close();
+            wss.close();
+            await new Promise<void>((resolve) => http.close(() => resolve()));
+          })(),
+          new Promise<void>((resolve) => setTimeout(resolve, SHUTDOWN_BUDGET_MS)),
+        ]);
+      } catch (err) {
+        log(`[host] untidy shutdown: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        clearInterval(heartbeat);
+        chrome.kill();
+      }
     },
   };
 }
