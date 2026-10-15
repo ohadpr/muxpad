@@ -292,3 +292,46 @@ describe('what agents are told about a browser that is not running yet', () => {
     expect(AGENT_INSTRUCTIONS_SEED).toContain('s-$MUXPAD_TAB_ID');
   });
 });
+
+describe('what a card should be made OF', () => {
+  const policy = AGENT_INSTRUCTIONS_SEED;
+
+  /**
+   * Observed in a real chat: two agents reporting build progress as
+   * `[######-----] verifying` inside a text card. They were not being lazy —
+   * they were following this document, which led with exactly that string and
+   * named it the house convention, while showing html once as a file redirect.
+   * What an agent reaches for by default is whatever this file reaches for
+   * first.
+   */
+  it('shows an html card FIRST, and inline — not as a file to write', () => {
+    const examples = policy.slice(policy.indexOf('muxpad card set'));
+    const firstSet = examples.slice(0, examples.indexOf('\n\n'));
+    expect(firstSet).toContain('--format=html');
+    // `< panel.html` taught agents that html means "go write a file first",
+    // which is a bigger step than a quoted string in the middle of a task.
+    expect(firstSet).not.toContain('< panel.html');
+  });
+
+  it('shows the theme variables being used, not just mentioned', () => {
+    // A card that follows the user's theme is the difference between html
+    // being worth it and html being a beige box in a dark app.
+    const examples = policy.slice(policy.indexOf('muxpad card set'));
+    expect(examples.slice(0, 600)).toMatch(/var\(--accent\)/);
+  });
+
+  it('says which format COLLAPSES and which one does not', () => {
+    // The compact row is one line of text; an html card has no one line to
+    // collapse to and renders whole. An agent that does not know this writes
+    // its shape into a text card, where all but the first line is hidden.
+    expect(policy).toMatch(/one format that shows in full/i);
+    expect(policy).toMatch(/compact/i);
+  });
+
+  it('keeps the ascii bar, but as the one-line case rather than the default', () => {
+    expect(policy).toContain('[############--------]');
+    const bar = policy.indexOf('[############--------]');
+    const lead = policy.slice(Math.max(0, bar - 400), bar);
+    expect(lead).toMatch(/if .*one-line|one-line text card/i);
+  });
+});

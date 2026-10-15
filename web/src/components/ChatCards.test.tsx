@@ -151,6 +151,20 @@ describe('pinned chat cards', () => {
     expect(doc).toContain(':root{');
   });
 
+  it('PAINTS the frame with the card surface, rather than leaving it transparent', async () => {
+    // A transparent root hands the canvas to the UA default, which follows
+    // color-scheme — and that was read from a --card-scheme variable no theme
+    // defines. It fell back to `light dark`, the UA took the BROWSER's
+    // preference, and a laptop set to dark rendered every html card as a black
+    // slab inside a light app.
+    const host = await mount([card({ format: 'html', content: '<b>hi</b>' })]);
+    const frame = host.querySelector('iframe');
+    const doc = frame?.getAttribute('srcdoc') ?? '';
+    expect(doc).not.toMatch(/html,body\{margin:0;background:transparent/);
+    expect(doc).toMatch(/color-scheme:(light|dark)\b/);
+    expect(doc).not.toContain('--card-scheme');
+  });
+
   it('gives the frame a way to report its own height', async () => {
     // The parent cannot measure a sandboxed frame (contentDocument is null), so
     // without this the card renders at the iframe default with content cut off.

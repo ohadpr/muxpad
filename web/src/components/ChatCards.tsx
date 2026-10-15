@@ -1,6 +1,7 @@
 import { type ChatCard, cardFreshness, cardIsStale } from '@muxpad/shared';
 import type React from 'react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { cardColorScheme } from '../lib/card-frame';
 import { subscribe, subscribeResync } from '../events';
 import { isCardOpen, toggleCardOpen, useCardOpen } from '../lib/card-open';
 import './ChatCards.css';
@@ -65,16 +66,30 @@ const THEME_VARS = [
   '--danger',
 ] as const;
 
-function themeBlock(): string {
+function themeBlock(surface: string): string {
   if (typeof window === 'undefined') return '';
   const cs = getComputedStyle(document.documentElement);
   const vars = THEME_VARS.map((v) => `${v}:${cs.getPropertyValue(v).trim() || 'inherit'}`).join(
     ';',
   );
-  // `color-scheme` so form controls and scrollbars inside the card match, and a
-  // sane default type stack so a card that styles nothing still looks native.
-  return `:root{${vars};color-scheme:${cs.getPropertyValue('--card-scheme').trim() || 'light dark'}}
-html,body{margin:0;background:transparent;color:var(--fg);
+  // ─── PAINTED, NOT TRANSPARENT ───────────────────────────────────────────
+  // This used to set `background:transparent` so the card's surface would show
+  // through, and read `color-scheme` from a `--card-scheme` variable NO THEME
+  // HAS EVER DEFINED. Per CSS a transparent root hands the canvas to the UA
+  // default, and that default follows color-scheme — so it fell back to
+  // `light dark`, the UA took the BROWSER's preference, and a laptop set to
+  // dark rendered every html card as a black slab inside a light app.
+  // Measured on the running app, in alucard.
+  //
+  // Transparent cannot be made to work, so the frame is painted with the
+  // card's own measured background: the exact resolved colour, read off the
+  // card element. That is the only form that stays right through a theme
+  // switch and through color-mix() values JS cannot recompute.
+  //
+  // The scheme follows that colour rather than the browser, so form controls
+  // and scrollbars inside a card match the card they are in.
+  return `:root{${vars};color-scheme:${cardColorScheme(surface)}}
+html,body{margin:0;background:${surface};color:var(--fg);
   font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
 /* The same inset the text and markdown cards have, so a card that styles
    nothing still sits properly in its frame instead of running edge to edge.
@@ -112,11 +127,20 @@ function HtmlCard({ card }: { card: ChatCard }) {
   // palette until it is re-rendered, so a theme switch has to produce new
   // srcdoc rather than hoping the frame notices.
   const theme = document.documentElement.dataset.theme ?? '';
+  // THE CARD'S OWN SURFACE, measured rather than recomputed. It is a
+  // color-mix() of two theme tokens, which JS cannot evaluate — and the frame
+  // has to be painted with it exactly, or the card has a differently-coloured
+  // rectangle inside it. Layout effect so it is known before the first paint.
+  const [surface, setSurface] = useState('transparent');
+  useLayoutEffect(() => {
+    const card = ref.current?.closest('.chat-card');
+    if (card) setSurface(getComputedStyle(card).backgroundColor);
+  }, [theme]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: `theme` is deliberately a dependency it does not read — it is the SIGNAL that `themeBlock()` would now return different values, which is exactly when the srcdoc must be rebuilt. Dropping it leaves every html card wearing the previous theme until its content changes.
   const srcdoc = useMemo(
     () =>
-      `<!doctype html><html><head><meta charset="utf-8"><style>${themeBlock()}</style></head><body>${card.content}${SELF_MEASURE}</body></html>`,
-    [card.content, theme],
+      `<!doctype html><html><head><meta charset="utf-8"><style>${themeBlock(surface)}</style></head><body>${card.content}${SELF_MEASURE}</body></html>`,
+    [card.content, theme, surface],
   );
   useEffect(() => {
     const onMsg = (e: MessageEvent) => {
