@@ -104,7 +104,19 @@
      a 75% tint of it on a name is a different object from the solid accent that
      attention uses, but it is one token doing two jobs and that is worth
      knowing. */
-  --nt-pinned-ink: color-mix(in srgb, var(--accent) 75%, var(--fg));
+  /* MIXED INTO THE READ INK, NOT INTO --fg, which is what finally makes the
+     paragraph above TRUE. The goal was always "hue, not lightness"; mixing the
+     accent into FULL-STRENGTH ink missed it, because an ordinary name is not
+     full-strength ink — it is the read ink, a step down. So a pinned name sat
+     ABOVE every other name in luminance, which is the one axis unread owns.
+     Once the read/unread step was widened, pinned landed between the two and
+     took the bold-white signal with it: "pinned chats are fucked a bit because
+     of their color, it makes noticing bold harder."
+     Derived from the same token an ordinary name uses, so the two cannot drift
+     apart again. Measured across all six themes on both surfaces: ΔL* 0.0-3.6
+     from a read name (no brightness competition), ΔE 10.2-37.0 (the hue is
+     unmistakable), contrast 4.68-8.33:1. */
+  --nt-pinned-ink: color-mix(in srgb, var(--accent) 40%, var(--nt-ink-read));
 
   /* NO GROUP SURFACE AT ALL, and that is the third answer to this question.
      The sequence is worth keeping because each attempt was measured and each
@@ -351,29 +363,22 @@
      made the selected PINNED chat's name light purple on a near-white row: the
      mix was baked once, at `.navtree`, out of rail ink.
 
-     AND THE RAIL'S TINT IS ITS OWN NUMBER, arrived at with two measurements
-     rather than one, because the first correction overshot.
+     AND THE RAIL USED TO NEED ITS OWN NUMBER. It does not any more, and the
+     history is worth keeping because the arithmetic moved under it.
 
-     The mark has to satisfy two things at once, and only one of them is a
-     contrast ratio:
+     The mark has to satisfy two things at once, and only one is a contrast
+     ratio: it must not read DIMMER than an ordinary name (a pinned chat is not
+     a de-emphasised one), and it must not read the SAME as one, or it says
+     nothing. Against the rail those two were traded off by hand — 75% came out
+     dimmer than the names beside it, 40% too close to tell apart, 65% sat
+     between — and all of that was measured against a plain name at 9.25:1,
+     which is no longer what a plain name is.
 
-       · it must not read DIMMER than an ordinary name — a pinned chat is not
-         a de-emphasised one, and
-       · it must not read the SAME as one, or it says nothing.
-
-     Against this rail (plain names 9.25:1), measuring the mix at 40/55/65/75%
-     accent gives contrast 10.41 / 9.00 / 8.13 / 7.33 and ΔE from a plain name
-     18.7 / 27.8 / 34.7 / 41.8. The original 75% fails the first test: 7.3:1 is
-     DIMMER than the 9.25:1 beside it, so a pinned chat looked faded — which is
-     what "contrast not good" meant, and why the raw ratio passing was no
-     defence. 40% fails the second: ΔE 18.7 is too close to tell apart, which
-     is what "not strong enough" meant.
-
-     65% sits between: 8.13:1 is within a hair of the plain names' brightness,
-     and ΔE 34.7 is unmistakably a different colour. The PANE keeps 75% — its
-     surface is not in the accent's hue family, so neither failure applies
-     there. */
-  --nt-pinned-ink: color-mix(in srgb, var(--accent) 65%, var(--fg));
+     Mixing into --nt-ink-read answers both tests by construction instead: the
+     pinned name is the READ name with a hue, so it cannot be dimmer or
+     brighter than one, and the percentage is then free to be chosen purely for
+     how visible the hue is. One number now serves both surfaces. */
+  --nt-pinned-ink: color-mix(in srgb, var(--accent) 40%, var(--nt-ink-read));
   --nt-hover: color-mix(in srgb, var(--fg) 6%, transparent);
   --nt-sel: color-mix(in srgb, var(--accent) 20%, transparent);
   --nt-sel-hover: color-mix(in srgb, var(--accent) 26%, transparent);
@@ -1253,7 +1258,13 @@
   --status-blocked: var(--pane-status-blocked);
   --status-dead: var(--pane-status-dead);
   /* Re-derived, for the same reason and in the same order as the rail's. */
-  --nt-pinned-ink: color-mix(in srgb, var(--accent) 75%, var(--fg));
+  /* The read ink is re-derived FIRST, because the pinned ink is now built from
+     it: left on the rail's value, a selected pinned chat's name would be a
+     rail-ink mix sitting on a pane-coloured row — the same substitution trap,
+     one token further along. */
+  --nt-ink-read: color-mix(in srgb, var(--fg-dim) 55%, var(--fg-faint));
+  --nt-ink-read-child: var(--fg-faint);
+  --nt-pinned-ink: color-mix(in srgb, var(--accent) 40%, var(--nt-ink-read));
   --nt-hover: color-mix(in srgb, var(--fg) 6%, transparent);
   --nt-sel: color-mix(in srgb, var(--accent) 20%, transparent);
   --nt-sel-hover: color-mix(in srgb, var(--accent) 26%, transparent);
@@ -1284,7 +1295,13 @@
   --status-working: var(--pane-status-working);
   --status-blocked: var(--pane-status-blocked);
   --status-dead: var(--pane-status-dead);
-  --nt-pinned-ink: color-mix(in srgb, var(--accent) 75%, var(--fg));
+  /* The read ink is re-derived FIRST, because the pinned ink is now built from
+     it: left on the rail's value, a selected pinned chat's name would be a
+     rail-ink mix sitting on a pane-coloured row — the same substitution trap,
+     one token further along. */
+  --nt-ink-read: color-mix(in srgb, var(--fg-dim) 55%, var(--fg-faint));
+  --nt-ink-read-child: var(--fg-faint);
+  --nt-pinned-ink: color-mix(in srgb, var(--accent) 40%, var(--nt-ink-read));
   --nt-hover: color-mix(in srgb, var(--fg) 6%, transparent);
   --nt-sel: color-mix(in srgb, var(--accent) 20%, transparent);
   --nt-sel-hover: color-mix(in srgb, var(--accent) 26%, transparent);
