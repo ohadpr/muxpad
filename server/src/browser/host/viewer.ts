@@ -354,8 +354,13 @@ const mods = (e) => (e.altKey?1:0) | (e.ctrlKey?2:0) | (e.metaKey?4:0) | (e.shif
 let watching = new URLSearchParams(location.search).get('mode') === 'watch'
 const INPUT = new Set(['mouse', 'key', 'text', 'nav', 'emulate', 'fillLogin'])
 const send = (o) => {
-  if (watching && INPUT.has(o.t)) return
-  if (ws && ws.readyState === 1) ws.send(JSON.stringify(o))
+  // RETURNS WHETHER IT WENT. Input is dropped while watching, and a caller that
+  // books the message as sent anyway ends up believing a state the host was
+  // never told about — which is exactly how phone mode came to be on in the
+  // viewer and off in the page, leaving touches that did nothing at all.
+  if (watching && INPUT.has(o.t)) return false
+  if (ws && ws.readyState === 1) { ws.send(JSON.stringify(o)); return true }
+  return false
 }
 
 let buttons = 0
@@ -1012,9 +1017,16 @@ const stageSize = () => {
   return { width: Math.round(r.width) || window.innerWidth, height: Math.round(r.height) || window.innerHeight }
 }
 const setMobile = (on) => {
+  // COMMITTED ONLY IF THE HOST HEARD IT. mobileOn decides whether a finger is
+  // relayed as a finger (phone mode, the page scrolls itself) or classified
+  // into wheels (desktop mode). Setting it for a message that was dropped put
+  // those two out of step: the viewer sent touch events to a page with no touch
+  // emulation, so scrolling and tapping into fields both did nothing.
+  const delivered = send({ t:'emulate', mobile: on, ...stageSize() })
+  if (!delivered) return false
   mobileOn = on
   mobileBtn.setAttribute('aria-pressed', String(on))
-  send({ t:'emulate', mobile: on, ...stageSize() })
+  return true
 }
 mobileBtn.addEventListener('click', () => setMobile(!mobileOn))
 
@@ -1042,7 +1054,16 @@ if (window.innerWidth < 700) {
   // browser from a phone to admire it, so the wheel is taken on arrival rather
   // than charged to the first touch. The desktop keeps watch-until-you-touch,
   // where glancing at what an agent is doing is a real thing people do.
-  whenOpen(() => { takeTheWheel(); setMobile(true) })
+  // Only the take: an emulate message cannot be sent until the wheel is
+  // ours, and takeTheWheel applies phone mode itself once granted. Calling
+  // both here raced: the emulate went out while still watching, was dropped,
+  // and nothing asked again.
+  // Two ways in, and both have to end in phone mode. Already driving: send it
+  // now. Watching: the message would be dropped, so take the wheel and let the
+  // grant apply it. Calling setMobile unconditionally raced exactly that, and
+  // sending only the take left a viewer opened in DRIVE mode never asking at
+  // all, because takeTheWheel short-circuits when the wheel is already ours.
+  whenOpen(() => { if (watching) takeTheWheel(); else setMobile(true) })
 }
 
 // Everything is wired; dial. Last rather than first so no handler can fire
