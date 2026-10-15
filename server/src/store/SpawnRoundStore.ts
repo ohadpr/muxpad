@@ -36,6 +36,16 @@ export interface SpawnRound {
    * See `abandon`.
    */
   delivered_at: number | null;
+  /**
+   * When this round was last REOPENED (`reopen`), or null if it never was.
+   *
+   * `started_at` cannot move — it is when the person handed the job over, and
+   * the card is anchored to it — but a reopen throws away the result the round
+   * had, so the round's real end is owed a summary of its own. The report gate
+   * reads this as the moment the round's CURRENT stretch of work began. See
+   * `shouldConsiderSpawnReport`.
+   */
+  reopened_at: number | null;
 }
 
 interface RawRound {
@@ -47,6 +57,7 @@ interface RawRound {
   report_state: string | null;
   artifacts: string | null;
   delivered_at: number | null;
+  reopened_at: number | null;
 }
 
 function toRound(r: RawRound): SpawnRound {
@@ -67,10 +78,12 @@ function toRound(r: RawRound): SpawnRound {
     report_state: r.report_state,
     artifacts,
     delivered_at: r.delivered_at,
+    reopened_at: r.reopened_at,
   };
 }
 
-const COLUMNS = 'id, tab_id, started_at, ended_at, report, report_state, artifacts, delivered_at';
+const COLUMNS =
+  'id, tab_id, started_at, ended_at, report, report_state, artifacts, delivered_at, reopened_at';
 /**
  * The same list, qualified for the joined queries below.
  *
@@ -82,6 +95,20 @@ const COLUMNS = 'id, tab_id, started_at, ended_at, report, report_state, artifac
 const R_COLUMNS = COLUMNS.split(', ')
   .map((c) => `r.${c}`)
   .join(', ');
+
+/**
+ * THE QUEUE, as one WHERE fragment over `spawn_rounds r JOIN tabs t`. Takes one
+ * parameter: the `orphanedBefore` cutoff (NULL disables that arm).
+ *
+ * `t.id <> t.spawned_by`: a tab that is its own parent would be handed its own
+ * report, which opens a round, which reports, which is handed back — a genuine
+ * infinite loop. spawned_by is not a foreign key and nothing constrains it, so
+ * the guard is here rather than assumed.
+ */
+const PENDING_CLAUSE = `t.id <> t.spawned_by
+            AND r.ended_at IS NOT NULL
+            AND r.delivered_at IS NULL
+            AND (r.report IS NOT NULL OR r.report_state IS NOT NULL OR r.ended_at < ?)`;
 
 export class SpawnRoundStore {
   constructor(private readonly db: Database.Database) {}
@@ -161,10 +188,20 @@ export class SpawnRoundStore {
    * they are a regex over work that actually happened, and a published url does
    * not stop existing because the job turned out to have more in it.
    *
+   * Stamps `reopened_at`, and that stamp is load-bearing: the report gate
+   * rate-limits by "did this round begin after the last attempt", and a reopened
+   * round's `started_at` is always BEFORE the attempt whose result this just
+   * discarded. Without it the real end of the job read as a retry of the
+   * premature one, the gate refused it inside the half hour, and the round
+   * closed with no result at all — invisible to the delivery queue, so the
+   * parent heard nothing until a restart's recovery sweep found it. Measured
+   * live: four children, 5h42m–7h51m late, every one of them a turn started by
+   * a background-task notification after the settle had already closed it.
+   *
    * Does nothing when a round is already open (there is no mistake to undo) or
    * when this child has never had one.
    */
-  reopen(tabId: string): boolean {
+  reopen(tabId: string, at: number = Date.now()): boolean {
     if (this.openRound(tabId)) return false;
     const last = this.db
       .prepare(
@@ -177,9 +214,9 @@ export class SpawnRoundStore {
     this.db
       .prepare(
         `UPDATE spawn_rounds SET ended_at = NULL, report = NULL, report_state = NULL,
-            delivered_at = NULL WHERE id = ?`,
+            delivered_at = NULL, reopened_at = ? WHERE id = ?`,
       )
-      .run(last.id);
+      .run(at, last.id);
     return true;
   }
 
@@ -257,33 +294,49 @@ export class SpawnRoundStore {
    * Finished (`ended_at`), carrying something to say, and never delivered. The
    * "something to say" clause is `report IS NOT NULL OR report_state IS NOT
    * NULL` and it is what keeps the queue honest: a round can close with neither
-   * — a worker whose summary is still being generated, one whose generation
-   * failed outright — and delivering a nameless empty section to the parent
-   * would be noise with a marker on it. Such a round stays NULL here and is
-   * picked up when its result lands (or abandoned by the caller).
+   * while its summary is still being generated, and delivering that as an empty
+   * section would race the sentences that land seconds later.
+   *
+   * ─── BUT NOT FOREVER ────────────────────────────────────────────────────
+   * `orphanedBefore` is the other half of that clause. A round that closed
+   * before it and STILL has no result is not waiting for anything — the
+   * generator ran (or was never reached) and wrote nothing — and leaving it out
+   * of the queue means the parent is never told the worker finished. That was
+   * the shape of a 7h51m-late delivery: the round closed, the report gate
+   * declined, nothing was written, and the only thing that ever found it again
+   * was a restart. An orchestrator whose only wake signal is this message
+   * cannot afford "eventually"; it is owed "finished, no summary" now.
    *
    * Oldest first, because that is the order the parent's message lists them in
    * and the order a reader expects a batch to have happened in.
    */
-  undeliveredByParent(parentTabId: string): SpawnRound[] {
+  undeliveredByParent(parentTabId: string, orphanedBefore?: number): SpawnRound[] {
     const rows = this.db
       .prepare(
         `SELECT ${R_COLUMNS}
            FROM spawn_rounds r JOIN tabs t ON t.id = r.tab_id
-          WHERE t.spawned_by = ?
-            -- A tab that is its own parent would be handed its own report,
-            -- which opens a round, which reports, which is handed back: a
-            -- genuine infinite loop rather than a cosmetic oddity. spawned_by
-            -- is not a foreign key and nothing constrains it, so the guard is
-            -- here rather than assumed.
-            AND t.id <> t.spawned_by
-            AND r.ended_at IS NOT NULL
-            AND r.delivered_at IS NULL
-            AND (r.report IS NOT NULL OR r.report_state IS NOT NULL)
+          WHERE t.spawned_by = ? AND ${PENDING_CLAUSE}
           ORDER BY r.ended_at ASC, r.started_at ASC`,
       )
-      .all(parentTabId) as RawRound[];
+      .all(parentTabId, orphanedBefore ?? null) as RawRound[];
     return rows.map(toRound);
+  }
+
+  /**
+   * Every parent with at least one round `undeliveredByParent` would return —
+   * the whole queue in one query rather than a scan of every tab. The SAME
+   * clause, so the sweep cannot skip a parent the flush would have served.
+   */
+  parentsWithUndelivered(orphanedBefore?: number): string[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT DISTINCT t.spawned_by AS parent_id
+             FROM spawn_rounds r JOIN tabs t ON t.id = r.tab_id
+            WHERE t.spawned_by IS NOT NULL AND ${PENDING_CLAUSE}`,
+        )
+        .all(orphanedBefore ?? null) as Array<{ parent_id: string }>
+    ).map((r) => r.parent_id);
   }
 
   /**

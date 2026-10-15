@@ -66,6 +66,21 @@ export const BATCH_MAX_HOLD_MS = 10 * 60_000;
  */
 export const BATCH_SPAWN_WINDOW_MS = 5 * 60_000;
 
+/**
+ * HOW LONG A CLOSED ROUND MAY SIT WITH NO RESULT before it is delivered anyway.
+ *
+ * A round closes synchronously at the end of the job and its summary lands up
+ * to a minute later (a 30 s model call, and one retry of it), so a round with
+ * nothing on it is normally a summary in flight — and is held. Past this, it is
+ * not in flight: nothing is coming, and the parent is told the worker finished
+ * without one rather than told nothing at all. See
+ * `SpawnRoundStore.undeliveredByParent` for the 7h51m case this closes.
+ *
+ * Three minutes is the generation's worst case with room to spare; it only has
+ * to be short against the hours the old behaviour cost.
+ */
+export const RESULT_GRACE_MS = 3 * 60_000;
+
 /** How often the sweep looks for a hold that has run out of patience. */
 export const DELIVERY_SWEEP_MS = 60_000;
 
@@ -152,20 +167,9 @@ export class ReportDelivery {
   sweep(): Flushed {
     const total = nothing();
     try {
-      // Only parents that actually have something pending — this is the whole
-      // queue in one query rather than a scan of every tab.
-      const parents = this.db
-        .prepare(
-          `SELECT DISTINCT t.spawned_by AS parent_id
-             FROM spawn_rounds r JOIN tabs t ON t.id = r.tab_id
-            WHERE t.spawned_by IS NOT NULL
-              AND t.id <> t.spawned_by
-              AND r.ended_at IS NOT NULL
-              AND r.delivered_at IS NULL
-              AND (r.report IS NOT NULL OR r.report_state IS NOT NULL)`,
-        )
-        .all() as Array<{ parent_id: string }>;
-      for (const { parent_id: parentId } of parents) {
+      // Only parents that actually have something pending.
+      const parents = new SpawnRoundStore(this.db).parentsWithUndelivered(this.orphanedBefore());
+      for (const parentId of parents) {
         const r = this.flushParent(parentId);
         total.delivered += r.delivered;
         total.abandoned += r.abandoned;
@@ -200,7 +204,7 @@ export class ReportDelivery {
    */
   private flushParent(parentTabId: string): Flushed {
     const rounds = new SpawnRoundStore(this.db);
-    const pending = rounds.undeliveredByParent(parentTabId);
+    const pending = rounds.undeliveredByParent(parentTabId, this.orphanedBefore());
     if (pending.length === 0) return nothing();
 
     // ─── IS THERE ANYBODY TO TELL? ──────────────────────────────────────────
@@ -257,7 +261,7 @@ export class ReportDelivery {
       );
     }
 
-    const entries = pending.map((r) => this.entryFor(r));
+    const entries = this.entriesFor(pending);
     const text = renderSpawnDelivery(entries);
     const ids = pending.map((r) => r.id);
 
@@ -322,6 +326,41 @@ export class ReportDelivery {
     return pane ? { id: pane.id } : null;
   }
 
+  /** Rounds that closed before this and still say nothing are delivered as such. */
+  private orphanedBefore(): number {
+    return this.now() - RESULT_GRACE_MS;
+  }
+
+  /**
+   * ONE SECTION PER CHILD, however many of its rounds are in the batch.
+   *
+   * A worker re-tasked inside one hold window has two rounds pending, and one
+   * entry per round rendered `from="X,X"` with `count` overstating the number
+   * of workers — and a reader (the agent included) counting sections as
+   * workers. The rounds' reports are kept, oldest first, under the child's one
+   * heading: they are different jobs and neither supersedes the other. The
+   * state is the LATEST round's, because that is where the worker stands now.
+   */
+  private entriesFor(pending: readonly SpawnRound[]): SpawnDeliveryEntry[] {
+    const byChild = new Map<string, SpawnRound[]>();
+    for (const r of pending) {
+      const list = byChild.get(r.tab_id) ?? [];
+      list.push(r);
+      byChild.set(r.tab_id, list);
+    }
+    return [...byChild.values()].map((rounds) => {
+      const entries = rounds.map((r) => this.entryFor(r));
+      const last = entries[entries.length - 1] as SpawnDeliveryEntry;
+      if (entries.length === 1) return last;
+      const reports = entries.map((e) => e.report).filter((t): t is string => !!t);
+      return {
+        ...last,
+        report: reports.length ? reports.join('\n\n') : null,
+        artifacts: [...new Set(entries.flatMap((e) => e.artifacts ?? []))],
+      };
+    });
+  }
+
   private entryFor(round: SpawnRound): SpawnDeliveryEntry {
     const tab = new TabStore(this.db).getById(round.tab_id);
     return {
@@ -331,7 +370,9 @@ export class ReportDelivery {
       // to the tab name, then to the id — never to nothing, because the heading
       // is how the reader tells the sections apart.
       name: tab?.spawn_task?.trim() || tab?.name?.trim() || round.tab_id,
-      state: round.report_state,
+      // A round with nothing on it got here past RESULT_GRACE_MS: the summary
+      // was lost, which is what `failed` says on the card too.
+      state: round.report_state ?? (round.report ? null : 'failed'),
       report: round.report,
       artifacts: round.artifacts,
     };
