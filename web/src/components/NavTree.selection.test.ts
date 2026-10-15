@@ -929,8 +929,19 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     // arm for the mark added after it.
     const edge = ruleBody(NAV_CSS, '.navtree-pin-edge');
     expect(edge).not.toBe('');
-    expect(decl(edge, 'background')).toBe('var(--accent)');
     expect(decl(edge, 'position')).toBe('absolute');
+
+    // THE RAIL'S ACCENT EXPLICITLY. The selected row re-points --accent to the
+    // PANE's — right for everything painted on the pill, wrong for this, which
+    // is painted BESIDE it on rail ground: a dark pane accent on a dark rail is
+    // invisible, which is exactly how it was reported.
+    expect(decl(edge, 'background')).toBe('var(--rail-accent, var(--accent))');
+
+    // AND IT SITS OUTSIDE THE ROW. The selected row's pill is rounded on its
+    // left (`6px 0 0 6px`), so a bar at `left: 0` lies on the curve with white
+    // behind its middle and rail behind its ends — a dimple in the pill rather
+    // than a mark. Negative, so one ground is behind every row's bar.
+    expect(Number.parseFloat(decl(edge, 'left'))).toBeLessThan(0);
     expect(NAV_CSS).not.toMatch(/\.navtree-tab-row\[data-pinned='?"?true'?"?\]::(before|after)/);
 
     // IT SURVIVES EVERY OTHER STATE, which is the whole reason it moved off
