@@ -1130,7 +1130,9 @@ describe('Done finishes the errand', () => {
     h.el('handback').fire('click');
     await h.settle();
     expect(h.location.href).toBeUndefined();
-    expect(h.posted).toEqual([{ muxpad: 'handback' }]);
+    // `toContain` rather than `toEqual`: a phone-sized viewer now takes the
+    // wheel on arrival, which posts its own `takeover` first.
+    expect(h.posted).toContainEqual({ muxpad: 'handback' });
   });
 
   it('does not ask anybody to close when it IS the page', async () => {
@@ -1222,26 +1224,38 @@ describe('a tap that goes nowhere says so', () => {
    * A line that was already there before you acted is not an answer to what you
    * just did.
    */
-  it('answers a tap on something that is not a field', () => {
-    // A link, an image, the background. Nothing to type into, so nothing to take
-    // the wheel for — but it still has to say why the tap went nowhere.
+  it('a tap anywhere takes the wheel, with nothing to press first', () => {
+    // CHANGED BY REQUEST, and the old contract is worth recording because it
+    // was not arbitrary: a tap on a non-field used to explain itself and take
+    // nothing, so that a stray tap could not stall a working agent.
+    //
+    // Overruled, in these words: "if I'm trying to interact then I'm taking
+    // control. Why do you need this? I'm not opening this thing for no good
+    // reason — if I'm opening it and I'm trying to do stuff I'm trying to be
+    // active; when I close it, I'm done."
+    //
+    // The stray-tap cost is now paid differently: Done hands it straight back,
+    // and a closed viewer releases the lease on its own after 90s
+    // (BrowserWheel.releaseIfUnattended). Which answers the stall without
+    // making the common case ask permission.
     const h = run({ search: '?mode=watch' });
     h.el('screen').fire('pointerdown', { clientX: 100, clientY: 300 });
-    expect(h.el('msg').textContent).toContain('Take over');
+    expect(h.fetches.some((f) => f.url.includes('/wheel/take'))).toBe(true);
+    expect(h.el('msg').textContent).not.toContain('press Take over');
   });
 
-  it('draws attention to Take over, which is the only thing that helps', () => {
+  it('no longer sends anybody hunting for Take over', () => {
     const h = run({ search: '?mode=watch' });
     h.el('screen').fire('pointerdown', { clientX: 100, clientY: 300 });
-    expect(h.el('takeover').classes).toContain('ready');
+    expect(h.el('takeover').classes).not.toContain('ready');
   });
 
-  it('still sends nothing — the point is to explain, not to start driving', () => {
-    // Taking the wheel off a stray tap is the stall this mode exists to avoid.
+  it('asks muxpad for the wheel rather than dropping the gesture', () => {
+    // The inverse of what stood here. Input is still gated on actually holding
+    // the wheel — the tap is replayed once it is granted, not fired blind.
     const h = run({ search: '?mode=watch' });
     h.el('screen').fire('pointerdown', { clientX: 100, clientY: 300 });
-    expect(h.sent.some((m) => m.t === 'mouse')).toBe(false);
-    expect(h.el('sink').focused).toBe(false);
+    expect(h.fetches.some((f) => f.url.includes('/wheel/take'))).toBe(true);
   });
 
   it('says nothing of the sort while driving', () => {
@@ -1251,10 +1265,13 @@ describe('a tap that goes nowhere says so', () => {
   });
 
   it('names the way out in the standing line too, not just the situation', () => {
-    // "watching — the agent is still working" describes the agent. What a person
-    // stuck on this page needs is the name of the button.
+    // "watching — the agent is still working" describes the agent. What a
+    // person stuck on this page needs is the way out. That used to be the name
+    // of a button; now the way out is to touch the page, so the line says so.
+    // The invariant is unchanged and worth keeping: the standing line must name
+    // an ACTION, not describe a state.
     const h = run({ search: '?mode=watch' });
-    expect(h.el('msg').textContent).toContain('Take over');
+    expect(h.el('msg').textContent).toContain('touch the page');
   });
 });
 
@@ -1586,9 +1603,13 @@ describe('one finger scrolls, a hold drags, a tap clicks', () => {
   const hold = (h: Harness) => {
     for (const timer of h.timers.filter((x) => x.ms === 450)) timer.fn();
   };
+  /** The classifier is for DESKTOP mode, where the page has no touch handling
+   *  and needs a synthesized wheel. A phone-sized viewer turns on phone mode
+   *  and relays the finger as a finger instead — covered separately below. */
+  const desktop = () => ready(run({ width: 1280 }));
 
   it('a drag scrolls, and never clicks', () => {
-    const h = ready(run());
+    const h = desktop();
     h.el('screen').fire('pointerdown', {
       clientX: 100,
       clientY: 200,
@@ -1618,7 +1639,7 @@ describe('one finger scrolls, a hold drags, a tap clicks', () => {
   });
 
   it('a tap is still a click', () => {
-    const h = ready(run());
+    const h = desktop();
     h.el('screen').fire('pointerdown', {
       clientX: 100,
       clientY: 200,
@@ -1636,7 +1657,7 @@ describe('one finger scrolls, a hold drags, a tap clicks', () => {
   });
 
   it('a press-and-hold becomes a real drag', () => {
-    const h = ready(run());
+    const h = desktop();
     h.el('screen').fire('pointerdown', {
       clientX: 100,
       clientY: 200,
@@ -1664,7 +1685,7 @@ describe('one finger scrolls, a hold drags, a tap clicks', () => {
   });
 
   it('moving first cancels the hold, so a scroll never turns into a drag', () => {
-    const h = ready(run());
+    const h = desktop();
     h.el('screen').fire('pointerdown', {
       clientX: 100,
       clientY: 200,
@@ -1689,10 +1710,52 @@ describe('one finger scrolls, a hold drags, a tap clicks', () => {
   });
 
   it('leaves the MOUSE alone — it has a wheel and no ambiguity', () => {
-    const h = ready(run());
+    const h = desktop();
     h.el('screen').fire('pointerdown', { clientX: 100, clientY: 200, button: 0 });
     h.el('screen').fire('pointermove', { clientX: 100, clientY: 160 });
     h.el('screen').fire('pointerup', { clientX: 100, clientY: 160 });
     expect(types(h)).toEqual(['mousePressed', 'mouseMoved', 'mouseReleased']);
+  });
+});
+
+describe('phone mode relays the finger as a finger', () => {
+  /**
+   * The classifier above exists for DESKTOP mode, where the page has no touch
+   * handling and a drag has to become a wheel. In phone mode the page is under
+   * touch emulation, so it can do its own scrolling — both axes, nested
+   * scrollers, momentum — and the viewer should stop interpreting the gesture
+   * at all. Synthesizing wheels got vertical roughly right and the rest wrong:
+   * "scrolling horizontally doesn't seem to respond too much. The whole thing
+   * is wonky."
+   */
+  it('sends touch events, not mouse or wheel, on a phone-sized viewer', async () => {
+    const h = ready(run()); // the stub is 390px: phone mode turns itself on
+    h.receive({ t: 'wheel', wheel: { holder: 'human', by: 'viewer' } });
+    await h.settle();
+    h.el('screen').fire('pointerdown', {
+      clientX: 100,
+      clientY: 200,
+      button: 0,
+      pointerType: 'touch',
+      pointerId: 1,
+    });
+    h.el('screen').fire('pointermove', {
+      clientX: 140,
+      clientY: 160,
+      pointerType: 'touch',
+      pointerId: 1,
+    });
+    h.el('screen').fire('pointerup', {
+      clientX: 140,
+      clientY: 160,
+      pointerType: 'touch',
+      pointerId: 1,
+    });
+    const touches = h.sent.filter((m) => m.t === 'touch').map((m) => m.type);
+    expect(touches).toEqual(['touchStart', 'touchMove', 'touchEnd']);
+    // Horizontal is carried by the gesture itself rather than a delta we chose.
+    const move = h.sent.find((m) => m.type === 'touchMove') as Record<string, number>;
+    expect(move.x).toBeGreaterThan(0);
+    expect(h.sent.some((m) => m.t === 'mouse')).toBe(false);
   });
 });
