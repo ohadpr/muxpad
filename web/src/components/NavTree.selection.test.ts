@@ -514,6 +514,69 @@ describe('what the quiet selection HANDS BACK to the row', () => {
   });
 });
 
+describe('unread has to be visible from across the room', () => {
+  /**
+   * "The status of a tab being unread is just not strong enough. Look how well
+   * Slack does it."
+   *
+   * It was not strong enough because it was ONE channel: weight 500 against
+   * 700, at 13px, with both rows the SAME INK — measured in the running rail,
+   * ΔE 0.0. Slack's signal is not its badge; it is that the label itself goes
+   * from muted to full white AND from regular to bold, which reads peripherally
+   * down a whole list and costs no width.
+   */
+  it('read and unread differ in COLOUR, not only in weight', () => {
+    const base = ruleBody(NAV_CSS, '.navtree-tab-row');
+    const unread = ruleBody(NAV_CSS, `.navtree-tab-row[data-unread="true"] .navtree-name-text`);
+    expect(decl(base, 'color')).toBe('var(--nt-ink-read)');
+    expect(decl(unread, 'color')).toBe('var(--fg)');
+    expect(decl(base, 'color')).not.toBe(decl(unread, 'color'));
+  });
+
+  it('A CHILD ROW IS NOT EXEMPT — the cascade, not the rule, is the test', () => {
+    // The bug, exactly. The child rule is variant-scoped, (0,5,0) against the
+    // unread rule's (0,3,0), so it won outright: an unread SUB-CHAT rendered
+    // at child weight in child ink — no bold, no step of colour, nothing. The
+    // one row in the list most likely to be the thing you were waiting for.
+    //
+    // Asserted through a real cascade rather than by reading the rule, because
+    // reading the rule is what missed it: the rule was there and correct.
+    document.head.innerHTML = `<style>${NAV_CSS}</style>`;
+    document.body.innerHTML = `
+      <div class="navtree" data-variant="sidebar">
+        <div class="navtree-tab-row" data-child="true" data-unread="true">
+          <span id="kid" class="navtree-name-text">subchat report delivery</span>
+        </div>
+        <div class="navtree-tab-row" data-child="true">
+          <span id="read" class="navtree-name-text">scroll-repro</span>
+        </div>
+      </div>`;
+    const kid = getComputedStyle(document.getElementById('kid') as HTMLElement);
+    const read = getComputedStyle(document.getElementById('read') as HTMLElement);
+    expect(kid.fontWeight).toBe('700');
+    expect(read.fontWeight).toBe('500');
+    expect(kid.color).not.toBe(read.color);
+  });
+
+  it('a child is still quieter than a parent when neither is unread', () => {
+    // The hierarchy the child rule exists for has to survive the change: a
+    // sub-chat is subordinate, and saying so in the type is what saves a mark.
+    const child = ruleBody(
+      NAV_CSS,
+      '.navtree[data-variant="sidebar"] .navtree-tab-row[data-child="true"] .navtree-name-text',
+    );
+    expect(decl(child, 'color')).toBe('var(--nt-ink-read-child)');
+  });
+
+  it('the sheet says it in ink too, not only in weight', () => {
+    const sheet = ruleBody(
+      NAV_CSS,
+      '.navtree[data-variant="sheet"] .navtree-tab-row[data-unread="true"] .navtree-name-text',
+    );
+    expect(decl(sheet, 'color')).toBe('var(--fg)');
+  });
+});
+
 describe('the ARITHMETIC — six themes, and the defect the TAB introduces', () => {
   it('the name on the tab clears AA on every theme — trivially, and that is the point', () => {
     // The selected row is the CONTENT surface, so its text sits on exactly the
