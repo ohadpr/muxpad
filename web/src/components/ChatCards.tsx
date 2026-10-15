@@ -144,6 +144,34 @@ function HtmlCard({ card }: { card: ChatCard }) {
   );
 }
 
+/**
+ * The bounded preview of a multi-line card.
+ *
+ * FADED ONLY WHEN SOMETHING IS ACTUALLY CUT. An unconditional fade dims the
+ * last line of a card that fits perfectly, which reads as the card being
+ * stale or broken rather than as "there is more" — the same reason the stack
+ * above only fades when it is genuinely scrolled. So it measures itself, the
+ * way the stack does.
+ */
+function CardPreview({ card }: { card: ChatCard }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const [clipped, setClipped] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const fit = () => setClipped(el.scrollHeight > el.clientHeight + 1);
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return (
+    <span className={`chat-card-preview${clipped ? ' -clipped' : ''}`} ref={ref}>
+      {card.format === 'markdown' ? <Markdown text={card.content} /> : card.content}
+    </span>
+  );
+}
+
 function CardBody({ card }: { card: ChatCard }) {
   if (card.format === 'html') return <HtmlCard card={card} />;
   if (card.format === 'markdown')
@@ -244,7 +272,16 @@ export function ChatCards({ tabId }: { tabId: string | null | undefined }) {
         // An html card is a sandboxed frame — there is no "one line" of it to
         // put in the row, so it always keeps a body underneath. Text and
         // markdown ride IN the row until somebody opens them.
-        const inline = !open && card.format !== 'html';
+        //
+        // …BUT ONLY IF THERE IS ONE LINE OF THEM. A card with several lines put
+        // into the row's leftover column gets every line cut at the same x a
+        // few words in, because the column is what the name and the age did not
+        // take: "split into free columns which severely limits how much content
+        // can fit in each card". Those cards keep the header and put their
+        // content underneath at full width instead.
+        const multiline = card.format !== 'html' && card.content.trim().includes('\n');
+        const inline = !open && card.format !== 'html' && !multiline;
+        const preview = !open && multiline;
         const body = open || card.format === 'html';
         // ALWAYS, AND HARD RIGHT. This was suppressed until a card went overdue,
         // on the argument that the age is noise until it is news — the rail
@@ -292,11 +329,16 @@ export function ChatCards({ tabId }: { tabId: string | null | undefined }) {
                 takes the row's slack, which is why the age needs no
                 `margin-left: auto` any more, and its dots carry freshness and
                 drift toward the age as they do it. */}
-              {inline ? <span className="chat-card-leader" aria-hidden="true" /> : null}
+              {inline || preview ? (
+                <span className="chat-card-leader" aria-hidden="true" />
+              ) : null}
               <span className={`chat-card-age${stale ? ' -stale' : ''}`}>
                 {ago(now - card.updated_at)}
                 {stale ? ' · overdue' : ''}
               </span>
+              {/* Its own line in the wrapped row, so the content is bounded by
+                the CARD rather than by whatever the header left over. */}
+              {preview ? <CardPreview card={card} /> : null}
             </button>
             {/* Unmounted, not hidden. An html card is a sandboxed iframe that
               re-measures itself and re-posts its height; left mounted behind

@@ -55,15 +55,35 @@
      stacked as two pale rounded bars and read as a pair of inputs; 11px keeps
      them related without letting them rhyme. */
   border-radius: 11px;
-  /* A WARM SURFACE, not a neutral one. The whole app is cool purple, so a card
-     tinted a few percent toward warm paper separates from the transcript by
-     TEMPERATURE rather than by another border — and it stops being the same
-     colour as the text field underneath it.
-     Mixed from the accent rather than hardcoded, so it follows the theme: the
-     dark build lands on a warm-grey instead of a cream. */
-  background: color-mix(in srgb, var(--chat-elev) 93%, var(--status-working, #8a6410));
-  border: 1px solid color-mix(in srgb, var(--chat-accent) 13%, transparent);
-  box-shadow: 0 1px 0 color-mix(in srgb, var(--chat-accent) 7%, transparent);
+  /* ── SEPARATED BY LIGHTNESS FIRST, WARMTH SECOND ────────────────────────
+     This used to be `--chat-elev` tinted 7% warm, on the argument that a warm
+     surface separates from a cool app by TEMPERATURE without needing another
+     border. Measured against the themes it actually runs in, that argument was
+     wrong: in alucard the card and the chat behind it differ by ΔL* 0.2 — the
+     same lightness, a different hue — and in acme by ΔE 1.5, which is nothing
+     at all. "Color wise they are not differentiated from the background of the
+     chat", and they were not. The eye separates two large adjacent surfaces by
+     lightness, which was the one axis this had none of.
+
+     So the surface is derived from the chat background by pushing it TOWARD
+     THE FOREGROUND, which is the only direction that means "elevated" in both
+     a light and a dark theme without branching on either. The warm tint stays,
+     second, because it is what keeps a card from reading as another text
+     field. Measured across all six themes: ΔL* 6.7–7.6, ΔE 7.6–11.4, and the
+     value text no worse than 4.94:1 on it.
+
+     Deriving it from --chat-bg rather than --chat-elev is load-bearing: in
+     dracula, elev is DARKER than bg, so every elev-based card was sitting at
+     ΔL* 1.1 no matter how much tint went into it. */
+  background: color-mix(
+    in srgb,
+    var(--status-working, #8a6410) 6%,
+    color-mix(in srgb, var(--chat-fg) 6%, var(--chat-bg))
+  );
+  /* A real edge, in ink rather than accent: at 13% of a purple accent the
+     border was invisible on the very themes the surface was invisible on. */
+  border: 1px solid color-mix(in srgb, var(--chat-fg) 14%, transparent);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--chat-fg) 7%, transparent);
   overflow: hidden;
 }
 /* Overdue turns the whole edge warm, which is the signal the rail used to
@@ -126,6 +146,10 @@
 /* The row: the whole control, and the whole card when nothing is open. */
 .chat-card-row {
   display: flex;
+  /* WRAPPED, so a multi-line card can put its content on its OWN line rather
+     than in the column left over beside the name and the age — see
+     .chat-card-preview. */
+  flex-wrap: wrap;
   width: 100%;
   align-items: baseline;
   gap: 9px;
@@ -178,6 +202,53 @@
 .chat-card-value > * {
   display: inline;
   margin: 0;
+}
+/* ── A MULTI-LINE CARD GETS THE WHOLE WIDTH ───────────────────────────────
+   The row is name · value · leader · age, and for a one-line card that is
+   exactly right. Give the same row three lines of content and the three
+   columns become a vice: every line is cut at the same x, a few words in,
+   because the value is sized by what the name and the age left behind.
+   Reported as cards "split into free columns which severely limits how much
+   content can fit", which is precisely what it is.
+
+   So a card with more than one line keeps the header — name, leader, age — and
+   puts its content underneath at full width. `flex: 1 0 100%` is the whole
+   mechanism: it takes a line of its own in the wrapped row, so the header is
+   still one tappable control with it. The header keeps the leader, so the age
+   is pushed to the far edge by the same thing that does it on a one-line card
+   — and the drift that says the card is live does not disappear on the cards
+   with the most to say.
+
+   Bounded, because a card is pinned and cannot be scrolled past: about four
+   lines, faded at the cut so it reads as "there is more" rather than as a
+   sentence that stops. Opening the card shows all of it. */
+.chat-card-preview {
+  flex: 1 0 100%;
+  min-width: 0;
+  margin-top: 1px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--chat-dim);
+  max-height: calc(4 * 1.5em);
+  overflow: hidden;
+  /* pre-wrap for a text card: its newlines ARE its layout. A markdown card
+     emits real blocks and lays itself out. */
+  white-space: pre-wrap;
+}
+/* ONLY WHEN SOMETHING IS ACTUALLY CUT. An unconditional fade dims the last
+   line of a card that fits, which reads as broken rather than as "there is
+   more" — see .chat-cards.-over, which is the same rule one level up. */
+.chat-card-preview.-clipped {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), transparent 100%);
+}
+/* Markdown inside the preview lays out as blocks — the inline override that
+   keeps a one-line card on its single line would run all of them together,
+   which is the "did something mess up newlines?" bug in a different costume. */
+.chat-card-preview > * {
+  margin: 0;
+}
+.chat-card-preview > * + * {
+  margin-top: 0.35em;
 }
 .chat-card-age {
   flex: 0 0 auto;

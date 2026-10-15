@@ -66,3 +66,63 @@ describe('the dotted leader', () => {
     expect(css.slice(i, i + 160)).toContain('.chat-card-leader');
   });
 });
+
+describe('a card has to look like a card', () => {
+  /**
+   * The surface was `--chat-elev` tinted 7% warm, separating from the chat by
+   * TEMPERATURE alone. Measured in the themes it runs in, that is ΔL* 0.2 in
+   * alucard and ΔE 1.5 in acme — two surfaces at the same lightness, which the
+   * eye reads as one. "Color wise they are not differentiated from the
+   * background of the chat."
+   */
+  it('is derived from the chat BACKGROUND, not from elev', () => {
+    // In dracula, --bg-elev is DARKER than --bg: an elev-based card sits at
+    // ΔL* 1.1 there no matter how much tint goes into it.
+    const r = rule('.chat-card') ?? '';
+    expect(r).toContain('--chat-bg');
+    expect(r).not.toMatch(/background:[^;]*--chat-elev/);
+  });
+
+  it('separates by LIGHTNESS — mixed toward the foreground, which works both ways', () => {
+    // Toward --chat-fg is the only direction that means "elevated" in a light
+    // theme and a dark one without branching on either.
+    expect(rule('.chat-card')).toMatch(/var\(--chat-fg\)\s+\d+%,\s*var\(--chat-bg\)/);
+  });
+
+  it('keeps the warm tint, but as the SECOND signal rather than the only one', () => {
+    expect(rule('.chat-card')).toContain('--status-working');
+  });
+
+  it('has an edge in ink, not in a purple nobody can see', () => {
+    const r = rule('.chat-card') ?? '';
+    expect(r).toMatch(/border:\s*1px solid color-mix\(in srgb, var\(--chat-fg\)/);
+  });
+});
+
+describe('the full-width preview', () => {
+  it('takes a whole line of the wrapped row', () => {
+    // `flex: 1 0 100%` is the entire mechanism: a line of its own inside the
+    // same button, so the content is bounded by the CARD rather than by what
+    // the name and the age left over.
+    expect(rule('.chat-card-preview')).toMatch(/flex:\s*1 0 100%/);
+    expect(rule('.chat-card-row')).toContain('flex-wrap: wrap');
+  });
+
+  it('is bounded, because a pinned card cannot be scrolled past', () => {
+    expect(rule('.chat-card-preview')).toContain('max-height');
+  });
+
+  it('fades ONLY when something is actually cut off', () => {
+    // An unconditional fade dims the last line of a card that fits perfectly,
+    // which reads as the card being broken rather than as "there is more".
+    expect(rule('.chat-card-preview')).not.toContain('mask-image');
+    expect(rule('.chat-card-preview.-clipped')).toContain('mask-image');
+  });
+
+  it('does NOT inherit the inline override that keeps a one-line card on one line', () => {
+    // `.chat-card-value > * { display: inline }` run over a markdown preview
+    // would weld every block together — the "did something mess up newlines?"
+    // bug wearing a different hat.
+    expect(rule('.chat-card-preview > *')).not.toContain('display: inline');
+  });
+});
