@@ -1508,9 +1508,20 @@
 .navtree .navtree-tab-row:not([data-child="true"]) + .navtree-tab-row[data-child="true"]::before {
   top: 7px;
 }
-/* A child with another child after it carries the trunk straight through. */
+/* A child with another child after it carries the trunk straight through —
+   and OVERLAPS the next segment by a pixel.
+
+   The rows are flush and each segment is exactly its row's height, so on paper
+   the pieces abut. On a 2x display they do not LOOK it: a 1.5px border is
+   antialiased independently per box, and at every seam the two half-covered
+   device pixels sit side by side instead of summing, so the line reads as
+   broken once per row. Reported from a Retina screen as "small visual gap in
+   vertical line in tree"; invisible at 1x, which is why the geometry measured
+   clean here.
+   A pixel of overlap costs nothing — it is the same line continuing over
+   itself — and it removes the seam whatever the rounding does. */
 .navtree .navtree-tab-row[data-child="true"]:has(+ .navtree-tab-row[data-child="true"])::before {
-  bottom: 0;
+  bottom: -1px;
 }
 /* …and the tick into each child. */
 .navtree .navtree-tab-row[data-child="true"]::after {
