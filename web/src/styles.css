@@ -321,7 +321,20 @@
 [data-theme="alucard"] {
   /* The rail, as reviewed on the demo — these are its rendered values, not a
      second guess at them. */
-  --rail-surface: #282340;
+  /* ── HOW DARK A RAIL SHOULD BE ──────────────────────────────────────────
+     Every rail sits in one lightness band, and the band is measured rather
+     than chosen: Slack's sidebar, sampled from a screenshot of the real app,
+     is #522d58 — L* 24.9. This one was L* 15.6, nine steps darker, which is
+     the whole of "contrast good but too dark, Slack uses a dark colour but not
+     sOOOOO dark".
+     Lifted toward the rail's OWN accent rather than toward white, so it gains
+     light without losing its hue — a rail is a tinted dark, not a grey one.
+     The ink is unchanged: read 5.43:1 and unread white 11.32:1 against the new
+     surface, and the step between them (what makes unread readable at a
+     glance) is a property of the two inks, so it survives the lift untouched.
+     tokyo-night, dracula and acme-dark are already in the band and are left
+     alone — a blanket percentage would have pushed those past Slack. */
+  --rail-surface: #3d345f;
   --rail-ink: #ffffff;
   --rail-ink-dim: #cccad6;
   --rail-ink-faint: #9794a5;
@@ -380,7 +393,20 @@
 [data-theme="github-light"] {
   /* The rail, as reviewed on the demo — these are its rendered values, not a
      second guess at them. */
-  --rail-surface: #1d2834;
+  /* ── HOW DARK A RAIL SHOULD BE ──────────────────────────────────────────
+     Every rail sits in one lightness band, and the band is measured rather
+     than chosen: Slack's sidebar, sampled from a screenshot of the real app,
+     is #522d58 — L* 24.9. This one was L* 15.6, nine steps darker, which is
+     the whole of "contrast good but too dark, Slack uses a dark colour but not
+     sOOOOO dark".
+     Lifted toward the rail's OWN accent rather than toward white, so it gains
+     light without losing its hue — a rail is a tinted dark, not a grey one.
+     The ink is unchanged: read 5.59:1 and unread white 10.79:1 against the new
+     surface, and the step between them (what makes unread readable at a
+     glance) is a property of the two inks, so it survives the lift untouched.
+     tokyo-night, dracula and acme-dark are already in the band and are left
+     alone — a blanket percentage would have pushed those past Slack. */
+  --rail-surface: #2a3c50;
   --rail-ink: #ffffff;
   --rail-ink-dim: #d2d4d6;
   --rail-ink-faint: #979ca2;
@@ -446,7 +472,20 @@
 [data-theme="acme"] {
   /* The rail, as reviewed on the demo — these are its rendered values, not a
      second guess at them. */
-  --rail-surface: #141223;
+  /* ── HOW DARK A RAIL SHOULD BE ──────────────────────────────────────────
+     Every rail sits in one lightness band, and the band is measured rather
+     than chosen: Slack's sidebar, sampled from a screenshot of the real app,
+     is #522d58 — L* 24.9. This one was L* 15.6, nine steps darker, which is
+     the whole of "contrast good but too dark, Slack uses a dark colour but not
+     sOOOOO dark".
+     Lifted toward the rail's OWN accent rather than toward white, so it gains
+     light without losing its hue — a rail is a tinted dark, not a grey one.
+     The ink is unchanged: read 5.30:1 and unread white 11.80:1 against the new
+     surface, and the step between them (what makes unread readable at a
+     glance) is a property of the two inks, so it survives the lift untouched.
+     tokyo-night, dracula and acme-dark are already in the band and are left
+     alone — a blanket percentage would have pushed those past Slack. */
+  --rail-surface: #3b3659;
   --rail-ink: #fffdf6;
   --rail-ink-dim: #cec8c2;
   --rail-ink-faint: #928d8e;
