@@ -1292,31 +1292,44 @@
   color: var(--fg);
   font-weight: 640;
 }
-/* ── PINNED IS NOT AN INK ANY MORE ──────────────────────────────────────────
-   It was, and the ink is the wrong channel for it however carefully the mix is
-   tuned. The list ended up with three inks that did not form one scale — grey
-   for read, white for unread, lavender for pinned — and the lavender silently
-   DISAPPEARED on a pinned row that went unread, because unread rightly wins the
-   colour. A mark that is shown only while the row is boring is not a mark.
-   "Now if it's unread it's white, otherwise it's gray, or if pinned it's
-   purple-ish. Not too consistent."
+/* ── PINNED IS AN EDGE, AND THE INK IS LEFT ALONE ──────────────────────────
+   Pinned was an ink, and ink is the wrong channel for it however carefully the
+   mix is tuned: the name's colour already carries read-vs-unread, so pinned was
+   a second meaning on one channel — and it LOST. A pinned row that went unread
+   took the white and dropped its hue, so the mark was visible only while the
+   row had nothing to say. "Not too consistent", and it was not.
 
-   So the ink says exactly one thing now — grey is read, white and bold is
-   unread — and pinned is told the way Slack tells starred: by GROUPING. The
-   server already orders pinned first; all that was missing was the seam, which
-   is the rule below. One meaning per channel, and the pinned mark no longer
-   vanishes at the moment the row becomes interesting. */
-.navtree-tab-row[data-pin-seam="true"] {
-  /* AIR, not a line. A rule here was drawn three ways — flush, inset, then a
-     40px stub — and each one was a line BETWEEN two things used to say
-     something about ONE of them. The gap says "the pinned block ends here"
-     without claiming to be about either row, and it is the same 10px that
-     separated the block before the mark moved onto the names.
-     The ROW is flagged by the renderer rather than matched by a sibling
-     selector, because the row above the seam is often a pinned chat's
-     SUB-CHAT — not pinned itself, and no selector can see that it belongs to
-     the block above. See `pinSeam` in NavTree.tsx. */
-  margin-top: 10px;
+   So the ink says exactly one thing now (grey read, white bold unread, a child
+   one rung quieter) and pinned moved OFF it entirely, onto a 2px accent edge at
+   the row's leading rim. A different channel, which is the whole point: it
+   cannot be overruled by unread, by selection, or by hover, because none of
+   them paint there.
+
+   WHY ON THE BOX, WHICH THIS FILE OTHERWISE FORBIDS. Five earlier designs went
+   on the box and were rejected for crowding what SELECTION owns — a rule under
+   the block, a tick in the state track, a ring and a plate on the chip, a fill
+   at the midpoint. The rim is the one piece of the box selection does not use,
+   so a pinned row you are also IN keeps both marks at once. That is the case
+   the hue could never do, and the first thing to check if this is ever moved.
+
+   AND IT IS ITS OWN NODE, not a pseudo-element. Both pseudos of a tab row are
+   already spoken for — `::before` is StateChip's 3px state track, `::after` is
+   the sub-chat elbow — and reaching for either from this file has produced the
+   same over-constrained-box bug twice, each time visible on screen and
+   invisible to any test that only read the rule it wrote. The funnel became a
+   node for exactly this reason; so is this. */
+.navtree-pin-edge {
+  position: absolute;
+  left: 0;
+  /* Short of the row's full height on purpose: a bar that runs edge to edge
+     reads as a divider between rows rather than as a mark on one. */
+  top: 5px;
+  bottom: 5px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+  /* Above the selection fill, which is painted on the row itself. */
+  z-index: 1;
 }
 /* Hover on the row you are already on has almost nothing to say, so it says it
    quietly: one step of the block's own fill, never a second colour. */

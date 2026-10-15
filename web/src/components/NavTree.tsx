@@ -1399,11 +1399,10 @@ export function TabList({
    *  switches the row's mark from a tile to a dot in its parent's chip column,
    *  and what puts the one indent step on the row. Nothing about a clock — a
    *  sub-chat has none, and the row reads its own. */
-  const renderRow = (t: Tab, parent?: Tab, pinSeam?: boolean) => (
+  const renderRow = (t: Tab, parent?: Tab) => (
     <TabRow
       key={t.id}
       tab={t}
-      {...(pinSeam ? { pinSeam } : {})}
       // The whole reason `renderGroup` knows the parent. Forwarding it was
       // missed, and because every OTHER prop here is spelled out explicitly
       // there was nothing to notice: `TabRow.parent` was simply `undefined` on
@@ -1431,7 +1430,7 @@ export function TabList({
       }
     />
   );
-  const renderGroup = (g: ChatGroup, pinSeam?: boolean) => (
+  const renderGroup = (g: ChatGroup) => (
     <Fragment key={`${g.chat.id}${g.contextOnly ? ':subs' : ''}`}>
       {g.contextOnly ? (
         /* A LABEL, not a row. The parent may be live with a row of its own
@@ -1442,7 +1441,7 @@ export function TabList({
           {g.chat.name}
         </div>
       ) : (
-        renderRow(g.chat, undefined, pinSeam)
+        renderRow(g.chat)
       )}
       {g.children.map((k) => renderRow(k, g.chat))}
     </Fragment>
@@ -1452,22 +1451,20 @@ export function TabList({
     <div className="navtree-tab-list">
       {liveGroups.map((g, i) => (
         <Fragment key={g.chat.id}>
-          {/* THE SEAM IS BACK, as air, and this time nothing draws it.
-              It was a rule (flush, then inset, then a 40px stub), then pure
-              air, then a `height: 0; margin: 0` div that rendered nothing —
-              an element kept alive by edits that each took one more thing
-              away from it. Then the mark moved onto the rows as a hue on the
-              NAME, and that is what failed here: the name's ink already says
-              read-vs-unread, so pinned was a second meaning on one channel,
-              and it LOST — a pinned row going unread dropped its hue and the
-              mark vanished exactly when the row became interesting.
-              Pinned is grouping now, which is what the order has always been
-              doing on its own. The gap goes on the first row of the unpinned
-              block, computed from this very list, so it lands after a pinned
-              chat's SUB-CHATS too — which is the case a CSS sibling selector
-              cannot see, because the row above the seam is a child and a
-              child is not pinned. */}
-          {renderGroup(g, !g.chat.pinned && (liveGroups[i - 1]?.chat.pinned ?? false))}
+          {/* NOTHING BETWEEN THE BLOCKS. A seam here was drawn as a rule
+              (flush, then inset, then a 40px stub), then as pure air, then as
+              a `height: 0` div that rendered nothing — an element kept alive
+              by edits each taking one more thing away from it. Then the mark
+              went onto the NAME as a hue and lost to unread; then back here as
+              a gap the renderer had to flag, because the row above the seam is
+              usually a pinned chat's SUB-CHAT and no selector can see that it
+              belongs to the block above.
+              It is on the ROWS now, as an edge (--accent, 2px) that selection
+              does not paint over and unread cannot overrule — which is what a
+              seam could never do anyway: it said "something changes here" from
+              between two blocks, legible only to someone who already knew the
+              list was sorted. */}
+          {renderGroup(g)}
         </Fragment>
       ))}
       {/* ─── The done group ────────────────────────────────────────────────
@@ -1703,19 +1700,6 @@ interface TabRowProps {
   /** The chat that spawned this one, when it is a child. Supplies the clock
    *  they share, and switches the row's leading mark from tile to dot. */
   parent?: Tab | undefined;
-  /**
-   * This row begins the UNPINNED block, so it carries the seam.
-   *
-   * Pinned is told by grouping now rather than by an ink on the name — see the
-   * seam rule in NavTree.css — and the gap has to fall after the last row that
-   * BELONGS to the pinned block, which includes a pinned chat's sub-chats. A
-   * CSS sibling selector cannot see that: the row above the seam is often a
-   * child, which is not pinned itself. So the renderer says where the seam is,
-   * derived from the very list it is rendering — not an index handed down,
-   * which is the thing that previously fell out of step and took the divider
-   * element with it.
-   */
-  pinSeam?: boolean | undefined;
   workspace: Workspace;
   isActiveTab: boolean;
   /**
@@ -2056,7 +2040,6 @@ function CronMark({ tab }: { tab: Tab }) {
 function TabRow({
   tab,
   parent,
-  pinSeam,
   workspace,
   isActiveTab,
   workspaceLabel,
@@ -2524,12 +2507,12 @@ function TabRow({
       // went deliberately — see RowMark. The row's state is now told exactly
       // once, by the 10px mark at its right edge.
       data-child={parent ? 'true' : undefined}
-      // Pinned is told by GROUPING — position, plus the seam this flags. The
-      // name's ink says read-vs-unread and nothing else; a hue here was a
-      // second meaning on that channel which then lost to it, so a pinned row
-      // going unread dropped its mark exactly when it became interesting.
+      // Pinned is a 2px accent EDGE on the row's leading rim — see NavTree.css.
+      // Off the ink entirely, because the name's colour already says
+      // read-vs-unread: a hue there was a second meaning on one channel, and it
+      // lost, so a pinned row going unread dropped its mark exactly when it
+      // became interesting.
       data-pinned={tab.pinned ? 'true' : undefined}
-      data-pin-seam={pinSeam ? 'true' : undefined}
       data-unread={tab.unread ? 'true' : undefined}
       data-pressing={pressing ? 'true' : undefined}
       {...(!isEditing
@@ -2617,6 +2600,15 @@ function TabRow({
           the row you are in. */}
       {isActiveTab && variant === 'sidebar' && (
         <span className="navtree-tab-funnel" aria-hidden="true" />
+      )}
+      {/* THE PINNED EDGE, and it is a node for the SAME reason the funnel is:
+          both pseudos of a tab row are spoken for — `::before` is StateChip's
+          state track, `::after` is the sub-chat elbow — and styling either one
+          from here has produced the same bug twice. Ownership, not geometry.
+          It is a mark on the row's rim rather than an ink on its name because
+          the name's colour already carries read-vs-unread; see NavTree.css. */}
+      {tab.pinned && variant === 'sidebar' && (
+        <span className="navtree-pin-edge" aria-hidden="true" />
       )}
       {/* ─── THE TRAILING RAIL — ONE CELL, ONE COLUMN ──────────────────────
           Everything a row says on its right, in one flex box, right-aligned,

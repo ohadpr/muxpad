@@ -99,61 +99,52 @@ const count = (haystack: string, needle: string) => haystack.split(needle).lengt
 const aged = (days: number) =>
   chatClock({ started_at: NOW - days * 86_400_000, now: NOW, pinned: false });
 
-describe('the seam that ends the pinned block', () => {
+describe('the pinned edge', () => {
   /**
-   * Pinned is told by GROUPING — the server orders pinned first, and the gap
-   * says where that block ends. It cannot be a CSS sibling selector: the row
-   * directly above the seam is often a pinned chat's SUB-CHAT, which is not
-   * pinned itself, so the selector would either miss the seam entirely or put
-   * one between a pinned parent and its own child.
+   * Pinned is a 2px accent bar on the row's leading rim — a channel nothing
+   * else paints in, so it cannot be overruled by unread (which owns the ink),
+   * by selection (which owns the fill) or by hover. The mark it replaces was a
+   * hue on the name, which lost to unread and so appeared only while the row
+   * had nothing to say.
+   *
+   * It is a NODE, not a pseudo: both of a tab row's are taken, and reaching
+   * for either has produced the same bug twice.
    */
-  const seams = (html: string) => count(html, 'data-pin-seam="true"');
+  const edges = (html: string) => count(html, 'navtree-pin-edge');
 
-  it('marks the first unpinned chat, once', () => {
+  it('draws one per pinned chat, and none on the rest', () => {
     const html = railHtml([
       tab('pinned-a', { pinned: true }),
       tab('pinned-b', { pinned: true }),
-      tab('ordinary-a'),
-      tab('ordinary-b'),
+      tab('ordinary'),
     ]);
-    expect(seams(html)).toBe(1);
-    // …and it is the first unpinned one, not the last pinned one.
-    expect(html.indexOf('data-pin-seam="true"')).toBeGreaterThan(html.indexOf('pinned-b'));
-    expect(html.indexOf('data-pin-seam="true"')).toBeLessThan(html.indexOf('ordinary-b'));
+    expect(edges(html)).toBe(2);
   });
 
-  it('puts it AFTER a pinned chat’s sub-chats — they belong to the block', () => {
-    // The case that rules out a sibling selector: the row above the seam is
-    // the child, which carries no pinned flag of its own.
+  it('draws it on a pinned chat that is also UNREAD — the case the hue lost', () => {
+    const html = railHtml([tab('pinned', { pinned: true, unread: true })]);
+    expect(edges(html)).toBe(1);
+    expect(html).toContain('data-unread="true"');
+  });
+
+  it('does not mark a pinned chat’s sub-chat — a child is not pinned', () => {
     const html = railHtml([
       tab('pinned', { pinned: true }),
       tab('kid', { spawned_by: 'pinned' }),
-      tab('ordinary'),
     ]);
-    expect(seams(html)).toBe(1);
-    expect(html.indexOf('data-pin-seam="true"')).toBeGreaterThan(html.indexOf('>kid<'));
+    expect(edges(html)).toBe(1);
   });
 
-  it('draws NO seam when nothing is pinned', () => {
-    expect(seams(railHtml([tab('a'), tab('b')]))).toBe(0);
+  it('draws nothing at all when nothing is pinned', () => {
+    expect(edges(railHtml([tab('a'), tab('b')]))).toBe(0);
   });
 
-  it('draws no seam when everything is pinned — there is no second block', () => {
-    expect(seams(railHtml([tab('a', { pinned: true }), tab('b', { pinned: true })]))).toBe(0);
-  });
-
-  it('never marks a child row itself', () => {
-    // A child inherits its place from its parent; a seam on one would split a
-    // chat from its own sub-chat.
-    const html = railHtml([
-      tab('pinned', { pinned: true }),
-      tab('ordinary'),
-      tab('kid', { spawned_by: 'ordinary' }),
-    ]);
-    const childAt = html.indexOf('data-child="true"');
-    const seamAt = html.indexOf('data-pin-seam="true"');
-    expect(seams(html)).toBe(1);
-    expect(seamAt).toBeLessThan(childAt);
+  it('is hidden from the screen reader — the pin button already says it', () => {
+    // `aria-pressed` on the pin control is the accessible statement; a second
+    // announcement per row would be noise on every pinned chat.
+    const html = railHtml([tab('pinned', { pinned: true })]);
+    const at = html.indexOf('navtree-pin-edge');
+    expect(html.slice(Math.max(0, at - 120), at + 40)).toContain('aria-hidden="true"');
   });
 });
 

@@ -889,70 +889,58 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     }
   });
 
-  it('PINNED IS GROUPING — it is not an ink, and it is not on the box', () => {
-    // Seven designs now. The first five were negative because each is ruled
-    // out by a reason rather than a value, and all five were on the row's BOX,
-    // which is the one thing selection owns:
+  it('PINNED IS AN EDGE — off the ink, on its own node', () => {
+    // Seven designs. The first five were on the row's BOX and were rejected
+    // for crowding what selection owns:
     //
     //   · a rule under the block (flush, inset, a 40px stub) — a line BETWEEN
     //     two things used to say something about ONE of them.
-    //   · a 3px tick in the left state track — free, but outside the icon
-    //     column, so it ragged the rail's left edge.
-    //   · a ring, then a plate, on the chip — measured invisible: the tile is
-    //     transparent and a 20px glyph fills a 24px box.
-    //   · the pin shown at rest — visible, but 18px of name width on exactly
-    //     the rows pinned because they matter.
-    //   · a FILL at the midpoint between the rail and the selected row —
-    //     rejected as "too close to the active tab indicator".
+    //   · a 3px tick in the left state track — free, but it ragged the rail's
+    //     left edge.
+    //   · a ring, then a plate, on the chip — measured invisible.
+    //   · the pin shown at rest — 18px of name width on exactly the rows
+    //     pinned because they matter.
+    //   · a FILL at the midpoint — "too close to the active tab indicator".
     //
-    // The SIXTH was a hue on the name, and it failed for a reason none of the
-    // others did: it put a second meaning on the channel that already carries
-    // read-vs-unread, and then LOST to it. A pinned row that went unread took
-    // the white and dropped its hue, so the pinned mark was visible only while
-    // the row had nothing to say — and three inks that do not form one scale
-    // read, correctly, as "not too consistent".
+    // The sixth was a hue on the NAME, and it failed for a reason none of the
+    // others did: the name's ink already carries read-vs-unread, so pinned was
+    // a second meaning on one channel — and it lost. A pinned row that went
+    // unread took the white and dropped its hue, so the mark showed only while
+    // the row had nothing to say.
     //
-    // The seventh is the one Slack uses for starred: GROUPING. The server
-    // already orders pinned first, so the only thing needed is the seam.
-    const seam = ruleBody(NAV_CSS, '.navtree-pin-divider');
-    expect(seam).not.toMatch(/border/);
+    // The seventh is a 2px accent edge on the leading rim: a channel nothing
+    // else paints in, so unread, selection and hover all leave it alone.
     expect(strip(STATE_CSS)).not.toMatch(/\[data-pinned/);
     expect(strip(CHIP_CSS)).not.toMatch(/data-phase="pinned"/);
-    for (const r of rules(NAV_CSS)) {
-      const onTheBox = r.selectors.some((sel) => /\[data-pinned="true"\]$/.test(sel));
-      if (onTheBox)
-        expect({ sel: r.selectors, body: r.body }).toEqual({ sel: r.selectors, body: '' });
-    }
 
-    // NO INK AT ALL. The token is gone, not merely unused: a colour nobody
-    // paints with is a colour somebody paints with later.
+    // NO INK. The token is gone, not merely unused: a colour nobody paints
+    // with is a colour somebody paints with later.
     expect(NT_TOKENS['--nt-pinned-ink']).toBeUndefined();
     expect(NAV_CSS).not.toMatch(/--nt-pinned-ink\s*:/);
     expect(
       ruleBody(NAV_CSS, '.navtree-tab-row[data-pinned="true"] .navtree-name-text', true),
     ).toBe('');
 
-    // THE SEAM IS AIR, and it is carried by the row that BEGINS the unpinned
-    // block — flagged by the renderer, not matched by a sibling selector. The
-    // row above the seam is often a pinned chat's SUB-CHAT, which is not
-    // pinned itself, so no selector can see that it belongs to the block
-    // above. NavTree.rows.test.tsx owns where the flag is put; this owns what
-    // it draws.
-    document.head.innerHTML = `<style>${NAV_CSS}</style>`;
-    document.body.innerHTML = `
-      <div class="navtree" data-variant="sidebar">
-        <div class="navtree-tab-list">
-          <div class="navtree-tab-row" data-pinned="true"><span></span></div>
-          <div class="navtree-tab-row" data-child="true"><span></span></div>
-          <div class="navtree-tab-row" id="seam" data-pin-seam="true"><span></span></div>
-          <div class="navtree-tab-row" id="ordinary"><span></span></div>
-        </div>
-      </div>`;
-    const top = (id: string) =>
-      Number.parseFloat(getComputedStyle(document.getElementById(id) as HTMLElement).marginTop);
-    expect(top('seam')).toBeGreaterThanOrEqual(8);
-    expect(top('ordinary') || 0).toBe(0);
-    const gap = ruleBody(NAV_CSS, '.navtree-tab-row[data-pin-seam="true"]');
-    expect(gap).not.toMatch(/border|background|box-shadow/);
+    // ITS OWN NODE, never a pseudo. Both of a tab row's are spoken for —
+    // ::before is StateChip's state track, ::after is the sub-chat elbow — and
+    // reaching for either from this file has produced the same
+    // over-constrained-box bug twice. The assertion above this one
+    // ('the fillets own their OWN element') is the general form; this is the
+    // arm for the mark added after it.
+    const edge = ruleBody(NAV_CSS, '.navtree-pin-edge');
+    expect(edge).not.toBe('');
+    expect(decl(edge, 'background')).toBe('var(--accent)');
+    expect(decl(edge, 'position')).toBe('absolute');
+    expect(NAV_CSS).not.toMatch(/\.navtree-tab-row\[data-pinned='?"?true'?"?\]::(before|after)/);
+
+    // IT SURVIVES EVERY OTHER STATE, which is the whole reason it moved off
+    // the ink. Nothing may hide it — and a row that is pinned AND selected
+    // AND unread has to keep all three marks.
+    for (const r of rules(NAV_CSS)) {
+      const hides =
+        r.selectors.some((sel) => sel.includes('.navtree-pin-edge')) &&
+        /display:\s*none|visibility:\s*hidden|opacity:\s*0\b/.test(r.body);
+      expect({ sel: r.selectors, hides }).toEqual({ sel: r.selectors, hides: false });
+    }
   });
 });
