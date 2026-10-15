@@ -95,28 +95,12 @@
      close to the active tab indicator" — which is the correct reading of the
      whole category, not of that value.
 
-     So this is INSIDE the row, on its contents, where selection says nothing.
-     And it is HUE rather than lightness: the name keeps its luminance and
-     changes temperature, so it cannot read as "louder" or "dimmer" than any
-     other name — the two marks are not on the same axis at all.
-
-     The accent is spent here by request. It had been reserved for "needs you";
-     a 75% tint of it on a name is a different object from the solid accent that
-     attention uses, but it is one token doing two jobs and that is worth
-     knowing. */
-  /* MIXED INTO THE READ INK, NOT INTO --fg, which is what finally makes the
-     paragraph above TRUE. The goal was always "hue, not lightness"; mixing the
-     accent into FULL-STRENGTH ink missed it, because an ordinary name is not
-     full-strength ink — it is the read ink, a step down. So a pinned name sat
-     ABOVE every other name in luminance, which is the one axis unread owns.
-     Once the read/unread step was widened, pinned landed between the two and
-     took the bold-white signal with it: "pinned chats are fucked a bit because
-     of their color, it makes noticing bold harder."
-     Derived from the same token an ordinary name uses, so the two cannot drift
-     apart again. Measured across all six themes on both surfaces: ΔL* 0.0-3.6
-     from a read name (no brightness competition), ΔE 10.2-37.0 (the hue is
-     unmistakable), contrast 4.68-8.33:1. */
-  --nt-pinned-ink: color-mix(in srgb, var(--accent) 40%, var(--nt-ink-read));
+     IT IS NO LONGER AN INK AT ALL. Hue was the third answer to this question
+     and it failed for a reason the first two did not: it put a second meaning
+     on the channel that already carries read-vs-unread, and then lost to it —
+     a pinned row that went unread dropped its hue entirely, so the mark was
+     visible only while the row had nothing to say. Pinned is grouping now; see
+     the seam rule beside the name colours. */
 
   /* NO GROUP SURFACE AT ALL, and that is the third answer to this question.
      The sequence is worth keeping because each attempt was measured and each
@@ -378,7 +362,6 @@
      pinned name is the READ name with a hue, so it cannot be dimmer or
      brighter than one, and the percentage is then free to be chosen purely for
      how visible the hue is. One number now serves both surfaces. */
-  --nt-pinned-ink: color-mix(in srgb, var(--accent) 40%, var(--nt-ink-read));
   --nt-hover: color-mix(in srgb, var(--fg) 6%, transparent);
   --nt-sel: color-mix(in srgb, var(--accent) 20%, transparent);
   --nt-sel-hover: color-mix(in srgb, var(--accent) 26%, transparent);
@@ -1264,7 +1247,6 @@
      one token further along. */
   --nt-ink-read: color-mix(in srgb, var(--fg-dim) 55%, var(--fg-faint));
   --nt-ink-read-child: var(--fg-faint);
-  --nt-pinned-ink: color-mix(in srgb, var(--accent) 40%, var(--nt-ink-read));
   --nt-hover: color-mix(in srgb, var(--fg) 6%, transparent);
   --nt-sel: color-mix(in srgb, var(--accent) 20%, transparent);
   --nt-sel-hover: color-mix(in srgb, var(--accent) 26%, transparent);
@@ -1301,7 +1283,6 @@
      one token further along. */
   --nt-ink-read: color-mix(in srgb, var(--fg-dim) 55%, var(--fg-faint));
   --nt-ink-read-child: var(--fg-faint);
-  --nt-pinned-ink: color-mix(in srgb, var(--accent) 40%, var(--nt-ink-read));
   --nt-hover: color-mix(in srgb, var(--fg) 6%, transparent);
   --nt-sel: color-mix(in srgb, var(--accent) 20%, transparent);
   --nt-sel-hover: color-mix(in srgb, var(--accent) 26%, transparent);
@@ -1311,12 +1292,31 @@
   color: var(--fg);
   font-weight: 640;
 }
-/* AFTER the active-row rule on purpose. Both selectors are (0,3,0), so source
-   order decides, and a pinned row that you are ALSO in is still pinned — the
-   hue has to survive selection rather than be overwritten by it. The weight
-   above still applies; only the colour is taken back. */
-.navtree-tab-row[data-pinned="true"] .navtree-name-text {
-  color: var(--nt-pinned-ink);
+/* ── PINNED IS NOT AN INK ANY MORE ──────────────────────────────────────────
+   It was, and the ink is the wrong channel for it however carefully the mix is
+   tuned. The list ended up with three inks that did not form one scale — grey
+   for read, white for unread, lavender for pinned — and the lavender silently
+   DISAPPEARED on a pinned row that went unread, because unread rightly wins the
+   colour. A mark that is shown only while the row is boring is not a mark.
+   "Now if it's unread it's white, otherwise it's gray, or if pinned it's
+   purple-ish. Not too consistent."
+
+   So the ink says exactly one thing now — grey is read, white and bold is
+   unread — and pinned is told the way Slack tells starred: by GROUPING. The
+   server already orders pinned first; all that was missing was the seam, which
+   is the rule below. One meaning per channel, and the pinned mark no longer
+   vanishes at the moment the row becomes interesting. */
+.navtree-tab-row[data-pin-seam="true"] {
+  /* AIR, not a line. A rule here was drawn three ways — flush, inset, then a
+     40px stub — and each one was a line BETWEEN two things used to say
+     something about ONE of them. The gap says "the pinned block ends here"
+     without claiming to be about either row, and it is the same 10px that
+     separated the block before the mark moved onto the names.
+     The ROW is flagged by the renderer rather than matched by a sibling
+     selector, because the row above the seam is often a pinned chat's
+     SUB-CHAT — not pinned itself, and no selector can see that it belongs to
+     the block above. See `pinSeam` in NavTree.tsx. */
+  margin-top: 10px;
 }
 /* Hover on the row you are already on has almost nothing to say, so it says it
    quietly: one step of the block's own fill, never a second colour. */
