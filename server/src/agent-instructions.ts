@@ -152,9 +152,15 @@ A chat can hold named CARDS, pinned above the conversation. Setting the same
 name again REPLACES that card. The transcript is the history; a card is the
 current answer.
 
-    muxpad card set build "V2.1 [####------] 42%  layout · 3/6 streams done"
-    muxpad card set panel --format=html < panel.html
+    muxpad card set build --format=html '<div style="display:flex;align-items:center;gap:9px;font:13px/1.4 system-ui">
+      <b>V2.1</b>
+      <span style="flex:1;height:6px;border-radius:3px;background:var(--bg-hover)">
+        <span style="display:block;width:62%;height:100%;border-radius:3px;background:var(--accent)"></span>
+      </span>
+      <span style="color:var(--fg-dim)">62% · 4/6 streams</span>
+    </div>'
     muxpad card set market --format=md --every=1d "**open** SPX +0.4% · VIX 13.1"
+    muxpad card set note "one line of plain text"
     muxpad card get build        # the content, bare — read-modify-write
     muxpad card list
     muxpad card clear build
@@ -166,13 +172,25 @@ message, not a card — and most things are messages.
 
 **The content is yours.** text, markdown or html, and muxpad imposes no fields
 and no components. An html card renders in a sandboxed frame: it can use
-\`var(--accent)\`, \`var(--fg)\`, \`var(--bg-hover)\` and friends (the app's theme is
-injected) and it cannot reach the app. Keep it under 64KB — a card is pinned
-where it cannot be scrolled past, so a card the height of the screen is worse
-than no card. For anything bigger, \`muxpad publish\`.
+\`var(--accent)\`, \`var(--fg)\`, \`var(--fg-dim)\`, \`var(--bg-hover)\` and friends
+(the app's theme is injected, so a card follows the user's theme for free), it
+sizes itself to its own content, and it cannot reach the app. Pass it inline as
+above — no file needed — or pipe one in for something long. Keep it under 64KB:
+a card is pinned where it cannot be scrolled past, so a card the height of the
+screen is worse than no card. For anything bigger, \`muxpad publish\`.
 
-A SUGGESTED progress line, because one shared shape is easier to read at a
-glance than six inventions — a convention, not a rule, and not a component:
+**HTML IS THE ONE FORMAT THAT SHOWS IN FULL.** A text or markdown card is
+COMPACT in the chat — one line, the rest a tap away — because most cards are a
+single current value and a pinned paragraph costs everybody the space. An html
+card has no "one line" to collapse to, so it always renders whole. That is the
+choice: a value that is one line wants text or markdown; anything with shape —
+a bar, a few rows, a small table, a sparkline — wants html, and drawing it with
+\`#\` and \`-\` inside a text card gets you a worse version of what the frame
+would have drawn properly.
+
+IF a one-line text card IS what you want, this is a suggested shape, because
+one shared form is easier to read at a glance than six inventions — a
+convention, not a rule, and not a component:
 
     V2.1 [############--------] 62%  edge live · 4/6 streams done
 
