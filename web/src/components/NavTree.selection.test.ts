@@ -514,6 +514,74 @@ describe('what the quiet selection HANDS BACK to the row', () => {
   });
 });
 
+describe('pinned must not out-shine an unread name', () => {
+  /**
+   * "Pinned chats are fucked a bit because of their color, it makes noticing
+   * bold harder."
+   *
+   * Lightness is the unread channel. Pinned is a HUE — this file has said so
+   * for a long time — but it mixed the accent into --fg, and an ordinary name
+   * is not --fg, it is one step down. So pinned sat between read and unread in
+   * brightness and competed with the signal it was supposed to be orthogonal
+   * to. Mixing into the READ ink makes the claim true by construction.
+   */
+  const READ_MIX = 0.55;
+  const PINNED_MIX = 0.4;
+  /** OKLab L, ×100 — the axis unread owns. */
+  const lightness = (h: string) => (oklab(h)[0] as number) * 100;
+
+  function inks(t: Record<string, unknown>, surface: 'rail' | 'pane') {
+    const dim = t[surface === 'rail' ? '--rail-ink-dim' : '--fg-dim'] as string;
+    const faint = t[surface === 'rail' ? '--rail-ink-faint' : '--fg-faint'] as string;
+    const accent = t[surface === 'rail' ? '--rail-accent' : '--accent'] as string;
+    const read = over(dim, faint, READ_MIX);
+    return { read, pinned: over(accent, read, PINNED_MIX) };
+  }
+
+  it('sits at the SAME brightness as a read name, on every theme and surface', () => {
+    // The complaint, as a number: pinned brighter than read is pinned
+    // competing with unread.
+    for (const [name, t] of Object.entries(THEMES)) {
+      for (const surface of ['rail', 'pane'] as const) {
+        const { read, pinned } = inks(t as Record<string, unknown>, surface);
+        const step = Math.abs(lightness(pinned) - lightness(read));
+        expect({ name, surface, tooBright: step > 4 }).toEqual({ name, surface, tooBright: false });
+      }
+    }
+  });
+
+  it('is still unmistakably a different COLOUR — otherwise it says nothing', () => {
+    for (const [name, t] of Object.entries(THEMES)) {
+      for (const surface of ['rail', 'pane'] as const) {
+        const { read, pinned } = inks(t as Record<string, unknown>, surface);
+        expect({ name, surface, tellable: deltaE(pinned, read) >= 3 }).toEqual({
+          name,
+          surface,
+          tellable: true,
+        });
+      }
+    }
+  });
+
+  it('and an UNREAD name is brighter than any pinned one — on every theme', () => {
+    // The ordering that has to hold for bold white to be the loudest thing in
+    // the list: unread > pinned ≈ read.
+    for (const [name, t] of Object.entries(THEMES)) {
+      for (const surface of ['rail', 'pane'] as const) {
+        const { pinned } = inks(t as Record<string, unknown>, surface);
+        const unread = (t as Record<string, string>)[
+          surface === 'rail' ? '--rail-ink' : '--fg'
+        ] as string;
+        const dark = lightness(unread) > 50;
+        const ok = dark
+          ? lightness(unread) - lightness(pinned) > 8
+          : lightness(pinned) - lightness(unread) > 8;
+        expect({ name, surface, ok }).toEqual({ name, surface, ok: true });
+      }
+    }
+  });
+});
+
 describe('unread has to be visible from across the room', () => {
   /**
    * "The status of a tab being unread is just not strong enough. Look how well
@@ -897,7 +965,15 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     const ink = ruleBody(NAV_CSS, '.navtree-tab-row[data-pinned="true"] .navtree-name-text');
     expect(decl(ink, 'color')).toBe('var(--nt-pinned-ink)');
     expect(ink).not.toMatch(/background|border|box-shadow|font-weight|font-size/);
-    expect(NT_TOKENS['--nt-pinned-ink']).toMatch(/var\(--accent\) \d+%, var\(--fg\)/);
+    // MIXED INTO THE READ INK, not into --fg. That is what makes the paragraph
+    // above true rather than aspirational: an ordinary name is not
+    // full-strength ink, it is the read ink — so an accent mixed into --fg sat
+    // ABOVE every other name in luminance, which is the one axis unread owns,
+    // and the brighter the pinned rows the harder the bold white was to spot.
+    // Built from the same token an ordinary name uses, the two cannot drift.
+    expect(NT_TOKENS['--nt-pinned-ink']).toMatch(
+      /var\(--accent\) \d+%, var\(--nt-ink-read\)/,
+    );
 
     // IT MUST SURVIVE SELECTION. A pinned row you are also IN is still pinned,
     // and `[data-active="true"] .navtree-name-text` is (0,3,0) — exactly the
