@@ -69,11 +69,18 @@ describe('the dotted leader', () => {
 
 describe('a card has to look like a card', () => {
   /**
-   * The surface was `--chat-elev` tinted 7% warm, separating from the chat by
-   * TEMPERATURE alone. Measured in the themes it runs in, that is ΔL* 0.2 in
-   * alucard and ΔE 1.5 in acme — two surfaces at the same lightness, which the
-   * eye reads as one. "Color wise they are not differentiated from the
-   * background of the chat."
+   * Two wrong answers before this one, both measured.
+   *
+   * First: `--bg-elev` tinted 7% warm, separating from the chat by TEMPERATURE
+   * alone — ΔL* 0.2 in alucard, ΔE 1.5 in acme. Two surfaces at the same
+   * lightness read as one.
+   *
+   * Second: the chat background mixed toward the FOREGROUND. That separates
+   * honestly, and it is grey: a warm-grey panel in an app made of purple,
+   * which got the accurate review "the colors are just ugly".
+   *
+   * So it separates by lightness, in the app's OWN hue. Across all six themes:
+   * ΔL* 4.4-5.9, ΔE 5.9-9.3, value text no worse than 5.17:1.
    */
   it('is derived from the chat BACKGROUND, not from elev', () => {
     // In dracula, --bg-elev is DARKER than --bg: an elev-based card sits at
@@ -83,19 +90,20 @@ describe('a card has to look like a card', () => {
     expect(r).not.toMatch(/background:[^;]*--chat-elev/);
   });
 
-  it('separates by LIGHTNESS — mixed toward the foreground, which works both ways', () => {
-    // Toward --chat-fg is the only direction that means "elevated" in a light
-    // theme and a dark one without branching on either.
-    expect(rule('.chat-card')).toMatch(/var\(--chat-fg\)\s+\d+%,\s*var\(--chat-bg\)/);
+  it('is tinted with the ACCENT — the app\'s own colour, not a grey', () => {
+    expect(rule('.chat-card')).toMatch(/var\(--chat-accent\)\s+\d+%,\s*var\(--chat-bg\)/);
   });
 
-  it('keeps the warm tint, but as the SECOND signal rather than the only one', () => {
-    expect(rule('.chat-card')).toContain('--status-working');
-  });
-
-  it('has an edge in ink, not in a purple nobody can see', () => {
+  it('has no warm tint left in it at all', () => {
+    // The "warm paper" idea is what produced both of the ugly versions. The
+    // overdue edge still uses --status-working; the SURFACE must not.
     const r = rule('.chat-card') ?? '';
-    expect(r).toMatch(/border:\s*1px solid color-mix\(in srgb, var\(--chat-fg\)/);
+    expect(r).not.toContain('--status-working');
+    expect(rule('.chat-card.-stale')).toContain('--status-working');
+  });
+
+  it('has a visible edge', () => {
+    expect(rule('.chat-card')).toMatch(/border:\s*1px solid/);
   });
 });
 
@@ -108,8 +116,20 @@ describe('the full-width preview', () => {
     expect(rule('.chat-card-row')).toContain('flex-wrap: wrap');
   });
 
-  it('is bounded, because a pinned card cannot be scrolled past', () => {
-    expect(rule('.chat-card-preview')).toContain('max-height');
+  it('is TWO LINES, not four — a card is a glance, not a paragraph', () => {
+    // At four lines a card with blank lines between its lines became a slab
+    // taller than the message above it: "this doesn't make sense for the
+    // compacted size of these things, it should be 1-2 lines max".
+    expect(rule('.chat-card-preview')).toMatch(/max-height:\s*calc\(2 \*/);
+  });
+
+  it('flattens the log\'s paragraph margins, which are what made it a slab', () => {
+    // .chat-md p carries 0.6em top AND bottom, and a markdown card written with
+    // blank lines arrives as a column of paragraphs with 16px of air between
+    // them. The old rule only reached the WRAPPER div, so it did nothing.
+    const i = css.indexOf('.chat-card-preview .chat-md');
+    expect(i).toBeGreaterThan(-1);
+    expect(css.slice(i, css.indexOf('}', i))).toContain('margin: 0');
   });
 
   it('fades ONLY when something is actually cut off', () => {
@@ -119,10 +139,11 @@ describe('the full-width preview', () => {
     expect(rule('.chat-card-preview.-clipped')).toContain('mask-image');
   });
 
-  it('does NOT inherit the inline override that keeps a one-line card on one line', () => {
-    // `.chat-card-value > * { display: inline }` run over a markdown preview
-    // would weld every block together — the "did something mess up newlines?"
-    // bug wearing a different hat.
-    expect(rule('.chat-card-preview > *')).not.toContain('display: inline');
+  it('is not touched by the inline override that keeps a one-line card on one line', () => {
+    // `display: inline` run over a preview would weld every block together —
+    // the "did something mess up newlines?" bug wearing a different hat. The
+    // override is scoped to the VALUE, which is the one-line slot.
+    expect(rule('.chat-card-value > *')).toContain('display: inline');
+    expect(css).not.toContain('.chat-card-preview > * {');
   });
 });
