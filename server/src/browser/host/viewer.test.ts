@@ -38,6 +38,11 @@ interface StubEl {
   hidden: boolean;
   textContent: string;
   fire(type: string, event?: Record<string, unknown>): void;
+  /** The rows the sheet built, in order. */
+  children: StubEl[];
+  disabled?: boolean;
+  type?: string;
+  className?: string;
   /** Overridable so a test can make capture refuse the way a real one does. */
   setPointerCapture?: (pointerId: number) => void;
 }
@@ -161,6 +166,22 @@ function run(opts: RunOpts | string = {}): Harness {
         el.focused = false;
         for (const fn of listeners.get('blur') ?? []) fn({});
       },
+      // Enough of a tree for the drop-down sheet, which BUILDS its list rather
+      // than looking it up: one row per option, from the page's own answer.
+      children: [] as StubEl[],
+      appendChild(child: StubEl) {
+        el.children.push(child);
+        return child;
+      },
+      replaceChildren() {
+        el.children = [];
+      },
+      querySelector(sel: string) {
+        const m = /^\[([^=\]]+)="([^"]*)"\]$/.exec(sel);
+        if (!m) return null;
+        return el.children.find((c) => c.attrs[m[1] as string] === m[2]) ?? null;
+      },
+      scrollIntoView() {},
       setPointerCapture() {},
       releasePointerCapture() {},
       click() {},
@@ -223,7 +244,7 @@ function run(opts: RunOpts | string = {}): Harness {
       addEventListener() {},
       body: el('body'),
       documentElement: el('html'),
-      createElement: () => make('made'),
+      createElement: (tag: string) => make(tag),
       hidden: false,
     },
     location: {
@@ -1832,5 +1853,109 @@ describe('the inlined page stays inlineable', () => {
       inside.includes('`'),
       'a backtick inside VIEWER_HTML closes the template early — use plain words in comments',
     ).toBe(false);
+  });
+});
+
+/**
+ * DROP-DOWNS.
+ *
+ * A native select popup is drawn by the browser, outside the page's own
+ * compositing, so Page.startScreencast never carries it: the tap lands on a
+ * real element and absolutely nothing appears. The list is read out of the page
+ * instead (SelectProbe.ts) and drawn here.
+ */
+describe('the drop-down sheet', () => {
+  const COUNTRIES = {
+    t: 'select',
+    label: 'Billing country',
+    options: [
+      { v: 'eu', l: 'Europe', selected: false, disabled: false },
+      { v: 'us', l: 'United States', selected: true, disabled: false },
+      { v: 'xx', l: 'Nowhere', selected: false, disabled: true },
+    ],
+  };
+
+  function sheet() {
+    const h = ready(run({ width: 390 }));
+    h.receive(COUNTRIES);
+    return h;
+  }
+
+  it('opens with a row per option, and names the field', () => {
+    const h = sheet();
+    expect(h.el('pick').hidden).toBe(false);
+    expect(h.el('pickTitle').textContent).toBe('Billing country');
+    expect(h.el('pickList').children.map((c) => c.textContent)).toEqual([
+      'Europe',
+      'United States',
+      'Nowhere',
+    ]);
+  });
+
+  it('marks the one that is already on', () => {
+    const rows = sheet().el('pickList').children;
+    expect(rows[1]?.attrs['aria-selected']).toBe('true');
+    expect(rows[0]?.attrs['aria-selected']).toBeUndefined();
+  });
+
+  it('does not offer a disabled option', () => {
+    expect(sheet().el('pickList').children[2]?.disabled).toBe(true);
+  });
+
+  it('sends the VALUE, not the label, and closes', () => {
+    const h = sheet();
+    h.el('pickList').children[0]?.fire('click');
+    expect(h.sent.filter((m) => m.t === 'pick')).toEqual([{ t: 'pick', value: 'eu' }]);
+    expect(h.el('pick').hidden).toBe(true);
+  });
+
+  it('TELLS THE PAGE when it is dismissed, so no stamp is left behind', () => {
+    // The probe marks the element it described, because the page may re-render
+    // between the tap and the answer. A sheet nobody chose from must clear it,
+    // or the next choice lands on the wrong element.
+    const h = sheet();
+    h.el('pickCancel').fire('click');
+    expect(h.sent.some((m) => m.t === 'unpick')).toBe(true);
+    expect(h.el('pick').hidden).toBe(true);
+  });
+
+  it('dismisses on the backdrop but NOT on the sheet itself', () => {
+    const h = sheet();
+    h.el('pickSheet').fire('click');
+    expect(h.el('pick').hidden).toBe(false);
+    h.el('pick').fire('click', { target: h.el('pick') });
+    expect(h.el('pick').hidden).toBe(true);
+  });
+
+  it('sends no choice when it was merely dismissed', () => {
+    const h = sheet();
+    h.el('pickCancel').fire('click');
+    expect(h.sent.some((m) => m.t === 'pick')).toBe(false);
+  });
+
+  it('ignores a select with no options at all rather than opening an empty sheet', () => {
+    const h = ready(run({ width: 390 }));
+    h.receive({ t: 'select', label: 'Empty', options: [] });
+    expect(h.el('pick').hidden).toBe(true);
+  });
+
+  it('says so when the drop-down went away under the sheet', () => {
+    const h = sheet();
+    h.el('pickList').children[0]?.fire('click');
+    h.receive({ t: 'picked', ok: false });
+    expect(h.el('msg').textContent).toMatch(/went away/i);
+  });
+
+  it('is quiet when the choice landed', () => {
+    const h = sheet();
+    h.el('pickList').children[0]?.fire('click');
+    h.receive({ t: 'picked', ok: true });
+    expect(h.el('msg').textContent).not.toMatch(/went away/i);
+  });
+
+  it('builds rows with textContent, never markup', () => {
+    // An option label is page content, and this page can reach the host.
+    expect(VIEWER_HTML).not.toMatch(/pickList\.innerHTML/);
+    expect(VIEWER_HTML).toMatch(/b\.textContent = String/);
   });
 });
