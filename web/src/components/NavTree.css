@@ -147,6 +147,25 @@
   --nt-indent: 12px;
   --nt-pill: 6px; /* selection/hover pill corner radius */
 
+  /* ─── READ AND UNREAD ARE A STEP OF INK, NOT ONLY OF WEIGHT ─────────────
+     Measured in the running rail: a read row and an unread one were the SAME
+     COLOUR, ΔE 0.0, separated by weight 500 vs 700 at 13px — and on a child
+     row not even that, because the child rule is variant-scoped and outscored
+     the unread rule, so a sub-chat that had finished looked exactly like one
+     that had not. "The status of a tab being unread is just not strong
+     enough. Look how well Slack does it."
+
+     Slack's unread signal is not the badge: it is that the LABEL ITSELF goes
+     from muted to full white and from regular to bold, so the state reads in
+     peripheral vision down the whole list. That is two channels on the thing
+     your eye is already scanning, and it costs no width.
+
+     So: read steps DOWN, unread goes to full ink. Measured against this rail,
+     ΔE 0.0 -> 30.0 (ΔL* 28.6), with read still at 6.81:1 and unread 14.95:1. */
+  --nt-ink-read: color-mix(in srgb, var(--fg-dim) 55%, var(--fg-faint));
+  /* A child is subordinate, so it sits one rung quieter again — 5.05:1. */
+  --nt-ink-read-child: var(--fg-faint);
+
   /* ─── The two surfaces a row can take, and why they are DERIVED ──────────
      Selection and hover are one scale with three rungs, and all three are
      mixed from the row's own ground rather than taken from a theme token. That
@@ -1058,7 +1077,7 @@
      block's rounded corner. */
   padding: 6px var(--nt-air) 6px calc(var(--nt-pad) + var(--nt-indent));
   border-radius: var(--nt-pill);
-  color: var(--fg-dim);
+  color: var(--nt-ink-read);
   font-weight: 500;
 }
 /* Renaming collapses the row to icon + input: the meta, controls and status
@@ -1480,7 +1499,7 @@
 .navtree[data-variant="sidebar"] .navtree-tab-row[data-child="true"] .navtree-name-text {
   font-weight: 500;
   font-size: 13.5px;
-  color: var(--fg-dim);
+  color: var(--nt-ink-read-child);
 }
 .navtree[data-variant="sidebar"] .navtree-tab-row[data-child="true"]:hover .navtree-name-text {
   color: var(--fg);
@@ -2165,6 +2184,22 @@
 .navtree-tab-row[data-unread="true"] .navtree-name-text,
 .navtree-pane-row[data-unread="true"] .navtree-pane-label {
   font-weight: 700;
+  /* The colour is half the signal — see --nt-ink-read. Weight alone at 13px,
+     with both rows the same ink, is the thing that was "not strong enough". */
+  color: var(--fg);
+}
+/* THE CHILD ARM, and it is load-bearing rather than belt-and-braces. The child
+   rule above is variant-scoped — (0,5,0) against this rule's (0,3,0) — so it
+   won outright, and an unread SUB-CHAT rendered at child weight and child ink:
+   no bold, no step of colour, nothing at all. The one row in the list most
+   likely to be the thing you were waiting for.
+   This file has been bitten by exactly this twice before (see the sheet's
+   selected-and-unread note); an explicit arm cannot be undone by a later move. */
+.navtree[data-variant="sidebar"]
+  .navtree-tab-row[data-child="true"][data-unread="true"]
+  .navtree-name-text {
+  font-weight: 700;
+  color: var(--fg);
 }
 /* The WORKSPACE-level unread bold is deliberately gone. `unread` bolded pane +
    tab + workspace simultaneously — the exact triple-signal the attention dot
@@ -3117,6 +3152,7 @@ body.sidenav-resizing iframe {
    all, which is why the weight step is a big one: 400 → 700, not 500 → 600. */
 .navtree[data-variant="sheet"] .navtree-tab-row[data-unread="true"] .navtree-name-text {
   font-weight: 700;
+  color: var(--fg);
 }
 
 /* ─── The trailing marks ──────────────────────────────────────────────────
