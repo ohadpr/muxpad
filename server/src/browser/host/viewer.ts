@@ -253,7 +253,7 @@ const connect = () => {
     // nothing had nothing on screen to tell them why.
     msg.textContent = ''
     msg.classList.remove('loud')
-    if (watching) msg.textContent = 'watching — press Take over to type'
+    if (watching) msg.textContent = 'watching — touch the page to drive'
     for (const fn of onEachOpen) { try { fn() } catch { /* one hook must not stop the rest */ } }
   }
   sock.onclose = () => {
@@ -417,17 +417,26 @@ const onPointerDown = (e) => {
     // iOS raises a keyboard only for a focus that happens during a real user
     // event, so waiting for the server's answer would cost the keyboard this tap
     // was for. The tap itself is replayed once the wheel is actually ours.
+    // INTERACTING IS TAKING THE WHEEL. There is no longer a button to press
+    // first, and that is the whole point: "if I'm opening it and I'm trying to
+    // do stuff, I'm trying to be active; when I close it, I'm done."
+    //
+    // Opening still costs the agent nothing — a viewer that is only being
+    // LOOKED at takes no wheel, which is what watch mode was for and still
+    // does. What changed is that deciding to act no longer costs a hunt for
+    // the control that allows it. Touching the page IS the decision, so the
+    // page takes the wheel on the touch and replays it, exactly as tapping a
+    // text field already did; that path was right and was arbitrarily
+    // restricted to text fields.
     const p0 = pt(e)
-    if (p0 && hitsField(p0) === true) {
+    const onField = p0 ? hitsField(p0) === true : false
+    if (onField) {
       kbFromTap = true
       placeSink(e)
       sink.focus({ preventScroll: true })
       reportKeyboard(true)
-      takeTheWheel(p0)
-    } else {
-      msg.textContent = 'watching only — press Take over to type'
-      takeover.classList.add('ready')
     }
+    takeTheWheel(p0)
   } else {
     const p0 = pt(e)
     const hit = p0 ? hitsField(p0) : null
@@ -439,6 +448,18 @@ const onPointerDown = (e) => {
     }
   }
   img.setPointerCapture?.(e.pointerId)
+  if (e.pointerType === 'touch' && mobileOn) {
+    // PHONE MODE RELAYS THE FINGER AS A FINGER. The page is under touch
+    // emulation, so it does its own scrolling — both axes, nested scrollers,
+    // momentum, and its own idea of which element the gesture belongs to.
+    // Nothing here has to guess what a drag meant, which is the only way to
+    // stop guessing wrong. (Desktop-mode-on-a-phone still classifies, below:
+    // a page with no touch handling needs a wheel.)
+    const p0 = pt(e)
+    touch = { id: e.pointerId, phase: 'native', sx: e.clientX, sy: e.clientY, lx: e.clientX, ly: e.clientY, down: p0, timer: null }
+    if (p0) send({ t:'touch', type:'touchStart', ...p0 })
+    return
+  }
   if (e.pointerType === 'touch') {
     // Nothing is sent yet: what this press MEANS is not known until it moves,
     // is held, or lifts. Sending mousePressed here is what made every scroll
@@ -477,6 +498,10 @@ for (const el of [img, sink]) {
 const onPointerMove = (e) => {
   if (e.pointerType === 'touch') {
     if (!touch || e.pointerId !== touch.id) return
+    if (touch.phase === 'native') {
+      const p = pt(e); if (p) send({ t:'touch', type:'touchMove', ...p })
+      return
+    }
     const dx = e.clientX - touch.lx
     const dy = e.clientY - touch.ly
     if (touch.phase === 'pending') {
@@ -504,6 +529,11 @@ for (const el of [img, sink]) {
 const release = (e) => {
   if (e.pointerType === 'touch') {
     if (!touch || e.pointerId !== touch.id) return
+    if (touch.phase === 'native') {
+      send({ t:'touch', type:'touchEnd' })
+      endTouch()
+      return
+    }
     const p = pt(e) || touch.down
     if (touch.phase === 'pending') {
       // Lifted without moving and before the hold: an ordinary tap, which is a
@@ -723,7 +753,7 @@ const applyWatching = () => {
   // minutes of nothing, at the end of every handoff, on the surface the handoff
   // was built for.
   handback.hidden = watching
-  msg.textContent = watching ? 'watching — press Take over to type' : ''
+  msg.textContent = watching ? 'watching — touch the page to drive' : ''
 }
 takeover.addEventListener('click', () => takeTheWheel())
 
@@ -813,6 +843,12 @@ function takeTheWheel(at) {
       announceMode()
       msg.textContent = 'you are driving now'
       if (window.top !== window) window.parent.postMessage({ muxpad: 'takeover', by: claimant() }, location.origin)
+      // PHONE MODE NOW THAT IT CAN BE SENT. An emulate message is input, and
+      // input is dropped while watching — so a viewer that opened in watch mode
+      // on a phone asked for the phone layout once, had it dropped, and never
+      // asked again. Which is why "it should open in phone mode" did not
+      // happen on the one device it was written for.
+      if (window.innerWidth < 700 && !mobileOn) setMobile(true)
       if (pendingTap) {
         send({ t: 'mouse', type: 'mousePressed', ...pendingTap, buttons: 1, clickCount: 1, modifiers: 0 })
         send({ t: 'mouse', type: 'mouseReleased', ...pendingTap, buttons: 0, clickCount: 1, modifiers: 0 })
@@ -989,18 +1025,24 @@ mobileBtn.addEventListener('click', () => setMobile(!mobileOn))
 let resizeTimer = null
 const onViewportChange = () => {
   note('window resize')
-  if (!mobileOn || watching) return
+  if (!mobileOn) return
   if (resizeTimer) clearTimeout(resizeTimer)
   resizeTimer = setTimeout(() => { resizeTimer = null; note('re-emulating'); setMobile(true) }, 250)
 }
 window.addEventListener('resize', onViewportChange)
 window.addEventListener('orientationchange', onViewportChange)
-if (window.innerWidth < 700 && !watching) {
+if (window.innerWidth < 700) {
   // After the socket is up, not before — the message would be dropped.
   // On every connection: a restarted host has forgotten it was in phone mode,
   // and a viewer that reconnects into a 1280px page on a phone is the bug this
   // was added to fix, arriving later.
-  whenOpen(() => setMobile(true))
+  //
+  // AND ON A PHONE, OPENING IS THE INTENT. "I'm not opening this thing for no
+  // good reason — if I'm opening it I'm trying to do stuff." Nobody peeks at a
+  // browser from a phone to admire it, so the wheel is taken on arrival rather
+  // than charged to the first touch. The desktop keeps watch-until-you-touch,
+  // where glancing at what an agent is doing is a real thing people do.
+  whenOpen(() => { takeTheWheel(); setMobile(true) })
 }
 
 // Everything is wired; dial. Last rather than first so no handler can fire

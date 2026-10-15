@@ -548,40 +548,71 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
     } catch {
       return;
     }
+    /**
+     * After a tap or a click, tell the viewer whether the page now has a text
+     * field focused. A phone shows no keyboard unless something on ITS side is
+     * focused, so tapping a text box in a video stream is otherwise a tap into
+     * a picture. Shared by the mouse and touch paths — it is the same question.
+     */
+    const reportFocus = async () => {
+      try {
+        const read = async () => {
+          // Descends into shadow roots and same-origin frames — see
+          // FocusProbe.ts. The flat version reported the IFRAME or the shadow
+          // HOST, said "not editable", and the viewer took the keyboard away a
+          // third of a second after the tap raised it.
+          const r = (await cdp.send('Runtime.evaluate', {
+            expression: focusProbeExpression(),
+            returnByValue: true,
+          })) as unknown as { result?: { value?: boolean } };
+          return Boolean(r.result?.value);
+        };
+        // Asked twice before believing "no" — see probeEditable. A keyboard is
+        // already up by now, and taking it away wrongly is the bug.
+        const editable = await probeEditable(read, (ms) => new Promise((r) => setTimeout(r, ms)));
+        if (socket.readyState === 1) socket.send(JSON.stringify({ t: 'focus', editable }));
+        // A click can reveal a form, or move the page. Re-measure.
+        void sendFieldBoxes(socket);
+      } catch {
+        // Not knowing is fine; the viewer keeps whatever it had.
+      }
+    };
     try {
-      if (message.t === 'mouse') {
+      if (message.t === 'touch') {
+        /**
+         * A FINGER, RELAYED AS A FINGER.
+         *
+         * Scrolling used to be synthesized: the viewer classified a drag and
+         * sent mouseWheel deltas. That gets vertical scrolling roughly right
+         * and everything else wrong — horizontal barely moved, nested
+         * scrollers did not take it, there was no momentum, and the whole
+         * thing felt, in the report, "wonky".
+         *
+         * None of that needs solving here. The page is already under touch
+         * emulation in phone mode, so a real touch sequence makes IT do the
+         * scrolling, with its own axes, its own inertia and its own idea of
+         * which element the gesture belongs to. The viewer stops guessing what
+         * a drag meant, which is the only way to stop guessing wrong.
+         */
+        const type = String(message.type ?? '');
+        const x = Number(message.x);
+        const y = Number(message.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+        await cdp.send('Input.dispatchTouchEvent', {
+          type,
+          // touchEnd carries no points, by the protocol: the finger is gone.
+          touchPoints: type === 'touchEnd' ? [] : [{ x, y, radiusX: 2, radiusY: 2, force: 1 }],
+          modifiers: Number(message.modifiers) || 0,
+        });
+        if (type === 'touchEnd') reportFocus();
+      } else if (message.t === 'mouse') {
         await cdp.send('Input.dispatchMouseEvent', mouseEvent(message as unknown as MouseInput));
         // After a RELEASE, report whether the page now has a text field focused.
         // A phone shows no keyboard unless something on ITS side is focused, so
         // the viewer needs to know when to put one there — tapping a text box in
         // a video stream is otherwise a tap into a picture.
         if (message.type === 'mouseReleased') {
-          try {
-            const read = async () => {
-              // Descends into shadow roots and same-origin frames — see
-              // FocusProbe.ts. The flat version reported the IFRAME or the
-              // shadow HOST, said "not editable", and the viewer took the
-              // keyboard away a third of a second after the tap raised it.
-              const r = (await cdp.send('Runtime.evaluate', {
-                expression: focusProbeExpression(),
-                returnByValue: true,
-              })) as unknown as { result?: { value?: boolean } };
-              return Boolean(r.result?.value);
-            };
-            // Asked twice before believing "no" — see probeEditable. A keyboard
-            // is already up by now, and taking it away wrongly is the bug.
-            const editable = await probeEditable(
-              read,
-              (ms) => new Promise((r) => setTimeout(r, ms)),
-            );
-            if (socket.readyState === 1) {
-              socket.send(JSON.stringify({ t: 'focus', editable }));
-            }
-            // A click can reveal a form, or move the page. Re-measure.
-            void sendFieldBoxes(socket);
-          } catch {
-            // Not knowing is fine; the viewer keeps whatever it had.
-          }
+          await reportFocus();
         }
         // Scrolling moves every box on the page.
         if (message.type === 'mouseWheel') void sendFieldBoxes(socket);
