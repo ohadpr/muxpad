@@ -109,6 +109,64 @@ describe('the card', () => {
     expect(onOpen).toHaveBeenLastCalledWith('tab');
   });
 
+  it('opens from ANYWHERE on it, even when it carries an Open button', () => {
+    // The button is a 60px target inside a 400px card that plainly is one
+    // thing you can open. "Make it so clicking anywhere in this card opens it."
+    const onOpen = vi.fn();
+    const browser = { ...base, needsYou: { reason: 'log in to HubSpot', at: 1 } };
+    const { host } = mount(
+      <BrowserCard
+        moment={moment(browser, { kind: 'needs-you', reason: 'log in to HubSpot' })}
+        onOpen={onOpen}
+        viewportWidth={1440}
+        now={1}
+      />,
+    );
+    const card = host.querySelector('[data-testid="browser-card"]');
+    expect(buttons(host)[0]?.dataset.urgent).toBe('true');
+    click(card ?? undefined);
+    expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens ONCE when the button itself is clicked, not twice', () => {
+    // The click bubbles to the card, which now opens too.
+    const onOpen = vi.fn();
+    const browser = { ...base, needsYou: { reason: 'log in to HubSpot', at: 1 } };
+    const { host } = mount(
+      <BrowserCard
+        moment={moment(browser, { kind: 'needs-you', reason: 'log in to HubSpot' })}
+        onOpen={onOpen}
+        viewportWidth={1440}
+        now={1}
+      />,
+    );
+    click(buttons(host)[0]);
+    expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not announce a control inside a control', () => {
+    // A role="button" wrapping a real button is one control containing
+    // another, and gives the same action two tab stops. The button IS the
+    // keyboard control when there is one; the card click is for pointers.
+    const browser = { ...base, needsYou: { reason: 'log in', at: 1 } };
+    const withButton = mount(
+      <BrowserCard
+        moment={moment(browser, { kind: 'needs-you', reason: 'log in' })}
+        onOpen={() => {}}
+        now={1}
+      />,
+    );
+    const card = withButton.host.querySelector('[data-testid="browser-card"]');
+    expect(card?.getAttribute('role')).toBeNull();
+    expect(card?.getAttribute('tabindex')).toBeNull();
+
+    // A passive card has no button, so it keeps the role and the tab stop.
+    const passive = mount(<BrowserCard moment={moment(base)} onOpen={() => {}} now={1} />);
+    expect(
+      passive.host.querySelector('[data-testid="browser-card"]')?.getAttribute('role'),
+    ).toBe('button');
+  });
+
   it('a card with nothing to show is not clickable at all', () => {
     const onOpen = vi.fn();
     const { host } = mount(
