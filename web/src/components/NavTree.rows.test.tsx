@@ -128,10 +128,7 @@ describe('the pinned edge', () => {
   });
 
   it('does not mark a pinned chat’s sub-chat — a child is not pinned', () => {
-    const html = railHtml([
-      tab('pinned', { pinned: true }),
-      tab('kid', { spawned_by: 'pinned' }),
-    ]);
+    const html = railHtml([tab('pinned', { pinned: true }), tab('kid', { spawned_by: 'pinned' })]);
     expect(edges(html)).toBe(1);
   });
 

@@ -917,9 +917,9 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     // with is a colour somebody paints with later.
     expect(NT_TOKENS['--nt-pinned-ink']).toBeUndefined();
     expect(NAV_CSS).not.toMatch(/--nt-pinned-ink\s*:/);
-    expect(
-      ruleBody(NAV_CSS, '.navtree-tab-row[data-pinned="true"] .navtree-name-text', true),
-    ).toBe('');
+    expect(ruleBody(NAV_CSS, '.navtree-tab-row[data-pinned="true"] .navtree-name-text', true)).toBe(
+      '',
+    );
 
     // ITS OWN NODE, never a pseudo. Both of a tab row's are spoken for —
     // ::before is StateChip's state track, ::after is the sub-chat elbow — and

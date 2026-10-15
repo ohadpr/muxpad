@@ -83,7 +83,7 @@ describe('a card has to look like a card', () => {
     expect(r).not.toMatch(/background:[^;]*--chat-elev/);
   });
 
-  it('is tinted with the ACCENT — the app\'s own colour, not a grey', () => {
+  it("is tinted with the ACCENT — the app's own colour, not a grey", () => {
     expect(rule('.chat-card')).toMatch(/var\(--chat-accent\)\s+\d+%,\s*var\(--chat-bg\)/);
   });
 

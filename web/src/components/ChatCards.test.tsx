@@ -383,7 +383,9 @@ describe('a card with more than one line', () => {
     });
     expect(host.querySelector('.chat-card-body')).not.toBeNull();
     const realSelection = window.getSelection;
-    window.getSelection = (() => ({ toString: () => 'infra owners' })) as typeof window.getSelection;
+    window.getSelection = (() => ({
+      toString: () => 'infra owners',
+    })) as typeof window.getSelection;
     await act(async () => {
       section.click();
     });

@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   type FieldRect,
+  MOD,
   imageToPageCoords,
   keyEvents,
-  MOD,
   mouseEvent,
   probeEditable,
   tapHitsField,

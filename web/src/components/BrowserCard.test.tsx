@@ -168,9 +168,9 @@ describe('the card', () => {
 
     // A passive card has no button, so it keeps the role and the tab stop.
     const passive = mount(<BrowserCard moment={moment(base)} onOpen={() => {}} now={1} />);
-    expect(
-      passive.host.querySelector('[data-testid="browser-card"]')?.getAttribute('role'),
-    ).toBe('button');
+    expect(passive.host.querySelector('[data-testid="browser-card"]')?.getAttribute('role')).toBe(
+      'button',
+    );
   });
 
   it('a card with nothing to show is not clickable at all', () => {
