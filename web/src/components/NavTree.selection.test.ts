@@ -514,70 +514,31 @@ describe('what the quiet selection HANDS BACK to the row', () => {
   });
 });
 
-describe('pinned must not out-shine an unread name', () => {
+describe('the ink is ONE scale, and it means one thing', () => {
   /**
-   * "Pinned chats are fucked a bit because of their color, it makes noticing
-   * bold harder."
+   * "Now if it's unread it's white, otherwise it's gray, or if pinned it's
+   * purple-ish. Not too consistent."
    *
-   * Lightness is the unread channel. Pinned is a HUE — this file has said so
-   * for a long time — but it mixed the accent into --fg, and an ordinary name
-   * is not --fg, it is one step down. So pinned sat between read and unread in
-   * brightness and competed with the signal it was supposed to be orthogonal
-   * to. Mixing into the READ ink makes the claim true by construction.
+   * It was not. Colour carried read-vs-unread AND pinned, and the two are not
+   * comparable: a pinned row going unread dropped its hue, so the second
+   * meaning disappeared exactly when the row became interesting. Pinned moved
+   * to grouping; this pins the channel down to one meaning.
    */
-  const READ_MIX = 0.55;
-  const PINNED_MIX = 0.4;
-  /** OKLab L, ×100 — the axis unread owns. */
-  const lightness = (h: string) => (oklab(h)[0] as number) * 100;
-
-  function inks(t: Record<string, unknown>, surface: 'rail' | 'pane') {
-    const dim = t[surface === 'rail' ? '--rail-ink-dim' : '--fg-dim'] as string;
-    const faint = t[surface === 'rail' ? '--rail-ink-faint' : '--fg-faint'] as string;
-    const accent = t[surface === 'rail' ? '--rail-accent' : '--accent'] as string;
-    const read = over(dim, faint, READ_MIX);
-    return { read, pinned: over(accent, read, PINNED_MIX) };
-  }
-
-  it('sits at the SAME brightness as a read name, on every theme and surface', () => {
-    // The complaint, as a number: pinned brighter than read is pinned
-    // competing with unread.
-    for (const [name, t] of Object.entries(THEMES)) {
-      for (const surface of ['rail', 'pane'] as const) {
-        const { read, pinned } = inks(t as Record<string, unknown>, surface);
-        const step = Math.abs(lightness(pinned) - lightness(read));
-        expect({ name, surface, tooBright: step > 4 }).toEqual({ name, surface, tooBright: false });
-      }
-    }
+  it('only read and unread may set a name colour', () => {
+    const colouring = rules(NAV_CSS)
+      .filter((r) => /color:/.test(r.body) && !/background|border/.test(r.body))
+      .flatMap((r) => r.selectors)
+      .filter((sel) => sel.includes('.navtree-name-text'))
+      .filter((sel) => /\[data-pinned/.test(sel));
+    expect(colouring).toEqual([]);
   });
 
-  it('is still unmistakably a different COLOUR — otherwise it says nothing', () => {
-    for (const [name, t] of Object.entries(THEMES)) {
-      for (const surface of ['rail', 'pane'] as const) {
-        const { read, pinned } = inks(t as Record<string, unknown>, surface);
-        expect({ name, surface, tellable: deltaE(pinned, read) >= 3 }).toEqual({
-          name,
-          surface,
-          tellable: true,
-        });
-      }
-    }
-  });
-
-  it('and an UNREAD name is brighter than any pinned one — on every theme', () => {
-    // The ordering that has to hold for bold white to be the loudest thing in
-    // the list: unread > pinned ≈ read.
-    for (const [name, t] of Object.entries(THEMES)) {
-      for (const surface of ['rail', 'pane'] as const) {
-        const { pinned } = inks(t as Record<string, unknown>, surface);
-        const unread = (t as Record<string, string>)[
-          surface === 'rail' ? '--rail-ink' : '--fg'
-        ] as string;
-        const dark = lightness(unread) > 50;
-        const ok = dark
-          ? lightness(unread) - lightness(pinned) > 8
-          : lightness(pinned) - lightness(unread) > 8;
-        expect({ name, surface, ok }).toEqual({ name, surface, ok: true });
-      }
+  it('a child row is quieter, which is the same scale rather than a new one', () => {
+    // Hierarchy is lightness too — one scale, three rungs: child, parent,
+    // unread. Nothing on it is a hue.
+    for (const token of ['--nt-ink-read', '--nt-ink-read-child']) {
+      expect(NT_TOKENS[token]).toBeDefined();
+      expect(NT_TOKENS[token]).not.toMatch(/--accent/);
     }
   });
 });
@@ -928,10 +889,10 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     }
   });
 
-  it('PINNED is a HUE on the name — a channel selection does not use', () => {
-    // Six designs, and the first five are negative assertions because each is
-    // ruled out by a reason rather than by a value. All five were on the row's
-    // BOX, which is the one thing selection owns:
+  it('PINNED IS GROUPING — it is not an ink, and it is not on the box', () => {
+    // Seven designs now. The first five were negative because each is ruled
+    // out by a reason rather than a value, and all five were on the row's BOX,
+    // which is the one thing selection owns:
     //
     //   · a rule under the block (flush, inset, a 40px stub) — a line BETWEEN
     //     two things used to say something about ONE of them.
@@ -942,14 +903,19 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     //   · the pin shown at rest — visible, but 18px of name width on exactly
     //     the rows pinned because they matter.
     //   · a FILL at the midpoint between the rail and the selected row —
-    //     rejected as "too close to the active tab indicator", which is the
-    //     correct reading of the whole category rather than of that mix.
+    //     rejected as "too close to the active tab indicator".
     //
-    // So the mark is INSIDE the row, on its contents, where selection says
-    // nothing at all. Nothing may go back on the box.
+    // The SIXTH was a hue on the name, and it failed for a reason none of the
+    // others did: it put a second meaning on the channel that already carries
+    // read-vs-unread, and then LOST to it. A pinned row that went unread took
+    // the white and dropped its hue, so the pinned mark was visible only while
+    // the row had nothing to say — and three inks that do not form one scale
+    // read, correctly, as "not too consistent".
+    //
+    // The seventh is the one Slack uses for starred: GROUPING. The server
+    // already orders pinned first, so the only thing needed is the seam.
     const seam = ruleBody(NAV_CSS, '.navtree-pin-divider');
     expect(seam).not.toMatch(/border/);
-    expect(Number.parseFloat(decl(seam, 'margin'))).toBe(0);
     expect(strip(STATE_CSS)).not.toMatch(/\[data-pinned/);
     expect(strip(CHIP_CSS)).not.toMatch(/data-phase="pinned"/);
     for (const r of rules(NAV_CSS)) {
@@ -958,47 +924,35 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
         expect({ sel: r.selectors, body: r.body }).toEqual({ sel: r.selectors, body: '' });
     }
 
-    // HUE, not lightness, and that is the point rather than a flourish: the
-    // name keeps its luminance and changes temperature, so a pinned name cannot
-    // read as louder or dimmer than any other — the two marks are not on the
-    // same axis, so they cannot be compared at all.
-    const ink = ruleBody(NAV_CSS, '.navtree-tab-row[data-pinned="true"] .navtree-name-text');
-    expect(decl(ink, 'color')).toBe('var(--nt-pinned-ink)');
-    expect(ink).not.toMatch(/background|border|box-shadow|font-weight|font-size/);
-    // MIXED INTO THE READ INK, not into --fg. That is what makes the paragraph
-    // above true rather than aspirational: an ordinary name is not
-    // full-strength ink, it is the read ink — so an accent mixed into --fg sat
-    // ABOVE every other name in luminance, which is the one axis unread owns,
-    // and the brighter the pinned rows the harder the bold white was to spot.
-    // Built from the same token an ordinary name uses, the two cannot drift.
-    expect(NT_TOKENS['--nt-pinned-ink']).toMatch(
-      /var\(--accent\) \d+%, var\(--nt-ink-read\)/,
-    );
+    // NO INK AT ALL. The token is gone, not merely unused: a colour nobody
+    // paints with is a colour somebody paints with later.
+    expect(NT_TOKENS['--nt-pinned-ink']).toBeUndefined();
+    expect(NAV_CSS).not.toMatch(/--nt-pinned-ink\s*:/);
+    expect(
+      ruleBody(NAV_CSS, '.navtree-tab-row[data-pinned="true"] .navtree-name-text', true),
+    ).toBe('');
 
-    // IT MUST SURVIVE SELECTION. A pinned row you are also IN is still pinned,
-    // and `[data-active="true"] .navtree-name-text` is (0,3,0) — exactly the
-    // same specificity — so the only thing keeping the hue is source order.
-    const sels = rules(NAV_CSS).flatMap((r, i) => r.selectors.map((sel) => ({ sel, i })));
-    const activeInk = sels.find(
-      (x) => x.sel === '.navtree-tab-row[data-active="true"] .navtree-name-text',
-    );
-    const pinnedInk = sels.find(
-      (x) => x.sel === '.navtree-tab-row[data-pinned="true"] .navtree-name-text',
-    );
-    expect(pinnedInk && activeInk && pinnedInk.i > activeInk.i).toBe(true);
-
-    // And it stays readable on both grounds it can land on, everywhere. The
-    // accent is a HUE token, not an ink one, so this is the arm that catches a
-    // theme whose accent is too close to its own rail.
-    for (const [name, t] of Object.entries(THEMES)) {
-      const tint = over(t['--accent'] as string, t['--fg'] as string, 0.75);
-      const onRail = ratio(tint, t['--bg-tabbar'] as string);
-      const onTab = ratio(tint, paneFace(t));
-      expect({ name, rail: onRail >= 4.5, tab: onTab >= 4.5 }).toEqual({
-        name,
-        rail: true,
-        tab: true,
-      });
-    }
+    // THE SEAM IS AIR, and it is carried by the row that BEGINS the unpinned
+    // block — flagged by the renderer, not matched by a sibling selector. The
+    // row above the seam is often a pinned chat's SUB-CHAT, which is not
+    // pinned itself, so no selector can see that it belongs to the block
+    // above. NavTree.rows.test.tsx owns where the flag is put; this owns what
+    // it draws.
+    document.head.innerHTML = `<style>${NAV_CSS}</style>`;
+    document.body.innerHTML = `
+      <div class="navtree" data-variant="sidebar">
+        <div class="navtree-tab-list">
+          <div class="navtree-tab-row" data-pinned="true"><span></span></div>
+          <div class="navtree-tab-row" data-child="true"><span></span></div>
+          <div class="navtree-tab-row" id="seam" data-pin-seam="true"><span></span></div>
+          <div class="navtree-tab-row" id="ordinary"><span></span></div>
+        </div>
+      </div>`;
+    const top = (id: string) =>
+      Number.parseFloat(getComputedStyle(document.getElementById(id) as HTMLElement).marginTop);
+    expect(top('seam')).toBeGreaterThanOrEqual(8);
+    expect(top('ordinary') || 0).toBe(0);
+    const gap = ruleBody(NAV_CSS, '.navtree-tab-row[data-pin-seam="true"]');
+    expect(gap).not.toMatch(/border|background|box-shadow/);
   });
 });

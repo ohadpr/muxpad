@@ -99,6 +99,64 @@ const count = (haystack: string, needle: string) => haystack.split(needle).lengt
 const aged = (days: number) =>
   chatClock({ started_at: NOW - days * 86_400_000, now: NOW, pinned: false });
 
+describe('the seam that ends the pinned block', () => {
+  /**
+   * Pinned is told by GROUPING — the server orders pinned first, and the gap
+   * says where that block ends. It cannot be a CSS sibling selector: the row
+   * directly above the seam is often a pinned chat's SUB-CHAT, which is not
+   * pinned itself, so the selector would either miss the seam entirely or put
+   * one between a pinned parent and its own child.
+   */
+  const seams = (html: string) => count(html, 'data-pin-seam="true"');
+
+  it('marks the first unpinned chat, once', () => {
+    const html = railHtml([
+      tab('pinned-a', { pinned: true }),
+      tab('pinned-b', { pinned: true }),
+      tab('ordinary-a'),
+      tab('ordinary-b'),
+    ]);
+    expect(seams(html)).toBe(1);
+    // …and it is the first unpinned one, not the last pinned one.
+    expect(html.indexOf('data-pin-seam="true"')).toBeGreaterThan(html.indexOf('pinned-b'));
+    expect(html.indexOf('data-pin-seam="true"')).toBeLessThan(html.indexOf('ordinary-b'));
+  });
+
+  it('puts it AFTER a pinned chat’s sub-chats — they belong to the block', () => {
+    // The case that rules out a sibling selector: the row above the seam is
+    // the child, which carries no pinned flag of its own.
+    const html = railHtml([
+      tab('pinned', { pinned: true }),
+      tab('kid', { spawned_by: 'pinned' }),
+      tab('ordinary'),
+    ]);
+    expect(seams(html)).toBe(1);
+    expect(html.indexOf('data-pin-seam="true"')).toBeGreaterThan(html.indexOf('>kid<'));
+  });
+
+  it('draws NO seam when nothing is pinned', () => {
+    expect(seams(railHtml([tab('a'), tab('b')]))).toBe(0);
+  });
+
+  it('draws no seam when everything is pinned — there is no second block', () => {
+    expect(seams(railHtml([tab('a', { pinned: true }), tab('b', { pinned: true })]))).toBe(0);
+  });
+
+  it('never marks a child row itself', () => {
+    // A child inherits its place from its parent; a seam on one would split a
+    // chat from its own sub-chat.
+    const html = railHtml([
+      tab('pinned', { pinned: true }),
+      tab('ordinary'),
+      tab('kid', { spawned_by: 'ordinary' }),
+    ]);
+    const childAt = html.indexOf('data-child="true"');
+    const seamAt = html.indexOf('data-pin-seam="true"');
+    expect(seams(html)).toBe(1);
+    expect(seamAt).toBeLessThan(childAt);
+  });
+});
+
 describe('the rail hands a child row the things that make it look like a child', () => {
   const rail = () => railHtml([tab('root'), tab('kid', { spawned_by: 'root' })]);
 
