@@ -17,53 +17,46 @@ const rule = (sel: string) => {
   return i < 0 ? null : css.slice(i, css.indexOf('}', i));
 };
 
-describe('the dotted leader', () => {
-  it('is a real element, not a pseudo nobody can measure', () => {
-    // Measured on the live app: getComputedStyle(el, '::before') reported the
-    // same colour for --card-fresh 1, 0.5 and 0 AND for the stale class,
-    // lagging a read behind. A gauge that cannot be read is a gauge that stops
-    // working quietly — which is the exact failure it exists to surface.
-    expect(rule('.chat-card-leader')).not.toBeNull();
-    expect(css).not.toContain('.chat-card::before');
+describe('one shape, whatever is in it', () => {
+  /**
+   * The card was assembled three ways — value inline in a row, a full-width
+   * preview under a row, a row above a frame — and the seams showed: the name
+   * moved between inline, header and absent depending on how many cards there
+   * were and whether one was open, and an html card's row toggled a state that
+   * changed nothing on screen. "Sometimes it's above, sometimes the line is
+   * below… clicking the line changes it a bit but doesn't expand."
+   */
+  it('draws no name at all — the value is what you came to read', () => {
+    expect(rule('.chat-card-name')).toBeNull();
+    expect(css).not.toContain('.chat-card-name');
   });
 
-  it('varies with --card-fresh rather than being a fixed colour', () => {
-    const r = rule('.chat-card-leader') ?? '';
-    expect(r).toContain('--card-fresh');
-    // The fallback matters as much as the variable: a card with no declared
-    // cadence must sit at full strength, not at zero.
-    expect(r).toMatch(/var\(--card-fresh,\s*1\)/);
+  it('has one collapsed line, and it is one LINE', () => {
+    const line = rule('.chat-card-line') ?? '';
+    expect(line).toContain('white-space: nowrap');
+    expect(line).toContain('text-overflow: ellipsis');
   });
 
-  it('still overrides to the overdue colour, which is not a fade', () => {
-    // Stale is a different claim from "getting old" and must not be reachable
-    // by the gradient — a writer that stopped is a state, not a point on a ramp.
-    expect(rule('.chat-card.-stale .chat-card-leader')).toContain('--status-working');
-  });
-
-  it('takes the row\u2019s slack, so the age needs no margin hack', () => {
-    // The leader grows into the gap; the value is sized by its content and the
-    // age sits at the end. That is what makes the dots a LEADER rather than
-    // decoration floating in a space something else created.
-    expect(rule('.chat-card-leader')).toMatch(/flex:\s*1 1 auto/);
-    expect(rule('.chat-card-value')).toMatch(/flex:\s*0 1 auto/);
-    expect(rule('.chat-card-age')).not.toContain('margin-left: auto');
-  });
-
-  it('feeds — the dots drift toward the age', () => {
-    // The one piece of motion on a surface whose job is to sit still, and what
-    // makes the card read as live rather than pasted. One 5px step per cycle:
-    // the dot pitch, so it loops seamlessly rather than jumping.
-    expect(rule('.chat-card-leader')).toMatch(/animation:\s*chat-card-feed/);
-    const kf = rule('@keyframes chat-card-feed') ?? '';
-    expect(kf).toContain('background-position: 5px center');
-    expect(rule('.chat-card-leader')).toMatch(/background-size:\s*5px 5px/);
-  });
-
-  it('stops feeding under reduced motion', () => {
-    const i = css.indexOf('@media (prefers-reduced-motion');
+  it('flattens a markdown card onto that line rather than laying it out', () => {
+    // Blocks rendered into a 19px box lose everything but the first line, and
+    // silently — the card looks fine and is missing its content.
+    expect(rule('.chat-card-line > *')).toContain('display: inline');
+    // AND THE BLOCKS INSIDE THE WRAPPER. `Markdown` emits a <div class="chat-md">
+    // with <p> children, so the rule above only reaches the wrapper — the same
+    // miss that shipped once already on the preview this replaced. Measured in
+    // the live app: a two-paragraph card rendering 59px tall on a "one line".
+    const i = css.indexOf('.chat-card-line .chat-md');
     expect(i).toBeGreaterThan(-1);
-    expect(css.slice(i, i + 160)).toContain('.chat-card-leader');
+    expect(css.slice(i, css.indexOf('}', i))).toContain('display: inline');
+  });
+
+  it('makes the WHOLE card the target, not a row beside the body', () => {
+    // The row-as-button existed because a <button> may only hold phrasing
+    // content and markdown emits <p>. That split is what let the control and
+    // the body disagree about what a click does.
+    expect(rule('.chat-card.-togglable')).toContain('cursor: pointer');
+    expect(rule('.chat-card-row')).toBeNull();
+    expect(rule('.chat-card.-togglable:focus-visible')).toContain('box-shadow');
   });
 });
 
@@ -107,47 +100,13 @@ describe('a card has to look like a card', () => {
   });
 });
 
-describe('the full-width preview', () => {
-  it('takes a whole line of the wrapped row', () => {
-    // `flex: 1 0 100%` is the entire mechanism: a line of its own inside the
-    // same button, so the content is bounded by the CARD rather than by what
-    // the name and the age left over.
-    expect(rule('.chat-card-preview')).toMatch(/flex:\s*1 0 100%/);
-    expect(rule('.chat-card-row')).toContain('flex-wrap: wrap');
+describe('an html card renders whole', () => {
+  it('reserves the tail’s width so the clock never lands on the author’s corner', () => {
+    expect(rule('.chat-card-body.-flush')).toContain('padding');
   });
 
-  it('is ONE line compact — a card is a glance, not a paragraph', () => {
-    // Four lines made a slab taller than the message above it; two was still a
-    // paragraph. "Make cards 1 line of text when compact." The rest is one tap
-    // away, which is what the card opening is for.
-    expect(rule('.chat-card-preview')).toMatch(/max-height:\s*calc\(1 \*/);
-  });
-
-  it('fades sideways, because a downward fade at one line dims the only line', () => {
-    expect(rule('.chat-card-preview.-clipped')).toContain('to right');
-  });
-
-  it('flattens the log\'s paragraph margins, which are what made it a slab', () => {
-    // .chat-md p carries 0.6em top AND bottom, and a markdown card written with
-    // blank lines arrives as a column of paragraphs with 16px of air between
-    // them. The old rule only reached the WRAPPER div, so it did nothing.
-    const i = css.indexOf('.chat-card-preview .chat-md');
-    expect(i).toBeGreaterThan(-1);
-    expect(css.slice(i, css.indexOf('}', i))).toContain('margin: 0');
-  });
-
-  it('fades ONLY when something is actually cut off', () => {
-    // An unconditional fade dims the last line of a card that fits perfectly,
-    // which reads as the card being broken rather than as "there is more".
-    expect(rule('.chat-card-preview')).not.toContain('mask-image');
-    expect(rule('.chat-card-preview.-clipped')).toContain('mask-image');
-  });
-
-  it('is not touched by the inline override that keeps a one-line card on one line', () => {
-    // `display: inline` run over a preview would weld every block together —
-    // the "did something mess up newlines?" bug wearing a different hat. The
-    // override is scoped to the VALUE, which is the one-line slot.
-    expect(rule('.chat-card-value > *')).toContain('display: inline');
-    expect(css).not.toContain('.chat-card-preview > * {');
+  it('keeps no padding of its own otherwise — the frame styles itself', () => {
+    const flush = rule('.chat-card-body.-flush') ?? '';
+    expect(flush).toMatch(/padding:\s*0 \d+px 0 0/);
   });
 });
