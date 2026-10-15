@@ -225,9 +225,11 @@
   font-size: 13px;
   line-height: 1.45;
   color: var(--chat-dim);
-  /* TWO LINES. A card is a glance — at four, one written with blank lines
-     between its lines became a slab taller than the message above it. */
-  max-height: calc(2 * 1.45em);
+  /* ONE LINE. A card is a glance: the current value, and nothing about the
+     card itself should cost more height than the value does. Four lines made
+     a slab taller than the message above it, two was still a paragraph. The
+     rest of the card is one tap away. */
+  max-height: calc(1 * 1.45em);
   overflow: hidden;
   /* pre-wrap for a text card: its newlines ARE its layout. A markdown card
      emits real blocks and lays itself out. */
@@ -249,11 +251,16 @@
 .chat-card-preview .chat-md h3 {
   margin: 0;
 }
-/* ONLY WHEN SOMETHING IS ACTUALLY CUT. An unconditional fade dims the last
-   line of a card that fits, which reads as broken rather than as "there is
-   more" — see .chat-cards.-over, which is the same rule one level up. */
+/* ONLY WHEN SOMETHING IS ACTUALLY CUT. An unconditional fade dims a card that
+   fits, which reads as broken rather than as "there is more" — see
+   .chat-cards.-over, which is the same rule one level up.
+
+   It fades to the RIGHT, not downward: at one line a downward fade dims the
+   only line there is. This is the ellipsis the one-line row gets, done in a
+   way that survives the markdown blocks inside a preview — `text-overflow`
+   cannot reach across them. */
 .chat-card-preview.-clipped {
-  mask-image: linear-gradient(to bottom, #000 calc(100% - 14px), transparent 100%);
+  mask-image: linear-gradient(to right, #000 calc(100% - 56px), transparent 100%);
 }
 .chat-card-age {
   flex: 0 0 auto;

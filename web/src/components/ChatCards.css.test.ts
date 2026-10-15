@@ -116,11 +116,15 @@ describe('the full-width preview', () => {
     expect(rule('.chat-card-row')).toContain('flex-wrap: wrap');
   });
 
-  it('is TWO LINES, not four — a card is a glance, not a paragraph', () => {
-    // At four lines a card with blank lines between its lines became a slab
-    // taller than the message above it: "this doesn't make sense for the
-    // compacted size of these things, it should be 1-2 lines max".
-    expect(rule('.chat-card-preview')).toMatch(/max-height:\s*calc\(2 \*/);
+  it('is ONE line compact — a card is a glance, not a paragraph', () => {
+    // Four lines made a slab taller than the message above it; two was still a
+    // paragraph. "Make cards 1 line of text when compact." The rest is one tap
+    // away, which is what the card opening is for.
+    expect(rule('.chat-card-preview')).toMatch(/max-height:\s*calc\(1 \*/);
+  });
+
+  it('fades sideways, because a downward fade at one line dims the only line', () => {
+    expect(rule('.chat-card-preview.-clipped')).toContain('to right');
   });
 
   it('flattens the log\'s paragraph margins, which are what made it a slab', () => {
