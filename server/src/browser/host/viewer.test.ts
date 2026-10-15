@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 import { VIEWER_HTML } from './viewer.js';
 
@@ -1757,5 +1758,64 @@ describe('phone mode relays the finger as a finger', () => {
     const move = h.sent.find((m) => m.type === 'touchMove') as Record<string, number>;
     expect(move.x).toBeGreaterThan(0);
     expect(h.sent.some((m) => m.t === 'mouse')).toBe(false);
+  });
+});
+
+describe('phone mode is only ON if the host was told', () => {
+  /**
+   * THE REGRESSION THIS PINS. `mobileOn` decides whether a finger is relayed as
+   * a finger (phone mode — the page scrolls itself) or classified into wheels.
+   * Input is dropped while watching, and `setMobile` used to set the flag and
+   * then send. On a phone the viewer took the wheel (async) and called
+   * setMobile in the same tick, so the emulate went out while still watching,
+   * was dropped, and the flag was set anyway.
+   *
+   * The two then disagreed: the viewer sent touch events to a page that had
+   * never been put under touch emulation. Reported as "now scrolling doesn't
+   * work and also typing into a form field doesn't work" — both symptoms of
+   * the same silently-dropped message.
+   */
+  it('does not claim phone mode when the message was dropped', async () => {
+    // The take FAILS here, so the viewer stays in watch mode and the emulate
+    // is dropped. The flag must stay false: claiming phone mode the host was
+    // never told about is what sent touch events to a page with no touch
+    // emulation.
+    const h = run({ search: '?mode=watch', fetchOk: false });
+    await h.settle();
+    expect(h.sent.some((m) => m.t === 'emulate')).toBe(false);
+    expect(h.el('mobile').attrs['aria-pressed']).not.toBe('true');
+  });
+
+  it('applies it once the wheel makes the message sendable', async () => {
+    const h = run({ search: '?mode=watch' });
+    h.el('screen').fire('pointerdown', { clientX: 100, clientY: 300 });
+    await h.settle();
+    // The take succeeded, so the emulate goes out — and only now is the flag set.
+    expect(h.sent.some((m) => m.t === 'emulate' && m.mobile === true)).toBe(true);
+    expect(h.el('mobile').attrs['aria-pressed']).toBe('true');
+  });
+});
+
+describe('the inlined page stays inlineable', () => {
+  /**
+   * FOUR TIMES NOW. A backtick written inside the String.raw template — almost
+   * always in a comment, naming a message type or a CSS property — closes the
+   * literal early and ships a syntactically dead page. The existing tests do
+   * catch it, but they catch it as an esbuild parse error pointing at a line of
+   * prose, which reads like a broken test rather than a typo in a comment.
+   *
+   * This says it in one sentence instead. It is a source check, deliberately:
+   * by the time a test can run the script, the damage is a parse error.
+   */
+  it('contains no backtick inside the template', async () => {
+    const src = await readFile(new URL('./viewer.ts', import.meta.url).pathname, 'utf-8');
+    const open = src.indexOf('String.raw`');
+    const body = src.slice(open + 'String.raw`'.length);
+    const close = body.lastIndexOf('`');
+    const inside = body.slice(0, close);
+    expect(
+      inside.includes('`'),
+      'a backtick inside VIEWER_HTML closes the template early — use plain words in comments',
+    ).toBe(false);
   });
 });
