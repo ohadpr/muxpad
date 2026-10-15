@@ -315,6 +315,57 @@ describe('pinned chat cards', () => {
   });
 });
 
+describe('a card with more than one line', () => {
+  /**
+   * The row is name · value · leader · age, and for a one-line card that is
+   * exactly right. Give it three lines and the columns become a vice: every
+   * line is cut at the same x a few words in, because the value gets whatever
+   * the name and the age left behind. Reported from a phone as cards "split
+   * into free columns which severely limits how much content can fit".
+   */
+  const THREE = 'Edge Workers rollout\nBoth environments now live\nLeft for infra owners: DNS';
+
+  it('puts its content on its own line instead of in the leftover column', async () => {
+    const host = await mount([card({ content: THREE })]);
+    expect(host.querySelector('.chat-card-preview')?.textContent).toContain('infra owners');
+    // NOT in the row's value slot, which is the narrow column.
+    expect(host.querySelector('.chat-card-value')).toBeNull();
+  });
+
+  it('keeps the header — the name, the age and the drifting leader', async () => {
+    const host = await mount([card({ content: THREE }), card({ name: 'other', content: 'x' })]);
+    const row = host.querySelector('.chat-card-row');
+    expect(row?.querySelector('.chat-card-name')?.textContent).toBe('build');
+    expect(row?.querySelector('.chat-card-age')).not.toBeNull();
+    // The leader is what pushes the age to the far edge AND says the card is
+    // live; a stacked card must not quietly lose either.
+    expect(row?.querySelector('.chat-card-leader')).not.toBeNull();
+  });
+
+  it('is still ONE control — the whole thing opens the card', async () => {
+    const host = await mount([card({ content: THREE })]);
+    const row = host.querySelector('.chat-card-row');
+    expect(row?.tagName).toBe('BUTTON');
+    expect(row?.querySelector('.chat-card-preview')).not.toBeNull();
+  });
+
+  it('leaves a one-line card exactly as it was', async () => {
+    const host = await mount([card({ content: 'V2.1 [###--] 62%' })]);
+    expect(host.querySelector('.chat-card-value')?.textContent).toBe('V2.1 [###--] 62%');
+    expect(host.querySelector('.chat-card-preview')).toBeNull();
+  });
+
+  it('shows the whole thing once it is OPEN, not the bounded preview', async () => {
+    const host = await mount([card({ content: THREE })]);
+    const row = host.querySelector('.chat-card-row') as HTMLButtonElement;
+    await act(async () => {
+      row.click();
+    });
+    expect(host.querySelector('.chat-card-preview')).toBeNull();
+    expect(host.querySelector('.chat-card-body')?.textContent).toContain('infra owners');
+  });
+});
+
 describe('the tape', () => {
   it('runs a leader from the value to the age', async () => {
     const host = await mount([card({ content: 'V2.1 62%' })]);
