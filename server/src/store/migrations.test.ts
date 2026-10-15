@@ -519,7 +519,7 @@ describe('migrations v21 — agent modes + the living sidebar', () => {
       .prepare('SELECT version FROM schema_version ORDER BY version DESC LIMIT 1')
       .get() as { version: number };
     expect(v.version).toBe(LATEST_SCHEMA_VERSION);
-    expect(LATEST_SCHEMA_VERSION).toBe(44);
+    expect(LATEST_SCHEMA_VERSION).toBe(45);
   });
 
   /**
@@ -1530,6 +1530,78 @@ describe('v38 — the join: spawn_rounds.delivered_at', () => {
       db.prepare('PRAGMA table_info(spawn_rounds)').all() as Array<{ name: string }>
     ).filter((c) => c.name === 'delivered_at');
     expect(cols).toHaveLength(1);
+  });
+});
+
+describe('v45 — spawn_rounds.reopened_at, and the rounds the old gate stranded', () => {
+  const HOUR = 60 * 60_000;
+
+  function v44(): Database.Database {
+    const db = new Database(':memory:');
+    runMigrations(db, { upTo: 44 });
+    db.prepare(
+      'INSERT INTO workspaces (id, slug, name, created_at, updated_at) VALUES (?,?,?,?,?)',
+    ).run('w1', 'w1', 'W', 1, 1);
+    for (const [id, parent] of [
+      ['parent', null],
+      ['kid', 'parent'],
+    ] as const)
+      db.prepare(
+        `INSERT INTO tabs (id, slug, name, layout, workspace_id, created_at, updated_at, spawned_by)
+         VALUES (?,?,?,?,?,?,?,?)`,
+      ).run(id, id, id, JSON.stringify(`p-${id}`), 'w1', 1, 1, parent);
+    const round = db.prepare(
+      `INSERT INTO spawn_rounds (id, tab_id, started_at, ended_at, report, report_state, delivered_at)
+       VALUES (?, 'kid', ?, ?, ?, ?, ?)`,
+    );
+    const now = Date.now();
+    // Stranded: closed long ago with nothing on it, never delivered.
+    round.run('stranded', 100, 200, null, null, null);
+    // Closed minutes ago with nothing on it: its summary may yet land.
+    round.run('recent', now - 5 * 60_000, now - 2 * 60_000, null, null, null);
+    // A real result, still owed to the parent.
+    round.run('owed', now - 2 * HOUR, now - HOUR - 1, 'a report', 'ok', null);
+    return db;
+  }
+
+  const stamp = (db: Database.Database, id: string) =>
+    (
+      db.prepare('SELECT delivered_at FROM spawn_rounds WHERE id = ?').get(id) as {
+        delivered_at: number | null;
+      }
+    ).delivered_at;
+
+  it('adds reopened_at, null for every existing round', () => {
+    const db = v44();
+    runMigrations(db);
+    const rows = db.prepare('SELECT reopened_at FROM spawn_rounds').all() as Array<{
+      reopened_at: number | null;
+    }>;
+    expect(rows.map((r) => r.reopened_at)).toEqual([null, null, null]);
+  });
+
+  it('SETTLES the stranded empty rounds, so the upgrade does not flood their parents', () => {
+    // The delivery queue now takes a round that sat closed with no result; the
+    // ones the old gate stranded days ago are not news to anybody.
+    const db = v44();
+    runMigrations(db);
+    expect(stamp(db, 'stranded')).toBe(200);
+  });
+
+  it('leaves a recent empty round and a real pending result in the queue', () => {
+    const db = v44();
+    runMigrations(db);
+    expect(stamp(db, 'recent')).toBeNull();
+    expect(stamp(db, 'owed')).toBeNull();
+  });
+
+  it('a re-run settles nothing', () => {
+    const db = v44();
+    runMigrations(db);
+    db.prepare("UPDATE spawn_rounds SET delivered_at = NULL WHERE id = 'stranded'").run();
+    db.prepare('DELETE FROM schema_version WHERE version >= 45').run();
+    expect(() => runMigrations(db)).not.toThrow();
+    expect(stamp(db, 'stranded')).toBeNull();
   });
 });
 
