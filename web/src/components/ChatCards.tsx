@@ -137,6 +137,7 @@ const SELF_MEASURE = `
 
 function HtmlCard({ card }: { card: ChatCard }) {
   const ref = useRef<HTMLIFrameElement>(null);
+  const slot = useRef<HTMLDivElement>(null);
   const [h, setH] = useState(120);
   // Rebuilt when the content or the THEME changes — a card keeps its injected
   // palette until it is re-rendered, so a theme switch has to produce new
@@ -146,17 +147,32 @@ function HtmlCard({ card }: { card: ChatCard }) {
   // color-mix() of two theme tokens, which JS cannot evaluate — and the frame
   // has to be painted with it exactly, or the card has a differently-coloured
   // rectangle inside it. Layout effect so it is known before the first paint.
-  const [surface, setSurface] = useState('transparent');
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `theme` is a SIGNAL here, not an input — the card's background is a color-mix of theme tokens, so the measurement has to be retaken when the theme changes even though this body never reads it.
+  //
+  // ─── AND THE FRAME DOES NOT EXIST UNTIL IT IS KNOWN ─────────────────────
+  // This used to render the iframe at once with a `transparent` placeholder
+  // and swap in the measured colour from this effect — a second srcdoc, set in
+  // the same task the frame was inserted. Chrome runs a sandboxed frame out of
+  // process, and a srcdoc replaced before its first navigation commits loses
+  // the race more often than not: the document that lands is never laid out
+  // and never paints. Every height it posts is 0 (ignored, rightly), the
+  // ResizeObserver never fires, and the card sits at the 120px guess with
+  // nothing in it. Measured on the live app: 6 of 10 loads, at any width.
+  // Safari keeps the frame in process and never hits it, which is why the
+  // phone looked fine. So the frame is inserted ONCE, with its final srcdoc.
+  const [paint, setPaint] = useState<{ theme: string; surface: string } | null>(null);
   useLayoutEffect(() => {
-    const card = ref.current?.closest('.chat-card');
-    if (card) setSurface(getComputedStyle(card).backgroundColor);
+    const el = slot.current?.closest('.chat-card');
+    setPaint({ theme, surface: el ? getComputedStyle(el).backgroundColor : 'transparent' });
   }, [theme]);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `theme` is deliberately a dependency it does not read — it is the SIGNAL that `themeBlock()` would now return different values, which is exactly when the srcdoc must be rebuilt. Dropping it leaves every html card wearing the previous theme until its content changes.
+  // `paint.theme` is never read here, and it does not have to be: a new
+  // `paint` object IS the signal that themeBlock() would now return different
+  // values, which is exactly when the srcdoc must be rebuilt.
   const srcdoc = useMemo(
     () =>
-      `<!doctype html><html><head><meta charset="utf-8"><style>${themeBlock(surface)}</style></head><body>${card.content}${SELF_MEASURE}</body></html>`,
-    [card.content, theme, surface],
+      paint
+        ? `<!doctype html><html><head><meta charset="utf-8"><style>${themeBlock(paint.surface)}</style></head><body>${card.content}${SELF_MEASURE}</body></html>`
+        : null,
+    [card.content, paint],
   );
   useEffect(() => {
     const onMsg = (e: MessageEvent) => {
@@ -178,15 +194,19 @@ function HtmlCard({ card }: { card: ChatCard }) {
     return () => window.removeEventListener('message', onMsg);
   }, []);
   return (
-    <iframe
-      ref={ref}
-      className="chat-card-frame"
-      title={card.name}
-      // No `allow-same-origin`: the frame must not be able to reach muxpad.
-      sandbox="allow-scripts"
-      srcDoc={srcdoc}
-      style={{ height: `${h}px` }}
-    />
+    <div ref={slot}>
+      {srcdoc === null ? null : (
+        <iframe
+          ref={ref}
+          className="chat-card-frame"
+          title={card.name}
+          // No `allow-same-origin`: the frame must not be able to reach muxpad.
+          sandbox="allow-scripts"
+          srcDoc={srcdoc}
+          style={{ height: `${h}px` }}
+        />
+      )}
+    </div>
   );
 }
 
