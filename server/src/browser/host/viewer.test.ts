@@ -38,6 +38,8 @@ interface StubEl {
   hidden: boolean;
   textContent: string;
   fire(type: string, event?: Record<string, unknown>): void;
+  /** Overridable so a test can make capture refuse the way a real one does. */
+  setPointerCapture?: (pointerId: number) => void;
 }
 
 interface Harness {
@@ -1775,6 +1777,19 @@ describe('phone mode is only ON if the host was told', () => {
    * work and also typing into a form field doesn't work" — both symptoms of
    * the same silently-dropped message.
    */
+  it('still relays the finger when pointer capture refuses', async () => {
+    // setPointerCapture throws NotFoundError for a pointer the browser has
+    // stopped tracking, and that exception used to abort the handler before the
+    // relay -- a finger that did absolutely nothing.
+    const h = ready(run({ width: 390 }));
+    await h.settle();
+    h.el('screen').setPointerCapture = () => {
+      throw new Error('NotFoundError');
+    };
+    h.el('screen').fire('pointerdown', { pointerId: 7, pointerType: 'touch', clientX: 100, clientY: 300 });
+    expect(h.sent.some((m) => m.t === 'touch' && m.type === 'touchStart')).toBe(true);
+  });
+
   it('does not claim phone mode when the message was dropped', async () => {
     // The take FAILS here, so the viewer stays in watch mode and the emulate
     // is dropped. The flag must stay false: claiming phone mode the host was
