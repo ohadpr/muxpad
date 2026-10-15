@@ -157,6 +157,35 @@ describe('pinned chat cards', () => {
     expect(doc).not.toContain('--card-scheme');
   });
 
+  it('inserts the frame ONCE, with its final srcdoc — never swapped as it lands', async () => {
+    // The frame used to be inserted with a `transparent` placeholder and have
+    // the measured surface swapped in by a layout effect: a second srcdoc in
+    // the same task. Chrome runs the sandboxed frame out of process, and a
+    // srcdoc replaced before its first navigation commits leaves a document
+    // that never lays out or paints — every height 0, the card a blank 120px
+    // box. 6 of 10 loads on the live app. Any srcdoc write after insertion is
+    // that race, so there must be none.
+    serve([card({ format: 'html', content: '<b>hi</b>' })]);
+    const host = document.createElement('div');
+    document.body.append(host);
+    const writes: string[] = [];
+    const mo = new MutationObserver((records) => {
+      for (const r of records) {
+        if (r.type === 'attributes' && r.attributeName === 'srcdoc') writes.push(r.attributeName);
+      }
+    });
+    mo.observe(host, { subtree: true, attributes: true, attributeFilter: ['srcdoc'] });
+    await act(async () => {
+      createRoot(host).render(<ChatCards tabId="t1" />);
+    });
+    await act(async () => {});
+    mo.disconnect();
+    const doc = host.querySelector('iframe')?.getAttribute('srcdoc') ?? '';
+    expect(doc).toContain('<b>hi</b>');
+    expect(doc).not.toMatch(/background:transparent/);
+    expect(writes).toEqual([]);
+  });
+
   it('re-measures without being asked, and ignores a zero', async () => {
     // The first two measurements are always 0 — the body is not laid out at
     // parse time or at load — and the real height comes from a ResizeObserver
