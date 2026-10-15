@@ -1320,15 +1320,27 @@
    node for exactly this reason; so is this. */
 .navtree-pin-edge {
   position: absolute;
-  left: 0;
+  /* IN THE RAIL'S GUTTER, NOT ON THE ROW. At `left: 0` the bar lands on the
+     selected row's own pill — whose radius is `6px 0 0 6px`, rounded on the
+     left — so it sat ON the curve: white behind its middle, rail behind its
+     ends, and the pane accent it inherited there reading as a dimple in the
+     pill's edge rather than as a mark. Reported as "barely visible on the
+     active tab", and the measurement agrees.
+     Measured geometry: the row starts at x=8, the scroller's clip box at x=4,
+     so -3px puts the whole bar on rail ground, clear of the pill at both ends
+     and 1px inside the clip. Every row's mark now sits on one background. */
+  left: -3px;
   /* Short of the row's full height on purpose: a bar that runs edge to edge
      reads as a divider between rows rather than as a mark on one. */
   top: 5px;
   bottom: 5px;
   width: 2px;
   border-radius: 2px;
-  background: var(--accent);
-  /* Above the selection fill, which is painted on the row itself. */
+  /* THE RAIL'S ACCENT EXPLICITLY, never the inherited one. The selected row
+     re-points --accent to the PANE's, which is correct for everything painted
+     ON the pill and wrong for this, which is painted beside it: a dark pane
+     accent on the dark rail is the "barely visible" half of the same bug. */
+  background: var(--rail-accent, var(--accent));
   z-index: 1;
 }
 /* Hover on the row you are already on has almost nothing to say, so it says it
