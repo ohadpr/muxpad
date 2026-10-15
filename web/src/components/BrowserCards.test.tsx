@@ -185,7 +185,8 @@ describe('opening', () => {
         viewportWidth={1440}
       />,
     );
-    await click(buttons(host)[0]);
+    // By name, not "the first button": a card carries a peek control too.
+    await click(host.querySelector('.browser-card__action') ?? undefined);
     const take = calls.find((c) => c.url.includes('/wheel/take'));
     expect(take?.method).toBe('POST');
     expect(take?.body).toMatchObject({ by: 'pane-7', reason: 'Amazon needs a login' });

@@ -287,6 +287,19 @@ export function browserShotUrl(profile: string, at: number): string {
   return `/api/browsers/${encodeURIComponent(profile)}/shot/${Math.floor(at)}`;
 }
 
+/**
+ * WHAT THAT BROWSER IS LOOKING AT NOW — the live counterpart of
+ * {@link browserShotUrl}, which serves the frozen still of a past moment.
+ *
+ * The cache-buster is the whole reason this is a function: the route answers
+ * `no-store`, but a phone browser will still serve the same URL out of memory
+ * within a single page, and a picture that never changes is exactly the bug
+ * this endpoint exists to avoid.
+ */
+export function browserLiveShotUrl(profile: string, tick: number): string {
+  return `/api/browsers/${encodeURIComponent(profile)}/shot?t=${Math.floor(tick)}`;
+}
+
 /** Session browsers are named after the session, which is not a word for a person. */
 function isSessionProfile(profile: string): boolean {
   return profile.startsWith('s-');

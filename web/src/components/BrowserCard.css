@@ -164,6 +164,84 @@
   grid-column: 3;
 }
 
+/* ── THE PEEK CONTROL ─────────────────────────────────────────────────────
+   "What is it doing right now?" — the question you have most of the time,
+   which opening the viewer answers at the cost of a window to dismiss (or, on
+   a phone, a whole tab). Icon-only and quiet: it is not a thing to deal with,
+   it is a thing to glance at.
+
+   The columns: the row is glyph · body · countdown? · peek? · action?, and
+   each of the trailing three is conditional, so every one that is MISSING
+   pulls the ones after it along. Hence the :has() pairs rather than one fixed
+   assignment — a card with a countdown and no action and a card with both have
+   to put the peek in different columns. */
+.browser-card__peek {
+  grid-column: 4;
+  grid-row: 1;
+  justify-self: end;
+  height: var(--b-line);
+  width: 22px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: color-mix(in srgb, var(--b-idle) 70%, var(--chat-fg, #1c1c22));
+  cursor: pointer;
+}
+.browser-card__peek svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.browser-card__peek:hover {
+  background: color-mix(in srgb, var(--b-idle) 16%, transparent);
+  color: var(--chat-fg, #1c1c22);
+}
+.browser-card__peek:focus-visible {
+  outline: 1px solid var(--chat-accent, #5b5bd6);
+  outline-offset: 1px;
+}
+.browser-card__peek[aria-expanded='true'] {
+  color: color-mix(in srgb, var(--b-live) 85%, var(--chat-fg, #1c1c22));
+  background: color-mix(in srgb, var(--b-live) 13%, transparent);
+}
+.browser-card:not(:has(.browser-card__countdown)) .browser-card__peek {
+  grid-column: 3;
+}
+.browser-card:has(.browser-card__peek) .browser-card__action {
+  grid-column: 5;
+}
+.browser-card:not(:has(.browser-card__countdown)):has(.browser-card__peek)
+  .browser-card__action {
+  grid-column: 4;
+}
+.browser-card:has(.browser-card__countdown):has(.browser-card__peek) {
+  grid-template-columns: auto 1fr auto auto;
+}
+
+/* THE LIVE PICTURE. Taller than the frozen still on a card you did not ask to
+   expand — you asked for this one — and clickable, because the picture is what
+   you were looking at when looking stopped being enough. */
+.browser-card__shot--live {
+  max-height: 210px;
+  cursor: pointer;
+}
+/* A capture that failed leaves the LAST frame up, dimmed, rather than tearing
+   to a broken-image icon: a page mid-navigation refuses one shot and serves
+   the next, and a card that blinks out on every navigation reads as breakage. */
+.browser-card__shot--stale {
+  opacity: 0.55;
+}
+@media (max-width: 560px) {
+  .browser-card__shot--live {
+    max-height: 170px;
+  }
+}
+
 .browser-card__action:hover {
   background: color-mix(in srgb, var(--b-live) 14%, transparent);
 }
