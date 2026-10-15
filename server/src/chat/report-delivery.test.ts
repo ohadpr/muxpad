@@ -9,6 +9,7 @@ import { openDb } from '../store/db.js';
 import {
   BATCH_MAX_HOLD_MS,
   BATCH_SPAWN_WINDOW_MS,
+  RESULT_GRACE_MS,
   ReportDelivery,
   type SubmitSendResult,
 } from './report-delivery.js';
@@ -308,6 +309,42 @@ describe('report delivery — the join', () => {
     expect(make().sweep()).toEqual(EMPTY_FLUSH);
     expect(sent).toHaveLength(0);
     expect(delivered('c1')).toBeNull();
+  });
+
+  it('…but delivers it past the grace window — nothing is coming, and silence is worse', () => {
+    // The 7h51m case. The round closed, the report gate declined, nothing was
+    // ever written, and a queue that waits for a result waited for a restart.
+    const p = parent('P');
+    child('c1', p, { report: null, state: null });
+    const delivery = make();
+    clock = NOW + 1000 + RESULT_GRACE_MS - 1;
+    expect(delivery.sweep()).toEqual(EMPTY_FLUSH);
+
+    clock = NOW + 1000 + RESULT_GRACE_MS + 1;
+    expect(delivery.sweep().delivered).toBe(1);
+    const body = parseSpawnDelivery(sent[0]?.text ?? '')?.body ?? '';
+    expect(body).toContain('task c1');
+    expect(body).toContain('could not summarise');
+    expect(delivered('c1')).toBe(clock);
+  });
+
+  it('names each child ONCE when two of its rounds land in one batch', () => {
+    // `from="X,X"`, seen live: a worker re-tasked inside one hold window.
+    const p = parent('P');
+    child('c1', p, { started: NOW, ended: NOW + 1000, report: 'first job done' });
+    db.prepare(
+      `INSERT INTO spawn_rounds (id, tab_id, started_at, ended_at, report, report_state)
+       VALUES ('r-c1-b', 'c1', ?, ?, 'second job done', 'ok')`,
+    ).run(NOW + 1100, NOW + 1500);
+    child('c2', p);
+
+    expect(make().sweep().delivered).toBe(3);
+    const parsed = parseSpawnDelivery(sent[0]?.text ?? '');
+    expect(parsed?.marker).toEqual({ count: 2, from: ['c1', 'c2'] });
+    // Both jobs' results survive, under the one heading.
+    expect(parsed?.body).toContain('first job done');
+    expect(parsed?.body).toContain('second job done');
+    expect(parsed?.body.match(/## task c1/g)).toHaveLength(1);
   });
 
   it('DOES deliver a crashed worker that produced no report', () => {
