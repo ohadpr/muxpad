@@ -68,6 +68,14 @@ export interface BrowserView extends BrowserAppState {
   needsYou: NeedsYou | null;
 }
 
+/**
+ * How long one capture serves everybody. A chat can hold a dozen cards about
+ * the same browser, each on its own refresh timer; this makes the cost a
+ * function of how many BROWSERS are being watched rather than how many cards
+ * mention one. Short enough that "now" is still now.
+ */
+const SHOT_COALESCE_MS = 1_000;
+
 const TakeSchema = z.object({
   /** Pane or chat id — whatever identifies this specific claimant. */
   by: z.string().min(1).max(200),
@@ -290,6 +298,29 @@ export function browsersRoutes(deps: {
     }
   };
 
+  /**
+   * A capture no older than {@link SHOT_COALESCE_MS}, shared by everyone who
+   * asks in that window.
+   *
+   * In flight is shared too, not just the result: ten cards expanding together
+   * is one burst of ten simultaneous requests, and without this they would be
+   * ten screenshots of the same page taken in the same instant.
+   */
+  const shotCache = new Map<string, { at: number; work: Promise<Uint8Array | null> }>();
+  const freshShot = (profile: string, state: BrowserAppState): Promise<Uint8Array | null> => {
+    const now = Date.now();
+    const cached = shotCache.get(profile);
+    if (cached && now - cached.at < SHOT_COALESCE_MS) return cached.work;
+    const work = fetchShot(state);
+    shotCache.set(profile, { at: now, work });
+    // A failed capture must not be remembered for a second — a browser that is
+    // mid-navigation would then look dead to everyone who asked next.
+    void work.then((bytes) => {
+      if (!bytes && shotCache.get(profile)?.work === work) shotCache.delete(profile);
+    });
+    return work;
+  };
+
   app.get('/', (c) => c.json({ browsers: listBrowserApps(deps.db).map(view) }));
 
   app.post('/', async (c) => {
@@ -431,6 +462,40 @@ export function browsersRoutes(deps: {
       return c.json({ ok: true, attached: false });
     }
     return c.json({ ok: true, attached: events.attachShot(profile, moment.at) });
+  });
+
+  /**
+   * WHAT THAT BROWSER IS LOOKING AT, NOW.
+   *
+   * The sibling route below serves a SAVED still: the photograph attached to a
+   * moment, immutable and cached forever, which is evidence of something that
+   * already happened. This one is the opposite — a fresh capture, never cached
+   * — and it exists so a card in the chat can be expanded into a picture that
+   * keeps up without opening the viewer and taking the wheel.
+   *
+   * COALESCED, because the cost is a real screenshot of a real browser and the
+   * callers are a chat full of cards. Several cards about the same profile — and
+   * a long conversation can hold a dozen — would otherwise each poll it on their
+   * own timer. One capture per profile per second serves all of them, which
+   * makes the cost a function of how many BROWSERS are being watched rather
+   * than of how many cards mention one.
+   */
+  app.get('/:profile/shot', async (c) => {
+    const profile = profileParam(c.req.param('profile'));
+    if (!profile) return c.json({ error: 'invalid profile name' }, 400);
+    const state = find(profile);
+    if (!state) return c.json({ error: 'no such browser' }, 404);
+    const bytes = await freshShot(profile, state);
+    if (!bytes) return c.json({ error: 'no picture' }, 503);
+    return new Response(new Uint8Array(bytes), {
+      status: 200,
+      headers: {
+        'content-type': 'image/jpeg',
+        // NEVER cached: the whole point is that it is current. The coalescing
+        // above is the only reuse, and it is measured in one second.
+        'cache-control': 'no-store',
+      },
+    });
   });
 
   app.get('/:profile/shot/:at', async (c) => {

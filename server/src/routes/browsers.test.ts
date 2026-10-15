@@ -671,6 +671,83 @@ describe('the last picture, and serving it back', () => {
   });
 });
 
+describe('the picture a card expands into', () => {
+  /**
+   * A SAVED still is evidence of a moment and is cached forever. This one is
+   * the opposite: what that browser is looking at NOW, never cached, so a card
+   * in the chat can be expanded into something that keeps up without opening
+   * the viewer and taking the wheel from the agent.
+   */
+  const captures: string[] = [];
+  const serveShots = (bytes: Uint8Array | null) => {
+    const realFetch = globalThis.fetch;
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.endsWith('/shot')) {
+        captures.push(url);
+        return Promise.resolve(
+          bytes ? new Response(bytes as BodyInit) : new Response('no', { status: 503 }),
+        );
+      }
+      if (url.endsWith('/agent-quiesce') || url.endsWith('/handoff'))
+        return Promise.resolve(new Response('{}'));
+      return realFetch(input, init);
+    });
+  };
+
+  beforeEach(() => {
+    captures.length = 0;
+  });
+
+  it('serves what the browser is looking at now', async () => {
+    await ensure();
+    serveShots(new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 7]));
+    const res = await app.request('/api/browsers/shopping/shot');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('image/jpeg');
+  });
+
+  it('is NEVER cached — the whole point is that it is current', async () => {
+    await ensure();
+    serveShots(new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 7]));
+    const res = await app.request('/api/browsers/shopping/shot');
+    expect(res.headers.get('cache-control')).toBe('no-store');
+  });
+
+  it('COALESCES, so a chat full of cards is not a chat full of screenshots', async () => {
+    // Several cards can be about one browser, each on its own refresh timer.
+    // The cost has to be a function of how many browsers are watched, not of
+    // how many cards mention one.
+    await ensure();
+    serveShots(new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 7]));
+    await Promise.all([
+      app.request('/api/browsers/shopping/shot'),
+      app.request('/api/browsers/shopping/shot'),
+      app.request('/api/browsers/shopping/shot'),
+    ]);
+    expect(captures).toHaveLength(1);
+  });
+
+  it('does not remember a FAILED capture, which would look like a dead browser', async () => {
+    // A page mid-navigation refuses one shot and serves the next. Caching the
+    // refusal would hand it to everyone who asked in that window.
+    await ensure();
+    serveShots(null);
+    expect((await app.request('/api/browsers/shopping/shot')).status).toBe(503);
+    serveShots(new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 7]));
+    expect((await app.request('/api/browsers/shopping/shot')).status).toBe(200);
+  });
+
+  it('404s for a browser that does not exist', async () => {
+    expect((await app.request('/api/browsers/nothing-here/shot')).status).toBe(404);
+  });
+
+  it('does not collide with the saved-still route', async () => {
+    await ensure();
+    expect((await app.request('/api/browsers/shopping/shot/not-a-time')).status).toBe(400);
+  });
+});
+
 describe('keeping a lease alive', () => {
   it('renews for the person holding it', async () => {
     await ensure();
