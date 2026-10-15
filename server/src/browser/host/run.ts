@@ -6,22 +6,17 @@ import { join } from 'node:path';
 import { WebSocketServer, type WebSocket as WsSocket } from 'ws';
 import { AgentCdpGate, bridgeAgentCdp } from '../AgentCdp.js';
 import {
-  keyEvents,
   type KeyInput,
-  mouseEvent,
   type MouseInput,
+  type TouchInput,
+  keyEvents,
+  mouseEvent,
   probeEditable,
   touchEvent,
-  type TouchInput,
 } from '../BrowserInput.js';
 import { browserLaunchSpec } from '../BrowserLaunch.js';
 import { browserViewerPort } from '../BrowserProfile.js';
 import { CdpConnection } from '../CdpConnection.js';
-import {
-  clearSelectMarkExpression,
-  selectAtExpression,
-  selectChoiceExpression,
-} from '../SelectProbe.js';
 import {
   type CdpCookie,
   type StorageState,
@@ -39,6 +34,11 @@ import { emulationParams } from '../MobileEmulation.js';
 import { isBrowsingUrl } from '../PageAttachment.js';
 import { clearStaleProfileLock } from '../ProfileLock.js';
 import { ScreencastSession } from '../ScreencastSession.js';
+import {
+  clearSelectMarkExpression,
+  selectAtExpression,
+  selectChoiceExpression,
+} from '../SelectProbe.js';
 import { type HeartbeatSocket, heartbeatRound } from '../SocketHeartbeat.js';
 import { stampViewer } from '../ViewerBuild.js';
 import { VIEWER_HTML } from './viewer.js';
@@ -555,12 +555,12 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
     }
   }
 
-/**
- * Where the finger last was. `touchEnd` carries no point of its own, by the
- * protocol, and the lift is exactly when "what did they just tap?" has to be
- * answered.
- */
-let lastTouch: { x: number; y: number } | null = null;
+  /**
+   * Where the finger last was. `touchEnd` carries no point of its own, by the
+   * protocol, and the lift is exactly when "what did they just tap?" has to be
+   * answered.
+   */
+  let lastTouch: { x: number; y: number } | null = null;
 
   async function handleInput(socket: WsSocket, raw: string) {
     let message: { t: string } & Record<string, unknown>;

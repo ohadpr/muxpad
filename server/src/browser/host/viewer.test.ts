@@ -1807,7 +1807,12 @@ describe('phone mode is only ON if the host was told', () => {
     h.el('screen').setPointerCapture = () => {
       throw new Error('NotFoundError');
     };
-    h.el('screen').fire('pointerdown', { pointerId: 7, pointerType: 'touch', clientX: 100, clientY: 300 });
+    h.el('screen').fire('pointerdown', {
+      pointerId: 7,
+      pointerType: 'touch',
+      clientX: 100,
+      clientY: 300,
+    });
     expect(h.sent.some((m) => m.t === 'touch' && m.type === 'touchStart')).toBe(true);
   });
 

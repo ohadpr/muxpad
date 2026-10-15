@@ -82,7 +82,9 @@ export function touchEvent(input: TouchInput): Record<string, unknown> | null {
   if (!lift && (!Number.isFinite(x) || !Number.isFinite(y))) return null;
   return {
     type: input.type,
-    touchPoints: lift ? [] : [{ x: Math.round(x), y: Math.round(y), radiusX: 2, radiusY: 2, force: 1 }],
+    touchPoints: lift
+      ? []
+      : [{ x: Math.round(x), y: Math.round(y), radiusX: 2, radiusY: 2, force: 1 }],
     modifiers: input.modifiers ?? 0,
   };
 }

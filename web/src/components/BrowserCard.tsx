@@ -174,13 +174,8 @@ export function BrowserCard({ moment, onOpen, viewportWidth, now }: BrowserCardP
             setPeeking((v) => !v);
           }}
         >
-          {/* biome-ignore lint/a11y/noSvgWithoutTitle: labelled on the button, where a screen reader reads it once rather than twice */}
           <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-            {peeking ? (
-              <path d="M3 10.5 8 5.5l5 5" />
-            ) : (
-              <path d="M3 5.5 8 10.5l5-5" />
-            )}
+            {peeking ? <path d="M3 10.5 8 5.5l5 5" /> : <path d="M3 5.5 8 10.5l5-5" />}
           </svg>
         </button>
       ) : null}
@@ -217,6 +212,7 @@ export function BrowserCard({ moment, onOpen, viewportWidth, now }: BrowserCardP
         // looking at, so it is also the thing you reach for when looking is no
         // longer enough. The card's own click would do it, but this is inside
         // the card and says so by being a control.
+        // biome-ignore lint/a11y/useKeyWithClickEvents: the picture is a shortcut, not the control — the card itself and the Open button are both keyboard-reachable and do the same thing. A key handler here would add a third tab stop to one action.
         <img
           className="browser-card__shot browser-card__shot--live"
           src={peekUrl}

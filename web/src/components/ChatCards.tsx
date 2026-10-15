@@ -1,8 +1,8 @@
 import { type ChatCard, cardIsStale } from '@muxpad/shared';
 import type React from 'react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { cardColorScheme } from '../lib/card-frame';
 import { subscribe, subscribeResync } from '../events';
+import { cardColorScheme } from '../lib/card-frame';
 import { isCardOpen, toggleCardOpen, useCardOpen } from '../lib/card-open';
 import './ChatCards.css';
 import { Markdown } from './ChatMarkdown';
@@ -147,6 +147,7 @@ function HtmlCard({ card }: { card: ChatCard }) {
   // has to be painted with it exactly, or the card has a differently-coloured
   // rectangle inside it. Layout effect so it is known before the first paint.
   const [surface, setSurface] = useState('transparent');
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `theme` is a SIGNAL here, not an input — the card's background is a color-mix of theme tokens, so the measurement has to be retaken when the theme changes even though this body never reads it.
   useLayoutEffect(() => {
     const card = ref.current?.closest('.chat-card');
     if (card) setSurface(getComputedStyle(card).backgroundColor);

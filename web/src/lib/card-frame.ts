@@ -27,7 +27,10 @@ export function parseRgb(color: string): [number, number, number] | null {
   // `rgb(12, 13, 20)` / `rgba(12, 13, 20, 0.5)` — the common case.
   const rgb = /^rgba?\(([^)]+)\)$/.exec(text);
   if (rgb?.[1]) {
-    const parts = rgb[1].split(/[\s,/]+/).filter(Boolean).map(Number);
+    const parts = rgb[1]
+      .split(/[\s,/]+/)
+      .filter(Boolean)
+      .map(Number);
     if (parts.length >= 3 && parts.slice(0, 3).every((n) => Number.isFinite(n))) {
       return [parts[0] as number, parts[1] as number, parts[2] as number];
     }
@@ -38,7 +41,10 @@ export function parseRgb(color: string): [number, number, number] | null {
   // card once measured as very nearly black.
   const fn = /^color\(srgb ([^)]+)\)$/.exec(text);
   if (fn?.[1]) {
-    const parts = fn[1].split(/[\s/]+/).filter(Boolean).map(Number);
+    const parts = fn[1]
+      .split(/[\s/]+/)
+      .filter(Boolean)
+      .map(Number);
     if (parts.length >= 3 && parts.slice(0, 3).every((n) => Number.isFinite(n))) {
       return [
         Math.round((parts[0] as number) * 255),

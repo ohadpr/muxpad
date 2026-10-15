@@ -205,7 +205,7 @@
   outline: 1px solid var(--chat-accent, #5b5bd6);
   outline-offset: 1px;
 }
-.browser-card__peek[aria-expanded='true'] {
+.browser-card__peek[aria-expanded="true"] {
   color: color-mix(in srgb, var(--b-live) 85%, var(--chat-fg, #1c1c22));
   background: color-mix(in srgb, var(--b-live) 13%, transparent);
 }
@@ -215,8 +215,7 @@
 .browser-card:has(.browser-card__peek) .browser-card__action {
   grid-column: 5;
 }
-.browser-card:not(:has(.browser-card__countdown)):has(.browser-card__peek)
-  .browser-card__action {
+.browser-card:not(:has(.browser-card__countdown)):has(.browser-card__peek) .browser-card__action {
   grid-column: 4;
 }
 .browser-card:has(.browser-card__countdown):has(.browser-card__peek) {
@@ -264,7 +263,7 @@
    inside a 400px card that plainly is one thing is work the card can do for
    you. The button stays, because it is the keyboard control and it says what
    the card does. */
-.browser-card[role='button'],
+.browser-card[role="button"],
 .browser-card:has(> .browser-card__action) {
   cursor: pointer;
 }

@@ -29,12 +29,12 @@ afterEach(() => {
  * with the answer, not the browser's hit testing.
  */
 function hits(el: Element | null) {
-  (document as unknown as { elementFromPoint: (x: number, y: number) => Element | null })
-    .elementFromPoint = () => el;
+  (
+    document as unknown as { elementFromPoint: (x: number, y: number) => Element | null }
+  ).elementFromPoint = () => el;
 }
 
-const parse = (raw: string) =>
-  raw ? (JSON.parse(raw) as ReturnType<typeof JSON.parse>) : null;
+const parse = (raw: string) => (raw ? (JSON.parse(raw) as ReturnType<typeof JSON.parse>) : null);
 
 describe('describing the drop-down under a tap', () => {
   it('reads the options, and which one is on', () => {
@@ -90,8 +90,7 @@ describe('describing the drop-down under a tap', () => {
   });
 
   it('carries the disabled flag, so the sheet does not offer a dead row', () => {
-    document.body.innerHTML =
-      '<select id="s"><option value="a" disabled>A</option></select>';
+    document.body.innerHTML = '<select id="s"><option value="a" disabled>A</option></select>';
     hits(document.getElementById('s'));
     expect(parse(describeSelectAt(10, 10, SELECT_MARK)).options[0].disabled).toBe(true);
   });
