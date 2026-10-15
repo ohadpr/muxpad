@@ -1248,3 +1248,69 @@ describe('scrolling down while messages append', () => {
     expect(c.phase(false)).toBe('FOLLOWING');
   });
 });
+
+// ── A QUEUED MESSAGE DRAINING ──────────────────────────────────────────────
+// Reported as "when I have pending messages at the bottom of a chat and I try
+// to scroll down it won't let me scroll down all the way and it goes into a
+// jumpy frenzy".
+//
+// A drain makes the document SHORTER for a moment: the pending row, with its
+// edit and cancel buttons, is removed, and the turn that replaces it starts
+// smaller. A reader sitting at the bottom is clamped up by the engine to the
+// new maximum — measured on a live chat with six messages queued, scrollTop
+// 5227 -> 5182 as the maximum went 5227 -> 5182, with no write from the
+// controller involved at all.
+//
+// `place()` has always known that a clamped shrink is layout rather than a
+// gesture. `onScroll()` did not, so the clamp was read as "they scrolled up":
+// following was dropped, the reader was parked just above the tail, and when
+// the content re-grew they were stranded there — with every later drain doing
+// it again, which is the frenzy.
+describe('a shrink under a reader at the end', () => {
+  function atEndThen(shrinkPx: number) {
+    const sim = new SimScroller(simRows(40), { furnitureBelow: 300 });
+    const c = new ChatScrollController(sim);
+    c.dispatch({ t: 'mounted' });
+    c.dispatch({ t: 'shown', mem: RETIRED });
+    expect(c.phase(true)).toBe('FOLLOWING');
+    // The pending row goes away: the document gets shorter under them.
+    sim.setFurniture(300 - shrinkPx);
+    drainScroll(sim, c);
+    c.place();
+    drainScroll(sim, c);
+    return { c, sim };
+  }
+
+  it('keeps following — the floor came up, nobody moved away', () => {
+    const { c } = atEndThen(45);
+    expect(c.phase(true)).toBe('FOLLOWING');
+  });
+
+  it('is still following after a big drain, not just a small one', () => {
+    const { c } = atEndThen(220);
+    expect(c.phase(true)).toBe('FOLLOWING');
+  });
+
+  it('and is carried to the new bottom when the turn renders and it regrows', () => {
+    // The stranding is what made it impossible to scroll down "all the way":
+    // the content came back, the reader did not.
+    const { c, sim } = atEndThen(45);
+    sim.setFurniture(300);
+    c.place();
+    drainScroll(sim, c);
+    expect(sim.scrollTop).toBe(sim.maxScrollTop);
+    expect(c.phase(true)).toBe('FOLLOWING');
+  });
+
+  it('still lets a REAL upward gesture stop the following', () => {
+    // The fix must not swallow the thing the test above it exists for: moving
+    // away from the tail is the reader's decision and outranks any arithmetic.
+    const sim = new SimScroller(simRows(40), { furnitureBelow: 300 });
+    const c = new ChatScrollController(sim);
+    c.dispatch({ t: 'mounted' });
+    c.dispatch({ t: 'shown', mem: RETIRED });
+    sim.readerScrollsBy(-120);
+    drainScroll(sim, c);
+    expect(c.phase(true)).not.toBe('FOLLOWING');
+  });
+});
