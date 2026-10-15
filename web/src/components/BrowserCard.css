@@ -181,6 +181,15 @@
  * On a phone there is no hover, and that is fine — the card is a note, and
  * anyone who wants the browser will tap it.
  */
+/* EVERY OPENABLE CARD IS A TARGET, not just the passive one. A card carrying
+   an "Open" button still opens from anywhere on it — aiming at a 60px button
+   inside a 400px card that plainly is one thing is work the card can do for
+   you. The button stays, because it is the keyboard control and it says what
+   the card does. */
+.browser-card[role='button'],
+.browser-card:has(> .browser-card__action) {
+  cursor: pointer;
+}
 .browser-card--passive {
   cursor: pointer;
   /* Quieter than a card with something to say. */
