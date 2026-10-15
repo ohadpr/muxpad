@@ -83,53 +83,45 @@ describe('pinned chat cards', () => {
     expect(host.querySelector('.chat-cards')).toBeNull();
   });
 
-  it('renders a text card as ONE ROW — value only, no header, no name', async () => {
-    // 44% of a one-line card used to be a header saying its name and its age.
-    // Both are gone from the row: the header entirely, and the name whenever
-    // there is nothing to tell this card apart from.
+  it('renders a text card as ONE LINE — the value, and a tail', async () => {
+    // A card is its value. The name is not drawn at all (it is the identity
+    // for `card set`, and the section's title attribute), and the age is a tail
+    // in the corner rather than a column.
     const host = await mount([card({ content: 'V2.1 [███░░] 62%' })]);
-    expect(host.querySelector('.chat-card-value')?.textContent).toBe('V2.1 [███░░] 62%');
+    expect(host.querySelector('.chat-card-line')?.textContent).toBe('V2.1 [███░░] 62%');
     expect(host.querySelector('.chat-card-name')).toBeNull();
-    // No separate body until somebody opens it.
+    expect(host.querySelector('.chat-card-age')?.textContent).toMatch(/^\d+[smhd]$/);
     expect(host.querySelector('.chat-card-body')).toBeNull();
   });
-
-  it('brings the name BACK as soon as there are two cards', async () => {
-    // With one card the name labels the only thing in the strip, and on a 430px
-    // phone costs the tail of the value. With two it is the only thing saying
-    // which row is which.
+  it('draws no name however many cards there are', async () => {
+    // It used to appear at two cards and on the open one, so it moved between
+    // inline, header and absent — "sometimes it's above, sometimes the line is
+    // below". The card's identity is its content; the strip holds two or three.
     const host = await mount([card({ name: 'build' }), card({ id: 'c2', name: 'market' })]);
-    const names = [...host.querySelectorAll('.chat-card-name')].map((e) => e.textContent);
-    expect(names).toEqual(['build', 'market']);
+    expect(host.querySelectorAll('.chat-card-name')).toHaveLength(0);
+    // Still reachable: the section names itself for a hover and a reader.
+    expect([...host.querySelectorAll('.chat-card')].map((c) => c.getAttribute('title'))).toEqual([
+      'build',
+      'market',
+    ]);
   });
-
-  it('shows the name on the one card you OPEN', async () => {
-    // Never lost, only deferred: inspecting a card is exactly when you want to
-    // know which one it is.
-    const host = await mount([card({ name: 'build' })]);
-    expect(host.querySelector('.chat-card-name')).toBeNull();
+  it('opens from ANYWHERE on the card, not from a row beside the body', async () => {
+    // The control used to be a <button> row and the body its sibling, because a
+    // button may only hold phrasing content and markdown emits <p>. That split
+    // is what let the two disagree about what a click does.
+    const host = await mount([card({ name: 'build', content: 'one line' })]);
+    const section = host.querySelector('.chat-card') as HTMLElement;
+    expect(section.getAttribute('role')).toBe('button');
     await act(async () => {
-      (host.querySelector('.chat-card-row') as HTMLButtonElement).click();
+      section.click();
     });
-    expect(host.querySelector('.chat-card-name')?.textContent).toBe('build');
+    expect(host.querySelector('.chat-card-body')).not.toBeNull();
+    expect(host.querySelector('.chat-card-line')).toBeNull();
   });
-
-  it('drives the rail from FRESHNESS, not just from staleness', async () => {
-    // The row carries no timestamp any more, so the rail is the readout: a
-    // number on the element, interpolated by the stylesheet, rather than three
-    // named buckets. Half a cadence old is half fresh.
-    const day = 86_400_000;
-    const host = await mount([card({ every_ms: day, updated_at: Date.now() - day / 2 })]);
-    const fresh = (host.querySelector('.chat-card') as HTMLElement).style.getPropertyValue(
-      '--card-fresh',
-    );
-    expect(Number(fresh)).toBeGreaterThan(0.4);
-    expect(Number(fresh)).toBeLessThan(0.6);
-    // And the leader is a real element, not a pseudo — the only thing left
-    // saying how current a card is must be something a test can look at.
-    expect(host.querySelector('.chat-card-leader')).not.toBeNull();
+  it('says how old it is in the shortest form that is true', async () => {
+    const host = await mount([card({ updated_at: Date.now() - 3 * 3_600_000 })]);
+    expect(host.querySelector('.chat-card-age')?.textContent).toBe('3h');
   });
-
   it('puts html in a SANDBOXED frame that cannot reach muxpad', async () => {
     // The security claim, asserted rather than assumed: agent-written markup is
     // pinned where you cannot scroll past it, so `allow-same-origin` would hand
@@ -163,6 +155,21 @@ describe('pinned chat cards', () => {
     expect(doc).not.toMatch(/html,body\{margin:0;background:transparent/);
     expect(doc).toMatch(/color-scheme:(light|dark)\b/);
     expect(doc).not.toContain('--card-scheme');
+  });
+
+  it('re-measures without being asked, and ignores a zero', async () => {
+    // The first two measurements are always 0 — the body is not laid out at
+    // parse time or at load — and the real height comes from a ResizeObserver
+    // that fires ONCE. Lose that message (a srcdoc swap for a theme change puts
+    // it on a window the parent no longer recognises) and the frame is stuck
+    // for good: measured, a 90px card parked at the 24px floor.
+    const host = await mount([card({ format: 'html', content: '<b>hi</b>' })]);
+    const doc = host.querySelector('iframe')?.getAttribute('srcdoc') ?? '';
+    expect(doc).toContain('requestAnimationFrame(send)');
+    expect(doc).toMatch(/setTimeout\(send, \d+\)/);
+    // And a zero must be ignored rather than clamped up to the floor, or
+    // "not laid out yet" is indistinguishable from "a very small card".
+    expect(doc).toContain('muxpadCard');
   });
 
   it('gives the frame a way to report its own height', async () => {
@@ -217,9 +224,8 @@ describe('pinned chat cards', () => {
 
   it('shows it on a card with no declared cadence too', async () => {
     const host = await mount([card({ every_ms: null })]);
-    expect(host.querySelector('.chat-card-age')?.textContent).toMatch(/ago$/);
+    expect(host.querySelector('.chat-card-age')?.textContent).toMatch(/^\d+[smhd]$/);
   });
-
   it('a card with no declared cadence is never overdue', async () => {
     const host = await mount([card({ every_ms: null, updated_at: 0 })]);
     expect(host.querySelector('.chat-card')?.className).not.toContain('-stale');
@@ -228,62 +234,60 @@ describe('pinned chat cards', () => {
   it('OPENS rather than deleting — and never asks the server to', async () => {
     // The only control a reader had used to be the destructive one. A card
     // belongs to whoever writes it: pressing × on a market card did not mean
-    // "retire this schedule's output", and the next fire recreated it anyway —
-    // a button that appeared to work and then undid itself.
+    // "retire this schedule's output", and the next fire recreated it anyway.
     const host = await mount([card({ name: 'build' })]);
-    const row = host.querySelector('.chat-card-row') as HTMLButtonElement;
-    // Compact is the DEFAULT now: the value rides in the row, there is no body.
-    expect(row.getAttribute('aria-expanded')).toBe('false');
+    const section = host.querySelector('.chat-card') as HTMLElement;
+    expect(section.getAttribute('aria-expanded')).toBe('false');
     expect(host.querySelector('.chat-card-body')).toBeNull();
     await act(async () => {
-      row.click();
+      section.click();
     });
     expect(fetched.some((f) => f.startsWith('DELETE'))).toBe(false);
     expect(host.querySelector('.chat-card-body')).not.toBeNull();
-    // …and the one-line value steps aside, so the content is not rendered twice.
-    expect(host.querySelector('.chat-card-value')).toBeNull();
-    expect(host.querySelector('.chat-card-row')?.getAttribute('aria-expanded')).toBe('true');
+    // …and the one line steps aside, so the content is not rendered twice.
+    expect(host.querySelector('.chat-card-line')).toBeNull();
+    expect(section.getAttribute('aria-expanded')).toBe('true');
   });
-
-  it('the compact row still says everything that matters', async () => {
-    // Name, value, and the one thing worth interrupting you for. A row that
-    // showed only a value would be a card you cannot identify.
+  it('the compact card is the value and the tail, nothing else', async () => {
     const day = 86_400_000;
     const host = await mount([
       card({ name: 'build', content: 'v2.1.4', every_ms: day, updated_at: Date.now() - day * 3 }),
     ]);
-    expect(host.querySelector('.chat-card-value')?.textContent).toBe('v2.1.4');
+    expect(host.querySelector('.chat-card-line')?.textContent).toBe('v2.1.4');
     expect(host.querySelector('.chat-card-age')?.className).toContain('-stale');
-    // …and the row still names itself on demand, via its title.
-    expect(host.querySelector('.chat-card-row')?.getAttribute('title')).toContain('build');
+    // Overdue is a colour on two characters, so the word is carried for a
+    // reader who cannot see the colour.
+    expect(host.querySelector('.chat-card-age')?.textContent).toContain('overdue');
+    // …and the card still names itself on demand, via its title.
+    expect(host.querySelector('.chat-card')?.getAttribute('title')).toBe('build');
   });
-
-  it('an html card keeps its body — there is no one line of a frame', async () => {
-    // Text and markdown ride in the row; a sandboxed iframe has no single line
-    // to put there, so it is the one format that still costs two rows.
+  it('an html card renders whole, and is NOT a control', async () => {
+    // It has nothing to expand — it already draws everything and measures
+    // itself — so making it clickable offered a gesture that changed nothing on
+    // screen: "clicking the line changes it a bit but doesn't expand".
     const host = await mount([card({ name: 'market', format: 'html', content: '<b>x</b>' })]);
+    const section = host.querySelector('.chat-card') as HTMLElement;
     expect(host.querySelector('iframe')).not.toBeNull();
-    expect(host.querySelector('.chat-card-value')).toBeNull();
-    expect(host.querySelector('.chat-card-row')?.getAttribute('title')).toContain('market');
+    expect(host.querySelector('.chat-card-line')).toBeNull();
+    expect(section.getAttribute('role')).toBeNull();
+    expect(section.getAttribute('aria-expanded')).toBeNull();
+    expect(section.className).not.toContain('-togglable');
   });
-
-  it('lays a markdown card out INLINE, in the row', async () => {
+  it('puts a markdown card on the one line, flattened', async () => {
     // `Markdown` emits block elements; the css forces them inline so one <p>
-    // cannot break the row. Asserted here because the alternative — a card
-    // silently two rows tall — is the exact thing this layout exists to stop.
+    // cannot turn a one-line card into a two-line one.
     const host = await mount([card({ format: 'markdown', content: '**open** SPX +0.4%' })]);
-    const value = host.querySelector('.chat-card-value');
-    expect(value).not.toBeNull();
-    expect(value?.textContent).toContain('SPX +0.4%');
+    const line = host.querySelector('.chat-card-line');
+    expect(line).not.toBeNull();
+    expect(line?.textContent).toContain('SPX +0.4%');
     expect(host.querySelector('.chat-card-body')).toBeNull();
   });
-
   it('remembers an OPEN card across a page load', async () => {
     // It is a view preference, so it lives in localStorage like the nav tree's
     // expansion — a card you put away stays away when you come back to the tab.
     const host = await mount([card({ name: 'build' })]);
     await act(async () => {
-      (host.querySelector('.chat-card-row') as HTMLButtonElement).click();
+      (host.querySelector('.chat-card') as HTMLElement).click();
     });
     document.body.innerHTML = '';
     // Drop the module's memory and re-read storage — a page load, not a
@@ -299,7 +303,7 @@ describe('pinned chat cards', () => {
     // reader had deliberately collapsed.
     const host = await mount([card({ name: 'build' })]);
     await act(async () => {
-      (host.querySelector('.chat-card-row') as HTMLButtonElement).click();
+      (host.querySelector('.chat-card') as HTMLElement).click();
     });
     document.body.innerHTML = '';
     __reloadCardOpen();
@@ -325,84 +329,65 @@ describe('pinned chat cards', () => {
     });
     // A card blanking because of one dropped request is a worse lie than a
     // card a few seconds stale.
-    expect(host.querySelector('.chat-card-value')?.textContent).toBe('good');
+    expect(host.querySelector('.chat-card-line')?.textContent).toBe('good');
   });
 });
 
 describe('a card with more than one line', () => {
   /**
-   * The row is name · value · leader · age, and for a one-line card that is
-   * exactly right. Give it three lines and the columns become a vice: every
-   * line is cut at the same x a few words in, because the value gets whatever
-   * the name and the age left behind. Reported from a phone as cards "split
-   * into free columns which severely limits how much content can fit".
+   * The row used to be name · value · leader · age, and a multi-line card got
+   * the column the name and the age left over: every line cut at the same x a
+   * few words in. It was then given a full-width preview under a header, which
+   * is where the third layout came from. Now there is one layout: one line
+   * collapsed, the whole thing open.
    */
   const THREE = 'Edge Workers rollout\nBoth environments now live\nLeft for infra owners: DNS';
 
-  it('puts its content on its own line instead of in the leftover column', async () => {
+  it('shows its first line, on the same one line every other card uses', async () => {
     const host = await mount([card({ content: THREE })]);
-    expect(host.querySelector('.chat-card-preview')?.textContent).toContain('infra owners');
-    // NOT in the row's value slot, which is the narrow column.
-    expect(host.querySelector('.chat-card-value')).toBeNull();
+    const line = host.querySelector('.chat-card-line');
+    expect(line).not.toBeNull();
+    expect(line?.textContent).toContain('Edge Workers rollout');
+    expect(host.querySelector('.chat-card-body')).toBeNull();
   });
 
-  it('keeps the header — the name, the age and the drifting leader', async () => {
-    const host = await mount([card({ content: THREE }), card({ name: 'other', content: 'x' })]);
-    const row = host.querySelector('.chat-card-row');
-    expect(row?.querySelector('.chat-card-name')?.textContent).toBe('build');
-    expect(row?.querySelector('.chat-card-age')).not.toBeNull();
-    // The leader is what pushes the age to the far edge AND says the card is
-    // live; a stacked card must not quietly lose either.
-    expect(row?.querySelector('.chat-card-leader')).not.toBeNull();
-  });
-
-  it('is still ONE control — the whole thing opens the card', async () => {
+  it('opens to the whole thing, from anywhere on the card', async () => {
     const host = await mount([card({ content: THREE })]);
-    const row = host.querySelector('.chat-card-row');
-    expect(row?.tagName).toBe('BUTTON');
-    expect(row?.querySelector('.chat-card-preview')).not.toBeNull();
-  });
-
-  it('leaves a one-line card exactly as it was', async () => {
-    const host = await mount([card({ content: 'V2.1 [###--] 62%' })]);
-    expect(host.querySelector('.chat-card-value')?.textContent).toBe('V2.1 [###--] 62%');
-    expect(host.querySelector('.chat-card-preview')).toBeNull();
-  });
-
-  it('shows the whole thing once it is OPEN, not the bounded preview', async () => {
-    const host = await mount([card({ content: THREE })]);
-    const row = host.querySelector('.chat-card-row') as HTMLButtonElement;
     await act(async () => {
-      row.click();
+      (host.querySelector('.chat-card') as HTMLElement).click();
     });
-    expect(host.querySelector('.chat-card-preview')).toBeNull();
     expect(host.querySelector('.chat-card-body')?.textContent).toContain('infra owners');
-  });
-});
-
-describe('the tape', () => {
-  it('runs a leader from the value to the age', async () => {
-    const host = await mount([card({ content: 'V2.1 62%' })]);
-    const row = host.querySelector('.chat-card-row');
-    const kids = [...(row?.children ?? [])].map((e) => e.className);
-    // Order matters: value, then the dots, then the age. A leader after the age
-    // is just a decoration trailing off the end of the row.
-    expect(kids).toEqual(['chat-card-value', 'chat-card-leader', 'chat-card-age']);
+    expect(host.querySelector('.chat-card-line')).toBeNull();
   });
 
-  it('drops the leader when the card is OPEN', async () => {
-    // Opened, the value moves to its own block below and the row is just a name
-    // and an age — there is no gap for a leader to lead across.
-    const host = await mount([card()]);
-    await act(async () => {
-      (host.querySelector('.chat-card-row') as HTMLButtonElement).click();
+  it('is the same shape as a one-line card — no header, no name, one tail', async () => {
+    const multi = await mount([card({ content: THREE })]);
+    const single = await mount([card({ id: 'c9', content: 'one line' })]);
+    const shape = (host: HTMLElement) => ({
+      names: host.querySelectorAll('.chat-card-name').length,
+      lines: host.querySelectorAll('.chat-card-line').length,
+      ages: host.querySelectorAll('.chat-card-age').length,
+      rows: host.querySelectorAll('.chat-card-row').length,
     });
-    expect(host.querySelector('.chat-card-leader')).toBeNull();
+    expect(shape(multi)).toEqual(shape(single));
+    expect(shape(multi)).toEqual({ names: 0, lines: 1, ages: 1, rows: 0 });
   });
 
-  it('has no leader on an html card either', async () => {
-    // Same reason: an iframe has no one-line value, so the row never had a gap.
-    const host = await mount([card({ format: 'html', content: '<b>x</b>' })]);
-    expect(host.querySelector('.chat-card-leader')).toBeNull();
+  it('does not toggle when a click merely ends a text selection', async () => {
+    // Collapsing the thing somebody was reading, as they finish dragging
+    // across it, is worse than not toggling at all.
+    const host = await mount([card({ content: THREE })]);
+    const section = host.querySelector('.chat-card') as HTMLElement;
+    await act(async () => {
+      section.click();
+    });
+    expect(host.querySelector('.chat-card-body')).not.toBeNull();
+    const realSelection = window.getSelection;
+    window.getSelection = (() => ({ toString: () => 'infra owners' })) as typeof window.getSelection;
+    await act(async () => {
+      section.click();
+    });
+    window.getSelection = realSelection;
+    expect(host.querySelector('.chat-card-body')).not.toBeNull();
   });
 });
