@@ -37,6 +37,7 @@ import {
 import { ChatChip, chatTooltip, isChatDone, isChatRetired } from './ChatChip';
 import { NavSearch } from './NavSearch';
 import { NewTabButton } from './NewTabButton';
+import { SvgAgentGlyph } from './PaneWebSwitch';
 import { StateChip } from './StateChip';
 import { SwipeRow } from './SwipeRow';
 import { WorkspaceSettings } from './WorkspaceSettings';
@@ -1524,11 +1525,18 @@ export function TabList({
             // aria-label replaces the visible text, so "Show sub-chats of
             // Trayo Builder" would be a screen reader hearing everything
             // except the part that says one of them is waiting on you.
-            aria-label={`${open ? 'Hide' : 'Show'} sub-chats of ${g.chat.name} — ${subChatChip(
-              g.children,
-            )}`}
+            // The WORDS live here and in `title`, because the visible line
+            // cannot afford them (see subChatChip). A screen reader hears the
+            // noun; the sighted reader who is unsure hovers and gets it.
+            title={subChatChipTitle(g.children)}
+            aria-label={`${open ? 'Hide' : 'Show'} ${subChatChipTitle(g.children)} of ${
+              g.chat.name
+            }`}
           >
             <SvgCaret open={open} />
+            <span className="navtree-subs-glyph" aria-hidden="true">
+              <SvgAgentGlyph />
+            </span>
             {subChatChip(g.children)}
           </button>
         ) : null}
@@ -2012,6 +2020,20 @@ export function groupChats(tabs: Tab[]): {
 }
 
 /**
+ * The same chip, with the noun the visible line cannot afford — the hover and
+ * the accessible name. One function so the two can never disagree about the
+ * counts, which is the only thing a reader is cross-checking between them.
+ */
+export function subChatChipTitle(children: readonly Tab[]): string {
+  const n = children.length;
+  const chip = subChatChip(children);
+  const noun = `${n} sub-chat${n === 1 ? '' : 's'}`;
+  // The quiet form already IS the noun ("6 sub-chats"); anything else leads
+  // with a bare count that this replaces.
+  return chip.startsWith(noun) ? chip : `${noun}${chip.slice(String(n).length)}`;
+}
+
+/**
  * THE STATE A COLLAPSED GROUP SHOWS — the parent's own, or its loudest child's.
  *
  * Collapsing sub-chats hides rows that were carrying the rail's two most
@@ -2099,7 +2121,8 @@ export function subChatChip(children: readonly Tab[]): string {
   // "6 sub-chats" over three dead ones is the shut group telling a lie by
   // omission. It is the rail's quietest state and it is the last word here.
   if (dead > 0) parts.push(`${dead} dead`);
-  if (parts.length === 0) return `${n} sub-chat${n === 1 ? '' : 's'}`;
+  const noun = `${n} sub-chat${n === 1 ? '' : 's'}`;
+  if (parts.length === 0) return noun;
   // ─── THE NUMBERS MUST ADD UP ─────────────────────────────────────────────
   // Reported, with a screenshot: "no working indicator but if only 6 are ready
   // then what are the other 3 doing?" — against a chip reading "9 · 6 ready".
@@ -2115,6 +2138,21 @@ export function subChatChip(children: readonly Tab[]): string {
   // segments now sum to the total by construction.
   const idle = n - blocked - working - ready - dead;
   if (idle > 0) parts.push(`${idle} idle`);
+  // …AND SOMETHING HAS TO SAY WHAT THEY ARE. A bare `9` is a number with no
+  // noun, on a row whose own name is somewhere above it.
+  //
+  // THE WORD DOES NOT FIT, and this was measured rather than guessed:
+  // "11 sub-chats · 1 running · 7 ready · 3 idle" is 228px of text in the
+  // 204px the rail gives this line, so the ellipsis eats the tail — which is
+  // the `3 idle` that was just added to make the numbers add up. A label that
+  // truncates exactly the part that closes the arithmetic is worse than the
+  // bare number it replaced.
+  //
+  // So the noun is the AGENT GLYPH, in the markup (see renderGroup): the
+  // product's existing mark for "an agent did this", worth ~16px against the
+  // word's ~62px, and it sits where the eye already is. The full words are not
+  // lost — they are the chip's `title` and its accessible name, which is where
+  // a reader who is unsure will look and where a screen reader reads from.
   return [`${n}`, ...parts].join(' · ');
 }
 

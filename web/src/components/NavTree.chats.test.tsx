@@ -1,6 +1,6 @@
 import { CHAT_DECAY_DAYS, type Tab, chatClock } from '@muxpad/shared';
 import { describe, expect, it } from 'vitest';
-import { doneChatCount, groupChats, rollupStatus, subChatChip } from './NavTree';
+import { doneChatCount, groupChats, rollupStatus, subChatChip, subChatChipTitle } from './NavTree';
 
 const DAY = 86_400_000;
 const NOW = 1_700_000_000_000;
@@ -395,6 +395,17 @@ describe('subChatChip', () => {
     expect(chip).toBe('5 · 1 needs you · 2 running · 1 ready · 1 idle');
   });
 
+  it('spells the noun out in the TITLE, which has room for it', () => {
+    // The visible line cannot afford "sub-chats" — measured, 228px of text in
+    // 204px, and the ellipsis would eat the `idle` segment that makes the
+    // numbers add up. The glyph carries the noun on screen; the words live
+    // here and in the accessible name.
+    expect(subChatChipTitle([kid('ready', 1), kid(undefined, 2)])).toBe(
+      '2 sub-chats \u00b7 1 ready \u00b7 1 idle',
+    );
+    expect(subChatChipTitle([kid(undefined, 1)])).toBe('1 sub-chat');
+  });
+
   it('ACCOUNTS FOR EVERYONE — the segments sum to the total', () => {
     // Reported with a screenshot: "no working indicator but if only 6 are
     // ready then what are the other 3 doing?", against a chip reading
@@ -410,8 +421,8 @@ describe('subChatChip', () => {
         m = Math.floor(m / 5);
       }
       const chip = subChatChip(kids);
-      const nums = [...chip.matchAll(/(\d+)\s(?!sub-chat)/g)].map((x) => Number(x[1]));
-      if (nums.length === 0) continue; // the all-idle form: "4 sub-chats"
+      const nums = [...chip.matchAll(/(\d+)\s/g)].map((x) => Number(x[1]));
+      if (nums.length < 2) continue; // the all-idle form: "4 sub-chats"
       const [total, ...segments] = nums;
       expect(segments.reduce((a, b) => a + b, 0)).toBe(total);
     }
