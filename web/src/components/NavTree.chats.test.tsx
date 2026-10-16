@@ -392,7 +392,7 @@ describe('subChatChip', () => {
       kid('ready', 4),
       kid(undefined, 5),
     ]);
-    expect(chip).toBe('5 · 1 needs you · 2 running · 1 ready · 1 idle');
+    expect(chip).toBe('5 (1 needs you · 2 running · 1 ready · 1 idle)');
   });
 
   it('spells the noun out in the TITLE, which has room for it', () => {
@@ -401,7 +401,7 @@ describe('subChatChip', () => {
     // numbers add up. The glyph carries the noun on screen; the words live
     // here and in the accessible name.
     expect(subChatChipTitle([kid('ready', 1), kid(undefined, 2)])).toBe(
-      '2 sub-chats \u00b7 1 ready \u00b7 1 idle',
+      '2 sub-chats (1 ready \u00b7 1 idle)',
     );
     expect(subChatChipTitle([kid(undefined, 1)])).toBe('1 sub-chat');
   });
@@ -421,7 +421,9 @@ describe('subChatChip', () => {
         m = Math.floor(m / 5);
       }
       const chip = subChatChip(kids);
-      const nums = [...chip.matchAll(/(\d+)\s/g)].map((x) => Number(x[1]));
+      // Every number in the line: the total, then one per segment. The
+      // parens are punctuation, not a boundary the arithmetic cares about.
+      const nums = [...chip.matchAll(/(\d+)/g)].map((x) => Number(x[1]));
       if (nums.length < 2) continue; // the all-idle form: "4 sub-chats"
       const [total, ...segments] = nums;
       expect(segments.reduce((a, b) => a + b, 0)).toBe(total);
@@ -429,18 +431,16 @@ describe('subChatChip', () => {
   });
 
   it('says nothing about a state nobody is in', () => {
-    expect(subChatChip([kid('working'), kid('working')])).toBe('2 · 2 running');
+    expect(subChatChip([kid('working'), kid('working')])).toBe('2 (2 running)');
   });
 
   it('counts the dead, last — a quiet worker is not an absent one', () => {
     // "6 sub-chats" over three exited runners is the shut group lying by
     // omission: dead is the one state that never makes a noise of its own.
     expect(subChatChip([kid('dead', 1), kid('dead', 2), kid(undefined, 3)])).toBe(
-      '3 \u00b7 2 dead \u00b7 1 idle',
+      '3 (2 dead \u00b7 1 idle)',
     );
-    expect(subChatChip([kid('blocked', 1), kid('dead', 2)])).toBe(
-      '2 \u00b7 1 needs you \u00b7 1 dead',
-    );
+    expect(subChatChip([kid('blocked', 1), kid('dead', 2)])).toBe('2 (1 needs you \u00b7 1 dead)');
   });
 
   it("uses the mark's own words, not a second vocabulary for the rail", () => {
