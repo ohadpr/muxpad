@@ -932,16 +932,34 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     expect(decl(edge, 'position')).toBe('absolute');
 
     // THE RAIL'S ACCENT EXPLICITLY. The selected row re-points --accent to the
-    // PANE's — right for everything painted on the pill, wrong for this, which
-    // is painted BESIDE it on rail ground: a dark pane accent on a dark rail is
-    // invisible, which is exactly how it was reported.
+    // PANE's, which is right for everything that belongs to the pane and wrong
+    // for a mark that means the same thing on every row: a dark pane accent
+    // was invisible on the dark rail, which is exactly how it was reported.
     expect(decl(edge, 'background')).toBe('var(--rail-accent, var(--accent))');
 
-    // AND IT SITS OUTSIDE THE ROW. The selected row's pill is rounded on its
-    // left (`6px 0 0 6px`), so a bar at `left: 0` lies on the curve with white
-    // behind its middle and rail behind its ends — a dimple in the pill rather
-    // than a mark. Negative, so one ground is behind every row's bar.
-    expect(Number.parseFloat(decl(edge, 'left'))).toBeLessThan(0);
+    // AND IT SITS ON THE ROW — which took three goes.
+    //
+    // It was OUTSIDE at first, in the rail's gutter, to keep one ground behind
+    // every bar: a bar at `left: 0` lies on the selected pill's left curve
+    // (`6px 0 0 6px`) with white behind its middle and rail behind its ends,
+    // a dimple rather than a mark. That reasoning is still true and is why
+    // `left` is not 0.
+    //
+    // But the gutter was wrong for a different reason, reported twice: at -3px
+    // the bar was one pixel from the pill, and centring it at -5px bought 3px
+    // of air and still read wrong. The problem was never the distance — a thin
+    // accent bar standing beside a large white pill is a second mark in a
+    // second language.
+    //
+    // Inside the box it is one object: a pill with an accent spine. The inset
+    // clears the curve by geometry rather than by luck — the corner radius is
+    // 6px and the bar is inset 5px top and bottom, so at the bar's topmost
+    // pixel the pill's own left edge has already come in to x≈0.08, well left
+    // of a bar starting at x=2.
+    const left = Number.parseFloat(decl(edge, 'left'));
+    expect(left).toBeGreaterThanOrEqual(2);
+    expect(Number.parseFloat(decl(edge, 'top'))).toBeGreaterThanOrEqual(5);
+    expect(Number.parseFloat(decl(edge, 'bottom'))).toBeGreaterThanOrEqual(5);
     expect(NAV_CSS).not.toMatch(/\.navtree-tab-row\[data-pinned='?"?true'?"?\]::(before|after)/);
 
     // IT SURVIVES EVERY OTHER STATE, which is the whole reason it moved off
