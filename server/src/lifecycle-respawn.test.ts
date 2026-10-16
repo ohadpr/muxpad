@@ -33,6 +33,11 @@ it.each(['deleted', 'archived', 'converted'])(
     const ensured: unknown[] = [];
     const ptyd = {
       on: () => {},
+      // No pty in a stub world, which is the truthful answer here: every test
+      // in this file is about a pane whose runner is GONE. The sweep asks this
+      // before trusting a foreground string, because that string outlives the
+      // runtime it describes (see ws.ts).
+      hasPane: async () => false,
       getForegroundCommand: async () => null,
       killPane: () =>
         new Promise<void>((resolve) => {

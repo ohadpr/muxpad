@@ -1076,13 +1076,46 @@ export function attachWsServer(deps: {
         // pane entirely: no attempt spent, no cooldown anchor moved, retried
         // on the next sweep once ptyd is back. Same distinction the serve
         // supervisor makes with `hasPane`.
-        let fg: string | null = null;
+        // ─── IS THERE A PTY AT ALL? ASK, DO NOT INFER FROM A STRING ─────────
+        // The foreground command is a CACHED value in ptyd's PaneManager and it
+        // outlives the runtime it describes. Measured on this install, ptyd up
+        // 18 days:
+        //
+        //   stuck pane  hasPane=false  fg="node …/agent-runner/index.js --mode chat"
+        //   live pane   hasPane=true   fg="node …/agent-runner/index.js --resume …"
+        //
+        // Identical answers to the only question the sweep was asking. So it
+        // read `agent-runner`, concluded "live but disconnected — it
+        // re-registers on its own", and continued. Every twenty seconds. For a
+        // day.
+        //
+        // What that cost: 25 messages undelivered across 8 sub-chats, the
+        // oldest 25 hours old, each pinning its worker in the live rail
+        // (`stillWorking` counts queued work) while the chat read `idle`. The
+        // rescue path existed the whole time and was never reached.
+        //
+        // `hasPane` is the authoritative question — it is what the scrollback
+        // route uses to say "pane has no live pty" — and a THROW still means
+        // liveness UNKNOWN, which is the one distinction this sweep must never
+        // get wrong: a ptyd outage spending every pane's attempt budget is the
+        // bug the comments above were written for.
+        let live: boolean;
         try {
-          fg = await deps.ptyd.getForegroundCommand(pane.id);
+          live = await deps.ptyd.hasPane(pane.id);
         } catch {
           continue;
         }
-        if (fg?.includes('agent-runner')) continue;
+        if (live) {
+          // There IS a pty, so the foreground means something again: a runner
+          // that owns it is mid-reconnect and must not be bounced.
+          let fg: string | null = null;
+          try {
+            fg = await deps.ptyd.getForegroundCommand(pane.id);
+          } catch {
+            continue;
+          }
+          if (fg?.includes('agent-runner')) continue;
+        }
         // ── The runner really is gone. Only NOW may we change anything. ──
         //
         // Resume-time repair, and it runs BEFORE the dead-session heal below on
