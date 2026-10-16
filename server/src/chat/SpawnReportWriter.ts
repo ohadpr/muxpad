@@ -22,6 +22,14 @@ import { type SpawnTaskModel, maybeWriteSpawnTask } from './spawn-task.js';
 export const RECOVER_LIMIT = 8;
 
 /**
+ * Cap on a STATED report, matching what the generator is held to
+ * (SPAWN_REPORT_MAX_CHARS). Clipped rather than refused: the tool's contract is
+ * that calling it never costs the worker anything, and a validation error on
+ * the one call that carries the result is the opposite of that.
+ */
+export const STATED_REPORT_MAX_CHARS = 800;
+
+/**
  * Turns "a worker finished" into a report in its parent's log, and nothing else.
  *
  * HeadlineWriter's skeleton, deliberately: this is the same arrangement — a
@@ -75,6 +83,20 @@ export class SpawnReportWriter {
   private unsubscribe: (() => void) | null = null;
   /** Tests await this to let a triggered generation settle. */
   private pending: Promise<unknown> = Promise.resolve();
+  /**
+   * What each worker has SAID its result is, by tab — the `report` tool.
+   *
+   * Held until the round closes rather than written on arrival, because the
+   * round is what a report belongs to and it is still open when the tool runs.
+   * The LAST statement wins: a worker that learns something after reporting
+   * should correct itself, not be held to its first answer.
+   *
+   * Cleared when it is used. A stale statement must never be attached to the
+   * NEXT round — a worker handed a second job and saying nothing about it
+   * would otherwise deliver its previous job's result again, which reads as a
+   * worker that did the same thing twice.
+   */
+  private stated = new Map<string, string>();
 
   constructor(opts: {
     db: Database.Database;
@@ -213,6 +235,28 @@ export class SpawnReportWriter {
     if (this.inFlight.has(key)) return;
     this.inFlight.add(key);
     const current = () => this.isCurrent(tabId, round);
+    // ─── A STATED RESULT ENDS THE QUESTION ───────────────────────────────────
+    // No model call, no 30-second timeout, no rejection pass, no interval gate:
+    // the worker said what it did, and muxpad's job is to deliver that rather
+    // than to have an opinion about it. This is the path that makes a report
+    // arrive at all for the workers the generator loses — it failed 115 times
+    // in this install's log, four of them in one day.
+    //
+    // `crashed` and `awaiting` still ride along: they are facts about the turn
+    // observed from OUTSIDE, and a worker that stated a result and then died
+    // mid-sentence has both things true at once.
+    const stated = this.stated.get(tabId);
+    if (stated !== undefined) {
+      this.stated.delete(tabId);
+      const write: SpawnReportWrite = {
+        report: stated,
+        state: opts.crashed ? 'crashed' : opts.awaiting ? 'awaiting' : 'ok',
+      };
+      if (this.ownsTab(tabId, round)) new TabStore(this.db).setSpawnReport(tabId, write);
+      this.deliver(tabId, write, round);
+      this.inFlight.delete(key);
+      return;
+    }
     const attempt = (force: boolean) =>
       maybeWriteSpawnReport(this.db, tabId, paneId, this.model, {
         crashed: opts.crashed,
@@ -256,6 +300,19 @@ export class SpawnReportWriter {
       });
     this.pending = this.pending.then(() => run);
   };
+
+  /**
+   * A worker STATED its result (the `report` tool), for the round it is in.
+   *
+   * Nothing is written here and nothing is delivered: the round is still open,
+   * and a report belongs to a round. `onFinished` picks it up when the round
+   * closes — which is also what makes "call it again if it changes" true.
+   */
+  state(tabId: string, text: string): void {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    this.stated.set(tabId, trimmed.slice(0, STATED_REPORT_MAX_CHARS));
+  }
 
   /**
    * One result, to the round and to every connected client. Shared by the

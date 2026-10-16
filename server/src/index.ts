@@ -575,6 +575,8 @@ const wsServer = attachWsServer({
   // than for the moment — it has spent three respawns and a ptyd probe getting
   // there — and nothing consumed that verdict before this line.
   onRunnerDead: (paneId) => chatRetirer.onRunnerDead(paneId),
+  // A worker stated its own result; the writer holds it for the round's close.
+  onReportStated: (tabId, text) => spawnReports.state(tabId, text),
   // Resolve /browser/<profile>/ws to the host's loopback socket, so the viewer
   // stream rides muxpad's tailnet origin and its upgrade guard.
   browserViewerSocket: (pathname) => {

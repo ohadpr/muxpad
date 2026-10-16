@@ -8,7 +8,12 @@ import { join } from 'node:path';
 import { AGENT_LAUNCH_TOOLS, type SubagentProgress, isAgentLaunchTool } from '@muxpad/shared';
 import { describe, expect, it } from 'vitest';
 import { SubagentRoster } from '../subagent-roster.js';
-import { applyTaskLifecycle, claudeSystemPromptOption, isTaskLifecycle } from './claude.js';
+import {
+  applyTaskLifecycle,
+  claudeSystemPromptOption,
+  isTaskLifecycle,
+  reportToolDescription,
+} from './claude.js';
 
 describe('claude backend — universal muxpad instructions', () => {
   it('appends the instructions to the default claude_code preset (native SDK mechanism)', () => {
@@ -218,5 +223,54 @@ describe('claude backend — one delegation primitive', () => {
     // substring that happens to straddle a line break asserts the margin
     // rather than the sentence.
     expect(instructions).toContain('do not look for them');
+  });
+});
+
+describe('the report tool says what it is for', () => {
+  // Its description is the whole instruction: there is deliberately nothing
+  // about this tool in the universal agent instructions, because a sentence
+  // there is read by every chat in the install and most of them have nobody to
+  // report to.
+  const d = reportToolDescription();
+
+  it('names the audience as the chat that spawned you, not a person', () => {
+    // The generator this replaces needed a rejection pass for reports written
+    // to a reader ("as you can see…"), which read as nonsense in an
+    // orchestrator's log.
+    expect(d).toMatch(/spawned you/);
+    expect(d).toMatch(/not by a person|read by the agent/);
+  });
+
+  it('says it does NOT end the turn, and that the last statement wins', () => {
+    // A worker that treats this as a goodbye stops working; one held to its
+    // first answer cannot correct itself.
+    expect(d).toMatch(/does not end your turn/);
+    expect(d).toMatch(/last statement/);
+  });
+
+  it('says NOT calling it is survivable', () => {
+    // A tool whose description implies data loss gets called defensively on
+    // every turn. muxpad still summarises a worker that said nothing.
+    expect(d).toMatch(/If you never call it/);
+    expect(d).toMatch(/summarises your transcript/);
+  });
+
+  it('is offered in BOTH modes, like notify and unlike reply', () => {
+    // Sub-chats are spawned in agent mode at least as often as in chat mode; a
+    // worker whose MODE decided whether it could state its own result is the
+    // kind of surprise this removes.
+    const SRC = readFileSync(join(__dirname, 'claude.ts'), 'utf8');
+    const block = SRC.slice(SRC.indexOf('tools:'), SRC.indexOf('alwaysLoad: true'));
+    const arms = block.split('?')[1] ?? '';
+    const [chatArm, agentArm] = arms.split(':');
+    expect(chatArm).toContain('reportTool');
+    expect(agentArm).toContain('reportTool');
+  });
+
+  it('is NOT taught in the universal instructions', () => {
+    // The constraint this was designed under: the tool's own description is
+    // read at the moment of relevance; an instruction is read by everyone.
+    const instructions = readFileSync(join(__dirname, '..', '..', 'agent-instructions.ts'), 'utf8');
+    expect(instructions).not.toMatch(/muxpad report|`report` tool/);
   });
 });
