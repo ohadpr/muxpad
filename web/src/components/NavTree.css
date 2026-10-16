@@ -1330,18 +1330,28 @@
      so -3px puts the whole bar on rail ground, clear of the pill at both ends
      and 1px inside the clip. Every row's mark now sits on one background.
 
-     ── …AND IT IS CENTRED IN THAT GUTTER, NOT HUGGING THE ROW ───────────────
-     At -3px the bar occupied x=5–7 against a row starting at x=8: a ONE PIXEL
-     gap. On an unselected row that gap is invisible (both sides are rail), but
-     the SELECTED row's pill is near-white, so a 2px accent bar one pixel from
-     it reads as touching it — "an active tab that's pinned, the pinned marker
-     is too close to the active tab indicator".
-     -5px puts it at x=3–5: three pixels of rail on each side, centred in the
-     8px gutter, still well inside the clip. The column does NOT move with
-     selection — a mark that changes x depending on which row you are on is not
-     a column — so every pinned row pays the same 2px and the selected one
-     simply stops colliding. */
-  left: -5px;
+     ── …AND THEN IT MOVED ONTO THE ROW, which is the only thing that made it
+        work with SELECTION ─────────────────────────────────────────────────
+     Two tries in the gutter both failed, and they failed for the same reason.
+     At -3px the bar sat x=5–7 against a row starting at x=8: a one-pixel gap,
+     invisible on an unselected row (rail on both sides) and a collision on the
+     selected one, whose pill is near-white. Centring it in the gutter at -5px
+     bought 3px of air and still read wrong — reported again — because the
+     problem was never the DISTANCE. A thin accent bar standing beside a large
+     white pill is a second mark in a second language, and no amount of space
+     between them makes them one thing.
+
+     So it goes ON the row: `left: 2px`, inside the box, which on a selected
+     row is inside the PILL. A white pill with an accent spine at its left edge
+     is one object that says "selected, and pinned" — the same shape a
+     highlighted list item has worn for thirty years — and on an unselected row
+     the identical bar sits on rail ground in the row's own left padding, well
+     clear of the icon at x≈25.
+
+     The column still does not move with selection, which was the point of the
+     last attempt and survives this one. The pill's left corners are radius 6
+     and the bar is inset 5px top and bottom, so it clears both curves. */
+  left: 2px;
   /* Short of the row's full height on purpose: a bar that runs edge to edge
      reads as a divider between rows rather than as a mark on one. */
   top: 5px;
