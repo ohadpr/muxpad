@@ -114,6 +114,40 @@ describe('createPaneNotifier', () => {
     expect(none).toHaveLength(0);
   });
 
+  // A SUB-CHAT DOES NOT RING THE PHONE. Its ordinary work — a question, the
+  // end of a turn, a BEL — is work the parent chat asked for, and its result
+  // is delivered into that chat. Buzzing a lock screen for each of a twenty-way
+  // fan-out is the failure this gate exists to prevent. `explicit` is the one
+  // way through, and only the `notify` TOOL sets it: a worker that was told to
+  // reach the user can still reach them.
+  it('holds an automatic push from a sub-chat, but not an explicit one', () => {
+    const db = openDb(':memory:');
+    const ws = new WorkspaceStore(db).create({ name: 'Dev' });
+    const tabs = new TabStore(db);
+    const parent = tabs.create({ name: 'muxpad', layout: '', workspace_id: ws.id });
+    const child = tabs.create({
+      name: 'worker',
+      layout: '',
+      workspace_id: ws.id,
+      spawned_by: parent.id,
+    });
+    const panes = new PaneStore(db);
+    const sub = panes.create({ tab_id: child.id, shell: '/bin/zsh', cwd: '/tmp' });
+    const top = panes.create({ tab_id: parent.id, shell: '/bin/zsh', cwd: '/tmp' });
+    const sent: PushPayload[] = [];
+    const notify = createPaneNotifier(db, fakePush(sent));
+
+    expect(notify(sub.id, 'finished its turn')).toBe('held-subchat');
+    expect(sent).toHaveLength(0);
+
+    expect(notify(sub.id, 'the deploy needs your key', { explicit: true })).toBe('sent');
+    expect(sent).toHaveLength(1);
+
+    // The parent is a conversation, not a worker — unchanged.
+    expect(notify(top.id, 'finished its turn')).toBe('sent');
+    expect(sent).toHaveLength(2);
+  });
+
   it('falls back to the root when the pane is unknown', () => {
     const db = openDb(':memory:');
     const sent: PushPayload[] = [];
