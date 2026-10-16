@@ -481,9 +481,22 @@ function extractTag(xml: string, tag: string): string | undefined {
 // look like. Two hand-kept copies of these rules is how a roster starts
 // disagreeing with the list right next to it.
 
-/** A Task/Agent tool call — a subagent LAUNCH. */
+/**
+ * The harness's in-process delegation tools, by name.
+ *
+ * THEY ARE NO LONGER OFFERED — the runner passes this list as
+ * `disallowedTools`, so the model never sees them and muxpad has ONE
+ * delegation primitive, the sub-chat. The names stay here because the
+ * transcript still has to render every launch that happened before that, and
+ * because the disallow list and the renderer must not drift: a tool removed
+ * under one name and recognised under another is a launch that renders as a
+ * bare tool row in the log it already occupies.
+ */
+export const AGENT_LAUNCH_TOOLS = ['Agent', 'Task'] as const;
+
+/** A Task/Agent tool call — a subagent LAUNCH. Historical transcripts only. */
 export function isAgentLaunchTool(name: string): boolean {
-  return name === 'Agent' || name === 'Task';
+  return (AGENT_LAUNCH_TOOLS as readonly string[]).includes(name);
 }
 
 /** The human description of a subagent launch, from the launching tool input. */

@@ -3,7 +3,9 @@
 // the universal-instructions injection is tested at its seam:
 // claudeSystemPromptOption builds the exact `systemPrompt` option the backend
 // spreads into the SDK query() Options.
-import type { SubagentProgress } from '@muxpad/shared';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { AGENT_LAUNCH_TOOLS, type SubagentProgress, isAgentLaunchTool } from '@muxpad/shared';
 import { describe, expect, it } from 'vitest';
 import { SubagentRoster } from '../subagent-roster.js';
 import { applyTaskLifecycle, claudeSystemPromptOption, isTaskLifecycle } from './claude.js';
@@ -182,5 +184,39 @@ describe('claude backend — SDK task lifecycle → roster', () => {
     roster.launch('tu_1', 'worker');
     applyTaskLifecycle(roster, { subtype: 'background_tasks_changed' });
     expect(roster.size).toBe(1); // unbound, so untouched
+  });
+});
+
+describe('claude backend — one delegation primitive', () => {
+  // The SDK session is built at construction, so the OPTION itself cannot be
+  // read back without spawning one. What can be asserted is the wiring: the
+  // disallow list and the transcript's recogniser must be THE SAME LIST, or a
+  // tool is removed under one name and rendered under another — a launch that
+  // becomes a bare tool row in the log it already occupies.
+  const SRC = readFileSync(join(__dirname, 'claude.ts'), 'utf8');
+
+  it('hands the SDK the shared launch-tool list, not a second copy', () => {
+    expect(SRC).toContain('disallowedTools: [...AGENT_LAUNCH_TOOLS]');
+    expect(AGENT_LAUNCH_TOOLS).toEqual(['Agent', 'Task']);
+  });
+
+  it('still RECOGNISES a historical launch — the past is not deleted with it', () => {
+    // Every transcript on this machine predates the removal and contains
+    // these. They must keep rendering as launches.
+    for (const name of AGENT_LAUNCH_TOOLS) expect(isAgentLaunchTool(name)).toBe(true);
+    expect(isAgentLaunchTool('Bash')).toBe(false);
+  });
+
+  it('tells the model there is no second way, rather than letting it hunt', () => {
+    // A tool removed from context with no instruction to match reads, from the
+    // inside, as a harness that lost a capability — and the model plans around
+    // it by shelling out, which is the invisible-work failure this exists to
+    // stop.
+    const instructions = readFileSync(join(__dirname, '..', '..', 'agent-instructions.ts'), 'utf8');
+    expect(instructions).toContain('There is no second way to delegate');
+    // A phrase that does not wrap: the file is prose at 80 columns, and a
+    // substring that happens to straddle a line break asserts the margin
+    // rather than the sentence.
+    expect(instructions).toContain('do not look for them');
   });
 });

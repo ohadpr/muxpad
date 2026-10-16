@@ -14,6 +14,7 @@ import {
   tool,
 } from '@anthropic-ai/claude-agent-sdk';
 import {
+  AGENT_LAUNCH_TOOLS,
   LAUNCH_ACK_RE,
   REPLY_ACK,
   blockText,
@@ -30,6 +31,7 @@ import { readChatModeOverlay, wrapModeNote } from '../../agent-modes.js';
 import { findTranscript } from '../../chat/TranscriptReader.js';
 import { bold, dim } from '../ansi.js';
 import { AuthHealPolicy, authGiveUpNotice, isAuthFailureText } from '../auth-heal.js';
+import { BackgroundCommands } from '../background-commands.js';
 import type { AgentMode, AgentQuestion, NotifyStatus, RunnerFrame } from '../protocol.js';
 import { ReplyBlockTracker, replyToolUseId } from '../reply-stream.js';
 import {
@@ -175,7 +177,7 @@ export interface TaskLifecycleMessage {
   subtype: string;
   task_id?: string;
   tool_use_id?: string;
-  tasks?: Array<{ task_id: string }>;
+  tasks?: Array<{ task_id: string; task_type?: string }>;
   patch?: { status?: string; is_backgrounded?: boolean };
 }
 
@@ -237,7 +239,16 @@ export function launchAckTaskId(text: string): string | null {
   return /\bagentId:\s*([A-Za-z0-9_-]+)/.exec(text)?.[1] ?? null;
 }
 
-export function applyTaskLifecycle(roster: SubagentRoster, msg: TaskLifecycleMessage): void {
+export function applyTaskLifecycle(
+  roster: SubagentRoster,
+  msg: TaskLifecycleMessage,
+  // The SAME frames carry the other half of this channel — backgrounded Bash,
+  // which the roster is built to ignore and which is what still outlives a turn
+  // now that subagents are gone. Optional so every existing caller (and every
+  // roster test) is unchanged by its arrival; absent simply means nobody is
+  // asking about commands.
+  commands?: BackgroundCommands,
+): void {
   switch (msg.subtype) {
     // Both bind task id ↔ launching tool_use. Ids we never launched (nested
     // agents, background Bash) are ignored inside bindTask. `task_progress` is
@@ -245,20 +256,29 @@ export function applyTaskLifecycle(roster: SubagentRoster, msg: TaskLifecycleMes
     // and `task_started`'s `tool_use_id` is optional.
     case 'task_started':
     case 'task_progress':
-      if (msg.tool_use_id && msg.task_id) roster.bindTask(msg.tool_use_id, msg.task_id);
+      if (msg.tool_use_id && msg.task_id) {
+        roster.bindTask(msg.tool_use_id, msg.task_id);
+        // Same pair, different question: which transcript line a running
+        // command came from. It binds only if the level has reported it.
+        commands?.bind(msg.task_id, msg.tool_use_id);
+      }
       break;
     case 'task_notification':
       // BOTH keys: `tool_use_id` is optional on this message and `task_id` is
       // not, so keying only on the former would leave an entry with no edge
       // end-path at all whenever the SDK omits it.
       if (msg.tool_use_id) roster.done(msg.tool_use_id);
-      if (msg.task_id) roster.doneByTaskId(msg.task_id);
+      if (msg.task_id) {
+        roster.doneByTaskId(msg.task_id);
+        commands?.done(msg.task_id);
+      }
       break;
     case 'task_updated': {
       if (!msg.task_id) break;
       const status = msg.patch?.status;
       if (status && TERMINAL_TASK_STATUSES.has(status)) {
         roster.doneByTaskId(msg.task_id);
+        commands?.done(msg.task_id);
         break;
       }
       // A paused task may leave the live set without dying — see pauseTask.
@@ -274,6 +294,10 @@ export function applyTaskLifecycle(roster: SubagentRoster, msg: TaskLifecycleMes
     }
     case 'background_tasks_changed':
       roster.reconcileBackground((msg.tasks ?? []).map((t) => t.task_id));
+      // The authoritative set, read for the other half of its payload. The
+      // roster takes ids only; the type is what separates a command from an
+      // agent, so this reads the entries rather than the ids.
+      commands?.reconcile(msg.tasks ?? []);
       break;
   }
 }
@@ -316,10 +340,14 @@ function blocksOf(msg: SubagentStreamMessage): ContentBlock[] {
  * Turn-boundary work lives in {@link applyTurnResult}: it needs the turn's own
  * state (was it interrupted?), not just the message.
  */
-export function applySubagentMessage(roster: SubagentRoster, msg: SubagentStreamMessage): void {
+export function applySubagentMessage(
+  roster: SubagentRoster,
+  msg: SubagentStreamMessage,
+  commands?: BackgroundCommands,
+): void {
   if (msg.type === 'system') {
     if (msg.subtype && isTaskLifecycle(msg.subtype)) {
-      applyTaskLifecycle(roster, msg as unknown as TaskLifecycleMessage);
+      applyTaskLifecycle(roster, msg as unknown as TaskLifecycleMessage, commands);
     }
     return;
   }
@@ -1010,6 +1038,31 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
     (progress) => emit({ t: 'subagent', progress }),
     (line) => log(dim(line)),
   );
+  // The other half of the same SDK channel: Bash calls the model backgrounded,
+  // which keep running after the turn ends. The roster cannot hold them (no
+  // top-level launch to see) and now has nothing else to hold either, since
+  // subagents are disallowed above. See background-commands.ts.
+  const backgroundCommands = new BackgroundCommands();
+  /**
+   * The last size the SERVER was told about, so the drain is reported as an
+   * EDGE rather than on every level message. The server only needs to know
+   * when the answer to "is anything still running" changes.
+   */
+  let lastBackgroundLive = 0;
+  /**
+   * The field, only when it says something. Absent already means "nothing
+   * running" everywhere that reads it (every other backend sends no such
+   * field), so a `background: 0` on every turn-done would be noise on the wire
+   * and a change every existing consumer and test had to absorb for nothing.
+   */
+  const backgroundField = (): { background?: number } =>
+    backgroundCommands.size > 0 ? { background: backgroundCommands.size } : {};
+  const reportBackground = (): void => {
+    const live = backgroundCommands.size;
+    if (live === lastBackgroundLive) return;
+    lastBackgroundLive = live;
+    emit({ t: 'background', live });
+  };
   /** How often a live roster entry re-announces itself when the SDK is silent. */
   const SUBAGENT_KEEPALIVE_MS = 5_000;
   // Keepalive: re-announce every live entry on a fixed tick so the server's
@@ -1219,6 +1272,28 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
 
   const options: Options = {
     cwd: process.cwd(),
+    // ─── ONE DELEGATION PRIMITIVE, AND IT IS THE SUB-CHAT ────────────────────
+    //
+    // `disallowedTools` removes a tool from the MODEL'S CONTEXT — it is not a
+    // refusal the model discovers by trying. That is the right shape here:
+    // there is nothing to teach at the call site, because the alternative is a
+    // different command entirely (`muxpad agent new`), and a tool that is
+    // visible but always denied spends a turn saying so every time.
+    //
+    // Why remove them at all, when the instructions already preferred
+    // sub-chats: an in-process subagent is work NOBODY CAN SEE. No row in the
+    // sidebar, no transcript the cockpit can read, no status, no way for the
+    // user to interrupt it — in a product whose whole job is making agent work
+    // visible. It also dies with the turn that launched it, which is why a
+    // respawn silently loses background subagents, and why the roster needed a
+    // leak sweep and a stall detector to paper over a lifecycle muxpad never
+    // owned. A sub-chat is a pane: it survives a restart, it can be read
+    // tomorrow, and it reports through one path.
+    //
+    // The RENDERER keeps recognising these names (see AGENT_LAUNCH_TOOLS):
+    // removing the primitive going forward is not the same as deleting the
+    // ability to read the logs that already contain it.
+    disallowedTools: [...AGENT_LAUNCH_TOOLS],
     ...(gateOn
       ? {
           hooks: {
@@ -1721,7 +1796,14 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
         // The roster's whole view of the stream, in one testable place. The
         // branches below own the pane's LOG and the wire frames; this owns
         // membership, and nothing else is allowed to touch it.
-        applySubagentMessage(subagents, msg as unknown as SubagentStreamMessage);
+        applySubagentMessage(
+          subagents,
+          msg as unknown as SubagentStreamMessage,
+          backgroundCommands,
+        );
+        // An EDGE, not a stream: only a change in "is anything still running"
+        // reaches the server, and the drain to zero is the one it acts on.
+        reportBackground();
         if (msg.type === 'system' && msg.subtype === 'init') {
           log(dim(`ready · ${msg.model} · ${msg.tools.length} tools`));
           // Init reports the concrete resolved model (e.g. 'claude-opus-4-8').
@@ -2053,17 +2135,31 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
           const summary = notifySnippet(firstReplyText || lastAssistantText);
           if (interruptRequested) {
             log(dim(`⏹ stopped after ${secs}s`));
-            emit({ t: 'turn-done', ok: true, ...(summary ? { summary } : {}) });
+            emit({
+              t: 'turn-done',
+              ok: true,
+              ...(summary ? { summary } : {}),
+              ...backgroundField(),
+            });
           } else if (msg.subtype === 'success') {
             log(dim(`✓ turn done · ${secs}s · $${msg.total_cost_usd.toFixed(2)}`));
-            emit({ t: 'turn-done', ok: true, ...(summary ? { summary } : {}) });
+            emit({
+              t: 'turn-done',
+              ok: true,
+              ...(summary ? { summary } : {}),
+              // THE TURN IS OVER; THE WORK MAY NOT BE. A command the model
+              // backgrounded outlives this frame, and its completion starts the
+              // next turn — the shape that delivered four results 5h42m–7h51m
+              // late. The retirement settle reads this.
+              ...backgroundField(),
+            });
             // First completed turn of a fresh session: self-title (resumed
             // sessions keep whatever name their pane/tab already carries).
             if (!resumeSid && !titleGenerated) void generateTitle();
           } else {
             const error = msg.errors?.join('; ') || msg.subtype;
             log(`✗ turn failed: ${error}`);
-            emit({ t: 'turn-done', ok, error });
+            emit({ t: 'turn-done', ok, error, ...backgroundField() });
           }
           interruptRequested = false;
           kick(); // release the next queued send, if any

@@ -504,10 +504,16 @@ point; the point is that a cockpit whose whole job is making agent work visible
 had been handed a fleet it could not show.
 
 This holds however many you are starting, and it holds especially for the big
-fans-out, because that is when being able to watch matters most. The same goes
-for your harness's own in-process subagent mechanism when the work is
-substantial and long-running: a muxpad pane survives your turn ending, survives
-a restart, and can be read tomorrow.
+fans-out, because that is when being able to watch matters most.
+
+**There is no second way to delegate, and that is deliberate.** Your harness's
+own in-process subagent tools are not offered to you here — they are removed
+from your context, so do not look for them and do not plan around them. One
+primitive, for one reason: an in-process subagent is invisible to the cockpit
+(no row, no transcript, no status, nothing to interrupt) and it dies with the
+turn that launched it, so a respawn loses it silently. A sub-chat is a pane. It
+survives your turn ending, it survives a restart, the user can read it
+tomorrow, and its result comes back to you through one path.
 
 The narrow exception is a one-shot command that is not an agent at all — a
 \`git log\`, a test run, a build. Those are tools, not workers.
