@@ -2100,6 +2100,21 @@ export function subChatChip(children: readonly Tab[]): string {
   // omission. It is the rail's quietest state and it is the last word here.
   if (dead > 0) parts.push(`${dead} dead`);
   if (parts.length === 0) return `${n} sub-chat${n === 1 ? '' : 's'}`;
+  // ─── THE NUMBERS MUST ADD UP ─────────────────────────────────────────────
+  // Reported, with a screenshot: "no working indicator but if only 6 are ready
+  // then what are the other 3 doing?" — against a chip reading "9 · 6 ready".
+  // Measured live at the time: 10 children, 1 running, 6 ready, three with no
+  // word anywhere.
+  //
+  // Listing only the loud states left the reader doing subtraction and getting
+  // no answer, which is worse than saying nothing: the total promises an
+  // account of everyone and the segments deliver part of one. An idle worker
+  // is a real and common state — it finished its turn and has not been
+  // retired — and NOTHING is exactly what the reader wants to be told about
+  // it. So the remainder is named rather than left to arithmetic, and the
+  // segments now sum to the total by construction.
+  const idle = n - blocked - working - ready - dead;
+  if (idle > 0) parts.push(`${idle} idle`);
   return [`${n}`, ...parts].join(' · ');
 }
 

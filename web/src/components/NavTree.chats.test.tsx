@@ -392,7 +392,29 @@ describe('subChatChip', () => {
       kid('ready', 4),
       kid(undefined, 5),
     ]);
-    expect(chip).toBe('5 · 1 needs you · 2 running · 1 ready');
+    expect(chip).toBe('5 · 1 needs you · 2 running · 1 ready · 1 idle');
+  });
+
+  it('ACCOUNTS FOR EVERYONE — the segments sum to the total', () => {
+    // Reported with a screenshot: "no working indicator but if only 6 are
+    // ready then what are the other 3 doing?", against a chip reading
+    // "9 · 6 ready". A total promises an account of everyone; listing only the
+    // loud states delivered part of one and left the reader doing subtraction
+    // with no answer.
+    const states = [undefined, 'working', 'blocked', 'ready', 'dead'] as const;
+    for (let mask = 1; mask < 5 ** 4; mask++) {
+      const kids = [];
+      let m = mask;
+      for (let i = 0; i < 4; i++) {
+        kids.push(kid(states[m % 5], i));
+        m = Math.floor(m / 5);
+      }
+      const chip = subChatChip(kids);
+      const nums = [...chip.matchAll(/(\d+)\s(?!sub-chat)/g)].map((x) => Number(x[1]));
+      if (nums.length === 0) continue; // the all-idle form: "4 sub-chats"
+      const [total, ...segments] = nums;
+      expect(segments.reduce((a, b) => a + b, 0)).toBe(total);
+    }
   });
 
   it('says nothing about a state nobody is in', () => {
@@ -403,7 +425,7 @@ describe('subChatChip', () => {
     // "6 sub-chats" over three exited runners is the shut group lying by
     // omission: dead is the one state that never makes a noise of its own.
     expect(subChatChip([kid('dead', 1), kid('dead', 2), kid(undefined, 3)])).toBe(
-      '3 \u00b7 2 dead',
+      '3 \u00b7 2 dead \u00b7 1 idle',
     );
     expect(subChatChip([kid('blocked', 1), kid('dead', 2)])).toBe(
       '2 \u00b7 1 needs you \u00b7 1 dead',
