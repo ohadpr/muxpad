@@ -1692,7 +1692,13 @@
 .navtree-subs-head {
   display: flex;
   align-items: center;
-  gap: 6px;
+  /* THE SAME 21px THE DONE HEAD USES, and for the same reason it was written
+     down there: its caret sits in the icon column and its label on the NAME
+     column, because this is a row in a list of chats, not a second kind of
+     header. Measured here: the caret ends at x=47 and a child name starts at
+     x=68 — a 6px gap put the label at 53, which is the 15px that reads as
+     "not aligned" and is the exact mistake that comment records. */
+  gap: calc(56px - 35px);
   width: 100%;
   padding: 2px var(--nt-pad) 4px calc(var(--nt-pad) + var(--nt-indent) + 8px);
   border: 0;
