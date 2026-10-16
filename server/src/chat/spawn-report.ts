@@ -148,9 +148,17 @@ export interface SpawnReportGateInput {
  * first try, so every further attempt at the SAME round meets the floor again. A
  * crashing worker still cannot spend a call per crash.
  *
- * Derived from data rather than remembered, so it survives a restart and needs
- * no column of its own — the round's start and the attempt clock are both
- * already persisted.
+ * A REOPENED ROUND COUNTS AS BEGINNING AT ITS REOPEN, and the caller passes it
+ * that way. A reopen discards the round's result, so its real end has had no
+ * attempt of its own — yet `started_at` is necessarily before the attempt that
+ * produced the discarded one. Reading it as a retry refused the summary, wrote
+ * nothing, and left the round with no result: out of the delivery queue, and
+ * the parent told 5–8 hours later, by a restart. The spin bound is unchanged —
+ * a reopen takes a turn START after a settled job, the same thing a new round
+ * takes, and repeated closes inside one stretch still meet the floor.
+ *
+ * Derived from data rather than remembered, so it survives a restart — the
+ * round's start, its reopen and the attempt clock are all persisted.
  */
 export function shouldConsiderSpawnReport(i: SpawnReportGateInput): boolean {
   if (i.turns < 1) return false;
@@ -652,7 +660,10 @@ export async function maybeWriteSpawnReport(
       lastAt: tabs.spawnReportAt(tabId),
       turns,
       now,
-      roundStartedAt: round?.started_at ?? null,
+      // A REOPENED round began again at its reopen: the result it had was
+      // thrown away with it (SpawnRoundStore.reopen), so the attempt that
+      // produced that result is not one this closure has had.
+      roundStartedAt: round ? Math.max(round.started_at, round.reopened_at ?? 0) : null,
     })
   ) {
     return fallback();
