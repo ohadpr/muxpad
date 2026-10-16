@@ -1968,6 +1968,12 @@ export function attachWsServer(deps: {
             const outcome = deps.notifyPane(
               paneId,
               body.length > NOTIFY_BODY_MAX ? `${body.slice(0, NOTIFY_BODY_MAX - 1)}…` : body,
+              // THE ONE EXPLICIT PUSH. Everything else that reaches a phone —
+              // a turn ending, a question appearing, a bell — is automatic and
+              // is refused for a sub-chat (see createPaneNotifier). An agent
+              // calling `notify` was told to interrupt somebody, which is the
+              // instruction that gate is waiting for.
+              { explicit: true },
             );
             // Only a push that WENT OUT starts the clock. One held because the
             // user is looking at the screen, or dropped for want of a

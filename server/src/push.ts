@@ -8,6 +8,7 @@ import { AppStore } from './store/AppStore.js';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
 import { WorkspaceStore } from './store/WorkspaceStore.js';
+import { clockIndex, isSubChat } from './tab-clock.js';
 
 /**
  * Web Push for the installed PWA (iOS home-screen app included). VAPID
@@ -190,7 +191,17 @@ export type PaneNotifyOutcome =
   /** Held: the user is at a device right now and can already see this. */
   | 'held-active'
   /** Nothing to send to — no subscriptions exist on this server. */
-  | 'no-devices';
+  | 'no-devices'
+  /**
+   * Held: the pane is a SUB-CHAT and nobody asked for this push.
+   *
+   * A worker finishing a turn, asking a question or ringing a bell is the
+   * ordinary business of a fan-out, and a coordinator runs ten at once. Their
+   * results go to the parent that asked for them; the phone is not in that
+   * loop unless an agent was told to put it there (`notify`, which passes
+   * `explicit`).
+   */
+  | 'held-subchat';
 
 /**
  * Pane-scoped notification sender: resolves the pane's owning tab +
@@ -203,7 +214,16 @@ export type PaneNotifier = (
   body: string,
   /** A live label for the pane, when the caller has a better one than the DB
    *  row can give (the pty title/foreground command). */
-  opts?: { label?: string | undefined },
+  opts?: {
+    label?: string | undefined;
+    /**
+     * This push was ASKED FOR — the `notify` tool — rather than being the
+     * automatic consequence of a turn ending, a question appearing or a bell
+     * ringing. Only an explicit push is allowed out of a sub-chat. See the
+     * gate in `createPaneNotifier`.
+     */
+    explicit?: boolean | undefined;
+  },
 ) => PaneNotifyOutcome;
 
 /**
@@ -338,6 +358,23 @@ export function createPaneNotifier(
   const workspaces = new WorkspaceStore(db);
   const apps = new AppStore(db);
   return (paneId, body, opts) => {
+    // ─── A SUB-CHAT DOES NOT RING THE PHONE ─────────────────────────────────
+    // A worker finishing a turn, asking a question or ringing a bell is the
+    // ordinary business of a fan-out, and a coordinator runs ten at a time: on
+    // a busy morning that is a pocketful of buzzes for work the person never
+    // started and cannot act on from a lock screen. Their results reach the
+    // parent, which is the thing that asked for them, and the rail shows the
+    // state. "Sub chats should not trigger push notifications unless clearly
+    // instructed to do so."
+    //
+    // The `notify` tool still gets through, because that IS the instruction —
+    // an agent that was told to tell you something is not the standard order
+    // of operations. Every automatic caller passes no `explicit`, so the
+    // default is silence and reaching the phone has to be deliberate.
+    if (!opts?.explicit) {
+      const pane = panes.getById(paneId);
+      if (pane && isSubChat(clockIndex(db), pane.tab_id)) return 'held-subchat';
+    }
     // Hold the push while the user is active on any device — they can see it.
     if (presence?.isActive()) return 'held-active';
     // No subscription anywhere: `send` would already be a no-op (it iterates an
