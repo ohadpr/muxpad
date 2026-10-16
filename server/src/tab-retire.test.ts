@@ -171,6 +171,45 @@ describe('retiring a sub-chat when it delivers', () => {
       expect(isDone(child.tab)).toBe(false);
     });
 
+    it('a BACKGROUND COMMAND still running — the turn ended, the work did not', () => {
+      // The shape behind four results arriving 5h42m–7h51m late: the model
+      // backgrounds a Bash call, the turn ends, the settle retires the worker —
+      // and then the command finishes and starts ANOTHER turn, into a chat that
+      // has already delivered and been summarised.
+      //
+      // The roster could never see these (a backgrounded Bash has no top-level
+      // Task launch to adopt), which is why `onTurnStart` carries a REVIVE as
+      // its safety net. BackgroundCommands sees them, and says so here.
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      const retirer = new ChatRetirer(deps);
+      retirer.onTurnEnded({ pane_id: child.pane, phase: 'done', background: 1 });
+      expect(retirer.settleNow(child.pane)).toBe(false);
+      expect(isDone(child.tab)).toBe(false);
+    });
+
+    it('…and retires the moment that command drains', () => {
+      // The drain has its own edge (the runner reports it; ws re-emits a `done`
+      // with background 0), so not arming is safe rather than a leak.
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      const retirer = new ChatRetirer(deps);
+      retirer.onTurnEnded({ pane_id: child.pane, phase: 'done', background: 2 });
+      expect(retirer.settleNow(child.pane)).toBe(false);
+      retirer.onTurnEnded({ pane_id: child.pane, phase: 'done', background: 0 });
+      expect(retirer.settleNow(child.pane)).toBe(true);
+      expect(isDone(child.tab)).toBe(true);
+    });
+
+    it('an absent count reads as none — every other backend is unchanged', () => {
+      // codex and cursor send no such field, and neither did claude before
+      // this. Absent must mean "nobody told us", not "something is running".
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      expect(finishJob(new ChatRetirer(deps), child.pane)).toBe(true);
+      expect(isDone(child.tab)).toBe(true);
+    });
+
     it('an ARTIFACT on the pane — it made you something', () => {
       const parent = chat('parent');
       const child = chat('child', parent.tab);

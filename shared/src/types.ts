@@ -778,6 +778,21 @@ export const AgentTurnEventSchema = z.object({
   backend: z.string(),
   /** Present only when this start relays this durable queue row. */
   queue_id: z.string().optional(),
+  /**
+   * How many BACKGROUND COMMANDS this pane still has running, on a `done`.
+   *
+   * A turn ending is not the same as the work ending. The model can background
+   * a Bash call that keeps running after the turn, and its completion starts
+   * ANOTHER turn — which is how four sub-chat results arrived 5h42m–7h51m late
+   * (#22): the round had been closed and summarised before that turn existed.
+   * A retirement settle armed on this `done` is armed against a worker that is
+   * demonstrably still working.
+   *
+   * Absent means "nobody told us", which every pre-existing emitter and every
+   * non-claude backend means, and which reads the same as zero — the behaviour
+   * before this field.
+   */
+  background: z.number().optional(),
 });
 
 // A chat's CARDS changed (set, cleared, or one went stale enough to redraw).
