@@ -1717,6 +1717,27 @@
   color: var(--fg-dim);
 }
 
+/* THE NOUN, as a glyph. The word "sub-chats" costs ~62px of a 204px line and
+   the line is already full at four segments; the product's own agent mark says
+   the same thing in ~16px and sits where the eye already is. Smaller than the
+   14px it ships at elsewhere, because here it is punctuation next to 11.5px
+   text rather than a thing in its own right. */
+.navtree-subs-glyph {
+  display: inline-flex;
+  align-items: center;
+  /* The row's gap (21px) is the CARET-to-column step, not a word space. The
+     glyph stands ON that column — where a child's name starts — and the count
+     follows it as part of the same phrase, so the negative margin pulls the
+     text back to a 5px word gap. Without it the glyph floats midway between
+     the caret and the number and reads as a third, unrelated mark. */
+  margin-right: -16px;
+  opacity: 0.75;
+}
+.navtree-subs-glyph svg {
+  width: 11px;
+  height: 11px;
+}
+
 /* ON THE PHONE IT IS A TARGET, NOT A LABEL. The sheet renders this same
    control, and on that surface it is the ONLY way to reach a worker — behind
    11.5px of text with 6px of padding, i.e. a ~21px tap target next to 36px
