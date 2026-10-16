@@ -146,6 +146,106 @@ describe('SpawnReportWriter — a finished worker becomes a card', () => {
     expect(reports()).toContain(GOOD);
   });
 
+  describe('a worker that STATES its result', () => {
+    // The `report` tool. Everything a sub-chat has ever told its parent was
+    // muxpad reading the transcript afterwards and asking a model to summarise
+    // it — a call per worker, a 30-second timeout, a rejection pass, and 115
+    // lost generations in this install's log. A stated result is the worker's
+    // own sentence and ends the question.
+    const STATED = 'Two dead rules in billing.ts:220; removed, suite green.';
+
+    it('delivers what the worker said, with no model call at all', async () => {
+      let calls = 0;
+      const { retirer, writer } = wire(async () => {
+        calls++;
+        return GOOD;
+      });
+      const kid = worker(parentChat());
+      writer.state(kid.tabId, STATED);
+      finishJob(retirer, kid.paneId);
+      await writer.idle();
+      expect(new TabStore(db).getById(kid.tabId)?.spawn_report).toBe(STATED);
+      expect(new TabStore(db).getById(kid.tabId)?.spawn_report_state).toBe('ok');
+      expect(calls).toBe(0);
+      expect(reports()).toContain(STATED);
+    });
+
+    it('takes the LAST statement — a corrected answer is not a second report', async () => {
+      // "Call again if it changes" has to be true, or a worker that learns
+      // something after reporting is held to its first answer.
+      const { retirer, writer } = wire(async () => GOOD);
+      const kid = worker(parentChat());
+      writer.state(kid.tabId, 'Looks like a caching bug.');
+      writer.state(kid.tabId, STATED);
+      finishJob(retirer, kid.paneId);
+      await writer.idle();
+      expect(new TabStore(db).getById(kid.tabId)?.spawn_report).toBe(STATED);
+    });
+
+    it('does not carry a statement into the NEXT round', async () => {
+      // A worker handed a second job and saying nothing about it would
+      // otherwise deliver the first job's result again — a worker that reads
+      // as having done the same thing twice.
+      //
+      // Asserted on the GENERATOR being consulted, not on the text: whether
+      // the second round writes at all is the interval gate's business (and it
+      // refuses, correctly, inside the window). What matters here is that the
+      // statement was spent, so the second close went down the model path.
+      let calls = 0;
+      const { retirer, writer } = wire(async () => {
+        calls++;
+        return GOOD;
+      });
+      const kid = worker(parentChat());
+      writer.state(kid.tabId, STATED);
+      finishJob(retirer, kid.paneId);
+      await writer.idle();
+      expect(calls).toBe(0);
+      // A genuinely NEW job: a fresh round, which is what the interval gate
+      // distinguishes a second job from a retry by.
+      new SpawnRoundStore(db).open(kid.tabId, Date.now() + 1);
+      retirer.onTurnStart(kid.paneId);
+      finishJob(retirer, kid.paneId);
+      await writer.idle();
+      expect(calls).toBeGreaterThan(0);
+    });
+
+    it('still records a CRASH — that is a fact observed from outside', async () => {
+      // A worker can state a result and then die mid-sentence, and both things
+      // are true. The state is what stops its card reading as an ordinary
+      // delivery.
+      const { retirer, writer } = wire(async () => GOOD);
+      const kid = worker(parentChat());
+      writer.state(kid.tabId, STATED);
+      finishJob(retirer, kid.paneId, 'fatal');
+      await writer.idle();
+      const row = new TabStore(db).getById(kid.tabId);
+      expect(row?.spawn_report).toBe(STATED);
+      expect(row?.spawn_report_state).toBe('crashed');
+    });
+
+    it('clips an over-long statement rather than refusing it', async () => {
+      // The tool's contract is that calling it never costs the worker
+      // anything; a validation error on the one call carrying the result is
+      // the opposite of that.
+      const { retirer, writer } = wire(async () => GOOD);
+      const kid = worker(parentChat());
+      writer.state(kid.tabId, 'x'.repeat(2000));
+      finishJob(retirer, kid.paneId);
+      await writer.idle();
+      expect(new TabStore(db).getById(kid.tabId)?.spawn_report?.length).toBe(800);
+    });
+
+    it('ignores an empty statement, leaving the generator in charge', async () => {
+      const { retirer, writer } = wire(async () => GOOD);
+      const kid = worker(parentChat());
+      writer.state(kid.tabId, '   ');
+      finishJob(retirer, kid.paneId);
+      await writer.idle();
+      expect(new TabStore(db).getById(kid.tabId)?.spawn_report).toBe(GOOD);
+    });
+  });
+
   it('RETIRES FIRST AND REPORTS AFTER — the row never waits on a model', async () => {
     // A model call is up to 30 seconds. The sidebar has to move on the same tick
     // the DECISION is taken, so this is a promise the row cannot be allowed to

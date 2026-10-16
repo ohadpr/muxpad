@@ -118,6 +118,43 @@ export function replyToolDescription(): string {
 }
 
 /**
+ * The `report` tool's description.
+ *
+ * ── WHY THE DESCRIPTION IS THE WHOLE INSTRUCTION ────────────────────────────
+ * There is deliberately nothing about this in the universal agent instructions.
+ * A sentence there would be read by every chat in the install — the overwhelming
+ * majority of which are not sub-chats and have nobody to report to — and the
+ * cost of a general instruction is paid by every session that does not need it.
+ * The tool's own description is read at the moment of relevance and nowhere
+ * else, which is exactly when a worker is deciding how to finish.
+ *
+ * ── WHAT IT MUST GET RIGHT ──────────────────────────────────────────────────
+ *  · That the audience is ANOTHER AGENT, not a person. The generator this
+ *    replaces had a whole rejection pass for reports that addressed the reader
+ *    ("As you can see…"), because a summary written for a human reads as
+ *    nonsense in an orchestrator's log.
+ *  · That it is not a goodbye. A worker may state a result and carry on, and
+ *    the last statement wins — otherwise a worker that learns something after
+ *    reporting is held to its first answer.
+ *  · That NOT calling it is survivable. muxpad still summarises a worker that
+ *    said nothing, so this must read as "say it better", never as "say it or
+ *    your work is lost" — a tool whose description implies data loss gets
+ *    called defensively on every turn.
+ *
+ * Exported for tests: constructing the backend spawns a real SDK session, so
+ * the description is the testable seam.
+ */
+export function reportToolDescription(): string {
+  return [
+    'State the RESULT of your work, for the chat that spawned you. This goes in that chat as your report — it is read by the agent coordinating you, not by a person.',
+    'Say what you found or changed, and what it means for the work: the outcome, the evidence (a file, a PR, a number, a command), and anything the coordinator must decide. No greeting, no sign-off, no "as you can see" — write it as a finding, not as a message.',
+    'Under 800 characters. One paragraph is usually right; a worker that needs more has usually done two jobs.',
+    'Call it when you HAVE a result, not when you are finishing: it does not end your turn and it does not close anything. You may keep working afterwards, and if you learn something that changes the answer, call it again — the last statement before your work ends is the one delivered.',
+    'If you never call it, muxpad summarises your transcript instead and the chat still gets something. This is the version that says what you meant.',
+  ].join(' ');
+}
+
+/**
  * The `notify` tool's description — the whole UX of this feature.
  *
  * A tool description is a system-prompt-strength instruction, and for a tool
@@ -836,6 +873,55 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
       'Sent, but the server did not acknowledge it, so delivery is unconfirmed. Do not call again — say it in your reply too.',
   };
 
+  const reportTool = tool(
+    'report',
+    reportToolDescription(),
+    {
+      text: z
+        .string()
+        .min(1)
+        .describe(
+          'The result, for the agent that spawned you: outcome, evidence, and anything they must decide. Under 800 characters, no greeting or sign-off.',
+        ),
+    },
+    async (args) => {
+      const text = args.text.trim();
+      if (!text) {
+        return {
+          content: [{ type: 'text' as const, text: 'Nothing recorded — `text` was empty.' }],
+        };
+      }
+      // DROPPED, not queued, when the socket is down — the same rule `notify`
+      // follows and for the same reason: a frame nobody can receive is latency
+      // in the middle of a turn. The generator still covers this worker, which
+      // is why the model is told it can simply carry on.
+      if (!host.connected()) {
+        log(`${bold('✗ report')} ${dim('not connected to muxpad — dropped')}`);
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: 'Not recorded: this pane is not connected to muxpad right now. Carry on — muxpad will summarise your transcript instead.',
+            },
+          ],
+        };
+      }
+      emit({ t: 'report', text });
+      log(`${bold('⇥ report')} ${dim(clampDisplay(text.replace(/\s+/g, ' '), 120))}`);
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            // NO ACK THEATRE. It says what happened and what the model may do
+            // next, because the one thing that must not follow this call is a
+            // worker deciding its turn is over.
+            text: 'Recorded as your result for the chat that spawned you. It is delivered when your work ends; call again if it changes. Carry on.',
+          },
+        ],
+      };
+    },
+  );
+
   const notifyTool = tool(
     'notify',
     notifyToolDescription(),
@@ -1397,10 +1483,16 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
         // misled by. Agent mode is also where it matters most: crons, wakeups
         // and overnight batches all run there, and those are precisely the
         // turns nobody is watching.
+        // `report` is registered in BOTH modes, for the same reason `notify`
+        // is: it is about reaching the chat that spawned this one, not about
+        // how this session speaks. Sub-chats are spawned in agent mode at
+        // least as often as in chat mode, and a worker whose mode decided
+        // whether it could state its own result would be the kind of surprise
+        // this tool exists to remove.
         tools:
           opts.mode === 'chat'
-            ? [askUserTool, showFilesTool, notifyTool, replyTool]
-            : [askUserTool, showFilesTool, notifyTool],
+            ? [askUserTool, showFilesTool, notifyTool, reportTool, replyTool]
+            : [askUserTool, showFilesTool, notifyTool, reportTool],
         alwaysLoad: true,
       }),
     },

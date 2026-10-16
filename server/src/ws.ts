@@ -414,6 +414,16 @@ export function attachWsServer(deps: {
    * Called synchronously from the sweep, so it must never throw.
    */
   onRunnerDead?: (paneId: string) => void;
+  /**
+   * A worker STATED its result (the runner's `report` tool).
+   *
+   * Same seam shape and same reason as `onRunnerDead` above: a fact one
+   * server-side writer needs and no client does. The web learns about it as
+   * the `tab.updated` the delivery already emits.
+   *
+   * Called synchronously from the frame handler, so it must never throw.
+   */
+  onReportStated?: (tabId: string, text: string) => void;
 }): WsServerHandle {
   const wss = new WebSocketServer({ noServer: true });
   const allowedOrigins =
@@ -1992,6 +2002,22 @@ export function attachWsServer(deps: {
             // next, genuinely urgent call its window.
             if (outcome === 'sent') conn.lastExplicitNotifyAt = now;
             ack(outcome);
+          } else if (frame.t === 'report') {
+            // THE WORKER'S OWN SENTENCE, for the round it is in. Not written
+            // and not delivered here: a report belongs to a ROUND, the round
+            // is still open while the turn runs, and the writer picks it up at
+            // the close — which is also what makes "call again if it changes"
+            // true rather than a race between two writes.
+            if (typeof frame.text !== 'string') return;
+            const tabId = panes.getById(paneId)?.tab_id;
+            if (!tabId) return;
+            try {
+              deps.onReportStated?.(tabId, frame.text);
+            } catch (err) {
+              // A report is worth more than the bookkeeping around it, and the
+              // generator still covers this worker.
+              console.error('[report] stating failed', err);
+            }
           } else if (frame.t === 'background') {
             // THE DRAIN IS THE EDGE THAT MATTERS. A worker whose turn ended
             // with a command still running was left un-settled on purpose (see
