@@ -31,6 +31,7 @@ import { readChatModeOverlay, wrapModeNote } from '../../agent-modes.js';
 import { findTranscript } from '../../chat/TranscriptReader.js';
 import { bold, dim } from '../ansi.js';
 import { AuthHealPolicy, authGiveUpNotice, isAuthFailureText } from '../auth-heal.js';
+import { BackgroundCommands } from '../background-commands.js';
 import type { AgentMode, AgentQuestion, NotifyStatus, RunnerFrame } from '../protocol.js';
 import { ReplyBlockTracker, replyToolUseId } from '../reply-stream.js';
 import {
@@ -176,7 +177,7 @@ export interface TaskLifecycleMessage {
   subtype: string;
   task_id?: string;
   tool_use_id?: string;
-  tasks?: Array<{ task_id: string }>;
+  tasks?: Array<{ task_id: string; task_type?: string }>;
   patch?: { status?: string; is_backgrounded?: boolean };
 }
 
@@ -238,7 +239,16 @@ export function launchAckTaskId(text: string): string | null {
   return /\bagentId:\s*([A-Za-z0-9_-]+)/.exec(text)?.[1] ?? null;
 }
 
-export function applyTaskLifecycle(roster: SubagentRoster, msg: TaskLifecycleMessage): void {
+export function applyTaskLifecycle(
+  roster: SubagentRoster,
+  msg: TaskLifecycleMessage,
+  // The SAME frames carry the other half of this channel — backgrounded Bash,
+  // which the roster is built to ignore and which is what still outlives a turn
+  // now that subagents are gone. Optional so every existing caller (and every
+  // roster test) is unchanged by its arrival; absent simply means nobody is
+  // asking about commands.
+  commands?: BackgroundCommands,
+): void {
   switch (msg.subtype) {
     // Both bind task id ↔ launching tool_use. Ids we never launched (nested
     // agents, background Bash) are ignored inside bindTask. `task_progress` is
@@ -246,20 +256,29 @@ export function applyTaskLifecycle(roster: SubagentRoster, msg: TaskLifecycleMes
     // and `task_started`'s `tool_use_id` is optional.
     case 'task_started':
     case 'task_progress':
-      if (msg.tool_use_id && msg.task_id) roster.bindTask(msg.tool_use_id, msg.task_id);
+      if (msg.tool_use_id && msg.task_id) {
+        roster.bindTask(msg.tool_use_id, msg.task_id);
+        // Same pair, different question: which transcript line a running
+        // command came from. It binds only if the level has reported it.
+        commands?.bind(msg.task_id, msg.tool_use_id);
+      }
       break;
     case 'task_notification':
       // BOTH keys: `tool_use_id` is optional on this message and `task_id` is
       // not, so keying only on the former would leave an entry with no edge
       // end-path at all whenever the SDK omits it.
       if (msg.tool_use_id) roster.done(msg.tool_use_id);
-      if (msg.task_id) roster.doneByTaskId(msg.task_id);
+      if (msg.task_id) {
+        roster.doneByTaskId(msg.task_id);
+        commands?.done(msg.task_id);
+      }
       break;
     case 'task_updated': {
       if (!msg.task_id) break;
       const status = msg.patch?.status;
       if (status && TERMINAL_TASK_STATUSES.has(status)) {
         roster.doneByTaskId(msg.task_id);
+        commands?.done(msg.task_id);
         break;
       }
       // A paused task may leave the live set without dying — see pauseTask.
@@ -275,6 +294,10 @@ export function applyTaskLifecycle(roster: SubagentRoster, msg: TaskLifecycleMes
     }
     case 'background_tasks_changed':
       roster.reconcileBackground((msg.tasks ?? []).map((t) => t.task_id));
+      // The authoritative set, read for the other half of its payload. The
+      // roster takes ids only; the type is what separates a command from an
+      // agent, so this reads the entries rather than the ids.
+      commands?.reconcile(msg.tasks ?? []);
       break;
   }
 }
@@ -317,10 +340,14 @@ function blocksOf(msg: SubagentStreamMessage): ContentBlock[] {
  * Turn-boundary work lives in {@link applyTurnResult}: it needs the turn's own
  * state (was it interrupted?), not just the message.
  */
-export function applySubagentMessage(roster: SubagentRoster, msg: SubagentStreamMessage): void {
+export function applySubagentMessage(
+  roster: SubagentRoster,
+  msg: SubagentStreamMessage,
+  commands?: BackgroundCommands,
+): void {
   if (msg.type === 'system') {
     if (msg.subtype && isTaskLifecycle(msg.subtype)) {
-      applyTaskLifecycle(roster, msg as unknown as TaskLifecycleMessage);
+      applyTaskLifecycle(roster, msg as unknown as TaskLifecycleMessage, commands);
     }
     return;
   }
@@ -1011,6 +1038,11 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
     (progress) => emit({ t: 'subagent', progress }),
     (line) => log(dim(line)),
   );
+  // The other half of the same SDK channel: Bash calls the model backgrounded,
+  // which keep running after the turn ends. The roster cannot hold them (no
+  // top-level launch to see) and now has nothing else to hold either, since
+  // subagents are disallowed above. See background-commands.ts.
+  const backgroundCommands = new BackgroundCommands();
   /** How often a live roster entry re-announces itself when the SDK is silent. */
   const SUBAGENT_KEEPALIVE_MS = 5_000;
   // Keepalive: re-announce every live entry on a fixed tick so the server's
@@ -1744,7 +1776,11 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
         // The roster's whole view of the stream, in one testable place. The
         // branches below own the pane's LOG and the wire frames; this owns
         // membership, and nothing else is allowed to touch it.
-        applySubagentMessage(subagents, msg as unknown as SubagentStreamMessage);
+        applySubagentMessage(
+          subagents,
+          msg as unknown as SubagentStreamMessage,
+          backgroundCommands,
+        );
         if (msg.type === 'system' && msg.subtype === 'init') {
           log(dim(`ready · ${msg.model} · ${msg.tools.length} tools`));
           // Init reports the concrete resolved model (e.g. 'claude-opus-4-8').
