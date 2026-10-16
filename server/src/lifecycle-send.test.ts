@@ -37,6 +37,11 @@ it('a rejected send after give-up records attention without reviving the child o
   const http = createServer();
   const ptyd = {
     on: () => {},
+    // No pty in a stub world, which is the truthful answer here: every test
+    // in this file is about a pane whose runner is GONE. The sweep asks this
+    // before trusting a foreground string, because that string outlives the
+    // runtime it describes (see ws.ts).
+    hasPane: async () => false,
     getForegroundCommand: async () => null,
     killPane: async () => {},
     ensurePane: async () => {},

@@ -35,7 +35,7 @@ import { WorkspaceStore } from './store/WorkspaceStore.js';
 import { openDb } from './store/db.js';
 import { clockIndex, resolveTabClock } from './tab-clock.js';
 import { ChatRetirer } from './tab-retire.js';
-import { spawnPtyd } from './test-helpers/spawnPtyd.js';
+import { type SpawnedPtyd, spawnPtyd } from './test-helpers/spawnPtyd.js';
 import { attachWsServer } from './ws.js';
 
 let cleanup: (() => Promise<void>) | null = null;
@@ -50,7 +50,15 @@ afterEach(async () => {
  * `subChat` makes that pane's tab a CHILD of another — the only shape whose
  * lifecycle a death ends, and the one the retirement tests need.
  */
-async function boot(opts: { subChat?: boolean } = {}) {
+async function boot(
+  opts: {
+    subChat?: boolean;
+    /** Wrap the real ptyd client — lets a test describe a ptyd that answers
+     *  differently from the one in front of it (see the stale-foreground
+     *  case). */
+    ptydWrap?: (client: SpawnedPtyd['client']) => SpawnedPtyd['client'];
+  } = {},
+) {
   const db = openDb(':memory:');
   const ptyd = await spawnPtyd();
   const workspaces = new WorkspaceStore(db);
@@ -87,7 +95,7 @@ async function boot(opts: { subChat?: boolean } = {}) {
   const handle = attachWsServer({
     http,
     db,
-    ptyd: ptyd.client,
+    ptyd: opts.ptydWrap ? opts.ptydWrap(ptyd.client) : ptyd.client,
     cache,
     events,
     onRunnerDead: (paneId) => retirer.onRunnerDead(paneId),
@@ -135,6 +143,60 @@ describe('dead-runner sweep vs a ptyd outage', () => {
     await handle.sweepDeadRunners();
     await settle();
     expect(chat.restarts()).toHaveLength(1);
+    chat.sock.close();
+  });
+
+  it('a pane with NO PTY is dead, whatever ptyd remembers its foreground was', async () => {
+    // THE STALE FOREGROUND, which is how 25 messages went undelivered for a
+    // day. ptyd's foreground command is a CACHED value and it outlives the
+    // runtime it describes, so a pane whose runner exited keeps answering
+    // "node …/agent-runner/index.js" for as long as ptyd stays up. Measured on
+    // the live install, ptyd up 18 days:
+    //
+    //   stuck pane  hasPane=false  fg="node …/agent-runner/index.js --mode chat"
+    //   live pane   hasPane=true   fg="node …/agent-runner/index.js --resume …"
+    //
+    // Identical answers to the only question the sweep asked. It read
+    // `agent-runner`, concluded "live but disconnected — it re-registers on
+    // its own", and continued every twenty seconds while the work sat there.
+    const { handle, port, paneId } = await boot({
+      ptydWrap: (client) =>
+        new Proxy(client, {
+          get(target, prop, receiver) {
+            if (prop === 'hasPane') return async () => false;
+            // …and still remembers a runner, which is the whole point.
+            if (prop === 'getForegroundCommand')
+              return async () => 'node /x/server/dist/agent-runner/index.js --mode chat';
+            return Reflect.get(target, prop, receiver);
+          },
+        }) as SpawnedPtyd['client'],
+    });
+    const chat = await openChat(port, paneId);
+    await handle.sweepDeadRunners();
+    await settle();
+    expect(chat.restarts()).toHaveLength(1);
+    chat.sock.close();
+  });
+
+  it('…and a pane that DOES have a pty still defers to its foreground', async () => {
+    // The other half, unchanged: a runner that owns a live pty is mid-
+    // reconnect and must not be bounced. Breaking this is how a ws blip turns
+    // into a restart loop.
+    const { handle, port, paneId } = await boot({
+      ptydWrap: (client) =>
+        new Proxy(client, {
+          get(target, prop, receiver) {
+            if (prop === 'hasPane') return async () => true;
+            if (prop === 'getForegroundCommand')
+              return async () => 'node /x/server/dist/agent-runner/index.js --mode chat';
+            return Reflect.get(target, prop, receiver);
+          },
+        }) as SpawnedPtyd['client'],
+    });
+    const chat = await openChat(port, paneId);
+    await handle.sweepDeadRunners();
+    await settle();
+    expect(chat.restarts()).toHaveLength(0);
     chat.sock.close();
   });
 
