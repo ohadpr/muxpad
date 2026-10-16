@@ -518,7 +518,12 @@ export function attachWsServer(deps: {
     // phone, and a per-pane loop would burn the whole rate limit on one event.
     const first = repairs[0] as ResumeRepair;
     const more = repairs.length > 1 ? ` (+${repairs.length - 1} more pane(s))` : '';
-    deps.notifyPane?.(first.pane_id, `${describeRepair(first)}${more}`);
+    // EXPLICIT, because this is muxpad speaking about its own repairs, not a
+    // sub-chat's ordinary work. The push is keyed on repairs[0] and covers all
+    // of them, so if that one pane happened to be a sub-chat the sub-chat gate
+    // would have swallowed the whole announcement — including the top-level
+    // panes counted in "+N more".
+    deps.notifyPane?.(first.pane_id, `${describeRepair(first)}${more}`, { explicit: true });
   };
   // Boot pass: fix every pane that has ALREADY drifted, before a chat client
   // connects and reads current_sid. The resume-time pass in the dead-runner
