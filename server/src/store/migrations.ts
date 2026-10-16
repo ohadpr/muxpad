@@ -1417,6 +1417,43 @@ const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    // `spawn_rounds.reopened_at` — when a round was last reopened.
+    //
+    // A reopen throws the round's result away, and the report gate had no way
+    // to know: it compared the round's START with the last attempt, the start
+    // is always earlier, and the real end of the job was refused as a retry.
+    // The round then closed with nothing on it and fell out of the delivery
+    // queue. See SpawnRoundStore.reopen.
+    //
+    // ─── AND SETTLE WHAT THAT BUG ALREADY STRANDED ──────────────────────────
+    // The delivery queue now also takes a round that closed with no result
+    // (ReportDelivery's RESULT_GRACE_MS), which is the fix for the parent
+    // never being told. Without this backfill the first boot after the upgrade
+    // would read every historical empty round as pending and wake each parent
+    // with "finished, no summary" for workers that ended days ago — the same
+    // reasoning as migration 38's. Stamped with `ended_at`, as there. The last
+    // hour is left alone: a round that closed just before this boot may have
+    // had its summary killed by the restart, and the recovery sweep plus the
+    // grace window still owe its parent a delivery.
+    //
+    // INSIDE THE ADD, for migration 38's reason: on a re-run the column exists,
+    // and an empty round legitimately inside its grace window must not be
+    // silently settled.
+    version: 45,
+    apply: (db) => {
+      const cols = db.prepare('PRAGMA table_info(spawn_rounds)').all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === 'reopened_at')) {
+        db.exec('ALTER TABLE spawn_rounds ADD COLUMN reopened_at INTEGER');
+        db.prepare(
+          `UPDATE spawn_rounds SET delivered_at = ended_at
+            WHERE ended_at IS NOT NULL AND delivered_at IS NULL
+              AND report IS NULL AND report_state IS NULL
+              AND ended_at < ?`,
+        ).run(Date.now() - 60 * 60_000);
+      }
+    },
+  },
 ];
 
 /** Highest version in the migration list. Exported so a test can assert the

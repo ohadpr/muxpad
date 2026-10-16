@@ -6,7 +6,13 @@ import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SpawnRoundStore } from '../store/SpawnRoundStore.js';
 import { openDb } from '../store/db.js';
-import { BATCH_MAX_HOLD_MS, ReportDelivery, type SubmitSendResult } from './report-delivery.js';
+import {
+  BATCH_MAX_HOLD_MS,
+  BATCH_SPAWN_WINDOW_MS,
+  RESULT_GRACE_MS,
+  ReportDelivery,
+  type SubmitSendResult,
+} from './report-delivery.js';
 
 /**
  * THE JOIN. A finished sub-chat's result has never reached its parent's AGENT —
@@ -58,7 +64,12 @@ describe('report delivery — the join', () => {
   function child(
     id: string,
     parentId: string,
-    round: { ended?: number | null; report?: string | null; state?: string | null } = {},
+    round: {
+      started?: number;
+      ended?: number | null;
+      report?: string | null;
+      state?: string | null;
+    } = {},
   ): string {
     db.prepare(
       `INSERT INTO tabs (id, slug, name, layout, workspace_id, created_at, updated_at, spawned_by, spawn_task)
@@ -74,7 +85,7 @@ describe('report delivery — the join', () => {
     ).run(
       `r-${id}`,
       id,
-      NOW,
+      round.started ?? NOW,
       ended,
       round.report === undefined ? `report from ${id}` : round.report,
       round.state === undefined ? 'ok' : round.state,
@@ -160,6 +171,33 @@ describe('report delivery — the join', () => {
 
     expect(sent).toHaveLength(1);
     expect(parseSpawnDelivery(sent[0]?.text ?? '')?.marker.count).toBe(2);
+  });
+
+  it('does NOT hold a finished child behind a sibling from a LATER dispatch', () => {
+    // The real case: the parent spawned one worker, ended its turn, and eleven
+    // minutes later — asked something new — spawned another. The first closed
+    // its round 0.7 s after the second opened, and its report then sat behind a
+    // "batch" that was never one.
+    const p = parent('P');
+    child('first', p, { started: NOW - 11 * 60_000, ended: NOW + 700 });
+    child('later', p, { started: NOW, ended: null, report: null, state: null });
+
+    const r = make().sweep();
+    expect(r.delivered).toBe(1);
+    expect(parseSpawnDelivery(sent[0]?.text ?? '')?.marker.from).toEqual(['first']);
+    expect(delivered('later')).toBeNull();
+  });
+
+  it('still holds for a sibling spawned in the same burst', () => {
+    const p = parent('P');
+    child('done', p, { started: NOW });
+    child('working', p, {
+      started: NOW + BATCH_SPAWN_WINDOW_MS,
+      ended: null,
+      report: null,
+      state: null,
+    });
+    expect(make().sweep().held).toBe(1);
   });
 
   it('BREAKS THE HOLD past the ceiling — a wedged sibling must not eat the batch', () => {
@@ -271,6 +309,42 @@ describe('report delivery — the join', () => {
     expect(make().sweep()).toEqual(EMPTY_FLUSH);
     expect(sent).toHaveLength(0);
     expect(delivered('c1')).toBeNull();
+  });
+
+  it('…but delivers it past the grace window — nothing is coming, and silence is worse', () => {
+    // The 7h51m case. The round closed, the report gate declined, nothing was
+    // ever written, and a queue that waits for a result waited for a restart.
+    const p = parent('P');
+    child('c1', p, { report: null, state: null });
+    const delivery = make();
+    clock = NOW + 1000 + RESULT_GRACE_MS - 1;
+    expect(delivery.sweep()).toEqual(EMPTY_FLUSH);
+
+    clock = NOW + 1000 + RESULT_GRACE_MS + 1;
+    expect(delivery.sweep().delivered).toBe(1);
+    const body = parseSpawnDelivery(sent[0]?.text ?? '')?.body ?? '';
+    expect(body).toContain('task c1');
+    expect(body).toContain('could not summarise');
+    expect(delivered('c1')).toBe(clock);
+  });
+
+  it('names each child ONCE when two of its rounds land in one batch', () => {
+    // `from="X,X"`, seen live: a worker re-tasked inside one hold window.
+    const p = parent('P');
+    child('c1', p, { started: NOW, ended: NOW + 1000, report: 'first job done' });
+    db.prepare(
+      `INSERT INTO spawn_rounds (id, tab_id, started_at, ended_at, report, report_state)
+       VALUES ('r-c1-b', 'c1', ?, ?, 'second job done', 'ok')`,
+    ).run(NOW + 1100, NOW + 1500);
+    child('c2', p);
+
+    expect(make().sweep().delivered).toBe(3);
+    const parsed = parseSpawnDelivery(sent[0]?.text ?? '');
+    expect(parsed?.marker).toEqual({ count: 2, from: ['c1', 'c2'] });
+    // Both jobs' results survive, under the one heading.
+    expect(parsed?.body).toContain('first job done');
+    expect(parsed?.body).toContain('second job done');
+    expect(parsed?.body.match(/## task c1/g)).toHaveLength(1);
   });
 
   it('DOES deliver a crashed worker that produced no report', () => {
