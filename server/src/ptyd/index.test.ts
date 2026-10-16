@@ -295,6 +295,16 @@ describe('ptyd /pty/:id per-attach WS endpoint', () => {
   // Open a binary WS to /pty/<id> over the same unix socket as control.
   // Returns the socket and a `nextOutput()` helper that resolves with the
   // decoded string body of the next output frame (or rejects on timeout).
+  //
+  // THE FRAMES ARE QUEUED FROM THE MOMENT THE SOCKET EXISTS, not from the
+  // moment somebody asks for one. ptyd sends the ring-buffer replay as part of
+  // attaching, so for a second attach the snapshot is already in flight before
+  // `await openPty(...)` has even resolved on 'open' — a `nextOutput()` that
+  // attached its own listener on demand dropped it and then waited 2s for a
+  // frame that had already arrived. That is exactly how it read in CI, where
+  // the scheduling differs: "timed out waiting for output after 2000ms", on
+  // the one test whose whole subject is the replay. A longer timeout would
+  // never have fixed it.
   async function openPty(
     socketPath: string,
     id: string,
@@ -304,6 +314,19 @@ describe('ptyd /pty/:id per-attach WS endpoint', () => {
     nextClose: (timeoutMs?: number) => Promise<{ code: number; reason: string }>;
   }> {
     const sock = new WebSocket(`ws+unix://${socketPath}:/pty/${id}`);
+    const pending: string[] = [];
+    let wake: (() => void) | null = null;
+    sock.on('message', (b: Buffer) => {
+      try {
+        const msg = decodeServerMessage(new Uint8Array(b));
+        if (msg.kind === 'output') {
+          pending.push(msg.data);
+          wake?.();
+        }
+      } catch {
+        // Not an output frame we understand — keep listening.
+      }
+    });
     await new Promise<void>((resolve, reject) => {
       sock.once('open', resolve);
       sock.once('error', reject);
@@ -317,24 +340,20 @@ describe('ptyd /pty/:id per-attach WS endpoint', () => {
     return {
       sock,
       nextOutput(timeoutMs = 2000): Promise<string> {
+        const queued = pending.shift();
+        if (queued !== undefined) return Promise.resolve(queued);
         return new Promise((resolve, reject) => {
           const timer = setTimeout(() => {
-            sock.off('message', onMsg);
+            wake = null;
             reject(new Error(`timed out waiting for output after ${timeoutMs}ms`));
           }, timeoutMs);
-          const onMsg = (b: Buffer) => {
-            try {
-              const msg = decodeServerMessage(new Uint8Array(b));
-              if (msg.kind === 'output') {
-                clearTimeout(timer);
-                sock.off('message', onMsg);
-                resolve(msg.data);
-              }
-            } catch {
-              // ignore decode errors — keep waiting
-            }
+          wake = () => {
+            const next = pending.shift();
+            if (next === undefined) return;
+            clearTimeout(timer);
+            wake = null;
+            resolve(next);
           };
-          sock.on('message', onMsg);
         });
       },
       nextClose(timeoutMs = 2000): Promise<{ code: number; reason: string }> {
