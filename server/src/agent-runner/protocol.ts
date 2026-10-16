@@ -170,7 +170,16 @@ export type RunnerFrame =
  *   unavailable   this server has no push wired up at all (tests, a headless
  *                 deployment), or the request was malformed.
  */
-export type NotifyStatus = 'sent' | 'held-active' | 'no-devices' | 'rate-limited' | 'unavailable';
+export type NotifyStatus =
+  | 'sent'
+  | 'held-active'
+  /** The pane is a sub-chat and the push was not explicitly asked for — see
+   *  the gate in push.ts. Only reachable for automatic pushes, so the `notify`
+   *  tool never sees it. */
+  | 'held-subchat'
+  | 'no-devices'
+  | 'rate-limited'
+  | 'unavailable';
 
 /** server → runner */
 export type ServerFrame =

@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 import { VIEWER_HTML } from './viewer.js';
 
@@ -37,6 +38,13 @@ interface StubEl {
   hidden: boolean;
   textContent: string;
   fire(type: string, event?: Record<string, unknown>): void;
+  /** The rows the sheet built, in order. */
+  children: StubEl[];
+  disabled?: boolean;
+  type?: string;
+  className?: string;
+  /** Overridable so a test can make capture refuse the way a real one does. */
+  setPointerCapture?: (pointerId: number) => void;
 }
 
 interface Harness {
@@ -158,6 +166,22 @@ function run(opts: RunOpts | string = {}): Harness {
         el.focused = false;
         for (const fn of listeners.get('blur') ?? []) fn({});
       },
+      // Enough of a tree for the drop-down sheet, which BUILDS its list rather
+      // than looking it up: one row per option, from the page's own answer.
+      children: [] as StubEl[],
+      appendChild(child: StubEl) {
+        el.children.push(child);
+        return child;
+      },
+      replaceChildren() {
+        el.children = [];
+      },
+      querySelector(sel: string) {
+        const m = /^\[([^=\]]+)="([^"]*)"\]$/.exec(sel);
+        if (!m) return null;
+        return el.children.find((c) => c.attrs[m[1] as string] === m[2]) ?? null;
+      },
+      scrollIntoView() {},
       setPointerCapture() {},
       releasePointerCapture() {},
       click() {},
@@ -220,7 +244,7 @@ function run(opts: RunOpts | string = {}): Harness {
       addEventListener() {},
       body: el('body'),
       documentElement: el('html'),
-      createElement: () => make('made'),
+      createElement: (tag: string) => make(tag),
       hidden: false,
     },
     location: {
@@ -1130,7 +1154,9 @@ describe('Done finishes the errand', () => {
     h.el('handback').fire('click');
     await h.settle();
     expect(h.location.href).toBeUndefined();
-    expect(h.posted).toEqual([{ muxpad: 'handback' }]);
+    // `toContain` rather than `toEqual`: a phone-sized viewer now takes the
+    // wheel on arrival, which posts its own `takeover` first.
+    expect(h.posted).toContainEqual({ muxpad: 'handback' });
   });
 
   it('does not ask anybody to close when it IS the page', async () => {
@@ -1222,26 +1248,38 @@ describe('a tap that goes nowhere says so', () => {
    * A line that was already there before you acted is not an answer to what you
    * just did.
    */
-  it('answers a tap on something that is not a field', () => {
-    // A link, an image, the background. Nothing to type into, so nothing to take
-    // the wheel for — but it still has to say why the tap went nowhere.
+  it('a tap anywhere takes the wheel, with nothing to press first', () => {
+    // CHANGED BY REQUEST, and the old contract is worth recording because it
+    // was not arbitrary: a tap on a non-field used to explain itself and take
+    // nothing, so that a stray tap could not stall a working agent.
+    //
+    // Overruled, in these words: "if I'm trying to interact then I'm taking
+    // control. Why do you need this? I'm not opening this thing for no good
+    // reason — if I'm opening it and I'm trying to do stuff I'm trying to be
+    // active; when I close it, I'm done."
+    //
+    // The stray-tap cost is now paid differently: Done hands it straight back,
+    // and a closed viewer releases the lease on its own after 90s
+    // (BrowserWheel.releaseIfUnattended). Which answers the stall without
+    // making the common case ask permission.
     const h = run({ search: '?mode=watch' });
     h.el('screen').fire('pointerdown', { clientX: 100, clientY: 300 });
-    expect(h.el('msg').textContent).toContain('Take over');
+    expect(h.fetches.some((f) => f.url.includes('/wheel/take'))).toBe(true);
+    expect(h.el('msg').textContent).not.toContain('press Take over');
   });
 
-  it('draws attention to Take over, which is the only thing that helps', () => {
+  it('no longer sends anybody hunting for Take over', () => {
     const h = run({ search: '?mode=watch' });
     h.el('screen').fire('pointerdown', { clientX: 100, clientY: 300 });
-    expect(h.el('takeover').classes).toContain('ready');
+    expect(h.el('takeover').classes).not.toContain('ready');
   });
 
-  it('still sends nothing — the point is to explain, not to start driving', () => {
-    // Taking the wheel off a stray tap is the stall this mode exists to avoid.
+  it('asks muxpad for the wheel rather than dropping the gesture', () => {
+    // The inverse of what stood here. Input is still gated on actually holding
+    // the wheel — the tap is replayed once it is granted, not fired blind.
     const h = run({ search: '?mode=watch' });
     h.el('screen').fire('pointerdown', { clientX: 100, clientY: 300 });
-    expect(h.sent.some((m) => m.t === 'mouse')).toBe(false);
-    expect(h.el('sink').focused).toBe(false);
+    expect(h.fetches.some((f) => f.url.includes('/wheel/take'))).toBe(true);
   });
 
   it('says nothing of the sort while driving', () => {
@@ -1251,10 +1289,13 @@ describe('a tap that goes nowhere says so', () => {
   });
 
   it('names the way out in the standing line too, not just the situation', () => {
-    // "watching — the agent is still working" describes the agent. What a person
-    // stuck on this page needs is the name of the button.
+    // "watching — the agent is still working" describes the agent. What a
+    // person stuck on this page needs is the way out. That used to be the name
+    // of a button; now the way out is to touch the page, so the line says so.
+    // The invariant is unchanged and worth keeping: the standing line must name
+    // an ACTION, not describe a state.
     const h = run({ search: '?mode=watch' });
-    expect(h.el('msg').textContent).toContain('Take over');
+    expect(h.el('msg').textContent).toContain('touch the page');
   });
 });
 
@@ -1570,4 +1611,356 @@ it('waits for an existing takeover before submitting the login form', async () =
   await h.settle();
   expect(h.fetches.filter((f) => f.url.endsWith('/wheel/take'))).toHaveLength(1);
   expect(h.sent).toContainEqual({ t: 'fillLogin', username: 'person', password: 'secret' });
+});
+
+/**
+ * Touch gestures. The stream had no way to scroll the page it was showing on a
+ * phone: a finger drag went out as a DRAG on the remote page, and a wheel event
+ * does not exist on touch, so the view sat wherever the page was — usually the
+ * top. These pin the three readings of a press.
+ */
+describe('one finger scrolls, a hold drags, a tap clicks', () => {
+  const types = (h: Harness) => h.sent.filter((m) => m.t === 'mouse').map((m) => m.type as string);
+  /** Fire the press-and-hold timer. `tickTimers` runs INTERVALS; timeouts are
+   *  exposed for inspection, so the hold is driven by hand. A cleared timer is
+   *  replaced with a no-op by the stub, so firing it is always safe. */
+  const hold = (h: Harness) => {
+    for (const timer of h.timers.filter((x) => x.ms === 450)) timer.fn();
+  };
+  /** The classifier is for DESKTOP mode, where the page has no touch handling
+   *  and needs a synthesized wheel. A phone-sized viewer turns on phone mode
+   *  and relays the finger as a finger instead — covered separately below. */
+  const desktop = () => ready(run({ width: 1280 }));
+
+  it('a drag scrolls, and never clicks', () => {
+    const h = desktop();
+    h.el('screen').fire('pointerdown', {
+      clientX: 100,
+      clientY: 200,
+      button: 0,
+      pointerType: 'touch',
+      pointerId: 1,
+    });
+    // Nothing is committed on the press itself — that was the bug.
+    expect(types(h)).not.toContain('mousePressed');
+    h.el('screen').fire('pointermove', {
+      clientX: 100,
+      clientY: 160,
+      pointerType: 'touch',
+      pointerId: 1,
+    });
+    h.el('screen').fire('pointerup', {
+      clientX: 100,
+      clientY: 160,
+      pointerType: 'touch',
+      pointerId: 1,
+    });
+    expect(types(h)).toEqual(['mouseWheel']);
+    // Dragging UP scrolls the page DOWN: content follows the finger.
+    const wheel = h.sent.find((m) => m.type === 'mouseWheel') as Record<string, number>;
+    expect(wheel.deltaY).toBeGreaterThan(0);
+    expect(types(h)).not.toContain('mouseReleased');
+  });
+
+  it('a tap is still a click', () => {
+    const h = desktop();
+    h.el('screen').fire('pointerdown', {
+      clientX: 100,
+      clientY: 200,
+      button: 0,
+      pointerType: 'touch',
+      pointerId: 1,
+    });
+    h.el('screen').fire('pointerup', {
+      clientX: 101,
+      clientY: 200,
+      pointerType: 'touch',
+      pointerId: 1,
+    });
+    expect(types(h)).toEqual(['mousePressed', 'mouseReleased']);
+  });
+
+  it('a press-and-hold becomes a real drag', () => {
+    const h = desktop();
+    h.el('screen').fire('pointerdown', {
+      clientX: 100,
+      clientY: 200,
+      button: 0,
+      pointerType: 'touch',
+      pointerId: 1,
+    });
+    hold(h);
+    expect(types(h)).toEqual(['mousePressed']);
+    h.el('screen').fire('pointermove', {
+      clientX: 100,
+      clientY: 160,
+      pointerType: 'touch',
+      pointerId: 1,
+    });
+    h.el('screen').fire('pointerup', {
+      clientX: 100,
+      clientY: 160,
+      pointerType: 'touch',
+      pointerId: 1,
+    });
+    // A drag, not a scroll: moves go out as moves and the button is released.
+    expect(types(h)).toEqual(['mousePressed', 'mouseMoved', 'mouseReleased']);
+    expect(types(h)).not.toContain('mouseWheel');
+  });
+
+  it('moving first cancels the hold, so a scroll never turns into a drag', () => {
+    const h = desktop();
+    h.el('screen').fire('pointerdown', {
+      clientX: 100,
+      clientY: 200,
+      button: 0,
+      pointerType: 'touch',
+      pointerId: 1,
+    });
+    h.el('screen').fire('pointermove', {
+      clientX: 100,
+      clientY: 150,
+      pointerType: 'touch',
+      pointerId: 1,
+    });
+    hold(h);
+    h.el('screen').fire('pointerup', {
+      clientX: 100,
+      clientY: 150,
+      pointerType: 'touch',
+      pointerId: 1,
+    });
+    expect(types(h)).not.toContain('mousePressed');
+  });
+
+  it('leaves the MOUSE alone — it has a wheel and no ambiguity', () => {
+    const h = desktop();
+    h.el('screen').fire('pointerdown', { clientX: 100, clientY: 200, button: 0 });
+    h.el('screen').fire('pointermove', { clientX: 100, clientY: 160 });
+    h.el('screen').fire('pointerup', { clientX: 100, clientY: 160 });
+    expect(types(h)).toEqual(['mousePressed', 'mouseMoved', 'mouseReleased']);
+  });
+});
+
+describe('phone mode relays the finger as a finger', () => {
+  /**
+   * The classifier above exists for DESKTOP mode, where the page has no touch
+   * handling and a drag has to become a wheel. In phone mode the page is under
+   * touch emulation, so it can do its own scrolling — both axes, nested
+   * scrollers, momentum — and the viewer should stop interpreting the gesture
+   * at all. Synthesizing wheels got vertical roughly right and the rest wrong:
+   * "scrolling horizontally doesn't seem to respond too much. The whole thing
+   * is wonky."
+   */
+  it('sends touch events, not mouse or wheel, on a phone-sized viewer', async () => {
+    const h = ready(run()); // the stub is 390px: phone mode turns itself on
+    h.receive({ t: 'wheel', wheel: { holder: 'human', by: 'viewer' } });
+    await h.settle();
+    h.el('screen').fire('pointerdown', {
+      clientX: 100,
+      clientY: 200,
+      button: 0,
+      pointerType: 'touch',
+      pointerId: 1,
+    });
+    h.el('screen').fire('pointermove', {
+      clientX: 140,
+      clientY: 160,
+      pointerType: 'touch',
+      pointerId: 1,
+    });
+    h.el('screen').fire('pointerup', {
+      clientX: 140,
+      clientY: 160,
+      pointerType: 'touch',
+      pointerId: 1,
+    });
+    const touches = h.sent.filter((m) => m.t === 'touch').map((m) => m.type);
+    expect(touches).toEqual(['touchStart', 'touchMove', 'touchEnd']);
+    // Horizontal is carried by the gesture itself rather than a delta we chose.
+    const move = h.sent.find((m) => m.type === 'touchMove') as Record<string, number>;
+    expect(move.x).toBeGreaterThan(0);
+    expect(h.sent.some((m) => m.t === 'mouse')).toBe(false);
+  });
+});
+
+describe('phone mode is only ON if the host was told', () => {
+  /**
+   * THE REGRESSION THIS PINS. `mobileOn` decides whether a finger is relayed as
+   * a finger (phone mode — the page scrolls itself) or classified into wheels.
+   * Input is dropped while watching, and `setMobile` used to set the flag and
+   * then send. On a phone the viewer took the wheel (async) and called
+   * setMobile in the same tick, so the emulate went out while still watching,
+   * was dropped, and the flag was set anyway.
+   *
+   * The two then disagreed: the viewer sent touch events to a page that had
+   * never been put under touch emulation. Reported as "now scrolling doesn't
+   * work and also typing into a form field doesn't work" — both symptoms of
+   * the same silently-dropped message.
+   */
+  it('still relays the finger when pointer capture refuses', async () => {
+    // setPointerCapture throws NotFoundError for a pointer the browser has
+    // stopped tracking, and that exception used to abort the handler before the
+    // relay -- a finger that did absolutely nothing.
+    const h = ready(run({ width: 390 }));
+    await h.settle();
+    h.el('screen').setPointerCapture = () => {
+      throw new Error('NotFoundError');
+    };
+    h.el('screen').fire('pointerdown', {
+      pointerId: 7,
+      pointerType: 'touch',
+      clientX: 100,
+      clientY: 300,
+    });
+    expect(h.sent.some((m) => m.t === 'touch' && m.type === 'touchStart')).toBe(true);
+  });
+
+  it('does not claim phone mode when the message was dropped', async () => {
+    // The take FAILS here, so the viewer stays in watch mode and the emulate
+    // is dropped. The flag must stay false: claiming phone mode the host was
+    // never told about is what sent touch events to a page with no touch
+    // emulation.
+    const h = run({ search: '?mode=watch', fetchOk: false });
+    await h.settle();
+    expect(h.sent.some((m) => m.t === 'emulate')).toBe(false);
+    expect(h.el('mobile').attrs['aria-pressed']).not.toBe('true');
+  });
+
+  it('applies it once the wheel makes the message sendable', async () => {
+    const h = run({ search: '?mode=watch' });
+    h.el('screen').fire('pointerdown', { clientX: 100, clientY: 300 });
+    await h.settle();
+    // The take succeeded, so the emulate goes out — and only now is the flag set.
+    expect(h.sent.some((m) => m.t === 'emulate' && m.mobile === true)).toBe(true);
+    expect(h.el('mobile').attrs['aria-pressed']).toBe('true');
+  });
+});
+
+describe('the inlined page stays inlineable', () => {
+  /**
+   * FOUR TIMES NOW. A backtick written inside the String.raw template — almost
+   * always in a comment, naming a message type or a CSS property — closes the
+   * literal early and ships a syntactically dead page. The existing tests do
+   * catch it, but they catch it as an esbuild parse error pointing at a line of
+   * prose, which reads like a broken test rather than a typo in a comment.
+   *
+   * This says it in one sentence instead. It is a source check, deliberately:
+   * by the time a test can run the script, the damage is a parse error.
+   */
+  it('contains no backtick inside the template', async () => {
+    const src = await readFile(new URL('./viewer.ts', import.meta.url).pathname, 'utf-8');
+    const open = src.indexOf('String.raw`');
+    const body = src.slice(open + 'String.raw`'.length);
+    const close = body.lastIndexOf('`');
+    const inside = body.slice(0, close);
+    expect(
+      inside.includes('`'),
+      'a backtick inside VIEWER_HTML closes the template early — use plain words in comments',
+    ).toBe(false);
+  });
+});
+
+/**
+ * DROP-DOWNS.
+ *
+ * A native select popup is drawn by the browser, outside the page's own
+ * compositing, so Page.startScreencast never carries it: the tap lands on a
+ * real element and absolutely nothing appears. The list is read out of the page
+ * instead (SelectProbe.ts) and drawn here.
+ */
+describe('the drop-down sheet', () => {
+  const COUNTRIES = {
+    t: 'select',
+    label: 'Billing country',
+    options: [
+      { v: 'eu', l: 'Europe', selected: false, disabled: false },
+      { v: 'us', l: 'United States', selected: true, disabled: false },
+      { v: 'xx', l: 'Nowhere', selected: false, disabled: true },
+    ],
+  };
+
+  function sheet() {
+    const h = ready(run({ width: 390 }));
+    h.receive(COUNTRIES);
+    return h;
+  }
+
+  it('opens with a row per option, and names the field', () => {
+    const h = sheet();
+    expect(h.el('pick').hidden).toBe(false);
+    expect(h.el('pickTitle').textContent).toBe('Billing country');
+    expect(h.el('pickList').children.map((c) => c.textContent)).toEqual([
+      'Europe',
+      'United States',
+      'Nowhere',
+    ]);
+  });
+
+  it('marks the one that is already on', () => {
+    const rows = sheet().el('pickList').children;
+    expect(rows[1]?.attrs['aria-selected']).toBe('true');
+    expect(rows[0]?.attrs['aria-selected']).toBeUndefined();
+  });
+
+  it('does not offer a disabled option', () => {
+    expect(sheet().el('pickList').children[2]?.disabled).toBe(true);
+  });
+
+  it('sends the VALUE, not the label, and closes', () => {
+    const h = sheet();
+    h.el('pickList').children[0]?.fire('click');
+    expect(h.sent.filter((m) => m.t === 'pick')).toEqual([{ t: 'pick', value: 'eu' }]);
+    expect(h.el('pick').hidden).toBe(true);
+  });
+
+  it('TELLS THE PAGE when it is dismissed, so no stamp is left behind', () => {
+    // The probe marks the element it described, because the page may re-render
+    // between the tap and the answer. A sheet nobody chose from must clear it,
+    // or the next choice lands on the wrong element.
+    const h = sheet();
+    h.el('pickCancel').fire('click');
+    expect(h.sent.some((m) => m.t === 'unpick')).toBe(true);
+    expect(h.el('pick').hidden).toBe(true);
+  });
+
+  it('dismisses on the backdrop but NOT on the sheet itself', () => {
+    const h = sheet();
+    h.el('pickSheet').fire('click');
+    expect(h.el('pick').hidden).toBe(false);
+    h.el('pick').fire('click', { target: h.el('pick') });
+    expect(h.el('pick').hidden).toBe(true);
+  });
+
+  it('sends no choice when it was merely dismissed', () => {
+    const h = sheet();
+    h.el('pickCancel').fire('click');
+    expect(h.sent.some((m) => m.t === 'pick')).toBe(false);
+  });
+
+  it('ignores a select with no options at all rather than opening an empty sheet', () => {
+    const h = ready(run({ width: 390 }));
+    h.receive({ t: 'select', label: 'Empty', options: [] });
+    expect(h.el('pick').hidden).toBe(true);
+  });
+
+  it('says so when the drop-down went away under the sheet', () => {
+    const h = sheet();
+    h.el('pickList').children[0]?.fire('click');
+    h.receive({ t: 'picked', ok: false });
+    expect(h.el('msg').textContent).toMatch(/went away/i);
+  });
+
+  it('is quiet when the choice landed', () => {
+    const h = sheet();
+    h.el('pickList').children[0]?.fire('click');
+    h.receive({ t: 'picked', ok: true });
+    expect(h.el('msg').textContent).not.toMatch(/went away/i);
+  });
+
+  it('builds rows with textContent, never markup', () => {
+    // An option label is page content, and this page can reach the host.
+    expect(VIEWER_HTML).not.toMatch(/pickList\.innerHTML/);
+    expect(VIEWER_HTML).toMatch(/b\.textContent = String/);
+  });
 });

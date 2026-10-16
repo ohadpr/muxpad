@@ -34,6 +34,14 @@ const prompt = (text = 'Run: python3 …'): ChatEvent => ({
   text,
   folded: true,
 });
+const report = (text = '## research auth\n\nFound three call sites.'): ChatEvent => ({
+  kind: 'user',
+  id: id(),
+  ts: 0,
+  text,
+  folded: true,
+  fold: 'report',
+});
 const tool = (): ChatEvent => ({
   kind: 'tool_use',
   id: id(),
@@ -74,6 +82,19 @@ describe('the fold header', () => {
     // The summary line names both; the count just needs a true noun, and prose
     // is the thing a reader would be surprised to find hidden.
     expect(label([prompt(), prose()])).toBe('2 notes');
+  });
+
+  it('calls a delivered batch of sub-chat reports a report', () => {
+    // Same fold, different cargo. "prompt" would be wrong twice over: nobody
+    // instructed anybody, and what is inside is somebody else's results.
+    expect(label([report()])).toBe('report');
+    expect(label([report(), report()])).toBe('2 reports');
+  });
+
+  it('falls back to prompts when a run mixes a delivery with a real prompt', () => {
+    // Mixed cargo gets the older, broader noun rather than a guess about which
+    // one the reader came for.
+    expect(label([report(), prompt()])).toBe('2 prompts');
   });
 
   it('counts ACTIONS the moment real work joins the run', () => {

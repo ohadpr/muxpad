@@ -7,6 +7,7 @@ import {
   mouseEvent,
   probeEditable,
   tapHitsField,
+  touchEvent,
 } from './BrowserInput.js';
 
 /**
@@ -190,5 +191,40 @@ describe('deciding locally whether a tap wants a keyboard', () => {
     // must fall back to focusing optimistically: a keyboard that flashes is a
     // blemish, a keyboard that never appears is the bug.
     expect(tapHitsField({ x: 50, y: 30 }, null)).toBe(null);
+  });
+});
+
+describe('a finger, relayed as a finger', () => {
+  it('describes the point a finger is pressing', () => {
+    expect(touchEvent({ type: 'touchStart', x: 12.4, y: 300.6 })).toMatchObject({
+      type: 'touchStart',
+      touchPoints: [{ x: 12, y: 301 }],
+    });
+  });
+
+  it('SENDS THE LIFT, which carries no point at all', () => {
+    // The bug this exists to prevent: a guard that demanded finite coordinates
+    // for every phase dropped every touchEnd, because the viewer correctly
+    // sends none -- the finger is gone. What that looks like from the outside is
+    // not a missing event, it is a finger that goes down and never comes up: no
+    // tap is ever recognised, so tapping a text field focuses nothing and
+    // typing into a form does nothing.
+    expect(touchEvent({ type: 'touchEnd' })).toMatchObject({
+      type: 'touchEnd',
+      touchPoints: [],
+    });
+    expect(touchEvent({ type: 'touchCancel' })).toMatchObject({ touchPoints: [] });
+  });
+
+  it('refuses a press with no coordinates, which it cannot place', () => {
+    expect(touchEvent({ type: 'touchStart' })).toBeNull();
+    expect(touchEvent({ type: 'touchMove', x: Number.NaN, y: 10 })).toBeNull();
+  });
+
+  it('carries modifiers, and defaults them to none', () => {
+    expect(touchEvent({ type: 'touchMove', x: 1, y: 2, modifiers: MOD.shift })).toMatchObject({
+      modifiers: MOD.shift,
+    });
+    expect(touchEvent({ type: 'touchMove', x: 1, y: 2 })).toMatchObject({ modifiers: 0 });
   });
 });

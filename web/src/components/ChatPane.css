@@ -1663,10 +1663,28 @@
 /* The box the image is actually measured against: whatever the stage has left
    after the nav. `min-height: 0` is load-bearing — a flex child defaults to
    min-height:auto and refuses to shrink below its content, which is the exact
-   mechanism that let a tall image push past the bottom edge. */
+   mechanism that let a tall image push past the bottom edge.
+
+   `align-self: stretch` IS LOAD-BEARING TOO, for the same class of reason on
+   the other axis, and without it the frame measures the wrong thing entirely.
+   The stage is `flex-direction: column; align-items: center`, so a child with
+   `align-self: auto` is shrink-wrapped to its CONTENT width — which is the
+   image. The box the image is bounded by was therefore DEFINED BY the image,
+   and grew with every zoom step.
+
+   Both things that read this box broke: `computeFit` fitted the picture to a
+   width the picture itself had set, and — the reported symptom — `clampXY`
+   computed its horizontal pan bound as (imageWidth - frameWidth) / 2, which is
+   exactly ZERO when the frame is the image. Measured on a 360px-wide stage
+   with a 2.5x zoom: frame 895px, image 895px, and a 180px horizontal drag
+   produced `translate(0px, …)`. With the frame stretched: frame 312px, image
+   780px, same drag, `translate(-180px, …)`. Vertical panning always worked
+   because the column axis is constrained by `flex: 1 1 auto` against a stage
+   of fixed height, so only one axis was ever free to shrink-wrap. */
 .chat-img-frame {
   display: grid;
   flex: 1 1 auto;
+  align-self: stretch;
   place-items: center;
   min-width: 0;
   min-height: 0;

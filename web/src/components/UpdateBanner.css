@@ -23,9 +23,20 @@
   align-items: center;
   gap: 4px;
   padding: 4px 6px 4px 4px;
-  background: var(--bg-tabbar);
-  color: var(--fg);
-  border: 1px solid var(--border-strong);
+  /* ── LOUD ON PURPOSE ──────────────────────────────────────────────────
+     This was --bg-tabbar: a surface from the chrome's own family, floated
+     over the app. Measured against the page behind it that is ΔE 8.8-23.2
+     depending on theme — a pill the same colour as everything else, which is
+     exactly how it reads ("needs much more contrast").
+
+     The accent instead: ΔE 57-114 against the page in the same six themes,
+     and --accent/--accent-fg is already the designed legible pair every
+     primary button uses (4.75-6.79:1). This is the one notice in the app that
+     is about the APP rather than about anything in it, and it has to survive
+     being glanced past on a phone. */
+  background: var(--accent);
+  color: var(--accent-fg);
+  border: 1px solid color-mix(in srgb, var(--accent) 72%, #000);
   border-radius: 999px;
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4);
   font-family: var(--chrome-font);
@@ -52,10 +63,13 @@
   }
 }
 
+/* On the accent now, so its surface and its edge are mixed from the INK rather
+   than from the app's neutrals — a --bg-hover pill on a saturated accent is a
+   grey hole in it. */
 .update-banner-action {
-  background: var(--bg-hover);
-  color: var(--fg);
-  border: 1px solid var(--border-strong);
+  background: color-mix(in srgb, var(--accent-fg) 16%, transparent);
+  color: var(--accent-fg);
+  border: 1px solid color-mix(in srgb, var(--accent-fg) 38%, transparent);
   border-radius: 999px;
   /* A thumb target, not a desktop button: this is tapped on a phone, one-handed,
      near the top of the screen. */
@@ -67,18 +81,18 @@
   transition: background 80ms ease, border-color 80ms ease;
 }
 .update-banner-action:hover {
-  background: var(--border-strong);
-  border-color: var(--fg-faint);
+  background: color-mix(in srgb, var(--accent-fg) 28%, transparent);
+  border-color: var(--accent-fg);
 }
 .update-banner-action:focus-visible {
-  outline: 2px solid var(--fg-faint);
+  outline: 2px solid var(--accent-fg);
   outline-offset: 2px;
 }
 
 .update-banner-dismiss {
   background: transparent;
   border: none;
-  color: var(--fg-faint);
+  color: color-mix(in srgb, var(--accent-fg) 78%, transparent);
   font-size: 18px;
   line-height: 1;
   width: 30px;
@@ -90,10 +104,10 @@
   justify-content: center;
 }
 .update-banner-dismiss:hover {
-  background: var(--border-strong);
-  color: var(--fg);
+  background: color-mix(in srgb, var(--accent-fg) 22%, transparent);
+  color: var(--accent-fg);
 }
 .update-banner-dismiss:focus-visible {
-  outline: 2px solid var(--fg-faint);
+  outline: 2px solid var(--accent-fg);
   outline-offset: 2px;
 }

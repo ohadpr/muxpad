@@ -148,6 +148,21 @@ export type ScrollInput =
   /** They tapped "jump to latest" — the one gesture that means "follow again". */
   | { t: 'jump-to-latest' }
   /**
+   * They sent a message. Their own bubble and the "working…" line land at the
+   * END, so the end is where they belong — wherever they were reading.
+   *
+   * Without this nothing followed a send: a reader even a nudge above the
+   * bottom is ANCHORED (any move away from the end drops following, see
+   * `followingAfter`), and an append below an anchored reader rightly moves
+   * nothing. Measured in Chromium with two pinned cards (composer wrap 228px):
+   * 60px above the end, Enter left scrollTop at 2941 while the end went to
+   * 3112, and the working line's bottom sat at y=735 behind a wrap whose top
+   * was y=572. The cards are why it reads as "hidden by the card": they make
+   * the band the composer covers 2.5x taller, so a reader close enough to the
+   * bottom to think they are AT it loses the whole reply.
+   */
+  | { t: 'sent' }
+  /**
    * They tapped a fold header. `offset` is where that header sat when they
    * tapped it, so it goes back there rather than being pushed off the top by a
    * re-pin — measured on the old design, a 1500 px expansion moved the tapped
@@ -265,6 +280,7 @@ export function next(state: ScrollState, input: ScrollInput): ScrollState {
       };
 
     case 'jump-to-latest':
+    case 'sent':
       return { ...state, intent: { at: 'end' }, placed: true };
 
     case 'fold-toggled':

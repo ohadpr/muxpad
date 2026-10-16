@@ -1,6 +1,7 @@
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { chmod, unlink } from 'node:fs/promises';
 import { createServer } from 'node:http';
+import { pathToFileURL } from 'node:url';
 import { WebSocket, WebSocketServer } from 'ws';
 import { PaneManager } from '../runtime/PaneManager.js';
 import type { PaneRuntimeSpec } from '../runtime/PaneRuntime.js';
@@ -294,7 +295,25 @@ function attachControl(
 }
 
 // CLI entry
-if (import.meta.url === `file://${process.argv[1]}`) {
+//
+// argv[1] is REALPATH'd before the compare, because `import.meta.url` already
+// is. On macOS /tmp is a symlink to /private/tmp, so `node /tmp/wt/server/dist/
+// ptyd/index.js` — which is every git worktree a developer or an agent makes
+// under /tmp — gave `file:///private/tmp/…` on the left and `/tmp/…` on the
+// right. The guard was false, the module loaded, nothing ran, and the process
+// exited 0 with NO OUTPUT AT ALL. The caller sees "ptyd: exited before socket
+// appeared" over an empty log, which is as far from "your path was a symlink"
+// as a message can get. Cost an hour of a night run; it is two lines.
+const invokedAs = (() => {
+  const argv1 = process.argv[1];
+  if (!argv1) return '';
+  try {
+    return realpathSync(argv1);
+  } catch {
+    return argv1;
+  }
+})();
+if (import.meta.url === pathToFileURL(invokedAs).href) {
   const socketPath = process.env.MUXPAD_PTYD_SOCKET ?? `${process.env.HOME}/.muxpad/ptyd.sock`;
   startPtyd({ socketPath }).then(() => {
     console.log(`ptyd listening on ${socketPath}`);

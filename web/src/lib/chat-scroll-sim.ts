@@ -244,7 +244,8 @@ export class SimScroller implements ScrollSurface {
       const before = Math.min(r.height, room);
       r.height = height;
       const after = Math.min(height, room);
-      return this.grewAbove(after - before);
+      this.grewAbove(after - before);
+      return this.clampToEnd();
     }
     throw new Error(`no such row: ${id}`);
   }
@@ -252,6 +253,25 @@ export class SimScroller implements ScrollSurface {
   /** The live furniture below the last message growing or shrinking. */
   setFurniture(px: number): this {
     this.furnitureBelow = px;
+    return this.clampToEnd();
+  }
+
+  /**
+   * WHAT AN ENGINE DOES WHEN THE DOCUMENT GETS SHORTER UNDER A READER.
+   *
+   * `scrollTop` cannot exceed the maximum, so a shrink that would leave it past
+   * the end moves it — and that move fires a scroll event, exactly like a
+   * gesture. Nothing here modelled that, so the whole class of bug was
+   * unreachable from the suite: the simulator simply recomputed a smaller
+   * maximum and left `scrollTop` impossibly beyond it.
+   *
+   * Measured in Chromium on a live chat as a queued message drained: scrollTop
+   * 5227 -> 5182 as the maximum went 5227 -> 5182, with no write from the app.
+   */
+  private clampToEnd(): this {
+    if (this.scrollTop <= this.maxScrollTop) return this;
+    this.scrollTop = this.maxScrollTop;
+    this.pending++;
     return this;
   }
 

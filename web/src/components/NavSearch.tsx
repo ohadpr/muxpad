@@ -1,24 +1,13 @@
 import { fallbackTabIcon } from '@muxpad/shared';
-import { useNavigate } from '@tanstack/react-router';
-import { Fragment, type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { type ArchiveSearchHit, api } from '../api';
-import { cachedAllTabs, loadAllTabs, subscribeAllTabs } from '../lib/all-tabs';
-import { type MentionSearchState, NO_MENTION_SEARCH, hitsFor } from '../lib/chat-mention';
-import { setLastPaneId } from '../lib/last-visited';
+import { Fragment, type ReactNode, useEffect, useId, useRef, useState } from 'react';
+import type { ArchiveSearchHit } from '../api';
 import type { NavTreeVariantName } from '../lib/nav-row-affordances';
+import { type SearchableTab, type TabMatch, snippetParts, splitHighlight } from '../lib/nav-search';
 import {
-  type SearchableTab,
-  type TabMatch,
-  type WorkspaceTabs,
-  paneIndex,
-  rankTabs,
-  snippetParts,
-  splitHighlight,
-  toSearchableTabs,
-} from '../lib/nav-search';
-import { requestSearchJump } from '../lib/search-jump';
-import { cachedTabsFor } from '../tabs';
-import { useWorkspaces, visibleWorkspaces } from '../workspaces';
+  type MessageRow,
+  useSearchResultOpener,
+  useSessionSearch,
+} from '../lib/use-session-search';
 import './NavSearch.css';
 
 /**
@@ -46,34 +35,11 @@ import './NavSearch.css';
  * siblings, and this component only decides what goes INSIDE the scroller.
  */
 
-/** How many tab rows a result list shows before it stops being scannable. */
-const MAX_TAB_RESULTS = 12;
-/** Message hits are a supplement, not a corpus browser — keep the tail short. */
-const MAX_MESSAGE_RESULTS = 6;
-/**
- * How many hits to ASK for, well above what we show.
- *
- * The archive indexes every transcript it can find, including sessions whose
- * pane is long gone — those cannot be navigated to and are dropped client-side
- * (see `messageRows`). Asking for exactly six therefore returns six rows that
- * may all be undisplayable: measured against a real archive, a common word
- * filled the whole top-20 with unresolvable sessions and the tier rendered
- * nothing at all. Over-fetching is one flat cost per query and buys the tier
- * its results back.
- */
-const MESSAGE_FETCH_LIMIT = 50;
-/** Long enough that the FTS5 index isn't asked to match half the alphabet. */
-const MIN_MESSAGE_CHARS = 3;
-/** Mirrors MAX_SEARCH_QUERY_BYTES on the server (1024) with room for
- *  multi-byte characters — past this the request can only earn a 400. */
-const MAX_MESSAGE_QUERY_CHARS = 256;
-const MESSAGE_DEBOUNCE_MS = 150;
-
-interface MessageRow {
-  hit: ArchiveSearchHit;
-  tab: SearchableTab;
-  paneId: string;
-}
+// The search-tuning constants (result caps, fetch limit, debounce, query
+// bounds) live with the engine in lib/use-session-search. They were left
+// behind here when it moved out and were dead for a while — two copies of a
+// tuning number with only one of them read is a trap for whoever next tries to
+// change the cap and watches nothing happen.
 
 /** Would a keystroke here be someone typing, rather than a bare shortcut? */
 function isTypingTarget(target: EventTarget | null): boolean {
@@ -110,142 +76,20 @@ export function NavSearch({
    *  the back button). The caller owns `box`, so it does the dismissing. */
   onDismissBox?: (() => void) | undefined;
 }) {
-  const navigate = useNavigate();
+  const openResult = useSearchResultOpener();
   const [query, setQuery] = useState('');
   const [cursor, setCursor] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const listId = useId();
 
-  // ── The corpus ─────────────────────────────────────────────────────────
-  // Seeded from whatever `/api/tabs/all` has already answered this session, so
-  // reopening the box costs nothing. Until it has, the per-workspace caches
-  // stand in — every workspace the user has expanded is already there, which
-  // means the FIRST keystroke is never matched against an empty list even
-  // though nothing has been fetched on this component's account.
-  const { workspaces: allWorkspaces } = useWorkspaces();
-  const [remote, setRemote] = useState<WorkspaceTabs[] | null>(() => cachedAllTabs());
-  // …and FOLLOWED, not snapshotted. `setRemote` used to run only when a focus
-  // fetch landed, so a chat deleted or renamed by another client while the box
-  // stayed focused kept being searched as it was — a dead destination still
-  // selectable, a new name unfindable — although the shared corpus had already
-  // patched it, and reconnect/visibility recovery healed everyone but this.
-  // `remote` outranks the workspace fallback, so nothing else could repair it.
-  // Subscribing makes this one more reader of the one corpus (as ChatPane is);
-  // it does not fetch, so the box is still lazy until focused.
-  useEffect(() => subscribeAllTabs(setRemote), []);
-  const corpus = useMemo<SearchableTab[]>(() => {
-    const groups: WorkspaceTabs[] =
-      remote ??
-      visibleWorkspaces(allWorkspaces).map((w) => ({
-        id: w.id,
-        slug: w.slug,
-        name: w.name,
-        tabs: cachedTabsFor(w.id),
-      }));
-    return toSearchableTabs(groups);
-  }, [remote, allWorkspaces]);
-
-  const loadCorpus = () => {
-    void loadAllTabs().then((groups) => {
-      // An empty answer is a real answer (no workspaces), but it must not
-      // REPLACE a usable fallback when it came from a failed request — see
-      // loadAllTabs, which resolves to `cache ?? []` rather than rejecting.
-      // A trailing refresh or push can publish before this promise callback.
-      // Read the held corpus now, never roll it back to the request's answer.
-      const current = cachedAllTabs();
-      if (current) setRemote(current);
-      else if (groups.length > 0) setRemote(groups);
-    });
-  };
-
-  // ── Tier 1 ─────────────────────────────────────────────────────────────
-  const tabMatches = useMemo(
-    () => rankTabs(corpus, query, { limit: MAX_TAB_RESULTS }),
-    [corpus, query],
-  );
-
-  // ── Tier 2 ─────────────────────────────────────────────────────────────
-  // `available` latches false on the first 404: /api/search is mounted only
-  // when the archive exists, so its absence is a supported configuration and
-  // must cost exactly one request to discover, not one per keystroke.
-  const [messagesAvailable, setMessagesAvailable] = useState(true);
-  // The hits AND the query they answer. The ticket below stops a late response
-  // overwriting a newer one; it cannot stop hits already in state being shown —
-  // and taken by Enter — under a query they have nothing to do with. Search
-  // `alpha`, get a message-only hit, type `bravo`, press Enter before the new
-  // answer lands: the alpha message opened with "bravo" handed to the jump.
-  // Read through `hitsFor`, the rule the `@` picker already uses for the same
-  // race, so a result never outlives the query it answers.
-  const [found, setFound] = useState<MentionSearchState>(NO_MENTION_SEARCH);
-  const hits = hitsFor(found, query);
-  // Only so the empty state can tell "nothing matched" from "not asked yet".
-  // Without it a query that only exists in MESSAGES shows a flat "no matches"
-  // for the debounce plus a round trip, and then contradicts itself.
-  const [searching, setSearching] = useState(false);
-  // Bumped by every keystroke. A response whose ticket has been superseded is
-  // discarded — otherwise a slow answer for "inv" lands after a fast one for
-  // "investing" and the list silently describes the wrong query.
-  const ticket = useRef(0);
-  useEffect(() => {
-    const q = query.trim();
-    ticket.current += 1;
-    // The server rejects an oversize `q` with a 400 (FTS5 MATCH is synchronous
-    // on its main thread), so don't spend the round trip to be told.
-    const askable =
-      messagesAvailable && q.length >= MIN_MESSAGE_CHARS && q.length <= MAX_MESSAGE_QUERY_CHARS;
-    if (!askable) {
-      setFound(NO_MENTION_SEARCH);
-      setSearching(false);
-      return;
-    }
-    const mine = ticket.current;
-    setSearching(true);
-    const timer = window.setTimeout(() => {
-      api
-        .searchMessages(q, MESSAGE_FETCH_LIMIT)
-        .then((res) => {
-          if (mine !== ticket.current) return;
-          setFound({ query: q, limit: MESSAGE_FETCH_LIMIT, hits: res.hits });
-        })
-        .catch((err: unknown) => {
-          if (mine !== ticket.current) return;
-          if ((err as { status?: number } | null)?.status === 404) setMessagesAvailable(false);
-          // Everything else (a 400 from an FTS5 expression the server could
-          // not even fall back on, a dropped connection) is silent: the
-          // instant tier above is the answer the user is actually reading.
-          setFound(NO_MENTION_SEARCH);
-        })
-        .finally(() => {
-          if (mine === ticket.current) setSearching(false);
-        });
-    }, MESSAGE_DEBOUNCE_MS);
-    return () => window.clearTimeout(timer);
-  }, [query, messagesAvailable]);
-
-  const panes = useMemo(() => paneIndex(corpus), [corpus]);
-  const messageRows = useMemo<MessageRow[]>(() => {
-    const out: MessageRow[] = [];
-    const seenSid = new Set<string>();
-    for (const hit of hits) {
-      const paneId = hit.session?.pane_id;
-      if (!paneId) continue;
-      const tab = panes.get(paneId);
-      // A hit whose pane is gone (closed chat, archived session) has nowhere
-      // to navigate. Drop it rather than offer a row that does nothing.
-      if (!tab) continue;
-      // One row per SESSION: ten hits inside the same long chat is one place
-      // to go, and ten identical rows is not a result list.
-      if (seenSid.has(hit.sid)) continue;
-      seenSid.add(hit.sid);
-      out.push({ hit, tab, paneId });
-      if (out.length >= MAX_MESSAGE_RESULTS) break;
-    }
-    return out;
-  }, [hits, panes]);
+  // THE ENGINE IS SHARED with the ⌘K palette (lib/use-session-search). It
+  // used to live here; it moved out the moment a second surface asked the same
+  // question, because two copies of a two-tier search are two sets of debounce,
+  // race and corpus-freshness bugs to fix separately.
+  const { tabMatches, messageRows, searching, rowCount, loadCorpus } = useSessionSearch(query);
 
   const active = query.trim().length > 0;
-  const rowCount = tabMatches.length + messageRows.length;
   // Clamp rather than reset: the list shrinks under the cursor whenever a
   // keystroke narrows it, and an out-of-range cursor makes Enter a no-op.
   const safeCursor = rowCount === 0 ? 0 : Math.min(cursor, rowCount - 1);
@@ -262,18 +106,19 @@ export function NavSearch({
     el.select();
   };
 
-  // `/` and ⌘K (Ctrl+K off macOS) from anywhere. Sidebar only: the sheet is a
-  // touch surface, and registering the same handler from both variants would
-  // double-handle the key on the one layout that can mount both.
+  // `/` from anywhere. Sidebar only: the sheet is a touch surface, and
+  // registering the same handler from both variants would double-handle the
+  // key on the one layout that can mount both.
+  //
+  // ⌘K USED TO LIVE HERE and focused this field. It moved to the palette
+  // (components/CommandPalette), because focusing a field only works on the
+  // layouts where the field is on screen — so the one chord meant to be a
+  // keyboard route to another chat did nothing with the rail collapsed, and
+  // nothing at all on mobile, where this box is behind a glyph inside a sheet.
   // biome-ignore lint/correctness/useExhaustiveDependencies: `focusBox` only touches a ref — listing it would re-register the window listener on every render for no behavioural difference.
   useEffect(() => {
     if (variant !== 'sidebar') return;
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && !e.altKey && (e.key === 'k' || e.key === 'K')) {
-        e.preventDefault();
-        focusBox();
-        return;
-      }
       // A bare `/` is a character in every text field on the page — including
       // the terminal's helper textarea — so it only becomes a shortcut when
       // nothing is being typed into.
@@ -323,14 +168,15 @@ export function NavSearch({
     if (query) {
       setQuery('');
       setCursor(0);
-      setFound(NO_MENTION_SEARCH);
     }
   }, [box, variant]);
 
+  // Clearing the QUERY is all it takes to clear the results: the shared hook
+  // keys tier 2 on it, and `hitsFor` refuses to hand back a result under a
+  // query it does not answer. This used to also reset the hits by hand.
   const clear = () => {
     setQuery('');
     setCursor(0);
-    setFound(NO_MENTION_SEARCH);
   };
 
   /**
@@ -345,32 +191,15 @@ export function NavSearch({
    * and its remembered scroll position is untouched.
    */
   const openTab = (tab: SearchableTab, paneId?: string, hit?: ArchiveSearchHit) => {
-    if (paneId) {
-      // Same handoff the sheet's pane list uses: persist first (a not-yet-
-      // mounted TabView reads it on mount), then tell a mounted one live.
-      setLastPaneId(tab.tabId, paneId);
-      window.dispatchEvent(
-        new CustomEvent('muxpad:select-pane', { detail: { tabId: tab.tabId, paneId } }),
-      );
-      if (hit) {
-        requestSearchJump({
-          paneId,
-          // The RAW query, not the trimmed-and-tokenised one: the chat splits
-          // it into terms itself, and if it can't find the message it quotes
-          // this back at the user, who should see what they typed.
-          query: query.trim(),
-          sid: hit.sid,
-          ts: hit.ts,
-        });
-      }
-    }
+    // Navigation itself is shared with the palette (useSearchResultOpener) —
+    // a message hit has a three-part hand-off (persist, live event, jump
+    // request) and getting one part wrong lands you in the right chat at the
+    // wrong place. What stays here is what is specific to a BOX that lives in
+    // the rail: emptying it, dropping focus, and letting the sheet dismiss.
+    openResult(tab, { paneId, hit, query });
     clear();
     inputRef.current?.blur();
     onNavigate?.();
-    void navigate({
-      to: '/w/$wsSlug/t/$tabSlug',
-      params: { wsSlug: tab.workspaceSlug, tabSlug: tab.tabSlug },
-    });
   };
 
   const openRow = (i: number) => {
@@ -559,7 +388,7 @@ function Highlight({
   );
 }
 
-function TabResult({
+export function TabResult({
   match,
   id,
   selected,
@@ -621,7 +450,7 @@ function TabResult({
   );
 }
 
-function MessageResult({
+export function MessageResult({
   row,
   id,
   selected,

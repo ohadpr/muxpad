@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { CdpConnection } from './CdpConnection.js';
+import { CDP_CALL_TIMEOUT_MS, CdpConnection } from './CdpConnection.js';
 
 /**
  * The connection, and the reason it attaches where it does.
@@ -14,6 +14,7 @@ class FakeSocket {
   static last: FakeSocket | null = null;
   onopen: (() => void) | null = null;
   onerror: ((e: unknown) => void) | null = null;
+  onclose: (() => void) | null = null;
   onmessage: ((e: { data: string }) => void) | null = null;
   sent: Array<Record<string, unknown>> = [];
   closed = false;
@@ -210,4 +211,68 @@ it('binds a handoff to page B while page A still exists', async () => {
   expect(socket.sent[1]).toMatchObject({ params: { targetId: 'p2' } });
   socket.reply(socket.sent[1]!.id as number, { sessionId: 'S2' });
   await expect(attaching).resolves.toMatchObject({ targetId: 'p2' });
+});
+
+/**
+ * A reply that never comes.
+ *
+ * Every call here used to wait forever. Nothing watched the socket after the
+ * handshake and no call had a deadline, so a browser that went away left the
+ * connection looking healthy and every later call parked for good: no error, no
+ * log, nothing to act on. The visible damage was two levels up — the host hung
+ * inside its own shutdown before reaching `chrome.kill()`, orphaning a Chrome
+ * that then squatted the debugging port, so the NEXT host attached to a dead
+ * browser and served a viewer that scrolled nothing and typed nothing.
+ */
+describe('giving up', () => {
+  function timed(callTimeoutMs = 50) {
+    const fetchImpl = vi.fn(async () => ({
+      json: async () => ({ webSocketDebuggerUrl: BROWSER_WS }),
+    })) as unknown as typeof fetch;
+    const errors: Array<[string, string]> = [];
+    const conn = new CdpConnection({
+      endpoint: 'http://127.0.0.1:9410',
+      fetchImpl,
+      socketImpl: FakeSocket as unknown as typeof WebSocket,
+      callTimeoutMs,
+      onError: (where, err) => errors.push([where, err.message]),
+    });
+    return { conn, errors };
+  }
+
+  it('rejects a call that is never answered, and says which one', async () => {
+    const { conn } = timed();
+    await conn.connect();
+    await expect(conn.send('Page.reload')).rejects.toThrow(/Page\.reload did not answer/);
+  });
+
+  it('does not reject a call that IS answered', async () => {
+    const { conn } = timed();
+    await conn.connect();
+    const call = conn.send('Page.reload');
+    FakeSocket.last?.reply(1, { ok: true });
+    await expect(call).resolves.toMatchObject({ ok: true });
+  });
+
+  it('fails everything in flight when the socket closes under it', async () => {
+    const { conn, errors } = timed(5_000);
+    await conn.connect();
+    const a = conn.send('Page.reload');
+    const b = conn.send('Page.navigate');
+    FakeSocket.last?.onclose?.();
+    await expect(a).rejects.toThrow(/closed/);
+    await expect(b).rejects.toThrow(/closed/);
+    expect(errors).toEqual([['closed', 'CDP connection closed']]);
+  });
+
+  it('refuses to send on a socket it has given up on, rather than waiting again', async () => {
+    const { conn } = timed(5_000);
+    await conn.connect();
+    FakeSocket.last?.onclose?.();
+    await expect(conn.send('Page.reload')).rejects.toThrow(/not connected/);
+  });
+
+  it('is generous by default — a slow page is not a dead one', () => {
+    expect(CDP_CALL_TIMEOUT_MS).toBeGreaterThanOrEqual(10_000);
+  });
 });

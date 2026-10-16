@@ -21,6 +21,34 @@ afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
+/**
+ * A path that cannot be written to, on any platform, in constant time.
+ *
+ * A regular FILE with a child path hung off it: `mkdir -p` under it fails
+ * ENOTDIR immediately, which is exactly the "the disk said no" case this file
+ * needs and nothing more exotic.
+ *
+ * It used to be `/proc/nope`, and that cost four days of red CI with no test
+ * ever named. On macOS there is no /proc, so the call failed instantly and the
+ * test was honest. On the Linux runner /proc is a procfs, and procfs answers a
+ * create attempt with ENOENT rather than EPERM — which node's recursive mkdir
+ * takes as "make the parent and retry", finds the parent already there, and
+ * retries forever. Measured in plain node on the runner, no vitest involved:
+ * `mkdirSync('/proc/nope')` throws ENOENT in 0ms, the same call with
+ * `{ recursive: true }` NEVER RETURNS. Node 22 and 24 both, io_uring on or
+ * off. Vitest then waits on a worker that will never report, prints its `RUN`
+ * banner and nothing else, and the job dies at the 20-minute ceiling. Two
+ * files did this (see KeyboardLog.test.ts) — one in shard 2, one in shard 4,
+ * which is exactly the two shards that were red on every run since sharding
+ * landed. Do not reach for a system path to mean "unwritable".
+ */
+function unwritable(): string {
+  const d = temp();
+  const file = join(d, 'a-file-not-a-directory');
+  writeFileSync(file, 'x');
+  return join(file, 'nope');
+}
+
 describe('where a still lives', () => {
   it('is named by the moment it belongs to', () => {
     // One file per MOMENT, not one per browser: a single "current.jpg" would
@@ -75,7 +103,7 @@ describe('saving one', () => {
   it('says so when it cannot write, instead of throwing', () => {
     // The card is worth more than its illustration: a disk problem must not
     // take the moment with it.
-    expect(saveBrowserShot('/proc/nope', 'shopping', 42, Buffer.from([1]))).toBe(false);
+    expect(saveBrowserShot(unwritable(), 'shopping', 42, Buffer.from([1]))).toBe(false);
   });
 
   it('prunes as it goes, so a busy browser cannot grow a gallery', () => {

@@ -1,7 +1,8 @@
-import { type ChatCard, cardFreshness, cardIsStale } from '@muxpad/shared';
+import { type ChatCard, cardIsStale } from '@muxpad/shared';
 import type React from 'react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { subscribe, subscribeResync } from '../events';
+import { cardColorScheme } from '../lib/card-frame';
 import { isCardOpen, toggleCardOpen, useCardOpen } from '../lib/card-open';
 import './ChatCards.css';
 import { Markdown } from './ChatMarkdown';
@@ -15,15 +16,20 @@ import { Markdown } from './ChatMarkdown';
  * is buried by the next thing said.
  */
 
-/** Relative age, in the shortest form that is still true. */
-function ago(ms: number): string {
+/**
+ * Relative age, in the shortest form that is still true — and SHORT, because
+ * this is a tail in the corner of a card rather than a column of its own.
+ * "4s", not "4 seconds ago": the only question it answers is how stale the
+ * value above it is, and two characters answer it.
+ */
+function shortAge(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000));
-  if (s < 45) return `${s}s ago`;
+  if (s < 45) return `${s}s`;
   const m = Math.round(s / 60);
-  if (m < 45) return `${m}m ago`;
+  if (m < 45) return `${m}m`;
   const h = Math.round(m / 60);
-  if (h < 36) return `${h}h ago`;
-  return `${Math.round(h / 24)}d ago`;
+  if (h < 36) return `${h}h`;
+  return `${Math.round(h / 24)}d`;
 }
 
 /**
@@ -65,16 +71,30 @@ const THEME_VARS = [
   '--danger',
 ] as const;
 
-function themeBlock(): string {
+function themeBlock(surface: string): string {
   if (typeof window === 'undefined') return '';
   const cs = getComputedStyle(document.documentElement);
   const vars = THEME_VARS.map((v) => `${v}:${cs.getPropertyValue(v).trim() || 'inherit'}`).join(
     ';',
   );
-  // `color-scheme` so form controls and scrollbars inside the card match, and a
-  // sane default type stack so a card that styles nothing still looks native.
-  return `:root{${vars};color-scheme:${cs.getPropertyValue('--card-scheme').trim() || 'light dark'}}
-html,body{margin:0;background:transparent;color:var(--fg);
+  // ─── PAINTED, NOT TRANSPARENT ───────────────────────────────────────────
+  // This used to set `background:transparent` so the card's surface would show
+  // through, and read `color-scheme` from a `--card-scheme` variable NO THEME
+  // HAS EVER DEFINED. Per CSS a transparent root hands the canvas to the UA
+  // default, and that default follows color-scheme — so it fell back to
+  // `light dark`, the UA took the BROWSER's preference, and a laptop set to
+  // dark rendered every html card as a black slab inside a light app.
+  // Measured on the running app, in alucard.
+  //
+  // Transparent cannot be made to work, so the frame is painted with the
+  // card's own measured background: the exact resolved colour, read off the
+  // card element. That is the only form that stays right through a theme
+  // switch and through color-mix() values JS cannot recompute.
+  //
+  // The scheme follows that colour rather than the browser, so form controls
+  // and scrollbars inside a card match the card they are in.
+  return `:root{${vars};color-scheme:${cardColorScheme(surface)}}
+html,body{margin:0;background:${surface};color:var(--fg);
   font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
 /* The same inset the text and markdown cards have, so a card that styles
    nothing still sits properly in its frame instead of running edge to edge.
@@ -103,28 +123,70 @@ const SELF_MEASURE = `
   addEventListener('load', send);
   if (window.ResizeObserver) new ResizeObserver(send).observe(document.body);
   send();
+  // SAYING IT AGAIN, UNPROMPTED. The first two measurements are always 0 — at
+  // parse time and at load the body has not been laid out — and the only
+  // message that carries the real height comes from the ResizeObserver, which
+  // fires ONCE. Lose that one (the parent swaps srcdoc for a theme change, say,
+  // so it arrives from a window the parent no longer recognises) and nothing
+  // ever measures again, because the body's size never changes after that.
+  // Measured: a card with a 90px block stuck at the 24px floor, for good.
+  requestAnimationFrame(send);
+  setTimeout(send, 120);
+  setTimeout(send, 500);
 </script>`;
 
 function HtmlCard({ card }: { card: ChatCard }) {
   const ref = useRef<HTMLIFrameElement>(null);
+  const slot = useRef<HTMLDivElement>(null);
   const [h, setH] = useState(120);
   // Rebuilt when the content or the THEME changes — a card keeps its injected
   // palette until it is re-rendered, so a theme switch has to produce new
   // srcdoc rather than hoping the frame notices.
   const theme = document.documentElement.dataset.theme ?? '';
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `theme` is deliberately a dependency it does not read — it is the SIGNAL that `themeBlock()` would now return different values, which is exactly when the srcdoc must be rebuilt. Dropping it leaves every html card wearing the previous theme until its content changes.
+  // THE CARD'S OWN SURFACE, measured rather than recomputed. It is a
+  // color-mix() of two theme tokens, which JS cannot evaluate — and the frame
+  // has to be painted with it exactly, or the card has a differently-coloured
+  // rectangle inside it. Layout effect so it is known before the first paint.
+  //
+  // ─── AND THE FRAME DOES NOT EXIST UNTIL IT IS KNOWN ─────────────────────
+  // This used to render the iframe at once with a `transparent` placeholder
+  // and swap in the measured colour from this effect — a second srcdoc, set in
+  // the same task the frame was inserted. Chrome runs a sandboxed frame out of
+  // process, and a srcdoc replaced before its first navigation commits loses
+  // the race more often than not: the document that lands is never laid out
+  // and never paints. Every height it posts is 0 (ignored, rightly), the
+  // ResizeObserver never fires, and the card sits at the 120px guess with
+  // nothing in it. Measured on the live app: 6 of 10 loads, at any width.
+  // Safari keeps the frame in process and never hits it, which is why the
+  // phone looked fine. So the frame is inserted ONCE, with its final srcdoc.
+  const [paint, setPaint] = useState<{ theme: string; surface: string } | null>(null);
+  useLayoutEffect(() => {
+    const el = slot.current?.closest('.chat-card');
+    setPaint({ theme, surface: el ? getComputedStyle(el).backgroundColor : 'transparent' });
+  }, [theme]);
+  // `paint.theme` is never read here, and it does not have to be: a new
+  // `paint` object IS the signal that themeBlock() would now return different
+  // values, which is exactly when the srcdoc must be rebuilt.
   const srcdoc = useMemo(
     () =>
-      `<!doctype html><html><head><meta charset="utf-8"><style>${themeBlock()}</style></head><body>${card.content}${SELF_MEASURE}</body></html>`,
-    [card.content, theme],
+      paint
+        ? `<!doctype html><html><head><meta charset="utf-8"><style>${themeBlock(paint.surface)}</style></head><body>${card.content}${SELF_MEASURE}</body></html>`
+        : null,
+    [card.content, paint],
   );
   useEffect(() => {
     const onMsg = (e: MessageEvent) => {
       const d = e.data as { muxpadCard?: number; h?: number } | null;
       if (!d || d.muxpadCard !== 1 || typeof d.h !== 'number') return;
       if (ref.current && ref.current.contentWindow === e.source) {
-        // Clamped: a card that reports a runaway height would push the whole
-        // transcript off screen, and it is pinned — you could not scroll past it.
+        // A ZERO IS NOT A HEIGHT, it is "ask me later" — the body has not been
+        // laid out yet. Clamping it UP to the floor is what made that
+        // indistinguishable from a genuinely tiny card, and left a frame
+        // parked at 24px with 90px of content in it.
+        if (d.h <= 0) return;
+        // Clamped at the top: a card that reports a runaway height would push
+        // the whole transcript off screen, and it is pinned — you could not
+        // scroll past it.
         setH(Math.min(Math.max(d.h, 24), 600));
       }
     };
@@ -132,15 +194,19 @@ function HtmlCard({ card }: { card: ChatCard }) {
     return () => window.removeEventListener('message', onMsg);
   }, []);
   return (
-    <iframe
-      ref={ref}
-      className="chat-card-frame"
-      title={card.name}
-      // No `allow-same-origin`: the frame must not be able to reach muxpad.
-      sandbox="allow-scripts"
-      srcDoc={srcdoc}
-      style={{ height: `${h}px` }}
-    />
+    <div ref={slot}>
+      {srcdoc === null ? null : (
+        <iframe
+          ref={ref}
+          className="chat-card-frame"
+          title={card.name}
+          // No `allow-same-origin`: the frame must not be able to reach muxpad.
+          sandbox="allow-scripts"
+          srcDoc={srcdoc}
+          style={{ height: `${h}px` }}
+        />
+      )}
+    </div>
   );
 }
 
@@ -231,82 +297,80 @@ export function ChatCards({ tabId }: { tabId: string | null | undefined }) {
       {cards.map((card) => {
         const stale = cardIsStale(card, now);
         const open = isCardOpen(opened, tabId, card.name);
-        // THE NAME IS ONLY WORTH ITS WIDTH WHEN THERE IS SOMETHING TO TELL IT
-        // APART FROM. With one card it is a label on the only thing in the
-        // strip — and on a 430px phone those seven characters cost the tail of
-        // the value, which is the part you actually came to read ("stocks
-        // -0.4…", truncated mid-number). With several, it is the only thing
-        // that says which row is which, so it comes back.
+        // ── ONE SHAPE, WHATEVER IS IN IT ────────────────────────────────
+        // The card used to be assembled three different ways and it showed.
+        // The NAME appeared when there were two cards or when one was open, so
+        // it moved between being inline, being a header, and being absent. An
+        // html card kept a body at all times, so clicking its row toggled a
+        // state that changed nothing visible — "clicking the line changes it a
+        // bit but doesn't expand". And the header took a whole line from the
+        // value on anything taller than one line.
         //
-        // The name is never LOST either way: opening a card shows it, and it is
-        // the row's title.
-        const showName = cards.length > 1 || open;
-        // An html card is a sandboxed frame — there is no "one line" of it to
-        // put in the row, so it always keeps a body underneath. Text and
-        // markdown ride IN the row until somebody opens them.
-        const inline = !open && card.format !== 'html';
-        const body = open || card.format === 'html';
-        // ALWAYS, AND HARD RIGHT. This was suppressed until a card went overdue,
-        // on the argument that the age is noise until it is news — the rail
-        // carries freshness as colour, so the text was redundant. Asked for
-        // back: "put the 'how long ago did this update' on the right edge of
-        // the container." A colour ramp tells you something is getting old; it
-        // does not tell you it is four hours old, and that is a number you read
-        // off a market card.
-        //
-        // Pinned to the far edge rather than trailing the value: the gap
-        // between them is slack the value gets to use, and the age never moves
-        // as the content changes length.
+        // So: the name is not drawn at all (it is the identity for `card set`,
+        // and it is on the title attribute), the age is a tail in the corner,
+        // and the card is one block of content. Nothing moves between layouts.
+        const isHtml = card.format === 'html';
+        // AN HTML CARD HAS NOTHING TO EXPAND. It renders whole and measures
+        // itself, so making it a control was offering a gesture that could not
+        // do anything. It is a plain section; everything else toggles.
+        const togglable = !isHtml;
+        const showBody = open || isHtml;
         return (
           <section
-            className={`chat-card${stale ? ' -stale' : ''}${open ? ' -open' : ''}`}
+            className={`chat-card${stale ? ' -stale' : ''}${open ? ' -open' : ''}${
+              togglable ? ' -togglable' : ''
+            }`}
             key={card.id}
-            // The rail IS the freshness readout now that the row carries no
-            // timestamp — see cardFreshness. A number, not a class, so it is a
-            // continuous fade rather than three buckets somebody has to name.
-            style={{ '--card-fresh': cardFreshness(card, now) } as React.CSSProperties}
+            title={card.name}
+            {...(togglable
+              ? {
+                  // ROLE, NOT <button>. A real button may only contain phrasing
+                  // content and a markdown card emits <p> — which is why the
+                  // control used to be a row BESIDE the body rather than around
+                  // it, and why the two could disagree about what a click does.
+                  // The whole card is one target now, as BrowserCard does it.
+                  role: 'button',
+                  tabIndex: 0,
+                  'aria-expanded': open,
+                  onClick: () => {
+                    // A click that ENDS a text selection is not a click on the
+                    // card: collapsing the thing somebody was reading, as they
+                    // finish dragging across it, is worse than not toggling.
+                    if (window.getSelection()?.toString()) return;
+                    if (tabId) toggleCardOpen(tabId, card.name);
+                  },
+                  onKeyDown: (e: React.KeyboardEvent) => {
+                    if (e.key !== 'Enter' && e.key !== ' ') return;
+                    e.preventDefault();
+                    if (tabId) toggleCardOpen(tabId, card.name);
+                  },
+                }
+              : {})}
           >
-            {/* THE WHOLE ROW IS THE CONTROL. This is a phone surface first, and
-              the × it replaced was a 15px glyph with 5px of padding — under
-              every touch-target guideline there is, and sitting right next to
-              the thing it destroyed. A full-width row has nothing to mis-hit. */}
-            <button
-              type="button"
-              className="chat-card-row"
-              aria-expanded={open}
-              onClick={() => {
-                if (tabId) toggleCardOpen(tabId, card.name);
-              }}
-              title={open ? `Collapse ${card.name}` : `Expand ${card.name}`}
-            >
-              {showName ? <span className="chat-card-name">{card.name}</span> : null}
-              {inline ? (
-                // One line, ellipsized — never wrapped. A compact card that
-                // silently becomes two rows on a narrow pane has given back
-                // exactly the height this layout exists to save.
-                <span className="chat-card-value">
-                  {card.format === 'markdown' ? <Markdown text={card.content} /> : card.content}
-                </span>
-              ) : null}
-              {/* The dotted run from the value to the age — see the css. It
-                takes the row's slack, which is why the age needs no
-                `margin-left: auto` any more, and its dots carry freshness and
-                drift toward the age as they do it. */}
-              {inline ? <span className="chat-card-leader" aria-hidden="true" /> : null}
-              <span className={`chat-card-age${stale ? ' -stale' : ''}`}>
-                {ago(now - card.updated_at)}
-                {stale ? ' · overdue' : ''}
-              </span>
-            </button>
-            {/* Unmounted, not hidden. An html card is a sandboxed iframe that
-              re-measures itself and re-posts its height; left mounted behind
-              `display:none` it would keep a frame alive and keep reporting a
-              height for something nobody can see. */}
-            {body ? (
-              <div className={`chat-card-body${card.format === 'html' ? ' -flush' : ''}`}>
+            {/* THE TAIL. Pinned to the top-right corner rather than given a
+              column, because a card is its value and the clock is a footnote on
+              it: "I don't want the title and last updated to consume an entire
+              line". Short form — 4s, 2m, 3h, 1d — for the same reason. */}
+            <span className={`chat-card-age${stale ? ' -stale' : ''}`}>
+              {shortAge(now - card.updated_at)}
+              {stale ? <span className="chat-card-sr">, overdue</span> : null}
+            </span>
+            {showBody ? (
+              // Unmounted, not hidden. An html card is a sandboxed iframe that
+              // re-measures itself and re-posts its height; left mounted behind
+              // `display:none` it would keep a frame alive and keep reporting a
+              // height for something nobody can see.
+              <div className={`chat-card-body${isHtml ? ' -flush' : ''}`}>
                 <CardBody card={card} />
               </div>
-            ) : null}
+            ) : (
+              // ONE LINE, and the same one line whatever the content is: a
+              // markdown card's blocks are flattened to it (see the css) rather
+              // than being given a layout of their own.
+              <div className="chat-card-line">
+                {card.format === 'markdown' ? <Markdown text={card.content} /> : card.content}
+              </div>
+            )}
           </section>
         );
       })}

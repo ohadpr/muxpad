@@ -64,6 +64,12 @@ export interface AgentBridge {
   lastSendAt: (paneId: string) => number | null;
   /** Relay a slash command to the pane's runner (cron `on_context=compact-first`). */
   slash: (paneId: string, cmd: 'compact' | 'clear') => boolean;
+  /**
+   * Interrupt the pane's in-flight turn — the Stop button, reachable from the
+   * CLI. False means there was nothing to stop (no runner, no live turn), which
+   * is an answer and not a failure.
+   */
+  stop: (paneId: string) => boolean;
   /** Is the pane's agent blocked on an unanswered question right now? */
   blocked: (paneId: string) => boolean;
 }
@@ -77,6 +83,7 @@ export function createAgentBridge(): AgentBridge {
     contextPct: () => null,
     lastSendAt: () => null,
     slash: () => false,
+    stop: () => false,
     blocked: () => false,
   };
 }

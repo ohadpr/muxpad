@@ -70,7 +70,22 @@
    panel, visible as a seam the width of the header. One knob, set per variant,
    so neither surface has to know about the other. */
 .navtree {
-  --nt-surface: var(--bg-tabbar);
+  --nt-surface: var(--rail-surface);
+  /* ─── THE RAIL IS A TOKEN ISLAND ──────────────────────────────────────────
+     Everything below re-points the GENERIC ink tokens at the rail's own, for
+     this subtree only. That is the whole trick, and it is not a shortcut: this
+     file reads --fg, --fg-dim, --fg-faint, --border and --bg-hover directly in
+     about seventy places, and the rail now sits on a surface that may be the
+     opposite polarity to the page (a dark rail inside a light theme). Without
+     this, each of those seventy would have to learn about the rail separately
+     — and the ones that were missed would be invisible text, found one at a
+     time by eye.
+
+     SIDEBAR ONLY — see the rule just below this block. It was declared here,
+     on every `.navtree`, and that included the mobile SHEET, which keeps
+     --bg-chrome as its surface: the sheet inherited rail ink and drew white
+     text on a light sheet. Measured before the split: sheet surface #edecf7,
+     sheet --fg #ffffff. */
   /* PINNED IS A HUE ON THE NAME, and the channel is the whole argument.
      SELECTION OWNS THE ROW'S BOX — a fill, with a funnel that runs into the
      pane. Every earlier design for this mark was also on that box: a rule under
@@ -80,16 +95,12 @@
      close to the active tab indicator" — which is the correct reading of the
      whole category, not of that value.
 
-     So this is INSIDE the row, on its contents, where selection says nothing.
-     And it is HUE rather than lightness: the name keeps its luminance and
-     changes temperature, so it cannot read as "louder" or "dimmer" than any
-     other name — the two marks are not on the same axis at all.
-
-     The accent is spent here by request. It had been reserved for "needs you";
-     a 75% tint of it on a name is a different object from the solid accent that
-     attention uses, but it is one token doing two jobs and that is worth
-     knowing. */
-  --nt-pinned-ink: color-mix(in srgb, var(--accent) 75%, var(--fg));
+     IT IS NO LONGER AN INK AT ALL. Hue was the third answer to this question
+     and it failed for a reason the first two did not: it put a second meaning
+     on the channel that already carries read-vs-unread, and then lost to it —
+     a pinned row that went unread dropped its hue entirely, so the mark was
+     visible only while the row had nothing to say. Pinned is grouping now; see
+     the seam rule beside the name colours. */
 
   /* NO GROUP SURFACE AT ALL, and that is the third answer to this question.
      The sequence is worth keeping because each attempt was measured and each
@@ -114,12 +125,42 @@
      tooltip (see TabRow) and every row is now exactly this tall. */
   --nt-row-tab: 36px;
   --nt-hit: 24px; /* square hit target for the close button */
+  /* THE ROW'S ACTION BUTTONS — one size and one gap, in one place.
+     These were 18px boxes 2px apart carrying 12–13px glyphs, and the pin and
+     the archive ended up two small marks of the same weight and colour sitting
+     two pixels apart: reported as reaching for the pin and archiving the chat.
+     A gap you can see is most of the fix, so the gap is a token too rather
+     than a magic number repeated at four call sites. */
+  --nt-ctl: 20px;
+  --nt-ctl-gap: 6px;
+  /* The destructive one stands further off. A × that deletes a workspace and
+     every chat in it should not sit on the same rhythm as `+`. */
+  --nt-ctl-gap-danger: 11px;
   --nt-disc: 18px; /* disclosure chevron column — narrow; the glyph is tiny */
   /* Tab leading-icon column. Tuned so a tab's icon lands directly under the
      workspace NAME (one chevron-width step) — the icon itself is the
      hierarchy cue, so no extra text-column indent is spent. */
   --nt-indent: 12px;
   --nt-pill: 6px; /* selection/hover pill corner radius */
+
+  /* ─── READ AND UNREAD ARE A STEP OF INK, NOT ONLY OF WEIGHT ─────────────
+     Measured in the running rail: a read row and an unread one were the SAME
+     COLOUR, ΔE 0.0, separated by weight 500 vs 700 at 13px — and on a child
+     row not even that, because the child rule is variant-scoped and outscored
+     the unread rule, so a sub-chat that had finished looked exactly like one
+     that had not. "The status of a tab being unread is just not strong
+     enough. Look how well Slack does it."
+
+     Slack's unread signal is not the badge: it is that the LABEL ITSELF goes
+     from muted to full white and from regular to bold, so the state reads in
+     peripheral vision down the whole list. That is two channels on the thing
+     your eye is already scanning, and it costs no width.
+
+     So: read steps DOWN, unread goes to full ink. Measured against this rail,
+     ΔE 0.0 -> 30.0 (ΔL* 28.6), with read still at 6.81:1 and unread 14.95:1. */
+  --nt-ink-read: color-mix(in srgb, var(--fg-dim) 55%, var(--fg-faint));
+  /* A child is subordinate, so it sits one rung quieter again — 5.05:1. */
+  --nt-ink-read-child: var(--fg-faint);
 
   /* ─── The two surfaces a row can take, and why they are DERIVED ──────────
      Selection and hover are one scale with three rungs, and all three are
@@ -285,6 +326,45 @@
   font-family: var(--ui-font);
   font-size: 14px;
   color: var(--fg);
+}
+
+/* The island itself, scoped to the surface that actually needs it. */
+.navtree[data-variant="sidebar"] {
+  --fg: var(--rail-ink);
+  --fg-dim: var(--rail-ink-dim);
+  --fg-faint: var(--rail-ink-faint);
+  --bg-hover: var(--rail-hover);
+  --border: var(--rail-border);
+  --border-strong: var(--rail-border);
+  --accent: var(--rail-accent);
+  --status-ready: var(--rail-status-ready);
+  --status-working: var(--rail-status-working);
+  --status-blocked: var(--rail-status-blocked);
+  --status-dead: var(--rail-status-dead);
+  /* DERIVED TOKENS ARE SUBSTITUTED WHERE THEY ARE DECLARED, so these have to be
+     re-derived here from the rail's values — and re-derived again on the
+     selected row, which is painted in the pane's colour. This is the bug that
+     made the selected PINNED chat's name light purple on a near-white row: the
+     mix was baked once, at `.navtree`, out of rail ink.
+
+     AND THE RAIL USED TO NEED ITS OWN NUMBER. It does not any more, and the
+     history is worth keeping because the arithmetic moved under it.
+
+     The mark has to satisfy two things at once, and only one is a contrast
+     ratio: it must not read DIMMER than an ordinary name (a pinned chat is not
+     a de-emphasised one), and it must not read the SAME as one, or it says
+     nothing. Against the rail those two were traded off by hand — 75% came out
+     dimmer than the names beside it, 40% too close to tell apart, 65% sat
+     between — and all of that was measured against a plain name at 9.25:1,
+     which is no longer what a plain name is.
+
+     Mixing into --nt-ink-read answers both tests by construction instead: the
+     pinned name is the READ name with a hue, so it cannot be dimmer or
+     brighter than one, and the percentage is then free to be chosen purely for
+     how visible the hue is. One number now serves both surfaces. */
+  --nt-hover: color-mix(in srgb, var(--fg) 6%, transparent);
+  --nt-sel: color-mix(in srgb, var(--accent) 20%, transparent);
+  --nt-sel-hover: color-mix(in srgb, var(--accent) 26%, transparent);
 }
 /* ─── The MOBILE RAIL's own scale ─────────────────────────────────────────
    The sheet does not inherit the rail's three-step scale, because it no longer
@@ -878,7 +958,12 @@
    — the same defect the reservation above fixes, just small enough to read as a
    twitch rather than a swap. A gap that appears is a gap that moves something. */
 .navtree-ws-row > .navtree-tab-controls > * + * {
-  margin-left: 2px;
+  margin-left: var(--nt-ctl-gap);
+}
+/* The × last in the group is the destructive one; give it its own air so the
+   hand does not arrive at it on the rhythm of the two beside it. */
+.navtree-ws-row > .navtree-tab-controls > .navtree-close:last-child {
+  margin-left: var(--nt-ctl-gap-danger);
 }
 
 /* Chat rows: charged in both states on the rows that RESERVE their slots, and
@@ -891,7 +976,7 @@
 /* Everything else keeps the gap only while the controls are actually out. */
 .navtree-tab-row:hover > .navtree-tab-rail > * + *,
 .navtree-tab-row:has(:focus-visible) > .navtree-tab-rail > * + * {
-  margin-left: 2px;
+  margin-left: var(--nt-ctl-gap);
 }
 .navtree-tab-row:hover > .navtree-tab-rail,
 .navtree-tab-row:has(:focus-visible) > .navtree-tab-rail,
@@ -980,7 +1065,7 @@
      block's rounded corner. */
   padding: 6px var(--nt-air) 6px calc(var(--nt-pad) + var(--nt-indent));
   border-radius: var(--nt-pill);
-  color: var(--fg-dim);
+  color: var(--nt-ink-read);
   font-weight: 500;
 }
 /* Renaming collapses the row to icon + input: the meta, controls and status
@@ -1138,16 +1223,125 @@
   background-repeat: no-repeat;
   pointer-events: none;
 }
+/* ─── AND THE SELECTED ROW LEAVES THE ISLAND ───────────────────────────────
+   It is painted in the pane's face and its funnel flares that same surface
+   into the rail — the row IS the pane reaching in. So its ink has to be the
+   pane's ink. Without this the name, the state mark and the hover controls on
+   the one row that is NOT rail-coloured would still be drawn in rail ink, i.e.
+   white on near-white in every light theme. */
+.navtree-tab-row[data-active="true"] {
+  --fg: var(--pane-ink);
+  --fg-dim: var(--pane-ink-dim);
+  --fg-faint: var(--pane-ink-faint);
+  --border: var(--pane-border);
+  --border-strong: var(--pane-border);
+  --accent: var(--pane-accent);
+  --status-ready: var(--pane-status-ready);
+  --status-working: var(--pane-status-working);
+  --status-blocked: var(--pane-status-blocked);
+  --status-dead: var(--pane-status-dead);
+  /* Re-derived, for the same reason and in the same order as the rail's. */
+  /* The read ink is re-derived FIRST, because the pinned ink is now built from
+     it: left on the rail's value, a selected pinned chat's name would be a
+     rail-ink mix sitting on a pane-coloured row — the same substitution trap,
+     one token further along. */
+  --nt-ink-read: color-mix(in srgb, var(--fg-dim) 55%, var(--fg-faint));
+  --nt-ink-read-child: var(--fg-faint);
+  --nt-hover: color-mix(in srgb, var(--fg) 6%, transparent);
+  --nt-sel: color-mix(in srgb, var(--accent) 20%, transparent);
+  --nt-sel-hover: color-mix(in srgb, var(--accent) 26%, transparent);
+}
+
+/* ─── OVERLAYS LEAVE THE ISLAND TOO ────────────────────────────────────────
+   A popover, menu or dialog rendered INSIDE the rail paints itself on the
+   PANE's surface — `.settings-popover` and `.navtree-menu` are both
+   `background: var(--bg-elev)`, and WorkspaceSettings' panel is --bg-chrome —
+   but it inherits the rail's ink, which is white in a light theme. The result
+   is white text on a white popover: the settings menu's Theme / Font size /
+   Notifications labels and its theme <select> were effectively invisible.
+
+   Same rule as the selected row, for the same reason: paint yourself in the
+   pane's colours, wear the pane's ink. Anything new that opens inside the rail
+   and is not rail-coloured belongs in this list. */
+.navtree-menu,
+.settings-popover,
+.ws-settings__panel,
+.ws-settings__bar {
+  --fg: var(--pane-ink);
+  --fg-dim: var(--pane-ink-dim);
+  --fg-faint: var(--pane-ink-faint);
+  --border: var(--pane-border);
+  --border-strong: var(--pane-border);
+  --accent: var(--pane-accent);
+  --status-ready: var(--pane-status-ready);
+  --status-working: var(--pane-status-working);
+  --status-blocked: var(--pane-status-blocked);
+  --status-dead: var(--pane-status-dead);
+  /* The read ink is re-derived FIRST, because the pinned ink is now built from
+     it: left on the rail's value, a selected pinned chat's name would be a
+     rail-ink mix sitting on a pane-coloured row — the same substitution trap,
+     one token further along. */
+  --nt-ink-read: color-mix(in srgb, var(--fg-dim) 55%, var(--fg-faint));
+  --nt-ink-read-child: var(--fg-faint);
+  --nt-hover: color-mix(in srgb, var(--fg) 6%, transparent);
+  --nt-sel: color-mix(in srgb, var(--accent) 20%, transparent);
+  --nt-sel-hover: color-mix(in srgb, var(--accent) 26%, transparent);
+}
+
 .navtree-tab-row[data-active="true"] .navtree-name-text {
   color: var(--fg);
   font-weight: 640;
 }
-/* AFTER the active-row rule on purpose. Both selectors are (0,3,0), so source
-   order decides, and a pinned row that you are ALSO in is still pinned — the
-   hue has to survive selection rather than be overwritten by it. The weight
-   above still applies; only the colour is taken back. */
-.navtree-tab-row[data-pinned="true"] .navtree-name-text {
-  color: var(--nt-pinned-ink);
+/* ── PINNED IS AN EDGE, AND THE INK IS LEFT ALONE ──────────────────────────
+   Pinned was an ink, and ink is the wrong channel for it however carefully the
+   mix is tuned: the name's colour already carries read-vs-unread, so pinned was
+   a second meaning on one channel — and it LOST. A pinned row that went unread
+   took the white and dropped its hue, so the mark was visible only while the
+   row had nothing to say. "Not too consistent", and it was not.
+
+   So the ink says exactly one thing now (grey read, white bold unread, a child
+   one rung quieter) and pinned moved OFF it entirely, onto a 2px accent edge at
+   the row's leading rim. A different channel, which is the whole point: it
+   cannot be overruled by unread, by selection, or by hover, because none of
+   them paint there.
+
+   WHY ON THE BOX, WHICH THIS FILE OTHERWISE FORBIDS. Five earlier designs went
+   on the box and were rejected for crowding what SELECTION owns — a rule under
+   the block, a tick in the state track, a ring and a plate on the chip, a fill
+   at the midpoint. The rim is the one piece of the box selection does not use,
+   so a pinned row you are also IN keeps both marks at once. That is the case
+   the hue could never do, and the first thing to check if this is ever moved.
+
+   AND IT IS ITS OWN NODE, not a pseudo-element. Both pseudos of a tab row are
+   already spoken for — `::before` is StateChip's 3px state track, `::after` is
+   the sub-chat elbow — and reaching for either from this file has produced the
+   same over-constrained-box bug twice, each time visible on screen and
+   invisible to any test that only read the rule it wrote. The funnel became a
+   node for exactly this reason; so is this. */
+.navtree-pin-edge {
+  position: absolute;
+  /* IN THE RAIL'S GUTTER, NOT ON THE ROW. At `left: 0` the bar lands on the
+     selected row's own pill — whose radius is `6px 0 0 6px`, rounded on the
+     left — so it sat ON the curve: white behind its middle, rail behind its
+     ends, and the pane accent it inherited there reading as a dimple in the
+     pill's edge rather than as a mark. Reported as "barely visible on the
+     active tab", and the measurement agrees.
+     Measured geometry: the row starts at x=8, the scroller's clip box at x=4,
+     so -3px puts the whole bar on rail ground, clear of the pill at both ends
+     and 1px inside the clip. Every row's mark now sits on one background. */
+  left: -3px;
+  /* Short of the row's full height on purpose: a bar that runs edge to edge
+     reads as a divider between rows rather than as a mark on one. */
+  top: 5px;
+  bottom: 5px;
+  width: 2px;
+  border-radius: 2px;
+  /* THE RAIL'S ACCENT EXPLICITLY, never the inherited one. The selected row
+     re-points --accent to the PANE's, which is correct for everything painted
+     ON the pill and wrong for this, which is painted beside it: a dark pane
+     accent on the dark rail is the "barely visible" half of the same bug. */
+  background: var(--rail-accent, var(--accent));
+  z-index: 1;
 }
 /* Hover on the row you are already on has almost nothing to say, so it says it
    quietly: one step of the block's own fill, never a second colour. */
@@ -1314,9 +1508,20 @@
 .navtree .navtree-tab-row:not([data-child="true"]) + .navtree-tab-row[data-child="true"]::before {
   top: 7px;
 }
-/* A child with another child after it carries the trunk straight through. */
+/* A child with another child after it carries the trunk straight through —
+   and OVERLAPS the next segment by a pixel.
+
+   The rows are flush and each segment is exactly its row's height, so on paper
+   the pieces abut. On a 2x display they do not LOOK it: a 1.5px border is
+   antialiased independently per box, and at every seam the two half-covered
+   device pixels sit side by side instead of summing, so the line reads as
+   broken once per row. Reported from a Retina screen as "small visual gap in
+   vertical line in tree"; invisible at 1x, which is why the geometry measured
+   clean here.
+   A pixel of overlap costs nothing — it is the same line continuing over
+   itself — and it removes the seam whatever the rounding does. */
 .navtree .navtree-tab-row[data-child="true"]:has(+ .navtree-tab-row[data-child="true"])::before {
-  bottom: 0;
+  bottom: -1px;
 }
 /* …and the tick into each child. */
 .navtree .navtree-tab-row[data-child="true"]::after {
@@ -1347,7 +1552,7 @@
 .navtree[data-variant="sidebar"] .navtree-tab-row[data-child="true"] .navtree-name-text {
   font-weight: 500;
   font-size: 13.5px;
-  color: var(--fg-dim);
+  color: var(--nt-ink-read-child);
 }
 .navtree[data-variant="sidebar"] .navtree-tab-row[data-child="true"]:hover .navtree-name-text {
   color: var(--fg);
@@ -1468,6 +1673,59 @@
   color: var(--fg-dim);
 }
 
+/* ─── THE COLLAPSED FAMILY'S CHIP ───────────────────────────────────────────
+   "6 · 2 running · 1 needs you", under the parent, at the children's indent.
+
+   It is the done drawer's disclosure one more step quieter — same control,
+   same caret column, smaller and fainter — because that is what it is: a
+   disclosure over chats, in a list of chats. A third kind of header here would
+   be a new thing to learn for a row that says less than either of them.
+
+   NOT a row: no 36px hit box, no state mark, no hover fill. The rows in this
+   list are chats you can open; this is a label with a caret on it, and giving
+   it a row's weight would put a seventh row in the list the collapse exists to
+   shorten.
+
+   Its caret sits on the CHILD indent (--nt-pad + --nt-indent + 8px, the same
+   expression the child rows use), so a shut group reads as one shape: parent,
+   then the chip tucked under it. */
+.navtree-subs-head {
+  display: flex;
+  align-items: center;
+  /* THE SAME 21px THE DONE HEAD USES, and for the same reason it was written
+     down there: its caret sits in the icon column and its label on the NAME
+     column, because this is a row in a list of chats, not a second kind of
+     header. Measured here: the caret ends at x=47 and a child name starts at
+     x=68 — a 6px gap put the label at 53, which is the 15px that reads as
+     "not aligned" and is the exact mistake that comment records. */
+  gap: calc(56px - 35px);
+  width: 100%;
+  padding: 2px var(--nt-pad) 4px calc(var(--nt-pad) + var(--nt-indent) + 8px);
+  border: 0;
+  background: none;
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--fg-faint);
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.navtree-subs-head:hover {
+  color: var(--fg-dim);
+}
+
+/* ON THE PHONE IT IS A TARGET, NOT A LABEL. The sheet renders this same
+   control, and on that surface it is the ONLY way to reach a worker — behind
+   11.5px of text with 6px of padding, i.e. a ~21px tap target next to 36px
+   rows. The ink stays label-quiet; only the box grows. */
+.navtree[data-variant="sheet"] .navtree-subs-head {
+  min-height: 40px;
+  padding-top: 4px;
+  padding-bottom: 6px;
+}
 /* The nested disclosure: the agents' work, inside the drawer and under the
    chats you archived yourself. One step further in than the head above it and
    one step quieter, so the nesting is legible without a second kind of
@@ -1594,9 +1852,8 @@
      sits in a track BEFORE the status column. */
   flex: 0 0 0;
   width: 0;
-  /* 18px square when revealed — the exact box the strip tabs' × uses; the
-     row is taller, so it centers as an inset square (not a full-height slab). */
-  height: 18px;
+  /* A square when revealed, inset in a taller row (not a full-height slab). */
+  height: var(--nt-ctl);
   align-self: center;
   display: inline-flex;
   align-items: center;
@@ -1665,8 +1922,8 @@
 .navtree-tab-row:has(:focus-visible) .navtree-close,
 .navtree-close:active,
 .navtree-close:focus-visible {
-  flex-basis: 18px;
-  width: 18px;
+  flex-basis: var(--nt-ctl);
+  width: var(--nt-ctl);
   opacity: 1;
   visibility: visible;
 }
@@ -1727,8 +1984,13 @@
 }
 /* Same hover grammar as the strip tabs' ×: quiet hover square, danger-red
    glyph — "this deletes", consistent everywhere a close lives. */
+/* ON HOVER IT STOPS BEING A HINT. The background is what tells you WHICH of
+   the two you are actually on — the thing the report was about — so it is a
+   filled square with a visible edge rather than a wash that blends into the
+   row's own hover tint. */
 .navtree-close:hover {
   background: var(--bg-hover);
+  box-shadow: inset 0 0 0 1px var(--border);
   color: var(--danger);
   opacity: 1;
 }
@@ -1979,8 +2241,8 @@
    looking at holds focus, so `:focus-within` pinned its close button open. */
 .navtree-pane-row-wrap:hover .navtree-close,
 .navtree-pane-row-wrap:has(:focus-visible) .navtree-close {
-  flex-basis: 18px;
-  width: 18px;
+  flex-basis: var(--nt-ctl);
+  width: var(--nt-ctl);
   margin-left: 0;
   opacity: 1;
 }
@@ -2028,6 +2290,22 @@
 .navtree-tab-row[data-unread="true"] .navtree-name-text,
 .navtree-pane-row[data-unread="true"] .navtree-pane-label {
   font-weight: 700;
+  /* The colour is half the signal — see --nt-ink-read. Weight alone at 13px,
+     with both rows the same ink, is the thing that was "not strong enough". */
+  color: var(--fg);
+}
+/* THE CHILD ARM, and it is load-bearing rather than belt-and-braces. The child
+   rule above is variant-scoped — (0,5,0) against this rule's (0,3,0) — so it
+   won outright, and an unread SUB-CHAT rendered at child weight and child ink:
+   no bold, no step of colour, nothing at all. The one row in the list most
+   likely to be the thing you were waiting for.
+   This file has been bitten by exactly this twice before (see the sheet's
+   selected-and-unread note); an explicit arm cannot be undone by a later move. */
+.navtree[data-variant="sidebar"]
+  .navtree-tab-row[data-child="true"][data-unread="true"]
+  .navtree-name-text {
+  font-weight: 700;
+  color: var(--fg);
 }
 /* The WORKSPACE-level unread bold is deliberately gone. `unread` bolded pane +
    tab + workspace simultaneously — the exact triple-signal the attention dot
@@ -2325,8 +2603,8 @@
    `:has(.navtree-pin.is-pinned)` outranked `.navtree-tab-row:hover` and the
    button stayed hidden on a row you were pointing at. */
 .navtree-ws-row > .navtree-tab-controls > .navtree-close:not(.navtree-ws-add) {
-  flex: 0 0 18px;
-  width: 18px;
+  flex: 0 0 var(--nt-ctl);
+  width: var(--nt-ctl);
 }
 
 /* Chat rows need no reservation at all now. Nothing in their rail is permanent
@@ -2354,8 +2632,8 @@
    — the same button, two opposite complaints). So: always there, at the weight
    of the rest of the row's chrome, full strength on hover. */
 .navtree-ws-row > .navtree-tab-controls > .navtree-ws-add {
-  flex: 0 0 18px;
-  width: 18px;
+  flex: 0 0 var(--nt-ctl);
+  width: var(--nt-ctl);
   opacity: 0.45;
   visibility: visible;
 }
@@ -2408,6 +2686,20 @@
    Chrome surface + hairline divider — same plate language as the bar
    it replaces. */
 .sidenav {
+  /* THE SAME ISLAND AS `.navtree`, because the rail's chrome is not all inside
+     the tree: `.sidenav-brand` is a SIBLING of it, and on the deep rail the
+     wordmark measured 1.02:1 — invisible — until this rule existed. */
+  --fg: var(--rail-ink);
+  --fg-dim: var(--rail-ink-dim);
+  --fg-faint: var(--rail-ink-faint);
+  --bg-hover: var(--rail-hover);
+  --border: var(--rail-border);
+  --border-strong: var(--rail-border);
+  --accent: var(--rail-accent);
+  --status-ready: var(--rail-status-ready);
+  --status-working: var(--rail-status-working);
+  --status-blocked: var(--rail-status-blocked);
+  --status-dead: var(--rail-status-dead);
   /* flex-basis is overridden inline with the persisted/dragged width; this
      is just the fallback before React mounts. grow/shrink stay 0 so the rail
      holds whatever width the user dragged. Kept in step with
@@ -2427,7 +2719,14 @@
   /* The distinctly-darker "chrome board" token (same as the top tab bar /
      mobile strip), not --bg-chrome: the latter is only a hair off --bg, so
      the rail's empty space + footer blurred into the pane content behind it. */
-  background: var(--bg-tabbar);
+  background: var(--rail-surface);
+  /* THE SEAM, and only where a tonal step cannot do the job. Dark themes set
+     --rail-seam because two dark surfaces have nowhere to go from each other;
+     light themes set it transparent, where the step is 60+ points of L* and a
+     line would only cut the selected row's curves as they open into the pane.
+     Drawn as a box-shadow rather than a border so it costs no layout width —
+     the selected row still reaches x=280 and merges. */
+  box-shadow: inset -1px 0 0 0 var(--rail-seam);
   /* NO RIGHT HAIRLINE. It was the seam between rail and pane, and the selected
      row is now the place where those two are deliberately ONE surface — a 1px
      border runs straight through the join, which is the only part of it that
@@ -2959,6 +3258,7 @@ body.sidenav-resizing iframe {
    all, which is why the weight step is a big one: 400 → 700, not 500 → 600. */
 .navtree[data-variant="sheet"] .navtree-tab-row[data-unread="true"] .navtree-name-text {
   font-weight: 700;
+  color: var(--fg);
 }
 
 /* ─── The trailing marks ──────────────────────────────────────────────────

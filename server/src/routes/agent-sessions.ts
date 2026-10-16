@@ -104,6 +104,26 @@ export function agentSessionsRoutes(deps: {
   });
 
   /**
+   * INTERRUPT the pane's in-flight turn — the Stop button over HTTP.
+   *
+   * 200 `{stopped:true}` when a turn was relayed a stop, 200 `{stopped:false}`
+   * when there was nothing running. Both are successes: "it was already idle"
+   * is the answer to "stop it", not an error, and a caller scripting a
+   * recovery sweep should not have to tell a no-op from a failure.
+   */
+  app.post('/:paneId/stop', (c) => {
+    const paneId = c.req.param('paneId');
+    // A PANE THAT DOES NOT EXIST IS NOT "ALREADY IDLE". Both used to answer
+    // `{stopped:false}`, so a typo'd pane id printed "no turn was running" and
+    // exited 0 — a recovery script would have reported success at stopping
+    // something it never reached.
+    if (!store.getByPane(paneId) && !new PaneStore(deps.db).getById(paneId))
+      return c.json({ error: { code: 'not_found', message: 'no such pane' } }, 404);
+    const stopped = deps.agentBridge?.stop(paneId) ?? false;
+    return c.json({ stopped });
+  });
+
+  /**
    * Note that a message arrived in this pane's chat, from another chat.
    *
    * Both ends are resolved pane → TAB here, because a chat is a tab: the

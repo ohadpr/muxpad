@@ -106,6 +106,71 @@ describe('scripts/muxpad HTTP wrapper', () => {
     expect(persisted!.name).toBe('test-from-cli');
   });
 
+  describe('muxpad agent — asking what it does must never swap the session', () => {
+    // The cost of getting this wrong, measured on pane
+    // 01M4WFEFZWKVE6HESHY772P0F3: a sub-chat trying to work out how to fan out
+    // workers ran `muxpad agent new --help`, got "unknown flag --help", and
+    // followed it with a bare `muxpad agent`. That minted a SECOND session in
+    // a pane that already had one; its in-flight tool call died with "the
+    // session ended before this call's result was recorded"; the pane then
+    // read `idle` as though it had finished; and a later `agent send` reported
+    // success while delivering into the stranded session nobody was reading.
+    it('answers --help on an HTTP subcommand instead of refusing it as a flag', async () => {
+      const env = { ...process.env, MUXPAD_API_URL: `http://127.0.0.1:${port}` };
+      for (const sub of ['new', 'send', 'list', 'wait', 'transcript', 'respawn']) {
+        const { stdout } = await execFileAsync(MUXPAD_BIN, ['agent', sub, '--help'], {
+          env,
+          encoding: 'utf-8',
+        });
+        expect(stdout, `agent ${sub} --help`).toContain(`usage: muxpad agent ${sub}`);
+      }
+    });
+
+    it('refuses a bare `muxpad agent` in a pane whose startup command already resumes a session', async () => {
+      const wsId = workspaces.create({ name: 'guard' }).id;
+      const tabId = tabs.create({ name: 't', workspace_id: wsId, layout: 'p' }).id;
+      const paneId = panes.create({ tab_id: tabId }).id;
+      panes.setStartupCmd(paneId, 'muxpad agent --mode chat --resume some-session-id');
+      const env = {
+        ...process.env,
+        MUXPAD_API_URL: `http://127.0.0.1:${port}`,
+        MUXPAD_PANE_ID: paneId,
+      };
+      await expect(
+        execFileAsync(MUXPAD_BIN, ['agent'], { env, encoding: 'utf-8' }),
+      ).rejects.toMatchObject({
+        code: 1,
+        stderr: expect.stringContaining('already has a running agent session'),
+      });
+    });
+
+    it('still lets the server respawn a pane — its own command carries --resume', async () => {
+      // The guard keys on the ARGV it was given, not on the pane being live, so
+      // the command the server itself writes into `startup_cmd` must pass. If
+      // this ever fails, every agent pane stops surviving a ptyd restart.
+      const wsId = workspaces.create({ name: 'respawn' }).id;
+      const tabId = tabs.create({ name: 't', workspace_id: wsId, layout: 'p' }).id;
+      const paneId = panes.create({ tab_id: tabId }).id;
+      panes.setStartupCmd(paneId, 'muxpad agent --mode chat --resume some-session-id');
+      const env = {
+        ...process.env,
+        MUXPAD_API_URL: `http://127.0.0.1:${port}`,
+        MUXPAD_PANE_ID: paneId,
+      };
+      // What this asserts is that the GUARD did not fire — not what happens
+      // afterwards. CI does not run `pnpm build`, so the runner's own usage
+      // text is not always there to print, and asserting on it made this test
+      // pass locally and fail in CI for a reason unrelated to the guard.
+      const out = await execFileAsync(
+        MUXPAD_BIN,
+        ['agent', '--mode', 'chat', '--resume', 'some-session-id', '--help'],
+        { env, encoding: 'utf-8' },
+      ).catch((e: { stdout?: string; stderr?: string }) => e);
+      const both = `${out.stdout ?? ''}${out.stderr ?? ''}`;
+      expect(both).not.toContain('already has a running agent session');
+    });
+  });
+
   it('--json emits raw server JSON', async () => {
     const env = { ...process.env, MUXPAD_API_URL: `http://127.0.0.1:${port}` };
     const { stdout } = await execFileAsync(

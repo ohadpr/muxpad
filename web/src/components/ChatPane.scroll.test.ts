@@ -218,3 +218,21 @@ describe('the composer clears the software keyboard', () => {
     expect(tsx).toContain('isMobileLayout()');
   });
 });
+
+describe('a send follows the reader to the end', () => {
+  // Both paths that put a `send` on the socket — the idle optimistic one and the
+  // queued one — must say `sent`. Measured with two pinned cards: a reader 60px
+  // above the end sent a message and their own working line sat 163px behind
+  // the composer, because neither path told the scroll mechanism anything. The
+  // follow itself is proven in chat-scroll-controller.test.ts; this pins the
+  // wiring, which jsdom cannot lay out.
+  it('every send to the socket is followed by a `sent` dispatch', () => {
+    const sends = code.match(/ws\.send\(JSON\.stringify\(\{ t: 'send'/g) ?? [];
+    const followed =
+      code.match(
+        /ws\.send\(JSON\.stringify\(\{ t: 'send', text: outgoing \}\)\);\s*scroll\.current\?\.dispatch\(\{ t: 'sent' \}\);/g,
+      ) ?? [];
+    expect(sends.length).toBe(2);
+    expect(followed.length).toBe(sends.length);
+  });
+});

@@ -19,6 +19,7 @@ import { isExpanded, toggleExpanded, useNavExpansion } from '../lib/nav-expansio
 import { tabRowAffordances } from '../lib/nav-row-affordances';
 import { nextCronLabel, railCronLabel } from '../lib/next-cron-label';
 
+import { recallOpenSubChats, rememberOpenSubChats } from '../lib/rail-folds';
 import { reorderByDrop } from '../lib/reorder';
 import { orderAfterPinnedDrop } from '../lib/tab-drag';
 import { useFrozenTabOrder } from '../lib/tab-freeze';
@@ -1306,6 +1307,26 @@ export function TabList({
   // fourteen finished chats under it.
   const [doneOpen, setDoneOpen] = useState(false);
   const [subsOpen, setSubsOpen] = useState(false);
+  // Which parents' sub-chats are open — REMEMBERED, because collapsing by
+  // default is only tolerable if opening sticks across the remounts a sidebar
+  // sees all day (see lib/rail-folds). Read once, lazily: localStorage in a
+  // render body would run on every keystroke in the rename field.
+  const [openSubs, setOpenSubs] = useState<Set<string>>(() => recallOpenSubChats());
+  // RE-READ, don't edit the snapshot. Every expanded workspace mounts its own
+  // TabList, and the sheet mounts another beside the rail — each one read the
+  // store at ITS mount and then wrote back its whole copy, so opening a group
+  // in one list silently erased the groups opened in a list that mounted
+  // earlier. (Open P in workspace A, then Q in B: the store ends up {Q}, and P
+  // is shut on the next reload.) The store is the shared state; the component
+  // holds a view of it.
+  const toggleSubs = (tabId: string) => {
+    setOpenSubs(() => {
+      const next = recallOpenSubChats();
+      if (!next.delete(tabId)) next.add(tabId);
+      rememberOpenSubChats(next);
+      return next;
+    });
+  };
 
   // Drag-to-reorder is PINNED-ONLY (see lib/tab-drag for why). The hook is
   // fed just the pinned ids, so an unpinned row can neither be dragged into
@@ -1399,10 +1420,11 @@ export function TabList({
    *  switches the row's mark from a tile to a dot in its parent's chip column,
    *  and what puts the one indent step on the row. Nothing about a clock — a
    *  sub-chat has none, and the row reads its own. */
-  const renderRow = (t: Tab, parent?: Tab) => (
+  const renderRow = (t: Tab, parent?: Tab, markStatus?: PaneStatus) => (
     <TabRow
       key={t.id}
       tab={t}
+      {...(markStatus ? { markStatus } : {})}
       // The whole reason `renderGroup` knows the parent. Forwarding it was
       // missed, and because every OTHER prop here is spelled out explicitly
       // there was nothing to notice: `TabRow.parent` was simply `undefined` on
@@ -1430,37 +1452,108 @@ export function TabList({
       }
     />
   );
-  const renderGroup = (g: ChatGroup) => (
-    <Fragment key={`${g.chat.id}${g.contextOnly ? ':subs' : ''}`}>
-      {g.contextOnly ? (
-        /* A LABEL, not a row. The parent may be live with a row of its own
-           above, or done with one beside these — either way a second clickable
-           copy of it here would be a chat appearing twice in one list, and the
-           live one would go on lighting up as it worked. */
-        <div className="navtree-done-parent" aria-hidden="true">
-          {g.chat.name}
-        </div>
-      ) : (
-        renderRow(g.chat)
-      )}
-      {g.children.map((k) => renderRow(k, g.chat))}
-    </Fragment>
-  );
+  /**
+   * ─── SUB-CHATS ARE COLLAPSED, AND THE COLLAPSE CARRIES THEIR STATE ────────
+   *
+   * A fan-out is the normal shape of work here — this install has a chat with
+   * 65 children — and every one of them was a row. The rail is a list of
+   * CONVERSATIONS; a worker is a thing one of those conversations is doing,
+   * and forty of them in the list is the list not working.
+   *
+   * Shut by default, and the chip under the parent says what is inside
+   * ("6 · 2 running · 1 needs you"). Two things make that safe rather than a
+   * hiding place:
+   *
+   *   · the parent's own mark wears the loudest state in the family while shut
+   *     (`rollupStatus`), so a blocked worker still reaches the glance; and
+   *   · opening STICKS (`rail-folds`), so the chat you are actually sitting
+   *     with is not re-collapsed by the next tab switch.
+   *
+   * The disclosure is drawn only where there is something to disclose. In the
+   * done drawer's sub-chat section the children are ALREADY behind two
+   * disclosures and the parent is a label, not a row — a third caret there
+   * would be a caret on a caret, so `contextOnly` keeps the flat rendering.
+   */
+  const renderGroup = (g: ChatGroup) => {
+    // OPEN WHEREVER YOU ARE. A shut group that contains the chat you are
+    // looking at would leave the rail with no selected row anywhere — tap a
+    // spawn card in the parent, or @-jump to a worker, and the sidebar shows
+    // nothing highlighted. On the phone, where the sheet IS the navigation,
+    // that is "where am I?" with no answer. Not persisted: it is a fact about
+    // where you are, not a disclosure you opened, so leaving the chat
+    // re-shuts the group.
+    const holdsActive = isActiveWorkspace && g.children.some((k) => k.slug === activeTabSlug);
+    const open = openSubs.has(g.chat.id) || holdsActive;
+    const foldable = !g.contextOnly && g.children.length > 0;
+    return (
+      <Fragment key={`${g.chat.id}${g.contextOnly ? ':subs' : ''}`}>
+        {g.contextOnly ? (
+          /* A LABEL, not a row. The parent may be live with a row of its own
+             above, or done with one beside these — either way a second clickable
+             copy of it here would be a chat appearing twice in one list, and the
+             live one would go on lighting up as it worked. */
+          <div className="navtree-done-parent" aria-hidden="true">
+            {g.chat.name}
+          </div>
+        ) : (
+          renderRow(
+            g.chat,
+            undefined,
+            // Only while SHUT. Expanded, the children have rows of their own
+            // and the parent goes back to saying what it is doing itself.
+            foldable && !open ? rollupStatus(g.chat.status, g.children) : undefined,
+          )
+        )}
+        {foldable ? (
+          <button
+            type="button"
+            className="navtree-subs-head"
+            // NO STATE COLOUR ON THIS LABEL, and that is a measurement, not a
+            // preference. It first carried the mark's own red for a blocked
+            // child: measured on dracula, #f0655f on the rail's ground is
+            // 2.97:1 — fine for a 10px filled dot (a graphic) and well under
+            // AA for 11.5px text. Lightening it would have invented a seventh
+            // red. The words say WHICH state and how many; the HUE is the
+            // parent row's mark, which is the rail's one state channel and is
+            // already carrying this exact fact while the group is shut (see
+            // rollupStatus). Two channels for one claim was what the rail's
+            // state slot was consolidated to remove.
+            onClick={() => toggleSubs(g.chat.id)}
+            aria-expanded={open}
+            // The CHIP'S OWN WORDS are in the name, not just the verb: an
+            // aria-label replaces the visible text, so "Show sub-chats of
+            // Trayo Builder" would be a screen reader hearing everything
+            // except the part that says one of them is waiting on you.
+            aria-label={`${open ? 'Hide' : 'Show'} sub-chats of ${g.chat.name} — ${subChatChip(
+              g.children,
+            )}`}
+          >
+            <SvgCaret open={open} />
+            {subChatChip(g.children)}
+          </button>
+        ) : null}
+        {!foldable || open ? g.children.map((k) => renderRow(k, g.chat)) : null}
+      </Fragment>
+    );
+  };
 
   return (
     <div className="navtree-tab-list">
       {liveGroups.map((g, i) => (
         <Fragment key={g.chat.id}>
-          {/* NO SEAM BETWEEN THE BLOCKS, and the element that drew it is gone
-              rather than zeroed. It was a rule (flush, then inset, then a 40px
-              stub), then pure air, then a `height: 0; margin: 0` div that
-              rendered nothing at all — an element kept alive by edits that each
-              took one more thing away from it.
-              The mark is on the ROWS now: a pinned chat's NAME carries a hue
-              (--nt-pinned-ink), which is a channel selection does not use.
-              Marking the rows is also what the seam could never do — it said
-              "something changes here" from BETWEEN two blocks, which is only
-              legible to someone who already knows the list is sorted. */}
+          {/* NOTHING BETWEEN THE BLOCKS. A seam here was drawn as a rule
+              (flush, then inset, then a 40px stub), then as pure air, then as
+              a `height: 0` div that rendered nothing — an element kept alive
+              by edits each taking one more thing away from it. Then the mark
+              went onto the NAME as a hue and lost to unread; then back here as
+              a gap the renderer had to flag, because the row above the seam is
+              usually a pinned chat's SUB-CHAT and no selector can see that it
+              belongs to the block above.
+              It is on the ROWS now, as an edge (--accent, 2px) that selection
+              does not paint over and unread cannot overrule — which is what a
+              seam could never do anyway: it said "something changes here" from
+              between two blocks, legible only to someone who already knew the
+              list was sorted. */}
           {renderGroup(g)}
         </Fragment>
       ))}
@@ -1482,7 +1575,7 @@ export function TabList({
             <SvgCaret open={doneOpen} />
             {doneCount} done
           </button>
-          {doneOpen ? doneGroups.map(renderGroup) : null}
+          {doneOpen ? doneGroups.map((g) => renderGroup(g)) : null}
           {/* ─── AND THE AGENTS' WORK, one level further in ──────────────────
               Delivered sub-chats were IN the list above and filled it with
               machine-named work nobody recognised: on this install, 104 of them
@@ -1506,7 +1599,7 @@ export function TabList({
                 <SvgCaret open={subsOpen} />
                 {subCount} sub-chat{subCount === 1 ? '' : 's'}
               </button>
-              {subsOpen ? subGroups.map(renderGroup) : null}
+              {subsOpen ? subGroups.map((g) => renderGroup(g)) : null}
             </>
           ) : null}
         </>
@@ -1697,6 +1790,16 @@ interface TabRowProps {
   /** The chat that spawned this one, when it is a child. Supplies the clock
    *  they share, and switches the row's leading mark from tile to dot. */
   parent?: Tab | undefined;
+  /**
+   * The state mark to draw INSTEAD of this tab's own.
+   *
+   * Set on a parent whose sub-chats are collapsed, where it carries the
+   * loudest state in the family (see `rollupStatus`). Absent everywhere else,
+   * and absent means "draw your own" — an override that defaulted to the
+   * rolled-up value would make every row's mark depend on a list the row
+   * cannot see.
+   */
+  markStatus?: PaneStatus | undefined;
   workspace: Workspace;
   isActiveTab: boolean;
   /**
@@ -1909,6 +2012,98 @@ export function groupChats(tabs: Tab[]): {
 }
 
 /**
+ * THE STATE A COLLAPSED GROUP SHOWS — the parent's own, or its loudest child's.
+ *
+ * Collapsing sub-chats hides rows that were carrying the rail's two most
+ * consequential signals: a worker that is BLOCKED on a question, and a worker
+ * that has finished and is waiting. Hiding those behind a caret would make the
+ * collapse a regression rather than a tidy-up — the whole value of the rail is
+ * that a glance down it is true.
+ *
+ * So a collapsed parent wears the loudest state in its family, its own
+ * included. Precedence, loudest first:
+ *
+ *   blocked  somebody is waiting on a human. Nothing outranks it.
+ *   working  a turn is running. ABOVE `ready` deliberately: "a still rail
+ *            means nothing is running" is a property of the whole rail, and a
+ *            collapsed group with a working child inside it must not be still.
+ *   ready    finished, waiting for you.
+ *   dead     findable, not shouting.
+ *   idle     nothing, and no element — see RowMark.
+ *
+ * Expanded, the parent goes back to its OWN state and the children carry
+ * theirs, because then they have rows to carry it on.
+ */
+const STATUS_RANK: Record<PaneStatus, number> = {
+  blocked: 4,
+  working: 3,
+  ready: 2,
+  dead: 1,
+  idle: 0,
+};
+
+export function rollupStatus(
+  own: PaneStatus | undefined,
+  children: readonly Tab[],
+): PaneStatus | undefined {
+  let loudest: PaneStatus = 'idle';
+  for (const k of children) {
+    const s = k.status ?? 'idle';
+    if (STATUS_RANK[s] > STATUS_RANK[loudest]) loudest = s;
+  }
+  // Blocked outranks the parent itself: somebody is stopped on a question, and
+  // nothing the parent is doing is more urgent than that.
+  if (loudest === 'blocked') return 'blocked';
+  // Otherwise the parent KEEPS ITS OWN STATE. A pure rank over the family
+  // swallowed the commonest shape there is: a coordinator that finished its
+  // turn and is waiting on you, with workers still running, showed a spinner
+  // and never said `ready` — its own completion hidden by its children's
+  // activity. The chip says "2 running" either way, so nothing is lost.
+  if (own && own !== 'idle') return own;
+  return loudest === 'idle' ? own : loudest;
+}
+
+/**
+ * WHAT THE COLLAPSED CHIP SAYS.
+ *
+ * A bare count ("6") is the thing a caret already implies and answers the
+ * wrong question: nobody collapses six workers and then wonders how many there
+ * were, they wonder whether any of them needs them. So the chip carries the
+ * STATES, in the same words the rest of the product uses — "needs you" is the
+ * mark's own title (MARK_TITLES.blocked), not a new vocabulary for the rail.
+ *
+ * Only non-zero states appear, loudest first, and a family where nothing is
+ * happening says so in the shortest possible form: "6 sub-chats". The count
+ * leads whenever there IS state to report, because then it is the denominator
+ * of what follows — "6 · 2 running · 1 needs you" reads as a fraction of a
+ * known whole, which "2 running · 1 needs you" does not.
+ */
+export function subChatChip(children: readonly Tab[]): string {
+  const n = children.length;
+  let working = 0;
+  let blocked = 0;
+  let ready = 0;
+  let dead = 0;
+  for (const k of children) {
+    const s = k.status ?? 'idle';
+    if (s === 'working') working++;
+    else if (s === 'blocked') blocked++;
+    else if (s === 'ready') ready++;
+    else if (s === 'dead') dead++;
+  }
+  const parts: string[] = [];
+  if (blocked > 0) parts.push(`${blocked} needs you`);
+  if (working > 0) parts.push(`${working} running`);
+  if (ready > 0) parts.push(`${ready} ready`);
+  // Last, and counted: a worker whose runner exited is quiet, not absent, and
+  // "6 sub-chats" over three dead ones is the shut group telling a lie by
+  // omission. It is the rail's quietest state and it is the last word here.
+  if (dead > 0) parts.push(`${dead} dead`);
+  if (parts.length === 0) return `${n} sub-chat${n === 1 ? '' : 's'}`;
+  return [`${n}`, ...parts].join(' · ');
+}
+
+/**
  * How many CHATS the done group holds — the number in its header.
  *
  * One per group now that the drawer holds top-level chats only and every group
@@ -2037,6 +2232,7 @@ function CronMark({ tab }: { tab: Tab }) {
 function TabRow({
   tab,
   parent,
+  markStatus,
   workspace,
   isActiveTab,
   workspaceLabel,
@@ -2504,7 +2700,11 @@ function TabRow({
       // went deliberately — see RowMark. The row's state is now told exactly
       // once, by the 10px mark at its right edge.
       data-child={parent ? 'true' : undefined}
-      // The NAME carries the pinned mark — see --nt-pinned-ink in NavTree.css.
+      // Pinned is a 2px accent EDGE on the row's leading rim — see NavTree.css.
+      // Off the ink entirely, because the name's colour already says
+      // read-vs-unread: a hue there was a second meaning on one channel, and it
+      // lost, so a pinned row going unread dropped its mark exactly when it
+      // became interesting.
       data-pinned={tab.pinned ? 'true' : undefined}
       data-unread={tab.unread ? 'true' : undefined}
       data-pressing={pressing ? 'true' : undefined}
@@ -2594,6 +2794,15 @@ function TabRow({
       {isActiveTab && variant === 'sidebar' && (
         <span className="navtree-tab-funnel" aria-hidden="true" />
       )}
+      {/* THE PINNED EDGE, and it is a node for the SAME reason the funnel is:
+          both pseudos of a tab row are spoken for — `::before` is StateChip's
+          state track, `::after` is the sub-chat elbow — and styling either one
+          from here has produced the same bug twice. Ownership, not geometry.
+          It is a mark on the row's rim rather than an ink on its name because
+          the name's colour already carries read-vs-unread; see NavTree.css. */}
+      {tab.pinned && variant === 'sidebar' && (
+        <span className="navtree-pin-edge" aria-hidden="true" />
+      )}
       {/* ─── THE TRAILING RAIL — ONE CELL, ONE COLUMN ──────────────────────
           Everything a row says on its right, in one flex box, right-aligned,
           in a fixed order. It used to be TWO grid tracks — hover controls in
@@ -2640,7 +2849,7 @@ function TabRow({
               aria-label={tab.pinned ? `Unpin tab ${tab.name}` : `Pin tab ${tab.name}`}
               aria-pressed={tab.pinned === true}
             >
-              <SvgPin size={12} filled={tab.pinned === true} />
+              <SvgPin size={14} filled={tab.pinned === true} />
             </button>
           ) : null}
           {affords.closeButton ? (
@@ -2651,7 +2860,7 @@ function TabRow({
               title="Archive — moves to done, a message brings it back"
               aria-label={`Archive chat ${tab.name}`}
             >
-              <SvgArchive size={13} />
+              <SvgArchive size={15} />
             </button>
           ) : null}
         </span>
@@ -2661,7 +2870,7 @@ function TabRow({
             deliberately: agent panes work quietly for minutes on their chat
             face, and the one chat whose progress you are actually waiting on
             must not be the single row that goes dark. */}
-      {!isEditing && <RowMark status={tab.status} />}
+      {!isEditing && <RowMark status={markStatus ?? tab.status} />}
       {overlays}
     </div>
   );
@@ -2915,14 +3124,24 @@ function SvgPin({ size = 12, filled = false }: { size?: number; filled?: boolean
  *  gesture and need a control you can simply see and tap. */
 
 /**
- * ARCHIVE — an arrow going down into a tray. The row's one-click action.
+ * ARCHIVE — a box with a lid. Reported: "the archive icon can easily be clicked
+ * thinking it's the pin."
  *
- * Deliberately NOT a × and deliberately not the filing-box glyph (a lid over a
- * body): at 13px the box's lid and body collapse into two stacked bars and it
- * reads as a hamburger. The arrow carries the verb — something moves, and it
- * moves DOWN and out of the way, which is what the done group is.
+ * The previous glyph was an arrow going down into a tray, and the note here
+ * argued against the box because "at 13px the lid and body collapse into two
+ * stacked bars and it reads as a hamburger". That was true of THAT box: two
+ * outlined bars of equal weight, at 13px. The fix is not to avoid the shape,
+ * it is to draw it so the two parts cannot read as equals — a FILLED lid sitting
+ * on an outlined body, with a handle notch in the middle. Filled-on-outline is
+ * legible at this size in a way outline-on-outline is not.
+ *
+ * And the shape has to be maximally unlike a PIN, because that is the actual
+ * complaint: the pin is a thin diagonal needle, so the archive is a wide
+ * horizontal solid. Two marks that differ in weight, axis and silhouette do not
+ * get confused for each other at a glance — which the old pair, both thin
+ * strokes of the same colour two pixels apart, demonstrably did.
  */
-function SvgArchive({ size = 13 }: { size?: number }) {
+function SvgArchive({ size = 15 }: { size?: number }) {
   return (
     <svg
       width={size}
@@ -2930,16 +3149,17 @@ function SvgArchive({ size = 13 }: { size?: number }) {
       viewBox="0 0 16 16"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.6"
+      strokeWidth="1.5"
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"
     >
-      {/* The stroke down, and the head. */}
-      <path d="M8 2.5v6.5" />
-      <path d="M5.25 6.5 8 9.25 10.75 6.5" />
-      {/* The tray it lands in — open at the top, so the arrow goes INTO it. */}
-      <path d="M3 11.25v1.25a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-1.25" />
+      {/* The LID: solid, full width, unmistakably the heavy part. */}
+      <rect x="1.75" y="2.75" width="12.5" height="3.25" rx="1" fill="currentColor" stroke="none" />
+      {/* The BODY: outlined, narrower, clearly hanging under the lid. */}
+      <path d="M3 6.75v5.5a1.25 1.25 0 0 0 1.25 1.25h7.5A1.25 1.25 0 0 0 13 12.25v-5.5" />
+      {/* The HANDLE: the detail that stops the two edges reading as bars. */}
+      <path d="M6.5 9.25h3" />
     </svg>
   );
 }
