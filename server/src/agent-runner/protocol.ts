@@ -153,6 +153,22 @@ export type RunnerFrame =
       /** The push BODY — what the user reads on the lock screen. */
       text: string;
     }
+  /**
+   * The worker STATES ITS RESULT, rather than muxpad inferring one.
+   *
+   * Everything a sub-chat has ever reported to its parent has been muxpad
+   * reading its transcript afterwards and asking a model to summarise it —
+   * which costs a model call per finished worker, races a 30-second timeout,
+   * and can decide there is nothing to say about work that plainly said
+   * something. This frame is the worker's own sentence, and it is final: the
+   * generator is not consulted for a round that has one.
+   *
+   * It does NOT end the turn or retire anything. A worker may call it and keep
+   * working; the LAST statement before the round closes is the one delivered,
+   * because a worker that learns something after reporting should correct
+   * itself rather than be held to its first answer.
+   */
+  | { t: 'report'; text: string }
   | { t: 'subagent'; progress: SubagentProgress }
   | {
       /**
