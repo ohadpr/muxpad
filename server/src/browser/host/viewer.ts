@@ -133,6 +133,28 @@ export const VIEWER_HTML = String.raw`<!doctype html>
   #loginGo{flex:1;background:#3f5d8f;border:0;color:#fff;font-size:15px;padding:12px;border-radius:8px}
   #loginCancel{background:transparent;border:1px solid #33333f;color:#9a9aab;font-size:14px;padding:12px;border-radius:8px}
   #loginNote{font-size:11.5px;color:#7c7c8c;line-height:1.4}
+  /* THE DROP-DOWN SHEET. A native select popup is browser chrome, not page
+     content, so the screencast never carries it — see SelectProbe.ts. This is
+     that list, drawn here instead. Bottom-anchored because this is a phone
+     surface first and the bottom of the screen is where a thumb is. */
+  #pick{position:fixed;inset:0;background:#000a;display:flex;align-items:flex-end;justify-content:center;z-index:21}
+  #pick[hidden]{display:none}
+  #pickSheet{width:min(520px,100%);max-height:72vh;display:flex;flex-direction:column;
+    background:#17171f;border:1px solid #33333f;border-radius:14px 14px 0 0;
+    /* Clear of the home indicator, so the last option is not under it. */
+    padding-bottom:env(safe-area-inset-bottom,0)}
+  #pickTitle{flex:0 0 auto;padding:13px 16px 9px;font-size:12.5px;letter-spacing:.04em;
+    text-transform:uppercase;color:#8b8b9c;border-bottom:1px solid #26262f}
+  #pickList{flex:1 1 auto;overflow-y:auto;-webkit-overflow-scrolling:touch}
+  /* 48px of target, which is the whole reason this is a sheet and not a menu. */
+  .pickOpt{display:block;width:100%;min-height:48px;padding:13px 16px;border:0;
+    background:transparent;color:#e8e8f0;font-size:16px;text-align:left;line-height:1.3}
+  .pickOpt:disabled{color:#5c5c6b}
+  .pickOpt[aria-selected="true"]{color:#8fb6ff;font-weight:600}
+  .pickOpt[aria-selected="true"]::after{content:' ✓'}
+  .pickOpt:not(:disabled):active{background:#23232e}
+  #pickCancel{flex:0 0 auto;min-height:48px;border:0;border-top:1px solid #26262f;
+    background:transparent;color:#9a9aab;font-size:15px}
   #drop{position:fixed;inset:0;background:#000c;display:none;place-items:center;padding:20px;text-align:center}
   #drop.on{display:grid}
 </style>
@@ -198,6 +220,22 @@ export const VIEWER_HTML = String.raw`<!doctype html>
     <div id="loginNote">Pick the site in your password manager — this form stands in for it.</div>
   </form>
 </div>
+<!--
+  THE DROP-DOWN SHEET.
+
+  A a <select> popup is drawn by the browser outside the page's compositing, so
+  Page.startScreencast never captures it: the tap lands on a real element and
+  nothing appears here at all. The list is read out of the page instead and
+  drawn by this, and the choice is applied back over CDP with the events a real
+  one would have produced. See SelectProbe.ts.
+-->
+<div id="pick" hidden>
+  <div id="pickSheet" role="dialog" aria-modal="true" aria-labelledby="pickTitle">
+    <div id="pickTitle">Choose</div>
+    <div id="pickList" role="listbox"></div>
+    <button type="button" id="pickCancel">Cancel</button>
+  </div>
+</div>
 <div id="drop"><div>The page is asking for a file.<br><br><input type="file" id="fpick"></div></div>
 <script>
 const img = document.getElementById('screen')
@@ -253,7 +291,7 @@ const connect = () => {
     // nothing had nothing on screen to tell them why.
     msg.textContent = ''
     msg.classList.remove('loud')
-    if (watching) msg.textContent = 'watching — press Take over to type'
+    if (watching) msg.textContent = 'watching — touch the page to drive'
     for (const fn of onEachOpen) { try { fn() } catch { /* one hook must not stop the rest */ } }
   }
   sock.onclose = () => {
@@ -305,6 +343,12 @@ function onSocketMessage(e) {
       return
     }
     if (m.t === 'filled') { if (!m.ok) msg.textContent = 'could not find the form to fill'; return }
+    // A tap landed on a native drop-down, whose popup the screencast cannot
+    // carry. Looked up through the handler's own hoisting the way the login
+    // report is: this arrives on a socket opened before the sheet's own
+    // declarations run.
+    if (m.t === 'select') { openPick(m); return }
+    if (m.t === 'picked') { if (!m.ok) msg.textContent = 'the drop-down went away'; return }
     if (m.t === 'revealed') { ringAt(m.rect); return }
     if (m.t === 'frame') { meta = m.meta }
     else if (m.t === 'fileChooser') { document.getElementById('drop').classList.add('on') }
@@ -354,11 +398,46 @@ const mods = (e) => (e.altKey?1:0) | (e.ctrlKey?2:0) | (e.metaKey?4:0) | (e.shif
 let watching = new URLSearchParams(location.search).get('mode') === 'watch'
 const INPUT = new Set(['mouse', 'key', 'text', 'nav', 'emulate', 'fillLogin'])
 const send = (o) => {
-  if (watching && INPUT.has(o.t)) return
-  if (ws && ws.readyState === 1) ws.send(JSON.stringify(o))
+  // RETURNS WHETHER IT WENT. Input is dropped while watching, and a caller that
+  // books the message as sent anyway ends up believing a state the host was
+  // never told about — which is exactly how phone mode came to be on in the
+  // viewer and off in the page, leaving touches that did nothing at all.
+  if (watching && INPUT.has(o.t)) return false
+  if (ws && ws.readyState === 1) { ws.send(JSON.stringify(o)); return true }
+  return false
 }
 
 let buttons = 0
+
+/* ── ONE FINGER SCROLLS ─────────────────────────────────────────────────────
+ * On a phone the stream had no way to scroll the page it is showing. A finger
+ * drag went out as mousePressed → mouseMoved → mouseReleased, which is a DRAG
+ * on the remote page, and a wheel event does not exist on touch — so the view was
+ * stuck wherever the page happened to be, usually the top. Reported as "I'm
+ * unable to pan the view so I'm sort of stuck on the top".
+ *
+ * The idiom every mobile browser already teaches: a finger drag SCROLLS. So a
+ * touch press is not classified until it has done something:
+ *
+ *   moves past the slop  → scroll   (mouseWheel deltas, no click)
+ *   held without moving  → drag     (a real mousePressed, for sliders,
+ *                                    text selection, drag-and-drop)
+ *   lifts early, no move → tap      (press + release, i.e. a click)
+ *
+ * Which is the inverse of "hold to scroll", and deliberately: dragging to
+ * scroll is the gesture the hand already knows, so the rarer thing — a real
+ * drag — is what earns the deliberate hold.
+ *
+ * MOUSE AND PEN ARE UNTOUCHED. They have a wheel and they have no ambiguity;
+ * every path below is gated on pointerType === 'touch'.
+ */
+const TAP_SLOP = 8      // px on screen before a press becomes a scroll
+const HOLD_MS = 450     // press-and-hold that becomes a real drag
+let touch = null        // { id, phase, sx, sy, lx, ly, timer, down }
+
+const clearHold = () => { if (touch?.timer) { clearTimeout(touch.timer); touch.timer = null } }
+const endTouch = () => { clearHold(); touch = null }
+
 const onPointerDown = (e) => {
   e.preventDefault()
   // FOCUS INSIDE THE GESTURE. iOS raises a keyboard only for a focus() that
@@ -387,17 +466,26 @@ const onPointerDown = (e) => {
     // iOS raises a keyboard only for a focus that happens during a real user
     // event, so waiting for the server's answer would cost the keyboard this tap
     // was for. The tap itself is replayed once the wheel is actually ours.
+    // INTERACTING IS TAKING THE WHEEL. There is no longer a button to press
+    // first, and that is the whole point: "if I'm opening it and I'm trying to
+    // do stuff, I'm trying to be active; when I close it, I'm done."
+    //
+    // Opening still costs the agent nothing — a viewer that is only being
+    // LOOKED at takes no wheel, which is what watch mode was for and still
+    // does. What changed is that deciding to act no longer costs a hunt for
+    // the control that allows it. Touching the page IS the decision, so the
+    // page takes the wheel on the touch and replays it, exactly as tapping a
+    // text field already did; that path was right and was arbitrarily
+    // restricted to text fields.
     const p0 = pt(e)
-    if (p0 && hitsField(p0) === true) {
+    const onField = p0 ? hitsField(p0) === true : false
+    if (onField) {
       kbFromTap = true
       placeSink(e)
       sink.focus({ preventScroll: true })
       reportKeyboard(true)
-      takeTheWheel(p0)
-    } else {
-      msg.textContent = 'watching only — press Take over to type'
-      takeover.classList.add('ready')
     }
+    takeTheWheel(p0)
   } else {
     const p0 = pt(e)
     const hit = p0 ? hitsField(p0) : null
@@ -408,8 +496,43 @@ const onPointerDown = (e) => {
       reportKeyboard(hit)
     }
   }
+  // CAPTURE IS A NICETY; THE GESTURE IS THE POINT. setPointerCapture throws
+  // NotFoundError for a pointer the browser no longer considers active, and an
+  // exception here killed the handler before the relay below ever ran -- the
+  // finger did nothing at all. Losing capture only means a drag that leaves the
+  // image stops tracking.
+  try { img.setPointerCapture?.(e.pointerId) } catch {}
+  if (e.pointerType === 'touch' && mobileOn) {
+    // PHONE MODE RELAYS THE FINGER AS A FINGER. The page is under touch
+    // emulation, so it does its own scrolling — both axes, nested scrollers,
+    // momentum, and its own idea of which element the gesture belongs to.
+    // Nothing here has to guess what a drag meant, which is the only way to
+    // stop guessing wrong. (Desktop-mode-on-a-phone still classifies, below:
+    // a page with no touch handling needs a wheel.)
+    const p0 = pt(e)
+    touch = { id: e.pointerId, phase: 'native', sx: e.clientX, sy: e.clientY, lx: e.clientX, ly: e.clientY, down: p0, timer: null }
+    if (p0) send({ t:'touch', type:'touchStart', ...p0 })
+    return
+  }
+  if (e.pointerType === 'touch') {
+    // Nothing is sent yet: what this press MEANS is not known until it moves,
+    // is held, or lifts. Sending mousePressed here is what made every scroll
+    // attempt a drag.
+    const p0 = pt(e)
+    touch = { id: e.pointerId, phase: 'pending', sx: e.clientX, sy: e.clientY, lx: e.clientX, ly: e.clientY, down: p0, timer: null }
+    touch.timer = setTimeout(() => {
+      if (!touch || touch.phase !== 'pending') return
+      touch.phase = 'drag'
+      buttons = 1
+      if (touch.down) send({ t:'mouse', type:'mousePressed', ...touch.down, buttons:1, clickCount:1, modifiers:0 })
+      // Say so: the hold changed what the finger does, and an unannounced mode
+      // switch is indistinguishable from a bug.
+      msg.textContent = 'drag'
+      navigator.vibrate?.(8)
+    }, HOLD_MS)
+    return
+  }
   buttons = 1
-  img.setPointerCapture?.(e.pointerId)
   const p = pt(e); if (p) send({ t:'mouse', type:'mousePressed', ...p, buttons:1, clickCount:e.detail||1, modifiers:mods(e) })
 }
 
@@ -427,12 +550,61 @@ for (const el of [img, sink]) {
 }
 
 const onPointerMove = (e) => {
+  if (e.pointerType === 'touch') {
+    if (!touch || e.pointerId !== touch.id) return
+    if (touch.phase === 'native') {
+      const p = pt(e); if (p) send({ t:'touch', type:'touchMove', ...p })
+      return
+    }
+    const dx = e.clientX - touch.lx
+    const dy = e.clientY - touch.ly
+    if (touch.phase === 'pending') {
+      if (Math.hypot(e.clientX - touch.sx, e.clientY - touch.sy) < TAP_SLOP) return
+      clearHold()
+      touch.phase = 'scroll'
+    }
+    if (touch.phase === 'scroll') {
+      touch.lx = e.clientX; touch.ly = e.clientY
+      const p = pt(e)
+      // Content follows the finger, so the wheel goes the other way: dragging
+      // UP (dy negative) scrolls the page DOWN (deltaY positive).
+      if (p) send({ t:'mouse', type:'mouseWheel', ...p, deltaX: -dx, deltaY: -dy, modifiers: 0 })
+      return
+    }
+    touch.lx = e.clientX; touch.ly = e.clientY
+    const p = pt(e); if (p) send({ t:'mouse', type:'mouseMoved', ...p, buttons, modifiers:0 })
+    return
+  }
   const p = pt(e); if (p) send({ t:'mouse', type:'mouseMoved', ...p, buttons, modifiers:mods(e) })
 }
 for (const el of [img, sink]) {
   el.addEventListener('pointermove', onPointerMove)
 }
 const release = (e) => {
+  if (e.pointerType === 'touch') {
+    if (!touch || e.pointerId !== touch.id) return
+    if (touch.phase === 'native') {
+      send({ t:'touch', type:'touchEnd' })
+      endTouch()
+      return
+    }
+    const p = pt(e) || touch.down
+    if (touch.phase === 'pending') {
+      // Lifted without moving and before the hold: an ordinary tap, which is a
+      // click — sent as a pair here because the press was withheld.
+      if (p) {
+        send({ t:'mouse', type:'mousePressed', ...p, buttons:1, clickCount:1, modifiers:0 })
+        send({ t:'mouse', type:'mouseReleased', ...p, buttons:0, clickCount:1, modifiers:0 })
+      }
+    } else if (touch.phase === 'drag') {
+      buttons = 0
+      if (p) send({ t:'mouse', type:'mouseReleased', ...p, buttons:0, clickCount:1, modifiers:0 })
+      if (msg.textContent === 'drag') msg.textContent = ''
+    }
+    // A scroll sends no click at all — that is the whole point.
+    endTouch()
+    return
+  }
   if (!buttons) return
   buttons = 0
   const p = pt(e); if (p) send({ t:'mouse', type:'mouseReleased', ...p, buttons:0, clickCount:1, modifiers:mods(e) })
@@ -635,7 +807,7 @@ const applyWatching = () => {
   // minutes of nothing, at the end of every handoff, on the surface the handoff
   // was built for.
   handback.hidden = watching
-  msg.textContent = watching ? 'watching — press Take over to type' : ''
+  msg.textContent = watching ? 'watching — touch the page to drive' : ''
 }
 takeover.addEventListener('click', () => takeTheWheel())
 
@@ -673,7 +845,15 @@ handback.addEventListener('click', async () => {
     // Only when this IS the page. In the desktop modal the viewer is framed, and
     // navigating in there would load muxpad inside its own dialog.
     if (window.top === window) {
-      location.href = '/'
+      // BACK, not '/'. Going to the root drops you on whatever tab muxpad
+      // opens by default, which is almost never the one you left — reported as
+      // "it takes me back to some other tab, but not to the tab I was in".
+      // The viewer is reached BY NAVIGATING from that tab, so history already
+      // holds it. A direct deep link has no same-origin referrer and no
+      // history to go back to, and only that case falls through to the root.
+      const cameFromMuxpad = document.referrer && new URL(document.referrer).origin === location.origin
+      if (cameFromMuxpad && history.length > 1) history.back()
+      else location.href = '/'
     } else {
       // FRAMED: ASK THE MODAL TO CLOSE. It has its own close button, and the one
       // in here could not reach it — so on a desktop Done handed the wheel back
@@ -717,6 +897,12 @@ function takeTheWheel(at) {
       announceMode()
       msg.textContent = 'you are driving now'
       if (window.top !== window) window.parent.postMessage({ muxpad: 'takeover', by: claimant() }, location.origin)
+      // PHONE MODE NOW THAT IT CAN BE SENT. An emulate message is input, and
+      // input is dropped while watching — so a viewer that opened in watch mode
+      // on a phone asked for the phone layout once, had it dropped, and never
+      // asked again. Which is why "it should open in phone mode" did not
+      // happen on the one device it was written for.
+      if (window.innerWidth < 700 && !mobileOn) setMobile(true)
       if (pendingTap) {
         send({ t: 'mouse', type: 'mousePressed', ...pendingTap, buttons: 1, clickCount: 1, modifiers: 0 })
         send({ t: 'mouse', type: 'mouseReleased', ...pendingTap, buttons: 0, clickCount: 1, modifiers: 0 })
@@ -880,9 +1066,16 @@ const stageSize = () => {
   return { width: Math.round(r.width) || window.innerWidth, height: Math.round(r.height) || window.innerHeight }
 }
 const setMobile = (on) => {
+  // COMMITTED ONLY IF THE HOST HEARD IT. mobileOn decides whether a finger is
+  // relayed as a finger (phone mode, the page scrolls itself) or classified
+  // into wheels (desktop mode). Setting it for a message that was dropped put
+  // those two out of step: the viewer sent touch events to a page with no touch
+  // emulation, so scrolling and tapping into fields both did nothing.
+  const delivered = send({ t:'emulate', mobile: on, ...stageSize() })
+  if (!delivered) return false
   mobileOn = on
   mobileBtn.setAttribute('aria-pressed', String(on))
-  send({ t:'emulate', mobile: on, ...stageSize() })
+  return true
 }
 mobileBtn.addEventListener('click', () => setMobile(!mobileOn))
 
@@ -893,18 +1086,33 @@ mobileBtn.addEventListener('click', () => setMobile(!mobileOn))
 let resizeTimer = null
 const onViewportChange = () => {
   note('window resize')
-  if (!mobileOn || watching) return
+  if (!mobileOn) return
   if (resizeTimer) clearTimeout(resizeTimer)
   resizeTimer = setTimeout(() => { resizeTimer = null; note('re-emulating'); setMobile(true) }, 250)
 }
 window.addEventListener('resize', onViewportChange)
 window.addEventListener('orientationchange', onViewportChange)
-if (window.innerWidth < 700 && !watching) {
+if (window.innerWidth < 700) {
   // After the socket is up, not before — the message would be dropped.
   // On every connection: a restarted host has forgotten it was in phone mode,
   // and a viewer that reconnects into a 1280px page on a phone is the bug this
   // was added to fix, arriving later.
-  whenOpen(() => setMobile(true))
+  //
+  // AND ON A PHONE, OPENING IS THE INTENT. "I'm not opening this thing for no
+  // good reason — if I'm opening it I'm trying to do stuff." Nobody peeks at a
+  // browser from a phone to admire it, so the wheel is taken on arrival rather
+  // than charged to the first touch. The desktop keeps watch-until-you-touch,
+  // where glancing at what an agent is doing is a real thing people do.
+  // Only the take: an emulate message cannot be sent until the wheel is
+  // ours, and takeTheWheel applies phone mode itself once granted. Calling
+  // both here raced: the emulate went out while still watching, was dropped,
+  // and nothing asked again.
+  // Two ways in, and both have to end in phone mode. Already driving: send it
+  // now. Watching: the message would be dropped, so take the wheel and let the
+  // grant apply it. Calling setMobile unconditionally raced exactly that, and
+  // sending only the take left a viewer opened in DRIVE mode never asking at
+  // all, because takeTheWheel short-circuits when the wheel is already ours.
+  whenOpen(() => { if (watching) takeTheWheel(); else setMobile(true) })
 }
 
 // Everything is wired; dial. Last rather than first so no handler can fire
@@ -917,6 +1125,64 @@ if (window.innerWidth < 700 && !watching) {
  * values into the page and closes; it never submits, because pressing the
  * button is the moment you notice it filled the wrong thing.
  */
+/* ── THE DROP-DOWN SHEET ───────────────────────────────────────────────────
+   The host says a tap landed on a native select and what is in it; this draws
+   the list. Nothing here guesses: the options, which one is on, and the title
+   all come from the page, and the answer goes back as a value for the page to
+   apply with its own events.
+
+   Dismissing is NOT free — a sheet nobody chose from leaves the element stamped
+   in the page, and the next choice would land on it. So cancel says so. */
+const pickWrap = document.getElementById('pick')
+const pickSheet = document.getElementById('pickSheet')
+const pickTitle = document.getElementById('pickTitle')
+const pickList = document.getElementById('pickList')
+const pickCancel = document.getElementById('pickCancel')
+let pickOpen = false
+
+const closePick = (tellPage) => {
+  if (!pickOpen) return
+  pickOpen = false
+  pickWrap.hidden = true
+  pickList.replaceChildren()
+  if (tellPage) send({ t: 'unpick' })
+}
+
+const openPick = (d) => {
+  const options = Array.isArray(d.options) ? d.options : []
+  if (!options.length) return
+  pickTitle.textContent = d.label ? String(d.label) : 'Choose'
+  pickList.replaceChildren()
+  for (const o of options) {
+    const b = document.createElement('button')
+    b.type = 'button'
+    b.className = 'pickOpt'
+    b.setAttribute('role', 'option')
+    // textContent, never innerHTML: an option label is page content, and this
+    // page can reach the host.
+    b.textContent = String(o.l == null ? '' : o.l)
+    if (o.selected) b.setAttribute('aria-selected', 'true')
+    if (o.disabled) b.disabled = true
+    b.addEventListener('click', () => {
+      send({ t: 'pick', value: String(o.v == null ? '' : o.v) })
+      closePick(false)
+    })
+    pickList.appendChild(b)
+  }
+  pickWrap.hidden = false
+  pickOpen = true
+  // The one that is already on, in view — a country list opens on "Albania"
+  // otherwise, however far down the current answer is.
+  const on = pickList.querySelector('[aria-selected="true"]')
+  if (on && on.scrollIntoView) on.scrollIntoView({ block: 'center' })
+}
+
+pickCancel.addEventListener('click', () => closePick(true))
+// The backdrop dismisses; the sheet itself must not.
+pickWrap.addEventListener('click', (e) => { if (e.target === pickWrap) closePick(true) })
+pickSheet.addEventListener('click', (e) => e.stopPropagation())
+window.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePick(true) })
+
 const loginPanel = document.getElementById('login')
 const loginBtn = document.getElementById('signin')
 const showLogin = (on) => {

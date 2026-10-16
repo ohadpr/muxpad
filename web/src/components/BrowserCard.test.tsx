@@ -40,6 +40,12 @@ afterEach(() => {
 });
 
 const buttons = (host: HTMLElement) => [...host.querySelectorAll('button')];
+/** The primary action, by name — a card now carries a peek control too. */
+const action = (host: HTMLElement) =>
+  host.querySelector<HTMLButtonElement>('.browser-card__action') ?? undefined;
+const peek = (host: HTMLElement) =>
+  host.querySelector<HTMLButtonElement>('.browser-card__peek') ?? undefined;
+const shot = (host: HTMLElement) => host.querySelector<HTMLImageElement>('.browser-card__shot');
 const click = (el: Element | undefined) =>
   act(() => {
     el?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
@@ -90,7 +96,7 @@ describe('the card', () => {
       'waiting',
     );
     expect(host.textContent).toContain('log in to Amazon');
-    expect(buttons(host)[0]?.dataset.urgent).toBe('true');
+    expect(action(host)?.dataset.urgent).toBe('true');
   });
 
   it('opens a MODAL on a wide viewport and a TAB on a phone', () => {
@@ -107,6 +113,64 @@ describe('the card', () => {
     );
     click(phone.host.querySelector('[data-testid="browser-card"]') ?? undefined);
     expect(onOpen).toHaveBeenLastCalledWith('tab');
+  });
+
+  it('opens from ANYWHERE on it, even when it carries an Open button', () => {
+    // The button is a 60px target inside a 400px card that plainly is one
+    // thing you can open. "Make it so clicking anywhere in this card opens it."
+    const onOpen = vi.fn();
+    const browser = { ...base, needsYou: { reason: 'log in to HubSpot', at: 1 } };
+    const { host } = mount(
+      <BrowserCard
+        moment={moment(browser, { kind: 'needs-you', reason: 'log in to HubSpot' })}
+        onOpen={onOpen}
+        viewportWidth={1440}
+        now={1}
+      />,
+    );
+    const card = host.querySelector('[data-testid="browser-card"]');
+    expect(action(host)?.dataset.urgent).toBe('true');
+    click(card ?? undefined);
+    expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens ONCE when the button itself is clicked, not twice', () => {
+    // The click bubbles to the card, which now opens too.
+    const onOpen = vi.fn();
+    const browser = { ...base, needsYou: { reason: 'log in to HubSpot', at: 1 } };
+    const { host } = mount(
+      <BrowserCard
+        moment={moment(browser, { kind: 'needs-you', reason: 'log in to HubSpot' })}
+        onOpen={onOpen}
+        viewportWidth={1440}
+        now={1}
+      />,
+    );
+    click(action(host));
+    expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not announce a control inside a control', () => {
+    // A role="button" wrapping a real button is one control containing
+    // another, and gives the same action two tab stops. The button IS the
+    // keyboard control when there is one; the card click is for pointers.
+    const browser = { ...base, needsYou: { reason: 'log in', at: 1 } };
+    const withButton = mount(
+      <BrowserCard
+        moment={moment(browser, { kind: 'needs-you', reason: 'log in' })}
+        onOpen={() => {}}
+        now={1}
+      />,
+    );
+    const card = withButton.host.querySelector('[data-testid="browser-card"]');
+    expect(card?.getAttribute('role')).toBeNull();
+    expect(card?.getAttribute('tabindex')).toBeNull();
+
+    // A passive card has no button, so it keeps the role and the tab stop.
+    const passive = mount(<BrowserCard moment={moment(base)} onOpen={() => {}} now={1} />);
+    expect(passive.host.querySelector('[data-testid="browser-card"]')?.getAttribute('role')).toBe(
+      'button',
+    );
   });
 
   it('a card with nothing to show is not clickable at all', () => {
@@ -294,5 +358,109 @@ describe('Done pressed inside the viewer closes the modal around it', () => {
     open(onClose);
     say({ other: 'thing' });
     expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * PEEKING — "what is it doing right now?", answered in the chat.
+ *
+ * A still rather than a stream: a live screencast per card is a socket and a
+ * frame rate per card, and the question is answered by a picture every couple
+ * of seconds. It never takes the wheel, so the agent carries on working while
+ * somebody looks over its shoulder.
+ */
+describe('peeking at a live browser', () => {
+  it('offers the control on any card whose browser is still alive', () => {
+    const { host } = mount(<BrowserCard moment={moment(base)} onOpen={() => {}} now={1} />);
+    expect(peek(host)).toBeDefined();
+  });
+
+  it('offers it on a card that is asking for a login too', () => {
+    // Those carry an Open button as well: looking first is allowed.
+    const browser = { ...base, needsYou: { reason: 'log in', at: 1 } };
+    const { host } = mount(
+      <BrowserCard
+        moment={moment(browser, { kind: 'needs-you', reason: 'log in' })}
+        onOpen={() => {}}
+        now={1}
+      />,
+    );
+    expect(peek(host)).toBeDefined();
+    expect(action(host)).toBeDefined();
+  });
+
+  it('offers nothing to peek at once the browser is gone', () => {
+    const { host } = mount(
+      <BrowserCard moment={moment({ ...base, state: 'registered' })} onOpen={() => {}} now={1} />,
+    );
+    expect(peek(host)).toBeUndefined();
+  });
+
+  it('shows the CURRENT page, not the frozen still of the moment', () => {
+    // Two pictures of one browser, one of them minutes old, is a card asking
+    // you to work out which is which. A summons card is the one that carries a
+    // frozen still while its browser is still alive.
+    const browser = { ...base, needsYou: { reason: 'log in', at: 1 } };
+    const { host } = mount(
+      <BrowserCard
+        moment={moment(browser, {
+          kind: 'needs-you',
+          reason: 'log in',
+          shotUrl: '/api/browsers/shopping/shot/100',
+        })}
+        onOpen={() => {}}
+        now={1}
+      />,
+    );
+    expect(shot(host)?.getAttribute('src')).toBe('/api/browsers/shopping/shot/100');
+    click(peek(host));
+    expect(shot(host)?.getAttribute('src')).toMatch(/\/api\/browsers\/shopping\/shot\?t=\d+/);
+  });
+
+  it('collapses back to the frozen still', () => {
+    const browser = { ...base, needsYou: { reason: 'log in', at: 1 } };
+    const { host } = mount(
+      <BrowserCard
+        moment={moment(browser, {
+          kind: 'needs-you',
+          reason: 'log in',
+          shotUrl: '/api/browsers/shopping/shot/100',
+        })}
+        onOpen={() => {}}
+        now={1}
+      />,
+    );
+    click(peek(host));
+    click(peek(host));
+    expect(shot(host)?.getAttribute('src')).toBe('/api/browsers/shopping/shot/100');
+  });
+
+  it('does NOT open the viewer — looking is not the same as taking over', () => {
+    const onOpen = vi.fn();
+    const { host } = mount(<BrowserCard moment={moment(base)} onOpen={onOpen} now={1} />);
+    click(peek(host));
+    expect(onOpen).not.toHaveBeenCalled();
+    expect(peek(host)?.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('opens the viewer when the PICTURE is clicked', () => {
+    // The picture is what you were looking at when looking stopped being
+    // enough, so it is the thing you reach for.
+    const onOpen = vi.fn();
+    const { host } = mount(
+      <BrowserCard moment={moment(base)} onOpen={onOpen} viewportWidth={1440} now={1} />,
+    );
+    click(peek(host));
+    click(shot(host) ?? undefined);
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    expect(onOpen).toHaveBeenCalledWith('modal');
+  });
+
+  it('is per card, so two browsers can be watched side by side', () => {
+    const a = mount(<BrowserCard moment={moment(base)} onOpen={() => {}} now={1} />);
+    const b = mount(<BrowserCard moment={moment(base)} onOpen={() => {}} now={1} />);
+    click(peek(a.host));
+    expect(peek(a.host)?.getAttribute('aria-expanded')).toBe('true');
+    expect(peek(b.host)?.getAttribute('aria-expanded')).toBe('false');
   });
 });

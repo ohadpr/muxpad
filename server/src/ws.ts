@@ -518,7 +518,12 @@ export function attachWsServer(deps: {
     // phone, and a per-pane loop would burn the whole rate limit on one event.
     const first = repairs[0] as ResumeRepair;
     const more = repairs.length > 1 ? ` (+${repairs.length - 1} more pane(s))` : '';
-    deps.notifyPane?.(first.pane_id, `${describeRepair(first)}${more}`);
+    // EXPLICIT, because this is muxpad speaking about its own repairs, not a
+    // sub-chat's ordinary work. The push is keyed on repairs[0] and covers all
+    // of them, so if that one pane happened to be a sub-chat the sub-chat gate
+    // would have swallowed the whole announcement — including the top-level
+    // panes counted in "+N more".
+    deps.notifyPane?.(first.pane_id, `${describeRepair(first)}${more}`, { explicit: true });
   };
   // Boot pass: fix every pane that has ALREADY drifted, before a chat client
   // connects and reads current_sid. The resume-time pass in the dead-runner
@@ -819,6 +824,36 @@ export function attachWsServer(deps: {
       return conn && conn.lastHumanSendAt > 0 ? conn.lastHumanSendAt : null;
     };
     deps.agentBridge.slash = (paneId, cmd) => sendToRunner(paneId, { t: 'slash', cmd });
+    /**
+     * STOP A TURN FROM OUTSIDE THE BROWSER.
+     *
+     * The same `{ t: 'stop' }` the chat composer's Stop button relays, reached
+     * over HTTP instead of over a chat socket — because until this existed
+     * there was NO way to interrupt a wedged chat-mode turn except opening the
+     * UI. `muxpad pane send <id> --key=esc` reports success and does nothing
+     * here: it types Escape into the PTY, and a chat-mode pane's turn is owned
+     * by the runner, not by whatever the terminal face happens to be showing.
+     *
+     * That gap is a stall vector, not an inconvenience. A tool call into a dead
+     * browser broker never times out, so an orchestrated sub-chat can sit in
+     * `working` indefinitely with its parent waiting on it and no mechanism —
+     * CLI, cron or supervisor — able to break the deadlock from the outside.
+     *
+     * Mirrors the socket's own relay rule: a turn that is active OR a send
+     * relayed in the last 15s (turnActive lags a fresh send by a round trip).
+     * `false` means "nothing was running", which the caller reports as such
+     * rather than as a failure.
+     */
+    deps.agentBridge.stop = (paneId) => {
+      const conn = agentRunners.get(paneId);
+      if (!conn) return false;
+      const sendInFlight = Date.now() - conn.lastSendAt < 15_000;
+      if (!conn.turnActive && !sendInFlight) return false;
+      // A Stop ABANDONS the relayed send, exactly as the socket path does —
+      // leaving the stamp on would let the next autonomous turn wear it.
+      conn.pendingSendText = null;
+      return sendToRunner(paneId, { t: 'stop' });
+    };
     deps.agentBridge.blocked = (paneId) =>
       (agentRunners.get(paneId)?.pendingQuestions.size ?? 0) > 0;
   }
@@ -880,8 +915,15 @@ export function attachWsServer(deps: {
     t.unref?.();
     probation.set(paneId, t);
   };
+  // `respawn`, NOT a bare `muxpad agent`. This said "rerun `muxpad agent` from
+  // the pane's terminal face", and on a pane that still carries `--resume` in
+  // its startup_cmd — which a dead pane does — that is advice to mint a SECOND
+  // session and strand the conversation the pane is there to hold. `respawn`
+  // replays the pane's own startup command, `--resume` and all, so it restarts
+  // the session instead of competing with it. scripts/muxpad's guard refuses
+  // the bare form and names this same command; the two have to agree.
   const agentExitedMessage = (paneId: string) =>
-    `agent exited — automatic restarts failed; see ~/.muxpad/agent-logs/${paneId}.log, then rerun \`muxpad agent\` from the pane's terminal face`;
+    `agent exited — automatic restarts failed; see ~/.muxpad/agent-logs/${paneId}.log, then run \`muxpad agent respawn ${paneId}\``;
   // Single-flight: a slow ptyd must not stack overlapping sweeps.
   let sweepInFlight = false;
   /**
@@ -1931,6 +1973,12 @@ export function attachWsServer(deps: {
             const outcome = deps.notifyPane(
               paneId,
               body.length > NOTIFY_BODY_MAX ? `${body.slice(0, NOTIFY_BODY_MAX - 1)}…` : body,
+              // THE ONE EXPLICIT PUSH. Everything else that reaches a phone —
+              // a turn ending, a question appearing, a bell — is automatic and
+              // is refused for a sub-chat (see createPaneNotifier). An agent
+              // calling `notify` was told to interrupt somebody, which is the
+              // instruction that gate is waiting for.
+              { explicit: true },
             );
             // Only a push that WENT OUT starts the clock. One held because the
             // user is looking at the screen, or dropped for want of a

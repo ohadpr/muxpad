@@ -49,6 +49,27 @@ export interface CdpConnectionOptions {
   /** Injected for tests; defaults to the global WebSocket. */
   socketImpl?: typeof WebSocket;
   onError?: (where: string, err: Error) => void;
+  /**
+   * How long to wait for a reply before giving up on it. See {@link sendOn}.
+   * Injected mainly so tests do not have to wait it out.
+   */
+  callTimeoutMs?: number;
+  /** Injected for tests; defaults to the global timers. */
+  timers?: CdpTimers;
+}
+
+/**
+ * A REPLY THAT NEVER COMES MUST NOT BE WAITED FOR FOREVER.
+ *
+ * Generous, because a real CDP call on a busy page can genuinely take seconds —
+ * this is the "something is wrong" threshold, not a performance budget.
+ */
+export const CDP_CALL_TIMEOUT_MS = 30_000;
+
+/** Just enough of the timer API to be swapped out in a test. */
+interface CdpTimers {
+  setTimeout: (fn: () => void, ms: number) => unknown;
+  clearTimeout: (handle: never) => void;
 }
 
 export class CdpConnection implements CdpTransport {
@@ -86,7 +107,25 @@ export class CdpConnection implements CdpTransport {
       socket.onerror = () => reject(new Error(`cannot reach CDP at ${this.opts.endpoint}`));
     });
     socket.onmessage = (event: MessageEvent) => this.dispatch(String(event.data));
+    // A DEAD SOCKET USED TO BE INVISIBLE. The handlers above are the handshake's;
+    // once it resolved, nothing watched the socket again. So a browser that went
+    // away left `this.socket` non-null and every later call parked on a reply
+    // that could never arrive: no error, no log, no recovery. The host then hung
+    // in its own shutdown before it reached `chrome.kill()`, which is how
+    // nineteen orphaned Chromes came to be squatting one debugging port.
+    socket.onclose = () => this.fail('closed', new Error('CDP connection closed'));
+    socket.onerror = () => this.fail('socket', new Error('CDP socket error'));
     this.socket = socket;
+  }
+
+  /** Gives up on every call in flight, and on the socket. */
+  private fail(where: string, err: Error): void {
+    if (!this.socket && this.pending.size === 0) return;
+    this.socket = null;
+    const waiting = [...this.pending.values()];
+    this.pending.clear();
+    for (const { reject } of waiting) reject(err);
+    this.opts.onError?.(where, err);
   }
 
   /**
@@ -157,10 +196,12 @@ export class CdpConnection implements CdpTransport {
   }
 
   close(): void {
-    this.socket?.close();
+    const socket = this.socket;
     this.socket = null;
-    for (const { reject } of this.pending.values()) reject(new Error('CDP connection closed'));
+    const waiting = [...this.pending.values()];
     this.pending.clear();
+    for (const { reject } of waiting) reject(new Error('CDP connection closed'));
+    socket?.close();
   }
 
   private sendOn(
@@ -171,8 +212,26 @@ export class CdpConnection implements CdpTransport {
     const socket = this.socket;
     if (!socket) return Promise.reject(new Error('CDP not connected'));
     const id = this.nextId++;
+    const timers: CdpTimers = this.opts.timers ?? {
+      setTimeout: (fn, ms) => setTimeout(fn, ms),
+      clearTimeout: (handle) => clearTimeout(handle as unknown as ReturnType<typeof setTimeout>),
+    };
+    const limit = this.opts.callTimeoutMs ?? CDP_CALL_TIMEOUT_MS;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      // THE METHOD NAME IS IN THE MESSAGE on purpose: a bare timeout in a log is
+      // unattributable, and which call hung is the whole diagnosis.
+      const timer = timers.setTimeout(() => {
+        if (!this.pending.delete(id)) return;
+        reject(new Error(`CDP ${method} did not answer within ${limit}ms`));
+      }, limit);
+      const settle = (fn: (v: never) => void) => (v: never) => {
+        timers.clearTimeout(timer as never);
+        fn(v);
+      };
+      this.pending.set(id, {
+        resolve: settle(resolve as (v: never) => void) as Pending['resolve'],
+        reject: settle(reject as (v: never) => void) as Pending['reject'],
+      });
       socket.send(
         JSON.stringify(sessionId ? { id, method, params, sessionId } : { id, method, params }),
       );

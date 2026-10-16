@@ -3,53 +3,58 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 /**
- * THE AGE SITS ON THE RIGHT EDGE, AND THE VALUE IS WHAT GIVES WAY.
+ * THE AGE IS A TAIL IN THE CORNER, AND IT COSTS THE VALUE NOTHING.
  *
- * That property has survived a change of mechanism, which is why this file
- * tests it twice over. It used to be `margin-left: auto` on the age pushing
- * itself to the edge across a gap the value could grow into. Now the dotted
- * LEADER is a real element that takes the row's slack, so the age simply sits
- * after it — same result, no margin hack, and the gap is something you can see
- * rather than empty space.
+ * The property has outlived three mechanisms, which is why it is tested on its
+ * own. It was `margin-left: auto` pushing the age to the edge across a gap;
+ * then a dotted LEADER element that took the row's slack and carried freshness
+ * in its dots; now it is out of the flow entirely, pinned to the card's
+ * top-right — "I don't want the title and last updated to consume an entire
+ * line… maybe add it as sort of a tail at the top right".
  *
- * What must not change: the age is never squeezed or ellipsized, because it is
- * six characters and the value is a sentence; the value is the thing you can
- * open the card to finish reading.
+ * What must not change: the age is never squeezed, never ellipsized, and never
+ * lands on top of the value.
  */
 const css = readFileSync(join(__dirname, 'ChatCards.css'), 'utf8');
 const rule = (sel: string) => {
   const i = css.indexOf(`${sel} {`);
   return i < 0 ? null : css.slice(i, css.indexOf('\n}', i));
 };
+const decl = (body: string | null, prop: string) => {
+  const m = new RegExp(`(?:^|;|\\n)\\s*${prop}:\\s*([^;]+)`).exec(body ?? '');
+  return (m?.[1] ?? '').trim();
+};
 
 describe('the card age', () => {
-  it('sits at the container edge, with the leader holding the gap open', () => {
-    // The leader is what reaches the edge; the age rides on the end of it.
-    expect(rule('.chat-card-leader')).toMatch(/flex:\s*1 1 auto/);
-    expect(rule('.chat-card-leader')).toMatch(/min-width:\s*\d+px/);
+  it('is out of the flow, in the corner', () => {
+    const age = rule('.chat-card-age');
+    expect(decl(age, 'position')).toBe('absolute');
+    expect(decl(age, 'top')).toBeTruthy();
+    expect(decl(age, 'right')).toBeTruthy();
   });
 
-  it('never shrinks — the value is what gives way', () => {
-    const r = rule('.chat-card-age') ?? '';
-    expect(r).toMatch(/flex:\s*0 0 auto/);
-    // …and the value is the one that can. `0 1` not `1 1`: it is sized by its
-    // content and only shrinks under real pressure, because the leader is what
-    // fills the room.
-    expect(rule('.chat-card-value')).toMatch(/flex:\s*0 1 auto/);
-    expect(rule('.chat-card-value')).toContain('min-width: 0');
+  it('takes no width from the value — it is not a column any more', () => {
+    // The leader and the name were the other two things on that line, and both
+    // are gone: a card is its value plus this.
+    expect(rule('.chat-card-leader')).toBeNull();
+    expect(rule('.chat-card-name')).toBeNull();
   });
 
-  it('keeps a gap so it cannot touch the value', () => {
-    expect(rule('.chat-card-age')).toMatch(/padding-left:\s*\d+px/);
+  it('never lands ON the value — every content box reserves its width', () => {
+    // Absolute positioning takes the tail out of the flow, so the clearance has
+    // to be paid by the content or a long line runs underneath the clock.
+    for (const sel of ['.chat-card-line', '.chat-card-body', '.chat-card-body.-flush']) {
+      const padRight = Number.parseFloat(decl(rule(sel), 'padding').split(/\s+/)[1] ?? '0');
+      expect({ sel, clears: padRight >= 40 }).toEqual({ sel, clears: true });
+    }
   });
 
-  it('turns warm when the writer stopped, not red', () => {
-    // Nothing is broken; something merely stopped arriving.
+  it('does not swallow the click the card is one big target for', () => {
+    expect(decl(rule('.chat-card-age'), 'pointer-events')).toBe('none');
+  });
+
+  it('goes warm when the writer stopped, and says so for a reader who cannot see it', () => {
     expect(rule('.chat-card-age.-stale')).toContain('--status-working');
-  });
-
-  it('and so does the card\u2019s edge, now there is no rail', () => {
-    // The tape has no rail; the border carries it instead.
-    expect(rule('.chat-card.-stale')).toContain('--status-working');
+    expect(rule('.chat-card-sr')).toBeTruthy();
   });
 });

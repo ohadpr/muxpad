@@ -141,6 +141,7 @@ export function notifyToolDescription(): string {
     'Call it when something cannot wait for the end of the turn: a long run hit a blocker only they can clear, a deploy or a suite failed, a watch they asked you to keep just fired, or you are about to spend a long time on something they should know about now. Also call it once, with the result, at the end of a long autonomous run (a cron, a wakeup, an overnight batch) they are actually waiting on.',
     'Do NOT call it to announce an ordinary finished turn. A turn that ends more than two minutes after the user last typed already notifies them on its own, so a notify next to your final reply just buzzes them twice, the second time with less news. Do not use it for progress updates, for anything that can wait until they next look at the screen, or twice in a minute — this pane sends at most one notification per minute and the rest are dropped.',
     'The `text` IS the notification: one sentence, on a lock screen, all they get until they tap. Name what happened and what it needs — "staging deploy failed: migration 0042 timed out" or "the 40-file rename is done, 3 conflicts need you" — never "check muxpad" or "I have an update".',
+    'If you are a SUB-CHAT, the bar is higher still: your work was asked for by another chat and your result is delivered there, so the automatic paths (a question, the end of your turn, a BEL) deliberately do not buzz anybody. Call this only when the user asked you to reach them, or when you have hit something that stops the work and only they can clear.',
     'The result tells you what happened: sent, held because the user is already at a device, no subscribed device on this server, or dropped by the rate limit. None of those is an error and none is a reason to call again — if it was not sent, say the thing in your reply instead.',
   ].join(' ');
 }
@@ -797,6 +798,8 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
       'Not sent: the user is actively using a device right now, so they can already see this pane. Nothing more to do — this is normal, do not call again.',
     'no-devices':
       'Not sent: no device is subscribed to push on this server, so notifications are a no-op here. Say it in your reply instead; do not call again.',
+    'held-subchat':
+      "Not sent: this is a sub-chat, and a sub-chat does not ring the user's phone for its ordinary work. Your result reaches the chat that spawned you — put it there. Do not call again.",
     'rate-limited':
       'Dropped: this pane already sent a notification within the last minute. Put this in your reply instead; do not call again.',
     unavailable:
@@ -907,6 +910,20 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
   // the turn-result guard below needs the count.
   // -------------------------------------------------------------------------
   let repliesThisTurn = 0;
+  /**
+   * Has this turn already streamed prose, so a NEW text block needs a blank
+   * line in front of it?
+   *
+   * The preview buffer is a raw concatenation of `text_delta`s, and the SDK
+   * emits one text block per paragraph the agent writes — with nothing between
+   * them. So two consecutive progress lines arrived as
+   * "…what the agent actually did." + "Got the user's asks…" and were drawn as
+   * one run-on sentence, "did.Got", for the whole time the turn was live. The
+   * landed events are separate and render correctly, so this was only ever
+   * visible in the preview — which is exactly where a reader watches a long
+   * turn, so it was visible most of the time.
+   */
+  let streamedTextThisTurn = false;
   // Reply tool calls currently being GENERATED, so their argument deltas can be
   // decoded into speakable text before the call runs (see reply-stream.ts).
   const replyBlocks = new ReplyBlockTracker();
@@ -1102,6 +1119,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
         interruptRequested = false;
         lastAssistantText = '';
         repliesThisTurn = 0;
+        streamedTextThisTurn = false;
         firstReplyText = '';
         currentTurnText = text;
         authFailureThisTurn = null;
@@ -1663,6 +1681,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
       interruptRequested = false;
       lastAssistantText = '';
       repliesThisTurn = 0;
+      streamedTextThisTurn = false;
       firstReplyText = '';
       // An autonomous turn has no text anyone is waiting on, so a re-exec has
       // nothing to put back — see the turn-result branch.
@@ -1761,6 +1780,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
               typeof evt.delta.text === 'string'
             ) {
               emit({ t: 'stream', delta: evt.delta.text });
+              streamedTextThisTurn = true;
             }
             // A `reply` being TYPED. Its text is a tool ARGUMENT, so it arrives
             // as `input_json_delta` — which this branch used to drop on the
@@ -1770,6 +1790,16 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
             // agent to finish the paragraph. See reply-stream.ts for the decoder
             // and the live-probed shapes.
             else if (evt.type === 'content_block_start' && typeof evt.index === 'number') {
+              // A NEW PARAGRAPH, said in the one channel the preview has. The
+              // buffer is a bare concatenation of deltas, so without this the
+              // previous block's full stop and this block's first word are
+              // adjacent characters. Only between TEXT blocks, and only once
+              // prose has actually started: a leading blank line, or one in
+              // front of a tool_use, would be a paragraph break around nothing.
+              const block = evt.content_block as { type?: string } | undefined;
+              if (block?.type === 'text' && streamedTextThisTurn) {
+                emit({ t: 'stream', delta: '\n\n' });
+              }
               replyBlocks.start(evt.index, evt.content_block);
             } else if (
               evt.type === 'content_block_delta' &&

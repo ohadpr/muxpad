@@ -37,6 +37,63 @@
      wash itself. The first two were written out by hand and the third is where
      the 5% comes from — three copies of one number is exactly how they drift. */
   --bg-pane-face: color-mix(in srgb, var(--accent) 5%, var(--bg));
+
+  /* ─── THE RAIL IS ITS OWN SURFACE ─────────────────────────────────────────
+     The sidebar and the pane used to be two shades of the same near-white —
+     measured ΔL* 2.7 between them in Alucard — so the eye got no edge to hold
+     and the two read as one field. (ΔL*, not a WCAG ratio: a ratio is built
+     for text on a background and compresses to nothing at the dark end, which
+     is why every dark theme scored ~1.05:1 no matter how far apart the
+     surfaces looked.)
+
+     So the rail declares its own surface AND ITS OWN INK, per theme. The ink
+     half is not optional: NavTree.css reads --fg/--fg-dim/--border directly in
+     about seventy places, and on a dark rail inside a light theme every one of
+     those would go invisible. The rail re-points those tokens at rail values
+     for its own subtree (see NavTree.css), and the SELECTED row — which is
+     painted in the pane's colour and merges into it — points them back.
+
+     A theme that declares none of these keeps exactly today's look: every
+     fallback below is the token the rail used before. */
+  --rail-surface: var(--bg-tabbar);
+  --rail-ink: var(--fg);
+  --rail-ink-dim: var(--fg-dim);
+  --rail-ink-faint: var(--fg-faint);
+  --rail-hover: var(--bg-hover);
+  --rail-border: var(--border);
+  /* The drawn edge. Dark themes need it because two dark surfaces cannot be
+     far apart in lightness — there is nothing below the pane to go to — so the
+     separation is drawn rather than toned. Light themes set it to transparent:
+     a 60-point tonal step needs no help, and a line there would cut the
+     selected row's curves where it merges into the pane. */
+  --rail-seam: transparent;
+  /* THE PANE'S OWN VALUES, kept reachable from inside the rail. Substitution
+     happens where a custom property is DECLARED, so these resolve against the
+     root's --fg/--border and survive the rail re-pointing those below. */
+  --pane-ink: var(--fg);
+  --pane-ink-dim: var(--fg-dim);
+  --pane-ink-faint: var(--fg-faint);
+  --pane-border: var(--border);
+  --pane-accent: var(--accent);
+  /* The accent HAS to be re-pointed too. It is not decoration here: a pinned
+     chat's name is a 75% accent tint and "+ New workspace" is solid accent, and
+     on a deep rail the page's accent measured 4.06:1 and 2.41:1 — both fail.
+     A theme that omits this keeps its page accent, which is correct for the
+     themes whose accent is already light. */
+  --rail-accent: var(--accent);
+  /* THE STATE MARKS TOO. A light theme picks dark state colours because they
+     sit on a light rail — #1a6b3d green, #8a6410 amber. On the deep rail those
+     measured 1.74–2.46:1, i.e. a status dot nobody can see, and the dot is the
+     one thing on a row that must read at a glance. Light themes therefore
+     declare rail-side states; dark themes already have bright ones. */
+  --rail-status-ready: var(--status-ready);
+  --rail-status-working: var(--status-working);
+  --rail-status-blocked: var(--status-blocked);
+  --rail-status-dead: var(--status-dead);
+  --pane-status-ready: var(--status-ready);
+  --pane-status-working: var(--status-working);
+  --pane-status-blocked: var(--status-blocked);
+  --pane-status-dead: var(--status-dead);
   --chrome-h: 36px;
   --chrome-pane-h: 28px;
   /* Thickness of the accent rail that signals "this is the active tab"
@@ -171,6 +228,18 @@
 
 /* Tokyo Night — saturated deep navy with a vivid blue accent. */
 [data-theme="tokyo-night"] {
+  /* The rail, as reviewed on the demo — these are its rendered values, not a
+     second guess at them. */
+  --rail-surface: #313443;
+  --rail-ink: #c0caf5;
+  --rail-ink-dim: #a3acd1;
+  --rail-ink-faint: #7b82a0;
+  --rail-hover: #404355;
+  --rail-border: #484c5f;
+  --rail-seam: #4e5267;
+  --rail-accent: #8fb3ff;
+  --rail-status-ready: #49c07d;
+  --rail-status-working: #e8b34b;
   --bg: #1a1b26;
   --bg-elev: #1f2335;
   --bg-hover: #292e42;
@@ -199,6 +268,18 @@
 /* Dracula — grey-purple base with vivid purple/pink accents. The standout
    colorful dark. Different both in bg tint and accent hue. */
 [data-theme="dracula"] {
+  /* The rail, as reviewed on the demo — these are its rendered values, not a
+     second guess at them. */
+  --rail-surface: #454750;
+  --rail-ink: #f8f8f2;
+  --rail-ink-dim: #d4d5d2;
+  --rail-ink-faint: #a2a3a4;
+  --rail-hover: #575960;
+  --rail-border: #62636a;
+  --rail-seam: #696a71;
+  --rail-accent: #d0b3ff;
+  --rail-status-ready: #50fa7b;
+  --rail-status-working: #f1fa8c;
   --bg: #282a36;
   --bg-elev: #21222c;
   --bg-hover: #44475a;
@@ -238,6 +319,33 @@
    accent is Dracula's violet taken down only as far as white-on-it needs
    (6.38:1) — enough to stay violet rather than becoming indigo. */
 [data-theme="alucard"] {
+  /* The rail, as reviewed on the demo — these are its rendered values, not a
+     second guess at them. */
+  /* ── HOW DARK A RAIL SHOULD BE ──────────────────────────────────────────
+     Every rail sits in one lightness band, and the band is measured rather
+     than chosen: Slack's sidebar, sampled from a screenshot of the real app,
+     is #522d58 — L* 24.9. This one was L* 15.6, nine steps darker, which is
+     the whole of "contrast good but too dark, Slack uses a dark colour but not
+     sOOOOO dark".
+     Lifted toward the rail's OWN accent rather than toward white, so it gains
+     light without losing its hue — a rail is a tinted dark, not a grey one.
+     The ink is unchanged: read 5.43:1 and unread white 11.32:1 against the new
+     surface, and the step between them (what makes unread readable at a
+     glance) is a property of the two inks, so it survives the lift untouched.
+     tokyo-night, dracula and acme-dark are already in the band and are left
+     alone — a blanket percentage would have pushed those past Slack. */
+  --rail-surface: #3d345f;
+  --rail-ink: #ffffff;
+  --rail-ink-dim: #cccad6;
+  --rail-ink-faint: #9794a5;
+  --rail-hover: #403c57;
+  --rail-border: #4d4962;
+  --rail-seam: transparent;
+  --rail-accent: #a98cff;
+  --rail-status-ready: #98bca8;
+  --rail-status-working: #d0c19f;
+  /* Rail: a decisive step toward the ink, so the pane reads as a separate
+     surface at last (ΔL* 78 against the pane, from 2.7). */
   --bg: #f5f4fb;
   --bg-elev: #ffffff;
   --bg-hover: #e2ddf5;
@@ -283,6 +391,31 @@
 
 /* GitHub Light — crisp pure white. The "well-lit room" theme. */
 [data-theme="github-light"] {
+  /* The rail, as reviewed on the demo — these are its rendered values, not a
+     second guess at them. */
+  /* ── HOW DARK A RAIL SHOULD BE ──────────────────────────────────────────
+     Every rail sits in one lightness band, and the band is measured rather
+     than chosen: Slack's sidebar, sampled from a screenshot of the real app,
+     is #522d58 — L* 24.9. This one was L* 15.6, nine steps darker, which is
+     the whole of "contrast good but too dark, Slack uses a dark colour but not
+     sOOOOO dark".
+     Lifted toward the rail's OWN accent rather than toward white, so it gains
+     light without losing its hue — a rail is a tinted dark, not a grey one.
+     The ink is unchanged: read 5.59:1 and unread white 10.79:1 against the new
+     surface, and the step between them (what makes unread readable at a
+     glance) is a property of the two inks, so it survives the lift untouched.
+     tokyo-night, dracula and acme-dark are already in the band and are left
+     alone — a blanket percentage would have pushed those past Slack. */
+  --rail-surface: #2a3c50;
+  --rail-ink: #ffffff;
+  --rail-ink-dim: #d2d4d6;
+  --rail-ink-faint: #979ca2;
+  --rail-hover: #39424d;
+  --rail-border: #464f59;
+  --rail-seam: transparent;
+  --rail-accent: #79b8ff;
+  --rail-status-ready: #9bc3ae;
+  --rail-status-working: #d5c19d;
   --bg: #ffffff;
   --bg-elev: #ffffff;
   --bg-hover: #eaeef2;
@@ -337,6 +470,31 @@
    acme.ai: buttery off-white surfaces, near-black ink, saturated purple
    for primaries with a soft lavender tint for hovers and selections. */
 [data-theme="acme"] {
+  /* The rail, as reviewed on the demo — these are its rendered values, not a
+     second guess at them. */
+  /* ── HOW DARK A RAIL SHOULD BE ──────────────────────────────────────────
+     Every rail sits in one lightness band, and the band is measured rather
+     than chosen: Slack's sidebar, sampled from a screenshot of the real app,
+     is #522d58 — L* 24.9. This one was L* 15.6, nine steps darker, which is
+     the whole of "contrast good but too dark, Slack uses a dark colour but not
+     sOOOOO dark".
+     Lifted toward the rail's OWN accent rather than toward white, so it gains
+     light without losing its hue — a rail is a tinted dark, not a grey one.
+     The ink is unchanged: read 5.30:1 and unread white 11.80:1 against the new
+     surface, and the step between them (what makes unread readable at a
+     glance) is a property of the two inks, so it survives the lift untouched.
+     tokyo-night, dracula and acme-dark are already in the band and are left
+     alone — a blanket percentage would have pushed those past Slack. */
+  --rail-surface: #3b3659;
+  --rail-ink: #fffdf6;
+  --rail-ink-dim: #cec8c2;
+  --rail-ink-faint: #928d8e;
+  --rail-hover: #302d3b;
+  --rail-border: #3e3b46;
+  --rail-seam: transparent;
+  --rail-accent: #b3a3ff;
+  --rail-status-ready: #9bc3ae;
+  --rail-status-working: #d5c19d;
   --bg: #fdf6ea;
   --bg-elev: #fffdf6;
   --bg-hover: #f6ecd8;
@@ -382,6 +540,18 @@
    accent, soft cream foreground. The "night-time Acme" pairing rather
    than the inverted-light version. */
 [data-theme="acme-dark"] {
+  /* The rail, as reviewed on the demo — these are its rendered values, not a
+     second guess at them. */
+  --rail-surface: #3e325a;
+  --rail-ink: #ebe5d2;
+  --rail-ink-dim: #c8c1ba;
+  --rail-ink-faint: #988f99;
+  --rail-hover: #4f4466;
+  --rail-border: #5a4f6e;
+  --rail-seam: #615672;
+  --rail-accent: #c3b0ff;
+  --rail-status-ready: #50fa7b;
+  --rail-status-working: #f5c85a;
   --bg: #221547;
   --bg-elev: #2c1d5b;
   --bg-hover: #382670;

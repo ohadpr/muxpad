@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   type BrowserMoment,
+  browserLiveShotUrl,
   browserMomentView,
   browserOpenMode,
   wheelCountdown,
@@ -33,6 +34,46 @@ export interface BrowserCardProps {
   now?: number;
 }
 
+/**
+ * How often an expanded card re-photographs the page.
+ *
+ * A still, not a stream, deliberately: a live screencast per card is a socket
+ * and a frame rate per card, and the question a peek answers — "what is it
+ * doing?" — is answered by a picture every couple of seconds. The server
+ * coalesces captures per browser, so several cards peeking at one browser cost
+ * one screenshot.
+ */
+const PEEK_EVERY_MS = 2_500;
+
+/**
+ * The expanded picture, refreshed while it is on screen.
+ *
+ * PAUSED WHEN THE TAB IS HIDDEN. Otherwise a phone in a pocket keeps a browser
+ * taking screenshots of itself every two and a half seconds, forever, for
+ * nobody — and the capture is a real CDP round trip into a real page.
+ */
+function useLiveShot(profile: string, on: boolean): string | null {
+  const [tick, setTick] = useState(() => Date.now());
+  useEffect(() => {
+    if (!on) return;
+    const beat = () => {
+      if (!document.hidden) setTick(Date.now());
+    };
+    const id = setInterval(beat, PEEK_EVERY_MS);
+    const wake = () => {
+      // Straight away on return, rather than up to one interval of a stale
+      // picture that looks like a frozen browser.
+      if (!document.hidden) setTick(Date.now());
+    };
+    document.addEventListener('visibilitychange', wake);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', wake);
+    };
+  }, [on]);
+  return on ? browserLiveShotUrl(profile, tick) : null;
+}
+
 export function BrowserCard({ moment, onOpen, viewportWidth, now }: BrowserCardProps) {
   const view = browserMomentView(moment);
   const data = moment.browser;
@@ -49,6 +90,11 @@ export function BrowserCard({ moment, onOpen, viewportWidth, now }: BrowserCardP
 
   const countdown = wheelCountdown(data.wheel, now ?? tick);
 
+  // PER CARD, and several can be open at once: peeking at two browsers side by
+  // side in one conversation is the case this is for.
+  const [peeking, setPeeking] = useState(false);
+  const peekUrl = useLiveShot(moment.profile, peeking && view.openable);
+
   const act = () => onOpen(browserOpenMode(viewportWidth ?? window.innerWidth));
 
   return (
@@ -56,22 +102,32 @@ export function BrowserCard({ moment, onOpen, viewportWidth, now }: BrowserCardP
       className={`browser-card browser-card--${view.tone}${view.passive ? ' browser-card--passive' : ''}`}
       data-testid="browser-card"
       data-tone={view.tone}
-      // A passive card takes the click ITSELF rather than carrying a button.
-      // Looking is always allowed; being ASKED to look is what was wrong — a
-      // button, however quiet, reads as a thing that needs dealing with, and
-      // almost always there is nothing to deal with.
-      {...(view.passive && view.openable
-        ? {
-            role: 'button',
-            tabIndex: 0,
-            onClick: act,
-            onKeyDown: (e: React.KeyboardEvent) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                act();
-              }
-            },
-          }
+      // THE WHOLE CARD IS THE TARGET, button or no button. A passive card
+      // always took its own click — looking is always allowed; being ASKED to
+      // look is what was wrong. But a card WITH an "Open" button was a 60px
+      // target inside a 400px card that plainly looks like one thing you can
+      // open, and aiming at the button is work the card can do for you. Asked
+      // for directly: "make it so clicking anywhere in this card opens it".
+      //
+      // ROLE AND KEYBOARD ONLY WHEN THERE IS NO BUTTON. Nesting a button inside
+      // a role="button" announces one control containing another and gives the
+      // same action two tab stops. When the card carries its own button, that
+      // button IS the accessible control and this is a pointer convenience on
+      // top of it.
+      {...(view.openable
+        ? view.action
+          ? { onClick: act }
+          : {
+              role: 'button',
+              tabIndex: 0,
+              onClick: act,
+              onKeyDown: (e: React.KeyboardEvent) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  act();
+                }
+              },
+            }
         : {})}
     >
       {/* A BROWSER, unmistakably. A dot said "some card"; next to a spawn card
@@ -98,8 +154,43 @@ export function BrowserCard({ moment, onOpen, viewportWidth, now }: BrowserCardP
       {view.countdown && countdown ? (
         <div className="browser-card__countdown">{countdown}</div>
       ) : null}
+      {/* PEEK — the control for "what is it doing right now?".
+        Separate from opening, because opening is a decision: the modal is a
+        window you have to dismiss, and on a phone it is a whole tab. This is
+        the question you actually have most of the time, and the answer is a
+        picture in the chat that keeps up. It does NOT take the wheel; the
+        agent carries on, unaware anyone is looking. */}
+      {view.openable ? (
+        <button
+          type="button"
+          className="browser-card__peek"
+          aria-expanded={peeking}
+          aria-label={peeking ? 'Hide the page' : 'Show what it is doing'}
+          title={peeking ? 'Hide the page' : 'Show what it is doing'}
+          onClick={(e) => {
+            // The card opens the viewer, so a peek has to stop here or looking
+            // would always be followed by a window nobody asked for.
+            e.stopPropagation();
+            setPeeking((v) => !v);
+          }}
+        >
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+            {peeking ? <path d="M3 10.5 8 5.5l5 5" /> : <path d="M3 5.5 8 10.5l5-5" />}
+          </svg>
+        </button>
+      ) : null}
       {view.action ? (
-        <button type="button" className="browser-card__action" onClick={act} data-urgent="true">
+        <button
+          type="button"
+          className="browser-card__action"
+          // The card around it opens it too, so a click here would otherwise
+          // run `act` twice — once for the button, once on the way up.
+          onClick={(e) => {
+            e.stopPropagation();
+            act();
+          }}
+          data-urgent="true"
+        >
           {view.action}
         </button>
       ) : null}
@@ -112,7 +203,35 @@ export function BrowserCard({ moment, onOpen, viewportWidth, now }: BrowserCardP
         `loading="lazy"` because a long chat can hold several, and onError
         removes it rather than leaving a broken frame — the still is cache, and
         one that has been pruned must read as "no picture", not as a fault. */}
-      {view.shotUrl ? (
+      {peekUrl ? (
+        // THE LIVE ONE REPLACES THE FROZEN ONE while peeking. Two pictures of
+        // the same browser, one of them minutes old, is a card asking you to
+        // work out which is which.
+        //
+        // Clicking it opens the viewer: the picture is the thing you were
+        // looking at, so it is also the thing you reach for when looking is no
+        // longer enough. The card's own click would do it, but this is inside
+        // the card and says so by being a control.
+        // biome-ignore lint/a11y/useKeyWithClickEvents: the picture is a shortcut, not the control — the card itself and the Open button are both keyboard-reachable and do the same thing. A key handler here would add a third tab stop to one action.
+        <img
+          className="browser-card__shot browser-card__shot--live"
+          src={peekUrl}
+          alt=""
+          decoding="async"
+          onClick={(e) => {
+            e.stopPropagation();
+            act();
+          }}
+          onError={(e) => {
+            // A capture that failed is not a broken card: the previous frame
+            // stays on screen rather than collapsing to a torn image icon.
+            e.currentTarget.classList.add('browser-card__shot--stale');
+          }}
+          onLoad={(e) => {
+            e.currentTarget.classList.remove('browser-card__shot--stale');
+          }}
+        />
+      ) : view.shotUrl ? (
         <img
           className="browser-card__shot"
           src={view.shotUrl}

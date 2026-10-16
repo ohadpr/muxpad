@@ -68,6 +68,14 @@ export interface BrowserView extends BrowserAppState {
   needsYou: NeedsYou | null;
 }
 
+/**
+ * How long one capture serves everybody. A chat can hold a dozen cards about
+ * the same browser, each on its own refresh timer; this makes the cost a
+ * function of how many BROWSERS are being watched rather than how many cards
+ * mention one. Short enough that "now" is still now.
+ */
+const SHOT_COALESCE_MS = 1_000;
+
 const TakeSchema = z.object({
   /** Pane or chat id — whatever identifies this specific claimant. */
   by: z.string().min(1).max(200),
@@ -229,6 +237,14 @@ export function browsersRoutes(deps: {
    * the right degradation for a convenience.
    */
   resumeAgent?: (paneId: string, text: string) => void;
+  /**
+   * How long discovery waits for BOTH listeners (Chrome, then the viewer)
+   * before giving up with a 504. Injectable only so the test that pins the
+   * never-ready case does not have to sit out the real one — a 30s test is a
+   * 30s shard, and the server suite's budget is already the tightest thing in
+   * CI.
+   */
+  cdpReadyTimeoutMs?: number;
 }) {
   const app = new Hono();
   const wheel = new BrowserWheel(deps.db);
@@ -280,6 +296,29 @@ export function browsersRoutes(deps: {
     } catch {
       return null;
     }
+  };
+
+  /**
+   * A capture no older than {@link SHOT_COALESCE_MS}, shared by everyone who
+   * asks in that window.
+   *
+   * In flight is shared too, not just the result: ten cards expanding together
+   * is one burst of ten simultaneous requests, and without this they would be
+   * ten screenshots of the same page taken in the same instant.
+   */
+  const shotCache = new Map<string, { at: number; work: Promise<Uint8Array | null> }>();
+  const freshShot = (profile: string, state: BrowserAppState): Promise<Uint8Array | null> => {
+    const now = Date.now();
+    const cached = shotCache.get(profile);
+    if (cached && now - cached.at < SHOT_COALESCE_MS) return cached.work;
+    const work = fetchShot(state);
+    shotCache.set(profile, { at: now, work });
+    // A failed capture must not be remembered for a second — a browser that is
+    // mid-navigation would then look dead to everyone who asked next.
+    void work.then((bytes) => {
+      if (!bytes && shotCache.get(profile)?.work === work) shotCache.delete(profile);
+    });
+    return work;
   };
 
   app.get('/', (c) => c.json({ browsers: listBrowserApps(deps.db).map(view) }));
@@ -425,6 +464,40 @@ export function browsersRoutes(deps: {
     return c.json({ ok: true, attached: events.attachShot(profile, moment.at) });
   });
 
+  /**
+   * WHAT THAT BROWSER IS LOOKING AT, NOW.
+   *
+   * The sibling route below serves a SAVED still: the photograph attached to a
+   * moment, immutable and cached forever, which is evidence of something that
+   * already happened. This one is the opposite — a fresh capture, never cached
+   * — and it exists so a card in the chat can be expanded into a picture that
+   * keeps up without opening the viewer and taking the wheel.
+   *
+   * COALESCED, because the cost is a real screenshot of a real browser and the
+   * callers are a chat full of cards. Several cards about the same profile — and
+   * a long conversation can hold a dozen — would otherwise each poll it on their
+   * own timer. One capture per profile per second serves all of them, which
+   * makes the cost a function of how many BROWSERS are being watched rather
+   * than of how many cards mention one.
+   */
+  app.get('/:profile/shot', async (c) => {
+    const profile = profileParam(c.req.param('profile'));
+    if (!profile) return c.json({ error: 'invalid profile name' }, 400);
+    const state = find(profile);
+    if (!state) return c.json({ error: 'no such browser' }, 404);
+    const bytes = await freshShot(profile, state);
+    if (!bytes) return c.json({ error: 'no picture' }, 503);
+    return new Response(new Uint8Array(bytes), {
+      status: 200,
+      headers: {
+        'content-type': 'image/jpeg',
+        // NEVER cached: the whole point is that it is current. The coalescing
+        // above is the only reuse, and it is measured in one second.
+        'cache-control': 'no-store',
+      },
+    });
+  });
+
   app.get('/:profile/shot/:at', async (c) => {
     const profile = profileParam(c.req.param('profile'));
     const at = Number(c.req.param('at'));
@@ -477,11 +550,44 @@ export function browsersRoutes(deps: {
     if (path.replace(/\/$/, '') !== '/json/version')
       return c.json({ error: 'use the guarded CDP socket' }, 404);
     const upstream = `${state.cdpUrl}${path}`;
-    const deadline = Date.now() + 30_000;
+    const deadline = Date.now() + (deps.cdpReadyTimeoutMs ?? 30_000);
+    /**
+     * IS THE VIEWER LISTENING YET? Not "is Chrome", which is a different
+     * process on a different port, and that distinction is the whole bug.
+     *
+     * This route polls CHROME's debugging port and then hands back the
+     * VIEWER's `/agent-cdp` — the guarded socket (host/run.ts owns that
+     * upgrade). Chrome comes up first. So the window where Chrome answers
+     * `/json/version` and the viewer is still binding returns a perfectly
+     * valid-looking 200 whose `webSocketDebuggerUrl` points at a port nothing
+     * is accepting on, and the MCP client fails its very first call with
+     *
+     *   async initializeServer: WebSocket error:
+     *   connect ECONNREFUSED 127.0.0.1:95xx
+     *
+     * Retrying by hand worked, which is exactly what a startup race looks
+     * like. Any answer proves the listener is up — a 404 from the viewer's own
+     * handler is as good as a 200 here, and better than guessing a path.
+     */
+    const viewerReady = async (): Promise<boolean> => {
+      try {
+        // HEAD, so there is no body to drain. The CDP probe below is a GET and
+        // its body IS drained on the not-ready path — an undrained response per
+        // 200ms tick is ~150 of them held open across a cold start.
+        await fetch(state.viewerUrl, { method: 'HEAD' });
+        return true;
+      } catch {
+        return false;
+      }
+    };
     for (;;) {
       try {
         const res = await fetch(upstream);
-        if (res.ok) {
+        if (res.ok && !(await viewerReady())) {
+          // Chrome is up, the viewer is not. Drain this body before looping:
+          // the url it carries is useless until both are listening.
+          await res.arrayBuffer().catch(() => undefined);
+        } else if (res.ok) {
           // Never expose Chrome's unguarded socket to the MCP client.
           const payload = (await res.json()) as Record<string, unknown>;
           if (typeof payload.webSocketDebuggerUrl === 'string')

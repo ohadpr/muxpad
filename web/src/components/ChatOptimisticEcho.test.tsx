@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { renderCronMarker } from '@muxpad/shared';
+import { renderCronMarker, renderSpawnDelivery } from '@muxpad/shared';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -84,5 +84,40 @@ describe('a cron fire previewed before its transcript line lands', () => {
     const block = src.slice(i, end);
     expect(block).toContain('<QueuedText');
     expect(block).not.toMatch(/<UserText text=\{optimisticUser\}/);
+  });
+});
+
+describe('a batch of sub-chat reports previewed the same way', () => {
+  // The identical bug one marker later: `QueuedText` split the cron block off
+  // and nothing split off `<muxpad-delivery …>`, so a batch shown from the
+  // queue — or echoed for the length of the turn it starts — printed its
+  // envelope, ids and all, over a wall of reports in the reader's own voice.
+  const delivery = renderSpawnDelivery([
+    {
+      tabId: '01M51ZCVPRMBP26F88V45EHDE2',
+      name: 'scroll-past-cards',
+      state: 'ok',
+      report: 'Fixed.',
+    },
+    { tabId: '01M4XM941101T1X8H9QC4QGFE4', name: 'astra', state: 'ok', report: 'Two findings.' },
+  ]);
+
+  it('shows the same chip the transcript draws, never the envelope', () => {
+    const host = render(<QueuedText text={delivery} />);
+    expect(host.textContent).not.toContain('muxpad-delivery');
+    expect(host.textContent).not.toContain('01M51ZCVPRMBP26F88V45EHDE2');
+    expect(host.querySelector('.chat-queued-cron')?.textContent).toContain('2 sub-chats reported');
+  });
+
+  it('says "1 sub-chat" for one, like the chip it will become', () => {
+    const one = renderSpawnDelivery([{ tabId: 't1', name: 'x', state: 'ok', report: 'y' }]);
+    const host = render(<QueuedText text={one} />);
+    expect(host.querySelector('.chat-queued-cron')?.textContent).toContain('1 sub-chat reported');
+  });
+
+  it('does not eat a message that merely mentions the tag', () => {
+    const host = render(<QueuedText text="why does <muxpad-delivery> leak?" />);
+    expect(host.textContent).toContain('why does');
+    expect(host.querySelector('.chat-queued-cron')).toBeNull();
   });
 });

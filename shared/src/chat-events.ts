@@ -43,6 +43,18 @@ export interface UserTextEvent extends Base {
    * the chip. See `expandCronFire`.
    */
   folded?: boolean;
+  /**
+   * WHAT the folded thing is, so the run can name it.
+   *
+   * Absent means an injected prompt, which is what folding was invented for.
+   * `'report'` is a batch of finished sub-chats delivered into this chat: the
+   * run header has to say "3 reports" and not "3 prompts", because a reader
+   * who opens it looking for an instruction and finds somebody else's results
+   * has been told the wrong thing about their own log. Carried on the event
+   * rather than sniffed from the text downstream — the renderer cannot see the
+   * envelope, which was stripped two layers up.
+   */
+  fold?: 'prompt' | 'report';
 }
 export interface AssistantTextEvent extends Base {
   kind: 'assistant';
@@ -646,7 +658,20 @@ export function expandSpawnDelivery(
     text: `${marker.count} sub-chat${marker.count === 1 ? '' : 's'} reported`,
   };
   const reports = body.trim();
-  return reports ? [notice, { kind: 'user', id, ts, text: reports }] : [notice];
+  // FOLDED, like a cron's injected prompt and for the same reason: nobody typed
+  // this. It arrived as a user-role message because that is the only door into
+  // a harness transcript, and rendering it as one put a wall of somebody
+  // else's results in the reader's own voice — directly under the "⇤ 3
+  // sub-chats reported" chip and the per-child completion cards that already
+  // say it. Three drawings of one event.
+  //
+  // FOLDED AND NOT DROPPED, though the cards carry the same reports: the cards
+  // are CAPPED (MAX_SPAWN_CARDS), so on the fan-outs where this matters most —
+  // dozens of children — dropping the body would be the only copy gone. A
+  // collapsed run keeps it inspectable at the cost of one chip.
+  return reports
+    ? [notice, { kind: 'user', id, ts, text: reports, folded: true, fold: 'report' as const }]
+    : [notice];
 }
 
 /**

@@ -1,6 +1,6 @@
 import { CHAT_DECAY_DAYS, type Tab, chatClock } from '@muxpad/shared';
 import { describe, expect, it } from 'vitest';
-import { doneChatCount, groupChats } from './NavTree';
+import { doneChatCount, groupChats, rollupStatus, subChatChip } from './NavTree';
 
 const DAY = 86_400_000;
 const NOW = 1_700_000_000_000;
@@ -318,5 +318,102 @@ describe('a grandchild lists under the root, not into a hole', () => {
       tab('b', { spawned_by: 'a' }),
     ]);
     expect(live.length + done.length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * ─── WHAT A SHUT GROUP SAYS ABOUT ITSELF ────────────────────────────────────
+ *
+ * Both of these decide what the reader learns WITHOUT opening anything, which
+ * is the entire bargain of collapsing sub-chats by default. They are pure for
+ * the same reason `groupChats` is: a rule about what you can see must not be
+ * checked by eye.
+ */
+describe('rollupStatus', () => {
+  const kid = (status?: Tab['status']) => tab(`k-${status ?? 'idle'}`, { spawned_by: 'a', status });
+
+  it("wears the loudest state in the family, not the parent's", () => {
+    expect(rollupStatus('idle', [kid('blocked')])).toBe('blocked');
+    expect(rollupStatus('idle', [kid('ready')])).toBe('ready');
+  });
+
+  it('ranks blocked above everything — somebody is waiting on a human', () => {
+    expect(rollupStatus('working', [kid('blocked')])).toBe('blocked');
+    expect(rollupStatus('idle', [kid('working'), kid('blocked'), kid('ready')])).toBe('blocked');
+  });
+
+  it('ranks working above ready, so a shut group is never still while work runs', () => {
+    // "A still rail means nothing is running" is a claim about the WHOLE rail;
+    // a collapsed family with a turn inside it cannot be the exception.
+    expect(rollupStatus('idle', [kid('ready'), kid('working')])).toBe('working');
+  });
+
+  it("keeps the parent's own state when the children have nothing to say", () => {
+    expect(rollupStatus('working', [kid(), kid()])).toBe('working');
+    expect(rollupStatus('blocked', [kid('ready')])).toBe('blocked');
+  });
+
+  it("does not let a running child swallow the parent's own READY", () => {
+    // The commonest shape in a fan-out: the coordinator finishes its turn and
+    // is waiting on you while its workers run on. A pure rank over the family
+    // showed a spinner and never said `ready` — the parent's completion hidden
+    // by its children's activity, which is the one thing the row is being
+    // asked about. The chip still says "2 running".
+    expect(rollupStatus('ready', [kid('working'), kid('working')])).toBe('ready');
+  });
+
+  it('…but a blocked child still outranks the parent, whatever it is doing', () => {
+    expect(rollupStatus('ready', [kid('blocked')])).toBe('blocked');
+    expect(rollupStatus('working', [kid('blocked')])).toBe('blocked');
+  });
+
+  it('stays undefined for an idle parent with idle children — no mark at all', () => {
+    // RowMark drops the element entirely for idle, which is what keeps the
+    // majority of rows from paying for a gutter. A rollup that returned 'idle'
+    // instead of undefined would be the same pixel, but it would also mean
+    // every row in the rail had an opinion about its state.
+    expect(rollupStatus(undefined, [kid(), kid()])).toBeUndefined();
+  });
+});
+
+describe('subChatChip', () => {
+  const kid = (status?: Tab['status'], n = 0) => tab(`k${n}`, { spawned_by: 'a', status });
+
+  it('counts the quiet case in the shortest form there is', () => {
+    expect(subChatChip([kid(), kid()])).toBe('2 sub-chats');
+    expect(subChatChip([kid()])).toBe('1 sub-chat');
+  });
+
+  it('leads with the total, then the states, loudest first', () => {
+    const chip = subChatChip([
+      kid('working', 1),
+      kid('working', 2),
+      kid('blocked', 3),
+      kid('ready', 4),
+      kid(undefined, 5),
+    ]);
+    expect(chip).toBe('5 · 1 needs you · 2 running · 1 ready');
+  });
+
+  it('says nothing about a state nobody is in', () => {
+    expect(subChatChip([kid('working'), kid('working')])).toBe('2 · 2 running');
+  });
+
+  it('counts the dead, last — a quiet worker is not an absent one', () => {
+    // "6 sub-chats" over three exited runners is the shut group lying by
+    // omission: dead is the one state that never makes a noise of its own.
+    expect(subChatChip([kid('dead', 1), kid('dead', 2), kid(undefined, 3)])).toBe(
+      '3 \u00b7 2 dead',
+    );
+    expect(subChatChip([kid('blocked', 1), kid('dead', 2)])).toBe(
+      '2 \u00b7 1 needs you \u00b7 1 dead',
+    );
+  });
+
+  it("uses the mark's own words, not a second vocabulary for the rail", () => {
+    // MARK_TITLES.blocked is "Waiting on you"; the chip's "needs you" is the
+    // same claim at chip length. What matters is that it is NOT "1 blocked" —
+    // the rail says what a thing needs, never what state machine it is in.
+    expect(subChatChip([kid('blocked')])).toContain('needs you');
   });
 });

@@ -8,9 +8,11 @@ import { AgentCdpGate, bridgeAgentCdp } from '../AgentCdp.js';
 import {
   type KeyInput,
   type MouseInput,
+  type TouchInput,
   keyEvents,
   mouseEvent,
   probeEditable,
+  touchEvent,
 } from '../BrowserInput.js';
 import { browserLaunchSpec } from '../BrowserLaunch.js';
 import { browserViewerPort } from '../BrowserProfile.js';
@@ -32,6 +34,11 @@ import { emulationParams } from '../MobileEmulation.js';
 import { isBrowsingUrl } from '../PageAttachment.js';
 import { clearStaleProfileLock } from '../ProfileLock.js';
 import { ScreencastSession } from '../ScreencastSession.js';
+import {
+  clearSelectMarkExpression,
+  selectAtExpression,
+  selectChoiceExpression,
+} from '../SelectProbe.js';
 import { type HeartbeatSocket, heartbeatRound } from '../SocketHeartbeat.js';
 import { stampViewer } from '../ViewerBuild.js';
 import { VIEWER_HTML } from './viewer.js';
@@ -95,6 +102,13 @@ export interface BrowserHost {
 }
 
 const CDP_READY_TIMEOUT_MS = 20_000;
+
+/**
+ * How long a tidy shutdown gets before the browser is killed anyway. Short on
+ * purpose: everything inside it is a courtesy, and a host that cannot finish is
+ * exactly the host whose Chrome must not be left running.
+ */
+const SHUTDOWN_BUDGET_MS = 5_000;
 
 /**
  * The page, stamped with its own build, once.
@@ -541,6 +555,13 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
     }
   }
 
+  /**
+   * Where the finger last was. `touchEnd` carries no point of its own, by the
+   * protocol, and the lift is exactly when "what did they just tap?" has to be
+   * answered.
+   */
+  let lastTouch: { x: number; y: number } | null = null;
+
   async function handleInput(socket: WsSocket, raw: string) {
     let message: { t: string } & Record<string, unknown>;
     try {
@@ -548,40 +569,115 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
     } catch {
       return;
     }
+    /**
+     * After a tap or a click, tell the viewer whether the page now has a text
+     * field focused. A phone shows no keyboard unless something on ITS side is
+     * focused, so tapping a text box in a video stream is otherwise a tap into
+     * a picture. Shared by the mouse and touch paths — it is the same question.
+     */
+    const reportFocus = async () => {
+      try {
+        const read = async () => {
+          // Descends into shadow roots and same-origin frames — see
+          // FocusProbe.ts. The flat version reported the IFRAME or the shadow
+          // HOST, said "not editable", and the viewer took the keyboard away a
+          // third of a second after the tap raised it.
+          const r = (await cdp.send('Runtime.evaluate', {
+            expression: focusProbeExpression(),
+            returnByValue: true,
+          })) as unknown as { result?: { value?: boolean } };
+          return Boolean(r.result?.value);
+        };
+        // Asked twice before believing "no" — see probeEditable. A keyboard is
+        // already up by now, and taking it away wrongly is the bug.
+        const editable = await probeEditable(read, (ms) => new Promise((r) => setTimeout(r, ms)));
+        if (socket.readyState === 1) socket.send(JSON.stringify({ t: 'focus', editable }));
+        // A click can reveal a form, or move the page. Re-measure.
+        void sendFieldBoxes(socket);
+      } catch {
+        // Not knowing is fine; the viewer keeps whatever it had.
+      }
+    };
+    /**
+     * DID THAT TAP LAND ON A NATIVE DROP-DOWN?
+     *
+     * A `<select>` popup is drawn by the browser, outside the page's own
+     * compositing, so `Page.startScreencast` never sees it: the click lands on
+     * a real element and NOTHING appears in the viewer. So the page is asked
+     * what the list contains and the viewer draws it — see SelectProbe.ts.
+     *
+     * Asked on the lift rather than the press, because that is when a real
+     * browser opens one, and asked at the same coordinates the click went to
+     * rather than from the focused element: a select is focusable but a tap on
+     * one that was ALREADY focused still has to open it.
+     */
+    const offerSelect = async (x: number, y: number) => {
+      try {
+        const r = (await cdp.send('Runtime.evaluate', {
+          expression: selectAtExpression(x, y),
+          returnByValue: true,
+        })) as unknown as { result?: { value?: string } };
+        const raw = r.result?.value;
+        if (!raw || socket.readyState !== 1) return;
+        const described = JSON.parse(raw) as {
+          options: unknown[];
+          multiple: boolean;
+          size: number;
+          label: string;
+        };
+        if (!Array.isArray(described.options) || described.options.length === 0) return;
+        // A multi-select and a `size > 1` list box are not popups — they render
+        // inside the page, so they are already on screen and already work. A
+        // sheet over one would be the only thing in the way.
+        if (described.multiple || described.size > 1) return;
+        socket.send(JSON.stringify({ t: 'select', ...described }));
+      } catch {
+        // A page that cannot be asked is a page with no drop-down, as far as
+        // the viewer is concerned. The click already went through.
+      }
+    };
+
     try {
-      if (message.t === 'mouse') {
+      if (message.t === 'touch') {
+        /**
+         * A FINGER, RELAYED AS A FINGER.
+         *
+         * Scrolling used to be synthesized: the viewer classified a drag and
+         * sent mouseWheel deltas. That gets vertical scrolling roughly right
+         * and everything else wrong — horizontal barely moved, nested
+         * scrollers did not take it, there was no momentum, and the whole
+         * thing felt, in the report, "wonky".
+         *
+         * None of that needs solving here. The page is already under touch
+         * emulation in phone mode, so a real touch sequence makes IT do the
+         * scrolling, with its own axes, its own inertia and its own idea of
+         * which element the gesture belongs to. The viewer stops guessing what
+         * a drag meant, which is the only way to stop guessing wrong.
+         */
+        const event = touchEvent(message as unknown as TouchInput);
+        if (!event) return;
+        await cdp.send('Input.dispatchTouchEvent', event);
+        // The lift is what makes a tap a tap, so it is also when to ask whether
+        // the page now has a text field focused — and whether the thing under
+        // the finger was a drop-down the viewer has to draw itself.
+        if (event.type === 'touchEnd') {
+          void reportFocus();
+          // touchEnd carries no point of its own, by the protocol. The last
+          // place the finger WAS is where the tap landed.
+          if (lastTouch) void offerSelect(lastTouch.x, lastTouch.y);
+        } else if (event.type === 'touchStart' || event.type === 'touchMove') {
+          const p = (event.touchPoints as Array<{ x: number; y: number }>)[0];
+          if (p) lastTouch = p;
+        }
+      } else if (message.t === 'mouse') {
         await cdp.send('Input.dispatchMouseEvent', mouseEvent(message as unknown as MouseInput));
         // After a RELEASE, report whether the page now has a text field focused.
         // A phone shows no keyboard unless something on ITS side is focused, so
         // the viewer needs to know when to put one there — tapping a text box in
         // a video stream is otherwise a tap into a picture.
         if (message.type === 'mouseReleased') {
-          try {
-            const read = async () => {
-              // Descends into shadow roots and same-origin frames — see
-              // FocusProbe.ts. The flat version reported the IFRAME or the
-              // shadow HOST, said "not editable", and the viewer took the
-              // keyboard away a third of a second after the tap raised it.
-              const r = (await cdp.send('Runtime.evaluate', {
-                expression: focusProbeExpression(),
-                returnByValue: true,
-              })) as unknown as { result?: { value?: boolean } };
-              return Boolean(r.result?.value);
-            };
-            // Asked twice before believing "no" — see probeEditable. A keyboard
-            // is already up by now, and taking it away wrongly is the bug.
-            const editable = await probeEditable(
-              read,
-              (ms) => new Promise((r) => setTimeout(r, ms)),
-            );
-            if (socket.readyState === 1) {
-              socket.send(JSON.stringify({ t: 'focus', editable }));
-            }
-            // A click can reveal a form, or move the page. Re-measure.
-            void sendFieldBoxes(socket);
-          } catch {
-            // Not knowing is fine; the viewer keeps whatever it had.
-          }
+          await reportFocus();
+          void offerSelect(Number(message.x), Number(message.y));
         }
         // Scrolling moves every box on the page.
         if (message.type === 'mouseWheel') void sendFieldBoxes(socket);
@@ -652,6 +748,23 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
           // A selector that does not resolve is not an error — the browser is
           // simply left where it was, which is the old behaviour.
         }
+      } else if (message.t === 'pick') {
+        // The answer to a drop-down the viewer drew. Applied with the events a
+        // controlled component needs — see applySelectChoice — and reported
+        // back so the viewer can say so rather than guess.
+        const ok = (await cdp.send('Runtime.evaluate', {
+          expression: selectChoiceExpression(String(message.value ?? '')),
+          returnByValue: true,
+        })) as unknown as { result?: { value?: boolean } };
+        if (socket.readyState === 1) {
+          socket.send(JSON.stringify({ t: 'picked', ok: Boolean(ok.result?.value) }));
+        }
+        // The chosen value can change what the form shows.
+        void sendFieldBoxes(socket);
+      } else if (message.t === 'unpick') {
+        // A sheet somebody dismissed. The stamp must not outlive it, or the
+        // next choice lands on the wrong element.
+        await cdp.send('Runtime.evaluate', { expression: clearSelectMarkExpression() });
       } else if (message.t === 'text') {
         // Whole strings, not keystrokes. A phone keyboard gives autocorrect,
         // dictation and emoji as composed text, and replaying that as synthetic
@@ -929,14 +1042,39 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
           log(`[host] no last picture: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
-      await screencast.stop().catch(() => {});
-      cdp.close();
-      clearInterval(heartbeat);
-      for (const socket of agentWss.clients) socket.terminate();
-      agentWss.close();
-      wss.close();
-      await new Promise<void>((resolve) => http.close(() => resolve()));
-      chrome.kill();
+      // CHROME DIES NO MATTER WHAT HAPPENS ABOVE IT.
+      //
+      // This used to be the last statement of a sequence of awaits, which meant
+      // any one of them hanging left a live headless browser behind — and an
+      // orphan still holds the debugging port, so the NEXT host dials 9452,
+      // reaches a browser nobody owns, and serves a viewer that shows a picture
+      // of nothing and relays input into the void. Measured: nineteen orphans
+      // for one profile, a fresh one every thirty seconds, each leaked by a host
+      // that could not finish shutting down.
+      //
+      // The specific hang was `http.close()`, which waits for every connection
+      // to drain and therefore waits forever on an attached viewer — the VIEWER
+      // sockets were never terminated, only the agent's.
+      try {
+        await Promise.race([
+          (async () => {
+            await screencast.stop().catch(() => {});
+            cdp.close();
+            clearInterval(heartbeat);
+            for (const socket of agentWss.clients) socket.terminate();
+            for (const socket of wss.clients) socket.terminate();
+            agentWss.close();
+            wss.close();
+            await new Promise<void>((resolve) => http.close(() => resolve()));
+          })(),
+          new Promise<void>((resolve) => setTimeout(resolve, SHUTDOWN_BUDGET_MS)),
+        ]);
+      } catch (err) {
+        log(`[host] untidy shutdown: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        clearInterval(heartbeat);
+        chrome.kill();
+      }
     },
   };
 }

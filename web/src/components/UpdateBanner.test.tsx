@@ -169,3 +169,36 @@ describe('placement', () => {
     expect(css).toMatch(/z-index:\s*1000/);
   });
 });
+
+describe('the pill has to be seen', () => {
+  const css = readFileSync(join(__dirname, 'UpdateBanner.css'), 'utf8');
+  const rule = (sel: string) => {
+    const i = css.indexOf(`${sel} {`);
+    return i < 0 ? null : css.slice(i, css.indexOf('}', i));
+  };
+
+  it('wears the ACCENT, not another surface from the chrome family', () => {
+    // --bg-tabbar put it at ΔE 8.8-23.2 against the page behind it, depending
+    // on theme: a pill the same colour as everything else. The accent is
+    // ΔE 57-114 in the same six themes.
+    const r = rule('.update-banner') ?? '';
+    expect(r).toContain('background: var(--accent)');
+    // The old token is named in the comment above it, deliberately, so this
+    // looks for the DECLARATION rather than the mention.
+    expect(r).not.toMatch(/background:\s*var\(--bg-tabbar\)/);
+  });
+
+  it('takes its ink from the pair the accent is designed with', () => {
+    // --accent/--accent-fg is 4.75-6.79:1 across the themes — already the
+    // legible pairing every primary button uses.
+    expect(rule('.update-banner')).toContain('color: var(--accent-fg)');
+  });
+
+  it('builds the controls ON it out of that ink, not out of the neutrals', () => {
+    // A --bg-hover pill on a saturated accent is a grey hole in it.
+    const action = rule('.update-banner-action') ?? '';
+    expect(action).toContain('--accent-fg');
+    expect(action).not.toContain('--bg-hover');
+    expect(rule('.update-banner-dismiss')).toContain('--accent-fg');
+  });
+});

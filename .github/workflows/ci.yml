@@ -38,6 +38,16 @@ jobs:
           # "cancelled" rather than a timeout and so read as a flake for days.
           # Sharding cuts the wall clock without touching the execution model;
           # do not fix this by raising the ceiling instead.
+          #
+          # SHARDS 2 AND 4 WERE RED FROM THE DAY THIS LANDED, and the cause was
+          # not the clock: one test file in each hung forever on a recursive
+          # mkdir under /proc, which is instant on macOS and infinite on the
+          # Linux runner. Fixed at the source — see the note on `unwritable()`
+          # in server/src/browser/BrowserShots.test.ts. If a shard ever again
+          # burns its full 20 minutes and names no failing test, suspect a hang
+          # during collection and bisect the shard file by file with
+          # `timeout 60` per file; the job log's last completed file is the one
+          # BEFORE the culprit.
           - check: server tests 1/4
             command: pnpm --dir server exec vitest run --no-file-parallelism --shard=1/4
           - check: server tests 2/4

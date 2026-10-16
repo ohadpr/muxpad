@@ -856,6 +856,10 @@ const reapStrandedProfiles = async (): Promise<void> => {
 // hard "idle" and pull Chrome out from under a running agent. The host counts
 // attached sockets and reports `idleMs: 0` while any remain.
 const BROWSER_IDLE_STOP_MS = 20 * 60 * 1000;
+// How long the last viewer must be gone before a human's wheel is handed back
+// on their behalf. Long enough to go and fetch a 2FA code and come back; short
+// enough that a closed view stops blocking the agent for ten minutes.
+const BROWSER_WHEEL_GRACE_MS = 90 * 1000;
 const stopIdleBrowsers = async () => {
   try {
     for (const row of listBrowserApps(db)) {
@@ -872,6 +876,19 @@ const stopIdleBrowsers = async () => {
         // Unreachable or too old to know the route. SKIP — never stop a browser
         // on a failed read, which is the same safe direction the reap takes.
         continue;
+      }
+      // THE WHEEL FOLLOWS PRESENCE. This loop already knows how long the host
+      // has had nobody attached, which is exactly the fact a stale human lease
+      // needs — so release it here rather than inventing a second poll. See
+      // BrowserWheel.releaseIfUnattended for why the grace exists and why only
+      // a human's lease is released this way.
+      if (idle.viewers === 0) {
+        const wheel = new BrowserWheel(db);
+        if (wheel.releaseIfUnattended(row.profile, idle.idleMs, BROWSER_WHEEL_GRACE_MS)) {
+          console.log(
+            `[browser] '${row.profile}' — wheel released: no viewer for ${Math.round(idle.idleMs / 1000)}s`,
+          );
+        }
       }
       if (
         !shouldStopIdleBrowser({

@@ -150,7 +150,10 @@ export function createServeSupervisor(deps: ServeSupervisorDeps): ServeSuperviso
     } catch {
       // Surfacing the failure must never itself throw the sweep off course.
     }
-    deps.notifyPane?.(paneId, msg);
+    // EXPLICIT: a supervised server dying is muxpad's own alarm about a thing
+    // the user asked to be kept up, not the pane's conversation — so it rings
+    // even when the server happens to live in a sub-chat's tab.
+    deps.notifyPane?.(paneId, msg, { explicit: true });
   };
 
   const respawn = async (paneId: string): Promise<void> => {

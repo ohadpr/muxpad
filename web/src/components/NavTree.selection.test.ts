@@ -323,8 +323,40 @@ describe('selection is the CONTENT SURFACE, not a colour on the list', () => {
     // The point of the change, and the thing most likely to be undone by
     // somebody "restoring" the highlight. With selection on the content surface
     // the accent is left to mean one thing only: a row that wants you.
+    //
+    // SPENDING it is the thing forbidden — painting the row with it. This used
+    // to be `not.toMatch(/--accent/)` on the whole rule body, which also caught
+    // the row RE-POINTING the token for its subtree. That is the opposite of
+    // spending: the rail re-points --fg/--accent/--status-* at rail values for
+    // its own island (a dark rail can sit inside a light theme), and the
+    // selected row — the one row painted in the PANE's colour — has to point
+    // them back, or a pinned name inside it is drawn in rail ink on pane
+    // background. So the guard names the properties that would be a SPEND.
     const body = ruleBody(NAV_CSS, RAIL_ACTIVE);
-    expect(body).not.toMatch(/--accent/);
+    for (const prop of [
+      'background',
+      'background-color',
+      'background-image',
+      'color',
+      'box-shadow',
+      'border-color',
+    ]) {
+      // Read the body directly: `decl` throws on an absent property, and most
+      // of these SHOULD be absent — "not declared at all" must pass, not error.
+      const spent = new RegExp(`(?:^|;)\\s*${prop}\\s*:[^;]*--accent`);
+      expect(body, `${prop} must not spend the accent`).not.toMatch(spent);
+    }
+    // And every remaining mention is a TOKEN being re-pointed, never a paint.
+    // The row restores --accent itself and then re-derives the tokens built
+    // from it (--nt-pinned-ink, --nt-sel, --nt-sel-hover), because a derived
+    // custom property is substituted where it is DECLARED: left on the rail's
+    // values, the selected pinned chat's name came out light purple on a
+    // near-white row.
+    for (const d of body.split(';')) {
+      if (!d.includes('--accent')) continue;
+      expect(d.trim(), `not a token declaration: ${d.trim()}`).toMatch(/^--[a-z0-9-]+\s*:/);
+    }
+    expect(body).toMatch(/--accent:\s*var\(--pane-accent\)/);
   });
 
   it('the SHEET keeps the accent wash, because it has no pane to join', () => {
@@ -479,6 +511,98 @@ describe('what the quiet selection HANDS BACK to the row', () => {
       const weight = getComputedStyle(document.getElementById('name') as HTMLElement).fontWeight;
       expect({ variant, weight }).toEqual({ variant, weight: '700' });
     }
+  });
+});
+
+describe('the ink is ONE scale, and it means one thing', () => {
+  /**
+   * "Now if it's unread it's white, otherwise it's gray, or if pinned it's
+   * purple-ish. Not too consistent."
+   *
+   * It was not. Colour carried read-vs-unread AND pinned, and the two are not
+   * comparable: a pinned row going unread dropped its hue, so the second
+   * meaning disappeared exactly when the row became interesting. Pinned moved
+   * to grouping; this pins the channel down to one meaning.
+   */
+  it('only read and unread may set a name colour', () => {
+    const colouring = rules(NAV_CSS)
+      .filter((r) => /color:/.test(r.body) && !/background|border/.test(r.body))
+      .flatMap((r) => r.selectors)
+      .filter((sel) => sel.includes('.navtree-name-text'))
+      .filter((sel) => /\[data-pinned/.test(sel));
+    expect(colouring).toEqual([]);
+  });
+
+  it('a child row is quieter, which is the same scale rather than a new one', () => {
+    // Hierarchy is lightness too — one scale, three rungs: child, parent,
+    // unread. Nothing on it is a hue.
+    for (const token of ['--nt-ink-read', '--nt-ink-read-child']) {
+      expect(NT_TOKENS[token]).toBeDefined();
+      expect(NT_TOKENS[token]).not.toMatch(/--accent/);
+    }
+  });
+});
+
+describe('unread has to be visible from across the room', () => {
+  /**
+   * "The status of a tab being unread is just not strong enough. Look how well
+   * Slack does it."
+   *
+   * It was not strong enough because it was ONE channel: weight 500 against
+   * 700, at 13px, with both rows the SAME INK — measured in the running rail,
+   * ΔE 0.0. Slack's signal is not its badge; it is that the label itself goes
+   * from muted to full white AND from regular to bold, which reads peripherally
+   * down a whole list and costs no width.
+   */
+  it('read and unread differ in COLOUR, not only in weight', () => {
+    const base = ruleBody(NAV_CSS, '.navtree-tab-row');
+    const unread = ruleBody(NAV_CSS, `.navtree-tab-row[data-unread="true"] .navtree-name-text`);
+    expect(decl(base, 'color')).toBe('var(--nt-ink-read)');
+    expect(decl(unread, 'color')).toBe('var(--fg)');
+    expect(decl(base, 'color')).not.toBe(decl(unread, 'color'));
+  });
+
+  it('A CHILD ROW IS NOT EXEMPT — the cascade, not the rule, is the test', () => {
+    // The bug, exactly. The child rule is variant-scoped, (0,5,0) against the
+    // unread rule's (0,3,0), so it won outright: an unread SUB-CHAT rendered
+    // at child weight in child ink — no bold, no step of colour, nothing. The
+    // one row in the list most likely to be the thing you were waiting for.
+    //
+    // Asserted through a real cascade rather than by reading the rule, because
+    // reading the rule is what missed it: the rule was there and correct.
+    document.head.innerHTML = `<style>${NAV_CSS}</style>`;
+    document.body.innerHTML = `
+      <div class="navtree" data-variant="sidebar">
+        <div class="navtree-tab-row" data-child="true" data-unread="true">
+          <span id="kid" class="navtree-name-text">subchat report delivery</span>
+        </div>
+        <div class="navtree-tab-row" data-child="true">
+          <span id="read" class="navtree-name-text">scroll-repro</span>
+        </div>
+      </div>`;
+    const kid = getComputedStyle(document.getElementById('kid') as HTMLElement);
+    const read = getComputedStyle(document.getElementById('read') as HTMLElement);
+    expect(kid.fontWeight).toBe('700');
+    expect(read.fontWeight).toBe('500');
+    expect(kid.color).not.toBe(read.color);
+  });
+
+  it('a child is still quieter than a parent when neither is unread', () => {
+    // The hierarchy the child rule exists for has to survive the change: a
+    // sub-chat is subordinate, and saying so in the type is what saves a mark.
+    const child = ruleBody(
+      NAV_CSS,
+      '.navtree[data-variant="sidebar"] .navtree-tab-row[data-child="true"] .navtree-name-text',
+    );
+    expect(decl(child, 'color')).toBe('var(--nt-ink-read-child)');
+  });
+
+  it('the sheet says it in ink too, not only in weight', () => {
+    const sheet = ruleBody(
+      NAV_CSS,
+      '.navtree[data-variant="sheet"] .navtree-tab-row[data-unread="true"] .navtree-name-text',
+    );
+    expect(decl(sheet, 'color')).toBe('var(--fg)');
   });
 });
 
@@ -765,69 +889,69 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     }
   });
 
-  it('PINNED is a HUE on the name — a channel selection does not use', () => {
-    // Six designs, and the first five are negative assertions because each is
-    // ruled out by a reason rather than by a value. All five were on the row's
-    // BOX, which is the one thing selection owns:
+  it('PINNED IS AN EDGE — off the ink, on its own node', () => {
+    // Seven designs. The first five were on the row's BOX and were rejected
+    // for crowding what selection owns:
     //
     //   · a rule under the block (flush, inset, a 40px stub) — a line BETWEEN
     //     two things used to say something about ONE of them.
-    //   · a 3px tick in the left state track — free, but outside the icon
-    //     column, so it ragged the rail's left edge.
-    //   · a ring, then a plate, on the chip — measured invisible: the tile is
-    //     transparent and a 20px glyph fills a 24px box.
-    //   · the pin shown at rest — visible, but 18px of name width on exactly
-    //     the rows pinned because they matter.
-    //   · a FILL at the midpoint between the rail and the selected row —
-    //     rejected as "too close to the active tab indicator", which is the
-    //     correct reading of the whole category rather than of that mix.
+    //   · a 3px tick in the left state track — free, but it ragged the rail's
+    //     left edge.
+    //   · a ring, then a plate, on the chip — measured invisible.
+    //   · the pin shown at rest — 18px of name width on exactly the rows
+    //     pinned because they matter.
+    //   · a FILL at the midpoint — "too close to the active tab indicator".
     //
-    // So the mark is INSIDE the row, on its contents, where selection says
-    // nothing at all. Nothing may go back on the box.
-    const seam = ruleBody(NAV_CSS, '.navtree-pin-divider');
-    expect(seam).not.toMatch(/border/);
-    expect(Number.parseFloat(decl(seam, 'margin'))).toBe(0);
+    // The sixth was a hue on the NAME, and it failed for a reason none of the
+    // others did: the name's ink already carries read-vs-unread, so pinned was
+    // a second meaning on one channel — and it lost. A pinned row that went
+    // unread took the white and dropped its hue, so the mark showed only while
+    // the row had nothing to say.
+    //
+    // The seventh is a 2px accent edge on the leading rim: a channel nothing
+    // else paints in, so unread, selection and hover all leave it alone.
     expect(strip(STATE_CSS)).not.toMatch(/\[data-pinned/);
     expect(strip(CHIP_CSS)).not.toMatch(/data-phase="pinned"/);
+
+    // NO INK. The token is gone, not merely unused: a colour nobody paints
+    // with is a colour somebody paints with later.
+    expect(NT_TOKENS['--nt-pinned-ink']).toBeUndefined();
+    expect(NAV_CSS).not.toMatch(/--nt-pinned-ink\s*:/);
+    expect(ruleBody(NAV_CSS, '.navtree-tab-row[data-pinned="true"] .navtree-name-text', true)).toBe(
+      '',
+    );
+
+    // ITS OWN NODE, never a pseudo. Both of a tab row's are spoken for —
+    // ::before is StateChip's state track, ::after is the sub-chat elbow — and
+    // reaching for either from this file has produced the same
+    // over-constrained-box bug twice. The assertion above this one
+    // ('the fillets own their OWN element') is the general form; this is the
+    // arm for the mark added after it.
+    const edge = ruleBody(NAV_CSS, '.navtree-pin-edge');
+    expect(edge).not.toBe('');
+    expect(decl(edge, 'position')).toBe('absolute');
+
+    // THE RAIL'S ACCENT EXPLICITLY. The selected row re-points --accent to the
+    // PANE's — right for everything painted on the pill, wrong for this, which
+    // is painted BESIDE it on rail ground: a dark pane accent on a dark rail is
+    // invisible, which is exactly how it was reported.
+    expect(decl(edge, 'background')).toBe('var(--rail-accent, var(--accent))');
+
+    // AND IT SITS OUTSIDE THE ROW. The selected row's pill is rounded on its
+    // left (`6px 0 0 6px`), so a bar at `left: 0` lies on the curve with white
+    // behind its middle and rail behind its ends — a dimple in the pill rather
+    // than a mark. Negative, so one ground is behind every row's bar.
+    expect(Number.parseFloat(decl(edge, 'left'))).toBeLessThan(0);
+    expect(NAV_CSS).not.toMatch(/\.navtree-tab-row\[data-pinned='?"?true'?"?\]::(before|after)/);
+
+    // IT SURVIVES EVERY OTHER STATE, which is the whole reason it moved off
+    // the ink. Nothing may hide it — and a row that is pinned AND selected
+    // AND unread has to keep all three marks.
     for (const r of rules(NAV_CSS)) {
-      const onTheBox = r.selectors.some((sel) => /\[data-pinned="true"\]$/.test(sel));
-      if (onTheBox)
-        expect({ sel: r.selectors, body: r.body }).toEqual({ sel: r.selectors, body: '' });
-    }
-
-    // HUE, not lightness, and that is the point rather than a flourish: the
-    // name keeps its luminance and changes temperature, so a pinned name cannot
-    // read as louder or dimmer than any other — the two marks are not on the
-    // same axis, so they cannot be compared at all.
-    const ink = ruleBody(NAV_CSS, '.navtree-tab-row[data-pinned="true"] .navtree-name-text');
-    expect(decl(ink, 'color')).toBe('var(--nt-pinned-ink)');
-    expect(ink).not.toMatch(/background|border|box-shadow|font-weight|font-size/);
-    expect(NT_TOKENS['--nt-pinned-ink']).toMatch(/var\(--accent\) \d+%, var\(--fg\)/);
-
-    // IT MUST SURVIVE SELECTION. A pinned row you are also IN is still pinned,
-    // and `[data-active="true"] .navtree-name-text` is (0,3,0) — exactly the
-    // same specificity — so the only thing keeping the hue is source order.
-    const sels = rules(NAV_CSS).flatMap((r, i) => r.selectors.map((sel) => ({ sel, i })));
-    const activeInk = sels.find(
-      (x) => x.sel === '.navtree-tab-row[data-active="true"] .navtree-name-text',
-    );
-    const pinnedInk = sels.find(
-      (x) => x.sel === '.navtree-tab-row[data-pinned="true"] .navtree-name-text',
-    );
-    expect(pinnedInk && activeInk && pinnedInk.i > activeInk.i).toBe(true);
-
-    // And it stays readable on both grounds it can land on, everywhere. The
-    // accent is a HUE token, not an ink one, so this is the arm that catches a
-    // theme whose accent is too close to its own rail.
-    for (const [name, t] of Object.entries(THEMES)) {
-      const tint = over(t['--accent'] as string, t['--fg'] as string, 0.75);
-      const onRail = ratio(tint, t['--bg-tabbar'] as string);
-      const onTab = ratio(tint, paneFace(t));
-      expect({ name, rail: onRail >= 4.5, tab: onTab >= 4.5 }).toEqual({
-        name,
-        rail: true,
-        tab: true,
-      });
+      const hides =
+        r.selectors.some((sel) => sel.includes('.navtree-pin-edge')) &&
+        /display:\s*none|visibility:\s*hidden|opacity:\s*0\b/.test(r.body);
+      expect({ sel: r.selectors, hides }).toEqual({ sel: r.selectors, hides: false });
     }
   });
 });

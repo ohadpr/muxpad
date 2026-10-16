@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { AgentSessionStore } from '../store/AgentSessionStore.js';
 import { SpawnRoundStore } from '../store/SpawnRoundStore.js';
 import { type SpawnReportState, type SpawnReportWrite, TabStore } from '../store/TabStore.js';
 import { type HeadlineModel, agentSdkHeadlineModel, readRecentTurns } from './headline.js';
@@ -589,7 +590,55 @@ export async function maybeWriteSpawnReport(
   // A bounded tail read, not a model call — the expensive thing is still behind
   // the gate. The turn count the gate needs is only knowable from it.
   const { conversation, turns } = readRecentTurns(db, paneId);
-  if (!conversation) return fallback();
+  // A WORKER THAT FINISHED AND LEFT NO TRANSCRIPT IS A FAILURE, NOT A SUCCESS.
+  //
+  // This returned `fallback()` with no argument, and for an ordinary (not
+  // crashed, not awaiting) worker that resolves to state 'ok' — which the
+  // fallback reads as "nothing to say" and drops on the floor: no row, no
+  // stamp, no log line. The card then renders "No summary was generated for
+  // this one." and there is no account of why ANYWHERE, which is exactly the
+  // shape of the bug this comment comes from.
+  //
+  // It is also not a rare path. It is what a SESSION SWAP looks like from here:
+  // a second runner mints a new sid, the pane's `current_sid` moves to it, and
+  // this read — which follows `current_sid` — lands on a transcript with
+  // nothing in it while the real conversation sits under the old id. Measured
+  // on pane 01M4WFEFZWKVE6HESHY772P0F3, whose parent was told nothing at all
+  // about a worker that had died mid-tool-call ten minutes earlier.
+  //
+  // So: SAY SO IN THE LOG, which is the part that was missing and the part that
+  // costs nothing to be wrong about.
+  //
+  // AND NOTHING ELSE. This first wrote `failed` on the row as well, and that
+  // was a mistake on two counts, both found in review:
+  //
+  //   · It cannot tell the dangerous empty from the ordinary ones. "Session
+  //     started, never spoke" is a real and harmless state (chat/has-messages),
+  //     and so are a `findTranscript` miss and a 64 KB tail that happens to be
+  //     one giant tool_result. Those would all have drawn a red card reading
+  //     "the work finished but its summary could not be generated", over
+  //     workers where nothing went wrong — and the gate below already has a
+  //     considered rule for exactly this input (`turns < 1 → false`), which
+  //     writing here would have inverted from six lines above it.
+  //   · Writing `failed` stamps the attempt clock, and the clock is what the
+  //     ONE retry and the 30-minute interval are measured against. A reopened
+  //     round keeps its original `started_at` (SpawnRoundStore.reopen), so a
+  //     single transient empty read — a slow flush — would spend the retry and
+  //     then refuse every later turn-end in that round, pinning a recoverable
+  //     worker to `failed` for half an hour.
+  //
+  // The silence this branch exists to fix was never the missing ROW; it was
+  // that nothing anywhere said why. One log line fixes that, and leaves the
+  // judgement to the gate that already knows how to make it.
+  if (!conversation) {
+    const sid = new AgentSessionStore(db).getByPane(paneId)?.current_sid;
+    if (sid) {
+      console.warn(
+        `[spawn-report] no transcript for tab ${tabId} (pane ${paneId}, sid ${sid.slice(0, 8)}) — nothing to summarise; if this worker did real work, its session was probably replaced mid-turn and the transcript is under its previous sid`,
+      );
+    }
+    return fallback();
+  }
   // WHICH ROUND this report is for, so the interval can tell a new job from a
   // retry. The round is CLOSED by the time we get here (the turn-end closes it
   // synchronously, ahead of this call, which is the whole reason retirement

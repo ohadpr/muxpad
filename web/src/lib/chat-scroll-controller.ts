@@ -568,9 +568,32 @@ export class ChatScrollController {
    * stranded a reader 5701 px up after a single wheel notch.
    */
   private followingAfter(geo: ScrollGeometry, prevTop: number | null): boolean {
+    // ── A SHRINK IS NOT A GESTURE ───────────────────────────────────────────
+    // `place()` has always known this (see `clampedShrink` there); this did
+    // not, and the two have to agree or the mechanism decides different things
+    // about one frame depending on which entry point saw it.
+    //
+    // The case is a reader sitting AT the bottom while the document gets
+    // shorter under them — which is what a queued message draining does: the
+    // pending row is removed and the turn that replaces it is briefly smaller.
+    // The engine clamps `scrollTop` to the new maximum, and that clamp is a
+    // DECREASE, which the test below read as "they scrolled up, stop
+    // following". Following was dropped and the reader parked just above the
+    // tail; the content then re-grew and left them stranded there, so the next
+    // wheel notch was spent getting back to a bottom that kept moving.
+    // Measured on a live chat with six messages queued: scrollTop 5227 -> 5182
+    // as the maximum went 5227 -> 5182, no write from this class involved.
+    // Reported as "it won't let me scroll down all the way and it goes into a
+    // jumpy frenzy".
+    //
+    // Still at the maximum ⇒ nobody moved away from anything; the floor came up.
+    const clampedShrink =
+      prevTop !== null &&
+      geo.scrollTop < prevTop &&
+      geo.scrollTop >= geo.scrollHeight - geo.clientHeight - 1;
     // Moved away from the tail. Their intent is the one thing that cannot be
     // overruled by arithmetic about where they happen to have ended up.
-    if (prevTop !== null && geo.scrollTop < prevTop) return false;
+    if (prevTop !== null && geo.scrollTop < prevTop && !clampedShrink) return false;
     return geo.scrollHeight - geo.scrollTop - geo.clientHeight < FOLLOW_THRESHOLD_PX;
   }
 }
