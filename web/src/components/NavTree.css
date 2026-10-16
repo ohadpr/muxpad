@@ -1789,8 +1789,14 @@
 }
 .navtree-subs-detail {
   font-weight: 600;
-  padding: 1px 5px;
-  border-radius: 7px;
+  /* ROOM TO BREATHE. At 1px/5px the text sat on the box's edge on every side —
+     "a tad cramped" — which makes an enclosure read as a tight label rather
+     than as a container something lives in. 3px/8px with a 1.45 line-height
+     puts ~4px above and below the glyphs and 8px at the ends; the box still
+     lands 12px clear of the rail (it had 20px). */
+  padding: 3px 8px;
+  line-height: 1.45;
+  border-radius: 9px;
   background: color-mix(in srgb, var(--fg) 7%, transparent);
 }
 
