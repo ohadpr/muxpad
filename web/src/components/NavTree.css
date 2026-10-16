@@ -1673,6 +1673,52 @@
   color: var(--fg-dim);
 }
 
+/* ─── THE COLLAPSED FAMILY'S CHIP ───────────────────────────────────────────
+   "6 · 2 running · 1 needs you", under the parent, at the children's indent.
+
+   It is the done drawer's disclosure one more step quieter — same control,
+   same caret column, smaller and fainter — because that is what it is: a
+   disclosure over chats, in a list of chats. A third kind of header here would
+   be a new thing to learn for a row that says less than either of them.
+
+   NOT a row: no 36px hit box, no state mark, no hover fill. The rows in this
+   list are chats you can open; this is a label with a caret on it, and giving
+   it a row's weight would put a seventh row in the list the collapse exists to
+   shorten.
+
+   Its caret sits on the CHILD indent (--nt-pad + --nt-indent + 8px, the same
+   expression the child rows use), so a shut group reads as one shape: parent,
+   then the chip tucked under it. */
+.navtree-subs-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 2px var(--nt-pad) 4px calc(var(--nt-pad) + var(--nt-indent) + 8px);
+  border: 0;
+  background: none;
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--fg-faint);
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.navtree-subs-head:hover {
+  color: var(--fg-dim);
+}
+/* The one state that earns colour here. A worker stopped on a question is the
+   rail's loudest signal, and while the group is shut this chip is the only
+   place it can be read in words — the parent's mark carries the same fact as a
+   dot (see rollupStatus), and a dot cannot say "1 of 6". Same red the mark
+   uses, so the two are obviously one claim. */
+.navtree-subs-head[data-state="blocked"] {
+  color: var(--status-blocked);
+}
+
 /* The nested disclosure: the agents' work, inside the drawer and under the
    chats you archived yourself. One step further in than the head above it and
    one step quieter, so the nesting is legible without a second kind of

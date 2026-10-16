@@ -19,6 +19,7 @@ import { isExpanded, toggleExpanded, useNavExpansion } from '../lib/nav-expansio
 import { tabRowAffordances } from '../lib/nav-row-affordances';
 import { nextCronLabel, railCronLabel } from '../lib/next-cron-label';
 
+import { recallOpenSubChats, rememberOpenSubChats } from '../lib/rail-folds';
 import { reorderByDrop } from '../lib/reorder';
 import { orderAfterPinnedDrop } from '../lib/tab-drag';
 import { useFrozenTabOrder } from '../lib/tab-freeze';
@@ -1306,6 +1307,19 @@ export function TabList({
   // fourteen finished chats under it.
   const [doneOpen, setDoneOpen] = useState(false);
   const [subsOpen, setSubsOpen] = useState(false);
+  // Which parents' sub-chats are open — REMEMBERED, because collapsing by
+  // default is only tolerable if opening sticks across the remounts a sidebar
+  // sees all day (see lib/rail-folds). Read once, lazily: localStorage in a
+  // render body would run on every keystroke in the rename field.
+  const [openSubs, setOpenSubs] = useState<Set<string>>(() => recallOpenSubChats());
+  const toggleSubs = (tabId: string) => {
+    setOpenSubs((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(tabId)) next.add(tabId);
+      rememberOpenSubChats(next);
+      return next;
+    });
+  };
 
   // Drag-to-reorder is PINNED-ONLY (see lib/tab-drag for why). The hook is
   // fed just the pinned ids, so an unpinned row can neither be dragged into
@@ -1399,10 +1413,11 @@ export function TabList({
    *  switches the row's mark from a tile to a dot in its parent's chip column,
    *  and what puts the one indent step on the row. Nothing about a clock — a
    *  sub-chat has none, and the row reads its own. */
-  const renderRow = (t: Tab, parent?: Tab) => (
+  const renderRow = (t: Tab, parent?: Tab, markStatus?: PaneStatus) => (
     <TabRow
       key={t.id}
       tab={t}
+      {...(markStatus ? { markStatus } : {})}
       // The whole reason `renderGroup` knows the parent. Forwarding it was
       // missed, and because every OTHER prop here is spelled out explicitly
       // there was nothing to notice: `TabRow.parent` was simply `undefined` on
@@ -1430,22 +1445,72 @@ export function TabList({
       }
     />
   );
-  const renderGroup = (g: ChatGroup) => (
-    <Fragment key={`${g.chat.id}${g.contextOnly ? ':subs' : ''}`}>
-      {g.contextOnly ? (
-        /* A LABEL, not a row. The parent may be live with a row of its own
-           above, or done with one beside these — either way a second clickable
-           copy of it here would be a chat appearing twice in one list, and the
-           live one would go on lighting up as it worked. */
-        <div className="navtree-done-parent" aria-hidden="true">
-          {g.chat.name}
-        </div>
-      ) : (
-        renderRow(g.chat)
-      )}
-      {g.children.map((k) => renderRow(k, g.chat))}
-    </Fragment>
-  );
+  /**
+   * ─── SUB-CHATS ARE COLLAPSED, AND THE COLLAPSE CARRIES THEIR STATE ────────
+   *
+   * A fan-out is the normal shape of work here — this install has a chat with
+   * 65 children — and every one of them was a row. The rail is a list of
+   * CONVERSATIONS; a worker is a thing one of those conversations is doing,
+   * and forty of them in the list is the list not working.
+   *
+   * Shut by default, and the chip under the parent says what is inside
+   * ("6 · 2 running · 1 needs you"). Two things make that safe rather than a
+   * hiding place:
+   *
+   *   · the parent's own mark wears the loudest state in the family while shut
+   *     (`rollupStatus`), so a blocked worker still reaches the glance; and
+   *   · opening STICKS (`rail-folds`), so the chat you are actually sitting
+   *     with is not re-collapsed by the next tab switch.
+   *
+   * The disclosure is drawn only where there is something to disclose. In the
+   * done drawer's sub-chat section the children are ALREADY behind two
+   * disclosures and the parent is a label, not a row — a third caret there
+   * would be a caret on a caret, so `contextOnly` keeps the flat rendering.
+   */
+  const renderGroup = (g: ChatGroup) => {
+    const open = openSubs.has(g.chat.id);
+    const foldable = !g.contextOnly && g.children.length > 0;
+    return (
+      <Fragment key={`${g.chat.id}${g.contextOnly ? ':subs' : ''}`}>
+        {g.contextOnly ? (
+          /* A LABEL, not a row. The parent may be live with a row of its own
+             above, or done with one beside these — either way a second clickable
+             copy of it here would be a chat appearing twice in one list, and the
+             live one would go on lighting up as it worked. */
+          <div className="navtree-done-parent" aria-hidden="true">
+            {g.chat.name}
+          </div>
+        ) : (
+          renderRow(
+            g.chat,
+            undefined,
+            // Only while SHUT. Expanded, the children have rows of their own
+            // and the parent goes back to saying what it is doing itself.
+            foldable && !open ? rollupStatus(g.chat.status, g.children) : undefined,
+          )
+        )}
+        {foldable ? (
+          <button
+            type="button"
+            className="navtree-subs-head"
+            // The chip's own loudest state, for the ONE case that earns colour:
+            // a child blocked on a question. Everything else stays in the
+            // faint ink a label should be — a chip that highlighted "running"
+            // too would be a second moving thing in a rail whose whole state
+            // budget is one mark per row.
+            data-state={rollupStatus('idle', g.children) ?? 'idle'}
+            onClick={() => toggleSubs(g.chat.id)}
+            aria-expanded={open}
+            aria-label={`${open ? 'Hide' : 'Show'} sub-chats of ${g.chat.name}`}
+          >
+            <SvgCaret open={open} />
+            {subChatChip(g.children)}
+          </button>
+        ) : null}
+        {!foldable || open ? g.children.map((k) => renderRow(k, g.chat)) : null}
+      </Fragment>
+    );
+  };
 
   return (
     <div className="navtree-tab-list">
@@ -1700,6 +1765,16 @@ interface TabRowProps {
   /** The chat that spawned this one, when it is a child. Supplies the clock
    *  they share, and switches the row's leading mark from tile to dot. */
   parent?: Tab | undefined;
+  /**
+   * The state mark to draw INSTEAD of this tab's own.
+   *
+   * Set on a parent whose sub-chats are collapsed, where it carries the
+   * loudest state in the family (see `rollupStatus`). Absent everywhere else,
+   * and absent means "draw your own" — an override that defaulted to the
+   * rolled-up value would make every row's mark depend on a list the row
+   * cannot see.
+   */
+  markStatus?: PaneStatus | undefined;
   workspace: Workspace;
   isActiveTab: boolean;
   /**
@@ -1912,6 +1987,83 @@ export function groupChats(tabs: Tab[]): {
 }
 
 /**
+ * THE STATE A COLLAPSED GROUP SHOWS — the parent's own, or its loudest child's.
+ *
+ * Collapsing sub-chats hides rows that were carrying the rail's two most
+ * consequential signals: a worker that is BLOCKED on a question, and a worker
+ * that has finished and is waiting. Hiding those behind a caret would make the
+ * collapse a regression rather than a tidy-up — the whole value of the rail is
+ * that a glance down it is true.
+ *
+ * So a collapsed parent wears the loudest state in its family, its own
+ * included. Precedence, loudest first:
+ *
+ *   blocked  somebody is waiting on a human. Nothing outranks it.
+ *   working  a turn is running. ABOVE `ready` deliberately: "a still rail
+ *            means nothing is running" is a property of the whole rail, and a
+ *            collapsed group with a working child inside it must not be still.
+ *   ready    finished, waiting for you.
+ *   dead     findable, not shouting.
+ *   idle     nothing, and no element — see RowMark.
+ *
+ * Expanded, the parent goes back to its OWN state and the children carry
+ * theirs, because then they have rows to carry it on.
+ */
+const STATUS_RANK: Record<PaneStatus, number> = {
+  blocked: 4,
+  working: 3,
+  ready: 2,
+  dead: 1,
+  idle: 0,
+};
+
+export function rollupStatus(
+  own: PaneStatus | undefined,
+  children: readonly Tab[],
+): PaneStatus | undefined {
+  let best: PaneStatus = own ?? 'idle';
+  for (const k of children) {
+    const s = k.status ?? 'idle';
+    if (STATUS_RANK[s] > STATUS_RANK[best]) best = s;
+  }
+  return best === 'idle' ? own : best;
+}
+
+/**
+ * WHAT THE COLLAPSED CHIP SAYS.
+ *
+ * A bare count ("6") is the thing a caret already implies and answers the
+ * wrong question: nobody collapses six workers and then wonders how many there
+ * were, they wonder whether any of them needs them. So the chip carries the
+ * STATES, in the same words the rest of the product uses — "needs you" is the
+ * mark's own title (MARK_TITLES.blocked), not a new vocabulary for the rail.
+ *
+ * Only non-zero states appear, loudest first, and a family where nothing is
+ * happening says so in the shortest possible form: "6 sub-chats". The count
+ * leads whenever there IS state to report, because then it is the denominator
+ * of what follows — "6 · 2 running · 1 needs you" reads as a fraction of a
+ * known whole, which "2 running · 1 needs you" does not.
+ */
+export function subChatChip(children: readonly Tab[]): string {
+  const n = children.length;
+  let working = 0;
+  let blocked = 0;
+  let ready = 0;
+  for (const k of children) {
+    const s = k.status ?? 'idle';
+    if (s === 'working') working++;
+    else if (s === 'blocked') blocked++;
+    else if (s === 'ready') ready++;
+  }
+  const parts: string[] = [];
+  if (blocked > 0) parts.push(`${blocked} needs you`);
+  if (working > 0) parts.push(`${working} running`);
+  if (ready > 0) parts.push(`${ready} ready`);
+  if (parts.length === 0) return `${n} sub-chat${n === 1 ? '' : 's'}`;
+  return [`${n}`, ...parts].join(' · ');
+}
+
+/**
  * How many CHATS the done group holds — the number in its header.
  *
  * One per group now that the drawer holds top-level chats only and every group
@@ -2040,6 +2192,7 @@ function CronMark({ tab }: { tab: Tab }) {
 function TabRow({
   tab,
   parent,
+  markStatus,
   workspace,
   isActiveTab,
   workspaceLabel,
@@ -2677,7 +2830,7 @@ function TabRow({
             deliberately: agent panes work quietly for minutes on their chat
             face, and the one chat whose progress you are actually waiting on
             must not be the single row that goes dark. */}
-      {!isEditing && <RowMark status={tab.status} />}
+      {!isEditing && <RowMark status={markStatus ?? tab.status} />}
       {overlays}
     </div>
   );

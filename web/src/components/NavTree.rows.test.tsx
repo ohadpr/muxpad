@@ -94,6 +94,20 @@ function railHtml(tabs: Tab[]): string {
  *  on a list that renders the child's mark twice or the parent's not at all. */
 const count = (haystack: string, needle: string) => haystack.split(needle).length - 1;
 
+/**
+ * Open a parent's sub-chats, the way the reader does — through the remembered
+ * set the rail reads on mount (lib/rail-folds).
+ *
+ * Static markup cannot click, and sub-chats are COLLAPSED by default, so every
+ * assertion about what a child row looks like has to start by saying which
+ * family is open. Seeding the store rather than exporting a test-only prop
+ * keeps the persistence on the tested path: a rail that forgot the set would
+ * fail these too.
+ */
+const openSubs = (...ids: string[]) =>
+  localStorage.setItem('muxpad:rail-open-subs:v1', JSON.stringify(ids));
+afterEach(() => localStorage.clear());
+
 /** A clock `days` old, built by the SERVER's own deriver rather than by hand, so
  *  a change to the decay curve reaches these rows instead of a stale copy. */
 const aged = (days: number) =>
@@ -146,7 +160,10 @@ describe('the pinned edge', () => {
 });
 
 describe('the rail hands a child row the things that make it look like a child', () => {
-  const rail = () => railHtml([tab('root'), tab('kid', { spawned_by: 'root' })]);
+  const rail = () => {
+    openSubs('root');
+    return railHtml([tab('root'), tab('kid', { spawned_by: 'root' })]);
+  };
 
   it('marks the child row, and only the child row, as a child', () => {
     // `data-child="true"` is what NavTree.css hangs the one indent step on. Its
@@ -281,6 +298,7 @@ describe('opening the done drawer shows a delivered child as a hollow dot', () =
   it('draws a working child as a SOLID dot in the live list', () => {
     // The other half of the two-state vocabulary, and the reason the drawer is
     // not the only place a dot appears.
+    openSubs('root');
     const box = mountRail([tab('root'), tab('kid', { spawned_by: 'root', clock: null })]);
     expect(box.querySelectorAll('[data-shape="dot"]')).toHaveLength(1);
     expect(box.querySelectorAll('.chatchip-dot[data-hollow="true"]')).toHaveLength(0);
@@ -324,6 +342,7 @@ describe('the sheet nests a child under its parent and files done chats away', (
   it('marks the child row as a child, so the indent rule can reach it', () => {
     // `data-child` was emitted by the desktop row and not by the sheet's, so
     // even once the grouping arrived a child would have been an ordinary line.
+    openSubs('root');
     const out = sheetHtml([tab('root'), tab('kid', { spawned_by: 'root', clock: null })]);
     expect(count(out, 'data-child="true"')).toBe(1);
   });
@@ -340,6 +359,7 @@ describe('the sheet nests a child under its parent and files done chats away', (
     // the two surfaces were one drawing apart and diverging on everything else.
     // With the same component on both, the phone gets the clock it never had
     // (its top-level rows aged invisibly) and cannot drift from the rail again.
+    openSubs('root');
     const out = sheetHtml([tab('root'), tab('kid', { spawned_by: 'root', clock: null })]);
     expect(count(out, 'data-shape="dot"')).toBe(1);
     expect(count(out, 'data-shape="tile"')).toBe(1);
@@ -362,6 +382,7 @@ describe('the sheet nests a child under its parent and files done chats away', (
     // chat that spawned them. Grouping is what makes position mean parentage
     // instead of last-touched, so the child must follow its parent even when the
     // incoming list has it first.
+    openSubs('root');
     const out = sheetHtml([tab('kid', { spawned_by: 'root', clock: null }), tab('root')]);
     expect(out.indexOf('>root<')).toBeLessThan(out.indexOf('>kid<'));
   });
@@ -382,5 +403,67 @@ describe('the sheet nests a child under its parent and files done chats away', (
     expect(out).not.toContain('data-child="true"');
     expect(out).not.toContain('data-shape="dot"');
     expect(out).not.toContain('done');
+  });
+});
+
+/**
+ * ─── THE COLLAPSE, AND WHAT IT MUST NOT HIDE ────────────────────────────────
+ *
+ * A fan-out is the normal shape of work here — 65 children under one chat on
+ * this install — and every one of them was a row, so the list of
+ * CONVERSATIONS became a list of errands. Shutting them is only safe if the
+ * two signals the rows were carrying survive the shut: a worker blocked on a
+ * question, and a count you can read without opening anything.
+ */
+describe('sub-chats are collapsed, and the collapse still tells the truth', () => {
+  const family = (over: Partial<Tab>[] = [{}, {}]) => [
+    tab('root'),
+    ...over.map((o, i) => tab(`kid${i}`, { spawned_by: 'root', clock: null, ...o })),
+  ];
+
+  it('draws no child rows by default, and one chip instead', () => {
+    const out = railHtml(family());
+    expect(out).not.toContain('>kid0<');
+    expect(out).not.toContain('data-child="true"');
+    expect(count(out, 'navtree-subs-head')).toBe(1);
+    expect(out).toContain('2 sub-chats');
+  });
+
+  it('names the states in the chip, loudest first', () => {
+    const out = railHtml(
+      family([{ status: 'working' }, { status: 'blocked' }, { status: 'working' }]),
+    );
+    expect(out).toContain('3 · 1 needs you · 2 running');
+  });
+
+  it('bubbles a blocked child onto the parent row while shut', () => {
+    // The whole safety argument for collapsing. The parent is idle and would
+    // normally render NO mark at all (RowMark drops the element), so this is
+    // not a tint on an existing dot — it is the difference between the rail
+    // showing the blocked worker and not showing it.
+    const out = railHtml(family([{ status: 'blocked' }]));
+    expect(out).toContain('data-state="blocked"');
+  });
+
+  it('keeps the rail moving for a working child, so a still rail still means still', () => {
+    const out = railHtml(family([{ status: 'working' }]));
+    expect(out).toContain('data-state="working"');
+  });
+
+  it('gives the parent its OWN state back once the family is open', () => {
+    // Open, the children have rows of their own to carry it on, and a parent
+    // wearing a child's state would be reporting the same fact twice.
+    openSubs('root');
+    const out = railHtml([tab('root'), tab('kid0', { spawned_by: 'root', status: 'blocked' })]);
+    // One row MARK, on the child's row. The chip keeps its own `data-state`
+    // (it is the control, and it still says "1 needs you" while open), so the
+    // count that matters is of marks, not of the attribute.
+    expect(count(out, 'navtree-mark" data-state="blocked"')).toBe(1);
+    expect(out).toContain('data-child="true"');
+  });
+
+  it('draws no chip for a chat with no children at all', () => {
+    const out = railHtml([tab('root'), tab('other')]);
+    expect(out).not.toContain('navtree-subs-head');
   });
 });
