@@ -1716,6 +1716,16 @@
 .navtree-subs-head:hover {
   color: var(--fg-dim);
 }
+
+/* ON THE PHONE IT IS A TARGET, NOT A LABEL. The sheet renders this same
+   control, and on that surface it is the ONLY way to reach a worker — behind
+   11.5px of text with 6px of padding, i.e. a ~21px tap target next to 36px
+   rows. The ink stays label-quiet; only the box grows. */
+.navtree[data-variant="sheet"] .navtree-subs-head {
+  min-height: 40px;
+  padding-top: 4px;
+  padding-bottom: 6px;
+}
 /* The nested disclosure: the agents' work, inside the drawer and under the
    chats you archived yourself. One step further in than the head above it and
    one step quieter, so the nesting is legible without a second kind of

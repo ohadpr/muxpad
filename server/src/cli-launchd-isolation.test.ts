@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -83,7 +83,8 @@ describe('scripts/muxpad and the launchd jobs', () => {
     // this assertion is about all four verbs, not about `status`.
     const { env, home } = withFakeLaunchctl();
     const out = await status(env, join(home, 'dev-instance'));
-    expect(out).not.toContain('launchd');
+    expect(out).not.toContain('owner: launchd');
+    expect(out).not.toContain('owner:  launchd');
     expect(out).not.toContain('4242');
     expect(out).toContain('muxpad: not running');
   });
@@ -95,5 +96,58 @@ describe('scripts/muxpad and the launchd jobs', () => {
     const { env, home } = withFakeLaunchctl();
     const out = await status(env, `${join(home, '.muxpad')}/`);
     expect(out).toContain('owner: launchd (dev.muxpad');
+  });
+});
+
+/**
+ * ─── AND IT NEVER TOUCHES THE LIVE SOCKET ───────────────────────────────────
+ *
+ * Every muxpad pane exports `MUXPAD_PTYD_SOCKET` pointing at the live
+ * install's socket, so an agent inside a pane that runs the documented
+ * isolated-instance command inherits it — and `start_ptyd` does `rm -f` on
+ * that path on the way up. Deleting it leaves the running server holding a
+ * connection to a ptyd that owns none of its panes: every pane on the user's
+ * screen goes dead.
+ *
+ * The launchd bug above was accidentally guarding this (it returned "already
+ * running" and did nothing). Removing one guard armed the other, which is why
+ * these two live in the same file.
+ */
+describe('scripts/muxpad and an inherited socket', () => {
+  const sockOf = (out: string): string => out.match(/socket: (\S+)/)?.[1] ?? '';
+
+  it('ignores an inherited socket that points at the default install', async () => {
+    const { env, home } = withFakeLaunchctl();
+    const live = join(home, '.muxpad', 'ptyd.sock');
+    mkdirSync(dirname(live), { recursive: true });
+    writeFileSync(live, '');
+    const dev = join(home, 'dev-instance');
+    const { stdout } = await execFileAsync(MUXPAD_BIN, ['status'], {
+      env: { ...env, MUXPAD_DATA_DIR: dev, MUXPAD_PTYD_SOCKET: live },
+    });
+    expect(sockOf(stdout)).toBe(join(dev, 'ptyd.sock'));
+    expect(stdout).not.toContain(live);
+    // The file itself is untouched by a mere status, and the point of the
+    // assertion is the PATH the start/stop paths would have operated on.
+    expect(existsSync(live)).toBe(true);
+  });
+
+  it('keeps a socket the caller put inside the instance', async () => {
+    const { env, home } = withFakeLaunchctl();
+    const dev = join(home, 'dev-instance');
+    const own = join(dev, 'custom.sock');
+    const { stdout } = await execFileAsync(MUXPAD_BIN, ['status'], {
+      env: { ...env, MUXPAD_DATA_DIR: dev, MUXPAD_PTYD_SOCKET: own },
+    });
+    expect(sockOf(stdout)).toBe(own);
+  });
+
+  it('leaves the default install alone — its socket is its own', async () => {
+    const { env, home } = withFakeLaunchctl();
+    const live = join(home, '.muxpad', 'ptyd.sock');
+    const { stdout } = await execFileAsync(MUXPAD_BIN, ['status'], {
+      env: { ...env, MUXPAD_PTYD_SOCKET: live },
+    });
+    expect(sockOf(stdout)).toBe(live);
   });
 });

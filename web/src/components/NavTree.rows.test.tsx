@@ -76,13 +76,13 @@ function tab(id: string, over: Partial<Tab> = {}): Tab {
   } as Tab;
 }
 
-function railHtml(tabs: Tab[]): string {
+function railHtml(tabs: Tab[], activeTabSlug: string | null = null): string {
   TABS = tabs;
   return renderToStaticMarkup(
     <TabList
       workspace={WS}
       isActiveWorkspace={true}
-      activeTabSlug={null}
+      activeTabSlug={activeTabSlug}
       variant="sidebar"
       editing={null}
       setEditing={() => {}}
@@ -465,5 +465,22 @@ describe('sub-chats are collapsed, and the collapse still tells the truth', () =
   it('draws no chip for a chat with no children at all', () => {
     const out = railHtml([tab('root'), tab('other')]);
     expect(out).not.toContain('navtree-subs-head');
+  });
+
+  it('opens the group that holds the chat you are LOOKING at', () => {
+    // A shut group containing the active chat leaves the rail with no selected
+    // row anywhere — tap a spawn card, or @-jump to a worker, and the sidebar
+    // highlights nothing. On the phone the sheet IS the navigation, so that is
+    // "where am I?" with no answer.
+    const out = railHtml([tab('root'), tab('kid0', { spawned_by: 'root' })], 'kid0');
+    expect(out).toContain('data-child="true"');
+    expect(out).toContain('>kid0<');
+  });
+
+  it('…and shuts it again when you are somewhere else', () => {
+    // Not persisted: it is a fact about where you are, not a disclosure you
+    // opened. Leaving must not quietly leave the group expanded forever.
+    const out = railHtml([tab('root'), tab('kid0', { spawned_by: 'root' })], 'root');
+    expect(out).not.toContain('>kid0<');
   });
 });

@@ -1312,9 +1312,16 @@ export function TabList({
   // sees all day (see lib/rail-folds). Read once, lazily: localStorage in a
   // render body would run on every keystroke in the rename field.
   const [openSubs, setOpenSubs] = useState<Set<string>>(() => recallOpenSubChats());
+  // RE-READ, don't edit the snapshot. Every expanded workspace mounts its own
+  // TabList, and the sheet mounts another beside the rail — each one read the
+  // store at ITS mount and then wrote back its whole copy, so opening a group
+  // in one list silently erased the groups opened in a list that mounted
+  // earlier. (Open P in workspace A, then Q in B: the store ends up {Q}, and P
+  // is shut on the next reload.) The store is the shared state; the component
+  // holds a view of it.
   const toggleSubs = (tabId: string) => {
-    setOpenSubs((prev) => {
-      const next = new Set(prev);
+    setOpenSubs(() => {
+      const next = recallOpenSubChats();
       if (!next.delete(tabId)) next.add(tabId);
       rememberOpenSubChats(next);
       return next;
@@ -1468,7 +1475,15 @@ export function TabList({
    * would be a caret on a caret, so `contextOnly` keeps the flat rendering.
    */
   const renderGroup = (g: ChatGroup) => {
-    const open = openSubs.has(g.chat.id);
+    // OPEN WHEREVER YOU ARE. A shut group that contains the chat you are
+    // looking at would leave the rail with no selected row anywhere — tap a
+    // spawn card in the parent, or @-jump to a worker, and the sidebar shows
+    // nothing highlighted. On the phone, where the sheet IS the navigation,
+    // that is "where am I?" with no answer. Not persisted: it is a fact about
+    // where you are, not a disclosure you opened, so leaving the chat
+    // re-shuts the group.
+    const holdsActive = isActiveWorkspace && g.children.some((k) => k.slug === activeTabSlug);
+    const open = openSubs.has(g.chat.id) || holdsActive;
     const foldable = !g.contextOnly && g.children.length > 0;
     return (
       <Fragment key={`${g.chat.id}${g.contextOnly ? ':subs' : ''}`}>
@@ -1505,7 +1520,13 @@ export function TabList({
             // state slot was consolidated to remove.
             onClick={() => toggleSubs(g.chat.id)}
             aria-expanded={open}
-            aria-label={`${open ? 'Hide' : 'Show'} sub-chats of ${g.chat.name}`}
+            // The CHIP'S OWN WORDS are in the name, not just the verb: an
+            // aria-label replaces the visible text, so "Show sub-chats of
+            // Trayo Builder" would be a screen reader hearing everything
+            // except the part that says one of them is waiting on you.
+            aria-label={`${open ? 'Hide' : 'Show'} sub-chats of ${g.chat.name} — ${subChatChip(
+              g.children,
+            )}`}
           >
             <SvgCaret open={open} />
             {subChatChip(g.children)}
@@ -2025,12 +2046,21 @@ export function rollupStatus(
   own: PaneStatus | undefined,
   children: readonly Tab[],
 ): PaneStatus | undefined {
-  let best: PaneStatus = own ?? 'idle';
+  let loudest: PaneStatus = 'idle';
   for (const k of children) {
     const s = k.status ?? 'idle';
-    if (STATUS_RANK[s] > STATUS_RANK[best]) best = s;
+    if (STATUS_RANK[s] > STATUS_RANK[loudest]) loudest = s;
   }
-  return best === 'idle' ? own : best;
+  // Blocked outranks the parent itself: somebody is stopped on a question, and
+  // nothing the parent is doing is more urgent than that.
+  if (loudest === 'blocked') return 'blocked';
+  // Otherwise the parent KEEPS ITS OWN STATE. A pure rank over the family
+  // swallowed the commonest shape there is: a coordinator that finished its
+  // turn and is waiting on you, with workers still running, showed a spinner
+  // and never said `ready` — its own completion hidden by its children's
+  // activity. The chip says "2 running" either way, so nothing is lost.
+  if (own && own !== 'idle') return own;
+  return loudest === 'idle' ? own : loudest;
 }
 
 /**
@@ -2053,16 +2083,22 @@ export function subChatChip(children: readonly Tab[]): string {
   let working = 0;
   let blocked = 0;
   let ready = 0;
+  let dead = 0;
   for (const k of children) {
     const s = k.status ?? 'idle';
     if (s === 'working') working++;
     else if (s === 'blocked') blocked++;
     else if (s === 'ready') ready++;
+    else if (s === 'dead') dead++;
   }
   const parts: string[] = [];
   if (blocked > 0) parts.push(`${blocked} needs you`);
   if (working > 0) parts.push(`${working} running`);
   if (ready > 0) parts.push(`${ready} ready`);
+  // Last, and counted: a worker whose runner exited is quiet, not absent, and
+  // "6 sub-chats" over three dead ones is the shut group telling a lie by
+  // omission. It is the rail's quietest state and it is the last word here.
+  if (dead > 0) parts.push(`${dead} dead`);
   if (parts.length === 0) return `${n} sub-chat${n === 1 ? '' : 's'}`;
   return [`${n}`, ...parts].join(' · ');
 }

@@ -48,3 +48,28 @@ describe('the rail remembers whose sub-chats are open', () => {
     expect(back.has('t0')).toBe(false);
   });
 });
+
+describe('several lists sharing one store', () => {
+  // Every expanded workspace mounts its own TabList, and the sheet mounts
+  // another beside the rail. Each read the store at ITS mount and wrote back
+  // its whole copy, so opening a group in one erased the groups opened in a
+  // list that mounted earlier. The toggle re-reads; this pins the property
+  // that makes that correct.
+  it("a writer that re-reads does not erase another list's open group", () => {
+    rememberOpenSubChats(new Set(['P'])); // list A opened P
+    const fresh = recallOpenSubChats(); // list B's toggle re-reads
+    fresh.add('Q');
+    rememberOpenSubChats(fresh);
+    expect([...recallOpenSubChats()].sort()).toEqual(['P', 'Q']);
+  });
+
+  it('…which a stale snapshot would have', () => {
+    // The old shape, kept as the counter-example: B's snapshot predates P.
+    const staleSnapshot = recallOpenSubChats(); // {} — B mounted first
+    rememberOpenSubChats(new Set(['P'])); // A opens P
+    const next = new Set(staleSnapshot);
+    next.add('Q');
+    rememberOpenSubChats(next);
+    expect([...recallOpenSubChats()]).toEqual(['Q']);
+  });
+});

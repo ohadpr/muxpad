@@ -353,6 +353,20 @@ describe('rollupStatus', () => {
     expect(rollupStatus('blocked', [kid('ready')])).toBe('blocked');
   });
 
+  it("does not let a running child swallow the parent's own READY", () => {
+    // The commonest shape in a fan-out: the coordinator finishes its turn and
+    // is waiting on you while its workers run on. A pure rank over the family
+    // showed a spinner and never said `ready` — the parent's completion hidden
+    // by its children's activity, which is the one thing the row is being
+    // asked about. The chip still says "2 running".
+    expect(rollupStatus('ready', [kid('working'), kid('working')])).toBe('ready');
+  });
+
+  it('…but a blocked child still outranks the parent, whatever it is doing', () => {
+    expect(rollupStatus('ready', [kid('blocked')])).toBe('blocked');
+    expect(rollupStatus('working', [kid('blocked')])).toBe('blocked');
+  });
+
   it('stays undefined for an idle parent with idle children — no mark at all', () => {
     // RowMark drops the element entirely for idle, which is what keeps the
     // majority of rows from paying for a gutter. A rollup that returned 'idle'
@@ -383,6 +397,17 @@ describe('subChatChip', () => {
 
   it('says nothing about a state nobody is in', () => {
     expect(subChatChip([kid('working'), kid('working')])).toBe('2 · 2 running');
+  });
+
+  it('counts the dead, last — a quiet worker is not an absent one', () => {
+    // "6 sub-chats" over three exited runners is the shut group lying by
+    // omission: dead is the one state that never makes a noise of its own.
+    expect(subChatChip([kid('dead', 1), kid('dead', 2), kid(undefined, 3)])).toBe(
+      '3 \u00b7 2 dead',
+    );
+    expect(subChatChip([kid('blocked', 1), kid('dead', 2)])).toBe(
+      '2 \u00b7 1 needs you \u00b7 1 dead',
+    );
   });
 
   it("uses the mark's own words, not a second vocabulary for the rail", () => {

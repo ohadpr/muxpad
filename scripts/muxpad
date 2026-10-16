@@ -40,6 +40,14 @@ done
 ROOT="$(cd "$(dirname "$_src")/.." && pwd)"
 unset _src _tgt
 DATA_DIR="${MUXPAD_DATA_DIR:-$HOME/.muxpad}"
+DEFAULT_DATA_DIR="$HOME/.muxpad"
+_norm_dir() { printf '%s' "${1%/}"; }
+if [ "$(_norm_dir "$DATA_DIR")" = "$(_norm_dir "$DEFAULT_DATA_DIR")" ]; then
+  IS_DEFAULT_INSTALL=1
+else
+  IS_DEFAULT_INSTALL=0
+fi
+
 PID_FILE="$DATA_DIR/server.pid"
 LOG_FILE="$DATA_DIR/server.log"
 PID_FILE_PTYD="$DATA_DIR/ptyd.pid"
@@ -47,6 +55,50 @@ LOG_FILE_PTYD="$DATA_DIR/ptyd.log"
 # Socket path must match server/src/config.ts default so the main server
 # and ptyd agree without us having to pass MUXPAD_PTYD_SOCKET to the server.
 PTYD_SOCKET="${MUXPAD_PTYD_SOCKET:-$DATA_DIR/ptyd.sock}"
+
+# ── AN ISOLATED INSTANCE NEVER TOUCHES THE DEFAULT INSTALL'S SOCKET ─────────
+# EVERY PANE EXPORTS `MUXPAD_PTYD_SOCKET`, pointing at the live install's
+# socket. So an agent inside a pane that runs the documented isolated-instance
+# command inherits it, and `start_ptyd` below does `rm -f "$PTYD_SOCKET"` on the
+# way up — deleting the LIVE socket and starting a rival ptyd on that path. The
+# running server then holds a connection to a ptyd that owns none of its panes,
+# and every pane on the user's screen is dead. `stop --all` removes the same
+# file by the same reasoning.
+#
+# This was unreachable while the launchd check (above) wrongly claimed "already
+# running" and did nothing — a bug whose only virtue was that it stopped here.
+# Fixing that made this path live, which is the whole reason this block exists:
+# removing a guard can arm the thing it was accidentally guarding.
+#
+# An isolated instance's socket therefore lives in ITS OWN data dir, and an
+# inherited value pointing anywhere else is ignored rather than obeyed. A value
+# explicitly aimed at the default install's socket is refused outright instead
+# of silently redirected, because that one cannot be a mistake worth guessing
+# about.
+if [ "$IS_DEFAULT_INSTALL" = "0" ]; then
+  _default_socket="$DEFAULT_DATA_DIR/ptyd.sock"
+  if [ "$PTYD_SOCKET" = "$_default_socket" ] && [ -n "${MUXPAD_PTYD_SOCKET:-}" ] \
+    && [ "${MUXPAD_PTYD_SOCKET}" = "$_default_socket" ] && [ "${MUXPAD_ALLOW_SHARED_PTYD:-0}" != "1" ]; then
+    PTYD_SOCKET="$DATA_DIR/ptyd.sock"
+    echo "note: ignoring inherited MUXPAD_PTYD_SOCKET ($_default_socket) — an isolated" >&2
+    echo "      instance uses its own socket ($PTYD_SOCKET), never the live install's." >&2
+  elif case "$PTYD_SOCKET" in "$DATA_DIR"/*) false ;; *) true ;; esac; then
+    # Any other outside path: same rule, stated the same way. The socket is
+    # part of the instance, and an instance is its data dir.
+    echo "note: MUXPAD_PTYD_SOCKET ($PTYD_SOCKET) is outside $DATA_DIR — using" >&2
+    echo "      $DATA_DIR/ptyd.sock instead." >&2
+    PTYD_SOCKET="$DATA_DIR/ptyd.sock"
+  fi
+  # The same inheritance makes the HOST wrong in the other direction: panes
+  # carry MUXPAD_HOST=0.0.0.0, and this machine is on a tailnet, so an
+  # isolated instance started for a five-minute check would be reachable from
+  # every device on it. Loopback unless something other than the inherited
+  # wide bind was asked for.
+  if [ "${MUXPAD_HOST:-}" = "0.0.0.0" ]; then
+    MUXPAD_HOST=127.0.0.1
+    echo "note: binding 127.0.0.1 — an isolated instance is not published." >&2
+  fi
+fi
 
 mkdir -p "$DATA_DIR"
 
@@ -81,14 +133,6 @@ LAUNCHD_PTYD="dev.muxpad.ptyd"
 # writes them under its own data dir) and the pid-file path below is correct
 # for it in every verb. Trailing slashes stripped because `MUXPAD_DATA_DIR`
 # comes from humans and from shell completion.
-DEFAULT_DATA_DIR="$HOME/.muxpad"
-_norm_dir() { printf '%s' "${1%/}"; }
-if [ "$(_norm_dir "$DATA_DIR")" = "$(_norm_dir "$DEFAULT_DATA_DIR")" ]; then
-  IS_DEFAULT_INSTALL=1
-else
-  IS_DEFAULT_INSTALL=0
-fi
-
 launchd_loaded() {
   [ "$IS_DEFAULT_INSTALL" = "1" ] || return 1
   launchctl print "gui/$UID/$1" >/dev/null 2>&1
@@ -458,7 +502,13 @@ cmd_status() {
     echo "  socket: $PTYD_SOCKET"
     echo "  log:    $LOG_FILE_PTYD"
   else
+    # The SOCKET is named even when nothing is running, because it is the one
+    # fact that decides whether this command is about to touch another
+    # instance. "muxpad: not running" under a path you did not expect is the
+    # cheapest possible warning, and it is what makes the isolation checkable
+    # without starting a daemon.
     echo "ptyd: not running"
+    echo "  socket: $PTYD_SOCKET"
   fi
 }
 
