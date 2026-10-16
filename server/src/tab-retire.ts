@@ -371,7 +371,11 @@ export class ChatRetirer {
         return;
       }
       if (e.phase !== 'done' && e.phase !== 'fatal') return;
-      this.onTurnEnded({ pane_id: e.pane_id, phase: e.phase });
+      this.onTurnEnded({
+        pane_id: e.pane_id,
+        phase: e.phase,
+        ...(typeof e.background === 'number' ? { background: e.background } : {}),
+      });
     });
   }
 
@@ -448,7 +452,7 @@ export class ChatRetirer {
    *
    * Exposed so a test can drive the transition without a runner.
    */
-  onTurnEnded(e: { pane_id: string; phase: 'done' | 'fatal' }): boolean {
+  onTurnEnded(e: { pane_id: string; phase: 'done' | 'fatal'; background?: number }): boolean {
     const pane = new PaneStore(this.deps.db).getById(e.pane_id);
     if (!pane) return false;
     // ONLY sub-chats. A top-level chat is a conversation you are having; it
@@ -459,6 +463,27 @@ export class ChatRetirer {
     // (normal completion or stall reaping). Keep that decision pending, with
     // its original phase; a real turn-start still cancels it.
     if (this.stillWorking(e) && this.deps.cache.getSubagentCount(e.pane_id) === 0) {
+      this.disarm(e.pane_id);
+      return false;
+    }
+    // ─── A BACKGROUND COMMAND IS STILL WORK ──────────────────────────────────
+    // The settle exists to decide "has this worker finished", and a turn ending
+    // is not that: the model can background a Bash call that keeps running, and
+    // its completion starts the NEXT turn. Arming here retires a worker that is
+    // demonstrably still working, and its later turn then has to REVIVE a chat
+    // that already retired, delivered and was summarised — which is the shape
+    // behind four sub-chat results arriving 5h42m–7h51m late.
+    //
+    // This file already knew: `onTurnStart`'s revive is documented as covering
+    // "a worker waiting on something the subagent roster cannot see — a long
+    // background task". The roster could not see them (no top-level launch);
+    // BackgroundCommands can, and says so on the turn-end itself.
+    //
+    // NOT ARMING IS SAFE because the drain has its own edge: when the last
+    // command finishes, the runner reports it and the server emits this same
+    // event with `background: 0`. A command that never ends leaves the worker
+    // live in the rail, which is the truth about it.
+    if ((e.background ?? 0) > 0) {
       this.disarm(e.pane_id);
       return false;
     }
