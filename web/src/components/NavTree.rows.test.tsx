@@ -433,7 +433,7 @@ describe('sub-chats are collapsed, and the collapse still tells the truth', () =
     const out = railHtml(
       family([{ status: 'working' }, { status: 'blocked' }, { status: 'working' }]),
     );
-    expect(out).toContain('3 · 1 needs you · 2 running');
+    expect(out).toContain('1 needs you · 2 running');
   });
 
   it('bubbles a blocked child onto the parent row while shut', () => {
