@@ -1328,8 +1328,20 @@
      active tab", and the measurement agrees.
      Measured geometry: the row starts at x=8, the scroller's clip box at x=4,
      so -3px puts the whole bar on rail ground, clear of the pill at both ends
-     and 1px inside the clip. Every row's mark now sits on one background. */
-  left: -3px;
+     and 1px inside the clip. Every row's mark now sits on one background.
+
+     ── …AND IT IS CENTRED IN THAT GUTTER, NOT HUGGING THE ROW ───────────────
+     At -3px the bar occupied x=5–7 against a row starting at x=8: a ONE PIXEL
+     gap. On an unselected row that gap is invisible (both sides are rail), but
+     the SELECTED row's pill is near-white, so a 2px accent bar one pixel from
+     it reads as touching it — "an active tab that's pinned, the pinned marker
+     is too close to the active tab indicator".
+     -5px puts it at x=3–5: three pixels of rail on each side, centred in the
+     8px gutter, still well inside the clip. The column does NOT move with
+     selection — a mark that changes x depending on which row you are on is not
+     a column — so every pinned row pays the same 2px and the selected one
+     simply stops colliding. */
+  left: -5px;
   /* Short of the row's full height on purpose: a bar that runs edge to edge
      reads as a divider between rows rather than as a mark on one. */
   top: 5px;
@@ -1736,6 +1748,20 @@
 .navtree-subs-glyph svg {
   width: 11px;
   height: 11px;
+}
+
+/* THE TOTAL IS THE SUBJECT. It used to sit in the same series as the states it
+   is the sum of, in one ink with one separator between all four — so the eye
+   read four statistics. Reported as "the 10 looks like it's another stat but
+   it's actually the total". The parentheses in the text do most of the work;
+   this does the rest, and the pair is what makes the line parse at a glance
+   rather than on a second look. */
+.navtree-subs-total {
+  color: var(--fg-dim);
+  font-weight: 700;
+}
+.navtree-subs-detail {
+  font-weight: 600;
 }
 
 /* ON THE PHONE IT IS A TARGET, NOT A LABEL. The sheet renders this same
