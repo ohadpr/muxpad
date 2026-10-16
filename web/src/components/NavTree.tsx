@@ -1537,7 +1537,26 @@ export function TabList({
             <span className="navtree-subs-glyph" aria-hidden="true">
               <SvgAgentGlyph />
             </span>
-            {subChatChip(g.children)}
+            {(() => {
+              // TWO SPANS, because the total and its breakdown are different
+              // kinds of thing and a reader was told otherwise by them sharing
+              // one ink and one separator. The words come from the same
+              // function as the title (`subChatChip`), split here only to wear
+              // different weight.
+              const { total, parts } = subChatCounts(g.children);
+              return (
+                <>
+                  <span className="navtree-subs-total">{total}</span>
+                  {parts.length === 0 ? (
+                    <span className="navtree-subs-detail">
+                      {` sub-chat${total === 1 ? '' : 's'}`}
+                    </span>
+                  ) : (
+                    <span className="navtree-subs-detail">{` (${parts.join(' · ')})`}</span>
+                  )}
+                </>
+              );
+            })()}
           </button>
         ) : null}
         {!foldable || open ? g.children.map((k) => renderRow(k, g.chat)) : null}
@@ -2025,12 +2044,9 @@ export function groupChats(tabs: Tab[]): {
  * counts, which is the only thing a reader is cross-checking between them.
  */
 export function subChatChipTitle(children: readonly Tab[]): string {
-  const n = children.length;
-  const chip = subChatChip(children);
-  const noun = `${n} sub-chat${n === 1 ? '' : 's'}`;
-  // The quiet form already IS the noun ("6 sub-chats"); anything else leads
-  // with a bare count that this replaces.
-  return chip.startsWith(noun) ? chip : `${noun}${chip.slice(String(n).length)}`;
+  const { total, parts } = subChatCounts(children);
+  const noun = `${total} sub-chat${total === 1 ? '' : 's'}`;
+  return parts.length === 0 ? noun : `${noun} (${parts.join(' · ')})`;
 }
 
 /**
@@ -2100,7 +2116,7 @@ export function rollupStatus(
  * of what follows — "6 · 2 running · 1 needs you" reads as a fraction of a
  * known whole, which "2 running · 1 needs you" does not.
  */
-export function subChatChip(children: readonly Tab[]): string {
+export function subChatCounts(children: readonly Tab[]): { total: number; parts: string[] } {
   const n = children.length;
   let working = 0;
   let blocked = 0;
@@ -2121,8 +2137,7 @@ export function subChatChip(children: readonly Tab[]): string {
   // "6 sub-chats" over three dead ones is the shut group telling a lie by
   // omission. It is the rail's quietest state and it is the last word here.
   if (dead > 0) parts.push(`${dead} dead`);
-  const noun = `${n} sub-chat${n === 1 ? '' : 's'}`;
-  if (parts.length === 0) return noun;
+  if (parts.length === 0) return { total: n, parts: [] };
   // ─── THE NUMBERS MUST ADD UP ─────────────────────────────────────────────
   // Reported, with a screenshot: "no working indicator but if only 6 are ready
   // then what are the other 3 doing?" — against a chip reading "9 · 6 ready".
@@ -2153,7 +2168,28 @@ export function subChatChip(children: readonly Tab[]): string {
   // word's ~62px, and it sits where the eye already is. The full words are not
   // lost — they are the chip's `title` and its accessible name, which is where
   // a reader who is unsure will look and where a screen reader reads from.
-  return [`${n}`, ...parts].join(' · ');
+  return { total: n, parts };
+}
+
+/**
+ * THE TOTAL IS THE SUBJECT, NOT A FOURTH STATISTIC.
+ *
+ * "10 · 1 running · 6 ready · 3 idle" puts the total in the same series as the
+ * things it is the sum of, with the same separator between them — so the eye
+ * reads four statistics and has to work out that the first one is different in
+ * kind. Reported exactly that way: "the 10 looks like it's another stat but
+ * it's actually the total".
+ *
+ * Parentheses say "this is a breakdown of the number before it" with no
+ * convention to learn, and cost ~10px of a line that measured 170px in 193px.
+ * The renderer adds weight on top (see `.navtree-subs-total`); this function is
+ * the one that decides the WORDS, and it is also what the hover title reads, so
+ * the two cannot drift.
+ */
+export function subChatChip(children: readonly Tab[]): string {
+  const { total, parts } = subChatCounts(children);
+  if (parts.length === 0) return `${total} sub-chat${total === 1 ? '' : 's'}`;
+  return `${total} (${parts.join(' · ')})`;
 }
 
 /**
