@@ -1026,7 +1026,29 @@ export function attachWsServer(deps: {
       const liveIds = new Set(agentPanes.map((p) => p.id));
       for (const id of respawns.keys()) if (!liveIds.has(id)) respawns.delete(id);
       for (const pane of agentPanes) {
-        if (agentRunners.get(pane.id)) continue;
+        const registered = agentRunners.get(pane.id);
+        if (registered) {
+          // A SKIP IS INVISIBLE UNTIL IT IS WRONG. The sweep is the only thing
+          // that can rescue a pane with undelivered work, and "a runner is
+          // registered" is the branch that silently retires that rescue — for
+          // a zombie socket it is wrong and nothing anywhere says so. One line,
+          // only when there is work waiting, so a healthy install prints
+          // nothing.
+          const waiting = queue.count(pane.id);
+          if (waiting > 0 && registered.ws.readyState !== WebSocket.OPEN) {
+            console.warn(
+              `[agent] pane ${pane.id}: ${waiting} message(s) queued behind a runner registration whose socket is ${registered.ws.readyState} — dropping it`,
+            );
+            agentRunners.delete(pane.id);
+          } else {
+            if (waiting > 0 && registered.turnActive) {
+              console.warn(
+                `[agent] pane ${pane.id}: ${waiting} message(s) queued behind a turn that has been active since ${new Date(registered.lastSendAt || 0).toISOString()}`,
+              );
+            }
+            continue;
+          }
+        }
         // A PENDING agent ('muxpad agent --pick') has no session/runner to
         // supervise — it idles waiting for the user to pick a harness. It never
         // registers, so the fg probe is its only guard; skip it outright rather
@@ -1294,7 +1316,30 @@ export function attachWsServer(deps: {
       queue.remove(next.id, paneId);
       broadcastQueue(paneId);
     }
-    // Relay failed (socket mid-close) → leave it queued; hello/turn-done retry.
+    // ─── A RELAY THAT FAILS MUST RELEASE THE PANE ───────────────────────────
+    // "Leave it queued; hello/turn-done retry" is true only if one of those
+    // ever arrives. For a socket that died without firing 'close' — the exact
+    // case the liveness ping below exists for, and one a severed TCP connection
+    // can hold open for minutes — neither does: the registry still has a conn,
+    // so the respawn sweep SKIPS this pane (`agentRunners.get(pane.id)`
+    // continues), and the drain has nobody to send to. The work sits in the
+    // queue, and because `stillWorking` counts queued work the worker is also
+    // pinned in the live rail for ever.
+    //
+    // Measured on this install: 7 live sub-chats holding 24 messages, the
+    // oldest 24 hours old, all with `status: idle` and no pty.
+    //
+    // Dropping the dead registration is the whole fix: the next sweep sees a
+    // pane with queued work and no runner, which is precisely the case it was
+    // written for.
+    const stale = agentRunners.get(paneId);
+    if (stale && stale.ws.readyState !== WebSocket.OPEN) {
+      console.warn(
+        `[agent] pane ${paneId}: dropping a runner registration whose socket is ${stale.ws.readyState} — ${queue.count(paneId)} message(s) queued`,
+      );
+      agentRunners.delete(paneId);
+      void sweepDeadRunners();
+    }
   };
   // Submit a user message. Idle + connected + nothing already waiting → start
   // the turn now. Otherwise persist to the queue (the drain loop feeds it when
