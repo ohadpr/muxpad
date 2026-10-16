@@ -1606,13 +1606,19 @@ export function attachWsServer(deps: {
         // Turn lifecycle on the GLOBAL bus (spec A4): a supervisor watching N
         // workers holds one /ws/events (or /api/events SSE) subscription
         // instead of N chat sockets. Ids only — content stays off the bus.
-        const emitTurn = (phase: 'start' | 'done' | 'fatal') =>
+        /**
+         * `background` rides the DONE, because that is the event the
+         * retirement settle is armed from and a turn ending is not the same as
+         * the work ending (see AgentTurnEventSchema.background).
+         */
+        const emitTurn = (phase: 'start' | 'done' | 'fatal', background?: number) =>
           deps.events.emit({
             type: 'agent_turn',
             pane_id: paneId,
             phase,
             sid: conn.sid,
             backend: conn.backend,
+            ...(background !== undefined ? { background } : {}),
           });
         ws.on('message', (data) => {
           // A displaced socket can still deliver in-flight frames during the
@@ -1826,7 +1832,7 @@ export function attachWsServer(deps: {
             });
             // `done` regardless of ok — the turn ENDED (an errored turn is
             // still a finished wait); a dying runner reports `fatal` below.
-            emitTurn('done');
+            emitTurn('done', typeof frame.background === 'number' ? frame.background : undefined);
             // Living sidebar: a finished turn is the single most meaningful
             // "something happened here" signal, so it bypasses the throttle.
             activity.touchPane(paneId, { force: true });
@@ -1986,6 +1992,20 @@ export function attachWsServer(deps: {
             // next, genuinely urgent call its window.
             if (outcome === 'sent') conn.lastExplicitNotifyAt = now;
             ack(outcome);
+          } else if (frame.t === 'background') {
+            // THE DRAIN IS THE EDGE THAT MATTERS. A worker whose turn ended
+            // with a command still running was left un-settled on purpose (see
+            // emitTurn's `background`), and a command that finishes WITHOUT
+            // starting a new turn produces no other frame — so without this it
+            // would never be retired at all.
+            //
+            // Reported as a `done` with nothing outstanding, which is exactly
+            // what it is: the same event the settle is armed from, arriving at
+            // the moment the work actually stopped rather than at the moment
+            // the turn did. A pane mid-turn is skipped — its own turn-done is
+            // the authority and will carry the then-current count.
+            if (typeof frame.live !== 'number') return;
+            if (frame.live === 0 && !conn.turnActive) emitTurn('done', 0);
           } else if (frame.t === 'subagent') {
             if (!frame.progress || typeof frame.progress.toolUseId !== 'string') return;
             if (frame.progress.done) {

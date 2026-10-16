@@ -97,7 +97,29 @@ export type RunnerFrame =
       id: string;
       delta: string;
     }
-  | { t: 'turn-done'; ok: boolean; error?: string; summary?: string }
+  | {
+      t: 'turn-done';
+      ok: boolean;
+      error?: string;
+      summary?: string;
+      /**
+       * Background COMMANDS still running as this turn ends (see
+       * background-commands.ts). The turn is over; the work may not be, and the
+       * next turn may be started by one of these finishing.
+       */
+      background?: number;
+    }
+  /**
+   * The background set CHANGED SIZE outside a turn boundary — in practice, the
+   * last command finished.
+   *
+   * It exists so the server has an edge to act on. Without it, a worker whose
+   * turn ended with a command still running would have to be retired by a
+   * timer anyway (the thing this removes), because nothing would ever say the
+   * command had finished: a command that completes without starting a new turn
+   * produces no other frame.
+   */
+  | { t: 'background'; live: number }
   | {
       /** The session is blocked on the user: render these as tappable chips. */
       t: 'question';

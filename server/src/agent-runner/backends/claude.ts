@@ -1043,6 +1043,26 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
   // top-level launch to see) and now has nothing else to hold either, since
   // subagents are disallowed above. See background-commands.ts.
   const backgroundCommands = new BackgroundCommands();
+  /**
+   * The last size the SERVER was told about, so the drain is reported as an
+   * EDGE rather than on every level message. The server only needs to know
+   * when the answer to "is anything still running" changes.
+   */
+  let lastBackgroundLive = 0;
+  /**
+   * The field, only when it says something. Absent already means "nothing
+   * running" everywhere that reads it (every other backend sends no such
+   * field), so a `background: 0` on every turn-done would be noise on the wire
+   * and a change every existing consumer and test had to absorb for nothing.
+   */
+  const backgroundField = (): { background?: number } =>
+    backgroundCommands.size > 0 ? { background: backgroundCommands.size } : {};
+  const reportBackground = (): void => {
+    const live = backgroundCommands.size;
+    if (live === lastBackgroundLive) return;
+    lastBackgroundLive = live;
+    emit({ t: 'background', live });
+  };
   /** How often a live roster entry re-announces itself when the SDK is silent. */
   const SUBAGENT_KEEPALIVE_MS = 5_000;
   // Keepalive: re-announce every live entry on a fixed tick so the server's
@@ -1781,6 +1801,9 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
           msg as unknown as SubagentStreamMessage,
           backgroundCommands,
         );
+        // An EDGE, not a stream: only a change in "is anything still running"
+        // reaches the server, and the drain to zero is the one it acts on.
+        reportBackground();
         if (msg.type === 'system' && msg.subtype === 'init') {
           log(dim(`ready · ${msg.model} · ${msg.tools.length} tools`));
           // Init reports the concrete resolved model (e.g. 'claude-opus-4-8').
@@ -2112,17 +2135,31 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
           const summary = notifySnippet(firstReplyText || lastAssistantText);
           if (interruptRequested) {
             log(dim(`⏹ stopped after ${secs}s`));
-            emit({ t: 'turn-done', ok: true, ...(summary ? { summary } : {}) });
+            emit({
+              t: 'turn-done',
+              ok: true,
+              ...(summary ? { summary } : {}),
+              ...backgroundField(),
+            });
           } else if (msg.subtype === 'success') {
             log(dim(`✓ turn done · ${secs}s · $${msg.total_cost_usd.toFixed(2)}`));
-            emit({ t: 'turn-done', ok: true, ...(summary ? { summary } : {}) });
+            emit({
+              t: 'turn-done',
+              ok: true,
+              ...(summary ? { summary } : {}),
+              // THE TURN IS OVER; THE WORK MAY NOT BE. A command the model
+              // backgrounded outlives this frame, and its completion starts the
+              // next turn — the shape that delivered four results 5h42m–7h51m
+              // late. The retirement settle reads this.
+              ...backgroundField(),
+            });
             // First completed turn of a fresh session: self-title (resumed
             // sessions keep whatever name their pane/tab already carries).
             if (!resumeSid && !titleGenerated) void generateTitle();
           } else {
             const error = msg.errors?.join('; ') || msg.subtype;
             log(`✗ turn failed: ${error}`);
-            emit({ t: 'turn-done', ok, error });
+            emit({ t: 'turn-done', ok, error, ...backgroundField() });
           }
           interruptRequested = false;
           kick(); // release the next queued send, if any
