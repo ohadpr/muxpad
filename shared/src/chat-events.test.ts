@@ -528,6 +528,17 @@ describe('THE JOIN in a transcript — a delivery is not a person typing', () =>
     expect((out?.[1] as { text: string }).text).toContain('Found three call sites.');
   });
 
+  it('folds the reports — they are not a message the reader wrote', () => {
+    // Three drawings of one event was the bug: the chip, the per-child
+    // completion cards, and a fat bubble of everybody's reports in the
+    // reader's own voice. The bubble is now plumbing, like a cron's prompt.
+    const out = expandSpawnDelivery(text, 'u1', MS);
+    const bubble = out?.[1] as { folded?: boolean; fold?: string };
+    expect(bubble.folded).toBe(true);
+    // …and NAMED, so the collapsed run says "reports" and not "prompts".
+    expect(bubble.fold).toBe('report');
+  });
+
   it('says "1 sub-chat" for one', () => {
     const one = renderSpawnDelivery([{ tabId: 't1', name: 'x', state: 'ok', report: 'y' }]);
     const out = expandSpawnDelivery(one, 'u1', MS);

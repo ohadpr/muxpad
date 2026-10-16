@@ -18,6 +18,7 @@ import {
   type ToolResultEvent,
   type ToolUseEvent,
   parseCronMarker,
+  parseSpawnDelivery,
   stripMentionContext,
   summarizeToolInput,
 } from '@muxpad/shared';
@@ -239,9 +240,11 @@ export function ActionGroup({
             ? 'notes'
             : // A folded cron's instruction, named for the same reason: the
               // header must say the prompt is in there rather than let it
-              // vanish.
+              // vanish — or a batch of sub-chat reports, which is the same
+              // mechanism carrying somebody else's results and must not be
+              // called a prompt.
               e.kind === 'user'
-              ? 'prompt'
+              ? (e.fold ?? 'prompt')
               : 'result';
     counts.set(name, (counts.get(name) ?? 0) + 1);
     if (e.kind === 'tool_result' && !e.ok) failed++;
@@ -270,7 +273,11 @@ export function ActionGroup({
   // one PROMPT, and the header called it a note. The reader opens it expecting
   // something the agent thought and finds an instruction it was handed.
   const promptsOnly = notesOnly && events.every((e) => e.kind === 'user');
-  const noun = promptsOnly ? 'prompt' : 'note';
+  // …and a run of only DELIVERIES is neither. "3 prompts" on a batch of
+  // finished sub-chats names the wrong thing twice: it is not an instruction
+  // and it was not addressed to the agent as one.
+  const reportsOnly = promptsOnly && events.every((e) => e.kind === 'user' && e.fold === 'report');
+  const noun = reportsOnly ? 'report' : promptsOnly ? 'prompt' : 'note';
   const countLabel = notesOnly
     ? `${actions === 1 ? noun : `${actions} ${noun}s`}`
     : `${actions} action${actions === 1 ? '' : 's'}`;
@@ -1003,6 +1010,23 @@ export function QueuedText({
   text: string;
   onOpenImage?: OpenMedia | undefined;
 }) {
+  // A DELIVERED BATCH OF SUB-CHAT REPORTS IS THE SAME BUG, ONE MARKER LATER.
+  // The transcript strips `<muxpad-delivery …>` on the way in
+  // (`expandSpawnDelivery`) and nothing stripped it here, so a batch shown from
+  // the durable queue — or echoed optimistically for the length of the turn it
+  // starts — rendered its envelope as visible text: `<muxpad-delivery count="3"
+  // from="01M…,01M…">` above a wall of reports, in the reader's own voice. Same
+  // chip the transcript draws, so the row does not change shape under them when
+  // the real event lands.
+  const delivery = parseSpawnDelivery(text);
+  if (delivery) {
+    const n = delivery.marker.count;
+    return (
+      <span className="chat-queued-cron">
+        <span aria-hidden="true">⇤</span> {n} sub-chat{n === 1 ? '' : 's'} reported
+      </span>
+    );
+  }
   const fire = parseCronMarker(text);
   // The queue holds the RAW outgoing message; `UserText` strips the mention
   // handles out of it, as it does for every other bubble.
