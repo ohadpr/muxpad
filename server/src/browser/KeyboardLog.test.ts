@@ -10,6 +10,26 @@ import {
 
 const dir = () => mkdtempSync(`${tmpdir()}/kblog-`);
 
+/**
+ * A path that cannot be written to, on any platform, in constant time: a
+ * regular FILE with a child hung off it, so `mkdir -p` under it fails ENOTDIR
+ * at once.
+ *
+ * NOT `/proc/...`, which is what this was. procfs answers a create attempt
+ * with ENOENT, node's recursive mkdir reads that as "make the parent and
+ * retry", and the retry never ends: on the Linux runner
+ * `mkdirSync('/proc/nonexistent/nope', { recursive: true })` never returns —
+ * plain node, no vitest. The worker then never reported, the run printed its
+ * banner and nothing else, and the job died at the 20-minute ceiling naming no
+ * test. See the longer note in BrowserShots.test.ts, which had the same bug.
+ */
+function unwritable(): string {
+  const d = dir();
+  const file = `${d}/a-file-not-a-directory`;
+  writeFileSync(file, 'x');
+  return `${file}/nope`;
+}
+
 describe('the line a keyboard report becomes', () => {
   it('keeps the events in the order they happened', () => {
     // The whole value of the log is the ORDER: a shrink then a growth with no
@@ -72,9 +92,7 @@ describe('writing the log', () => {
   it('reports failure instead of throwing when it cannot write', () => {
     // It runs on the socket path that carries taps and typing. A note about a
     // keyboard must never be able to break the browser.
-    expect(appendKeyboardLog('/proc/nonexistent/nope', 'default', { events: [{ w: 1 }] })).toBe(
-      false,
-    );
+    expect(appendKeyboardLog(unwritable(), 'default', { events: [{ w: 1 }] })).toBe(false);
   });
 
   it('writes nothing for an empty report', () => {
