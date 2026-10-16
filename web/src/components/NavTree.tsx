@@ -1548,11 +1548,21 @@ export function TabList({
                 <>
                   <span className="navtree-subs-total">{total}</span>
                   {parts.length === 0 ? (
-                    <span className="navtree-subs-detail">
+                    // NO ENCLOSURE when there is nothing to enclose: the quiet
+                    // form is a noun, not a breakdown, and a box around the
+                    // word "sub-chats" would be a container holding the label
+                    // of the thing it contains.
+                    <span className="navtree-subs-noun">
                       {` sub-chat${total === 1 ? '' : 's'}`}
                     </span>
                   ) : (
-                    <span className="navtree-subs-detail">{` (${parts.join(' · ')})`}</span>
+                    // ENCLOSED, not parenthesised. The parens said "breakdown"
+                    // in punctuation; a container says it in shape — the
+                    // states sit INSIDE something and the total stands outside
+                    // it, so the line reads as "ten, made of these" without
+                    // spelling out an equation. The brackets are the box now,
+                    // so the characters go.
+                    <span className="navtree-subs-detail">{parts.join(' · ')}</span>
                   )}
                 </>
               );

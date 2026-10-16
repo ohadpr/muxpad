@@ -1704,15 +1704,18 @@
 .navtree-subs-head {
   display: flex;
   align-items: center;
-  /* THE SAME 21px THE DONE HEAD USES, and for the same reason it was written
-     down there: its caret sits in the icon column and its label on the NAME
-     column, because this is a row in a list of chats, not a second kind of
-     header. Measured here: the caret ends at x=47 and a child name starts at
-     x=68 — a 6px gap put the label at 53, which is the 15px that reads as
-     "not aligned" and is the exact mistake that comment records. */
-  gap: calc(56px - 35px);
+  /* NO FLEX GAP. The 21px that puts this line on the child-name column is a
+     ONE-OFF step from the caret to that column, not a word space — and as a
+     flex `gap` it was also applied between the total and its enclosure, which
+     put 26px between a number and the box it is the sum of. The step moves to
+     the glyph's own margin; everything after it is spaced like words. */
+  gap: 0;
   width: 100%;
-  padding: 2px var(--nt-pad) 4px calc(var(--nt-pad) + var(--nt-indent) + 8px);
+  /* RIGHT PADDING IS 2px, NOT the row's --nt-pad. A row reserves that gutter
+     for its controls and its state mark; this line has neither, and the box
+     below needs every pixel it can get (it overflowed by 6.7px at --nt-pad).
+     Measured: the enclosure lands 2px clear of the rail's edge. */
+  padding: 2px 2px 4px calc(var(--nt-pad) + var(--nt-indent) + 8px);
   border: 0;
   background: none;
   font-family: inherit;
@@ -1737,12 +1740,13 @@
 .navtree-subs-glyph {
   display: inline-flex;
   align-items: center;
-  /* The row's gap (21px) is the CARET-to-column step, not a word space. The
-     glyph stands ON that column — where a child's name starts — and the count
-     follows it as part of the same phrase, so the negative margin pulls the
-     text back to a 5px word gap. Without it the glyph floats midway between
-     the caret and the number and reads as a third, unrelated mark. */
-  margin-right: -16px;
+  /* THE STEP TO THE CHILD-NAME COLUMN, and it lives here because it belongs to
+     this one element: the caret ends at x=47 and a child's name starts at
+     x=68. The glyph stands on that column and the count follows it as part of
+     the same phrase. (The done head keeps the same 21px for the same reason —
+     its caret in the icon column, its label on the name column.) */
+  margin-left: 21px;
+  margin-right: 5px;
   opacity: 0.75;
 }
 .navtree-subs-glyph svg {
@@ -1759,9 +1763,35 @@
 .navtree-subs-total {
   color: var(--fg-dim);
   font-weight: 700;
+  /* The total stands OUTSIDE the box below it, with a real word space — it is
+     the subject, and the enclosure is what it contains. */
+  margin-right: 5px;
+}
+
+/* ─── THE BREAKDOWN IS ENCLOSED, AND THE TOTAL IS NOT ───────────────────────
+   "Make the 10 look like it's wrapping the other counts — almost 10 = [X+Y+Z]
+   but not so explicitly."
+
+   A container says that in SHAPE rather than in punctuation: the states sit
+   inside something, the total stands beside it, and the line reads as "ten,
+   made of these" with no equation and no brackets to parse. The parens are
+   gone — the box is the brackets now, which is also why this costs almost
+   nothing in width (parens ~8px out, padding ~10px in; measured 177px on a
+   185px line).
+
+   VERY quiet on purpose: 7% ink. The rail's whole state budget is one mark per
+   row, and a tinted block in it would be a second thing competing for the
+   glance. It has to read as a boundary, not as a highlight — if you notice the
+   fill before you notice the numbers, it is too strong. */
+/* The quiet form's noun — same ink, no box. */
+.navtree-subs-noun {
+  font-weight: 600;
 }
 .navtree-subs-detail {
   font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--fg) 7%, transparent);
 }
 
 /* ON THE PHONE IT IS A TARGET, NOT A LABEL. The sheet renders this same
