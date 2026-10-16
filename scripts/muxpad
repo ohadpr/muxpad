@@ -60,12 +60,44 @@ mkdir -p "$DATA_DIR"
 LAUNCHD_MAIN="dev.muxpad"
 LAUNCHD_PTYD="dev.muxpad.ptyd"
 
+# ── …AND THE JOBS BELONG TO THE DEFAULT INSTALL, NOBODY ELSE ────────────────
+# The labels above are GLOBAL. The data dir is what makes an instance, so a
+# command run with MUXPAD_DATA_DIR pointing somewhere else was asking launchctl
+# about a job that is not its own — and then acting on the answer:
+#
+#   MUXPAD_DATA_DIR=~/.muxpad-dev muxpad start    "already running (PID …)",
+#                                                 and started NOTHING
+#   MUXPAD_DATA_DIR=~/.muxpad-dev muxpad stop     booted out the LIVE job
+#   MUXPAD_DATA_DIR=~/.muxpad-dev muxpad restart  kickstarted the LIVE job
+#   MUXPAD_DATA_DIR=~/.muxpad-dev muxpad status   printed the live pids under
+#                                                 the dev data dir's name
+#
+# That is the whole isolated-dev-instance workflow — the one every agent
+# working on this repo is told to use so it cannot disturb the running
+# cockpit — and three of its four verbs reached for the cockpit instead. Found
+# by a sub-chat that read `stop` before running it.
+#
+# So: an isolated instance never consults launchd. It has pid files (start
+# writes them under its own data dir) and the pid-file path below is correct
+# for it in every verb. Trailing slashes stripped because `MUXPAD_DATA_DIR`
+# comes from humans and from shell completion.
+DEFAULT_DATA_DIR="$HOME/.muxpad"
+_norm_dir() { printf '%s' "${1%/}"; }
+if [ "$(_norm_dir "$DATA_DIR")" = "$(_norm_dir "$DEFAULT_DATA_DIR")" ]; then
+  IS_DEFAULT_INSTALL=1
+else
+  IS_DEFAULT_INSTALL=0
+fi
+
 launchd_loaded() {
+  [ "$IS_DEFAULT_INSTALL" = "1" ] || return 1
   launchctl print "gui/$UID/$1" >/dev/null 2>&1
 }
 
-# Echo the job's pid; empty when the job isn't loaded or isn't running.
+# Echo the job's pid; empty when the job isn't loaded or isn't running — and
+# always empty for an isolated instance, which launchd has never heard of.
 launchd_pid() {
+  [ "$IS_DEFAULT_INSTALL" = "1" ] || return 0
   launchctl print "gui/$UID/$1" 2>/dev/null |
     awk -F'= ' '/^[[:space:]]*pid = /{gsub(/[^0-9]/, "", $2); print $2; exit}'
 }
