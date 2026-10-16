@@ -1493,12 +1493,16 @@ export function TabList({
           <button
             type="button"
             className="navtree-subs-head"
-            // The chip's own loudest state, for the ONE case that earns colour:
-            // a child blocked on a question. Everything else stays in the
-            // faint ink a label should be — a chip that highlighted "running"
-            // too would be a second moving thing in a rail whose whole state
-            // budget is one mark per row.
-            data-state={rollupStatus('idle', g.children) ?? 'idle'}
+            // NO STATE COLOUR ON THIS LABEL, and that is a measurement, not a
+            // preference. It first carried the mark's own red for a blocked
+            // child: measured on dracula, #f0655f on the rail's ground is
+            // 2.97:1 — fine for a 10px filled dot (a graphic) and well under
+            // AA for 11.5px text. Lightening it would have invented a seventh
+            // red. The words say WHICH state and how many; the HUE is the
+            // parent row's mark, which is the rail's one state channel and is
+            // already carrying this exact fact while the group is shut (see
+            // rollupStatus). Two channels for one claim was what the rail's
+            // state slot was consolidated to remove.
             onClick={() => toggleSubs(g.chat.id)}
             aria-expanded={open}
             aria-label={`${open ? 'Hide' : 'Show'} sub-chats of ${g.chat.name}`}

@@ -1710,15 +1710,6 @@
 .navtree-subs-head:hover {
   color: var(--fg-dim);
 }
-/* The one state that earns colour here. A worker stopped on a question is the
-   rail's loudest signal, and while the group is shut this chip is the only
-   place it can be read in words — the parent's mark carries the same fact as a
-   dot (see rollupStatus), and a dot cannot say "1 of 6". Same red the mark
-   uses, so the two are obviously one claim. */
-.navtree-subs-head[data-state="blocked"] {
-  color: var(--status-blocked);
-}
-
 /* The nested disclosure: the agents' work, inside the drawer and under the
    chats you archived yourself. One step further in than the head above it and
    one step quieter, so the nesting is legible without a second kind of
