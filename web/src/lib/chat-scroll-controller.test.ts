@@ -1314,3 +1314,56 @@ describe('a shrink under a reader at the end', () => {
     expect(c.phase(true)).not.toBe('FOLLOWING');
   });
 });
+
+// ── SENDING TAKES YOU TO WHAT YOU SENT ──────────────────────────────────────
+// "When you post a message to a chat that has persistent cards I don't think it
+// fully scrolls all the way down to make the agent's 'working…' indicator
+// visible — it's hidden by the persistent card."
+//
+// Measured in Chromium, two pinned cards, composer wrap 228px: a reader 60px
+// above the end pressed Enter, the end moved 3001 -> 3112, scrollTop stayed at
+// 2941, and the working line's bottom sat at y=735 under a wrap starting at
+// y=572. Nothing was mis-measured — the reserve was right on every frame. The
+// send simply never said "follow", and an append below an ANCHORED reader is
+// correctly a no-op. 228px of cards and composer is the furniture here.
+describe.each(ENGINES)('a send follows to the end — $name', ({ paysAnchoring }) => {
+  const COMPOSER_WITH_CARDS = 228;
+  let sim: SimScroller;
+  let c: ChatScrollController;
+  beforeEach(() => {
+    sim = new SimScroller(simRows(40), { furnitureBelow: COMPOSER_WITH_CARDS, paysAnchoring });
+    c = new ChatScrollController(sim);
+    c.dispatch({ t: 'mounted' });
+    c.dispatch({ t: 'shown', mem: RETIRED });
+    drainScroll(sim, c);
+    // Close enough to the bottom to look like it, far enough to be ANCHORED.
+    sim.readerScrollsBy(-60);
+    drainScroll(sim, c);
+  });
+
+  /** Where the newest row's bottom sits relative to the composer's top edge;
+   *  positive means it is behind the cards. */
+  const hiddenBehindComposer = (id: string): number =>
+    sim.rowOffset(id) + 111 - (sim.clientHeight - COMPOSER_WITH_CARDS);
+
+  it('without a send, an append below an anchored reader moves nothing', () => {
+    // The reason `sent` has to exist: this is right for streaming you are not
+    // reading, and it is exactly what hid your own message.
+    const top = sim.scrollTop;
+    sim.append([{ id: 'reply', height: 111 }]);
+    c.place();
+    drainScroll(sim, c);
+    expect(sim.scrollTop).toBe(top);
+    expect(hiddenBehindComposer('reply')).toBeGreaterThan(0);
+  });
+
+  it('the bubble and the working line land clear of the cards', () => {
+    c.dispatch({ t: 'sent' });
+    sim.append([{ id: 'mine', height: 111 }]);
+    c.place();
+    drainScroll(sim, c);
+    expect(sim.scrollTop).toBe(sim.maxScrollTop);
+    expect(hiddenBehindComposer('mine')).toBeLessThanOrEqual(0);
+    expect(c.phase(true)).toBe('FOLLOWING');
+  });
+});

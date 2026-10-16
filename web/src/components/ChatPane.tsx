@@ -2111,6 +2111,8 @@ export function ChatPane({
     pendingText.current = outgoing;
     setOptimisticUser(outgoing); // show it immediately, don't wait for the transcript
     ws.send(JSON.stringify({ t: 'send', text: outgoing }));
+    // Your own message lands at the end, so that is where you go — see `sent`.
+    scroll.current?.dispatch({ t: 'sent' });
     setNotice(null);
     setSending(true);
     armSendWatchdog(outgoing);
@@ -2228,6 +2230,8 @@ export function ChatPane({
       // send-ack (fired for queued sends too) clears both on a live socket.
       pendingText.current = outgoing;
       ws.send(JSON.stringify({ t: 'send', text: outgoing }));
+      // The queued bubble renders at the end too — same reason as `dispatchSend`.
+      scroll.current?.dispatch({ t: 'sent' });
       armSendWatchdog(outgoing);
     } else {
       // Idle → optimistic send (instant echo + working state). If the server
