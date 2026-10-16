@@ -14,6 +14,7 @@ import {
   tool,
 } from '@anthropic-ai/claude-agent-sdk';
 import {
+  AGENT_LAUNCH_TOOLS,
   LAUNCH_ACK_RE,
   REPLY_ACK,
   blockText,
@@ -1219,6 +1220,28 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
 
   const options: Options = {
     cwd: process.cwd(),
+    // ─── ONE DELEGATION PRIMITIVE, AND IT IS THE SUB-CHAT ────────────────────
+    //
+    // `disallowedTools` removes a tool from the MODEL'S CONTEXT — it is not a
+    // refusal the model discovers by trying. That is the right shape here:
+    // there is nothing to teach at the call site, because the alternative is a
+    // different command entirely (`muxpad agent new`), and a tool that is
+    // visible but always denied spends a turn saying so every time.
+    //
+    // Why remove them at all, when the instructions already preferred
+    // sub-chats: an in-process subagent is work NOBODY CAN SEE. No row in the
+    // sidebar, no transcript the cockpit can read, no status, no way for the
+    // user to interrupt it — in a product whose whole job is making agent work
+    // visible. It also dies with the turn that launched it, which is why a
+    // respawn silently loses background subagents, and why the roster needed a
+    // leak sweep and a stall detector to paper over a lifecycle muxpad never
+    // owned. A sub-chat is a pane: it survives a restart, it can be read
+    // tomorrow, and it reports through one path.
+    //
+    // The RENDERER keeps recognising these names (see AGENT_LAUNCH_TOOLS):
+    // removing the primitive going forward is not the same as deleting the
+    // ability to read the logs that already contain it.
+    disallowedTools: [...AGENT_LAUNCH_TOOLS],
     ...(gateOn
       ? {
           hooks: {
