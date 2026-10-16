@@ -220,6 +220,41 @@ describe('retiring a sub-chat when it delivers', () => {
       expect(isDone(child.tab)).toBe(false);
     });
 
+    it('…but NOT once those artifacts are published on its card', () => {
+      // The hold exists so output is not buried by retiring the chat holding
+      // it — true only while the output is ONLY in there. The report carries
+      // `spawn_artifacts` and the parent's card renders them; after that the
+      // links are somewhere nobody has to dig for.
+      //
+      // Unbounded it never ends: a sub-chat has no clock, so a worker that
+      // took a screenshot stays in the live rail for ever. Three on this
+      // install, one 27 hours old, every one already published.
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      db.prepare(
+        'INSERT INTO attachments (id, pane_id, mime, path, created_at) VALUES (?,?,?,?,?)',
+      ).run('a2', child.pane, 'image/png', '/tmp/shot.png', Date.now());
+      db.prepare('UPDATE tabs SET spawn_artifacts = ? WHERE id = ?').run(
+        JSON.stringify(['/tmp/shot.png']),
+        child.tab,
+      );
+      expect(finishJob(new ChatRetirer(deps), child.pane)).toBe(true);
+      expect(isDone(child.tab)).toBe(true);
+    });
+
+    it('an EMPTY artifact list is not a publication', () => {
+      // A scrape that found nothing has not put anything anywhere, so the
+      // worker is still the only place its output exists.
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      db.prepare(
+        'INSERT INTO attachments (id, pane_id, mime, path, created_at) VALUES (?,?,?,?,?)',
+      ).run('a3', child.pane, 'image/png', '/tmp/shot.png', Date.now());
+      db.prepare('UPDATE tabs SET spawn_artifacts = ? WHERE id = ?').run('[]', child.tab);
+      expect(finishJob(new ChatRetirer(deps), child.pane)).toBe(false);
+      expect(isDone(child.tab)).toBe(false);
+    });
+
     it('LIVE BACKGROUND SUBAGENTS — the work it spawned outlives the turn', () => {
       // R2-3. A turn ends; the subagents it launched are still running. The
       // sub-chat retired anyway, and the row it left behind published

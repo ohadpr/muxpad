@@ -739,7 +739,48 @@ export class ChatRetirer {
     // `ready` mark that is the only thing saying it wants you — is the worst
     // response available.
     if (awaiting) return true;
-    return this.hasArtifact(e.pane_id); // it made you something
+    // ─── IT MADE YOU SOMETHING — UNTIL THE CARD SAYS SO ──────────────────────
+    // The hold exists so a worker's output is not buried by retiring the chat
+    // that holds it. That is only true while the output is ONLY in there: the
+    // report carries `spawn_artifacts`, the card in the parent's log renders
+    // them, and once that has happened the links are somewhere nobody has to
+    // dig for.
+    //
+    // Unbounded, this never ends. A sub-chat has no clock — it retires on
+    // delivery and nothing else — so a worker that produced a screenshot stays
+    // in the live rail for ever. Measured on this install: three of them, one
+    // 27 hours old, every one with its artifacts ALREADY published on its card
+    // (two PRs, a Linear issue, five PNGs and three review files between them).
+    // They were not being protected; they were just never leaving.
+    //
+    // So the hold ends when the publication it is waiting for has happened.
+    // A worker whose artifacts never made it onto the card is still held —
+    // that is the case this was written for and it is unchanged.
+    if (!this.hasArtifact(e.pane_id)) return false;
+    return !this.artifactsPublished(this.tabOf(e.pane_id));
+  }
+
+  /**
+   * Has this worker's output reached its card in the parent's log?
+   *
+   * Read off the TAB's published column rather than recomputed: the card draws
+   * from exactly this, so "published" here and "visible there" cannot come
+   * apart. An empty array counts as NOT published — a scrape that found
+   * nothing has not put anything anywhere.
+   */
+  private artifactsPublished(tabId: string): boolean {
+    if (!tabId) return false;
+    try {
+      const row = this.deps.db
+        .prepare('SELECT spawn_artifacts AS a FROM tabs WHERE id = ?')
+        .get(tabId) as { a: string | null } | undefined;
+      if (!row?.a) return false;
+      const parsed = JSON.parse(row.a) as unknown;
+      return Array.isArray(parsed) && parsed.length > 0;
+    } catch {
+      // Unparseable is not published.
+      return false;
+    }
   }
 
   private tabOf(paneId: string): string {
