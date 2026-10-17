@@ -100,12 +100,12 @@ import {
   applyChatVoice,
   chatVoiceActive,
   coalesceCronFires,
-  deliveryCovered,
   dropCardedDeliveries,
   dropSilentCardFires,
   foldCronTurns,
   foldsAsActionRun,
   isAction,
+  isDeliveryText,
   lastTurnStartId,
   toggleActionRun,
 } from '../lib/chat-voice';
@@ -4574,7 +4574,7 @@ export function ChatPane({
               // agent response". Same rule as the transcript chip
               // (`dropCardedDeliveries`), applied one layer earlier, because
               // the queue and the echo are what the reader sees FIRST.
-              .filter((q) => !deliveryCovered(q.text, cardedChildren))
+              .filter((q) => !isDeliveryText(q.text))
               .map((q) => (
                 <div key={q.id} className="chat-turn chat-turn-user chat-turn-queued">
                   <div className="chat-queued-actions">
