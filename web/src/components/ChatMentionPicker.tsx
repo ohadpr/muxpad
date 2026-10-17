@@ -278,7 +278,7 @@ export function ChatMentionCard({
    * THE WHOLE RUN, on a card that absorbed its own launch.
    *
    * A collapsed pair is the only record left of the launch, so the card says
-   * what the vanished one did: started, completed, and how long that took. A
+   * what the vanished one did: started, done, and how long that took. A
    * pair that did NOT collapse has its launch card still sitting up the log
    * and gets none of this — the strip would be repeating it.
    */
@@ -445,7 +445,7 @@ export function ChatMentionCard({
           //
           // So the state keeps its glyph — the hue is still the fastest read —
           // and says its name beside it, in the same chip the launch card
-          // uses. One vocabulary: started → completed.
+          // uses. One vocabulary: started → done.
           <span className="chat-mention-card-state" data-state={tone} data-tone={tone}>
             <span className="chat-mention-card-tick" data-state={tone} aria-hidden="true" />
             {state}
@@ -500,7 +500,7 @@ export function ChatMentionCard({
           <span className="chat-mention-card-life-arrow" aria-hidden="true">
             →
           </span>
-          <span className="chat-mention-card-life-done">completed</span>
+          <span className="chat-mention-card-life-done">done</span>
           <span className="chat-mention-card-life-dur">
             {formatRunLength(lifecycle.endedAt - lifecycle.startedAt)}
           </span>
