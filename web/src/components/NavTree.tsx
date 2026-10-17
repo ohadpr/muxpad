@@ -1421,11 +1421,21 @@ export function TabList({
    *  switches the row's mark from a tile to a dot in its parent's chip column,
    *  and what puts the one indent step on the row. Nothing about a clock — a
    *  sub-chat has none, and the row reads its own. */
-  const renderRow = (t: Tab, parent?: Tab, markStatus?: PaneStatus) => (
+  const renderRow = (t: Tab, parent?: Tab, markStatus?: PaneStatus, childLast?: boolean) => (
     <TabRow
       key={t.id}
       tab={t}
       {...(markStatus ? { markStatus } : {})}
+      // WHICH CHILD ENDS THE RUN, from the only place that knows without
+      // guessing. The trunk used to find it in CSS —
+      // `[data-child]:has(+ [data-child])` — which is a claim about DOM
+      // ADJACENCY, and on the sheet it is false: every row there is wrapped in
+      // a `.swiperow`, so no two child rows are ever siblings. The rule never
+      // matched, every child's trunk stopped at its own middle, and the group
+      // drew N separate brackets instead of one line. It had been that way
+      // since the trunk landed and was simply too faint to see until the ink
+      // went up. React knows the index; CSS was being asked to infer it.
+      {...(childLast ? { childLast: true } : {})}
       // The whole reason `renderGroup` knows the parent. Forwarding it was
       // missed, and because every OTHER prop here is spelled out explicitly
       // there was nothing to notice: `TabRow.parent` was simply `undefined` on
@@ -1569,7 +1579,9 @@ export function TabList({
             })()}
           </button>
         ) : null}
-        {!foldable || open ? g.children.map((k) => renderRow(k, g.chat)) : null}
+        {!foldable || open
+          ? g.children.map((k, i) => renderRow(k, g.chat, undefined, i === g.children.length - 1))
+          : null}
       </Fragment>
     );
   };
@@ -1827,6 +1839,15 @@ interface TabRowProps {
   /** The chat that spawned this one, when it is a child. Supplies the clock
    *  they share, and switches the row's leading mark from tile to dot. */
   parent?: Tab | undefined;
+  /**
+   * This is the LAST child in its parent's run, so its trunk segment stops at
+   * the elbow instead of carrying on into whatever follows.
+   *
+   * A prop rather than a CSS sibling test, because the sibling test was a
+   * claim about DOM adjacency that the mobile sheet makes false — see
+   * `renderRow`.
+   */
+  childLast?: boolean | undefined;
   /**
    * The state mark to draw INSTEAD of this tab's own.
    *
@@ -2331,6 +2352,7 @@ function CronMark({ tab }: { tab: Tab }) {
 function TabRow({
   tab,
   parent,
+  childLast,
   markStatus,
   workspace,
   isActiveTab,
@@ -2665,6 +2687,10 @@ function TabRow({
       // would have rendered as an ordinary line — indistinguishable from the
       // chat that spawned it, sitting directly beneath it.
       data-child={parent ? 'true' : undefined}
+      // THE LAST ONE STOPS THE TRUNK. See renderRow for why this is an
+      // attribute and not a CSS sibling test — on THIS surface the sibling
+      // test could never have worked.
+      data-child-last={childLast ? 'true' : undefined}
       // No `data-state` here, and that is the design rather than an omission:
       // the left bar and the row tint in StateChip.css are keyed off it, and
       // the mobile rail has neither. Its state is one bit, drawn by the
@@ -2799,6 +2825,7 @@ function TabRow({
       // went deliberately — see RowMark. The row's state is now told exactly
       // once, by the 10px mark at its right edge.
       data-child={parent ? 'true' : undefined}
+      data-child-last={childLast ? 'true' : undefined}
       // Pinned is a 2px accent EDGE on the row's leading rim — see NavTree.css.
       // Off the ink entirely, because the name's colour already says
       // read-vs-unread: a hue there was a second meaning on one channel, and it

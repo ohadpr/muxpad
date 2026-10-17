@@ -627,6 +627,24 @@ describe('what the pass was NOT allowed to move', () => {
     expect(caretEnd + resolve(decl(glyph, 'margin-left'), BASE)).toBeCloseTo(nameX, 5);
   });
 
+  it('the trunk carries through by DEFAULT, and the last child stops it', () => {
+    // The inverse of what this was, and the fix for a group that drew N
+    // brackets instead of one line. The continuation used to be
+    // `[data-child]:has(+ [data-child])` — a claim about DOM ADJACENCY that is
+    // FALSE on the mobile sheet, where every row is wrapped in a `.swiperow`.
+    // It never matched there, so every child's trunk stopped at its own middle.
+    // No sibling combinator is allowed back into this rule for that reason:
+    // the tree's shape differs per surface and the index does not.
+    const trunk = ruleBody(NAV_CSS, '.navtree .navtree-tab-row[data-child="true"]::before');
+    expect(decl(trunk, 'bottom')).toBe('-1px');
+    const last = ruleBody(
+      NAV_CSS,
+      '.navtree .navtree-tab-row[data-child="true"][data-child-last="true"]::before',
+    );
+    expect(decl(last, 'bottom')).toBe('50%');
+    expect(NAV_CSS).not.toMatch(/\[data-child="true"\]:has\(\s*\+/);
+  });
+
   it('the trunk is drawn in ONE ink, and it is the token', () => {
     // With the indent gone the line is the only thing saying "under that one",
     // so it is load-bearing and gets a name. 18% read as nothing on a tinted

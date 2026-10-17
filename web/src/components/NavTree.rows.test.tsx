@@ -188,6 +188,53 @@ describe('the rail hands a child row the things that make it look like a child',
     expect(out).not.toContain('data-child="true"');
   });
 
+  it('ends the trunk on the LAST child, and marks exactly one', () => {
+    // THE BUG THIS REPLACES. The trunk's continuation was a CSS sibling test —
+    // `[data-child]:has(+ [data-child])` — which is a claim about DOM
+    // ADJACENCY. It held on the rail and was FALSE on the sheet, where every
+    // row is wrapped in a `.swiperow`, so no two child rows are ever siblings:
+    // the rule never matched, every child's trunk stopped at its own middle,
+    // and a family drew N detached brackets instead of one line. It shipped
+    // that way from the day the trunk landed and was only visible once the ink
+    // went up.
+    // The index is a thing React knows. It is told now, on both surfaces, and
+    // these assertions are what keep it told.
+    openSubs('root');
+    const out = railHtml([
+      tab('root'),
+      tab('kid-a', { spawned_by: 'root' }),
+      tab('kid-b', { spawned_by: 'root' }),
+      tab('kid-c', { spawned_by: 'root' }),
+    ]);
+    expect(count(out, 'data-child="true"')).toBe(3);
+    expect(count(out, 'data-child-last="true"')).toBe(1);
+    // …and it is the LAST one, not just any one.
+    const last = out.lastIndexOf('data-child-last="true"');
+    expect(out.slice(last)).toContain('kid-c');
+    expect(out.slice(0, last)).toContain('kid-b');
+  });
+
+  it('marks an only child as the last one — a run of one still ends', () => {
+    openSubs('root');
+    const out = railHtml([tab('root'), tab('kid', { spawned_by: 'root' })]);
+    expect(count(out, 'data-child-last="true"')).toBe(1);
+  });
+
+  it('marks the last child of EACH family, not of the list', () => {
+    // Two parents in one list: a single flag for the whole rail would leave the
+    // first family's trunk running on into the second parent's rows.
+    openSubs('a', 'b');
+    const out = railHtml([
+      tab('a'),
+      tab('a1', { spawned_by: 'a' }),
+      tab('a2', { spawned_by: 'a' }),
+      tab('b'),
+      tab('b1', { spawned_by: 'b' }),
+    ]);
+    expect(count(out, 'data-child="true"')).toBe(3);
+    expect(count(out, 'data-child-last="true"')).toBe(2);
+  });
+
   it('draws a promoted orphan as a top-level TILE, never a stray dot', () => {
     // A `spawned_by` that does not resolve in this list makes the chat a
     // top-level row (groupChats), and a dot with no parent row above it belongs
@@ -345,6 +392,22 @@ describe('the sheet nests a child under its parent and files done chats away', (
     openSubs('root');
     const out = sheetHtml([tab('root'), tab('kid', { spawned_by: 'root', clock: null })]);
     expect(count(out, 'data-child="true"')).toBe(1);
+  });
+
+  it('ends the trunk on the last child HERE TOO — this is the surface it broke on', () => {
+    // The sheet wraps every row in a `.swiperow`, so the CSS sibling test that
+    // used to carry the trunk through could never match here. Three children
+    // drew three detached brackets.
+    openSubs('root');
+    const out = sheetHtml([
+      tab('root'),
+      tab('k1', { spawned_by: 'root', clock: null }),
+      tab('k2', { spawned_by: 'root', clock: null }),
+      tab('k3', { spawned_by: 'root', clock: null }),
+    ]);
+    expect(count(out, 'data-child="true"')).toBe(3);
+    expect(count(out, 'data-child-last="true"')).toBe(1);
+    expect(out.slice(out.lastIndexOf('data-child-last="true"'))).toContain('k3');
   });
 
   it('gives the child a dot in the emoji column and the parent the same CHIP the rail draws', () => {
