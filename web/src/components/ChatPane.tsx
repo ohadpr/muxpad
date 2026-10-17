@@ -91,6 +91,7 @@ import {
   spawnHandle,
   spawnLabel,
   spawnState,
+  spawnStateLabel,
   toMentionChats,
   withContentRows,
 } from '../lib/chat-mention';
@@ -99,6 +100,7 @@ import {
   applyChatVoice,
   chatVoiceActive,
   coalesceCronFires,
+  deliveryCovered,
   dropCardedDeliveries,
   dropSilentCardFires,
   foldCronTurns,
@@ -4019,7 +4021,13 @@ export function ChatPane({
               // A completion card only exists for a finished child, so `working`
               // is unreachable here — narrowed rather than asserted, because the
               // compiler cannot know that and a cast would hide it if it changed.
-              state={state === 'working' ? undefined : state}
+              // ONE VOCABULARY WITH THE LAUNCH CARD: `started` → `completed`.
+              // The raw lifecycle word was the state's own name (`delivered`),
+              // which is muxpad's word for what happened to the REPORT, not
+              // the reader's word for what happened to the worker. The hue and
+              // the glyph still come from the state; only the label is the
+              // reader's.
+              state={state === 'working' ? undefined : spawnStateLabel(state)}
               tone={state === 'working' ? undefined : state}
               expanded={expanded}
               work={expanded ? <SpawnWorkBody work={work} onOpenImage={setOpenImage} /> : undefined}
@@ -4557,33 +4565,43 @@ export function ChatPane({
               scrolling with the log. Dashed + muted = "waiting its turn"; edit
               pulls it back to the composer, cancel drops it before it runs. Both
               act on the server, so the change follows you across devices. */}
-            {queue.map((q) => (
-              <div key={q.id} className="chat-turn chat-turn-user chat-turn-queued">
-                <div className="chat-queued-actions">
-                  <button
-                    type="button"
-                    className="chat-queued-edit"
-                    onClick={() => editQueued(q)}
-                    aria-label="Edit — restore to the composer"
-                    title="Queued — tap to edit before it sends"
-                  >
-                    <SvgRestore />
-                  </button>
-                  <button
-                    type="button"
-                    className="chat-queued-cancel"
-                    onClick={() => cancelQueued(q.id)}
-                    aria-label="Cancel this queued message"
-                    title="Cancel — remove before it sends"
-                  >
-                    ✕
-                  </button>
+            {queue
+              // A DELIVERY THE CARDS ALREADY COVER IS NOT A PENDING MESSAGE.
+              // Its whole row — the dashed bubble, the edit and cancel
+              // controls — was a third drawing of a worker that already has a
+              // launch card and a completion card carrying its report.
+              // Reported as "another pending card which was likely the actual
+              // agent response". Same rule as the transcript chip
+              // (`dropCardedDeliveries`), applied one layer earlier, because
+              // the queue and the echo are what the reader sees FIRST.
+              .filter((q) => !deliveryCovered(q.text, cardedChildren))
+              .map((q) => (
+                <div key={q.id} className="chat-turn chat-turn-user chat-turn-queued">
+                  <div className="chat-queued-actions">
+                    <button
+                      type="button"
+                      className="chat-queued-edit"
+                      onClick={() => editQueued(q)}
+                      aria-label="Edit — restore to the composer"
+                      title="Queued — tap to edit before it sends"
+                    >
+                      <SvgRestore />
+                    </button>
+                    <button
+                      type="button"
+                      className="chat-queued-cancel"
+                      onClick={() => cancelQueued(q.id)}
+                      aria-label="Cancel this queued message"
+                      title="Cancel — remove before it sends"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <div className="chat-bubble chat-bubble-queued" dir="auto">
+                    <QueuedText text={q.text} onOpenImage={setOpenImage} />
+                  </div>
                 </div>
-                <div className="chat-bubble chat-bubble-queued" dir="auto">
-                  <QueuedText text={q.text} onOpenImage={setOpenImage} />
-                </div>
-              </div>
-            ))}
+              ))}
             {/* ── The composer's reserve, as a SIBLING ──────────────────────────
               The floating composer overlaps the scroller, so the log has to
               reserve its exact measured height or the last message hides behind

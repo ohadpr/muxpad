@@ -215,6 +215,9 @@ const retireDeps = {
   // leaving the live list (a crashed worker keeps its row and still has plenty
   // to report). Fire-and-forget; retirement never waits on a model call.
   onFinished: spawnReports.onFinished,
+  // A worker that stated its result does not wait out the settle — see the
+  // dep's note.
+  statedReport: (tabId: string) => spawnReports.hasStated(tabId),
 };
 const clockSweeper = new ChatClockSweeper(db, (tabId, { announce }) => {
   // A chat that has decayed is not "finished, waiting for you" — it is four

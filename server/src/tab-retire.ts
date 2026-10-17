@@ -104,6 +104,22 @@ export interface RetireDeps {
     | ((tabId: string, paneId: string, opts: { crashed: boolean; awaiting: boolean }) => void)
     | undefined;
   /**
+   * Has this worker STATED its result (the `report` tool)?
+   *
+   * The settle exists because a turn ending is not a job ending — a worker
+   * routinely runs several turns, so the window asks "did another one start?".
+   * A stated report answers that question directly and from the inside: the
+   * worker said what it did. Waiting out the window after that is latency with
+   * nothing to learn in it, and it is what "it was done almost instantly and
+   * it took the main chat 1-3 minutes to detect" was measuring — 98 seconds
+   * for work that took about ten.
+   *
+   * It does not bypass any DECISION: `settle()` re-reads every condition, and
+   * a worker that speaks again is revived by `onTurnStart` exactly as before.
+   * It only skips the clock.
+   */
+  statedReport?: ((tabId: string) => boolean) | undefined;
+  /**
    * Did this worker STOP TO ASK the user something?
    *
    * `delivered` and `awaiting you` were one state and they are opposites — one
@@ -486,6 +502,15 @@ export class ChatRetirer {
     if ((e.background ?? 0) > 0) {
       this.disarm(e.pane_id);
       return false;
+    }
+    // ─── A STATED RESULT NEEDS NO QUIET WINDOW ───────────────────────────────
+    // The window asks "is another turn coming?" — a question the worker has
+    // just answered from the inside. Settle NOW, through the same decision
+    // function the timer would have called: every condition is re-read, and a
+    // worker that speaks again is revived like any other.
+    if (this.deps.statedReport?.(pane.tab_id) === true) {
+      this.disarm(e.pane_id);
+      return this.settle(e.pane_id, e.phase);
     }
     this.arm(e.pane_id, e.phase);
     return true;

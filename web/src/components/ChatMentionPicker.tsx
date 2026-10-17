@@ -351,6 +351,11 @@ export function ChatMentionCard({
   return (
     <div
       className={`chat-mention-card${body ? ' -report' : ''}`}
+      // THE PAIR IS ONE WORKER SEEN TWICE, so the two cards are one shape: the
+      // sheet gives every spawn card the same width, whether or not it carries
+      // a report. They were 379px and 560px — "why so wide", and the launch
+      // card looked like a different kind of object from its own completion.
+      data-kind={mark === 'spawn' ? 'spawn' : undefined}
       data-expanded={expanded ? 'true' : undefined}
       data-eid={anchorId}
       title={chatTooltip(chat)}
@@ -366,16 +371,23 @@ export function ChatMentionCard({
         {working ? (
           <span className="chat-mention-card-mark" aria-hidden="true" />
         ) : tone && tone !== 'note' ? (
-          // A LIFECYCLE STATE IS A MARK, NOT A WORD. `delivered` used to be
-          // written out in the slot the rest of the app draws a mark in, and the
-          // complaint was exactly that: a tick is read in one glance, a label is
-          // something you stop and read, and it said the same thing every time.
+          // A WORD AND A MARK, because this one has a PAIR to match.
           //
-          // The glyph is CSS (see the sheet) so the only text here is the name —
-          // which a screen reader still needs, because a mark with no name is a
-          // state that simply does not exist for anyone not looking at it.
-          <span className="chat-mention-card-tick" data-state={tone} title={state}>
-            <span className="chat-mention-card-sr">{state}</span>
+          // It was a bare tick, on the stated argument that "a tick is read in
+          // one glance and a label is something you stop and read". That held
+          // while this card stood alone. It stopped holding the moment its
+          // LAUNCH card started carrying the word `started`: a pair where one
+          // half is a word and the other a glyph reads as two unrelated
+          // objects, which is what "why is the icon the same and not something
+          // telling me you are closing it, why not a label of 'completed'"
+          // was describing.
+          //
+          // So the state keeps its glyph — the hue is still the fastest read —
+          // and says its name beside it, in the same chip the launch card
+          // uses. One vocabulary: started → completed.
+          <span className="chat-mention-card-state" data-state={tone} data-tone={tone}>
+            <span className="chat-mention-card-tick" data-state={tone} aria-hidden="true" />
+            {state}
           </span>
         ) : state ? (
           // An ANNOTATION keeps its word: "reported" / "directed here" are notes

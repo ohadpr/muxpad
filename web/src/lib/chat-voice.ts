@@ -38,6 +38,7 @@ import {
   backendSupportsChatMode,
   isAgentLaunchTool,
   needsReplyFallback,
+  parseSpawnDelivery,
 } from '@muxpad/shared';
 
 export interface ChatVoiceOpts {
@@ -412,6 +413,21 @@ export function fireTime(ts: number | null): string {
  * (`expandSpawnDelivery`), so the full text stays one disclosure away even for
  * a child whose card was capped out.
  */
+/**
+ * Is this raw outgoing text a delivery whose children all have cards?
+ *
+ * The QUEUE and the optimistic ECHO render the message before it is a
+ * transcript event, so `dropCardedDeliveries` cannot reach them — and they are
+ * what the reader sees first. Same question, asked of the text.
+ */
+export function deliveryCovered(text: string, carded: ReadonlySet<string>): boolean {
+  if (carded.size === 0) return false;
+  const parsed = parseSpawnDelivery(text);
+  if (!parsed) return false;
+  const from = parsed.marker.from;
+  return from.length > 0 && from.every((id) => carded.has(id));
+}
+
 export function dropCardedDeliveries(
   events: readonly ChatEvent[],
   carded: ReadonlySet<string>,
