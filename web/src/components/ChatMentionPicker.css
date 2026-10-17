@@ -415,6 +415,45 @@ button.chat-mention-card-head {
   overflow: visible;
 }
 
+/* ── WHICH CARD AT THE OTHER END ─────────────────────────────────────────────
+   Hover or focus either end and BOTH light up. The stubs say a pair exists;
+   this says which two cards it is made of, which is the question a screenful
+   of log between them actually raises — and on a fan-out there are several
+   candidates in both directions.
+
+   The hovered card already takes the accent border from `[data-openable]
+   :hover`, so this rule is really for the OTHER one, and it is deliberately
+   one step quieter: the two are a pair, not two cards you are pointing at.
+   An echo, not a copy.
+
+   Nothing here is drawn at rest, which is the whole argument for doing it this
+   way rather than giving each sub-chat a colour: no ink until you ask, and it
+   works the same for the twentieth worker in a fan-out as for the first. */
+.chat-mention-card[data-paired="true"] {
+  border-color: color-mix(in srgb, var(--chat-accent) 60%, var(--chat-border-strong));
+  background: linear-gradient(
+      color-mix(in srgb, var(--chat-accent) 7%, transparent),
+      color-mix(in srgb, var(--chat-accent) 2.5%, transparent) 70%
+    ), var(--chat-panel);
+}
+/* THE STUB STOPS FADING. At rest it fades because it ends in mid-air and a
+   hard end reads as a broken line; while the pair is lit the line is not
+   pointing into nothing — you have been shown the other end — so it goes to
+   full strength along its whole length. Both halves of the thread do it at
+   once, which is what makes the two stubs read as one line with the log
+   folded in between. */
+.chat-mention-card[data-paired="true"][data-thread="open"]::after {
+  background: color-mix(in srgb, var(--chat-accent) 75%, transparent);
+}
+.chat-mention-card[data-paired="true"][data-thread="close"]::after {
+  background: color-mix(in srgb, var(--status-ready) 85%, transparent);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .chat-mention-card[data-thread]::after {
+    transition: background 120ms ease;
+  }
+}
+
 /* ── THE LIFECYCLE STRIP ─────────────────────────────────────────────────────
    On a card that absorbed its own launch, and nowhere else. It carries what
    the vanished card said — started, completed, how long — in the quietest

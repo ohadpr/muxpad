@@ -794,6 +794,16 @@ export type LogEntry<T> =
        * is elsewhere in this log — see {@link threadSpawnPairs}.
        */
       thread?: 'open' | 'close';
+      /**
+       * WHICH pair, so the two ends can find each other at runtime.
+       *
+       * The stubs say a pair exists; they cannot say WHICH card at the other
+       * end of a screenful of log is the partner, and on a fan-out there are
+       * several candidates in both directions. This key is on both ends, so
+       * hovering or focusing one can light the other — see `data-pair` in
+       * ChatMentionPicker.
+       */
+      pair?: string;
     };
 
 /**
@@ -863,11 +873,11 @@ export function threadSpawnPairs<T>(list: readonly LogEntry<T>[]): LogEntry<T>[]
     const key = pairKey(item.card);
     if (item.card.kind === 'launch' && closes.has(key)) {
       changed = true;
-      return { ...item, thread: 'open' as const };
+      return { ...item, thread: 'open' as const, pair: key };
     }
     if (item.card.kind === 'completion' && opens.has(key)) {
       changed = true;
-      return { ...item, thread: 'close' as const };
+      return { ...item, thread: 'close' as const, pair: key };
     }
     return item;
   });
