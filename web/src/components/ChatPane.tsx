@@ -88,7 +88,6 @@ import {
   resolveSpawnAnchor,
   spawnCardSummary,
   spawnCards,
-  spawnHandle,
   spawnLabel,
   spawnState,
   spawnStateLabel,
@@ -3904,16 +3903,22 @@ export function ChatPane({
               <ChatMentionCard
                 key={anchorId}
                 anchorId={anchorId}
-                // A SENTENCE, NOT A HANDLE. The card used to read `status-line`
-                // — the `--name=` value typed on a command line — beside a dot
-                // and a spinner, and two of those said nothing about what was
-                // running. `spawnLabel` reaches for the generated task line, then
-                // the headline, then the handle; it is never blank.
+                // ONE LINE, AND IT IS THE SAME ONE ITS COMPLETION SHOWS.
+                //
+                // This card used to carry the generated task line with the
+                // HANDLE under it — two lines on the launch, one on the
+                // completion, so the pair had different shapes and the glyph
+                // beside them sat at the centre of a two-line block on one and
+                // a one-line block on the other. "The icon… is not centred
+                // vertically always." It was centred; the thing it was centred
+                // on was a different height on each card.
+                //
+                // So: one line on both, and it is `spawnLabel` on both — the
+                // generated task line, falling back to the headline and then
+                // to the handle, which is never blank. The handle it used to
+                // print underneath is the rail's business, and the rail is two
+                // inches to the left.
                 chat={{ ...kid.chip, name: spawnLabel(kid) }}
-                // …and the handle underneath it, because that is what the rail
-                // shows, what `@` completes, and what you would type to talk to
-                // this worker. Omitted when it IS the label.
-                sub={spawnHandle(kid)}
                 // "At a minimum give them a sub-chat icon." A branch, in place of
                 // the clock chip a sub-chat has no use for — see the component.
                 mark="spawn"
