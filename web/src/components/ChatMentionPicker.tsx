@@ -263,6 +263,7 @@ export function ChatMentionCard({
   expanded,
   anchorId,
   lifecycle,
+  thread,
   onToggleExpanded,
   onOpen,
   onDismiss,
@@ -282,6 +283,12 @@ export function ChatMentionCard({
    * and gets none of this — the strip would be repeating it.
    */
   lifecycle?: { startedAt: number; endedAt: number } | undefined;
+  /**
+   * One END of a pair whose other end is elsewhere in this log. The sheet
+   * draws a stub leaving the bottom of an `open` and entering the top of a
+   * `close`, so the two point at each other across whatever is between them.
+   */
+  thread?: 'open' | 'close' | undefined;
   /** The other chat is still on it: the same 10px mark as everywhere else. */
   working?: boolean | undefined;
   /**
@@ -398,6 +405,7 @@ export function ChatMentionCard({
     <div
       className={`chat-mention-card${body ? ' -report' : ''}`}
       {...(onOpen ? { onClick: openFromSurface, 'data-openable': 'true' } : {})}
+      {...(thread ? { 'data-thread': thread } : {})}
       // THE PAIR IS ONE WORKER SEEN TWICE, so the two cards are one shape: the
       // sheet gives every spawn card the same width, whether or not it carries
       // a report. They were 379px and 560px — "why so wide", and the launch
