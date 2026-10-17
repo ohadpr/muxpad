@@ -602,7 +602,7 @@ export function spawnState(chat: MentionChat): SpawnState {
  * The chip used to carry the state's own name. `delivered` is muxpad's word
  * for what happened to the REPORT — it is the retirement reason — and next to a
  * launch card reading `started` it named a different axis: started what,
- * delivered what. The pair now reads started → completed, and the exceptions
+ * delivered what. The pair now reads started → done, and the exceptions
  * keep their own words because they are not completions:
  *
  *   failed    it crashed; "completed" would be a lie with a green tick on it
@@ -614,7 +614,13 @@ export function spawnState(chat: MentionChat): SpawnState {
  * reader's.
  */
 export function spawnStateLabel(state: SpawnState): string {
-  return state === 'delivered' ? 'completed' : state;
+  // `done`, not `completed` and not `delivered`. Asked for directly, and it is
+  // the shorter word for the same fact — the rail already calls a finished
+  // chat done, so the card and the sidebar say the same thing about the same
+  // worker. (`done` the STATE — a chat that left the live list some other way
+  // — lands on the same word, which is honest: from the reader's side both are
+  // over. The hue still separates them.)
+  return state === 'delivered' ? 'done' : state;
 }
 
 /**
