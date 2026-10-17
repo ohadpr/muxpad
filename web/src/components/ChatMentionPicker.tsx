@@ -307,8 +307,14 @@ export function ChatMentionCard({
    * Absent means `note`: a neutral chip for a word that is an annotation rather
    * than a lifecycle state ("reported", "directed here"). Those must not borrow
    * the green that means a worker finished.
+   *
+   * `started` is a lifecycle state like the rest, and it takes the chip's full
+   * shape — box, type and glyph slot — in the quiet ink. That is the point of
+   * it: a launch and its completion are the same object twice, and when one
+   * was a bare word and the other a word with a tick they read as two
+   * different kinds of thing.
    */
-  tone?: 'delivered' | 'done' | 'failed' | 'awaiting' | 'note' | undefined;
+  tone?: 'started' | 'delivered' | 'done' | 'failed' | 'awaiting' | 'note' | undefined;
   /** The report itself, rendered in full by the caller (markdown, links…). */
   body?: ReactNode | undefined;
   /**
