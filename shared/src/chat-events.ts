@@ -137,6 +137,15 @@ export interface NoticeEvent extends Base {
    * started.
    */
   card?: string;
+  /**
+   * For a 'report' notice: the child tab ids the delivery covered.
+   *
+   * Carried so the renderer can tell whether this chip is saying anything the
+   * COMPLETION CARDS do not already say. One finished worker was drawing three
+   * rows — a launch card, a completion card with its report, and this — and the
+   * third is only worth a row when the cards are not there (they are capped).
+   */
+  from?: string[];
   /** For a task-notification: the parent Task/Agent tool-use id it reports on.
    *  Lets the live roster match a subagent's FINISH to its launch reliably —
    *  a background agent's own tool_result is only the immediate launch ack. */
@@ -669,6 +678,7 @@ export function expandSpawnDelivery(
     ts,
     variant: 'report',
     text: `${marker.count} sub-chat${marker.count === 1 ? '' : 's'} reported`,
+    ...(marker.from.length > 0 ? { from: marker.from } : {}),
   };
   const reports = body.trim();
   // FOLDED, like a cron's injected prompt and for the same reason: nobody typed
