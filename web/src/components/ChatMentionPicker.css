@@ -357,6 +357,43 @@ button.chat-mention-card-head {
   overflow: hidden;
 }
 
+/* ── THE THREAD BETWEEN A PAIR ───────────────────────────────────────────────
+   A launch and its completion are one worker seen twice, and in practice there
+   is ALWAYS something between them: the turn that spawns a worker ends by
+   saying so. So each end grows a stub in the gutter — leaving the bottom of
+   the launch, entering the top of the completion — and the two point at each
+   other across whatever is in between.
+
+   In the GUTTER (left: 6px, outside the card's own padding) so it cannot
+   collide with the branch glyph or the name, and `overflow: visible` on the
+   card is what lets it leave the box at all.
+
+   A stub, not a rail through the rows between: those are user bubbles, tool
+   runs and prose with their own alignments, and threading a line through them
+   would mean re-laying-out every row in the span for a decoration. */
+.chat-mention-card[data-thread]::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  width: 2px;
+  height: 11px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--chat-accent) 45%, transparent);
+}
+.chat-mention-card[data-thread="open"]::after {
+  bottom: -11px;
+}
+/* The closing end takes the state's hue rather than the accent: by then the
+   thread is not "this is live", it is "this is the end of that". */
+.chat-mention-card[data-thread="close"]::after {
+  top: -11px;
+  background: color-mix(in srgb, var(--status-ready) 55%, transparent);
+}
+.chat-mention-card[data-thread] {
+  position: relative;
+  overflow: visible;
+}
+
 /* ── THE LIFECYCLE STRIP ─────────────────────────────────────────────────────
    On a card that absorbed its own launch, and nowhere else. It carries what
    the vanished card said — started, completed, how long — in the quietest

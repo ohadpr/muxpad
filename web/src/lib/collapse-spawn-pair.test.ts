@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { type LogEntry, type SpawnCard, collapseSpawnPairs } from './chat-mention';
+import {
+  type LogEntry,
+  type SpawnCard,
+  collapseSpawnPairs,
+  threadSpawnPairs,
+} from './chat-mention';
 
 /**
  * TWO CARDS ARE A HISTORY. TWO CARDS WITH NOTHING BETWEEN THEM ARE A
@@ -81,5 +86,57 @@ describe('a pair with nothing between it is one card', () => {
   it('returns the SAME array when nothing collapsed — no needless rerender', () => {
     const input = [msg('hello'), card('t1', 'launch', 100)];
     expect(collapseSpawnPairs(input)).toBe(input);
+  });
+});
+
+describe('a pair that stays apart is threaded', () => {
+  // The collapse almost never fires, and not by accident: the turn that spawns
+  // a worker ENDS by saying so, so "Launched hn-second — back shortly" lands
+  // between the two cards every single time.
+  it('marks both ends when something is between them', () => {
+    const out = threadSpawnPairs([
+      card('t1', 'launch', 100, 'r'),
+      msg('Launched t1 — back shortly.'),
+      card('t1', 'completion', 1100, 'r'),
+    ]);
+    expect(out.map((x) => (x.kind === 'card' ? x.thread : x.node))).toEqual([
+      'open',
+      'Launched t1 — back shortly.',
+      'close',
+    ]);
+  });
+
+  it('leaves a LONE launch plain — a stub pointing at nothing is a line to nowhere', () => {
+    // It is still running, or its completion has not loaded yet.
+    const out = threadSpawnPairs([card('t1', 'launch', 100, 'r'), msg('still going')]);
+    expect(out[0]?.kind === 'card' && out[0].thread).toBeUndefined();
+  });
+
+  it('does not thread a pair that already COLLAPSED', () => {
+    // One card has no other end to point at.
+    const collapsed = collapseSpawnPairs([
+      card('t1', 'launch', 100, 'r'),
+      card('t1', 'completion', 1100, 'r'),
+    ]);
+    const out = threadSpawnPairs(collapsed);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.kind === 'card' && out[0].thread).toBeUndefined();
+  });
+
+  it('pairs by CHILD and ROUND, not by proximity', () => {
+    // Two workers interleaved: each end must find its own other end.
+    const out = threadSpawnPairs([
+      card('a', 'launch', 10, 'r'),
+      card('b', 'launch', 20, 'r'),
+      msg('working'),
+      card('b', 'completion', 30, 'r'),
+    ]);
+    const threads = out.map((x) => (x.kind === 'card' ? `${x.card.chat.tabId}:${x.thread}` : null));
+    expect(threads).toEqual(['a:undefined', 'b:open', null, 'b:close']);
+  });
+
+  it('returns the SAME array when there is no pair to thread', () => {
+    const input = [msg('hello')];
+    expect(threadSpawnPairs(input)).toBe(input);
   });
 });

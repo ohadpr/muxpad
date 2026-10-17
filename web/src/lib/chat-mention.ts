@@ -783,6 +783,11 @@ export type LogEntry<T> =
        * took.
        */
       openedAt?: number;
+      /**
+       * This card is one END of a pair that did NOT collapse, and the other end
+       * is elsewhere in this log — see {@link threadSpawnPairs}.
+       */
+      thread?: 'open' | 'close';
     };
 
 /**
@@ -809,6 +814,60 @@ export type LogEntry<T> =
  * is about WHERE a card goes, and this is about whether two of them are one
  * thing — the same separation `spawnCards` keeps between identity and placement.
  */
+/**
+ * TIE THE TWO ENDS OF A PAIR THAT STAYED APART.
+ *
+ * The collapse above almost never fires, and the reason is structural rather
+ * than rare: the turn that spawns a worker ENDS by saying so. "Launched
+ * hn-second — back shortly" lands between the launch card and the completion
+ * every single time, so "nothing in between" describes a case that barely
+ * exists. (It is kept because it is cheap and it does happen — a worker that
+ * finishes before its launcher has replied, or two cards of a fan-out landing
+ * together.)
+ *
+ * So the pair has to read as a pair while apart. Each end is marked, and the
+ * sheet draws a stub leaving the bottom of the launch and entering the top of
+ * the completion: the two point at each other across whatever is between them.
+ *
+ * Marked on the CARDS rather than drawn as one continuous rail through the
+ * intervening rows, and that is a deliberate limit. The rows between them are
+ * user bubbles, tool runs and assistant prose with their own alignments and
+ * their own left edges; threading a line through them would mean re-laying-out
+ * every row in the span to make room for it, for a decoration. The stubs say
+ * "this continues" without touching anything that is not ours.
+ *
+ * A launch with no completion in the log is left plain: it is still running
+ * (or its completion has not loaded yet), and a stub pointing at nothing is a
+ * line to nowhere.
+ */
+export function threadSpawnPairs<T>(list: readonly LogEntry<T>[]): LogEntry<T>[] {
+  const pairKey = (c: SpawnCard) => `${c.chat.tabId}:${c.round?.id ?? ''}`;
+  const closes = new Set<string>();
+  for (const item of list) {
+    if (item.kind === 'card' && item.card.kind === 'completion') closes.add(pairKey(item.card));
+  }
+  if (closes.size === 0) return list as LogEntry<T>[];
+  const opens = new Set<string>();
+  for (const item of list) {
+    if (item.kind === 'card' && item.card.kind === 'launch') opens.add(pairKey(item.card));
+  }
+  let changed = false;
+  const out = list.map((item) => {
+    if (item.kind !== 'card' || item.openedAt !== undefined) return item;
+    const key = pairKey(item.card);
+    if (item.card.kind === 'launch' && closes.has(key)) {
+      changed = true;
+      return { ...item, thread: 'open' as const };
+    }
+    if (item.card.kind === 'completion' && opens.has(key)) {
+      changed = true;
+      return { ...item, thread: 'close' as const };
+    }
+    return item;
+  });
+  return changed ? out : (list as LogEntry<T>[]);
+}
+
 export function collapseSpawnPairs<T>(list: readonly LogEntry<T>[]): LogEntry<T>[] {
   const out: LogEntry<T>[] = [];
   let changed = false;
