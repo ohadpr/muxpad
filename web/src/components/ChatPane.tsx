@@ -73,7 +73,6 @@ import {
   type SpawnCard,
   type SpawnRoundsByChild,
   applyMention,
-  canExpandSpawn,
   collapseSpawnPairs,
   detectMentionRun,
   hitsFor,
@@ -130,7 +129,6 @@ import {
 } from '../lib/search-jump';
 import { documentVisible } from '../lib/seen-ack';
 import { NO_ROUNDS, loadSpawnRounds } from '../lib/spawn-rounds';
-import { type SpawnWork, fetchSpawnWork } from '../lib/spawn-work';
 import type { AgentLink } from '../lib/voice/session';
 import { useVoice } from '../lib/voice/use-voice';
 import { workingVariantFor } from '../lib/working-variant';
@@ -167,7 +165,6 @@ import {
   QuestionCard,
   QueuedText,
   RosterSpinner,
-  SpawnWorkBody,
   type ToolDetail,
   ToolModal,
   ToolRow,
@@ -208,8 +205,6 @@ import './ChatPane.css';
 
 /** Stable empties for the report-expansion state, so a pane that never opens one
  *  contributes no new identity to the transcript memo on every render. */
-const EMPTY_EXPANDED: ReadonlySet<string> = new Set();
-const EMPTY_WORK: ReadonlyMap<string, SpawnWork | null> = new Map();
 
 // The markdown layer — MD_COMPONENTS, the per-block base direction, Markdown
 // and HighlightedText — now lives in ChatMarkdown.tsx. It had to move rather
@@ -1372,44 +1367,11 @@ export function ChatPane({
   //   · Held HERE rather than inside the card, for the reason `expandedGroups` is:
   //     the element tree is rebuilt whenever the transcript or the corpus changes,
   //     and state inside the card would collapse every open report when it did.
-  const [expandedReports, setExpandedReports] = useState<ReadonlySet<string>>(EMPTY_EXPANDED);
-  // The fetched work, cached per entry so later rounds never reuse an old answer.
-  // `undefined` = never asked, `null` = in flight.
-  const [reportWork, setReportWork] = useState<ReadonlyMap<string, SpawnWork | null>>(EMPTY_WORK);
-  const toggleReport = useCallback(
-    (chat: MentionChat, anchorId: string, round?: SpawnCard['round']) => {
-      // The height change is READER-CAUSED and in the middle of the document, so
-      // it is an INPUT rather than something to detect afterwards: hold this row
-      // where it is, measured before the commit that changes its height. Without
-      // it, expanding a card above the viewport pulls the text out from under
-      // whoever pressed the button. Same machinery as an action-run fold.
-      onFoldToggled(anchorId);
-      // KEYED BY THE CARD, not by the child. A worker draws a completion entry
-      // per round, so a set keyed by tab id opened EVERY one of them from one
-      // tap — on the measured 27-round child, twenty-seven boxes growing at once,
-      // most of them above the reader. `anchorId` is per entry (see
-      // `SpawnCard.anchorId`), which is what "this disclosure" means.
-      setExpandedReports((prev) => {
-        const next = new Set(prev);
-        if (next.has(anchorId)) next.delete(anchorId);
-        else next.add(anchorId);
-        return next;
-      });
-      setReportWork((prev) => {
-        // Asked once. A `gone` answer is cached too — re-requesting a pruned
-        // transcript on every toggle would be a request per click with one
-        // possible answer.
-        if (prev.has(anchorId)) return prev;
-        const next = new Map(prev);
-        next.set(anchorId, null);
-        void fetchSpawnWork(chat.paneIds, round).then((work) => {
-          setReportWork((cur) => new Map(cur).set(anchorId, work));
-        });
-        return next;
-      });
-    },
-    [onFoldToggled],
-  );
+  // THE EXPANSION IS GONE, with the caret that opened it. A report is the
+  // worker's own one sentence now, so the card shows all of it and there is
+  // nothing behind a disclosure — see the completion card below. What the
+  // caret used to open (the child's full final message) is what tapping the
+  // card gives you, in the chat where the rest of the work is too.
 
   // Everything this pane resolves through a chat, in one condition. Declared
   // here rather than up with the corpus because a card is one of the three
@@ -3970,7 +3932,13 @@ export function ChatPane({
                 // would claim something this card does not know. While the
                 // child is working the spinner wins the slot, which is the one
                 // state worth more than a word.
-                {...(state === 'working' ? {} : { state: 'started' })}
+                // THE SAME CHIP AS ITS COMPLETION, differing only in hue and
+                // glyph. They were a plain grey word and a green word with a
+                // tick — "the complete and started labels differ in style
+                // unnecessarily" — which made a pair of states read as two
+                // kinds of thing. One shape, two hues: a ring while it is out
+                // there, a tick when it is back.
+                {...(state === 'working' ? {} : { state: 'started', tone: 'started' })}
                 {...(x.thread ? { thread: x.thread } : {})}
                 onOpen={() => openChat(kid)}
               />
@@ -3989,17 +3957,18 @@ export function ChatPane({
           // `spawnCards`, which is the only thing that knows whether this entry
           // came from a round or from the tab-level fallback.
           const anchorId = x.card.anchorId;
-          // AN EXPANDER ONLY WHERE THERE IS A RESULT BEHIND IT. Three report
-          // states exist in the wild at once and two of them have nothing to
-          // show; over those the control used to fall through to the transcript,
-          // and what it opened onto was the worker's entire narration. See
-          // `canExpandSpawn`, which is where the three cases are written out.
-          const canExpand = canExpandSpawn(kid);
-          // The disclosure is per ENTRY — see `toggleReport`. Keyed by the child
-          // it opened every round's card at once.
-          const expanded = canExpand && expandedReports.has(anchorId);
-          // The work is bounded to this round and cached under this entry.
-          const work = expanded ? reportWork.get(anchorId) : undefined;
+          // NO DISCLOSURE ON A SPAWN CARD ANY MORE. It existed because the
+          // report was a model's paragraphs and the card could only show the
+          // first of them — "there's no toggle to expand to see a longer
+          // summary". A report is now the worker's own ONE SENTENCE (the
+          // `report` tool), so the card shows the whole thing and a caret is a
+          // control that reveals nothing, charging the name 28px of width for
+          // it on every card.
+          //
+          // What the caret used to open — the child's full final message — is
+          // one tap away on the card itself, which opens the chat. That is a
+          // better destination anyway: it is the work, not a longer summary
+          // of it.
           return (
             <ChatMentionCard
               key={anchorId}
@@ -4041,15 +4010,6 @@ export function ChatPane({
               // reader's.
               state={state === 'working' ? undefined : spawnStateLabel(state)}
               tone={state === 'working' ? undefined : state}
-              expanded={expanded}
-              work={expanded ? <SpawnWorkBody work={work} onOpenImage={setOpenImage} /> : undefined}
-              // Offered only behind a real report. The expansion is then the
-              // child's own FINAL MESSAGE — its answer, with the path or url it
-              // names in it — and not the story of how it worked, which is what
-              // the whole final turn turned out to be.
-              onToggleExpanded={
-                canExpand ? () => toggleReport(kid, anchorId, x.card.round) : undefined
-              }
               // THE WHOLE LIFECYCLE, on the one card that is now the whole
               // record. Present only when this card absorbed its own launch:
               // where the pair survives, the launch card up the log is still
@@ -4111,9 +4071,6 @@ export function ChatPane({
     openChat,
     // The expansion is a disclosure the READER drives, so the transcript has to
     // rebuild when it changes — and when the fetched work lands under it.
-    expandedReports,
-    reportWork,
-    toggleReport,
     // Same reason as `spawnedCards` above: browser cards live IN the transcript,
     // so the transcript has to rebuild when one arrives or changes. Without
     // this the cards render once and then lie — a summons answered ten minutes
