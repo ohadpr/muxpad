@@ -424,11 +424,39 @@ button.chat-mention-card-head {
   font-weight: 600;
 }
 
-/* The card is one big target now (see `openFromSurface`), so say so on hover
-   — a surface that acts on a click and never looks like it does is a trap the
-   second time. */
+/* ── SAYING THE CARD IS A TARGET, WITHOUT SPENDING A PIXEL ON IT ─────────────
+   The caret is gone (a one-sentence report has nothing to disclose) and
+   nothing replaces it: an icon that announces "you can tap this" costs the
+   NAME the width it sits in, which is the complaint that removed the caret in
+   the first place.
+   So the affordance is in states rather than in objects — the card's own
+   border and lift on hover, the name underlining with it, and a press that
+   settles the card a pixel. All of it is zero-width, and the press is the half
+   that works on a phone, where there is no hover at all. */
 .chat-mention-card[data-openable="true"] {
   cursor: pointer;
+  transition: border-color 90ms ease, box-shadow 90ms ease, transform 90ms ease;
+}
+.chat-mention-card[data-openable="true"]:hover {
+  border-color: var(--chat-accent);
+  box-shadow: 0 2px 10px rgb(0 0 0 / 13%);
+}
+.chat-mention-card[data-openable="true"]:hover .chat-mention-card-name {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+}
+.chat-mention-card[data-openable="true"]:active {
+  transform: translateY(1px);
+  box-shadow: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-mention-card[data-openable="true"] {
+    transition: none;
+  }
+  .chat-mention-card[data-openable="true"]:active {
+    transform: none;
+  }
 }
 
 .chat-mention-card-text {
@@ -608,6 +636,25 @@ button.chat-mention-card-head {
   position: absolute;
   box-sizing: border-box;
 }
+/* STARTED — the launch half of the pair, and the whole point of it is that it
+   is the SAME OBJECT as the completion chip: same box, same type, same glyph
+   slot. A ring rather than a tick (nothing has come back yet) in the quiet ink
+   rather than a state hue (nothing has happened yet). */
+.chat-mention-card-tick[data-state="started"] {
+  --state-hue: var(--chat-faint);
+}
+.chat-mention-card-tick[data-state="started"]::after {
+  left: 3.5px;
+  top: 3.5px;
+  width: 6px;
+  height: 6px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+}
+.chat-mention-card-state[data-state="started"] {
+  --state-hue: var(--chat-faint);
+}
+
 /* DELIVERED — the green the rail already uses for "finished, waiting for you",
    which is precisely what a worker's result is. */
 .chat-mention-card-tick[data-state="delivered"] {
