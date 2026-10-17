@@ -884,22 +884,21 @@ button.chat-mention-card-head {
 .chat-mention-card-artifact {
   max-width: 100%;
   font-size: 12.5px;
-  /* The one place a path is worth monospacing: it is a thing to copy, and the
-     shape of a path is how you recognise it. */
-  font-family: var(--mono-font, ui-monospace, monospace);
+  /* WORDS, so the card's own face — it was monospaced when it printed a raw
+     path, which was the right call for a thing you copy and the wrong one for
+     a label you read. The string itself lives in `title`. */
+  font-weight: 550;
   color: var(--chat-accent);
-  /* Truncate from the LEFT: the end of a url or a path is what identifies it
-     (`…/muxpad-cross-workspace`), and the origin is the part you can lose. */
-  direction: rtl;
-  text-align: left;
+  /* …and therefore NO `direction: rtl`. That was here so the ellipsis would eat
+     a url's origin rather than its identifying tail, and it cost a real bug:
+     the bidi algorithm moves NEUTRAL characters at the end of an LTR run to the
+     paragraph's left edge, so a url scraped with its markdown bold still
+     attached rendered with that punctuation in front of the host. A label made
+     of words has no origin to lose and truncates from the right like every
+     other piece of text on this card. */
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-/* …but the text inside still reads left to right — `direction: rtl` on the box
-   only decides which end the ellipsis eats. */
-.chat-mention-card-artifact > * {
-  direction: ltr;
 }
 /* A local path is not pressable — there is nothing for a browser to open — so it
    is ink rather than a link, and says so by being quiet. */

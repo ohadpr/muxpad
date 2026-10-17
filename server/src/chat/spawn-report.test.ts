@@ -266,11 +266,28 @@ describe('buildSpawnReportPrompt', () => {
     expect(body.trimEnd().endsWith('</transcript>')).toBe(true);
   });
 
-  it('asks for the sentinel by name, and for the path to the work', () => {
+  it('asks for the sentinel by name, and for a length', () => {
     const p = buildSpawnReportPrompt('assistant: done', { crashed: false });
     expect(p).toContain(NOTHING);
     expect(p).toContain(String(SPAWN_REPORT_TARGET_CHARS));
-    expect(p).toMatch(/exactly as it appears/i);
+  });
+
+  it('FORBIDS a url in the prose, and says what to write instead', () => {
+    // It used to ASK for one — "name that path or url in the last sentence,
+    // exactly as it appears" — from before `scrapeArtifacts` existed. With both
+    // in place a card carried the same link twice, and the prose copy is the
+    // expensive one: measured on a real card, "now live at
+    // https://pub.octarine.org/trayo-plan-card-demo/," filled most of the two
+    // lines a summary gets and the sentence was cut off at "with three …".
+    const p = buildSpawnReportPrompt('assistant: done', { crashed: false });
+    expect(p).toMatch(/never write out a url or a file path/i);
+    // And the replacement behaviour, or the rule is only a prohibition and the
+    // model drops the fact instead of rephrasing it.
+    expect(p).toMatch(/in WORDS instead/);
+    expect(p).toMatch(/published a demo page/);
+    // The old instruction must not survive anywhere in the prompt — one line
+    // asking for the url exactly as written would outrank every word above.
+    expect(p).not.toMatch(/exactly as it appears/i);
   });
 
   it('TELLS THE MODEL WHEN THE WORKER CRASHED', () => {
@@ -300,6 +317,22 @@ describe('scrapeArtifacts — where the work is, with no model in the path', () 
 
   it('strips the punctuation the sentence put on the end', () => {
     expect(scrapeArtifacts('assistant: see (https://x.test/p/).')).toEqual(['https://x.test/p/']);
+  });
+
+  it('strips MARKDOWN — emphasis is not part of an address', () => {
+    // A worker that wrote its url in bold had the asterisks scraped into the
+    // artifact, and they then rendered in FRONT of the host: the link box used
+    // `direction: rtl` so its ellipsis would eat the origin, and the bidi
+    // algorithm moves trailing neutrals to the paragraph's left edge. The card
+    // read `**/pub.octarine.org/trayo-plan-card-demo`. Both ends, both the url
+    // and the path form.
+    expect(scrapeArtifacts('assistant: live at **https://x.test/demo/**')).toEqual([
+      'https://x.test/demo/',
+    ]);
+    expect(scrapeArtifacts('assistant: wrote `/tmp/out.md`')).toEqual(['/tmp/out.md']);
+    expect(scrapeArtifacts('assistant: see _https://x.test/a/b_ now')).toEqual([
+      'https://x.test/a/b',
+    ]);
   });
 
   it('ignores loopback — that is where muxpad lives, not an artifact', () => {
