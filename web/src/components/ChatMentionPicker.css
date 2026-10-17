@@ -638,10 +638,15 @@ button.chat-mention-card-head {
      15px when it stood alone as the whole state. */
   width: 13px;
   height: 13px;
-  border-radius: 50%;
-  /* A disc of the hue at the chip wash, so the mark is a SHAPE at a glance
-     rather than two thin strokes floating at the card's edge. */
-  background: color-mix(in srgb, var(--state-hue) var(--status-chip-wash, 22%), transparent);
+  /* NO DISC. It was `the hue at the chip wash`, and a wash of the hue is the
+     same bug the pill had one round earlier: --chat-faint at 22% is invisible
+     and --status-ready at 22% is a solid green coin, so the pair read as a
+     floating grey ring beside a filled green badge. "done and started still
+     differently styled."
+     What makes them one object is the SLOT and the STROKE, not a plate: a
+     13px box, a 1.6px line, and one optical size for every glyph in it. The
+     hue is then the only thing that differs between the states, which is the
+     rule this sheet already applies to the word beside it. */
   color: var(--state-hue);
 }
 .chat-mention-card-tick::after {
@@ -657,11 +662,14 @@ button.chat-mention-card-head {
   --state-hue: var(--chat-faint);
 }
 .chat-mention-card-tick[data-state="started"]::after {
-  left: 3.5px;
-  top: 3.5px;
-  width: 6px;
-  height: 6px;
-  border: 1.5px solid currentColor;
+  /* 7.4px, which is the INK WIDTH of the tick beside it — the two glyphs are
+     sized to each other rather than each to the box, so neither reads as the
+     bigger mark. Centred by arithmetic: (13 - 7.4) / 2. */
+  left: 2.8px;
+  top: 2.8px;
+  width: 7.4px;
+  height: 7.4px;
+  border: 1.6px solid currentColor;
   border-radius: 50%;
 }
 .chat-mention-card-state[data-state="started"] {
@@ -673,16 +681,27 @@ button.chat-mention-card-head {
 .chat-mention-card-tick[data-state="delivered"] {
   --state-hue: var(--status-ready);
 }
-/* The checkmark: the short arm and the long arm of an L, rotated. Positioned off
-   the CENTRE rather than the box, and nudged up a hair, because a tick's optical
-   centre sits below its bounding box's. */
+/* The checkmark: the short arm and the long arm of an L, rotated 45°.
+   CENTRED BY THE INK, NOT BY THE BOX — which is why it looked low and off to
+   one side ("checkmark icon in done is not centered in circle container"). An
+   L is two SIDES of its element, so after the rotation the ink is nowhere near
+   the element's middle: with the box w×h, the three corners land at
+   ±(w+h)/2·sin45 across and from (w−h)/2·sin45 to (w+h)/2·sin45 down, so the
+   ink's own centre sits w/2·sin45 BELOW the element's — w, not h, because the
+   two ends of the L are (w+h)/2·sin45 and (w−h)/2·sin45 from it and their mean
+   is w·sin45/2. For w=4 that is 1.41px, so the top offset is
+   (13 − 6.5)/2 − 1.41 and the left is the plain (13 − 4)/2: the ink is
+   horizontally symmetric about the element, only vertically is it not.
+   The arms are 4 and 6.5 rather than 5 and 8 because (w+h)·sin45 is the mark's
+   visible width — 9.2px in a 13px box was a tick that filled its slot next to
+   a 6px ring. At 4/6.5 it is 7.4, the ring's new diameter. */
 .chat-mention-card-tick[data-state="delivered"]::after {
-  left: 3.6px;
-  top: 3.5px;
-  width: 5px;
-  height: 8px;
-  border-right: 1.7px solid currentColor;
-  border-bottom: 1.7px solid currentColor;
+  left: 4.5px;
+  top: 1.84px;
+  width: 4px;
+  height: 6.5px;
+  border-right: 1.6px solid currentColor;
+  border-bottom: 1.6px solid currentColor;
   transform: rotate(45deg);
 }
 /* FAILED is grey, not red, and that is the channel's rule rather than this
@@ -692,24 +711,26 @@ button.chat-mention-card-head {
 .chat-mention-card-tick[data-state="failed"] {
   --state-hue: var(--status-dead);
 }
-/* An ✕, as two crossed rules on one element (the second is a linear-gradient, so
-   it needs no extra box). */
+/* An ✕, as two crossed rules on one box. Both bars are centred on the box's
+   centre (6.5, 6.5) — they were on (7.5, 7.8), a whole pixel right and 1.3
+   down, which is the same not-centred-in-its-slot fault as the tick. 8px of
+   bar at 45° is 6.8px of ink, the same optical size as the ring and the
+   tick. */
 .chat-mention-card-tick[data-state="failed"]::after {
-  left: 4px;
-  top: 7px;
-  width: 7px;
+  left: 2.5px;
+  top: 5.7px;
+  width: 8px;
   height: 1.6px;
   background: currentColor;
-  box-shadow: 0 0 0 0 transparent;
   transform: rotate(45deg);
   border-radius: 1px;
 }
 .chat-mention-card-tick[data-state="failed"]::before {
   content: "";
   position: absolute;
-  left: 4px;
-  top: 7px;
-  width: 7px;
+  left: 2.5px;
+  top: 5.7px;
+  width: 8px;
   height: 1.6px;
   background: currentColor;
   transform: rotate(-45deg);
@@ -729,19 +750,19 @@ button.chat-mention-card-head {
 .chat-mention-card-tick[data-state="awaiting"]::before {
   content: "";
   position: absolute;
-  left: 5.5px;
-  top: 3px;
+  left: 4px;
+  top: 2.7px;
   width: 5px;
-  height: 4px;
+  height: 3.8px;
   border: 1.6px solid currentColor;
   border-bottom: 0;
   border-radius: 3px 3px 0 0;
 }
 .chat-mention-card-tick[data-state="awaiting"]::after {
-  left: 6.8px;
-  top: 7px;
+  left: 5.7px;
+  top: 6.5px;
   width: 1.6px;
-  height: 4.5px;
+  height: 3.8px;
   background: currentColor;
   border-radius: 1px;
 }
@@ -751,8 +772,8 @@ button.chat-mention-card-head {
   --state-hue: var(--chat-faint);
 }
 .chat-mention-card-tick[data-state="done"]::after {
-  left: 5.5px;
-  top: 5.5px;
+  left: 4.5px;
+  top: 4.5px;
   width: 4px;
   height: 4px;
   border-radius: 50%;
