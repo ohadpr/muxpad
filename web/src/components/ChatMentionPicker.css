@@ -342,6 +342,27 @@ button.chat-mention-card-head {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+/* TWO LINES, HARD, until it is expanded. "Summary should be one single line,
+   max two hard limit, esp on mobile." A worker that writes four lines does not
+   get to spend four lines of a phone screen on them: the clamp is the card's
+   own guarantee, independent of whether the worker honoured the tool's "one
+   sentence". The rest is one tap away — the chevron, or anywhere on the card.
+   `-webkit-line-clamp` is the only cross-browser line clamp there is; it needs
+   the box model beside it, which is why those three declarations travel
+   together. */
+.chat-mention-card-body[data-clamp="true"] {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* The card is one big target now (see `openFromSurface`), so say so on hover
+   — a surface that acts on a click and never looks like it does is a trap the
+   second time. */
+.chat-mention-card[data-openable="true"] {
+  cursor: pointer;
+}
 
 .chat-mention-card-text {
   min-width: 0;
