@@ -276,3 +276,38 @@ describe('a zoomed image overflows the frame EVENLY', () => {
     expect(rule).toMatch(/place-content:\s*center/);
   });
 });
+
+describe('double-tap zooms once', () => {
+  it('ignores the dblclick the browser synthesizes from the same two taps', () => {
+    // Mobile Chrome fires touchstart/touchend ×2 and THEN a dblclick. Both
+    // paths toggled the zoom, so the second undid the first: measured 342px →
+    // 855px at the second touchend, back to 342px at the dblclick.
+    mount([IMG(1)]);
+    const img = document.querySelector('.chat-img-zoom') as HTMLImageElement;
+    const tap = () =>
+      act(() => {
+        const t = new Event('touchstart', { bubbles: true });
+        Object.defineProperty(t, 'touches', { value: [{ clientX: 10, clientY: 10 }] });
+        img.dispatchEvent(t);
+        const e = new Event('touchend', { bubbles: true });
+        Object.defineProperty(e, 'touches', { value: [] });
+        img.dispatchEvent(e);
+      });
+    tap();
+    tap();
+    expect(img.classList.contains('-zoomed')).toBe(true);
+    act(() => {
+      img.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    });
+    expect(img.classList.contains('-zoomed')).toBe(true);
+  });
+
+  it('a real double-click with no touch still zooms', () => {
+    mount([IMG(1)]);
+    const img = document.querySelector('.chat-img-zoom') as HTMLImageElement;
+    act(() => {
+      img.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    });
+    expect(img.classList.contains('-zoomed')).toBe(true);
+  });
+});
