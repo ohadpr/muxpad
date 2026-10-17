@@ -235,6 +235,21 @@ export function ChatMentionPill({
  * index, and an index that can only be followed by leaving the conversation is
  * the thing being complained about.
  */
+/**
+ * How long a worker ran, for the collapsed card's strip.
+ *
+ * Coarse on purpose: this is a glance, not a stopwatch. Seconds under a
+ * minute, whole minutes under an hour, and hours after that — a run that took
+ * 1h04m is a run that took an hour as far as this line is concerned.
+ */
+export function formatRunLength(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m`;
+  return `${Math.round(m / 60)}h`;
+}
+
 export function ChatMentionCard({
   chat,
   sub,
@@ -247,6 +262,7 @@ export function ChatMentionCard({
   work,
   expanded,
   anchorId,
+  lifecycle,
   onToggleExpanded,
   onOpen,
   onDismiss,
@@ -257,6 +273,15 @@ export function ChatMentionCard({
   /** Shows a dismiss ×. Only for a card that is the sole record of something —
    *  see the button. */
   onDismiss?: (() => void) | undefined;
+  /**
+   * THE WHOLE RUN, on a card that absorbed its own launch.
+   *
+   * A collapsed pair is the only record left of the launch, so the card says
+   * what the vanished one did: started, completed, and how long that took. A
+   * pair that did NOT collapse has its launch card still sitting up the log
+   * and gets none of this — the strip would be repeating it.
+   */
+  lifecycle?: { startedAt: number; endedAt: number } | undefined;
   /** The other chat is still on it: the same 10px mark as everywhere else. */
   working?: boolean | undefined;
   /**
@@ -453,6 +478,18 @@ export function ChatMentionCard({
           dir="auto"
         >
           {body}
+        </div>
+      ) : null}
+      {lifecycle ? (
+        <div className="chat-mention-card-life">
+          <span>started</span>
+          <span className="chat-mention-card-life-arrow" aria-hidden="true">
+            →
+          </span>
+          <span className="chat-mention-card-life-done">completed</span>
+          <span className="chat-mention-card-life-dur">
+            {formatRunLength(lifecycle.endedAt - lifecycle.startedAt)}
+          </span>
         </div>
       ) : null}
       {artifacts && artifacts.length > 0 ? (
