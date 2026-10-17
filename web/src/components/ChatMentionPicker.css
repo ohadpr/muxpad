@@ -542,7 +542,14 @@ button.chat-mention-card-head {
   letter-spacing: 0.05em;
   text-transform: uppercase;
   white-space: nowrap;
-  background: color-mix(in srgb, var(--state-hue) var(--status-chip-wash, 22%), transparent);
+  /* NO PILL. The wash is the hue at 22%, which is a VISIBLE grey behind
+     `started` and an invisible green behind `done` — so the pair read as a
+     chip and a bare word. "These two indicators still use a different style,
+     make them consistent once and for all."
+     One recipe for both now, and the only thing that differs between them is
+     the hue token: the glyph disc carries it at full strength, the word
+     carries it mixed into the ink. The card's own border is enough frame for
+     a nine-pixel label; a pill around it was a second box inside a box. */
   color: color-mix(in srgb, var(--state-hue) var(--status-ink-mix, 55%), var(--chat-fg));
 }
 /* An ANNOTATION, not a lifecycle state ("reported", "directed here"). Neutral on

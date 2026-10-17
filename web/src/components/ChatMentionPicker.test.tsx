@@ -195,19 +195,25 @@ describe('the card says what happened, in the app state language', () => {
     // the other a glyph reads as two unrelated objects.
     //
     // Both are answered by keeping the glyph — the hue is still the fastest
-    // read — and naming it `completed`, which is the reader's word for the
-    // worker rather than muxpad's word for the report.
+    // read — and naming it `done`, which is the reader's word for the worker
+    // rather than muxpad's word for the report, and the same word the rail
+    // uses for a finished chat.
+    //
+    // THE CHIP HAS NO PILL. The wash behind it was the hue at 22%: visible
+    // grey behind `started`, invisible green behind `done`, so the pair read
+    // as a chip and a bare word. One recipe for both, and only the hue
+    // differs.
     const out = html(
       <ChatMentionCard
         chat={{ name: 'biggest-files' }}
-        state="completed"
+        state="done"
         tone="delivered"
         onOpen={() => {}}
       />,
     );
     expect(out).toContain('chat-mention-card-tick');
     expect(out).toContain('data-state="delivered"');
-    expect(out).toContain('completed');
+    expect(out).toContain('done');
     // The old jargon is gone from the visible text, which is the half of the
     // first complaint that still stands.
     const visible = out.replace(/<span class="chat-mention-card-sr">[^<]*<\/span>/g, '');
@@ -217,7 +223,7 @@ describe('the card says what happened, in the app state language', () => {
   it('marks the other two lifecycle states the same way', () => {
     // These keep their own words: a crash is not a completion, and a chat that
     // left the live list some other way delivered nothing. Only `delivered`
-    // becomes `completed` (see spawnStateLabel).
+    // becomes `done` (see spawnStateLabel).
     for (const tone of ['failed', 'done'] as const) {
       const out = html(<ChatMentionCard chat={{ name: 'kid' }} state={tone} tone={tone} />);
       expect(out).toContain(`data-state="${tone}"`);
@@ -475,5 +481,32 @@ describe('a mention row says which workspace the chat is in', () => {
     expect(out.split('chat-mention-ws').length - 1).toBe(1);
     expect(out).toContain('Personal<');
     expect(out).not.toContain('chat-mention-under');
+  });
+});
+
+describe('the two lifecycle chips are one object', () => {
+  // "These two indicators still use a different style, make them consistent
+  // once and for all." They were: a visible grey pill behind `started`, and
+  // nothing behind `done` — the same 22% wash rule producing a chip in one
+  // case and a bare word in the other, because grey at 22% reads and green at
+  // 22% does not.
+  //
+  // One recipe now. The markup is identical and the ONLY difference between
+  // them is the hue token, which is what makes this checkable at all.
+  const started = html(<ChatMentionCard chat={{ name: 'kid' }} state="started" tone="started" />);
+  const done = html(<ChatMentionCard chat={{ name: 'kid' }} state="done" tone="delivered" />);
+
+  const shape = (out: string) =>
+    out
+      .replace(/data-state="[a-z]+"/g, 'data-state="X"')
+      .replace(/data-tone="[a-z]+"/g, 'data-tone="X"')
+      .replace(/>(started|done)</g, '>WORD<');
+
+  it('renders the same markup for both, hue aside', () => {
+    expect(shape(started)).toBe(shape(done));
+  });
+
+  it('gives each a glyph in the same slot', () => {
+    for (const out of [started, done]) expect(out).toContain('chat-mention-card-tick');
   });
 });
