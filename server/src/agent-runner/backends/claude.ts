@@ -148,7 +148,7 @@ export function reportToolDescription(): string {
   return [
     'State the RESULT of your work, for the chat that spawned you. This goes in that chat as your report — it is read by the agent coordinating you, not by a person.',
     'Say what you found or changed, and what it means for the work: the outcome, the evidence (a file, a PR, a number, a command), and anything the coordinator must decide. No greeting, no sign-off, no "as you can see" — write it as a finding, not as a message.',
-    'Under 800 characters. One paragraph is usually right; a worker that needs more has usually done two jobs.',
+    'ONE SENTENCE. The card that shows this in the other chat clamps to two lines and the rest is a tap away, so a second sentence is a second sentence nobody reads — put the detail in your chat, where they will land if they want it. A url counts as part of the sentence, not as an excuse for another one.',
     'Call it when you HAVE a result, not when you are finishing: it does not end your turn and it does not close anything. You may keep working afterwards, and if you learn something that changes the answer, call it again — the last statement before your work ends is the one delivered.',
     'If you never call it, muxpad summarises your transcript instead and the chat still gets something. This is the version that says what you meant.',
   ].join(' ');
@@ -881,7 +881,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
         .string()
         .min(1)
         .describe(
-          'The result, for the agent that spawned you: outcome, evidence, and anything they must decide. Under 800 characters, no greeting or sign-off.',
+          'The result, in ONE SENTENCE: outcome, the evidence (a number, a path, a url), and anything they must decide. No greeting, no sign-off, no second sentence.',
         ),
     },
     async (args) => {
