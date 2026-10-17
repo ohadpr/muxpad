@@ -16,6 +16,7 @@ import {
   attachmentExtForMime,
   imageExtForMime,
   isAgentLaunchTool,
+  parseCronMarker,
   subagentLabel,
   summarizeToolInput,
   withMentionContext,
@@ -4568,33 +4569,81 @@ export function ChatPane({
               // (`dropCardedDeliveries`), applied one layer earlier, because
               // the queue and the echo are what the reader sees FIRST.
               .filter((q) => !isDeliveryText(q.text))
-              .map((q) => (
-                <div key={q.id} className="chat-turn chat-turn-user chat-turn-queued">
-                  <div className="chat-queued-actions">
-                    <button
-                      type="button"
-                      className="chat-queued-edit"
-                      onClick={() => editQueued(q)}
-                      aria-label="Edit — restore to the composer"
-                      title="Queued — tap to edit before it sends"
-                    >
-                      <SvgRestore />
-                    </button>
-                    <button
-                      type="button"
-                      className="chat-queued-cancel"
-                      onClick={() => cancelQueued(q.id)}
-                      aria-label="Cancel this queued message"
-                      title="Cancel — remove before it sends"
-                    >
-                      ✕
-                    </button>
+              .map((q) => {
+                // ─── A WAITING JOB IS NOT A MESSAGE YOU TYPED ──────────────
+                // Everything in this queue used to render in the USER's slot:
+                // right-aligned, a dashed version of a sent bubble, with edit
+                // and cancel beside it. For a message you typed while the
+                // agent was busy that is exactly right — it IS your message,
+                // and it has not gone yet.
+                //
+                // A CRON FIRE is in the same queue and is none of those
+                // things. Nobody typed it, it is not addressed to anyone, and
+                // the row said only its name: a dashed pill reading
+                // `⏱ nightrun-plumbing-test` on the right-hand side with a
+                // restore arrow next to it. Reported as "this pending message
+                // as if I typed it is just weird — what is it, where is it
+                // coming from, what is it trying to say".
+                //
+                // So it gets the shape of the thing it is: the same quiet
+                // sysnote strip the transcript uses for a fire that already
+                // ran, saying in words what it is and what it is waiting for.
+                // `Edit` is gone with it — restoring a schedule's prompt into
+                // your composer is not an operation anybody wants — and
+                // `Cancel` becomes SKIP, which is what cancelling one fire of
+                // a repeating job actually does.
+                const fire = parseCronMarker(q.text);
+                if (fire) {
+                  return (
+                    <div key={q.id} className="chat-turn chat-turn-notice">
+                      <div className="chat-sysnote chat-sysnote-cron" title={q.text}>
+                        <span className="chat-sysnote-icon" aria-hidden="true">
+                          ⏱
+                        </span>
+                        <span className="chat-sysnote-text">
+                          <b>{fire.marker.name}</b> is queued — a scheduled job, waiting for this
+                          chat to finish
+                        </span>
+                        <button
+                          type="button"
+                          className="chat-sysnote-action"
+                          onClick={() => cancelQueued(q.id)}
+                          title="Skip this run — the schedule itself is unchanged"
+                        >
+                          Skip
+                        </button>
+                      </div>
+                    </div>
+                  );
+                }
+                return (
+                  <div key={q.id} className="chat-turn chat-turn-user chat-turn-queued">
+                    <div className="chat-queued-actions">
+                      <button
+                        type="button"
+                        className="chat-queued-edit"
+                        onClick={() => editQueued(q)}
+                        aria-label="Edit — restore to the composer"
+                        title="Queued — tap to edit before it sends"
+                      >
+                        <SvgRestore />
+                      </button>
+                      <button
+                        type="button"
+                        className="chat-queued-cancel"
+                        onClick={() => cancelQueued(q.id)}
+                        aria-label="Cancel this queued message"
+                        title="Cancel — remove before it sends"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                    <div className="chat-bubble chat-bubble-queued" dir="auto">
+                      <QueuedText text={q.text} onOpenImage={setOpenImage} />
+                    </div>
                   </div>
-                  <div className="chat-bubble chat-bubble-queued" dir="auto">
-                    <QueuedText text={q.text} onOpenImage={setOpenImage} />
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             {/* ── The composer's reserve, as a SIBLING ──────────────────────────
               The floating composer overlaps the scroller, so the log has to
               reserve its exact measured height or the last message hides behind
