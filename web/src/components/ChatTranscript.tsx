@@ -892,7 +892,10 @@ function ZoomableImage({
       onLoad={computeFit}
       // Size drives the zoom (browser re-rasterizes from source = sharp);
       // translate only pans. Before the image loads, fall back to the CSS
-      // fit (max 100%). transform-origin stays center so pan math holds.
+      // fit (max 100%). The pan clamp assumes the image is laid out CENTRED
+      // in the frame even when it overflows it — `.chat-img-frame` guarantees
+      // that with `place-content: center`; without it the right edge was
+      // unreachable.
       style={
         fit
           ? {
