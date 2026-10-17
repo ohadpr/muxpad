@@ -93,6 +93,7 @@ import {
   spawnLabel,
   spawnState,
   spawnStateLabel,
+  threadSpawnPairs,
   toMentionChats,
   withContentRows,
 } from '../lib/chat-mention';
@@ -3871,40 +3872,43 @@ export function ChatPane({
             other is "a request to it is in flight". Suppressing the spawn entry
             because of an unrelated later `@` would delete a piece of the record
             from the middle of the conversation. */}
-        {collapseSpawnPairs(
-          interleaveSpawnCards(
-            // Browser moments go in FIRST, as ordinary timed entries, so the
-            // spawn-card interleave — and the file it lives in — never has to
-            // know browsers exist. A browser opening and an agent getting stuck
-            // are two moments in the log, not a status light above it.
-            injectBrowserMoments(
-              items,
-              browserMoments,
-              (moment) => (
-                <BrowserCard
-                  key={`browser:${moment.profile}:${moment.at}:${moment.kind}`}
-                  moment={moment}
-                  onOpen={(mode) => openBrowser(moment.browser, mode, browserOpenIntent(moment))}
-                />
+        {threadSpawnPairs(
+          collapseSpawnPairs(
+            interleaveSpawnCards(
+              // Browser moments go in FIRST, as ordinary timed entries, so the
+              // spawn-card interleave — and the file it lives in — never has to
+              // know browsers exist. A browser opening and an agent getting stuck
+              // are two moments in the log, not a status light above it.
+              injectBrowserMoments(
+                items,
+                browserMoments,
+                (moment) => (
+                  <BrowserCard
+                    key={`browser:${moment.profile}:${moment.at}:${moment.kind}`}
+                    moment={moment}
+                    onOpen={(mode) => openBrowser(moment.browser, mode, browserOpenIntent(moment))}
+                  />
+                ),
+                // The same window floor the cards get — a browser opened before the
+                // oldest loaded message is not placeable either.
+                { floor: items.find((e) => e.at !== null)?.at ?? null },
               ),
-              // The same window floor the cards get — a browser opened before the
-              // oldest loaded message is not placeable either.
-              { floor: items.find((e) => e.at !== null)?.at ?? null },
+              spawnedCards,
+              // The window's lower edge, taken from the TRANSCRIPT rather than from
+              // the list above — which has browser moments in it by now, and a
+              // browser opening can be older than every message loaded. A card
+              // below this edge is not placeable until history pages back to its
+              // moment, UNLESS the server has said there is none earlier, in which
+              // case it genuinely predates the conversation and belongs at the
+              // head. See interleaveSpawnCards.
+              { hasMoreOlder, floor: items.find((e) => e.at !== null)?.at ?? null },
             ),
-            spawnedCards,
-            // The window's lower edge, taken from the TRANSCRIPT rather than from
-            // the list above — which has browser moments in it by now, and a
-            // browser opening can be older than every message loaded. A card
-            // below this edge is not placeable until history pages back to its
-            // moment, UNLESS the server has said there is none earlier, in which
-            // case it genuinely predates the conversation and belongs at the
-            // head. See interleaveSpawnCards.
-            { hasMoreOlder, floor: items.find((e) => e.at !== null)?.at ?? null },
+            // A LAUNCH WITH NOTHING AFTER IT IS NOT A SECOND ENTRY. The pair
+            // collapses into one card when the completion lands directly on
+            // its own launch — which is rare, because the spawning turn ends
+            // by saying it spawned something. So the pair that STAYS apart is
+            // threaded instead: each end points at the other.
           ),
-          // A LAUNCH WITH NOTHING AFTER IT IS NOT A SECOND ENTRY. The pair
-          // collapses into one card when the completion lands directly on its
-          // own launch; when the log moved on in between, both stay — the
-          // launch where it happened, the result where the reader is looking.
         ).map((x) => {
           if (x.kind === 'entry') return x.node;
           const kid = x.card.chat;
@@ -3967,6 +3971,7 @@ export function ChatPane({
                 // child is working the spinner wins the slot, which is the one
                 // state worth more than a word.
                 {...(state === 'working' ? {} : { state: 'started' })}
+                {...(x.thread ? { thread: x.thread } : {})}
                 onOpen={() => openChat(kid)}
               />
             );
@@ -4053,6 +4058,7 @@ export function ChatPane({
               {...(x.openedAt !== undefined
                 ? { lifecycle: { startedAt: x.openedAt, endedAt: x.card.at } }
                 : {})}
+              {...(x.thread ? { thread: x.thread } : {})}
               onOpen={() => openChat(kid)}
             />
           );
