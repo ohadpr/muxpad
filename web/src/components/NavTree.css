@@ -305,7 +305,31 @@
      different places — the rail has a 24px chip 16px in, the sheet a 20px emoji
      14px in. One set of rules, two sets of coordinates. */
   --nt-trunk-x: calc(var(--nt-pad) + var(--nt-indent) + var(--nt-chip) / 2);
-  --nt-tick-w: 24px;
+  /* WHERE A CHILD'S NAME LANDS, per surface — the group's other column, and
+     now a token because four separate rules have to agree on it: the child
+     row's own inset, the tick's length, the group head's caret and the agent
+     glyph beside it. Each of those was a literal, and they drifted: measured
+     on the live rail, the caret sat at 32, the glyph and the child name at 71,
+     the trunk at 28 and the parent name at 63 — four left columns inside one
+     family, which is what "I'd want some consistency in visual aspects" was
+     looking at.
+     On the rail it is now the SAME x as a parent's name: the child keeps the
+     full icon column (the elbow lands in it) and takes no extra step, so a
+     name is at one place in this list whoever's child it is. The sheet keeps
+     its 8px step — it has no icon column to hold the line, so the indent is
+     the only thing saying "under that one". */
+  --nt-child-name-x: calc(var(--nt-pad) + var(--nt-indent) + var(--nt-col-icon));
+  /* THE TRUNK'S INK, and it is a token because the line is now load-bearing:
+     with the child's indent gone it is the only thing saying "these are under
+     that one". 18% of the rail's ink reads as nothing on a tinted dark surface
+     and snaps to a 1px line at DPR 1 — "the lines don't look good". 26% holds
+     at both densities and is still quieter than the faintest text. */
+  --nt-trunk-ink: color-mix(in srgb, var(--fg) 26%, transparent);
+  /* The tick reaches to 8px short of that name, so the elbow points at the
+     label instead of stopping in empty space. It was a literal 24px chosen
+     when the child name was at 60 and is now the arithmetic, on both
+     surfaces — the one number that has to track two others cannot be typed. */
+  --nt-tick-w: calc(var(--nt-child-name-x) - var(--nt-trunk-x) - 8px);
   --nt-chip-radius: 8px;
   /* Floor for the meta cell, wide enough that `◷ 07:00` and `◷ Sun 09:00`
      right-align on the same digits instead of jittering row to row. A FLOOR,
@@ -394,9 +418,11 @@
    because the sheet's PANE rows are still built from them. */
 .navtree[data-variant="sheet"] {
   --nt-trunk-x: calc(var(--nt-rail-lead) + var(--nt-rail-emoji) / 2);
-  /* Shorter than the rail's: the sheet's name starts at 42 against the rail's
-     60, so the same 24px tick would run straight into the text. */
-  --nt-tick-w: 14px;
+  /* The sheet's own child-name column: this surface KEEPS its 8px step, so its
+     name lands at 14 + 8 + 20 + 8 = 50. --nt-tick-w is derived from it above
+     and needs no literal here — it was 14px, hand-tuned against a 24px rail
+     value that has since moved twice. */
+  --nt-child-name-x: calc(var(--nt-rail-lead) + 8px + var(--nt-rail-emoji) + var(--nt-rail-gap));
   --nt-rail-lead: 14px;
   --nt-rail-trail: 12px;
   --nt-rail-emoji: 20px;
@@ -1489,10 +1515,15 @@
    name. A child of a chat is exactly one level of the same hierarchy, so it
    costs the same. */
 .navtree[data-variant="sidebar"] .navtree-tab-row[data-child="true"] {
-  /* 8px past a normal row, not 12. A full second indent pushed the child far
-     enough right that it stopped reading as "under that one" and started
-     reading as its own column. */
-  padding-left: calc(var(--nt-pad) + var(--nt-indent) + 8px);
+  /* NO STEP AT ALL on this surface, which is the one thing here that looks
+     wrong written down and is right on screen. It was 8px (and a full indent
+     before that), and every value of it put a child's name on a different x
+     from its parent's — a fifth column in a group that already had four.
+     The child keeps the full icon column, so it is not the indent that says
+     "under that one": the ELBOW does, and it lands in that column, which is
+     exactly what the column is spent on. The name is then at one x for every
+     row in the rail. The sheet, which has no such column, keeps its step. */
+  padding-left: calc(var(--nt-pad) + var(--nt-indent));
   position: relative;
 }
 
@@ -1524,7 +1555,7 @@
   left: var(--nt-trunk-x);
   top: 0;
   bottom: 50%;
-  border-left: 1.5px solid color-mix(in srgb, var(--fg) 18%, transparent);
+  border-left: 1.5px solid var(--nt-trunk-ink);
 }
 /* The FIRST child in a run: start below the parent's edge, not at it. */
 .navtree .navtree-tab-row:not([data-child="true"]) + .navtree-tab-row[data-child="true"]::before {
@@ -1555,7 +1586,7 @@
      instead of stopping in empty space. The name lands at 60 and the trunk is
      at 28; 24px leaves an 8px breath before the text. */
   width: var(--nt-tick-w);
-  border-top: 1.5px solid color-mix(in srgb, var(--fg) 18%, transparent);
+  border-top: 1.5px solid var(--nt-trunk-ink);
 }
 
 /* NO BULLET. The child wore a dot in its mark column, from when the dot was the
@@ -1708,9 +1739,12 @@
    it a row's weight would put a seventh row in the list the collapse exists to
    shorten.
 
-   Its caret sits on the CHILD indent (--nt-pad + --nt-indent + 8px, the same
-   expression the child rows use), so a shut group reads as one shape: parent,
-   then the chip tucked under it. */
+   ITS CARET STANDS ON THE TRUNK, centred — half the 15px glyph back from
+   --nt-trunk-x. It used to sit on the child indent, which put it at 32 against
+   a trunk at 28: close enough to look like a mistake rather than a
+   relationship, and the line then descended from a point 4px to the caret's
+   left. One column now carries the caret, the trunk and every elbow, so an
+   open group is one vertical with a control at the top of it. */
 .navtree-subs-head {
   display: flex;
   align-items: center;
@@ -1725,7 +1759,7 @@
      for its controls and its state mark; this line has neither, and the box
      below needs every pixel it can get (it overflowed by 6.7px at --nt-pad).
      Measured: the enclosure lands 2px clear of the rail's edge. */
-  padding: 2px 2px 4px calc(var(--nt-pad) + var(--nt-indent) + 8px);
+  padding: 2px 2px 4px calc(var(--nt-trunk-x) - 7.5px);
   border: 0;
   background: none;
   font-family: inherit;
@@ -1751,11 +1785,13 @@
   display: inline-flex;
   align-items: center;
   /* THE STEP TO THE CHILD-NAME COLUMN, and it lives here because it belongs to
-     this one element: the caret ends at x=47 and a child's name starts at
-     x=68. The glyph stands on that column and the count follows it as part of
-     the same phrase. (The done head keeps the same 21px for the same reason —
-     its caret in the icon column, its label on the name column.) */
-  margin-left: 21px;
+     this one element: the glyph stands on that column and the count follows it
+     as part of the same phrase. Derived, not typed — the caret now ends at
+     --nt-trunk-x + 7.5 and the column is --nt-child-name-x, and both have
+     moved under this line twice. (The done head keeps a literal 21px: it is a
+     different control on a different column — its caret in the icon column,
+     its label on the name column.) */
+  margin-left: calc(var(--nt-child-name-x) - var(--nt-trunk-x) - 7.5px);
   margin-right: 5px;
   opacity: 0.75;
 }
