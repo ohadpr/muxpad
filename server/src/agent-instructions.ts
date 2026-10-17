@@ -506,6 +506,16 @@ had been handed a fleet it could not show.
 This holds however many you are starting, and it holds especially for the big
 fans-out, because that is when being able to watch matters most.
 
+**NAME A SUB-CHAT THE WAY YOU WOULD NAME A TASK TO A PERSON.** \`--name\` is what
+the rail shows, what the card in your own log says, and what you will scan a
+week from now. Two to four plain words naming the WORK and its subject —
+\`hacker news top story\`, \`audit billing retries\`, \`rename the pane store\`.
+Not an abbreviation only you can expand (\`hn-second\` was unreadable an hour
+later), not a single generic verb (\`check\`, \`review\`, \`fix\`), and not a
+sentence. If
+the subject has a proper name, use it in full: the point of the name is that it
+still means something to someone who was not in this conversation.
+
 **Do not relay the harness's own housekeeping.** Notices about MCP servers that
 need authorizing, connectors that are not signed in, or tools that are
 unavailable are infrastructure, not findings — and a worker that ends its
