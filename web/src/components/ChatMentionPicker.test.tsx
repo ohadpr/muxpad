@@ -181,37 +181,47 @@ describe('the card', () => {
  * expand button to show the archived sub-chat or something."
  */
 describe('the card says what happened, in the app state language', () => {
-  it('DRAWS A GREEN CHECKMARK, not the word `delivered`', () => {
-    // "first of all delivered needs to be replaced with a green checkmark."
-    // The word was the whole complaint: a finished worker is a tick, read in
-    // one glance, and a label in that slot is a thing you have to stop and read.
+  it('draws the GLYPH and says the word beside it — a pair needs both', () => {
+    // TWO COMPLAINTS, A YEAR APART, AND THIS IS WHAT SATISFIES BOTH.
+    //
+    // The first was about the WORD: "delivered needs to be replaced with a
+    // green checkmark" — muxpad's own jargon for a retirement reason, in the
+    // slot the rest of the app draws a mark in, said the same way every time.
+    // So the word went and the tick stayed.
+    //
+    // The second arrived once the LAUNCH card started carrying `started`:
+    // "why is the icon the same and not something telling me you are closing
+    // it, why not a label of 'completed'". A pair where one half is a word and
+    // the other a glyph reads as two unrelated objects.
+    //
+    // Both are answered by keeping the glyph — the hue is still the fastest
+    // read — and naming it `completed`, which is the reader's word for the
+    // worker rather than muxpad's word for the report.
     const out = html(
       <ChatMentionCard
         chat={{ name: 'biggest-files' }}
-        state="delivered"
+        state="completed"
         tone="delivered"
         onOpen={() => {}}
       />,
     );
     expect(out).toContain('chat-mention-card-tick');
     expect(out).toContain('data-state="delivered"');
-    // The word is no longer TEXT anywhere the eye reaches — measured with the
-    // screen-reader spans removed, which is the only way to tell "not rendered"
-    // from "rendered for a reader who cannot see the mark". (It survives as the
-    // mark's `title`, which is a hover, and as `data-state`, which is a hook.)
+    expect(out).toContain('completed');
+    // The old jargon is gone from the visible text, which is the half of the
+    // first complaint that still stands.
     const visible = out.replace(/<span class="chat-mention-card-sr">[^<]*<\/span>/g, '');
-    expect(visible).not.toMatch(/>[^<]*delivered/);
-    expect(visible).not.toContain('chat-mention-card-state');
-    // …and the mark is still NAMED, because a glyph with no name is a state a
-    // screen reader cannot read at all.
-    expect(out).toContain('<span class="chat-mention-card-sr">delivered</span>');
+    expect(visible).not.toMatch(/>[^<]*delivered</);
   });
 
   it('marks the other two lifecycle states the same way', () => {
+    // These keep their own words: a crash is not a completion, and a chat that
+    // left the live list some other way delivered nothing. Only `delivered`
+    // becomes `completed` (see spawnStateLabel).
     for (const tone of ['failed', 'done'] as const) {
       const out = html(<ChatMentionCard chat={{ name: 'kid' }} state={tone} tone={tone} />);
       expect(out).toContain(`data-state="${tone}"`);
-      expect(out).toContain(`<span class="chat-mention-card-sr">${tone}</span>`);
+      expect(out).toContain(tone);
     }
   });
 
@@ -305,7 +315,10 @@ describe('the card says it is waiting, and shows what it made', () => {
       <ChatMentionCard chat={{ name: 'cross-ws' }} state="awaiting" tone="awaiting" />,
     );
     expect(out).toContain('data-state="awaiting"');
-    expect(out).toContain('<span class="chat-mention-card-sr">awaiting</span>');
+    // The word is VISIBLE now, not only announced: the state chip carries its
+    // glyph and its name together, so the pair of cards reads in one
+    // vocabulary (see the checkmark test above).
+    expect(out).toContain('awaiting');
     // NOT the finished mark. That was the bug.
     expect(out).not.toContain('data-state="delivered"');
   });

@@ -506,6 +506,13 @@ had been handed a fleet it could not show.
 This holds however many you are starting, and it holds especially for the big
 fans-out, because that is when being able to watch matters most.
 
+**Do not relay the harness's own housekeeping.** Notices about MCP servers that
+need authorizing, connectors that are not signed in, or tools that are
+unavailable are infrastructure, not findings — and a worker that ends its
+report with "some connected tools need you to authorize them" has put a system
+message in a human's chat about work they asked for. Say it ONLY if it actually
+blocked the task, and then say which part of the task it blocked.
+
 **There is no second way to delegate, and that is deliberate.** Your harness's
 own in-process subagent tools are not offered to you here — they are removed
 from your context, so do not look for them and do not plan around them. One
