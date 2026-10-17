@@ -171,6 +171,29 @@ describe('retiring a sub-chat when it delivers', () => {
       expect(isDone(child.tab)).toBe(false);
     });
 
+    it('a STATED result retires at once — no quiet window to wait out', () => {
+      // "It was done almost instantly and it took the main chat 1-3 minutes to
+      // detect that." Measured: 98 seconds for work that took about ten, all
+      // of it the settle asking "is another turn coming?" — a question the
+      // worker had already answered by calling `report`.
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      const retirer = new ChatRetirer({ ...deps, statedReport: () => true });
+      // No settleNow() — the turn-end itself is the whole lifecycle now.
+      expect(retirer.onTurnEnded({ pane_id: child.pane, phase: 'done' })).toBe(true);
+      expect(isDone(child.tab)).toBe(true);
+    });
+
+    it('…and still refuses when something is actually running', () => {
+      // The shortcut skips the CLOCK, never a decision: a stated result from a
+      // worker with a command still going is a worker that is still going.
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      const retirer = new ChatRetirer({ ...deps, statedReport: () => true });
+      retirer.onTurnEnded({ pane_id: child.pane, phase: 'done', background: 1 });
+      expect(isDone(child.tab)).toBe(false);
+    });
+
     it('a BACKGROUND COMMAND still running — the turn ended, the work did not', () => {
       // The shape behind four results arriving 5h42m–7h51m late: the model
       // backgrounds a Bash call, the turn ends, the settle retires the worker —
