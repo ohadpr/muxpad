@@ -771,7 +771,69 @@ export function liveSpawnedChildren(
 }
 
 /** One thing the conversation draws: a rendered transcript entry, or a card. */
-export type LogEntry<T> = { kind: 'entry'; node: T } | { kind: 'card'; card: SpawnCard };
+export type LogEntry<T> =
+  | { kind: 'entry'; node: T }
+  | {
+      kind: 'card';
+      card: SpawnCard;
+      /**
+       * This completion card ABSORBED its own launch card, which was the entry
+       * immediately before it — see {@link collapseSpawnPairs}. The value is
+       * when that launch happened, so the card can say how long the worker
+       * took.
+       */
+      openedAt?: number;
+    };
+
+/**
+ * ONE CARD WHEN NOTHING HAPPENED IN BETWEEN.
+ *
+ * A worker draws two entries: the launch, at the moment you started it, and the
+ * completion, at the moment it finished. That is right when the two are far
+ * apart — a long job's result has to arrive where the reader is LOOKING, which
+ * in a log means a new entry at the bottom, and the launch stays up where it
+ * happened as the record that you started it.
+ *
+ * It is wrong when they are adjacent, which is the common case for a fast
+ * worker and the one that produced "one sub chat yielded three messages". Two
+ * cards with the same name stacked back to back, one of which says only that
+ * the other is about to exist, is a repetition rather than a history.
+ *
+ * So: a completion whose IMMEDIATELY PRECEDING entry is its own launch absorbs
+ * it. Same child, same round — a worker on its third job must not swallow the
+ * first job's launch. Anything at all between them (a message, a tool run,
+ * another card) and both stay, because then the launch is genuinely the record
+ * of a moment the log has since moved past.
+ *
+ * Pure, and applied after the interleave rather than inside it: the interleave
+ * is about WHERE a card goes, and this is about whether two of them are one
+ * thing — the same separation `spawnCards` keeps between identity and placement.
+ */
+export function collapseSpawnPairs<T>(list: readonly LogEntry<T>[]): LogEntry<T>[] {
+  const out: LogEntry<T>[] = [];
+  let changed = false;
+  for (const item of list) {
+    const prev = out.at(-1);
+    if (
+      item.kind === 'card' &&
+      item.card.kind === 'completion' &&
+      prev?.kind === 'card' &&
+      prev.card.kind === 'launch' &&
+      prev.card.chat.tabId === item.card.chat.tabId &&
+      // Same ROUND. Both ids are absent only for the legacy tab-level
+      // fallback, where a child has exactly one pair and matching on the child
+      // is the same statement.
+      prev.card.round?.id === item.card.round?.id
+    ) {
+      out.pop();
+      out.push({ ...item, openedAt: prev.card.at });
+      changed = true;
+      continue;
+    }
+    out.push(item);
+  }
+  return changed ? out : (list as LogEntry<T>[]);
+}
 
 /**
  * Place the spawn cards into the log, each at the moment its child started.
