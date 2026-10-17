@@ -74,7 +74,12 @@ describe('a cron fire previewed before its transcript line lands', () => {
     // of them went through the split. Asserted against the source because the
     // echo lives behind a live socket and a turn-start frame.
     const src = readFileSync(join(__dirname, 'ChatPane.tsx'), 'utf8');
-    const i = src.indexOf('{optimisticUser ? (');
+    // The echo now carries a guard of its own — a DELIVERY is never echoed as
+    // an outgoing message (see ChatPane.spawn.test.tsx) — so this looks for
+    // the block by its subject rather than by a literal that a second rule
+    // moved. The thing it is asserting is unchanged: whatever renders the
+    // echo must be `QueuedText`, because the raw text can begin with a marker.
+    const i = src.indexOf('{optimisticUser && !isDeliveryText(optimisticUser) ? (');
     expect(i).toBeGreaterThan(-1);
     // Slice to the block's own end, not a byte count — a fixed window silently
     // stops covering the thing it is checking the moment a comment is added,

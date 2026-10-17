@@ -4464,7 +4464,15 @@ export function ChatPane({
               </div>
             ) : null}
             {body}
-            {optimisticUser ? (
+            {/* A DELIVERY IS NOT AN OUTGOING MESSAGE. muxpad hands a worker's
+              result to this chat as a user-role message because that is the
+              only door into a harness transcript, and echoing it drew a
+              bubble on the RIGHT, in the reader's own voice, for the length
+              of the turn it started — "as if it's coming from me". The
+              transcript rows that replace it are the launch and completion
+              cards, which already say it. See `isDeliveryText`; the durable
+              queue's preview is filtered on the same rule below. */}
+            {optimisticUser && !isDeliveryText(optimisticUser) ? (
               <div className="chat-turn chat-turn-user">
                 <div className="chat-bubble" dir="auto">
                   {/* `QueuedText`, NOT `UserText`. This echo is the RAW outgoing
