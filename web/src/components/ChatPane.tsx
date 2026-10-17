@@ -3945,6 +3945,7 @@ export function ChatPane({
                 // there, a tick when it is back.
                 {...(state === 'working' ? {} : { state: 'started', tone: 'started' })}
                 {...(x.thread ? { thread: x.thread } : {})}
+                {...(x.pair ? { pair: x.pair } : {})}
                 onOpen={() => openChat(kid)}
               />
             );
@@ -4024,6 +4025,7 @@ export function ChatPane({
                 ? { lifecycle: { startedAt: x.openedAt, endedAt: x.card.at } }
                 : {})}
               {...(x.thread ? { thread: x.thread } : {})}
+              {...(x.pair ? { pair: x.pair } : {})}
               onOpen={() => openChat(kid)}
             />
           );

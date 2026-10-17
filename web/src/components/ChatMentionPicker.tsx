@@ -252,6 +252,55 @@ export function formatRunLength(ms: number): string {
 }
 
 /**
+ * WHICH CARD AT THE OTHER END — hover or focus one, and its partner lights up.
+ *
+ * The stubs already say a pair EXISTS. What they cannot say is which of the
+ * cards across a screenful of log is the other end, and on a fan-out there are
+ * several candidates in both directions. Colour per sub-chat was the obvious
+ * alternative and it loses: the hue on this card already means STATE (green
+ * done, red needs-you), a second hue channel on a 400px object means learning
+ * which colour means what, a categorical palette has to be re-stepped across
+ * six themes without colliding with the four status hues, and identity carried
+ * by colour alone fails a colourblind reader. A transient highlight costs no
+ * ink at rest, and it scales to a twenty-way fan-out where a palette would run
+ * out of distinguishable steps.
+ *
+ * ─── IMPERATIVE, AND DELIBERATELY SO ────────────────────────────────────────
+ * This sets an attribute on the DOM rather than lifting a `hoveredPair` into
+ * React state. The state would live in ChatPane, whose render is the WHOLE log
+ * — thousands of rows — so every pointer crossing a card would re-render all of
+ * it. The thing being changed is one attribute on at most two elements, and
+ * nothing about it needs to survive a render.
+ *
+ * The key is `tabId:roundId`; both are ULIDs or numbers, so it never needs
+ * escaping inside a quoted attribute selector.
+ */
+function highlightPair(pair: string, on: boolean): void {
+  if (typeof document === 'undefined') return;
+  for (const el of document.querySelectorAll(`[data-pair="${pair}"]`)) {
+    if (on) el.setAttribute('data-paired', 'true');
+    else el.removeAttribute('data-paired');
+  }
+}
+
+/**
+ * Pointer AND focus, because a keyboard reader needs the same answer — and
+ * `onFocus`/`onBlur` in React already bubble (they are focusin/focusout), so
+ * tabbing to the card's own open button lights the pair too.
+ */
+function pairProps(pair: string) {
+  const on = () => highlightPair(pair, true);
+  const off = () => highlightPair(pair, false);
+  return {
+    'data-pair': pair,
+    onPointerEnter: on,
+    onPointerLeave: off,
+    onFocus: on,
+    onBlur: off,
+  };
+}
+
+/**
  * OPENS SOMEWHERE ELSE — the one thing a label of words no longer says.
  *
  * The artifact row used to print the raw url, which carried its own notice:
@@ -306,6 +355,7 @@ export function ChatMentionCard({
   anchorId,
   lifecycle,
   thread,
+  pair,
   onToggleExpanded,
   onOpen,
   onDismiss,
@@ -331,6 +381,12 @@ export function ChatMentionCard({
    * `close`, so the two point at each other across whatever is between them.
    */
   thread?: 'open' | 'close' | undefined;
+  /**
+   * WHICH pair, shared by both ends — see `highlightPair`. Present exactly
+   * when `thread` is, because a key with only one end to find is a key for
+   * nothing.
+   */
+  pair?: string | undefined;
   /** The other chat is still on it: the same 10px mark as everywhere else. */
   working?: boolean | undefined;
   /**
@@ -454,6 +510,7 @@ export function ChatMentionCard({
       className={`chat-mention-card${body ? ' -report' : ''}`}
       {...(onOpen ? { onClick: openFromSurface, 'data-openable': 'true' } : {})}
       {...(thread ? { 'data-thread': thread } : {})}
+      {...(pair ? pairProps(pair) : {})}
       // THE PAIR IS ONE WORKER SEEN TWICE, so the two cards are one shape: the
       // sheet gives every spawn card the same width, whether or not it carries
       // a report. They were 379px and 560px — "why so wide", and the launch
