@@ -205,14 +205,17 @@ const RULE_LINES: readonly string[] = [
   '- Third person about the worker, or no subject at all. Never "I", "we" or "you".',
   '- Concrete. Name the actual numbers, files and findings; never "various improvements" or "several issues".',
   '- Report on the WORK, never on the log: no sentence about the transcript, the conversation, the session or yourself.',
-  '- If the worker wrote a file, saved a report or published a url, name that path or url in the last sentence, exactly as it appears in the transcript. Never invent one, never tidy one up, and say nothing about where the work is if the transcript does not say.',
+  '- NEVER write out a url or a file path. The card this report appears on already carries every link and path the worker produced, as its own row of pressable labels. A url in your sentence is the same thing twice, and it is the expensive copy: one spelled-out link fills the two lines the card has and the sentence is cut off mid-word.',
+  '- Say what the worker produced in WORDS instead: "published a demo page", "wrote the audit as a markdown file", "opened a pull request". Name the thing, not its address.',
   "- If a word in the transcript is unfamiliar, it is one of this person's own project or tool names. Use it as written, and never remark on it.",
   `- If the transcript shows NO work — it never started, it only asked a question, it is one greeting — your entire output is exactly: ${NOTHING}`,
 ];
 
 const EXAMPLE_LINES: readonly string[] = [
   'Example. For a session that was asked to find every TODO comment in a repository and answered with a count and a file it wrote, the entire correct output is:',
-  'Counted every TODO comment in the repo: 41 across 6 files, most of them in the cron scheduler. The list is at /tmp/todos.md.',
+  'Counted every TODO comment in the repo: 41 across 6 files, most of them in the cron scheduler. The full list was written out as a markdown file.',
+  '',
+  'Counter-example. The same report with the path spelled out — "The list is at /tmp/todos.md." — is WRONG however accurate the path is: the card links it already, and the characters come out of the sentence.',
 ];
 
 /**
@@ -470,7 +473,14 @@ export function parseSpawnReport(raw: string, conversation: string): ParsedSpawn
 export function scrapeArtifacts(conversation: string): string[] {
   const out: string[] = [];
   const add = (v: string) => {
-    const clean = v.replace(/[.,;:!?)\]}>'"]+$/, '');
+    // MARKDOWN IS NOT PART OF THE ADDRESS. A transcript that wrote the url in
+    // bold (`**https://…/demo/**`) was scraped with the asterisks attached, and
+    // they then rendered in front of the host rather than behind it — the link
+    // box used `direction: rtl` for its ellipsis, and the bidi algorithm puts
+    // trailing neutrals at the paragraph's left edge. Stripped on both ends,
+    // alongside the sentence punctuation that was already being stripped,
+    // because an address never begins or ends with emphasis.
+    const clean = v.replace(/^[*_`~]+/, '').replace(/[*_`~.,;:!?)\]}>'"]+$/, '');
     if (clean.length > 4 && !out.includes(clean)) out.push(clean);
   };
   // A published page. Loopback and the local server are not artifacts — they are

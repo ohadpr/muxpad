@@ -1,5 +1,6 @@
 import { fallbackTabIcon } from '@muxpad/shared';
 import { Fragment, type ReactNode } from 'react';
+import { artifactLabel } from '../lib/artifact-label';
 import type { MentionRow } from '../lib/chat-mention';
 import { snippetParts, splitHighlight } from '../lib/nav-search';
 import { ChatChip, type ChatChipChat, chatTooltip } from './ChatChip';
@@ -512,21 +513,26 @@ export function ChatMentionCard({
             /^https?:\/\//.test(a) ? (
               // `noreferrer` implies `noopener`; a published page is somebody
               // else's origin and must not get a handle on this window.
+              // WORDS, NOT THE URL. The summary above used to spell the same
+              // url out and clip the sentence doing it; the prompt no longer
+              // writes one, and this is the one place it appears. The full
+              // string is in `title` — a hover and a right-click-copy away.
               <a
                 key={a}
                 className="chat-mention-card-artifact"
                 href={a}
                 target="_blank"
                 rel="noreferrer"
+                title={a}
               >
-                {a.replace(/^https?:\/\//, '')}
+                {artifactLabel(a)}
               </a>
             ) : (
               // A local path is NOT a link: a browser cannot open it, and a
               // control that fails when pressed is worse than text. Shown as the
               // thing you would paste into a terminal.
-              <span key={a} className="chat-mention-card-artifact" data-path="true">
-                {a}
+              <span key={a} className="chat-mention-card-artifact" data-path="true" title={a}>
+                {artifactLabel(a)}
               </span>
             ),
           )}
