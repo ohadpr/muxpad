@@ -377,23 +377,38 @@ button.chat-mention-card-head {
    A stub, not a rail through the rows between: those are user bubbles, tool
    runs and prose with their own alignments, and threading a line through them
    would mean re-laying-out every row in the span for a decoration. */
+/* IT FADES AT THE FREE END. A stub of uniform colour stopping in mid-air reads
+   as a line that broke, not as one that carries on past what is between — "make
+   it fade out so it doesn't feel like a broken stem". A gradient says the same
+   thing the stub was always for and makes no claim about where it ends.
+   Full strength where it meets its card, nothing where it leaves. 14px rather
+   than 11 because a fade needs length to be a fade and not a soft edge. */
 .chat-mention-card[data-thread]::after {
   content: "";
   position: absolute;
   left: 6px;
   width: 2px;
-  height: 11px;
+  height: 14px;
   border-radius: 2px;
-  background: color-mix(in srgb, var(--chat-accent) 45%, transparent);
 }
 .chat-mention-card[data-thread="open"]::after {
-  bottom: -11px;
+  bottom: -14px;
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--chat-accent) 55%, transparent),
+    transparent
+  );
 }
 /* The closing end takes the state's hue rather than the accent: by then the
-   thread is not "this is live", it is "this is the end of that". */
+   thread is not "this is live", it is "this is the end of that". It fades the
+   other way — in from nothing, solid where it arrives. */
 .chat-mention-card[data-thread="close"]::after {
-  top: -11px;
-  background: color-mix(in srgb, var(--status-ready) 55%, transparent);
+  top: -14px;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    color-mix(in srgb, var(--status-ready) 65%, transparent)
+  );
 }
 .chat-mention-card[data-thread] {
   position: relative;
@@ -548,20 +563,41 @@ button.chat-mention-card-head {
   letter-spacing: 0.05em;
   text-transform: uppercase;
   white-space: nowrap;
-  /* NO PILL. The wash is the hue at 22%, which is a VISIBLE grey behind
-     `started` and an invisible green behind `done` — so the pair read as a
-     chip and a bare word. "These two indicators still use a different style,
-     make them consistent once and for all."
-     One recipe for both now, and the only thing that differs between them is
-     the hue token: the glyph disc carries it at full strength, the word
-     carries it mixed into the ink. The card's own border is enough frame for
-     a nine-pixel label; a pill around it was a second box inside a box. */
-  color: color-mix(in srgb, var(--state-hue) var(--status-ink-mix, 55%), var(--chat-fg));
+  /* ── THE PLATE, AND WHY IT CAME BACK ─────────────────────────────────────
+     It was removed because one recipe — `the hue at 22%` — produced two
+     different objects: a green that reads clearly and a GREY that reads as
+     nothing, so `done` wore a badge and `started` wore a bare word. Removing
+     it made them consistent and made them both flat: "both should have bg
+     color like before".
+     The fault was never the plate, it was keying its strength to a hue whose
+     chroma varies from "green" to "none". So the plate is a TOKEN now, with
+     the chromatic states taking the status wash and the achromatic one taking
+     a neutral mix of the card's own ink, which is the only thing a grey can
+     be visible against. Both are plates; neither depends on a grey having
+     colour it does not have. */
+  background: var(--state-plate);
+  color: var(--state-ink);
 }
-/* An ANNOTATION, not a lifecycle state ("reported", "directed here"). Neutral on
-   purpose — see the `tone` prop. It is the only thing left that draws a WORD. */
+/* The defaults, for a state with a real hue. Declared on the element that uses
+   them so a `[data-state]` rule can override either one. */
+.chat-mention-card-state {
+  --state-plate: color-mix(in srgb, var(--state-hue) var(--status-chip-wash, 22%), transparent);
+  /* GREENER THAN IT WAS. The ink was the hue at --status-ink-mix (50–55%),
+     which is half the state's colour and half the card's text — and half of a
+     green mixed into near-black ink is a grey-green that reads as "text with a
+     tint". 78% keeps it unmistakably the status colour while leaving enough of
+     the text ink to stay dark/light with the theme rather than floating off
+     it. Contrast against its own plate is measured in the sibling test. */
+  --state-ink: color-mix(in srgb, var(--state-hue) 78%, var(--chat-fg));
+}
+/* An ANNOTATION, not a lifecycle state ("reported", "directed here"). Neutral
+   on purpose — see the `tone` prop — and the one kind here that stays a bare
+   word: it is a remark about an exchange, not a badge on a worker, and a plate
+   would make it look like one. */
 .chat-mention-card-state[data-state="note"] {
   --state-hue: var(--chat-faint);
+  --state-plate: transparent;
+  --state-ink: var(--chat-faint);
 }
 
 /* ── The SUB-CHAT mark ────────────────────────────────────────────────────
@@ -658,9 +694,6 @@ button.chat-mention-card-head {
    is the SAME OBJECT as the completion chip: same box, same type, same glyph
    slot. A ring rather than a tick (nothing has come back yet) in the quiet ink
    rather than a state hue (nothing has happened yet). */
-.chat-mention-card-tick[data-state="started"] {
-  --state-hue: var(--chat-faint);
-}
 .chat-mention-card-tick[data-state="started"]::after {
   /* 7.4px, which is the INK WIDTH of the tick beside it — the two glyphs are
      sized to each other rather than each to the box, so neither reads as the
@@ -672,15 +705,49 @@ button.chat-mention-card-head {
   border: 1.6px solid currentColor;
   border-radius: 50%;
 }
+/* ── THE HUE, DECLARED ONCE PER STATE, ON THE CHIP ───────────────────────────
+   It used to be declared on the TICK, which is the chip's CHILD — so the chip
+   itself never had one, and `color: color-mix(…, var(--state-hue), …)` on it
+   was an invalid value that silently fell back to the inherited text colour.
+   That is why `DONE` was a black word beside a green mark: not a tuning
+   choice, a property that resolved to nothing. Custom properties inherit
+   DOWNWARD, so declaring it here gives both elements the same hue and removes
+   the second copy that could disagree.
+   Every hue here comes from the status channel and never from the accent or
+   the error colour, for the channel's own two reasons: it must not change hue
+   with the theme, and each theme re-tunes its error colour to fit its
+   palette. */
 .chat-mention-card-state[data-state="started"] {
   --state-hue: var(--chat-faint);
+}
+.chat-mention-card-state[data-state="delivered"] {
+  --state-hue: var(--status-ready);
+}
+.chat-mention-card-state[data-state="failed"] {
+  --state-hue: var(--status-dead);
+}
+.chat-mention-card-state[data-state="awaiting"] {
+  --state-hue: var(--status-blocked);
+}
+.chat-mention-card-state[data-state="done"] {
+  --state-hue: var(--chat-faint);
+}
+/* THE ACHROMATIC ONE. Its hue is a grey, so a wash OF that grey is invisible
+   on every surface this card sits on — the original bug. Its plate is a
+   neutral mix of the card's own ink instead, at the strength that makes a
+   boundary without making a highlight: the pair must read as two of the same
+   object, and one of them must not shout. `done` — archived, or decayed
+   without delivering — takes the same treatment for the same reason. */
+.chat-mention-card-state[data-state="started"],
+.chat-mention-card-state[data-state="done"] {
+  --state-plate: color-mix(in srgb, var(--chat-fg) 9%, transparent);
+  /* …and its ink stays mostly the text's: `started` is not a status, it is the
+     absence of one. */
+  --state-ink: color-mix(in srgb, var(--chat-faint) 55%, var(--chat-fg));
 }
 
 /* DELIVERED — the green the rail already uses for "finished, waiting for you",
    which is precisely what a worker's result is. */
-.chat-mention-card-tick[data-state="delivered"] {
-  --state-hue: var(--status-ready);
-}
 /* The checkmark: the short arm and the long arm of an L, rotated 45°.
    CENTRED BY THE INK, NOT BY THE BOX — which is why it looked low and off to
    one side ("checkmark icon in done is not centered in circle container"). An
@@ -708,9 +775,6 @@ button.chat-mention-card-head {
    sheet's taste: red means "you are needed", and a crashed worker needs nothing
    until you decide it does. --status-dead over --status-quiet because quiet is
    tuned to recede and a dead run still has to be findable. */
-.chat-mention-card-tick[data-state="failed"] {
-  --state-hue: var(--status-dead);
-}
 /* An ✕, as two crossed rules on one box. Both bars are centred on the box's
    centre (6.5, 6.5) — they were on (7.5, 7.8), a whole pixel right and 1.3
    down, which is the same not-centred-in-its-slot fault as the tick. 8px of
@@ -741,9 +805,6 @@ button.chat-mention-card-head {
    wants you NOW", and this is the same claim in a different container.
    Deliberately the loudest mark here: a worker holding a question is the only
    thing on a completion card that is not already over. */
-.chat-mention-card-tick[data-state="awaiting"] {
-  --state-hue: var(--status-blocked);
-}
 /* A question mark, drawn: the dot of one, and the hook above it as a rotated
    elbow. Two pseudo-elements, like every other mark here, so it takes
    currentColor and stays the same shape at any DPI. */
@@ -768,9 +829,6 @@ button.chat-mention-card-head {
 }
 /* DONE — archived, or decayed without ever delivering. A filled dot: the state
    with the least to tell you gets the mark with the least shape in it. */
-.chat-mention-card-tick[data-state="done"] {
-  --state-hue: var(--chat-faint);
-}
 .chat-mention-card-tick[data-state="done"]::after {
   left: 4.5px;
   top: 4.5px;

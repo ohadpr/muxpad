@@ -151,9 +151,44 @@ describe('started and done are one object', () => {
   });
 
   it('the only thing that differs between the states is the hue', () => {
+    // …and it is declared ONCE, on the CHIP, which is the tick's parent. It
+    // used to be declared on the tick itself — so the chip had no --state-hue
+    // of its own and its `color: color-mix(…, var(--state-hue), …)` was an
+    // invalid value that fell back to the inherited text colour. That is the
+    // whole reason `DONE` was a black word beside a green mark. Custom
+    // properties inherit downward; one declaration feeds both elements and
+    // there is no second copy to disagree.
     for (const state of ['started', 'delivered', 'failed', 'awaiting', 'done']) {
-      const body = rule(`.chat-mention-card-tick[data-state="${state}"]`);
+      const body = rule(`.chat-mention-card-state[data-state="${state}"]`);
       expect(body.replace(/\s/g, '')).toMatch(/^--state-hue:[^;]+;?$/);
+      // The tick must NOT redeclare it.
+      expect(CSS).not.toMatch(
+        new RegExp(`\\.chat-mention-card-tick\\[data-state="${state}"\\]\\s*\\{[^}]*--state-hue`),
+      );
     }
+  });
+
+  it('the pair both wear a PLATE, and neither plate is keyed to a grey', () => {
+    // The plate was removed because one recipe — the hue at 22% — made a
+    // visible green badge and an invisible grey one, so the two read as
+    // different objects. Removing it made them consistent and flat: "both
+    // should have bg color like before". The fault was keying a wash to a hue
+    // with no chroma, so the achromatic states take a NEUTRAL plate instead.
+    expect(rule('.chat-mention-card-state')).toMatch(/background:\s*var\(--state-plate\)/);
+    const neutral = rule(
+      '.chat-mention-card-state[data-state="started"],\n.chat-mention-card-state[data-state="done"]',
+    );
+    expect(neutral).toMatch(/--state-plate:[^;]*--chat-fg/);
+    expect(neutral).not.toMatch(/--state-plate:[^;]*--state-hue/);
+  });
+
+  it('DONE is green, not a tinted black', () => {
+    // "especially done should be greener." The ink was the hue at
+    // --status-ink-mix (50–55%) — half the status colour, half the card's own
+    // text — which on a near-black text ink is a grey-green. The status colour
+    // has to be the majority of it.
+    const m = /--state-ink:\s*color-mix\(in srgb,\s*var\(--state-hue\)\s*(\d+)%/.exec(CSS);
+    expect(m).not.toBeNull();
+    expect(Number(m?.[1])).toBeGreaterThanOrEqual(70);
   });
 });
