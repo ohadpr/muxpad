@@ -1,6 +1,6 @@
 import type { ChatEvent } from '@muxpad/shared';
 import { describe, expect, it } from 'vitest';
-import { dropCardedDeliveries } from './chat-voice';
+import { dropCardedDeliveries, isDeliveryText } from './chat-voice';
 
 /**
  * ONE FINISHED WORKER, ONE ROW TOO MANY.
@@ -58,5 +58,36 @@ describe('a delivery chip the cards already cover', () => {
     const input = [chip(['t9'])];
     expect(dropCardedDeliveries(input, new Set(['t1']))).toBe(input);
     expect(dropCardedDeliveries(input, new Set())).toBe(input);
+  });
+});
+
+describe('the echo and the queue render nothing for a delivery', () => {
+  // The chip appeared for a few seconds and then vanished: it was the
+  // OPTIMISTIC ECHO, and whether it drew depended on whether the child's card
+  // had landed yet — two different signals racing, with the answer changing
+  // under the reader.
+  //
+  // So the preview is unconditional, and the question "is this worth a row?"
+  // belongs to the row that persists (`dropCardedDeliveries`), where a capped
+  // fan-out still keeps its chip.
+  const delivery = [
+    '<muxpad-delivery count="1" from="t1">',
+    'Delivered by muxpad: 1 sub-chat you spawned has finished.',
+    '</muxpad-delivery>',
+    '',
+    '## hn-top',
+    '',
+    'HN #1: something',
+  ].join('\n');
+
+  it('recognises a delivery, whatever the cards know', () => {
+    expect(isDeliveryText(delivery)).toBe(true);
+  });
+
+  it('leaves a message a PERSON sent alone', () => {
+    expect(isDeliveryText('get me the top HN headline')).toBe(false);
+    // …including one that merely mentions the tag mid-sentence, which is the
+    // same rule `parseSpawnDelivery` has always had.
+    expect(isDeliveryText('why does <muxpad-delivery> leak?')).toBe(false);
   });
 });

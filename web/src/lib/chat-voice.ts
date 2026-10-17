@@ -414,18 +414,24 @@ export function fireTime(ts: number | null): string {
  * a child whose card was capped out.
  */
 /**
- * Is this raw outgoing text a delivery whose children all have cards?
+ * Is this raw outgoing text a DELIVERY — muxpad handing a worker's result to
+ * this chat — rather than something a person is sending?
  *
- * The QUEUE and the optimistic ECHO render the message before it is a
- * transcript event, so `dropCardedDeliveries` cannot reach them — and they are
- * what the reader sees first. Same question, asked of the text.
+ * The QUEUE and the optimistic ECHO render a message before it is a transcript
+ * event, and for a delivery they should render NOTHING. Not "nothing when the
+ * cards cover it", which is what this asked first and what produced a chip
+ * that appeared for a few seconds and then vanished: the card and the delivery
+ * arrive on two different signals (a `tab.updated` and a turn start), so
+ * whichever lands first decides, and the answer changes under the reader.
+ *
+ * Unconditional here is also correct on its own terms. The echo is transient
+ * by construction — the transcript event replaces it seconds later — so the
+ * question "is this worth a row?" belongs to the row that PERSISTS, and
+ * `dropCardedDeliveries` still asks it there, where a capped fan-out keeps its
+ * chip. A preview that is gone before it can be read is not a preview.
  */
-export function deliveryCovered(text: string, carded: ReadonlySet<string>): boolean {
-  if (carded.size === 0) return false;
-  const parsed = parseSpawnDelivery(text);
-  if (!parsed) return false;
-  const from = parsed.marker.from;
-  return from.length > 0 && from.every((id) => carded.has(id));
+export function isDeliveryText(text: string): boolean {
+  return parseSpawnDelivery(text) !== null;
 }
 
 export function dropCardedDeliveries(
