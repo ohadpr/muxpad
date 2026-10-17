@@ -562,11 +562,15 @@ describe('what the pass was NOT allowed to move', () => {
     ).toBe('start');
   });
 
-  it('a CHILD row steps one indent, and nothing else moves', () => {
-    // The child's mark is drawn in a box the width of the parent's chip
-    // (ChatChip.css), so the only thing separating a child row from a parent
-    // row is this one step — which is what puts every child name on one shared
-    // x while keeping the dot in the mark column.
+  it('a CHILD row takes NO step — the ELBOW says "under that one", not the indent', () => {
+    // This test used to pin an 8px step, and before that a full --nt-indent.
+    // Both were the same idea — move the name right so the eye reads a level —
+    // and on this surface the idea is wrong, because the rail ALREADY spends a
+    // 24px column on every child: the icon cell, kept precisely so the names
+    // line up, with the trunk's elbow landing inside it. An indent on top of
+    // that is a second statement of one fact, paid for with a fifth left
+    // column in a group that measured four (caret 32, trunk 28, parent name
+    // 63, child name 71).
     //
     // THIS TEST WAS INERT AND PASSING for three reviews: the rule is correct,
     // and `data-child="true"` was emitted on no element in the product, because
@@ -578,25 +582,61 @@ describe('what the pass was NOT allowed to move', () => {
       NAV_CSS,
       '.navtree[data-variant="sidebar"] .navtree-tab-row[data-child="true"]',
     );
-    //
-    // THE STEP IS NO LONGER A FULL INDENT. It was `--nt-indent * 2` — one whole
-    // step past a normal row — and reported as the child being "indented just
-    // too much": far enough right that it stopped reading as "under that one"
-    // and started reading as its own column. 8px instead, which is two thirds
-    // of the step and still unmistakably a step.
-    //
-    // Pinned as a RANGE rather than an expression, because the exact number is
-    // taste and will be tuned again. What must not drift is that a child is
-    // clearly indented and clearly less than a full level.
-    expect(decl(child, 'padding-left')).toBe('calc(var(--nt-pad) + var(--nt-indent) + 8px)');
     const parentLeft = resolve(
       side(decl(ruleBody(NAV_CSS, '.navtree-tab-row'), 'padding'), 'left'),
       BASE,
     );
-    const step = resolve(decl(child, 'padding-left'), BASE) - parentLeft;
-    const indent = resolve(BASE['--nt-indent'] as string, BASE);
-    expect(step).toBeGreaterThanOrEqual(6);
-    expect(step).toBeLessThan(indent);
+    expect(resolve(decl(child, 'padding-left'), BASE)).toBe(parentLeft);
+  });
+
+  it('…so every name in the rail lands on ONE x, parent or child', () => {
+    // The invariant the step was trading away, stated directly.
+    // --nt-child-name-x is the token the tick, the group head's caret and the
+    // agent glyph all derive from, so if this moves they move with it.
+    const parentLeft = resolve(
+      side(decl(ruleBody(NAV_CSS, '.navtree-tab-row'), 'padding'), 'left'),
+      BASE,
+    );
+    const parentName = parentLeft + resolve(BASE['--nt-col-icon'] as string, BASE);
+    expect(resolve(BASE['--nt-child-name-x'] as string, BASE)).toBe(parentName);
+  });
+
+  it('the caret, the trunk and every elbow stand on ONE column', () => {
+    // The other half of "consistency in visual aspects": a group that draws a
+    // vertical should draw it under the control that opens it. The caret is a
+    // 15px glyph, so its own left edge is half that back from the column.
+    const trunk = resolve(BASE['--nt-trunk-x'] as string, BASE);
+    const head = ruleBody(NAV_CSS, '.navtree-subs-head');
+    const caretLeft = resolve(side(decl(head, 'padding'), 'left'), BASE);
+    expect(caretLeft + 15 / 2).toBeCloseTo(trunk, 5);
+  });
+
+  it('the tick stops 8px short of the name it points at, by arithmetic', () => {
+    // It was a literal 24px, correct for a child name at 60 and wrong the
+    // moment that moved. Now it cannot disagree with the column it measures to.
+    const trunk = resolve(BASE['--nt-trunk-x'] as string, BASE);
+    const nameX = resolve(BASE['--nt-child-name-x'] as string, BASE);
+    expect(resolve(BASE['--nt-tick-w'] as string, BASE)).toBe(nameX - trunk - 8);
+  });
+
+  it('the agent glyph in the head stands on that same name column', () => {
+    const trunk = resolve(BASE['--nt-trunk-x'] as string, BASE);
+    const nameX = resolve(BASE['--nt-child-name-x'] as string, BASE);
+    const glyph = ruleBody(NAV_CSS, '.navtree-subs-glyph');
+    const caretEnd = trunk - 15 / 2 + 15;
+    expect(caretEnd + resolve(decl(glyph, 'margin-left'), BASE)).toBeCloseTo(nameX, 5);
+  });
+
+  it('the trunk is drawn in ONE ink, and it is the token', () => {
+    // With the indent gone the line is the only thing saying "under that one",
+    // so it is load-bearing and gets a name. 18% read as nothing on a tinted
+    // dark rail and snapped to a 1px line at DPR 1 — "the lines don't look
+    // good".
+    const trunkRule = ruleBody(NAV_CSS, '.navtree .navtree-tab-row[data-child="true"]::before');
+    const tickRule = ruleBody(NAV_CSS, '.navtree .navtree-tab-row[data-child="true"]::after');
+    expect(decl(trunkRule, 'border-left')).toContain('var(--nt-trunk-ink)');
+    expect(decl(tickRule, 'border-top')).toContain('var(--nt-trunk-ink)');
+    expect(BASE['--nt-trunk-ink']).toContain('26%');
   });
 });
 
