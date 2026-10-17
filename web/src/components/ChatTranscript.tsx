@@ -686,6 +686,8 @@ function ZoomableImage({
     startCX: 0,
     startCY: 0,
     lastTap: 0,
+    /** Any touchstart — tells a real double-click from a synthesized one. */
+    lastTouch: 0,
     swipeDX: 0,
   });
   const MAX = 5;
@@ -772,6 +774,7 @@ function ZoomableImage({
 
   const onTouchStart = (e: React.TouchEvent) => {
     const gs = g.current;
+    gs.lastTouch = Date.now();
     if (e.touches.length === 2) {
       const [a, b] = [e.touches[0], e.touches[1]];
       if (!a || !b) return;
@@ -910,7 +913,14 @@ function ZoomableImage({
       onTouchStart={onTouchStart}
       onTouchMove={onTouchMove}
       onTouchEnd={onTouchEnd}
-      onDoubleClick={(e) => toggleZoom(e.clientX, e.clientY)}
+      // A double-TAP is already handled in onTouchStart, and mobile Chrome then
+      // synthesizes a `dblclick` from the same two taps — measured on a 390px
+      // touch emulation: touchend at 855px wide, then dblclick, then back to
+      // 342px. The second toggle undid the first, so double-tap never zoomed.
+      onDoubleClick={(e) => {
+        if (Date.now() - g.current.lastTouch < 1000) return;
+        toggleZoom(e.clientX, e.clientY);
+      }}
       onMouseDown={onMouseDown}
     />
   );
