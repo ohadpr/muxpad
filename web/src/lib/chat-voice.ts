@@ -394,6 +394,44 @@ export function fireTime(ts: number | null): string {
  * than a tidy-up. A fire that wants to explain the failure in words uses
  * `muxpad say`, which also breaks it.
  */
+/**
+ * ONE FINISHED WORKER SHOULD NOT BE THREE ROWS.
+ *
+ * A sub-chat that ran and reported drew: a LAUNCH card, a COMPLETION card
+ * carrying its report, and a "⇤ 1 sub-chat reported" chip for the delivery that
+ * brought the same words into this chat. Reported as exactly that — "one sub
+ * chat yielded three messages" — and the third is the one with nothing of its
+ * own to say: the card above it already has the name, the state and the text.
+ *
+ * So the chip is dropped WHEN THE CARDS COVER IT, and kept when they do not.
+ * That is not a formality: spawn cards are capped (MAX_SPAWN_CARDS), so a big
+ * fan-out has children with no card at all, and for those this chip is the only
+ * thing in the log saying their result arrived.
+ *
+ * It drops only the CHIP. The delivery's body is a folded run either way
+ * (`expandSpawnDelivery`), so the full text stays one disclosure away even for
+ * a child whose card was capped out.
+ */
+export function dropCardedDeliveries(
+  events: readonly ChatEvent[],
+  carded: ReadonlySet<string>,
+): ChatEvent[] {
+  if (carded.size === 0) return events as ChatEvent[];
+  let changed = false;
+  const out = events.filter((e) => {
+    if (e.kind !== 'notice' || e.variant !== 'report') return true;
+    const from = e.from ?? [];
+    // No ids (an older transcript, before the delivery carried them) means we
+    // cannot prove the cards cover it — keep the chip. A silent drop on a
+    // guess is how a result goes missing from a log.
+    if (from.length === 0) return true;
+    if (!from.every((id) => carded.has(id))) return true;
+    changed = true;
+    return false;
+  });
+  return changed ? out : (events as ChatEvent[]);
+}
+
 export function dropSilentCardFires(events: readonly ChatEvent[]): ChatEvent[] {
   const drop = new Set<number>();
   for (let i = 0; i < events.length; i++) {

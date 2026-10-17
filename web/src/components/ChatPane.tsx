@@ -99,6 +99,7 @@ import {
   applyChatVoice,
   chatVoiceActive,
   coalesceCronFires,
+  dropCardedDeliveries,
   dropSilentCardFires,
   foldCronTurns,
   foldsAsActionRun,
@@ -2763,11 +2764,28 @@ export function ChatPane({
   // same events: the voice is about this PANE's mode, the fold is about a
   // SCHEDULE whose author said its output is plumbing — so the fold applies in
   // agent mode too, where the voice does not run at all.
+  /**
+   * Children whose COMPLETION card is on screen — the set that decides whether
+   * a delivery chip is saying anything the log does not already show.
+   *
+   * Completion only: a launch card says the work started, which is not the
+   * same claim as "its result is here".
+   */
+  const cardedChildren = useMemo(
+    () => new Set(spawnedCards.filter((c) => c.kind === 'completion').map((c) => c.chat.tabId)),
+    [spawnedCards],
+  );
   const voiced = useMemo(
     // …then ONE chip per quiet stretch rather than one per fire. Last, because
     // it has to see the result of the fold to know which stretches are silent.
-    () => coalesceCronFires(dropSilentCardFires(foldCronTurns(applyChatVoice(events, voiceOpts)))),
-    [events, voiceOpts],
+    () =>
+      coalesceCronFires(
+        dropCardedDeliveries(
+          dropSilentCardFires(foldCronTurns(applyChatVoice(events, voiceOpts))),
+          cardedChildren,
+        ),
+      ),
+    [events, voiceOpts, cardedChildren],
   );
 
   const jumpTerms = useMemo(() => (jump ? queryTerms(jump.query) : NO_TERMS), [jump]);
@@ -3925,6 +3943,21 @@ export function ChatPane({
                 // the clock chip a sub-chat has no use for — see the component.
                 mark="spawn"
                 working={state === 'working'}
+                // ─── SAY WHICH CARD THIS IS ──────────────────────────────────
+                // The two entries carry the same name, the same mark and the
+                // same shape, and once the work is over the launch card's
+                // spinner goes out — so the pair differed only by the
+                // COMPLETION having a tick and a chevron. Absence is not a
+                // signal: "I'd expect better visual indication that this card
+                // is agent launch, this card is agent done".
+                //
+                // A word in the slot the reader already scans, in the neutral
+                // `note` tone — this is an annotation about the log, not a
+                // lifecycle mark on the worker, and borrowing the tick's green
+                // would claim something this card does not know. While the
+                // child is working the spinner wins the slot, which is the one
+                // state worth more than a word.
+                {...(state === 'working' ? {} : { state: 'started' })}
                 onOpen={() => openChat(kid)}
               />
             );
