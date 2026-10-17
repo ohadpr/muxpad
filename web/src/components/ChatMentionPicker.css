@@ -357,6 +357,36 @@ button.chat-mention-card-head {
   overflow: hidden;
 }
 
+/* ── THE LIFECYCLE STRIP ─────────────────────────────────────────────────────
+   On a card that absorbed its own launch, and nowhere else. It carries what
+   the vanished card said — started, completed, how long — in the quietest
+   register on the card: uppercase micro-type, faint, above a hairline. It is
+   provenance, not news; the news is the report two lines above it. */
+.chat-mention-card-life {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px solid color-mix(in srgb, var(--chat-border-strong) 70%, transparent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--chat-faint);
+}
+.chat-mention-card-life-done {
+  color: color-mix(in srgb, var(--status-ready) 70%, var(--chat-fg));
+}
+/* The one thing here that is a VALUE rather than a label, so it drops the
+   uppercase and sits at the far end where a duration belongs. */
+.chat-mention-card-life-dur {
+  margin-left: auto;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 600;
+}
+
 /* The card is one big target now (see `openFromSurface`), so say so on hover
    — a surface that acts on a click and never looks like it does is a trap the
    second time. */
