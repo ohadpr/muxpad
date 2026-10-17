@@ -243,13 +243,20 @@ describe('the spawn cards and the roster read ONE list', () => {
     expect(launch).not.toContain('state=');
   });
 
-  it('gives the launch card a LABEL, a HANDLE and a SUB-CHAT MARK', () => {
-    // The cards read `status-line` and `cross-ws` — a dot, a slug and a spinner,
-    // and nothing else. "Sub chats need a more purposeful card, something more
-    // informative."
+  it('gives BOTH cards one line, the same line, and a sub-chat mark', () => {
+    // The cards read `status-line` and `cross-ws` — a dot, a slug and a
+    // spinner, and nothing else — so the launch gained the generated task line
+    // with the HANDLE under it. That second line then made the pair two
+    // different shapes: the glyph beside them centres on its head, and one
+    // head was two lines tall while the other was one. Reported as "the icon
+    // is not centred vertically always", which it was — on a block that
+    // differed between the cards.
+    //
+    // One line on both now, and it is the same expression on both. The handle
+    // is the rail's business, and the rail is two inches to the left.
     expect(BODY).toContain('mark="spawn"');
-    expect(BODY).toContain('name: spawnLabel(kid)');
-    expect(BODY).toContain('sub={spawnHandle(kid)}');
+    expect(BODY.match(/name: spawnLabel\(kid\)/g) ?? []).toHaveLength(2);
+    expect(BODY).not.toContain('spawnHandle');
   });
 
   it('NEVER PUTS THE HEADLINE UNDER THE NAME', () => {

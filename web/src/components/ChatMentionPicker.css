@@ -318,6 +318,12 @@
    around it already paints the card. */
 .chat-mention-card-head {
   display: flex;
+  /* CENTRED, AND EXACT — because the head is one line by construction: the
+     name is `nowrap` with an ellipsis and nothing sits under it any more.
+     The glyph looked off-centre because the LAUNCH card used to carry the
+     handle on a second line, so `center` was centring it on a two-line block
+     while its completion centred on one. One line on both, and this is right
+     again without a magic offset to maintain. */
   align-items: center;
   gap: 10px;
   min-width: 0;
