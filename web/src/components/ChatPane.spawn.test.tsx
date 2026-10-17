@@ -364,3 +364,24 @@ describe('a conversation asks for the corpus when it opens', () => {
     expect(SRC).toMatch(/useEffect\(\(\) => \{\s*\n\s*if \(needsCorpus\) ensureCorpus\(\);/);
   });
 });
+
+describe('a delivery is never echoed as an outgoing message', () => {
+  // It drew a bubble on the RIGHT, in the reader's own voice, for the length of
+  // the turn it started — "as if it's coming from me" — and then vanished when
+  // the transcript replaced it.
+  //
+  // ASSERTED AGAINST THE SOURCE, because the echo lives behind a live socket
+  // and a turn-start frame. That is also how this was missed once already: a
+  // patch replaced a string that was no longer there, silently, and the guard
+  // shipped on the queue preview but not on the echo. Both sites are checked
+  // here, so neither can drift alone again.
+  const SRC = readFileSync(join(__dirname, 'ChatPane.tsx'), 'utf8');
+
+  it('guards the OPTIMISTIC ECHO', () => {
+    expect(SRC).toContain('{optimisticUser && !isDeliveryText(optimisticUser) ? (');
+  });
+
+  it('guards the DURABLE QUEUE preview', () => {
+    expect(SRC).toContain('.filter((q) => !isDeliveryText(q.text))');
+  });
+});
