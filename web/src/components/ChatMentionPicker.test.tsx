@@ -344,8 +344,48 @@ describe('the card says it is waiting, and shows what it made', () => {
     expect(out).toContain('rel="noreferrer"');
     // A local path is not a link — there is nothing for a browser to open — so
     // it is shown as the text you would paste, not as a control that fails.
-    expect(out).toContain('/tmp/sidebar/cross-workspace.md');
+    // …and the LABEL is words now, not the url — the summary beside it used to
+    // spell the same string out and clip the sentence doing it.
+    expect(out).toContain('muxpad cross workspace');
+    expect(out).not.toContain('>https://x.test/muxpad-cross-workspace<');
+    // A local path is not a link — there is nothing for a browser to open — so
+    // it is shown as the text you would paste, not as a control that fails.
+    expect(out).toContain('cross-workspace.md');
     expect(out).not.toContain('href="/tmp/sidebar/cross-workspace.md"');
+  });
+
+  it('says a link LEAVES — with a mark, and out loud for a screen reader', () => {
+    // The raw url carried that notice for free: a string starting `https://` is
+    // visibly not a place in this app. A label of words does not, and the only
+    // thing left distinguishing it is the accent — which says "pressable", not
+    // "pressable, and the page goes away".
+    const out = html(
+      <ChatMentionCard
+        chat={{ name: 'cross-ws' }}
+        artifacts={['https://x.test/demo', '/tmp/out.md']}
+      />,
+    );
+    expect(out).toContain('chat-mention-card-ext');
+    expect(out).toContain('opens in a new tab');
+    // ONCE — for the link, and not for the path. Nothing opens for a path, so a
+    // mark promising it would is worse than none.
+    expect(out.match(/chat-mention-card-ext/g)).toHaveLength(1);
+    expect(out.match(/opens in a new tab/g)).toHaveLength(1);
+  });
+
+  it('…and the mark is OUTSIDE the part that truncates', () => {
+    // An icon inside the clipped run is the first thing an ellipsis eats, and
+    // it is the half carrying the warning. The label gets its own box; the mark
+    // is its sibling.
+    const out = html(
+      <ChatMentionCard chat={{ name: 'cross-ws' }} artifacts={['https://x.test/demo']} />,
+    );
+    const label = out.indexOf('chat-mention-card-artifact-label');
+    const ext = out.indexOf('chat-mention-card-ext');
+    expect(label).toBeGreaterThan(-1);
+    expect(ext).toBeGreaterThan(label);
+    // The ellipsis belongs to the label's own box, not the row's.
+    expect(out.slice(label, ext)).toContain('</span>');
   });
 
   it('shows the artifacts even with no summary at all', () => {
