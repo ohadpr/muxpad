@@ -275,11 +275,6 @@ describe('the spawn cards and the roster read ONE list', () => {
     // generated (`spawn_report`, 356 characters of it for `dead-css`) was on the
     // wire the whole time; the card has to be the thing that reads it.
     expect(BODY).toContain('body={spawnCardSummary(report)}');
-    // And the transcript is NOT a substitute for it: the fetched work is only
-    // ever reached for behind a report that earned the expander.
-    expect(BODY).toContain('const canExpand = canExpandSpawn(kid)');
-    expect(BODY).toContain('work={expanded ? <SpawnWorkBody');
-    expect(BODY).toContain('expanded={expanded}');
   });
 
   it('SHOWS WHERE THE WORK IS, and says something even with no summary', () => {
@@ -291,12 +286,16 @@ describe('the spawn cards and the roster read ONE list', () => {
     expect(BODY).toContain('body={spawnCardSummary(report)}');
   });
 
-  it('offers NO expander when there is nothing behind it', () => {
-    // Three report states in the wild — `ok`, `none`, and unset — and two of
-    // them have nothing to show. An expander over those fell through to the
-    // transcript, which is how the narration got on screen.
-    expect(BODY_FLAT).toContain('onToggleExpanded={ canExpand ?');
-    // …and the click-through survives either way.
+  it('offers NO EXPANDER AT ALL — the card is the way in', () => {
+    // It had one, behind a rule about which report states had something to
+    // show. A report is now the worker's own ONE SENTENCE (the `report` tool),
+    // so the card shows the whole thing: a caret there reveals nothing and
+    // charges the name its width on every card.
+    //
+    // What it used to open — the child's full final message — is what tapping
+    // the card gives you, in the chat where the rest of the work is too.
+    expect(BODY).not.toContain('onToggleExpanded');
+    expect(BODY).not.toContain('SpawnWorkBody');
     expect(BODY).toContain('onOpen={() => openChat(kid)}');
   });
 
@@ -315,19 +314,14 @@ describe('the spawn cards and the roster read ONE list', () => {
     expect(BODY).toContain('x.card.report ?? kid.report');
   });
 
-  it('keeps the expansion EPHEMERAL — a disclosure is not a preference', () => {
-    // Nothing persisted and nothing synced: opening a report on the phone must
-    // not open it on the desktop.
-    expect(SRC).toContain('useState<ReadonlySet<string>>(EMPTY_EXPANDED)');
-    expect(SRC).not.toMatch(/expandedReports[\s\S]{0,400}localStorage/);
-    // Keyed by the CARD, not the child. Child tab id was the only handle that
-    // could not move while a worker had one completion entry; since
-    // `spawn_rounds` it has one per round, and a set keyed by the tab opened
-    // every one of them from a single tap — twenty-seven boxes on the measured
-    // child, most of them above the reader. The work cache is also per card:
-    // each round in that transcript has a different final answer.
-    expect(SRC).toContain('next.add(anchorId)');
-    expect(SRC).toContain('reportWork.get(anchorId)');
+  it('keeps NO expansion state at all, now that there is no expansion', () => {
+    // This used to assert that the open/closed set was ephemeral and keyed by
+    // the card rather than by the child — both hard-won, and both moot: the
+    // disclosure is gone, so the state, the per-card keying and the fetched
+    // work cache went with it rather than sitting unused.
+    expect(SRC).not.toContain('EMPTY_EXPANDED');
+    expect(SRC).not.toContain('expandedReports');
+    expect(SRC).not.toContain('fetchSpawnWork');
   });
 
   it('cannot park the cards at the foot of the log again', () => {
