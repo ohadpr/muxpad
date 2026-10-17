@@ -308,6 +308,17 @@ export class SpawnReportWriter {
    * and a report belongs to a round. `onFinished` picks it up when the round
    * closes — which is also what makes "call it again if it changes" true.
    */
+  /**
+   * Has this worker STATED a result for the round it is in?
+   *
+   * Read by the retirement settle: a worker that said what it did, whose turn
+   * has ended with nothing still running, is finished — and waiting out a
+   * quiet window to discover that is pure latency.
+   */
+  hasStated(tabId: string): boolean {
+    return this.stated.has(tabId);
+  }
+
   state(tabId: string, text: string): void {
     const trimmed = text.trim();
     if (!trimmed) return;

@@ -597,6 +597,27 @@ export function spawnState(chat: MentionChat): SpawnState {
 }
 
 /**
+ * THE READER'S WORD for a finished worker, paired with the launch card's.
+ *
+ * The chip used to carry the state's own name. `delivered` is muxpad's word
+ * for what happened to the REPORT — it is the retirement reason — and next to a
+ * launch card reading `started` it named a different axis: started what,
+ * delivered what. The pair now reads started → completed, and the exceptions
+ * keep their own words because they are not completions:
+ *
+ *   failed    it crashed; "completed" would be a lie with a green tick on it
+ *   awaiting  it stopped to ask you something, which is the opposite of done
+ *   done      the chat left the live list some other way (archived, decayed) —
+ *             nothing was delivered, so it does not claim a completion
+ *
+ * The HUE and the glyph still come from the state. Only the label is the
+ * reader's.
+ */
+export function spawnStateLabel(state: SpawnState): string {
+  return state === 'delivered' ? 'completed' : state;
+}
+
+/**
  * Is there anything behind an expander on this child's completion card?
  *
  * Only a REPORT earns one. Three states exist in the wild at once — measured on
