@@ -882,7 +882,14 @@ button.chat-mention-card-head {
   gap: 3px;
 }
 .chat-mention-card-artifact {
+  /* A ROW, not a line of text: the label truncates and the external mark after
+     it does not. An icon inside the clipped run is the first thing an ellipsis
+     eats, and it is the half carrying "this leaves the app". */
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   max-width: 100%;
+  min-width: 0;
   font-size: 12.5px;
   /* WORDS, so the card's own face — it was monospaced when it printed a raw
      path, which was the right call for a thing you copy and the wrong one for
@@ -896,12 +903,30 @@ button.chat-mention-card-head {
      attached rendered with that punctuation in front of the host. A label made
      of words has no origin to lose and truncates from the right like every
      other piece of text on this card. */
+}
+/* The truncating half. */
+.chat-mention-card-artifact-label {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* THE MARK THAT SAYS IT LEAVES. One step quieter than the words — it is a
+   qualifier on the label, not a second thing to read — and it never shrinks,
+   because a flex item with text in it beside one without will otherwise give up
+   its width first. */
+.chat-mention-card-ext {
+  flex: 0 0 auto;
+  width: 11px;
+  height: 11px;
+  opacity: 0.7;
+}
+.chat-mention-card-artifact:hover .chat-mention-card-ext {
+  opacity: 1;
+}
 /* A local path is not pressable — there is nothing for a browser to open — so it
-   is ink rather than a link, and says so by being quiet. */
+   is ink rather than a link, and says so by being quiet. It gets NO external
+   mark for the same reason: nothing opens. */
 .chat-mention-card-artifact[data-path="true"] {
   color: var(--chat-dim);
 }

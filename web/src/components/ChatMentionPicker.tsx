@@ -251,6 +251,47 @@ export function formatRunLength(ms: number): string {
   return `${Math.round(m / 60)}h`;
 }
 
+/**
+ * OPENS SOMEWHERE ELSE — the one thing a label of words no longer says.
+ *
+ * The artifact row used to print the raw url, which carried its own notice:
+ * a string beginning `https://` is visibly not a place in this app. Now it
+ * reads `trayo plan card demo`, which looks exactly like every other piece of
+ * text on the card, and the only thing distinguishing it is the accent — a
+ * colour, which says "pressable" and not "pressable, and the page goes away".
+ *
+ * Drawn, like every other mark in this file and for the same reason: a glyph
+ * from a font lands differently in each theme's UI font and takes emoji
+ * presentation on some platforms. Two paths — a box missing its top-right
+ * corner, and the arrow leaving through the gap — which is the one shape for
+ * this that needs no legend.
+ *
+ * 11px, and the viewBox is 13 so the strokes land on whole units at that size.
+ * The sentence after it is for a screen reader, where the icon is invisible
+ * and `target="_blank"` is otherwise silent.
+ */
+function ExternalMark() {
+  return (
+    <>
+      <svg
+        className="chat-mention-card-ext"
+        viewBox="0 0 13 13"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M7.4 1.2h4.4v4.4" />
+        <path d="M11.8 1.2 6.6 6.4" />
+        <path d="M9.6 7.6v3.2a1 1 0 0 1-1 1H2.2a1 1 0 0 1-1-1V4.4a1 1 0 0 1 1-1h3.2" />
+      </svg>
+      <span className="chat-mention-card-sr">(opens in a new tab)</span>
+    </>
+  );
+}
+
 export function ChatMentionCard({
   chat,
   sub,
@@ -525,14 +566,19 @@ export function ChatMentionCard({
                 rel="noreferrer"
                 title={a}
               >
-                {artifactLabel(a)}
+                {/* THE LABEL IS THE ONLY THING THAT TRUNCATES. Its own box, so
+                    the mark after it survives an ellipsis — an icon inside the
+                    clipped run is the first thing to disappear, and it is the
+                    half that says what pressing this does. */}
+                <span className="chat-mention-card-artifact-label">{artifactLabel(a)}</span>
+                <ExternalMark />
               </a>
             ) : (
               // A local path is NOT a link: a browser cannot open it, and a
               // control that fails when pressed is worse than text. Shown as the
               // thing you would paste into a terminal.
               <span key={a} className="chat-mention-card-artifact" data-path="true" title={a}>
-                {artifactLabel(a)}
+                <span className="chat-mention-card-artifact-label">{artifactLabel(a)}</span>
               </span>
             ),
           )}
