@@ -348,9 +348,31 @@ export function ChatMentionCard({
       </span>
     </>
   );
+  /**
+   * THE WHOLE CARD IS THE TARGET, not just the name.
+   *
+   * "Make entire sub chat card clickable to take me to sub chat." The head was
+   * a button and the rest was dead space — on a phone that is a 36px strip of
+   * a 200px object, and the body is the part the thumb lands on.
+   *
+   * A click HANDLER on the div rather than a <button> around everything: the
+   * card contains a disclosure, artifact links and (expanded) a whole rendered
+   * message, and nesting those inside a button is invalid and breaks them. So
+   * anything interactive the click actually landed on wins, and bare card
+   * surface falls through to open. A text SELECTION never opens either —
+   * reading a report by dragging across it is not a tap.
+   */
+  const openFromSurface = (e: React.MouseEvent) => {
+    if (!onOpen) return;
+    const target = e.target as HTMLElement | null;
+    if (target?.closest('a, button, input, textarea, [role="button"]')) return;
+    if ((window.getSelection()?.toString().length ?? 0) > 0) return;
+    onOpen();
+  };
   return (
     <div
       className={`chat-mention-card${body ? ' -report' : ''}`}
+      {...(onOpen ? { onClick: openFromSurface, 'data-openable': 'true' } : {})}
       // THE PAIR IS ONE WORKER SEEN TWICE, so the two cards are one shape: the
       // sheet gives every spawn card the same width, whether or not it carries
       // a report. They were 379px and 560px — "why so wide", and the launch
@@ -423,7 +445,13 @@ export function ChatMentionCard({
         ) : null}
       </div>
       {body ? (
-        <div className="chat-mention-card-body" dir="auto">
+        // CLAMPED, and the clamp is the point — see the sheet. A report is one
+        // sentence; anything longer is read by opening the chat.
+        <div
+          className="chat-mention-card-body"
+          data-clamp={expanded ? undefined : 'true'}
+          dir="auto"
+        >
           {body}
         </div>
       ) : null}
