@@ -1477,7 +1477,7 @@ export function TabList({
    * hiding place:
    *
    *   · the parent's own mark wears the loudest state in the family while shut
-   *     (`rollupStatus`), so a blocked worker still reaches the glance; and
+   *     (`subsStatus`), so a blocked worker still reaches the glance; and
    *   · opening STICKS (`rail-folds`), so the chat you are actually sitting
    *     with is not re-collapsed by the next tab switch.
    *
@@ -1515,11 +1515,9 @@ export function TabList({
               ? {
                   ...subChatCounts(g.children),
                   open,
-                  // THE ROLLUP, ONLY WHILE SHUT — the rule this already had,
-                  // now carried by the pill instead of by a separate mark.
-                  // Expanded, the children have rows of their own and the
-                  // parent goes back to saying what it is doing itself.
-                  ...(open ? {} : { status: rollupStatus(g.chat.status, g.children) }),
+                  // ONLY WHILE SHUT. Expanded, the children have rows of their
+                  // own and their marks say it better than one roll-up can.
+                  ...(open ? {} : { status: subsStatus(g.children) }),
                   title: subChatChipTitle(g.children),
                   parentName: g.chat.name,
                   onToggle: () => toggleSubs(g.chat.id),
@@ -1811,7 +1809,7 @@ interface TabRowProps {
    * The state mark to draw INSTEAD of this tab's own.
    *
    * Set on a parent whose sub-chats are collapsed, where it carries the
-   * loudest state in the family (see `rollupStatus`). Absent everywhere else,
+   * loudest state among its children (see `subsStatus`). Absent everywhere else,
    * and absent means "draw your own" — an override that defaulted to the
    * rolled-up value would make every row's mark depend on a list the row
    * cannot see.
@@ -2070,25 +2068,32 @@ const STATUS_RANK: Record<PaneStatus, number> = {
   idle: 0,
 };
 
-export function rollupStatus(
-  own: PaneStatus | undefined,
-  children: readonly Tab[],
-): PaneStatus | undefined {
+/**
+ * THE LOUDEST STATE AMONG THE CHILDREN — and ONLY the children.
+ *
+ * It used to take the parent's own state too (`rollupStatus(own, children)`),
+ * which was right while this fed the parent ROW's mark: that mark is about the
+ * row, and a collapsed group had no other way to surface a blocked worker.
+ *
+ * The pill is not the row. It counts sub-chats, it names sub-chats in its
+ * title, and it opens sub-chats — so a hue taken from the PARENT makes one
+ * object say two things about two different subjects. Measured on the live
+ * rail at 03:48, with one worker finished and this chat mid-turn:
+ *
+ *   data-state="working"   title="1 sub-chat (1 ready)"
+ *
+ * The dot said the parent was working, the words said the child was ready, and
+ * a reader has no way to know which half is about what. The parent's own state
+ * goes back to the row's own mark, where it has always belonged; this answers
+ * only "what are the workers doing".
+ */
+export function subsStatus(children: readonly Tab[]): PaneStatus | undefined {
   let loudest: PaneStatus = 'idle';
   for (const k of children) {
     const s = k.status ?? 'idle';
     if (STATUS_RANK[s] > STATUS_RANK[loudest]) loudest = s;
   }
-  // Blocked outranks the parent itself: somebody is stopped on a question, and
-  // nothing the parent is doing is more urgent than that.
-  if (loudest === 'blocked') return 'blocked';
-  // Otherwise the parent KEEPS ITS OWN STATE. A pure rank over the family
-  // swallowed the commonest shape there is: a coordinator that finished its
-  // turn and is waiting on you, with workers still running, showed a spinner
-  // and never said `ready` — its own completion hidden by its children's
-  // activity. The chip says "2 running" either way, so nothing is lost.
-  if (own && own !== 'idle') return own;
-  return loudest === 'idle' ? own : loudest;
+  return loudest === 'idle' ? undefined : loudest;
 }
 
 /**
@@ -2859,11 +2864,9 @@ function TabRow({
           {/* Outside the link, as everywhere else: its visually-hidden state
               text would otherwise join the link's ACCESSIBLE NAME and rename
               the control every time an agent started or stopped.
-              Suppressed while a shut group's pill is carrying the rollup —
-              see the desktop row for why the two were one fact twice. */}
-          {group && !group.open ? null : (
-            <StateChip status={tab.status} mode="mark" className="navtree-rail-mark" />
-          )}
+              ALWAYS DRAWN — see the desktop row for why suppressing it beside
+              a pill made one object speak for two subjects. */}
+          <StateChip status={tab.status} mode="mark" className="navtree-rail-mark" />
         </span>
       ) : null}
       {overlays}
@@ -3102,12 +3105,15 @@ function TabRow({
             deliberately: agent panes work quietly for minutes on their chat
             face, and the one chat whose progress you are actually waiting on
             must not be the single row that goes dark.
-            THE PILL TAKES ITS PLACE WHILE A GROUP IS SHUT. They were two
-            drawings of one fact: this mark carried `rollupStatus` — the
-            loudest state among the children — a few pixels from a chip
-            counting those same children. Open, the children draw their own
-            marks and this comes back to say what the PARENT is doing. */}
-      {!isEditing && !(group && !group.open) && <RowMark status={tab.status} />}
+            IT IS ALWAYS THIS ROW'S OWN STATE, and it is always drawn. It was
+            suppressed while a shut group's pill was present, back when the
+            pill carried `rollupStatus` — the parent's state folded together
+            with its children's. That made one object speak for two subjects
+            and produced a pill whose dot said `working` (the parent) beside a
+            title saying `1 ready` (the child). The pill answers for the
+            workers now; this answers for the chat, and the two no longer
+            overlap. */}
+      {!isEditing && <RowMark status={tab.status} />}
       {overlays}
     </div>
   );

@@ -1,6 +1,6 @@
 import { CHAT_DECAY_DAYS, type Tab, chatClock } from '@muxpad/shared';
 import { describe, expect, it } from 'vitest';
-import { doneChatCount, groupChats, rollupStatus, subChatChip, subChatChipTitle } from './NavTree';
+import { doneChatCount, groupChats, subChatChip, subChatChipTitle, subsStatus } from './NavTree';
 
 const DAY = 86_400_000;
 const NOW = 1_700_000_000_000;
@@ -329,50 +329,46 @@ describe('a grandchild lists under the root, not into a hole', () => {
  * the same reason `groupChats` is: a rule about what you can see must not be
  * checked by eye.
  */
-describe('rollupStatus', () => {
+describe('subsStatus — the pill answers for the WORKERS, not for the chat', () => {
   const kid = (status?: Tab['status']) => tab(`k-${status ?? 'idle'}`, { spawned_by: 'a', status });
 
-  it("wears the loudest state in the family, not the parent's", () => {
-    expect(rollupStatus('idle', [kid('blocked')])).toBe('blocked');
-    expect(rollupStatus('idle', [kid('ready')])).toBe('ready');
+  it('IGNORES the parent entirely, which is the whole correction', () => {
+    // It used to take the parent's own state too, and that was right while it
+    // fed the parent ROW's mark. The pill is not the row: it counts sub-chats,
+    // names sub-chats in its title and opens sub-chats, so a hue from the
+    // parent makes one object say two things about two subjects.
+    //
+    // Measured on the live rail at 03:48, one worker finished and the chat
+    // mid-turn:  data-state="working"  title="1 sub-chat (1 ready)".  The dot
+    // was about the parent, the words about the child, and nothing told the
+    // reader which was which.
+    expect(subsStatus([kid('ready')])).toBe('ready');
+    expect(subsStatus([kid()])).toBeUndefined();
   });
 
-  it('ranks blocked above everything — somebody is waiting on a human', () => {
-    expect(rollupStatus('working', [kid('blocked')])).toBe('blocked');
-    expect(rollupStatus('idle', [kid('working'), kid('blocked'), kid('ready')])).toBe('blocked');
+  it('wears the loudest state among them', () => {
+    expect(subsStatus([kid('blocked')])).toBe('blocked');
+    expect(subsStatus([kid('working'), kid('blocked'), kid('ready')])).toBe('blocked');
   });
 
   it('ranks working above ready, so a shut group is never still while work runs', () => {
     // "A still rail means nothing is running" is a claim about the WHOLE rail;
     // a collapsed family with a turn inside it cannot be the exception.
-    expect(rollupStatus('idle', [kid('ready'), kid('working')])).toBe('working');
+    expect(subsStatus([kid('ready'), kid('working')])).toBe('working');
   });
 
-  it("keeps the parent's own state when the children have nothing to say", () => {
-    expect(rollupStatus('working', [kid(), kid()])).toBe('working');
-    expect(rollupStatus('blocked', [kid('ready')])).toBe('blocked');
+  it('ranks dead below ready — findable, not shouting', () => {
+    expect(subsStatus([kid('ready'), kid('dead')])).toBe('ready');
+    expect(subsStatus([kid('dead')])).toBe('dead');
   });
 
-  it("does not let a running child swallow the parent's own READY", () => {
-    // The commonest shape in a fan-out: the coordinator finishes its turn and
-    // is waiting on you while its workers run on. A pure rank over the family
-    // showed a spinner and never said `ready` — the parent's completion hidden
-    // by its children's activity, which is the one thing the row is being
-    // asked about. The chip still says "2 running".
-    expect(rollupStatus('ready', [kid('working'), kid('working')])).toBe('ready');
-  });
-
-  it('…but a blocked child still outranks the parent, whatever it is doing', () => {
-    expect(rollupStatus('ready', [kid('blocked')])).toBe('blocked');
-    expect(rollupStatus('working', [kid('blocked')])).toBe('blocked');
-  });
-
-  it('stays undefined for an idle parent with idle children — no mark at all', () => {
-    // RowMark drops the element entirely for idle, which is what keeps the
-    // majority of rows from paying for a gutter. A rollup that returned 'idle'
-    // instead of undefined would be the same pixel, but it would also mean
-    // every row in the rail had an opinion about its state.
-    expect(rollupStatus(undefined, [kid(), kid()])).toBeUndefined();
+  it('stays undefined when every worker is idle — the pill goes quiet', () => {
+    // The quiet form is what `[data-state="idle"]` styles: the rail's own ink
+    // rather than a status hue, because "nothing is happening" is not a state
+    // the status channel owns. Returning 'idle' would be the same pixel and a
+    // different claim.
+    expect(subsStatus([kid(), kid()])).toBeUndefined();
+    expect(subsStatus([])).toBeUndefined();
   });
 });
 
