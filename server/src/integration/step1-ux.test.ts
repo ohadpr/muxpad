@@ -29,7 +29,34 @@ import { attachWsServer } from '../ws.js';
 const SID = '11111111-2222-3333-4444-555555555555';
 const settle = (ms = 250) => new Promise((r) => setTimeout(r, ms));
 
-describe('Step 1 e2e — agent modes + the living sidebar', () => {
+/**
+ * WHY THIS FILE DECLARES ITS OWN BUDGET.
+ *
+ * Five of eleven tests here failed for weeks, always by timing out at ~5.3s and
+ * always the LATER ones, which reads exactly like flake. It is not. Every test
+ * creates a tab whose pane is a REAL pty on the in-process ptyd, and those
+ * panes live for the whole file — so each test pays for every pane the tests
+ * before it left running. Instrumented across one run, the time to create one
+ * tab:
+ *
+ *     test 1 →   19ms      test 6  → 1622ms
+ *     test 2 →    8ms      test 7  → 2045ms
+ *     test 3 →  605ms      test 8  → 2073ms
+ *     test 4 → 1133ms      test 9  → 2062ms
+ *     test 5 → 1634ms      test 10 → 1780ms
+ *
+ * A hundredfold, with no socket left open — the first guess, and the numbers
+ * above were taken with every socket closed per test, which is what ruled it
+ * out. Two such calls plus their settles no longer fit in vitest's DEFAULT 5s,
+ * and 5s was never a judgement about this file; it is the number you get for
+ * not saying one.
+ *
+ * So it says one. The alternative — tearing every pane down between tests —
+ * is a bigger change to a file that is correct, and it would also stop
+ * exercising the thing this file is for: a living instance that accumulates
+ * state the way a real one does.
+ */
+describe('Step 1 e2e — agent modes + the living sidebar', { timeout: 20_000 }, () => {
   let server: ServerType;
   let port: number;
   let tmp: string;
