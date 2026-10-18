@@ -601,14 +601,39 @@ describe('what the pass was NOT allowed to move', () => {
     expect(resolve(BASE['--nt-child-name-x'] as string, BASE)).toBe(parentName);
   });
 
-  it('the caret, the trunk and every elbow stand on ONE column', () => {
-    // The other half of "consistency in visual aspects": a group that draws a
-    // vertical should draw it under the control that opens it. The caret is a
-    // 15px glyph, so its own left edge is half that back from the column.
-    const trunk = resolve(BASE['--nt-trunk-x'] as string, BASE);
-    const head = ruleBody(NAV_CSS, '.navtree-subs-head');
-    const caretLeft = resolve(side(decl(head, 'padding'), 'left'), BASE);
-    expect(caretLeft + 15 / 2).toBeCloseTo(trunk, 5);
+  it('the group head has no row of its own to align — it is a PILL now', () => {
+    // This used to assert the head's caret stood on the trunk, 15/2 back from
+    // --nt-trunk-x, so an open group read as one vertical with a control at
+    // the top of it. The control moved onto the PARENT's row: the caret, the
+    // agent glyph, the total and the breakdown cost a whole row of a 240px
+    // rail (a 40px band on the phone) for a group that is usually one or two
+    // children — "it feels like we're just wasting space now".
+    // So the alignment this guarded no longer exists, and what replaces it is
+    // that the rule does not either: a stylesheet keeping a dead selector is
+    // how a layout grows a second answer to one question.
+    expect(NAV_CSS).not.toMatch(/\.navtree-subs-head\b/);
+    expect(NAV_CSS).not.toMatch(/\.navtree-subs-(?:glyph|total|detail|noun)\b/);
+  });
+
+  it('the pill is a status object, and takes the channel’s own wash', () => {
+    // A pill and a state mark of the same state must be the same colour on
+    // every theme, which is the status channel's whole rule — see styles.css.
+    // It names no colour of its own and no theme-tuned accent.
+    const pill = ruleBody(NAV_CSS, '.navtree-subs-pill');
+    expect(decl(pill, 'background')).toContain('--status-chip-wash');
+    expect(decl(pill, 'background')).toContain('--pill-hue');
+    for (const state of ['working', 'ready', 'blocked', 'dead']) {
+      const body = ruleBody(NAV_CSS, `.navtree-subs-pill[data-state="${state}"]`);
+      expect(body.replace(/\s/g, '')).toBe(`--pill-hue:var(--status-${state});`);
+    }
+    expect(pill).not.toMatch(/#[0-9a-f]{3,8}\b/i);
+    expect(pill).not.toMatch(/--accent|--danger/);
+  });
+
+  it('…and it sits one CONTENT gutter from whatever precedes it', () => {
+    // The row's own scale, not a number of its own: --nt-gutter is the step
+    // between two content columns, and the pill is one.
+    expect(decl(ruleBody(NAV_CSS, '.navtree-subs-pill'), 'margin-left')).toBe('var(--nt-gutter)');
   });
 
   it('the tick stops 8px short of the name it points at, by arithmetic', () => {
@@ -617,32 +642,6 @@ describe('what the pass was NOT allowed to move', () => {
     const trunk = resolve(BASE['--nt-trunk-x'] as string, BASE);
     const nameX = resolve(BASE['--nt-child-name-x'] as string, BASE);
     expect(resolve(BASE['--nt-tick-w'] as string, BASE)).toBe(nameX - trunk - 8);
-  });
-
-  it('the agent glyph in the head stands on that same name column', () => {
-    const trunk = resolve(BASE['--nt-trunk-x'] as string, BASE);
-    const nameX = resolve(BASE['--nt-child-name-x'] as string, BASE);
-    const glyph = ruleBody(NAV_CSS, '.navtree-subs-glyph');
-    const caretEnd = trunk - 15 / 2 + 15;
-    expect(caretEnd + resolve(decl(glyph, 'margin-left'), BASE)).toBeCloseTo(nameX, 5);
-  });
-
-  it('the trunk carries through by DEFAULT, and the last child stops it', () => {
-    // The inverse of what this was, and the fix for a group that drew N
-    // brackets instead of one line. The continuation used to be
-    // `[data-child]:has(+ [data-child])` — a claim about DOM ADJACENCY that is
-    // FALSE on the mobile sheet, where every row is wrapped in a `.swiperow`.
-    // It never matched there, so every child's trunk stopped at its own middle.
-    // No sibling combinator is allowed back into this rule for that reason:
-    // the tree's shape differs per surface and the index does not.
-    const trunk = ruleBody(NAV_CSS, '.navtree .navtree-tab-row[data-child="true"]::before');
-    expect(decl(trunk, 'bottom')).toBe('-1px');
-    const last = ruleBody(
-      NAV_CSS,
-      '.navtree .navtree-tab-row[data-child="true"][data-child-last="true"]::before',
-    );
-    expect(decl(last, 'bottom')).toBe('50%');
-    expect(NAV_CSS).not.toMatch(/\[data-child="true"\]:has\(\s*\+/);
   });
 
   it('the trunk is drawn in ONE ink, and it is the token', () => {

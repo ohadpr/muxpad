@@ -484,12 +484,47 @@ describe('sub-chats are collapsed, and the collapse still tells the truth', () =
     ...over.map((o, i) => tab(`kid${i}`, { spawned_by: 'root', clock: null, ...o })),
   ];
 
-  it('draws no child rows by default, and one chip instead', () => {
+  it('draws no child rows by default, and one PILL instead — on the parent row', () => {
+    // The chip used to be a line of its own under the parent. It is now one
+    // object at the end of the parent's row: "it feels like we're just wasting
+    // space now" — four small things and a whole row of a 240px rail for a
+    // group that is usually one or two children.
     const out = railHtml(family());
     expect(out).not.toContain('>kid0<');
     expect(out).not.toContain('data-child="true"');
-    expect(count(out, 'navtree-subs-head')).toBe(1);
+    expect(count(out, 'class="navtree-subs-pill"')).toBe(1);
+    // …and the row it used to occupy is gone, not merely restyled.
+    expect(out).not.toContain('navtree-subs-head');
+    // The words survive in the title and the accessible name, which is where
+    // they have to live: they do not fit beside a name on a 240px row.
     expect(out).toContain('2 sub-chats');
+  });
+
+  it('puts the pill INSIDE the parent’s row, not after it', () => {
+    // The whole point. If it rendered as a sibling the row count would not
+    // have changed and this would be a restyle of the same layout.
+    const out = railHtml(family());
+    const row = out.indexOf('navtree-tab-row');
+    const pill = out.indexOf('navtree-subs-pill');
+    const rowEnd = out.indexOf('navtree-tab-row', row + 1);
+    expect(pill).toBeGreaterThan(row);
+    expect(pill).toBeLessThan(rowEnd === -1 ? out.length : rowEnd);
+  });
+
+  it('the schedule yields to it, and only on a row that has sub-chats', () => {
+    // Both will not fit beside a name on a 240px row — measured, the name
+    // drops to 55px and `Trayo Builder` truncates. A chat with live workers
+    // has more to say than when its cron next fires, and the time stays on the
+    // row's title. A chat WITHOUT sub-chats is untouched.
+    const crons = [{ name: 'sweep', next_at: NOW + 3_600_000 }] as unknown as Tab['crons'];
+    const withSubs = railHtml([
+      tab('root', { crons }),
+      tab('kid0', { spawned_by: 'root', clock: null }),
+    ]);
+    expect(withSubs).toContain('navtree-subs-pill');
+    expect(withSubs).not.toContain('navtree-cron');
+    const without = railHtml([tab('solo', { crons })]);
+    expect(without).toContain('navtree-cron');
   });
 
   it('names the states in the chip, loudest first', () => {

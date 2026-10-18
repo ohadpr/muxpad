@@ -1421,11 +1421,12 @@ export function TabList({
    *  switches the row's mark from a tile to a dot in its parent's chip column,
    *  and what puts the one indent step on the row. Nothing about a clock — a
    *  sub-chat has none, and the row reads its own. */
-  const renderRow = (t: Tab, parent?: Tab, markStatus?: PaneStatus, childLast?: boolean) => (
+  const renderRow = (t: Tab, parent?: Tab, group?: SubsGroup, childLast?: boolean) => (
     <TabRow
       key={t.id}
       tab={t}
-      {...(markStatus ? { markStatus } : {})}
+      // THE GROUP CONTROL, on the row rather than under it. See SubsPill.
+      {...(group ? { group } : {})}
       // WHICH CHILD ENDS THE RUN, from the only place that knows without
       // guessing. The trunk used to find it in CSS —
       // `[data-child]:has(+ [data-child])` — which is a claim about DOM
@@ -1510,75 +1511,30 @@ export function TabList({
           renderRow(
             g.chat,
             undefined,
-            // Only while SHUT. Expanded, the children have rows of their own
-            // and the parent goes back to saying what it is doing itself.
-            foldable && !open ? rollupStatus(g.chat.status, g.children) : undefined,
+            foldable
+              ? {
+                  ...subChatCounts(g.children),
+                  open,
+                  // THE ROLLUP, ONLY WHILE SHUT — the rule this already had,
+                  // now carried by the pill instead of by a separate mark.
+                  // Expanded, the children have rows of their own and the
+                  // parent goes back to saying what it is doing itself.
+                  ...(open ? {} : { status: rollupStatus(g.chat.status, g.children) }),
+                  title: subChatChipTitle(g.children),
+                  parentName: g.chat.name,
+                  onToggle: () => toggleSubs(g.chat.id),
+                }
+              : undefined,
           )
         )}
-        {foldable ? (
-          <button
-            type="button"
-            className="navtree-subs-head"
-            // NO STATE COLOUR ON THIS LABEL, and that is a measurement, not a
-            // preference. It first carried the mark's own red for a blocked
-            // child: measured on dracula, #f0655f on the rail's ground is
-            // 2.97:1 — fine for a 10px filled dot (a graphic) and well under
-            // AA for 11.5px text. Lightening it would have invented a seventh
-            // red. The words say WHICH state and how many; the HUE is the
-            // parent row's mark, which is the rail's one state channel and is
-            // already carrying this exact fact while the group is shut (see
-            // rollupStatus). Two channels for one claim was what the rail's
-            // state slot was consolidated to remove.
-            onClick={() => toggleSubs(g.chat.id)}
-            aria-expanded={open}
-            // The CHIP'S OWN WORDS are in the name, not just the verb: an
-            // aria-label replaces the visible text, so "Show sub-chats of
-            // Trayo Builder" would be a screen reader hearing everything
-            // except the part that says one of them is waiting on you.
-            // The WORDS live here and in `title`, because the visible line
-            // cannot afford them (see subChatChip). A screen reader hears the
-            // noun; the sighted reader who is unsure hovers and gets it.
-            title={subChatChipTitle(g.children)}
-            aria-label={`${open ? 'Hide' : 'Show'} ${subChatChipTitle(g.children)} of ${
-              g.chat.name
-            }`}
-          >
-            <SvgCaret open={open} />
-            <span className="navtree-subs-glyph" aria-hidden="true">
-              <SvgAgentGlyph />
-            </span>
-            {(() => {
-              // TWO SPANS, because the total and its breakdown are different
-              // kinds of thing and a reader was told otherwise by them sharing
-              // one ink and one separator. The words come from the same
-              // function as the title (`subChatChip`), split here only to wear
-              // different weight.
-              const { total, parts } = subChatCounts(g.children);
-              return (
-                <>
-                  <span className="navtree-subs-total">{total}</span>
-                  {parts.length === 0 ? (
-                    // NO ENCLOSURE when there is nothing to enclose: the quiet
-                    // form is a noun, not a breakdown, and a box around the
-                    // word "sub-chats" would be a container holding the label
-                    // of the thing it contains.
-                    <span className="navtree-subs-noun">
-                      {` sub-chat${total === 1 ? '' : 's'}`}
-                    </span>
-                  ) : (
-                    // ENCLOSED, not parenthesised. The parens said "breakdown"
-                    // in punctuation; a container says it in shape — the
-                    // states sit INSIDE something and the total stands outside
-                    // it, so the line reads as "ten, made of these" without
-                    // spelling out an equation. The brackets are the box now,
-                    // so the characters go.
-                    <span className="navtree-subs-detail">{parts.join(' · ')}</span>
-                  )}
-                </>
-              );
-            })()}
-          </button>
-        ) : null}
+        {/* NO ROW OF ITS OWN ANY MORE. The disclosure, the count, the agent
+            glyph and the breakdown used to sit on a line under the parent —
+            four small things costing a whole row of a 240px rail, and a 40px
+            band on the phone, for a group that was usually one or two
+            children. "It feels like we're just wasting space now."
+            They are one pill at the end of the PARENT's row now (SubsPill),
+            which also lets the rollup state and the count stop being two
+            drawings of one fact. */}
         {!foldable || open
           ? g.children.map((k, i) => renderRow(k, g.chat, undefined, i === g.children.length - 1))
           : null}
@@ -1848,6 +1804,9 @@ interface TabRowProps {
    * `renderRow`.
    */
   childLast?: boolean | undefined;
+  /** This chat has sub-chats: the row carries their count, their rolled-up
+   *  state and their disclosure, as one pill. See SubsPill. */
+  group?: SubsGroup | undefined;
   /**
    * The state mark to draw INSTEAD of this tab's own.
    *
@@ -1857,7 +1816,7 @@ interface TabRowProps {
    * rolled-up value would make every row's mark depend on a list the row
    * cannot see.
    */
-  markStatus?: PaneStatus | undefined;
+
   workspace: Workspace;
   isActiveTab: boolean;
   /**
@@ -2349,11 +2308,97 @@ function CronMark({ tab }: { tab: Tab }) {
   );
 }
 
+/**
+ * THE GROUP CONTROL, as the parent row receives it.
+ *
+ * `status` is present only while the group is SHUT: that is when the pill is
+ * speaking for children you cannot see. Open, they draw their own marks and
+ * the pill goes quiet — the same rule `rollupStatus` already had, moved from a
+ * separate 10px mark onto the one object.
+ */
+export interface SubsGroup {
+  total: number;
+  /** The breakdown, already worded: `['2 running', '1 ready']`. */
+  parts: string[];
+  open: boolean;
+  status?: PaneStatus | undefined;
+  /** The full sentence, for the title and the accessible name. */
+  title: string;
+  parentName: string;
+  onToggle: () => void;
+}
+
+/**
+ * THE PILL — count, state and disclosure as ONE object at the end of the
+ * parent's row.
+ *
+ * It replaces a whole row. The chip used to be a line under the parent
+ * carrying a caret, the agent glyph, the total and the breakdown; on a 240px
+ * rail that is a row spent on four small things, and on the phone a 40px band
+ * between a chat and its workers. Reported as "it feels like we're just
+ * wasting space now". Measured after: 4 rows to 3 shut, 6 to 5 open, and the
+ * parent's NAME gets 8px wider rather than narrower, because the schedule
+ * leaves the row with the chip (see CronMark's call site).
+ *
+ * ─── IT ALSO STOPS DRAWING ONE FACT TWICE ───────────────────────────────────
+ * While a group is shut the parent row already drew `rollupStatus` — the
+ * loudest state among its children — as its own 10px mark, beside a chip
+ * saying `2 · 1 running`. Those are the same claim in two objects a few pixels
+ * apart. The pill carries the hue AND the count, and the row's own mark is
+ * suppressed while it does; open, the pill goes neutral, takes the agent glyph
+ * instead of a state dot, and the mark comes back to say what the PARENT is
+ * doing.
+ *
+ * ─── WHY THE WORDS LEAVE ON THE DESKTOP AND STAY ON THE PHONE ───────────────
+ * `2 running · 1 ready` does not fit on a 240px row beside a name. It is in
+ * the title and in the accessible name, both of which a sighted reader reaches
+ * by hovering and a screen reader gets for free. The sheet is 330px+ and has
+ * the room, so there it stays visible — a tooltip is not reachable by a thumb.
+ */
+function SubsPill({ group, wide }: { group: SubsGroup; wide?: boolean }) {
+  const { total, parts, open, status, title, parentName, onToggle } = group;
+  // NEUTRAL IS A STATE VALUE, not a missing one: `idle` is what the stylesheet
+  // keys the quiet form off, and an absent attribute would fall through to
+  // whatever the row's own hue is.
+  const hue = open ? 'idle' : (status ?? 'idle');
+  return (
+    <button
+      type="button"
+      className="navtree-subs-pill"
+      data-state={hue}
+      data-open={open ? 'true' : undefined}
+      onClick={(e) => {
+        // The row behind it navigates. A disclosure that also opened the chat
+        // would make the one control on this row do two things.
+        e.stopPropagation();
+        e.preventDefault();
+        onToggle();
+      }}
+      aria-expanded={open}
+      title={title}
+      aria-label={`${open ? 'Hide' : 'Show'} ${title} of ${parentName}`}
+    >
+      {open ? (
+        <span className="navtree-subs-pill-glyph" aria-hidden="true">
+          <SvgAgentGlyph />
+        </span>
+      ) : (
+        <span className="navtree-subs-pill-dot" aria-hidden="true" />
+      )}
+      <span className="navtree-subs-pill-n">
+        {total}
+        {wide && parts.length > 0 ? ` · ${parts.join(' · ')}` : ''}
+      </span>
+      <SvgCaret open={open} />
+    </button>
+  );
+}
+
 function TabRow({
   tab,
   parent,
   childLast,
-  markStatus,
+  group,
   workspace,
   isActiveTab,
   workspaceLabel,
@@ -2727,7 +2772,7 @@ function TabRow({
           rather than an auto margin per mark: two auto margins on one flex
           line share the free space between them and the marks drift apart. */}
       {!isEditing &&
-      (workspaceLabel || affords.paneExpander || (tab.status && tab.status !== 'idle')) ? (
+      (workspaceLabel || affords.paneExpander || group || (tab.status && tab.status !== 'idle')) ? (
         <span className="navtree-rail-tail">
           {/* WHERE THIS ROW GOES, when it is not where you already are. It sits
               INSIDE the trailing group rather than after the name, which is
@@ -2761,10 +2806,18 @@ function TabRow({
               <SvgChevronRight />
             </button>
           ) : null}
+          {/* WIDE on this surface: a 330px+ sheet has room for the breakdown,
+              and a tooltip is not reachable by a thumb. Same object, same
+              rules — only the words differ. */}
+          {group ? <SubsPill group={group} wide /> : null}
           {/* Outside the link, as everywhere else: its visually-hidden state
               text would otherwise join the link's ACCESSIBLE NAME and rename
-              the control every time an agent started or stopped. */}
-          <StateChip status={tab.status} mode="mark" className="navtree-rail-mark" />
+              the control every time an agent started or stopped.
+              Suppressed while a shut group's pill is carrying the rollup —
+              see the desktop row for why the two were one fact twice. */}
+          {group && !group.open ? null : (
+            <StateChip status={tab.status} mode="mark" className="navtree-rail-mark" />
+          )}
         </span>
       ) : null}
       {overlays}
@@ -2961,7 +3014,13 @@ function TabRow({
               {workspaceLabel}
             </span>
           ) : null}
-          {tab.crons ? <CronMark tab={tab} /> : null}
+          {/* THE SCHEDULE YIELDS. A chat with live workers has something more
+              urgent to say than when its cron next fires, and both will not
+              fit beside a name on a 240px row — measured, the name drops to
+              55px and `Trayo Builder` truncates. The time is still on the
+              row's own title. Only on a row that HAS sub-chats: a chat
+              without them keeps its `◷ 09:00` exactly as before. */}
+          {tab.crons && !group ? <CronMark tab={tab} /> : null}
           {affords.pinButton ? (
             <button
               type="button"
@@ -2989,14 +3048,20 @@ function TabRow({
               <SvgArchive size={15} />
             </button>
           ) : null}
+          {group ? <SubsPill group={group} /> : null}
         </span>
       ) : null}
       {/* The state mark — the LAST track, so nothing in front of it can push
             it off the row's right edge. Rendered on the ACTIVE row too, and
             deliberately: agent panes work quietly for minutes on their chat
             face, and the one chat whose progress you are actually waiting on
-            must not be the single row that goes dark. */}
-      {!isEditing && <RowMark status={markStatus ?? tab.status} />}
+            must not be the single row that goes dark.
+            THE PILL TAKES ITS PLACE WHILE A GROUP IS SHUT. They were two
+            drawings of one fact: this mark carried `rollupStatus` — the
+            loudest state among the children — a few pixels from a chip
+            counting those same children. Open, the children draw their own
+            marks and this comes back to say what the PARENT is doing. */}
+      {!isEditing && !(group && !group.open) && <RowMark status={tab.status} />}
       {overlays}
     </div>
   );
