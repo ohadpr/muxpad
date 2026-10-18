@@ -1734,135 +1734,174 @@
   color: var(--fg-dim);
 }
 
-/* ─── THE COLLAPSED FAMILY'S CHIP ───────────────────────────────────────────
-   "6 · 2 running · 1 needs you", under the parent, at the children's indent.
+/* ─── THE SUB-CHAT PILL ─────────────────────────────────────────────────────
+   The count, the rolled-up state and the disclosure, as ONE object at the end
+   of the PARENT's row.
 
-   It is the done drawer's disclosure one more step quieter — same control,
-   same caret column, smaller and fainter — because that is what it is: a
-   disclosure over chats, in a list of chats. A third kind of header here would
-   be a new thing to learn for a row that says less than either of them.
+   It used to be a line of its own under the parent: a caret, the agent glyph,
+   the total and an enclosed breakdown. Four small things and a whole row of a
+   240px rail — a 40px band on the phone — for a group that is usually one or
+   two children. "It feels like we're just wasting space now." Measured after:
+   4 rows to 3 shut and 6 to 5 open, and the parent's NAME comes out WIDER than
+   before rather than narrower, because the schedule leaves the row with the
+   chip (see the CronMark call site in NavTree.tsx).
 
-   NOT a row: no 36px hit box, no state mark, no hover fill. The rows in this
-   list are chats you can open; this is a label with a caret on it, and giving
-   it a row's weight would put a seventh row in the list the collapse exists to
-   shorten.
+   ─── IT ALSO STOPS DRAWING ONE FACT TWICE ─────────────────────────────────
+   While the group was shut the parent row drew `rollupStatus` as its own 10px
+   mark — the loudest state among its children — a few pixels from a chip
+   counting those same children. One hue, one count, one object now; the row's
+   mark is suppressed while this is carrying it.
 
-   ITS CARET STANDS ON THE TRUNK, centred — half the 15px glyph back from
-   --nt-trunk-x. It used to sit on the child indent, which put it at 32 against
-   a trunk at 28: close enough to look like a mistake rather than a
-   relationship, and the line then descended from a point 4px to the caret's
-   left. One column now carries the caret, the trunk and every elbow, so an
-   open group is one vertical with a control at the top of it. */
-.navtree-subs-head {
-  display: flex;
+   ─── THE HUE IS A STATE, AND ONLY WHILE IT HAS TO BE ──────────────────────
+   Shut, the pill speaks for children you cannot see and takes the rollup hue.
+   Open, they draw their own marks, so it goes neutral and swaps the state dot
+   for the agent glyph — the same rule `rollupStatus` always had, now visible
+   in the thing itself rather than in a prop.
+
+   The wash is the status channel's own, so a pill and a mark of the same state
+   are the same colour on every theme. */
+.navtree-subs-pill {
+  --pill-hue: var(--status-quiet);
+  display: inline-flex;
   align-items: center;
-  /* NO FLEX GAP. The 21px that puts this line on the child-name column is a
-     ONE-OFF step from the caret to that column, not a word space — and as a
-     flex `gap` it was also applied between the total and its enclosure, which
-     put 26px between a number and the box it is the sum of. The step moves to
-     the glyph's own margin; everything after it is spaced like words. */
-  gap: 0;
-  width: 100%;
-  /* RIGHT PADDING IS 2px, NOT the row's --nt-pad. A row reserves that gutter
-     for its controls and its state mark; this line has neither, and the box
-     below needs every pixel it can get (it overflowed by 6.7px at --nt-pad).
-     Measured: the enclosure lands 2px clear of the rail's edge. */
-  padding: 2px 2px 4px calc(var(--nt-trunk-x) - 7.5px);
+  gap: 4px;
+  flex: 0 0 auto;
+  /* One CONTENT gutter from whatever precedes it, like every other pair on
+     this row. */
+  margin-left: var(--nt-gutter);
+  padding: 2.5px 6px 2.5px 5px;
   border: 0;
-  background: none;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--pill-hue) var(--status-chip-wash, 22%), transparent);
+  color: color-mix(in srgb, var(--pill-hue) 78%, var(--fg));
   font-family: inherit;
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--fg-faint);
-  text-align: left;
-  cursor: pointer;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1.35;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  cursor: pointer;
+}
+.navtree-subs-pill[data-state="working"] {
+  --pill-hue: var(--status-working);
+}
+.navtree-subs-pill[data-state="ready"] {
+  --pill-hue: var(--status-ready);
+}
+.navtree-subs-pill[data-state="blocked"] {
+  --pill-hue: var(--status-blocked);
+}
+.navtree-subs-pill[data-state="dead"] {
+  --pill-hue: var(--status-dead);
+}
+/* QUIET — idle, and every open group. The rail's own ink rather than a status
+   hue, because "nothing is happening" is not a state the status channel owns:
+   giving idle a colour would put a mark on every group in the list. */
+.navtree-subs-pill[data-state="idle"],
+.navtree-subs-pill[data-open="true"] {
+  background: color-mix(in srgb, var(--fg) 11%, transparent);
+  color: var(--fg-dim);
+}
+/* ON THE SELECTED ROW IT NEEDS MORE. The row you are on is filled with the
+   accent at 20%, and a 22% wash of a status hue over that is the same fault
+   the completion card's chip had: one recipe, two surfaces, and on the louder
+   one it reads as nothing. Measured on alucard, an amber pill on the violet
+   selection was indistinguishable from the fill. The STEP is the fix, not a
+   different hue — the pill must stay the colour its state is everywhere. */
+.navtree-tab-row[data-active="true"] .navtree-subs-pill {
+  background: color-mix(in srgb, var(--pill-hue) 40%, transparent);
+  color: color-mix(in srgb, var(--pill-hue) 40%, var(--fg));
+}
+.navtree-tab-row[data-active="true"] .navtree-subs-pill[data-state="idle"],
+.navtree-tab-row[data-active="true"] .navtree-subs-pill[data-open="true"] {
+  background: color-mix(in srgb, var(--fg) 20%, transparent);
+  color: var(--fg);
+}
+.navtree-subs-pill:hover {
+  background: color-mix(in srgb, var(--pill-hue) 34%, transparent);
+}
+.navtree-tab-row[data-active="true"] .navtree-subs-pill:hover {
+  background: color-mix(in srgb, var(--pill-hue) 52%, transparent);
+}
+.navtree-subs-pill[data-state="idle"]:hover,
+.navtree-subs-pill[data-open="true"]:hover {
+  background: color-mix(in srgb, var(--fg) 18%, transparent);
+}
+/* THE STATE DOT. The same three shapes the rail's marks use, so the pill is
+   not a fourth vocabulary: a ring that turns for `working`, a filled disc for
+   anything settled, a hollow one for idle. It reuses `navtree-state-spin`
+   rather than declaring a second keyframe — ONE spin animation exists in this
+   rail, and a test enforces it. */
+.navtree-subs-pill-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: currentColor;
+}
+.navtree-subs-pill[data-state="working"] .navtree-subs-pill-dot {
+  background: none;
+  border: 1.5px solid currentColor;
+  border-top-color: transparent;
+  animation: navtree-state-spin 0.8s linear infinite;
+}
+.navtree-subs-pill[data-state="idle"] .navtree-subs-pill-dot {
+  background: none;
+  border: 1.5px solid currentColor;
+  opacity: 0.75;
+}
+/* UNDER REDUCED MOTION IT FILLS INSTEAD OF STOPPING — the rail's own rule for
+   the mark this echoes, and not `animation: none`: a stilled ring with a gap
+   in it is a shape that means nothing, and a second `animation` declaration in
+   this sheet would break the one-animation invariant a test enforces.
+   `working` is then told by fill rather than by turning. */
+@media (prefers-reduced-motion: reduce) {
+  .navtree-subs-pill[data-state="working"] .navtree-subs-pill-dot {
+    border-color: currentColor;
+    background: currentColor;
+  }
+}
+/* OPEN takes the agent glyph instead: the children are showing their own
+   states, so a dot here would be a mark for nothing. */
+.navtree-subs-pill-glyph {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  opacity: 0.85;
+}
+.navtree-subs-pill-glyph svg {
+  width: 10px;
+  height: 10px;
+}
+.navtree-subs-pill > svg {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+  opacity: 0.7;
+}
+.navtree-subs-pill-n {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.navtree-subs-head:hover {
-  color: var(--fg-dim);
+/* ON THE SHEET IT CARRIES THE WORDS. A 330px row has the space a 240px one
+   does not, and the breakdown's home on the desktop is a tooltip — which a
+   thumb cannot reach. Bigger too: this is a tap target in a list of 44px rows,
+   not a label beside 11.5px text. */
+.navtree[data-variant="sheet"] .navtree-subs-pill {
+  padding: 3.5px 8px 3.5px 6px;
+  font-size: 11.5px;
+  min-height: 26px;
+}
+.navtree[data-variant="sheet"] .navtree-subs-pill-dot {
+  width: 9px;
+  height: 9px;
+}
+.navtree[data-variant="sheet"] .navtree-subs-pill > svg {
+  width: 14px;
+  height: 14px;
 }
 
-/* THE NOUN, as a glyph. The word "sub-chats" costs ~62px of a 204px line and
-   the line is already full at four segments; the product's own agent mark says
-   the same thing in ~16px and sits where the eye already is. Smaller than the
-   14px it ships at elsewhere, because here it is punctuation next to 11.5px
-   text rather than a thing in its own right. */
-.navtree-subs-glyph {
-  display: inline-flex;
-  align-items: center;
-  /* THE STEP TO THE CHILD-NAME COLUMN, and it lives here because it belongs to
-     this one element: the glyph stands on that column and the count follows it
-     as part of the same phrase. Derived, not typed — the caret now ends at
-     --nt-trunk-x + 7.5 and the column is --nt-child-name-x, and both have
-     moved under this line twice. (The done head keeps a literal 21px: it is a
-     different control on a different column — its caret in the icon column,
-     its label on the name column.) */
-  margin-left: calc(var(--nt-child-name-x) - var(--nt-trunk-x) - 7.5px);
-  margin-right: 5px;
-  opacity: 0.75;
-}
-.navtree-subs-glyph svg {
-  width: 11px;
-  height: 11px;
-}
-
-/* THE TOTAL IS THE SUBJECT. It used to sit in the same series as the states it
-   is the sum of, in one ink with one separator between all four — so the eye
-   read four statistics. Reported as "the 10 looks like it's another stat but
-   it's actually the total". The parentheses in the text do most of the work;
-   this does the rest, and the pair is what makes the line parse at a glance
-   rather than on a second look. */
-.navtree-subs-total {
-  color: var(--fg-dim);
-  font-weight: 700;
-  /* The total stands OUTSIDE the box below it, with a real word space — it is
-     the subject, and the enclosure is what it contains. */
-  margin-right: 5px;
-}
-
-/* ─── THE BREAKDOWN IS ENCLOSED, AND THE TOTAL IS NOT ───────────────────────
-   "Make the 10 look like it's wrapping the other counts — almost 10 = [X+Y+Z]
-   but not so explicitly."
-
-   A container says that in SHAPE rather than in punctuation: the states sit
-   inside something, the total stands beside it, and the line reads as "ten,
-   made of these" with no equation and no brackets to parse. The parens are
-   gone — the box is the brackets now, which is also why this costs almost
-   nothing in width (parens ~8px out, padding ~10px in; measured 177px on a
-   185px line).
-
-   VERY quiet on purpose: 7% ink. The rail's whole state budget is one mark per
-   row, and a tinted block in it would be a second thing competing for the
-   glance. It has to read as a boundary, not as a highlight — if you notice the
-   fill before you notice the numbers, it is too strong. */
-/* The quiet form's noun — same ink, no box. */
-.navtree-subs-noun {
-  font-weight: 600;
-}
-.navtree-subs-detail {
-  font-weight: 600;
-  /* ROOM TO BREATHE. At 1px/5px the text sat on the box's edge on every side —
-     "a tad cramped" — which makes an enclosure read as a tight label rather
-     than as a container something lives in. 3px/8px with a 1.45 line-height
-     puts ~4px above and below the glyphs and 8px at the ends; the box still
-     lands 12px clear of the rail (it had 20px). */
-  padding: 3px 8px;
-  line-height: 1.45;
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--fg) 7%, transparent);
-}
-
-/* ON THE PHONE IT IS A TARGET, NOT A LABEL. The sheet renders this same
-   control, and on that surface it is the ONLY way to reach a worker — behind
-   11.5px of text with 6px of padding, i.e. a ~21px tap target next to 36px
-   rows. The ink stays label-quiet; only the box grows. */
-.navtree[data-variant="sheet"] .navtree-subs-head {
-  min-height: 40px;
-  padding-top: 4px;
-  padding-bottom: 6px;
-}
 /* The nested disclosure: the agents' work, inside the drawer and under the
    chats you archived yourself. One step further in than the head above it and
    one step quieter, so the nesting is legible without a second kind of
