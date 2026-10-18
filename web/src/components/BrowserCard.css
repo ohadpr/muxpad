@@ -175,10 +175,21 @@
    pulls the ones after it along. Hence the :has() pairs rather than one fixed
    assignment — a card with a countdown and no action and a card with both have
    to put the peek in different columns. */
-.browser-card__peek {
+/* ONE SLOT FOR THE CONTROLS. Peek and widen are two steps of one action and
+   they share a cell; giving each its own grid column meant a chain of `:has()`
+   rules renumbering every cell to their right every time a control appeared,
+   which is a layout that grows a new rule per button. */
+.browser-card__tools {
   grid-column: 4;
   grid-row: 1;
   justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  height: var(--b-line);
+}
+.browser-card__peek,
+.browser-card__wide {
   height: var(--b-line);
   width: 22px;
   display: grid;
@@ -190,35 +201,39 @@
   color: color-mix(in srgb, var(--b-idle) 70%, var(--chat-fg, #1c1c22));
   cursor: pointer;
 }
-.browser-card__peek svg {
+.browser-card__peek svg,
+.browser-card__wide svg {
   fill: none;
   stroke: currentColor;
   stroke-width: 1.6;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
-.browser-card__peek:hover {
+.browser-card__peek:hover,
+.browser-card__wide:hover {
   background: color-mix(in srgb, var(--b-idle) 16%, transparent);
   color: var(--chat-fg, #1c1c22);
 }
-.browser-card__peek:focus-visible {
+.browser-card__peek:focus-visible,
+.browser-card__wide:focus-visible {
   outline: 1px solid var(--chat-accent, #5b5bd6);
   outline-offset: 1px;
 }
-.browser-card__peek[aria-expanded="true"] {
+.browser-card__peek[aria-expanded="true"],
+.browser-card__wide[aria-pressed="true"] {
   color: color-mix(in srgb, var(--b-live) 85%, var(--chat-fg, #1c1c22));
   background: color-mix(in srgb, var(--b-live) 13%, transparent);
 }
-.browser-card:not(:has(.browser-card__countdown)) .browser-card__peek {
+.browser-card:not(:has(.browser-card__countdown)) .browser-card__tools {
   grid-column: 3;
 }
-.browser-card:has(.browser-card__peek) .browser-card__action {
+.browser-card:has(.browser-card__tools) .browser-card__action {
   grid-column: 5;
 }
-.browser-card:not(:has(.browser-card__countdown)):has(.browser-card__peek) .browser-card__action {
+.browser-card:not(:has(.browser-card__countdown)):has(.browser-card__tools) .browser-card__action {
   grid-column: 4;
 }
-.browser-card:has(.browser-card__countdown):has(.browser-card__peek) {
+.browser-card:has(.browser-card__countdown):has(.browser-card__tools) {
   grid-template-columns: auto 1fr auto auto;
 }
 
@@ -404,6 +419,37 @@
 /* The picture is the only thing that makes these cards worth widening. */
 .browser-card:has(.browser-card__shot) {
   max-width: min(520px, 94%);
+}
+
+/* ─── WIDE — the step between a thumbnail and the viewer ────────────────────
+   A peek is sized as a LOG ENTRY: a card ends where its words do, and a 148px
+   strip answers "what is it doing" most of the time. When it does not, the
+   only next step was the viewer — a window to dismiss, a whole tab on a phone,
+   and it takes the wheel off the agent to open. This is the step in between:
+   the same picture, the full width of the conversation and twice the height,
+   still only looking.
+
+   The CARD grows, not just the image, because a 520px cap with a wide picture
+   inside it would letterbox rather than show more page. And the height cap
+   stays a cap: a browser card is still a line in a conversation you are
+   scrolling, not a viewport — 2x is "more of the page", not "all of it". */
+.browser-card[data-wide="true"] {
+  max-width: 100%;
+  width: 100%;
+}
+.browser-card[data-wide="true"] .browser-card__shot {
+  max-height: 340px;
+  /* CONTAIN, not cover: at this size the crop is the thing you widened to get
+     rid of. The page gets its own aspect ratio back and the card takes
+     whatever height that needs, up to the cap. */
+  object-fit: contain;
+  object-position: top center;
+  background: color-mix(in srgb, var(--chat-fg, #1c1c22) 5%, transparent);
+}
+@media (max-width: 560px) {
+  .browser-card[data-wide="true"] .browser-card__shot {
+    max-height: 260px;
+  }
 }
 
 @media (max-width: 560px) {

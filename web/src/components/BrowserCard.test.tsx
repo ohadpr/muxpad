@@ -45,6 +45,11 @@ const action = (host: HTMLElement) =>
   host.querySelector<HTMLButtonElement>('.browser-card__action') ?? undefined;
 const peek = (host: HTMLElement) =>
   host.querySelector<HTMLButtonElement>('.browser-card__peek') ?? undefined;
+/** Widen — the step between the thumbnail and the viewer. */
+const widen = (host: HTMLElement) =>
+  host.querySelector<HTMLButtonElement>('.browser-card__wide') ?? undefined;
+const card = (host: HTMLElement) =>
+  host.querySelector<HTMLElement>('[data-testid="browser-card"]') as HTMLElement;
 const shot = (host: HTMLElement) => host.querySelector<HTMLImageElement>('.browser-card__shot');
 const click = (el: Element | undefined) =>
   act(() => {
@@ -387,6 +392,62 @@ describe('peeking at a live browser', () => {
     );
     expect(peek(host)).toBeDefined();
     expect(action(host)).toBeDefined();
+  });
+
+  it('offers no WIDEN until there is a picture to widen', () => {
+    // There is nothing to make wider while the card is a line of text, and a
+    // control that does nothing is worse than one that is not there.
+    const { host } = mount(<BrowserCard moment={moment(base)} onOpen={() => {}} now={1} />);
+    expect(widen(host)).toBeUndefined();
+    click(peek(host));
+    expect(widen(host)).toBeDefined();
+  });
+
+  it('WIDENS the card, and the same control shrinks it back', () => {
+    // "An expanded button that makes the card full width so I can see more of
+    // the browser, and then the button turns into shrink back to regular size."
+    // One control going both ways: a button that only ever grew, with
+    // shrinking hidden somewhere else, is a state you cannot leave.
+    const { host } = mount(<BrowserCard moment={moment(base)} onOpen={() => {}} now={1} />);
+    click(peek(host));
+    expect(card(host).dataset.wide).toBeUndefined();
+    click(widen(host));
+    expect(card(host).dataset.wide).toBe('true');
+    expect(widen(host)?.getAttribute('aria-pressed')).toBe('true');
+    expect(widen(host)?.getAttribute('aria-label')).toMatch(/shrink/i);
+    click(widen(host));
+    expect(card(host).dataset.wide).toBeUndefined();
+    expect(widen(host)?.getAttribute('aria-label')).toMatch(/widen/i);
+  });
+
+  it('forgets the width when the peek closes', () => {
+    // A card that reopened at full width later, with no picture in it yet,
+    // would be a banner across the conversation with one line of text in it.
+    const { host } = mount(<BrowserCard moment={moment(base)} onOpen={() => {}} now={1} />);
+    click(peek(host));
+    click(widen(host));
+    expect(card(host).dataset.wide).toBe('true');
+    click(peek(host));
+    click(peek(host));
+    expect(card(host).dataset.wide).toBeUndefined();
+  });
+
+  it('widening does not open the viewer', () => {
+    // Everything on this card falls through to the card's own click, which
+    // opens a window. Looking harder must stay looking.
+    let opened = 0;
+    const { host } = mount(
+      <BrowserCard
+        moment={moment(base)}
+        onOpen={() => {
+          opened += 1;
+        }}
+        now={1}
+      />,
+    );
+    click(peek(host));
+    click(widen(host));
+    expect(opened).toBe(0);
   });
 
   it('offers nothing to peek at once the browser is gone', () => {
