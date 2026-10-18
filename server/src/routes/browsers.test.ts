@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { browsersRoutes } from './browsers.js';
+import { OPENED_QUIET_MS, browsersRoutes } from './browsers.js';
 
 /**
  * The REST surface, and the one thing it must not get wrong.
@@ -520,6 +520,27 @@ describe('the moments a conversation shows', () => {
     const res = await post('/api/browsers/shopping/opened', {});
     const body = (await res.json()) as { events: Array<{ kind: string }> };
     expect(body.events.map((e) => e.kind)).toEqual(['opened']);
+  });
+
+  it('…but says it AGAIN the next time you come back to the chat', async () => {
+    // THE BUG THE WINDOW EXISTS FOR. The rule was "has this profile ever
+    // announced", with no time bound, so one `opened` suppressed every launch
+    // after it for the life of the chat. Measured on the real install: a chat
+    // that browses most days carried exactly ONE browser card, dated 30
+    // September, describing a Chrome that had died days before — while the
+    // live browser, running and photographable, had nothing in the log to hang
+    // on. The peek control had shipped weeks earlier and worked; it simply had
+    // no card to be drawn on, which reads as "the feature is broken".
+    await ensure();
+    await post('/api/browsers/shopping/opened', {});
+    // Age the first announcement past the window, the way an hour of real time
+    // would, and the next launch is news again.
+    const later = Date.now() + OPENED_QUIET_MS + 1_000;
+    vi.spyOn(Date, 'now').mockReturnValue(later);
+    const res = await post('/api/browsers/shopping/opened', {});
+    const body = (await res.json()) as { events: Array<{ kind: string }> };
+    vi.restoreAllMocks();
+    expect(body.events.map((e) => e.kind)).toEqual(['opened', 'opened']);
   });
 
   it('and not at all once the chat has been summoned', async () => {

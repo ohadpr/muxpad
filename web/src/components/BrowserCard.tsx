@@ -93,6 +93,21 @@ export function BrowserCard({ moment, onOpen, viewportWidth, now }: BrowserCardP
   // PER CARD, and several can be open at once: peeking at two browsers side by
   // side in one conversation is the case this is for.
   const [peeking, setPeeking] = useState(false);
+  /**
+   * WIDE, for when the thumbnail is not enough.
+   *
+   * The peek is sized as a log entry — a card ends where its words do, and a
+   * 148px strip answers "what is it doing" most of the time. When it does not,
+   * the next step was the viewer, which is a window to dismiss and takes the
+   * wheel off the agent to open. This is the step between: the same picture,
+   * the full width of the conversation and twice the height, still just
+   * looking.
+   *
+   * It FOLLOWS the peek rather than standing beside it — there is nothing to
+   * widen while the card is a line of text — and it is forgotten when the peek
+   * closes, so reopening starts small again.
+   */
+  const [wide, setWide] = useState(false);
   const peekUrl = useLiveShot(moment.profile, peeking && view.openable);
 
   const act = () => onOpen(browserOpenMode(viewportWidth ?? window.innerWidth));
@@ -102,6 +117,7 @@ export function BrowserCard({ moment, onOpen, viewportWidth, now }: BrowserCardP
       className={`browser-card browser-card--${view.tone}${view.passive ? ' browser-card--passive' : ''}`}
       data-testid="browser-card"
       data-tone={view.tone}
+      data-wide={peekUrl && wide ? 'true' : undefined}
       // THE WHOLE CARD IS THE TARGET, button or no button. A passive card
       // always took its own click — looking is always allowed; being ASKED to
       // look is what was wrong. But a card WITH an "Open" button was a 60px
@@ -160,24 +176,69 @@ export function BrowserCard({ moment, onOpen, viewportWidth, now }: BrowserCardP
         the question you actually have most of the time, and the answer is a
         picture in the chat that keeps up. It does NOT take the wheel; the
         agent carries on, unaware anyone is looking. */}
+      {/* ONE CELL FOR BOTH CONTROLS. They are two steps of one action — look,
+        then look closer — and a grid column each meant a chain of `:has()`
+        rules renumbering every cell to their right as controls appeared. A
+        wrapper ends that: the row has one slot for tools, however many. */}
       {view.openable ? (
-        <button
-          type="button"
-          className="browser-card__peek"
-          aria-expanded={peeking}
-          aria-label={peeking ? 'Hide the page' : 'Show what it is doing'}
-          title={peeking ? 'Hide the page' : 'Show what it is doing'}
-          onClick={(e) => {
-            // The card opens the viewer, so a peek has to stop here or looking
-            // would always be followed by a window nobody asked for.
-            e.stopPropagation();
-            setPeeking((v) => !v);
-          }}
-        >
-          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-            {peeking ? <path d="M3 10.5 8 5.5l5 5" /> : <path d="M3 5.5 8 10.5l5-5" />}
-          </svg>
-        </button>
+        <span className="browser-card__tools">
+          <button
+            type="button"
+            className="browser-card__peek"
+            aria-expanded={peeking}
+            aria-label={peeking ? 'Hide the page' : 'Show what it is doing'}
+            title={peeking ? 'Hide the page' : 'Show what it is doing'}
+            onClick={(e) => {
+              // The card opens the viewer, so a peek has to stop here or looking
+              // would always be followed by a window nobody asked for.
+              e.stopPropagation();
+              setPeeking((v) => {
+                // Shutting the peek forgets the size: a card that reopened at
+                // full width later, with no picture yet, would be a banner with
+                // a line of text in it.
+                if (v) setWide(false);
+                return !v;
+              });
+            }}
+          >
+            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+              {peeking ? <path d="M3 10.5 8 5.5l5 5" /> : <path d="M3 5.5 8 10.5l5-5" />}
+            </svg>
+          </button>
+          {/* WIDEN — only while there is a picture to widen, and it is the same
+          control going both ways: arrows out, then arrows in. A second button
+          that only ever grew, with shrinking hidden somewhere else, is how a
+          card ends up with a state you cannot leave. */}
+          {peekUrl ? (
+            <button
+              type="button"
+              className="browser-card__wide"
+              aria-pressed={wide}
+              aria-label={wide ? 'Shrink the page back' : 'Widen the page'}
+              title={wide ? 'Shrink back to card size' : 'Widen to see more'}
+              onClick={(e) => {
+                e.stopPropagation();
+                setWide((v) => !v);
+              }}
+            >
+              <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+                {wide ? (
+                  /* Arrows IN: two corners pointing at each other. */
+                  <>
+                    <path d="M7 2.5v4.5H2.5" />
+                    <path d="M9 13.5V9h4.5" />
+                  </>
+                ) : (
+                  /* Arrows OUT: two corners pointing away. */
+                  <>
+                    <path d="M9.5 2h4.5v4.5" />
+                    <path d="M6.5 14H2V9.5" />
+                  </>
+                )}
+              </svg>
+            </button>
+          ) : null}
+        </span>
       ) : null}
       {view.action ? (
         <button

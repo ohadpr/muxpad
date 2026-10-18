@@ -76,6 +76,19 @@ export interface BrowserView extends BrowserAppState {
  */
 const SHOT_COALESCE_MS = 1_000;
 
+/**
+ * How long a browser stays "already announced" for.
+ *
+ * The dedupe in POST /:profile/opened exists for one measured case: a host that
+ * restarts underneath a conversation and announces again, which produced a bare
+ * "Browser opened" nine minutes after a summons had already said the same thing
+ * more loudly. An hour swallows a crash-and-respawn cycle comfortably.
+ *
+ * It used to be UNBOUNDED — any prior announcement, at any point in the chat's
+ * history, suppressed every launch after it. See the route for what that cost.
+ */
+export const OPENED_QUIET_MS = 60 * 60 * 1_000;
+
 const TakeSchema = z.object({
   /** Pane or chat id — whatever identifies this specific claimant. */
   by: z.string().min(1).max(200),
@@ -399,8 +412,32 @@ export function browsersRoutes(deps: {
     // A summons counts as having said it. It is a louder statement of the same
     // fact — there is a browser here, and here is the way into it — so a card
     // repeating it quietly afterwards is noise with a button on it.
-    const already = events.list(profile).some((e) => e.kind === 'opened' || e.kind === 'needs-you');
-    if (already) return c.json({ ok: true, events: events.list(profile) }, 200);
+    // …BUT THE RULE HAS TO BE BOUNDED, and it was not. It looked at the
+    // profile's WHOLE history, so one `opened` suppressed every launch after it
+    // for the life of the chat. Measured on this install: a chat that browses
+    // most days had exactly one browser card, dated 30 September, describing a
+    // Chrome that had died days before — while the live one, running and
+    // photographable (GET /:profile/shot answered 200 with a 79 KB JPEG), had
+    // nothing in the log to hang on. The peek control works and shipped weeks
+    // ago; it had no card to be drawn on, which reads as "the feature is
+    // broken".
+    //
+    // ONE HOUR, because that is the shape of the noise it exists to stop: the
+    // real case was a summons at 17:37 and a bare "Browser opened" at 17:46,
+    // nine minutes apart, from a host that had restarted underneath. A window
+    // wide enough to swallow a crash-and-respawn cycle and narrow enough that
+    // the next day's browsing gets a card where you are actually reading.
+    //
+    // NOT per-run state, which would be more precise and is the wrong trade: a
+    // host that crashes and respawns IS a new run, so it would re-announce —
+    // reintroducing exactly the noise the dedupe was written for.
+    const announcedAt = events
+      .list(profile)
+      .filter((e) => e.kind === 'opened' || e.kind === 'needs-you')
+      .reduce((latest, e) => Math.max(latest, e.at), 0);
+    if (announcedAt > 0 && Date.now() - announcedAt < OPENED_QUIET_MS) {
+      return c.json({ ok: true, events: events.list(profile) }, 200);
+    }
 
     const tabId = owner.get(profile);
     // NO PICTURE HERE. A still taken now is the FIRST page the agent visited,
