@@ -112,7 +112,6 @@ const moment = (browser: BrowserCardData, over: Partial<BrowserMoment> = {}): Br
   at: 100,
   shotUrl: null,
   answered: false,
-  pinned: false,
   profile: browser.profile,
   browser,
   ...over,
