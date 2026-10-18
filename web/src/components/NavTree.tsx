@@ -2309,6 +2309,30 @@ function CronMark({ tab }: { tab: Tab }) {
 }
 
 /**
+ * PANES — a split, drawn. One box divided, which is what a pane layout is and
+ * what the rail already shows when you open it. Deliberately NOT the agent
+ * glyph the sub-chat pill wears: the two pills are the same object and the
+ * glyph is the only thing saying which hierarchy you are about to open.
+ */
+function SvgPanesGlyph() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 14 14" aria-hidden="true">
+      <rect
+        x="1.3"
+        y="2.3"
+        width="11.4"
+        height="9.4"
+        rx="1.8"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.2"
+      />
+      <path d="M7 2.8v8.4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/**
  * THE GROUP CONTROL, as the parent row receives it.
  *
  * `status` is present only while the group is SHUT: that is when the pill is
@@ -2364,7 +2388,7 @@ function SubsPill({ group, wide }: { group: SubsGroup; wide?: boolean }) {
   return (
     <button
       type="button"
-      className="navtree-subs-pill"
+      className="navtree-row-pill navtree-subs-pill"
       data-state={hue}
       data-open={open ? 'true' : undefined}
       onClick={(e) => {
@@ -2379,13 +2403,13 @@ function SubsPill({ group, wide }: { group: SubsGroup; wide?: boolean }) {
       aria-label={`${open ? 'Hide' : 'Show'} ${title} of ${parentName}`}
     >
       {open ? (
-        <span className="navtree-subs-pill-glyph" aria-hidden="true">
+        <span className="navtree-row-pill-glyph" aria-hidden="true">
           <SvgAgentGlyph />
         </span>
       ) : (
-        <span className="navtree-subs-pill-dot" aria-hidden="true" />
+        <span className="navtree-row-pill-dot" aria-hidden="true" />
       )}
-      <span className="navtree-subs-pill-n">
+      <span className="navtree-row-pill-n">
         {total}
         {wide && parts.length > 0 ? ` · ${parts.join(' · ')}` : ''}
       </span>
@@ -2790,10 +2814,23 @@ function TabRow({
               {workspaceLabel}
             </span>
           ) : null}
+          {/* ─── THE SAME OBJECT, A DIFFERENT NOUN ────────────────────────
+              This expands a chat into its own PANES; the pill beside it on
+              another row expands a chat into its SUB-CHATS. Two hierarchies —
+              panes inside a chat, chats under a chat — and they were both bare
+              carets until the sub-chat one became a counted, state-coloured
+              pill. That left this as the odd one out, which read as a bug:
+              "the chat named Main has a caret which you click and you see
+              three things under it but it's rendered differently, what's going
+              on?"
+              Same shape and same grammar now, so the rail has one kind of
+              disclosure; a different GLYPH and no state hue, because it is a
+              different thing and panes have no rollup to report. The count is
+              the gain: how many are under there, before you tap. */}
           {affords.paneExpander ? (
             <button
               type="button"
-              className="navtree-pane-expander"
+              className="navtree-row-pill navtree-pane-pill"
               data-open={panesOpen ? 'true' : undefined}
               onClick={(e) => {
                 e.preventDefault();
@@ -2801,9 +2838,18 @@ function TabRow({
                 togglePanes();
               }}
               aria-expanded={panesOpen}
-              aria-label={panesOpen ? `Hide panes of ${tab.name}` : `Show panes of ${tab.name}`}
+              aria-label={
+                panesOpen
+                  ? `Hide ${paneCount} panes of ${tab.name}`
+                  : `Show ${paneCount} panes of ${tab.name}`
+              }
+              title={`${paneCount} panes`}
             >
-              <SvgChevronRight />
+              <span className="navtree-row-pill-glyph" aria-hidden="true">
+                <SvgPanesGlyph />
+              </span>
+              <span className="navtree-row-pill-n">{paneCount}</span>
+              <SvgCaret open={panesOpen} />
             </button>
           ) : null}
           {/* WIDE on this surface: a 330px+ sheet has room for the breakdown,

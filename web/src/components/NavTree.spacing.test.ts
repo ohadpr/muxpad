@@ -619,7 +619,7 @@ describe('what the pass was NOT allowed to move', () => {
     // A pill and a state mark of the same state must be the same colour on
     // every theme, which is the status channel's whole rule — see styles.css.
     // It names no colour of its own and no theme-tuned accent.
-    const pill = ruleBody(NAV_CSS, '.navtree-subs-pill');
+    const pill = ruleBody(NAV_CSS, '.navtree-row-pill');
     expect(decl(pill, 'background')).toContain('--status-chip-wash');
     expect(decl(pill, 'background')).toContain('--pill-hue');
     for (const state of ['working', 'ready', 'blocked', 'dead']) {
@@ -633,7 +633,20 @@ describe('what the pass was NOT allowed to move', () => {
   it('…and it sits one CONTENT gutter from whatever precedes it', () => {
     // The row's own scale, not a number of its own: --nt-gutter is the step
     // between two content columns, and the pill is one.
-    expect(decl(ruleBody(NAV_CSS, '.navtree-subs-pill'), 'margin-left')).toBe('var(--nt-gutter)');
+    expect(decl(ruleBody(NAV_CSS, '.navtree-row-pill'), 'margin-left')).toBe('var(--nt-gutter)');
+  });
+
+  it('the rail has ONE disclosure shape, and the glyph is what differs', () => {
+    // Two hierarchies — panes inside a chat, chats under a chat — and they
+    // were both bare carets until one became a counted pill. Leaving the other
+    // a naked chevron made a difference in KIND read as a bug. Same base, two
+    // modifiers; the pane one never takes a state hue, because the row's own
+    // mark one cell along is already saying what the chat is doing.
+    expect(NAV_CSS).toMatch(/\.navtree-pane-pill\b/);
+    expect(NAV_CSS).not.toMatch(/\.navtree-pane-expander\b/);
+    for (const state of ['working', 'ready', 'blocked', 'dead']) {
+      expect(NAV_CSS).not.toMatch(new RegExp(`\\.navtree-pane-pill\\[data-state="${state}"\\]`));
+    }
   });
 
   it('the tick stops 8px short of the name it points at, by arithmetic', () => {
