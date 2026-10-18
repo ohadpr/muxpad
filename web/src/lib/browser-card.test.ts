@@ -235,69 +235,9 @@ describe('a card drawn from a moment', () => {
     at: 100,
     shotUrl: null,
     answered: false,
-    pinned: false,
     profile: 'shopping',
     browser: base,
     ...over,
-  });
-
-  it('pins the LATEST moment of a LIVE browser, and nothing else', () => {
-    // The rule behind the floating card. Only the newest, so an earlier
-    // summons stays where it happened — it is a record of something already
-    // dealt with — and only while the browser is alive, because a card for a
-    // browser that is gone has nothing to show you now.
-    const live = { ...base, state: 'running' as const };
-    const out = browserMoments(
-      [
-        {
-          ...live,
-          events: [
-            { kind: 'opened', tabId: 'tab-1', at: 10 },
-            { kind: 'needs-you', tabId: 'tab-1', reason: 'log in', at: 20 },
-          ],
-        },
-      ],
-      'tab-1',
-    );
-    expect(out.map((o) => [o.at, o.pinned])).toEqual([
-      [10, false],
-      [20, true],
-    ]);
-  });
-
-  it('pins nothing once the browser is gone — the card settles back into history', () => {
-    const out = browserMoments(
-      [
-        {
-          ...base,
-          state: 'registered',
-          events: [{ kind: 'opened', tabId: 'tab-1', at: 10 }],
-        },
-      ],
-      'tab-1',
-    );
-    expect(out.map((o) => o.pinned)).toEqual([false]);
-  });
-
-  it('pins ONE PER BROWSER, so two live browsers both stay reachable', () => {
-    const out = browserMoments(
-      [
-        { ...base, state: 'running', events: [{ kind: 'opened', tabId: 'tab-1', at: 10 }] },
-        {
-          ...base,
-          profile: 'research',
-          state: 'running',
-          events: [{ kind: 'opened', tabId: 'tab-1', at: 20 }],
-        },
-      ],
-      'tab-1',
-    );
-    expect(
-      out
-        .filter((o) => o.pinned)
-        .map((o) => o.profile)
-        .sort(),
-    ).toEqual(['research', 'shopping']);
   });
 
   it('reads as an event, not a status light', () => {
@@ -349,71 +289,10 @@ describe('placing moments in a conversation', () => {
     at,
     shotUrl: null,
     answered: false,
-    pinned: false,
     profile: 'shopping',
     browser: base,
   });
   const shape = (out: ReturnType<typeof injectBrowserMoments<string>>) => out.map((e) => e.node);
-
-  const pin = (at: number, over: Partial<BrowserMoment> = {}): BrowserMoment => ({
-    ...m(at),
-    pinned: true,
-    ...over,
-  });
-
-  it('A PINNED MOMENT GOES LAST, however long ago it happened', () => {
-    // The complaint this answers: "it's stuck far away so I'm not sure what's
-    // going on." A browser card is a moment and a moment belongs at its
-    // timestamp — right for history, wrong for the one case the card is most
-    // useful in. Measured in a real chat: a browser opened two hours earlier
-    // and still working had its card 2072px above the bottom, under everything
-    // written since, while the question it answers is "what is it doing NOW".
-    const entries = [entry(100, 'a'), entry(300, 'b')];
-    expect(shape(injectBrowserMoments(entries, [pin(200)], () => '[live]'))).toEqual([
-      'a',
-      'b',
-      '[live]',
-    ]);
-  });
-
-  it('…and it is the LAST thing, after a timed card that also flushed', () => {
-    // Both end up at the tail; the live one has to win, or a card from an hour
-    // ago sits between the reader and the browser that is working now.
-    const entries = [entry(100, 'a')];
-    const out = shape(
-      injectBrowserMoments(entries, [m(9_000), pin(200)], (x) => (x.pinned ? '[live]' : '[old]')),
-    );
-    expect(out).toEqual(['a', '[old]', '[live]']);
-  });
-
-  it('carries NO timestamp, so the pass after it does not place it in the past', () => {
-    // The spawn interleave runs over this list next and reads `at`. A pinned
-    // card stamped with its own would send it looking for a slot two hours up.
-    const out = injectBrowserMoments([entry(100, 'a')], [pin(200)], () => '[live]');
-    expect(out.at(-1)).toEqual({ at: null, node: '[live]' });
-  });
-
-  it('an UNPINNED moment still lands exactly where it happened', () => {
-    // The floating rule must not quietly move history. Same list, same card,
-    // one flag apart.
-    const entries = [entry(100, 'a'), entry(300, 'b')];
-    expect(shape(injectBrowserMoments(entries, [m(200)], () => '[card]'))).toEqual([
-      'a',
-      '[card]',
-      'b',
-    ]);
-  });
-
-  it('a pinned moment is NOT subject to the window floor', () => {
-    // The floor exists so a moment older than the oldest loaded message is not
-    // piled at the nearest edge. A pinned card is not being placed in time at
-    // all, so the floor has nothing to say about it — and dropping it would
-    // lose the card for exactly the long conversation that needs it most.
-    const entries = [entry(5_000, 'a')];
-    expect(
-      shape(injectBrowserMoments(entries, [pin(10)], () => '[live]', { floor: 5_000 })),
-    ).toEqual(['a', '[live]']);
-  });
 
   it('lands a moment before the first entry that came after it', () => {
     const entries = [entry(100, 'a'), entry(300, 'b')];
@@ -470,7 +349,6 @@ describe('what the card says, in as few words as possible', () => {
     at: 1,
     shotUrl: null,
     answered: false,
-    pinned: false,
     profile: 's-01m3hwabcdef',
     browser: base,
     ...over,
@@ -520,7 +398,6 @@ describe('what the card shows, and what it leaves out', () => {
     at: 1,
     shotUrl: null,
     answered: false,
-    pinned: false,
     profile: 's-abc',
     browser: base,
     ...over,
@@ -554,7 +431,6 @@ describe('a card that is only telling you something', () => {
     at: 1,
     shotUrl: null,
     answered: false,
-    pinned: false,
     profile: 's-abc',
     browser: base,
     ...over,
@@ -668,7 +544,6 @@ describe('what opening a card is meant to do', () => {
     at: 1,
     shotUrl: null,
     answered: false,
-    pinned: false,
     profile: 's-abc',
     browser: base,
     ...over,
