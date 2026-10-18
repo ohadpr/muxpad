@@ -563,6 +563,44 @@ describe('sub-chats are collapsed, and the collapse still tells the truth', () =
     expect(without).toContain('navtree-cron');
   });
 
+  it('the PILL is about the workers and the MARK is about the chat', () => {
+    // THE BUG THIS REPLACES, caught on the live rail at 03:48. Merging the
+    // count and the state into one pill was right; feeding it
+    // `rollupStatus(own, children)` was not, because that folds the parent's
+    // own state in with its children's. With the chat mid-turn and its one
+    // worker finished the pill rendered
+    //
+    //   data-state="working"   title="1 sub-chat (1 ready)"
+    //
+    // — the dot about the parent, the words about the child, and nothing to
+    // tell a reader which half was which. They are two subjects and they get
+    // two objects: the pill answers for the workers, the row's own mark
+    // answers for the chat.
+    const out = railHtml([
+      tab('root', { status: 'working' }),
+      tab('kid0', { spawned_by: 'root', status: 'ready', clock: null }),
+    ]);
+    const pill = /<button[^>]*navtree-subs-pill[^>]*>/.exec(out)?.[0] ?? '';
+    expect(pill).toContain('data-state="ready"');
+    expect(pill).not.toContain('data-state="working"');
+    // …and the parent's own `working` did not vanish with it: the mark is
+    // drawn again now, where it was suppressed while the pill carried both.
+    expect(out).toContain('navtree-mark');
+    expect(out).toContain('data-state="working"');
+  });
+
+  it('…so an idle chat with a blocked worker still reaches the glance', () => {
+    // The safety argument for collapsing, restated for the new owner of it.
+    // The parent is idle and would draw no mark at all, so the pill is the
+    // only thing that can say a worker is stopped on a question.
+    const out = railHtml([
+      tab('root'),
+      tab('kid0', { spawned_by: 'root', status: 'blocked', clock: null }),
+    ]);
+    const pill = /<button[^>]*navtree-subs-pill[^>]*>/.exec(out)?.[0] ?? '';
+    expect(pill).toContain('data-state="blocked"');
+  });
+
   it('names the states in the chip, loudest first', () => {
     const out = railHtml(
       family([{ status: 'working' }, { status: 'blocked' }, { status: 'working' }]),
