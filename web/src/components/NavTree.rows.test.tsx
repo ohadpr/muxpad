@@ -394,6 +394,42 @@ describe('the sheet nests a child under its parent and files done chats away', (
     expect(count(out, 'data-child="true"')).toBe(1);
   });
 
+  it('a MULTI-PANE chat opens with the same pill, a different glyph', () => {
+    // The rail has two hierarchies: panes inside a chat, and chats under a
+    // chat. Both were bare carets until the sub-chat one became a counted
+    // pill, which left this one looking like a bug — "the chat named Main has
+    // a caret which you click and you see three things under it but it's
+    // rendered differently, what's going on?".
+    // Same shape, different noun. The old chevron must not come back.
+    const split = {
+      direction: 'row',
+      first: { direction: 'row', first: 'p1', second: 'p2' },
+      second: 'p3',
+    } as unknown as Tab['layout'];
+    const out = sheetHtml([tab('main', { layout: split })]);
+    expect(out).toContain('navtree-row-pill navtree-pane-pill');
+    expect(out).not.toContain('navtree-pane-expander');
+    // THE COUNT is the gain: how many are under there, before you tap.
+    expect(out).toContain('3 panes');
+    // …and it is never a status object. The row's own mark one cell along is
+    // already saying what the chat is doing.
+    expect(out).not.toMatch(/navtree-pane-pill[^>]*data-state=/);
+  });
+
+  it('a single-pane chat gets no pill at all — there is nothing to pick', () => {
+    const out = sheetHtml([tab('solo')]);
+    expect(out).not.toContain('navtree-pane-pill');
+  });
+
+  it('…and the DESKTOP rail never draws one: it is a touch control', () => {
+    const split = {
+      direction: 'row',
+      first: 'p1',
+      second: 'p2',
+    } as unknown as Tab['layout'];
+    expect(railHtml([tab('main', { layout: split })])).not.toContain('navtree-pane-pill');
+  });
+
   it('ends the trunk on the last child HERE TOO — this is the surface it broke on', () => {
     // The sheet wraps every row in a `.swiperow`, so the CSS sibling test that
     // used to carry the trunk through could never match here. Three children
@@ -492,7 +528,7 @@ describe('sub-chats are collapsed, and the collapse still tells the truth', () =
     const out = railHtml(family());
     expect(out).not.toContain('>kid0<');
     expect(out).not.toContain('data-child="true"');
-    expect(count(out, 'class="navtree-subs-pill"')).toBe(1);
+    expect(count(out, 'navtree-row-pill navtree-subs-pill')).toBe(1);
     // …and the row it used to occupy is gone, not merely restyled.
     expect(out).not.toContain('navtree-subs-head');
     // The words survive in the title and the accessible name, which is where

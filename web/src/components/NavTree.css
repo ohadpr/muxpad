@@ -1415,7 +1415,7 @@
        --clock now, on every row including this one, which is the whole point of
        the chip being one component. A2's, drawn and not touched.
      · .navtree-close, the pinned pin, .navtree-cron and its
-       glyph's opacity bump, .navtree-tab-headline, .navtree-pane-expander,
+       glyph's opacity bump, .navtree-tab-headline, .navtree-row-pill,
        .navtree-ws-count.
      · all four .navtree-mark state hues, plus the reduced-motion arm. The four
        states are told apart BY colour, so flattening them to one ink made the
@@ -1734,7 +1734,25 @@
   color: var(--fg-dim);
 }
 
-/* ─── THE SUB-CHAT PILL ─────────────────────────────────────────────────────
+/* ─── THE ROW PILL ──────────────────────────────────────────────────────────
+   A count, a disclosure and (where it has one) a state, as ONE object at the
+   end of a row. The rail has TWO hierarchies and this is the shape both of
+   them open with:
+
+     · `.navtree-subs-pill`  — the chats a chat SPAWNED. Agent glyph while
+       open, a state dot while shut, the rollup hue.
+     · `.navtree-pane-pill`  — the PANES inside one chat. A split glyph, never
+       a state hue: panes have no rollup to report, and the row's own mark
+       already says what the chat is doing.
+
+   They were both bare carets until the sub-chat one became this. Leaving the
+   other a naked chevron made a difference in KIND read as a bug — "the chat
+   named Main has a caret which you click and you see three things under it
+   but it's rendered differently, what's going on?" — so the shape is shared
+   and the GLYPH is what distinguishes them. The count is the gain on both:
+   how many are under there, before you tap.
+
+   ─── WHAT THE SUB-CHAT ONE REPLACED ───────────────────────────────────────
    The count, the rolled-up state and the disclosure, as ONE object at the end
    of the PARENT's row.
 
@@ -1760,7 +1778,7 @@
 
    The wash is the status channel's own, so a pill and a mark of the same state
    are the same colour on every theme. */
-.navtree-subs-pill {
+.navtree-row-pill {
   --pill-hue: var(--status-quiet);
   display: inline-flex;
   align-items: center;
@@ -1794,10 +1812,15 @@
 .navtree-subs-pill[data-state="dead"] {
   --pill-hue: var(--status-dead);
 }
+/* PANES NEVER TAKE A STATE HUE. The pill counts boxes in a layout; whether
+   anything in them is working is the ROW's own mark, one cell along, and
+   colouring this too would put the same fact on two objects — the exact
+   duplication the sub-chat pill was built to remove. */
+.navtree-pane-pill,
 /* QUIET — idle, and every open group. The rail's own ink rather than a status
    hue, because "nothing is happening" is not a state the status channel owns:
    giving idle a colour would put a mark on every group in the list. */
-.navtree-subs-pill[data-state="idle"],
+  .navtree-subs-pill[data-state="idle"],
 .navtree-subs-pill[data-open="true"] {
   background: color-mix(in srgb, var(--fg) 11%, transparent);
   color: var(--fg-dim);
@@ -1808,21 +1831,23 @@
    one it reads as nothing. Measured on alucard, an amber pill on the violet
    selection was indistinguishable from the fill. The STEP is the fix, not a
    different hue — the pill must stay the colour its state is everywhere. */
-.navtree-tab-row[data-active="true"] .navtree-subs-pill {
+.navtree-tab-row[data-active="true"] .navtree-row-pill {
   background: color-mix(in srgb, var(--pill-hue) 40%, transparent);
   color: color-mix(in srgb, var(--pill-hue) 40%, var(--fg));
 }
+.navtree-tab-row[data-active="true"] .navtree-pane-pill,
 .navtree-tab-row[data-active="true"] .navtree-subs-pill[data-state="idle"],
 .navtree-tab-row[data-active="true"] .navtree-subs-pill[data-open="true"] {
   background: color-mix(in srgb, var(--fg) 20%, transparent);
   color: var(--fg);
 }
-.navtree-subs-pill:hover {
+.navtree-row-pill:hover {
   background: color-mix(in srgb, var(--pill-hue) 34%, transparent);
 }
-.navtree-tab-row[data-active="true"] .navtree-subs-pill:hover {
+.navtree-tab-row[data-active="true"] .navtree-row-pill:hover {
   background: color-mix(in srgb, var(--pill-hue) 52%, transparent);
 }
+.navtree-pane-pill:hover,
 .navtree-subs-pill[data-state="idle"]:hover,
 .navtree-subs-pill[data-open="true"]:hover {
   background: color-mix(in srgb, var(--fg) 18%, transparent);
@@ -1832,20 +1857,20 @@
    anything settled, a hollow one for idle. It reuses `navtree-state-spin`
    rather than declaring a second keyframe — ONE spin animation exists in this
    rail, and a test enforces it. */
-.navtree-subs-pill-dot {
+.navtree-row-pill-dot {
   width: 8px;
   height: 8px;
   flex: 0 0 auto;
   border-radius: 50%;
   background: currentColor;
 }
-.navtree-subs-pill[data-state="working"] .navtree-subs-pill-dot {
+.navtree-subs-pill[data-state="working"] .navtree-row-pill-dot {
   background: none;
   border: 1.5px solid currentColor;
   border-top-color: transparent;
   animation: navtree-state-spin 0.8s linear infinite;
 }
-.navtree-subs-pill[data-state="idle"] .navtree-subs-pill-dot {
+.navtree-subs-pill[data-state="idle"] .navtree-row-pill-dot {
   background: none;
   border: 1.5px solid currentColor;
   opacity: 0.75;
@@ -1856,30 +1881,30 @@
    this sheet would break the one-animation invariant a test enforces.
    `working` is then told by fill rather than by turning. */
 @media (prefers-reduced-motion: reduce) {
-  .navtree-subs-pill[data-state="working"] .navtree-subs-pill-dot {
+  .navtree-subs-pill[data-state="working"] .navtree-row-pill-dot {
     border-color: currentColor;
     background: currentColor;
   }
 }
 /* OPEN takes the agent glyph instead: the children are showing their own
    states, so a dot here would be a mark for nothing. */
-.navtree-subs-pill-glyph {
+.navtree-row-pill-glyph {
   display: inline-flex;
   align-items: center;
   flex: 0 0 auto;
   opacity: 0.85;
 }
-.navtree-subs-pill-glyph svg {
+.navtree-row-pill-glyph svg {
   width: 10px;
   height: 10px;
 }
-.navtree-subs-pill > svg {
+.navtree-row-pill > svg {
   width: 12px;
   height: 12px;
   flex: 0 0 auto;
   opacity: 0.7;
 }
-.navtree-subs-pill-n {
+.navtree-row-pill-n {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1888,16 +1913,27 @@
    does not, and the breakdown's home on the desktop is a tooltip — which a
    thumb cannot reach. Bigger too: this is a tap target in a list of 44px rows,
    not a label beside 11.5px text. */
-.navtree[data-variant="sheet"] .navtree-subs-pill {
+.navtree[data-variant="sheet"] .navtree-row-pill {
   padding: 3.5px 8px 3.5px 6px;
   font-size: 11.5px;
   min-height: 26px;
+  /* IT MAY SHRINK HERE, and only here. On the rail it carries a bare number
+     and is never the thing that has to give; with the breakdown in it, a long
+     name and a long pill on a narrow phone have to share one line. `-n`
+     already ellipsises and this is what lets it, so what goes is words — the
+     dot and the caret stay `flex: 0 0 auto` and the controls never shrink. */
+  flex-shrink: 1;
+  min-width: 0;
 }
-.navtree[data-variant="sheet"] .navtree-subs-pill-dot {
+.navtree[data-variant="sheet"] .navtree-row-pill-dot {
   width: 9px;
   height: 9px;
 }
-.navtree[data-variant="sheet"] .navtree-subs-pill > svg {
+/* The pane list opens INSTANTLY, so its caret flips instantly too — an
+   animated chevron beside a snapping list reads as lag. (The rule it replaces
+   rotated a right-chevron 90°; this one is already a down-caret, so `open`
+   turns it up like every other disclosure in the rail.) */
+.navtree[data-variant="sheet"] .navtree-row-pill > svg {
   width: 14px;
   height: 14px;
 }
@@ -2333,34 +2369,11 @@
 
 /* ─── Sheet pane list (mobile: tab row expands into its panes) ───────── */
 
-/* Expander chevron. It no longer LEADS the row — see the mobile-rail section
-   at the foot of this file: a leading disclosure track was charged to every
-   row (chevron-less rows carried an identical-width `.-spacer` twin, now
-   deleted along with this rule's leading geometry) and it pushed the emoji,
-   the rail's one hard leading edge, 24px in. It trails now, on multi-pane rows
-   only, inside `.navtree-rail-tail`, which is where its size is set. */
-.navtree-pane-expander {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: none;
-  padding: 0;
-  color: var(--fg-faint);
-  cursor: pointer;
-  border-radius: 4px;
-  touch-action: manipulation;
-  -webkit-tap-highlight-color: transparent;
-}
-.navtree-pane-expander:active {
-  background: var(--bg-hover);
-}
-
-.navtree-pane-expander[data-open="true"] svg {
-  /* Instant flip — expansion itself is instant, an animated chevron next
-     to a snapping list reads as lag. */
-  transform: rotate(90deg);
-}
+/* The pane expander's old chevron rules are GONE with the chevron: it is a
+   `.navtree-pane-pill` now, sharing the sub-chat pill's shape so the rail has
+   one disclosure object instead of two that differ by accident. A stylesheet
+   keeping the dead selector is how a layout grows a second answer to one
+   question. */
 
 /* The expanded pane rows — one hierarchy step deeper than tab rows. */
 .navtree-pane-list {
@@ -3457,21 +3470,6 @@ body.sidenav-resizing iframe {
   display: inline-flex;
   align-items: center;
 }
-/* The pane chevron, trailing. It leads the row on no surface any more: a
-   leading disclosure track was charged to EVERY row (chevron-less rows carried
-   a spacer to keep the column) and it pushed the emoji — the rail's one hard
-   leading edge — 24px in. Multi-pane rows only, so most rows never draw it. */
-.navtree[data-variant="sheet"] .navtree-rail-tail .navtree-pane-expander {
-  flex: 0 0 28px;
-  align-self: center;
-  inline-size: 28px;
-  block-size: 28px;
-  margin-inline: 0;
-  color: var(--fg-dim);
-}
-.navtree[data-variant="sheet"] .navtree-rail-tail .navtree-pane-expander[data-open="true"] svg {
-  transform: rotate(90deg);
-}
 
 /* ─── Selection ───────────────────────────────────────────────────────────
    A FULL-BLEED BAND, and a quiet one. Two changes from the desktop rail, both
@@ -3529,9 +3527,7 @@ body.sidenav-resizing iframe {
   .navtree-name-text {
   font-weight: 700;
 }
-.navtree[data-variant="sheet"] .navtree-tab-row[data-active="true"] .navtree-pane-expander {
-  color: var(--fg-dim);
-}
+
 /* Long-press acknowledgment. Kept below the selection rule so a press on the
    row you are already on does not blank its band. */
 .navtree[data-variant="sheet"] .navtree-tab-row[data-pressing="true"]:not([data-active="true"]) {
