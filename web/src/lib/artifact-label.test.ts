@@ -3,7 +3,7 @@ import { artifactLabel } from './artifact-label';
 
 describe('a link on a card reads as words', () => {
   it('turns a published slug into the words it is made of', () => {
-    expect(artifactLabel('https://pub.octarine.org/trayo-plan-card-demo/')).toBe(
+    expect(artifactLabel('https://pub.example.org/trayo-plan-card-demo/')).toBe(
       'trayo plan card demo',
     );
   });

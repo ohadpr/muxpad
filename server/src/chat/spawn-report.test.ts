@@ -277,7 +277,7 @@ describe('buildSpawnReportPrompt', () => {
     // exactly as it appears" — from before `scrapeArtifacts` existed. With both
     // in place a card carried the same link twice, and the prose copy is the
     // expensive one: measured on a real card, "now live at
-    // https://pub.octarine.org/trayo-plan-card-demo/," filled most of the two
+    // https://pub.example.org/trayo-plan-card-demo/," filled most of the two
     // lines a summary gets and the sentence was cut off at "with three …".
     const p = buildSpawnReportPrompt('assistant: done', { crashed: false });
     expect(p).toMatch(/never write out a url or a file path/i);
@@ -324,7 +324,7 @@ describe('scrapeArtifacts — where the work is, with no model in the path', () 
     // artifact, and they then rendered in FRONT of the host: the link box used
     // `direction: rtl` so its ellipsis would eat the origin, and the bidi
     // algorithm moves trailing neutrals to the paragraph's left edge. The card
-    // read `**/pub.octarine.org/trayo-plan-card-demo`. Both ends, both the url
+    // read `**/pub.example.org/trayo-plan-card-demo`. Both ends, both the url
     // and the path form.
     expect(scrapeArtifacts('assistant: live at **https://x.test/demo/**')).toEqual([
       'https://x.test/demo/',
