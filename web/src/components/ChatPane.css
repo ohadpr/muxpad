@@ -1710,6 +1710,16 @@
   flex: 1 1 auto;
   align-self: stretch;
   place-items: center;
+  /* CENTRE THE TRACK, not just the item in it. A zoomed image is wider than the
+     frame, the implicit `auto` track grows to the image's width, and with the
+     default `justify-content: normal` that track starts at the frame's LEFT
+     edge — so every pixel of overflow went right (and down). The pan clamp
+     (`clampXY`) assumes a centred image and allows ±overflow/2, so on a 390px
+     phone at 2.5x (855px image in a 342px frame) the drag left stopped at
+     tx=-257 with the image's right edge still 257px off-screen, while dragging
+     right revealed 232px of empty backdrop. Centring the track splits the
+     overflow evenly, which is what the clamp's arithmetic was always for. */
+  place-content: center;
   min-width: 0;
   min-height: 0;
 }

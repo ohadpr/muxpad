@@ -686,6 +686,8 @@ function ZoomableImage({
     startCX: 0,
     startCY: 0,
     lastTap: 0,
+    /** Any touchstart — tells a real double-click from a synthesized one. */
+    lastTouch: 0,
     swipeDX: 0,
   });
   const MAX = 5;
@@ -772,6 +774,7 @@ function ZoomableImage({
 
   const onTouchStart = (e: React.TouchEvent) => {
     const gs = g.current;
+    gs.lastTouch = Date.now();
     if (e.touches.length === 2) {
       const [a, b] = [e.touches[0], e.touches[1]];
       if (!a || !b) return;
@@ -892,7 +895,10 @@ function ZoomableImage({
       onLoad={computeFit}
       // Size drives the zoom (browser re-rasterizes from source = sharp);
       // translate only pans. Before the image loads, fall back to the CSS
-      // fit (max 100%). transform-origin stays center so pan math holds.
+      // fit (max 100%). The pan clamp assumes the image is laid out CENTRED
+      // in the frame even when it overflows it — `.chat-img-frame` guarantees
+      // that with `place-content: center`; without it the right edge was
+      // unreachable.
       style={
         fit
           ? {
@@ -907,7 +913,14 @@ function ZoomableImage({
       onTouchStart={onTouchStart}
       onTouchMove={onTouchMove}
       onTouchEnd={onTouchEnd}
-      onDoubleClick={(e) => toggleZoom(e.clientX, e.clientY)}
+      // A double-TAP is already handled in onTouchStart, and mobile Chrome then
+      // synthesizes a `dblclick` from the same two taps — measured on a 390px
+      // touch emulation: touchend at 855px wide, then dblclick, then back to
+      // 342px. The second toggle undid the first, so double-tap never zoomed.
+      onDoubleClick={(e) => {
+        if (Date.now() - g.current.lastTouch < 1000) return;
+        toggleZoom(e.clientX, e.clientY);
+      }}
       onMouseDown={onMouseDown}
     />
   );
