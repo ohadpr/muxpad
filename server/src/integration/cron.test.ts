@@ -47,7 +47,24 @@ async function until(what: string, cond: () => Promise<boolean>, timeoutMs = 10_
   }
 }
 
-describe('muxpad cron e2e (isolated instance, fake runner)', () => {
+/**
+ * WHY THIS FILE DECLARES ITS OWN BUDGET.
+ *
+ * `until()` above waits up to 10s for a condition and throws a sentence naming
+ * what it was waiting for. Vitest's DEFAULT per-test budget is 5s — so the
+ * test always died first, and the one message anybody ever saw was
+ *
+ *     Error: Test timed out in 5000ms.
+ *
+ * which names nothing. A helper whose patience exceeds its test's budget can
+ * never report its own failure: the useful error is unreachable by
+ * construction. The budget here is longer than the helper's patience, so a
+ * genuine hang now says what it was waiting for.
+ *
+ * (The same shape bit `step1-ux.test.ts`, where a 5000ms wait for a frame sat
+ * inside a 5000ms test. Worth checking for wherever a helper has a deadline.)
+ */
+describe('muxpad cron e2e (isolated instance, fake runner)', { timeout: 30_000 }, () => {
   let server: ServerType;
   let port: number;
   let tmp: string;
