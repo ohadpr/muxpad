@@ -1,6 +1,6 @@
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserCardData, BrowserMoment } from '../lib/browser-card';
 import { BrowserCard } from './BrowserCard';
 import { BrowserModal } from './BrowserModal';
@@ -35,9 +35,45 @@ function mount(node: React.ReactNode) {
   return { host, rerender: (next: React.ReactNode) => act(() => root.render(next)) };
 }
 
+/**
+ * THE LIVE FRAME ARRIVES AS BYTES, so the test has to supply bytes.
+ *
+ * The peek fetches each frame as a blob and points the element at an object
+ * URL — see `useLiveShot` for why: an <img> whose `src` changes blanks until
+ * the next response lands, which is the flash. jsdom has neither
+ * `createObjectURL` nor a network, so both are stood up here. `shotFetches`
+ * keeps what was asked for, which is the part worth asserting: the ROUTE is
+ * still the live one, whatever the element ends up holding.
+ */
+let shotFetches: string[] = [];
+let objectUrls = 0;
+beforeEach(() => {
+  shotFetches = [];
+  objectUrls = 0;
+  URL.createObjectURL = () => `blob:mock/${++objectUrls}`;
+  URL.revokeObjectURL = () => {};
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
+    const url = String(input);
+    shotFetches.push(url);
+    return new Response(new Blob([new Uint8Array([1, 2, 3])], { type: 'image/jpeg' }), {
+      status: 200,
+    });
+  });
+});
+
 afterEach(() => {
+  vi.unstubAllGlobals();
   for (const host of hosts.splice(0)) host.remove();
 });
+
+/** Let the queued fetch + blob read settle, the way a real frame would. */
+const settle = async () => {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+};
 
 const buttons = (host: HTMLElement) => [...host.querySelectorAll('button')];
 /** The primary action, by name — a card now carries a peek control too. */
@@ -76,6 +112,7 @@ const moment = (browser: BrowserCardData, over: Partial<BrowserMoment> = {}): Br
   at: 100,
   shotUrl: null,
   answered: false,
+  pinned: false,
   profile: browser.profile,
   browser,
   ...over,
@@ -394,22 +431,24 @@ describe('peeking at a live browser', () => {
     expect(action(host)).toBeDefined();
   });
 
-  it('offers no WIDEN until there is a picture to widen', () => {
+  it('offers no WIDEN until there is a picture to widen', async () => {
     // There is nothing to make wider while the card is a line of text, and a
     // control that does nothing is worse than one that is not there.
     const { host } = mount(<BrowserCard moment={moment(base)} onOpen={() => {}} now={1} />);
     expect(widen(host)).toBeUndefined();
     click(peek(host));
+    await settle();
     expect(widen(host)).toBeDefined();
   });
 
-  it('WIDENS the card, and the same control shrinks it back', () => {
+  it('WIDENS the card, and the same control shrinks it back', async () => {
     // "An expanded button that makes the card full width so I can see more of
     // the browser, and then the button turns into shrink back to regular size."
     // One control going both ways: a button that only ever grew, with
     // shrinking hidden somewhere else, is a state you cannot leave.
     const { host } = mount(<BrowserCard moment={moment(base)} onOpen={() => {}} now={1} />);
     click(peek(host));
+    await settle();
     expect(card(host).dataset.wide).toBeUndefined();
     click(widen(host));
     expect(card(host).dataset.wide).toBe('true');
@@ -420,19 +459,21 @@ describe('peeking at a live browser', () => {
     expect(widen(host)?.getAttribute('aria-label')).toMatch(/widen/i);
   });
 
-  it('forgets the width when the peek closes', () => {
+  it('forgets the width when the peek closes', async () => {
     // A card that reopened at full width later, with no picture in it yet,
     // would be a banner across the conversation with one line of text in it.
     const { host } = mount(<BrowserCard moment={moment(base)} onOpen={() => {}} now={1} />);
     click(peek(host));
+    await settle();
     click(widen(host));
     expect(card(host).dataset.wide).toBe('true');
     click(peek(host));
     click(peek(host));
+    await settle();
     expect(card(host).dataset.wide).toBeUndefined();
   });
 
-  it('widening does not open the viewer', () => {
+  it('widening does not open the viewer', async () => {
     // Everything on this card falls through to the card's own click, which
     // opens a window. Looking harder must stay looking.
     let opened = 0;
@@ -446,6 +487,7 @@ describe('peeking at a live browser', () => {
       />,
     );
     click(peek(host));
+    await settle();
     click(widen(host));
     expect(opened).toBe(0);
   });
@@ -457,7 +499,7 @@ describe('peeking at a live browser', () => {
     expect(peek(host)).toBeUndefined();
   });
 
-  it('shows the CURRENT page, not the frozen still of the moment', () => {
+  it('shows the CURRENT page, not the frozen still of the moment', async () => {
     // Two pictures of one browser, one of them minutes old, is a card asking
     // you to work out which is which. A summons card is the one that carries a
     // frozen still while its browser is still alive.
@@ -475,7 +517,10 @@ describe('peeking at a live browser', () => {
     );
     expect(shot(host)?.getAttribute('src')).toBe('/api/browsers/shopping/shot/100');
     click(peek(host));
-    expect(shot(host)?.getAttribute('src')).toMatch(/\/api\/browsers\/shopping\/shot\?t=\d+/);
+    await settle();
+    // THE ROUTE is the live one — the element holds the bytes it answered with.
+    expect(shotFetches.some((u) => /\/api\/browsers\/shopping\/shot\?t=\d+/.test(u))).toBe(true);
+    expect(shot(host)?.getAttribute('src')).toMatch(/^blob:/);
   });
 
   it('collapses back to the frozen still', () => {
@@ -504,7 +549,7 @@ describe('peeking at a live browser', () => {
     expect(peek(host)?.getAttribute('aria-expanded')).toBe('true');
   });
 
-  it('opens the viewer when the PICTURE is clicked', () => {
+  it('opens the viewer when the PICTURE is clicked', async () => {
     // The picture is what you were looking at when looking stopped being
     // enough, so it is the thing you reach for.
     const onOpen = vi.fn();
@@ -512,6 +557,7 @@ describe('peeking at a live browser', () => {
       <BrowserCard moment={moment(base)} onOpen={onOpen} viewportWidth={1440} now={1} />,
     );
     click(peek(host));
+    await settle();
     click(shot(host) ?? undefined);
     expect(onOpen).toHaveBeenCalledTimes(1);
     expect(onOpen).toHaveBeenCalledWith('modal');

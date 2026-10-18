@@ -201,6 +201,23 @@ export interface BrowserMoment {
   profile: string;
   /** The browser as it is NOW, so the card can open it and read the wheel. */
   browser: BrowserCardData;
+  /**
+   * THIS CARD FOLLOWS THE READER instead of sitting where it happened.
+   *
+   * A browser card is a moment, and a moment belongs at its timestamp — which
+   * is right for history and wrong for the one case the card is most useful
+   * in. A browser opened two hours ago and still working has its card two
+   * hours up the log; measured in a real chat, 2072px above the bottom, under
+   * everything written since. "It's stuck far away so I'm not sure what's
+   * going on." The question a peek answers is "what is it doing NOW", and the
+   * card that answers it was the hardest one to reach.
+   *
+   * So while the browser is LIVE its latest moment floats to the end of the
+   * log, and settles back into place the moment the browser is gone. Only the
+   * latest, and only one per browser: the older moments are history and stay
+   * where they happened.
+   */
+  pinned: boolean;
 }
 
 /**
@@ -270,10 +287,25 @@ export function browserMoments(
         answered: resolvedAt.some((at) => at > event.at),
         profile: browser.profile,
         browser,
+        // Decided below, once the whole list is known: it is the LATEST moment
+        // of each live browser, and "latest" is not a property of one event.
+        pinned: false,
       });
     }
   }
-  return out.sort((a, b) => a.at - b.at);
+  out.sort((a, b) => a.at - b.at);
+  // THE LAST MOMENT OF EACH LIVE BROWSER FLOATS. Walking backwards so the
+  // first one seen per profile is its newest; everything older is history and
+  // stays where it happened, including an earlier summons from the same
+  // browser — that one is a record of something you already dealt with.
+  const floated = new Set<string>();
+  for (let i = out.length - 1; i >= 0; i--) {
+    const m = out[i] as BrowserMoment;
+    if (floated.has(m.profile) || !isLive(m.browser)) continue;
+    floated.add(m.profile);
+    m.pinned = true;
+  }
+  return out;
 }
 
 /**
@@ -421,11 +453,17 @@ export function injectBrowserMoments<T>(
   // Measured on a chat whose browser cards sat at indices 0, 1 and 2, above
   // every message: "it acts real weird once I try to scroll past the cards
   // representing browser automation."
-  let i = windowStart(moments, opts?.floor ?? null);
+  // A PINNED MOMENT IS NOT PLACED IN TIME. It belongs at the end, with the
+  // reader, for as long as its browser is alive — see BrowserMoment.pinned.
+  // Split first so the timeline walk below never sees one and the tail flush
+  // never has to decide between them.
+  const timed = moments.filter((m) => !m.pinned);
+  const pinned = moments.filter((m) => m.pinned);
+  let i = windowStart(timed, opts?.floor ?? null);
   for (const entry of entries) {
     if (entry.at !== null) {
-      while (i < moments.length && (moments[i] as BrowserMoment).at <= entry.at) {
-        const moment = moments[i++] as BrowserMoment;
+      while (i < timed.length && (timed[i] as BrowserMoment).at <= entry.at) {
+        const moment = timed[i++] as BrowserMoment;
         out.push({ at: moment.at, node: render(moment) });
       }
     }
@@ -433,9 +471,19 @@ export function injectBrowserMoments<T>(
   }
   // …and nothing at the bottom until the log has a timeline to hang it on.
   if (canFlushTail(entries)) {
-    for (; i < moments.length; i++) {
-      const moment = moments[i] as BrowserMoment;
+    for (; i < timed.length; i++) {
+      const moment = timed[i] as BrowserMoment;
       out.push({ at: moment.at, node: render(moment) });
+    }
+    // THE PINNED ONES LAST, and after everything — including any timed moment
+    // that flushed above, so a live browser's card is the final thing in the
+    // log rather than merely near the end.
+    //
+    // `at: null` is load-bearing: the entries carry timestamps for the spawn
+    // interleave that runs after this, and a pinned card stamped with its own
+    // `at` would send that pass looking for a place in the past for it.
+    for (const moment of pinned) {
+      out.push({ at: null, node: render(moment) });
     }
   }
   return out;

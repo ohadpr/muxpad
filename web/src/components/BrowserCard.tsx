@@ -51,27 +51,77 @@ const PEEK_EVERY_MS = 2_500;
  * PAUSED WHEN THE TAB IS HIDDEN. Otherwise a phone in a pocket keeps a browser
  * taking screenshots of itself every two and a half seconds, forever, for
  * nobody — and the capture is a real CDP round trip into a real page.
+ *
+ * ─── IT USED TO FLASH, ONCE PER REFRESH ─────────────────────────────────────
+ * The hook handed the <img> a new URL every tick and let the element fetch it.
+ * An <img> whose `src` changes clears what it is showing before the next
+ * response arrives, so every 2.5s the picture blanked to the card's background
+ * for the length of a round trip into Chrome — reported simply as "it
+ * flashes". The longer the capture took, the longer the gap, which is backwards:
+ * a busy page blinked hardest.
+ *
+ * So the frame is fetched as a BLOB and the element is only ever pointed at
+ * bytes that have already arrived. The old frame stays on screen the whole
+ * time; the swap is one paint with nothing in between.
+ *
+ * It cannot be done by preloading the same URL into `new Image()` either: the
+ * route answers `no-store` precisely so that "now" is now, so the element's own
+ * fetch would be a second round trip rather than a cache hit, and the flash
+ * would come back with the bill doubled.
+ *
+ * OBJECT URLs ARE REVOKED ONE GENERATION LATE. Revoking the previous frame at
+ * the moment of the swap races the paint — the element may still be showing it
+ * — so the queue holds two and releases the older. A failed fetch releases
+ * nothing and changes nothing, which is what keeps a dropped frame from
+ * blanking a card that has a perfectly good picture on it.
  */
 function useLiveShot(profile: string, on: boolean): string | null {
-  const [tick, setTick] = useState(() => Date.now());
+  const [shown, setShown] = useState<string | null>(null);
   useEffect(() => {
-    if (!on) return;
-    const beat = () => {
-      if (!document.hidden) setTick(Date.now());
+    if (!on) {
+      setShown(null);
+      return;
+    }
+    let alive = true;
+    /** The object URLs this mount created, newest last. At most two live. */
+    const held: string[] = [];
+    const release = () => {
+      while (held.length > 2) {
+        const old = held.shift();
+        if (old) URL.revokeObjectURL(old);
+      }
     };
-    const id = setInterval(beat, PEEK_EVERY_MS);
+    const grab = async () => {
+      if (document.hidden) return;
+      try {
+        const res = await fetch(browserLiveShotUrl(profile, Date.now()), { cache: 'no-store' });
+        if (!res.ok) return;
+        const blob = await res.blob();
+        if (!alive || blob.size === 0) return;
+        const url = URL.createObjectURL(blob);
+        held.push(url);
+        setShown(url);
+        release();
+      } catch {
+        // A dropped frame is not a broken card: the one on screen stays.
+      }
+    };
+    void grab();
+    const id = setInterval(() => void grab(), PEEK_EVERY_MS);
     const wake = () => {
       // Straight away on return, rather than up to one interval of a stale
       // picture that looks like a frozen browser.
-      if (!document.hidden) setTick(Date.now());
+      if (!document.hidden) void grab();
     };
     document.addEventListener('visibilitychange', wake);
     return () => {
+      alive = false;
       clearInterval(id);
       document.removeEventListener('visibilitychange', wake);
+      for (const u of held) URL.revokeObjectURL(u);
     };
-  }, [on]);
-  return on ? browserLiveShotUrl(profile, tick) : null;
+  }, [on, profile]);
+  return shown;
 }
 
 export function BrowserCard({ moment, onOpen, viewportWidth, now }: BrowserCardProps) {
