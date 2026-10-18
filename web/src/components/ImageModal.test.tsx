@@ -261,3 +261,53 @@ describe('the lightbox frame must not shrink-wrap to its image', () => {
     expect(rule).toMatch(/align-items:\s*center/);
   });
 });
+
+describe('a zoomed image overflows the frame EVENLY', () => {
+  it('.chat-img-frame centres its grid track, not just the item in it', () => {
+    // The pan clamp allows ±(scaled width − frame width)/2 — correct only if the
+    // overflow is split evenly. With the default `justify-content: normal` the
+    // track grew rightwards from the frame's left edge, so at 2.5x on a 390px
+    // phone the drag left stopped with 257px of the image's right side still
+    // off-screen. jsdom cannot lay that out, so the rule itself is the guard.
+    const css = readFileSync(join(__dirname, 'ChatPane.css'), 'utf-8');
+    const block = css.slice(css.indexOf('.chat-img-frame {'));
+    const rule = block.slice(0, block.indexOf('}'));
+    expect(rule).toMatch(/display:\s*grid/);
+    expect(rule).toMatch(/place-content:\s*center/);
+  });
+});
+
+describe('double-tap zooms once', () => {
+  it('ignores the dblclick the browser synthesizes from the same two taps', () => {
+    // Mobile Chrome fires touchstart/touchend ×2 and THEN a dblclick. Both
+    // paths toggled the zoom, so the second undid the first: measured 342px →
+    // 855px at the second touchend, back to 342px at the dblclick.
+    mount([IMG(1)]);
+    const img = document.querySelector('.chat-img-zoom') as HTMLImageElement;
+    const tap = () =>
+      act(() => {
+        const t = new Event('touchstart', { bubbles: true });
+        Object.defineProperty(t, 'touches', { value: [{ clientX: 10, clientY: 10 }] });
+        img.dispatchEvent(t);
+        const e = new Event('touchend', { bubbles: true });
+        Object.defineProperty(e, 'touches', { value: [] });
+        img.dispatchEvent(e);
+      });
+    tap();
+    tap();
+    expect(img.classList.contains('-zoomed')).toBe(true);
+    act(() => {
+      img.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    });
+    expect(img.classList.contains('-zoomed')).toBe(true);
+  });
+
+  it('a real double-click with no touch still zooms', () => {
+    mount([IMG(1)]);
+    const img = document.querySelector('.chat-img-zoom') as HTMLImageElement;
+    act(() => {
+      img.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    });
+    expect(img.classList.contains('-zoomed')).toBe(true);
+  });
+});
