@@ -3214,6 +3214,23 @@ cmd_agent() {
     echo "muxpad agent: runner not built ($runner missing) — run 'pnpm build' in $ROOT" >&2
     exit 1
   fi
+  # Account logins are isolated; profiles share projects so resume keeps history.
+  # Only Claude uses this selector. The runner applies persisted quota cooldowns.
+  local _backend=claude _previous='' _account_dir=''
+  for a in "$@"; do
+    if [ "$_previous" = '--backend' ]; then _backend="$a"; fi
+    case "$a" in --backend=*) _backend="${a#--backend=}" ;; esac
+    _previous="$a"
+  done
+  if [ "$_backend" = claude ] && [ -f "$DATA_DIR/claude-accounts.json" ]; then
+    require_jq
+    _account_dir="$(jq -er '.preferred as $id | .accounts[] | select(.id == $id) | .configDir' "$DATA_DIR/claude-accounts.json")" || {
+      echo 'muxpad: invalid Claude account configuration' >&2; exit 1;
+    }
+    export CLAUDE_CONFIG_DIR="$_account_dir"
+    unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN
+  fi
+
   exec node "$runner" "$@"
 }
 
@@ -4345,6 +4362,12 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                      chat face; the terminal shows an activity
                                      log. Auto-resumes across ptyd restarts via
                                      the pane's saved startup command.
+  claude-account [status|add <id>|remove <id>|use <id|auto>|reset <id>]
+                                     run Claude panes across more than one
+                                     subscription. One account needs no setup;
+                                     `add` creates a second profile, shares the
+                                     transcript history with the first and turns
+                                     on failover. `status` says how full each is.
   agent stop <paneId>                         interrupt an in-flight turn
   agent new [--workspace=<id>] [--cwd=<dir>] [--name=<tab name>] [--backend=<b>]
             [--model=<model>] [--mode=chat|agent] "message"
@@ -4594,6 +4617,15 @@ case "$VERB" in
   tunnel) cmd_tunnel "${ARGS[@]:1}" ;;
   claude) cmd_claude "${ARGS[@]:1}" ;;
   agent) cmd_agent "${ARGS[@]:1}" ;;
+  # --json is stripped as a global flag before dispatch, so it has to be handed
+  # back or `muxpad claude-account status --json` silently returns the prose
+  # form — which is what the quota card parses, and it is not JSON.
+  claude-account)
+    if [ "${JSON_OUTPUT:-0}" = 1 ]; then
+      exec node "$ROOT/server/dist/claude-accounts/cli.js" "${ARGS[@]:1}" --json
+    fi
+    exec node "$ROOT/server/dist/claude-accounts/cli.js" "${ARGS[@]:1}"
+    ;;
   cron) cmd_cron "${ARGS[@]:1}" ;;
   search) cmd_search "${ARGS[@]:1}" ;;
   slack) cmd_slack "${ARGS[@]:1}" ;;

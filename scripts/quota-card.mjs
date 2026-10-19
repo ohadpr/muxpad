@@ -27,7 +27,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 const status = JSON.parse(
-  execFileSync('muxpad', ['claude-account', 'status'], { encoding: 'utf8' }),
+  execFileSync('muxpad', ['claude-account', 'status', '--json'], { encoding: 'utf8' }),
 );
 const cooled = new Set(status.cooldowns.map((c) => `${c.account}:${c.scope}`));
 /** A COOLDOWN IS A FULL WINDOW. The pool writes one the moment an account is

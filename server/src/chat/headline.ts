@@ -1284,7 +1284,7 @@ export function sweepImplausibleHeadlines(db: Database.Database): { cleared: str
  * churn and latency, not money.)
  */
 export const agentSdkHeadlineModel: HeadlineModel = async (prompt, signal) => {
-  const { query } = await import('@anthropic-ai/claude-agent-sdk');
+  const { accountCompletion: query } = await import('../claude-accounts/completion.js');
   const abort = new AbortController();
   if (signal.aborted) abort.abort();
   else signal.addEventListener('abort', () => abort.abort(), { once: true });

@@ -282,6 +282,8 @@ Mobile is for checking in on a session you started elsewhere. Long sessions stil
 
 Agent panes need `codex` and/or `cursor-agent` on the PATH if you intend to use those backends. The **claude** backend does not need anything on the PATH — it runs through `@anthropic-ai/claude-agent-sdk`, which brings its own binary and uses your existing login. A PATH `claude` is needed only for `muxpad claude`, the TUI adoption path.
 
+**One Claude login is the whole setup** — the claude backend uses it and there is nothing to configure. If you have a second subscription and want panes to keep working when the first one hits a usage window, `muxpad claude-account add backup` enrols it: see **[docs/claude-accounts.md](docs/claude-accounts.md)**. `muxpad claude-account status` says how full each one is.
+
 ## Install
 
 ```bash

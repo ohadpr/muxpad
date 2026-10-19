@@ -29,6 +29,16 @@ import { z } from 'zod';
 import { readAgentInstructions } from '../../agent-instructions.js';
 import { readChatModeOverlay, wrapModeNote } from '../../agent-modes.js';
 import { findTranscript } from '../../chat/TranscriptReader.js';
+import { accountCompletion } from '../../claude-accounts/completion.js';
+import {
+  type Account,
+  AccountPool,
+  type QuotaBlock,
+  accountEnv,
+  assertSharedHistory,
+  assistantQuota,
+  quotaBlock,
+} from '../../claude-accounts/pool.js';
 import { bold, dim } from '../ansi.js';
 import { AuthHealPolicy, authGiveUpNotice, isAuthFailureText } from '../auth-heal.js';
 import { BackgroundCommands } from '../background-commands.js';
@@ -512,6 +522,22 @@ export function applyTurnResult(
 export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): AgentBackend {
   const { emit, log } = host;
   const { requestedSid, requestedModel } = opts;
+  const accountPool = AccountPool.open();
+  if (accountPool) assertSharedHistory(accountPool.accounts());
+  let account = accountPool?.choose(host.paneId, requestedModel ?? 'opus') ?? null;
+  // An exhausted pool may construct an idle child, but cannot deliver work.
+  if (accountPool && !account) account = accountPool.accounts().find((a) => a.enabled) ?? null;
+  if (account) log(dim(`Claude account: ${account.label} (${account.id})`));
+  let activeModel: string | null = requestedModel;
+  const triedAccounts = new Set<string>();
+  let quotaFailure: QuotaBlock | null = null;
+  let quotaPaused = false;
+  let quotaTimer: ReturnType<typeof setTimeout> | null = null;
+  let recoveryGeneration = 0;
+  let recoveryInFlight = false;
+  let wakeHistoryRecovery: (() => void) | null = null;
+  const unresolvedTools = new Set<string>();
+  let uncertainToolResult = false;
 
   // ── Agent mode (⚡ do / 🧠 deep) ──────────────────────────────────────────
   // The LAUNCH mode is the only one that can reach the SDK as system-prompt
@@ -633,8 +659,16 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
    * by the session loop, which is the only place allowed to tear the session
    * down and build another.
    */
-  let healPlan: { delayMs: number; attempt: number; of: number; retry: string | null } | null =
-    null;
+  type HealPlan = {
+    delayMs: number;
+    attempt: number;
+    of: number;
+    retry: string | null;
+    account?: Account;
+    reason?: string;
+    generation?: number;
+  };
+  let healPlan: HealPlan | null = null;
   /** Set by shutdown(): a heal parked on its backoff must not resurrect the
    *  session after the runner has been told to die. */
   let shuttingDown = false;
@@ -1211,7 +1245,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
     const timeout = setTimeout(() => abort.abort(), 60_000);
     try {
       const prompt = `Generate a concise 3–6 word title for this conversation, in its language. Reply with ONLY the title — no quotes, no trailing punctuation.\n\nUser: ${firstUserText.slice(0, 500)}\n\nAssistant: ${firstAssistantText.slice(0, 500)}`;
-      const one = query({
+      const one = accountCompletion({
         prompt,
         options: {
           model: 'haiku',
@@ -1251,7 +1285,47 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
    */
   async function* userMessages(epoch: number): AsyncGenerator<SDKUserMessage> {
     while (epoch === sessionEpoch) {
-      while (epoch === sessionEpoch && !inTurn && pendingTexts.length > 0) {
+      while (epoch === sessionEpoch && !inTurn && !quotaPaused && pendingTexts.length > 0) {
+        if (accountPool && account) {
+          const next = accountPool.choose(
+            host.paneId,
+            activeModel ?? requestedModel ?? 'opus',
+            new Set(),
+            account.id,
+          );
+          if (!next) {
+            quotaPaused = true;
+            const reason =
+              'All Claude accounts are unavailable. Request saved; use /retry after an account resets.';
+            accountPool.savePending(host.paneId, liveSid, pendingTexts[0] as string, reason);
+            log(reason);
+            emit({ t: 'turn-done', ok: false, error: reason });
+            break;
+          }
+          if (next.id !== account.id) {
+            if (backgroundCommands.size || subagents.values().length) {
+              quotaPaused = true;
+              emit({
+                t: 'turn-done',
+                ok: false,
+                error:
+                  'Claude account switch is waiting for background work. Use /retry once it finishes.',
+              });
+              break;
+            }
+            healPlan = {
+              delayMs: 0,
+              attempt: 1,
+              of: 1,
+              retry: null,
+              account: next,
+              reason: 'previous account is cooling down',
+              generation: recoveryGeneration,
+            };
+            retireSession();
+            return;
+          }
+        }
         const text = pendingTexts.shift() as string;
         if (firstUserText === null) firstUserText = text;
         inTurn = true;
@@ -1262,6 +1336,9 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
         firstReplyText = '';
         currentTurnText = text;
         authFailureThisTurn = null;
+        quotaFailure = null;
+        unresolvedTools.clear();
+        uncertainToolResult = false;
         toolUsesThisTurn = 0;
         // A cron fire is a relay, not a person: the scheduler wrote it and
         // nobody is sitting there, so it may legitimately end silent. Read off
@@ -1517,7 +1594,18 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
    * itself and the pane keeps its identity either way.
    */
   function spawnSession(anchor: Pick<Options, 'resume' | 'sessionId'>): ReturnType<typeof query> {
-    return query({ prompt: userMessages(sessionEpoch), options: { ...options, ...anchor } });
+    const saved = accountPool?.pending(host.paneId);
+    const effectiveAnchor =
+      saved?.session === liveSid && saved.requiresHistory ? { resume: liveSid } : anchor;
+    return query({
+      prompt: userMessages(sessionEpoch),
+      options: {
+        ...options,
+        ...effectiveAnchor,
+        ...(activeModel ? { model: activeModel } : {}),
+        ...(account ? { env: accountEnv(account) } : {}),
+      },
+    });
   }
 
   sessionEpoch = 1;
@@ -1536,7 +1624,6 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
   // reports only the ALIAS ('opus'), so this is the sole reliable source of the
   // exact version — the chat's own self-report is unreliable. Rides the status
   // frame so the picker/chip can show precisely which model is live.
-  let activeModel: string | null = null;
 
   // Single-flight across ALL callers (init, turn-done, interval, set-model,
   // boot) — concurrent control requests buy nothing and race lastStatus.
@@ -1626,7 +1713,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
       sid: liveSid,
       cwd: process.cwd(),
       pid: process.pid,
-      turnActive: inTurn,
+      turnActive: inTurn || recoveryInFlight || healPlan !== null,
       backend: 'claude',
     };
   }
@@ -1665,14 +1752,64 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
   }
 
   /**
-   * Spawn the replacement and put the user's turn back. The ONLY recovery for
-   * a dead credential — see auth-heal.ts.
+   * Persist the interrupted request and select a bounded, safe quota recovery.
    */
+  function recoverQuota(): void {
+    if (!quotaFailure || !accountPool || !account) return;
+    const failure = quotaFailure;
+    quotaFailure = null;
+    if (quotaTimer) {
+      clearTimeout(quotaTimer);
+      quotaTimer = null;
+    }
+    inTurn = false;
+    triedAccounts.add(account.id);
+    const unsafe =
+      (toolUsesThisTurn > 0 && !findTranscript(liveSid)) ||
+      unresolvedTools.size > 0 ||
+      uncertainToolResult ||
+      backgroundCommands.size > 0 ||
+      subagents.values().length > 0;
+    const retry =
+      toolUsesThisTurn > 0
+        ? 'Continue the interrupted request from the saved conversation. Completed tool results are authoritative: do not repeat completed actions. Reconcile any uncertain outcome before acting.'
+        : currentTurnText;
+    const next = unsafe
+      ? null
+      : accountPool.choose(host.paneId, activeModel ?? 'opus', triedAccounts);
+    if (retry !== null)
+      accountPool.savePending(host.paneId, liveSid, retry, failure.reason, toolUsesThisTurn > 0);
+    currentTurnText = null;
+    resolveAllQuestions('interrupted');
+    replyBlocks.clear();
+    if (!next) {
+      quotaPaused = true;
+      const reason = unsafe
+        ? `Claude ${account.id} hit its limit. Recovery paused because tool/background outcomes need reconciliation. Request saved; check the work before /retry.`
+        : 'All Claude accounts are unavailable. Request saved; use /retry after an account resets.';
+      log(reason);
+      emit({ t: 'turn-done', ok: false, error: reason, ...backgroundField() });
+      notifyUser(reason);
+      return;
+    }
+    healPlan = {
+      delayMs: 100 + Math.floor(Math.random() * 400),
+      attempt: triedAccounts.size,
+      of: accountPool.accounts().length,
+      retry,
+      account: next,
+      reason: failure.reason,
+      generation: recoveryGeneration,
+    };
+    if (retry === null) emit({ t: 'turn-done', ok: false, error: failure.reason });
+    retireSession();
+  }
+
   async function performHeal(plan: NonNullable<typeof healPlan>): Promise<void> {
     if (plan.delayMs > 0) {
       log(
         dim(
-          `auth: waiting ${Math.round(plan.delayMs / 1000)}s before re-exec ${plan.attempt}/${plan.of}`,
+          `recovery: waiting ${Math.round(plan.delayMs / 1000)}s before re-exec ${plan.attempt}/${plan.of}`,
         ),
       );
       await new Promise<void>((r) => {
@@ -1681,19 +1818,48 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
       });
     }
     if (shuttingDown) return;
-    log(
-      `${bold('↻ auth')} re-execing the session (attempt ${plan.attempt}/${plan.of}) — a fresh process re-reads the credential`,
-    );
+    // A transcript can disappear during recovery backoff. Never replace the
+    // session or queue a post-tool continuation without its saved history.
+    while (
+      !shuttingDown &&
+      accountPool?.pending(host.paneId)?.requiresHistory &&
+      !findTranscript(liveSid)
+    ) {
+      quotaPaused = true;
+      const reason =
+        'Claude recovery paused: saved conversation history is unavailable after tools ran. Restore the conversation and use /retry.';
+      log(reason);
+      emit({ t: 'turn-done', ok: false, error: reason });
+      notifyUser(reason);
+      await new Promise<void>((resolve) => {
+        wakeHistoryRecovery = resolve;
+      });
+      wakeHistoryRecovery = null;
+    }
+    if (shuttingDown) return;
+    quotaPaused = false;
+    if (plan.account) {
+      const previous = account?.id;
+      account = plan.account;
+      const notice = `Claude switched ${previous} → ${account.id}: ${plan.reason ?? 'account unavailable'}`;
+      log(notice);
+      notifyUser(notice);
+    } else {
+      log(`${bold('↻ auth')} re-execing the session (attempt ${plan.attempt}/${plan.of})`);
+    }
     // Half-generated reply blocks and the status cache belong to the process
     // that is now dead; the new session re-inits and re-reports.
     replyBlocks.clear();
     lastStatus = null;
     statusEpoch += 1;
-    if (plan.retry !== null) {
-      // Front of the queue: this message was never delivered to a model (the
-      // failed turn cost $0 and 0.05s), and it is what the user is waiting for.
+    if (
+      plan.retry !== null &&
+      (plan.generation === undefined || plan.generation === recoveryGeneration)
+    ) {
+      // Retry rejected requests, or continue from recorded results after tools.
+      // Both precede later input and are cancelled by Stop during the delay.
       pendingTexts.unshift(plan.retry);
-      log(dim('auth: the message that failed goes back at the front of the queue'));
+      log(dim('recovery: resuming the interrupted request'));
     }
     session = spawnSession(findTranscript(liveSid) ? { resume: liveSid } : { sessionId: liveSid });
     kick();
@@ -1703,6 +1869,41 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
   // AgentBackend surface.
   // -------------------------------------------------------------------------
   function send(text: string): void {
+    if (accountPool?.pending(host.paneId)?.requiresHistory && !findTranscript(liveSid)) {
+      emit({
+        t: 'turn-done',
+        ok: false,
+        error:
+          'Saved history is missing after tools ran. Reconcile completed work and restore the conversation before retrying.',
+      });
+      return;
+    }
+    if (wakeHistoryRecovery) {
+      if (text.trim() !== '/retry') pendingTexts.push(text);
+      wakeHistoryRecovery();
+      return;
+    }
+    triedAccounts.clear();
+    quotaPaused = false;
+    if (text.trim() === '/retry' && accountPool) {
+      const saved = accountPool.pending(host.paneId);
+      if (saved && saved.session !== liveSid) {
+        emit({
+          t: 'turn-done',
+          ok: false,
+          error:
+            'Saved request belongs to another session; resume that conversation before retrying.',
+        });
+        return;
+      }
+      if (saved && pendingTexts[0] !== saved.text) pendingTexts.unshift(saved.text);
+      if (pendingTexts.length === 0) {
+        emit({ t: 'turn-done', ok: false, error: 'No saved Claude request to retry.' });
+        return;
+      }
+      kick();
+      return;
+    }
     pendingTexts.push(text);
     kick();
   }
@@ -1719,6 +1920,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
     session
       .setModel(model)
       .then(() => {
+        activeModel = model;
         log(`${bold('model')} → ${model}`);
         return refreshStatus(false);
       })
@@ -1728,6 +1930,12 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
   }
 
   function stop(): void {
+    const wasRecovering = recoveryInFlight || healPlan !== null;
+    recoveryGeneration++;
+    quotaPaused = false;
+    accountPool?.clearPending(host.paneId);
+    wakeHistoryRecovery?.();
+    if (healPlan) healPlan.retry = null;
     // Stop always empties the queue — a user pressing Stop wants pending
     // messages cancelled, not delivered into whatever runs next. This also
     // covers the send-then-immediate-stop pattern where the send is queued
@@ -1766,7 +1974,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
           }
         }, 10_000);
       });
-    } else if (hadQueued) {
+    } else if (hadQueued || wasRecovering) {
       // Nothing running, but queued sends were just cancelled: tell the chat
       // views so their optimistic bubbles/working state clear (that content
       // will never reach the transcript).
@@ -1854,6 +2062,9 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
       // nothing to put back — see the turn-result branch.
       currentTurnText = null;
       authFailureThisTurn = null;
+      quotaFailure = null;
+      unresolvedTools.clear();
+      uncertainToolResult = false;
       toolUsesThisTurn = 0;
       // Nobody asked for this turn, so nobody is owed an answer for it — the
       // reply guard stays out of the way. (This is the distinction xAI's
@@ -1874,16 +2085,26 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
     // anything else that ends the stream ends the runner, exactly as before.
     while (true) {
       healPlan = null;
-      await runSession();
+      try {
+        await runSession();
+      } catch (error) {
+        if (!healPlan && !shuttingDown) throw error;
+      }
       const plan = healPlan;
       healPlan = null;
       if (!plan || shuttingDown) return;
-      await performHeal(plan);
+      recoveryInFlight = true;
+      try {
+        await performHeal(plan);
+      } finally {
+        recoveryInFlight = false;
+      }
       if (shuttingDown) return;
     }
 
     async function runSession(): Promise<void> {
       for await (const msg of session) {
+        if (shuttingDown) return;
         lastSessionActivityAt = Date.now();
         // The roster's whole view of the stream, in one testable place. The
         // branches below own the pane's LOG and the wire frames; this owns
@@ -1896,6 +2117,37 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
         // An EDGE, not a stream: only a change in "is anything still running"
         // reaches the server, and the drain to zero is the one it acts on.
         reportBackground();
+        if (msg.type === 'rate_limit_event' && accountPool && account) {
+          const info = msg.rate_limit_info as unknown as Record<string, unknown>;
+          // EVERY reading, not just the denials. `quotaBlock` below answers
+          // "may this proceed"; this keeps the number on the same event, which
+          // is the only place "how full is this subscription" is ever stated.
+          accountPool.record(account.id, info);
+          const block = quotaBlock(info);
+          if (block) {
+            quotaFailure = block;
+            accountPool.block(account.id, block);
+            // Some CLI versions park for hours instead of emitting a result.
+            // Ask for a clean boundary; the bounded fallback preserves unknown
+            // tool outcomes and never replays them.
+            if (inTurn && !quotaTimer) {
+              void session.interrupt().catch(() => {});
+              quotaTimer = setTimeout(() => {
+                quotaTimer = null;
+                if (quotaFailure && inTurn && !interruptRequested) recoverQuota();
+              }, 5_000);
+              quotaTimer.unref();
+            }
+          }
+        }
+        if (msg.type === 'user' && Array.isArray(msg.message.content)) {
+          for (const block of msg.message.content) {
+            if (block.type === 'tool_result') {
+              unresolvedTools.delete(block.tool_use_id);
+              if (block.is_error) uncertainToolResult = true;
+            }
+          }
+        }
         if (msg.type === 'system' && msg.subtype === 'init') {
           log(dim(`ready · ${msg.model} · ${msg.tools.length} tools`));
           // Init reports the concrete resolved model (e.g. 'claude-opus-4-8').
@@ -1992,7 +2244,13 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
           // Track the concrete model per assistant message so a mid-session switch
           // (setModel) is reflected; refresh the status when it actually changes.
           const m = msg.message.model;
-          if (typeof m === 'string' && m && m !== activeModel) {
+          if (
+            !msg.error &&
+            typeof m === 'string' &&
+            m &&
+            m !== '<synthetic>' &&
+            m !== activeModel
+          ) {
             activeModel = m;
             void refreshStatus(false);
           }
@@ -2023,8 +2281,16 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
               // authenticate never reaches a model, so a turn that CALLED
               // something is a turn that was working. See the result branch.
               toolUsesThisTurn++;
+              unresolvedTools.add(block.id);
               const arg = summarizeToolInput(block.name, block.input);
               log(`${dim('⚙')} ${block.name}${arg ? dim(` ${arg}`) : ''}`);
+            }
+          }
+          if (accountPool && account) {
+            const block = assistantQuota(msg.error, msgText);
+            if (block) {
+              quotaFailure ??= block;
+              accountPool.block(account.id, quotaFailure);
             }
           }
           // Keep the LATEST prose-bearing assistant message as the turn's summary.
@@ -2033,6 +2299,19 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
             lastAssistantTextId = msgTextId;
           }
         } else if (msg.type === 'result') {
+          if (quotaPaused) {
+            inTurn = false;
+            continue;
+          }
+          if (quotaTimer) {
+            clearTimeout(quotaTimer);
+            quotaTimer = null;
+          }
+          if (quotaFailure && accountPool && account && !interruptRequested) {
+            recoverQuota();
+            if (healPlan) break;
+            continue;
+          }
           inTurn = false;
           // A half-generated reply block cannot outlive the turn that was typing
           // it — its index will be reused by the next turn's blocks.
@@ -2091,6 +2370,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
                 attempt: decision.attempt,
                 of: decision.of,
                 retry: currentTurnText,
+                generation: recoveryGeneration,
               };
               if (currentTurnText === null) emit({ t: 'turn-done', ok: false, error: message });
               currentTurnText = null;
@@ -2129,6 +2409,13 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
           }
           // A turn that got through on this credential forgives the ladder.
           authHeal.ok();
+          if (msg.subtype === 'success' && !interruptRequested) {
+            triedAccounts.clear();
+            const saved = accountPool?.pending(host.paneId);
+            if (saved?.session === liveSid && saved.text === currentTurnText) {
+              accountPool?.clearPending(host.paneId);
+            }
+          }
           currentTurnText = null;
           // …and a turn the CLI actually ran has written the transcript a
           // future respawn will look for. Record that it exists, once.
@@ -2263,6 +2550,9 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
 
   function shutdown(): void {
     shuttingDown = true;
+    wakeHistoryRecovery?.();
+    if (quotaTimer) clearTimeout(quotaTimer);
+    accountPool?.close();
     clearInterval(statusInterval);
     clearInterval(subagentKeepalive);
     if (interruptFailTimer !== null) clearTimeout(interruptFailTimer); // no spurious post-shutdown turn-done

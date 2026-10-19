@@ -82,7 +82,7 @@ export async function summarizePane(db: Database.Database, paneId: string): Prom
   const abort = new AbortController();
   const timeout = setTimeout(() => abort.abort(), 30_000);
   try {
-    const { query } = await import('@anthropic-ai/claude-agent-sdk');
+    const { accountCompletion: query } = await import('../claude-accounts/completion.js');
     const prompt = `Below is a conversation between a user and an AI assistant. In 1–2 sentences, state the DELIVERABLE — what was answered or produced — not the process it took. Be terse and concrete. If files/artifacts were produced, mention them. Reply with ONLY the summary, no preamble.\n\n${convo}`;
     const one = query({
       prompt,

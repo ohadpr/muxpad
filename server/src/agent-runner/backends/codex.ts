@@ -248,6 +248,10 @@ export function createCodexBackend(
   // placeholder id the server never tails.
   let turnLog: ChatEvent[] = [];
   let turnCommitted = false;
+  /** Has this turn streamed any prose yet? Only the SECOND and later messages
+   *  get a leading blank line — one in front of the first would be a paragraph
+   *  break around nothing. Same rule as claude.ts. */
+  let streamedTextThisTurn = false;
   function writeEvent(event: ChatEvent): void {
     try {
       appendTranscriptEvent(liveSid, event);
@@ -387,6 +391,18 @@ export function createCodexBackend(
         if (text) {
           // No token deltas from exec — stream the whole message as one chunk
           // for the live view, and land it in the transcript log for history.
+          //
+          // A BLANK LINE BETWEEN MESSAGES, the same one claude.ts emits
+          // between text blocks, and for a sharper reason here. The client
+          // subtracts landed text from the live preview by joining the landed
+          // blocks (ChatPane's `consumeStreamedText`) and that join is tried
+          // with '\n\n' first. Codex sent no separator, so a turn with TWO
+          // agent messages — speak, run a tool, speak again — left a preview
+          // the subtraction could not line up, and the whole turn's prose drew
+          // a second time underneath the committed messages. Reported as
+          // "duplication of messages" in a codex chat.
+          if (streamedTextThisTurn) emit({ t: 'stream', delta: '\n\n' });
+          streamedTextThisTurn = true;
           emit({ t: 'stream', delta: text });
           log(`${bold('codex')} ${text}`);
           logEvent({
@@ -435,6 +451,9 @@ export function createCodexBackend(
     // spawns a second child for the same session (leaking the first, wiping its
     // transcript buffer).
     turnActive = true;
+    // Per TURN, not per process: the separator rule below is "every message
+    // after the first one of this turn".
+    streamedTextThisTurn = false;
     if (!authOk) {
       authOk = await checkAuth();
       if (!authOk) {
