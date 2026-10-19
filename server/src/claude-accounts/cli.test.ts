@@ -1,5 +1,14 @@
-import { spawnSync } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -40,6 +49,10 @@ beforeEach(() => {
 function run(...args: string[]) {
   const r = spawnSync(TSX, [CLI, ...args], {
     encoding: 'utf8',
+    // In the temp home, not the repo: a relative --dir is resolved against the
+    // caller's cwd, and a test that leaves a profile directory in `server/`
+    // fails the NEXT run when the stale one no longer matches.
+    cwd: home,
     env: {
       ...process.env,
       HOME: home,
@@ -130,9 +143,9 @@ describe('add', () => {
 });
 
 describe('the pool, once there is one', () => {
-  it('marks the account that is not signed in', () => {
+  it('marks the account that has no login file', () => {
     run('add', 'backup');
-    expect(run('status').out).toContain('NOT SIGNED IN');
+    expect(run('status').out).toContain('NO LOGIN FOUND');
   });
 
   it('keeps --json machine-readable, because the quota card parses it', () => {
@@ -157,5 +170,95 @@ describe('the pool, once there is one', () => {
     run('add', 'backup');
     run('remove', 'backup');
     expect(run('remove', 'primary').code).toBe(1);
+  });
+});
+
+/**
+ * EVERY ONE OF THESE IS A DEFECT THAT SHIPPED IN bccbb19 AND WAS FOUND BY
+ * REVIEW. They are written as the reproduction, not as the fix, so a later
+ * rewrite of `add` has to keep clearing the same bar.
+ */
+describe('the ways add used to go wrong', () => {
+  it('will not enrol a second account onto the first one by a symlink', () => {
+    // THE WORST ONE. configDir uniqueness compared strings, so a --dir that is
+    // a link to the primary profile passed: shared history "validated"
+    // (it IS the same history), and the new account sat on the primary's
+    // credentials. Following the printed login line would then replace the
+    // login it was meant to sit beside.
+    const alias = join(home, 'alias');
+    symlinkSync(join(home, '.claude'), alias);
+    const { code, err } = run('add', 'backup', `--dir=${alias}`);
+    expect(code).toBe(1);
+    expect(err).toMatch(/already uses that directory/);
+    expect(existsSync(join(data, 'claude-accounts.json'))).toBe(false);
+  });
+
+  it('refuses a destination holding its own transcript history, and links nothing', () => {
+    // Sharing ran before validation, so this failed the command AFTER linking
+    // the primary's settings into a profile it never joined.
+    const dest = join(home, 'other-profile');
+    mkdirSync(join(dest, 'projects'), { recursive: true });
+    const { code } = run('add', 'backup', `--dir=${dest}`);
+    expect(code).toBe(1);
+    expect(existsSync(join(dest, 'settings.json'))).toBe(false);
+    expect(existsSync(join(dest, 'skills'))).toBe(false);
+  });
+
+  it('writes no config a later read would reject', () => {
+    // `--label=` wrote an empty label, which the schema refuses — so every
+    // subsequent command, and the runner's own startup, failed on a file this
+    // command had just written.
+    expect(run('add', 'backup', '--label=').code).toBe(1);
+    expect(existsSync(join(data, 'claude-accounts.json'))).toBe(false);
+  });
+
+  it('prints a login line that survives a space in the path', () => {
+    const dest = join(home, 'Claude Backup');
+    const { out } = run('add', 'backup', `--dir=${dest}`);
+    expect(out).toContain(`CLAUDE_CONFIG_DIR='${dest}' claude auth login`);
+  });
+
+  it('loses no account when adds race', async () => {
+    // Read-modify-write of a whole file: both read the same accounts, both
+    // appended their own, and the second rename won — two successes, one
+    // account, one orphaned profile directory. spawnSync cannot show this;
+    // the processes have to actually overlap.
+    const codes = await Promise.all(
+      ['a', 'b', 'c', 'd', 'e', 'f'].map(
+        (n) =>
+          new Promise<number>((done) => {
+            const kid = spawn(TSX, [CLI, 'add', `acct${n}`], {
+              env: {
+                ...process.env,
+                HOME: home,
+                MUXPAD_DATA_DIR: data,
+                CLAUDE_CONFIG_DIR: undefined as unknown as string,
+              },
+              stdio: 'ignore',
+            });
+            kid.on('close', (code) => done(code ?? 1));
+          }),
+      ),
+    );
+    const won = codes.filter((c) => c === 0).length;
+    expect(won).toBeGreaterThan(1);
+    // Whatever succeeded is in the file. The old failure was successes that
+    // vanished, so this compares the two counts rather than pinning either.
+    expect(config().accounts).toHaveLength(won + 1);
+  }, 30_000);
+
+  it('reports an ordinary install as signed in, from the file Claude actually writes', () => {
+    // The default profile keeps its identity at ~/.claude.json — BESIDE
+    // ~/.claude, not inside it. Checking one path called every normal
+    // single-account install "not signed in".
+    writeFileSync(join(home, '.claude.json'), '{}');
+    expect(run('status').out).not.toContain('NO LOGIN FOUND');
+  });
+
+  it('resolves a relative --dir rather than storing it', () => {
+    const { code } = run('add', 'backup', '--dir=./rel-profile');
+    expect(code).toBe(0);
+    const added = config().accounts[1];
+    expect(added.configDir).toBe(realpathSync(added.configDir));
   });
 });

@@ -53,10 +53,18 @@ export async function* accountCompletion(args: {
           // above never fired and the account was never blocked. Six hours of
           // spawn reports were lost to it; see resultQuota.
           if (message.type === 'result' && message.subtype !== 'success') {
+            // `errors: string[]` is the SDK's own field on a failed result —
+            // the others are defensive, this one is the documented shape. It
+            // was missing, so a refusal that arrived ONLY as an errors array
+            // (no preceding rate_limit_event, no assistant error) blocked
+            // nothing and the next housekeeping call picked the exhausted
+            // account straight back up.
+            const errors = (message as { errors?: unknown }).errors;
             const text = [
               (message as { result?: unknown }).result,
               (message as { subtype?: unknown }).subtype,
               (message as { error?: unknown }).error,
+              ...(Array.isArray(errors) ? errors : [errors]),
             ]
               .map((v) => (typeof v === 'string' ? v : ''))
               .join(' ');
