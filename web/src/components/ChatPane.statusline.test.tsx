@@ -127,12 +127,37 @@ describe('the session line cannot become two lines', () => {
   });
 
   it('aligns to the PILL, not to the pane, so the desktop inherits the phone', () => {
-    // Designed at 390px, where the pill is the full width and any right-hand
-    // alignment looks the same. On a wide desktop the pill is 768px centered, so
-    // a strip merely pushed right with `margin-left: auto` would sit a long way
-    // out from the thing it describes. Same centering as the pill and the notice.
+    // Designed at 390px, where the pill is the full width. On a wide desktop the
+    // pill is 768px centered, so a strip laid out against the PANE would sit a
+    // long way out from the thing it describes. Same box as the pill and the
+    // notice, so the line centres on the pill at every width.
     expect(decl('.chat-status-bar', 'max-width')).toBe(decl('.chat-composer', 'max-width'));
-    expect(decl('.chat-status-bar', 'justify-content')).toBe('flex-end');
+  });
+
+  it('centres, so neither end of it sits in a phone\'s bottom corner radius', () => {
+    // It was right-aligned, which put the live cell — the one cell that is
+    // always populated — into the bottom-RIGHT corner of the screen, exactly
+    // where an iPhone's display curve cuts in: the last word of "Working…" sat
+    // under it. Centred is the only alignment whose content is far from BOTH
+    // bottom corners, so this is the assertion, not "not flex-end".
+    expect(decl('.chat-status-bar', 'justify-content')).toBe('center');
+    // …and the strip's own side padding stays symmetric, or centred content is
+    // centred on an off-centre box.
+    const pad = (decl('.chat-status-bar', 'padding') ?? '').split(/\s+/);
+    expect(pad).toHaveLength(2);
+  });
+
+  it('clears the home indicator by max(), never by adding to it', () => {
+    // `10px + env(safe-area-inset-bottom)` spent the indicator's 34px AND 10
+    // more on top: 44px of nothing under the status line, and an input bar
+    // visibly floating. Reported as "move the input bar lower". max() clears
+    // the indicator where there is one and keeps the 10px where there isn't.
+    const pad = decl('.chat-composer-wrap', 'padding') ?? '';
+    expect(pad).not.toMatch(/\+\s*env\(safe-area-inset-bottom/);
+    expect(pad).toMatch(/max\(10px,\s*env\(safe-area-inset-bottom/);
+    // The sides are the rounded corners in landscape, same idiom.
+    expect(pad).toMatch(/max\(12px,\s*env\(safe-area-inset-left/);
+    expect(pad).toMatch(/max\(12px,\s*env\(safe-area-inset-right/);
   });
 
   /**

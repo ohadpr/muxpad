@@ -1036,7 +1036,14 @@
      failure mode resolve to the fallback and keep the layout that shipped. */
   bottom: var(--chat-keyboard-inset, 0px);
   z-index: 5;
-  padding: 6px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+  /* THE BOTTOM GAP IS A MAX, NOT A SUM. `10px + inset` spent the home
+     indicator's 34px AND another 10 on top of it, which on a phone is 44px of
+     nothing under the status line and an input bar floating visibly high.
+     max() means: clear the home indicator where there is one, keep the 10px
+     where there isn't. The sides are the same idea for the rounded corners —
+     the strip below the pill used to run into the bottom-right curve. */
+  padding: 6px max(12px, env(safe-area-inset-right, 0px))
+    max(10px, env(safe-area-inset-bottom, 0px)) max(12px, env(safe-area-inset-left, 0px));
   background: transparent;
   pointer-events: none; /* the transparent gaps don't eat scroll/clicks… */
 }
@@ -1939,15 +1946,19 @@
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
-  /* Right-aligned over the input below it, at every pane width. */
-  justify-content: flex-end;
+  /* CENTRED, not right-aligned. Right-alignment put the live cell — the one
+     cell that is always populated — into the bottom-RIGHT corner of the screen,
+     which on a phone is exactly where the display's corner radius cuts in; the
+     last word of "Working…" sat under the curve. Centred, the strip's content
+     is as far from both bottom corners as the line can get, and it still reads
+     as belonging to the pill because it shares the pill's 768px box. */
+  justify-content: center;
   /* ONE LINE. Equal to the cells' line-height, which carry no block padding —
      see the arithmetic tie in ChatPane.statusline.test.tsx. */
   height: 16px;
   /* The pill's own centering, repeated — that is the idiom every child of
      `.chat-composer-wrap` uses (see .chat-notice), and it is what makes this
-     line's right edge sit over the PILL's right edge on a wide desktop instead
-     of way out at the pane's. */
+     line centre on the PILL on a wide desktop instead of on the whole pane. */
   width: 100%;
   max-width: 768px;
   /* THE GAP IS ON TOP, because the strip is UNDER the pill now. It was written
@@ -1961,7 +1972,7 @@
      gap at all. This is the strip's ENTIRE cost besides its one line of text;
      it is not allowed to grow into a box again (both css tests cap it). */
   margin: 16px auto 0;
-  padding-right: 2px;
+  padding: 0 2px;
   /* Menus escape via position:absolute on .chat-status-menu; segment buttons
      clip their own labels so long model names can't paint over the live cell. */
   overflow: visible;
