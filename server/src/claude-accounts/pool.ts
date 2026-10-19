@@ -88,9 +88,19 @@ export class AccountPool {
         status TEXT NOT NULL, resets_at INTEGER, updated_at INTEGER NOT NULL,
         PRIMARY KEY(account, scope));
     `);
+    // TWO RUNNERS OPEN THIS DATABASE AT ONCE. `CREATE TABLE IF NOT EXISTS` is
+    // safe for that; a check-then-ALTER is not — both see the column missing,
+    // both run the ALTER, and the loser throws `duplicate column name` out of
+    // a constructor, which is a runner that failed to start. The check still
+    // avoids the common no-op; the catch covers the interleaving.
     const columns = this.db.prepare('PRAGMA table_info(pending)').all() as { name: string }[];
-    if (!columns.some((c) => c.name === 'requires_history'))
-      this.db.exec('ALTER TABLE pending ADD COLUMN requires_history INTEGER NOT NULL DEFAULT 1');
+    if (!columns.some((c) => c.name === 'requires_history')) {
+      try {
+        this.db.exec('ALTER TABLE pending ADD COLUMN requires_history INTEGER NOT NULL DEFAULT 1');
+      } catch (error) {
+        if (!/duplicate column name/i.test(String(error))) throw error;
+      }
+    }
   }
   static open(dir = accountDataDir()): AccountPool | null {
     return readAccountConfig(dir) ? new AccountPool(dir) : null;
