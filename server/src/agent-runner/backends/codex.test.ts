@@ -443,4 +443,70 @@ describe('codex backend', () => {
     expect(status.model).toBe('gpt-5.6-sol'); // highlights the current row
     expect(status.models?.map((m) => m.value)).toEqual(['gpt-5.6-sol', 'gpt-5.5']);
   });
+
+  /**
+   * TWO MESSAGES IN ONE TURN, AND THE BLANK LINE BETWEEN THEM.
+   *
+   * Codex has no token deltas, so each whole `agent_message` goes out twice: a
+   * `stream` delta for the live view and a transcript event for history. The
+   * client removes the landed copy from the preview by joining the landed
+   * blocks and subtracting them (ChatPane's `consumeStreamedText`), and that
+   * join is tried with the '\n\n' separator claude.ts emits between blocks.
+   *
+   * Codex emitted none, so a turn that spoke, ran a tool and spoke again left
+   * a preview the subtraction could not line up, and the turn's prose drew a
+   * SECOND time under the committed messages. Reported from a real codex chat
+   * as "duplication of messages", with the stored transcript provably single —
+   * one id per sentence, nothing repeated on disk.
+   */
+  it('separates two agent messages with a blank line, none before the first', async () => {
+    const { b, calls, frames } = await boot();
+    b.send('go');
+    await tick();
+    const turn = calls[1]!.child;
+    line(turn, { type: 'thread.started', thread_id: 'thr-2' });
+    line(turn, { type: 'item.completed', item: { type: 'agent_message', text: 'first' } });
+    line(turn, {
+      type: 'item.completed',
+      item: { type: 'command_execution', command: 'ls', exit_code: 0, aggregated_output: '' },
+    });
+    line(turn, { type: 'item.completed', item: { type: 'agent_message', text: 'second' } });
+    line(turn, { type: 'turn.completed' });
+    closeChild(turn, 0);
+    await tick();
+    const deltas = frames
+      .filter((f) => f.t === 'stream')
+      .map((f) => (f as { t: 'stream'; delta: string }).delta);
+    // The buffer the client accumulates is these concatenated…
+    expect(deltas.join('')).toBe('first\n\nsecond');
+    // …which is exactly `landed.join('\n\n')` for the two transcript events,
+    // so the subtraction lines up and nothing draws twice.
+    expect(['first', 'second'].join('\n\n')).toBe(deltas.join(''));
+  });
+
+  it('starts a NEW turn with no leading blank line', async () => {
+    // The flag is per TURN, not per process: a later turn's first message must
+    // not open with a paragraph break around nothing.
+    const { b, calls, frames } = await boot();
+    b.send('one');
+    await tick();
+    const t1 = calls[1]!.child;
+    line(t1, { type: 'thread.started', thread_id: 'thr-3' });
+    line(t1, { type: 'item.completed', item: { type: 'agent_message', text: 'a' } });
+    line(t1, { type: 'turn.completed' });
+    closeChild(t1, 0);
+    await tick();
+    frames.length = 0;
+    b.send('two');
+    await tick();
+    const t2 = calls[calls.length - 1]!.child;
+    line(t2, { type: 'item.completed', item: { type: 'agent_message', text: 'b' } });
+    line(t2, { type: 'turn.completed' });
+    closeChild(t2, 0);
+    await tick();
+    const deltas = frames
+      .filter((f) => f.t === 'stream')
+      .map((f) => (f as { t: 'stream'; delta: string }).delta);
+    expect(deltas.join('')).toBe('b');
+  });
 });
