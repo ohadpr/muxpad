@@ -10,7 +10,13 @@
   /* Matches the composer pill's own width and gutters, so the stack reads as
      one object with the thing below it rather than as a floating slab. */
   max-width: 768px;
-  margin: 0 auto 8px;
+  /* THE GAP UNDER THE STACK HAS A SHADOW IN IT. The composer pill carries
+     `0 10px 30px -10px` and `0 2px 8px -4px`, which reach about 5px ABOVE its
+     own top edge — so 8px of margin was about 3px of visible gap and the card
+     read as stuck to the composer. 14px is the first value where the cards
+     clearly sit apart from it. Same lesson as the status strip below the pill,
+     which needed its own 16px for the same reason. */
+  margin: 0 auto 14px;
   padding: 0 2px;
   /* The stack is bounded. Cards are pinned above the composer, so a tall one
      cannot be scrolled past — without a ceiling a single verbose card would
