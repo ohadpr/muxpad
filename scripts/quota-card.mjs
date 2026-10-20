@@ -217,9 +217,9 @@ const seg = (r) => {
   // segment spends that width on the countdown instead.
   const body =
     r.blocked && reset
-      ? `<s>&#8635;${esc(reset)}</s>`
+      ? `<s><svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="6"/><path d="M8 4.6V8l2.3 1.6"/></svg>${esc(reset)}</s>`
       : `<i class=t><i style="width:${Math.max(4, Math.min(100, pct))}%;background:${bar(hue(pct))}"></i></i>`;
-  return `<span class=s title="${title}">
+  return `<span class="s${r.blocked && reset ? ' b' : ''}" title="${title}">
   <b${cur}>${esc(r.name)}</b>
   ${body}
   <u style="color:${ink(hue(pct))}">${shown}%</u>
@@ -271,8 +271,21 @@ const html = `<style>
     quiet text rather than a chip: it is a fact about when, not a second status
     light, and the percentage beside it is already carrying the alarm. Shrinks
     and ellipsises like the label, so it can never be what clips a number. */
- .q s{text-decoration:none;flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;
-   white-space:nowrap;font-size:11px;opacity:.75;font-variant-numeric:tabular-nums}
+ .q s{display:inline-flex;align-items:center;gap:3px;text-decoration:none;flex:0 1 auto;
+   min-width:0;overflow:hidden;white-space:nowrap;font-size:11px;opacity:.75;
+   font-variant-numeric:tabular-nums}
+ /* A font glyph at 11px is at the mercy of whatever the device substitutes —
+    the first attempt used ↻ and rendered as a muddy smudge jammed against the
+    number. An inline SVG is the same two strokes at every size on every
+    device, and the gap is explicit rather than whatever the glyph's sidebearing
+    happens to be. */
+ .q s svg{flex:none;opacity:.85}
+ /* A SEGMENT WITH NO BAR TAKES NO SHARE OF THE SLACK. The bar is what absorbs
+    leftover width; a blocked segment has a countdown instead, which is a fixed
+    piece of text. Left growable it claimed a third of the spare room and
+    had nothing to put in it, so "claude 1 20h 100%" sat in front of a hole the
+    width of the gap before the divider. */
+ .q .s.b{flex:0 1 auto}
  /* NEVER SHRINKS, NEVER CLIPS. It is the thing the card exists to show. */
  .q u{text-decoration:none;font-weight:700;font-size:12px;white-space:nowrap;flex:0 0 auto;
    font-variant-numeric:tabular-nums}
