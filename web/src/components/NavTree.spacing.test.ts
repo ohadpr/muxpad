@@ -1199,11 +1199,12 @@ describe('the row’s right-hand side holds one thing at a time', () => {
  * Asserted as ARITHMETIC against the same tokens, not as a literal pair, so the
  * two cannot drift apart again when the gutter changes.
  */
-describe('the search box sits on the rows’ own edges', () => {
-  const SEARCH_CSS = css('NavSearch.css');
+describe('the search button sits on the rows’ own edges', () => {
+  // It was the inline `.navsearch` field; it is now the button that opens the
+  // ⌘K palette, and it inherited the field's place and this rule with it.
   const scroll = ruleBody(NAV_CSS, '.navtree-scroll');
   const group = ruleBody(NAV_CSS, '.navtree-group');
-  const search = ruleBody(SEARCH_CSS, '.navsearch');
+  const search = ruleBody(NAV_CSS, '.navtree-search');
 
   const rowInset = (which: 'left' | 'right') =>
     resolve(side(decl(scroll, 'padding'), which), BASE) +
@@ -1298,5 +1299,61 @@ describe('the active row’s funnel', () => {
 
   it('never eats a click', () => {
     expect(decl(ruleBody(NAV_CSS, '.navtree-tab-funnel'), 'pointer-events')).toBe('none');
+  });
+});
+
+/**
+ * THE SHEET'S WORKSPACE ROW: TWO CONTROLS AT A THUMB'S SIZE.
+ *
+ * The sheet inherited the desktop's `--nt-ctl: 20px` / `--nt-ctl-gap: 6px`, so
+ * its "+" was a 20px target 6px from the × that closes the workspace. The fix
+ * overrides the tokens on the sheet's row only — the desktop keeps its numbers —
+ * and the target and the glyph are different numbers: 44 for the thumb, 15 for
+ * the ink (the glyph size is asserted on the SVG, in NavTree.sheet-controls).
+ */
+describe('the sheet’s workspace controls clear the touch floor', () => {
+  const SHEET_ROW = '.navtree[data-variant="sheet"] .navtree-ws-row';
+  const SHEET_CTL = `${SHEET_ROW} > .navtree-tab-controls > .navtree-close`;
+  const px = (v: string) => Number(/^(\d+(?:\.\d+)?)px$/.exec(v)?.[1]);
+
+  it('overrides the control size to 44px on the sheet row', () => {
+    const row = ruleBody(NAV_CSS, SHEET_ROW);
+    expect(px(decl(row, '--nt-ctl'))).toBeGreaterThanOrEqual(44);
+    // The row grows with its target, or a 44px button would overhang a 32px row.
+    expect(px(decl(row, '--nt-row-ws'))).toBeGreaterThanOrEqual(44);
+  });
+
+  it('sizes every sheet control from that token, in both axes, and never hides it', () => {
+    const body = ruleBody(NAV_CSS, SHEET_CTL);
+    expect(decl(body, 'width')).toBe('var(--nt-ctl)');
+    expect(decl(body, 'height')).toBe('var(--nt-ctl)');
+    expect(decl(body, 'flex')).toBe('0 0 var(--nt-ctl)');
+    expect(decl(body, 'visibility')).toBe('visible');
+  });
+
+  it('wears no accent fill and no danger red, even on a sticky touch :hover', () => {
+    const hover = ruleBody(NAV_CSS, `${SHEET_CTL}:hover`);
+    expect(decl(hover, 'color')).toBe('var(--fg)');
+    expect(decl(hover, 'background')).toBe('transparent');
+    // …and goes to full strength under the thumb.
+    expect(decl(ruleBody(NAV_CSS, `${SHEET_CTL}:active`), 'opacity')).toBe('1');
+  });
+
+  it('leaves the DESKTOP tokens exactly where they were', () => {
+    const root = rules(NAV_CSS).find(
+      (r) => r.atRules.length === 0 && /--nt-ctl:\s*20px/.test(r.body),
+    );
+    expect(root).toBeTruthy();
+    expect(decl(root?.body ?? '', '--nt-ctl-gap')).toBe('6px');
+    // The only other place the token is re-declared is the sheet row.
+    const owners = rules(NAV_CSS)
+      .filter((r) => /(?:^|;)\s*--nt-ctl:/.test(r.body))
+      .flatMap((r) => r.selectors);
+    expect(owners.filter((sel) => sel !== SHEET_ROW)).toEqual(root?.selectors);
+  });
+
+  it('gives the “⋯” menu rows the same 44px floor', () => {
+    const item = ruleBody(NAV_CSS, '.navtree-menu.-touch .navtree-menu-item');
+    expect(px(decl(item, 'min-height'))).toBeGreaterThanOrEqual(44);
   });
 });

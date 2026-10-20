@@ -11,6 +11,7 @@ import { Fragment, Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '../api';
 import { HOUSE_CHAT_CREATE, HOUSE_CHAT_PANE_CREATE } from '../lib/agent-backend';
+import { openCommandPalette, paletteChordLabel } from '../lib/command-palette';
 import { createDragOrigin } from '../lib/drag-origin';
 import { clearFollowTarget, setFollowTarget } from '../lib/follow-tab';
 import { getLastPaneId, setLastPaneId } from '../lib/last-visited';
@@ -35,7 +36,6 @@ import {
   visibleWorkspaces,
 } from '../workspaces';
 import { ChatChip, chatTooltip, isChatDone, isChatRetired } from './ChatChip';
-import { NavSearch } from './NavSearch';
 import { NewTabButton } from './NewTabButton';
 import { SvgAgentGlyph } from './PaneWebSwitch';
 import { StateChip } from './StateChip';
@@ -43,8 +43,7 @@ import { SwipeRow } from './SwipeRow';
 import { WorkspaceSettings } from './WorkspaceSettings';
 import { SvgClose } from './icons';
 import './NavTree.css';
-// The flat 'recent' view's own rules. A separate sheet for the same reason
-// NavSearch.css is one: it is a distinct surface with its own budget (the
+// The flat 'recent' view's own rules. A separate sheet because it is a distinct surface with its own budget (the
 // workspace label's max width, the rail's view switch), and NavTree.css is
 // already the longest stylesheet here. It adds no geometry — the row is still
 // the row, pinned by NavTree.spacing.test.ts — so nothing in the two can drift.
@@ -367,10 +366,17 @@ function SidebarTree({
 
   return (
     <nav className="navtree" data-variant={variant} aria-label="Workspaces and tabs">
-      {/* The box owns `.navtree-scroll` (it swaps the tree for its results
-          while it has a query), so it renders a fragment and the scroller
-          stays a direct flex child of this nav. */}
-      <NavSearch variant={variant} onNavigate={onNavigate}>
+      {/* SEARCH IS THE PALETTE. This was an inline field that swapped the
+          tree for its own result list — the same engine as ⌘K, in a second
+          surface with its own query state, keyboard contract and focus rules.
+          One search is enough; this is the door to it, and it says which key
+          opens it so the button teaches the chord. */}
+      <button type="button" className="navtree-search" onClick={openCommandPalette}>
+        <SvgSearchGlyph size={14} />
+        <span className="navtree-search-label">Search chats</span>
+        <kbd className="navtree-search-kbd">{paletteChordLabel()}</kbd>
+      </button>
+      <div className="navtree-scroll">
         {/* NO CREATE CONTROL HERE, and none in the list either. It is on each
             WORKSPACE HEADER — see WorkspaceNode. That is the row the action is
             about, so the button needs no label saying where it creates and
@@ -425,7 +431,7 @@ function SidebarTree({
             <span className="navtree-name-text">Hosted</span>
           </Link>
         </div>
-      </NavSearch>
+      </div>
     </nav>
   );
 }
@@ -519,9 +525,8 @@ async function createHouseTab(
  * The workspace header and the search field used to be rows in the list; both
  * are now controls in the ONE bar above it. So is "+ New chat". The workspace
  * button swaps the list for a workspace picker (which also owns "+ New
- * workspace", Hosted, and closing a workspace); the magnifier REPLACES the bar
- * with the search field, so the resting rail is one bar and a column of chats,
- * never two bars.
+ * workspace", Hosted, and closing a workspace); the magnifier opens the ⌘K
+ * palette, so the resting rail is one bar and a column of chats.
  *
  * ─── Order is frozen while this is open ──────────────────────────────────
  * With the marks gone, the rail's information lives almost entirely in order —
@@ -546,10 +551,6 @@ function SheetRail({
    *   'create'  the bar's "+", in the flat view only — put the new chat THERE.
    */
   const [picking, setPicking] = useState<'switch' | null>(null);
-  // The magnifier's state. Opening it hides the bar — the search field takes
-  // the bar's place rather than stacking under it, so the rail is never two
-  // rows of chrome deep.
-  const [searching, setSearching] = useState(false);
   const [busy, setBusy] = useState(false);
   // Which workspace's chats are listed. Follows the URL, until you pick
   // another one from the bar — looking at another workspace's chats must not
@@ -584,45 +585,40 @@ function SheetRail({
 
   return (
     <nav className="navtree" data-variant="sheet" aria-label="Chats">
-      {/* THE bar. One row, three controls, and it is the only chrome above the
-          list. Hidden entirely while searching, so the field can take its
-          place instead of pushing the chats one row further down. */}
-      {searching ? null : (
-        <div className="navtree-bar">
-          {/* A LABEL, not a control. The bar used to open a workspace PICKER,
+      {/* THE bar. One row, and it is the only chrome above the list. */}
+      <div className="navtree-bar">
+        {/* A LABEL, not a control. The bar used to open a workspace PICKER,
               because the sheet showed one workspace at a time and getting to
               another meant choosing it first. The list below now holds every
               workspace, so there is nothing left to pick — and a button that
               swapped the whole list for a different list was the thing that
               made this surface feel like clicking in and out of a folder. */}
-          <span className="navtree-bar-wsname" dir="auto">
-            Chats
-          </span>
-          <button
-            type="button"
-            className="navtree-bar-icon"
-            onClick={() => setSearching(true)}
-            aria-label="Search"
-          >
-            <SvgSearchGlyph />
-          </button>
-          {/* NO "+" HERE EITHER. It created in "the workspace the bar names",
+        <span className="navtree-bar-wsname" dir="auto">
+          Chats
+        </span>
+        {/* The palette, not a field of our own — and on a phone this is the
+              ONLY way to it, since there is no ⌘K. The sheet steps aside first:
+              a result navigates, and a sheet left open over the chat you just
+              picked is one more tap to get rid of. */}
+        <button
+          type="button"
+          className="navtree-bar-icon"
+          onClick={() => {
+            onNavigate?.();
+            openCommandPalette();
+          }}
+          aria-label="Search chats"
+        >
+          <SvgSearchGlyph />
+        </button>
+        {/* NO "+" HERE EITHER. It created in "the workspace the bar names",
               and the bar no longer names one — every workspace is on screen,
               and each header carries its own, exactly as on the rail. A single
               bar button would have had to pick one of them on your behalf,
               which is the guess this navigator keeps being redesigned to
               avoid. */}
-        </div>
-      )}
-      {/* The box owns `.navtree-scroll`, so the scroller stays a direct flex
-          child of this nav. `box` is what the magnifier toggles: with it false
-          NavSearch renders no field at all and simply hosts the list. */}
-      <NavSearch
-        variant="sheet"
-        box={searching}
-        onDismissBox={() => setSearching(false)}
-        onNavigate={onNavigate}
-      >
+      </div>
+      <div className="navtree-scroll">
         {/* EVERY WORKSPACE, like the desktop rail. The sheet used to render one
             workspace's TabList and reach the others through a picker that
             replaced the whole list — so moving between them was a mode change,
@@ -646,7 +642,7 @@ function SheetRail({
             onNavigate={onNavigate}
           />
         ))}
-      </NavSearch>
+      </div>
     </nav>
   );
 }
@@ -956,6 +952,8 @@ function WorkspaceNode({
    * on, so there is nothing to ask and nothing to label.
    */
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // The sheet's "⋯" menu, anchored under the button that opened it.
+  const [moreAt, setMoreAt] = useState<{ x: number; y: number } | null>(null);
   const [creating, setCreating] = useState(false);
   const createHere = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -981,9 +979,9 @@ function WorkspaceNode({
   // vocabulary (a workspace header means "this group", not "extract that pane
   // into a fresh tab inside it") and the same move is a context-menu item that
   // says what it does. The ONE drop this tree still takes is a TAB, below.
-  const closeWorkspace = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    e.preventDefault();
+  const closeWorkspace = async (e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    e?.preventDefault();
     // Desktop keeps the confirm the old switcher had — closing cascade-
     // kills every tab and pane. The sheet stays confirm-free because
     // window.confirm is flaky in iOS PWA standalone mode (silent no-op).
@@ -1123,7 +1121,42 @@ function WorkspaceNode({
             Collapsed-ONLY, for the same reason the tab-count chip is: once the
             tabs are listed they carry their own marks, and a rollup on top of
             them would just double-signal. */}
-        {!isEditing && (
+        {/* THE SHEET'S PAIR: "+" and "⋯", nothing else. Three controls at a
+            real 44px touch target would take 132px of a phone-width row, and
+            the desktop's 20px squares are too small for a thumb AND put the
+            "+" 6px from the × that deletes the workspace. So the row keeps the
+            action you take all day, and the rare ones — settings, rename, and
+            the destructive close — go one tap deeper, where close is a labelled
+            red row rather than a glyph beside "+". */}
+        {!isEditing && variant === 'sheet' && (
+          <span className="navtree-tab-controls">
+            <button
+              type="button"
+              className="navtree-close navtree-ws-add"
+              onClick={(e) => void createHere(e)}
+              disabled={creating}
+              aria-label={`New chat in ${workspace.name}`}
+            >
+              <SvgPlus size={15} />
+            </button>
+            <button
+              type="button"
+              className="navtree-close navtree-ws-more"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const r = e.currentTarget.getBoundingClientRect();
+                setMoreAt({ x: r.right, y: r.bottom });
+              }}
+              aria-label={`More for ${workspace.name}`}
+              aria-haspopup="menu"
+              aria-expanded={moreAt !== null}
+            >
+              <SvgMore />
+            </button>
+          </span>
+        )}
+        {!isEditing && variant === 'sidebar' && (
           <span className="navtree-tab-controls">
             {/* ALWAYS VISIBLE, unlike the × beside it. The two are opposites:
                 one makes a thing and one destroys a workspace and everything in
@@ -1184,6 +1217,24 @@ function WorkspaceNode({
             expanded one has nothing to add over the rows now visible below. */}
         {!isEditing && <RowMark status={expanded ? 'idle' : workspace.status} />}
       </div>
+      {moreAt && (
+        <NavContextMenu
+          x={moreAt.x}
+          y={moreAt.y}
+          touch={true}
+          alignEnd={true}
+          onDismiss={() => setMoreAt(null)}
+          items={[
+            { label: 'Workspace settings', onSelect: () => setSettingsOpen(true) },
+            {
+              label: 'Rename',
+              onSelect: () => setEditing({ kind: 'workspace', id: workspace.id }),
+            },
+            // LAST, and red: the one item here that cannot be taken back.
+            { label: 'Close workspace', danger: true, onSelect: () => void closeWorkspace() },
+          ]}
+        />
+      )}
       {expanded && (
         <TabList
           workspace={workspace}
@@ -3160,11 +3211,18 @@ function NavContextMenu({
   y,
   items,
   onDismiss,
+  touch = false,
+  alignEnd = false,
 }: {
   x: number;
   y: number;
   items: MenuItem[];
   onDismiss: () => void;
+  /** Thumb-sized rows (44px) — for a menu opened by a tap on the sheet. */
+  touch?: boolean;
+  /** `x` is the menu's RIGHT edge rather than its left: it opens from a
+   *  button at the end of a row and must not run off the screen's edge. */
+  alignEnd?: boolean;
 }) {
   const [openSub, setOpenSub] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -3174,8 +3232,8 @@ function NavContextMenu({
   // Clamp so the menu never spills past the viewport edge (approx size —
   // exact enough to keep all items reachable near the bottom/right).
   const MENU_W = 200;
-  const MENU_H = 44 + items.length * 34;
-  const left = Math.max(4, Math.min(x, window.innerWidth - MENU_W - 4));
+  const MENU_H = 44 + items.length * (touch ? 44 : 34);
+  const left = Math.max(4, Math.min(alignEnd ? x - MENU_W : x, window.innerWidth - MENU_W - 4));
   const top = Math.max(4, Math.min(y, window.innerHeight - MENU_H - 4));
   // Flyout side: open to the left when the menu sits in the right half of the
   // viewport, so the submenu doesn't run off-screen.
@@ -3192,7 +3250,7 @@ function NavContextMenu({
       >
         <div
           ref={menuRef}
-          className="navtree-menu"
+          className={touch ? 'navtree-menu -touch' : 'navtree-menu'}
           style={{ left, top }}
           onMouseDown={(e) => e.stopPropagation()}
           role="menu"
@@ -3446,11 +3504,11 @@ function SvgCaret({ open }: { open: boolean }) {
   );
 }
 
-function SvgSearchGlyph() {
+function SvgSearchGlyph({ size = 19 }: { size?: number }) {
   return (
     <svg
-      width="19"
-      height="19"
+      width={size}
+      height={size}
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -3487,11 +3545,11 @@ function SvgSliders() {
   );
 }
 
-function SvgPlus() {
+function SvgPlus({ size = 19 }: { size?: number }) {
   return (
     <svg
-      width="19"
-      height="19"
+      width={size}
+      height={size}
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -3501,6 +3559,18 @@ function SvgPlus() {
       aria-hidden="true"
     >
       <path d="M12 5v14M5 12h14" />
+    </svg>
+  );
+}
+
+/** "More" — three dots on one line, at the sheet's 15px glyph size. Filled
+ *  dots rather than a stroke, so they hold their weight next to the "+". */
+function SvgMore() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <circle cx="3.2" cy="8" r="1.3" />
+      <circle cx="8" cy="8" r="1.3" />
+      <circle cx="12.8" cy="8" r="1.3" />
     </svg>
   );
 }

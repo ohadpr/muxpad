@@ -135,23 +135,20 @@ describe('the CSS actually consumes it', () => {
   });
 });
 
-describe('the sheet’s search box clears the touch floor', () => {
-  const CSS = readFileSync(join(import.meta.dirname, '..', 'components', 'NavSearch.css'), 'utf8');
+describe('the sheet’s search — the ⌘K palette — does not zoom the page', () => {
+  // The sheet's inline search field is gone; its magnifier opens the palette,
+  // so the 16px floor that stops iOS zooming on focus moved with it.
+  const CSS = readFileSync(
+    join(import.meta.dirname, '..', 'components', 'CommandPalette.css'),
+    'utf8',
+  );
 
-  it('is 44px in the sheet variant — the same floor as the tab rows', () => {
+  it('keeps the 16px font on the palette field at phone widths', () => {
+    // The classic cause of "the whole app zoomed when I tapped search". iOS
+    // reads the FONT, not the box.
     const flat = CSS.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\s+/g, ' ');
-    const body =
-      flat.match(/\.navsearch\[data-variant="sheet"\] \.navsearch-input \{([^}]*)\}/)?.[1] ?? '';
-    const height = Number(body.match(/height:\s*(\d+)px/)?.[1]);
-    expect(height).toBeGreaterThanOrEqual(44);
-  });
-
-  it('keeps the 16px font that stops iOS zooming the page on focus', () => {
-    // The classic cause of "the whole app zoomed when I tapped search". A
-    // taller box alone does not prevent it; the FONT is what iOS reads.
-    const flat = CSS.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\s+/g, ' ');
-    const body =
-      flat.match(/\.navsearch\[data-variant="sheet"\] \.navsearch-input \{([^}]*)\}/)?.[1] ?? '';
+    const media = flat.slice(flat.indexOf('@media (max-width: 640px)'));
+    const body = media.match(/\.cmdk-input \{([^}]*)\}/)?.[1] ?? '';
     expect(Number(body.match(/font-size:\s*(\d+)px/)?.[1])).toBeGreaterThanOrEqual(16);
   });
 });

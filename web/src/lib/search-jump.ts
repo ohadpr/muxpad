@@ -19,7 +19,7 @@ import { termsPresent, textMatchesTerms } from './search-highlight';
  * made and move the reader somewhere they did not ask to go. Instant hits
  * therefore open the tab and change nothing about it; the term stays
  * highlighted where it actually matched, in the row you clicked and in the tab
- * name you land on. See `NavSearch.openTab`.
+ * name you land on. See `CommandPalette`'s `openRow`.
  *
  * ── WHY A MODULE STORE AND NOT THE URL ──────────────────────────────────────
  * Two reasons, and the second is the important one.

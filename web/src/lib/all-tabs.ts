@@ -4,14 +4,13 @@ import { subscribe, subscribeResync } from '../events';
 import type { WorkspaceTabs } from './nav-search';
 
 /**
- * The cross-workspace tab corpus behind the sidebar search box and the `@`
- * picker.
+ * The cross-workspace tab corpus behind the ⌘K palette and the `@` picker.
  *
- * LAZY BY CONSTRUCTION. Nothing here runs until the box is focused for the
- * first time — the user has complained about mobile load time, and a corpus
+ * LAZY BY CONSTRUCTION. Nothing here runs until the palette is opened for
+ * the first time — the user has complained about mobile load time, and a corpus
  * fetch on mount would put a request the first paint doesn't need in front of
- * the one it does. Until then the box falls back to whatever the per-workspace
- * caches already hold (see NavSearch), so the FIRST keystroke is never empty
+ * the one it does. Until then search falls back to whatever the per-workspace
+ * caches already hold (see use-session-search), so the FIRST keystroke is never empty
  * even though nothing has been fetched for it.
  *
  * There is no poll. A search session is seconds long; the corpus is refreshed

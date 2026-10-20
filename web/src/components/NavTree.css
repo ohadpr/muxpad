@@ -499,6 +499,65 @@
      makes the statement true instead of hopeful. */
   scrollbar-width: none;
 }
+/* ─── "Search chats" — the door to the ⌘K palette ─────────────────────────
+   It was an inline field that filtered by swapping the tree for its results;
+   now it is a button wearing the field's clothes, because what you do with it
+   is still "search", and the palette it opens is the stronger search (the
+   same engine, in a surface every layout can reach).
+   Sits between the brand hairline and the tree on the rows' own edges: a row's
+   inset is the scroller's (`--nt-pad` left, nothing right) plus the group's
+   (`--nt-pad` both sides), so 8 left and 4 right. Derived from the token, not
+   written as literals — NavTree.spacing.test pins the arithmetic. */
+.navtree-search {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 6px var(--nt-pad) 2px calc(var(--nt-pad) * 2);
+  padding: 0 6px 0 8px;
+  height: 30px;
+  /* The rail is resizable down to 160px; the button shrinks with it. */
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-elev);
+  /* --fg-dim, not the mock's --fg-faint: this is TEXT, and the faint token
+     fails AA on both rails (see .navtree-ws-count). */
+  color: var(--fg-dim);
+  font-family: var(--ui-font);
+  font-size: var(--chrome-size);
+  text-align: left;
+  cursor: pointer;
+}
+.navtree-search:hover,
+.navtree-search:focus-visible {
+  border-color: var(--accent);
+  color: var(--fg);
+}
+.navtree-search:focus-visible {
+  outline: none;
+}
+.navtree-search > svg {
+  flex: none;
+}
+.navtree-search-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.navtree-search-kbd {
+  flex: none;
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 5px;
+  color: inherit;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
 /* Desktop has no section header (dropped as redundant under the brand),
    so the list sits directly below the brand hairline — give it a little
    breathing room there. */
@@ -2597,6 +2656,24 @@
 .navtree-menu-item.-danger:hover {
   background: color-mix(in srgb, var(--danger) 16%, transparent);
 }
+/* The sheet's "⋯" menu: opened by a thumb, so its rows clear the same 44px
+   floor as the button that opened it. */
+.navtree-menu.-touch {
+  min-width: 200px;
+  border-radius: 12px;
+  font-size: 15px;
+}
+.navtree-menu.-touch .navtree-menu-item {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: 8px;
+  touch-action: manipulation;
+}
+.navtree-menu.-touch .navtree-menu-item:active {
+  background: var(--bg-hover);
+}
 
 /* Submenu (e.g. "Move to workspace ›") — a hover flyout off the parent row. */
 .navtree-menu-sub {
@@ -2866,6 +2943,54 @@
 .navtree-ws-row > .navtree-tab-controls {
   margin-left: var(--nt-gutter);
 }
+/* ─── THE SHEET'S WORKSPACE ROW: "+" AND "⋯" AT A THUMB'S SIZE ─────────────
+   The sheet used to inherit the desktop's 20px controls 6px apart — a "+" too
+   small to hit and one gap away from the × that closes the workspace. The
+   TARGET and the GLYPH are different numbers: the target is the 44px touch
+   floor the sheet's chat rows are already built to, the glyph stays ~15px (set
+   on the SVG), because the row can only carry that much ink. No accent fill
+   and no pill — the same quiet weight as every other mark in the rail, full
+   strength only under the thumb.
+   Overridden HERE, on the sheet's workspace row, not on `.navtree` and not on
+   the desktop: the desktop keeps 20px / 6px, and other sheet controls built on
+   --nt-ctl are not part of this. The row grows to the target with it. */
+.navtree[data-variant="sheet"] .navtree-ws-row {
+  --nt-ctl: 44px;
+  --nt-ctl-gap: 0px;
+  --nt-ctl-gap-danger: 0px;
+  --nt-row-ws: 44px;
+}
+.navtree[data-variant="sheet"] .navtree-ws-row > .navtree-tab-controls > .navtree-close {
+  flex: 0 0 var(--nt-ctl);
+  width: var(--nt-ctl);
+  height: var(--nt-ctl);
+  border-radius: 11px;
+  color: var(--fg);
+  opacity: 0.55;
+  visibility: visible;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+/* A touch :hover sticks after the tap, so it must look like rest — not the
+   desktop's accent "+" or the red every `.navtree-close` turns on hover. */
+.navtree[data-variant="sheet"] .navtree-ws-row > .navtree-tab-controls > .navtree-close:hover {
+  color: var(--fg);
+  background: transparent;
+  box-shadow: none;
+  opacity: 0.55;
+}
+.navtree[data-variant="sheet"] .navtree-ws-row > .navtree-tab-controls > .navtree-close:active,
+.navtree[data-variant="sheet"]
+  .navtree-ws-row
+  > .navtree-tab-controls
+  > .navtree-close[aria-expanded="true"] {
+  background: var(--bg-hover);
+  opacity: 1;
+}
+.navtree[data-variant="sheet"] .navtree-ws-row > .navtree-tab-controls > .navtree-close:disabled {
+  opacity: 0.25;
+}
+
 /* Extra top space sets "+ New workspace" apart from whatever list it follows,
    so it reads as the outer-level action rather than part of the block above
    it. */
@@ -3132,9 +3257,7 @@ body.sidenav-resizing iframe {
 
 /* ─── The one top bar ─────────────────────────────────────────────────────
    Everything that used to be a ROW in the scroller and was not a chat is a
-   control here: the workspace (name + caret, opens the picker), search (a
-   glyph that swaps this whole bar for the field — never two bars deep), and
-   "+" (a new chat in the workspace named to its left). */
+   control here: the label, and search (a glyph that opens the ⌘K palette). */
 .navtree-bar {
   flex: 0 0 52px;
   display: flex;
@@ -3202,23 +3325,6 @@ body.sidenav-resizing iframe {
 }
 .navtree-bar-icon:disabled {
   opacity: 0.4;
-}
-/* The search field takes the BAR's place rather than stacking under it, so it
-   sits on the bar's own metrics. */
-.navsearch[data-variant="sheet"] {
-  margin-block: 6px;
-  margin-inline: var(--nt-rail-lead) var(--nt-rail-trail);
-}
-.navsearch-done {
-  flex: none;
-  background: transparent;
-  border: 0;
-  padding: 0 2px;
-  color: var(--accent);
-  font: inherit;
-  font-size: 14px;
-  cursor: pointer;
-  touch-action: manipulation;
 }
 
 /* ─── The chat row ────────────────────────────────────────────────────────
