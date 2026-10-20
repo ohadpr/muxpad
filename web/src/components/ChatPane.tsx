@@ -1535,7 +1535,7 @@ export function ChatPane({
   // The text of the in-flight send, held so a socket death before the ack
   // can restore it into the composer instead of losing it.
   const pendingText = useRef('');
-  /** What the watchdog last put back in the composer, so a late ack can undo
+  /** What recovery last put back in the composer, so a late ack can undo
    *  it. Null whenever the composer's contents are the user's own. */
   const restoredText = useRef<string | null>(null);
   // Delivery tracking. A send on a half-dead socket (mobile coming back from
@@ -1571,6 +1571,7 @@ export function ChatPane({
     olderTimeout.current = undefined;
     acked.current = true;
     pendingText.current = '';
+    restoredText.current = null;
     streamBuffer.current = '';
     setStreamingText('');
     window.clearTimeout(sendWatchdog.current);
@@ -1977,6 +1978,7 @@ export function ChatPane({
           pendingText.current = '';
           setOptimisticUser(null);
           if (lost) {
+            restoredText.current = lost;
             setInput((prev) => prev || lost);
             setNotice({
               text: 'Connection dropped before the message was sent — try again.',
@@ -2067,6 +2069,7 @@ export function ChatPane({
   const FIRST_WAIT_MS = 6000;
   const PROBE_GRACE_MS = 3000;
   const armSendWatchdog = (text: string) => {
+    restoredText.current = null;
     acked.current = false;
     window.clearTimeout(sendWatchdog.current);
     let probes = 0;
@@ -2131,7 +2134,11 @@ export function ChatPane({
     if (!restored) return;
     restoredText.current = null;
     setInput((prev) => composerAfterLateAck(prev, restored));
-    setNotice((prev) => (prev && /not delivered/i.test(prev.text) ? null : prev));
+    setNotice((prev) =>
+      prev && /not delivered|Connection dropped before the message was sent/i.test(prev.text)
+        ? null
+        : prev,
+    );
   };
 
   // The pending send queue is owned by the SERVER now, not this component: the
