@@ -25,12 +25,18 @@ import { BrowserModal } from './BrowserModal';
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const hosts: HTMLElement[] = [];
+/** UNMOUNTED, not just detached. A card's preview now opens itself, so every
+ *  mount starts a capture loop; removing the host node left those effects
+ *  running and their fetches landing after the test had finished, which React
+ *  reports as a state update outside act(). Unmounting runs the cleanup. */
+const roots: Array<{ unmount: () => void }> = [];
 
 function mount(node: React.ReactNode) {
   const host = document.createElement('div');
   document.body.appendChild(host);
   hosts.push(host);
   const root = createRoot(host);
+  roots.push(root);
   act(() => root.render(node));
   return { host, rerender: (next: React.ReactNode) => act(() => root.render(next)) };
 }
@@ -62,6 +68,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  act(() => {
+    for (const root of roots.splice(0)) root.unmount();
+  });
   vi.unstubAllGlobals();
   for (const host of hosts.splice(0)) host.remove();
 });
@@ -430,14 +439,32 @@ describe('peeking at a live browser', () => {
     expect(action(host)).toBeDefined();
   });
 
+  it('shows the page without being asked', async () => {
+    // THE DEFAULT. A card used to be a line of text with a chevron, and the
+    // picture — the part that answers "what is it doing" — was one tap away on
+    // every single card. Asked for directly: browser cards should always show
+    // their small preview rather than being fully collapsed.
+    const { host } = mount(<BrowserCard moment={moment(base)} onOpen={() => {}} now={1} />);
+    expect(peek(host)?.getAttribute('aria-expanded')).toBe('true');
+    await settle();
+    expect(shot(host)?.getAttribute('src')).toMatch(/^blob:/);
+  });
+
   it('offers no WIDEN until there is a picture to widen', async () => {
-    // There is nothing to make wider while the card is a line of text, and a
+    // There is nothing to make wider before the first frame lands, and a
     // control that does nothing is worse than one that is not there.
     const { host } = mount(<BrowserCard moment={moment(base)} onOpen={() => {}} now={1} />);
     expect(widen(host)).toBeUndefined();
-    click(peek(host));
     await settle();
     expect(widen(host)).toBeDefined();
+  });
+
+  it('closes, and stays closed, when the chevron says so', async () => {
+    const { host } = mount(<BrowserCard moment={moment(base)} onOpen={() => {}} now={1} />);
+    await settle();
+    click(peek(host));
+    expect(peek(host)?.getAttribute('aria-expanded')).toBe('false');
+    expect(shot(host)).toBeNull();
   });
 
   it('WIDENS the card, and the same control shrinks it back', async () => {
@@ -446,7 +473,6 @@ describe('peeking at a live browser', () => {
     // One control going both ways: a button that only ever grew, with
     // shrinking hidden somewhere else, is a state you cannot leave.
     const { host } = mount(<BrowserCard moment={moment(base)} onOpen={() => {}} now={1} />);
-    click(peek(host));
     await settle();
     expect(card(host).dataset.wide).toBeUndefined();
     click(widen(host));
@@ -462,12 +488,11 @@ describe('peeking at a live browser', () => {
     // A card that reopened at full width later, with no picture in it yet,
     // would be a banner across the conversation with one line of text in it.
     const { host } = mount(<BrowserCard moment={moment(base)} onOpen={() => {}} now={1} />);
-    click(peek(host));
     await settle();
     click(widen(host));
     expect(card(host).dataset.wide).toBe('true');
-    click(peek(host));
-    click(peek(host));
+    click(peek(host)); // closed
+    click(peek(host)); // and open again
     await settle();
     expect(card(host).dataset.wide).toBeUndefined();
   });
@@ -485,7 +510,6 @@ describe('peeking at a live browser', () => {
         now={1}
       />,
     );
-    click(peek(host));
     await settle();
     click(widen(host));
     expect(opened).toBe(0);
@@ -514,8 +538,8 @@ describe('peeking at a live browser', () => {
         now={1}
       />,
     );
+    // The frozen still is what the card has until the first live frame lands.
     expect(shot(host)?.getAttribute('src')).toBe('/api/browsers/shopping/shot/100');
-    click(peek(host));
     await settle();
     // THE ROUTE is the live one — the element holds the bytes it answered with.
     expect(shotFetches.some((u) => /\/api\/browsers\/shopping\/shot\?t=\d+/.test(u))).toBe(true);
@@ -536,14 +560,14 @@ describe('peeking at a live browser', () => {
       />,
     );
     click(peek(host));
-    click(peek(host));
     expect(shot(host)?.getAttribute('src')).toBe('/api/browsers/shopping/shot/100');
   });
 
   it('does NOT open the viewer — looking is not the same as taking over', () => {
     const onOpen = vi.fn();
     const { host } = mount(<BrowserCard moment={moment(base)} onOpen={onOpen} now={1} />);
-    click(peek(host));
+    click(peek(host)); // closed
+    click(peek(host)); // open again
     expect(onOpen).not.toHaveBeenCalled();
     expect(peek(host)?.getAttribute('aria-expanded')).toBe('true');
   });
@@ -555,18 +579,57 @@ describe('peeking at a live browser', () => {
     const { host } = mount(
       <BrowserCard moment={moment(base)} onOpen={onOpen} viewportWidth={1440} now={1} />,
     );
-    click(peek(host));
     await settle();
     click(shot(host) ?? undefined);
     expect(onOpen).toHaveBeenCalledTimes(1);
     expect(onOpen).toHaveBeenCalledWith('modal');
   });
 
-  it('is per card, so two browsers can be watched side by side', () => {
+  it('is per card, so two browsers can be watched side by side', async () => {
     const a = mount(<BrowserCard moment={moment(base)} onOpen={() => {}} now={1} />);
     const b = mount(<BrowserCard moment={moment(base)} onOpen={() => {}} now={1} />);
     click(peek(a.host));
-    expect(peek(a.host)?.getAttribute('aria-expanded')).toBe('true');
-    expect(peek(b.host)?.getAttribute('aria-expanded')).toBe('false');
+    expect(peek(a.host)?.getAttribute('aria-expanded')).toBe('false');
+    expect(peek(b.host)?.getAttribute('aria-expanded')).toBe('true');
+    await settle();
+  });
+
+  it('captures nothing while the card is scrolled out of view', async () => {
+    // THE COST CONTROL FOR THE DEFAULT ABOVE. Previews open themselves now, so
+    // a long conversation can hold a dozen; each capture is a real CDP round
+    // trip into a real page, and a card three screens up is a round trip for
+    // nobody. jsdom has no IntersectionObserver, so the card falls back to
+    // "always visible" — this stands one up and reports the card as off
+    // screen.
+    const observers: Array<(entries: Array<{ isIntersecting: boolean }>) => void> = [];
+    const original = globalThis.IntersectionObserver;
+    // A two-method stub, not the DOM type — the card only ever constructs it,
+    // observes one element and disconnects.
+    (globalThis as unknown as { IntersectionObserver: unknown }).IntersectionObserver = class {
+      constructor(cb: (entries: Array<{ isIntersecting: boolean }>) => void) {
+        observers.push(cb);
+      }
+      observe() {}
+      disconnect() {}
+    };
+    vi.useFakeTimers();
+    try {
+      const { host } = mount(<BrowserCard moment={moment(base)} onOpen={() => {}} now={1} />);
+      await settle();
+      const taken = shotFetches.length;
+      expect(taken).toBeGreaterThan(0);
+      act(() => {
+        for (const cb of observers) cb([{ isIntersecting: false }]);
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(10_000);
+        await Promise.resolve();
+      });
+      expect(shotFetches.length).toBe(taken);
+      expect(shot(host)?.getAttribute('src')).toMatch(/^blob:/); // the last frame stays
+    } finally {
+      vi.useRealTimers();
+      globalThis.IntersectionObserver = original;
+    }
   });
 });
