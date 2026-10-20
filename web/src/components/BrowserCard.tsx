@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   type BrowserMoment,
   browserLiveShotUrl,
@@ -75,7 +75,14 @@ const PEEK_EVERY_MS = 2_500;
  * nothing and changes nothing, which is what keeps a dropped frame from
  * blanking a card that has a perfectly good picture on it.
  */
-function useLiveShot(profile: string, on: boolean): string | null {
+function useLiveShot(
+  profile: string,
+  on: boolean,
+  /** False while the card is scrolled out of view. A ref, not a dependency:
+   *  re-running the effect on every scroll would drop the frame on screen and
+   *  refetch it, which is the flash this hook exists to avoid. */
+  onScreen: React.RefObject<boolean>,
+): string | null {
   const [shown, setShown] = useState<string | null>(null);
   useEffect(() => {
     if (!on) {
@@ -92,7 +99,13 @@ function useLiveShot(profile: string, on: boolean): string | null {
       }
     };
     const grab = async () => {
-      if (document.hidden) return;
+      // NOT WHILE NOBODY IS LOOKING. Previews are open by default now, so a
+      // long conversation can hold a dozen cards; each one capturing every
+      // 2.5s forever would be a dozen CDP round trips into real pages for
+      // pictures that are three screens up. The frame already fetched stays on
+      // the card, so scrolling back shows the last one immediately and the
+      // next tick refreshes it.
+      if (document.hidden || onScreen.current === false) return;
       try {
         const res = await fetch(browserLiveShotUrl(profile, Date.now()), { cache: 'no-store' });
         if (!res.ok) return;
@@ -120,7 +133,7 @@ function useLiveShot(profile: string, on: boolean): string | null {
       document.removeEventListener('visibilitychange', wake);
       for (const u of held) URL.revokeObjectURL(u);
     };
-  }, [on, profile]);
+  }, [on, profile, onScreen]);
   return shown;
 }
 
@@ -140,9 +153,22 @@ export function BrowserCard({ moment, onOpen, viewportWidth, now }: BrowserCardP
 
   const countdown = wheelCountdown(data.wheel, now ?? tick);
 
+  // OPEN BY DEFAULT, when there is a live browser to show.
+  //
+  // It used to start closed, so an opened-browser card was a line of text with
+  // a chevron — "Browser opened", and the page itself one tap away. The policy
+  // behind that was "a screenshot per session turns a log into a gallery", and
+  // the picture is in fact the useful part: a card that shows the page answers
+  // "what is it doing" without being asked. Asked for directly: browser cards
+  // should always show their small preview rather than being fully collapsed.
+  //
+  // The chevron still closes it, and the cost of leaving it open is bounded by
+  // the on-screen check in useLiveShot — a card nobody is looking at captures
+  // nothing.
+  //
   // PER CARD, and several can be open at once: peeking at two browsers side by
   // side in one conversation is the case this is for.
-  const [peeking, setPeeking] = useState(false);
+  const [peeking, setPeeking] = useState(view.openable);
   /**
    * WIDE, for when the thumbnail is not enough.
    *
@@ -158,12 +184,37 @@ export function BrowserCard({ moment, onOpen, viewportWidth, now }: BrowserCardP
    * closes, so reopening starts small again.
    */
   const [wide, setWide] = useState(false);
-  const peekUrl = useLiveShot(moment.profile, peeking && view.openable);
+  /**
+   * IS THIS CARD ON SCREEN?
+   *
+   * A ref rather than state, because nothing renders differently — it only
+   * decides whether the next capture happens. Defaults to true so a browser
+   * without IntersectionObserver (jsdom, and any engine that lacks it) behaves
+   * exactly as it did before: always refreshing.
+   */
+  const onScreen = useRef(true);
+  const cardRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = cardRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        onScreen.current = entry?.isIntersecting ?? true;
+      },
+      // A margin, so a card one scroll-flick away is already refreshing by the
+      // time it arrives instead of showing a frame from when you left it.
+      { rootMargin: '200px' },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  const peekUrl = useLiveShot(moment.profile, peeking && view.openable, onScreen);
 
   const act = () => onOpen(browserOpenMode(viewportWidth ?? window.innerWidth));
 
   return (
     <div
+      ref={cardRef}
       className={`browser-card browser-card--${view.tone}${view.passive ? ' browser-card--passive' : ''}`}
       data-testid="browser-card"
       data-tone={view.tone}
