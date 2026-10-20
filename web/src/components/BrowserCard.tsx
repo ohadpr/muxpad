@@ -90,6 +90,8 @@ function useLiveShot(
       return;
     }
     let alive = true;
+    let inFlight = false;
+    const controller = new AbortController();
     /** The object URLs this mount created, newest last. At most two live. */
     const held: string[] = [];
     const release = () => {
@@ -105,9 +107,15 @@ function useLiveShot(
       // pictures that are three screens up. The frame already fetched stays on
       // the card, so scrolling back shows the last one immediately and the
       // next tick refreshes it.
-      if (document.hidden || onScreen.current === false) return;
+      // Keep one capture in flight through fetch, body read and image decode.
+      // Both the interval and visibility wake-up can arrive while it is busy.
+      if (!alive || inFlight || document.hidden || onScreen.current === false) return;
+      inFlight = true;
       try {
-        const res = await fetch(browserLiveShotUrl(profile, Date.now()), { cache: 'no-store' });
+        const res = await fetch(browserLiveShotUrl(profile, Date.now()), {
+          cache: 'no-store',
+          signal: controller.signal,
+        });
         if (!res.ok) return;
         const blob = await res.blob();
         if (!alive || blob.size === 0) return;
@@ -145,6 +153,8 @@ function useLiveShot(
         release();
       } catch {
         // A dropped frame is not a broken card: the one on screen stays.
+      } finally {
+        inFlight = false;
       }
     };
     void grab();
@@ -157,6 +167,7 @@ function useLiveShot(
     document.addEventListener('visibilitychange', wake);
     return () => {
       alive = false;
+      controller.abort();
       clearInterval(id);
       document.removeEventListener('visibilitychange', wake);
       for (const u of held) URL.revokeObjectURL(u);

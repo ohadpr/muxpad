@@ -657,6 +657,88 @@ describe('peeking at a live browser', () => {
     }
   });
 
+  it('keeps one capture in flight across timer ticks and visibility wake-ups', async () => {
+    vi.useFakeTimers();
+    let finish!: (response: Response) => void;
+    const fetchFrame = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    vi.stubGlobal('fetch', fetchFrame);
+    try {
+      mount(<BrowserCard moment={moment(base)} onOpen={() => {}} now={1} />);
+      expect(fetchFrame).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        vi.advanceTimersByTime(10_000);
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      expect(fetchFrame).toHaveBeenCalledTimes(1);
+      // A failed capture must release the guard too.
+      await act(async () => {
+        finish(new Response(null, { status: 503 }));
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(2500);
+      });
+      expect(fetchFrame).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('aborts a pending capture when the preview closes', async () => {
+    const fetchFrame = vi.fn(
+      (_url: unknown, _options?: RequestInit) => new Promise<Response>(() => {}),
+    );
+    vi.stubGlobal('fetch', fetchFrame);
+    const { host } = mount(<BrowserCard moment={moment(base)} onOpen={() => {}} now={1} />);
+    const signal = fetchFrame.mock.calls[0]?.[1]?.signal;
+    expect(signal?.aborted).toBe(false);
+    click(peek(host));
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it('keeps the capture busy until image decoding finishes', async () => {
+    vi.useFakeTimers();
+    let release!: () => void;
+    vi.stubGlobal(
+      'Image',
+      class {
+        src = '';
+        decode() {
+          return new Promise<void>((resolve) => {
+            release = resolve;
+          });
+        }
+      },
+    );
+    try {
+      mount(<BrowserCard moment={moment(base)} onOpen={() => {}} now={1} />);
+      await settle();
+      expect(shotFetches).toHaveLength(1);
+      await act(async () => {
+        vi.advanceTimersByTime(10_000);
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      expect(shotFetches).toHaveLength(1);
+      await act(async () => {
+        release();
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(2500);
+      });
+      expect(shotFetches).toHaveLength(2);
+      await settle();
+      await act(async () => {
+        release();
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('captures nothing while the card is scrolled out of view', async () => {
     // THE COST CONTROL FOR THE DEFAULT ABOVE. Previews open themselves now, so
     // a long conversation can hold a dozen; each capture is a real CDP round
