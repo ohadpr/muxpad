@@ -57,6 +57,18 @@
      fallback below is the token the rail used before. */
   --rail-surface: var(--bg-tabbar);
   --rail-ink: var(--fg);
+  /* AN ELEVATED SURFACE MADE OUT OF THE RAIL'S OWN COLOURS.
+     The islands below rebind --fg to --rail-ink, which is what makes rail text
+     readable on a deep surface — but a control that also wanted a RAISED
+     background kept taking --bg-elev, which is still the app's. On every theme
+     with a light app and a deep rail those are the same colour, so the search
+     field rendered white ink on a white box: alucard, github-light and acme
+     all measured exactly 1.00:1, which is not low contrast, it is invisible.
+     Reported as "the text seems to be rendered hidden somehow".
+     Derived rather than listed per theme, so a theme added later cannot
+     forget it. 10% of the ink into the surface reads as lifted and leaves the
+     worst case across the six themes at 6.06:1. */
+  --rail-elev: color-mix(in srgb, var(--rail-ink) 10%, var(--rail-surface));
   --rail-ink-dim: var(--fg-dim);
   --rail-ink-faint: var(--fg-faint);
   --rail-hover: var(--bg-hover);

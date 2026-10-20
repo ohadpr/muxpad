@@ -355,6 +355,10 @@
 /* The island itself, scoped to the surface that actually needs it. */
 .navtree[data-variant="sidebar"] {
   --fg: var(--rail-ink);
+  /* The island's own raised surface — see --rail-elev. Without this a
+     control inside the rail wears the APP's elevated colour under the RAIL's
+     ink, which on a light theme with a deep rail is ink on its own colour. */
+  --bg-elev: var(--rail-elev);
   --fg-dim: var(--rail-ink-dim);
   --fg-faint: var(--rail-ink-faint);
   --bg-hover: var(--rail-hover);
@@ -2880,6 +2884,10 @@
      the tree: `.sidenav-brand` is a SIBLING of it, and on the deep rail the
      wordmark measured 1.02:1 — invisible — until this rule existed. */
   --fg: var(--rail-ink);
+  /* The island's own raised surface — see --rail-elev. Without this a
+     control inside the rail wears the APP's elevated colour under the RAIL's
+     ink, which on a light theme with a deep rail is ink on its own colour. */
+  --bg-elev: var(--rail-elev);
   --fg-dim: var(--rail-ink-dim);
   --fg-faint: var(--rail-ink-faint);
   --bg-hover: var(--rail-hover);
