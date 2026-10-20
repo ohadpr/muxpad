@@ -117,6 +117,40 @@ describe('codex backend', () => {
     expect(status.context).toBeUndefined();
   });
 
+  it('reports the last answer before completion and never repeats it on a silent turn', async () => {
+    const { b, frames, calls } = await boot();
+    b.send('review');
+    await tick();
+    const turn = calls[1]!.child;
+    line(turn, { type: 'item.completed', item: { type: 'agent_message', text: 'Checking now' } });
+    line(turn, { type: 'item.completed', item: { type: 'agent_message', text: 'ACCEPT' } });
+    line(turn, { type: 'turn.completed' });
+    closeChild(turn);
+    await tick();
+    expect(frames.filter((frame) => frame.t === 'report')).toEqual([
+      { t: 'report', text: 'ACCEPT' },
+    ]);
+    expect(types(frames).indexOf('report')).toBeLessThan(types(frames).indexOf('turn-done'));
+    b.send('second job');
+    await tick();
+    line(calls[2]!.child, { type: 'turn.completed' });
+    closeChild(calls[2]!.child);
+    await tick();
+    expect(frames.filter((frame) => frame.t === 'report')).toHaveLength(1);
+  });
+
+  it('does not report unfinished commentary when the turn fails', async () => {
+    const { b, frames, calls } = await boot();
+    b.send('review');
+    await tick();
+    const turn = calls[1]!.child;
+    line(turn, { type: 'item.completed', item: { type: 'agent_message', text: 'Checking now' } });
+    line(turn, { type: 'turn.failed', error: 'interrupted' });
+    closeChild(turn, 1);
+    await tick();
+    expect(frames.filter((frame) => frame.t === 'report')).toEqual([]);
+  });
+
   it('adopts the real thread id (re-hello) and lands [user, assistant] under it', async () => {
     const { b, frames, calls } = await boot();
     b.send('the prompt');

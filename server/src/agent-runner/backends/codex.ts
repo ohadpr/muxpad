@@ -252,6 +252,7 @@ export function createCodexBackend(
    *  get a leading blank line — one in front of the first would be a paragraph
    *  break around nothing. Same rule as claude.ts. */
   let streamedTextThisTurn = false;
+  let lastAnswer = '';
   function writeEvent(event: ChatEvent): void {
     try {
       appendTranscriptEvent(liveSid, event);
@@ -355,6 +356,9 @@ export function createCodexBackend(
     // Defensive: a turn that produced no thread.started (spawn error) still
     // flushes its buffered user event so it isn't lost.
     if (!turnCommitted) commitTurnLog();
+    // Use the same explicit-report channel as Claude, before turn completion.
+    // Reset per turn so a silent or failed turn cannot repeat an older result.
+    if (ok && lastAnswer) emit({ t: 'report', text: lastAnswer });
     emit({ t: 'turn-done', ok, ...(error ? { error } : {}) });
     emitStatus();
     // Release the next queued send.
@@ -389,6 +393,7 @@ export function createCodexBackend(
       if (itype === 'agent_message') {
         const text = typeof item.text === 'string' ? item.text : '';
         if (text) {
+          lastAnswer = text;
           // No token deltas from exec — stream the whole message as one chunk
           // for the live view, and land it in the transcript log for history.
           //
@@ -414,6 +419,7 @@ export function createCodexBackend(
           });
         }
       } else if (itype === 'command_execution') {
+        lastAnswer = '';
         const command = typeof item.command === 'string' ? item.command : '';
         const output = typeof item.aggregated_output === 'string' ? item.aggregated_output : '';
         const exit = typeof item.exit_code === 'number' ? item.exit_code : null;
@@ -454,6 +460,7 @@ export function createCodexBackend(
     // Per TURN, not per process: the separator rule below is "every message
     // after the first one of this turn".
     streamedTextThisTurn = false;
+    lastAnswer = '';
     if (!authOk) {
       authOk = await checkAuth();
       if (!authOk) {

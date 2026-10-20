@@ -3,6 +3,7 @@ import { AgentSessionStore } from '../store/AgentSessionStore.js';
 import { SpawnRoundStore } from '../store/SpawnRoundStore.js';
 import { type SpawnReportState, type SpawnReportWrite, TabStore } from '../store/TabStore.js';
 import { type HeadlineModel, agentSdkHeadlineModel, readRecentTurns } from './headline.js';
+import { readWorkerAnswer } from './worker-answer.js';
 
 /**
  * THE SPAWN REPORT — what a worker chat did, said in its PARENT's log.
@@ -18,18 +19,11 @@ import { type HeadlineModel, agentSdkHeadlineModel, readRecentTurns } from './he
  * FULL work it indexes is fetched from the transcript endpoint on demand — this
  * is deliberately only the few sentences that tell you whether to expand.
  *
- * ─── GENERATED, never requested ──────────────────────────────────────────────
- * The obvious design is to tell the worker to report back in its own words. It
- * was built that way, committed and reverted whole (77c1583 / 86bcbc8), and the
- * reasons it loses are structural, not stylistic:
- *
- *   · an instruction can be ignored, or truncated by a context rotation
- *   · a crashed agent never gets to the reporting step — and the crash is
- *     exactly the case where the parent most needs to be told something
- *   · the report becomes a real delivered message, with all the quoting and
- *     round-trip fragility that implies
- *
- * The transcript is on disk in every one of those cases. So this reads it.
+ * ─── THE WORKER'S ANSWER FIRST ───────────────────────────────────────────────
+ * Explicit reports are delivered by SpawnReportWriter without a model call.
+ * Otherwise recover the final answer from the current round's transcript.
+ * Generation is a last resort for a worker that left no usable final answer,
+ * including crashes. Delivery of an existing answer never needs model quota.
  *
  * ─── The shape is chat/headline.ts, one size up ───────────────────────────────
  * Read a transcript tail, ask a cheap model, judge the reply hard, write it to
@@ -664,6 +658,19 @@ export async function maybeWriteSpawnReport(
   // reported on. The writer captures its identity before awaiting the model.
   const rounds = new SpawnRoundStore(db);
   const round = rounds.openRound(tabId) ?? rounds.lastEnded(tabId);
+  // A worker's own answer is already a report. Deliver it without spending
+  // another provider's quota or subjecting it to generated-summary validators.
+  const answer = readWorkerAnswer(db, paneId, round);
+  if (answer) {
+    const write: SpawnReportWrite = {
+      report: answer,
+      state: endState,
+      artifacts: scrapeArtifacts(answer),
+    };
+    if (writeTab()) tabs.setSpawnReport(tabId, write, now);
+    return write;
+  }
+
   if (
     opts.force !== true &&
     !shouldConsiderSpawnReport({
