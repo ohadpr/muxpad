@@ -25,9 +25,18 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
+/** THE CLI, BY ABSOLUTE PATH.
+ *
+ * `'muxpad'` resolved fine from a pane, whose PATH the shell had set up, and
+ * not at all from a scheduler — launchd hands a job PATH=/usr/bin:/bin and
+ * nothing else, so the first run outside a terminal died on `spawnSync muxpad
+ * ENOENT`. The repo's own copy is two directories up from this file and is the
+ * one that matches this checkout; $MUXPAD_BIN wins when a pane set it. */
+const MUXPAD = process.env.MUXPAD_BIN ?? fileURLToPath(new URL('./muxpad', import.meta.url));
 const status = JSON.parse(
-  execFileSync('muxpad', ['claude-account', 'status', '--json'], { encoding: 'utf8' }),
+  execFileSync(MUXPAD, ['claude-account', 'status', '--json'], { encoding: 'utf8' }),
 );
 const cooled = new Set(status.cooldowns.map((c) => `${c.account}:${c.scope}`));
 /** A COOLDOWN IS A FULL WINDOW. The pool writes one the moment an account is
@@ -197,9 +206,22 @@ const seg = (r) => {
   // the side that makes you check. The exact value stays in the hover title.
   const shown = Math.ceil(pct);
   const reset = when(r.top.resetsAt);
-  return `<span class=s title="${esc(r.name)} · ${esc(window(r.top.scope))} ${esc(pct)}%${reset ? ` · resets ${esc(reset)}` : ''}${r.blocked ? ' · blocked' : ''}">
+  const title = `${esc(r.name)} · ${esc(window(r.top.scope))} ${esc(pct)}%${
+    reset ? ` · resets ${esc(reset)}` : ''
+  }${r.blocked ? ' · blocked' : ''}`;
+  // WHEN IT COMES BACK, ON THE CARD — not only in a hover title nobody on a
+  // phone can reach. An exhausted subscription's one useful fact is the hour
+  // it returns; "100%" alone tells you it is dead without telling you for how
+  // long. The bar is what makes room: a full bar is a flat block of colour
+  // that says exactly what the number beside it already said, so the blocked
+  // segment spends that width on the countdown instead.
+  const body =
+    r.blocked && reset
+      ? `<s>&#8635;${esc(reset)}</s>`
+      : `<i class=t><i style="width:${Math.max(4, Math.min(100, pct))}%;background:${bar(hue(pct))}"></i></i>`;
+  return `<span class=s title="${title}">
   <b${cur}>${esc(r.name)}</b>
-  <i class=t><i style="width:${Math.max(4, Math.min(100, pct))}%;background:${bar(hue(pct))}"></i></i>
+  ${body}
   <u style="color:${ink(hue(pct))}">${shown}%</u>
 </span>`;
 };
@@ -245,6 +267,12 @@ const html = `<style>
  .q .t{display:block;flex:1 999 auto;min-width:0;height:6px;border-radius:99px;
    background:color-mix(in srgb,var(--fg,#222) 14%,transparent);overflow:hidden}
  .q .t i{display:block;height:100%;border-radius:99px}
+ /* THE COUNTDOWN, in the bar's place on a blocked subscription. Styled as
+    quiet text rather than a chip: it is a fact about when, not a second status
+    light, and the percentage beside it is already carrying the alarm. Shrinks
+    and ellipsises like the label, so it can never be what clips a number. */
+ .q s{text-decoration:none;flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;
+   white-space:nowrap;font-size:11px;opacity:.75;font-variant-numeric:tabular-nums}
  /* NEVER SHRINKS, NEVER CLIPS. It is the thing the card exists to show. */
  .q u{text-decoration:none;font-weight:700;font-size:12px;white-space:nowrap;flex:0 0 auto;
    font-variant-numeric:tabular-nums}
@@ -256,7 +284,7 @@ const html = `<style>
 if (process.argv.includes('--print')) {
   process.stdout.write(html);
 } else {
-  execFileSync('muxpad', ['card', 'set', 'quota', '--format=html', '--every=1h', html], {
+  execFileSync(MUXPAD, ['card', 'set', 'quota', '--format=html', '--every=1h', html], {
     stdio: 'inherit',
   });
 }
