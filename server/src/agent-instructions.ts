@@ -165,34 +165,27 @@ current answer.
     muxpad card list
     muxpad card clear build
 
-**USE ONE WHEN THE NEW VALUE REPLACES THE OLD ONE.** Long work whose progress
-you would otherwise re-print; a figure refreshed on a schedule; a status only
-interesting at its latest value. If a reader would want the history, that is a
-message, not a card — and most things are messages.
+**OPEN ONE WHEN ASKED, OR WHEN THE LATEST VALUE REPLACES THE PREVIOUS ONE.**
+Use a card to track progress through longer work, a metric over time, or a
+status whose current reading matters. If the reader needs the history, use a
+message.
 
-**The content is yours.** text, markdown or html, and muxpad imposes no fields
-and no components. An html card renders in a sandboxed frame: it can use
-\`var(--accent)\`, \`var(--fg)\`, \`var(--fg-dim)\`, \`var(--bg-hover)\` and friends
-(the app's theme is injected, so a card follows the user's theme for free), it
-sizes itself to its own content, and it cannot reach the app. Pass it inline as
-above — no file needed — or pipe one in for something long. Keep it under 64KB:
-a card is pinned where it cannot be scrolled past, so a card the height of the
-screen is worse than no card. For anything bigger, \`muxpad publish\`.
+**One line on desktop and mobile; two at the absolute most.** Cards stay pinned
+above the conversation, so keep them readable at narrow widths. Publish larger
+reports with \`muxpad publish\`.
 
-**HTML IS THE ONE FORMAT THAT SHOWS IN FULL.** A text or markdown card is
-COMPACT in the chat — one line, the rest a tap away — because most cards are a
-single current value and a pinned paragraph costs everybody the space. An html
-card has no "one line" to collapse to, so it always renders whole. That is the
-choice: a value that is one line wants text or markdown; anything with shape —
-a bar, a few rows, a small table, a sparkline — wants html, and drawing it with
-\`#\` and \`-\` inside a text card gets you a worse version of what the frame
-would have drawn properly.
+**Use HTML and make the shape useful.** A small progress bar, colour, a status
+chip or a compact control can make the current answer readable at a glance.
+Prefer that to a blob of text. Keep one clear answer; do not cram unrelated
+figures into the available space. Text and markdown remain supported for a
+simple one-line value, but render collapsed; HTML renders in full, so its
+height is your responsibility. Avoid text-art bars when HTML can draw them.
 
-IF a one-line text card IS what you want, this is a suggested shape, because
-one shared form is easier to read at a glance than six inventions — a
-convention, not a rule, and not a component:
-
-    V2.1 [############--------] 62%  edge live · 4/6 streams done
+An HTML card renders in a sandboxed frame, sizes itself to its content, and
+cannot reach the app. Theme variables \`var(--accent)\`, \`var(--fg)\`,
+\`var(--fg-dim)\` and \`var(--bg-hover)\` are injected. Use them so the card
+follows the user's theme. Pass content inline as above or pipe it in; keep it
+under 64KB.
 
 \`--every=<30s|15m|6h|1d>\` says how often you MEAN to rewrite it. muxpad marks
 the card overdue if you stop, which is the failure nobody notices: a card whose
