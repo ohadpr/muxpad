@@ -251,19 +251,26 @@ function SvgQueue() {
   );
 }
 
-/** Restore glyph — a curved back-arrow ("pull it back to the composer"). */
-function SvgRestore() {
+/** Edit glyph — a pencil.
+ *
+ * It was a curved back-arrow, on the reasoning that the button PULLS the text
+ * back to the composer. That is the mechanism, not the intent: beside a
+ * message you have not sent yet, a back-arrow reads as undo/revert — as though
+ * the tap would discard what you typed — and the control next to it is already
+ * the one that discards. A pencil says the one thing this does, which is let
+ * you change the words before they go. */
+function SvgEdit() {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" fill="none">
       <path
-        d="M9 10H5V6"
+        d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"
         stroke="currentColor"
         strokeWidth="1.8"
         strokeLinecap="round"
         strokeLinejoin="round"
       />
       <path
-        d="M5 10a8 8 0 1 1 2 5.3"
+        d="m15 5 4 4"
         stroke="currentColor"
         strokeWidth="1.8"
         strokeLinecap="round"
@@ -4255,7 +4262,7 @@ export function ChatPane({
   // auto-focuses when url is null).
   if (pendingPick) {
     return (
-      <div className="chat-pane">
+      <div className="chat-pane" data-slack-chat-pane={paneId} data-slack-active={active} data-slack-session={false}>
         {active && <SlackApprovalAlert paneId={paneId} />}
         <div className="chat-empty chat-harness-pick">
           <p className="chat-empty-title">What do you want to open?</p>
@@ -4352,7 +4359,7 @@ export function ChatPane({
     // shape in the file. The value is memoized, so the transcript re-renders
     // when the CORPUS lands and not on the frames in between.
     <ChatMentionContext.Provider value={mentionContext}>
-      <div className="chat-pane" ref={paneRef}>
+      <div className="chat-pane" ref={paneRef} data-slack-chat-pane={paneId} data-slack-active={active} data-slack-session={!!session?.current_sid}>
         {/* Keep approval reachable while the chat transport is still connecting. */}
         {active && !session?.current_sid && <SlackApprovalAlert paneId={paneId} />}
         {/* Fixed-position, draws nothing until you take the wheel. Mounted here
@@ -4635,7 +4642,7 @@ export function ChatPane({
                         aria-label="Edit — restore to the composer"
                         title="Queued — tap to edit before it sends"
                       >
-                        <SvgRestore />
+                        <SvgEdit />
                       </button>
                       <button
                         type="button"
