@@ -324,14 +324,15 @@ describe('what a card should be made OF', () => {
     // The compact row is one line of text; an html card has no one line to
     // collapse to and renders whole. An agent that does not know this writes
     // its shape into a text card, where all but the first line is hidden.
-    expect(policy).toMatch(/one format that shows in full/i);
-    expect(policy).toMatch(/compact/i);
+    expect(policy).toMatch(/Text and markdown[\s\S]*render collapsed/);
+    expect(policy).toMatch(/HTML renders in full/);
   });
 
-  it('keeps the ascii bar, but as the one-line case rather than the default', () => {
-    expect(policy).toContain('[############--------]');
-    const bar = policy.indexOf('[############--------]');
-    const lead = policy.slice(Math.max(0, bar - 400), bar);
-    expect(lead).toMatch(/if .*one-line|one-line text card/i);
+  it('keeps cards compact on desktop and mobile and prefers useful HTML', () => {
+    expect(policy).toContain('One line on desktop and mobile; two at the absolute most.');
+    expect(policy).toContain('Use HTML and make the shape useful.');
+    expect(policy).toContain('Prefer that to a blob of text.');
+    expect(policy).toContain('OPEN ONE WHEN ASKED');
+    expect(policy).toContain('Clear a card when its work is over.');
   });
 });
