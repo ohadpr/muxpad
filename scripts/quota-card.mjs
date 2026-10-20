@@ -215,14 +215,21 @@ const seg = (r) => {
   // long. The bar is what makes room: a full bar is a flat block of colour
   // that says exactly what the number beside it already said, so the blocked
   // segment spends that width on the countdown instead.
-  const body =
-    r.blocked && reset
-      ? `<s><svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="6"/><path d="M8 4.6V8l2.3 1.6"/></svg>${esc(reset)}</s>`
-      : `<i class=t><i style="width:${Math.max(4, Math.min(100, pct))}%;background:${bar(hue(pct))}"></i></i>`;
-  return `<span class="s${r.blocked && reset ? ' b' : ''}" title="${title}">
+  // EVERY SUBSCRIPTION KEEPS ITS BAR, including the full one.
+  //
+  // The countdown first REPLACED the bar, on the reasoning that a full bar
+  // only restates the number beside it. On the row that was wrong: three
+  // subscriptions, two bars, and the gap sat on the one that is 100% — which
+  // reads as a bar that failed to draw, not as a deliberate substitution.
+  // Reported as "it still is weird, doesn't show a bar for the full one".
+  // So the bar is the constant, and the countdown is an EXTRA the blocked
+  // segment carries after its number.
+  const clock = `<svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="6"/><path d="M8 4.6V8l2.3 1.6"/></svg>`;
+  const countdown = r.blocked && reset ? `<s>${clock}${esc(reset)}</s>` : '';
+  return `<span class=s title="${title}">
   <b${cur}>${esc(r.name)}</b>
-  ${body}
-  <u style="color:${ink(hue(pct))}">${shown}%</u>
+  <i class=t><i style="width:${Math.max(4, Math.min(100, pct))}%;background:${bar(hue(pct))}"></i></i>
+  <u style="color:${ink(hue(pct))}">${shown}%</u>${countdown}
 </span>`;
 };
 
@@ -280,12 +287,9 @@ const html = `<style>
     device, and the gap is explicit rather than whatever the glyph's sidebearing
     happens to be. */
  .q s svg{flex:none;opacity:.85}
- /* A SEGMENT WITH NO BAR TAKES NO SHARE OF THE SLACK. The bar is what absorbs
-    leftover width; a blocked segment has a countdown instead, which is a fixed
-    piece of text. Left growable it claimed a third of the spare room and
-    had nothing to put in it, so "claude 1 20h 100%" sat in front of a hole the
-    width of the gap before the divider. */
- .q .s.b{flex:0 1 auto}
+ /* The countdown sits AFTER the number and never shrinks it: it is the last
+    thing in the segment and the first thing allowed to go, so a narrow card
+    loses "20h" before it loses a digit of "100%". */
  /* NEVER SHRINKS, NEVER CLIPS. It is the thing the card exists to show. */
  .q u{text-decoration:none;font-weight:700;font-size:12px;white-space:nowrap;flex:0 0 auto;
    font-variant-numeric:tabular-nums}
