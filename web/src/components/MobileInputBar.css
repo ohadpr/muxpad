@@ -172,3 +172,20 @@
 .mobile-input-send:active {
   filter: brightness(0.9);
 }
+
+/* A FAILED UPLOAD, IN ONE LINE. The bar has no notice region of its own and
+   should not grow one: this is a single line that appears only while there is
+   something to say, above the keys row so it never displaces the composer. */
+.mobile-input-note {
+  flex: 0 0 auto;
+  padding: 0 2px;
+  color: var(--danger);
+  font-family: var(--chrome-font);
+  font-size: 12px;
+  line-height: 1.3;
+  /* Two lines at most; a server message can be a sentence. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}

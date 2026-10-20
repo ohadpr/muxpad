@@ -58,6 +58,49 @@ describe('attachments', () => {
     expect(readFileSync(body.path)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
   });
 
+  /**
+   * THE BUG THIS PAIR EXISTS FOR. The upload route took images only while the
+   * composer's `accept` list, the serve route and the renderer all took the
+   * full union — so a phone offered "Take Video", the OS handed the file over,
+   * and the upload 400'd into a catch block that said nothing.
+   */
+  it.each([
+    ['clip.mov', 'video/quicktime'],
+    ['clip.mp4', 'video/mp4'],
+    ['notes.pdf', 'application/pdf'],
+    // The provider that reports no type at all: iOS Files and several Android
+    // pickers do this, and the extension is then the only evidence.
+    ['clip2.mp4', ''],
+  ])('accepts %s (type %s) — every type the rest of the pipeline renders', async (name, type) => {
+    const fd = new FormData();
+    fd.append('file', new Blob([new Uint8Array([1, 2, 3, 4])], { type }), name);
+    const res = await test.app.request(`/api/panes/${paneId}/attachments`, {
+      method: 'POST',
+      body: fd,
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { path: string };
+    expect(body.path.endsWith(name.slice(name.lastIndexOf('.')))).toBe(true);
+    expect(readFileSync(body.path)).toEqual(Buffer.from([1, 2, 3, 4]));
+  });
+
+  it('still refuses a type nothing downstream can render, and says which', async () => {
+    const fd = new FormData();
+    fd.append(
+      'file',
+      new Blob([new Uint8Array([0])], { type: 'application/x-msdownload' }),
+      'a.exe',
+    );
+    const res = await test.app.request(`/api/panes/${paneId}/attachments`, {
+      method: 'POST',
+      body: fd,
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { message: string } };
+    // The composer prints this sentence verbatim, so it has to name the file.
+    expect(body.error.message).toContain('a.exe');
+  });
+
   it('returns 400 if file is missing', async () => {
     const fd = new FormData();
     const res = await test.app.request(`/api/panes/${paneId}/attachments`, {

@@ -4,6 +4,7 @@ import { api } from '../api';
 import { companionTextForImagePaste, splitClipboard } from '../lib/clipboard-detect';
 import { planSubmit } from '../lib/mobile-submit';
 import { usePaneFace } from '../lib/pane-face';
+import { uploadError } from '../lib/upload-error';
 import { isCursorAgentCmd } from '../lib/xterm-internals';
 import './MobileInputBar.css';
 
@@ -56,6 +57,15 @@ export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: Mobil
   const editableRef = useRef<HTMLDivElement | null>(null);
   const barRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  /** One line, only while an upload has failed. Cleared by the next success,
+   *  by picking again, and by a timer so a stale failure cannot sit over the
+   *  keyboard forever. */
+  const [uploadNote, setUploadNote] = useState<string | null>(null);
+  useEffect(() => {
+    if (!uploadNote) return;
+    const timer = window.setTimeout(() => setUploadNote(null), 8000);
+    return () => window.clearTimeout(timer);
+  }, [uploadNote]);
 
   // The bar is ALWAYS rendered (hidden via the `hidden` attribute when the
   // active pane isn't a shell) so the positioning effect below — which runs
@@ -229,11 +239,16 @@ export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: Mobil
       try {
         const { path } = await api.uploadAttachment(paneId, blob, name);
         paths.push(path);
-      } catch {
-        // ignore — drop this image; the rest still get a chance
+      } catch (error) {
+        // SAY SO. This used to be an empty catch, and on a phone the result
+        // was a picker that closed and did nothing — the whole report was
+        // "uploading videos just fails silently". The bar has no notice of its
+        // own, so it grows one line for as long as it is worth reading.
+        setUploadNote(`${name}: ${uploadError(error)}`);
       }
     }
     if (paths.length === 0) return;
+    setUploadNote(null);
     insertAtCaret(`${paths.join(' ')} ${tail}`);
   };
 
@@ -278,6 +293,8 @@ export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: Mobil
       .map((f) => ({ blob: f, name: f.name || `image.${f.type.split('/')[1] ?? 'png'}` }));
     // Reset first so picking the SAME file again still fires onChange.
     input.value = '';
+    setUploadNote(null);
+    if (items.length === 0) return;
     await uploadAndInsert(items, '');
   };
 
@@ -360,6 +377,7 @@ export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: Mobil
           ^C
         </button>
       </div>
+      {uploadNote ? <output className="mobile-input-note">{uploadNote}</output> : null}
       <div className="mobile-input-row">
         {/* Attach any file muxpad can render. The hidden input does the work;
             the button is the visible affordance. See onPickFiles for why the
