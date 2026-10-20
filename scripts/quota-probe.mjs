@@ -66,7 +66,17 @@ for (const account of pool.accounts().filter((a) => a.enabled)) {
         const info = msg.rate_limit_info;
         pool.record(account.id, info);
         got = true;
-        console.log(`${account.id}: ${info.rateLimitType ?? 'all'} ${info.utilization ?? '?'}%`);
+        // PRINT WHAT WAS RECORDED, not the field that is never populated.
+        // Top-level `utilization` is undefined on every real event — the
+        // numbers live in `unifiedWindows`, which is why `record` reads them
+        // there — so this line printed "five_hour ?%" on every successful
+        // probe and read like a failure in a log nobody could interpret.
+        const windows = pool.usage(account.id);
+        console.log(
+          windows.length
+            ? `${account.id}: ${windows.map((w) => `${w.scope} ${Math.ceil(w.utilization)}%`).join(', ')}`
+            : `${account.id}: recorded (no window reported)`,
+        );
       }
     }
     session.close?.();
