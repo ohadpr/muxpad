@@ -1,5 +1,5 @@
 /*
- * ⌘K palette. The ROWS are the rail's (NavSearch.css) — this file is only the
+ * ⌘K palette. The ROWS are NavSearch.css's — this file is only the
  * surface they sit on: a backdrop, a dialog, a field and a divider.
  *
  * Deliberately NOT centred vertically. A dialog pinned to the middle of the
@@ -11,7 +11,10 @@
 .cmdk-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 1000;
+  /* Above the mobile nav sheet (1101): the sheet's magnifier opens this, and
+     the sheet is still sliding out for a moment after. Below the row menus
+     (1200), which never open while this is up. */
+  z-index: 1150;
   display: flex;
   justify-content: center;
   align-items: flex-start;
@@ -122,8 +125,8 @@
   background: var(--border);
 }
 
-/* The palette's rows are a touch roomier than the rail's: this is a surface
-   you are pointing at, not a column you are scanning past. */
+/* Roomier than the rows' base: this is a surface you are pointing at, not a
+   column you are scanning past. */
 .cmdk-results .navsearch-row {
   border-radius: 8px;
   padding-block: 7px;
@@ -136,5 +139,18 @@
 
   .cmdk-dialog {
     max-height: 72vh;
+  }
+
+  /* On a phone this is the only search there is (the sheet's magnifier opens
+     it). Under 16px iOS zooms the whole page when the field takes focus. */
+  .cmdk-input {
+    font-size: 16px;
+  }
+}
+
+/* Thumb-height result rows wherever the pointer is a finger. */
+@media (pointer: coarse) {
+  .cmdk-results .navsearch-row {
+    min-height: 44px;
   }
 }

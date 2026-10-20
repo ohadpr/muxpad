@@ -1,6 +1,6 @@
 /* ──────────────────────────────────────────────────────────────────────
-   NavSearch — the box at the head of the rail, and the result list that
-   takes the tree's place while it has anything in it.
+   NavSearch — the search result rows, as the ⌘K palette renders them
+   (CommandPalette.css styles the surface they sit on).
 
    Deliberately its OWN class namespace rather than a reuse of
    `.navtree-tab-row`: those rows carry a three-channel state encoding
@@ -11,113 +11,6 @@
    snippet, not a status rail — so it gets its own small sheet instead of
    a fourth qualifier on theirs.
    ────────────────────────────────────────────────────────────────────── */
-
-.navsearch {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  /* Sits between the brand hairline and the tree, on the SAME left and right
-     edges as the rows under it — which is what the old value said it was doing
-     and was doing backwards. A row's inset is the scroller's (`--nt-pad` on the
-     left, nothing on the right) plus the group's (`--nt-pad` both sides), so it
-     is 8 left and 4 right; this box had 4 left and 8 right, mirroring the list
-     instead of matching it, and the mismatch doubled into an 8px disagreement
-     at the right edge. Reported as "the search bar doesn't have equal margins".
-     Derived from the token rather than written as literals, because this is the
-     second surface deriving the list's gutter and the first one drifted. */
-  margin: 6px var(--nt-pad) 2px calc(var(--nt-pad) * 2);
-  padding: 0 8px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--bg-elev);
-  /* The rail is resizable down to 160px; the box must shrink with it rather
-     than push the scroller's tracks around. */
-  min-width: 0;
-}
-.navsearch:focus-within {
-  border-color: var(--accent);
-}
-
-.navsearch-glyph {
-  flex: none;
-  color: var(--fg-faint);
-}
-
-.navsearch-input {
-  flex: 1;
-  min-width: 0;
-  border: 0;
-  outline: none;
-  background: transparent;
-  color: var(--fg);
-  font-family: var(--ui-font);
-  font-size: var(--chrome-size);
-  /* 32px on desktop; the sheet raises it below. iOS zooms a focused field
-     whose text is under 16px, which is why the mobile variant also bumps the
-     FONT — a taller box alone does not prevent the zoom. */
-  height: 30px;
-  padding: 0;
-}
-.navsearch-input::placeholder {
-  color: var(--fg-faint);
-}
-/* Chromium paints its own clear button on a field with a value when the UA
-   thinks it is a search field; we draw our own, so make sure there is only
-   ever one. */
-.navsearch-input::-webkit-search-cancel-button {
-  display: none;
-}
-
-.navsearch-clear {
-  flex: none;
-  display: grid;
-  place-items: center;
-  width: 20px;
-  height: 20px;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--fg-faint);
-  font-size: 15px;
-  line-height: 1;
-  cursor: pointer;
-  padding: 0;
-}
-.navsearch-clear:hover {
-  background: var(--bg-hover);
-  color: var(--fg);
-}
-
-/* ─── Mobile ────────────────────────────────────────────────────────────
-   The sheet is a thumb surface: a taller box, a 16px field (below that iOS
-   zooms the whole page on focus and the user has to pinch back out), and a
-   clear button at the 24px minimum tap target.
-
-   44px, not 40: that is the touch floor the sheet's own tab rows are built
-   to (12 + --nt-icon-h + 12, pinned by NavTree.spacing.test.ts), and the one
-   control you are meant to hit FIRST should not be the shortest target in
-   the panel. */
-.navsearch[data-variant="sheet"] {
-  margin: 4px 10px 6px;
-  padding: 0 10px;
-}
-.navsearch[data-variant="sheet"] .navsearch-input {
-  height: 44px;
-  font-size: 16px;
-}
-.navsearch[data-variant="sheet"] .navsearch-clear {
-  width: 26px;
-  height: 26px;
-  font-size: 18px;
-}
-
-/* ─── Results ───────────────────────────────────────────────────────── */
-
-.navsearch-results {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
 
 .navsearch-row {
   display: grid;
@@ -220,37 +113,4 @@
 }
 .navsearch-row-state[data-state="dead"] {
   background: var(--status-dead);
-}
-
-/* The seam between "chats" and "what was said in them". A labelled hairline,
-   because the two tiers answer different questions and a result list that
-   mixed them without saying so would read as one ranking that had gone
-   wrong. */
-.navsearch-divider {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 8px 6px 4px;
-  color: var(--fg-faint);
-  font-size: 10px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-.navsearch-divider::after {
-  content: "";
-  flex: 1;
-  height: 1px;
-  background: var(--border);
-}
-
-.navsearch-empty {
-  padding: 10px 8px;
-  color: var(--fg-faint);
-  font-size: var(--chrome-size-sm);
-}
-
-.navtree[data-variant="sheet"] .navsearch-row {
-  /* Thumb height, matching the sheet's own tab rows. */
-  padding: 9px 10px;
-  gap: 10px;
 }

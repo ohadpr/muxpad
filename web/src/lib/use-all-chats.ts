@@ -52,7 +52,7 @@ export function useAllChats(): { workspace: Workspace; tabs: Tab[] }[] {
     void loadAllTabs().then((groups) => {
       // An empty answer is real (no workspaces) but must not replace a usable
       // fallback when it came from a failed request — `loadAllTabs` resolves to
-      // `cache ?? []` rather than rejecting. Same guard NavSearch uses.
+      // `cache ?? []` rather than rejecting. Same guard the palette's search uses.
       // A trailing refresh or push can publish before this promise callback.
       // Read the held corpus now, never roll it back to the request's answer.
       const current = cachedAllTabs();

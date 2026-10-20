@@ -20,9 +20,9 @@ import { useWorkspaces, visibleWorkspaces } from '../workspaces';
  * "Find any session, by its NAME or by what was SAID in it" — the engine, with
  * no opinion about where it is drawn.
  *
- * This was the sidebar box's private machinery (components/NavSearch). It
- * moved here the moment a SECOND surface needed it: the ⌘K palette, which is
- * the same question asked from a different place. Two copies of a two-tier
+ * This was the sidebar box's private machinery. It moved here the moment a
+ * SECOND surface needed it — the ⌘K palette — and the sidebar box has since
+ * been folded into the palette entirely, leaving one caller. Two copies of a two-tier
  * search would have been two sets of debounce, race and corpus-freshness bugs
  * to fix separately — and the subtle ones here (the superseded-ticket guard,
  * `hitsFor`, following the shared corpus rather than snapshotting it) are

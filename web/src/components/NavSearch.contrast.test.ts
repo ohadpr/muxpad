@@ -4,10 +4,12 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 /**
- * THE SEARCH FIELD MUST NOT BE INK ON ITS OWN COLOUR.
+ * THE SEARCH BUTTON MUST NOT BE INK ON ITS OWN COLOUR.
  *
  * The rail is an island: it rebinds `--fg` to `--rail-ink` so its text is
- * readable on a deep surface. `.navsearch` takes its background from
+ * readable on a deep surface. The search field (`.navsearch`, now the "Search
+ * chats" button `.navtree-search`, which opens the ⌘K palette) takes its
+ * background from
  * `--bg-elev` — and that was NOT rebound, so it stayed the app's elevated
  * colour. On every theme with a light app and a deep rail the two are the
  * same value, and the field rendered white on white: alucard, github-light
@@ -58,7 +60,7 @@ const mix = (ink: string, surface: string, pct: number) =>
     Math.round((v * pct) / 100 + (rgb(surface)[i] as number) * (1 - pct / 100)),
   );
 
-describe('the rail search field, on every theme that ships', () => {
+describe('the rail search button, on every theme that ships', () => {
   it('finds the themes to check at all', () => {
     // If the stylesheet is restructured this file silently passes on nothing;
     // say so instead.
@@ -74,7 +76,7 @@ describe('the rail search field, on every theme that ships', () => {
   });
 
   it.each(themes().map((t) => [t.name, t] as const))(
-    '%s keeps typed text legible on the field it is typed into',
+    '%s keeps its label legible on the surface it sits on',
     (_name, theme) => {
       const field = mix(theme.ink, theme.surface, 10);
       // AA for body text. The failure this replaces was not 4.4 — it was 1.0,
@@ -98,6 +100,12 @@ describe('the rail search field, on every theme that ships', () => {
     const islands = [...TREE.matchAll(/--fg:\s*var\(--rail-ink\);/g)];
     expect(islands.length).toBeGreaterThanOrEqual(2);
     expect([...TREE.matchAll(/--bg-elev:\s*var\(--rail-elev\);/g)]).toHaveLength(islands.length);
+  });
+
+  it('paints the button on that surface, which is what the arithmetic is about', () => {
+    const flat = TREE.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\s+/g, ' ');
+    const body = flat.match(/(?:^|\}) ?\.navtree-search \{([^}]*)\}/)?.[1] ?? '';
+    expect(body).toMatch(/background:\s*var\(--bg-elev\)/);
   });
 
   it('keeps the field distinguishable from the rail behind it', () => {

@@ -1,4 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
+import { PALETTE_OPEN_EVENT, isMacPlatform } from '../lib/command-palette';
 import { useSearchResultOpener, useSessionSearch } from '../lib/use-session-search';
 import { MessageResult, TabResult } from './NavSearch';
 import './CommandPalette.css';
@@ -6,15 +8,14 @@ import './CommandPalette.css';
 /**
  * ⌘K — "find any chat, by name or by what was said in it, and go there."
  *
- * THE SAME SEARCH AS THE RAIL'S BOX, deliberately: both call
- * lib/use-session-search, so a chat that one of them can find is one the other
- * can find too, ranked identically. What differs is only WHERE the question
- * can be asked from, and that is the entire reason this exists — ⌘K used to
- * focus the sidebar field, which meant it did nothing at all on the two
- * layouts where you most need a keyboard route to another chat:
+ * THE ONE SEARCH. The rail used to carry a second, inline box over the same
+ * engine (lib/use-session-search); it is now a button that opens this, and so
+ * is the mobile sheet's magnifier (lib/command-palette). ⌘K used to focus that
+ * box, which meant it did nothing at all on the two layouts where you most
+ * need a keyboard route to another chat:
  *
  *   · the desktop rail collapsed or dragged to nothing, and
- *   · mobile, where the field lives behind a glyph inside a sheet.
+ *   · mobile, where the field lived behind a glyph inside a sheet.
  *
  * A dialog has no such dependency. It is mounted once in AppLayout, above
  * everything, and it opens the same way from a terminal pane, a chat composer
@@ -65,7 +66,7 @@ export function CommandPalette() {
   // So on those platforms a focused terminal keeps its key and the palette
   // takes Ctrl+K only from the rest of the page.
   useEffect(() => {
-    const isMac = /mac|iphone|ipad/i.test(navigator.platform || navigator.userAgent);
+    const isMac = isMacPlatform();
     const onKey = (e: KeyboardEvent) => {
       if (e.altKey) return;
       if (e.key !== 'k' && e.key !== 'K') return;
@@ -77,6 +78,24 @@ export function CommandPalette() {
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
+  }, []);
+
+  // The BUTTONS — the rail's "Search chats" and the sheet's magnifier (see
+  // lib/command-palette). Open, never toggle: a button says "show me search",
+  // and a second press on something now under the backdrop cannot happen anyway.
+  //
+  // flushSync + focus IN the handler, not after a frame, and that is for the
+  // phone, where this button is the only way in at all: iOS raises the
+  // keyboard only for a focus() made inside the tap that asked for it, and
+  // `dispatchEvent` keeps us on that tap's stack. The rAF focus below still
+  // runs and is a no-op by then.
+  useEffect(() => {
+    const onOpen = () => {
+      flushSync(() => setOpen(true));
+      inputRef.current?.focus();
+    };
+    window.addEventListener(PALETTE_OPEN_EVENT, onOpen);
+    return () => window.removeEventListener(PALETTE_OPEN_EVENT, onOpen);
   }, []);
 
   // Opening is the moment to pay for the corpus, and the moment to forget the
@@ -115,8 +134,7 @@ export function CommandPalette() {
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     // Mid-composition an IME owns Enter and the arrows (choosing a candidate),
     // and stealing them there makes the field unusable in Japanese/Chinese
-    // input — Enter would navigate instead of committing the candidate. Same
-    // rule, same reason, as the rail's box.
+    // input — Enter would navigate instead of committing the candidate.
     if (e.nativeEvent.isComposing) return;
     if (e.key === 'Escape') {
       e.preventDefault();
@@ -169,9 +187,8 @@ export function CommandPalette() {
             role="combobox"
             aria-expanded={active}
             aria-autocomplete="list"
-            // Same contract as the rail's box: `aria-controls` is required of
-            // the role and stated unconditionally, but the ACTIVE DESCENDANT
-            // is not — pointing it at a row id that is not in the document is
+            // `aria-controls` is required of the role and stated
+            // unconditionally, but the ACTIVE DESCENDANT is not — pointing it at a row id that is not in the document is
             // a reader announcing nothing at all.
             aria-controls={listId}
             {...(active && rowCount > 0
@@ -208,10 +225,8 @@ export function CommandPalette() {
             <p className="cmdk-empty">{searching ? 'Searching messages…' : 'No matches.'}</p>
           )}
 
-          {/* The RAIL'S OWN ROWS, imported rather than re-drawn. A result that
-              looks one way in the sidebar and another in the palette is two
-              things to learn for one list, and the highlight/icon/status
-              details are exactly where a second copy drifts. */}
+          {/* The result rows live in NavSearch.tsx, where the rail's old
+              inline search drew them too. */}
           {tabMatches.map((m, i) => (
             <TabResult
               key={m.tab.tabId}
