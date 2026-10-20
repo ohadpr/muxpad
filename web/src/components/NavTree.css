@@ -1356,6 +1356,13 @@
 .settings-popover,
 .ws-settings__panel,
 .ws-settings__bar {
+  /* SURFACES FIRST, and they are the half this rule used to be missing. It
+     restored the ink and left the backgrounds alone — correct while the island
+     rebound only ink, and wrong the moment --bg-elev became the rail's. An
+     overlay that paints itself on the rail's surface while wearing the pane's
+     ink is the same invisibility, mirrored. */
+  --bg-elev: var(--pane-elev);
+  --bg-hover: var(--pane-hover);
   --fg: var(--pane-ink);
   --fg-dim: var(--pane-ink-dim);
   --fg-faint: var(--pane-ink-faint);

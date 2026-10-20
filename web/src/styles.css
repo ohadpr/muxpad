@@ -82,6 +82,17 @@
   /* THE PANE'S OWN VALUES, kept reachable from inside the rail. Substitution
      happens where a custom property is DECLARED, so these resolve against the
      root's --fg/--border and survive the rail re-pointing those below. */
+  /* THE PANE'S SURFACES, for overlays that open inside the rail.
+     The ink half of this family has existed since a popover rendered in the
+     rail wore rail ink on a pane-coloured panel. The surfaces were not part of
+     it, because the island did not rebind them — until --bg-elev became
+     --rail-elev, at which point the settings popover painted itself on the
+     rail's purple while keeping the pane's dark ink: 1.1:1, and the Theme /
+     Font size labels vanished. The same bug as before, with the two halves
+     swapped, which is the argument for the family being complete rather than
+     "whatever was needed last time". */
+  --pane-elev: var(--bg-elev);
+  --pane-hover: var(--bg-hover);
   --pane-ink: var(--fg);
   --pane-ink-dim: var(--fg-dim);
   --pane-ink-faint: var(--fg-faint);
