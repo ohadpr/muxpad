@@ -128,6 +128,7 @@ import {
   takeSearchJump,
 } from '../lib/search-jump';
 import { documentVisible } from '../lib/seen-ack';
+import { composerAfterLateAck, watchdogVerdict } from '../lib/send-watchdog';
 import { NO_ROUNDS, loadSpawnRounds } from '../lib/spawn-rounds';
 import { uploadError } from '../lib/upload-error';
 import type { AgentLink } from '../lib/voice/session';
@@ -1534,6 +1535,9 @@ export function ChatPane({
   // The text of the in-flight send, held so a socket death before the ack
   // can restore it into the composer instead of losing it.
   const pendingText = useRef('');
+  /** What the watchdog last put back in the composer, so a late ack can undo
+   *  it. Null whenever the composer's contents are the user's own. */
+  const restoredText = useRef<string | null>(null);
   // Delivery tracking. A send on a half-dead socket (mobile coming back from
   // background) vanishes silently — the browser reports the socket open until
   // the TCP timeout. The server acks every received frame; if neither an ack
@@ -1784,11 +1788,13 @@ export function ChatPane({
       } else if (msg.t === 'send-ack') {
         acked.current = true;
         window.clearTimeout(sendWatchdog.current);
+        dropRestoredText();
       } else if (msg.t === 'pong') {
         lastPongAt.current = Date.now();
       } else if (msg.t === 'turn-start') {
         acked.current = true;
         window.clearTimeout(sendWatchdog.current);
+        dropRestoredText();
         setSending(true);
         setNotice(null);
         streamBuffer.current = '';
@@ -1873,6 +1879,7 @@ export function ChatPane({
         const wasOurOptimistic = pendingText.current === msg.text;
         acked.current = true;
         window.clearTimeout(sendWatchdog.current);
+        dropRestoredText();
         // The server has this message persisted now, so it must NOT be restored
         // into the composer on a later socket close — clear the recovery slot
         // unconditionally (safe: acked is already true, so onclose won't restore
@@ -2046,28 +2053,85 @@ export function ChatPane({
   }, [paneId]);
 
   // Watchdog: a socket can look OPEN yet be dead (mobile background/network
-  // flip) — a send then vanishes with no close event for minutes. No ack in
-  // time → restore the composer and close the zombie so the backoff machinery
-  // brings up a fresh socket (a close on a dead link can dawdle in CLOSING,
-  // so don't wait for onclose to do the restoring). Armed by every path that
-  // fires a `send` frame.
+  // flip) — a send then vanishes with no close event for minutes. Armed by
+  // every path that fires a `send` frame; on expiry it PROBES the link rather
+  // than assuming, and only restores the composer (and closes the zombie, since
+  // a close on a dead link can dawdle in CLOSING) when the probe goes
+  // unanswered. The verdict table is in lib/send-watchdog.
+  //
+  // FIRST_WAIT is how long an ack may take before it is worth asking. It was
+  // the whole watchdog at 6s, and 6s of a busy server became an ordinary
+  // event — which is how a dead-socket detector started firing on live ones.
+  // PROBE_GRACE is how long a pong may take, and is deliberately short: the
+  // link either answers or it does not.
+  const FIRST_WAIT_MS = 6000;
+  const PROBE_GRACE_MS = 3000;
   const armSendWatchdog = (text: string) => {
     acked.current = false;
     window.clearTimeout(sendWatchdog.current);
-    sendWatchdog.current = window.setTimeout(() => {
+    let probes = 0;
+    /** Ask the link directly, rather than inferring it from the clock. See
+     *  lib/send-watchdog: a slow ack and a dead socket are only the same
+     *  observation if you decline to look any further. */
+    const probe = () => {
       if (acked.current) return;
-      acked.current = true;
-      pendingText.current = '';
-      setSending(false);
-      setOptimisticUser(null);
-      setInput((prev) => prev || text);
-      setNotice({ text: 'Message not delivered — reconnecting. Try again.', tone: 'info' });
-      try {
-        wsRef.current?.close();
-      } catch {
-        // already closing
+      const sock = wsRef.current;
+      const probedAt = Date.now();
+      if (sock && sock.readyState === WebSocket.OPEN) {
+        try {
+          sock.send(JSON.stringify({ t: 'ping' }));
+        } catch {
+          // A socket that cannot even be written to is the dead case.
+        }
       }
-    }, 6000);
+      sendWatchdog.current = window.setTimeout(() => {
+        const verdict = watchdogVerdict({
+          acked: acked.current,
+          socketOpen: wsRef.current?.readyState === WebSocket.OPEN,
+          pongSinceProbe: lastPongAt.current >= probedAt,
+          probes,
+        });
+        if (verdict === 'wait') return;
+        if (verdict === 'probe') {
+          probes += 1;
+          probe();
+          return;
+        }
+        acked.current = true;
+        pendingText.current = '';
+        setSending(false);
+        setOptimisticUser(null);
+        // Remember what we put back, so a late ack can take it away again —
+        // the server may have had the message all along and answered over the
+        // next socket.
+        restoredText.current = text;
+        setInput((prev) => prev || text);
+        setNotice({ text: 'Message not delivered — reconnecting. Try again.', tone: 'info' });
+        try {
+          wsRef.current?.close();
+        } catch {
+          // already closing
+        }
+      }, PROBE_GRACE_MS);
+    };
+    sendWatchdog.current = window.setTimeout(probe, FIRST_WAIT_MS);
+  };
+
+  /**
+   * A RESTORE THAT TURNED OUT TO BE WRONG, TAKEN BACK.
+   *
+   * `acked` is a one-way latch — it stops the watchdog firing twice — so an ack
+   * arriving after a restore used to be ignored entirely, and the text sat in
+   * the composer beside its own sent copy. That is the half of this bug that
+   * survives even a perfect liveness probe: the socket really did die, the text
+   * really was restored, and the server really did have the message.
+   */
+  const dropRestoredText = () => {
+    const restored = restoredText.current;
+    if (!restored) return;
+    restoredText.current = null;
+    setInput((prev) => composerAfterLateAck(prev, restored));
+    setNotice((prev) => (prev && /not delivered/i.test(prev.text) ? null : prev));
   };
 
   // The pending send queue is owned by the SERVER now, not this component: the
@@ -4262,7 +4326,12 @@ export function ChatPane({
   // auto-focuses when url is null).
   if (pendingPick) {
     return (
-      <div className="chat-pane" data-slack-chat-pane={paneId} data-slack-active={active} data-slack-session={false}>
+      <div
+        className="chat-pane"
+        data-slack-chat-pane={paneId}
+        data-slack-active={active}
+        data-slack-session={false}
+      >
         {active && <SlackApprovalAlert paneId={paneId} />}
         <div className="chat-empty chat-harness-pick">
           <p className="chat-empty-title">What do you want to open?</p>
@@ -4359,7 +4428,13 @@ export function ChatPane({
     // shape in the file. The value is memoized, so the transcript re-renders
     // when the CORPUS lands and not on the frames in between.
     <ChatMentionContext.Provider value={mentionContext}>
-      <div className="chat-pane" ref={paneRef} data-slack-chat-pane={paneId} data-slack-active={active} data-slack-session={!!session?.current_sid}>
+      <div
+        className="chat-pane"
+        ref={paneRef}
+        data-slack-chat-pane={paneId}
+        data-slack-active={active}
+        data-slack-session={!!session?.current_sid}
+      >
         {/* Keep approval reachable while the chat transport is still connecting. */}
         {active && !session?.current_sid && <SlackApprovalAlert paneId={paneId} />}
         {/* Fixed-position, draws nothing until you take the wheel. Mounted here
