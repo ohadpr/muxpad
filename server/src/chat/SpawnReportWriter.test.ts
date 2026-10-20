@@ -14,6 +14,7 @@ import { WorkspaceStore } from '../store/WorkspaceStore.js';
 import { openDb } from '../store/db.js';
 import { ChatRetirer } from '../tab-retire.js';
 import { SpawnReportWriter } from './SpawnReportWriter.js';
+import { readWorkerAnswer } from './worker-answer.js';
 
 /**
  * The plumbing between a worker finishing and the card in its parent's log —
@@ -144,6 +145,79 @@ describe('SpawnReportWriter — a finished worker becomes a card', () => {
     expect(new TabStore(db).getById(kid.tabId)?.spawn_report).toBe(GOOD);
     // The one event the card's whole delivery path rests on.
     expect(reports()).toContain(GOOD);
+  });
+
+  it('delivers the current final answer even when every Claude account is unavailable', async () => {
+    let calls = 0;
+    const { retirer, writer } = wire(async () => {
+      calls++;
+      throw new Error('All Claude accounts are unavailable');
+    });
+    const kid = worker(parentChat());
+    const start = Date.now() - 100;
+    new SpawnRoundStore(db).open(kid.tabId, start);
+    const sid = new AgentSessionStore(db).getByPane(kid.paneId)!.current_sid;
+    writeFileSync(
+      join(dir, 'agent-transcripts', `${sid}.jsonl`),
+      [
+        { id: 'old', ts: start - 1, kind: 'assistant', text: 'STALE answer' },
+        { id: 'request', ts: start, kind: 'user', text: 'review this change' },
+        { id: 'result', ts: start + 1, kind: 'assistant', text: 'ACCEPT — no blocking finding.' },
+      ]
+        .map((event) => JSON.stringify(event))
+        .join('\n'),
+    );
+    finishJob(retirer, kid.paneId);
+    await writer.idle();
+    const result = new SpawnRoundStore(db).lastEnded(kid.tabId);
+    expect(result?.report).toBe('ACCEPT — no blocking finding.');
+    expect(result?.report_state).toBe('ok');
+    expect(reports()).toContain('ACCEPT — no blocking finding.');
+    expect(calls).toBe(0);
+  });
+
+  it.each([
+    { name: 'previous job', events: [{ kind: 'assistant', ts: 99, text: 'OLD' }], expected: null },
+    { name: 'later job', events: [{ kind: 'assistant', ts: 201, text: 'FUTURE' }], expected: null },
+    {
+      name: 'unanswered request',
+      events: [
+        { kind: 'assistant', ts: 110, text: 'OLD' },
+        { kind: 'user', ts: 120, text: 'another task' },
+      ],
+      expected: null,
+    },
+    {
+      name: 'unfinished tool work',
+      events: [
+        { kind: 'assistant', ts: 110, text: 'Checking' },
+        { kind: 'tool_use', ts: 120, name: 'shell' },
+      ],
+      expected: null,
+    },
+    {
+      name: 'latest answer',
+      events: [
+        { kind: 'assistant', ts: 110, text: 'Checking' },
+        { kind: 'assistant', ts: 120, text: 'ACCEPT' },
+      ],
+      expected: 'ACCEPT',
+    },
+  ])('recovers only the answer for this round: $name', ({ events: transcript, expected }) => {
+    const kid = worker(parentChat());
+    const rounds = new SpawnRoundStore(db);
+    rounds.open(kid.tabId, 100);
+    rounds.close(kid.tabId, 200);
+    const sid = new AgentSessionStore(db).getByPane(kid.paneId)!.current_sid;
+    writeFileSync(
+      join(dir, 'agent-transcripts', `${sid}.jsonl`),
+      transcript.map((event, id) => JSON.stringify({ id: String(id), ...event })).join('\n'),
+    );
+    expect(readWorkerAnswer(db, kid.paneId, rounds.lastEnded(kid.tabId))).toBe(expected);
+    // A reopened round must not inherit even its own previous closure's answer.
+    rounds.reopen(kid.tabId, 300);
+    rounds.close(kid.tabId, 400);
+    expect(readWorkerAnswer(db, kid.paneId, rounds.lastEnded(kid.tabId))).toBeNull();
   });
 
   describe('a worker that STATES its result', () => {
