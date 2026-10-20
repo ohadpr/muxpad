@@ -67,7 +67,19 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // DRAIN, THEN UNMOUNT. A card's preview opens itself, so every mount has a
+  // capture in flight: fetch → blob → decode → setShown. A test that asserts
+  // something synchronous ends with that chain part-way through, and whichever
+  // half lands outside act() is reported as a state update outside act().
+  // Letting it finish first, inside act, is the whole fix — unmounting alone
+  // still raced the continuation that was already past its `alive` check.
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
   act(() => {
     for (const root of roots.splice(0)) root.unmount();
   });
@@ -127,13 +139,14 @@ const moment = (browser: BrowserCardData, over: Partial<BrowserMoment> = {}): Br
 });
 
 describe('the card', () => {
-  it('reads as something that happened, not a status light', () => {
+  it('reads as something that happened, not a status light', async () => {
     const { host } = mount(<BrowserCard moment={moment(base)} onOpen={() => {}} now={1} />);
     expect(host.textContent).toMatch(/opened|browser/i);
     expect(host.textContent).toContain('shopping');
+    await settle(); // the preview opens itself; let its frame land inside act
   });
 
-  it('shouts while the summons is still live', () => {
+  it('shouts while the summons is still live', async () => {
     const browser = { ...base, needsYou: { reason: 'log in to Amazon', at: 1 } };
     const { host } = mount(
       <BrowserCard
@@ -147,9 +160,10 @@ describe('the card', () => {
     );
     expect(host.textContent).toContain('log in to Amazon');
     expect(action(host)?.dataset.urgent).toBe('true');
+    await settle(); // the preview opens itself; let its frame land inside act
   });
 
-  it('opens a MODAL on a wide viewport and a TAB on a phone', () => {
+  it('opens a MODAL on a wide viewport and a TAB on a phone', async () => {
     // Clicking the CARD, because a passive one carries no button.
     const onOpen = vi.fn();
     const wide = mount(
@@ -163,9 +177,10 @@ describe('the card', () => {
     );
     click(phone.host.querySelector('[data-testid="browser-card"]') ?? undefined);
     expect(onOpen).toHaveBeenLastCalledWith('tab');
+    await settle(); // the preview opens itself; let its frame land inside act
   });
 
-  it('opens from ANYWHERE on it, even when it carries an Open button', () => {
+  it('opens from ANYWHERE on it, even when it carries an Open button', async () => {
     // The button is a 60px target inside a 400px card that plainly is one
     // thing you can open. "Make it so clicking anywhere in this card opens it."
     const onOpen = vi.fn();
@@ -182,9 +197,10 @@ describe('the card', () => {
     expect(action(host)?.dataset.urgent).toBe('true');
     click(card ?? undefined);
     expect(onOpen).toHaveBeenCalledTimes(1);
+    await settle(); // the preview opens itself; let its frame land inside act
   });
 
-  it('opens ONCE when the button itself is clicked, not twice', () => {
+  it('opens ONCE when the button itself is clicked, not twice', async () => {
     // The click bubbles to the card, which now opens too.
     const onOpen = vi.fn();
     const browser = { ...base, needsYou: { reason: 'log in to HubSpot', at: 1 } };
@@ -198,9 +214,10 @@ describe('the card', () => {
     );
     click(action(host));
     expect(onOpen).toHaveBeenCalledTimes(1);
+    await settle(); // the preview opens itself; let its frame land inside act
   });
 
-  it('does not announce a control inside a control', () => {
+  it('does not announce a control inside a control', async () => {
     // A role="button" wrapping a real button is one control containing
     // another, and gives the same action two tab stops. The button IS the
     // keyboard control when there is one; the card click is for pointers.
@@ -221,6 +238,7 @@ describe('the card', () => {
     expect(passive.host.querySelector('[data-testid="browser-card"]')?.getAttribute('role')).toBe(
       'button',
     );
+    await settle(); // the preview opens itself; let its frame land inside act
   });
 
   it('a card with nothing to show is not clickable at all', () => {
@@ -240,7 +258,7 @@ describe('the card', () => {
     expect(host.textContent).toMatch(/closed/i);
   });
 
-  it('shows how long the wheel is held for, and nothing when it is free', () => {
+  it('shows how long the wheel is held for, and nothing when it is free', async () => {
     const held = mount(
       <BrowserCard
         moment={moment({ ...base, wheel: lease() })}
@@ -252,6 +270,7 @@ describe('the card', () => {
 
     const free = mount(<BrowserCard moment={moment(base)} onOpen={() => {}} now={1_000_000} />);
     expect(free.host.textContent).not.toContain('left');
+    await settle(); // the preview opens itself; let its frame land inside act
   });
 });
 
@@ -334,33 +353,38 @@ describe('the picture on the card', () => {
       />,
     ).host;
 
-  it('shows the page when a still was captured', () => {
+  it('shows the page when a still was captured', async () => {
     // The difference between a card that CLAIMS the agent is stuck at a sign-in
     // and one that shows you the sign-in page.
     const img = shot('/api/browsers/s-abc/shot/2').querySelector('img');
     expect(img?.getAttribute('src')).toBe('/api/browsers/s-abc/shot/2');
+    await settle(); // the preview opens itself; let its frame land inside act
   });
 
-  it('draws no image element at all when there is none', () => {
+  it('draws no image element at all when there is none', async () => {
     // Not an empty src — that is a request for the CURRENT page, which is how a
     // card ends up illustrating itself with the wrong thing.
     expect(shot(null).querySelector('img')).toBeNull();
+    await settle(); // the preview opens itself; let its frame land inside act
   });
 
-  it('carries an empty alt, because the words above already say it', () => {
+  it('carries an empty alt, because the words above already say it', async () => {
     // The reason is right there on the card. A screen reader announcing a
     // filename on top of it is noise, not access.
     expect(shot('/api/browsers/s-abc/shot/2').querySelector('img')?.getAttribute('alt')).toBe('');
+    await settle(); // the preview opens itself; let its frame land inside act
   });
 
-  it('loads lazily, because a long chat can hold several', () => {
+  it('loads lazily, because a long chat can hold several', async () => {
     expect(shot('/api/browsers/s-abc/shot/2').querySelector('img')?.getAttribute('loading')).toBe(
       'lazy',
     );
+    await settle(); // the preview opens itself; let its frame land inside act
   });
 
-  it('still shows the reason, so the picture illustrates rather than replaces', () => {
+  it('still shows the reason, so the picture illustrates rather than replaces', async () => {
     expect(shot('/api/browsers/s-abc/shot/2').textContent).toContain('Amazon needs a login');
+    await settle(); // the preview opens itself; let its frame land inside act
   });
 });
 
@@ -420,12 +444,13 @@ describe('Done pressed inside the viewer closes the modal around it', () => {
  * somebody looks over its shoulder.
  */
 describe('peeking at a live browser', () => {
-  it('offers the control on any card whose browser is still alive', () => {
+  it('offers the control on any card whose browser is still alive', async () => {
     const { host } = mount(<BrowserCard moment={moment(base)} onOpen={() => {}} now={1} />);
     expect(peek(host)).toBeDefined();
+    await settle(); // the preview opens itself; let its frame land inside act
   });
 
-  it('offers it on a card that is asking for a login too', () => {
+  it('offers it on a card that is asking for a login too', async () => {
     // Those carry an Open button as well: looking first is allowed.
     const browser = { ...base, needsYou: { reason: 'log in', at: 1 } };
     const { host } = mount(
@@ -437,6 +462,7 @@ describe('peeking at a live browser', () => {
     );
     expect(peek(host)).toBeDefined();
     expect(action(host)).toBeDefined();
+    await settle(); // the preview opens itself; let its frame land inside act
   });
 
   it('shows the page without being asked', async () => {
@@ -563,13 +589,14 @@ describe('peeking at a live browser', () => {
     expect(shot(host)?.getAttribute('src')).toBe('/api/browsers/shopping/shot/100');
   });
 
-  it('does NOT open the viewer — looking is not the same as taking over', () => {
+  it('does NOT open the viewer — looking is not the same as taking over', async () => {
     const onOpen = vi.fn();
     const { host } = mount(<BrowserCard moment={moment(base)} onOpen={onOpen} now={1} />);
     click(peek(host)); // closed
     click(peek(host)); // open again
     expect(onOpen).not.toHaveBeenCalled();
     expect(peek(host)?.getAttribute('aria-expanded')).toBe('true');
+    await settle(); // the preview opens itself; let its frame land inside act
   });
 
   it('opens the viewer when the PICTURE is clicked', async () => {
@@ -592,6 +619,42 @@ describe('peeking at a live browser', () => {
     expect(peek(a.host)?.getAttribute('aria-expanded')).toBe('false');
     expect(peek(b.host)?.getAttribute('aria-expanded')).toBe('true');
     await settle();
+  });
+
+  it('decodes the next frame BEFORE putting it on the card', async () => {
+    // THE FLICKER, stated as a property. Fetching the frame as a blob was only
+    // half the job: pointing an <img> at any new src — a blob URL included —
+    // puts the element back into "no image available" until the bytes are
+    // decoded, and it paints nothing until then. Measured in Chrome over 20
+    // swaps: blank on 20 of 20 without this, 0 of 20 with it. Reported as
+    // "flickers every 2.5s".
+    let release: (() => void) | null = null;
+    const decoding = new Promise<void>((done) => {
+      release = done;
+    });
+    const original = globalThis.Image;
+    (globalThis as unknown as { Image: unknown }).Image = class {
+      src = '';
+      decode() {
+        return decoding;
+      }
+    };
+    try {
+      const { host } = mount(<BrowserCard moment={moment(base)} onOpen={() => {}} now={1} />);
+      await settle();
+      // The frame has been fetched and is decoding — and the card is still
+      // showing nothing rather than a half-swapped element.
+      expect(shotFetches.length).toBeGreaterThan(0);
+      expect(shot(host)).toBeNull();
+      await act(async () => {
+        release?.();
+        await decoding;
+      });
+      await settle();
+      expect(shot(host)?.getAttribute('src')).toMatch(/^blob:/);
+    } finally {
+      globalThis.Image = original;
+    }
   });
 
   it('captures nothing while the card is scrolled out of view', async () => {
