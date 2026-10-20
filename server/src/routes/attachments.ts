@@ -1,8 +1,14 @@
 import { randomBytes } from 'node:crypto';
-import { copyFileSync, createReadStream, mkdirSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, createReadStream, createWriteStream, mkdirSync, statSync } from 'node:fs';
 import { basename, extname, join } from 'node:path';
 import { Readable } from 'node:stream';
-import { IMAGE_MIME_BY_EXT, attachmentKind, attachmentMime, imageExtForMime } from '@muxpad/shared';
+import { pipeline } from 'node:stream/promises';
+import {
+  ATTACHMENT_MIME_BY_EXT,
+  attachmentExtForMime,
+  attachmentKind,
+  attachmentMime,
+} from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { ulid } from 'ulid';
@@ -14,6 +20,7 @@ export function attachmentsRoutes(deps: {
 }): Hono {
   const app = new Hono();
   const panes = new PaneStore(deps.db);
+  const MAX_BYTES = 512 * 1024 * 1024; // 512 MB — a sane ceiling for a recording
 
   app.post('/:paneId/attachments', async (c) => {
     const paneId = c.req.param('paneId');
@@ -25,21 +32,45 @@ export function attachmentsRoutes(deps: {
     if (!(file instanceof File))
       return c.json({ error: { code: 'bad_request', message: 'file is required' } }, 400);
 
-    // Only formats the WHOLE pipeline can handle: the thumbnail regex and the
-    // serve route derive from the same shared map, so accepting anything else
-    // here would store a file that renders as raw path text and 400s on GET.
+    // EVERY ATTACHMENT TYPE, not just images.
+    //
+    // This route took `IMAGE_MIME_BY_EXT` while the composer's `accept` list,
+    // the serve route and the chat renderer all took the full union — so the
+    // picker offered a video, the OS let you choose it, and the upload 400'd.
+    // Both composers then swallowed that 400, which is why it read as nothing
+    // happening at all. Reported as "uploading videos usually doesn't work,
+    // recording or picking from photos, just fails silently".
+    //
+    // The same two lookups as the by-path route below: a provider that reports
+    // `video/quicktime` for a recording and one that reports `''` for the same
+    // file (iOS Files, several Android providers) must both be accepted.
     const extFromName = extname(file.name).toLowerCase();
     const ext =
-      imageExtForMime(file.type) ?? (extFromName in IMAGE_MIME_BY_EXT ? extFromName : null);
+      attachmentExtForMime(file.type) ??
+      (extFromName in ATTACHMENT_MIME_BY_EXT ? extFromName : null);
     if (!ext)
       return c.json(
         {
           error: {
             code: 'bad_request',
-            message: `unsupported image type: ${file.type || file.name}`,
+            // The composer prints this verbatim, and the user picked a FILE,
+            // not a MIME type — lead with the name they recognise.
+            message: `muxpad can't attach ${file.name || 'that file'}${file.type ? ` (${file.type})` : ''}`,
           },
         },
         400,
+      );
+    // A video is the first attachment big enough for this to matter. Same
+    // ceiling as the by-path route, and a 413 the composer can show.
+    if (file.size > MAX_BYTES)
+      return c.json(
+        {
+          error: {
+            code: 'too_large',
+            message: `${file.name || 'file'} is ${Math.round(file.size / 1e6)} MB — the limit is 512 MB`,
+          },
+        },
+        413,
       );
     // Flat directory + short hex name keeps paths readable when the
     // user spots one on disk (or in a Claude prompt). 8 hex chars =
@@ -49,7 +80,13 @@ export function attachmentsRoutes(deps: {
     const dir = join(deps.dataDir, 'attachments');
     mkdirSync(dir, { recursive: true });
     const path = join(dir, `${randomBytes(4).toString('hex')}${ext}`);
-    writeFileSync(path, Buffer.from(await file.arrayBuffer()));
+    // Streamed to disk rather than `Buffer.from(await file.arrayBuffer())`.
+    // That held a second full copy of the file in memory, which is free for a
+    // screenshot and is not for a phone video.
+    await pipeline(
+      Readable.fromWeb(file.stream() as Parameters<typeof Readable.fromWeb>[0]),
+      createWriteStream(path),
+    );
 
     deps.db
       .prepare(
@@ -64,7 +101,6 @@ export function attachmentsRoutes(deps: {
   // copy it into the served dir disk-to-disk — no memory buffering (unlike the
   // multipart upload above), which matters for large videos. Any supported
   // attachment type; the client renders each by extension.
-  const MAX_BYTES = 512 * 1024 * 1024; // 512 MB — a sane ceiling for a recording
   app.post('/:paneId/attachments/by-path', async (c) => {
     const paneId = c.req.param('paneId');
     if (!panes.getById(paneId))

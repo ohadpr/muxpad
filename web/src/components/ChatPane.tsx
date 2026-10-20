@@ -129,6 +129,7 @@ import {
 } from '../lib/search-jump';
 import { documentVisible } from '../lib/seen-ack';
 import { NO_ROUNDS, loadSpawnRounds } from '../lib/spawn-rounds';
+import { uploadError } from '../lib/upload-error';
 import type { AgentLink } from '../lib/voice/session';
 import { useVoice } from '../lib/voice/use-voice';
 import { workingVariantFor } from '../lib/working-variant';
@@ -201,6 +202,7 @@ import {
 } from '../lib/live-status';
 import { isMobileLayout } from '../lib/mobile-layout';
 import { useDismissable } from '../lib/use-dismissable';
+import { SlackApprovalAlert } from './SlackApprovalAlert';
 import './ChatPane.css';
 
 /** Stable empties for the report-expansion state, so a pane that never opens one
@@ -2256,8 +2258,12 @@ export function ChatPane({
       try {
         const { path } = await api.uploadAttachment(paneId, f, f.name || 'image.png');
         addChip(path, f);
-      } catch {
-        // drop this one; the rest still upload
+      } catch (error) {
+        // LOUD, for the same reason the skip above is. A swallowed upload
+        // failure is indistinguishable from a broken button: the file was
+        // picked, the sheet closed, and nothing appeared. Reported as
+        // "uploading videos just fails silently".
+        setNotice({ text: `${f.name || 'upload'} failed: ${uploadError(error)}`, tone: 'danger' });
       }
     }
     setUploading(false);
@@ -2325,8 +2331,8 @@ export function ChatPane({
           const { path } = await api.uploadAttachment(paneId, blob, `pasted${ext}`);
           paths.push(path);
           addChip(path, blob);
-        } catch {
-          setNotice({ text: 'image upload failed', tone: 'danger' });
+        } catch (error) {
+          setNotice({ text: `image upload failed: ${uploadError(error)}`, tone: 'danger' });
         }
       }
       setUploading(false);
@@ -4250,6 +4256,7 @@ export function ChatPane({
   if (pendingPick) {
     return (
       <div className="chat-pane">
+        {active && <SlackApprovalAlert paneId={paneId} />}
         <div className="chat-empty chat-harness-pick">
           <p className="chat-empty-title">What do you want to open?</p>
           <p className="chat-empty-hint">Pick an agent, or open a terminal / web view</p>
@@ -4346,6 +4353,8 @@ export function ChatPane({
     // when the CORPUS lands and not on the frames in between.
     <ChatMentionContext.Provider value={mentionContext}>
       <div className="chat-pane" ref={paneRef}>
+        {/* Keep approval reachable while the chat transport is still connecting. */}
+        {active && !session?.current_sid && <SlackApprovalAlert paneId={paneId} />}
         {/* Fixed-position, draws nothing until you take the wheel. Mounted here
           rather than beside a card because the card that opened it may scroll
           away — or be unmounted by a poll — while the modal is still open. */}
@@ -4786,6 +4795,8 @@ export function ChatPane({
               height is a constant in the stylesheet and it cannot wrap
               (ChatPane.statusline.test.tsx pins both), so it cannot move the
               composer whatever it says. */}
+            {/* In the measured wrap: reserves transcript space and follows the keyboard. */}
+            {active && <SlackApprovalAlert paneId={paneId} />}
             <div className="chat-composer">
               {/* No `capture` attribute, deliberately: with one, iOS goes straight
                 to the camera. Without it — and with an `accept` that is not

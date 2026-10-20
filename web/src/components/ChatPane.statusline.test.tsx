@@ -134,7 +134,7 @@ describe('the session line cannot become two lines', () => {
     expect(decl('.chat-status-bar', 'max-width')).toBe(decl('.chat-composer', 'max-width'));
   });
 
-  it('centres, so neither end of it sits in a phone\'s bottom corner radius', () => {
+  it("centres, so neither end of it sits in a phone's bottom corner radius", () => {
     // It was right-aligned, which put the live cell — the one cell that is
     // always populated — into the bottom-RIGHT corner of the screen, exactly
     // where an iPhone's display curve cuts in: the last word of "Working…" sat
