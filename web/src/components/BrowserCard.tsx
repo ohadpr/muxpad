@@ -112,6 +112,34 @@ function useLiveShot(
         const blob = await res.blob();
         if (!alive || blob.size === 0) return;
         const url = URL.createObjectURL(blob);
+        // DECODED BEFORE IT IS SHOWN.
+        //
+        // Fetching the frame as a blob was only half the job. Pointing an
+        // <img> at ANY new `src` — a blob URL included — puts the element back
+        // into "no image available" until the new bytes are decoded, and it
+        // paints nothing in the meantime. Compressed into a 2.5s loop that is
+        // a visible blink on every tick, reported exactly that way: "flickers
+        // every 2.5s".
+        //
+        // Decoding it off-screen first means the bytes are ready in the
+        // decoded-image cache under this URL, so the element's own swap
+        // resolves without an unavailable frame in between. `decode()` on a
+        // blob is memory work, not a second request — which is the thing that
+        // ruled out preloading the HTTP url (the route answers `no-store` on
+        // purpose, so that would have been a second round trip).
+        try {
+          const pre = new Image();
+          pre.src = url;
+          await pre.decode?.();
+        } catch {
+          // No decode() (older engine) or an undecodable frame: show it anyway
+          // and let the element do what it did before. A blink beats a card
+          // that stopped updating.
+        }
+        if (!alive) {
+          URL.revokeObjectURL(url);
+          return;
+        }
         held.push(url);
         setShown(url);
         release();
