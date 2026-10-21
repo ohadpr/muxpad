@@ -49,6 +49,36 @@ describe('the card age', () => {
     }
   });
 
+  describe('collapsed, it is a grid column instead', () => {
+    // Both of these were reported together: the tail sat high against a value
+    // centred in a one-line card, and it reserved 46px to draw ~20px.
+    it('centres against the row rather than at a guessed offset', () => {
+      const row = rule('.chat-card.-line');
+      expect(decl(row, 'display')).toBe('grid');
+      expect(decl(row, 'align-items')).toBe('center');
+      // `static`, so the centring applies to it at all — an absolute item is
+      // not aligned by the grid.
+      expect(decl(rule('.chat-card.-line > .chat-card-age'), 'position')).toBe('static');
+    });
+
+    it('reserves exactly its own width, not the worst tail ever rendered', () => {
+      // `auto`, never a length: the column is as wide as the text in it, so
+      // "2m" costs what "2m" costs and "365d" still fits.
+      const cols = decl(rule('.chat-card.-line'), 'grid-template-columns');
+      expect(cols).toBe('minmax(0, 1fr) auto');
+      expect(cols).not.toMatch(/\d+px/);
+      // …and the padding that used to reserve it is not charged twice.
+      expect(decl(rule('.chat-card.-line > .chat-card-line'), 'padding-right')).toBe('0');
+    });
+
+    it('still cannot be squeezed or ellipsized by a long value', () => {
+      // The value takes the slack (`minmax(0, 1fr)`), so it is the thing that
+      // ellipsizes. The tail's column is sized to content and has no shrink.
+      expect(decl(rule('.chat-card-line'), 'text-overflow')).toBe('ellipsis');
+      expect(decl(rule('.chat-card-line'), 'white-space')).toBe('nowrap');
+    });
+  });
+
   it('does not swallow the click the card is one big target for', () => {
     expect(decl(rule('.chat-card-age'), 'pointer-events')).toBe('none');
   });

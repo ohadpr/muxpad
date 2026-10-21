@@ -318,9 +318,14 @@ export function ChatCards({ tabId }: { tabId: string | null | undefined }) {
         const showBody = open || isHtml;
         return (
           <section
+            // `-line` marks the COLLAPSED one-liner, which lays out differently
+            // from a body: see "COLLAPSED, THE TAIL IS A COLUMN" in the CSS. It
+            // is not the negation of `-open` — an html card has no `-open` and
+            // still renders a body — so it is derived from `showBody`, the same
+            // value that decides which of the two is actually drawn.
             className={`chat-card${stale ? ' -stale' : ''}${open ? ' -open' : ''}${
               togglable ? ' -togglable' : ''
-            }`}
+            }${showBody ? '' : ' -line'}`}
             key={card.id}
             title={card.name}
             {...(togglable
