@@ -138,6 +138,19 @@ export class AccountPool {
         account TEXT NOT NULL, scope TEXT NOT NULL, pct REAL NOT NULL,
         status TEXT NOT NULL, resets_at INTEGER, updated_at INTEGER NOT NULL,
         PRIMARY KEY(account, scope));
+      -- IS THIS ACCOUNT SIGNED IN? A different question from "is it full", and
+      -- keeping it in the cooldowns table would have been a lie with a clock on it:
+      -- a quota block ends by itself at a known time, and a dead credential
+      -- ends when a human runs /login and not one second before.
+      --
+      -- This exists because the pool could not tell the difference. An account
+      -- whose login had died stayed the preferred one, every new session went
+      -- to it, and each one failed four times and gave up — while a healthy
+      -- account sat beside it, eligible and unused. Observed, on a pane whose
+      -- whole conversation reads: Not logged in, please run /login.
+      CREATE TABLE IF NOT EXISTS credentials (
+        account TEXT PRIMARY KEY, state TEXT NOT NULL, detail TEXT NOT NULL,
+        updated_at INTEGER NOT NULL);
     `);
     // TWO RUNNERS OPEN THIS DATABASE AT ONCE. `CREATE TABLE IF NOT EXISTS` is
     // safe for that; a check-then-ALTER is not — both see the column missing,
@@ -161,6 +174,10 @@ export class AccountPool {
   }
   private eligible(account: Account, model: string): boolean {
     if (!account.enabled) return false;
+    // A DEAD CREDENTIAL IS NOT A CANDIDATE. Cheaper than any quota question and
+    // asked first, because an account that cannot authenticate cannot do work
+    // of any size on any model.
+    if (this.credential(account.id).state === 'dead') return false;
     const family = model.toLowerCase().includes('sonnet')
       ? 'sonnet'
       : model.toLowerCase().includes('haiku')
@@ -279,6 +296,37 @@ export class AccountPool {
         resetsAt: r.resets_at,
         updatedAt: r.updated_at,
       }));
+  }
+  /**
+   * Record whether this account's login still works.
+   *
+   * `dead` makes it ineligible until something proves otherwise — a successful
+   * turn, or the hourly probe getting an answer. Nothing here expires on a
+   * timer: the condition is fixed by a person at a keyboard, and a block that
+   * lifted itself would just hand the next session back to a broken account.
+   *
+   * Written on TRANSITIONS by the callers' own bookkeeping where they have it,
+   * but this is also safe to call repeatedly — it is one upsert on a two-row
+   * table.
+   */
+  markCredential(id: string, state: 'ok' | 'dead', detail = ''): void {
+    this.db
+      .prepare(
+        `INSERT INTO credentials VALUES (?, ?, ?, ?) ON CONFLICT(account)
+         DO UPDATE SET state = excluded.state, detail = excluded.detail,
+                       updated_at = excluded.updated_at`,
+      )
+      .run(id, state, detail, this.now());
+  }
+  /** What we last learned about this account's login. Unknown reads as `ok`:
+   *  an account nobody has tried yet is a candidate, not a suspect. */
+  credential(id: string): { state: 'ok' | 'dead'; detail: string; updatedAt: number } {
+    const row = this.db
+      .prepare('SELECT state, detail, updated_at AS updatedAt FROM credentials WHERE account = ?')
+      .get(id) as { state: string; detail: string; updatedAt: number } | undefined;
+    return row?.state === 'dead'
+      ? { state: 'dead', detail: row.detail, updatedAt: row.updatedAt }
+      : { state: 'ok', detail: row?.detail ?? '', updatedAt: row?.updatedAt ?? 0 };
   }
   block(id: string, block: QuotaBlock): void {
     this.db

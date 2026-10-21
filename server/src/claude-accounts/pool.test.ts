@@ -60,6 +60,49 @@ describe('shared Claude account pool', () => {
     expect(pool.choose('pane-c', 'opus')?.id).toBe('primary');
     expect(pool.choose('pane-b', 'opus', new Set(), 'backup')?.id).toBe('backup');
   });
+  /**
+   * THE INCIDENT THIS CAME FROM. The preferred account's login died; the pool
+   * knew nothing about logins, so it kept handing every new session to it, and
+   * each one failed four times and gave up with a healthy account sitting idle
+   * beside it. A dead credential is not a quota block and must not be stored
+   * as one: it has no reset time, and it ends when a person runs /login.
+   */
+  it('skips a signed-out account, and keeps skipping it — no timer lifts this', () => {
+    const { pool, advance } = fixture();
+    expect(pool.choose('pane-a', 'opus')?.id).toBe('primary');
+    pool.markCredential('primary', 'dead', 'Not logged in · Please run /login');
+    expect(pool.choose('pane-b', 'opus')?.id).toBe('backup');
+    // Not even the sticky assignment brings it back: the pane that was ON the
+    // dead account is exactly the one that must move.
+    expect(pool.choose('pane-a', 'opus', new Set(), 'primary')?.id).toBe('backup');
+    advance(7 * 24 * 3600 * 1000);
+    expect(pool.choose('pane-c', 'opus')?.id).toBe('backup');
+  });
+
+  it('comes back on evidence — a working turn or a probe, never on time passing', () => {
+    const { pool } = fixture();
+    pool.markCredential('primary', 'dead', 'Not logged in');
+    expect(pool.choose('pane-a', 'opus')?.id).toBe('backup');
+    expect(pool.credential('primary').state).toBe('dead');
+    expect(pool.credential('primary').detail).toBe('Not logged in');
+    pool.markCredential('primary', 'ok');
+    expect(pool.choose('pane-b', 'opus')?.id).toBe('primary');
+  });
+
+  it('an account nobody has tried is a candidate, not a suspect', () => {
+    const { pool } = fixture();
+    expect(pool.credential('primary').state).toBe('ok');
+    expect(pool.choose('pane-a', 'opus')?.id).toBe('primary');
+  });
+
+  it('a dead credential outranks a quota block, and survives it expiring', () => {
+    const { pool, advance } = fixture();
+    pool.block('primary', { scope: 'all', until: 20000, reason: 'quota' });
+    pool.markCredential('primary', 'dead', 'Not logged in');
+    advance(11000); // the quota block is over…
+    expect(pool.choose('pane-a', 'opus')?.id).toBe('backup'); // …the logout is not
+  });
+
   it('returns to primary when the sticky backup is exhausted after primary resets', () => {
     const { pool, advance } = fixture();
     pool.block('primary', { scope: 'all', until: 20000, reason: 'weekly quota' });

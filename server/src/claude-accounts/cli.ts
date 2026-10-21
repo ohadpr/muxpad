@@ -302,6 +302,13 @@ function report(pool: AccountPool | null): void {
           preferred,
           accounts,
           cooldowns,
+          // The card reads this: a signed-out account is not a number and must
+          // not be drawn as one (it showed an em dash, which reads "we do not
+          // know" rather than "this needs you").
+          credentials: accounts.map((a) => ({
+            account: a.id,
+            ...(pool?.credential(a.id) ?? { state: 'ok', detail: '', updatedAt: 0 }),
+          })),
           assignments: pool?.db.prepare('SELECT * FROM assignments').all() ?? [],
           utilization: accounts.map((a) => ({ account: a.id, windows: pool?.usage(a.id) ?? [] })),
           pending:
@@ -317,11 +324,17 @@ function report(pool: AccountPool | null): void {
     const mark = a.id === preferred ? '*' : ' ';
     const use = pool?.usage(a.id)?.[0];
     const cool = cooldowns.find((c) => c.account === a.id);
-    const state = cool
-      ? `blocked until ${new Date(cool.until_ms).toLocaleString()} (${cool.reason})`
-      : use
-        ? `${Math.ceil(use.utilization)}% of ${use.scope}`
-        : 'no reading yet';
+    // SIGNED OUT OUTRANKS EVERYTHING ELSE on this line, including a quota
+    // block: an account that cannot authenticate is not waiting for a reset,
+    // and the sentence has to name the one action that fixes it.
+    const dead = pool?.credential(a.id).state === 'dead';
+    const state = dead
+      ? `signed out — run: CLAUDE_CONFIG_DIR=${a.configDir} claude /login`
+      : cool
+        ? `blocked until ${new Date(cool.until_ms).toLocaleString()} (${cool.reason})`
+        : use
+          ? `${Math.ceil(use.utilization)}% of ${use.scope}`
+          : 'no reading yet';
     const signedIn = hasLogin(a) ? '' : '  — NO LOGIN FOUND';
     console.log(`${mark} ${a.id.padEnd(10)} ${state}${signedIn}`);
     console.log(`  ${' '.repeat(10)} ${a.configDir}`);
@@ -335,6 +348,8 @@ function report(pool: AccountPool | null): void {
   const n = accounts.length;
   console.log(`* preferred for new sessions. ${n} account${n === 1 ? '' : 's'} in the pool.`);
   console.log('A refused usage window moves new work to the next eligible account.');
+  if (accounts.some((a) => pool?.credential(a.id).state === 'dead'))
+    console.log('A signed-out account is skipped entirely; it returns on its own once you log in.');
 }
 
 try {

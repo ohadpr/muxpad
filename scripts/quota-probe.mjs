@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isAuthFailureText } from '../server/dist/agent-runner/auth-heal.js';
 /**
  * ASK EACH CLAUDE SUBSCRIPTION HOW FULL IT IS, now, without waiting for work.
  *
@@ -83,10 +84,25 @@ for (const account of pool.accounts().filter((a) => a.enabled)) {
     }
     session.close?.();
   } catch (error) {
-    console.error(`${account.id}: ${error instanceof Error ? error.message : String(error)}`);
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`${account.id}: ${message}`);
+    // THE PROBE IS THE ONLY THING THAT ASKS AN IDLE ACCOUNT ANYTHING. When it
+    // comes back "Not logged in", that is the earliest this machine can know a
+    // subscription has stopped working — an hour or more before somebody opens
+    // a pane and watches it fail. It used to end up in a log file instead, so
+    // the account stayed preferred and the next session walked into it.
+    if (isAuthFailureText(message.replace(/^Claude Code returned an error result:\s*/i, ''))) {
+      pool.markCredential(account.id, 'dead', message);
+      console.error(
+        `${account.id}: marked signed out — run /login, then: muxpad claude-account status`,
+      );
+    }
   } finally {
     clearTimeout(timer);
   }
+  // A WINDOW IS PROOF OF A LOGIN. Nothing else clears the mark on an idle
+  // account: no pane may run on it for days, and the mark does not expire.
+  if (got) pool.markCredential(account.id, 'ok');
   if (!got) console.error(`${account.id}: no rate-limit event — nothing recorded`);
   asked += 1;
 }
