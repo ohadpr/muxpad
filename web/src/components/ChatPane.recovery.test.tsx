@@ -129,7 +129,11 @@ it.each([
       await act(async () => {
         next.readyState = Socket.OPEN;
         next.onopen?.();
-        next.frame({ t: 'turn-start' });
+        // THE TEXT MATTERS. A bare turn-start means "a turn nobody here
+        // started" — a cron, a queue drain — and must NOT clear a composer
+        // holding an undelivered message. Asserting recovery on a bare frame
+        // is what locked that bug in; this names the send it is evidence for.
+        next.frame({ t: 'turn-start', text: 'hello' });
       });
     } else {
       await act(async () => socket.frame({ t: 'send-ack' }));
@@ -138,3 +142,31 @@ it.each([
     expect(host.textContent).not.toContain('Connection dropped before the message was sent');
   },
 );
+
+it('a turn that nobody here started does not empty the composer', async () => {
+  // THE REGRESSION THE BARE FRAME ABOVE USED TO HIDE. A restored message sits
+  // in the composer until something proves it arrived. A cron fire, a wakeup,
+  // or the queue draining another message broadcasts a turn-start with NO
+  // text — "this one isn't yours" — and clearing on that lost a message the
+  // server never received, silently, along with the notice saying so.
+  const socket = await setup();
+  await type('hello');
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click());
+  await act(async () => {
+    socket.close();
+    socket.onclose?.();
+  });
+  expect(draft().textContent).toBe('hello');
+
+  await act(async () => socket.frame({ t: 'turn-start' }));
+  expect(draft().textContent).toBe('hello');
+  expect(host.textContent).toContain('Connection dropped before the message was sent');
+
+  // A turn-start naming a DIFFERENT message is equally not ours.
+  await act(async () => socket.frame({ t: 'turn-start', text: 'something else' }));
+  expect(draft().textContent).toBe('hello');
+
+  // Only the one that names it counts.
+  await act(async () => socket.frame({ t: 'turn-start', text: 'hello' }));
+  expect(draft().textContent).toBe('');
+});
