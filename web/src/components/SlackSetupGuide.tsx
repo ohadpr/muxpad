@@ -365,7 +365,12 @@ export function SlackSetupGuide({ active }: { active: boolean }) {
           No compatible setup command is available for this installation. Do not run an update
           intended for another version.{' '}
           <a
-            href="https://pub.octarine.org/muxpad-slack-setup/"
+            // THE REPO, NOT A PERSONAL HOST. This pointed at the author's own
+            // publish domain — a private hostname baked into a public app, and
+            // shown to anyone who ever hits this state. The broker's own
+            // README is the reviewed instructions, and it travels with the
+            // checkout.
+            href="https://github.com/ohadpr/muxpad/blob/main/broker/README.md"
             target="_blank"
             rel="noopener noreferrer"
           >
