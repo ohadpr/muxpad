@@ -19,6 +19,7 @@ import { pushUndo } from '../lib/move-undo-store';
 import { isExpanded, toggleExpanded, useNavExpansion } from '../lib/nav-expansion';
 import { tabRowAffordances } from '../lib/nav-row-affordances';
 import { nextCronLabel, railCronLabel } from '../lib/next-cron-label';
+import { noticeFromError } from '../lib/notice-store';
 
 import { recallOpenSubChats, rememberOpenSubChats } from '../lib/rail-folds';
 import { reorderByDrop } from '../lib/reorder';
@@ -26,6 +27,7 @@ import { orderAfterPinnedDrop } from '../lib/tab-drag';
 import { useFrozenTabOrder } from '../lib/tab-freeze';
 import { tabRowActions } from '../lib/tab-row-actions';
 import { useAllChats } from '../lib/use-all-chats';
+import { useArmed } from '../lib/use-armed';
 import { useDismissable } from '../lib/use-dismissable';
 import { applyTabOrder, insertTabRow, refreshTabs, useTabs } from '../tabs';
 import { useLongPress } from '../use-long-press';
@@ -709,14 +711,15 @@ function WorkspacePickList({
   const closeWorkspace = async (e: React.MouseEvent, w: Workspace) => {
     e.stopPropagation();
     e.preventDefault();
-    // No window.confirm: it is unreliable in an iOS PWA in standalone mode
-    // (silently a no-op), which is exactly where this row lives.
+    // The confirmation is the × itself (ArmedClose), not a dialog: this row
+    // lives on the sheet, where `window.confirm` is silently a no-op — which
+    // is why a thumb used to be able to delete a workspace in one tap.
     try {
       await api.deleteWorkspace(w.id);
       await refreshWorkspaces();
     } catch (err) {
       console.error('deleteWorkspace failed', err);
-      window.alert(`Failed to close workspace: ${String(err)}`);
+      noticeFromError(`Couldn't close "${w.name}".`, err);
     }
   };
 
@@ -853,15 +856,13 @@ function WorkspacePickRow({
           workspace you are not looking at is exactly the case that mark is
           for. */}
       <StateChip status={workspace.status} mode="mark" className="navtree-rail-mark" />
-      <button
-        type="button"
-        className="navtree-close"
-        onClick={onClose}
+      <ArmedClose
+        onConfirm={onClose}
         title="Close workspace"
-        aria-label={`Close workspace ${workspace.name}`}
-      >
-        <SvgClose size={13} />
-      </button>
+        armedTitle="Tap again — this kills every tab and pane in it"
+        label={`Close workspace ${workspace.name}`}
+        armedLabel={`Tap again to close ${workspace.name} and all its tabs`}
+      />
     </div>
   );
 }
@@ -980,18 +981,13 @@ function WorkspaceNode({
   const closeWorkspace = async (e?: React.MouseEvent) => {
     e?.stopPropagation();
     e?.preventDefault();
-    // Desktop keeps the confirm the old switcher had — closing cascade-
-    // kills every tab and pane. The sheet stays confirm-free because
-    // window.confirm is flaky in iOS PWA standalone mode (silent no-op).
-    if (variant === 'sidebar') {
-      const n = workspace.tab_count;
-      if (
-        !window.confirm(
-          `Close workspace "${workspace.name}"? All ${n} ${n === 1 ? 'tab' : 'tabs'} and their panes will be killed.`,
-        )
-      )
-        return;
-    }
+    // NO CONFIRMATION HERE ANY MORE, and that is not the same as no
+    // confirmation: closing cascade-kills every tab and pane, so both callers
+    // ask first — the × arms in place (ArmedClose) and the menu row arms in
+    // place (MenuItem.confirm). It moved out of this function because the two
+    // surfaces could not share a `window.confirm`: it is a silent no-op in the
+    // iOS PWA, so the sheet had to skip it entirely and the one surface where
+    // a thumb can hit × by accident was the one with no guard at all.
     try {
       await api.deleteWorkspace(workspace.id);
       await refreshWorkspaces();
@@ -1001,7 +997,7 @@ function WorkspaceNode({
       }
     } catch (err) {
       console.error('deleteWorkspace failed', err);
-      window.alert(`Failed to close workspace: ${String(err)}`);
+      noticeFromError(`Couldn't close "${workspace.name}".`, err);
     }
   };
 
@@ -1173,15 +1169,15 @@ function WorkspaceNode({
             >
               <SvgPlus />
             </button>
-            <button
-              type="button"
-              className="navtree-close"
-              onClick={(e) => void closeWorkspace(e)}
+            <ArmedClose
+              onConfirm={(e) => void closeWorkspace(e)}
               title="Close workspace"
-              aria-label={`Close workspace ${workspace.name}`}
-            >
-              <SvgClose size={13} />
-            </button>
+              armedTitle={`Click again — ${workspace.tab_count} ${
+                workspace.tab_count === 1 ? 'tab' : 'tabs'
+              } and their panes will be killed`}
+              label={`Close workspace ${workspace.name}`}
+              armedLabel={`Click again to close ${workspace.name} and all its tabs`}
+            />
           </span>
         )}
         {/* LAST cell, always — same rule as the tab rows.
@@ -1207,7 +1203,12 @@ function WorkspaceNode({
               onSelect: () => setEditing({ kind: 'workspace', id: workspace.id }),
             },
             // LAST, and red: the one item here that cannot be taken back.
-            { label: 'Close workspace', danger: true, onSelect: () => void closeWorkspace() },
+            {
+              label: 'Close workspace',
+              danger: true,
+              confirm: 'Tap again to close it and all its tabs',
+              onSelect: () => void closeWorkspace(),
+            },
           ]}
         />
       )}
@@ -1743,7 +1744,7 @@ function SheetPaneList({
       if (wasLast) await api.deleteTab(tab.id);
     } catch (err) {
       console.error('deletePane failed', err);
-      window.alert(`Failed to close pane ${label}: ${String(err)}`);
+      noticeFromError(`Couldn't close the pane ${label}.`, err);
       api
         .getTab(tab.id)
         .then((d) => setPanes(d.panes))
@@ -2609,7 +2610,12 @@ function TabRow({
     // PERMANENT, and this menu is the only way to reach it. It used to be the
     // row's ×, one click from every row in the rail — which is exactly why the
     // rail never got tidied. Its own confirm lives in the handler.
-    { label: 'Delete permanently…', danger: true, onSelect: () => onDelete() },
+    {
+      label: 'Delete permanently…',
+      danger: true,
+      confirm: 'Click again — this cannot be undone',
+      onSelect: () => onDelete(),
+    },
   ];
 
   /** Clicking the leading cell opens the icon picker under it. Both surfaces'
@@ -3149,6 +3155,57 @@ function TabRow({
 }
 
 /**
+ * A × that ASKS, in place.
+ *
+ * Closing a workspace cascade-kills every tab and pane under it, so it cannot
+ * be a single click on a 20px glyph that sits two pixels from "new chat". It
+ * used to be guarded by `window.confirm`, which bought the guarantee on
+ * desktop and NOTHING on the sheet — the dialog is a silent no-op in an
+ * installed iOS PWA, so the surface driven by a thumb was the unguarded one.
+ *
+ * So the question lives in the button: one click arms it (red, and the
+ * tooltip/label say what the next click does), the second click acts. It
+ * disarms on a timer, on leaving the row, and on blur — a button left armed
+ * behind you is the trap this is supposed to prevent.
+ *
+ * Same shape as the sheet's swipe tray, which has always armed its destructive
+ * action rather than opening anything.
+ */
+function ArmedClose({
+  title,
+  armedTitle,
+  label,
+  armedLabel,
+  onConfirm,
+}: {
+  title: string;
+  armedTitle: string;
+  label: string;
+  armedLabel: string;
+  onConfirm: (e: React.MouseEvent) => void;
+}) {
+  const { armed, press, disarm } = useArmed();
+  return (
+    <button
+      type="button"
+      className={`navtree-close${armed ? ' -armed' : ''}`}
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (press()) onConfirm(e);
+      }}
+      onMouseLeave={disarm}
+      onBlur={disarm}
+      title={armed ? armedTitle : title}
+      aria-label={armed ? armedLabel : label}
+      aria-pressed={armed}
+    >
+      <SvgClose size={13} />
+    </button>
+  );
+}
+
+/**
  * Portal target for the row overlays.
  *
  * The menu and the icon picker are viewport-positioned (`position: fixed`),
@@ -3165,11 +3222,19 @@ function Overlay({ children }: { children: React.ReactNode }) {
 }
 
 /** One row in a NavContextMenu. With `submenu`, the row opens a flyout of
- *  child rows on hover instead of acting on click. */
+ *  child rows on hover instead of acting on click. With `confirm`, the row
+ *  ARMS on first click and acts on the second — see NavContextMenu. */
 interface MenuItem {
   label: string;
   onSelect?: () => void;
   danger?: boolean;
+  /** The armed label — what the row says once it is one click from doing
+   *  something irreversible. Replaces `window.confirm`, which took the whole
+   *  window for a decision about a 20px row, could not be styled, and is a
+   *  silent no-op in the iOS PWA (which is why the sheet's destructive rows
+   *  had no confirmation AT ALL). State in the row that asked means the two
+   *  surfaces can finally behave the same way. */
+  confirm?: string;
   submenu?: { label: string; onSelect: () => void }[];
 }
 
@@ -3198,6 +3263,9 @@ function NavContextMenu({
   alignEnd?: boolean;
 }) {
   const [openSub, setOpenSub] = useState<string | null>(null);
+  // At most one row is armed, and arming one disarms the other: two live
+  // "click again" rows in a six-row menu is a trap, not a safeguard.
+  const [armed, setArmed] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   // Backdrop mousedown already covers outside-click; the hook adds Escape
   // and keeps this menu on the ONE shared dismissal implementation.
@@ -3272,14 +3340,32 @@ function NavContextMenu({
               <button
                 key={it.label}
                 type="button"
-                className={it.danger ? 'navtree-menu-item -danger' : 'navtree-menu-item'}
+                className={`navtree-menu-item${it.danger ? ' -danger' : ''}${
+                  armed === it.label ? ' -armed' : ''
+                }`}
                 role="menuitem"
+                // The armed row is the menu's current question, so it says so
+                // for a screen reader too — otherwise the second click is an
+                // unannounced change of meaning.
+                {...(it.confirm ? { 'aria-pressed': armed === it.label } : {})}
                 onClick={() => {
+                  // FIRST click on a confirming row arms it and keeps the menu
+                  // open. Nothing has happened yet, and the row now says what
+                  // the second click will do.
+                  if (it.confirm && armed !== it.label) {
+                    setArmed(it.label);
+                    return;
+                  }
                   onDismiss();
                   it.onSelect?.();
                 }}
+                // Moving to ANOTHER row disarms: a menu you have moved on in
+                // is a menu you are no longer answering.
+                onMouseEnter={() => {
+                  if (armed && armed !== it.label) setArmed(null);
+                }}
               >
-                {it.label}
+                {armed === it.label ? (it.confirm ?? it.label) : it.label}
               </button>
             ),
           )}

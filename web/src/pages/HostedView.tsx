@@ -10,6 +10,8 @@ import { useState } from 'react';
 import { StatusMark } from '../components/StatusMark';
 import { XtermPane } from '../components/XtermPane';
 import { appDetail, formatBytes, formatDate, hostedApi, useHosted } from '../lib/hosted';
+import { noticeFromError } from '../lib/notice-store';
+import { useArmed } from '../lib/use-armed';
 import { useDocumentTitle } from '../use-document-title';
 import './HostedView.css';
 
@@ -249,20 +251,55 @@ function AppRow({ app, onChanged }: { app: AppWithStatus; onChanged: () => void 
             immediately beside Stop with identical weight, which on a phone is
             one mis-tap from destroying an app. Everything else here is
             one-tap; this one is quiet, separated, and confirmed. */}
-        <button
-          type="button"
-          className="hosted-btn hosted-btn-danger"
-          disabled={busy}
-          onClick={() => {
-            if (!confirm(`Unregister ${app.name}? Its files are untouched; the server stops.`))
-              return;
-            void run(() => hostedApi.removeApp(app.slug));
-          }}
-        >
-          Delete
-        </button>
+        <ArmedDanger
+          busy={busy}
+          label="Delete"
+          armedLabel="Click again — unregisters it"
+          title={`Unregister ${app.name}. Its files are untouched; the server stops.`}
+          onConfirm={() => void run(() => hostedApi.removeApp(app.slug))}
+        />
       </div>
     </li>
+  );
+}
+
+/**
+ * The destructive button on a hosted row, asking in place.
+ *
+ * Both of these used `confirm()`; see lib/use-armed for why none of them do
+ * any more. The label is the question — there is room for words here, unlike
+ * the sidebar's 20px ×, so the armed state SAYS what the second click does
+ * instead of relying on colour alone.
+ */
+function ArmedDanger({
+  busy,
+  label,
+  armedLabel,
+  title,
+  onConfirm,
+}: {
+  busy: boolean;
+  label: string;
+  armedLabel: string;
+  title: string;
+  onConfirm: () => void;
+}) {
+  const { armed, press, disarm } = useArmed();
+  return (
+    <button
+      type="button"
+      className={`hosted-btn hosted-btn-danger${armed ? ' -armed' : ''}`}
+      disabled={busy}
+      title={title}
+      aria-pressed={armed}
+      onClick={() => {
+        if (press()) onConfirm();
+      }}
+      onMouseLeave={disarm}
+      onBlur={disarm}
+    >
+      {armed ? armedLabel : label}
+    </button>
   );
 }
 
@@ -333,22 +370,23 @@ function ArtifactRow({ artifact, onChanged }: { artifact: Artifact; onChanged: (
             Versions ({artifact.versions.length})
           </button>
         )}
-        <button
-          type="button"
-          className="hosted-btn hosted-btn-danger"
-          disabled={busy}
-          onClick={() => {
-            if (!confirm(`Unpublish ${artifact.slug}? Its previous versions go too.`)) return;
+        <ArmedDanger
+          busy={busy}
+          label="Delete"
+          armedLabel="Click again — versions go too"
+          title={`Unpublish ${artifact.slug}. Its previous versions go too.`}
+          onConfirm={() => {
             setBusy(true);
             void hostedApi
               .removeArtifact(artifact.slug)
               .then(onChanged)
-              .catch((err) => console.error(err))
+              .catch((err) => {
+                console.error(err);
+                noticeFromError(`Couldn't unpublish ${artifact.slug}.`, err);
+              })
               .finally(() => setBusy(false));
           }}
-        >
-          Delete
-        </button>
+        />
       </div>
       {open && (
         <ul className="hosted-versions">

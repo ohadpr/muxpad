@@ -254,12 +254,69 @@ describe('the sheet’s workspace row: “+” and “⋯”, nothing else', () 
     expect(document.querySelector('.navtree-menu.-touch')).not.toBeNull();
   });
 
-  it('closes the workspace from the menu', async () => {
+  /** The sheet used to be the surface with NO confirmation at all, because
+   *  `window.confirm` is a silent no-op in an installed iOS PWA. The row now
+   *  arms instead, so a thumb cannot cascade-kill a workspace in one tap. */
+  it('closes the workspace from the menu — on the SECOND tap', async () => {
+    const box = mount('sheet');
+    await click(rowFor(box, 'Acme').querySelector('.navtree-ws-more'));
+    const item = () => menuItems().find((i) => i.textContent?.startsWith('Close workspace'));
+    await click(item());
+    // First tap: nothing deleted, the menu stays open, and the row now says
+    // what the next tap does.
+    expect(DELETED).toEqual([]);
+    const armed = menuItems().find((i) => i.classList.contains('-armed'));
+    expect(armed?.textContent).toBe('Tap again to close it and all its tabs');
+    expect(armed?.getAttribute('aria-pressed')).toBe('true');
+    await click(armed);
+    expect(DELETED).toEqual(['w-acme']);
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+  });
+
+  it('disarms when the thumb moves to another row', async () => {
     const box = mount('sheet');
     await click(rowFor(box, 'Acme').querySelector('.navtree-ws-more'));
     await click(menuItems().find((i) => i.textContent === 'Close workspace'));
+    expect(menuItems().some((i) => i.classList.contains('-armed'))).toBe(true);
+    const rename = menuItems().find((i) => i.textContent === 'Rename');
+    await act(async () => {
+      rename?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    });
+    expect(menuItems().some((i) => i.classList.contains('-armed'))).toBe(false);
+    expect(DELETED).toEqual([]);
+  });
+
+  /** The sidebar's × used to raise a native dialog, which was the only reason
+   *  a one-click glyph two pixels from "new chat" was safe. The dialog is
+   *  gone; the guarantee is not. */
+  it('arms the sidebar × instead of opening a dialog', async () => {
+    const box = mount('sidebar');
+    const row = rowFor(box, 'Acme');
+    const x = [...row.querySelectorAll('.navtree-tab-controls .navtree-close')].find(
+      (b) => !b.classList.contains('navtree-ws-add'),
+    ) as HTMLButtonElement;
+    expect(x.getAttribute('aria-label')).toBe('Close workspace Acme');
+    await click(x);
+    expect(DELETED).toEqual([]);
+    expect(x.classList.contains('-armed')).toBe(true);
+    expect(x.getAttribute('aria-label')).toBe('Click again to close Acme and all its tabs');
+    await click(x);
     expect(DELETED).toEqual(['w-acme']);
-    expect(document.querySelector('[role="menu"]')).toBeNull();
+  });
+
+  it('disarms the × when the pointer leaves it', async () => {
+    const box = mount('sidebar');
+    const row = rowFor(box, 'Acme');
+    const x = [...row.querySelectorAll('.navtree-tab-controls .navtree-close')].find(
+      (b) => !b.classList.contains('navtree-ws-add'),
+    ) as HTMLButtonElement;
+    await click(x);
+    await act(async () => {
+      x.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
+    });
+    expect(x.classList.contains('-armed')).toBe(false);
+    await click(x);
+    expect(DELETED).toEqual([]);
   });
 
   it('renames from the menu', async () => {

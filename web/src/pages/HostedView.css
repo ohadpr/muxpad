@@ -302,6 +302,18 @@
 .hosted-btn-danger:focus-visible {
   color: var(--danger);
 }
+/* Armed — one click from unregistering an app or unpublishing an artifact.
+   FILLED, because the resting and hover states of this button are already
+   danger-coloured outlines: a tint on a tint says nothing. The label changes
+   with it ("Delete" -> "Click again — …"), so the state does not rest on
+   colour alone. */
+.hosted-btn-danger.-armed,
+.hosted-btn-danger.-armed:hover {
+  background: var(--armed-fill);
+  border-color: var(--armed-fill);
+  color: var(--bg);
+  font-weight: 600;
+}
 .hosted-btn-sm {
   min-height: 36px;
   padding: 0 10px;

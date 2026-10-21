@@ -1,0 +1,99 @@
+/* Failure notices — bottom-left, stacked ABOVE the move-undo toasts (which
+   own the bottom edge because they hold the only button). The stack grows
+   upward from the same corner so one glance covers both. */
+.notice-toasts {
+  position: fixed;
+  left: 16px;
+  /* Clears a single undo toast; both stacks are short-lived and a rare overlap
+     costs a line of reading, not an action. */
+  bottom: 72px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 10px;
+  align-items: flex-start;
+  pointer-events: none;
+}
+
+.notice-toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 9px 8px 9px 12px;
+  background: var(--bg-tabbar);
+  color: var(--fg);
+  /* The ONE colour: a danger-tinted left edge rather than a red panel. The
+     message is text to read, not an alarm to survive. */
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--danger);
+  border-radius: 8px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4);
+  max-width: 420px;
+  font-size: 0.8125rem;
+  line-height: 1.35;
+  animation: notice-toast-in 140ms ease-out;
+}
+@keyframes notice-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .notice-toast {
+    animation: none;
+  }
+}
+
+.notice-toast-mark {
+  flex: 0 0 auto;
+  display: inline-flex;
+  margin-top: 1px;
+  color: var(--danger);
+}
+
+.notice-toast-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.notice-toast-msg {
+  font-weight: 600;
+}
+/* The raw error. Two lines at most — past that it is log material, and the
+   console has it. */
+.notice-toast-detail {
+  color: var(--fg-dim);
+  font-size: 0.75rem;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.notice-toast-dismiss {
+  flex: 0 0 auto;
+  background: transparent;
+  border: none;
+  color: var(--fg-faint);
+  font-size: 1.125rem;
+  line-height: 1;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.notice-toast-dismiss:hover {
+  background: var(--border-strong);
+  color: var(--fg);
+}
+.notice-toast-dismiss:focus-visible {
+  outline: 2px solid var(--fg-faint);
+  outline-offset: 1px;
+}

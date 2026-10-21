@@ -130,6 +130,21 @@
      glance without dominating the chrome plate. */
   --chrome-rail: 3px;
 
+  /* ─── "Click again" ─────────────────────────────────────────────────────
+     The fill under an ARMED destructive control — the × that is one click
+     from closing a workspace, the menu row one click from deleting a chat,
+     the hosted-row button one click from unpublishing. It replaced
+     `window.confirm`, so it has to carry the weight that dialog did: filled,
+     not tinted, and legible with --bg as its ink on every theme.
+
+     WHY NOT PLAIN --danger. The label is --bg on this fill, and raw --danger
+     measures 4.18:1 in acme and 4.53:1 in dracula — under AA for text this
+     size. Mixing 12% of --fg in is self-correcting in both directions: on a
+     light theme --fg is dark, so the red deepens under white ink; on a dark
+     theme --fg is light, so the pink lifts away from dark ink. Measured
+     across all six themes: 5.04-7.23:1. Pinned in NavTree.armed.contrast.test. */
+  --armed-fill: color-mix(in srgb, var(--danger) 88%, var(--fg));
+
   /* ─── Status-rail colours ───────────────────────────────────────────────
      The four state colours, deliberately NOT borrowed from --accent/--danger.
      A status mark must mean the same thing on every theme: dracula's --danger
