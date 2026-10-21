@@ -667,9 +667,36 @@ describe('the ARITHMETIC — six themes, and the defect the TAB introduces', () 
     // measure on a given theme, which is what the edge was standing in for.
     expect(fill(hovered)).not.toContain('--bg-pane-face');
     expect(hovered).not.toMatch(/border-radius|margin-right|box-shadow/);
-    // No edge on the selected row either — a straight line cannot follow this
-    // shape, and one that tries ends over the curve.
-    expect(selected).not.toMatch(/box-shadow/);
+    // ── AND THE EDGE IS BACK, BECAUSE THE OBJECTION TO IT WAS ANSWERED ────
+    // This used to assert the opposite: no edge at all, on the grounds that a
+    // straight line cannot follow this shape and one that tries ends over the
+    // curve. That was true of a border drawn by the ROW ALONE — the row's
+    // rectangle stops where the fillet has already curved away.
+    //
+    // The hairline is now drawn by both parts, each taking the stretch it
+    // owns. The row's inset ring does the top, the bottom and the rounded left
+    // end; the funnel's middle band covers the overlap where the ring would
+    // run on into the flare; and each fillet carries the line round as a 1px
+    // arc just inside its radius. They meet at a point that falls out of the
+    // geometry rather than being tuned: the arc's lower end is (funnel-left,
+    // row-top) for any row height and any rail width, because both are
+    // derived from the same 18px fillet and the same --nt-pad.
+    expect(decl(selected, 'box-shadow')).toBe('inset 0 0 0 1px var(--nt-carve-edge)');
+    // The mask. Without this third layer the straight run continues under the
+    // fillet and out the other side — the exact failure the old assertion was
+    // protecting against.
+    expect(decl(fillet, 'background-image')).toContain('linear-gradient(var(--bg-pane-face)');
+    expect(decl(fillet, 'background-size')).toContain('calc(100% - 36px)');
+    // Both arcs carry the stroke, and both stop 1px short of the fill so the
+    // line sits ON the silhouette rather than inside the pane's face.
+    expect((decl(fillet, 'background-image') ?? '').match(/--nt-carve-edge/g)).toHaveLength(2);
+    expect(decl(fillet, 'background-image')).toContain('17px 18px');
+    // Derived from the row's ink — which is the PANE's here — so it reads on
+    // all six themes for the same reason the ink does. `--border` would not:
+    // it measures 1.00:1 against the rail on alucard.
+    // Declared in the row's island block (the one that rebinds the pane's ink),
+    // not the paint block above — so this looks at the sheet, not one rule.
+    expect(NAV_CSS).toMatch(/--nt-carve-edge:\s*color-mix\(in srgb, var\(--fg\)/);
 
     // The fill arithmetic is still RECORDED, because it is the reason the shape
     // has to carry this and a palette change that fixes acme should show up

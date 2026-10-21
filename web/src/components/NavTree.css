@@ -1236,6 +1236,24 @@
 .navtree-tab-row[data-active="true"] {
   background-color: var(--bg-pane-face);
   border-radius: var(--nt-pill) 0 0 var(--nt-pill);
+  /* ── THE SILHOUETTE GETS A HAIRLINE, AS ONE CONTINUOUS PATH ─────────────
+     The note below is the record of this being tried and abandoned, and it is
+     still right about WHY: three inset hairlines on the row's rectangle ran
+     straight on through the point where the fillet had already curved away,
+     and died in mid-air over the corner.
+
+     What makes it work now is that the stroke is not the row's alone. This
+     inset ring draws the top, bottom and the rounded left end; the funnel
+     covers the 14px where the ring would cross into the flare, and carries the
+     line onward as a 1px arc inside each fillet. Row and funnel each draw the
+     part of the outline they own, and they meet exactly on the circle: the
+     arc's lower end is (funnel-left, row-top), which is where the straight
+     run stops.
+
+     Keyed to the row's own --fg, which is the PANE's ink here (see the island
+     rebinding below), so it reads against the pane face on every theme rather
+     than being a colour picked for one. */
+  box-shadow: inset 0 0 0 1px var(--nt-carve-edge);
   /* Out past the GROUP's own right padding, so the row genuinely touches the
      pane instead of stopping a hair short of it. Measured: without this the tab
      ended at 277 against a rail edge of 279, and two pixels of rail showing
@@ -1305,10 +1323,29 @@
   top: -18px;
   bottom: -18px;
   width: 18px;
-  background-image: radial-gradient(circle at 0% 0%, transparent 18px, var(--bg-pane-face) 18px),
-    radial-gradient(circle at 0% 100%, transparent 18px, var(--bg-pane-face) 18px);
-  background-size: 18px 18px;
-  background-position: right top, right bottom;
+  /* THREE LAYERS, AND THE MIDDLE ONE IS NEW.
+     The fillets are unchanged in shape; each now carries a 1px ring just
+     inside its arc, so the hairline follows the curve instead of stopping at
+     it. The middle band — exactly the row's height, which is this box minus
+     the two 18px overhangs — used to be left unpainted because the row's own
+     fill was already there. It is painted now, in the same colour, because it
+     also has to COVER the row's inset ring across the 14px where the flare
+     begins. Without it the straight line would run on under the fillet and
+     out the other side, which is the failure the row's note describes. */
+  background-image: radial-gradient(
+      circle at 0% 0%,
+      transparent 17px,
+      var(--nt-carve-edge) 17px 18px,
+      var(--bg-pane-face) 18px
+    ),
+    radial-gradient(
+      circle at 0% 100%,
+      transparent 17px,
+      var(--nt-carve-edge) 17px 18px,
+      var(--bg-pane-face) 18px
+    ), linear-gradient(var(--bg-pane-face), var(--bg-pane-face));
+  background-size: 18px 18px, 18px 18px, 18px calc(100% - 36px);
+  background-position: right top, right bottom, right center;
   background-repeat: no-repeat;
   pointer-events: none;
 }
@@ -1339,6 +1376,13 @@
   --nt-hover: color-mix(in srgb, var(--fg) 6%, transparent);
   --nt-sel: color-mix(in srgb, var(--accent) 20%, transparent);
   --nt-sel-hover: color-mix(in srgb, var(--accent) 26%, transparent);
+  /* THE CARVEOUT'S OWN HAIRLINE. Derived from the pane's ink rather than
+     `--border`, which measures 1.00:1 against the rail on alucard and 1.06 on
+     acme — the same reason the group hairlines were removed. A mix of the ink
+     that has to be readable on this surface is readable on it by construction,
+     on all six themes. 14%: enough to define the silhouette, not enough to
+     read as a second object drawn around the row. */
+  --nt-carve-edge: color-mix(in srgb, var(--fg) 14%, transparent);
 }
 
 /* ─── OVERLAYS LEAVE THE ISLAND TOO ────────────────────────────────────────
