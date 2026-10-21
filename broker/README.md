@@ -39,6 +39,40 @@ Use your own browser on a device agents cannot access, initially your phone. Do
 not pair an agent browser, shared profile, or a browser whose files/debugging
 endpoint are available to the agent.
 
+## Who may ENQUEUE a request — a decision, written down
+
+`POST /requests` has no caller authentication, and that is a choice rather than
+an oversight. A review flagged it; the decision is to leave it, and the reasons
+are recorded here so the next reader does not have to re-derive them — or
+"fix" it into something weaker.
+
+What reaching that endpoint actually buys: a PENDING ASK. Every action still
+needs a passkey ceremony on the protected shell, whose challenge is the hash of
+the displayed intent (action, team, payload, decision, duration), so a request
+cannot be approved as anything other than what the human is shown. The queue is
+capped at 100 and pruned on expiry.
+
+What it costs: anyone who can reach the transport can put a prompt in front of
+the human. Under the installed `tsnet` transport that is the tailnet, not the
+local machine — the broker itself listens only on a root-owned 0600 Unix socket.
+So the exposure is prompt-spam, and a crafted request whose displayed intent a
+hurried human might approve.
+
+Why not add a caller credential: the muxpad process deliberately holds NO broker
+credential (see `server/src/slack-broker.ts`). That property is why compromising
+muxpad does not yield Slack access — it yields the ability to ASK, which is
+exactly the ability the human's approval exists to adjudicate. Giving muxpad a
+token to prove it is muxpad hands the agent the thing the design keeps out of
+its reach, and it has to be installed as root, into a hash-pinned release.
+
+What would change the decision: tailnet-peer identity for the ENQUEUE path, so
+only the hosting node may create requests while remote members keep only
+approve/deny. The pieces exist (`node-policy.mjs`, `verifiedPeer`), but they are
+wired for `tailnet-peer` auth mode and this install runs `paired`; and
+`NODE-AUTH.md` records that the node-identity prerequisites have NOT been
+established on this machine. That is the work, and it is an owner's call with a
+re-reviewed release artifact — not a patch.
+
 Read the [design](../docs/plans/2026-10-18-slack-approval-broker.md) and
 [security review and open deployment gates](../docs/plans/2026-10-18-slack-approval-security-review.md).
 Application-level security checks pass. This is not independent audit approval;
