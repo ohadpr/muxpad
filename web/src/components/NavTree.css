@@ -2668,21 +2668,37 @@
   height: calc(var(--nt-row-tab) - 6px);
   margin: 0 2px;
   padding: 0 6px;
-  /* THE RAIL'S OWN SURFACE, not the page's. This took `--bg` — the PAGE
-     background — while its text takes `--fg`, which the island has rebound to
-     the rail's ink. On every theme with a light page and a deep rail those
-     are the same colour: github-light measured 1.00:1, alucard 1.09, acme
-     1.06, so renaming a workspace or an inactive chat typed into an invisible
-     field. The third instance of this exact mix-up, and the reason the pane
-     tokens now come as a family: a surface and the ink on it must come from
-     the same one. On `--rail-elev` the worst case is 6.65:1. */
-  background: var(--rail-elev);
+  /* THE ELEVATED SURFACE OF WHATEVER ISLAND THIS IS IN — the only form of
+     this declaration that is right on both surfaces.
+
+     It took `--bg` first (the PAGE background under the RAIL's ink: 1.00:1 on
+     github-light), then `--rail-elev`, which fixed the sidebar and broke the
+     SHEET by the same mechanism in reverse. The island — the block that
+     rebinds --fg to --rail-ink — is scoped to `[data-variant="sidebar"]`, so
+     on the sheet the ink stays the PAGE's --fg while this surface was the
+     rail's: measured 1.66:1 on alucard, 1.68 on github-light, 2.05 on acme.
+     Reported as "renaming chat css not ideal", with the name unreadable.
+
+     `--bg-elev` is the token the island itself rebinds (to --rail-elev), so
+     one declaration resolves to the rail's surface inside the rail and the
+     page's everywhere else — ink and surface from the same family by
+     construction, which is the whole point of the family. Worst case 6.65:1
+     in the sidebar, 9.63:1 on the sheet. Pinned in NavTree.rename.contrast. */
+  background: var(--bg-elev);
   border: 1px solid var(--accent);
   border-radius: 4px;
   color: var(--fg);
   font-family: inherit;
   font-size: inherit;
   outline: none;
+}
+/* The browser's default selection is a system blue that belongs to no theme —
+   and a rename opens with the whole name SELECTED, so that default is the
+   first thing you see every time. The app's own accent, at a weight that
+   leaves the text on top of it readable. */
+.navtree-rename::selection {
+  background: color-mix(in srgb, var(--accent) 40%, transparent);
+  color: var(--fg);
 }
 
 /* ─── Tab context menu (desktop right-click) ─────────────────────────── */
@@ -3437,6 +3453,24 @@ body.sidenav-resizing iframe {
 /* Renaming: the input takes the whole line beside the emoji. */
 .navtree[data-variant="sheet"] .navtree-tab-row:has(.navtree-rename) {
   display: flex;
+  /* AND IT HAS TO PAINT ITS OWN BAND. Every other row on this surface is
+     transparent and gets its fill from the swipe FACE it sits in
+     (SwipeRow.css) — but a row being renamed is deliberately not wrapped in a
+     SwipeRow (a tray you can swipe out from under a rename input is a way to
+     lose what you typed), so it had no fill at all and the page showed
+     through: a white slab in the middle of a dark list, which is what the
+     report was looking at. Same token the face uses, so the band is
+     continuous and the row simply stops being swipeable. */
+  background-color: var(--swipe-surface);
+}
+/* The name must not JUMP when the row turns into a field. The input's border
+   and padding pushed its text 9px right of where the name was sitting (42px ->
+   51px, measured), so the thing you are editing moved as you started editing
+   it. The pull-back is the border + most of the padding; 1px off, and it keeps
+   3px of air between the pill and the emoji. */
+.navtree[data-variant="sheet"] .navtree-rename {
+  margin-inline-start: -5px;
+  padding-inline: 5px;
 }
 
 /* ─── The emoji, which is now THE CHIP at this surface's scale ─────────────
