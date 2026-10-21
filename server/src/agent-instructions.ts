@@ -75,8 +75,8 @@ list. Capabilities worth knowing:
 
 <!--cap:slack-->
 - \`muxpad slack\` — the company Slack, read/write, from any pane and any
-  harness. \`slack read <#channel|@user> [--since=2h]\`, \`slack search
-  "<query>"\`, \`slack post <#channel|@user> "<text>"\`,
+  harness. \`slack read <channel-name|conversationID> [--since=2h]\`, \`slack search
+  "<query>"\`, \`slack post <channel-name|conversationID> "<text>"\`,
   \`slack unpost <channelID> <ts>\`, \`slack channels\`.
 
   **ONLY WHEN ASKED.** Reading reaches the user's DMs and every private channel
@@ -97,29 +97,33 @@ list. Capabilities worth knowing:
   Sending under the user's name is right about where it lands and who owns it;
   it is not a claim that they typed it, and the reader is owed that.
 
-  **3 · SLACK IS A WORKSPACE CAPABILITY, AND IT FAILS CLOSED.** Read, search
-  and post alike: a workspace with Slack switched off cannot touch Slack at
-  all. Off is the default.
+  **3 · SLACK REQUIRES HUMAN APPROVAL.** Every workspace can request Slack;
+  the protected broker requires a passkey approval or an active timed grant.
+  Workspace settings never authorize Slack access.
 
-  **THERE IS NO TOKEN FOR YOU TO FIND.** The muxpad server holds the
-  credential; \`muxpad slack\` asks the server to act and never sees it. There
-  is no secrets file to read, no environment variable, and nothing \`curl\`
-  can do that this command cannot — if you are refused, going around is not
-  blocked by an oversight, it is blocked by not having the credential.
+  **APPROVAL IS INLINE AND AUTOMATIC.** Run the requested command and wait
+  for its final tool result. muxpad opens the approval dialog in this chat;
+  the command waits and continues after approval. Do not narrate the approval
+  process, ask the user to click the dialog, or end the task while it is pending.
+  Never claim a request is pending, approved, expired or sent without a tool
+  result establishing that state. A failed command is not a pending approval.
+  Bare channel names and #channel names both use an exact approved lookup.
+  Use exact @username for DMs (approval-controlled user lookup then DM open; no fuzzy match).
+  Also: \`slack user <@username|userID>\`, \`slack thread <channel|@user|ID> <ts>\`,
+  \`slack post <channel|@user|ID> "text" --thread=<ts>\`,
+  \`slack react <channel|@user|ID> <ts> <emoji> [--remove]\`,
+  \`slack edit <channel|@user|ID> <ts> "text"\`,
+  \`slack upload <channel|@user|ID> <file> [--text="message"] [--thread=ts]\`.
+  Edits are limited to the last 500 messages recorded as sent by muxpad. Uploads
+  snapshot at most 10 MiB; the exact content hash and destination are approved.
+  Missing Slack scopes require a token update, never a credentials fallback.
+  Never resubmit an uncertain send: it could duplicate a message.
 
-  **AND YOUR WORKSPACE IS NOT SOMETHING YOU DECLARE.** The server works out
-  which pane the call came from by walking the calling process's ancestry.
-  Setting \`MUXPAD_PANE_ID\` or \`MUXPAD_WORKSPACE_ID\` does nothing, and
-  neither does \`cd\` — a chat is often told where its files are rather than
-  started there.
-
-  If you are refused, **that is the system working**. Do not post from another
-  pane and do not try to install a token. Tell the user they were refused and
-  which workspace you are in; the switch is in the muxpad UI (the workspace
-  row's settings button), and it is theirs to throw, not yours.
-
-  Reading never needs the bot invited anywhere; posting as muxpad does
-  (\`/invite @muxpad\`), and the error says so when it bites.
+  **THERE IS NO SLACK TOKEN FOR YOU TO FIND.** The isolated broker holds it;
+  the CLI presents a server-issued pane proof, and the server checks workspace
+  access. Neither changing folders nor declaring a workspace grants access.
+  For an actual refusal, report the concrete error briefly. Do not switch
+  panes, change workspace permissions, or look for credentials to bypass it.
 
 <!--/cap:slack-->
 
@@ -595,6 +599,8 @@ export function agentInstructionsPath(dataDir: string): string {
  * retired; anything unrecognised is treated as the user's and kept.
  */
 export const SHIPPED_INSTRUCTIONS_DEFAULTS: readonly string[] = [
+  '2197738520e9f41112c88e04bdfd91363c72ab30076faf9aee98d3cca729aaba',
+  '908aa98f033d03911efcede2a89c7055e4f2dcad2a38d0ac7b31a894d04bdec8',
   '4e6713de01f8b9f5666f149cc297df7d54421e94ee51d8a420171014d6bbd7d7',
   'ea5747ded789e55db867340cd422059ac7c83eeb5c8c5aeb1b640e608814d242',
   '277aae4ac82196b5360b5d78570ec7b17cc907ea9cb7b588d199bb88985b2efb',
@@ -625,58 +631,20 @@ export function seedAgentInstructions(dataDir: string): void {
  * own. The generated half is muxpad's and comes back on the next boot; opting
  * out of THAT is not a thing you do by deleting a file.
  */
-/**
- * What one workspace adds to, or removes from, the universal instructions.
- *
- * Both halves exist because this function used to take a directory and nothing
- * else, so every agent everywhere received byte-identical text — including the
- * Slack section, in workspaces that may not use Slack. A chat was told it had
- * the company Slack and found out otherwise by trying.
- */
-export interface WorkspaceAgentContext {
-  /** Free text appended for agents in this workspace. */
-  instructions?: string | null;
-  /**
-   * Is the Slack capability on here? When false the whole Slack section is
-   * removed — not softened, removed. A capability a chat cannot use should not
-   * be described to it, because describing it is how an agent comes to try.
-   */
-  slack?: boolean;
-}
-
-/** Everything between the capability fences, inclusive. */
-function stripCapability(text: string, cap: string): string {
-  const open = `<!--cap:${cap}-->`;
-  const close = `<!--/cap:${cap}-->`;
-  const a = text.indexOf(open);
-  const b = text.indexOf(close);
-  if (a < 0 || b < 0 || b < a) return text;
-  return (text.slice(0, a) + text.slice(b + close.length)).replace(/\n{3,}/g, '\n\n');
-}
-
 /** …and the fences themselves, once the decision is made to keep a section. */
 function dropFences(text: string): string {
   return text.replace(/<!--\/?cap:[a-z-]+-->\n?/g, '');
 }
 
-export function readAgentInstructions(
-  dataDir: string = runnerDataDir(),
-  ws?: WorkspaceAgentContext,
-): string | null {
+export function readAgentInstructions(dataDir: string = runnerDataDir()): string | null {
   let generated: string | null = null;
   try {
     generated = readFileSync(agentInstructionsPath(dataDir), 'utf8');
   } catch {
     generated = null;
   }
-  if (generated) {
-    // DEFAULT OFF. `ws` undefined means nobody said, and for a capability gate
-    // "nobody said" has to mean no — a caller that has not been taught to pass
-    // the workspace must not silently hand out Slack.
-    if (!ws?.slack) generated = stripCapability(generated, 'slack');
-    generated = dropFences(generated);
-  }
-  const parts = [generated, ws?.instructions, readAgentNotes(dataDir)]
+  if (generated) generated = dropFences(generated);
+  const parts = [generated, readAgentNotes(dataDir)]
     .map((t) => t?.trim())
     .filter((t): t is string => !!t);
   return parts.length ? parts.join('\n\n') : null;

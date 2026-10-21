@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import '@xterm/xterm/css/xterm.css';
 import { decodeServerMessage, encodeInput, encodePing, encodeResize } from '@muxpad/shared';
 import { api } from '../api';
+import { browserTerminalFontSize, isBrowserZoomKey, useBrowserFontSize } from '../lib/browser-font';
 import { companionTextForImagePaste, splitClipboard } from '../lib/clipboard-detect';
 import { writeClipboard } from '../lib/clipboard-write';
 import { CursorScrollSession } from '../lib/cursor-scroll-session';
@@ -45,7 +46,6 @@ import {
   resolveTheme,
   systemPrefersDark,
   useResolvedTheme,
-  useSettings,
 } from '../settings';
 import './XtermPane.css';
 
@@ -151,7 +151,7 @@ export function XtermPane({
   paneActiveRef.current = paneActive;
   const onExitRef = useRef(onExit);
   onExitRef.current = onExit;
-  const settings = useSettings();
+  const fontSize = useBrowserFontSize();
   // The painted theme, not the stored one — see useResolvedTheme.
   const resolvedTheme = useResolvedTheme();
   const wsRef = useRef<WebSocket | null>(null);
@@ -178,13 +178,14 @@ export function XtermPane({
   // in place by the live-update effect below (mutating term.options), so this
   // effect deliberately does NOT depend on `settings` — recreating the
   // Terminal would drop scrollback and re-establish the WS attach. Initial
-  // font/theme is read from getSettings() at mount for the same reason.
+  // theme is read from getSettings(), and font size from the browser, at mount.
   // biome-ignore lint/correctness/useExhaustiveDependencies: `autoFocus` is an initial-mount intent, not a live setting — re-running on it would steal focus from whatever the user moved to since
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
-    const { fontSize, theme } = getSettings();
+    const { theme } = getSettings();
+    const fontSize = browserTerminalFontSize();
     const fontFamily = TERMINAL_FONT;
     // `theme` may be 'system'; the palette map is keyed by real themes only.
     const initialTheme = resolveTheme(theme, systemPrefersDark());
@@ -359,6 +360,8 @@ export function XtermPane({
       // Mobile hidden slots stay mounted but display:none — opening xterm
       // at 0×0 corrupts layout; defer until the pane slot is shown.
       if (isMobileLayout() && !paneActiveRef.current) return;
+      // Skip xterm's key handling without cancelling the browser's zoom action.
+      term.attachCustomKeyEventHandler((event) => !isBrowserZoomKey(event));
       term.open(container);
       opened = true;
       // Mobile: the terminal is a view/scroll/tap surface, not a typing
@@ -1750,12 +1753,12 @@ export function XtermPane({
     const fit = fitRef.current;
     if (!term || !fit) return;
     term.options.fontFamily = TERMINAL_FONT;
-    term.options.fontSize = settings.fontSize;
+    term.options.fontSize = fontSize;
     term.options.theme = themeFor(resolvedTheme);
     const timerIds: number[] = [];
     let disposed = false;
     void document.fonts
-      .load(`${settings.fontSize}px ${TERMINAL_FONT}`)
+      .load(`${fontSize}px ${TERMINAL_FONT}`)
       .catch(() => {
         // a system font that will not load is not recoverable here; refit anyway
       })
@@ -1786,7 +1789,7 @@ export function XtermPane({
       disposed = true;
       for (const id of timerIds) window.clearTimeout(id);
     };
-  }, [settings.fontSize, resolvedTheme]);
+  }, [fontSize, resolvedTheme]);
 
   return (
     <div

@@ -1,7 +1,7 @@
 // Run in a visible muxpad shell pane. Tool-free live login + resume smoke test.
 import { randomUUID } from 'node:crypto';
-import { query } from '../server/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs';
 import { AccountPool, accountEnv } from '../server/dist/claude-accounts/pool.js';
+import { query } from '../server/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs';
 const pool = AccountPool.open();
 const account = pool?.accounts().find((a) => a.id === (process.argv[2] ?? 'backup'));
 if (!account) throw new Error('Account not configured');
@@ -14,10 +14,19 @@ try {
     `Remember this marker: ${marker}. Reply with only that marker.`,
     'What marker did I ask you to remember? Reply with only that marker.',
   ].entries()) {
-    const session = query({ prompt, options: { env: accountEnv(account), model: 'haiku',
-      ...(index === 0 ? { sessionId: sid } : { resume: sid }),
-      tools: [], allowedTools: [], settingSources: [], maxTurns: 1, abortController: abort,
-    } });
+    const session = query({
+      prompt,
+      options: {
+        env: accountEnv(account),
+        model: 'haiku',
+        ...(index === 0 ? { sessionId: sid } : { resume: sid }),
+        tools: [],
+        allowedTools: [],
+        settingSources: [],
+        maxTurns: 1,
+        abortController: abort,
+      },
+    });
     let result = '';
     try {
       for await (const msg of session) {
@@ -26,9 +35,17 @@ try {
           result = msg.result;
         }
       }
-    } finally { session.close(); }
-    if (result.trim() !== marker) throw new Error(`Account probe did not return its marker (turn ${index + 1})`);
-    console.log(JSON.stringify({ account: account.id, session: sid, turn: index + 1, passed: true }));
+    } finally {
+      session.close();
+    }
+    if (result.trim() !== marker)
+      throw new Error(`Account probe did not return its marker (turn ${index + 1})`);
+    console.log(
+      JSON.stringify({ account: account.id, session: sid, turn: index + 1, passed: true }),
+    );
   }
   console.log('PASS: backup inference and persisted conversation resume');
-} finally { clearTimeout(timer); pool.close(); }
+} finally {
+  clearTimeout(timer);
+  pool.close();
+}

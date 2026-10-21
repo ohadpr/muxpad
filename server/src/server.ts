@@ -36,7 +36,6 @@ import { voiceRoutes } from './routes/voice.js';
 import { workspacesRoutes } from './routes/workspaces.js';
 import { sameOriginGuard } from './same-origin.js';
 import { readOrCreateSayKey } from './say-key.js';
-import { migrateLegacySlackEnv } from './slack-secrets.js';
 import type { TabActivity } from './tab-activity.js';
 import type { VoiceSessionManager } from './voice/VoiceSessionManager.js';
 
@@ -206,9 +205,6 @@ export function createApp(deps: AppDeps): Hono {
   setSayKey(theSayKey);
   app.get('/api/say/key', (c) => c.json({ key: theSayKey }));
 
-  // ONE explicit migration, here and nowhere else — a read path that deletes
-  // a file is how the author's own Slack token got destroyed by a unit test.
-  migrateLegacySlackEnv(resolved.dataDir);
   app.route('/api/slack', slackRoutes({ db: resolved.db, dataDir: resolved.dataDir }));
   app.route('/api/tabs', tabsRoutes(resolved));
   app.route('/api/tabs', panesTabScopedRoutes(resolved));

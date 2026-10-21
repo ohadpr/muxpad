@@ -1,78 +1,125 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { type PushState, disablePush, enablePush, getPushState, sendTestPush } from '../lib/push';
-import { useDismissable } from '../lib/use-dismissable';
 import { THEME_CHOICES, type ThemeChoice, updateSettings, useSettings } from '../settings';
+import { SlackPasskeySettings } from './SlackPasskeySettings';
 import './SettingsMenu.css';
 
 export function SettingsMenu() {
   const settings = useSettings();
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement | null>(null);
-
-  useDismissable(open, ref, () => setOpen(false));
+  const [openedOnce, setOpenedOnce] = useState(false);
+  const dialog = useRef<HTMLDialogElement | null>(null);
+  const trigger = useRef<HTMLButtonElement | null>(null);
+  const [section, setSection] = useState<'general' | 'integrations'>('general');
+  useEffect(() => {
+    if (!open) return;
+    const el = dialog.current;
+    el?.showModal();
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      el?.close();
+      document.body.style.overflow = previousOverflow;
+      trigger.current?.focus();
+    };
+  }, [open]);
 
   return (
-    <div className="settings-wrap" ref={ref}>
+    <div className="settings-wrap">
       <button
+        ref={trigger}
+        aria-haspopup="dialog"
+        aria-expanded={open}
         type="button"
         className="icon-btn"
         title="Settings"
         aria-label="Settings"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          setOpenedOnce(true);
+          setOpen((v) => !v);
+        }}
       >
         <SvgGear />
       </button>
-      {open && (
-        <div className="settings-popover">
-          <div className="settings-row">
-            <label htmlFor="theme">Theme</label>
-            <select
-              id="theme"
-              value={settings.theme}
-              onChange={(e) => updateSettings({ theme: e.target.value as ThemeChoice })}
-            >
-              {THEME_CHOICES.map((t) => (
-                <option key={t.value} value={t.value}>
-                  {t.label}
-                </option>
-              ))}
-            </select>
-          </div>
+      {openedOnce &&
+        createPortal(
+          // biome-ignore lint/a11y/useKeyWithClickEvents: Native dialog provides Escape; this click only dismisses its backdrop.
+          <dialog
+            ref={dialog}
+            className="settings-dialog"
+            aria-labelledby="settings-title"
+            onCancel={(event) => {
+              event.preventDefault();
+              setOpen(false);
+            }}
+            onClick={(event) => {
+              if (event.target === event.currentTarget) {
+                const bounds = event.currentTarget.getBoundingClientRect();
+                if (
+                  event.clientX < bounds.left ||
+                  event.clientX > bounds.right ||
+                  event.clientY < bounds.top ||
+                  event.clientY > bounds.bottom
+                )
+                  setOpen(false);
+              }
+            }}
+          >
+            <header className="settings-chrome">
+              <h2 id="settings-title">Settings</h2>
+              <button
+                type="button"
+                className="settings-close"
+                aria-label="Close settings"
+                onClick={() => setOpen(false)}
+              >
+                ×
+              </button>
+            </header>
+            <div className="settings-layout">
+              <aside className="settings-sidebar">
+                <nav aria-label="Settings sections">
+                  {(['general', 'integrations'] as const).map((item) => (
+                    <button
+                      key={item}
+                      type="button"
+                      aria-current={section === item ? 'page' : undefined}
+                      onClick={() => setSection(item)}
+                    >
+                      {item.charAt(0).toUpperCase() + item.slice(1)}
+                    </button>
+                  ))}
+                </nav>
+              </aside>
+              <div className="settings-body">
+                <header className="settings-heading">
+                  <h2>{section.charAt(0).toUpperCase() + section.slice(1)}</h2>
+                </header>
+                <section hidden={section !== 'general'} aria-label="General settings">
+                  <div className="settings-row">
+                    <label htmlFor="theme">Theme</label>
+                    <select
+                      id="theme"
+                      value={settings.theme}
+                      onChange={(e) => updateSettings({ theme: e.target.value as ThemeChoice })}
+                    >
+                      {THEME_CHOICES.map((t) => (
+                        <option key={t.value} value={t.value}>
+                          {t.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
 
-          <div className="settings-row">
-            <label htmlFor="font-size">Font size</label>
-            <div className="settings-stepper">
-              <button
-                type="button"
-                onClick={() => updateSettings({ fontSize: Math.max(8, settings.fontSize - 1) })}
-              >
-                −
-              </button>
-              <input
-                id="font-size"
-                type="number"
-                min={8}
-                max={32}
-                value={settings.fontSize}
-                onChange={(e) => {
-                  const n = Number(e.target.value);
-                  if (Number.isFinite(n) && n >= 8 && n <= 32) {
-                    updateSettings({ fontSize: n });
-                  }
-                }}
-              />
-              <button
-                type="button"
-                onClick={() => updateSettings({ fontSize: Math.min(32, settings.fontSize + 1) })}
-              >
-                +
-              </button>
+                  <PushRow />
+                </section>
+                <SlackPasskeySettings active={open} section={section} />
+              </div>
             </div>
-          </div>
-
-          <PushRow />
-        </div>
-      )}
+          </dialog>,
+          document.body,
+        )}
     </div>
   );
 }

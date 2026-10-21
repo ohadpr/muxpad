@@ -35,7 +35,7 @@
   /* Sans, dim, light — reads like a note heading, not machined chrome. */
   color: var(--fg-dim);
   font-family: var(--ui-font);
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 550;
   text-align: left;
   cursor: pointer;
@@ -48,7 +48,7 @@
 .agent-block-chevron {
   color: var(--fg-faint);
   flex: 0 0 auto;
-  font-size: 11px;
+  font-size: 0.6875rem;
 }
 .agent-block-title {
   overflow: hidden;
@@ -59,7 +59,7 @@
 .agent-block-label {
   color: var(--fg-faint);
   font-weight: 500;
-  font-size: 12px;
+  font-size: 0.75rem;
   letter-spacing: 0.03em;
 }
 
@@ -71,7 +71,7 @@
 }
 .agent-block-summarizing {
   color: var(--fg-faint);
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-family: var(--chrome-font);
 }
 /* Remove is present but recessive — surfaces on hover so it doesn't add chrome. */
@@ -80,7 +80,7 @@
   background: transparent;
   color: var(--fg-faint);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 0.75rem;
   padding: 2px 6px;
   border-radius: 6px;
   opacity: 0;
@@ -110,7 +110,7 @@
   background: transparent;
   color: var(--fg-dim);
   font-family: var(--ui-font);
-  font-size: 14px;
+  font-size: 0.875rem;
   line-height: 1.55;
   padding: 2px 0 4px;
   cursor: pointer;
@@ -147,7 +147,7 @@
   border-radius: 6px;
   padding: 3px 8px;
   font-family: var(--chrome-font);
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--fg-dim);
   background: var(--bg);
 }

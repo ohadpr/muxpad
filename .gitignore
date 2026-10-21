@@ -22,7 +22,10 @@ test-results/
 server/undefined/
 
 # Standalone credential broker dependencies
-broker/node_modules/
+# No trailing slash: on this machine it is a SYMLINK into a worktree, and a
+# trailing slash matches only a real directory — so `git add -A` staged the
+# link itself, which points at somebody's home.
+broker/node_modules
 
 # THIS MACHINE'S BROKER RELEASES, not source. It pins the release hashes and
 # the tailnet `origin` of the host they were built for — a real machine name

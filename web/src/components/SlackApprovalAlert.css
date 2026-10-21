@@ -1,0 +1,54 @@
+.slack-approval-alert {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  color: var(--fg);
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  font: 0.75rem / 1.4 system-ui;
+}
+.slack-approval-alert strong {
+  font-weight: 500;
+}
+.slack-approval-alert > .slack-approval-review {
+  margin-left: auto;
+}
+.slack-approval-alert .slack-approval-review {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+  min-height: 36px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  border: 0;
+  font: inherit;
+}
+.slack-approval-alert .slack-approval-review:hover {
+  background: color-mix(in srgb, var(--accent) 86%, var(--fg));
+}
+.slack-approval-alert small {
+  color: var(--fg-dim);
+  font-size: 0.6875rem;
+}
+
+.slack-approval-alert > svg {
+  flex-shrink: 0;
+}
+
+/* Normal flow inside the measured composer wrap; never overlays the transcript. */
+.chat-composer-wrap > .slack-approval-alert {
+  max-width: 768px;
+  margin: 0 auto 8px;
+  flex-wrap: wrap;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.chat-composer-wrap > .slack-approval-alert strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

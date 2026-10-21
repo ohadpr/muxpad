@@ -1,15 +1,10 @@
 .settings-wrap {
-  position: relative;
   height: 100%;
   display: inline-flex;
 }
-
-/* Gear plate — fills the bar's height, hairline divider on its leading
-   edge so it joins the right-side stack of plates (build wordmark, etc).
-   No border-radius, no padding-box; it's a plate, not a floating button. */
 .icon-btn {
   background: transparent;
-  border: none;
+  border: 0;
   border-left: 1px solid var(--border);
   width: 36px;
   height: 100%;
@@ -18,135 +13,578 @@
   justify-content: center;
   color: var(--fg-faint);
   cursor: pointer;
-  transition: color 80ms ease, background 80ms ease;
 }
-.icon-btn:hover {
-  color: var(--fg);
-  background: var(--bg-hover);
-}
+.icon-btn:hover,
 .icon-btn:focus-visible {
-  outline: none;
-  background: var(--bg-hover);
   color: var(--fg);
+  background: var(--bg-hover);
 }
-
-/* Settings popover — drops from the bar's bottom hairline, anchored right.
-   Same mono-font interior and corner treatment as the workspace dropdown,
-   mirrored so the sharp top-RIGHT corner aligns with the gear plate above. */
-.settings-popover {
-  position: absolute;
-  top: 100%;
-  right: 0;
+/* Settings are reading and controls, so use the app's proportional UI face.
+   Accent is reserved for selection and the next action. */
+.settings-dialog {
+  --settings-muted: color-mix(in srgb, var(--fg) 74%, var(--bg-elev));
+  --settings-line: color-mix(in srgb, var(--fg) 14%, var(--bg-elev));
+  --settings-soft: color-mix(in srgb, var(--fg) 3%, var(--bg-elev));
+  width: min(860px, calc(100vw - 40px));
+  height: min(700px, calc(100dvh - 40px));
+  max-width: none;
+  max-height: calc(100dvh - 40px);
+  padding: 0;
+  overflow: hidden;
+  color: var(--fg);
   background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-top: none;
-  border-radius: 6px 0 6px 6px;
-  padding: 14px;
-  width: 280px;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
-  z-index: 1000;
+  border: 1px solid var(--settings-line);
+  border-radius: 14px;
+  box-shadow: 0 24px 80px #0003;
+  font: 0.875rem / 1.5 var(--ui-font);
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+.settings-dialog[open] {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  font-family: var(--chrome-font);
 }
-
+.settings-dialog::backdrop {
+  background: #17132170;
+  backdrop-filter: blur(3px);
+}
+.settings-dialog * {
+  box-sizing: border-box;
+}
+.settings-dialog [hidden] {
+  display: none !important;
+}
+.settings-chrome {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px 8px 24px;
+  border-bottom: 1px solid var(--settings-line);
+}
+.settings-chrome h2 {
+  margin: 0;
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+.settings-layout {
+  display: grid;
+  grid-template-columns: 172px minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.settings-sidebar {
+  padding: 20px 10px;
+  background: var(--settings-soft);
+  border-right: 1px solid var(--settings-line);
+  overflow: auto;
+}
+.settings-sidebar nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.settings-dialog button,
+.settings-dialog input,
+.settings-dialog select {
+  font: inherit;
+}
+.settings-dialog button,
+.settings-dialog select,
+.settings-dialog input {
+  min-height: 36px;
+  padding: 7px 11px;
+  color: var(--fg);
+  background: var(--bg-elev);
+  border: 1px solid var(--settings-line);
+  border-radius: 7px;
+}
+.settings-dialog button {
+  cursor: pointer;
+  font-weight: 500;
+}
+.settings-dialog button:hover:not(:disabled) {
+  background: var(--settings-soft);
+}
+.settings-dialog button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.settings-dialog :focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.settings-dialog .settings-close {
+  display: grid;
+  place-items: center;
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  font: 1.5rem / 1 var(--ui-font);
+  color: var(--settings-muted);
+  background: transparent;
+  border: 0;
+  touch-action: manipulation;
+}
+.settings-sidebar nav button {
+  text-align: left;
+  padding: 9px 12px;
+  min-height: 40px;
+  font-size: 0.8125rem;
+  color: var(--settings-muted);
+  background: transparent;
+  border: 0;
+}
+.settings-sidebar nav button[aria-current] {
+  color: var(--fg);
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  font-weight: 600;
+}
+.settings-body {
+  min-width: 0;
+  min-height: 0;
+  padding: 28px 32px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.settings-heading h2 {
+  margin: 0 0 24px;
+  font-size: 1.25rem;
+  line-height: 1.3;
+  font-weight: 600;
+  letter-spacing: -.35px;
+}
 .settings-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 16px;
+  padding: 18px 0;
+  border-bottom: 1px solid var(--settings-line);
 }
-
+.settings-row:last-child {
+  border-bottom: 0;
+}
+.settings-row p,
+.settings-card p {
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--settings-muted);
+  margin: 4px 0 0;
+}
 .settings-row label {
-  font-size: var(--chrome-size);
-  color: var(--fg-dim);
+  font-weight: 500;
 }
-
-.settings-stepper {
-  display: inline-flex;
-  align-items: center;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  overflow: hidden;
-}
-.settings-stepper button {
-  background: transparent;
-  border: none;
-  width: 24px;
-  height: 24px;
-  font-size: 14px;
-  color: var(--fg-dim);
-  cursor: pointer;
-}
-.settings-stepper button:hover {
-  background: var(--bg-hover);
-  color: var(--fg);
-}
-.settings-stepper input {
-  width: 38px;
-  text-align: center;
-  background: transparent;
-  border: none;
-  border-left: 1px solid var(--border);
-  border-right: 1px solid var(--border);
-  color: var(--fg);
-  font-size: 12px;
-  padding: 0;
-  height: 24px;
-  appearance: textfield;
-  -moz-appearance: textfield;
-}
-.settings-stepper input::-webkit-outer-spin-button,
-.settings-stepper input::-webkit-inner-spin-button {
-  -webkit-appearance: none;
-  margin: 0;
-}
-
-.settings-popover select {
-  background: var(--bg);
-  color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 4px 6px;
-  font-family: var(--chrome-font);
-  font-size: var(--chrome-size-sm);
-  flex: 1;
-  max-width: 180px;
-}
-
-/* Form controls inside the popover inherit chrome-font from the popover
-   itself wouldn't reach <button>/<input>/<select> — those use UA defaults
-   without explicit family. Force the cascade where it matters. */
-.settings-popover button,
-.settings-popover input {
-  font-family: var(--chrome-font);
-}
-
-/* Push-notification row: enable/disable + test buttons, styled like the
-   stepper's bordered plates; the note explains why push is unavailable. */
 .settings-push-actions {
   display: inline-flex;
+  align-items: center;
   gap: 6px;
 }
-.settings-push-actions button {
-  background: var(--bg);
-  color: var(--fg-dim);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 3px 10px;
-  font-size: var(--chrome-size-sm);
-  cursor: pointer;
+.settings-note {
+  margin: 16px 0 0;
+  color: var(--settings-muted);
+  font-size: 0.75rem;
+  line-height: 1.5;
 }
-.settings-push-actions button:hover:not(:disabled) {
-  background: var(--bg-hover);
+.settings-card {
+  padding: 20px;
+  border: 1px solid var(--settings-line);
+  border-radius: 10px;
+}
+.settings-service {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.settings-service svg {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+}
+.settings-service strong {
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+.settings-service p {
+  margin: 2px 0 0;
+}
+.settings-badge {
+  margin-left: auto;
+  color: var(--settings-muted);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+.settings-badge::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  vertical-align: 1px;
+}
+.settings-dialog .settings-text-button {
+  min-height: 36px;
+  padding: 6px 0;
+  border: 0;
+  background: transparent;
+  color: var(--settings-muted);
+  font-size: 0.75rem;
+}
+.settings-dialog .settings-text-button:hover:not(:disabled) {
+  color: var(--fg);
+  background: transparent;
+  text-decoration: underline;
+}
+.settings-details {
+  margin-top: 20px;
+  border-top: 1px solid var(--settings-line);
+  padding-top: 12px;
+  color: var(--settings-muted);
+  font-size: 0.8125rem;
+}
+.settings-details summary {
+  cursor: pointer;
+  padding: 6px 0;
+  color: var(--settings-muted);
+}
+.settings-details p {
+  margin: 8px 0;
+}
+.settings-details dl {
+  margin: 10px 0;
+}
+.settings-details dl > div {
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  margin-top: 8px;
+}
+.settings-details dt {
+  color: var(--settings-muted);
+}
+.settings-details dd {
+  margin: 0;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.settings-details code {
+  font: 0.75rem var(--chrome-font);
+}
+.settings-steps {
+  list-style: none;
+  padding: 0;
+  margin: 20px 0 0;
+}
+.settings-steps > li {
+  padding: 16px 0;
+  border-top: 1px solid var(--settings-line);
+}
+.settings-steps > li > strong {
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.settings-enrollment {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 14px 0 10px;
+  font-size: 0.8125rem;
+}
+.settings-enrollment input {
+  width: 100%;
+  min-width: 0;
+}
+.settings-passkey pre {
+  max-width: 100%;
+  max-height: 220px;
+  overflow: auto;
+  padding: 12px;
+  background: var(--settings-soft);
+  border-radius: 7px;
+  font: 0.6875rem / 1.5 var(--chrome-font);
+}
+.settings-card .settings-note {
+  font-size: 0.75rem;
+}
+.settings-card .settings-row {
+  align-items: flex-start;
+}
+.settings-card .settings-row strong {
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.settings-card ul {
+  padding-left: 18px;
+  font-size: 0.8125rem;
+}
+.settings-error {
+  /* Set for the same reason as the rule above: this is rendered by an
+     `<output>` now, which is inline unless told otherwise, and the padding
+     and border below assume a block. */
+  display: block;
+  color: var(--fg);
+  border-left: 2px solid var(--danger, var(--accent));
+  padding: 8px 12px;
+  margin-top: 16px;
+  font-size: 0.8125rem;
+}
+@media (max-width: 700px) {
+  .settings-dialog {
+    width: calc(100vw - 16px);
+    height: calc(100dvh - 16px);
+    max-height: calc(100dvh - 16px);
+    border-radius: 12px;
+  }
+  .settings-chrome {
+    padding: 6px 8px 6px 18px;
+  }
+  .settings-dialog .settings-close {
+    flex-basis: 44px;
+    width: 44px;
+    height: 44px;
+  }
+  .settings-layout {
+    display: flex;
+    flex-direction: column;
+  }
+  .settings-sidebar {
+    flex: 0 0 auto;
+    padding: 6px 10px;
+    overflow: visible;
+    border-right: 0;
+    border-bottom: 1px solid var(--settings-line);
+  }
+  .settings-sidebar nav {
+    flex-direction: row;
+    gap: 4px;
+  }
+  .settings-sidebar nav button {
+    flex: 1;
+    text-align: center;
+    padding: 8px 4px;
+    min-height: 44px;
+  }
+  .settings-body {
+    flex: 1;
+    padding: 22px 18px;
+  }
+  .settings-heading h2 {
+    font-size: 1.1875rem;
+    margin-bottom: 20px;
+  }
+  .settings-dialog button,
+  .settings-dialog select,
+  .settings-dialog input {
+    min-height: 44px;
+  }
+  .settings-dialog select,
+  .settings-dialog input {
+    font-size: 1rem;
+    max-width: 100%;
+  }
+  .settings-row {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .settings-card {
+    padding: 16px;
+  }
+  .settings-service {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .settings-badge {
+    margin-left: 0;
+  }
+  .settings-details dl > div {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+}
+
+.settings-card .settings-access {
+  padding: 0;
+  border-bottom: 0;
+}
+
+.settings-setup {
+  border-top: 1px solid var(--border);
+  margin-top: 16px;
+  padding-top: 16px;
+}
+.settings-checklist {
+  padding-left: 22px;
+  display: grid;
+  gap: 14px;
+}
+.settings-checklist li {
+  padding-left: 2px;
+}
+.settings-setup-command {
+  margin: 16px 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  min-width: 0;
+}
+.settings-setup-command pre {
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre;
+  font-size: 12px;
+}
+.settings-setup-command code,
+.settings-setup code {
+  overflow-wrap: anywhere;
+}
+
+/* Integration hierarchy: status, next action, then optional diagnostics. */
+.settings-dialog .settings-card {
+  background: color-mix(in srgb, var(--accent) 3%, var(--bg-elev));
+  border-color: color-mix(in srgb, var(--accent) 16%, var(--bg-elev));
+  padding: 20px;
+}
+.settings-service {
+  margin-bottom: 12px;
+}
+.settings-setup {
+  border-top: 0;
+  margin-top: 0;
+  padding-top: 0;
+}
+.settings-card .settings-setup-status {
+  align-items: center;
+  padding: 4px 0 0;
+  border-bottom: 0;
+  gap: 12px;
+}
+.settings-card .settings-setup-status strong {
+  font-size: .875rem;
+  line-height: 1.4;
+}
+.settings-setup-status > div {
+  min-width: 0;
+}
+/* The read-only test: its result line, then its button, then air before the
+   repair card below so the two controls never touch. */
+.settings-setup-test {
+  margin: 0 0 20px;
+}
+.settings-card .settings-setup-test > p:first-child {
+  margin: 2px 0 12px;
+}
+/* `<output>`, not `p[role="status"]`: the status lines became real output
+   elements (role=status is implicit on them, and biome's useSemanticElements
+   asks for the element over the role). `<output>` is INLINE by default, so it
+   also has to be told it is a block or the margins below do nothing. */
+.settings-card .settings-setup-test > output:not(.settings-error) {
+  display: block;
+  margin: 10px 0 0;
+}
+.settings-setup-test > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.settings-setup-status > button {
+  flex-shrink: 0;
+  font-size: .75rem;
+  min-height: 32px;
+  padding: 5px 9px;
+  background: transparent;
+}
+.settings-setup-command {
+  margin: 0 0 16px;
+  padding: 16px;
+  background: var(--bg-elev);
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--bg-elev));
+  border-radius: 10px;
+  box-shadow: 0 2px 8px #00000005;
+}
+.settings-setup-command > summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: .8125rem;
   color: var(--fg);
 }
-.settings-push-actions button:disabled {
-  opacity: 0.5;
-  cursor: default;
+.settings-setup-command > p {
+  margin: 8px 0 12px;
 }
-.settings-note {
-  font-size: var(--chrome-size-sm);
-  color: var(--fg-faint);
+.settings-dialog .settings-primary {
+  color: var(--bg-elev);
+  background: var(--fg);
+  border-color: var(--fg);
+  padding: 8px 14px;
+  min-height: 40px;
+}
+.settings-dialog .settings-primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--fg) 85%, var(--accent));
+}
+.settings-setup-command > details {
+  margin-top: 12px;
+}
+.settings-setup-command > details > summary {
+  cursor: pointer;
+  font-size: .75rem;
+  color: var(--settings-muted);
+}
+.settings-setup-command > p:last-child {
+  font-size: .75rem;
+  margin: 10px 0 0;
+}
+.settings-setup .settings-details {
+  margin: 0;
+  padding: 7px 0;
+  border-top: 1px solid var(--settings-line);
+}
+.settings-setup .settings-details > summary {
+  min-height: 32px;
+}
+.settings-card .settings-access {
+  margin-top: 0;
+  padding: 12px 0;
+  border-top: 1px solid var(--settings-line);
+  align-items: center;
+}
+.settings-access > div {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.settings-card .settings-access p {
+  margin: 0;
+}
+.settings-card > .settings-details {
+  margin-top: 0;
+  padding-top: 7px;
+}
+@media (max-width: 700px) {
+  .settings-dialog .settings-card {
+    padding: 14px;
+  }
+  .settings-card .settings-setup-status {
+    flex-wrap: nowrap;
+  }
+  .settings-setup-status > button {
+    min-height: 44px;
+  }
+  .settings-dialog .settings-primary {
+    min-height: 44px;
+    width: 100%;
+  }
+  .settings-setup-command {
+    padding: 14px;
+  }
+  .settings-setup .settings-details > summary {
+    min-height: 44px;
+    display: list-item;
+    padding: 11px 0;
+  }
 }

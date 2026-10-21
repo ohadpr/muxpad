@@ -18,6 +18,7 @@ import { applyModeToStartupCmd, modeFromStartupCmd } from '../agent-modes.js';
 import { agentStartupCmd } from '../agent-tab.js';
 import { agentPaneHasMessages } from '../chat/has-messages.js';
 import type { EventBus } from '../events.js';
+import { withPaneKey } from '../pane-key.js';
 import { announceProvision, provisionPane, setProvisionError } from '../pane-provision.js';
 import { queuePaneKill } from '../pane-reaper.js';
 import { agentCwd, hasProjectContext } from '../project-root.js';
@@ -728,7 +729,7 @@ export function panesScopedRoutes(deps: {
         shell: p.shell ?? defaultShell,
         startup_cmd: p.startup_cmd,
         cwd: safeCwd(p.cwd),
-        env: p.env,
+        env: withPaneKey(p.env, p.id),
         tab_id: p.tab_id,
         ...(workspaceId !== undefined ? { workspace_id: workspaceId } : {}),
       });
@@ -762,7 +763,7 @@ export function panesScopedRoutes(deps: {
       shell: p.shell ?? defaultShell,
       startup_cmd: p.startup_cmd,
       cwd: safeCwd(p.cwd),
-      env: p.env,
+      env: withPaneKey(p.env, p.id),
       tab_id: p.tab_id,
       attempts: 1,
       ...(workspaceId !== undefined ? { workspace_id: workspaceId } : {}),
@@ -970,7 +971,7 @@ export function panesScopedRoutes(deps: {
         shell: p.shell ?? defaultShell,
         startup_cmd: startupCmd,
         cwd: safeCwd(nextCwd),
-        env: p.env,
+        env: withPaneKey(p.env, p.id),
         tab_id: p.tab_id,
         ...(workspaceId !== undefined ? { workspace_id: workspaceId } : {}),
       });
@@ -1039,7 +1040,7 @@ export function panesScopedRoutes(deps: {
         shell: p.shell ?? defaultShell,
         startup_cmd: null,
         cwd: safeCwd(p.cwd),
-        env: p.env,
+        env: withPaneKey(p.env, p.id),
         tab_id: p.tab_id,
         ...(workspaceId !== undefined ? { workspace_id: workspaceId } : {}),
       });
@@ -1158,7 +1159,7 @@ export function panesScopedRoutes(deps: {
         shell: p.shell ?? defaultShell,
         startup_cmd: startupCmd,
         cwd: dir,
-        env: p.env,
+        env: withPaneKey(p.env, p.id),
         tab_id: p.tab_id,
         ...(workspaceId !== undefined ? { workspace_id: workspaceId } : {}),
       });

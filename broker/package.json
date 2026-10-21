@@ -1,0 +1,15 @@
+{
+  "name": "muxpad-approval-broker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test *.test.mjs",
+    "start": "node main.mjs"
+  },
+  "dependencies": {
+    "@simplewebauthn/server": "13.3.3"
+  },
+  "devDependencies": {
+    "@levischuck/tiny-cbor": "0.2.11"
+  }
+}

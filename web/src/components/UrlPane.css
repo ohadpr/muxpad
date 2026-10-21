@@ -26,7 +26,7 @@
   background: var(--bg-active, rgba(0, 0, 0, 0.35));
   color: var(--fg, #c0caf5);
   font-family: var(--chrome-font, ui-sans-serif, system-ui, sans-serif);
-  font-size: 13px;
+  font-size: 0.8125rem;
   outline: none;
 }
 
@@ -40,7 +40,7 @@
   background: transparent;
   color: var(--fg-dim, #a9b1d6);
   font-family: var(--chrome-font, ui-sans-serif, system-ui, sans-serif);
-  font-size: 13px;
+  font-size: 0.8125rem;
   text-align: left;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -61,7 +61,7 @@
   border-radius: 6px;
   background: transparent;
   color: var(--fg-faint, #565f89);
-  font-size: 16px;
+  font-size: 1rem;
   line-height: 1;
   cursor: pointer;
 }
@@ -75,7 +75,7 @@
   margin: 0;
   padding: 4px 12px 6px;
   color: var(--danger, #f7768e);
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 .url-pane-empty {
@@ -91,13 +91,13 @@
 .url-pane-empty-title {
   margin: 0;
   color: var(--fg-dim, #a9b1d6);
-  font-size: 15px;
+  font-size: 0.9375rem;
   font-weight: 600;
 }
 .url-pane-empty-hint {
   margin: 0;
   color: var(--fg-faint, #565f89);
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 .url-pane iframe {

@@ -95,7 +95,7 @@ function themeBlock(surface: string): string {
   // and scrollbars inside a card match the card they are in.
   return `:root{${vars};color-scheme:${cardColorScheme(surface)}}
 html,body{margin:0;background:${surface};color:var(--fg);
-  font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
+  font:0.875rem/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
 /* The same inset the text and markdown cards have, so a card that styles
    nothing still sits properly in its frame instead of running edge to edge.
    A DEFAULT, not a rule: an author who wants the full bleed sets

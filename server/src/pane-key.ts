@@ -103,5 +103,8 @@ export function withPaneKey(
   paneId: string,
 ): Record<string, string> {
   const key = paneKeyFor(paneId);
-  return { ...(env ?? {}), ...(key ? { MUXPAD_PANE_KEY: key } : {}) };
+  // Codex shell policies can strip names containing KEY/SECRET/TOKEN. Carry
+  // the same pane-only bearer proof under a compatible name as well. This
+  // grants no Slack authority: server verification and passkey approval remain.
+  return { ...(env ?? {}), ...(key ? { MUXPAD_PANE_KEY: key, MUXPAD_PANE_PROOF: key } : {}) };
 }

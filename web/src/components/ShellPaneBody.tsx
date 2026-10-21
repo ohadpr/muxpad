@@ -5,6 +5,7 @@ import { type LivenessReason, isMixedContentUrl, probeUrlLive } from '../lib/fac
 import { isSelfOriginUrl, setPaneFace, usePaneFace } from '../lib/pane-face';
 import { initialWebFaceHealth, stepWebFaceHealth, webDeadMessage } from '../lib/web-face-health';
 import { ChatPane } from './ChatPane';
+import { SlackApprovalAlert } from './SlackApprovalAlert';
 import { XtermPane } from './XtermPane';
 import './ShellPaneBody.css';
 
@@ -146,7 +147,13 @@ export function ShellPaneBody({
   }, [showWeb, url, pane.id]);
 
   return (
-    <div className="shell-pane-body">
+    <div
+      className="shell-pane-body"
+      data-slack-shell-pane={pane.id}
+      data-slack-active={paneActive}
+      data-slack-face={showWeb ? 'web' : showChat ? 'chat' : 'terminal'}
+    >
+      {paneActive && !showChat && !showWeb && <SlackApprovalAlert key={pane.id} paneId={pane.id} />}
       <div className="shell-pane-face" hidden={showWeb || showChat}>
         <XtermPane
           paneId={pane.id}

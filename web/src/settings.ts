@@ -61,7 +61,6 @@ const THEME_ALIASES: Record<string, Theme> = {
 };
 
 export interface Settings {
-  fontSize: number;
   theme: ThemeChoice;
   // Persisted width of the desktop sidebar. The upper bound is enforced live
   // while dragging (never wider than the longest tab name + its status/close
@@ -85,7 +84,6 @@ export const SIDENAV_MIN_WIDTH = 160;
 export const SIDENAV_MAX_WIDTH = 640;
 
 const DEFAULTS: Settings = {
-  fontSize: 14,
   // System by default: it is the option most people want, and it is the one
   // pair in this list built to be flipped between.
   theme: 'system',
@@ -131,7 +129,6 @@ function read(): Settings {
     if (!raw) return DEFAULTS;
     const parsed = JSON.parse(raw) as Partial<Settings>;
     return {
-      fontSize: typeof parsed.fontSize === 'number' ? parsed.fontSize : DEFAULTS.fontSize,
       theme: readChoice(parsed),
       sidebarWidth:
         typeof parsed.sidebarWidth === 'number' && Number.isFinite(parsed.sidebarWidth)

@@ -149,7 +149,7 @@ describe('the sheet’s search — the ⌘K palette — does not zoom the page',
     const flat = CSS.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\s+/g, ' ');
     const media = flat.slice(flat.indexOf('@media (max-width: 640px)'));
     const body = media.match(/\.cmdk-input \{([^}]*)\}/)?.[1] ?? '';
-    expect(Number(body.match(/font-size:\s*(\d+)px/)?.[1])).toBeGreaterThanOrEqual(16);
+    expect(Number(body.match(/font-size:\s*([\d.]+)rem/)?.[1])).toBeGreaterThanOrEqual(1);
   });
 });
 

@@ -65,7 +65,7 @@
   border-radius: 10px;
   background: var(--chat-elev);
   font-family: var(--chrome-font);
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--chat-dim);
 }
 

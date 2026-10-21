@@ -19,7 +19,6 @@ import type { ChatEvent } from '@muxpad/shared';
 import { readAgentInstructions, wrapAgentInstructions } from '../../agent-instructions.js';
 import { appendTranscriptEvent, migrateTranscript } from '../../chat/TranscriptReader.js';
 import { codexHome, readCodexDefaultModel, readCodexModels } from '../../codex-models.js';
-import { workspaceAgentContextSync } from '../workspace-context.js';
 
 // Provider ids we adopt as the transcript-log filename + hello sid must satisfy
 // the server's charset gate, or the hello is rejected and the pane goes dark.
@@ -306,11 +305,7 @@ export function createCodexBackend(
     // Agent mode is by definition the harness exactly as it ships.
     const finalPrompt = resuming
       ? prompt
-      : withSessionPreamble(
-          prompt,
-          readAgentInstructions(undefined, workspaceAgentContextSync()),
-          null,
-        );
+      : withSessionPreamble(prompt, readAgentInstructions(), null);
     const head = resuming ? ['exec', 'resume', sessionRef as string] : ['exec'];
     const common = [
       '--json',

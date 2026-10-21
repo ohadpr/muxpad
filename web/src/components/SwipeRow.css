@@ -121,7 +121,7 @@
   justify-content: center;
   gap: 3px;
   font-family: inherit;
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   font-weight: 600;
   /* White on both fills: these are solid action blocks, not chrome, and they
      must not restyle themselves per theme (the meaning is fixed). */
@@ -131,7 +131,7 @@
   -webkit-tap-highlight-color: transparent;
 }
 .swiperow-action-glyph {
-  font-size: 15px;
+  font-size: 0.9375rem;
   line-height: 1;
 }
 /* Pin is a slate blue-grey, not the theme accent: the accent already means

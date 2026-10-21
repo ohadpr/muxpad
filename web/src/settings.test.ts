@@ -7,20 +7,20 @@ describe('settings', () => {
   });
 
   it('persists updates to localStorage', () => {
-    updateSettings({ theme: 'dracula', fontSize: 18 });
+    updateSettings({ theme: 'dracula', sidebarWidth: 320 });
     const raw = localStorage.getItem('muxpad.settings.v1');
     expect(raw).toContain('"theme":"dracula"');
-    expect(raw).toContain('"fontSize":18');
+    expect(raw).toContain('"sidebarWidth":320');
   });
 
   it('round-trips settings through localStorage', async () => {
-    updateSettings({ theme: 'dracula', fontSize: 18 });
+    updateSettings({ theme: 'dracula', sidebarWidth: 320 });
     vi.resetModules();
     // re-import after seeding localStorage so module-init's read() runs against the seeded blob
     const { getSettings: get } = await import('./settings');
     const s = get();
     expect(s.theme).toBe('dracula');
-    expect(s.fontSize).toBe(18);
+    expect(s.sidebarWidth).toBe(320);
   });
 
   it('migrates retired theme ids to their replacement', async () => {
@@ -43,7 +43,7 @@ describe('settings', () => {
     const { getSettings: get } = await import('./settings');
     const s = get();
     expect(s.theme).toBe('dracula');
-    expect(s.fontSize).toBe(14);
+    expect(s).not.toHaveProperty('fontSize');
   });
 
   it('falls back to defaults for a corrupt localStorage blob', async () => {
@@ -51,7 +51,6 @@ describe('settings', () => {
     vi.resetModules();
     const { getSettings: get } = await import('./settings');
     expect(get()).toEqual({
-      fontSize: 14,
       theme: 'system',
       sidebarWidth: 280,
     });
@@ -104,4 +103,11 @@ describe('the System theme option', () => {
     const fresh = await import('./settings');
     expect(fresh.getSettings().theme).toBe('tokyo-night');
   });
+});
+
+it('ignores the retired terminal font-size preference', async () => {
+  localStorage.setItem('muxpad.settings.v1', JSON.stringify({ theme: 'dracula', fontSize: 28 }));
+  vi.resetModules();
+  const { getSettings } = await import('./settings');
+  expect(getSettings()).not.toHaveProperty('fontSize');
 });

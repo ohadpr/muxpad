@@ -42,7 +42,7 @@
   padding: 8px 10px 8px 14px;
   background: var(--bg-elev, #f4f4f8);
   border-bottom: 1px solid var(--chat-border, #d6d6e0);
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--chat-dim, #6b6b7a);
 }
 
@@ -75,7 +75,7 @@
   background: transparent;
   color: var(--chat-fg, #1c1c22);
   font: inherit;
-  font-size: 12px;
+  font-size: 0.75rem;
   cursor: pointer;
 }
 

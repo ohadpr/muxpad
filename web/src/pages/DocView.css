@@ -17,7 +17,7 @@
   border-bottom: 1px solid var(--border);
   background: var(--bg-chrome);
   font-family: var(--chrome-font);
-  font-size: var(--chrome-size-sm, 12px);
+  font-size: var(--chrome-size-sm, 0.75rem);
 }
 .doc-brand {
   color: var(--fg-dim);
@@ -54,7 +54,7 @@
   background: transparent;
   color: var(--fg);
   font-family: var(--ui-font);
-  font-size: 16px;
+  font-size: 1rem;
   line-height: 1.6;
   padding: 4px 2px;
 }
@@ -73,7 +73,7 @@
   background: var(--bg-elev);
   color: var(--fg-dim);
   font-family: var(--chrome-font);
-  font-size: var(--chrome-size-sm, 12px);
+  font-size: var(--chrome-size-sm, 0.75rem);
   padding: 5px 12px;
   border-radius: 8px;
   cursor: pointer;
@@ -89,5 +89,5 @@
 }
 .doc-add-hint {
   color: var(--fg-faint);
-  font-size: 12px;
+  font-size: 0.75rem;
 }

@@ -17,12 +17,12 @@
 .doc-chat-hint {
   color: var(--fg-faint);
   font-style: italic;
-  font-size: 14px;
+  font-size: 0.875rem;
 }
 
 .doc-chat-msg {
   font-family: var(--ui-font);
-  font-size: 15px;
+  font-size: 0.9375rem;
   line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;
@@ -123,7 +123,7 @@
 
 .doc-chat-thinking-dot {
   color: var(--fg-faint);
-  font-size: 16px;
+  font-size: 1rem;
   letter-spacing: 2px;
 }
 
@@ -132,7 +132,7 @@
 .doc-chat-work {
   color: var(--fg-faint);
   font-family: var(--chrome-font);
-  font-size: 12px;
+  font-size: 0.75rem;
   line-height: 1.4;
   white-space: pre-wrap;
   overflow: hidden;
@@ -140,7 +140,7 @@
 }
 .doc-chat-notice {
   color: var(--fg-faint);
-  font-size: 12px;
+  font-size: 0.75rem;
   font-style: italic;
 }
 
@@ -177,7 +177,7 @@
   background: color-mix(in srgb, var(--fg) 3%, transparent);
   color: var(--fg);
   font-family: var(--ui-font);
-  font-size: 15px;
+  font-size: 0.9375rem;
   line-height: 1.5;
   padding: 9px 40px 9px 12px;
   transition: border-color 0.12s ease, background 0.12s ease;
@@ -199,7 +199,7 @@
   bottom: 9px;
   color: var(--fg-faint);
   font-family: var(--chrome-font);
-  font-size: 13px;
+  font-size: 0.8125rem;
   pointer-events: none;
 }
 
@@ -215,7 +215,7 @@
   color: var(--fg-faint);
   cursor: pointer;
   font-family: var(--chrome-font);
-  font-size: 11px;
+  font-size: 0.6875rem;
   padding: 0;
 }
 .doc-chat-work-toggle:hover {
@@ -227,7 +227,7 @@
   color: var(--danger);
   cursor: pointer;
   font-family: var(--chrome-font);
-  font-size: 11px;
+  font-size: 0.6875rem;
   padding: 2px 8px;
   border-radius: 6px;
 }
@@ -244,7 +244,7 @@
 }
 .doc-chat-q-text {
   color: var(--fg);
-  font-size: 14px;
+  font-size: 0.875rem;
   margin-bottom: 6px;
 }
 .doc-chat-q-opts {
@@ -258,7 +258,7 @@
   color: var(--fg);
   cursor: pointer;
   font-family: var(--ui-font);
-  font-size: 13px;
+  font-size: 0.8125rem;
   padding: 5px 12px;
   border-radius: 8px;
 }

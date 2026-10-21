@@ -40,7 +40,6 @@ import { NewTabButton } from './NewTabButton';
 import { SvgAgentGlyph } from './PaneWebSwitch';
 import { StateChip } from './StateChip';
 import { SwipeRow } from './SwipeRow';
-import { WorkspaceSettings } from './WorkspaceSettings';
 import { SvgClose } from './icons';
 import './NavTree.css';
 // The flat 'recent' view's own rules. A separate sheet because it is a distinct surface with its own budget (the
@@ -951,7 +950,6 @@ function WorkspaceNode({
    * "+ New chat", ON THE HEADER. The destination is the row the button is drawn
    * on, so there is nothing to ask and nothing to label.
    */
-  const [settingsOpen, setSettingsOpen] = useState(false);
   // The sheet's "⋯" menu, anchored under the button that opened it.
   const [moreAt, setMoreAt] = useState<{ x: number; y: number } | null>(null);
   const [creating, setCreating] = useState(false);
@@ -1165,27 +1163,6 @@ function WorkspaceNode({
                 about the old top button — "it's hard to see" — so this one does
                 not hide, it just sits at the weight of the rest of the row's
                 chrome and comes up on hover. */}
-            {/* SETTINGS, in the row's own control cluster. The per-workspace
-                instructions and the capability switches are properties OF A
-                WORKSPACE, so the workspace row is where they belong — and the
-                Slack switch has to live on a browser surface specifically,
-                because the server refuses a capability change that arrives
-                without an `Origin` header. There is no CLI route to it on
-                purpose: an agent that can grant itself Slack makes the guard
-                decoration. */}
-            <button
-              type="button"
-              className="navtree-close navtree-ws-settings"
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                setSettingsOpen(true);
-              }}
-              title={`${workspace.name} settings`}
-              aria-label={`Settings for ${workspace.name}`}
-            >
-              <SvgSliders />
-            </button>
             <button
               type="button"
               className="navtree-close navtree-ws-add"
@@ -1225,7 +1202,6 @@ function WorkspaceNode({
           alignEnd={true}
           onDismiss={() => setMoreAt(null)}
           items={[
-            { label: 'Workspace settings', onSelect: () => setSettingsOpen(true) },
             {
               label: 'Rename',
               onSelect: () => setEditing({ kind: 'workspace', id: workspace.id }),
@@ -1245,9 +1221,6 @@ function WorkspaceNode({
           setEditing={setEditing}
           onNavigate={onNavigate}
         />
-      )}
-      {settingsOpen && (
-        <WorkspaceSettings workspace={workspace} onClose={() => setSettingsOpen(false)} />
       )}
     </div>
   );
@@ -3519,28 +3492,6 @@ function SvgSearchGlyph({ size = 19 }: { size?: number }) {
     >
       <circle cx="11" cy="11" r="7" />
       <path d="m20 20-3.2-3.2" />
-    </svg>
-  );
-}
-
-/** Sliders, not a gear: the app's own gear is the global settings button in
- *  the chrome, and two gears a few pixels apart would be the same control
- *  twice. */
-function SvgSliders() {
-  return (
-    <svg
-      width="17"
-      height="17"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      aria-hidden="true"
-    >
-      <path d="M4 7h11M19 7h1M4 17h5M13 17h7" />
-      <circle cx="17" cy="7" r="2" />
-      <circle cx="11" cy="17" r="2" />
     </svg>
   );
 }

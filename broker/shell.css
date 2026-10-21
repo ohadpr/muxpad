@@ -1,0 +1,326 @@
+:root {
+  color-scheme: dark;
+  font: 14px / 1.5 system-ui;
+  background: #111827;
+  color: #f9fafb;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+#trust-bar {
+  height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 14px;
+  background: #111827;
+  border-bottom: 1px solid #374151;
+}
+#connection {
+  flex: 1;
+  color: #cbd5e1;
+  font-size: 12px;
+}
+#sign-out {
+  font-size: 12px;
+  padding: 3px 7px;
+}
+#muxpad {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: 0;
+  background: #111827;
+}
+#pairing,
+#review-idle {
+  max-width: 520px;
+  margin: 48px auto;
+  padding: 20px;
+}
+label {
+  display: block;
+}
+input,
+button {
+  font: inherit;
+  padding: 10px 14px;
+  border-radius: 7px;
+  border: 1px solid #64748b;
+}
+input {
+  width: 100%;
+  margin: 8px 0 16px;
+}
+button {
+  cursor: pointer;
+  background: #1f2937;
+  color: #f9fafb;
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+dialog {
+  width: min(680px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+  padding: 24px;
+  background: #111827;
+  color: #f9fafb;
+  border: 1px solid #64748b;
+  border-radius: 14px;
+  box-shadow: 0 20px 70px #0009;
+}
+dialog::backdrop {
+  background: #000b;
+}
+dialog h1 {
+  margin-top: 0;
+  font-size: 22px;
+}
+dt {
+  font-size: 12px;
+  color: #cbd5e1;
+}
+dd {
+  margin: 0 0 10px;
+  overflow-wrap: anywhere;
+}
+pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: #1f2937;
+  padding: 18px;
+  border-radius: 8px;
+  font: 14px / 1.6 ui-monospace, monospace;
+  max-height: 45dvh;
+  overflow: auto;
+}
+#buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
+#approve {
+  background: #2563eb;
+  border-color: #60a5fa;
+}
+#expiry {
+  font-size: 12px;
+  color: #cbd5e1;
+}
+[hidden] {
+  display: none !important;
+}
+
+#duration {
+  font: inherit;
+  padding: 10px 12px;
+  background: #1f2937;
+  color: #f9fafb;
+  border: 1px solid #64748b;
+  border-radius: 7px;
+  width: 100%;
+  margin: 8px 0;
+}
+#grant-scope {
+  font-size: 13px;
+  color: #cbd5e1;
+}
+.grant-row {
+  border-bottom: 1px solid #374151;
+  padding: 10px 0;
+}
+#permission-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+/* Keep the review readable and its controls reachable on narrow screens. */
+#trust-bar {
+  min-height: 42px;
+  flex-shrink: 0;
+  height: auto;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 12px;
+}
+#request-context,
+#approval-description {
+  color: #cbd5e1;
+  font-size: 12px;
+  margin: 6px 0;
+  overflow-wrap: anywhere;
+}
+#approval h1 {
+  margin-bottom: 6px;
+}
+#approval pre {
+  max-height: none;
+  overflow: visible;
+  margin: 12px 0;
+  padding: 12px;
+}
+#message {
+  font: inherit;
+}
+#payload {
+  font-size: 12px;
+}
+#decision-status:empty {
+  display: none;
+}
+#approval-permissions {
+  font-size: 12px;
+  padding: 6px 10px;
+}
+#buttons {
+  padding: 12px 0;
+  background: #111827;
+}
+#buttons button {
+  min-height: 44px;
+  min-width: 100px;
+}
+@media (max-width: 540px) {
+  dialog {
+    padding: 16px;
+    max-height: calc(100dvh - 16px);
+    width: calc(100vw - 16px);
+  }
+  dialog h1 {
+    font-size: 20px;
+  }
+  #buttons button {
+    flex: 1;
+  }
+  #duration {
+    font-size: 16px;
+  }
+  #pairing,
+  #review-idle {
+    margin: 16px auto;
+  }
+}
+
+/* The exact request is the decision surface; management stays secondary. */
+.brand-pair {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.brand-pair svg {
+  flex-shrink: 0;
+}
+.approval-heading {
+  display: flex;
+  align-items: start;
+  gap: 12px;
+}
+.approval-heading h1 {
+  flex: 1;
+}
+.manage-access {
+  font-size: 12px;
+  text-align: right;
+}
+.manage-access summary {
+  cursor: pointer;
+  padding: 4px 8px;
+  list-style: none;
+}
+.manage-access button {
+  margin-top: 6px;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+#approval {
+  width: min(520px, calc(100vw - 24px));
+}
+#approval #message {
+  font: 15px / 1.6 system-ui;
+  padding: 14px;
+  margin: 16px 0;
+}
+#payload {
+  display: grid;
+  grid-template-columns: minmax(70px, auto) minmax(0, 1fr);
+  gap: 5px 14px;
+  margin: 14px 0;
+}
+#payload dt {
+  align-self: baseline;
+}
+#payload dd {
+  margin: 0;
+  white-space: pre-wrap;
+  font: 13px / 1.5 ui-monospace, monospace;
+}
+.duration-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-top: 16px;
+}
+#duration {
+  width: auto;
+  flex: 1;
+  margin: 0;
+  padding: 7px 10px;
+}
+#grant-scope {
+  font-size: 12px;
+  line-height: 1.5;
+  margin-bottom: 8px;
+}
+#buttons {
+  margin-top: 8px;
+  padding-bottom: 0;
+}
+@media (max-width: 540px) {
+  #approval {
+    width: calc(100vw - 16px);
+  }
+  #duration {
+    font-size: 16px;
+  }
+  #trust-bar {
+    gap: 6px;
+  }
+  #sign-out {
+    font-size: 11px;
+  }
+}
+#session-management {
+  font-size: 12px;
+}
+#session-management summary {
+  cursor: pointer;
+}
+#session-management > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: 6px;
+}
+#approval .brand-pair {
+  margin-bottom: 16px;
+}
