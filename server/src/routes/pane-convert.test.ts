@@ -99,7 +99,10 @@ describe('pane conversion — the zero-message gate', () => {
     ['agent-backend', { backend: 'codex', mode: 'agent' }],
     ['respawn', {}],
     ['as-terminal', {}],
-    ['cwd', { cwd: '/private/tmp' }],
+    // `tmpdir()`, not a literal: this said '/private/tmp', which exists on
+    // macOS and does not on Linux — so the route correctly rejected it with a
+    // 400 and the case failed on CI while passing on every developer's Mac.
+    ['cwd', { cwd: tmpdir() }],
   ])('retains authenticated pane identity through %s', async (route, body) => {
     const { pane } = await newChat();
     const spawn = vi.spyOn(test.ptyd.client, 'ensurePane');
