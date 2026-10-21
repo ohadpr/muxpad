@@ -2207,6 +2207,25 @@
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
 }
+/* ARMED — the × is one click from cascade-killing a workspace, and it says so
+   on its own surface rather than in a system dialog. Filled, not tinted: a
+   hover is a tint, and this must not read as a hover. Visibility is forced
+   because the state can outlive the pointer (keyboard focus, or a touch that
+   left no hover behind) and an invisible armed button is the exact trap the
+   arming exists to prevent. */
+.navtree-close.-armed {
+  visibility: visible;
+  opacity: 1;
+  background: var(--armed-fill);
+  color: var(--bg);
+}
+/* …and on the sheet, where the resting × is deliberately 16% opaque and the
+   armed one must not be. Specificity, not duplication of intent. */
+.navtree[data-variant="sheet"] .navtree-wspick-row .navtree-close.-armed,
+.navtree[data-variant="sheet"] .navtree-pane-row-wrap .navtree-close.-armed {
+  opacity: 1;
+}
+
 /* Sheet: the WORKSPACE-PICKER and PANE rows keep their × (neither is
    swipeable). CHAT rows on the sheet render no × at all — pin, mark-unread and
    close live under the row behind a left swipe. */
@@ -2712,6 +2731,22 @@
 .navtree-menu-item.-danger:hover {
   background: color-mix(in srgb, var(--danger) 16%, transparent);
 }
+/* ARMED — one click from doing something that cannot be undone. This is the
+   whole of what replaced window.confirm, so it has to read as a question and
+   not as a hover: filled rather than tinted, with the label swapped to name
+   the consequence ("Delete permanently…" -> "Click again to delete"). The
+   row keeps its place and its size; nothing below it moves. */
+.navtree-menu-item.-armed {
+  background: var(--armed-fill);
+  color: var(--bg);
+  font-weight: 600;
+}
+.navtree-menu-item.-danger.-armed:hover,
+.navtree-menu-item.-armed:hover {
+  background: var(--armed-fill);
+  color: var(--bg);
+}
+
 /* The sheet's "⋯" menu: opened by a thumb, so its rows clear the same 44px
    floor as the button that opened it. */
 .navtree-menu.-touch {

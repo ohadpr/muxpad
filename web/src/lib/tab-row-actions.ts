@@ -2,6 +2,7 @@ import type { Tab, Workspace } from '@muxpad/shared';
 import { api } from '../api';
 import { applyTabUnread, refreshTabs } from '../tabs';
 import { refreshWorkspaces } from '../workspaces';
+import { noticeFromError } from './notice-store';
 import { setTabUnread as setTabUnreadAction } from './tab-unread';
 
 /**
@@ -62,26 +63,29 @@ export function tabRowActions(workspace: Workspace | { id: string }): TabRowActi
         await refresh();
       } catch (err) {
         console.error('archiveTab failed', err);
-        window.alert(`Failed to archive chat: ${String(err)}`);
+        noticeFromError(`Couldn't archive "${tab.name}".`, err);
       }
     },
 
     /**
      * DELETE — permanent, and reachable only from the context menu.
      *
-     * It keeps its confirm BECAUSE it is now the rare path: the common action
-     * (archive) is one click and reversible, so the destructive one can afford
-     * to ask. window.confirm is flaky in the iOS PWA, so the guard is the
-     * menu's own depth plus this prompt on desktop.
+     * It is still CONFIRMED, just not here: the menu row arms itself and asks
+     * on its own surface (MenuItem.confirm). The `window.confirm` that used to
+     * live on this line was a guarantee on desktop and nothing on the sheet,
+     * where it is a silent no-op — so the two surfaces disagreed about whether
+     * an irreversible action asks at all. One mechanism, both surfaces.
+     *
+     * It can afford to ask because it is the rare path: the common action
+     * (archive) is one click and reversible.
      */
     remove: async (tab) => {
-      if (!window.confirm(`Delete “${tab.name}” permanently? This cannot be undone.`)) return;
       try {
         await api.deleteTab(tab.id);
         await refresh();
       } catch (err) {
         console.error('deleteTab failed', err);
-        window.alert(`Failed to delete chat: ${String(err)}`);
+        noticeFromError(`Couldn't delete "${tab.name}".`, err);
       }
     },
 

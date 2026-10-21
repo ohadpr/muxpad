@@ -3,6 +3,8 @@ import { rollupStatus } from '@muxpad/shared';
 import { useNavigate } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
+import { noticeFromError } from '../lib/notice-store';
+import { useArmed } from '../lib/use-armed';
 import { useDismissable } from '../lib/use-dismissable';
 import { refreshTabs } from '../tabs';
 import { openInNewTab, useLongPress } from '../use-long-press';
@@ -139,18 +141,22 @@ function TabDropdownItem({
     onLongPress: () =>
       openInNewTab(`/w/${encodeURIComponent(workspaceSlug)}/t/${encodeURIComponent(tab.slug)}`),
   });
-  const onClose = async (e: React.MouseEvent) => {
+  // ASKED IN PLACE, not in a system dialog. Closing a tab kills its running
+  // panes, so it still asks — but the question is the × itself going red and
+  // saying so, which costs no modal, matches the sidebar's × exactly, and
+  // works on the one surface where `window.confirm` silently does nothing (an
+  // installed iOS PWA). Disarms on a timer and on leaving the row.
+  const { armed, press, disarm } = useArmed();
+  const onClose = async (e: React.MouseEvent | React.KeyboardEvent) => {
     e.stopPropagation();
     e.preventDefault();
-    // Confirm because closing a tab kills its running panes and any
-    // unsaved work in them. cheap window.confirm is enough — personal
-    // tool, single user.
-    if (!window.confirm(`Close tab "${tab.name}"? Any running panes will be killed.`)) return;
+    if (!press()) return;
     try {
       await api.deleteTab(tab.id);
       await refreshTabs(workspaceId);
     } catch (err) {
       console.error('deleteTab failed', err);
+      noticeFromError(`Couldn't close "${tab.name}".`, err);
     }
   };
   return (
@@ -182,13 +188,16 @@ function TabDropdownItem({
       <span
         role="button"
         tabIndex={0}
-        className="ws-tabbar-dropdown-item-close"
-        onClick={onClose}
+        className={`ws-tabbar-dropdown-item-close${armed ? ' -armed' : ''}`}
+        onClick={(e) => void onClose(e)}
         onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') void onClose(e as unknown as React.MouseEvent);
+          if (e.key === 'Enter' || e.key === ' ') void onClose(e);
         }}
-        title="Close tab"
-        aria-label={`Close tab ${tab.name}`}
+        onMouseLeave={disarm}
+        onBlur={disarm}
+        aria-pressed={armed}
+        title={armed ? 'Click again — running panes will be killed' : 'Close tab'}
+        aria-label={armed ? `Click again to close ${tab.name}` : `Close tab ${tab.name}`}
       >
         <SvgClose />
       </span>

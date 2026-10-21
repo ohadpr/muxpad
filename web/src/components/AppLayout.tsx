@@ -10,6 +10,7 @@ import { CommandPalette } from './CommandPalette';
 import { MobileNavSwitcher } from './MobileNavSwitcher';
 import { MoveUndoToast } from './MoveUndoToast';
 import { NavTree } from './NavTree';
+import { NoticeToast } from './NoticeToast';
 import { SettingsMenu } from './SettingsMenu';
 import { UpdateBanner } from './UpdateBanner';
 import { WorkspaceShell } from './WorkspaceLayout';
@@ -151,6 +152,10 @@ export function AppLayout() {
       {/* Global, route-independent — a move-undo toast must outlive the
           navigation the move triggers (follow-the-pane / follow-the-tab). */}
       <MoveUndoToast />
+      {/* Failure notices — same reason again, and one more: the action that
+          failed (closing a workspace, deleting a chat) may have navigated
+          away from the row it was about. This replaced window.alert. */}
+      <NoticeToast />
       {/* Same reason, plus one of its own: an installed iOS PWA is the case
           this exists for, and the chrome's build label is display:none on
           mobile. See UpdateBanner / lib/update-check. */}
