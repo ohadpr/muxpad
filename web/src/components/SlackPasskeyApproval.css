@@ -1,0 +1,209 @@
+.slack-passkey-dialog {
+  box-sizing: border-box;
+  width: min(25rem, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 20px;
+  color: var(--fg);
+  background: var(--bg-elev);
+  font: 0.875rem / 1.5 var(--ui-font);
+}
+.slack-passkey-dialog::backdrop {
+  background: rgb(0 0 0 / 0.5);
+}
+.slack-passkey-dialog h2 {
+  font-size: 1.125rem;
+  line-height: 1.3;
+  margin: 20px 0;
+}
+.slack-passkey-brand,
+.slack-passkey-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.slack-passkey-brand {
+  font-weight: 600;
+}
+.slack-passkey-dialog dl {
+  margin: 16px 0;
+}
+.slack-passkey-dialog dt {
+  color: var(--fg-dim);
+  font-size: 0.75rem;
+}
+.slack-passkey-dialog dd {
+  margin: 0 0 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+}
+.slack-passkey-dialog label {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+dialog.slack-passkey-dialog select,
+dialog.slack-passkey-dialog button {
+  font: inherit;
+  min-height: 44px;
+  border-radius: 8px;
+  padding: 8px 12px;
+  color: var(--fg);
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+}
+.slack-passkey-actions {
+  justify-content: flex-end;
+  margin: 12px 0;
+}
+
+.slack-passkey-scope {
+  padding: 0;
+  color: var(--fg-dim);
+  font-size: 0.75rem;
+}
+.slack-passkey-error {
+  /* Rendered by an `<output>` now (implicit role=status) — inline unless told
+     otherwise, and the wrapping below assumes a block. */
+  display: block;
+  color: var(--fg-dim);
+  white-space: pre-wrap;
+}
+.slack-passkey-dialog small {
+  color: var(--fg-dim);
+}
+.slack-passkey-settings {
+  border-top: 1px solid var(--border);
+  padding: 12px 0;
+  max-width: 28rem;
+}
+.slack-passkey-settings p {
+  font-size: 0.75rem;
+}
+.slack-passkey-settings pre {
+  font: 0.6875rem / 1.4 monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 12rem;
+  overflow: auto;
+}
+.slack-passkey-settings label {
+  display: block;
+}
+.slack-passkey-settings input {
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.slack-passkey-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  max-width: 768px;
+  margin: 0 auto 8px;
+  font: 0.75rem / 1.4 system-ui;
+}
+.slack-passkey-inline button {
+  margin-left: auto;
+  min-height: 36px;
+  font: inherit;
+}
+.slack-passkey-actions {
+  flex-wrap: wrap;
+}
+.slack-passkey-actions button {
+  flex: 1 1 auto;
+  max-width: 100%;
+}
+
+.slack-passkey-brand {
+  font-size: 0.75rem;
+  gap: 8px;
+  color: var(--fg-dim);
+}
+.slack-passkey-brand svg {
+  width: 18px;
+  height: 18px;
+}
+.slack-passkey-duration {
+  margin: 20px 0 12px;
+  color: var(--fg-dim);
+  font-size: 0.8125rem;
+}
+.slack-passkey-details {
+  margin: 12px 0;
+  color: var(--fg-dim);
+  font-size: 0.75rem;
+}
+.slack-passkey-details summary {
+  cursor: pointer;
+  min-height: 32px;
+  display: list-item;
+}
+.slack-passkey-note {
+  font-size: 0.75rem;
+  color: var(--fg-dim);
+}
+.slack-passkey-actions {
+  gap: 8px;
+  margin: 12px 0 0;
+  flex-wrap: nowrap;
+}
+.slack-passkey-actions button {
+  flex: 1;
+}
+.slack-passkey-close {
+  width: 100%;
+  margin-top: 8px;
+}
+
+.slack-passkey-dialog :focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.slack-passkey-error {
+  display: block;
+  color: var(--fg);
+  border-left: 2px solid var(--danger, var(--accent));
+  padding-left: 10px;
+}
+
+/* Button states. This dialog also opens inside Settings, whose generic
+   `.settings-dialog button:hover` repainted Approve's accent fill with a
+   near-white tint under white ink. The `dialog` qualifier outweighs those rules
+   whatever order the CSS is bundled in, and hover moves the accent toward --fg,
+   which raises contrast against --accent-fg in light and dark themes alike. */
+dialog.slack-passkey-dialog button {
+  transition: background-color 80ms ease, border-color 80ms ease;
+}
+dialog.slack-passkey-dialog button:hover:not(:disabled) {
+  color: var(--fg);
+  background: color-mix(in srgb, var(--fg) 10%, var(--bg-elev));
+  border-color: var(--border-strong, var(--border));
+}
+dialog.slack-passkey-dialog .slack-passkey-approve,
+dialog.slack-passkey-dialog .slack-passkey-approve:disabled {
+  color: var(--accent-fg);
+  background: var(--accent);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+dialog.slack-passkey-dialog .slack-passkey-approve:hover:not(:disabled) {
+  color: var(--accent-fg);
+  background: color-mix(in srgb, var(--accent) 86%, var(--fg));
+  border-color: color-mix(in srgb, var(--accent) 86%, var(--fg));
+}
+dialog.slack-passkey-dialog button:active:not(:disabled) {
+  filter: brightness(0.94);
+}
+dialog.slack-passkey-dialog button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

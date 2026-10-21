@@ -63,6 +63,9 @@ const decl = (selector: string, prop: string): string | null => {
   return hit ? (hit[2] ?? '').trim() : null;
 };
 
+const px = (value: string | null) =>
+  Number.parseFloat(value ?? '') * (value?.endsWith('rem') ? 16 : 1);
+
 describe('the status strip is a line, not a second object', () => {
   it('draws no border of its own', () => {
     // A border around the strip is what made it read as a second object stacked
@@ -91,7 +94,7 @@ describe('the status strip is a line, not a second object', () => {
     expect(below).toBe(0);
     // And the line is FIXED, not a value its content can grow — which is what
     // makes this a budget rather than a hope. See ChatPane.statusline.test.tsx.
-    const h = Number((decl('.chat-status-bar', 'height') ?? '').replace('px', ''));
+    const h = px(decl('.chat-status-bar', 'height'));
     expect(h + above).toBeLessThanOrEqual(32);
   });
 });
@@ -100,8 +103,8 @@ describe('a one-line composer is a known height', () => {
   it('fixes the line at 40px, and says the same thing twice', () => {
     // height and min-height must agree: JS grows `height` for multi-line from
     // whatever this is, so a disagreement makes the resting height a guess.
-    expect(decl('.chat-input', 'height')).toBe('40px');
-    expect(decl('.chat-input', 'min-height')).toBe('40px');
+    expect(decl('.chat-input', 'height')).toBe('2.5rem');
+    expect(decl('.chat-input', 'min-height')).toBe('2.5rem');
   });
 
   it('pads to exactly that, so the number is not a coincidence', () => {
@@ -110,7 +113,9 @@ describe('a one-line composer is a known height', () => {
     // comment and the code still describe the same bar.
     const padding = decl('.chat-input', 'padding');
     const line = decl('.chat-input', 'line-height');
-    const top = Number((padding ?? '').split(/\s+/)[0]?.replace('px', ''));
-    expect(Number((line ?? '').replace('px', '')) + top * 2).toBe(40);
+    const top = px((padding ?? '').split(/\s+/)[0] ?? null);
+    const linePx = Number.parseFloat(line ?? '') * (line?.endsWith('rem') ? 16 : 1);
+    expect(line).toBe('1.375rem');
+    expect(linePx + top * 2).toBe(40);
   });
 });

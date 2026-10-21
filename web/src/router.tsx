@@ -1,6 +1,7 @@
 import { createRootRoute, createRoute, createRouter } from '@tanstack/react-router';
 import { AppLayout } from './components/AppLayout';
 import { WorkspaceLayout } from './components/WorkspaceLayout';
+import { noticeCaptureNonce } from './lib/slack-notice-diagnostic';
 import { DocView } from './pages/DocView';
 import { HostedAppView, HostedView } from './pages/HostedView';
 import { PopoutView } from './pages/PopoutView';
@@ -41,8 +42,11 @@ const tabRoute = createRoute({
   // desktop 'tabbed' view, where panes read as tabs) so a refresh / shared
   // link / back button lands on the same pane. The split mosaic shows every
   // pane at once, so it ignores this. TabView owns reading + syncing it.
-  validateSearch: (search: Record<string, unknown>): { pane?: string | undefined } => ({
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { pane?: string | undefined; slackNoticeCapture?: string | undefined } => ({
     pane: typeof search.pane === 'string' && search.pane ? search.pane : undefined,
+    slackNoticeCapture: noticeCaptureNonce(search.slackNoticeCapture),
   }),
   component: () => null,
 });

@@ -40,7 +40,7 @@
   border-radius: 999px;
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4);
   font-family: var(--chrome-font);
-  font-size: 13px;
+  font-size: 0.8125rem;
   line-height: 1.35;
   /* Appears while the user is doing something else — slide it in rather than
      letting it pop into a stable layout. */
@@ -93,7 +93,7 @@
   background: transparent;
   border: none;
   color: color-mix(in srgb, var(--accent-fg) 78%, transparent);
-  font-size: 18px;
+  font-size: 1.125rem;
   line-height: 1;
   width: 30px;
   height: 30px;

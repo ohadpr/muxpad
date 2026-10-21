@@ -888,6 +888,8 @@ json_string() {
 # into a running process. It fails closed and the server's refusal says to
 # restart the pane.
 slack_ident() {
+  # Same server-issued pane proof; compatible with shells that filter KEY names.
+  MUXPAD_PANE_KEY="${MUXPAD_PANE_KEY:-${MUXPAD_PANE_PROOF:-}}"
   [ -n "${MUXPAD_PANE_ID:-}" ] && [ -n "${MUXPAD_PANE_KEY:-}" ] && return 0
   cat >&2 <<'EOF'
 muxpad: slack: this pane cannot prove which workspace it is in.
@@ -908,8 +910,8 @@ slack_call() {
   local tmp status
   tmp="$(mktemp)"
   if [ -n "$body" ]; then
-    status="$(curl -sS -o "$tmp" -w '%{http_code}' -X "$method" \
-      -H 'content-type: application/json' --data "$body" \
+    status="$(printf '%s' "$body" | curl -sS -o "$tmp" -w '%{http_code}' -X "$method" \
+      -H 'content-type: application/json' --data-binary @- \
       "${MUXPAD_API_URL%/}$path")"
   else
     status="$(curl -sS -o "$tmp" -w '%{http_code}' -X "$method" "${MUXPAD_API_URL%/}$path")"
@@ -923,7 +925,34 @@ slack_call() {
     rm -f "$tmp"
     exit 1
   fi
-  cat "$tmp"
+  # A protected broker request is queued, never silently treated as a send.
+  local request_id state rounds=0
+  request_id="$(jq -r '.id // empty' "$tmp")"
+  if [ -n "$request_id" ]; then
+    state="$(jq -r '.state // empty' "$tmp")"
+    while [ "$state" = pending ] || [ "$state" = verifying ] || [ "$state" = executing ]; do
+      rounds=$((rounds + 1))
+      if [ "$rounds" -gt 170 ]; then
+        echo 'muxpad: slack: timed out waiting; inspect the broker before retrying' >&2
+        rm -f "$tmp"; exit 1
+      fi
+      sleep 2
+      status="$(curl -sS --max-time 40 -o "$tmp" -w '%{http_code}' \
+        "${MUXPAD_API_URL%/}/api/slack/requests/$request_id?pane=$MUXPAD_PANE_ID&key=$MUXPAD_PANE_KEY")"
+      if [ "$status" != 200 ]; then
+        echo 'muxpad: slack: cannot read broker status; inspect the broker before retrying' >&2
+        rm -f "$tmp"; exit 1
+      fi
+      state="$(jq -r '.state // empty' "$tmp")"
+    done
+    if [ "$state" != complete ]; then
+      printf 'muxpad: slack: %s\n' "$(jq -r '.error // .state // "invalid broker response"' "$tmp")" >&2
+      rm -f "$tmp"; exit 1
+    fi
+    jq '.result' "$tmp"
+  else
+    cat "$tmp"
+  fi
   rm -f "$tmp"
 }
 
@@ -931,6 +960,38 @@ slack_require_pane() {
   [ -n "${MUXPAD_API_URL:-}" ] || {
     echo 'muxpad: slack: works only from inside a muxpad pane' >&2; exit 1; }
   slack_ident
+}
+
+# Resolve names only through the existing human-approved broker listing. Never
+# fetch Slack metadata directly, cache names, or infer a destination by prefix.
+slack_resolve_ref() {
+  local ref="$1" listing id
+  if [[ "$ref" =~ ^[CDG][A-Z0-9]+$ ]]; then printf '%s\n' "$ref"; return; fi
+  if [[ "$ref" == @* ]]; then
+    local user result body
+    user="$(slack_call GET "/api/slack/users?pane=$MUXPAD_PANE_ID&key=$MUXPAD_PANE_KEY&name=$(printf '%s' "${ref#@}" | jq -sRr @uri)" | jq -er '.user.id | select(test("^[UW][A-Z0-9]+$"))')" || return 1
+    body="$(jq -nc --arg pane "$MUXPAD_PANE_ID" --arg key "$MUXPAD_PANE_KEY" --arg user "$user" '{pane:$pane,key:$key,user:$user}')"
+    result="$(slack_call POST /api/slack/dm "$body")" || return 1
+    printf '%s' "$result" | jq -er '.channel | select(test("^D[A-Z0-9]+$"))'
+    return
+  fi
+  if [[ "$ref" =~ ^[a-z0-9][a-z0-9_-]{0,79}$ ]]; then ref="#$ref"; fi
+  if [[ ! "$ref" =~ ^#[a-z0-9][a-z0-9_-]{0,79}$ ]]; then
+    echo 'muxpad: slack: use an exact #channel, @username or conversation ID' >&2
+    return 1
+  fi
+  listing="$(slack_call GET "/api/slack/channels?pane=$MUXPAD_PANE_ID&key=$MUXPAD_PANE_KEY")" || return 1
+  id="$(printf '%s' "$listing" | jq -er --arg name "${ref#\#}" '
+    if (.channels | type) != "array" then error("Invalid channel listing") else
+      [.channels[] | select(.name == $name)] as $matches |
+      if ($matches | length) != 1 then error("Expected one exact match in returned accessible listing")
+      else $matches[0].id | if type == "string" and test("^[CDG][A-Z0-9]+$") then . else error("Invalid channel ID") end end
+    end
+  ')" || {
+    echo 'muxpad: slack: could not resolve one exact channel from the returned accessible listing; no action submitted' >&2
+    return 1
+  }
+  printf '%s\n' "$id"
 }
 
 # "2h" / "90m" / "3d" → an epoch second, for --since.
@@ -950,9 +1011,10 @@ slack_since_epoch() {
 cmd_slack_read() {
   slack_require_pane
   local ref="${1:-}"; shift || true
-  [ -n "$ref" ] || { echo 'usage: muxpad slack read <#channel|@user|ID> [--since=2h] [--limit=50]' >&2; exit 1; }
+  [ -n "$ref" ] || { echo 'usage: muxpad slack read <#channel|ID> [--since=2h] [--limit=50]' >&2; exit 1; }
   reset_flags since limit
   parse_flags since limit -- "$@"
+  ref="$(slack_resolve_ref "$ref")" || return 1
   local q="pane=$MUXPAD_PANE_ID&key=$MUXPAD_PANE_KEY&ref=$(printf '%s' "$ref" | jq -sRr @uri)&limit=${FLAG_limit:-50}"
   [ -n "${FLAG_since:-}" ] && q="$q&oldest=$(slack_since_epoch "$FLAG_since")"
   slack_call GET "/api/slack/read?$q" \
@@ -974,14 +1036,17 @@ cmd_slack_post() {
   slack_require_pane
   local ref="${1:-}" text="${2:-}"
   [ -n "$ref" ] && [ -n "$text" ] || {
-    echo 'usage: muxpad slack post <#channel|@user|ID> "<text>"' >&2; exit 1; }
+    echo 'usage: muxpad slack post <#channel|ID> "<text>"' >&2; exit 1; }
   # The 🤖 prefix is added by the SERVER, not here. A disclosure every caller
   # has to remember is a disclosure that gets forgotten, and this script is no
   # longer the only thing that can post.
+  reset_flags thread
+  parse_flags thread -- "${@:3}"
+  ref="$(slack_resolve_ref "$ref")" || return 1
   local body out
-  body="$(jq -nc --arg pane "$MUXPAD_PANE_ID" --arg key "$MUXPAD_PANE_KEY" --arg ref "$ref" --arg text "$text" \
-    '{pane: $pane, key: $key, ref: $ref, text: $text}')"
-  out="$(slack_call POST /api/slack/post "$body")"
+  body="$(jq -nc --arg pane "$MUXPAD_PANE_ID" --arg key "$MUXPAD_PANE_KEY" --arg ref "$ref" --arg text "$text" --arg thread "${FLAG_thread:-}" \
+    '{pane: $pane, key: $key, ref: $ref, text: $text} + (if $thread == "" then {} else {thread_ts:$thread} end)')"
+  out="$(slack_call POST /api/slack/post "$body")" || return 1
   local id ts
   id="$(printf '%s' "$out" | jq -r '.channel')"
   ts="$(printf '%s' "$out" | jq -r '.ts')"
@@ -1006,6 +1071,64 @@ cmd_slack_channels() {
     | jq -r '.channels[] | "\(.id)  \(if .private then "🔒" else "# " end) \(.name)"'
 }
 
+cmd_slack_user() {
+  slack_require_pane
+  local name="${1:-}"
+  name="${name#@}"
+  [ -n "$name" ] || { echo 'usage: muxpad slack user <@username|userID>' >&2; return 1; }
+  slack_call GET "/api/slack/users?pane=$MUXPAD_PANE_ID&key=$MUXPAD_PANE_KEY&name=$(printf '%s' "$name" | jq -sRr @uri)"
+}
+
+cmd_slack_thread() {
+  slack_require_pane
+  local ref="${1:-}" ts="${2:-}"
+  [ -n "$ref" ] && [ -n "$ts" ] || { echo 'usage: muxpad slack thread <channel|@user|ID> <thread-ts> [--limit=50]' >&2; return 1; }
+  reset_flags limit cursor
+  parse_flags limit cursor -- "${@:3}"
+  ref="$(slack_resolve_ref "$ref")" || return 1
+  slack_call GET "/api/slack/thread?pane=$MUXPAD_PANE_ID&key=$MUXPAD_PANE_KEY&ref=$ref&ts=$(printf '%s' "$ts" | jq -sRr @uri)&limit=${FLAG_limit:-50}&cursor=$(printf '%s' "${FLAG_cursor:-}" | jq -sRr @uri)"
+}
+
+cmd_slack_react() {
+  slack_require_pane
+  local ref="${1:-}" ts="${2:-}" name="${3:-}" operation=add
+  [ -n "$ref" ] && [ -n "$ts" ] && [ -n "$name" ] || { echo 'usage: muxpad slack react <channel|@user|ID> <ts> <emoji> [--remove]' >&2; return 1; }
+  [ "${4:-}" != --remove ] || operation=remove
+  name="${name#:}"; name="${name%:}"
+  ref="$(slack_resolve_ref "$ref")" || return 1
+  slack_call POST /api/slack/react "$(jq -nc --arg pane "$MUXPAD_PANE_ID" --arg key "$MUXPAD_PANE_KEY" --arg ref "$ref" --arg ts "$ts" --arg name "$name" --arg operation "$operation" '{pane:$pane,key:$key,ref:$ref,ts:$ts,name:$name,operation:$operation}')"
+}
+
+cmd_slack_edit() {
+  slack_require_pane
+  local ref="${1:-}" ts="${2:-}" text="${3:-}"
+  [ -n "$ref" ] && [ -n "$ts" ] && [ -n "$text" ] || { echo 'usage: muxpad slack edit <channel|@user|ID> <ts> "<text>"' >&2; return 1; }
+  ref="$(slack_resolve_ref "$ref")" || return 1
+  slack_call POST /api/slack/edit "$(jq -nc --arg pane "$MUXPAD_PANE_ID" --arg key "$MUXPAD_PANE_KEY" --arg ref "$ref" --arg ts "$ts" --arg text "$text" '{pane:$pane,key:$key,ref:$ref,ts:$ts,text:$text}')"
+}
+
+cmd_slack_upload() {
+  slack_require_pane
+  local ref="${1:-}" file="${2:-}" body
+  [ -n "$ref" ] && [ -f "$file" ] || { echo 'usage: muxpad slack upload <channel|@user|ID> <file> [--text="message"] [--thread=ts] (10 MiB max)' >&2; return 1; }
+  reset_flags text thread
+  parse_flags text thread -- "${@:3}"
+  # Snapshot bytes once; no path is ever sent to the broker. Do not pass binary data in argv.
+  body="$(python3 - "$file" "$MUXPAD_PANE_ID" "$MUXPAD_PANE_KEY" "${FLAG_text:-}" "${FLAG_thread:-}" <<'PYUPLOAD'
+import sys,os,base64,json,stat
+path,pane,key,text,thread=sys.argv[1:]
+with open(path,'rb') as f:
+    if not stat.S_ISREG(os.fstat(f.fileno()).st_mode): raise SystemExit('Not a regular file')
+    data=f.read(10*1024*1024+1)
+if not 0<len(data)<=10*1024*1024: raise SystemExit('File must be between 1 byte and 10 MiB')
+print(json.dumps(dict(pane=pane,key=key,filename=os.path.basename(path),content=base64.b64encode(data).decode(),text=text,**({'thread_ts':thread} if thread else {}))))
+PYUPLOAD
+)" || return 1
+  ref="$(slack_resolve_ref "$ref")" || return 1
+  body="$(printf '%s' "$body" | jq -c --arg ref "$ref" '. + {ref:$ref}')" || return 1
+  slack_call POST /api/slack/upload "$body"
+}
+
 cmd_slack() {
   case "${1:-}" in
     read) cmd_slack_read "${@:2}" ;;
@@ -1013,29 +1136,47 @@ cmd_slack() {
     post) cmd_slack_post "${@:2}" ;;
     unpost) cmd_slack_unpost "${@:2}" ;;
     channels) cmd_slack_channels ;;
+    user) cmd_slack_user "${@:2}" ;;
+    thread) cmd_slack_thread "${@:2}" ;;
+    react) cmd_slack_react "${@:2}" ;;
+    edit) cmd_slack_edit "${@:2}" ;;
+    upload) cmd_slack_upload "${@:2}" ;;
     *)
       cat >&2 <<'EOF'
 usage:
-  muxpad slack read <#channel|@user|ID> [--since=2h] [--limit=50]
+  muxpad slack read <#channel|ID> [--since=2h] [--limit=50]
   muxpad slack search "<query>" [--limit=20]
-  muxpad slack post <#channel|@user|ID> "<text>"
+  muxpad slack post <#channel|ID> "<text>"
   muxpad slack unpost <channelID> <ts>
   muxpad slack channels
+  muxpad slack user <@username|userID>
+  muxpad slack thread <channel|@user|ID> <thread-ts> [--limit=50]
+  muxpad slack post <channel|@user|ID> "<text>" [--thread=ts]
+  muxpad slack react <channel|@user|ID> <ts> <emoji> [--remove]
+  muxpad slack edit <channel|@user|ID> <ts> "<text>"
+  muxpad slack upload <channel|@user|ID> <file> [--text="message"] [--thread=ts]
 
-THE TOKEN IS NOT HERE. The muxpad server holds it; this command asks the
-server to act and never sees a credential. Set it in the UI: the workspace
-row's settings button → Slack. There is nothing to put in a dotfile and
-nothing for this script to read.
+#channel names first request an approval-controlled channel listing, then the
+exact-ID action. Approve once may require both decisions. Names absent from the
+returned accessible listing cannot be resolved; direct IDs skip this lookup.
+@username requests an exact user lookup and opens/resumes that person's DM
+through the broker. Once-only approval can require each step. No fuzzy matches.
+Edits are limited to the last 500 messages recorded as sent by muxpad.
+Uploads snapshot up to 10 MiB and bind approval to the file hash and destination.
+
+THE TOKEN IS NOT HERE. Credentials and Slack execution live in the protected
+broker. All workspaces can request Slack through passkey approval; muxpad
+does not store a Slack token.
 
 EVERY MESSAGE GOES OUT AS YOU, in your own conversation and your own audit
 log — there is no bot identity, because a bot DM lands in the recipient's
 separate conversation with "muxpad", which you cannot see. Each one is
 prefixed 🤖 by the server so the reader knows a machine composed it.
 
-AND THE WHOLE SURFACE IS GATED BY WORKSPACE — read, search and post alike. A
-workspace with Slack switched off cannot touch Slack at all. Which workspace
-you are in is resolved from your PROCESS ANCESTRY by the server, so neither
-`cd` nor MUXPAD_PANE_ID nor MUXPAD_WORKSPACE_ID can talk it round.
+ORDINARY REQUESTS ARE ROUTED BY PANE AND WORKSPACE. The server checks the
+pane's key to identify the requesting chat. This routing is not an isolation boundary
+against an agent sharing the server OS account. Human approval and token
+isolation belong to the separate protected broker.
 
 'post' prints the conversation id and the ts; the ts is the only way to
 delete the message afterwards.
@@ -1312,60 +1453,10 @@ cmd_workspace_delete() {
   fi
 }
 
-cmd_workspace_instructions() {
-  reset_flags
-  parse_flags -- "$@"
-  local id="${POSITIONAL[0]:-}"
-  if [ -z "$id" ]; then
-    echo 'usage: muxpad workspace instructions <id> [text|-]' >&2
-    echo '       with no text, prints the current instructions' >&2
-    exit 1
-  fi
-  require_jq
-  if [ "${#POSITIONAL[@]}" -lt 2 ]; then
-    http_request GET "/api/workspaces/$id" | jq -r '.instructions // ""'
-    return
-  fi
-  local text="${POSITIONAL[1]}"
-  # `-` reads stdin, because these are paragraphs and a shell argument is a bad
-  # place to keep paragraphs.
-  [ "$text" = "-" ] && text="$(cat)"
-  http_request PATCH "/api/workspaces/$id" "{\"instructions\":$(json_string "$text")}" >/dev/null
-  if [ "$JSON_OUTPUT" = "1" ]; then
-    printf '{"updated":"%s"}\n' "$id"
-  else
-    printf '%s✓%s workspace instructions updated — new agent panes pick them up at launch\n' "$C_GREEN" "$C_RESET"
-  fi
-}
-
-# READ-ONLY ON PURPOSE. Instructions are text an agent may usefully maintain;
-# capabilities are what an agent is ALLOWED to do, and a tool that can grant
-# itself a capability is a guard in name only. The server refuses a capability
-# PATCH that carries no browser Origin, so this is not the only line of defence
-# — it is the honest message in front of it.
-cmd_workspace_caps() {
-  reset_flags
-  parse_flags -- "$@"
-  local id="${POSITIONAL[0]:-}"
-  if [ -z "$id" ]; then
-    echo 'usage: muxpad workspace caps <id>' >&2
-    exit 1
-  fi
-  require_jq
-  local ws; ws="$(http_request GET "/api/workspaces/$id")"
-  if [ "$JSON_OUTPUT" = "1" ]; then
-    printf '%s' "$ws" | jq '{slack: (.slack // false)}'
-    return
-  fi
-  local on; on="$(printf '%s' "$ws" | jq -r '.slack // false')"
-  printf 'slack   %s\n' "$([ "$on" = "true" ] && echo on || echo off)"
-  printf '\n%scapabilities are changed in the UI only%s (workspace ⋯ → Settings → Capabilities).\n' "$C_DIM" "$C_RESET"
-}
-
 cmd_workspace() {
   local verb="${1:-}"
   if [ -z "$verb" ]; then
-    echo "usage: muxpad workspace {new|list|delete|instructions|caps}" >&2
+    echo "usage: muxpad workspace {new|list|delete}" >&2
     exit 1
   fi
   shift
@@ -1373,11 +1464,9 @@ cmd_workspace() {
     new) cmd_workspace_new "$@" ;;
     list) cmd_workspace_list "$@" ;;
     delete) cmd_workspace_delete "$@" ;;
-    instructions) cmd_workspace_instructions "$@" ;;
-    caps|capabilities) cmd_workspace_caps "$@" ;;
     *)
       echo "muxpad: unknown workspace verb '$verb'" >&2
-      echo "usage: muxpad workspace {new|list|delete|instructions|caps}" >&2
+      echo "usage: muxpad workspace {new|list|delete}" >&2
       exit 1
       ;;
   esac

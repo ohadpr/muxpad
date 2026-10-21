@@ -47,7 +47,7 @@ body.mosaic-dragging .shell-pane-web {
   padding: 24px;
   text-align: center;
   color: var(--fg-faint, #6f7488);
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 .shell-pane-web-back {
   padding: 5px 14px;
@@ -55,7 +55,7 @@ body.mosaic-dragging .shell-pane-web {
   border-radius: 6px;
   background: transparent;
   color: var(--fg, #d7dae0);
-  font-size: 12px;
+  font-size: 0.75rem;
   cursor: pointer;
 }
 .shell-pane-web-back:hover {

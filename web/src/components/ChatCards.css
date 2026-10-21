@@ -124,7 +124,7 @@
    running under it. */
 .chat-card-line {
   padding: 7px 46px 7px 13px;
-  font-size: 13px;
+  font-size: 0.8125rem;
   line-height: 1.45;
   color: var(--chat-dim);
   overflow: hidden;
@@ -168,7 +168,7 @@
   top: 6px;
   right: 10px;
   z-index: 1;
-  font-size: 11px;
+  font-size: 0.6875rem;
   line-height: 1.3;
   color: var(--chat-faint);
   font-variant-numeric: tabular-nums;
@@ -207,12 +207,12 @@
   white-space: pre-wrap;
   overflow-x: auto;
   font-family: var(--chrome-font, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   line-height: 1.5;
   color: var(--chat-dim);
 }
 .chat-card-md {
-  font-size: 13.5px;
+  font-size: 0.84375rem;
 }
 .chat-card-md > :first-child {
   margin-top: 0;

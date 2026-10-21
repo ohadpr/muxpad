@@ -57,7 +57,7 @@
   border: 1px solid var(--border);
   border-radius: 6px;
   font-family: var(--chrome-font);
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 500;
   cursor: pointer;
   /* Avoid the long-press magnifier / context menu eating the tap. */
@@ -98,7 +98,7 @@
   padding: 5px 10px;
   /* Stay >=16px so iOS doesn't auto-zoom the page when the field gets
      focus — anything smaller and Safari "helps" by zooming in. */
-  font-size: 16px;
+  font-size: 1rem;
   line-height: 1.4;
   font-family: var(--chrome-font);
   outline: none;
@@ -158,7 +158,7 @@
   border: none;
   border-radius: 8px;
   font-family: var(--chrome-font);
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 600;
   cursor: pointer;
   -webkit-touch-callout: none;
@@ -181,7 +181,7 @@
   padding: 0 2px;
   color: var(--danger);
   font-family: var(--chrome-font);
-  font-size: 12px;
+  font-size: 0.75rem;
   line-height: 1.3;
   /* Two lines at most; a server message can be a sentence. */
   display: -webkit-box;

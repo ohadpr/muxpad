@@ -1,6 +1,7 @@
 import { RouterProvider } from '@tanstack/react-router';
 import { useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
+import { SlackNoticeDiagnostic } from './components/SlackNoticeDiagnostic';
 import { startEvents, subscribe, subscribeReconnect } from './events';
 import { pushOpen } from './lib/external-open-store';
 import { setLastPaneId } from './lib/last-visited';
@@ -304,6 +305,7 @@ if (selfEmbedded) {
     <>
       <RouterProvider router={router} />
       <PushSinkGate />
+      <SlackNoticeDiagnostic />
     </>,
   );
 }

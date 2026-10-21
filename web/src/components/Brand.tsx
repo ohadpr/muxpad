@@ -14,9 +14,20 @@ interface BrandProps {
 }
 
 export function Brand({ asLink = true, responsive = true, markOnly = false }: BrandProps) {
+  const insecure = window.location.protocol !== 'https:';
+  const securityLabel = insecure ? 'Muxpad — HTTP connection is not encrypted' : 'Muxpad';
   const inner = (
     <>
-      <BrandMark />
+      <span className="brand-logo-wrap">
+        <BrandMark />
+        {insecure && (
+          <span
+            className="brand-insecure-dot"
+            role="img"
+            aria-label="HTTP connection is not encrypted"
+          />
+        )}
+      </span>
       {!markOnly && (
         <span className={`brand-text${responsive ? ' brand-text-responsive' : ''}`}>muxpad</span>
       )}
@@ -25,12 +36,16 @@ export function Brand({ asLink = true, responsive = true, markOnly = false }: Br
   const className = `brand${markOnly ? ' brand-mark-only' : ''}`;
   if (asLink) {
     return (
-      <Link to="/" className={className} title="Muxpad">
+      <Link to="/" className={className} title={securityLabel}>
         {inner}
       </Link>
     );
   }
-  return <span className={`${className} brand-static`}>{inner}</span>;
+  return (
+    <span className={`${className} brand-static`} title={securityLabel}>
+      {inner}
+    </span>
+  );
 }
 
 /** The bare logo mark — exported for the sidebar's pinned "muxpad" row

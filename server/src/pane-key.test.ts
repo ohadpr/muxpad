@@ -100,12 +100,25 @@ describe('withPaneKey', () => {
     expect(withPaneKey({ FOO: 'bar' }, 'pane-a')).toEqual({
       FOO: 'bar',
       MUXPAD_PANE_KEY: paneKeyFor('pane-a'),
+      MUXPAD_PANE_PROOF: paneKeyFor('pane-a'),
     });
   });
 
   it('handles a pane with no env of its own', () => {
-    expect(withPaneKey(null, 'pane-a')).toEqual({ MUXPAD_PANE_KEY: paneKeyFor('pane-a') });
-    expect(withPaneKey(undefined, 'pane-a')).toEqual({ MUXPAD_PANE_KEY: paneKeyFor('pane-a') });
+    expect(withPaneKey(null, 'pane-a')).toEqual({
+      MUXPAD_PANE_KEY: paneKeyFor('pane-a'),
+      MUXPAD_PANE_PROOF: paneKeyFor('pane-a'),
+    });
+    expect(withPaneKey(undefined, 'pane-a')).toEqual({
+      MUXPAD_PANE_KEY: paneKeyFor('pane-a'),
+      MUXPAD_PANE_PROOF: paneKeyFor('pane-a'),
+    });
+  });
+
+  it('overwrites caller aliases with this pane’s verified proof', () => {
+    const env = withPaneKey({ MUXPAD_PANE_PROOF: 'wrong', MUXPAD_PANE_KEY: 'wrong' }, 'pane-a');
+    expect(verifyPaneKey('pane-a', env.MUXPAD_PANE_PROOF)).toBe(true);
+    expect(verifyPaneKey('pane-b', env.MUXPAD_PANE_PROOF)).toBe(false);
   });
 
   it('adds NOTHING before init rather than an empty key', () => {

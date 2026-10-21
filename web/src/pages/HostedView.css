@@ -47,13 +47,13 @@
 }
 .hosted-title {
   margin: 0;
-  font-size: 22px;
+  font-size: 1.375rem;
   font-weight: 650;
   letter-spacing: -0.01em;
 }
 .hosted-sub {
   margin: 4px 0 0;
-  font-size: 13px;
+  font-size: 0.8125rem;
   line-height: 1.45;
   color: var(--fg-dim);
   max-width: 46ch;
@@ -70,7 +70,7 @@
   border: 1px solid var(--danger);
   background: color-mix(in srgb, var(--danger) 10%, transparent);
   color: var(--fg);
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 /* ─── Sections ───────────────────────────────────────────────────────── */
@@ -91,7 +91,7 @@
    same way. */
 .hosted-section-label {
   margin: 0;
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -100,7 +100,7 @@
 /* The exposure note is a standing fact about the whole section, so it lives
    in the header rather than repeating on every row. */
 .hosted-section-note {
-  font-size: 11px;
+  font-size: 0.6875rem;
   letter-spacing: 0.04em;
   color: var(--fg-faint);
 }
@@ -163,14 +163,14 @@
   flex-wrap: wrap;
 }
 .hosted-row-name {
-  font-size: 15px;
+  font-size: 0.9375rem;
   font-weight: 600;
   line-height: 1.3;
   overflow-wrap: anywhere;
 }
 .hosted-row-meta {
   margin-top: 3px;
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   line-height: 1.45;
   color: var(--fg-dim);
 }
@@ -178,7 +178,7 @@
    the mono face and tabular figures the rest of the chrome uses. */
 .hosted-row-mono {
   font-family: var(--chrome-font);
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   color: var(--fg-faint);
   overflow-wrap: anywhere;
 }
@@ -188,7 +188,7 @@
 .hosted-chip {
   flex: 0 0 auto;
   font-family: var(--chrome-font);
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   line-height: 1;
   letter-spacing: 0.02em;
   padding: 4px 6px;
@@ -235,7 +235,7 @@
   background: var(--bg);
   color: var(--fg);
   font-family: var(--ui-font);
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 500;
   text-decoration: none;
   cursor: pointer;
@@ -305,7 +305,7 @@
 .hosted-btn-sm {
   min-height: 36px;
   padding: 0 10px;
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 /* ─── Versions ───────────────────────────────────────────────────────── */
@@ -327,7 +327,7 @@
 }
 .hosted-version-n {
   font-family: var(--chrome-font);
-  font-size: 12px;
+  font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
   color: var(--fg);
   background: var(--bg-hover);
@@ -339,7 +339,7 @@
   flex: 1;
 }
 .hosted-version-note {
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   line-height: 1.45;
   color: var(--fg-faint);
 }
@@ -349,7 +349,7 @@
 .hosted-empty {
   padding: 18px 4px;
   color: var(--fg-dim);
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 .hosted-empty-line {
   margin: 0 0 8px;
@@ -357,7 +357,7 @@
 .hosted-empty-hint {
   display: block;
   font-family: var(--chrome-font);
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   line-height: 1.6;
   color: var(--fg-faint);
   background: var(--bg-elev);
@@ -397,7 +397,7 @@
    are the two a phone reaches for most. The desktop shrink lives in the
    pointer breakpoint at the bottom of this file, with the others. */
 .hosted-app-name {
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 600;
   white-space: nowrap;
 }
@@ -456,7 +456,7 @@
   .hosted-btn {
     min-height: 32px;
     padding: 0 11px;
-    font-size: 12.5px;
+    font-size: 0.78125rem;
   }
   .hosted-btn-sm {
     min-height: 28px;
@@ -464,7 +464,7 @@
   .hosted-app-bar .hosted-btn {
     min-height: 30px;
     padding: 0 10px;
-    font-size: 12.5px;
+    font-size: 0.78125rem;
   }
   /* The versions list is a full-width row of its own under a wrapped row. */
   .hosted-versions {
@@ -478,7 +478,7 @@
 .hosted-base {
   margin-left: auto;
   font-family: var(--chrome-font);
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   color: var(--fg-faint);
   overflow: hidden;
   text-overflow: ellipsis;

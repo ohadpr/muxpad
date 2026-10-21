@@ -55,7 +55,7 @@
   border: 1px solid var(--chat-border, #dcdce6);
   color: var(--chat-fg, #1c1c22);
   font-family: var(--chrome-font, inherit);
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   line-height: 1.38;
 }
 
@@ -130,7 +130,7 @@
   display: grid;
   place-items: center;
   color: var(--chat-faint, #8b8b9c);
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-variant-numeric: tabular-nums;
   padding-right: 2px;
 }
@@ -154,7 +154,7 @@
   background: transparent;
   color: color-mix(in srgb, var(--b-live) 82%, var(--chat-fg, #1c1c22));
   font: inherit;
-  font-size: 12px;
+  font-size: 0.75rem;
   cursor: pointer;
 }
 .browser-card:has(.browser-card__countdown) {

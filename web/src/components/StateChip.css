@@ -175,8 +175,8 @@
   padding: 1px 5px;
   border-radius: 4px;
   font-family: var(--ui-font);
-  font-size: 9.5px;
-  line-height: 13px;
+  font-size: 0.59375rem;
+  line-height: 0.8125rem;
   font-weight: 700;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -185,8 +185,8 @@
   color: color-mix(in srgb, var(--state-hue) var(--status-ink-mix), var(--fg));
 }
 .navtree[data-variant="sheet"] .navtree-state-word {
-  font-size: 10px;
-  line-height: 14px;
+  font-size: 0.625rem;
+  line-height: 0.875rem;
 }
 
 /* The spinner — the rail's ONE moving thing. A ring rather than a labelled

@@ -58,7 +58,7 @@
 .chat-mention-head,
 .chat-mention-divider,
 .chat-mention-foot {
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   font-weight: 600;
   color: var(--chat-faint);
   padding: 7px 13px 4px;
@@ -86,7 +86,7 @@
 }
 
 .chat-mention-name {
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 600;
   color: var(--chat-fg);
   /* The name is the thing you are choosing: it keeps its width, and the
@@ -119,7 +119,7 @@
 .chat-mention-ws {
   flex: 0 2 auto;
   min-width: 0;
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   color: var(--chat-faint);
   white-space: nowrap;
   overflow: hidden;
@@ -129,7 +129,7 @@
 .chat-mention-under {
   flex: 0 1 auto;
   max-width: 45%;
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   color: var(--chat-faint);
   padding: 0 5px;
   border: 1px solid var(--chat-border);
@@ -142,7 +142,7 @@
 .chat-mention-why {
   flex: 1 1 auto;
   min-width: 0;
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   color: var(--chat-faint);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -342,7 +342,7 @@ button.chat-mention-card-head {
 /* The answer from the other chat, in full: it is a message, and a message that
    ellipsises is a message you have to go somewhere else to read. */
 .chat-mention-card-body {
-  font-size: 14px;
+  font-size: 0.875rem;
   line-height: 1.5;
   color: var(--chat-fg);
   white-space: pre-wrap;
@@ -466,7 +466,7 @@ button.chat-mention-card-head {
   margin-top: 8px;
   padding-top: 7px;
   border-top: 1px solid color-mix(in srgb, var(--chat-border-strong) 70%, transparent);
-  font-size: 10px;
+  font-size: 0.625rem;
   font-weight: 700;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -527,7 +527,7 @@ button.chat-mention-card-head {
   gap: 1px;
 }
 .chat-mention-card-name {
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 600;
   color: var(--chat-fg);
   overflow: hidden;
@@ -535,7 +535,7 @@ button.chat-mention-card-head {
   white-space: nowrap;
 }
 .chat-mention-card-sub {
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   color: var(--chat-faint);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -596,8 +596,8 @@ button.chat-mention-card-head {
   padding: 1.5px 6px;
   border-radius: 5px;
   font-family: inherit;
-  font-size: 9.5px;
-  line-height: 13px;
+  font-size: 0.59375rem;
+  line-height: 0.8125rem;
   font-weight: 700;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -952,7 +952,7 @@ button.chat-mention-card-head {
 .chat-mention-card-work {
   border-top: 1px solid var(--chat-border);
   padding-top: 8px;
-  font-size: 14px;
+  font-size: 0.875rem;
   line-height: 1.55;
   color: var(--chat-fg);
   overflow-wrap: anywhere;
@@ -987,7 +987,7 @@ button.chat-mention-card-head {
   gap: 4px;
   max-width: 100%;
   min-width: 0;
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   /* WORDS, so the card's own face — it was monospaced when it printed a raw
      path, which was the right call for a thing you copy and the wrong one for
      a label you read. The string itself lives in `title`. */
@@ -1037,7 +1037,7 @@ a.chat-mention-card-artifact:hover {
 .chat-mention-card-cut {
   display: block;
   margin-top: 8px;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--chat-faint);
 }
 
@@ -1052,7 +1052,7 @@ a.chat-mention-card-artifact:hover {
   /* No fallback hex: this sheet names no colour of its own — the card borrows
      the app's channel or it borrows nothing (see the test that enforces it). */
   color: var(--chat-faint);
-  font-size: 15px;
+  font-size: 0.9375rem;
   line-height: 1;
   cursor: pointer;
 }

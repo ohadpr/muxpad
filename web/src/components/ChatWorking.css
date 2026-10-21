@@ -30,7 +30,7 @@
 .chat-typing s {
   text-decoration: none;
   white-space: pre;
-  font: 13px / 18px var(--chrome-font, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font: 0.8125rem / 1.125rem var(--chrome-font, ui-monospace, SFMono-Regular, Menlo, monospace);
 }
 
 /* ══ 1 · BRAILLE — the canonical CLI spinner ══════════════════════════════ */
@@ -179,7 +179,7 @@
   width: 1ch;
   overflow: hidden;
   animation: ct-strip4 0.8s steps(4) infinite;
-  font-size: 15px;
+  font-size: 0.9375rem;
 }
 @keyframes ct-glide {
   from {
@@ -242,7 +242,7 @@
 }
 .chat-typing.-tetris s {
   animation: ct-strip4 1.1s steps(4) infinite;
-  font-size: 15px;
+  font-size: 0.9375rem;
 }
 
 /* ══ 8 · MATRIX — three columns, three speeds ════════════════════════════ */
@@ -257,8 +257,8 @@
   position: absolute;
   top: -18px;
   width: 1ch;
-  font-size: 11px;
-  line-height: 11px;
+  font-size: 0.6875rem;
+  line-height: 0.6875rem;
   /* Vertical, which a strip of characters is not by default. */
   writing-mode: vertical-rl;
   text-orientation: upright;

@@ -22,6 +22,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - check: broker tests
+            command: npm ci --ignore-scripts --prefix broker && npm test --prefix broker
           - check: typecheck
             command: pnpm typecheck
           - check: lint

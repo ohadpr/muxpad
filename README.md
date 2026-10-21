@@ -74,55 +74,12 @@ A pane can hold a **chat-native agent session** — rendered as HTML, not a TUI 
 
 Nothing about any of that is specific to code. The question above is a shipping contract; the agent that asked it has never opened a file in a repo.
 
-## What a workspace tells its agents, and what it lets them do
+## Slack access
 
-Every agent in a workspace is handed muxpad's own instructions plus whatever
-that workspace adds — house conventions, where things live, what never to point
-at prod. Free text, edited from the workspace row's settings button, picked up
-when a pane launches. The CLI reads and writes it too (`muxpad workspace
-instructions <id>`), because an agent maintaining its own workspace's notes is
-the point.
-
-**Capabilities are the other half, and they are not the same kind of thing.**
-A capability is off until you switch it on, and a capability that is off is not
-merely refused at the call — the whole section is stripped from the
-instructions, so an agent is never told about a tool it cannot use. Advertising
-something to exactly the contexts that must never have it is how an agent comes
-to attempt it.
-
-Slack is the first one. A workspace with it off cannot read, search or post —
-not just post, because a chat full of personal files listing every private
-channel in the company is the same leak pointed the other way.
-
-Three things make that hold rather than merely ask:
-
-- **The credential never leaves the server.** It used to be a line in a dotfile
-  that the CLI sourced into whichever pane asked, so a refused chat could read
-  it and call Slack directly. `muxpad slack` is a thin client now; the token
-  lives in `~/.muxpad/secrets.json`, written `0600` and refused on read if it is
-  not `0600` any more.
-- **The caller cannot just say who it is.** `$MUXPAD_PANE_ID` is a value any
-  caller can set, so beside it every pane gets `$MUXPAD_PANE_KEY` — minted by
-  the server for that pane and handed over in its spawn environment. Naming
-  somebody else's pane does not get past the key, and a `cd` is worth nothing
-  either way. A pane started before keys existed has none and fails closed;
-  using Slack from it costs a restart of that pane.
-- **An agent cannot grant itself anything.** The switch and the credential are
-  both browser-only — the server refuses either change on a request with no
-  `Origin` header, which the CLI and the agent runner never send.
-
-Honest about the limits, of which there are two. The key is a bearer token: it
-sits in a pane's environment, so anything that prints its environment into a
-transcript puts it somewhere another pane can read. And everything here runs as
-one uid, so none of it stops a process that is actively trying. It stops a
-*helpful* agent reaching for a tool in arm's reach, which is the thing that
-actually goes wrong. The airtight version is a broker under a second OS user.
-
-(The first design proved identity by walking the caller's process ancestry,
-which cannot be forged at all. It needed pane pids — a fact only the pty daemon
-has — and reaching them meant a protocol change, which restarts the daemon that
-owns every terminal on the machine. Not a price worth paying to beat an
-accident.)
+All workspaces can request Slack. Configure the connection in **Settings → Integrations → Slack**.
+The isolated approval broker holds credentials and executes Slack calls only after a passkey
+approval or under an active timed grant. Denying a request does not grant access.
+Workspaces organize chats; they have no tool switches or custom agent instructions.
 
 ## Pinned cards
 
@@ -314,7 +271,7 @@ Read this section before you point it at anything.
 
 **There is no authentication.** Reachability is authorization. Bind to an interface you actually trust — typically your Tailscale IPv4 — and never to `0.0.0.0` on an unfiltered network. Anyone who can reach the port can open a WebSocket into a live shell. Note that `pnpm serve` falls back to `0.0.0.0` when there is no `MUXPAD_HOST` and no Tailscale; set it explicitly.
 
-**A workspace's capabilities are a boundary against mistakes, not against malice.** See [capabilities](#what-a-workspace-tells-its-agents-and-what-it-lets-them-do). Credentials live in the server process and are identified by process ancestry rather than by anything the caller says, which is enough to stop an agent wandering into a tool it should not have. It is not a sandbox: same uid, same home directory, same everything.
+**Slack approval is separate from workspace organization.** Credentials and Slack execution live in the isolated broker, not the muxpad server. Pane keys route requests back to their originating chats; passkey verification authorizes access.
 
 **Artifacts are public on purpose.** The listener is a *second* one on its own port — no API, no WebSocket, no directory listings. Access control is an unguessable slug, and a named slug is a URL you chose to hand out. Publishing something publishes it; check the directory first.
 
@@ -353,20 +310,10 @@ muxpad agent new --name='vat rules' "audit the eu-vat rule table for gaps"
 # Same verb, no code involved
 muxpad agent new --name='returns quotes' "compare the two returns quotes on total cost"
 
-# Read, search and post in Slack — always as you, 🤖-prefixed, off by default
+# Read, search and post in Slack — passkey approval or an active timed grant
 muxpad slack read '#eng' --since=2h
 muxpad slack post @teammate "the PR feedback"
-#   → refuses unless this chat's WORKSPACE has Slack switched on in the UI, so a
-#     personal chat can never read or message a work surface. This command holds
-#     no credential: the server does, and it works out which workspace you are
-#     in from your process ancestry — so neither `cd` nor MUXPAD_PANE_ID nor
-#     MUXPAD_WORKSPACE_ID can talk it round, and the switch cannot be thrown
-#     from the CLI, because the CLI is what agents drive.
-
-# Per-workspace agent instructions (readable AND writable from a chat)
-muxpad workspace instructions <id>                  # print
-muxpad workspace instructions <id> - < notes.md     # replace
-muxpad workspace caps <id>                          # read-only; UI changes them
+# All workspaces use the same protected approval flow.
 
 # Put a finished thing on a URL and print the link
 muxpad publish ./report --name=market-teardown

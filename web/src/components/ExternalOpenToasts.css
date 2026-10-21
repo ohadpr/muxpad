@@ -28,7 +28,7 @@
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4);
   min-width: 280px;
   max-width: 420px;
-  font-size: 13px;
+  font-size: 0.8125rem;
   line-height: 1.35;
 }
 
@@ -37,7 +37,7 @@
 }
 .external-open-toast-origin {
   color: var(--fg-dim);
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 .external-open-toast-url {
   color: var(--fg);
@@ -78,7 +78,7 @@
   background: transparent;
   border: none;
   color: var(--fg-faint);
-  font-size: 18px;
+  font-size: 1.125rem;
   line-height: 1;
   width: 22px;
   height: 22px;

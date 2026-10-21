@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>muxpad</title><link rel="stylesheet" href="/shell.css">
+</head>
+<body>
+  <header id="trust-bar"><strong>muxpad</strong><span id="connection" role="status">Connecting to approvals…</span><button id="retry-connection" type="button" hidden>Retry connection</button><details id="session-management" hidden><summary>Manage</summary><div><button id="permissions-button" type="button" hidden>Permissions (0)</button><button id="revoke-device" type="button" hidden>Revoke this tailnet device</button><button id="sign-out" type="button" hidden>Unpair this session</button></div></details></header>
+  <main id="node-access" hidden><h1>Slack approvals</h1><p id="node-access-status" role="status"></p><button id="resume-access" type="button" hidden>Resume approvals</button></main>
+  <main id="pairing" hidden><h1>Pair your device once</h1><p>Use your own browser on a device agents cannot access. Never pair an agent browser or shared profile.</p><form id="pair-form"><label for="pair-secret">One-use pairing secret</label><input id="pair-secret" type="password" autocomplete="off" required><button type="submit">Pair this device</button></form><p id="pair-status" role="status"></p></main>
+  <main id="review-idle" hidden><h1>Slack approvals</h1><p>No request is waiting for your approval. You can keep this window open.</p><button id="close-window" type="button">Close window</button></main>
+  <iframe id="muxpad" title="muxpad workspace" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads" hidden></iframe>
+  <dialog id="approval" aria-labelledby="approval-title" aria-describedby="approval-description">
+    <span class="brand-pair" role="group" aria-label="muxpad connected to Slack"><svg width="18" height="18" viewBox="0 0 32 32" aria-hidden="true"><rect x="2" y="2" width="14" height="28" rx="3" fill="#334155"/><rect x="18" y="2" width="12" height="13" rx="3" fill="#f59e0b"/><rect x="18" y="17" width="12" height="13" rx="3" fill="#475569"/></svg><span>muxpad</span><span aria-hidden="true">↔</span><svg width="18" height="18" viewBox="0 0 128 128" aria-hidden="true"><g fill="#36c5f0"><circle cx="20" cy="52" r="12"/><rect x="40" y="8" width="24" height="56" rx="12"/></g><g fill="#2eb67d"><circle cx="76" cy="20" r="12"/><rect x="72" y="40" width="56" height="24" rx="12"/></g><g fill="#ecb22e"><circle cx="108" cy="76" r="12"/><rect x="64" y="72" width="24" height="56" rx="12"/></g><g fill="#e01e5a"><circle cx="52" cy="108" r="12"/><rect x="8" y="64" width="56" height="24" rx="12"/></g></svg><span>Slack</span></span>
+    <div class="approval-heading"><h1 id="approval-title">Approve Slack action</h1><details class="manage-access"><summary aria-label="Manage access">•••</summary><button id="approval-permissions" type="button">Permissions / revoke</button></details></div><p id="approval-description" class="sr-only">Review the exact request below.</p>
+    <p id="request-context">Slack team <span id="team"></span></p>
+    <pre id="message" hidden aria-label="Exact message"></pre><dl id="payload"></dl>
+    <div class="duration-row"><label for="duration">Allow</label>
+    <select id="duration"><option value="once">Once</option><option value="10m">For 10 minutes</option><option value="1h">For 1 hour</option><option value="1d">For 1 day</option></select></div>
+    <p id="grant-scope"></p><p id="expiry"></p><p id="decision-status" role="status"></p>
+    <div id="buttons"><button id="reject" type="button" autofocus>Cancel</button><button id="approve" type="button">Approve</button></div>
+  </dialog>
+  <dialog id="permissions" aria-labelledby="permissions-title"><h1 id="permissions-title">Active permissions</h1><p>Full Slack access covers all agents in the team shown: list channels and users, open DMs, read history and threads, search, send, edit and delete messages, react and upload files. Protected broker policy still applies. Revocation stops new actions; an action already in progress may finish.</p><div id="grant-list"></div><p id="permissions-status" role="status"></p><div id="permission-buttons"><button id="permissions-close" type="button" autofocus>Close</button><button id="revoke-all" type="button">Revoke all</button></div></dialog>
+  <script type="module" src="/shell.js"></script>
+</body>
+</html>

@@ -72,7 +72,10 @@ const decl = (selector: string, prop: string): string | null => {
   return hit ? (hit[2] ?? '').trim() : null;
 };
 
-const px = (v: string | null) => Number((v ?? '').replace('px', ''));
+const px = (v: string | null) => {
+  const value = v ?? '';
+  return Number.parseFloat(value) * (value.endsWith('rem') ? 16 : 1);
+};
 
 describe('the session line cannot become two lines', () => {
   it('fixes the bar at exactly one line of text, so content cannot grow it', () => {
@@ -80,6 +83,7 @@ describe('the session line cannot become two lines', () => {
     // the only one of the three that both reserves the line AND refuses a
     // second one. With `max-height` the children would still lay out two rows
     // and merely be clipped, which is how you get a half-visible second line.
+    expect(decl('.chat-status-bar', 'height')).toBe('1rem');
     const h = px(decl('.chat-status-bar', 'height'));
     expect(h).toBeGreaterThan(0);
     // …and the number is the line, not a guess: the cell's line-height with no
@@ -262,7 +266,7 @@ describe('the session line sits outside the composer pill', () => {
     // strip pushed the input down. Its height is now a constant in the
     // stylesheet and the only inline style the composer measures is the
     // reserve's — nothing in this component sizes the strip at runtime.
-    expect(decl('.chat-status-bar', 'height')).toMatch(/^\d+px$/);
+    expect(decl('.chat-status-bar', 'height')).toBe('1rem');
     expect(SRC).not.toMatch(/className="chat-status-bar"[\s\S]{0,200}style=/);
   });
 });

@@ -13,8 +13,6 @@ interface WorkspaceRow {
   hidden: number;
   created_at: number;
   updated_at: number;
-  instructions: string | null;
-  slack: number;
 }
 
 /**
@@ -159,51 +157,7 @@ export class WorkspaceStore {
       created_at: r.created_at,
       updated_at: r.updated_at,
       tab_count: this.tabCount(r.id),
-      instructions: r.instructions ?? null,
-      slack: !!r.slack,
     };
-  }
-
-  /**
-   * Set the per-workspace agent instructions.
-   *
-   * Separate from `update` on purpose: that one is name/slug, which the nav
-   * edits inline, and this is a different surface with a different risk.
-   */
-  setInstructions(id: string, instructions: string | null): Workspace {
-    const existing = this.getById(id);
-    if (!existing) throw new Error(`workspace ${id} not found`);
-    const now = Date.now();
-    this.db
-      .prepare('UPDATE workspaces SET instructions = ?, updated_at = ? WHERE id = ?')
-      .run(instructions, now, id);
-    return { ...existing, instructions, updated_at: now };
-  }
-
-  /**
-   * Turn a capability on or off.
-   *
-   * The route guards WHO may call this — see routes/workspaces.ts. The store
-   * only knows how to write it.
-   */
-  setSlack(id: string, slack: boolean): Workspace {
-    const existing = this.getById(id);
-    if (!existing) throw new Error(`workspace ${id} not found`);
-    const now = Date.now();
-    this.db
-      .prepare('UPDATE workspaces SET slack = ?, updated_at = ? WHERE id = ?')
-      .run(slack ? 1 : 0, now, id);
-    return { ...existing, slack, updated_at: now };
-  }
-
-  /** Is Slack switched on for the workspace this TAB belongs to? */
-  slackEnabledForTab(tabId: string): boolean {
-    const r = this.db
-      .prepare(
-        'SELECT w.slack AS slack FROM tabs t JOIN workspaces w ON w.id = t.workspace_id WHERE t.id = ?',
-      )
-      .get(tabId) as { slack?: number } | undefined;
-    return !!r?.slack;
   }
 
   private uniqueSlug(): string {

@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { PaneSpec, Tab } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { verifyPaneKey } from '../pane-key.js';
 import { AgentQueueStore } from '../store/AgentQueueStore.js';
 import { AgentSessionStore } from '../store/AgentSessionStore.js';
 import { openDb } from '../store/db.js';
@@ -92,6 +93,27 @@ describe('pane conversion — the zero-message gate', () => {
       mode: 'agent',
       startup_cmd: 'muxpad agent --backend codex',
     });
+  });
+
+  it.each([
+    ['agent-backend', { backend: 'codex', mode: 'agent' }],
+    ['respawn', {}],
+    ['as-terminal', {}],
+    ['cwd', { cwd: '/private/tmp' }],
+  ])('retains authenticated pane identity through %s', async (route, body) => {
+    const { pane } = await newChat();
+    const spawn = vi.spyOn(test.ptyd.client, 'ensurePane');
+    const res = await test.app.request(`/api/panes/${pane.id}/${route}`, {
+      method: 'POST',
+      ...json(body),
+    });
+    expect(res.status).toBe(route === 'agent-backend' ? 200 : 204);
+    const spec = spawn.mock.calls[0]?.[0];
+    expect(spec?.id).toBe(pane.id);
+    expect(verifyPaneKey(pane.id, spec?.env?.MUXPAD_PANE_KEY)).toBe(true);
+    expect(verifyPaneKey(pane.id, spec?.env?.MUXPAD_PANE_PROOF)).toBe(true);
+    expect(verifyPaneKey('another-pane', spec?.env?.MUXPAD_PANE_PROOF)).toBe(false);
+    spawn.mockRestore();
   });
 
   it('carries the launch card’s FOLDER and MODEL into the spawned session', async () => {

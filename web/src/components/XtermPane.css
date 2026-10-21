@@ -64,7 +64,7 @@
   box-shadow: 0 4px 16px color-mix(in srgb, #000 35%, transparent);
   color: var(--xterm-fg, #c0caf5);
   font-family: var(--ui-font, sans-serif);
-  font-size: 12px;
+  font-size: 0.75rem;
   opacity: 0.95;
   pointer-events: none;
 }
@@ -127,7 +127,7 @@
 
 .xterm-paste-toast-path {
   min-width: 0;
-  font: 11px / 1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: 0.6875rem / 1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
   overflow: hidden;
   display: -webkit-box;
   -webkit-box-orient: vertical;

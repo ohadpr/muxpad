@@ -240,20 +240,16 @@ describe('the sheet’s workspace row: “+” and “⋯”, nothing else', () 
     }
   });
 
-  it('“⋯” opens settings, rename, and close — close last, and marked destructive', async () => {
+  it('“⋯” opens rename and close — close last, and marked destructive', async () => {
     const box = mount('sheet');
     const more = rowFor(box, 'Personal').querySelector('.navtree-ws-more');
     expect(more?.getAttribute('aria-expanded')).toBe('false');
     await click(more);
     expect(more?.getAttribute('aria-expanded')).toBe('true');
     const items = menuItems();
-    expect(items.map((i) => i.textContent)).toEqual([
-      'Workspace settings',
-      'Rename',
-      'Close workspace',
-    ]);
-    expect(items[2]?.classList.contains('-danger')).toBe(true);
-    expect(items.slice(0, 2).some((i) => i.classList.contains('-danger'))).toBe(false);
+    expect(items.map((i) => i.textContent)).toEqual(['Rename', 'Close workspace']);
+    expect(items[1]?.classList.contains('-danger')).toBe(true);
+    expect(items.slice(0, 1).some((i) => i.classList.contains('-danger'))).toBe(false);
     // The thumb-sized variant of the menu (44px rows, pinned in the CSS test).
     expect(document.querySelector('.navtree-menu.-touch')).not.toBeNull();
   });
@@ -277,14 +273,10 @@ describe('the sheet’s workspace row: “+” and “⋯”, nothing else', () 
 });
 
 describe('the desktop row is untouched', () => {
-  it('keeps settings, “+” and × on the rail', () => {
+  it('keeps “+” and × on the rail', () => {
     const box = mount('sidebar');
     const labels = controls(rowFor(box, 'Personal')).map((b) => b.className);
-    expect(labels).toEqual([
-      'navtree-close navtree-ws-settings',
-      'navtree-close navtree-ws-add',
-      'navtree-close',
-    ]);
+    expect(labels).toEqual(['navtree-close navtree-ws-add', 'navtree-close']);
     expect(box.querySelector('.navtree-ws-more')).toBeNull();
   });
 });
