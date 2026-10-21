@@ -11,11 +11,11 @@
 
   /* Chrome is monospace across every level (header, tabs, switcher,
      dropdown rows, pane headers). Separate from the terminal font (which
-     remains user-configurable) so the chrome reads as a unified machined
+     follows the browser font size) so the chrome reads as a unified machined
      surface regardless of what's running inside the panes. */
   --chrome-font: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace;
-  --chrome-size: 13px;
-  --chrome-size-sm: 12px;
+  --chrome-size: 0.8125rem;
+  --chrome-size-sm: 0.75rem;
 
   /* Proportional UI sans for prose-y chrome — chiefly the sidebar nav
      labels (workspace/tab names), where the machined monospace reads
@@ -66,9 +66,15 @@
      all measured exactly 1.00:1, which is not low contrast, it is invisible.
      Reported as "the text seems to be rendered hidden somehow".
      Derived rather than listed per theme, so a theme added later cannot
-     forget it. 10% of the ink into the surface reads as lifted and leaves the
-     worst case across the six themes at 6.06:1. */
-  --rail-elev: color-mix(in srgb, var(--rail-ink) 10%, var(--rail-surface));
+     forget it.
+     6%, NOT 10%: the number was chosen against --rail-ink, and the control
+     that sits on this surface wears --fg-dim at rest, which the island rebinds
+     to --rail-ink-dim. Measured on the dimmer ink the 10% mix put tokyo-night
+     at 4.37:1 — under AA, while the test that was supposed to guard it
+     measured the ink the button does not use and reported 6.06. At 6% the
+     worst case across the six themes is 4.79:1 for the resting label and
+     6.65:1 for full-strength ink, and the box still reads as lifted. */
+  --rail-elev: color-mix(in srgb, var(--rail-ink) 6%, var(--rail-surface));
   --rail-ink-dim: var(--fg-dim);
   --rail-ink-faint: var(--fg-faint);
   --rail-hover: var(--bg-hover);
@@ -606,6 +612,13 @@
   box-sizing: border-box;
 }
 
+/* Keep the root at the browser's chosen size. All UI typography uses rem. */
+html {
+  font-size: 100%;
+}
+body {
+  font-size: 0.875rem;
+}
 html,
 body,
 #root {
@@ -627,7 +640,6 @@ body,
   background: var(--bg);
   color: var(--fg);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", sans-serif;
-  font-size: 14px;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow: hidden;
@@ -742,7 +754,7 @@ select:focus {
   border: 1px solid var(--border);
   padding: 6px 12px;
   border-radius: 6px;
-  font-size: 13px;
+  font-size: 0.8125rem;
   cursor: pointer;
   transition: background 80ms ease, border-color 80ms ease;
 }
@@ -981,7 +993,7 @@ select:focus {
 }
 .brand-text-side-version {
   font-family: var(--chrome-font);
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--fg-dim);
   opacity: 0.75;
 }
@@ -996,4 +1008,20 @@ select:focus {
   :root {
     --chrome-h: 46px;
   }
+}
+
+.brand-logo-wrap {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+.brand-insecure-dot {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  right: -2px;
+  top: -2px;
+  background: #f59e0b;
+  box-shadow: 0 0 0 2px var(--bg, #111827);
 }

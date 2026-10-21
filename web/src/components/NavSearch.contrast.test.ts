@@ -31,7 +31,12 @@ function themes(): Theme[] {
   for (const match of CSS.matchAll(/\[data-theme="([^"]+)"\]\s*\{([\s\S]*?)\n\}/g)) {
     const [, sel, body] = match;
     if (!sel || !body) continue;
-    const ink = /--rail-ink:\s*(#[0-9a-f]{3,8});/i.exec(body)?.[1];
+    // THE INK THE CONTROL ACTUALLY WEARS. This read --rail-ink, which is the
+    // island's FULL-strength ink; the search button's resting label is
+    // --fg-dim, rebound to --rail-ink-dim. So the test measured a pair that
+    // nothing renders and passed at 6.06:1 while tokyo-night really sat at
+    // 4.37 — under the very threshold asserted below. Found by review.
+    const ink = /--rail-ink-dim:\s*(#[0-9a-f]{3,8});/i.exec(body)?.[1];
     const surface = /--rail-surface:\s*(#[0-9a-f]{3,8});/i.exec(body)?.[1];
     if (ink && surface) out.push({ name: sel, ink, surface });
   }
@@ -71,14 +76,14 @@ describe('the rail search button, on every theme that ships', () => {
     // The ratio below is computed from that formula, so the formula has to be
     // the one the stylesheet actually uses.
     expect(CSS).toMatch(
-      /--rail-elev:\s*color-mix\(in srgb,\s*var\(--rail-ink\)\s*10%,\s*var\(--rail-surface\)\)/,
+      /--rail-elev:\s*color-mix\(in srgb,\s*var\(--rail-ink\)\s*6%,\s*var\(--rail-surface\)\)/,
     );
   });
 
   it.each(themes().map((t) => [t.name, t] as const))(
     '%s keeps its label legible on the surface it sits on',
     (_name, theme) => {
-      const field = mix(theme.ink, theme.surface, 10);
+      const field = mix(theme.ink, theme.surface, 6);
       // AA for body text. The failure this replaces was not 4.4 — it was 1.0,
       // the same colour twice, so the bar is set where a human can read it
       // rather than where the old value nearly was.

@@ -55,6 +55,7 @@ import {
   splitMessageAttachments,
 } from '../lib/attachments';
 import { browserOpenIntent, injectBrowserMoments } from '../lib/browser-card';
+import { useBrowserFontSize } from '../lib/browser-font';
 import {
   type DirectedWork,
   directedIsStale,
@@ -699,6 +700,7 @@ export function ChatPane({
   pendingPick?: boolean;
 }) {
   // undefined = still connecting; null = connected but no agent session.
+  const browserFontSize = useBrowserFontSize();
   const [session, setSession] = useState<SessionMeta | null | undefined>(undefined);
   const [events, setEvents] = useState<ChatEvent[]>([]);
   // Ordered event list (source of truth for `events`). The server sends the
@@ -1795,9 +1797,23 @@ export function ChatPane({
       } else if (msg.t === 'turn-start') {
         acked.current = true;
         window.clearTimeout(sendWatchdog.current);
-        dropRestoredText();
+        // ONLY IF THIS TURN IS THE ONE WE RESTORED. A turn-start carries the
+        // text that started it and is deliberately BARE when nothing did — a
+        // cron fire, a wakeup, the queue draining somebody else's message (see
+        // `pendingSendText` in ws.ts). Clearing on any turn-start meant the
+        // next unrelated turn silently emptied a composer holding a message
+        // that was never delivered, and took its "not delivered" notice with
+        // it. `send-ack` and `queued` go only to the socket that sent, so for
+        // a socket that died this match IS the late evidence.
+        if (typeof msg.text === 'string') dropRestoredText(msg.text);
         setSending(true);
-        setNotice(null);
+        // …AND THE NOTICE OUTLIVES AN UNRELATED TURN TOO. A turn starting is
+        // normally the end of any connection chatter, but "your message was
+        // not delivered" is a statement about a send that is STILL undelivered
+        // — `restoredText` is exactly the flag for that — and somebody else's
+        // turn starting is not news about it. Clearing it here left the text
+        // in the composer with nothing left on screen to explain why.
+        if (!restoredText.current) setNotice(null);
         streamBuffer.current = '';
         setStreamingText('');
         pendingText.current = '';
@@ -2129,9 +2145,13 @@ export function ChatPane({
    * survives even a perfect liveness probe: the socket really did die, the text
    * really was restored, and the server really did have the message.
    */
-  const dropRestoredText = () => {
+  const dropRestoredText = (onlyIfMatches?: string) => {
     const restored = restoredText.current;
     if (!restored) return;
+    // A caller that names the delivered text is claiming "this specific send
+    // landed"; anything else is a different message and must not take the
+    // composer with it.
+    if (onlyIfMatches !== undefined && onlyIfMatches.trim() !== restored.trim()) return;
     restoredText.current = null;
     setInput((prev) => composerAfterLateAck(prev, restored));
     setNotice((prev) =>
@@ -2470,7 +2490,7 @@ export function ChatPane({
   // than the text beside it, so a draft can outgrow one line without any newline
   // in it. Which is the same reason this reads the DOM rather than counting the
   // string, and was already true of a wrapped line.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: input is the resize trigger
+  // biome-ignore lint/correctness/useExhaustiveDependencies: input and browserFontSize are resize triggers
   useEffect(() => {
     const el = inputRef.current?.el();
     if (!el) return;
@@ -2479,7 +2499,7 @@ export function ChatPane({
     el.style.height = `${el.scrollHeight}px`;
     // No scrollbar while growing; only reveal one once we hit the max height.
     el.style.overflowY = el.scrollHeight > max ? 'auto' : 'hidden';
-  }, [input]);
+  }, [input, browserFontSize]);
 
   // Track the floating composer's height so the scroll area can reserve exactly
   // that much bottom padding (see composerH usage on .chat-list). Re-attaches
