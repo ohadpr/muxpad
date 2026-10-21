@@ -76,6 +76,29 @@ beforeEach(() => {
       }
     },
   );
+  // AND THE OBSERVER, WHICH IS WHAT ACTUALLY MADE CI RED.
+  //
+  // The card suppresses captures while it is off screen, decided by an
+  // IntersectionObserver — and falls back to "always visible" where there is
+  // none. The jsdom installed here HAS none, so the gate never engaged and
+  // every test passed. CI's does, and in a DOM with no layout nothing is ever
+  // intersecting, so it reported off-screen, every capture was skipped, and
+  // ten tests failed on a card that was working exactly as designed.
+  //
+  // A stub that says "on screen" is the honest environment for these tests:
+  // they are about what the card does when somebody is looking at it. The
+  // off-screen case has its own test, which installs its own observer.
+  vi.stubGlobal(
+    'IntersectionObserver',
+    class {
+      constructor(private cb: (e: Array<{ isIntersecting: boolean }>) => void) {
+        queueMicrotask(() => cb([{ isIntersecting: true }]));
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
   vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
     const url = String(input);
     shotFetches.push(url);
@@ -492,6 +515,28 @@ describe('peeking at a live browser', () => {
     expect(peek(host)).toBeDefined();
     expect(action(host)).toBeDefined();
     await settle(); // the preview opens itself; let its frame land inside act
+  });
+
+  it('DIAGNOSTIC: the environment this file actually gets', async () => {
+    // TEMPORARY, removed once CI is green. Five fixes have been pushed at this
+    // failure without reproducing it on macOS, in a Linux container, or under
+    // CI's own command, so this prints what differs instead of guessing again.
+    const { host } = mount(<BrowserCard moment={moment(base)} onOpen={() => {}} now={1} />);
+    await settle();
+    // biome-ignore lint/suspicious/noConsole: diagnostic, removed next commit
+    console.error(
+      'MUXPAD-DIAG',
+      JSON.stringify({
+        hidden: document.hidden,
+        visibility: document.visibilityState,
+        io: typeof IntersectionObserver,
+        img: String(globalThis.Image).slice(0, 30),
+        fetches: shotFetches.length,
+        urls: objectUrls,
+        src: shot(host)?.getAttribute('src') ?? null,
+      }),
+    );
+    expect(true).toBe(true);
   });
 
   it('shows the page without being asked', async () => {
