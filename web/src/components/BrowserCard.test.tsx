@@ -99,12 +99,23 @@ beforeEach(() => {
       disconnect() {}
     },
   );
+  // NO `Response` ROUND TRIP. This wrapped the blob in a real Response and
+  // read it back with `.blob()` — which works here and came back EMPTY on CI,
+  // so every capture fetched, found a zero-size body, and returned before
+  // creating an object URL. The card then had nothing to show and ten tests
+  // failed on a component that was behaving correctly.
+  //
+  // Diagnosed by printing the environment from inside the run rather than
+  // guessing a sixth time: `fetches: 1, urls: 0, src: null` says the fetch
+  // happened and `createObjectURL` was never reached, which leaves exactly
+  // one step in between. The stub hands the blob straight back now, so there
+  // is no serialisation for a platform to disagree about.
   vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
-    const url = String(input);
-    shotFetches.push(url);
-    return new Response(new Blob([new Uint8Array([1, 2, 3])], { type: 'image/jpeg' }), {
-      status: 200,
-    });
+    shotFetches.push(String(input));
+    return {
+      ok: true,
+      blob: async () => new Blob([new Uint8Array([1, 2, 3])], { type: 'image/jpeg' }),
+    };
   });
 });
 
@@ -515,28 +526,6 @@ describe('peeking at a live browser', () => {
     expect(peek(host)).toBeDefined();
     expect(action(host)).toBeDefined();
     await settle(); // the preview opens itself; let its frame land inside act
-  });
-
-  it('DIAGNOSTIC: the environment this file actually gets', async () => {
-    // TEMPORARY, removed once CI is green. Five fixes have been pushed at this
-    // failure without reproducing it on macOS, in a Linux container, or under
-    // CI's own command, so this prints what differs instead of guessing again.
-    const { host } = mount(<BrowserCard moment={moment(base)} onOpen={() => {}} now={1} />);
-    await settle();
-    // biome-ignore lint/suspicious/noConsole: diagnostic, removed next commit
-    console.error(
-      'MUXPAD-DIAG',
-      JSON.stringify({
-        hidden: document.hidden,
-        visibility: document.visibilityState,
-        io: typeof IntersectionObserver,
-        img: String(globalThis.Image).slice(0, 30),
-        fetches: shotFetches.length,
-        urls: objectUrls,
-        src: shot(host)?.getAttribute('src') ?? null,
-      }),
-    );
-    expect(true).toBe(true);
   });
 
   it('shows the page without being asked', async () => {
