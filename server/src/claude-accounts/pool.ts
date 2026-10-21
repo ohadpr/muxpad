@@ -289,6 +289,16 @@ export class AccountPool {
     requiresHistory = false,
   ): void {
     const previous = this.pending(pane);
+    // THE FIRST SAVED REQUEST IS THE ONE THAT WAS PROMISED.
+    //
+    // This was INSERT OR REPLACE with no guard, so a second message sent while
+    // still blocked silently overwrote the first — the one the user had been
+    // told, in as many words, was saved. They then come back after the reset,
+    // type /retry, and get the wrong message back; the original is gone with
+    // no trace it ever existed. A later message is never more entitled to the
+    // single slot than the one already holding it, so the slot keeps what it
+    // has and the newcomer stays in the runner's own queue.
+    if (previous && previous.session === session && previous.text !== text) return;
     const required =
       requiresHistory || (previous?.session === session && !!previous.requiresHistory);
     this.db

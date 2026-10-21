@@ -1299,7 +1299,21 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
             quotaPaused = true;
             const reason =
               'All Claude accounts are unavailable. Request saved; use /retry after an account resets.';
-            accountPool.savePending(host.paneId, liveSid, pendingTexts[0] as string, reason);
+            // SAVED MEANS MOVED, NOT COPIED.
+            //
+            // This saved `pendingTexts[0]` and left it in the queue, so one
+            // message existed in two places with no memory that they were the
+            // same one. Two ways that bit:
+            //   · the user does the natural thing after "Request saved" and
+            //     retypes it, so the queue becomes [M, M] and it runs twice;
+            //   · the user moves on and sends N instead — the next send clears
+            //     `quotaPaused`, the loop resumes, and takes the STALE M off
+            //     the front of the queue, running the message they had
+            //     abandoned instead of the one they just typed.
+            // Shifting it out makes the pending row the single copy, which is
+            // what `/retry` already assumes when it unshifts it back.
+            const saved = pendingTexts.shift() as string;
+            accountPool.savePending(host.paneId, liveSid, saved, reason);
             log(reason);
             emit({ t: 'turn-done', ok: false, error: reason });
             break;
