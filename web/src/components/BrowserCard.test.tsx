@@ -58,6 +58,24 @@ beforeEach(() => {
   objectUrls = 0;
   URL.createObjectURL = () => `blob:mock/${++objectUrls}`;
   URL.revokeObjectURL = () => {};
+  // DECODE IS STUBBED, BECAUSE INHERITING IT MADE THE SUITE ENVIRONMENT-
+  // DEPENDENT. The card decodes each frame off-screen before swapping it in,
+  // to avoid the blank between `src` and the bytes being ready. The jsdom
+  // installed here has NO decode(), so that step vanished and every test
+  // passed; CI's jsdom has one that never settles for a URL it cannot load, so
+  // the frame was withheld for the full decode budget and seven tests failed
+  // there — twice, because the first fix corrected the CODE and left the
+  // suite still inheriting whatever the environment happened to provide.
+  // A test that only passes on one machine's jsdom is not a test.
+  vi.stubGlobal(
+    'Image',
+    class {
+      src = '';
+      decode() {
+        return Promise.resolve();
+      }
+    },
+  );
   vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
     const url = String(input);
     shotFetches.push(url);
