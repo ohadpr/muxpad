@@ -20,3 +20,13 @@ test-results/
 # Written when MUXPAD_DATA_DIR is the literal string "undefined" (a harness
 # env leak, not a real data dir). Never an artifact worth tracking.
 server/undefined/
+
+# Standalone credential broker dependencies
+broker/node_modules/
+
+# THIS MACHINE'S BROKER RELEASES, not source. It pins the release hashes and
+# the tailnet `origin` of the host they were built for — a real machine name
+# in a PUBLIC repo, and meaningless to anyone else's install. `setupReleases`
+# already returns [] when the file is absent, so a fresh checkout simply
+# offers no setup commands until it has its own.
+server/assets/slack-setup-releases.json

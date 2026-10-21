@@ -9,6 +9,7 @@ import {
   assistantQuota,
   quotaBlock,
   readAccountConfig,
+  readAccountConfigOrNull,
   resultQuota,
 } from './pool.js';
 const dirs: string[] = [];
@@ -378,5 +379,46 @@ describe('a refusal that arrives as a failed RESULT', () => {
     // separate door for a failure, not for a sentence.
     expect(assistantQuota(undefined, "You've hit your weekly limit")).toBeNull();
     expect(assistantQuota('rate_limit', "You've hit your weekly limit")).not.toBeNull();
+  });
+});
+
+describe('a config a human broke by hand', () => {
+  /**
+   * A POOL IS AN OPTIMISATION; LOSING IT MUST NOT COST THE APP.
+   *
+   * The runner reads this file at boot and on every send, through a parse that
+   * threw. One typo, or a backup profile directory deleted by hand, therefore
+   * crashed every Claude pane — and the respawn loop met the same file and
+   * crashed again.
+   */
+  it('falls back to the default login instead of throwing', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mux-badcfg-'));
+    writeFileSync(join(dir, 'claude-accounts.json'), '{ this is not json');
+    expect(() => readAccountConfig(dir)).toThrow();
+    expect(readAccountConfigOrNull(dir)).toBeNull();
+    expect(AccountPool.open(dir)).toBeNull();
+  });
+
+  it('refuses a config whose accounts are secretly one directory', () => {
+    // The schema compares configDir as TEXT, so a trailing "/." or a symlink
+    // passed as two accounts while resolving to one profile — failover then
+    // misattributes usage, and signing in to the "backup" replaces the login
+    // it was supposed to stand beside.
+    const dir = mkdtempSync(join(tmpdir(), 'mux-alias-'));
+    const real = join(dir, 'profile');
+    mkdirSync(join(real, 'projects'), { recursive: true });
+    writeFileSync(
+      join(dir, 'claude-accounts.json'),
+      JSON.stringify({
+        version: 1,
+        preferred: 'primary',
+        accounts: [
+          { id: 'primary', label: 'P', configDir: real, priority: 0, enabled: true },
+          { id: 'backup', label: 'B', configDir: `${real}/.`, priority: 1, enabled: true },
+        ],
+      }),
+    );
+    expect(() => readAccountConfig(dir)).toThrow(/same directory/);
+    expect(readAccountConfigOrNull(dir)).toBeNull();
   });
 });

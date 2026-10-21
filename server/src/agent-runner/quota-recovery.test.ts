@@ -112,6 +112,48 @@ describe('Claude quota recovery through real backend loop', () => {
     await next.settle();
     expect(frames.some((f) => f.t === 'turn-done' && f.ok)).toBe(true);
   });
+  it('does NOT replay a request the turn already answered', async () => {
+    /**
+     * THE DOUBLE DELIVERY, as a test.
+     *
+     * The SDK emits `rate_limit_event` whenever the window CHANGES, not only
+     * when a request is refused. So a turn that answered perfectly well and
+     * then tipped the window to rejected looked, to recovery, exactly like a
+     * request that never ran — and the user's message was sent again on the
+     * next account. One typed message, two turns, two answers. Reported from
+     * a real session as "I only typed this once".
+     *
+     * The account must still be blocked; only the replay is wrong.
+     */
+    const first = await send();
+    first.push(assistant([{ type: 'text', text: 'Here is the answer.' }]));
+    await deny(first);
+    await first.settle();
+
+    // No second session, and nothing re-prompted.
+    expect(fakeSession()).toBe(first);
+    expect(first.promptTexts).toEqual(['do the work']);
+    expect(frames.some((f) => f.t === 'turn-done' && f.ok)).toBe(true);
+    // …and the refusal was still recorded, so the account cools down.
+    const pool = new AccountPool(dir);
+    const cooling = pool.db
+      .prepare('SELECT 1 FROM cooldowns WHERE account = ? AND until_ms > ?')
+      .get('primary', Date.now());
+    pool.close();
+    expect(cooling).toBeTruthy();
+  });
+
+  it('still replays when the turn produced only the provider refusal', async () => {
+    // The other side of the same branch: a turn whose ONLY assistant message
+    // is the CLI's synthetic "you've hit your limit" has not answered
+    // anything, and must still move to the next account.
+    const first = await send();
+    first.push(assistant([{ type: 'text', text: "You've hit your limit" }], 'rate_limit'));
+    await deny(first);
+    await until(() => fakeSession() !== first);
+    expect(fakeSession().promptTexts).toEqual(['do the work']);
+  });
+
   it('does not switch on warning events or normal prose', async () => {
     const first = await send();
     first.push({ ...limited, rate_limit_info: { status: 'allowed_warning' } });

@@ -348,7 +348,7 @@
      14px (not the 13px chrome size) so the text fills the row metrics
      instead of floating in them. */
   font-family: var(--ui-font);
-  font-size: 14px;
+  font-size: 0.875rem;
   color: var(--fg);
 }
 
@@ -442,7 +442,7 @@
   --nt-air: 14px;
   /* What a swiped row slides over — see SwipeRow.css. */
   --swipe-surface: var(--bg-chrome);
-  font-size: 15px;
+  font-size: 0.9375rem;
 }
 
 /* ─── Section header — DELETED ────────────────────────────────────────────
@@ -550,7 +550,7 @@
 .navtree-search-kbd {
   flex: none;
   font-family: inherit;
-  font-size: 11px;
+  font-size: 0.6875rem;
   line-height: 1;
   padding: 3px 5px;
   color: inherit;
@@ -789,7 +789,7 @@
    different KIND of thing at a glance, and the tracking is what keeps it
    legible after the case change. */
 .navtree-ws-row .navtree-name-text {
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 700;
   letter-spacing: 0.07em;
   text-transform: uppercase;
@@ -1083,7 +1083,7 @@
    chevron or a ×, which are held to 3:1 as non-text indicators.) */
 .navtree-ws-count {
   flex: 0 0 auto;
-  font-size: 10px;
+  font-size: 0.625rem;
   line-height: 1;
   color: var(--fg-dim);
   background: var(--bg-hover);
@@ -1352,10 +1352,7 @@
    Same rule as the selected row, for the same reason: paint yourself in the
    pane's colours, wear the pane's ink. Anything new that opens inside the rail
    and is not rail-coloured belongs in this list. */
-.navtree-menu,
-.settings-popover,
-.ws-settings__panel,
-.ws-settings__bar {
+.navtree-menu {
   /* SURFACES FIRST, and they are the half this rule used to be missing. It
      restored the ink and left the backgrounds alone — correct while the island
      rebound only ink, and wrong the moment --bg-elev became the rail's. An
@@ -1522,7 +1519,7 @@
   align-items: center;
   gap: 5px;
   min-width: 0;
-  line-height: 18px;
+  line-height: 1.125rem;
 }
 
 /* ─── Headline (line two) ─────────────────────────────────────────────────
@@ -1538,8 +1535,8 @@
 .navtree-tab-headline {
   /* Same bidi treatment as the name — automatic direction, pinned alignment. */
   text-align: left;
-  font-size: 11.5px;
-  line-height: 15px;
+  font-size: 0.71875rem;
+  line-height: 0.9375rem;
   color: var(--fg-faint);
   white-space: nowrap;
   overflow: hidden;
@@ -1682,7 +1679,7 @@
    are reading it. */
 .navtree[data-variant="sidebar"] .navtree-tab-row[data-child="true"] .navtree-name-text {
   font-weight: 500;
-  font-size: 13.5px;
+  font-size: 0.84375rem;
   color: var(--nt-ink-read-child);
 }
 .navtree[data-variant="sidebar"] .navtree-tab-row[data-child="true"]:hover .navtree-name-text {
@@ -1794,7 +1791,7 @@
   border: 0;
   background: none;
   font-family: inherit;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 600;
   color: var(--fg-faint);
   text-align: left;
@@ -1864,7 +1861,7 @@
   background: color-mix(in srgb, var(--pill-hue) var(--status-chip-wash, 22%), transparent);
   color: color-mix(in srgb, var(--pill-hue) 78%, var(--fg));
   font-family: inherit;
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   font-weight: 700;
   line-height: 1.35;
   font-variant-numeric: tabular-nums;
@@ -1986,7 +1983,7 @@
    not a label beside 11.5px text. */
 .navtree[data-variant="sheet"] .navtree-row-pill {
   padding: 3.5px 8px 3.5px 6px;
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   min-height: 26px;
   /* IT MAY SHRINK HERE, and only here. On the rail it carries a bare number
      and is never the thing that has to give; with the breakdown in it, a long
@@ -2016,7 +2013,7 @@
 .navtree-done-head.-subs {
   padding-top: 6px;
   padding-left: calc(var(--nt-pad) + var(--nt-indent) * 2);
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 /* Whose work these were. The parent is NOT drawn as a row: it may be live with
@@ -2027,7 +2024,7 @@
    rows is one more thing between the reader and the list. */
 .navtree-done-parent {
   padding: 8px var(--nt-air) 2px calc(var(--nt-pad) + var(--nt-indent) * 2);
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   font-weight: 600;
   color: var(--fg-faint);
   white-space: nowrap;
@@ -2094,7 +2091,7 @@
   align-items: baseline;
   gap: 5px;
   font-family: var(--chrome-font);
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   line-height: 1.2;
   letter-spacing: 0.02em;
   font-variant-numeric: tabular-nums;
@@ -2106,7 +2103,7 @@
 /* Set BACK from the digits: the glyph only says what KIND of number follows,
    so it shouldn't compete with the number itself. */
 .navtree-cron-glyph {
-  font-size: 11px;
+  font-size: 0.6875rem;
   line-height: 1;
   opacity: 0.6;
   /* The glyph renders as coloured emoji on some platforms; force the text
@@ -2596,7 +2593,7 @@
 .navtree-pane-error {
   padding: 4px 8px;
   color: var(--fg-dim);
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-style: italic;
 }
 
@@ -2608,7 +2605,15 @@
   height: calc(var(--nt-row-tab) - 6px);
   margin: 0 2px;
   padding: 0 6px;
-  background: var(--bg);
+  /* THE RAIL'S OWN SURFACE, not the page's. This took `--bg` — the PAGE
+     background — while its text takes `--fg`, which the island has rebound to
+     the rail's ink. On every theme with a light page and a deep rail those
+     are the same colour: github-light measured 1.00:1, alucard 1.09, acme
+     1.06, so renaming a workspace or an inactive chat typed into an invisible
+     field. The third instance of this exact mix-up, and the reason the pane
+     tokens now come as a family: a surface and the ink on it must come from
+     the same one. On `--rail-elev` the worst case is 6.65:1. */
+  background: var(--rail-elev);
   border: 1px solid var(--accent);
   border-radius: 4px;
   color: var(--fg);
@@ -2640,7 +2645,7 @@
   border-radius: 8px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
   font-family: var(--ui-font);
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 .navtree-menu-item {
   display: block;
@@ -2668,7 +2673,7 @@
 .navtree-menu.-touch {
   min-width: 200px;
   border-radius: 12px;
-  font-size: 15px;
+  font-size: 0.9375rem;
 }
 .navtree-menu.-touch .navtree-menu-item {
   display: flex;
@@ -2694,7 +2699,7 @@
 }
 .navtree-menu-caret {
   color: var(--fg-faint);
-  font-size: 14px;
+  font-size: 0.875rem;
   line-height: 1;
 }
 .navtree-submenu {
@@ -2769,7 +2774,7 @@
   justify-content: center;
   /* Absolute, not an inherited `em`: the rendered size must be one number for
      every glyph and every variant, and must stay inside the chip. */
-  font-size: 14px;
+  font-size: 0.875rem;
   line-height: 1;
   cursor: pointer;
   -webkit-user-select: none;
@@ -2796,7 +2801,7 @@
   background: color-mix(in srgb, var(--fg) 7%, transparent);
 }
 .navtree[data-variant="sheet"] .navtree-tab-icon {
-  font-size: 16px;
+  font-size: 1rem;
 }
 
 /* Positioned wrapper for the emoji-mart picker (which brings its own
@@ -2814,7 +2819,7 @@
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
   color: var(--fg-dim);
   font-family: var(--ui-font);
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 /* ─── Actions ────────────────────────────────────────────────────────── */
@@ -2919,17 +2924,6 @@
 .navtree-ws-row:hover > .navtree-tab-controls > .navtree-ws-add,
 .navtree-ws-row > .navtree-tab-controls > .navtree-ws-add:focus-visible {
   opacity: 1;
-}
-
-/* THE WORKSPACE'S SETTINGS BUTTON — hover-revealed like the ×, because it is
-   rarely wanted, but NOT danger-coloured: `.navtree-close:hover` paints every
-   member of this cluster the × 's red, and a red sliders icon reads as "this
-   will break something". It inherits the reservation rule above by not being
-   `.navtree-ws-add`, which is deliberate: settings is the rare control and the
-   "+" is the constant one. */
-.navtree-ws-row > .navtree-tab-controls > .navtree-ws-settings:hover {
-  color: var(--accent);
-  background: var(--bg-hover);
 }
 
 /* Constructive, so it goes to the accent on hover rather than to the × 's
@@ -3146,7 +3140,7 @@ body.sidenav-resizing iframe {
   padding: 0 12px;
   color: var(--fg-dim);
   font-family: var(--chrome-font);
-  font-size: 11px;
+  font-size: 0.6875rem;
   text-decoration: none;
   transition: background 80ms ease, color 80ms ease;
 }
@@ -3295,7 +3289,7 @@ body.sidenav-resizing iframe {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 15px;
+  font-size: 0.9375rem;
   /* The one place in the rail that is heavier than a chat name at rest. It is
      a title, not a row. */
   font-weight: 640;
@@ -3489,7 +3483,7 @@ body.sidenav-resizing iframe {
    the accent fill, which is grey ink on violet. */
 .navtree[data-variant="sheet"] .navtree-tab-row[data-child="true"] .navtree-name-text {
   font-weight: 400;
-  font-size: 14px;
+  font-size: 0.875rem;
   color: var(--fg-dim);
 }
 /* --fg, and this one was WRONG BEFORE THIS PASS rather than by it. The sheet's
@@ -3553,8 +3547,8 @@ body.sidenav-resizing iframe {
      — the box has no slack to align inside, so pinning it would be a no-op
      that hid the real mechanism. */
   text-align: unset;
-  font-size: 15px;
-  line-height: 20px;
+  font-size: 0.9375rem;
+  line-height: 1.25rem;
 }
 /* THE STRETCHED LINK. The name's box now stops at its text, which would leave
    most of a 390px row untappable — the row IS the target on a thumb surface.
@@ -3688,7 +3682,7 @@ body.sidenav-resizing iframe {
   padding: 0;
   color: inherit;
   font: inherit;
-  font-size: 15px;
+  font-size: 0.9375rem;
   text-align: start;
   cursor: pointer;
   touch-action: manipulation;

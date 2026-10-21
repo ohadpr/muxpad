@@ -27,6 +27,25 @@ export function attachmentsRoutes(deps: {
     const pane = panes.getById(paneId);
     if (!pane) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
 
+    // REFUSE BEFORE READING, NOT AFTER. `formData()` consumes the entire
+    // multipart body into memory before anything can look at it, so the 512 MB
+    // check further down only ever ran on bytes the server had already taken.
+    // A multi-gigabyte upload — or a small `file` padded with huge extra
+    // fields, which the per-file check never sees at all — could exhaust the
+    // process before being rejected. Content-Length is the client's claim, but
+    // it is the only figure available before the read, and a client that lies
+    // low still meets the per-file check afterwards.
+    const declared = Number(c.req.header('content-length') ?? '0');
+    if (Number.isFinite(declared) && declared > MAX_BYTES)
+      return c.json(
+        {
+          error: {
+            code: 'too_large',
+            message: `upload is ${Math.round(declared / 1e6)} MB — the limit is 512 MB`,
+          },
+        },
+        413,
+      );
     const form = await c.req.formData();
     const file = form.get('file');
     if (!(file instanceof File))

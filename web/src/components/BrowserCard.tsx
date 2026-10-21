@@ -208,6 +208,18 @@ export function BrowserCard({ moment, onOpen, viewportWidth, now }: BrowserCardP
   // PER CARD, and several can be open at once: peeking at two browsers side by
   // side in one conversation is the case this is for.
   const [peeking, setPeeking] = useState(view.openable);
+  // A CARD CAN BECOME OPENABLE AFTER IT MOUNTS. `useState` reads its argument
+  // once, so a card rendered while its browser was still starting stayed
+  // collapsed for ever — the default is meant to be "open when there is
+  // something live to show", not "open if there happened to be at the moment
+  // React first saw this row". Only ever opens: a peek the user closed by hand
+  // stays closed, which is why this tracks the previous value rather than
+  // assigning on every render.
+  const wasOpenable = useRef(view.openable);
+  useEffect(() => {
+    if (view.openable && !wasOpenable.current) setPeeking(true);
+    wasOpenable.current = view.openable;
+  }, [view.openable]);
   /**
    * WIDE, for when the thumbnail is not enough.
    *

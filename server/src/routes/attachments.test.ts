@@ -101,6 +101,23 @@ describe('attachments', () => {
     expect(body.error.message).toContain('a.exe');
   });
 
+  it('refuses an oversized upload before reading the body', async () => {
+    // The per-file check ran only AFTER formData() had pulled the whole
+    // multipart body into memory, so the cap bounded what was stored and not
+    // what was ingested. A declared length over the limit is now refused up
+    // front.
+    const res = await test.app.request(`/api/panes/${paneId}/attachments`, {
+      method: 'POST',
+      headers: {
+        'content-length': String(600 * 1024 * 1024),
+        'content-type': 'multipart/form-data; boundary=x',
+      },
+      body: '--x--',
+    });
+    expect(res.status).toBe(413);
+    expect((await res.json()).error.message).toMatch(/limit is 512 MB/);
+  });
+
   it('returns 400 if file is missing', async () => {
     const fd = new FormData();
     const res = await test.app.request(`/api/panes/${paneId}/attachments`, {

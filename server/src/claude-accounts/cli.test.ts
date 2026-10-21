@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readFileSync,
   realpathSync,
+  rmSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -251,8 +252,26 @@ describe('the ways add used to go wrong', () => {
     // The default profile keeps its identity at ~/.claude.json — BESIDE
     // ~/.claude, not inside it. Checking one path called every normal
     // single-account install "not signed in".
+    //
+    // THE FIXTURE USED TO MASK THIS. beforeEach writes ~/.claude/.claude.json
+    // too, so the sibling fallback could be deleted and the first file would
+    // still satisfy the assertion — the test passed either way. Remove the
+    // inside-the-profile copy so only the sibling can answer, and assert the
+    // account line itself rather than the mere absence of a string (empty
+    // output contains no "NO LOGIN FOUND" either).
+    rmSync(join(home, '.claude', '.claude.json'));
     writeFileSync(join(home, '.claude.json'), '{}');
-    expect(run('status').out).not.toContain('NO LOGIN FOUND');
+    const { out, code } = run('status');
+    expect(code).toBe(0);
+    expect(out).toContain('primary');
+    expect(out).not.toContain('NO LOGIN FOUND');
+  });
+
+  it('says so when NEITHER identity file exists', () => {
+    // The inverse case, absent before: without it the assertion above could be
+    // satisfied by a hasLogin() that simply always returned true.
+    rmSync(join(home, '.claude', '.claude.json'));
+    expect(run('status').out).toContain('NO LOGIN FOUND');
   });
 
   it('resolves a relative --dir rather than storing it', () => {
