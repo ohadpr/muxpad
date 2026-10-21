@@ -376,7 +376,7 @@ describe('a card with more than one line', () => {
     const host = await mount([card({ content: THREE })]);
     const line = host.querySelector('.chat-card-line');
     expect(line).not.toBeNull();
-    expect(line?.textContent).toContain('Edge Workers rollout');
+    expect(line?.textContent).toBe('Edge Workers rollout');
     expect(host.querySelector('.chat-card-body')).toBeNull();
   });
 
@@ -421,4 +421,20 @@ describe('a card with more than one line', () => {
     window.getSelection = realSelection;
     expect(host.querySelector('.chat-card-body')).not.toBeNull();
   });
+});
+
+it('keeps lower markdown lines out of the collapsed preview and shows them when expanded', async () => {
+  const host = await mount([
+    card({
+      format: 'markdown',
+      content: '**Summary**\n\nDetails  \nMore details\n\n```\nTable row\n```',
+    }),
+  ]);
+  expect(host.querySelector('.chat-card-line')?.textContent).toBe('Summary');
+  expect(host.querySelector('pre')).toBeNull();
+  await act(async () => {
+    (host.querySelector('.chat-card') as HTMLElement).click();
+  });
+  expect(host.querySelector('.chat-card-body')?.textContent).toContain('Details');
+  expect(host.querySelector('.chat-card-body pre')?.textContent).toContain('Table row');
 });
