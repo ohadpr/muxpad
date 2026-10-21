@@ -54,6 +54,8 @@ for (const account of pool.accounts().filter((a) => a.enabled)) {
       options: {
         env: accountEnv(account),
         model: 'haiku',
+        thinking: { type: 'disabled' },
+        effort: 'low',
         tools: [],
         allowedTools: [],
         settingSources: [],

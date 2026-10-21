@@ -10,13 +10,8 @@
  * in the rollout file of every session under ~/.codex/sessions. No plumbing
  * was needed, only somebody reading it.
  *
- * THE NUMBER IS A PERCENTAGE, 0–100. Codex says so in the field name
- * (`used_percent: 37.0`); Anthropic's `utilization` does not, and it matters —
- * 0.41 is either "nearly half gone" or "basically untouched". Two probes three
- * seconds apart moved five_hour from 0.40 to 0.41, a hundredth of a point for
- * one haiku turn, which is the grain of a percentage and far too small to be a
- * hundredth of a whole allowance. The raw value is in the hover title so the
- * reading stays checkable.
+ * AccountPool.usage normalizes SDK fractions (0.54) to percentages (54).
+ * Codex's used_percent is already 0–100. Both arrive here in display units.
  *
  * Pure formatting, no model: a card that costs a completion to redraw is a
  * card nobody can afford to refresh often.
@@ -155,7 +150,18 @@ for (const { account, windows } of status.utilization) {
   // The cooldown wins when it exists: an account that is being refused right
   // now is full whatever an older reading says.
   const top = cd
-    ? { utilization: 100, scope: cd.scope === 'all' ? '7d' : cd.scope, resetsAt: cd.until }
+    ? {
+        utilization: 100,
+        scope:
+          cd.scope === 'all'
+            ? /five_hour|session/i.test(cd.reason)
+              ? 'five_hour'
+              : /week|seven_day/i.test(cd.reason)
+                ? 'seven_day'
+                : 'all'
+            : cd.scope,
+        resetsAt: cd.until,
+      }
     : (windows[0] ?? null);
   rows.push({
     name: NAMES[account] ?? account,
@@ -163,7 +169,13 @@ for (const { account, windows } of status.utilization) {
     top,
     blocked:
       Boolean(cd) ||
-      windows.some((w) => cooled.has(`${account}:${w.scope}`) || w.status === 'rejected'),
+      windows.some(
+        (w) =>
+          cooled.has(`${account}:${w.scope}`) ||
+          (w.status === 'rejected' &&
+            w.utilization >= 100 &&
+            (w.resetsAt == null || w.resetsAt > Date.now())),
+      ),
   });
 }
 const cx = codex();

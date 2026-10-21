@@ -277,14 +277,29 @@ backend. muxpad's is durable (SQLite, survives every restart), catches up
 after downtime, never expires, is visible and editable from any pane, works
 the same on every backend, and can be fired by hand before you trust it.
 
-- From inside a pane, scheduling work for THIS session:
-  \`muxpad cron new --name=pr-sweep --at='weekdays at 09:00' --pane "check my open PRs and summarize what needs me"\`
-  \`--pane\` with no value means this pane. \`--at\` takes a cron expression
-  (\`0 9 * * 1-5\`) or a phrase (\`daily at 09:00\`, \`weekdays at 09:00\`,
-  \`every 30m\`); add \`--tz=<IANA>\` to pin a zone.
-- For a recurring job that wants a FRESH context each time (a sweep, a digest,
-  a report — most recurring jobs), use \`--new-tab\` instead of \`--pane\`: it
-  spawns a new agent tab per fire and closes it when the run finishes cleanly.
+- **Recurring watchers use fresh context by default.** Use \`--new-tab\`
+  for checks, digests and reports; it closes the worker after a successful run.
+  Reserve \`--pane\` for work that truly depends on that live conversation.
+  A one-line check in a long chat still resends its entire history.
+- Make the job self-contained: exact inputs/paths, decision rule, notification
+  destination, and a small durable state file for last-seen values and alerts.
+  Read/update that file each run; never scan conversation history to deduplicate
+  alerts. Save current facts, not an ever-growing run log. Separate jobs that
+  share state must serialize or lock updates.
+- Prefer an existing script for fetching, filtering and comparing data; ask a
+  model only when interpretation is needed. Do not reread broad transcripts,
+  repositories or logs to rediscover setup on every fire. Pick the smallest
+  model that can reliably do the job; do not reduce reasoning for real analysis.
+- Before creating a fresh-context job, write its required state and verify it
+  can run from its prompt plus the named files alone. Pin output to the original
+  chat with \`muxpad card set ... --tab=<origin-tab>\`. Name the notification
+  destination explicitly; \`muxpad say\` speaks only in the worker’s own chat.
+  Scripts that use MUXPAD_TAB_ID need that origin explicitly in their invocation.
+  A fresh worker must not write a card into its own disposable tab.
+- \`muxpad cron new --name=pr-sweep --at='weekdays at 09:00' --new-tab "check the PRs using the saved watcher state and report new actionable changes"\`
+  \`--at\` accepts cron expressions or phrases; \`--tz=<IANA>\` pins a zone.
+  \`--pane\` with no value means this pane; use it only when its history is
+  essential, and keep that conversation compact.
 - \`muxpad cron list\` (schedules, next due, last run, failure streak),
   \`muxpad cron show <name>\` (+ run history), \`muxpad cron run <name>\`
   (fire NOW — always test a new cron this way), \`muxpad cron pause/resume

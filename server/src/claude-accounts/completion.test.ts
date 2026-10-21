@@ -80,3 +80,25 @@ it('keeps legacy behavior when the pool is not configured', async () => {
   }
   expect(query.mock.calls[0]?.[0].options.env).toBeUndefined();
 });
+
+it('disables thinking and uses low effort for all housekeeping, including retries', async () => {
+  query
+    .mockReturnValueOnce(
+      stream([{ type: 'rate_limit_event', rate_limit_info: { status: 'rejected' } }]),
+    )
+    .mockReturnValueOnce(stream([{ type: 'result', subtype: 'success', result: 'label' }]));
+  for await (const _ of accountCompletion({
+    prompt: 'label',
+    options: { model: 'haiku', effort: 'high' },
+  })) {
+    /* drain */
+  }
+  expect(query).toHaveBeenCalledTimes(2);
+  for (const [args] of query.mock.calls) {
+    expect(args.options).toMatchObject({
+      thinking: { type: 'disabled' },
+      effort: 'low',
+      tools: [],
+    });
+  }
+});

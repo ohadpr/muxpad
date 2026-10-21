@@ -1452,6 +1452,10 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
 
   const options: Options = {
     cwd: process.cwd(),
+    // A 1M model window is capacity, not a sensible recurring input bill.
+    // Let Claude's native compactor preserve task state and handle mid-turn
+    // tool boundaries; do not implement another slash-command replay queue.
+    settings: { autoCompactWindow: 200_000 },
     // ─── ONE DELEGATION PRIMITIVE, AND IT IS THE SUB-CHAT ────────────────────
     //
     // `disallowedTools` removes a tool from the MODEL'S CONTEXT — it is not a

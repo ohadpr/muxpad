@@ -352,3 +352,7 @@ describe('Claude quota recovery through real backend loop', () => {
     expect(fakeSession().promptTexts[0]).toBe('do the work');
   });
 });
+
+it('uses native compaction at 200k tokens even for resumed large-window sessions', () => {
+  expect(fakeSession().options.settings).toMatchObject({ autoCompactWindow: 200_000 });
+});
