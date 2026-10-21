@@ -3,6 +3,7 @@ import type React from 'react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { subscribe, subscribeResync } from '../events';
 import { cardColorScheme } from '../lib/card-frame';
+import { cardLineMarkdown } from '../lib/card-line';
 import { isCardOpen, toggleCardOpen, useCardOpen } from '../lib/card-open';
 import './ChatCards.css';
 import { Markdown } from './ChatMarkdown';
@@ -365,10 +366,18 @@ export function ChatCards({ tabId }: { tabId: string | null | undefined }) {
               </div>
             ) : (
               // ONE LINE, and the same one line whatever the content is: a
-              // markdown card's blocks are flattened to it (see the css) rather
-              // than being given a layout of their own.
+              // markdown card's blocks are flattened to it BEFORE rendering
+              // (lib/card-line), not fought with `display: inline` afterwards.
+              // The css rules are still there and still correct; they were just
+              // never able to cover everything markdown emits — a <br> breaks
+              // the line whatever its display, and a fence's <code> carries a
+              // `white-space` that beats the line's `nowrap`.
               <div className="chat-card-line">
-                {card.format === 'markdown' ? <Markdown text={card.content} /> : card.content}
+                {card.format === 'markdown' ? (
+                  <Markdown text={cardLineMarkdown(card.content)} />
+                ) : (
+                  card.content
+                )}
               </div>
             )}
           </section>
