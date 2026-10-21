@@ -2415,6 +2415,53 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
           if (authFailureThisTurn) {
             const message = authFailureThisTurn;
             authFailureThisTurn = null;
+            // ── A DEAD CREDENTIAL IS AN ACCOUNT FACT, NOT A SESSION FACT ────
+            // The re-exec ladder below assumes the credential MIGHT come back
+            // (a token refreshed on disk by another process, a /login that
+            // just happened). That is right for one account and wrong for a
+            // pool: with a second, healthy subscription sitting there, four
+            // re-execs against a signed-out one is four ways to fail at
+            // something another account could have done immediately.
+            //
+            // Observed exactly once and that was enough: a pane whose entire
+            // conversation is `Not logged in · Please run /login`, four times,
+            // while the other account was eligible and idle. The account was
+            // still `preferred`, so every NEW session went the same way.
+            //
+            // So the fact is recorded on the ACCOUNT, which (a) makes it
+            // ineligible for every pane, not just this one, and (b) is what
+            // `choose` below reads to hand us somebody else. It is cleared by
+            // evidence — a turn that works, or the probe getting an answer.
+            if (accountPool && account) {
+              accountPool.markCredential(account.id, 'dead', message);
+              const next = accountPool.choose(
+                host.paneId,
+                activeModel ?? requestedModel ?? 'opus',
+                new Set([account.id]),
+              );
+              if (next && next.id !== account.id) {
+                log(
+                  `${bold('✗ auth')} ${message} ${dim(`— switching to ${next.label} (${next.id})`)}`,
+                );
+                // NOT a rung of the auth ladder: nothing about this credential
+                // is expected to heal, and spending an attempt here would make
+                // a successful failover count against a later, genuine retry.
+                healPlan = {
+                  delayMs: 0,
+                  attempt: 1,
+                  of: 1,
+                  retry: currentTurnText,
+                  account: next,
+                  reason: 'previous account is signed out',
+                  generation: recoveryGeneration,
+                };
+                if (currentTurnText === null) emit({ t: 'turn-done', ok: false, error: message });
+                currentTurnText = null;
+                interruptRequested = false;
+                retireSession();
+                break;
+              }
+            }
             const decision = authHeal.decide();
             if (decision.kind === 'heal') {
               log(`${bold('✗ auth')} ${message}`);
@@ -2466,8 +2513,15 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
             void refreshStatus(false);
             continue;
           }
-          // A turn that got through on this credential forgives the ladder.
+          // A turn that got through on this credential forgives the ladder —
+          // and is also the evidence that clears a `dead` mark, since nothing
+          // about that mark expires on its own. Only on a TRANSITION: this
+          // runs after every turn, and the common case must not be a write.
           authHeal.ok();
+          if (accountPool && account && accountPool.credential(account.id).state === 'dead') {
+            accountPool.markCredential(account.id, 'ok');
+            log(dim(`Claude account ${account.id}: credential works again`));
+          }
           if (msg.subtype === 'success' && !interruptRequested) {
             triedAccounts.clear();
             const saved = accountPool?.pending(host.paneId);

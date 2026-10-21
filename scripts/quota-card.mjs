@@ -145,6 +145,9 @@ const bar = (h) => `color-mix(in srgb, ${h} 75%, var(--fg,#222))`;
  *  (5h, 7d, 7d opus); the binding one is whichever is nearest its limit. */
 const rows = [];
 const NAMES = { primary: 'claude 1', backup: 'claude 2' };
+const signedOut = new Set(
+  (status.credentials ?? []).filter((c) => c.state === 'dead').map((c) => c.account),
+);
 for (const { account, windows } of status.utilization) {
   const cd = blocked.get(account);
   // The cooldown wins when it exists: an account that is being refused right
@@ -166,6 +169,12 @@ for (const { account, windows } of status.utilization) {
   rows.push({
     name: NAMES[account] ?? account,
     cur: status.preferred === account,
+    // NOT A NUMBER AND NOT A BLANK. A signed-out account used to render the
+    // same em dash as one nobody had probed yet — "we do not know" — on the
+    // one occasion the reader needed to be told to do something. It is the
+    // only state on this card that names an ACTION, because it is the only one
+    // that does not fix itself.
+    needsLogin: signedOut.has(account),
     top,
     blocked:
       Boolean(cd) ||
@@ -208,6 +217,8 @@ const esc = (t) =>
  */
 const seg = (r) => {
   const cur = r.cur ? ' class=c' : '';
+  if (r.needsLogin)
+    return `<span class="s n" title="${esc(r.name)} is signed out — run /login on the muxpad host; muxpad is skipping it until you do"><b${cur}>${esc(r.name)}</b><em class=w>needs /login</em></span>`;
   if (!r.top)
     return `<span class="s n" title="no reading — the account may not be logged in"><b${cur}>${esc(r.name)}</b><em>—</em></span>`;
   const pct = r.top.utilization;
@@ -306,6 +317,16 @@ const html = `<style>
  .q u{text-decoration:none;font-weight:700;font-size:12px;white-space:nowrap;flex:0 0 auto;
    font-variant-numeric:tabular-nums}
  .q em{font-style:normal;opacity:.4;font-size:12px}
+ /* "needs /login" is not a reading, so it is not drawn like one: no bar, no
+    percentage ink, and it does not fade back like the em dash it replaced —
+    it is the only thing on this card asking for anything.
+
+    50%, not 65%: at 65 the worst theme (tokyo-night) measured 4.29:1 against
+    the card, under AA for 12px text, which is a poor property for the one
+    string here that is asking somebody to do something. Mixing toward --fg
+    self-corrects on both polarities, exactly as the gauge ink above does.
+    Worst case across the six themes at 50%: 5.18:1. */
+ .q em.w{opacity:1;font-weight:700;color:color-mix(in srgb, #c2410c 50%, var(--fg,#222))}
 </style><div class=q>${rows.map(seg).join('')}</div>`;
 
 // `--print` dumps the markup instead of setting the card, so the layout can be
