@@ -45,6 +45,11 @@ export interface BrowserCardProps {
  */
 const PEEK_EVERY_MS = 2_500;
 
+/** How long a frame may spend decoding before it is shown undecoded anyway.
+ *  A real decode of an in-memory blob is a couple of milliseconds; this is the
+ *  ceiling that keeps a non-answering implementation from hiding the card. */
+const DECODE_BUDGET_MS = 250;
+
 /**
  * The expanded picture, refreshed while it is on screen.
  *
@@ -138,7 +143,22 @@ function useLiveShot(
         try {
           const pre = new Image();
           pre.src = url;
-          await pre.decode?.();
+          // DECODE IS AN OPTIMISATION, NOT A GATE. It exists to avoid the
+          // blank frame between assigning `src` and the bytes being ready —
+          // worth a few milliseconds, never worth the picture. Awaited bare,
+          // it becomes a dependency on the environment resolving it: this
+          // passed locally only because the installed jsdom has NO decode(),
+          // so the await was skipped, while CI's jsdom has one that never
+          // settles for a URL it cannot load — and the card showed nothing at
+          // all. A green test for the wrong reason, which is the worst kind.
+          // So: take the benefit when it arrives promptly, and show the frame
+          // regardless when it does not.
+          const decoded = pre.decode?.();
+          if (decoded)
+            await Promise.race([
+              decoded.catch(() => {}),
+              new Promise((go) => setTimeout(go, DECODE_BUDGET_MS)),
+            ]);
         } catch {
           // No decode() (older engine) or an undecodable frame: show it anyway
           // and let the element do what it did before. A blink beats a card
