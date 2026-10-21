@@ -739,6 +739,45 @@ describe('peeking at a live browser', () => {
     }
   });
 
+  it('shows the frame even when decode() never answers', async () => {
+    /**
+     * THE ENVIRONMENT DEPENDENCY THAT CI FOUND AND THIS SUITE DID NOT.
+     *
+     * `decode()` is an optimisation: it avoids the blank frame between
+     * assigning `src` and the bytes being ready. Awaited bare it becomes a
+     * REQUIREMENT, and an implementation that never settles hides the card
+     * completely. These tests passed locally only because the installed jsdom
+     * has no decode() at all, so the await was skipped — green for the wrong
+     * reason, while CI's jsdom had one that never resolved and seven tests
+     * failed there.
+     *
+     * So this stands one up that never answers, and asserts the picture
+     * arrives anyway.
+     */
+    const original = globalThis.Image;
+    (globalThis as unknown as { Image: unknown }).Image = class {
+      src = '';
+      decode() {
+        return new Promise<void>(() => {}); // never settles, like CI's
+      }
+    };
+    vi.useFakeTimers();
+    try {
+      const { host } = mount(<BrowserCard moment={moment(base)} onOpen={() => {}} now={1} />);
+      await settle();
+      // Still nothing: the budget has not elapsed and decode has not answered.
+      expect(shot(host)).toBeNull();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300);
+      });
+      await settle();
+      expect(shot(host)?.getAttribute('src')).toMatch(/^blob:/);
+    } finally {
+      vi.useRealTimers();
+      globalThis.Image = original;
+    }
+  });
+
   it('captures nothing while the card is scrolled out of view', async () => {
     // THE COST CONTROL FOR THE DEFAULT ABOVE. Previews open themselves now, so
     // a long conversation can hold a dozen; each capture is a real CDP round
