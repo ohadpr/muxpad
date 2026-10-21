@@ -8,7 +8,7 @@ import { EventBus } from '../events.js';
 import { PtydCache } from '../ptyd-cache.js';
 import { AgentSessionStore } from '../store/AgentSessionStore.js';
 import { PaneStore } from '../store/PaneStore.js';
-import { SpawnRoundStore } from '../store/SpawnRoundStore.js';
+import { type SpawnRound, SpawnRoundStore } from '../store/SpawnRoundStore.js';
 import { TabStore } from '../store/TabStore.js';
 import { WorkspaceStore } from '../store/WorkspaceStore.js';
 import { openDb } from '../store/db.js';
@@ -918,5 +918,71 @@ describe('SpawnReportWriter — a finished worker becomes a card', () => {
     const tab = new TabStore(db).getById(kid.tabId);
     expect(tab?.spawn_report).toBe('Got through 38 of the files before dying.');
     expect(tab?.spawn_report_state).toBe('crashed');
+  });
+  describe('what a worker is taken to have said', () => {
+    /**
+     * CHAT MODE'S PLAIN PROSE IS A SCRATCHPAD, NOT A REPORT.
+     *
+     * The agent's deliberate speech is a `reply` tool call, which the normalizer
+     * marks `voice: 'reply'`. Taking "the last assistant text" delivered the
+     * muttering written AFTER that reply to the parent chat as the worker's
+     * result — "Done, replied", or the provider's own "You've hit your limit…".
+     */
+    function transcript(events: object[]): { paneId: string; round: SpawnRound } {
+      const tabId = new TabStore(db).create({
+        name: 'w',
+        workspace_id: workspaceId,
+        layout: '',
+      }).id;
+      const paneId = new PaneStore(db).create({ tab_id: tabId, shell: '/bin/zsh', cwd: '/tmp' }).id;
+      const sid = `sid-${paneId}`;
+      new AgentSessionStore(db).register({ pane_id: paneId, assistant: 'codex', session_id: sid });
+      writeFileSync(
+        join(dir, 'agent-transcripts', `${sid}.jsonl`),
+        `${events.map((e) => JSON.stringify(e)).join('\n')}\n`,
+      );
+      return { paneId, round: { started_at: 0, ended_at: 99 } as SpawnRound };
+    }
+
+    it('reports the reply, not the muttering that followed it', () => {
+      const { paneId, round } = transcript([
+        { id: '1', ts: 1, kind: 'user', text: 'count the TODOs' },
+        { id: '2', ts: 2, kind: 'assistant', text: 'let me look…' },
+        { id: '3', ts: 3, kind: 'assistant', voice: 'reply', text: '41 TODOs in 6 files.' },
+        { id: '4', ts: 4, kind: 'assistant', text: 'Done, replied.' },
+      ]);
+      expect(readWorkerAnswer(db, paneId, round)).toBe('41 TODOs in 6 files.');
+    });
+
+    it('takes a promoted fallback as speech too', () => {
+      // A turn a human was waiting on that ended with no reply call at all.
+      const { paneId, round } = transcript([
+        { id: '1', ts: 1, kind: 'user', text: 'go' },
+        { id: '2', ts: 2, kind: 'assistant', voice: 'fallback', text: 'the real answer' },
+        { id: '3', ts: 3, kind: 'assistant', text: 'thinking out loud' },
+      ]);
+      expect(readWorkerAnswer(db, paneId, round)).toBe('the real answer');
+    });
+
+    it('still uses plain prose when the worker never speaks deliberately', () => {
+      // Agent mode, and every pre-voice transcript: prose IS the answer, and
+      // this must not regress into reporting nothing.
+      const { paneId, round } = transcript([
+        { id: '1', ts: 1, kind: 'user', text: 'go' },
+        { id: '2', ts: 2, kind: 'assistant', text: 'found 41 in 6 files' },
+      ]);
+      expect(readWorkerAnswer(db, paneId, round)).toBe('found 41 in 6 files');
+    });
+
+    it('forgets a reply once new work starts', () => {
+      // The existing contract: commentary followed by unanswered work is not a
+      // result. A reply belonging to an earlier question is not one either.
+      const { paneId, round } = transcript([
+        { id: '1', ts: 1, kind: 'user', text: 'first' },
+        { id: '2', ts: 2, kind: 'assistant', voice: 'reply', text: 'answer to the first' },
+        { id: '3', ts: 3, kind: 'user', text: 'second' },
+      ]);
+      expect(readWorkerAnswer(db, paneId, round)).toBeNull();
+    });
   });
 });

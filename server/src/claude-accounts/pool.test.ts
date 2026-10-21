@@ -422,3 +422,40 @@ describe('a config a human broke by hand', () => {
     expect(readAccountConfigOrNull(dir)).toBeNull();
   });
 });
+
+describe('the single saved-request slot', () => {
+  it('keeps the message the user was PROMISED was saved', () => {
+    // "Request saved; use /retry after an account resets." Then they send
+    // something else while still blocked, and INSERT OR REPLACE quietly threw
+    // the promised one away. They come back after the reset, type /retry, and
+    // get the wrong message — with nothing to say the first ever existed.
+    const dir = mkdtempSync(join(tmpdir(), 'mux-pending-'));
+    const pool = new AccountPool(dir);
+    pool.savePending('pane', 'sid', 'the original request', 'no accounts');
+    pool.savePending('pane', 'sid', 'something else entirely', 'no accounts');
+    expect(pool.pending('pane')?.text).toBe('the original request');
+    pool.close();
+  });
+
+  it('still takes a new request for a DIFFERENT session', () => {
+    // The slot is per pane, and a pane whose conversation was replaced has no
+    // business holding the old session's request: /retry refuses a checkpoint
+    // from another session anyway, so keeping it would strand the slot.
+    const dir = mkdtempSync(join(tmpdir(), 'mux-pending2-'));
+    const pool = new AccountPool(dir);
+    pool.savePending('pane', 'old-session', 'stale', 'no accounts');
+    pool.savePending('pane', 'new-session', 'fresh', 'no accounts');
+    expect(pool.pending('pane')?.text).toBe('fresh');
+    pool.close();
+  });
+
+  it('is idempotent for the same request', () => {
+    // Recovery can save the same text more than once as it walks the accounts.
+    const dir = mkdtempSync(join(tmpdir(), 'mux-pending3-'));
+    const pool = new AccountPool(dir);
+    pool.savePending('pane', 'sid', 'same', 'first reason');
+    pool.savePending('pane', 'sid', 'same', 'second reason');
+    expect(pool.pending('pane')?.text).toBe('same');
+    pool.close();
+  });
+});

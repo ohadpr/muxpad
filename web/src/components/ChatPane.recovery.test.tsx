@@ -170,3 +170,72 @@ it('a turn that nobody here started does not empty the composer', async () => {
   await act(async () => socket.frame({ t: 'turn-start', text: 'hello' }));
   expect(draft().textContent).toBe('');
 });
+
+it('pings when the ack is slow, and waits while the link answers', async () => {
+  // THE WATCHDOG'S USER-VISIBLE HALF, which the helper's unit tests do not
+  // reach: restore the old six-second timeout and every one of them stays
+  // green. On a busy server the ack is simply late, and the composer must not
+  // hand the message back as undelivered.
+  const socket = await setup();
+  await type('slow but fine');
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click());
+  expect(draft().textContent).toBe('');
+
+  // Six seconds of silence used to BE the verdict. Now it is a question.
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(6000);
+  });
+  expect(socket.sent).toContainEqual({ t: 'ping' });
+  expect(draft().textContent).toBe('');
+
+  // The link answers: alive, merely slow. Keep waiting, say nothing.
+  await act(async () => {
+    socket.frame({ t: 'pong' });
+    await vi.advanceTimersByTimeAsync(3000);
+  });
+  expect(draft().textContent).toBe('');
+  expect(host.textContent).not.toContain('not delivered');
+});
+
+it('hands the message back when the link does not answer the ping', async () => {
+  // The case the watchdog exists for: a socket reading OPEN over a link that
+  // is gone. No pong, so the text comes back rather than vanishing.
+  const socket = await setup();
+  await type('into the void');
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click());
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(6000);
+  });
+  expect(socket.sent).toContainEqual({ t: 'ping' });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(3000);
+  });
+  expect(draft().textContent).toBe('into the void');
+  expect(host.textContent).toContain('not delivered');
+});
+
+it('shows WHY an upload failed, with the file named', async () => {
+  // The helper tests cover the sentence-extraction; none of them reach the
+  // composer. Delete the setNotice in the upload catch block and every
+  // upload-error test stays green while the picker goes silent again — which
+  // is the exact bug that was reported ("it just fails silently").
+  await setup();
+  const file = new File([new Uint8Array([1, 2, 3])], 'clip.mov', { type: 'video/quicktime' });
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      if (String(url).includes('/attachments'))
+        return {
+          ok: false,
+          text: async () =>
+            JSON.stringify({ error: { code: 'too_large', message: 'clip.mov is 812 MB' } }),
+        };
+      return { ok: true, json: async () => (url === '/api/tabs/all' ? { workspaces: [] } : []) };
+    }),
+  );
+  const picker = host.querySelector<HTMLInputElement>('input[type="file"]')!;
+  Object.defineProperty(picker, 'files', { value: [file], configurable: true });
+  await act(async () => picker.dispatchEvent(new Event('change', { bubbles: true })));
+  expect(host.textContent).toContain('clip.mov');
+  expect(host.textContent).toContain('812 MB');
+});
