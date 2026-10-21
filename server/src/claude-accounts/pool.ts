@@ -45,6 +45,7 @@ export type QuotaBlock = { scope: string; until: number; reason: string };
  * being dropped on the floor. */
 export type QuotaUse = {
   scope: string;
+  /** Display percentage, 0–100. The SDK and SQLite store a 0–1 fraction. */
   utilization: number;
   status: string;
   resetsAt: number | null;
@@ -251,7 +252,7 @@ export class AccountPool {
     // event carries no `unifiedWindows` at all. Recording nothing left the one
     // account that mattered showing an em dash — "we do not know" — on the day
     // it ran out, which is the opposite of what the reader needed.
-    if (status === 'rejected') write.run(id, scope, 100, status, ms(info.resetsAt), this.now());
+    if (status === 'rejected') write.run(id, scope, 1, status, ms(info.resetsAt), this.now());
   }
   /** Every window this account has reported, fullest first. */
   usage(id: string): QuotaUse[] {
@@ -267,13 +268,17 @@ export class AccountPool {
         resets_at: number | null;
         updated_at: number;
       }[]
-    ).map((r) => ({
-      scope: r.scope,
-      utilization: r.pct,
-      status: r.status,
-      resetsAt: r.resets_at,
-      updatedAt: r.updated_at,
-    }));
+    )
+      .filter((r) => r.resets_at === null || r.resets_at > this.now())
+      .map((r) => ({
+        scope: r.scope,
+        // Normalize at the boundary, including rows written by older runners.
+        // Old synthetic denials stored 100; clamping keeps those full too.
+        utilization: Math.max(0, Math.min(100, Number((r.pct * 100).toFixed(6)))),
+        status: r.status,
+        resetsAt: r.resets_at,
+        updatedAt: r.updated_at,
+      }));
   }
   block(id: string, block: QuotaBlock): void {
     this.db

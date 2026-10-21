@@ -26,6 +26,10 @@ export async function* accountCompletion(args: {
         prompt: args.prompt,
         options: {
           ...args.options,
+          // Titles, labels and handoffs do not need extended reasoning.
+          // Apply centrally so new housekeeping callers inherit the policy.
+          thinking: { type: 'disabled' },
+          effort: 'low',
           ...(account ? { env: accountEnv(account) } : {}),
           tools: [],
           allowedTools: [],

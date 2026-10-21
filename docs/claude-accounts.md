@@ -112,3 +112,26 @@ and CLI-wrapper suites cover compatibility.
 it sends a random marker, closes the child, resumes the session and checks the
 marker. Run it in a visible muxpad shell pane. It spends two small Haiku calls
 and exits; it does not open a browser or server.
+
+## Usage defaults
+
+Claude panes use the native `autoCompactWindow: 200000` setting. This bounds
+conversation growth independently of a model's 1M-token capacity and lets the
+CLI compact during tool use without injecting an extra queued user turn.
+Compaction summarizes history; important decisions and task state still belong
+in project files. Existing runners pick up the launch setting on their next
+normal restart; an existing session can use `/autocompact 200k` immediately.
+
+Tool-free labels, titles and handoffs use low effort with thinking disabled.
+Quota probes use the same settings. SDK quota fractions are stored unchanged
+and converted to display percentages when read, including historical readings.
+
+`muxpad cron new` defaults to a fresh tab per fire. Use `--pane` explicitly only
+when the existing conversation is needed. Watchers should read small saved
+state, run deterministic fetch/compare scripts where possible, and write only
+current state. Pin cards to their persistent destination using `--tab`; a
+worker's own tab is disposable. Do not recover alert history by searching chat.
+
+Healthy running sessions retain their selected account to avoid needless cache
+rebuilds. If the backup becomes exhausted after primary's cooldown expires,
+normal failover selects primary automatically at a safe request boundary.

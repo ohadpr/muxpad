@@ -60,6 +60,15 @@ describe('shared Claude account pool', () => {
     expect(pool.choose('pane-c', 'opus')?.id).toBe('primary');
     expect(pool.choose('pane-b', 'opus', new Set(), 'backup')?.id).toBe('backup');
   });
+  it('returns to primary when the sticky backup is exhausted after primary resets', () => {
+    const { pool, advance } = fixture();
+    pool.block('primary', { scope: 'all', until: 20000, reason: 'weekly quota' });
+    expect(pool.choose('pane', 'opus')?.id).toBe('backup');
+    advance(11000);
+    pool.block('backup', { scope: 'all', until: 30000, reason: 'session quota' });
+    expect(pool.choose('pane', 'opus', new Set(), 'backup')?.id).toBe('primary');
+  });
+
   it('model quota does not block other models; exclusions cap retries', () => {
     const { pool } = fixture();
     pool.block('primary', { scope: 'opus', until: 20000, reason: 'opus quota' });
@@ -142,7 +151,7 @@ describe('utilisation, which failover never cared about', () => {
     // `quotaBlock` returns null for this exact shape, so nothing about it
     // reached the database before.
     const { pool } = fixture();
-    const info = { status: 'allowed', rateLimitType: 'seven_day', utilization: 73.4 };
+    const info = { status: 'allowed', rateLimitType: 'seven_day', utilization: 0.734 };
     expect(quotaBlock(info)).toBeNull();
     pool.record('primary', info);
     expect(pool.usage('primary')).toEqual([
@@ -160,9 +169,9 @@ describe('utilisation, which failover never cared about', () => {
     // The question is "how full is it now". A history would be a time series
     // nobody asked for, and the newest reading is the whole answer.
     const { pool, advance } = fixture();
-    pool.record('primary', { status: 'allowed', rateLimitType: 'five_hour', utilization: 10 });
+    pool.record('primary', { status: 'allowed', rateLimitType: 'five_hour', utilization: 0.1 });
     advance(60_000);
-    pool.record('primary', { status: 'allowed', rateLimitType: 'five_hour', utilization: 42 });
+    pool.record('primary', { status: 'allowed', rateLimitType: 'five_hour', utilization: 0.42 });
     expect(pool.usage('primary')).toEqual([
       { scope: 'five_hour', utilization: 42, status: 'allowed', resetsAt: null, updatedAt: 70000 },
     ]);
@@ -170,8 +179,12 @@ describe('utilisation, which failover never cared about', () => {
 
   it('keeps the windows apart, fullest first', () => {
     const { pool } = fixture();
-    pool.record('primary', { status: 'allowed', rateLimitType: 'five_hour', utilization: 12 });
-    pool.record('primary', { status: 'allowed', rateLimitType: 'seven_day_opus', utilization: 88 });
+    pool.record('primary', { status: 'allowed', rateLimitType: 'five_hour', utilization: 0.12 });
+    pool.record('primary', {
+      status: 'allowed',
+      rateLimitType: 'seven_day_opus',
+      utilization: 0.88,
+    });
     expect(pool.usage('primary').map((u) => [u.scope, u.utilization])).toEqual([
       ['seven_day_opus', 88],
       ['five_hour', 12],
@@ -180,8 +193,8 @@ describe('utilisation, which failover never cared about', () => {
 
   it('keeps the ACCOUNTS apart — the entire question is per-subscription', () => {
     const { pool } = fixture();
-    pool.record('primary', { status: 'allowed', rateLimitType: 'seven_day', utilization: 20 });
-    pool.record('backup', { status: 'allowed', rateLimitType: 'seven_day', utilization: 90 });
+    pool.record('primary', { status: 'allowed', rateLimitType: 'seven_day', utilization: 0.2 });
+    pool.record('backup', { status: 'allowed', rateLimitType: 'seven_day', utilization: 0.9 });
     expect(pool.usage('primary')[0]?.utilization).toBe(20);
     expect(pool.usage('backup')[0]?.utilization).toBe(90);
   });
@@ -203,14 +216,14 @@ describe('utilisation, which failover never cared about', () => {
     pool.record('primary', {
       status: 'allowed',
       rateLimitType: 'five_hour',
-      utilization: 5,
+      utilization: 0.05,
       resetsAt: 1_792_300_000,
     });
     expect(pool.usage('primary')[0]?.resetsAt).toBe(1_792_300_000_000);
     pool.record('backup', {
       status: 'allowed',
       rateLimitType: 'five_hour',
-      utilization: 5,
+      utilization: 0.05,
       resetsAt: 1_792_300_000_000,
     });
     expect(pool.usage('backup')[0]?.resetsAt).toBe(1_792_300_000_000);
@@ -220,7 +233,7 @@ describe('utilisation, which failover never cared about', () => {
     // Failover already blocks on this; the bar should also say 100-ish rather
     // than going blank at the one moment the number matters most.
     const { pool } = fixture();
-    const info = { status: 'rejected', rateLimitType: 'seven_day_opus', utilization: 100 };
+    const info = { status: 'rejected', rateLimitType: 'seven_day_opus', utilization: 1 };
     expect(quotaBlock(info)).not.toBeNull();
     pool.record('primary', info);
     expect(pool.usage('primary')[0]).toMatchObject({ utilization: 100, status: 'rejected' });
@@ -258,14 +271,14 @@ describe('unifiedWindows, which is where the numbers actually are', () => {
     expect(pool.usage('primary')).toEqual([
       {
         scope: 'five_hour',
-        utilization: 0.41,
+        utilization: 41,
         status: 'allowed',
         resetsAt: 1_792_401_600_000,
         updatedAt: 10000,
       },
       {
         scope: 'seven_day',
-        utilization: 0.03,
+        utilization: 3,
         status: 'allowed',
         resetsAt: 1_792_609_200_000,
         updatedAt: 10000,
@@ -277,7 +290,7 @@ describe('unifiedWindows, which is where the numbers actually are', () => {
     // Older CLIs, and the shape the type documents. Keeping both costs one
     // branch and means a version change cannot silently empty the card again.
     const { pool } = fixture();
-    pool.record('primary', { status: 'allowed', rateLimitType: 'seven_day', utilization: 12 });
+    pool.record('primary', { status: 'allowed', rateLimitType: 'seven_day', utilization: 0.12 });
     expect(pool.usage('primary')[0]).toMatchObject({ scope: 'seven_day', utilization: 12 });
   });
 
@@ -285,7 +298,7 @@ describe('unifiedWindows, which is where the numbers actually are', () => {
     const { pool } = fixture();
     pool.record('primary', {
       status: 'allowed',
-      unifiedWindows: { five_hour: { utilization: 5 }, seven_day: { resetsAt: 1 } },
+      unifiedWindows: { five_hour: { utilization: 0.05 }, seven_day: { resetsAt: 1 } },
     });
     expect(pool.usage('primary').map((u) => u.scope)).toEqual(['five_hour']);
   });
@@ -325,7 +338,7 @@ describe('a rejection is a reading', () => {
 
   it('a real number beats the rejection default', () => {
     const { pool } = fixture();
-    pool.record('primary', { status: 'rejected', rateLimitType: 'seven_day', utilization: 97 });
+    pool.record('primary', { status: 'rejected', rateLimitType: 'seven_day', utilization: 0.97 });
     expect(pool.usage('primary')[0]?.utilization).toBe(97);
   });
 });
@@ -458,4 +471,31 @@ describe('the single saved-request slot', () => {
     expect(pool.pending('pane')?.text).toBe('same');
     pool.close();
   });
+});
+
+it('converts existing fractional readings without waiting for another model request', () => {
+  const { pool } = fixture();
+  pool.db
+    .prepare('INSERT INTO utilization VALUES (?, ?, ?, ?, ?, ?)')
+    .run('backup', 'seven_day', 0.54, 'allowed', null, 10000);
+  expect(pool.usage('backup')[0]?.utilization).toBe(54);
+});
+
+it('does not show an expired window as still exhausted or pretend its new usage is zero', () => {
+  const { pool, advance } = fixture();
+  pool.record('backup', {
+    status: 'rejected',
+    rateLimitType: 'five_hour',
+    utilization: 1,
+    resetsAt: 11,
+  });
+  expect(pool.usage('backup')[0]?.utilization).toBe(100);
+  advance(2000);
+  expect(pool.usage('backup')).toEqual([]);
+});
+
+it('does not round a floating-point 7% reading up to 8% on the card', () => {
+  const { pool } = fixture();
+  pool.record('backup', { status: 'allowed', rateLimitType: 'seven_day', utilization: 0.07 });
+  expect(Math.ceil(pool.usage('backup')[0]?.utilization ?? 0)).toBe(7);
 });
