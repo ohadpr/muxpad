@@ -105,12 +105,23 @@ afterEach(async () => {
   for (const host of hosts.splice(0)) host.remove();
 });
 
-/** Let the queued fetch + blob read settle, the way a real frame would. */
+/**
+ * Let the queued capture settle, the way a real frame would.
+ *
+ * COUNTING MICROTASKS IS GUESSING, and this guessed three. The chain is fetch
+ * → blob → object URL → decode → setState, and every link is a promise whose
+ * hop count is an implementation detail of whatever `fetch`, `Response` and
+ * `Image` happen to be. Adding the decode step pushed it past three, which
+ * showed up as ten failures on CI and none here — the same machine-dependence
+ * that has now bitten this file twice.
+ *
+ * Draining generously is the fix: forty ticks cost microseconds and do not
+ * care how many hops the chain actually takes. If a future change needs more
+ * than forty, something is looping, not settling.
+ */
 const settle = async () => {
   await act(async () => {
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    for (let i = 0; i < 40; i++) await Promise.resolve();
   });
 };
 
