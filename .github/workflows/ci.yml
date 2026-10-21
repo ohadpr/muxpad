@@ -15,7 +15,9 @@ concurrency:
 jobs:
   checks:
     name: ${{ matrix.check }}
-    runs-on: ubuntu-latest
+    # Per-check, defaulting to ubuntu. The broker's suite is the exception and
+    # the reason this is a variable: see its entry below.
+    runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     timeout-minutes: 20
     strategy:
       # Report every check even if, for example, lint fails first.
@@ -23,6 +25,15 @@ jobs:
       matrix:
         include:
           - check: broker tests
+            # macOS, BY CONSTRUCTION, not by preference. The broker is a macOS
+            # daemon — launchd, dscl, /Library/LaunchDaemons — and
+            # `assertProtectedPath` walks every ancestor of a path demanding
+            # the right owner and no group/other write bit. A per-user temp dir
+            # on macOS (/var/folders/…, 0700) satisfies that; Linux's /tmp is
+            # mode 1777 and never can, so nine tests failed on ubuntu with
+            # "Unprotected file or ancestor" — the check working correctly on a
+            # filesystem its subject does not run on.
+            os: macos-latest
             command: npm ci --ignore-scripts --prefix broker && npm test --prefix broker
           - check: typecheck
             command: pnpm typecheck
