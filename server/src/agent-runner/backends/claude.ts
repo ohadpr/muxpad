@@ -53,7 +53,6 @@ import {
 } from '../reversibility.js';
 import { markSessionCleared, markSessionTurned, sessionHadTurn } from '../session-marks.js';
 import { SubagentRoster } from '../subagent-roster.js';
-import { workspaceAgentContextSync } from '../workspace-context.js';
 import type { AgentBackend, BackendOptions, RunnerHost } from './types.js';
 
 // Default model for a FRESH agent chat with no explicit `--model` pin: muxpad
@@ -1206,6 +1205,9 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
   // The current turn's most recent assistant prose — rides along on turn-done so
   // the push notification can say WHAT the agent finished with, not just "done".
   let lastAssistantText = '';
+  /** Did a real (non-synthetic, non-error) assistant message land this turn?
+   *  See the quota-recovery branch: an answered turn must never be replayed. */
+  let answeredThisTurn = false;
   /** The transcript id of {@link lastAssistantText}'s block, so the reply
    *  guard's promoted speech can share an identity with the bubble that
    *  renders for it. Null when the SDK message carried no uuid. */
@@ -1331,6 +1333,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
         inTurn = true;
         interruptRequested = false;
         lastAssistantText = '';
+        answeredThisTurn = false;
         repliesThisTurn = 0;
         streamedTextThisTurn = false;
         firstReplyText = '';
@@ -1394,7 +1397,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
   // The workspace decides which capabilities are described at all — see
   // readAgentInstructions. Fetched once per runner and cached.
   const muxpadSystemPrompt = claudeSystemPromptOption(
-    readAgentInstructions(undefined, workspaceAgentContextSync()),
+    readAgentInstructions(),
     readChatModeOverlay(currentMode),
   );
 
@@ -1770,6 +1773,24 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
       uncertainToolResult ||
       backgroundCommands.size > 0 ||
       subagents.values().length > 0;
+    // AN ANSWERED TURN IS NOT A LOST ONE.
+    //
+    // This replayed `currentTurnText` word for word whenever the turn used no
+    // tools, without ever asking whether the turn had already SUCCEEDED. But
+    // the SDK emits `rate_limit_event` whenever the window CHANGES, so a
+    // perfectly good answer followed by the window tipping to rejected looked
+    // exactly like a request that never ran — and the user's message was sent
+    // again on the next account. One typed message, two turns, two answers,
+    // which is precisely the double delivery reported from a real session.
+    //
+    // The block is still recorded and the account still cools down; the only
+    // thing that changes is that nobody re-asks a question that was answered.
+    if (answeredThisTurn && toolUsesThisTurn === 0) {
+      log(`Claude ${account.id} hit its limit after answering; recording it and not replaying.`);
+      currentTurnText = null;
+      emit({ t: 'turn-done', ok: true, ...backgroundField() });
+      return;
+    }
     const retry =
       toolUsesThisTurn > 0
         ? 'Continue the interrupted request from the saved conversation. Completed tool results are authoritative: do not repeat completed actions. Reconcile any uncertain outcome before acting.'
@@ -2055,6 +2076,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
       inTurn = true;
       interruptRequested = false;
       lastAssistantText = '';
+      answeredThisTurn = false;
       repliesThisTurn = 0;
       streamedTextThisTurn = false;
       firstReplyText = '';
@@ -2297,10 +2319,29 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
           if (msgText) {
             lastAssistantText = msgText;
             lastAssistantTextId = msgTextId;
+            // DID THIS TURN ALREADY ANSWER? A real model wrote it, and it is
+            // not the provider's own refusal prose. `recoverQuota` needs this
+            // to tell "the request never ran" from "the request ran, and the
+            // window closed afterwards" — the two cases it used to replay
+            // identically. `<synthetic>` is the CLI's own voice (the "you've
+            // hit your limit" line arrives wearing it), and `msg.error` marks
+            // a provider error rather than an answer.
+            if (!msg.error && msg.message.model !== '<synthetic>') answeredThisTurn = true;
           }
         } else if (msg.type === 'result') {
           if (quotaPaused) {
             inTurn = false;
+            // A PARKED CLI THAT FINALLY ANSWERS CLEARS THE SAVED COPY.
+            //
+            // Recovery parks the turn and saves the message for /retry, but it
+            // does not kill the CLI — it cannot, because /retry resumes that
+            // very session. Some versions park for hours rather than returning
+            // a result, so the window can reopen and the request can complete
+            // on its own. Swallowing the result wholesale left the saved copy
+            // in the pending table, and a later /retry sent the same message
+            // again: one send, two deliveries, by a slower route than the
+            // replay above. If it answered, there is nothing left to retry.
+            if (answeredThisTurn && accountPool) accountPool.clearPending(host.paneId);
             continue;
           }
           if (quotaTimer) {

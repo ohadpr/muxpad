@@ -56,7 +56,57 @@ export function accountDataDir(): string {
 export function readAccountConfig(dir = accountDataDir()) {
   const path = join(dir, 'claude-accounts.json');
   if (!existsSync(path)) return null;
-  return configSchema.parse(JSON.parse(readFileSync(path, 'utf8')));
+  const config = configSchema.parse(JSON.parse(readFileSync(path, 'utf8')));
+  // TWO ACCOUNTS MUST NOT BE ONE DIRECTORY, AND STRINGS CANNOT TELL YOU THAT.
+  // The schema compares configDir as text, so `/home/me/p` and `/home/me/p/.`
+  // — or a symlink to it — pass as distinct while resolving to one profile:
+  // failover then misattributes usage, and signing into the "backup" replaces
+  // the login it was meant to stand beside. The CLI's `add` already resolves
+  // paths before accepting one; a hand-edited file reached neither check.
+  const seen = new Map<string, string>();
+  for (const a of config.accounts.filter((x) => x.enabled)) {
+    let real = a.configDir;
+    try {
+      real = realpathSync(a.configDir);
+    } catch {
+      // Not created yet — the literal path is the best identity available.
+    }
+    const clash = seen.get(real);
+    if (clash) throw new Error(`Accounts "${clash}" and "${a.id}" resolve to the same directory`);
+    seen.set(real, a.id);
+  }
+  return config;
+}
+
+/**
+ * THE SAME READ, FOR CODE THAT MUST NOT DIE OF A TYPO.
+ *
+ * `readAccountConfig` throws on a malformed file, which is right for the CLI:
+ * a human editing the config should be told. It is wrong everywhere else. The
+ * runner reads this at boot and on EVERY send, so one bad character — or a
+ * backup profile directory deleted by hand — crashed every Claude pane, and
+ * the respawn loop re-crashed on the same file. A pool is an optimisation over
+ * running on one account; failing to parse it should cost you the
+ * optimisation, not the app.
+ */
+let configComplaint = '';
+export function readAccountConfigOrNull(dir = accountDataDir()) {
+  try {
+    const config = readAccountConfig(dir);
+    configComplaint = '';
+    return config;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // Once per distinct fault: this runs per send, and a broken config would
+    // otherwise write a line of log per keystroke-turn for ever.
+    if (message !== configComplaint) {
+      configComplaint = message;
+      console.error(
+        `[claude-accounts] ignoring ${join(dir, 'claude-accounts.json')} — ${message}. Running on the default login.`,
+      );
+    }
+    return null;
+  }
 }
 
 /** Shared WAL database: runners coordinate atomically without depending on an
@@ -103,10 +153,10 @@ export class AccountPool {
     }
   }
   static open(dir = accountDataDir()): AccountPool | null {
-    return readAccountConfig(dir) ? new AccountPool(dir) : null;
+    return readAccountConfigOrNull(dir) ? new AccountPool(dir) : null;
   }
   accounts(): Account[] {
-    return readAccountConfig(this.dir)?.accounts ?? [];
+    return readAccountConfigOrNull(this.dir)?.accounts ?? [];
   }
   private eligible(account: Account, model: string): boolean {
     if (!account.enabled) return false;
@@ -127,7 +177,7 @@ export class AccountPool {
   ): Account | null {
     return this.db
       .transaction(() => {
-        const config = readAccountConfig(this.dir);
+        const config = readAccountConfigOrNull(this.dir);
         if (!config) return null;
         const candidates = config.accounts.filter(
           (a) => !excluded.has(a.id) && this.eligible(a, model),
@@ -347,6 +397,23 @@ export function quotaBlock(info: Record<string, unknown>, now = Date.now()): Quo
  * failed result is not prose, it is the failure itself, so its sentence is
  * evidence. The phrase list is the same one.
  */
+/**
+ * HOW LONG TO BLOCK AN ACCOUNT WHOSE REFUSAL CAME AS PROSE.
+ *
+ * The normal path reads `resetsAt` off the rate-limit event and blocks until
+ * exactly then. These two fallbacks have only a sentence — "you've hit your
+ * weekly limit" — and no machine-readable time, so the figure is a guess.
+ *
+ * It was five minutes, which is a guess that costs something: the preferred,
+ * exhausted account becomes eligible again almost immediately, failover picks
+ * it (preference is evaluated before health), it refuses, and recovery moves
+ * on. Twelve of those an hour, each one a wasted turn. Thirty minutes keeps
+ * the "maybe it was transient" property that a short cooldown is for while
+ * making the bounce rare, and it is still far shorter than any real limit
+ * window — so an account that recovers early is only briefly unused.
+ */
+const BLIND_COOLDOWN_MS = 30 * 60_000;
+
 export function resultQuota(text: string, now = Date.now()): QuotaBlock | null {
   if (
     !/you(?:'|’)?ve (?:hit|reached) your (?:(?:weekly|daily|monthly|session) )?limit|usage limit|out of credits|credit balance.*(?:low|exhaust)|insufficient credits/i.test(
@@ -354,7 +421,7 @@ export function resultQuota(text: string, now = Date.now()): QuotaBlock | null {
     )
   )
     return null;
-  return { scope: 'all', until: now + 5 * 60_000, reason: text.slice(0, 200) };
+  return { scope: 'all', until: now + BLIND_COOLDOWN_MS, reason: text.slice(0, 200) };
 }
 
 /** Compatibility fallback only for provider-generated assistant errors.
@@ -367,5 +434,5 @@ export function assistantQuota(error: unknown, text: string, now = Date.now()): 
     )
   )
     return null;
-  return { scope: 'all', until: now + 5 * 60_000, reason: text.slice(0, 200) };
+  return { scope: 'all', until: now + BLIND_COOLDOWN_MS, reason: text.slice(0, 200) };
 }
