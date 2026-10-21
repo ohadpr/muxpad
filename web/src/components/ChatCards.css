@@ -119,9 +119,12 @@
   box-shadow: inset 0 0 0 2px var(--chat-accent);
 }
 
-/* THE VALUE, collapsed: one line, ellipsized, never wrapped. The tail's width
-   is reserved by padding so a long value stops before the clock rather than
-   running under it. */
+/* THE VALUE, collapsed: one line, ellipsized, never wrapped.
+
+   The 46px right padding is now only a FALLBACK. Collapsed, the card is a grid
+   and the tail is a real column that reserves exactly its own width (see
+   below); this keeps a long value off the clock even if that rule is ever lost,
+   which is the one failure this file has already had twice. */
 .chat-card-line {
   padding: 7px 46px 7px 13px;
   font-size: 0.8125rem;
@@ -180,6 +183,45 @@
 .chat-card-age.-stale {
   color: var(--status-working, #8a6410);
 }
+/* ── COLLAPSED, THE TAIL IS A COLUMN ──────────────────────────────────────
+   Absolute positioning is right for a BODY — several lines of blocks, with the
+   clock as a footnote pinned to the corner — and wrong for the one-liner, in
+   two ways that were both reported.
+
+   It was not CENTRED. `top: 6px` is the top-right of a card, but when the card
+   IS one 33px row the tail sat high against a value centred in it. There is no
+   constant that fixes this: the offset would have to be half the difference
+   between two line boxes, so it drifts with either font size.
+
+   And it RESERVED TOO MUCH. 46px of padding was sized for the worst tail
+   ("365d") and paid on every card, so a typical "2m" clipped ~25px of value
+   for nothing — "much wider than its contents, which clips the card contents
+   unnecessarily".
+
+   So, collapsed only: the card is a two-column grid and the tail is an item in
+   it. `auto` makes the column exactly as wide as the text in it, whatever the
+   text turns out to be, and `align-items: center` centres both items against
+   the row rather than against a number someone guessed. */
+.chat-card.-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  /* The gap the 46px used to include, now the only clearance there is. */
+  column-gap: 8px;
+  padding-right: 10px;
+}
+.chat-card.-line > .chat-card-age {
+  position: static;
+  grid-column: 2;
+  grid-row: 1;
+}
+.chat-card.-line > .chat-card-line {
+  grid-column: 1;
+  grid-row: 1;
+  /* The grid column has replaced it; keeping it would double the clearance. */
+  padding-right: 0;
+}
+
 .chat-card-sr {
   position: absolute;
   width: 1px;
