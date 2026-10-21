@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cardLineMarkdown } from './card-line';
+import { cardLineMarkdown, cardLineText } from './card-line';
 
 /** The card that found the bug, verbatim from the store — a close summary with
  *  two-space hard breaks and a fenced holdings table. Collapsed, it drew ten
@@ -25,16 +25,10 @@ describe('the collapsed card is one line of markdown', () => {
    *  from the text rather than from which elements the css happened to name. */
   const isOneLine = (s: string) => !s.includes('\n');
 
-  it('flattens the card that was ten lines tall', () => {
+  it('previews only the headline of the card that was ten lines tall', () => {
     const line = cardLineMarkdown(INVESTING);
     expect(isOneLine(line)).toBe(true);
-    expect(line.startsWith('🟢 CLOSE · NW $3.95M +$43K (+1.11%) · 📈 stocks')).toBe(true);
-    // The hard-broken lines are segments, not a run-on: "…no action✅ no action"
-    // is exactly what flattening without a separator produced.
-    expect(line).toContain('▲ VGT +$20K, ₿ +$6K · ▼ GOOGL −$0.9K · ✅ no action');
-    // The table survives as ONE code span — monospace and literal, so a `*` or
-    // `_` in an ascii table cannot open an emphasis run that never closes.
-    expect(line).toContain('`Indices $2.29M +$25K · MAG-6 $216K +$1K');
+    expect(line).toBe('🟢 CLOSE · NW $3.95M +$43K (+1.11%)');
   });
 
   it('keeps inline formatting, which costs no height', () => {
@@ -43,15 +37,12 @@ describe('the collapsed card is one line of markdown', () => {
   });
 
   it('drops the markers of blocks it cannot have', () => {
-    expect(cardLineMarkdown('# Build\n\n- one\n- two\n\n---\n\n> note')).toBe(
-      'Build · one · two · note',
-    );
-    expect(cardLineMarkdown('1. first\n2. second')).toBe('first · second');
+    expect(cardLineMarkdown('# Build\n\n- one\n- two\n\n---\n\n> note')).toBe('Build');
+    expect(cardLineMarkdown('1. first\n2. second')).toBe('first');
   });
 
-  it('does not lose an unterminated fence', () => {
-    // A card written mid-edit, or truncated. Dropping it would blank the card.
-    expect(cardLineMarkdown('head\n\n```\nstill here')).toBe('head · `still here`');
+  it('does not pull a later code block into the headline', () => {
+    expect(cardLineMarkdown('head\n\n```\nstill here')).toBe('head');
   });
 
   it('delimits a code span longer than any backtick run inside it', () => {
@@ -67,4 +58,13 @@ describe('the collapsed card is one line of markdown', () => {
   it('is empty for a card that is only layout', () => {
     expect(cardLineMarkdown('\n\n---\n\n')).toBe('');
   });
+});
+
+it('previews only the first code row, including an unterminated fence', () => {
+  expect(cardLineMarkdown('```\nfirst row\nsecond row')).toBe('`first row`');
+});
+it('skips leading blank lines without joining later content', () => {
+  expect(cardLineMarkdown('\r\n\r\n**Summary**  \r\nDetails')).toBe('**Summary**');
+  expect(cardLineText('\nSummary\nDetails')).toBe('Summary');
+  expect(cardLineText('\n  \n')).toBe('');
 });
