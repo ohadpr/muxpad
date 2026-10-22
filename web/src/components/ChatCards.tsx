@@ -171,7 +171,8 @@ function HtmlCard({ card }: { card: ChatCard }) {
   const srcdoc = useMemo(
     () =>
       paint
-        ? `<!doctype html><html><head><meta charset="utf-8"><style>${themeBlock(paint.surface)}</style></head><body>${card.content}${SELF_MEASURE}</body></html>`
+        ? `<!doctype html><html><head><meta charset="utf-8"><base target="_blank">` +
+          `<style>${themeBlock(paint.surface)}</style></head><body>${card.content}${SELF_MEASURE}</body></html>`
         : null,
     [card.content, paint],
   );
@@ -201,8 +202,26 @@ function HtmlCard({ card }: { card: ChatCard }) {
           ref={ref}
           className="chat-card-frame"
           title={card.name}
-          // No `allow-same-origin`: the frame must not be able to reach muxpad.
-          sandbox="allow-scripts"
+          // ── A LINK IN A CARD LEAVES THE CARD ────────────────────────────
+          // Reported: a link in a pinned card opened INSIDE it, replacing the
+          // card with the page. There is no back button in a 90px frame, and
+          // nothing else in muxpad behaves that way — every other surface
+          // (chat markdown, file chips, artifact links, the brand mark) is
+          // already `target="_blank"`. This frame was the one exception, and
+          // only because it is sandboxed: a sandboxed frame CAN navigate
+          // itself, and `<base>` plus popup permission is what redirects that
+          // to a new tab.
+          //
+          // `allow-popups-to-escape-sandbox` is the half people forget: without
+          // it the opened tab inherits the sandbox and lands as a scriptless,
+          // origin-less page — a broken version of the site, which reads as the
+          // link being broken.
+          //
+          // NO `allow-same-origin`, unchanged: the frame still cannot reach
+          // muxpad. What it gains is the ability to open a tab, which the chat
+          // text beside it could already do — a card is written by the agents
+          // you already run.
+          sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
           srcDoc={srcdoc}
           style={{ height: `${h}px` }}
         />
