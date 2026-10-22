@@ -1511,6 +1511,139 @@
   background: color-mix(in srgb, #000 72%, transparent);
 }
 
+/* ── THE CHIP'S UPLOAD STATES ─────────────────────────────────────────────
+   A chip now exists from the moment a file is PICKED, so it has to be able to
+   look unfinished. Three things carry that, in order of how hard they are to
+   miss: the tile dims, a fill rises through it, and (only when something has
+   gone wrong) its border takes the danger colour. */
+.chat-chip[data-state="queued"],
+.chat-chip[data-state="uploading"] {
+  /* The file is not here yet, and the tile says so without moving: a
+     pulsing or sliding chip in a row of six is a row that will not hold
+     still long enough to read. */
+  opacity: 0.72;
+}
+.chat-chip[data-state="error"],
+.chat-chip[data-state="canceled"] {
+  border-color: var(--danger);
+  opacity: 0.85;
+}
+/* The fill RISES, rather than crossing a 3px bar at the foot. On a 52px tile
+   a horizontal bar is 6% of the object and reads as a border artifact; a
+   column of tinted accent over the thumbnail is legible at a glance across a
+   row of them, which is the case this is for. */
+.chat-chip-progress {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  pointer-events: none;
+}
+.chat-chip-progress-fill {
+  width: 100%;
+  background: color-mix(in srgb, var(--chat-accent) 38%, transparent);
+  border-top: 2px solid var(--chat-accent);
+  transition: height 180ms linear;
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-chip-progress-fill {
+    transition: none;
+  }
+}
+/* Not an image: its extension, centred. An <img> pointed at a pdf draws the
+   browser's broken-image glyph, which is what every non-image attachment used
+   to look like in this row. */
+.chat-chip-kind {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--chat-dim);
+  background: var(--chat-panel);
+}
+/* Retry sits opposite the ×, so the two never swap places under a thumb: the
+   one that destroys is always top-right, as it is on every other chip. */
+.chat-chip-retry {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: color-mix(in srgb, #000 55%, transparent);
+  color: #fff;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+.chat-chip-retry:hover {
+  background: color-mix(in srgb, #000 72%, transparent);
+}
+
+/* ── THE BATCH LINE ───────────────────────────────────────────────────────
+   One line above the chips while a pick is in flight. It answers the one
+   question the chips cannot — how much longer — and it is the only place a
+   cancel-everything lives. It is NOT drawn when nothing is uploading: a strip
+   that is always there is chrome, and this is news. */
+.chat-uploads {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px 0 8px;
+  font-size: 0.6875rem;
+  color: var(--chat-dim);
+  font-variant-numeric: tabular-nums;
+}
+.chat-uploads.-failed {
+  color: var(--danger);
+}
+.chat-uploads-label {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.chat-uploads-track {
+  flex: 1 1 auto;
+  min-width: 40px;
+  height: 3px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--chat-fg) 12%, transparent);
+  overflow: hidden;
+}
+.chat-uploads-fill {
+  display: block;
+  height: 100%;
+  background: var(--chat-accent);
+  transition: width 180ms linear;
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-uploads-fill {
+    transition: none;
+  }
+}
+.chat-uploads-cancel {
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  color: var(--chat-dim);
+  font: inherit;
+  padding: 2px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.chat-uploads-cancel:hover {
+  color: var(--chat-fg);
+  background: color-mix(in srgb, var(--chat-fg) 8%, transparent);
+}
+
 /* Clickable image thumbnail inline in a history bubble (opens the lightbox). */
 .chat-img-thumb {
   /* Each image breaks onto its OWN line (block), and the frame shrink-wraps
