@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>review spike</title>
+<style>
+  :root { color-scheme: dark; --bg:#1a1b26; --fg:#c0caf5; --dim:#8b93b8; --accent:#7aa2f7; --warn:#e0af68; --ok:#9ece6a; --panel:#1f2335; --line:#2c3047 }
+  * { box-sizing: border-box }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 ui-sans-serif,system-ui; padding:20px; max-width:900px; margin-inline:auto }
+  h1 { font-size:17px; margin:0 0 4px }
+  p.sub { color:var(--dim); margin:0 0 18px; font-size:13px }
+  button { font:inherit; font-weight:600; border:0; border-radius:10px; padding:11px 18px; cursor:pointer; background:var(--accent); color:#11131f }
+  button.stop { background:var(--warn) }
+  button:disabled { opacity:.45; cursor:default }
+  #bar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:14px }
+  #stat { font-size:13px; color:var(--dim); font-variant-numeric:tabular-nums }
+  .note { display:grid; grid-template-columns:220px 1fr; gap:14px; padding:12px 0; border-top:1px solid var(--line); align-items:start }
+  .note img { width:220px; border-radius:8px; border:1px solid var(--line); display:block; cursor:zoom-in }
+  .note .t { font-variant-numeric:tabular-nums; color:var(--dim); font-size:12px }
+  .note .u { margin-top:3px }
+  .note .same { color:var(--dim); font-size:12px; font-style:italic }
+  #out { margin-top:18px }
+  #log { margin-top:22px; padding-top:12px; border-top:1px solid var(--line); color:var(--dim); font:12px/1.5 ui-monospace,Menlo,monospace; white-space:pre-wrap; max-height:220px; overflow:auto }
+  #copy { background:var(--panel); color:var(--fg); border:1px solid var(--line) }
+  .pill { font-size:12px; padding:3px 9px; border-radius:999px; background:var(--panel); border:1px solid var(--line); color:var(--dim) }
+</style>
+<body>
+<h1>review spike</h1>
+<p class="sub"><b>Test A first:</b> Start, then talk AT THIS PAGE for ten seconds without clicking away — notes should appear. <b>Then test B:</b> Start, switch to the app, and talk there. If A works and B does not, we have our answer. Each thing you say becomes a note with the frame that was on screen when you started saying it. Nothing leaves this page.</p>
+
+<div id="bar">
+  <button id="go">Start review</button>
+  <button id="end" class="stop" disabled>Stop</button>
+  <button id="copy" disabled>Copy as message</button>
+  <span class="pill" id="stat">idle</span>
+  <span class="pill" id="focus">focus: —</span>
+  <span class="pill" style="min-width:150px">mic
+    <span style="display:inline-block;width:90px;height:7px;background:#2c3047;border-radius:4px;vertical-align:middle;overflow:hidden">
+      <span id="level" style="display:block;height:100%;width:0;background:var(--ok)"></span></span>
+  </span>
+</div>
+<p id="nag" class="sub" style="color:var(--warn);display:none">
+  <b>This page is not focused.</b> Chrome's speech recogniser goes deaf when the tab is in the
+  background — click anywhere on this page before you talk, for test A.
+</p>
+
+<div id="out"></div>
+<div id="log"></div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+addEventListener('DOMContentLoaded', () => {
+  let sandboxed = false;
+  try { localStorage.setItem('_p', '1'); localStorage.removeItem('_p'); } catch { sandboxed = true; }
+  if (sandboxed || (window.opener && window.top === window.self)) {
+    $('#stat').textContent = 'opened from another page';
+    $('#out').innerHTML =
+      '<p style="color:var(--warn)"><b>This tab was opened from another page' +
+      (sandboxed ? ' and inherited its sandbox' : '') + '.</b> Capture will refuse. ' +
+      'Copy this url and paste it into a brand-new tab:<br><code style="color:var(--accent)">' +
+      location.origin + location.pathname + '</code></p>';
+  }
+  if (window.top !== window.self) {
+    $('#stat').textContent = 'open in its own tab';
+    $('#go').disabled = true;
+    $('#out').innerHTML =
+      '<p style="color:var(--warn)"><b>This page is in a frame.</b> A cross-origin frame cannot be ' +
+      'granted the screen, so capture would refuse before you saw a picker. ' +
+      '<a href="' + location.href + '" target="_blank" rel="noopener" style="color:var(--accent)">' +
+      'Open it in its own tab →</a></p>';
+  }
+});
+const log = (m) => { $('#log').textContent += `${new Date().toISOString().slice(11,23)}  ${m}\n`; $('#log').scrollTop = 1e6; };
+
+let stream = null, video = null, canvas = null, rec = null;
+let notes = [], frames = [], t0 = 0, lastHash = null, grabTimer = null, speaking = false;
+/** Everything seen recently, cheap and small. Only what a note SELECTS from
+ *  here ever becomes an attachment. */
+let ring = [];
+const RING_MS = 90_000;
+let heard = 'none';
+/** Set BEFORE anything async, because the meter's loop starts before `rec`
+ *  and `grabTimer` exist — guarding on those is what killed it. */
+let capturing = false;
+addEventListener('blur', () => rec && log('page BLURRED (switched away)'));
+addEventListener('focus', () => rec && log('page focused'));
+const since = () => ((performance.now() - t0) / 1000);
+const stamp = (s) => `${String(Math.floor(s/60)).padStart(2,'0')}:${String(Math.floor(s%60)).padStart(2,'0')}`;
+
+/** Downscale, encode, and hash. The hash is what keeps a static screen to one file. */
+async function grab(force = false) {
+  if (!video || video.readyState < 2) return null;
+  const w = 1280, h = Math.round(video.videoHeight * (w / video.videoWidth));
+  canvas.width = w; canvas.height = h;
+  canvas.getContext('2d').drawImage(video, 0, 0, w, h);
+  const url = canvas.toDataURL('image/jpeg', 0.7);
+  // Cheap perceptual-ish hash: 16x16 greyscale, 4 bits each.
+  const s = document.createElement('canvas'); s.width = 16; s.height = 16;
+  s.getContext('2d').drawImage(canvas, 0, 0, 16, 16);
+  const px = s.getContext('2d').getImageData(0, 0, 16, 16).data;
+  let hash = '';
+  for (let i = 0; i < px.length; i += 4) hash += ((px[i]*0.3 + px[i+1]*0.59 + px[i+2]*0.11) >> 3).toString(16);
+  if (hash === lastHash && !force)
+    return { url: frames[frames.length - 1]?.url ?? url, reused: true, bytes: 0 };
+  lastHash = hash;
+  const bytes = Math.round(url.length * 0.75);
+  // Spread of the 256 sampled pixels: ~0 means a flat/blank capture, which is
+  // what a minimised or occluded window gives you.
+  let min = 255, max = 0;
+  for (let i = 0; i < px.length; i += 4) {
+    const g = px[i] * 0.3 + px[i + 1] * 0.59 + px[i + 2] * 0.11;
+    min = Math.min(min, g); max = Math.max(max, g);
+  }
+  const f = { url, bytes, at: since() };
+  frames.push(f);
+  log(`frame #${frames.length}: ${w}x${h}, ${Math.round(bytes / 1000)} KB, spread ${Math.round(max - min)}` +
+      `${max - min < 12 ? '  ← nearly blank: is the window visible?' : ''}`);
+  return { url, reused: false, bytes };
+}
+
+function render() {
+  const total = frames.reduce((n, f) => n + f.bytes, 0);
+  const size = total > 900_000 ? `${(total/1e6).toFixed(1)} MB` : `${Math.round(total/1000)} KB`;
+  const kept = notes.reduce((n, x) => n + (x.urls?.length || (x.url ? 1 : 0)), 0);
+  $('#stat').textContent =
+    `${notes.length} notes · ${kept} images · ${frames.length} sampled · ${size} · ${stamp(since())}`;
+  $('#out').innerHTML = notes.map((n, i) => `
+    <div class="note">
+      <div>${(n.urls?.length ? n.urls : [n.url]).filter(Boolean).map((u, k) =>
+        `<img src="${u}" onclick="window.open(this.src)" style="${k ? 'margin-top:6px' : ''}" title="frame ${k + 1} of this note">`).join('')}</div>
+      <div><div class="t">${stamp(n.at)}</div><div class="u">${n.text.replace(/[<&]/g, c => ({'<':'&lt;','&':'&amp;'}[c]))}</div></div>
+    </div>`).join('');
+}
+
+/** Raw mic level — proof the microphone itself is working, whatever the
+ *  recogniser decides to do. Also records the PEAK, so a run can be judged
+ *  after the fact rather than by watching a bar. */
+let micPeak = 0;
+async function startMeter() {
+  let ms;
+  try { ms = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch (e) { log(`mic refused: ${e.name}: ${e.message}`); return null; }
+  const ctx = new AudioContext();
+  // CREATED AFTER TWO AWAITS, so the click that started this is no longer a
+  // live user gesture and the context begins SUSPENDED — an analyser on a
+  // suspended context reads pure silence, which is indistinguishable from a
+  // dead microphone. That is exactly what the last run reported, and it was
+  // this bug rather than the mic.
+  if (ctx.state === 'suspended') {
+    try { await ctx.resume(); } catch (e) { log(`audio resume failed: ${e.name}`); }
+  }
+  const t = ms.getAudioTracks()[0];
+  log(`mic track: state=${ctx.state} muted=${t.muted} enabled=${t.enabled} ready=${t.readyState}`);
+  const an = ctx.createAnalyser();
+  an.fftSize = 512;
+  ctx.createMediaStreamSource(ms).connect(an);
+  const buf = new Uint8Array(an.frequencyBinCount);
+  const tick = () => {
+    if (!capturing) return;
+    an.getByteTimeDomainData(buf);
+    let peak = 0;
+    for (const v of buf) peak = Math.max(peak, Math.abs(v - 128) / 128);
+    micPeak = Math.max(micPeak, peak);
+    $('#level').style.width = `${Math.min(100, peak * 320)}%`;
+    requestAnimationFrame(tick);
+  };
+  tick();
+  log(`mic open: ${ms.getAudioTracks()[0].label}`);
+  return ms;
+}
+
+async function startSpeech() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { log('NO SpeechRecognition — type notes instead (not supported here)'); return; }
+  const r = new SR();
+  r.continuous = true; r.interimResults = true; r.lang = 'en-US';
+  let pending = null, startedAt = null, lastEnd = 0;
+  // A FATAL ERROR MUST NOT RESTART. Observed in testing: with no mic
+  // permission, `not-allowed` fires, `onend` restarts, and the two spin in a
+  // tight loop — hundreds of lines a second and a wedged page. Only transient
+  // ends (silence timeouts, which are normal and frequent) get the restart.
+  let fatal = false;
+  r.onstart = () => log(`speech: listening (focus=${document.hasFocus()})`);
+  r.onspeechstart = () => log('speech: HEARD something');
+  r.onaudiostart = () => { heard = 'audio'; };
+  r.onsoundstart = () => { heard = 'sound'; };
+  r.onerror = (e) => {
+    // `no-speech` WHILE BLURRED is the signature of the real problem: Chrome's
+    // Web Speech stops delivering once the tab is not focused. That is a limit
+    // of this shortcut, not of the design — muxpad's own voice path is a
+    // WebRTC session, which keeps streaming regardless of focus.
+    log(`speech error: ${e.error} (focus=${document.hasFocus()}, heard=${heard})`);
+    if (e.error === 'no-speech' && !document.hasFocus())
+      log('  → this is the known Web Speech limit: it goes deaf when the tab is not focused.');
+    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+      fatal = true;
+      log('speech: mic refused — allow the microphone and press Start again');
+    }
+  };
+  r.onend = () => {
+    if (!rec || fatal) return;
+    setTimeout(() => { if (rec && !fatal) { try { r.start(); } catch {} } }, 300);
+  };
+  r.onresult = async (e) => {
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const res = e.results[i];
+      // FIRST interim result of an utterance = speech start → grab the anchor.
+      if (!res.isFinal && !pending) {
+        speaking = true;
+        // force: this is the anchor, and it must be ITS OWN frame even when the
+        // screen is unchanged — the cursor is the difference, and the cursor is
+        // the point.
+        pending = await grab(true);
+        log('speech start → frame (anchor, always new)');
+      }
+      if (res.isFinal) {
+        const text = res[0].transcript.trim();
+        if (text) {
+          const end = since();
+          const from = startedAt ?? lastEnd;
+          const span = ring.filter((f) => f.at >= from - 0.4 && f.at <= end + 0.2);
+          // UP TO FIVE, SPREAD ACROSS THE UTTERANCE. Web Speech only finalises
+          // after a long pause, so one "utterance" is routinely three asks
+          // across twenty seconds and three different things pointed at. One
+          // image for a remark; five for a sentence that wandered.
+          const want = Math.max(1, Math.min(5, Math.round((end - from) / 3)));
+          const picks = [...new Set(
+            Array.from({ length: want }, (_, k) =>
+              span[Math.min(span.length - 1, Math.round((k * (span.length - 1)) / Math.max(1, want - 1)))])
+              .filter(Boolean).map((f) => f.url),
+          )];
+          lastEnd = end;
+          notes.push({
+            text,
+            at: startedAt ?? end,
+            url: pending?.url ?? picks[0] ?? null,
+            urls: picks.length ? picks : pending?.url ? [pending.url] : [],
+          });
+          log(`note: "${text.slice(0, 60)}"`);
+        }
+        pending = null; speaking = false; startedAt = null;
+        render();
+      }
+    }
+  };
+  try { r.start(); } catch (e) { log(`speech start failed: ${e.message}`); }
+  return r;
+}
+
+$('#go').onclick = async () => {
+  try {
+    // PLAIN `video: true`. `cursor:'always'` inside video constraints is not
+    // standard and is one more thing that can be blamed for a refusal; the
+    // pointer is in the capture anyway. Frame rate is applied after.
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { cursor: 'always' }, audio: false,
+      });
+    } catch (inner) {
+      if (inner.name === 'TypeError' || inner.name === 'OverconstrainedError') {
+        log('cursor constraint rejected — falling back (the pointer may not be in the frames)');
+        stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      } else throw inner;
+    }
+    try { await stream.getVideoTracks()[0].applyConstraints({ frameRate: 5 }); } catch {}
+  } catch (e) {
+    // SAY WHY, NOT JUST NO. "Invalid security origin" is the browser's way of
+    // saying this document was never allowed to ask — and from inside the page
+    // that is indistinguishable from the page being broken. The three facts
+    // that decide it are all readable from here, so they get printed instead
+    // of a bare error.
+    const fp = document.featurePolicy || document.permissionsPolicy;
+    log(`capture refused: ${e.name}: ${e.message}`);
+    log(`  framed:        ${window.top !== window.self ? 'YES — open this page in its own browser tab' : 'no (top-level)'}`);
+    log(`  secure:        ${window.isSecureContext}`);
+    log(`  origin:        ${location.origin}`);
+    log(`  may-ask:       ${fp ? fp.allowsFeature('display-capture') : 'unknown'}`);
+    // A tab opened FROM a sandboxed frame inherits the sandbox: still
+    // top-level, still https, still "allowed" by policy — and still refused.
+    // Storage is the tell that survives `allow-same-origin`.
+    let storage = 'ok';
+    try { localStorage.setItem('_p', '1'); localStorage.removeItem('_p'); }
+    catch (err) { storage = `BLOCKED (${err.name}) — this document is sandboxed`; }
+    log(`  storage:       ${storage}`);
+    log(`  opener:        ${window.opener ? 'yes — opened from another page' : 'none'}`);
+    log(`  referrer:      ${document.referrer || '(none)'}`);
+    if (window.opener || storage !== 'ok')
+      log('  → opened from another page. PASTE the url into a NEW tab instead: a tab opened from a sandboxed frame inherits the sandbox.');
+    if (window.top !== window.self)
+      log('  → a cross-origin frame cannot ask for the screen unless its parent says so.');
+    else if (/denied|NotAllowed/i.test(`${e.name}${e.message}`))
+      log('  → the browser itself lacks macOS Screen Recording: System Settings → Privacy & Security → Screen Recording.');
+    return;
+  }
+  capturing = true;
+  video = document.createElement('video');
+  video.srcObject = stream; video.muted = true; await video.play();
+  canvas = document.createElement('canvas');
+  t0 = performance.now(); notes = []; frames = []; lastHash = null;
+  $('#go').disabled = true; $('#end').disabled = false; $('#copy').disabled = false;
+  log(`capture started: ${stream.getVideoTracks()[0].label}`);
+  stream.getVideoTracks()[0].onended = () => { log('stream ended by browser'); $('#end').click(); };
+  micPeak = 0;
+  await startMeter();
+  rec = await startSpeech();
+  // Heartbeat: proves frames keep arriving while you are in another app, and
+  // samples ~every 2s DURING speech (the real thing would only do the latter).
+  setInterval(() => {
+    const f = document.hasFocus();
+    $('#focus').textContent = `focus: ${f ? 'yes' : 'NO'}`;
+    $('#nag').style.display = rec && !f ? 'block' : 'none';
+  }, 400);
+  grabTimer = setInterval(async () => {
+    const f = await grab(speaking);   // while speaking, keep every sample
+    if (f) {
+      ring.push({ url: f.url, at: since() });
+      const cutoff = since() - RING_MS / 1000;
+      while (ring.length && ring[0].at < cutoff) ring.shift();
+    }
+    log(`heartbeat ${speaking ? '(speaking)' : ''} ${f ? (f.reused ? 'same' : 'NEW') : 'NO FRAME'}` +
+        ` focus=${document.hasFocus()} mic=${(micPeak * 100).toFixed(0)}% heard=${heard}`);
+    render();
+  }, 350);   // ~3/s — cheap, and the selector needs choices
+  render();
+};
+
+$('#end').onclick = () => {
+  capturing = false;
+  clearInterval(grabTimer); grabTimer = null;
+  if (rec) { const r = rec; rec = null; try { r.stop(); } catch {} }
+  stream?.getTracks().forEach(t => t.stop());
+  $('#go').disabled = false; $('#end').disabled = true;
+  log(`stopped — ${notes.length} notes, ${frames.length} distinct frames`);
+  log(`  mic peak this run: ${(micPeak * 100).toFixed(0)}%  ${
+    notes.length > 0
+      ? '(speech worked — the meter is only a diagnostic)'
+      : micPeak < 0.02
+        ? '← no signal AND no notes: check the input device'
+        : '← signal but no notes: the recogniser is the problem'}`);
+  render();
+};
+
+$('#copy').onclick = async () => {
+  const msg = notes.map((n, i) => `${i+1}. ${n.text}${n.reused ? '' : `\n[frame @ ${stamp(n.at)}]`}`).join('\n');
+  await navigator.clipboard.writeText(msg);
+  log('copied note list to clipboard');
+};
+</script>
