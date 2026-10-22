@@ -2355,6 +2355,38 @@
   border-radius: 3px;
   background: var(--accent, #4a9eff);
 }
+/* ── THE CONTEXT-PRESSURE CELL ────────────────────────────────────────────
+   Not a gauge: a cell that only exists past 70%, so its presence IS the
+   signal. Amber while there is room to decide, danger once the next long turn
+   could hit the ceiling — and never a bar on the strip itself, because the
+   bar lives in the panel this opens, next to the button that acts on it. */
+.chat-status-seg.-ctx {
+  flex-shrink: 0;
+  min-width: max-content;
+  gap: 5px;
+  font-weight: 600;
+  color: var(--status-working, #b7791f);
+}
+.chat-status-seg.-ctx[data-level="high"] {
+  color: var(--danger);
+}
+.chat-status-seg.-ctx .chat-ctx-glyph {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+/* The one place the strip's own svg rule must not win: that rule paints every
+   icon --chat-dim so icons read as identity marks, and this icon is the
+   warning itself. */
+.chat-status-seg.-ctx svg {
+  color: inherit;
+}
+.chat-session-bar-fill[data-level="warn"] {
+  background: var(--status-working, #b7791f);
+}
+.chat-session-bar-fill[data-level="high"] {
+  background: var(--danger);
+}
+
 .chat-session-context-label {
   display: block;
   margin-top: 4px;

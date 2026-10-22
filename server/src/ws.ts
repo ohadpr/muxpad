@@ -2526,6 +2526,8 @@ export function attachWsServer(deps: {
             id?: string;
             model?: string;
             cmd?: string;
+            /** `/compact` instructions — what the summary must keep. */
+            args?: string;
             answers?: Array<{ question: string; answers: string[] }>;
           }>(data);
           if (!msg) return;
@@ -2578,7 +2580,15 @@ export function attachWsServer(deps: {
           }
           if (msg.t === 'slash') {
             if (msg.cmd === 'compact' || msg.cmd === 'clear') {
-              if (!sendToRunner(chatPaneId, { t: 'slash', cmd: msg.cmd })) {
+              // Instructions ride only `/compact`, and are bounded: this ends
+              // up as the head of a prompt, not as a command argument.
+              const args =
+                msg.cmd === 'compact' && typeof msg.args === 'string'
+                  ? msg.args.slice(0, 2000)
+                  : undefined;
+              if (
+                !sendToRunner(chatPaneId, { t: 'slash', cmd: msg.cmd, ...(args ? { args } : {}) })
+              ) {
                 send({ t: 'notice', message: 'agent is reconnecting — try again in a moment' });
               }
             }

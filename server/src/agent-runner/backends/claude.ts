@@ -1452,10 +1452,28 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
 
   const options: Options = {
     cwd: process.cwd(),
-    // A 1M model window is capacity, not a sensible recurring input bill.
-    // Let Claude's native compactor preserve task state and handle mid-turn
-    // tool boundaries; do not implement another slash-command replay queue.
-    settings: { autoCompactWindow: 200_000 },
+    // ── NOTHING COMPACTS A CHAT EXCEPT THE PERSON READING IT ────────────────
+    //
+    // This was `autoCompactWindow: 200_000`, to stop watchers resuming 900k
+    // conversations on every fire. It worked, and it was the wrong instrument:
+    // the window is per SESSION, so it also applied to the long threads a
+    // human is in the middle of. Measured on one of them — a deal thread —
+    // two automatic compactions in three hours, 216k -> 4.7k and 167k -> 6.3k,
+    // 372k tokens of verbatim history dropped without anybody asking.
+    //
+    // A compaction is lossy and IRREVERSIBLE from inside the session. Deciding
+    // to take that is the user's call, every time, so muxpad does not make it:
+    // the context meter turns amber, a Compact button appears beside the model
+    // chip (SessionBar), and nothing happens until it is pressed.
+    //
+    // `autoCompactEnabled: false`, NOT `DISABLE_COMPACT`: that env var also
+    // disables the manual /compact, which is the one this hands to the user.
+    //
+    // THE COST, STATED: a session that runs to the real window ceiling now
+    // fails its turn instead of silently compacting. That is the trade asked
+    // for — a hard edge you can see beats a quiet edit of your own history —
+    // and it is why the warning starts at 70%, not at 95%.
+    settings: { autoCompactEnabled: false },
     // ─── ONE DELEGATION PRIMITIVE, AND IT IS THE SUB-CHAT ────────────────────
     //
     // `disallowedTools` removes a tool from the MODEL'S CONTEXT — it is not a
@@ -1947,11 +1965,19 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
     kick();
   }
 
-  function slash(cmd: 'compact' | 'clear'): void {
+  function slash(cmd: 'compact' | 'clear', args?: string): void {
     // Session-management commands ride the normal turn queue so turn accounting
     // stays exact (the CLI executes them in-band).
-    log(dim(`/${cmd} requested from chat`));
-    pendingTexts.push(`/${cmd}`);
+    //
+    // `/compact <instructions>` is the CLI's own form, and muxpad uses it for
+    // every compaction it offers: an unguided summary of a long thread is a
+    // paragraph standing where the numbers, names and decisions used to be,
+    // and this is the one chance to say which of those must survive. The text
+    // comes from the button that was pressed (SessionBar), not from here, so
+    // what the user agreed to is what gets sent.
+    const text = args?.trim() ? `/${cmd} ${args.trim()}` : `/${cmd}`;
+    log(dim(`${text.split('\n')[0]} requested from chat`));
+    pendingTexts.push(text);
     kick();
   }
 

@@ -15,6 +15,7 @@ import { AGENT_MODE_LABELS, type AgentMode, type AgentSessionStatus } from '@mux
 import { useEffect, useRef, useState } from 'react';
 import { type RecentFolder, api } from '../api';
 import { AGENT_BACKENDS, type AgentBackendId, backendLabel } from '../lib/agent-backend';
+import { COMPACT_INSTRUCTIONS, compactionBlurb, contextLevel } from '../lib/context-pressure';
 import { sessionModelLabel } from '../lib/live-status';
 import { showFolderChip } from '../lib/nav-row-affordances';
 import { useDismissable } from '../lib/use-dismissable';
@@ -84,7 +85,7 @@ export function assistantLabel(a: string | null | undefined): string {
 /** Session status pushed by the agent runner — shape shared with the server
  * pipeline via @muxpad/shared so the two ends can't drift apart. */
 export type AgentStatus = AgentSessionStatus;
-export type StatusPanel = 'folder' | 'model' | 'live' | null;
+export type StatusPanel = 'folder' | 'model' | 'live' | 'ctx' | null;
 
 export interface RosterAgent {
   id: string;
@@ -734,6 +735,7 @@ export function SessionBar({
     : undefined;
   const modelLabel = current?.displayName ?? status?.model ?? '';
   const ctx = status?.context;
+  const ctxLevel = contextLevel(ctx?.pct);
   const kTokens = (n: number) => `${Math.round(n / 1000)}k`;
 
   // Does the folder deserve a cell in the header at all?
@@ -848,6 +850,86 @@ export function SessionBar({
           so nothing here is the only way to reach them. Agent mode keeps the
           chip: there the model IS your choice and the meter is the budget you
           are spending. */}
+      {/* ── CONTEXT PRESSURE ──────────────────────────────────────────────
+          A cell that is not there until it is needed, in every mode — Chat
+          mode deliberately hides the model chip and its meter, which is right
+          for a number nobody should have to watch and wrong for the one
+          moment it stops being routine.
+
+          It exists because muxpad no longer compacts anything by itself. The
+          window cap that used to do it silently rewrote long threads (two
+          compactions in three hours on a deal thread, 372k tokens of detail
+          gone), so the decision moved here: the bar says the chat is filling
+          up, and the button under it is the only thing that compacts. */}
+      {ctxLevel !== 'ok' && ctx ? (
+        <div className="chat-status-seg-wrap -ctx">
+          <button
+            type="button"
+            className={`chat-status-seg -ctx${panel === 'ctx' ? ' is-open' : ''}`}
+            data-level={ctxLevel}
+            onClick={() => toggle('ctx')}
+            aria-haspopup="menu"
+            aria-expanded={panel === 'ctx'}
+            title={`Context ${ctx.pct}% full (${kTokens(ctx.tokens)} of ${kTokens(
+              ctx.max,
+            )} tokens) — nothing is compacted automatically`}
+          >
+            <span className="chat-ctx-glyph" aria-hidden="true">
+              <svg width="11" height="11" viewBox="0 0 12 12">
+                <path
+                  d="M6 1.4 11 10.6H1z"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.3"
+                  strokeLinejoin="round"
+                />
+                <path d="M6 5v2.4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+                <circle cx="6" cy="9.2" r="0.7" fill="currentColor" />
+              </svg>
+            </span>
+            <span className="chat-status-seg-label">{ctx.pct}% full</span>
+          </button>
+          {panel === 'ctx' ? (
+            // biome-ignore lint/a11y/useSemanticElements: an anchored popover, not a modal.
+            <div className="chat-status-menu chat-session-menu" role="dialog">
+              <div className="chat-session-head">Context</div>
+              <div className="chat-session-context">
+                <div className="chat-session-bar">
+                  <div
+                    className="chat-session-bar-fill"
+                    data-level={ctxLevel}
+                    style={{ width: `${Math.min(100, ctx.pct)}%` }}
+                  />
+                </div>
+                <span className="chat-session-context-label">
+                  {ctx.pct}% · {kTokens(ctx.tokens)} / {kTokens(ctx.max)} tokens
+                </span>
+              </div>
+              <button
+                type="button"
+                className="chat-session-item"
+                onClick={() => {
+                  send({ t: 'slash', cmd: 'compact', args: COMPACT_INSTRUCTIONS });
+                  setPanel(null);
+                }}
+              >
+                <span className="chat-session-item-label">Compact now</span>
+                <span className="chat-session-item-desc">
+                  {compactionBlurb(ctx.tokens, ctx.max)}
+                </span>
+              </button>
+              {/* The honest alternative, and often the better one: a long
+                  thread that has done its work is finished, not compressible. */}
+              <div className="chat-session-item -static">
+                <span className="chat-session-item-desc">
+                  Or keep it whole and start a new chat — nothing here is compacted unless you press
+                  the button.
+                </span>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       {mode !== 'chat' && (status || assistant) ? (
         <div className="chat-status-seg-wrap">
           <button
@@ -970,7 +1052,7 @@ export function SessionBar({
                     role="menuitem"
                     className="chat-session-item"
                     onClick={() => {
-                      send({ t: 'slash', cmd: 'compact' });
+                      send({ t: 'slash', cmd: 'compact', args: COMPACT_INSTRUCTIONS });
                       setPanel(null);
                     }}
                   >

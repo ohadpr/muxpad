@@ -234,6 +234,11 @@ export type ServerFrame =
       /** Run a session-management slash command (queued like a user turn). */
       t: 'slash';
       cmd: 'compact' | 'clear';
+      /** `/compact` only: what the summary must keep. muxpad never compacts on
+       *  its own, so this always rides a press — and the press is worth
+       *  spending on instructions, because the default summary of a long
+       *  thread is a paragraph where the details were. */
+      args?: string;
     }
   | {
       /** The user's answer to a `question` frame. One entry per question, in order. */
