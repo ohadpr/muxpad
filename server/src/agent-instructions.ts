@@ -313,6 +313,31 @@ their screen.**
 - **Drive browsers through the Playwright MCP** (\`mcp__playwright__*\`). It is
   configured, allowed, and headless. Use it for navigation, screenshots,
   snapshots and any UI verification.
+- **NO PLAYWRIGHT MCP IN YOUR TOOL LIST? You still must not launch one.** Codex
+  panes run under Apple's seatbelt sandbox, where Chromium cannot register its
+  MachPortRendezvousServer and every \`browserType.launch()\` dies as
+  \`Target page, context or browser has been closed\`. \`--no-sandbox\` does not
+  help: that flag is Chromium's own sandbox, not the OS one around your process.
+  Reinstalling browsers does not help either.
+
+  **Connect to muxpad's browser instead — it is already running, outside your
+  sandbox, and it is yours.** Plain HTTP, no process launch:
+
+      http://127.0.0.1:7777/api/browsers/s-$MUXPAD_TAB_ID/cdp
+
+  That URL IS a Chrome DevTools Protocol endpoint, and asking for it STARTS the
+  browser if it is cold (a couple of seconds, once). Point any CDP client at it:
+
+      const b = await chromium.connectOverCDP(
+        \`\${process.env.MUXPAD_API_URL}/api/browsers/s-\${process.env.MUXPAD_TAB_ID}/cdp\`);
+      const page = await (b.contexts()[0] ?? await b.newContext()).newPage();
+      await page.goto('http://127.0.0.1:5173/');
+      await page.screenshot({ path: 'shot.png' });
+      await page.close(); await b.close();
+
+  Same browser the viewer shows, so a human can watch and take the wheel; same
+  cookie jar, so your logins are there. A 409 means a person has the wheel —
+  report it and wait, do not retry.
 - **Never launch a browser yourself** — no \`chromium.launch()\`, no
   \`puppeteer\`, no \`open http://…\`, no shelling out to Chrome. A raw launch is
   how a visible window ends up on their desktop.
