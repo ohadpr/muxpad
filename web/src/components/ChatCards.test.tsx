@@ -129,10 +129,40 @@ describe('pinned chat cards', () => {
     const host = await mount([card({ format: 'html', content: '<b>hi</b>' })]);
     const f = host.querySelector('iframe.chat-card-frame') as HTMLIFrameElement;
     expect(f).toBeTruthy();
-    expect(f.getAttribute('sandbox')).toBe('allow-scripts');
+    const sandbox = f.getAttribute('sandbox') ?? '';
+    // The claim is about ORIGIN, not about the attribute's exact text: the
+    // frame may gain abilities (it has gained popups, below) and must never
+    // gain this one.
+    expect(sandbox).toContain('allow-scripts');
+    expect(sandbox).not.toContain('allow-same-origin');
+    expect(sandbox).not.toContain('allow-top-navigation');
     expect(f.getAttribute('srcdoc')).toContain('<b>hi</b>');
     // …and it must never be rendered into the page as live markup.
     expect(host.querySelector('.chat-card-body b')).toBeNull();
+  });
+
+  /**
+   * ── A LINK IN A CARD LEAVES THE CARD ────────────────────────────────────
+   * Reported with a screenshot: a link in a pinned card opened INSIDE it,
+   * replacing the card with the page — and a 90px frame has no back button.
+   *
+   * Every other clickable surface in the app already opens out (chat markdown,
+   * file chips, artifact links, the brand mark). This frame was the lone
+   * exception, because a sandboxed frame is allowed to navigate ITSELF and
+   * nothing told it not to.
+   */
+  it('opens a link in a new tab instead of inside the card', async () => {
+    const host = await mount([
+      card({ format: 'html', content: '<a href="https://x.test/r">quality review</a>' }),
+    ]);
+    const doc = host.querySelector('iframe')?.getAttribute('srcdoc') ?? '';
+    expect(doc).toContain('<base target="_blank">');
+    const sandbox =
+      host.querySelector('iframe.chat-card-frame')?.getAttribute('sandbox') ?? '';
+    // Without the popup pair, `target="_blank"` is simply blocked and the click
+    // does nothing at all — which is worse than the bug it replaced.
+    expect(sandbox).toContain('allow-popups');
+    expect(sandbox).toContain('allow-popups-to-escape-sandbox');
   });
 
   it('injects the theme into the frame — it inherits no CSS variables', async () => {
