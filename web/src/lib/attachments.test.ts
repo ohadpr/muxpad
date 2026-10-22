@@ -65,7 +65,7 @@ describe('splitMessageAttachments', () => {
    * message rendered as one code block.
    */
   it('leaves a fenced example alone — paths AND fence intact', () => {
-    const text = ['here is the shape:', '```', `① a note`, A, `② another`, B, '```', 'after'].join(
+    const text = ['here is the shape:', '```', '① a note', A, '② another', B, '```', 'after'].join(
       '\n',
     );
     const parts = splitMessageAttachments(text);

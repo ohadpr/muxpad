@@ -171,8 +171,9 @@ function HtmlCard({ card }: { card: ChatCard }) {
   const srcdoc = useMemo(
     () =>
       paint
-        ? `<!doctype html><html><head><meta charset="utf-8"><base target="_blank">` +
-          `<style>${themeBlock(paint.surface)}</style></head><body>${card.content}${SELF_MEASURE}</body></html>`
+        ? `<!doctype html><html><head><meta charset="utf-8"><base target="_blank"><style>${themeBlock(
+            paint.surface,
+          )}</style></head><body>${card.content}${SELF_MEASURE}</body></html>`
         : null,
     [card.content, paint],
   );

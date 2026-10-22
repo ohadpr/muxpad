@@ -239,7 +239,8 @@ describe('the optimistic user echo', () => {
   });
 
   it('still refuses an unrelated line that merely carries a context block', () => {
-    const sent = 'ask @Builder v2 about the browser\n\n<muxpad-context count="1">\n- x\n</muxpad-context>';
+    const sent =
+      'ask @Builder v2 about the browser\n\n<muxpad-context count="1">\n- x\n</muxpad-context>';
     expect(optimisticEchoLanded([ev('u1', 'user', 'something else entirely')], sent)).toBe(false);
   });
 
