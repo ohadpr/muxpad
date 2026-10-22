@@ -1356,6 +1356,10 @@
    the one row that is NOT rail-coloured would still be drawn in rail ink, i.e.
    white on near-white in every light theme. */
 .navtree-tab-row[data-active="true"] {
+  /* Controls inside the selected row need pane surfaces as well as pane ink.
+     Otherwise rename inherits the rail's dark --bg-elev under dark pane text. */
+  --bg-elev: var(--pane-elev);
+  --bg-hover: var(--pane-hover);
   --fg: var(--pane-ink);
   --fg-dim: var(--pane-ink-dim);
   --fg-faint: var(--pane-ink-faint);
