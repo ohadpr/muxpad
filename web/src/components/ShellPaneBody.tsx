@@ -206,6 +206,23 @@ export function ShellPaneBody({
               key={`${url}#${reloadNonce}`}
               className="shell-pane-web"
               src={url}
+              // ── WHAT AN EMBEDDED PAGE MAY ASK FOR ──────────────────────────
+              // Without an `allow`, a cross-origin frame cannot even ASK: the
+              // browser answers getDisplayMedia with "Invalid security origin",
+              // getUserMedia with a permissions-policy error. Hit while testing a
+              // screen-capture page in a web pane — it looked like the page was
+              // broken, and the page was fine.
+              //
+              // DELEGATION IS NOT CONSENT. Every item here still costs the user a
+              // prompt or a picker at the moment of use (and `display-capture` is
+              // the one that cannot be granted silently by anybody). What the
+              // attribute changes is whether the question can be asked at all —
+              // and a pane you deliberately opened a url in is exactly the place
+              // where the answer should be yours, not a silent no.
+              //
+              // `clipboard-read` is deliberately NOT here: it is the one that
+              // reads something you did not offer.
+              allow="display-capture; microphone; camera; fullscreen; autoplay; clipboard-write"
               sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
               referrerPolicy="no-referrer"
               title={url}
