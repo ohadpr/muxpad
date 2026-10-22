@@ -63,7 +63,9 @@ export interface AgentBackend {
   /** A user turn from chat. */
   send(text: string): void;
   /** A session-management slash command from chat. */
-  slash(cmd: 'compact' | 'clear'): void;
+  /** `args` is `/compact` only: what the summary must keep. muxpad never
+   *  compacts unasked, so this always carries a press's instructions. */
+  slash(cmd: 'compact' | 'clear', args?: string): void;
   /** Stop: interrupt the running turn and cancel any queued sends. */
   stop(): void;
   /** Switch the session model. */

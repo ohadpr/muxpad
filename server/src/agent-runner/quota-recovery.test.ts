@@ -353,6 +353,21 @@ describe('Claude quota recovery through real backend loop', () => {
   });
 });
 
-it('uses native compaction at 200k tokens even for resumed large-window sessions', () => {
-  expect(fakeSession().options.settings).toMatchObject({ autoCompactWindow: 200_000 });
+/**
+ * NOBODY COMPACTS A CHAT BUT THE PERSON READING IT.
+ *
+ * This asserted the opposite — a 200k window, to stop watchers resuming huge
+ * conversations — and that cap silently rewrote the history of threads a human
+ * was working in: two automatic compactions in three hours on one of them,
+ * 372k tokens of verbatim detail gone, nobody asked. The meter and the Compact
+ * button replace it, and the point of this test is that the setting cannot
+ * come back by accident.
+ */
+it('never compacts on its own — and keeps manual /compact available', () => {
+  const settings = fakeSession().options.settings as Record<string, unknown>;
+  expect(settings).toMatchObject({ autoCompactEnabled: false });
+  // `autoCompactWindow` would re-arm the automatic path by the back door; and
+  // DISABLE_COMPACT (the env var) would take the manual one away with it.
+  expect(settings.autoCompactWindow).toBeUndefined();
+  expect(process.env.DISABLE_COMPACT).toBeUndefined();
 });

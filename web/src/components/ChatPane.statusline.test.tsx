@@ -326,6 +326,77 @@ describe('the session line spends its width on what changes', () => {
     expect(box.textContent).toContain('2 agents');
   });
 
+  /**
+   * ── THE ONE CELL THAT MAY APPEAR IN CHAT MODE ────────────────────────────
+   *
+   * The count above is the rule: Chat mode has no dials. This is the single
+   * exception, and it earns it by not being a dial — it is absent until the
+   * conversation is nearly full, and it is the only route to the one action
+   * that can do something about that.
+   *
+   * It exists because muxpad stopped compacting on its own. The 200k window
+   * that used to do it silently rewrote long threads (measured: two
+   * compactions in three hours on one, 372k tokens of detail dropped). With
+   * that gone, the chat has to say the pressure is coming, or the first news
+   * of the ceiling is a failed turn.
+   */
+  it('stays out of the way below the warning threshold', () => {
+    const box = mount({ mode: 'chat', status: STATUS }); // 25%
+    expect(box.querySelector('.chat-status-seg.-ctx')).toBeNull();
+    expect(cells(box)).toHaveLength(2);
+  });
+
+  it('appears in CHAT mode once the chat is filling up', () => {
+    const box = mount({
+      mode: 'chat',
+      status: { ...STATUS, context: { pct: 72, tokens: 720_000, max: 1_000_000 } },
+    });
+    const cell = box.querySelector('.chat-status-seg.-ctx');
+    expect(cell).not.toBeNull();
+    expect(cell?.getAttribute('data-level')).toBe('warn');
+    expect(cell?.textContent).toContain('72%');
+    // It names the numbers and the policy in the tooltip, because the cell
+    // itself is two words wide.
+    expect(cell?.getAttribute('title')).toContain('nothing is compacted automatically');
+  });
+
+  it('turns danger-coloured when the next long turn could hit the ceiling', () => {
+    const box = mount({
+      mode: 'agent',
+      status: { ...STATUS, context: { pct: 93, tokens: 930_000, max: 1_000_000 } },
+    });
+    expect(box.querySelector('.chat-status-seg.-ctx')?.getAttribute('data-level')).toBe('high');
+  });
+
+  it('compacts only when pressed, and says what to keep when it does', async () => {
+    const sent: unknown[] = [];
+    const box = mount({
+      mode: 'chat',
+      status: { ...STATUS, context: { pct: 80, tokens: 800_000, max: 1_000_000 } },
+      send: (m: unknown) => sent.push(m),
+    });
+    // Opening the panel is not compacting.
+    await act(async () => {
+      box.querySelector<HTMLButtonElement>('.chat-status-seg.-ctx')?.click();
+    });
+    expect(sent).toHaveLength(0);
+    const compact = [...box.querySelectorAll<HTMLButtonElement>('.chat-session-item')].find((b) =>
+      b.textContent?.includes('Compact now'),
+    );
+    expect(compact).toBeTruthy();
+    // The cost is stated where the decision is taken.
+    expect(compact?.textContent).toContain('cannot be undone');
+    await act(async () => {
+      compact?.click();
+    });
+    expect(sent).toHaveLength(1);
+    const msg = sent[0] as { t: string; cmd: string; args?: string };
+    expect(msg.t).toBe('slash');
+    expect(msg.cmd).toBe('compact');
+    // Unguided, this is where a 216k-token thread becomes 4.7k.
+    expect(msg.args).toContain('Preserve the specifics');
+  });
+
   it('drops the mode cell in Agent mode, where the backend logo already says it', () => {
     // "Mode and folder are rarely-changing facts about the session." The mode
     // word is also REDUNDANT there: the model cell — logo and all — renders

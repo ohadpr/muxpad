@@ -237,7 +237,8 @@ function connect(): void {
     } else if (frame.t === 'set-model') {
       if (typeof frame.model === 'string' && frame.model) b.setModel(frame.model);
     } else if (frame.t === 'slash') {
-      if (frame.cmd === 'compact' || frame.cmd === 'clear') b.slash(frame.cmd);
+      if (frame.cmd === 'compact' || frame.cmd === 'clear')
+        b.slash(frame.cmd, typeof frame.args === 'string' ? frame.args : undefined);
     } else if (frame.t === 'stop') {
       b.stop();
     } else if (frame.t === 'mode') {
