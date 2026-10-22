@@ -17,6 +17,7 @@ import {
   imageExtForMime,
   isAgentLaunchTool,
   parseCronMarker,
+  stripMentionContext,
   subagentLabel,
   summarizeToolInput,
   withMentionContext,
@@ -531,12 +532,31 @@ export function streamingPreview(
  *    as `<muxpad-mode>…</muxpad-mode>\n\n` + what was typed, so exact equality
  *    never matched and the reader saw their message twice — once clean, once
  *    wearing the XML — until `turn-done`.
+ *
+ * ── AND THE SAME THING IN THE OTHER DIRECTION: @MENTIONS ───────────────────
+ * Reported with a screenshot, as "messages repeating when they were originally
+ * like pending messages": the bubble twice, the second copy at the live end of
+ * the log for the length of the turn.
+ *
+ * A QUEUED send seeds this from `turn-start.text` — the server's correlation
+ * stamp, i.e. the text as SENT. A message carrying an `@mention` is sent with a
+ * `<muxpad-context>` block appended, and the transcript line is RENDERED with
+ * that block stripped (normalizeTranscriptLine). So the comparison was
+ * stripped-vs-raw, and `endsWith` could not rescue it: the mode-note case is a
+ * transcript line LONGER than the echo, this one is shorter.
+ *
+ * Both sides are therefore normalised the same way before comparing — the
+ * decoration the renderer removes is removed here too, rather than this
+ * function growing a list of prefixes and suffixes to forgive.
  */
 export function optimisticEchoLanded(events: readonly ChatEvent[], optimistic: string): boolean {
+  const want = stripMentionContext(optimistic).trimEnd();
+  if (!want) return false;
   for (let i = events.length - 1; i >= 0; i--) {
     const e = events[i];
     if (e?.kind !== 'user') continue;
-    return e.text === optimistic || e.text.endsWith(optimistic);
+    const have = stripMentionContext(e.text).trimEnd();
+    return have === want || have.endsWith(want);
   }
   return false;
 }

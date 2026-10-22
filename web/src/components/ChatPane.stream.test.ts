@@ -215,6 +215,34 @@ describe('the optimistic user echo', () => {
     expect(optimisticEchoLanded([ev('u1', 'user', line)], 'hello there')).toBe(true);
   });
 
+  /**
+   * ── THE @MENTION CASE, REPORTED WITH A SCREENSHOT ─────────────────────────
+   * "there's some issue with messages repeating when they were originally like
+   * pending messages" — the same bubble twice, the second one sitting at the
+   * live end of the log while the turn ran.
+   *
+   * The echo for a QUEUED send is seeded from `turn-start.text`, which is the
+   * server's correlation stamp: the text as SENT. A message with an @mention
+   * is sent with a `<muxpad-context>` block appended, and the transcript line
+   * is rendered with that block STRIPPED. So the comparison ran
+   * stripped-vs-raw: not equal, and `endsWith` cannot save it either, because
+   * here the transcript text is the SHORTER of the two (the mode-note case
+   * above is the opposite direction, which is why it kept working).
+   *
+   * The echo therefore never retired and the message rendered twice until
+   * `turn-done` cleared it.
+   */
+  it('is retired when the echo carries an @mention context the line does not', () => {
+    const typed = "@Builder v2 is having trouble using a browser check what's up with it";
+    const sent = `${typed}\n\n<muxpad-context count="1">\n- @Builder v2 — tab 01M5E68\n</muxpad-context>`;
+    expect(optimisticEchoLanded([ev('u1', 'user', typed)], sent)).toBe(true);
+  });
+
+  it('still refuses an unrelated line that merely carries a context block', () => {
+    const sent = 'ask @Builder v2 about the browser\n\n<muxpad-context count="1">\n- x\n</muxpad-context>';
+    expect(optimisticEchoLanded([ev('u1', 'user', 'something else entirely')], sent)).toBe(false);
+  });
+
   it('is not retired by an unrelated newest line', () => {
     expect(optimisticEchoLanded([ev('u1', 'user', 'something else')], 'hello')).toBe(false);
   });
