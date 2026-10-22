@@ -157,8 +157,7 @@ describe('pinned chat cards', () => {
     ]);
     const doc = host.querySelector('iframe')?.getAttribute('srcdoc') ?? '';
     expect(doc).toContain('<base target="_blank">');
-    const sandbox =
-      host.querySelector('iframe.chat-card-frame')?.getAttribute('sandbox') ?? '';
+    const sandbox = host.querySelector('iframe.chat-card-frame')?.getAttribute('sandbox') ?? '';
     // Without the popup pair, `target="_blank"` is simply blocked and the click
     // does nothing at all — which is worse than the bug it replaced.
     expect(sandbox).toContain('allow-popups');
