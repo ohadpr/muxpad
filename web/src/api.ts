@@ -421,14 +421,73 @@ export const api = {
       method: 'POST',
     }),
 
-  uploadAttachment: async (paneId: string, blob: Blob, name: string): Promise<{ path: string }> => {
-    const fd = new FormData();
-    fd.append('file', blob, name);
-    const res = await fetch(`/api/panes/${paneId}/attachments`, {
-      method: 'POST',
-      body: fd,
-    });
-    if (!res.ok) throw new Error(await res.text());
-    return (await res.json()) as { path: string };
-  },
+  /**
+   * Upload one attachment, reporting how far it has got.
+   *
+   * XHR, NOT FETCH, and that is the whole reason this is not three lines of
+   * `fetch`. `fetch` has no upload-progress event — the request body is sent
+   * opaquely, and the promise settles once, at the end. The ceiling on this
+   * route is 512 MB (a screen recording is a normal attachment here), so the
+   * difference between the two is a spinner that spins for four minutes
+   * against a bar that says 38%.
+   *
+   * `onProgress` is called with bytes sent and the total when the browser can
+   * compute it (`lengthComputable` is false for a stream it cannot measure, and
+   * a caller that assumed a total would divide by zero). `signal` aborts the
+   * transfer for real — the request stops, rather than being left to finish
+   * into a handler nobody reads.
+   */
+  uploadAttachment: (
+    paneId: string,
+    blob: Blob,
+    name: string,
+    opts: {
+      onProgress?: (loaded: number, total: number | null) => void;
+      signal?: AbortSignal;
+    } = {},
+  ): Promise<{ path: string }> =>
+    new Promise((resolve, reject) => {
+      if (opts.signal?.aborted) {
+        reject(new DOMException('Upload canceled', 'AbortError'));
+        return;
+      }
+      const fd = new FormData();
+      fd.append('file', blob, name);
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `/api/panes/${encodeURIComponent(paneId)}/attachments`);
+      xhr.responseType = 'text';
+      const onAbort = () => xhr.abort();
+      opts.signal?.addEventListener('abort', onAbort);
+      const done = () => opts.signal?.removeEventListener('abort', onAbort);
+      if (opts.onProgress)
+        xhr.upload.addEventListener('progress', (e) => {
+          opts.onProgress?.(e.loaded, e.lengthComputable ? e.total : null);
+        });
+      xhr.addEventListener('load', () => {
+        done();
+        // SAME ERROR SHAPE AS BEFORE: the body text, which lib/upload-error
+        // unwraps from the server's JSON envelope. A status line here instead
+        // would have thrown away the sentence the server wrote for the user.
+        if (xhr.status < 200 || xhr.status >= 300) {
+          reject(new Error(xhr.responseText || `upload failed (${xhr.status})`));
+          return;
+        }
+        try {
+          resolve(JSON.parse(xhr.responseText) as { path: string });
+        } catch {
+          reject(new Error('upload returned an unreadable response'));
+        }
+      });
+      // A dropped connection and a cancel are different events with different
+      // words: one is a failure to report, the other is something the user did.
+      xhr.addEventListener('error', () => {
+        done();
+        reject(new Error('upload failed — the connection dropped'));
+      });
+      xhr.addEventListener('abort', () => {
+        done();
+        reject(new DOMException('Upload canceled', 'AbortError'));
+      });
+      xhr.send(fd);
+    }),
 };

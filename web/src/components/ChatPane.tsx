@@ -132,6 +132,13 @@ import { documentVisible } from '../lib/seen-ack';
 import { composerAfterLateAck, watchdogVerdict } from '../lib/send-watchdog';
 import { NO_ROUNDS, loadSpawnRounds } from '../lib/spawn-rounds';
 import { uploadError } from '../lib/upload-error';
+import {
+  type UploadItem,
+  UploadQueue,
+  formatBytes,
+  summarize,
+  summaryLabel,
+} from '../lib/upload-queue';
 import type { AgentLink } from '../lib/voice/session';
 import { useVoice } from '../lib/voice/use-voice';
 import { workingVariantFor } from '../lib/working-variant';
@@ -1422,7 +1429,6 @@ export function ChatPane({
   }, [paneId, reportedIds]);
 
   const [sending, setSending] = useState(false);
-  const [uploading, setUploading] = useState(false);
   // tone 'info' = transient connection chatter (reconnecting, not connected
   // yet) — rendered as a quiet muted line and auto-cleared when the socket
   // recovers. tone 'danger' = a real failure (turn failed, send rejected)
@@ -2219,9 +2225,29 @@ export function ChatPane({
       .trim();
     const atts = parts
       .filter((p): p is Exclude<MessagePart, { kind: 'text' }> => p.kind !== 'text')
-      .map((p) => ({ path: p.path, name: p.name, previewUrl: p.url }));
+      // An <img> is only right for an IMAGE: a video or a pdf pulled back into
+      // the composer would draw a broken-image glyph, which is the same defect
+      // the extension label above fixes for a fresh pick.
+      .map((p) => ({
+        path: p.path,
+        name: p.name,
+        url: p.kind === 'media' && p.media === 'image' ? p.url : null,
+      }));
     setInput((cur) => (cur.trim() ? `${prose}\n${cur}` : prose));
-    if (atts.length) setChips((prev) => [...prev, ...atts]);
+    // Already uploaded — they enter the same chip list as finished items, with
+    // the SERVED url as their preview (the bytes are on the server, so this
+    // works on a fresh reload where no local blob exists).
+    if (atts.length) {
+      const ids = uploader.adopt(atts.map((a) => ({ name: a.name, path: a.path })));
+      ids.forEach((id, i) => {
+        const a = atts[i];
+        if (a)
+          previews.current.set(id, {
+            url: a.url,
+            kind: (a.name.split('.').pop() ?? 'file').slice(0, 4).toUpperCase(),
+          });
+      });
+    }
     inputRef.current?.focus();
   };
 
@@ -2244,7 +2270,11 @@ export function ChatPane({
     // Whatever happens below, the composed text is leaving (or being answered
     // Attachment paths ride along at the END of the message — the agent reads
     // the path, not the pixels. The draft box stays clean prose.
-    const attachmentPaths = chips.map((c) => c.path);
+    // ONLY WHAT LANDED. A queued or failed item has no path, and a message
+    // carrying `undefined` would reach the agent as a broken reference.
+    const attachmentPaths = chips
+      .filter((c) => c.state === 'done' && c.path)
+      .map((c) => c.path as string);
     if (!text && attachmentPaths.length === 0) return;
     // While a question card is showing, the composer IS the free-text answer
     // — a normal send would silently queue behind the blocked turn and
@@ -2351,20 +2381,11 @@ export function ChatPane({
     }
     el.value = ''; // reset so re-picking the same file still fires onChange
     if (files.length === 0) return;
-    setUploading(true);
-    for (const f of files) {
-      try {
-        const { path } = await api.uploadAttachment(paneId, f, f.name || 'image.png');
-        addChip(path, f);
-      } catch (error) {
-        // LOUD, for the same reason the skip above is. A swallowed upload
-        // failure is indistinguishable from a broken button: the file was
-        // picked, the sheet closed, and nothing appeared. Reported as
-        // "uploading videos just fails silently".
-        setNotice({ text: `${f.name || 'upload'} failed: ${uploadError(error)}`, tone: 'danger' });
-      }
-    }
-    setUploading(false);
+    // NOT AWAITED, AND NOT SEQUENTIAL. The chips exist on this frame — the
+    // pick's receipt — and the queue runs two transfers at a time behind them.
+    // A failure is no longer a toast that scrolls away either: it stays on the
+    // chip, with the file still in hand, one tap from a retry.
+    enqueueUploads(files.map((f) => ({ file: f, name: f.name || 'image.png' })));
     inputRef.current?.focus();
   };
 
@@ -2374,33 +2395,101 @@ export function ChatPane({
   // composer, so you can see the image that went in for as long as its path is
   // still in the draft. The blob URL gives an instant thumbnail without a
   // round-trip; it is revoked when the chip drops.
-  const [chips, setChips] = useState<{ path: string; name: string; previewUrl: string }[]>([]);
-  const chipsRef = useRef(chips);
-  chipsRef.current = chips;
-  const addChip = (path: string, blob: Blob) => {
-    const name = path.split('/').pop() ?? path;
-    setChips((prev) => [...prev, { path, name, previewUrl: URL.createObjectURL(blob) }]);
+  // ── ATTACHMENTS ARE A QUEUE, AND THE CHIPS ARE ITS VIEW ────────────────────
+  // They used to be a list of FINISHED uploads: a chip existed only once its
+  // file had landed, so picking five photos drew nothing at all until the
+  // first one completed. The queue (lib/upload-queue) owns the whole life of
+  // each file — queued, uploading with bytes, done, failed, canceled — and the
+  // row below the composer renders it, so the pick has a receipt immediately
+  // and a 300 MB video has a bar instead of a spinner.
+  const [chips, setChips] = useState<UploadItem[]>([]);
+  // Per-item preview, kept OUT of the queue: an object URL is a browser
+  // resource with a lifetime, and the queue is a tested value with none. Keyed
+  // by item id, revoked when the item leaves.
+  const previews = useRef(new Map<string, { url: string | null; kind: string }>());
+  const uploadQueue = useRef<UploadQueue | null>(null);
+  if (!uploadQueue.current)
+    uploadQueue.current = new UploadQueue(
+      (file, name, handlers) =>
+        api.uploadAttachment(paneId, file, name, {
+          onProgress: handlers.onProgress,
+          signal: handlers.signal,
+        }),
+      (items) => setChips(items),
+    );
+  const uploader = uploadQueue.current;
+  const dropPreview = (id: string) => {
+    const p = previews.current.get(id);
+    if (p?.url) URL.revokeObjectURL(p.url);
+    previews.current.delete(id);
   };
-  // Attachments are managed independently of the draft text now (their paths
-  // are appended at send, not typed into the box): remove one via its × ,
-  // clear all after a send. Both revoke the blob URL so previews don't leak.
-  const removeChip = (path: string) => {
-    setChips((prev) => {
-      const ch = prev.find((c) => c.path === path);
-      if (ch) URL.revokeObjectURL(ch.previewUrl);
-      return prev.filter((c) => c.path !== path);
+  /** Queue files, and remember how to draw each one. */
+  const enqueueUploads = (files: { file: File | Blob; name: string }[]) => {
+    const ids = uploader.add(files);
+    ids.forEach((id, i) => {
+      const f = files[i];
+      if (!f) return;
+      // An <img> pointed at a PDF renders a broken-image glyph, which is how
+      // every non-image attachment used to look. Only images get a thumbnail;
+      // everything else gets its extension, drawn as a label.
+      const isImage = (f.file as File).type?.startsWith('image/') ?? false;
+      // GUARDED, because a thumbnail is a nicety and an upload is not. Object
+      // URLs are absent in jsdom and can throw for an exotic blob; letting
+      // that escape would take the whole pick down with it — the files would
+      // never be queued at all, to spare them a preview.
+      let url: string | null = null;
+      if (isImage)
+        try {
+          url = URL.createObjectURL(f.file);
+        } catch {
+          url = null;
+        }
+      previews.current.set(id, {
+        url,
+        kind: (f.name.split('.').pop() ?? 'file').slice(0, 4).toUpperCase(),
+      });
     });
+    return ids;
+  };
+  const removeChip = (id: string) => {
+    dropPreview(id);
+    uploader.remove(id);
   };
   const clearChips = () => {
-    for (const ch of chipsRef.current) URL.revokeObjectURL(ch.previewUrl);
-    setChips([]);
+    for (const id of [...previews.current.keys()]) dropPreview(id);
+    uploader.clear();
   };
   useEffect(
     () => () => {
-      for (const ch of chipsRef.current) URL.revokeObjectURL(ch.previewUrl);
+      for (const p of previews.current.values()) if (p.url) URL.revokeObjectURL(p.url);
+      previews.current.clear();
+      uploadQueue.current?.clear();
     },
     [],
   );
+  const uploads = summarize(chips);
+  // The send button waits for the bytes. Sending mid-upload would drop the
+  // attachment silently — the message goes with the paths that happen to
+  // exist — and silently dropping an attachment is the failure this whole
+  // change is about. Cancel is one tap away on every chip if the wait is not
+  // wanted.
+  const uploadsInFlight = uploads.active > 0;
+  /**
+   * WHAT WENT WRONG, IN WORDS, STILL ON SCREEN.
+   *
+   * The old failure surface was a notice that said the file and the server's
+   * sentence — which was itself the fix for "uploading videos just fails
+   * silently". A tooltip on a 52px tile would have quietly undone that: nobody
+   * hovers a chip to discover that their upload died. So the batch line keeps
+   * saying it, in text, and it does not time out — it is cleared by retrying
+   * or removing the chip, which are the two things that resolve it.
+   */
+  const firstFailure = chips.find((c) => c.state === 'error');
+  const failureLabel = firstFailure
+    ? `${firstFailure.name} failed: ${uploadError(new Error(firstFailure.error ?? ''))}${
+        uploads.failed > 1 ? ` (+${uploads.failed - 1} more)` : ''
+      }`
+    : '';
 
   const onPaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
     const data = e.clipboardData;
@@ -2415,8 +2504,7 @@ export function ChatPane({
     const text = imageOnly ? '' : companionTextForImagePaste(data.getData('text/plain'));
     const blobs = imageItems.map((item) => item.getAsFile()).filter((b): b is File => b !== null);
     void (async () => {
-      setUploading(true);
-      const paths: string[] = [];
+      const queued: { file: File | Blob; name: string }[] = [];
       for (const blob of blobs) {
         const ext = imageExtForMime(blob.type);
         if (!ext) {
@@ -2425,15 +2513,9 @@ export function ChatPane({
           setNotice({ text: `unsupported image type: ${blob.type}`, tone: 'danger' });
           continue;
         }
-        try {
-          const { path } = await api.uploadAttachment(paneId, blob, `pasted${ext}`);
-          paths.push(path);
-          addChip(path, blob);
-        } catch (error) {
-          setNotice({ text: `image upload failed: ${uploadError(error)}`, tone: 'danger' });
-        }
+        queued.push({ file: blob, name: `pasted${ext}` });
       }
-      setUploading(false);
+      enqueueUploads(queued);
       // Only companion text goes into the draft — the image path is NOT
       // inserted. Attachments live as removable preview chips and are appended
       // to the message at send time, so the composer stays clean prose.
@@ -4925,15 +5007,16 @@ export function ChatPane({
                   type="button"
                   className="chat-attach"
                   onClick={() => fileInputRef.current?.click()}
-                  disabled={uploading}
                   aria-label="Attach a file"
                   title="Attach a file"
                 >
-                  {uploading ? (
-                    <span className="chat-attach-spin" aria-hidden="true" />
-                  ) : (
-                    <SvgAttach />
-                  )}
+                  {/* NOT DISABLED DURING AN UPLOAD ANY MORE. It was, because a
+                      spinner on the paperclip was the only upload indicator
+                      there was, so the button had to BE the status. Progress
+                      now lives on the chips and the strip above them, and
+                      adding a sixth file to a running batch is the thing a
+                      queue exists to allow. */}
+                  <SvgAttach />
                 </button>
                 {/* Chat mode only — Agent mode is raw, and `voiceOn` is the same
                   predicate that governs Chat mode's written voice. */}
@@ -5066,9 +5149,13 @@ export function ChatPane({
                     type="button"
                     className="chat-send"
                     onClick={sendMessage}
-                    disabled={!input.trim() && chips.length === 0}
-                    aria-label="Send"
-                    title="Send"
+                    disabled={uploadsInFlight || (!input.trim() && chips.length === 0)}
+                    aria-label={uploadsInFlight ? 'Waiting for uploads' : 'Send'}
+                    title={
+                      uploadsInFlight
+                        ? 'Waiting for uploads to finish — cancel one to send now'
+                        : 'Send'
+                    }
                   >
                     <span className="chat-send-glyph" aria-hidden="true">
                       ↑
@@ -5079,22 +5166,137 @@ export function ChatPane({
               {/* Attachment previews live INSIDE the composer pill, as a row
                 under the input — not a floating strip above it. */}
               {chips.length > 0 ? (
-                <div className="chat-chips">
-                  {chips.map((ch) => (
-                    <div key={ch.path} className="chat-chip" title={ch.name}>
-                      <img className="chat-chip-thumb" src={ch.previewUrl} alt={ch.name} />
-                      <button
-                        type="button"
-                        className="chat-chip-remove"
-                        onClick={() => removeChip(ch.path)}
-                        aria-label={`Remove ${ch.name}`}
-                        title="Remove"
-                      >
-                        ×
-                      </button>
+                <>
+                  {/* ── THE BATCH LINE ────────────────────────────────────
+                      One line for the whole pick, and it only exists while
+                      there is something to say. It answers the question a row
+                      of chips cannot: how much longer. Progress is by BYTES
+                      (see summarize) because a file count sits still through
+                      the one big file that is the entire wait. */}
+                  {uploads.active > 0 || uploads.failed > 0 ? (
+                    <div
+                      className={`chat-uploads${uploads.failed > 0 && uploads.active === 0 ? ' -failed' : ''}`}
+                    >
+                      <span className="chat-uploads-label">
+                        {uploads.active > 0 ? summaryLabel(uploads) : failureLabel}
+                      </span>
+                      {uploads.active > 0 ? (
+                        <>
+                          <span className="chat-uploads-track" aria-hidden="true">
+                            <span
+                              className="chat-uploads-fill"
+                              style={{ width: `${uploads.pct}%` }}
+                            />
+                          </span>
+                          <button
+                            type="button"
+                            className="chat-uploads-cancel"
+                            onClick={() => {
+                              for (const c of chips)
+                                if (c.state === 'queued' || c.state === 'uploading')
+                                  uploader.cancel(c.id);
+                            }}
+                          >
+                            Cancel
+                          </button>
+                        </>
+                      ) : null}
                     </div>
-                  ))}
-                </div>
+                  ) : null}
+                  <div className="chat-chips">
+                    {chips.map((ch) => {
+                      const preview = previews.current.get(ch.id);
+                      const pct =
+                        ch.size > 0
+                          ? Math.min(100, (ch.loaded / ch.size) * 100)
+                          : ch.state === 'done'
+                            ? 100
+                            : 0;
+                      const busy = ch.state === 'uploading' || ch.state === 'queued';
+                      return (
+                        <div
+                          key={ch.id}
+                          className="chat-chip"
+                          data-state={ch.state}
+                          title={
+                            ch.state === 'error'
+                              ? `${ch.name} — ${uploadError(new Error(ch.error ?? ''))}`
+                              : ch.size > 0
+                                ? `${ch.name} · ${formatBytes(ch.size)}`
+                                : ch.name
+                          }
+                        >
+                          {preview?.url ? (
+                            // AN IMAGE THAT WILL NOT DECODE FALLS BACK TO ITS
+                            // LABEL. `type` says image/png and the bytes may
+                            // still be unreadable — a truncated file, a HEIC
+                            // mislabelled by the picker — and the browser's
+                            // answer to that is the broken-image glyph plus
+                            // the alt text sprawling out of a 52px tile
+                            // (measured, in the live app). Dropping the url
+                            // re-renders this chip as the extension badge,
+                            // which is the same thing a pdf gets and is
+                            // legible.
+                            <img
+                              className="chat-chip-thumb"
+                              src={preview.url}
+                              alt={ch.name}
+                              onError={() => {
+                                const cur = previews.current.get(ch.id);
+                                if (!cur?.url) return;
+                                URL.revokeObjectURL(cur.url);
+                                previews.current.set(ch.id, { ...cur, url: null });
+                                // The previews map is a ref, so nothing has
+                                // asked React to look at it: re-render through
+                                // the queue, which is the component's state.
+                                setChips((prev) => [...prev]);
+                              }}
+                            />
+                          ) : (
+                            // Everything that is not an image: its extension,
+                            // because a broken-image glyph is what an <img>
+                            // pointed at a PDF actually draws.
+                            <span className="chat-chip-kind" aria-hidden="true">
+                              {preview?.kind ?? 'FILE'}
+                            </span>
+                          )}
+                          {busy ? (
+                            <span className="chat-chip-progress" aria-hidden="true">
+                              <span
+                                className="chat-chip-progress-fill"
+                                style={{ height: `${pct}%` }}
+                              />
+                            </span>
+                          ) : null}
+                          {ch.state === 'error' || ch.state === 'canceled' ? (
+                            <button
+                              type="button"
+                              className="chat-chip-retry"
+                              onClick={() => uploader.retry(ch.id)}
+                              aria-label={`Retry ${ch.name}`}
+                              title={
+                                ch.state === 'canceled'
+                                  ? 'Canceled — retry'
+                                  : `Failed: ${uploadError(new Error(ch.error ?? ''))} — retry`
+                              }
+                            >
+                              ↻
+                            </button>
+                          ) : null}
+                          <button
+                            type="button"
+                            className="chat-chip-remove"
+                            onClick={() => (busy ? uploader.cancel(ch.id) : removeChip(ch.id))}
+                            aria-label={busy ? `Cancel ${ch.name}` : `Remove ${ch.name}`}
+                            title={busy ? 'Cancel' : 'Remove'}
+                          >
+                            ×
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
               ) : null}
             </div>
             <SessionBar
