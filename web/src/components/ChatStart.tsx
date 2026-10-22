@@ -875,7 +875,7 @@ export function SessionBar({
             )} tokens) — nothing is compacted automatically`}
           >
             <span className="chat-ctx-glyph" aria-hidden="true">
-              <svg width="11" height="11" viewBox="0 0 12 12">
+              <svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true">
                 <path
                   d="M6 1.4 11 10.6H1z"
                   fill="none"

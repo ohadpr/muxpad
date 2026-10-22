@@ -239,7 +239,10 @@ class FakeXHR {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), fn]);
   }
   removeEventListener(type: string, fn: EventListener) {
-    this.listeners.set(type, (this.listeners.get(type) ?? []).filter((f) => f !== fn));
+    this.listeners.set(
+      type,
+      (this.listeners.get(type) ?? []).filter((f) => f !== fn),
+    );
   }
   fire(type: string) {
     for (const fn of this.listeners.get(type) ?? []) fn(new Event(type));
@@ -298,9 +301,9 @@ it('draws the file before a byte moves, and tracks the bytes', async () => {
   expect(chip()?.getAttribute('data-state')).toBe('uploading');
   // Send is held while bytes are in flight — a message that goes without its
   // attachment is the silent loss this is all about.
-  expect(host.querySelector<HTMLButtonElement>('[aria-label="Waiting for uploads"]')?.disabled).toBe(
-    true,
-  );
+  expect(
+    host.querySelector<HTMLButtonElement>('[aria-label="Waiting for uploads"]')?.disabled,
+  ).toBe(true);
   await act(async () => {
     xhr.progress(400, 1000);
   });
