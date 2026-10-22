@@ -80,9 +80,7 @@ describe('nothing compacts on its own', () => {
     // file would fail on the sentence explaining the correct choice. (Same
     // mistake this repo already made once, reading a token name out of a CSS
     // comment.)
-    const code = runner
-      .replace(/\/\*[\s\S]*?\*\//g, '')
-      .replace(/(^|[^:])\/\/.*$/gm, '$1');
+    const code = runner.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
     expect(code).toContain('autoCompactEnabled: false');
     expect(code).not.toContain('DISABLE_COMPACT');
     expect(code).not.toContain('DISABLE_AUTO_COMPACT');
