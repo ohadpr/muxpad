@@ -15,6 +15,7 @@ import { initPaneKeys } from './pane-key.js';
 import type { PtydCache } from './ptyd-cache.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
 import type { Presence, PushService } from './push.js';
+import type { Transcriber } from './review/transcribe.js';
 import { agentLaunchRoutes } from './routes/agent-launch.js';
 import { agentSessionsRoutes } from './routes/agent-sessions.js';
 import { appsRoutes } from './routes/apps.js';
@@ -28,6 +29,7 @@ import { paneIoRoutes } from './routes/pane-io.js';
 import { panesScopedRoutes, panesTabScopedRoutes } from './routes/panes.js';
 import { publishRoutes } from './routes/publish.js';
 import { pushRoutes } from './routes/push.js';
+import { reviewRoutes } from './routes/review.js';
 import { archiveRoutes, searchRoutes } from './routes/search.js';
 import { slackRoutes } from './routes/slack.js';
 import { summaryRoutes } from './routes/summary.js';
@@ -162,6 +164,16 @@ export interface AppDeps {
    */
   voice?: VoiceSessionManager;
   /**
+   * Screen review's two stateless calls (review/): the transcriber for one
+   * utterance of audio, and the install's vocabulary to bias it with. Optional
+   * for the same reason voice is — /api/review stays mounted and answers
+   * `configured: false` / 503 rather than 404.
+   */
+  review?: {
+    transcribe?: Transcriber | undefined;
+    glossary?: (() => readonly string[]) | undefined;
+  };
+  /**
    * Extra hostnames the CSRF guard trusts as an Origin, on top of loopback
    * and "same hostname as Host". Production reads MUXPAD_ALLOWED_ORIGINS;
    * this is the injection seam for tests. See same-origin.ts.
@@ -219,6 +231,15 @@ export function createApp(deps: AppDeps): Hono {
   // Voice mode's SDP relay + its cost controls. Always mounted (see
   // routes/voice.ts): "no API key" must be an answer, not a 404.
   app.route('/api/voice', voiceRoutes({ voice: resolved.voice }));
+  // Screen review — talk while you point, get back addressed notes. Same
+  // always-mounted contract as voice; see routes/review.ts.
+  app.route(
+    '/api/review',
+    reviewRoutes({
+      transcribe: resolved.review?.transcribe,
+      glossary: resolved.review?.glossary,
+    }),
+  );
   // SSE mirror of /ws/events — curl-able subscription for scripts/agents.
   app.route('/api/events', eventsRoutes(resolved));
   app.route('/api/agent-sessions', agentSessionsRoutes(resolved));
