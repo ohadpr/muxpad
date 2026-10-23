@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GrayMap } from './cursor';
-import { IDLE_SAMPLE_MS, type Grabbed, ReviewSession, SAMPLE_MS } from './session';
+import { type Grabbed, IDLE_SAMPLE_MS, ReviewSession, SAMPLE_MS } from './session';
 
 // THE WHOLE PLATFORM IS A FAKE HERE, which is the point: the spike's losses
 // were all instruments that lied (a suspended AudioContext reading zero, a rAF
@@ -88,7 +88,11 @@ function harness(
     const blockMs = (BLOCK / RATE) * 1000;
     for (let d = 0; d < ms; d += blockMs) {
       const samples = new Float32Array(BLOCK).fill(rms);
-      audioCb?.(session.current.startedAt === null ? 0 : clock - session.current.startedAt, samples, RATE);
+      audioCb?.(
+        session.current.startedAt === null ? 0 : clock - session.current.startedAt,
+        samples,
+        RATE,
+      );
       clock += blockMs;
       await Promise.resolve();
     }
@@ -184,7 +188,10 @@ describe('ReviewSession', () => {
 
   it('shows the note PENDING while it is being transcribed', async () => {
     let release: (t: string) => void = () => {};
-    const h = harness({ transcribe: () => new Promise<string>((r) => (release = r)) });
+    const held = new Promise<string>((r) => {
+      release = r;
+    });
+    const h = harness({ transcribe: () => held });
     await h.session.start();
     await h.speak(1500, LOUD);
     await h.speak(1200, ROOM);

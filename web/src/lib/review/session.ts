@@ -27,8 +27,8 @@
 // already have and its worst outcome is one note instead of three.
 
 import type { ReviewNote, ReviewSplit } from '@muxpad/shared';
-import { FrameRing, type FrameSample, aHash } from './frames';
 import { type GrayMap, findCursor } from './cursor';
+import { FrameRing, type FrameSample, aHash } from './frames';
 import { Segmenter, meterLevel, rmsOf } from './segment';
 import { concatPcm, encodeWav, resample } from './wav';
 

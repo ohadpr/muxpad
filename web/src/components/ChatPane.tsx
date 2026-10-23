@@ -14,6 +14,7 @@ import {
   type ToolResultEvent,
   type ToolUseEvent,
   attachmentExtForMime,
+  composeReviewMessage,
   imageExtForMime,
   isAgentLaunchTool,
   parseCronMarker,
@@ -116,6 +117,7 @@ import { canAutoPageHistory, showLoadEarlier } from '../lib/history-budget';
 import { NO_SENDERS, loadInboundSenders, matchInboundSenders } from '../lib/inbound-senders';
 import { showFolderChip } from '../lib/nav-row-affordances';
 import { type WorkspaceTabs, paneIndex } from '../lib/nav-search';
+import { useReview } from '../lib/review/use-review';
 import {
   type HighlightRun,
   highlightRuns,
@@ -179,6 +181,7 @@ import { ChatWorking } from './ChatWorking';
 import { CopyablePre } from './CopyablePre';
 import { FromAgentMessage } from './FromAgentMessage';
 import { SvgAgentGlyph, SvgGlobe, SvgTerminalGlyph } from './PaneWebSwitch';
+import { ReviewButton, ReviewPanel, sendableNotes } from './ReviewControl';
 import { VoiceBar, VoiceControl } from './VoiceControl';
 
 /** Open a media item in the lightbox (image or video). */
@@ -2274,6 +2277,44 @@ export function ChatPane({
   // The CARDS and their report parsing stay: old cards must still render, and
   // an agent-initiated `<muxpad-direct>` message still draws one.
 
+  /**
+   * Put a composed message on the wire — the socket rules, in ONE place.
+   *
+   * Two callers: the composer, and a finished screen review (which composes a
+   * numbered list of instructions with their frames and hands it over the same
+   * way a typed message goes). Returns false when nothing was sent, so the
+   * caller can keep whatever it was holding.
+   */
+  const deliver = (outgoing: string): boolean => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      // Don't fire into a dead socket (the browser would drop it silently).
+      // Keep the text (and chips) where they are, kick a reconnect, retry.
+      setNotice({ text: 'Reconnecting — try again in a moment.', tone: 'info' });
+      reconnectNow.current();
+      return false;
+    }
+    if (sending) {
+      // Agent busy → hand it to the server to queue. No optimistic turn state;
+      // the server's `queue` broadcast renders the pending bubble. The message
+      // is persisted server-side, so it's safe even if we close the tab now.
+      // Track it as the pending send so BOTH the watchdog and a hard `onclose`
+      // can restore it if no ack comes back — without this, a socket that closes
+      // before `send-ack` drops the message silently (onclose reads pendingText).
+      // send-ack (fired for queued sends too) clears both on a live socket.
+      pendingText.current = outgoing;
+      ws.send(JSON.stringify({ t: 'send', text: outgoing }));
+      // The queued bubble renders at the end too — same reason as `dispatchSend`.
+      scroll.current?.dispatch({ t: 'sent' });
+      armSendWatchdog(outgoing);
+    } else {
+      // Idle → optimistic send (instant echo + working state). If the server
+      // turns out to be busy (reconnect race), its `queued` frame reconciles.
+      dispatchSend(outgoing);
+    }
+    return true;
+  };
+
   const sendMessage = () => {
     const text = input.trim();
     // Sending retires a search highlight: it is the clearest possible statement
@@ -2323,32 +2364,7 @@ export function ChatPane({
     // `muxpad agent send`.
     const mentioned = mentionedChats(input, corpus, livePicks);
     const outgoing = withMentionContext(composeOutgoingMessage(text, attachmentPaths), mentioned);
-    const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      // Don't fire into a dead socket (the browser would drop it silently).
-      // Keep the text (and chips) in the composer, kick a reconnect, retry.
-      setNotice({ text: 'Reconnecting — try again in a moment.', tone: 'info' });
-      reconnectNow.current();
-      return;
-    }
-    if (sending) {
-      // Agent busy → hand it to the server to queue. No optimistic turn state;
-      // the server's `queue` broadcast renders the pending bubble. The message
-      // is persisted server-side, so it's safe even if we close the tab now.
-      // Track it as the pending send so BOTH the watchdog and a hard `onclose`
-      // can restore it if no ack comes back — without this, a socket that closes
-      // before `send-ack` drops the message silently (onclose reads pendingText).
-      // send-ack (fired for queued sends too) clears both on a live socket.
-      pendingText.current = outgoing;
-      ws.send(JSON.stringify({ t: 'send', text: outgoing }));
-      // The queued bubble renders at the end too — same reason as `dispatchSend`.
-      scroll.current?.dispatch({ t: 'sent' });
-      armSendWatchdog(outgoing);
-    } else {
-      // Idle → optimistic send (instant echo + working state). If the server
-      // turns out to be busy (reconnect race), its `queued` frame reconciles.
-      dispatchSend(outgoing);
-    }
+    if (!deliver(outgoing)) return;
     setInput('');
     clearChips();
   };
@@ -3431,6 +3447,24 @@ export function ChatPane({
     },
   };
   const voice = useVoice({ paneId, enabled: voiceOn, agent: agentLink });
+
+  // ── SCREEN REVIEW ──────────────────────────────────────────────────────────
+  //
+  // Both modes, unlike voice: the thing you most often want to review is a web
+  // app being built by the agent in THIS pane, and Agent mode is where that
+  // agent usually lives. Nothing is sent without the press below — the note
+  // list is the review-before-send affordance, and it is the only defence
+  // against a mishearing or a bad split, both of which read plausibly.
+  const review = useReview(paneId);
+  const sendReview = () => {
+    const outgoing = composeReviewMessage(sendableNotes(review.state.items));
+    if (!outgoing) return;
+    // The SAME path a typed message takes, queueing behind a busy agent like
+    // any other. The frames are already uploaded attachments, so what goes out
+    // is text with their paths in it — see shared/src/review.ts.
+    if (!deliver(outgoing)) return;
+    review.reset();
+  };
 
   // ONE tool-resolution index for everything below (and one place for the
   // "a tool_use is resolved when a tool_result shares its toolUseId" rule).
@@ -4971,6 +5005,18 @@ export function ChatPane({
                 onDismiss={() => voice.stop('user')}
               />
             ) : null}
+            {/* A review in progress, or a list waiting to be sent. Renders
+              nothing at rest — this strip costs the same space the last
+              message occupies. */}
+            <ReviewPanel
+              state={review.state}
+              elapsedMs={review.elapsedMs}
+              onStop={() => void review.stop()}
+              onScrap={review.scrap}
+              onSend={sendReview}
+              onDiscard={review.reset}
+              log={review.log}
+            />
             {/* Absolutely positioned (see ChatMentionPicker.css): the composer
               wrap's measured height is what reserves room at the foot of the
               transcript, so a picker in its flow would scroll the conversation
@@ -5032,6 +5078,15 @@ export function ChatPane({
                       queue exists to allow. */}
                   <SvgAttach />
                 </button>
+                {/* Both modes, unlike the mic: the thing you review is usually
+                  the app the agent in THIS pane is building. */}
+                <ReviewButton
+                  state={review.state}
+                  available={review.available}
+                  unconfigured={review.unconfigured}
+                  onStart={() => void review.start()}
+                  onStop={() => void review.stop()}
+                />
                 {/* Chat mode only — Agent mode is raw, and `voiceOn` is the same
                   predicate that governs Chat mode's written voice. */}
                 {voiceOn ? (

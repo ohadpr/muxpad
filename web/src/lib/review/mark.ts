@@ -84,7 +84,11 @@ export function placeInset(
 }
 
 /** Where the ring goes, in frame pixels. */
-export function placeRing(w: number, h: number, cursor: Point): { x: number; y: number; r: number } {
+export function placeRing(
+  w: number,
+  h: number,
+  cursor: Point,
+): { x: number; y: number; r: number } {
   return {
     x: Math.round(cursor.x * w),
     y: Math.round(cursor.y * h),

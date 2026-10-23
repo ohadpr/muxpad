@@ -68,7 +68,9 @@ export async function startScreenCapture(opts: ScreenCaptureOpts = {}): Promise<
   if (track) {
     const settings = track.getSettings() as MediaTrackSettings & { cursor?: string };
     if (settings.cursor && settings.cursor !== 'always')
-      opts.log?.(`the browser refused cursor:always (got ${settings.cursor}) — frames may not show the pointer`);
+      opts.log?.(
+        `the browser refused cursor:always (got ${settings.cursor}) — frames may not show the pointer`,
+      );
     track.addEventListener('ended', () => opts.onEnded?.());
   }
 
