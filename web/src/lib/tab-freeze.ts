@@ -67,28 +67,34 @@ export function freezeActiveTab<T extends FreezableTab>(
 /**
  * The index to freeze the active tab at: the HIGHEST it has reached this visit.
  *
- * ── IT USED TO PIN THE ROW WHERE YOU CLICKED IT ─────────────────────────────
- * The index came from the DISPLAYED order, captured once on arrival, and held
- * for the whole visit — "what you clicked stays exactly where you clicked it".
- * That reads well and is half a rule. The missing half: opening a chat makes it
- * the most recent thing you have touched, so the server immediately sorts it to
- * the top — and this held it at row 8, where it had been two hours cold. The
- * promotion the user asked for by clicking never arrived on screen, and the row
- * that DID climb was the one they had just left (its freeze having been dropped
- * on the way out). Reported as "when I touch a chat it doesn't go to the top".
+ * ── TWO REPORTS, OPPOSITE DIRECTIONS, ONE ANSWER ────────────────────────────
  *
- * So the rule becomes directional, which is what it always should have been.
- * What hurts is a row sliding DOWN the list under your cursor while you work in
- * it — other chats getting busier and pushing it away, so closing the row below
- * it or re-finding where you are becomes a moving-target problem. A row moving
- * UP is the opposite: it is the consequence of the click you just made, it
- * happens once, and it ends at the top where it then stays.
+ * This rule has been written twice from two complaints that look like
+ * contradictions and are not.
  *
- * Hence the minimum. The freeze holds the best index the active row has
- * achieved, so it rises to its sorted position and never falls back. It also
- * makes the capture self-correcting without any knowledge of when the server's
- * stamp lands: the arrival index is simply the first candidate, and the
- * promotion a moment later wins on its own.
+ *   1. "when I touch a chat it doesn't go to the top" — the freeze held the
+ *      clicked row at index 8 for the whole visit, so the promotion the click
+ *      earned never arrived anywhere, and the row that DID climb was the one
+ *      you had just left. Answered by letting the active row climb.
+ *   2. "I click a chat to go do something with it and then it immediately
+ *      jumps up… in terms of UX it's causing me to not be able to remember the
+ *      order of chats." — which is that same climb, seen from the chair.
+ *
+ * Both are true, and they are about DIFFERENT MOMENTS. (1) is about the list
+ * you come back to; (2) is about the list you are looking at. The rule that
+ * serves both is therefore about WHEN, not about which direction:
+ *
+ *      NOTHING MOVES WHILE YOU ARE IN IT. IT SETTLES WHEN YOU LEAVE.
+ *
+ * So the freeze is no longer directional. The active row holds the index it
+ * had when you arrived — up and down alike — and the moment you go elsewhere
+ * the freeze evaporates and it lands wherever recency says, ready for the next
+ * time you look. Report (1)'s promotion still happens; it just stops happening
+ * under the cursor, which is the only part that was ever a problem.
+ *
+ * This is the behaviour of every mail client: reading a message does not
+ * reflow the list you are reading it in, and the list is correct again the
+ * next time you open it.
  */
 export function activeTabFreezeIndex<T extends FreezableTab>(
   displayed: T[],
@@ -133,15 +139,12 @@ export function advanceTabFreeze<T extends FreezableTab>(
     freeze = index === null ? null : { id: activeId, index };
   } else if (tabs.find((t) => t.id === activeId)?.pinned) {
     freeze = null;
-  } else {
-    // SAME tab, still active: let a promotion through and keep it. The server's
-    // index is where recency says this row belongs; a smaller one means it has
-    // climbed, which is exactly what arriving here caused and what must not be
-    // undone. Anything larger is the list closing over it and is what the
-    // freeze is for.
-    const now = tabs.findIndex((t) => t.id === activeId);
-    if (now >= 0 && now < freeze.index) freeze = { id: activeId, index: now };
   }
+  // SAME tab, still active: hold it exactly where it is, in BOTH directions.
+  // This branch used to re-capture a smaller index — letting the row climb to
+  // the top the instant the server stamped it — which is the jump reported as
+  // "I click a chat and it immediately jumps up". The climb is not wrong, its
+  // TIMING was: it lands on deactivate, one branch up.
   return { freeze, order: freezeActiveTab(tabs, activeId, freeze?.index ?? null) };
 }
 
