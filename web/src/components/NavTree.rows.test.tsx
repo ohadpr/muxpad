@@ -386,6 +386,20 @@ describe('the sheet nests a child under its parent and files done chats away', (
     );
   };
 
+  it('uses the same unread-parent and running-child distinction on the sheet', () => {
+    openSubs('root');
+    const html = sheetHtml([
+      tab('root', { status: 'ready' }),
+      tab('child', { spawned_by: 'root', status: 'working', clock: null }),
+    ]);
+    expect(html).toContain('navtree-mark navtree-rail-mark" data-state="ready"');
+    expect(html).toContain('title="Unread reply in this chat"');
+    expect(html).toContain('navtree-mark navtree-rail-mark" data-state="working"');
+    expect(html).toContain('>1 sub-chat</span>');
+    expect(html).not.toContain('navtree-row-pill-dot');
+    expect(html).not.toContain('navtree-row-pill-glyph');
+  });
+
   it('marks the child row as a child, so the indent rule can reach it', () => {
     // `data-child` was emitted by the desktop row and not by the sheet's, so
     // even once the grouping arrived a child would have been an ordinary line.
@@ -654,5 +668,48 @@ describe('sub-chats are collapsed, and the collapse still tells the truth', () =
     // opened. Leaving must not quietly leave the group expanded forever.
     const out = railHtml([tab('root'), tab('kid0', { spawned_by: 'root' })], 'root');
     expect(out).not.toContain('>kid0<');
+  });
+});
+
+describe('sub-chat status wording', () => {
+  const pill = (html: string) =>
+    /<button[^>]*navtree-subs-pill[^>]*>[\s\S]*?<\/button>/.exec(html)?.[0] ?? '';
+  const text = (html: string) => pill(html).replace(/<[^>]+>/g, '');
+
+  it.each([
+    ['idle', '1 sub-chat'],
+    ['working', '1 running'],
+    ['ready', '1 unread'],
+    ['blocked', '1 needs you'],
+    ['dead', '1 stopped'],
+  ] as const)('names %s hidden children without a status-symbol legend', (status, label) => {
+    const html = railHtml([tab('root'), tab('child', { spawned_by: 'root', status, clock: null })]);
+    expect(text(html)).toBe(label);
+    expect(pill(html)).not.toContain('navtree-row-pill-dot');
+    expect(pill(html)).not.toContain('navtree-row-pill-glyph');
+  });
+
+  it('distinguishes an unread parent from its still-running visible child', () => {
+    openSubs('root');
+    const html = railHtml([
+      tab('root', { status: 'ready' }),
+      tab('child', { spawned_by: 'root', status: 'working', clock: null }),
+    ]);
+    expect(text(html)).toBe('1 sub-chat');
+    expect(html).toContain('title="Unread reply in this chat"');
+    expect(html).toMatch(/navtree-mark" data-state="ready"[^>]*>✓<\/span>/);
+    expect(html).toContain('navtree-mark" data-state="working"');
+  });
+
+  it('retains the total and counts the urgent subset for mixed children', () => {
+    const html = railHtml([
+      tab('root'),
+      tab('one', { spawned_by: 'root', status: 'blocked', clock: null }),
+      tab('two', { spawned_by: 'root', status: 'working', clock: null }),
+      tab('three', { spawned_by: 'root', status: 'idle', clock: null }),
+    ]);
+    expect(text(html)).toBe('3 · 1 needs you');
+    expect(pill(html)).toContain('1 running');
+    expect(pill(html)).toContain('1 idle');
   });
 });

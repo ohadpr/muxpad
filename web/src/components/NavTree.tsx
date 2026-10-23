@@ -39,7 +39,6 @@ import {
 } from '../workspaces';
 import { ChatChip, chatTooltip, isChatDone, isChatRetired } from './ChatChip';
 import { NewTabButton } from './NewTabButton';
-import { SvgAgentGlyph } from './PaneWebSwitch';
 import { StateChip } from './StateChip';
 import { SwipeRow } from './SwipeRow';
 import { SvgClose } from './icons';
@@ -2224,39 +2223,11 @@ export function doneChatCount(groups: readonly ChatGroup[]): number {
   return groups.reduce((n, g) => n + g.children.length + (g.contextOnly ? 0 : 1), 0);
 }
 
-/**
- * THE state slot — one 10px mark, one place, every state.
- *
- * This replaces the rail's three-way encoding (a 3px bar on the row's left
- * edge, a faint tint across the whole row, and a worded chip on the right).
- * All three are gone from the chat rows, and they were removed deliberately
- * rather than lost: next to a chip that says how much life a chat has left by
- * quietly filling with colour, a tinted row and a mono `READY` badge were
- * shouting. Two channels competing for "look here" is one channel.
- *
- * What is left is the smallest thing that can still say it, in the slot at the
- * row's right edge that every row shares:
- *
- *   working  a 10px turning ring — still the rail's ONE moving thing, and
- *            still the whole basis of "a still rail means nothing is running"
- *   blocked  a 10px filled dot, red. It wants you NOW.
- *   ready    a 10px filled dot, green. Finished, waiting for you.
- *   dead     a 10px filled dot, grey — findable, but not shouting: a dead
- *            runner needs nothing until you decide it does
- *   idle     NOTHING, and no element at all, so the cell takes no width and
- *            declines its gutter. Most rows are this one.
- *
- * Only `working` and `idle` come from the prototype, whose toy data had no
- * `blocked` and no `dead`. Rendering those two as nothing would have deleted
- * the rail's most consequential signal, so they take the same mark in the same
- * slot, separated by hue — which is what the rule ("every state is the SAME
- * mark in the same place") actually asks for.
- *
- * Rendered OUTSIDE the row's link, like every other state mark in this tree:
- * a label inside a control joins that control's accessible name, and the name
- * would then change under the user every time an agent started or stopped.
- */
-function RowMark({ status }: { status: PaneStatus | undefined }) {
+/** This row's own state, separate from the child-count pill. Idle renders
+ * nothing; running is the only animated mark. Settled states have distinct
+ * shapes (unread ✓, needs input !, stopped ×), so color is not the legend.
+ * Keep this outside the chat link so status updates do not rename that link. */
+function RowMark({ status, className }: { status: PaneStatus | undefined; className?: string }) {
   const s = status ?? 'idle';
   // A genuinely absent element, not an empty one: the grid's last track is
   // `auto`, so nothing here means no width and no gutter for the majority of
@@ -2267,21 +2238,23 @@ function RowMark({ status }: { status: PaneStatus | undefined }) {
   const announced = s !== 'working';
   return (
     <span
-      className="navtree-mark"
+      className={`navtree-mark${className ? ` ${className}` : ''}`}
       data-state={s}
       title={MARK_TITLES[s]}
       {...(announced
         ? { role: 'img' as const, 'aria-label': MARK_TITLES[s] }
         : { 'aria-hidden': 'true' as const })}
-    />
+    >
+      {s === 'ready' ? '✓' : s === 'blocked' ? '!' : s === 'dead' ? '×' : null}
+    </span>
   );
 }
 
 const MARK_TITLES: Record<Exclude<PaneStatus, 'idle'>, string> = {
-  blocked: 'Waiting on you',
-  working: 'Working…',
-  ready: 'Ready for you',
-  dead: 'Agent exited',
+  blocked: 'This chat needs your input',
+  working: 'This chat is running',
+  ready: 'Unread reply in this chat',
+  dead: 'This chat’s agent stopped',
 };
 
 /**
@@ -2382,39 +2355,24 @@ export interface SubsGroup {
   onToggle: () => void;
 }
 
-/**
- * THE PILL — count, state and disclosure as ONE object at the end of the
- * parent's row.
- *
- * It replaces a whole row. The chip used to be a line under the parent
- * carrying a caret, the agent glyph, the total and the breakdown; on a 240px
- * rail that is a row spent on four small things, and on the phone a 40px band
- * between a chat and its workers. Reported as "it feels like we're just
- * wasting space now". Measured after: 4 rows to 3 shut, 6 to 5 open, and the
- * parent's NAME gets 8px wider rather than narrower, because the schedule
- * leaves the row with the chip (see CronMark's call site).
- *
- * ─── IT ALSO STOPS DRAWING ONE FACT TWICE ───────────────────────────────────
- * While a group is shut the parent row already drew `rollupStatus` — the
- * loudest state among its children — as its own 10px mark, beside a chip
- * saying `2 · 1 running`. Those are the same claim in two objects a few pixels
- * apart. The pill carries the hue AND the count, and the row's own mark is
- * suppressed while it does; open, the pill goes neutral, takes the agent glyph
- * instead of a state dot, and the mark comes back to say what the PARENT is
- * doing.
- *
- * ─── WHY THE WORDS LEAVE ON THE DESKTOP AND STAY ON THE PHONE ───────────────
- * `2 running · 1 ready` does not fit on a 240px row beside a name. It is in
- * the title and in the accessible name, both of which a sighted reader reaches
- * by hovering and a screen reader gets for free. The sheet is 330px+ and has
- * the room, so there it stays visible — a tooltip is not reachable by a thumb.
- */
-function SubsPill({ group, wide }: { group: SubsGroup; wide?: boolean }) {
+/** Count hidden workers in plain language. No idle symbol or agent glyph:
+ * closed groups say what their children are doing; open groups only count
+ * them because each visible child already carries its own state. */
+function SubsPill({ group }: { group: SubsGroup }) {
   const { total, parts, open, status, title, parentName, onToggle } = group;
-  // NEUTRAL IS A STATE VALUE, not a missing one: `idle` is what the stylesheet
-  // keys the quiet form off, and an absent attribute would fall through to
-  // whatever the row's own hue is.
   const hue = open ? 'idle' : (status ?? 'idle');
+  const noun = `${total} ${total === 1 ? 'sub-chat' : 'sub-chats'}`;
+  const wording = (text: string) =>
+    text.replace(/\bready\b/g, 'unread').replace(/\bdead\b/g, 'stopped');
+  // A homogeneous group can say "2 running". For mixed states, retain the
+  // total and name the most urgent subset; the title keeps the full breakdown.
+  const label =
+    open || parts.length === 0
+      ? noun
+      : parts.length === 1
+        ? wording(parts[0]!)
+        : `${total} · ${wording(parts[0]!)}`;
+  const description = wording(title);
   return (
     <button
       type="button"
@@ -2429,20 +2387,10 @@ function SubsPill({ group, wide }: { group: SubsGroup; wide?: boolean }) {
         onToggle();
       }}
       aria-expanded={open}
-      title={title}
-      aria-label={`${open ? 'Hide' : 'Show'} ${title} of ${parentName}`}
+      title={description}
+      aria-label={`${open ? 'Hide' : 'Show'} ${description} of ${parentName}`}
     >
-      {open ? (
-        <span className="navtree-row-pill-glyph" aria-hidden="true">
-          <SvgAgentGlyph />
-        </span>
-      ) : (
-        <span className="navtree-row-pill-dot" aria-hidden="true" />
-      )}
-      <span className="navtree-row-pill-n">
-        {total}
-        {wide && parts.length > 0 ? ` · ${parts.join(' · ')}` : ''}
-      </span>
+      <span className="navtree-row-pill-n">{label}</span>
       <SvgCaret open={open} />
     </button>
   );
@@ -2887,16 +2835,14 @@ function TabRow({
               <SvgCaret open={panesOpen} />
             </button>
           ) : null}
-          {/* WIDE on this surface: a 330px+ sheet has room for the breakdown,
-              and a tooltip is not reachable by a thumb. Same object, same
-              rules — only the words differ. */}
-          {group ? <SubsPill group={group} wide /> : null}
+          {/* The same plain-language child count on desktop and mobile. */}
+          {group ? <SubsPill group={group} /> : null}
           {/* Outside the link, as everywhere else: its visually-hidden state
               text would otherwise join the link's ACCESSIBLE NAME and rename
               the control every time an agent started or stopped.
               ALWAYS DRAWN — see the desktop row for why suppressing it beside
               a pill made one object speak for two subjects. */}
-          <StateChip status={tab.status} mode="mark" className="navtree-rail-mark" />
+          <RowMark status={tab.status} className="navtree-rail-mark" />
         </span>
       ) : null}
       {overlays}
