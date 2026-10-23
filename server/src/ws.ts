@@ -631,6 +631,19 @@ export function attachWsServer(deps: {
     /** Latest per-task subagent progress for mid-turn (re)connects. */
     subagents: Map<string, SubagentProgress>;
     /**
+     * How many BACKGROUND SHELL COMMANDS are running — `Bash` calls the agent
+     * backgrounded, which outlive the turn that started them.
+     *
+     * Held here for the same reason the roster is: a chat that connects or
+     * reloads while one is running has no other way to learn about it, and
+     * the runner only speaks when the number CHANGES.
+     *
+     * NOT subagents, and the UI must never say they are. A subagent is a
+     * conversation with a pane, a transcript and a report; this is a process
+     * with an exit code.
+     */
+    backgroundLive: number;
+    /**
      * When each roster entry's payload last CHANGED, by toolUseId. Not when a
      * frame last arrived — the 5s keepalive re-sends ghosts unchanged, so
      * arrival time cannot tell a live subagent from a dead one. Feeds
@@ -1651,6 +1664,7 @@ export function attachWsServer(deps: {
           subagents: new Map(),
           subagentChangedAt: new Map(),
           subagentReaped: new Map(),
+          backgroundLive: 0,
           lastOverflowWarnAt: 0,
           status: null,
           lastSendAt: 0,
@@ -2109,6 +2123,13 @@ export function attachWsServer(deps: {
             // the turn did. A pane mid-turn is skipped — its own turn-done is
             // the authority and will carry the then-current count.
             if (typeof frame.live !== 'number') return;
+            // THE CHAT WANTS THIS TOO. A backgrounded command is the one piece
+            // of still-running work the cockpit showed NOTHING for: no row, no
+            // mark, no way to know it was there until its completion notice
+            // arrived minutes later. Remembered for (re)connects and
+            // broadcast for the open ones.
+            conn.backgroundLive = frame.live;
+            bcastToPane(paneId, { t: 'background', live: frame.live });
             if (frame.live === 0 && !conn.turnActive) emitTurn('done', 0);
           } else if (frame.t === 'subagent') {
             if (!frame.progress || typeof frame.progress.toolUseId !== 'string') return;
@@ -2384,6 +2405,7 @@ export function attachWsServer(deps: {
             // Ids only, sorted: progress churn (steps/lastTool) and the
             // runner's keepalive must NOT re-push the whole session frame.
             subagents: [...(agentRunners.get(chatPaneId)?.subagents.keys() ?? [])].sort().join(','),
+            background: agentRunners.get(chatPaneId)?.backgroundLive ?? 0,
           });
           if (first || hello !== lastHello) {
             lastHello = hello;
@@ -2420,6 +2442,9 @@ export function attachWsServer(deps: {
               ...(runner && runner.subagents.size > 0
                 ? { subagents: [...runner.subagents.values()] }
                 : {}),
+              // Only when there is something to say — absent reads as zero
+              // everywhere, and every other backend sends no such field.
+              ...(runner?.backgroundLive ? { background: runner.backgroundLive } : {}),
             });
           }
           // ── THE RESUME TARGET MUST ACTUALLY HAVE A TRANSCRIPT ──────────

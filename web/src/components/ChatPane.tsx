@@ -341,6 +341,9 @@ type ServerMsg =
       // subagent progress.
       question?: PendingQuestion;
       subagents?: SubagentProgress[];
+      /** Background SHELL COMMANDS running right now — see the `background`
+       *  frame below. Absent means none. */
+      background?: number;
       status?: AgentStatus;
       /** The pane's working dir + whether it has project context (git/rules/MCP). */
       cwd?: string;
@@ -348,6 +351,16 @@ type ServerMsg =
       /** Server-owned pending send queue (messages waiting for a busy agent). */
       queue?: QueuedItem[];
     }
+  /**
+   * HOW MANY BACKGROUND SHELL COMMANDS ARE RUNNING.
+   *
+   * A `Bash` call the agent started with `run_in_background`, which keeps
+   * running after the turn that launched it ends. Emphatically NOT a
+   * sub-agent: no context, no transcript, no report — a process and an exit
+   * code. The status line says so in those words, because the only thing
+   * worse than not showing this is showing it as something it is not.
+   */
+  | { t: 'background'; live: number }
   | { t: 'events'; phase: 'history' | 'live' | 'older'; events: ChatEvent[] }
   | { t: 'older-done'; hasMore: boolean }
   | { t: 'send-ack' }
@@ -1521,6 +1534,9 @@ export function ChatPane({
   const [question, setQuestion] = useState<PendingQuestion | null>(null);
   // Live per-task subagent progress, keyed by the Task tool-use id.
   const [subagents, setSubagents] = useState<Record<string, SubagentProgress>>({});
+  /** Background shell commands running right now (not sub-agents — see the
+   *  `background` frame). Zero is the common case and renders nothing. */
+  const [backgroundLive, setBackgroundLive] = useState(0);
   // Last progress-frame arrival per task — the staleness horizon for the
   // running-subagents indicator (a background task that's gone silent past
   // it reads as done, not running; its tool_result may never stream here).
@@ -1713,6 +1729,9 @@ export function ChatPane({
           subagentSeenAt.current = new Map(live.map((p) => [p.toolUseId, p.seenAt ?? now]));
           setSubagents(Object.fromEntries(live.map((p) => [p.toolUseId, p])));
         }
+        // A snapshot, like the roster above: absent means none, and assigning
+        // unconditionally is what lets the last command clear on a resync.
+        setBackgroundLive(msg.background ?? 0);
       } else if (msg.t === 'events') {
         const fresh = msg.events.filter((e) => !byId.current.has(e.id));
         // A subagent's FINISH notice (matched by tool-use-id) ends it — prune
@@ -1928,6 +1947,8 @@ export function ChatPane({
         // queued this because a turn is running/about to drain).
         pendingText.current = '';
         if (wasOurOptimistic) setOptimisticUser(null);
+      } else if (msg.t === 'background') {
+        setBackgroundLive(msg.live);
       } else if (msg.t === 'subagent') {
         const { toolUseId, done } = msg.progress;
         if (done) {
@@ -5365,6 +5386,7 @@ export function ChatPane({
               {...(session?.assistant ? { assistant: session.assistant } : {})}
               liveLabel={liveLabel}
               agents={rosterAgents}
+              background={backgroundLive}
               onOpenChat={openChat}
               mode={mode}
               send={(obj) => {

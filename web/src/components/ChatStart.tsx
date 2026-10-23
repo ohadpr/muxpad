@@ -40,6 +40,35 @@ export function SvgFolder({ size = 13 }: { size?: number }) {
  *  speech bubble (you are talking to muxpad's assistant), Agent is a bare
  *  terminal caret (the harness, as it ships). Colour alone would be invisible
  *  to anyone who can't see the hue difference at 12px. */
+/**
+ * A SHELL PROMPT — `>_` in a box, the same vocabulary the Agent-mode glyph
+ * uses for "the harness as it ships". Deliberately NOT a gear, a spinner or
+ * anything that reads as an agent: the whole job of this mark is to say the
+ * running thing is a COMMAND.
+ */
+export function SvgShellGlyph({ size = 12 }: { size?: number } = {}) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" aria-hidden="true" fill="none">
+      <rect
+        x="1.4"
+        y="2.6"
+        width="13.2"
+        height="10.8"
+        rx="1.6"
+        stroke="currentColor"
+        strokeWidth="1.3"
+      />
+      <path
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="m4.3 6.1 2 1.9-2 1.9M8.6 10.3h3.1"
+      />
+    </svg>
+  );
+}
+
 export function SvgModeGlyph({ mode, size = 12 }: { mode: AgentMode; size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" aria-hidden="true" fill="none">
@@ -646,6 +675,7 @@ export function SessionBar({
   send,
   liveLabel,
   agents,
+  background = 0,
   onOpenChat,
   mode,
 }: {
@@ -656,6 +686,8 @@ export function SessionBar({
   send: (obj: unknown) => void;
   liveLabel: string | null;
   agents: RosterAgent[];
+  /** Background SHELL COMMANDS running right now. Not agents — see the cell. */
+  background?: number;
   /** Go to a chat — only ever called for a CHILD row (see RosterAgent.chat). */
   onOpenChat?: ((chat: { workspaceSlug: string; tabSlug: string }) => void) | undefined;
   /** The pane's mode, or null when the server hasn't told us — no chip. */
@@ -818,6 +850,42 @@ export function SessionBar({
         >
           <SvgModeGlyph mode={mode} />
           <span className="chat-status-seg-label">{AGENT_MODE_LABELS[mode]}</span>
+        </div>
+      ) : null}
+
+      {/* ── BACKGROUND SHELL COMMANDS ───────────────────────────────────────
+          A `Bash` call the agent backgrounded, still running after the turn
+          that started it ended. This cell exists because it was the ONE piece
+          of live work the cockpit showed nothing for: no row, no mark, nothing
+          until a completion notice arrived in the log minutes later — which
+          read, reasonably, as "what is this and why is it not a sub-agent?".
+
+          THE WORD IS THE POINT. It says `shell`, never `agent` and never a
+          bare count, because the two are different things and the expensive
+          confusion is in exactly that direction: a sub-agent is a conversation
+          with a pane, a transcript and a report; this is a process with an
+          exit code. A cell reading "1 running" next to a rail that counts
+          sub-agents would merge them in the reader's head.
+
+          No menu: there is nothing to show yet. The output lives in a file the
+          agent reads; surfacing it is a separate piece of work. */}
+      {background > 0 ? (
+        <div
+          className="chat-status-seg -bg -static"
+          data-testid="chat-status-bg"
+          title={`${background} background shell command${
+            background === 1 ? '' : 's'
+          } still running — a Bash call the agent left running after its turn. Not a sub-agent: no transcript and no report, just an exit code when it finishes.`}
+        >
+          <SvgShellGlyph />
+          {/* "bg command", not "shell" and not a bare count. `shell` reads as
+              a terminal pane — the cockpit is full of those and they are a
+              different thing again — and a bare "2 running" beside a rail that
+              counts sub-agents merges the two ideas that this cell exists to
+              keep apart. */}
+          <span className="chat-status-seg-label">
+            {background} bg command{background === 1 ? '' : 's'}
+          </span>
         </div>
       ) : null}
 

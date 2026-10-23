@@ -2335,6 +2335,30 @@
    signal. Amber while there is room to decide, danger once the next long turn
    could hit the ceiling — and never a bar on the strip itself, because the
    bar lives in the panel this opens, next to the button that acts on it. */
+/* ── BACKGROUND SHELL COMMANDS ───────────────────────────────────────────────
+   A Bash call the agent left running after its turn. Quiet: this is a fact
+   about the session, not a warning and not a call to action — the context
+   cell below is the one allowed to be loud, and it earns that by being about
+   something the user has to act on.
+
+   NO ANIMATION. The rail's "only `working` moves" invariant is about the rail,
+   but the reasoning travels: a composer strip that pulses while a build runs
+   puts motion at the bottom of the screen for minutes at a time, next to the
+   thing you are typing in.
+
+   `min-width: max-content` for the same reason the context cell has it — this
+   cell is two short words and must not be the one the line clips to `1 sh…`. */
+.chat-status-seg.-bg {
+  flex-shrink: 0;
+  min-width: max-content;
+  gap: 5px;
+  color: var(--chat-dim);
+}
+.chat-status-seg.-bg svg {
+  color: inherit;
+  opacity: 0.9;
+}
+
 .chat-status-seg.-ctx {
   flex-shrink: 0;
   min-width: max-content;

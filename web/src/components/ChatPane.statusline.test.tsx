@@ -513,3 +513,87 @@ describe('only one surface says the word', () => {
     expect(liveStatusLabel({ chats: 2, turnActive: true })).toBe('2 agents');
   });
 });
+
+/**
+ * BACKGROUND SHELL COMMANDS — the one piece of live work the cockpit used to
+ * show nothing for.
+ *
+ * A `Bash` call the agent backgrounded keeps running after the turn that
+ * started it ends. Nothing rendered while it ran; a completion notice arrived
+ * in the log minutes later, and the reasonable reaction to it was "what is
+ * this, and why is it not a sub-agent?".
+ *
+ * The answer the cell has to give is the WORD. A sub-agent is a conversation
+ * with a pane, a transcript and a report; this is a process with an exit code,
+ * and a cell saying "1 running" beside a rail that counts sub-agents would
+ * merge the two in the reader's head.
+ */
+describe('the background-command cell', () => {
+  let host: HTMLElement | null = null;
+  let root: ReturnType<typeof createRoot> | null = null;
+  afterEach(() => {
+    act(() => root?.unmount());
+    host?.remove();
+    host = null;
+    root = null;
+  });
+
+  function bar(props: Partial<Parameters<typeof SessionBar>[0]>) {
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+    act(() => {
+      root?.render(
+        <SessionBar
+          paneId="p1"
+          folder={null}
+          status={null}
+          send={() => {}}
+          liveLabel={null}
+          agents={[]}
+          mode="agent"
+          {...props}
+        />,
+      );
+    });
+    return host;
+  }
+  const cell = (box: HTMLElement) => box.querySelector('[data-testid="chat-status-bg"]');
+
+  it('renders nothing when no command is running — the common case', () => {
+    expect(cell(bar({}))).toBeNull();
+    expect(cell(bar({ background: 0 }))).toBeNull();
+  });
+
+  it('names the thing — a bg COMMAND, never an agent, never a bare number', () => {
+    const text = cell(bar({ background: 1 }))?.textContent ?? '';
+    expect(text).toBe('1 bg command');
+    expect(text.toLowerCase()).not.toContain('agent');
+  });
+
+  it('counts, and pluralises', () => {
+    expect(cell(bar({ background: 3 }))?.textContent).toBe('3 bg commands');
+  });
+
+  it('spells out in the tooltip what it is and what it is NOT', () => {
+    // The cell has two words; the hover is where the distinction can live.
+    const title = cell(bar({ background: 2 }))?.getAttribute('title') ?? '';
+    expect(title).toContain('Bash');
+    expect(title.toLowerCase()).toContain('not a sub-agent');
+    expect(title).toContain('exit code');
+  });
+
+  it('does not animate — a composer strip that pulses for minutes is worse', () => {
+    const css = readFileSync(join(import.meta.dirname, 'ChatPane.css'), 'utf8');
+    const rule = /\.chat-status-seg\.-bg\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(rule).not.toContain('animation');
+    // And it must not be the cell the line clips away.
+    expect(rule).toContain('min-width: max-content');
+  });
+
+  it('coexists with the other cells rather than replacing them', () => {
+    const box = bar({ background: 1, mode: 'chat', liveLabel: liveStatusLabel({ chats: 2 }) });
+    expect(cell(box)).not.toBeNull();
+    expect(box.querySelector('.chat-status-seg.-mode')).not.toBeNull();
+  });
+});
