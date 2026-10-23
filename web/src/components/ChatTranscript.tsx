@@ -1377,7 +1377,27 @@ export function QuestionCard({
   );
 
   return (
-    <div className="chat-turn chat-turn-assistant">
+    // ── AN ANCHOR, LIKE EVERY OTHER ROW ──────────────────────────────────────
+    //
+    // This card is routinely the TALLEST thing in the log — measured at 647px
+    // against a 700px viewport for three questions — and it was the only row
+    // in the list with no `data-eid`. The scroll controller's whole model of
+    // "where is the reader" is built from rows that have one
+    // (`anchorRows`/`rowBox` in lib/chat-scroll-dom.ts), so to it this card did
+    // not exist: the newest row it could name sat ABOVE several hundred pixels
+    // of options, every re-place put the reader back at that row, and the card
+    // below could not be held on screen.
+    //
+    // Reported as "i literally can't scroll to its bottom there's some scroll
+    // bug", with the top of the card showing, its last option cut off, and the
+    // jump-to-latest arrow up — the arrow being the controller saying, truly,
+    // that the reader was nowhere near the end.
+    //
+    // The qid is stable for the life of the question and unique per card,
+    // which is all an anchor id has to be. A stale one (the question was
+    // answered and the card is gone) resolves to no row and falls back exactly
+    // as any other removed row does.
+    <div className="chat-turn chat-turn-assistant" data-eid={`q:${pending.qid}`}>
       <div className="chat-question">
         {qs.map((q, i) => (
           <div className="chat-question-block" key={q.question}>
