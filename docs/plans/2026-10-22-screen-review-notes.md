@@ -1,7 +1,8 @@
 # Screen review → addressed notes
 
-**Status:** specified, not built. The spike is done and its findings are below.
-**Spike:** `web/public/review-spike.html` (throwaway; delete when v1 lands).
+**Status:** v1 BUILT (2026-10-22). The spike is gone; §11 records where the
+build deviated from this plan and why. Everything above §11 is the design as
+specified — read §11 before trusting §5 on a detail.
 
 ---
 
@@ -246,3 +247,116 @@ recorder.
    prefer window over full screen.
 3. **Attachment volume.** ~70 KB × 5 per note. A long review is a few MB. The
    existing 512 MB route handles it; the pane's attachment store grows.
+
+---
+
+## 11. What v1 actually does differently
+
+Four deviations, each decided while building and each cheaper than what §5
+specified. The plan's *shape* survived intact: page captures, server does the
+things that need a secret, the agent reads a finished message.
+
+### 11.1 Transcription is a batch call, NOT the live voice session
+
+§5.2 said to reuse the voice stack wholesale. Reading it closely while wiring it
+up, that stack is a **conversational GPT-Live session**: it speaks back, it holds
+muxpad's one-session-per-install lock, and it bills against the voice minute cap.
+The worst possible behaviour during a review is a voice in your ear answering
+instructions you are dictating for somebody else.
+
+What the plan was right about is the segmentation — and that turned out not to
+need the live session at all. The page cuts on **silence** instead
+(`web/src/lib/review/segment.ts`: a 700ms gap ends an utterance, with
+hysteresis so a plosive gap does not), which means what reaches the server is
+already one utterance with measured `startMs`/`endMs`. A clip is exactly what
+the cheap batch endpoints are for: `POST /api/review/transcribe` →
+`gpt-4o-mini-transcribe`, no SDP, no lock, no cap, no opinions. The install
+glossary rides along as the recognizer's `prompt`, the same list voice gets.
+
+Cost of the change: no live partial transcript. Notes land a second or two after
+each sentence rather than as the words appear — invisible in a workflow whose
+next step is "read the list and press send".
+
+`TranscriptBuffer` is therefore NOT used. Its `GAP_MS` is where this design's
+700ms came from.
+
+### 11.2 The session lives in the PAGE; the server is two stateless calls
+
+§5 put the session on the server for survival. But the durable half of a review
+is the frames, and those are ordinary attachments the moment they are chosen —
+already on disk, already in the attachments table. What a server session would
+have added is the note LIST, at the price of shipping every sampled frame to a
+process that has no other use for them (~2 MB/minute to find a cursor the page
+had already found).
+
+So `/api/review` is `status`, `transcribe`, `split` — stateless — and the
+controller is `web/src/lib/review/session.ts`. A reload during a review loses
+the note list and keeps the frames. Reload survival is **out** of v1 (§7 said
+in); it is a few lines of `sessionStorage` if it ever bites.
+
+### 11.3 The split pass does not get the images
+
+§3.1.4 said a model looking at the frame can repair a mishearing ("thyroid
+script" → "diarized transcript"). True, but the thing that READS the note is a
+coding agent that receives the text *and* the picture — so the repair happens
+anyway, at the place where it matters, for free. Paying image tokens to fix a
+word the next reader fixes itself buys nothing.
+
+So the split is text-only (haiku, one call, skipped entirely under 8 words), and
+its parser is deliberately suspicious: a reply that **tidied** the instruction,
+explained itself, or produced an implausible number of lines is rejected and the
+utterance stays whole. Frame assignment is proportional-by-position
+(`assignFrames`), which the plan already named as the fallback — there are no
+word timings in a batch transcript, and the arithmetic is the whole algorithm.
+
+A single instruction keeps ALL its frames; only a split one takes a single
+frame each.
+
+### 11.4 The cursor is found and drawn on the page
+
+§5.6 put this on the server. The server has no image library (and adding `sharp`
+to muxpad for this would be the largest dependency in the repo), the page
+already holds the pixels, and the diff runs on the small greyscale map the hash
+needs anyway — one subtract per cell, no extra decode.
+
+The method is in `web/src/lib/review/cursor.ts` and is worth stating because it
+is not the obvious one: a two-frame diff lights up **both** where the pointer
+was and where it now is, and nothing in the pixels says which is which. The
+cursor's position in frame N is the region that changed in BOTH adjacent diffs —
+it arrived in one and left in the other. A scroll or a video lights up most of
+the screen, which is detected (`MAX_CHANGED`) and answered with `null`: the
+frame then ships unmarked, which is much better than a ring drawn confidently
+around the wrong quarter of the window.
+
+### 11.5 Where the code is
+
+| part | file |
+|---|---|
+| utterance cutting, mic level | `web/src/lib/review/segment.ts` |
+| WAV per utterance | `web/src/lib/review/wav.ts` |
+| ring buffer, hashing, pairing | `web/src/lib/review/frames.ts` |
+| cursor from three frames | `web/src/lib/review/cursor.ts` |
+| ring + zoom inset | `web/src/lib/review/mark.ts` |
+| the controller | `web/src/lib/review/session.ts` |
+| getDisplayMedia / mic tap | `web/src/lib/review/capture.ts` |
+| hook | `web/src/lib/review/use-review.ts` |
+| button + note panel | `web/src/components/ReviewControl.tsx` |
+| transcription (OpenAI seam) | `server/src/review/transcribe.ts` |
+| the split pass | `server/src/review/split.ts` |
+| the two routes | `server/src/routes/review.ts` |
+| message composition | `shared/src/review.ts` |
+
+### 11.6 Not verified in a browser
+
+Unit coverage is thorough (segmentation, dedupe, pairing, cursor, placement,
+parsing, the controller end to end against fakes, the compose round trip through
+the chat renderer). **The platform half is not**: `getDisplayMedia` must never be
+called from a probe — one headless probe reached the picker and hung for thirty
+minutes — so the first real run is a human pressing the button. What to watch for
+on that run, in order of likelihood:
+
+1. the mic meter not moving (wrong input device — the spike's device trap);
+2. `cursor:always` refused, which is logged and shows in the panel;
+3. the AudioWorklet blob URL being refused by a CSP, which falls back to a
+   ScriptProcessor silently;
+4. frames arriving black (a minimised window — the stream gives nothing).
