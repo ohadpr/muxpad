@@ -4,7 +4,7 @@ import { api } from './api';
 import { subscribe, subscribeReconnect } from './events';
 import { mergeWorkspaceTabs, refreshCorpusForTab } from './lib/all-tabs';
 import { unreadRowPatch } from './lib/tab-unread';
-import { refreshWorkspaces } from './workspaces';
+import { refreshWorkspaces, refreshWorkspacesSoon } from './workspaces';
 
 /**
  * Per-workspace tabs hook. Each workspace has its own cache slot, so
@@ -175,8 +175,10 @@ function scheduleLiveRefresh(): void {
     const wss = [...pendingWorkspaceRefresh];
     pendingWorkspaceRefresh.clear();
     for (const wsId of wss) void refreshTabs(wsId);
-    // Keep the collapsed-workspace attention rollup live too.
-    void refreshWorkspaces();
+    // Keep the collapsed-workspace attention rollup live too. Through the
+    // coalescer, so this pass and main.tsx's event router cannot both ask
+    // within the same beat — they fire on the same events.
+    refreshWorkspacesSoon();
   }, 250);
 }
 

@@ -11,6 +11,7 @@ import { browserHostEntry } from './browser/hostEntry.js';
 import type { CronScheduler } from './cron/CronScheduler.js';
 import { EventBus } from './events.js';
 import { type Funnel, localFunnel } from './funnel.js';
+import { jsonCache } from './json-cache.js';
 import { initPaneKeys } from './pane-key.js';
 import type { PtydCache } from './ptyd-cache.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
@@ -196,6 +197,21 @@ export function createApp(deps: AppDeps): Hono {
   // route below, including ones not yet written. See same-origin.ts for what
   // is allowed and why the CLI (which sends no Origin) still works.
   app.use('*', sameOriginGuard(deps.allowedOrigins ? { allowedOrigins: deps.allowedOrigins } : {}));
+  // A VALIDATOR AND A COMPRESSOR ON EVERY JSON GET.
+  //
+  // Measured on an idle page with 537 tabs: ~2.2 MB of JSON every twenty
+  // seconds, nearly all of it byte-identical to what the client already held,
+  // because the UI polls to catch edges the push bus can miss. An etag turns
+  // each of those into a 304 with no body; compression handles the ones that
+  // genuinely changed (the 497 KB tab list gzips to ~60 KB). Nothing on the
+  // client changes — the browser does the revalidation itself. See
+  // json-cache.ts, which also lists what it must never touch (the SSE feed
+  // above all).
+  //
+  // Mounted straight after the origin guard so it covers every route below,
+  // including ones not yet written: the set of endpoints something polls is
+  // not a list anybody maintains.
+  app.use('/api/*', jsonCache());
   app.get('/api/health', (c) => c.json({ ok: true }));
   // Active-device heartbeat: the web app POSTs this while foregrounded and
   // interacted-with, so push notifications hold off while you're at a device.
