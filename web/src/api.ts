@@ -58,13 +58,33 @@ export class ApiError extends Error {
 /** The one JSON fetch wrapper — exported so feature libs (push, …) don't
  *  grow divergent copies of the same content-type/error/204 handling. */
 export async function req<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
-  const res = await fetch(input, {
-    ...init,
-    headers: {
-      'content-type': 'application/json',
-      ...(init?.headers ?? {}),
-    },
-  });
+  const send = (extra?: RequestInit) =>
+    fetch(input, {
+      ...init,
+      ...extra,
+      headers: {
+        'content-type': 'application/json',
+        ...(init?.headers ?? {}),
+      },
+    });
+  let res = await send();
+  // ── A 304 MUST NEVER REACH A CALLER ──────────────────────────────────────
+  //
+  // Every JSON GET carries an etag now (server/src/json-cache.ts), and the
+  // browser is supposed to resolve the revalidation itself: it sends
+  // If-None-Match, gets a bodiless 304, and hands US the cached body as an
+  // ordinary 200. That is the whole mechanism, and it works.
+  //
+  // It worked 24 times out of 24 in a loop and failed ONCE — on the very first
+  // load of a fresh origin, where a conditional request raced the cache entry
+  // it was conditioned on. Chrome then has a 304 and nothing to resurrect, so
+  // it passes the 304 up, `res.ok` is false, and `refreshWorkspaces` throws at
+  // module scope: a blank cockpit from a cache race.
+  //
+  // There is no body to parse and nothing cached to fall back on, so the only
+  // honest recovery is to ask again without the cache. `reload` sends no
+  // validator, so the server cannot answer 304 to it and this can never loop.
+  if (res.status === 304) res = await send({ cache: 'reload' });
   if (!res.ok) {
     const { message, code } = await errorEnvelope(res);
     throw new ApiError(message, res.status, code);

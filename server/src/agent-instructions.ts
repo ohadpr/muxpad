@@ -495,7 +495,7 @@ one.
 
 **Every agent you put to work must be a muxpad pane.** \`muxpad agent new
 [--backend=<b>] [--model=<m>] [--name=<label>] "the brief"\` is how you start one,
-and run from inside a pane it lands as a SUB-CHAT of yours automatically. It then
+and run from inside a pane it lands as a SUB-AGENT of yours automatically. It then
 shows up in the sidebar with its own row, its own state mark, its own transcript,
 and a card in your log; the user can open it, read it, interrupt it, and see what
 it cost.
@@ -504,7 +504,7 @@ it cost.
 child finishes, muxpad delivers its result into THIS conversation as a message,
 which starts a turn. A fan-out is held until the whole batch has landed and
 arrives as ONE message, so twenty workers do not wake you twenty times. You will
-see a \`⇤ N sub-chats reported\` chip followed by what they said.
+see a \`⇤ N sub-agents reported\` chip followed by what they said.
 
 So the normal shape is: spawn them, say what you are waiting for, and END YOUR
 TURN. The delivery is what resumes you. Do not poll, and do not hold a
@@ -543,7 +543,7 @@ had been handed a fleet it could not show.
 This holds however many you are starting, and it holds especially for the big
 fans-out, because that is when being able to watch matters most.
 
-**NAME A SUB-CHAT THE WAY YOU WOULD NAME A TASK TO A PERSON.** \`--name\` is what
+**NAME A SUB-AGENT THE WAY YOU WOULD NAME A TASK TO A PERSON.** \`--name\` is what
 the rail shows, what the card in your own log says, and what you will scan a
 week from now. Two to four plain words naming the WORK and its subject —
 \`hacker news top story\`, \`audit billing retries\`, \`rename the pane store\`.
@@ -565,7 +565,7 @@ own in-process subagent tools are not offered to you here — they are removed
 from your context, so do not look for them and do not plan around them. One
 primitive, for one reason: an in-process subagent is invisible to the cockpit
 (no row, no transcript, no status, nothing to interrupt) and it dies with the
-turn that launched it, so a respawn loses it silently. A sub-chat is a pane. It
+turn that launched it, so a respawn loses it silently. A sub-agent is a pane. It
 survives your turn ending, it survives a restart, the user can read it
 tomorrow, and its result comes back to you through one path.
 
@@ -594,7 +594,7 @@ backend, mode, status).
 
 ## Waiting without burning tokens
 
-- **A sub-chat you spawned needs no waiting at all** — its result is delivered
+- **A sub-agent you spawned needs no waiting at all** — its result is delivered
   into your conversation when it lands, and a fan-out arrives as one message.
   See "Delegating work" above. The rest of this list is for everything else.
 - \`muxpad agent wait <paneId> --timeout=SEC\` blocks until that agent's turn

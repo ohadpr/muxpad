@@ -897,7 +897,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
     'no-devices':
       'Not sent: no device is subscribed to push on this server, so notifications are a no-op here. Say it in your reply instead; do not call again.',
     'held-subchat':
-      "Not sent: this is a sub-chat, and a sub-chat does not ring the user's phone for its ordinary work. Your result reaches the chat that spawned you — put it there. Do not call again.",
+      "Not sent: this is a sub-agent, and a sub-agent does not ring the user's phone for its ordinary work. Your result reaches the chat that spawned you — put it there. Do not call again.",
     'rate-limited':
       'Dropped: this pane already sent a notification within the last minute. Put this in your reply instead; do not call again.',
     unavailable:

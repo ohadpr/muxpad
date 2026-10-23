@@ -1938,11 +1938,15 @@
    colouring this too would put the same fact on two objects — the exact
    duplication the sub-chat pill was built to remove. */
 .navtree-pane-pill,
-/* QUIET — idle, and every open group. The rail's own ink rather than a status
-   hue, because "nothing is happening" is not a state the status channel owns:
-   giving idle a colour would put a mark on every group in the list. */
-  .navtree-subs-pill[data-state="idle"],
-.navtree-subs-pill[data-open="true"] {
+/* QUIET — idle only. The rail's own ink rather than a status hue, because
+   "nothing is happening" is not a state the status channel owns: giving idle a
+   colour would put a mark on every group in the list.
+
+   OPEN GROUPS ARE NOT QUIET ANY MORE. They were, and the result was a row
+   whose only remaining state was the PARENT's: a chat with two running
+   sub-agents expanded under it wore a green tick and nothing else. The caret
+   says open; the hue says what the workers are doing. */
+  .navtree-subs-pill[data-state="idle"] {
   background: color-mix(in srgb, var(--fg) 11%, transparent);
   color: var(--fg-dim);
 }
@@ -1957,8 +1961,7 @@
   color: color-mix(in srgb, var(--pill-hue) 40%, var(--fg));
 }
 .navtree-tab-row[data-active="true"] .navtree-pane-pill,
-.navtree-tab-row[data-active="true"] .navtree-subs-pill[data-state="idle"],
-.navtree-tab-row[data-active="true"] .navtree-subs-pill[data-open="true"] {
+.navtree-tab-row[data-active="true"] .navtree-subs-pill[data-state="idle"] {
   background: color-mix(in srgb, var(--fg) 20%, transparent);
   color: var(--fg);
 }
@@ -1969,8 +1972,7 @@
   background: color-mix(in srgb, var(--pill-hue) 52%, transparent);
 }
 .navtree-pane-pill:hover,
-.navtree-subs-pill[data-state="idle"]:hover,
-.navtree-subs-pill[data-open="true"]:hover {
+.navtree-subs-pill[data-state="idle"]:hover {
   background: color-mix(in srgb, var(--fg) 18%, transparent);
 }
 /* Pane disclosures keep their layout glyph; sub-chat disclosures use words. */

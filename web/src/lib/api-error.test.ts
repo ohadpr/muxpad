@@ -65,3 +65,42 @@ describe('req() error surfacing', () => {
     expect(err.message.trim().length).toBeGreaterThan(0);
   });
 });
+
+/**
+ * A 304 THAT ESCAPES THE BROWSER'S CACHE.
+ *
+ * Every JSON GET carries an etag (server/src/json-cache.ts) and the browser is
+ * supposed to turn the revalidation into a 200 carrying the cached body. It
+ * does — except once, measured on the first load of a fresh origin, where a
+ * conditional request raced the entry it was conditioned on and Chrome passed
+ * the bodiless 304 straight up. `refreshWorkspaces` throws at module scope, and
+ * the cockpit renders nothing at all.
+ */
+describe('req() and a stray 304', () => {
+  it('asks again without the cache rather than failing the call', async () => {
+    const calls: RequestInit[] = [];
+    globalThis.fetch = (async (_url: RequestInfo, init: RequestInit) => {
+      calls.push(init);
+      return calls.length === 1
+        ? new Response(null, { status: 304 })
+        : new Response(JSON.stringify({ ok: true }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+    }) as unknown as typeof fetch;
+
+    await expect(req('/api/workspaces?all=1')).resolves.toEqual({ ok: true });
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.cache).toBe('reload');
+  });
+
+  it('cannot loop: the retry sends no validator, so a second 304 is a real failure', async () => {
+    let n = 0;
+    globalThis.fetch = (async () => {
+      n++;
+      return new Response(null, { status: 304 });
+    }) as unknown as typeof fetch;
+    await expect(req('/api/x')).rejects.toBeInstanceOf(ApiError);
+    expect(n).toBe(2);
+  });
+});

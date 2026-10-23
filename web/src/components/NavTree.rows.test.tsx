@@ -310,7 +310,7 @@ describe('opening the done drawer shows a delivered child as a hollow dot', () =
     // One click: the drawer opens onto the nested head, and STILL no sub-chat.
     act(() => heads()[0]?.click());
     expect(heads()).toHaveLength(2);
-    expect(heads()[1]?.textContent).toContain('1 sub-chat');
+    expect(heads()[1]?.textContent).toContain('1 sub-agent');
     expect(box.querySelectorAll('[data-shape="dot"]')).toHaveLength(0);
 
     // Two clicks: now the row, as a hollow dot under a label naming its parent.
@@ -322,7 +322,7 @@ describe('opening the done drawer shows a delivered child as a hollow dot', () =
     expect(box.querySelectorAll('.navtree-tab-row')).toHaveLength(2);
   });
 
-  it('singular, because "1 sub-chats" is the kind of thing nobody fixes later', () => {
+  it('singular, because "1 sub-agents" is the kind of thing nobody fixes later', () => {
     const box = mountRail([
       tab('root'),
       tab('a', { spawned_by: 'root', done: true, done_reason: 'delivered', clock: null }),
@@ -331,7 +331,7 @@ describe('opening the done drawer shows a delivered child as a hollow dot', () =
     act(() => box.querySelector<HTMLButtonElement>('.navtree-done-head')?.click());
     expect(
       [...box.querySelectorAll<HTMLButtonElement>('.navtree-done-head')][1]?.textContent,
-    ).toContain('2 sub-chats');
+    ).toContain('2 sub-agents');
   });
 
   it('a DECAYED top-level chat still fills the drawer', () => {
@@ -395,7 +395,9 @@ describe('the sheet nests a child under its parent and files done chats away', (
     expect(html).toContain('navtree-mark navtree-rail-mark" data-state="ready"');
     expect(html).toContain('title="Unread reply in this chat"');
     expect(html).toContain('navtree-mark navtree-rail-mark" data-state="working"');
-    expect(html).toContain('>1 sub-chat</span>');
+    // …and the pill says what the worker is doing, open or shut (see the rail
+    // test of the same case).
+    expect(html).toContain('>1 running</span>');
     expect(html).not.toContain('navtree-row-pill-dot');
     expect(html).not.toContain('navtree-row-pill-glyph');
   });
@@ -547,7 +549,7 @@ describe('sub-chats are collapsed, and the collapse still tells the truth', () =
     expect(out).not.toContain('navtree-subs-head');
     // The words survive in the title and the accessible name, which is where
     // they have to live: they do not fit beside a name on a 240px row.
-    expect(out).toContain('2 sub-chats');
+    expect(out).toContain('2 sub-agents');
   });
 
   it('puts the pill INSIDE the parent’s row, not after it', () => {
@@ -677,7 +679,7 @@ describe('sub-chat status wording', () => {
   const text = (html: string) => pill(html).replace(/<[^>]+>/g, '');
 
   it.each([
-    ['idle', '1 sub-chat'],
+    ['idle', '1 sub-agent'],
     ['working', '1 running'],
     ['ready', '1 unread'],
     ['blocked', '1 needs you'],
@@ -690,15 +692,45 @@ describe('sub-chat status wording', () => {
   });
 
   it('distinguishes an unread parent from its still-running visible child', () => {
+    // REPORTED FROM A SCREENSHOT: "this state is a bit odd there's a green
+    // checkmark but two sub-agents are working."
+    //
+    // Both facts were true and only one of them was on the row. The parent's
+    // tick is its own unread reply; the workers under it were running; and the
+    // pill — the one object on the row that answers for the workers — went
+    // quiet the moment the group was expanded, leaving a tick as the only
+    // state on a family that was plainly not finished.
+    //
+    // So the two subjects keep one object each, in both states of the
+    // disclosure: the mark is the chat's, the pill is the workers'.
     openSubs('root');
     const html = railHtml([
       tab('root', { status: 'ready' }),
       tab('child', { spawned_by: 'root', status: 'working', clock: null }),
     ]);
-    expect(text(html)).toBe('1 sub-chat');
+    expect(text(html)).toBe('1 running');
+    expect(pill(html)).toContain('data-state="working"');
     expect(html).toContain('title="Unread reply in this chat"');
     expect(html).toMatch(/navtree-mark" data-state="ready"[^>]*>✓<\/span>/);
     expect(html).toContain('navtree-mark" data-state="working"');
+  });
+
+  it("keeps the workers' state on the pill whether the group is open or shut", () => {
+    // The caret is what says open; the hue is what says what they are doing.
+    // Expanding a group must not be a way to lose the second.
+    const shut = railHtml([
+      tab('root', { status: 'ready' }),
+      tab('child', { spawned_by: 'root', status: 'blocked', clock: null }),
+    ]);
+    openSubs('root');
+    const open = railHtml([
+      tab('root', { status: 'ready' }),
+      tab('child', { spawned_by: 'root', status: 'blocked', clock: null }),
+    ]);
+    expect(pill(shut)).toContain('data-state="blocked"');
+    expect(pill(open)).toContain('data-state="blocked"');
+    expect(text(shut)).toBe('1 needs you');
+    expect(text(open)).toBe('1 needs you');
   });
 
   it('retains the total and counts the urgent subset for mixed children', () => {

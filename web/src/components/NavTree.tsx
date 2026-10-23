@@ -1539,9 +1539,18 @@ export function TabList({
               ? {
                   ...subChatCounts(g.children),
                   open,
-                  // ONLY WHILE SHUT. Expanded, the children have rows of their
-                  // own and their marks say it better than one roll-up can.
-                  ...(open ? {} : { status: subsStatus(g.children) }),
+                  // OPEN OR SHUT. The pill is the one object on this row that
+                  // is about the WORKERS, and a pill that goes quiet when you
+                  // expand the group leaves the row saying only what the
+                  // PARENT is doing — which is how a chat with two running
+                  // sub-agents under it came to wear a green tick and nothing
+                  // else. Reported from a screenshot: "there's a green
+                  // checkmark but two sub-agents are working."
+                  //
+                  // The two facts are different and both are true: the tick is
+                  // the parent's unread reply, the pill is the family's work.
+                  // They get one object each and neither has to be silenced.
+                  status: subsStatus(g.children),
                   title: subChatChipTitle(g.children),
                   parentName: g.chat.name,
                   onToggle: () => toggleSubs(g.chat.id),
@@ -1624,7 +1633,7 @@ export function TabList({
                 aria-expanded={subsOpen}
               >
                 <SvgCaret open={subsOpen} />
-                {subCount} sub-chat{subCount === 1 ? '' : 's'}
+                {subCount} sub-agent{subCount === 1 ? '' : 's'}
               </button>
               {subsOpen ? subGroups.map((g) => renderGroup(g)) : null}
             </>
@@ -2057,7 +2066,7 @@ export function groupChats(tabs: Tab[]): {
  */
 export function subChatChipTitle(children: readonly Tab[]): string {
   const { total, parts } = subChatCounts(children);
-  const noun = `${total} sub-chat${total === 1 ? '' : 's'}`;
+  const noun = `${total} sub-agent${total === 1 ? '' : 's'}`;
   return parts.length === 0 ? noun : `${noun} (${parts.join(' · ')})`;
 }
 
@@ -2207,7 +2216,7 @@ export function subChatCounts(children: readonly Tab[]): { total: number; parts:
  */
 export function subChatChip(children: readonly Tab[]): string {
   const { total, parts } = subChatCounts(children);
-  if (parts.length === 0) return `${total} sub-chat${total === 1 ? '' : 's'}`;
+  if (parts.length === 0) return `${total} sub-agent${total === 1 ? '' : 's'}`;
   return `${total} (${parts.join(' · ')})`;
 }
 
@@ -2360,14 +2369,20 @@ export interface SubsGroup {
  * them because each visible child already carries its own state. */
 function SubsPill({ group }: { group: SubsGroup }) {
   const { total, parts, open, status, title, parentName, onToggle } = group;
-  const hue = open ? 'idle' : (status ?? 'idle');
-  const noun = `${total} ${total === 1 ? 'sub-chat' : 'sub-chats'}`;
+  const hue = status ?? 'idle';
+  const noun = `${total} ${total === 1 ? 'sub-agent' : 'sub-agents'}`;
   const wording = (text: string) =>
     text.replace(/\bready\b/g, 'unread').replace(/\bdead\b/g, 'stopped');
   // A homogeneous group can say "2 running". For mixed states, retain the
   // total and name the most urgent subset; the title keeps the full breakdown.
+  //
+  // SAID WHETHER OR NOT THE GROUP IS OPEN. It used to fall back to the bare
+  // noun once expanded, on the reasoning that the children's own rows say it
+  // better — but the row the pill sits on is the family's header, and with it
+  // mute the only state left there is the parent's. A chat with two running
+  // workers under it then reads as finished.
   const label =
-    open || parts.length === 0
+    parts.length === 0
       ? noun
       : parts.length === 1
         ? wording(parts[0]!)
