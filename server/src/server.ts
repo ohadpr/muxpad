@@ -13,6 +13,7 @@ import { EventBus } from './events.js';
 import { type Funnel, localFunnel } from './funnel.js';
 import { jsonCache } from './json-cache.js';
 import { initPaneKeys } from './pane-key.js';
+import { decorateWorkspace } from './ptyd-cache.js';
 import type { PtydCache } from './ptyd-cache.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
 import type { Presence, PushService } from './push.js';
@@ -21,6 +22,7 @@ import { agentLaunchRoutes } from './routes/agent-launch.js';
 import { agentSessionsRoutes } from './routes/agent-sessions.js';
 import { appsRoutes } from './routes/apps.js';
 import { attachmentsRoutes } from './routes/attachments.js';
+import { bootRoutes } from './routes/boot.js';
 import { browserProxyRoutes, browsersRoutes } from './routes/browsers.js';
 import { cardsRoutes } from './routes/cards.js';
 import { cronsRoutes } from './routes/crons.js';
@@ -39,7 +41,10 @@ import { voiceRoutes } from './routes/voice.js';
 import { workspacesRoutes } from './routes/workspaces.js';
 import { sameOriginGuard } from './same-origin.js';
 import { readOrCreateSayKey } from './say-key.js';
+import { WorkspaceStore } from './store/WorkspaceStore.js';
 import type { TabActivity } from './tab-activity.js';
+import { clockSnapshot } from './tab-clock.js';
+import { orderedTabsForWorkspace } from './tab-list.js';
 import type { VoiceSessionManager } from './voice/VoiceSessionManager.js';
 
 export interface AppDeps {
@@ -234,6 +239,23 @@ export function createApp(deps: AppDeps): Hono {
   app.get('/api/say/key', (c) => c.json({ key: theSayKey }));
 
   app.route('/api/slack', slackRoutes({ db: resolved.db, dataDir: resolved.dataDir }));
+  // ONE request for the sidebar's first two rungs, fired by an inline script
+  // in index.html while the bundle is still downloading. See routes/boot.ts
+  // for the cold-load trace that justifies it.
+  app.route(
+    '/api/boot',
+    bootRoutes({
+      // DECORATED THE SAME WAY `/api/workspaces` decorates them — the whole
+      // value of a prefetch is that the app can use it verbatim.
+      listWorkspaces: (opts) => {
+        const clocks = clockSnapshot(resolved.db);
+        return new WorkspaceStore(resolved.db)
+          .list(opts)
+          .map((w) => decorateWorkspace(resolved.cache, resolved.db, w, clocks));
+      },
+      listTabs: (workspaceId) => orderedTabsForWorkspace(resolved.db, resolved.cache, workspaceId),
+    }),
+  );
   app.route('/api/tabs', tabsRoutes(resolved));
   app.route('/api/tabs', panesTabScopedRoutes(resolved));
   // Chat cards — named persistent blocks pinned in a conversation. Tab-scoped

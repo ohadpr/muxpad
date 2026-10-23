@@ -1,6 +1,7 @@
 import type { Workspace } from '@muxpad/shared';
 import { useEffect, useState } from 'react';
 import { api } from './api';
+import { bootPending, bootWorkspaces } from './boot-prefetch';
 
 /**
  * Hook returning the list of top-level workspaces — INCLUDING hidden system
@@ -39,7 +40,17 @@ const channel: BroadcastChannel | null =
 export async function refreshWorkspaces(opts?: { broadcast?: boolean }): Promise<Workspace[]> {
   const shouldBroadcast = opts?.broadcast !== false;
   const myVersion = ++version;
-  const next = await api.listWorkspaces({ all: true });
+  // THE PREFETCH, FOR WHOEVER ASKS FIRST — and that is not always a mount.
+  // Measured: the events socket's reconnect handler calls this directly, and
+  // it wins the race on a cold load, so putting the adoption only in
+  // `refreshWorkspacesOnMount` left the head start unused and the request
+  // issued anyway.
+  //
+  // `settledAt === 0` is the whole guard: nothing has ever landed, so there is
+  // no newer answer to roll back and no write to read back. One line past
+  // that, this is the ordinary path.
+  const prefetched = settledAt === 0 && bootPending('workspaces') ? await bootWorkspaces() : null;
+  const next = prefetched ?? (await api.listWorkspaces({ all: true }));
   if (myVersion < version) return next;
   // Only a response that actually LANDS in the cache counts as "fresh".
   // Marking the discarded ones too would let a superseded reply (one thrown
