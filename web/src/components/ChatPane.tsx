@@ -14,6 +14,7 @@ import {
   type ToolResultEvent,
   type ToolUseEvent,
   attachmentExtForMime,
+  composeReviewMessage,
   imageExtForMime,
   isAgentLaunchTool,
   parseCronMarker,
@@ -116,6 +117,7 @@ import { canAutoPageHistory, showLoadEarlier } from '../lib/history-budget';
 import { NO_SENDERS, loadInboundSenders, matchInboundSenders } from '../lib/inbound-senders';
 import { showFolderChip } from '../lib/nav-row-affordances';
 import { type WorkspaceTabs, paneIndex } from '../lib/nav-search';
+import { useReview } from '../lib/review/use-review';
 import {
   type HighlightRun,
   highlightRuns,
@@ -133,13 +135,7 @@ import { documentVisible } from '../lib/seen-ack';
 import { composerAfterLateAck, watchdogVerdict } from '../lib/send-watchdog';
 import { NO_ROUNDS, loadSpawnRounds } from '../lib/spawn-rounds';
 import { uploadError } from '../lib/upload-error';
-import {
-  type UploadItem,
-  UploadQueue,
-  formatBytes,
-  summarize,
-  summaryLabel,
-} from '../lib/upload-queue';
+import { type UploadItem, UploadQueue, formatBytes, summarize } from '../lib/upload-queue';
 import type { AgentLink } from '../lib/voice/session';
 import { useVoice } from '../lib/voice/use-voice';
 import { workingVariantFor } from '../lib/working-variant';
@@ -185,6 +181,7 @@ import { ChatWorking } from './ChatWorking';
 import { CopyablePre } from './CopyablePre';
 import { FromAgentMessage } from './FromAgentMessage';
 import { SvgAgentGlyph, SvgGlobe, SvgTerminalGlyph } from './PaneWebSwitch';
+import { ReviewButton, ReviewPanel, sendableNotes } from './ReviewControl';
 import { VoiceBar, VoiceControl } from './VoiceControl';
 
 /** Open a media item in the lightbox (image or video). */
@@ -344,6 +341,9 @@ type ServerMsg =
       // subagent progress.
       question?: PendingQuestion;
       subagents?: SubagentProgress[];
+      /** Background SHELL COMMANDS running right now — see the `background`
+       *  frame below. Absent means none. */
+      background?: number;
       status?: AgentStatus;
       /** The pane's working dir + whether it has project context (git/rules/MCP). */
       cwd?: string;
@@ -351,6 +351,16 @@ type ServerMsg =
       /** Server-owned pending send queue (messages waiting for a busy agent). */
       queue?: QueuedItem[];
     }
+  /**
+   * HOW MANY BACKGROUND SHELL COMMANDS ARE RUNNING.
+   *
+   * A `Bash` call the agent started with `run_in_background`, which keeps
+   * running after the turn that launched it ends. Emphatically NOT a
+   * sub-agent: no context, no transcript, no report — a process and an exit
+   * code. The status line says so in those words, because the only thing
+   * worse than not showing this is showing it as something it is not.
+   */
+  | { t: 'background'; live: number }
   | { t: 'events'; phase: 'history' | 'live' | 'older'; events: ChatEvent[] }
   | { t: 'older-done'; hasMore: boolean }
   | { t: 'send-ack' }
@@ -1524,6 +1534,9 @@ export function ChatPane({
   const [question, setQuestion] = useState<PendingQuestion | null>(null);
   // Live per-task subagent progress, keyed by the Task tool-use id.
   const [subagents, setSubagents] = useState<Record<string, SubagentProgress>>({});
+  /** Background shell commands running right now (not sub-agents — see the
+   *  `background` frame). Zero is the common case and renders nothing. */
+  const [backgroundLive, setBackgroundLive] = useState(0);
   // Last progress-frame arrival per task — the staleness horizon for the
   // running-subagents indicator (a background task that's gone silent past
   // it reads as done, not running; its tool_result may never stream here).
@@ -1716,6 +1729,9 @@ export function ChatPane({
           subagentSeenAt.current = new Map(live.map((p) => [p.toolUseId, p.seenAt ?? now]));
           setSubagents(Object.fromEntries(live.map((p) => [p.toolUseId, p])));
         }
+        // A snapshot, like the roster above: absent means none, and assigning
+        // unconditionally is what lets the last command clear on a resync.
+        setBackgroundLive(msg.background ?? 0);
       } else if (msg.t === 'events') {
         const fresh = msg.events.filter((e) => !byId.current.has(e.id));
         // A subagent's FINISH notice (matched by tool-use-id) ends it — prune
@@ -1931,6 +1947,8 @@ export function ChatPane({
         // queued this because a turn is running/about to drain).
         pendingText.current = '';
         if (wasOurOptimistic) setOptimisticUser(null);
+      } else if (msg.t === 'background') {
+        setBackgroundLive(msg.live);
       } else if (msg.t === 'subagent') {
         const { toolUseId, done } = msg.progress;
         if (done) {
@@ -2280,6 +2298,44 @@ export function ChatPane({
   // The CARDS and their report parsing stay: old cards must still render, and
   // an agent-initiated `<muxpad-direct>` message still draws one.
 
+  /**
+   * Put a composed message on the wire — the socket rules, in ONE place.
+   *
+   * Two callers: the composer, and a finished screen review (which composes a
+   * numbered list of instructions with their frames and hands it over the same
+   * way a typed message goes). Returns false when nothing was sent, so the
+   * caller can keep whatever it was holding.
+   */
+  const deliver = (outgoing: string): boolean => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      // Don't fire into a dead socket (the browser would drop it silently).
+      // Keep the text (and chips) where they are, kick a reconnect, retry.
+      setNotice({ text: 'Reconnecting — try again in a moment.', tone: 'info' });
+      reconnectNow.current();
+      return false;
+    }
+    if (sending) {
+      // Agent busy → hand it to the server to queue. No optimistic turn state;
+      // the server's `queue` broadcast renders the pending bubble. The message
+      // is persisted server-side, so it's safe even if we close the tab now.
+      // Track it as the pending send so BOTH the watchdog and a hard `onclose`
+      // can restore it if no ack comes back — without this, a socket that closes
+      // before `send-ack` drops the message silently (onclose reads pendingText).
+      // send-ack (fired for queued sends too) clears both on a live socket.
+      pendingText.current = outgoing;
+      ws.send(JSON.stringify({ t: 'send', text: outgoing }));
+      // The queued bubble renders at the end too — same reason as `dispatchSend`.
+      scroll.current?.dispatch({ t: 'sent' });
+      armSendWatchdog(outgoing);
+    } else {
+      // Idle → optimistic send (instant echo + working state). If the server
+      // turns out to be busy (reconnect race), its `queued` frame reconciles.
+      dispatchSend(outgoing);
+    }
+    return true;
+  };
+
   const sendMessage = () => {
     const text = input.trim();
     // Sending retires a search highlight: it is the clearest possible statement
@@ -2329,32 +2385,7 @@ export function ChatPane({
     // `muxpad agent send`.
     const mentioned = mentionedChats(input, corpus, livePicks);
     const outgoing = withMentionContext(composeOutgoingMessage(text, attachmentPaths), mentioned);
-    const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      // Don't fire into a dead socket (the browser would drop it silently).
-      // Keep the text (and chips) in the composer, kick a reconnect, retry.
-      setNotice({ text: 'Reconnecting — try again in a moment.', tone: 'info' });
-      reconnectNow.current();
-      return;
-    }
-    if (sending) {
-      // Agent busy → hand it to the server to queue. No optimistic turn state;
-      // the server's `queue` broadcast renders the pending bubble. The message
-      // is persisted server-side, so it's safe even if we close the tab now.
-      // Track it as the pending send so BOTH the watchdog and a hard `onclose`
-      // can restore it if no ack comes back — without this, a socket that closes
-      // before `send-ack` drops the message silently (onclose reads pendingText).
-      // send-ack (fired for queued sends too) clears both on a live socket.
-      pendingText.current = outgoing;
-      ws.send(JSON.stringify({ t: 'send', text: outgoing }));
-      // The queued bubble renders at the end too — same reason as `dispatchSend`.
-      scroll.current?.dispatch({ t: 'sent' });
-      armSendWatchdog(outgoing);
-    } else {
-      // Idle → optimistic send (instant echo + working state). If the server
-      // turns out to be busy (reconnect race), its `queued` frame reconciles.
-      dispatchSend(outgoing);
-    }
+    if (!deliver(outgoing)) return;
     setInput('');
     clearChips();
   };
@@ -2500,7 +2531,7 @@ export function ChatPane({
    * The old failure surface was a notice that said the file and the server's
    * sentence — which was itself the fix for "uploading videos just fails
    * silently". A tooltip on a 52px tile would have quietly undone that: nobody
-   * hovers a chip to discover that their upload died. So the batch line keeps
+   * hovers a chip to discover that their upload died. So a failure line keeps
    * saying it, in text, and it does not time out — it is cleared by retrying
    * or removing the chip, which are the two things that resolve it.
    */
@@ -3437,6 +3468,24 @@ export function ChatPane({
     },
   };
   const voice = useVoice({ paneId, enabled: voiceOn, agent: agentLink });
+
+  // ── SCREEN REVIEW ──────────────────────────────────────────────────────────
+  //
+  // Both modes, unlike voice: the thing you most often want to review is a web
+  // app being built by the agent in THIS pane, and Agent mode is where that
+  // agent usually lives. Nothing is sent without the press below — the note
+  // list is the review-before-send affordance, and it is the only defence
+  // against a mishearing or a bad split, both of which read plausibly.
+  const review = useReview(paneId);
+  const sendReview = () => {
+    const outgoing = composeReviewMessage(sendableNotes(review.state.items));
+    if (!outgoing) return;
+    // The SAME path a typed message takes, queueing behind a busy agent like
+    // any other. The frames are already uploaded attachments, so what goes out
+    // is text with their paths in it — see shared/src/review.ts.
+    if (!deliver(outgoing)) return;
+    review.reset();
+  };
 
   // ONE tool-resolution index for everything below (and one place for the
   // "a tool_use is resolved when a tool_result shares its toolUseId" rule).
@@ -4977,6 +5026,18 @@ export function ChatPane({
                 onDismiss={() => voice.stop('user')}
               />
             ) : null}
+            {/* A review in progress, or a list waiting to be sent. Renders
+              nothing at rest — this strip costs the same space the last
+              message occupies. */}
+            <ReviewPanel
+              state={review.state}
+              elapsedMs={review.elapsedMs}
+              onStop={() => void review.stop()}
+              onScrap={review.scrap}
+              onSend={sendReview}
+              onDiscard={review.reset}
+              log={review.log}
+            />
             {/* Absolutely positioned (see ChatMentionPicker.css): the composer
               wrap's measured height is what reserves room at the foot of the
               transcript, so a picker in its flow would scroll the conversation
@@ -5038,6 +5099,15 @@ export function ChatPane({
                       queue exists to allow. */}
                   <SvgAttach />
                 </button>
+                {/* Both modes, unlike the mic: the thing you review is usually
+                  the app the agent in THIS pane is building. */}
+                <ReviewButton
+                  state={review.state}
+                  available={review.available}
+                  unconfigured={review.unconfigured}
+                  onStart={() => void review.start()}
+                  onStop={() => void review.stop()}
+                />
                 {/* Chat mode only — Agent mode is raw, and `voiceOn` is the same
                   predicate that governs Chat mode's written voice. */}
                 {voiceOn ? (
@@ -5187,40 +5257,12 @@ export function ChatPane({
                 under the input — not a floating strip above it. */}
               {chips.length > 0 ? (
                 <>
-                  {/* ── THE BATCH LINE ────────────────────────────────────
-                      One line for the whole pick, and it only exists while
-                      there is something to say. It answers the question a row
-                      of chips cannot: how much longer. Progress is by BYTES
-                      (see summarize) because a file count sits still through
-                      the one big file that is the entire wait. */}
-                  {uploads.active > 0 || uploads.failed > 0 ? (
-                    <div
-                      className={`chat-uploads${uploads.failed > 0 && uploads.active === 0 ? ' -failed' : ''}`}
-                    >
-                      <span className="chat-uploads-label">
-                        {uploads.active > 0 ? summaryLabel(uploads) : failureLabel}
-                      </span>
-                      {uploads.active > 0 ? (
-                        <>
-                          <span className="chat-uploads-track" aria-hidden="true">
-                            <span
-                              className="chat-uploads-fill"
-                              style={{ width: `${uploads.pct}%` }}
-                            />
-                          </span>
-                          <button
-                            type="button"
-                            className="chat-uploads-cancel"
-                            onClick={() => {
-                              for (const c of chips)
-                                if (c.state === 'queued' || c.state === 'uploading')
-                                  uploader.cancel(c.id);
-                            }}
-                          >
-                            Cancel
-                          </button>
-                        </>
-                      ) : null}
+                  {/* Progress stays inside each preview so completing a
+                      small upload never removes a row from the composer.
+                      Failures remain visible in words until resolved. */}
+                  {uploads.failed > 0 ? (
+                    <div className="chat-uploads -failed" role="alert">
+                      <span className="chat-uploads-label">{failureLabel}</span>
                     </div>
                   ) : null}
                   <div className="chat-chips">
@@ -5281,11 +5323,29 @@ export function ChatPane({
                             </span>
                           )}
                           {busy ? (
-                            <span className="chat-chip-progress" aria-hidden="true">
+                            <span
+                              className="chat-chip-progress"
+                              role="progressbar"
+                              tabIndex={0}
+                              aria-label={`Uploading ${ch.name}`}
+                              aria-valuemin={0}
+                              aria-valuemax={100}
+                              aria-valuenow={Math.round(pct)}
+                              aria-valuetext={
+                                ch.state === 'queued'
+                                  ? 'Queued'
+                                  : pct >= 100
+                                    ? 'Processing'
+                                    : `${Math.round(pct)}%`
+                              }
+                            >
                               <span
                                 className="chat-chip-progress-fill"
                                 style={{ height: `${pct}%` }}
                               />
+                              <span className="chat-chip-progress-label" aria-hidden="true">
+                                {ch.state === 'queued' ? 'Queued' : `${Math.round(pct)}%`}
+                              </span>
                             </span>
                           ) : null}
                           {ch.state === 'error' || ch.state === 'canceled' ? (
@@ -5326,6 +5386,7 @@ export function ChatPane({
               {...(session?.assistant ? { assistant: session.assistant } : {})}
               liveLabel={liveLabel}
               agents={rosterAgents}
+              background={backgroundLive}
               onOpenChat={openChat}
               mode={mode}
               send={(obj) => {

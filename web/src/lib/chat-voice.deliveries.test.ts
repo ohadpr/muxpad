@@ -6,7 +6,7 @@ import { dropCardedDeliveries, isDeliveryText } from './chat-voice';
  * ONE FINISHED WORKER, ONE ROW TOO MANY.
  *
  * A sub-chat that ran and reported drew three: a launch card, a completion
- * card carrying its report, and a "⇤ 1 sub-chat reported" chip for the
+ * card carrying its report, and a "⇤ 1 sub-agent reported" chip for the
  * delivery that brought the same words in. Reported as "one sub chat yielded
  * three messages".
  */
@@ -15,7 +15,7 @@ const chip = (from?: string[]): ChatEvent => ({
   id: 'n1',
   ts: 1,
   variant: 'report',
-  text: '1 sub-chat reported',
+  text: '1 sub-agent reported',
   ...(from ? { from } : {}),
 });
 const body = (): ChatEvent => ({ kind: 'user', id: 'u1', ts: 1, text: '## x', folded: true });

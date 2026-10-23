@@ -54,6 +54,7 @@ import { PtydClient } from './ptyd-client/PtydClient.js';
 import { createPublicApp } from './public-server.js';
 import { Presence, PushService, attachAttentionPush, createPaneNotifier } from './push.js';
 import { releaseResidentPane } from './resident-release.js';
+import { openAiTranscriber } from './review/transcribe.js';
 import { startServeSupervisor } from './serve-supervisor.js';
 import { createApp } from './server.js';
 import { mountStaticWeb } from './static-assets.js';
@@ -519,6 +520,13 @@ const app = createApp({
   },
   apps: { registry: appRegistry, status: appStatus },
   voice,
+  // Screen review shares voice's key and voice's glossary — one secret, one
+  // vocabulary. The transcriber is built here, at the call site that reads the
+  // key, and closes over it (never on `config`, never logged).
+  review: {
+    ...(voiceKey ? { transcribe: openAiTranscriber(voiceKey) } : {}),
+    glossary: voiceGlossary,
+  },
 });
 
 // Static asset serving (CSS, JS, fonts, images) from the built web bundle,

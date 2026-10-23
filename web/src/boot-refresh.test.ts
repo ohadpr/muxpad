@@ -117,6 +117,57 @@ describe('workspaces mount refresh', () => {
   });
 });
 
+describe('the live-event rollup refresh', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    listWorkspaces.mockClear();
+  });
+
+  it('answers a BURST of live events with one request', async () => {
+    // MEASURED before this existed: 34 `GET /api/workspaces?all=1` in twenty
+    // seconds on an idle cockpit with one agent working, because every
+    // tab.updated — headline, title, status, busy, subagent count — asked for
+    // the whole list, and each ask walks workspaces → tabs → panes
+    // synchronously through better-sqlite3.
+    vi.useFakeTimers();
+    try {
+      const mod = await import('./workspaces');
+      for (let i = 0; i < 40; i++) mod.refreshWorkspacesSoon();
+      expect(listWorkspaces).toHaveBeenCalledTimes(0); // nothing yet: coalescing
+      await vi.advanceTimersByTimeAsync(500);
+      expect(listWorkspaces).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still lands inside half a second — an attention dot must not lag', async () => {
+    vi.useFakeTimers();
+    try {
+      const mod = await import('./workspaces');
+      mod.refreshWorkspacesSoon();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(listWorkspaces).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('arms again for the NEXT burst rather than latching', async () => {
+    vi.useFakeTimers();
+    try {
+      const mod = await import('./workspaces');
+      mod.refreshWorkspacesSoon();
+      await vi.advanceTimersByTimeAsync(500);
+      mod.refreshWorkspacesSoon();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(listWorkspaces).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('tabs mount refresh', () => {
   beforeEach(() => {
     vi.resetModules();

@@ -275,6 +275,10 @@ function markParentUnread(deps: RetireDeps, tabId: string, reason: RetireReason)
 
 export function retireChat(deps: RetireDeps, tabId: string, reason: RetireReason): boolean {
   const tabs = new TabStore(deps.db);
+  // A deliberate archive supersedes a pin; automatic retirement never does.
+  // Include unpinning in the change signal for already-retired pinned rows.
+  const unpinned = reason === 'archived' && tabs.getById(tabId)?.pinned === true;
+  if (unpinned) tabs.setPinned(tabId, false);
   const retired = tabs.retire(tabId, reason);
   // Stamped with the RETIREMENT instant and not with `now`, so the round's end
   // and the row's `retired_at` agree — they are the same moment, and the card
@@ -291,7 +295,7 @@ export function retireChat(deps: RetireDeps, tabId: string, reason: RetireReason
   // the other. Emits its own `tab.updated` for the PARENT; the one below is
   // this tab's and says nothing about it.
   const told = markParentUnread(deps, tabId, reason);
-  if (!retired && !cleared && !closed && !told) return false;
+  if (!unpinned && !retired && !cleared && !closed && !told) return false;
   const fresh = tabs.getById(tabId);
   if (fresh)
     deps.events.emit({ type: 'tab.updated', tab: decorateTab(deps.cache, deps.db, fresh) });

@@ -20,9 +20,8 @@
   transform: translateX(-50%);
   z-index: 1000;
   display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 6px 4px 4px;
+  align-items: stretch;
+  overflow: hidden;
   /* ── LOUD ON PURPOSE ──────────────────────────────────────────────────
      This was --bg-tabbar: a surface from the chrome's own family, floated
      over the app. Measured against the page behind it that is ΔE 8.8-23.2
@@ -63,51 +62,41 @@
   }
 }
 
-/* On the accent now, so its surface and its edge are mixed from the INK rather
-   than from the app's neutrals — a --bg-hover pill on a saturated accent is a
-   grey hole in it. */
-.update-banner-action {
-  background: color-mix(in srgb, var(--accent-fg) 16%, transparent);
-  color: var(--accent-fg);
-  border: 1px solid color-mix(in srgb, var(--accent-fg) 38%, transparent);
-  border-radius: 999px;
-  /* A thumb target, not a desktop button: this is tapped on a phone, one-handed,
-     near the top of the screen. */
-  padding: 7px 14px;
-  font: inherit;
-  font-weight: 600;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: background 80ms ease, border-color 80ms ease;
-}
-.update-banner-action:hover {
-  background: color-mix(in srgb, var(--accent-fg) 28%, transparent);
-  border-color: var(--accent-fg);
-}
-.update-banner-action:focus-visible {
-  outline: 2px solid var(--accent-fg);
-  outline-offset: 2px;
-}
-
+/* One shared pill with two full-height touch targets. */
+.update-banner-action,
 .update-banner-dismiss {
   background: transparent;
-  border: none;
-  color: color-mix(in srgb, var(--accent-fg) 78%, transparent);
-  font-size: 1.125rem;
-  line-height: 1;
-  width: 30px;
-  height: 30px;
-  border-radius: 999px;
+  color: var(--accent-fg);
+  border: 0;
+  border-radius: 0;
+  min-height: 44px;
+  font: inherit;
   cursor: pointer;
+  transition: background 80ms ease;
+}
+.update-banner-action {
+  color: var(--accent-fg);
+  padding: 10px 16px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.update-banner-dismiss {
+  width: 44px;
+  min-width: 44px;
+  padding: 0;
+  border-left: 1px solid color-mix(in srgb, var(--accent-fg) 22%, transparent);
+  font-size: 1.25rem;
+  line-height: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
 }
+.update-banner-action:hover,
 .update-banner-dismiss:hover {
-  background: color-mix(in srgb, var(--accent-fg) 22%, transparent);
-  color: var(--accent-fg);
+  background: color-mix(in srgb, var(--accent-fg) 16%, transparent);
 }
+.update-banner-action:focus-visible,
 .update-banner-dismiss:focus-visible {
   outline: 2px solid var(--accent-fg);
-  outline-offset: 2px;
+  outline-offset: -4px;
 }

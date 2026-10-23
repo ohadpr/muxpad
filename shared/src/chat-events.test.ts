@@ -522,7 +522,7 @@ describe('THE JOIN in a transcript — a delivery is not a person typing', () =>
     expect(kinds(out ?? [])).toEqual(['notice', 'user']);
     const notice = out?.[0] as { variant: string; text: string };
     expect(notice.variant).toBe('report');
-    expect(notice.text).toBe('2 sub-chats reported');
+    expect(notice.text).toBe('2 sub-agents reported');
     // The bubble carries the reports and NOT the marker.
     expect((out?.[1] as { text: string }).text).not.toContain('<muxpad-delivery');
     expect((out?.[1] as { text: string }).text).toContain('Found three call sites.');
@@ -542,7 +542,7 @@ describe('THE JOIN in a transcript — a delivery is not a person typing', () =>
   it('says "1 sub-chat" for one', () => {
     const one = renderSpawnDelivery([{ tabId: 't1', name: 'x', state: 'ok', report: 'y' }]);
     const out = expandSpawnDelivery(one, 'u1', MS);
-    expect((out?.[0] as { text: string }).text).toBe('1 sub-chat reported');
+    expect((out?.[0] as { text: string }).text).toBe('1 sub-agent reported');
   });
 
   it('reaches BOTH transcript roads — claude JSONL and the normalized log', () => {

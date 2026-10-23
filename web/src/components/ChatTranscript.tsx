@@ -1036,7 +1036,7 @@ export function QueuedText({
     const n = delivery.marker.count;
     return (
       <span className="chat-queued-cron">
-        <span aria-hidden="true">⇤</span> {n} sub-chat{n === 1 ? '' : 's'} reported
+        <span aria-hidden="true">⇤</span> {n} sub-agent{n === 1 ? '' : 's'} reported
       </span>
     );
   }

@@ -52,6 +52,7 @@ import {
   isApproval,
 } from '../reversibility.js';
 import { markSessionCleared, markSessionTurned, sessionHadTurn } from '../session-marks.js';
+import { isSilentTurn } from '../silent-turn.js';
 import { SubagentRoster } from '../subagent-roster.js';
 import type { AgentBackend, BackendOptions, RunnerHost } from './types.js';
 
@@ -897,7 +898,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
     'no-devices':
       'Not sent: no device is subscribed to push on this server, so notifications are a no-op here. Say it in your reply instead; do not call again.',
     'held-subchat':
-      "Not sent: this is a sub-chat, and a sub-chat does not ring the user's phone for its ordinary work. Your result reaches the chat that spawned you — put it there. Do not call again.",
+      "Not sent: this is a sub-agent, and a sub-agent does not ring the user's phone for its ordinary work. Your result reaches the chat that spawned you — put it there. Do not call again.",
     'rate-limited':
       'Dropped: this pane already sent a notification within the last minute. Put this in your reply instead; do not call again.',
     unavailable:
@@ -1071,6 +1072,20 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
    * turn, so it was visible most of the time.
    */
   let streamedTextThisTurn = false;
+  /**
+   * DID THIS TURN PUT ANYTHING IN THE CHAT?
+   *
+   * Prose, a reply, or a `muxpad say` — the three ways a turn reaches the log
+   * as something to read. Tool calls are not: they collapse into a run nobody
+   * expands (`dropSilentCardFires` drops the whole thing, chip included).
+   *
+   * It exists for the SIDEBAR's bold mark. An hourly card refresh that says
+   * nothing was bolding its chat every hour — reported as "@Investing keeps
+   * showing as new message but nothing is happening there" — because the
+   * server bolds on every turn-done and had no way to tell a turn that spoke
+   * from one that did not. See ws.ts's turn-done handler.
+   */
+  let saidSomethingThisTurn = false;
   // Reply tool calls currently being GENERATED, so their argument deltas can be
   // decoded into speakable text before the call runs (see reply-stream.ts).
   const replyBlocks = new ReplyBlockTracker();
@@ -1176,6 +1191,24 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
    */
   const backgroundField = (): { background?: number } =>
     backgroundCommands.size > 0 ? { background: backgroundCommands.size } : {};
+  /**
+   * `silent: true` when this turn put NOTHING in the chat — no prose, no
+   * reply, no `muxpad say`.
+   *
+   * Only for a turn nobody typed. A human-started turn that ends quiet still
+   * marks the chat: somebody is waiting on it, and "it finished" is news even
+   * when the agent had nothing to add. A cron's hourly card refresh is the
+   * opposite case, and it was bolding its chat every hour for nothing — see
+   * ws.ts, which is the only consumer.
+   *
+   * The field is ABSENT unless true, like `background` above: absent reads as
+   * "mark it" everywhere, which is both the old behaviour and what every other
+   * backend will keep sending.
+   */
+  const silentField = (): { silent?: true } =>
+    isSilentTurn({ human: turnHuman, said: saidSomethingThisTurn, replies: repliesThisTurn })
+      ? { silent: true }
+      : {};
   const reportBackground = (): void => {
     const live = backgroundCommands.size;
     if (live === lastBackgroundLive) return;
@@ -1350,6 +1383,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
         answeredThisTurn = false;
         repliesThisTurn = 0;
         streamedTextThisTurn = false;
+        saidSomethingThisTurn = false;
         firstReplyText = '';
         currentTurnText = text;
         authFailureThisTurn = null;
@@ -2123,6 +2157,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
       answeredThisTurn = false;
       repliesThisTurn = 0;
       streamedTextThisTurn = false;
+      saidSomethingThisTurn = false;
       firstReplyText = '';
       // An autonomous turn has no text anyone is waiting on, so a re-exec has
       // nothing to put back — see the turn-result branch.
@@ -2211,6 +2246,19 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
             if (block.type === 'tool_result') {
               unresolvedTools.delete(block.tool_use_id);
               if (block.is_error) uncertainToolResult = true;
+              // `muxpad say` IS SPEECH, and it does not come through the
+              // model's own voice — it rides a Bash tool_result as a marker
+              // and is lifted out at render time (shared/chat-events.ts).
+              // A cron that only speaks this way (the shape muxpad's own
+              // instructions ask for) would otherwise look silent, and the
+              // one fire that HAD something to tell you would be the one that
+              // failed to mark the chat.
+              //
+              // The bare opening tag, not the keyed form: a false positive
+              // here only means the chat gets bolded, which is what used to
+              // happen to every turn anyway.
+              if (!saidSomethingThisTurn && blockText(block.content).includes('<muxpad-said k="'))
+                saidSomethingThisTurn = true;
             }
           }
         }
@@ -2361,6 +2409,13 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
           }
           // Keep the LATEST prose-bearing assistant message as the turn's summary.
           if (msgText) {
+            // Prose is the commonest way a turn says something — in AGENT
+            // mode. In Chat mode it is the scratchpad: the chat renders the
+            // `reply` tool and nothing else, so counting prose there would
+            // call every thinking-out-loud fire "spoken" and bold a row whose
+            // log gained nothing. `.trim()` because a lone newline is not
+            // speech in either mode.
+            if (currentMode !== 'chat' && msgText.trim()) saidSomethingThisTurn = true;
             lastAssistantText = msgText;
             lastAssistantTextId = msgTextId;
             // DID THIS TURN ALREADY ANSWER? A real model wrote it, and it is
@@ -2665,6 +2720,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
               t: 'turn-done',
               ok: true,
               ...(summary ? { summary } : {}),
+              ...silentField(),
               // THE TURN IS OVER; THE WORK MAY NOT BE. A command the model
               // backgrounded outlives this frame, and its completion starts the
               // next turn — the shape that delivered four results 5h42m–7h51m
