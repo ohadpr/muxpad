@@ -130,9 +130,16 @@ export class FrameRing<P = unknown> {
   push(sample: FrameSample<P>, opts: { speaking: boolean }): boolean {
     const last = this.samples[this.samples.length - 1];
     if (!opts.speaking && last && sample.hash && sameFrame(last.hash, sample.hash)) {
-      // Keep the clock moving on the frame we already hold: an idle screen
-      // should look RECENT, not like it stopped being captured.
+      // Keep the clock moving on the frame we hold — an idle screen should
+      // look RECENT, not like it stopped being captured — but keep the NEWEST
+      // PIXELS with it. Advancing the timestamp alone left a frame whose
+      // picture and cursor were seconds older than the moment it claimed, and
+      // that frame is exactly the one a following note takes as its pre-roll
+      // anchor. Same screen, so the swap is free; the cursor inside it is the
+      // part that is not.
       last.atMs = sample.atMs;
+      last.payload = sample.payload;
+      last.cursor = sample.cursor;
       return false;
     }
     this.samples.push(sample);
@@ -207,10 +214,17 @@ export class FrameRing<P = unknown> {
     take(anchor);
 
     // Then spread: evenly spaced targets across the span, nearest sample each.
+    //
+    // `i / (max - 1)` REACHES THE END. It used to be `i / max`, which stops
+    // short — on a ten-second utterance the last target landed at eight
+    // seconds, so a final short instruction ("…and that label is wrong") was
+    // handed an image from the middle of the sentence and nothing from its
+    // own moment was ever selected.
     const spanStart = Math.max(from, first.atMs);
     const spanEnd = Math.max(spanStart, endMs);
+    const steps = Math.max(1, max - 1);
     for (let i = 1; i < max && chosen.length < max; i++) {
-      const at = spanStart + ((spanEnd - spanStart) * i) / max;
+      const at = spanStart + ((spanEnd - spanStart) * i) / steps;
       let best: FrameSample<P> | undefined;
       let gap = Number.POSITIVE_INFINITY;
       for (const s of pool) {

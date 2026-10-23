@@ -104,3 +104,17 @@ describe('req() and a stray 304', () => {
     expect(n).toBe(2);
   });
 });
+
+describe('req() never replays a mutation', () => {
+  it('does NOT retry a POST that somehow answered 304', async () => {
+    // Verified in review: the unguarded retry sent two identical POSTs and
+    // reported the second as success — a duplicated operation, hidden.
+    let n = 0;
+    globalThis.fetch = (async () => {
+      n++;
+      return new Response(null, { status: 304 });
+    }) as unknown as typeof fetch;
+    await expect(req('/api/x', { method: 'POST', body: '{}' })).rejects.toBeInstanceOf(ApiError);
+    expect(n).toBe(1);
+  });
+});

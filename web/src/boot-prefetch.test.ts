@@ -80,7 +80,14 @@ describe('the boot prefetch', () => {
   });
 
   it('falls back when the prefetch REJECTED — an old server, a dropped link', async () => {
-    window.__muxpadBoot = Promise.reject(new Error('404'));
+    // The catch is attached HERE, synchronously. A bare `Promise.reject(...)`
+    // left on the global is unhandled for as long as the dynamic import takes,
+    // which vitest reports as an unhandled rejection and exits 1 on — with
+    // every assertion passing. (The real inline script attaches its own catch,
+    // so this was only ever a defect in the test.)
+    const rejected = Promise.reject(new Error('404'));
+    rejected.catch(() => {});
+    window.__muxpadBoot = rejected;
     const mod = await import('./workspaces');
     mod.refreshWorkspacesOnMount();
     await settle();
@@ -102,15 +109,62 @@ describe('the boot prefetch', () => {
   });
 
   it('expires: a late reader asks the server rather than adopting old bytes', async () => {
-    window.__muxpadBoot = Promise.resolve(payload() as never);
     const boot = await import('./boot-prefetch');
-    // Far past the window, whenever the module happened to be imported.
-    vi.spyOn(performance, 'now').mockReturnValue(performance.now() + boot.STALE_AFTER_MS * 10);
+    window.__muxpadBoot = Promise.resolve(payload() as never);
+    // Asked for long ago — which is the real shape of this: the stamp comes
+    // from the inline script, not from when this module was imported.
+    window.__muxpadBootAt = performance.now() - boot.STALE_AFTER_MS * 2;
     try {
       expect(boot.bootPending('tabs')).toBe(false);
       expect(await boot.bootTabs('w1')).toBeNull();
     } finally {
-      vi.restoreAllMocks();
+      window.__muxpadBootAt = undefined;
     }
+  });
+});
+
+/**
+ * THE RACE THE REVIEW REPRODUCED, kept as a test.
+ *
+ * `usedTabs` was checked before the await and set after it, so two refreshes
+ * that both started while the boot request was in flight both passed the check
+ * and both received the same old snapshot — and the second, carrying the newer
+ * version number, LANDED it as if it were fresh.
+ */
+describe('two readers racing the same prefetch', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    listTabs.mockClear();
+    window.__muxpadBoot = undefined;
+  });
+
+  it('gives the snapshot to ONE of them; the other asks the server', async () => {
+    let release!: (p: unknown) => void;
+    window.__muxpadBoot = new Promise((r) => {
+      release = r;
+    }) as never;
+    const tabs = await import('./tabs');
+    const first = tabs.refreshTabs('w1');
+    const second = tabs.refreshTabs('w1');
+    release(payload());
+    await Promise.all([first, second]);
+    // Exactly one of the two went to the network, and the list that landed is
+    // the one that came back from it.
+    expect(listTabs).toHaveBeenCalledTimes(1);
+    expect(tabs.cachedTabsFor('w1')?.map((t) => t.id)).toEqual(['fetched']);
+  });
+
+  it('does not wait forever for a prefetch that never answers', async () => {
+    window.__muxpadBoot = new Promise(() => {}) as never;
+    const boot = await import('./boot-prefetch');
+    const tabs = await import('./tabs');
+    const started = Date.now();
+    listTabs.mockClear();
+    await tabs.refreshTabs('w1');
+    // Bounded, and it went to the server rather than hanging on the prefetch.
+    // `toHaveBeenCalled`, not a count: a debounced refresh left armed by an
+    // earlier test in this file shares this mock.
+    expect(Date.now() - started).toBeLessThan(boot.WAIT_BUDGET_MS + 1000);
+    expect(listTabs).toHaveBeenCalled();
   });
 });

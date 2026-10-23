@@ -208,14 +208,19 @@ export function ReviewPanel({
             <span className="review-small">
               {state.kept} {state.kept === 1 ? 'frame' : 'frames'} kept of {state.sampled} sampled
             </span>
+            {/* STILL TRANSCRIBING IS NOT NOTHING. A note whose words have not
+              come back yet is one the user said out loud, and a Send that
+              went out without it dropped it with no trace — the row vanishes
+              with the reset. The button says what it is waiting for. */}
             <button
               type="button"
               className="review-send"
               onClick={onSend}
-              disabled={sendable.length === 0}
+              disabled={sendable.length === 0 || state.pending}
               data-testid="review-send"
+              title={state.pending ? 'Still transcribing the last thing you said' : undefined}
             >
-              Send to this chat
+              {state.pending ? 'Transcribing…' : 'Send to this chat'}
             </button>
             <button type="button" className="review-dismiss" onClick={onDiscard}>
               Discard

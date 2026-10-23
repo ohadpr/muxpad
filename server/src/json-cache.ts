@@ -62,6 +62,16 @@ export const MIN_COMPRESS_BYTES = 1024;
  */
 const BR_QUALITY = 4;
 
+/**
+ * The biggest answer this will hold in memory.
+ *
+ * muxpad's own JSON answers are hundreds of KB at the very top end (the tab
+ * corpus on a 537-tab install is ~500 KB uncompressed). A `.json` ATTACHMENT
+ * can be 512 MB. 2 MB is comfortably above everything the API produces and far
+ * below anything that is really a file.
+ */
+export const MAX_BUFFER_BYTES = 2 * 1024 * 1024;
+
 /** How many compressed bodies to remember, keyed by etag+encoding.
  *  A handful of hot endpoints × two encodings, with room to spare. */
 const CACHE_MAX = 32;
@@ -75,12 +85,36 @@ export interface JsonCacheStats {
   reused: number;
 }
 
+/**
+ * What this client will accept, honouring the `q` values.
+ *
+ * `q=0` means NOT ACCEPTABLE, and sending an encoding a client has explicitly
+ * refused hands it a body it cannot read (RFC 9110 §12.5.3). An earlier
+ * version matched the token and ignored the weight, so
+ * `Accept-Encoding: br;q=0, gzip` was answered in brotli.
+ */
 export function pickEncoding(acceptEncoding: string | undefined): 'br' | 'gzip' | null {
   if (!acceptEncoding) return null;
-  const a = acceptEncoding.toLowerCase();
+  const weights = new Map<string, number>();
+  for (const part of acceptEncoding.toLowerCase().split(',')) {
+    const [name, ...params] = part.trim().split(';');
+    if (!name) continue;
+    const q = params
+      .map((p) => /^\s*q=([0-9.]+)\s*$/.exec(p))
+      .find((m): m is RegExpExecArray => m !== null);
+    weights.set(name.trim(), q ? Number.parseFloat(q[1] as string) : 1);
+  }
+  const acceptable = (name: string) => {
+    const own = weights.get(name);
+    if (own !== undefined) return own > 0;
+    // A wildcard stands in for anything not named — including, at q=0, a
+    // refusal of everything the client did not list.
+    const star = weights.get('*');
+    return star !== undefined && star > 0;
+  };
   // br first: measurably smaller on this shape of JSON at a comparable cost.
-  if (/(^|[\s,])br(;|,|$)/.test(a)) return 'br';
-  if (/(^|[\s,])gzip(;|,|$)/.test(a)) return 'gzip';
+  if (acceptable('br')) return 'br';
+  if (acceptable('gzip')) return 'gzip';
   return null;
 }
 
@@ -116,25 +150,80 @@ function bodyOf(bytes: Uint8Array): ArrayBuffer {
   return out;
 }
 
+/**
+ * THE ONE WAY TO REPLACE A RESPONSE IN HONO WITHOUT INHERITING ITS HEADERS.
+ *
+ * `set res(_res)` copies EVERY header off the previous response onto the
+ * replacement (context.ts), with `.set()` — so it overwrites. The consequence
+ * here was a malformed response: a route that declares its own
+ * `content-length` (the attachments route streams a file and does) had that
+ * length copied back over the COMPRESSED length, and a 304 got a body length
+ * it had no body for. Reproduced: 42 bytes sent under `content-length: 2000`.
+ *
+ * Clearing first leaves nothing to copy from. It looks redundant and is not.
+ */
+function replaceResponse(c: Parameters<MiddlewareHandler>[0], res: Response): void {
+  c.res = undefined;
+  c.res = res;
+}
+
+/** Add one token to `Vary` without dropping what is already there. */
+export function appendVary(headers: Headers, token: string): void {
+  const existing = headers.get('vary');
+  if (!existing) {
+    headers.set('vary', token);
+    return;
+  }
+  const have = existing
+    .split(',')
+    .map((v) => v.trim().toLowerCase())
+    .filter(Boolean);
+  if (have.includes('*') || have.includes(token.toLowerCase())) return;
+  headers.set('vary', `${existing}, ${token}`);
+}
+
 export function jsonCache(
-  opts: { minCompressBytes?: number; stats?: JsonCacheStats } = {},
+  opts: { minCompressBytes?: number; maxBytes?: number; stats?: JsonCacheStats } = {},
 ): MiddlewareHandler {
   const minBytes = opts.minCompressBytes ?? MIN_COMPRESS_BYTES;
+  const maxBytes = opts.maxBytes ?? MAX_BUFFER_BYTES;
   const compressed = new Map<string, Uint8Array>();
 
   return async (c, next) => {
     await next();
-    if (c.req.method !== 'GET' && c.req.method !== 'HEAD') return;
+    // GET ONLY. HEAD used to be handled too, which meant reading and hashing a
+    // whole file to answer a request whose entire point is that it has no
+    // body. A HEAD now passes through untouched.
+    if (c.req.method !== 'GET') return;
     const res = c.res;
     if (!res || res.status !== 200 || !res.body) return;
     if (res.headers.get('content-encoding')) return;
     if (res.headers.get('etag')) return;
     const type = res.headers.get('content-type') ?? '';
     if (!type.includes('json')) return;
+    // ── NOT EVERY application/json IS AN API ANSWER ────────────────────────
+    //
+    // A `.json` ATTACHMENT is served from disk by the attachments route, as a
+    // stream, with a declared length, and the upload ceiling is 512 MB. This
+    // middleware would read all of it into memory, hash it, compress it
+    // synchronously on the event loop the agent panes run on, and keep the
+    // compressed copy. A declared length past the ceiling below is the signal
+    // that this is a FILE rather than a value, and files go straight through.
+    const declared = Number(res.headers.get('content-length') ?? '0');
+    if (Number.isFinite(declared) && declared > maxBytes) return;
 
     // Buffering is safe HERE and nowhere else in this server: the gate above
-    // has already excluded streams, and a JSON answer is a value, not a feed.
+    // has excluded streams, files, and anything that declares itself large.
     const body = new Uint8Array(await res.arrayBuffer());
+    // …and a body that did NOT declare a length can still turn out to be one.
+    // Hand it back unchanged rather than hold it.
+    if (body.length > maxBytes) {
+      replaceResponse(
+        c,
+        new Response(bodyOf(body), { status: 200, headers: new Headers(res.headers) }),
+      );
+      return;
+    }
     const etag = etagOf(body);
     const headers = new Headers(res.headers);
     headers.set('etag', etag);
@@ -143,20 +232,23 @@ export function jsonCache(
     // serving a stale body without asking. `no-store` here would delete the
     // entire benefit.
     headers.set('cache-control', 'no-cache');
-    headers.set('vary', 'accept-encoding');
+    // APPENDED, not set: a route that varies on something else of its own
+    // (`Vary: Cookie`) must keep saying so, or a cache keyed on the wrong
+    // thing will serve one client another's answer.
+    appendVary(headers, 'accept-encoding');
 
     if (matchesEtag(c.req.header('if-none-match'), etag)) {
       if (opts.stats) opts.stats.notModified++;
       // A 304 carries validators and no body. Content-Length must go with the
       // body: a 304 claiming 497 KB of content hangs a strict client.
       headers.delete('content-length');
-      c.res = new Response(null, { status: 304, headers });
+      replaceResponse(c, new Response(null, { status: 304, headers }));
       return;
     }
 
     const encoding = body.length >= minBytes ? pickEncoding(c.req.header('accept-encoding')) : null;
     if (!encoding) {
-      c.res = new Response(bodyOf(body), { status: 200, headers });
+      replaceResponse(c, new Response(bodyOf(body), { status: 200, headers }));
       return;
     }
 
@@ -188,6 +280,6 @@ export function jsonCache(
 
     headers.set('content-encoding', encoding);
     headers.set('content-length', String(out.length));
-    c.res = new Response(bodyOf(out), { status: 200, headers });
+    replaceResponse(c, new Response(bodyOf(out), { status: 200, headers }));
   };
 }

@@ -35,7 +35,11 @@
     <script>
       try {
         var m = location.pathname.match(/^\/w\/([^/]+)/);
-        window.__muxpadBoot = fetch('/api/boot' + (m ? '?w=' + encodeURIComponent(m[1]) : ''), {
+        // DECODED FIRST: `location.pathname` is already percent-encoded, so
+        // encoding it again sends `my%2520work` for a slug called `my work`.
+        var slug = m ? decodeURIComponent(m[1]) : '';
+        window.__muxpadBootAt = performance.now();
+        window.__muxpadBoot = fetch('/api/boot' + (slug ? '?w=' + encodeURIComponent(slug) : ''), {
           headers: { accept: 'application/json' },
         })
           .then(function (r) { return r.ok ? r.json() : null; })

@@ -41,6 +41,15 @@ export const DIFF_THRESHOLD = 24;
  *  pointer to find. A 48×36 map has 1728 cells; a cursor occupies one or two. */
 export const MAX_CHANGED = 0.06;
 
+/**
+ * How far apart the lit cells may be and still be ONE pointer.
+ *
+ * At 48 cells across a 1280px frame, one cell is ~27px, so a pointer plus its
+ * shadow and the text it uncovers spans two or three. Six is generous for one
+ * pointer and far too small for two.
+ */
+export const MAX_BLOB_CELLS = 6;
+
 export interface GrayMap {
   w: number;
   h: number;
@@ -71,14 +80,36 @@ export function centroidOf(
   let count = 0;
   let sx = 0;
   let sy = 0;
+  let minX = w;
+  let maxX = -1;
+  let minY = h;
+  let maxY = -1;
   for (let i = 0; i < mask.length; i++) {
     if (!mask[i]) continue;
     count++;
-    sx += i % w;
-    sy += Math.floor(i / w);
+    const x = i % w;
+    const y = Math.floor(i / w);
+    sx += x;
+    sy += y;
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
   }
   if (count === 0) return null;
   if (count / (w * h) > maxChanged) return null;
+  // ── A CENTROID OF TWO PLACES IS A THIRD PLACE, AND IT IS WRONG ──────────
+  //
+  // The intersection is "where the pointer was in BOTH diffs", which is one
+  // spot — unless the pointer went A → B → A, in which case both diffs hold
+  // both spots and their intersection does too. The mean of those two is a
+  // point the cursor never occupied: measured in review at x=0.36 for a
+  // pointer sitting at x=0.64.
+  //
+  // A pointer is a few cells across. If the lit cells span much more than
+  // that, this is not one pointer and the honest answer is that we do not
+  // know. An unmarked frame is always better than a ring on nothing.
+  if (maxX - minX > MAX_BLOB_CELLS || maxY - minY > MAX_BLOB_CELLS) return null;
   // +0.5 puts the point at the cell's centre rather than its corner — at this
   // resolution one cell is ~27px of a 1280px frame, so the half-cell matters.
   return { x: (sx / count + 0.5) / w, y: (sy / count + 0.5) / h };

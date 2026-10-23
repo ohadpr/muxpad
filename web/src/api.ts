@@ -84,7 +84,14 @@ export async function req<T>(input: RequestInfo, init?: RequestInit): Promise<T>
   // There is no body to parse and nothing cached to fall back on, so the only
   // honest recovery is to ask again without the cache. `reload` sends no
   // validator, so the server cannot answer 304 to it and this can never loop.
-  if (res.status === 304) res = await send({ cache: 'reload' });
+  // GET ONLY. A 304 to a POST cannot come from this server (json-cache.ts
+  // answers one only for a GET), but "cannot happen" is not a reason to build
+  // a retry that would REPLAY A MUTATION if it ever did — a proxy, a captive
+  // portal, or a future route are all somebody else's decision. Verified in
+  // review: the unguarded version sent two identical POSTs and reported the
+  // second as success.
+  const method = (init?.method ?? 'GET').toUpperCase();
+  if (res.status === 304 && method === 'GET') res = await send({ cache: 'reload' });
   if (!res.ok) {
     const { message, code } = await errorEnvelope(res);
     throw new ApiError(message, res.status, code);

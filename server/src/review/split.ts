@@ -74,15 +74,17 @@ function cleanLine(line: string): string {
     .trim();
 }
 
+export function words(text: string): string[] {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]+/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
 /** Words shared with the input, as a fraction of the candidate's own words. A
  *  line the model wrote rather than heard scores low. */
 function overlap(candidate: string, source: string): number {
-  const words = (s: string) =>
-    s
-      .toLowerCase()
-      .replace(/[^a-z0-9\s]+/g, ' ')
-      .split(/\s+/)
-      .filter(Boolean);
   const src = new Set(words(source));
   const cand = words(candidate);
   if (cand.length === 0) return 0;
@@ -93,6 +95,101 @@ function overlap(candidate: string, source: string): number {
 
 /** Below this, the line is the model's prose, not the user's instruction. */
 export const MIN_OVERLAP = 0.7;
+
+/**
+ * ─── THE CHECK THAT ACTUALLY PROTECTS THE MEANING ─────────────────────────
+ *
+ * Per-line overlap asks "did these words come from the user?". It cannot ask
+ * the question that matters, which is "are these ALL of the user's words, in
+ * the order they said them?" — and the gap between those two is where an
+ * instruction gets inverted.
+ *
+ * The reproduction, from review:
+ *
+ *   said:   "do not delete this button make that label pink"
+ *   reply:  "delete this button" / "make that label pink"
+ *
+ * Every word of that reply is the user's. Every line scores 1.0. And the
+ * instruction it hands an agent is the OPPOSITE of what was asked, with
+ * nothing anywhere to notice.
+ *
+ * So the splits are checked as a whole, against the source, twice:
+ *
+ *   1. ORDER — the splits' words, concatenated, must be a subsequence of the
+ *      source's. A reordering is a rewrite.
+ *   2. COVERAGE — they must account for nearly all of it. Dropping filler is
+ *      allowed and asked for; dropping "do not" is not, and the only way to
+ *      tell those apart without a second model is to insist that what goes
+ *      missing is both small and known to be filler.
+ */
+/**
+ * How much of what was said may go missing, even when every missing word is
+ * filler. The filler list below is the real guard; this is the backstop for a
+ * reply that is technically all-filler-dropped and still nothing like the
+ * remark ("pink", out of a twenty-word sentence).
+ */
+export const MAX_DROPPED_FRACTION = 0.35;
+
+/** Words a split may drop: the noises a transcriber hears between thoughts.
+ *  Deliberately TINY. Anything not on this list counts against coverage. */
+const DROPPABLE = new Set([
+  'okay',
+  'ok',
+  'so',
+  'um',
+  'uh',
+  'erm',
+  'hmm',
+  'like',
+  'well',
+  'now',
+  'just',
+  'right',
+  'yeah',
+  'and',
+  'then',
+  'also',
+  'let',
+  'me',
+  'see',
+  'i',
+  'think',
+  'maybe',
+]);
+
+/**
+ * Do these splits preserve what was said — every word, in order?
+ *
+ * Returns false the moment they do not, and the caller's answer to false is
+ * always the same: keep the utterance whole. An unsplit note is a worse note
+ * and a TRUE one.
+ */
+export function preservesSource(splits: readonly { text: string }[], source: string): boolean {
+  const src = words(source);
+  const got = splits.flatMap((s) => words(s.text));
+  if (got.length === 0) return false;
+  // (1) Order: walk the source once, consuming each split word in turn.
+  let at = 0;
+  for (const w of got) {
+    const found = src.indexOf(w, at);
+    if (found === -1) return false;
+    at = found + 1;
+  }
+  // (2) Coverage: what was left out has to be both scarce and filler.
+  const kept = new Set<number>();
+  let cursor = 0;
+  for (const w of got) {
+    const found = src.indexOf(w, cursor);
+    if (found === -1) break;
+    kept.add(found);
+    cursor = found + 1;
+  }
+  // Anything missing must be filler — this is the clause that catches a
+  // dropped "not" — and there must not be too much of it even then.
+  const dropped = src.filter((w, i) => !kept.has(i));
+  if (dropped.some((w) => !DROPPABLE.has(w))) return false;
+  return dropped.length <= src.length * MAX_DROPPED_FRACTION;
+}
 
 /**
  * Read the reply. Every doubt resolves to "one note, unsplit".
@@ -120,7 +217,12 @@ export function parseSplitReply(reply: string, source: string): ReviewSplit[] {
   if (lines.length === 0 || lines.length > MAX_SPLITS) return whole;
   if (lines.some((l) => l.length > MAX_SPLIT_CHARS)) return whole;
   if (lines.some((l) => overlap(l, source) < MIN_OVERLAP)) return whole;
-  return lines.map((text) => ({ text, frame: null }));
+  const splits = lines.map((text) => ({ text, frame: null }));
+  // The whole-reply check: order and coverage, which per-line overlap cannot
+  // see. This is what stops "do not delete this button" becoming "delete this
+  // button".
+  if (!preservesSource(splits, source)) return whole;
+  return splits;
 }
 
 /** Is this remark even worth a model call? */

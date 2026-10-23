@@ -49,6 +49,10 @@ declare global {
      *  because a reader clears it by assignment, and this project compiles
      *  with `exactOptionalPropertyTypes`. */
     __muxpadBoot?: Promise<BootPayload | null> | undefined;
+    /** `performance.now()` at the moment the inline script ASKED. Set by the
+     *  same script — the module's own import time is far too late to measure
+     *  age from on a slow bundle download. */
+    __muxpadBootAt?: number | undefined;
   }
 }
 
@@ -56,7 +60,29 @@ declare global {
  *  rendering from. The 5s polls have run; let them own it. */
 export const STALE_AFTER_MS = 10_000;
 
-const startedAt = typeof performance !== 'undefined' ? performance.now() : 0;
+/**
+ * How long a reader will WAIT for the prefetch before going to the server
+ * itself. Separate from staleness, and just as necessary: a reader that
+ * entered while the request was in flight used to await it with no bound at
+ * all, so a boot request that hung took the first render with it. Observed in
+ * review as a read resolving at sixty seconds and still adopting.
+ */
+export const WAIT_BUDGET_MS = 1500;
+
+/**
+ * When the REQUEST was made, not when this module was imported.
+ *
+ * A slow bundle download sits between the two, and that is exactly the case
+ * where the difference decides whether the answer is still fresh. The inline
+ * script stamps it; the fallback is only for a page that somehow has the
+ * promise without the stamp.
+ */
+function askedAt(): number {
+  if (typeof window !== 'undefined' && typeof window.__muxpadBootAt === 'number')
+    return window.__muxpadBootAt;
+  return typeof performance !== 'undefined' ? performance.now() : 0;
+}
+
 let usedWorkspaces = false;
 let usedTabs = false;
 
@@ -68,13 +94,22 @@ function releaseIfSpent(): void {
 }
 
 function expired(): boolean {
-  return typeof performance !== 'undefined' && performance.now() - startedAt > STALE_AFTER_MS;
+  return typeof performance !== 'undefined' && performance.now() - askedAt() > STALE_AFTER_MS;
 }
 
 async function payload(): Promise<BootPayload | null> {
   if (typeof window === 'undefined' || !window.__muxpadBoot || expired()) return null;
   try {
-    const got = await window.__muxpadBoot;
+    // BOUNDED. Whatever is wrong with a request that has not answered in a
+    // second and a half, waiting longer for it is not the fix — and the
+    // ordinary path is sitting right there.
+    const got = await Promise.race([
+      window.__muxpadBoot,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), WAIT_BUDGET_MS)),
+    ]);
+    // Re-checked AFTER the await: this is where the time went, so this is
+    // where the answer can have gone stale.
+    if (expired()) return null;
     return got && Array.isArray(got.workspaces) ? got : null;
   } catch {
     return null;
@@ -90,6 +125,7 @@ export function bootPending(part: 'workspaces' | 'tabs'): boolean {
 
 /** The prefetched workspace list, once. */
 export async function bootWorkspaces(): Promise<Workspace[] | null> {
+  // Reserved before the await, for the reason spelled out on `bootTabs`.
   if (usedWorkspaces) return null;
   usedWorkspaces = true;
   const got = await payload();
@@ -97,14 +133,26 @@ export async function bootWorkspaces(): Promise<Workspace[] | null> {
   return got?.workspaces?.length ? got.workspaces : null;
 }
 
-/** The prefetched tab list for ONE workspace, once. Null for any other
- *  workspace — a list from elsewhere is not a cheaper version of this one. */
+/**
+ * The prefetched tab list for ONE workspace, once.
+ *
+ * RESERVED BEFORE THE AWAIT, and that ordering is the whole of a bug found in
+ * review: the flag used to be set after, so two refreshes that both started
+ * while the request was in flight both passed the check and both got the same
+ * old snapshot — and the SECOND one, carrying the newest version number,
+ * landed it. The version guard cannot help, because by then the stale bytes
+ * are indistinguishable from a fresh answer.
+ *
+ * A caller that reserves and then finds the payload is for another workspace
+ * has spent it. That is the right way round: it means the one request this
+ * saves is never saved twice, and the loser fetches.
+ */
 export async function bootTabs(workspaceId: string): Promise<Tab[] | null> {
   if (usedTabs) return null;
-  const got = await payload();
-  if (!got || got.workspaceId !== workspaceId) return null;
   usedTabs = true;
+  const got = await payload();
   releaseIfSpent();
+  if (!got || got.workspaceId !== workspaceId) return null;
   return got.tabs;
 }
 

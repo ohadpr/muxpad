@@ -74,6 +74,26 @@ export async function startScreenCapture(opts: ScreenCaptureOpts = {}): Promise<
     track.addEventListener('ended', () => opts.onEnded?.());
   }
 
+  // EVERYTHING BELOW CAN THROW, and the stream is already live by now: a
+  // canvas that will not give a 2d context, a video element that refuses — any
+  // of them used to leave a screen share running with nobody holding it and
+  // the browser's "you are sharing" bar up over nothing.
+  const release = () => {
+    for (const t of stream.getTracks()) t.stop();
+  };
+  try {
+    return await buildGrabber(stream, track ?? null, opts);
+  } catch (e) {
+    release();
+    throw e;
+  }
+}
+
+async function buildGrabber(
+  stream: MediaStream,
+  track: MediaStreamTrack | null,
+  opts: ScreenCaptureOpts,
+): Promise<FrameGrabber> {
   const video = document.createElement('video');
   video.srcObject = stream;
   video.muted = true;
@@ -171,7 +191,18 @@ export async function startMicTap(): Promise<AudioTap> {
   const stream = await md.getUserMedia({
     audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
   });
+  // THE MICROPHONE IS LIVE FROM HERE. An AudioContext constructor that throws
+  // (no device, a locked-down browser) left the recording dot on with nothing
+  // to turn it off — measured in review as a stop count of zero.
+  try {
+    return await buildTap(stream);
+  } catch (e) {
+    for (const t of stream.getTracks()) t.stop();
+    throw e;
+  }
+}
 
+async function buildTap(stream: MediaStream): Promise<AudioTap> {
   // Created and resumed up front — see the note at the top of this file.
   const ctx = new AudioContext();
   if (ctx.state === 'suspended') await ctx.resume();
@@ -202,10 +233,10 @@ export async function startMicTap(): Promise<AudioTap> {
     }
     registerProcessor('muxpad-review-tap', Tap);
   `;
+  let workletUrl: string | null = null;
   try {
-    const url = URL.createObjectURL(new Blob([worklet], { type: 'text/javascript' }));
-    await ctx.audioWorklet.addModule(url);
-    URL.revokeObjectURL(url);
+    workletUrl = URL.createObjectURL(new Blob([worklet], { type: 'text/javascript' }));
+    await ctx.audioWorklet.addModule(workletUrl);
     const node = new AudioWorkletNode(ctx, 'muxpad-review-tap');
     node.port.onmessage = (e: MessageEvent) => emit(e.data as Float32Array);
     source.connect(node);
@@ -221,6 +252,8 @@ export async function startMicTap(): Promise<AudioTap> {
       sink.disconnect();
     };
   } catch {
+    // The fallback path. The Blob URL is revoked in the `finally` below either
+    // way — leaking one per failed start is small and permanent.
     const node = ctx.createScriptProcessor(2048, 1, 1);
     node.onaudioprocess = (e: AudioProcessingEvent) => {
       emit(new Float32Array(e.inputBuffer.getChannelData(0)));
@@ -234,6 +267,8 @@ export async function startMicTap(): Promise<AudioTap> {
       node.disconnect();
       sink.disconnect();
     };
+  } finally {
+    if (workletUrl) URL.revokeObjectURL(workletUrl);
   }
 
   return {

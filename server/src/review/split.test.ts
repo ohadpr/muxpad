@@ -4,6 +4,7 @@ import {
   assignFrames,
   buildSplitPrompt,
   parseSplitReply,
+  preservesSource,
   worthSplitting,
 } from './split.js';
 
@@ -28,9 +29,18 @@ describe('parseSplitReply', () => {
   });
 
   it('strips the numbering a model adds after being told not to', () => {
-    const reply = '1. this video should be smaller\n2) this button make it Pink';
-    expect(parseSplitReply(reply, FOUR_ASKS)).toHaveLength(2);
-    expect(parseSplitReply(reply, FOUR_ASKS)[0]?.text).toBe('this video should be smaller');
+    // A COMPLETE reply, because a partial one is now refused on its own
+    // account — see the coverage tests below. This test is about the `1.`
+    // and the `2)`, and it has to stop being about anything else.
+    const reply = [
+      '1. this video should be smaller',
+      '2) this button make it Pink',
+      '3. and these two buttons combine them together with little icons',
+      '4) and the thyroid script should be full with',
+    ].join('\n');
+    const got = parseSplitReply(reply, FOUR_ASKS);
+    expect(got).toHaveLength(4);
+    expect(got[0]?.text).toBe('this video should be smaller');
   });
 
   it('leaves a mishearing alone — the agent repairs that from the picture', () => {
@@ -129,5 +139,51 @@ describe('buildSplitPrompt', () => {
     expect(p).toContain(FOUR_ASKS);
     expect(p).toContain('one instruction per line');
     expect(p).toContain('OWN WORDS');
+  });
+});
+
+/**
+ * THE FINDING THAT MATTERED MOST, kept as tests.
+ *
+ * Per-line overlap asks whether the words came from the user. It cannot ask
+ * whether they are ALL of the user's words in the order they said them — and
+ * that gap is where an instruction gets inverted. A model that drops two words
+ * turns a refusal into a command, every line still scores 1.0, and nothing
+ * downstream can tell.
+ */
+describe('preserving what was said', () => {
+  it('REFUSES a reply that dropped a negation', () => {
+    const said = 'do not delete this button make that label pink';
+    const reply = 'delete this button\nmake that label pink';
+    // Whole, not split: the user said "do not", and an agent must not be
+    // handed the opposite of that with a straight face.
+    expect(parseSplitReply(reply, said).map((s) => s.text)).toEqual([said]);
+  });
+
+  it('REFUSES a reply that left an instruction out', () => {
+    const reply = 'this video should be smaller\nthis button make it Pink';
+    expect(parseSplitReply(reply, FOUR_ASKS)).toHaveLength(1);
+  });
+
+  it('REFUSES a reply that reordered the instructions', () => {
+    const said = 'make the header blue and the footer green';
+    const reply = 'the footer green\nmake the header blue';
+    expect(parseSplitReply(reply, said)).toHaveLength(1);
+  });
+
+  it('still allows the filler the prompt asks it to drop', () => {
+    const said = 'okay so this video should be smaller and this button make it pink';
+    const reply = 'this video should be smaller\nthis button make it pink';
+    expect(parseSplitReply(reply, said).map((s) => s.text)).toEqual([
+      'this video should be smaller',
+      'this button make it pink',
+    ]);
+  });
+
+  it('preservesSource is the predicate, and it is strict about order', () => {
+    expect(preservesSource([{ text: 'a b' }, { text: 'c d' }], 'a b c d')).toBe(true);
+    expect(preservesSource([{ text: 'c d' }, { text: 'a b' }], 'a b c d')).toBe(false);
+    expect(preservesSource([{ text: 'a b' }], 'a b c d')).toBe(false);
+    expect(preservesSource([], 'a b')).toBe(false);
   });
 });

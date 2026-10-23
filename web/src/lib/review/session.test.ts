@@ -313,3 +313,125 @@ describe('ReviewSession', () => {
     expect(h.logs.some((l) => l.includes('grab failed'))).toBe(true);
   });
 });
+
+/**
+ * THE LIFECYCLE RACES, each one as the review reproduced it.
+ *
+ * All three are the same shape: something asynchronous outlived the review
+ * that launched it. A screen share nobody holds, a microphone that stays live
+ * over a stopped session, and a note that was said out loud and then dropped.
+ */
+describe('ReviewSession lifecycle races', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('a stop DURING startup releases both devices', async () => {
+    // `stop()` used to return early (the phase is `starting`, not
+    // `recording`), and `start()` carried on into `recording` with both
+    // devices live and the component already unmounted.
+    const grabber = { grab: vi.fn(async () => null), mark: vi.fn(), stop: vi.fn() };
+    const tap = { onBlock: vi.fn(), stop: vi.fn() };
+    let releaseAudio!: () => void;
+    const session = new ReviewSession({
+      startCapture: async () => grabber as never,
+      startAudio: () =>
+        new Promise((resolve) => {
+          releaseAudio = () => resolve(tap as never);
+        }),
+      uploadFrame: async () => '/p.jpg',
+      transcribe: async () => '',
+      split: async (t) => [{ text: t, frame: null }],
+      now: () => 0,
+    });
+
+    const starting = session.start();
+    await vi.advanceTimersByTimeAsync(1);
+    await session.stop(); // pressed while the microphone was still coming up
+    releaseAudio();
+    await starting;
+
+    expect(session.current.phase).toBe('stopped');
+    expect(grabber.stop).toHaveBeenCalled();
+    expect(tap.stop).toHaveBeenCalled();
+  });
+
+  it('refuses to start while a stop is still finishing', async () => {
+    // Starting underneath a stop opened a second capture and then let the OLD
+    // stop close it — leaving the first screen share running forever.
+    let releaseTranscribe!: (t: string) => void;
+    const h = harness({
+      transcribe: () =>
+        new Promise<string>((r) => {
+          releaseTranscribe = r;
+        }),
+    });
+    await h.session.start();
+    await h.speak(1500, LOUD);
+    const stopping = h.session.stop();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.session.current.phase).toBe('stopping');
+
+    await h.session.start(); // must be a no-op
+    expect(h.grabber.stop).not.toHaveBeenCalled();
+
+    releaseTranscribe('this button make it pink');
+    await stopping;
+    expect(h.session.current.phase).toBe('stopped');
+    expect(h.grabber.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('WAITS for a note that is still transcribing before it says it is stopped', async () => {
+    // Note A ready, note B transcribing, stop, Send — B was omitted and its
+    // row deleted by the reset that followed. The user had said it out loud.
+    let releaseB!: (t: string) => void;
+    let call = 0;
+    const h = harness({
+      transcribe: () => {
+        call++;
+        return call === 1
+          ? Promise.resolve('make the video smaller')
+          : new Promise<string>((r) => {
+              releaseB = r;
+            });
+      },
+    });
+    await h.session.start();
+    await h.speak(1200, LOUD);
+    await h.speak(1200, ROOM); // A ends on silence
+    await h.speak(1200, LOUD);
+    await h.speak(1200, ROOM); // B ends on silence, transcription hangs
+
+    const stopping = h.session.stop();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(h.session.current.pending).toBe(true);
+
+    releaseB('and this button pink');
+    await stopping;
+    expect(h.session.current.pending).toBe(false);
+    expect(h.session.current.items.map((n) => n.text)).toEqual([
+      'make the video smaller',
+      'and this button pink',
+    ]);
+  });
+
+  it('drops a note whose review was reset while it was in flight', async () => {
+    let release!: (t: string) => void;
+    const h = harness({
+      transcribe: () =>
+        new Promise<string>((r) => {
+          release = r;
+        }),
+    });
+    await h.session.start();
+    await h.speak(1200, LOUD);
+    await h.speak(1200, ROOM);
+    h.session.reset();
+    release('too late');
+    await vi.advanceTimersByTimeAsync(10);
+    expect(h.session.current.items).toEqual([]);
+  });
+});

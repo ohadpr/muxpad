@@ -99,6 +99,10 @@ export interface ReviewState {
   /** Frames sampled / frames kept, for the UI's small print. */
   sampled: number;
   kept: number;
+  /** Something is still being transcribed or uploaded. Send must wait for it:
+   *  a note that has not come back yet is a note the user SAID, and sending
+   *  without it drops it with no trace. */
+  pending: boolean;
 }
 
 /** How often to sample the screen while somebody is talking. Three a second
@@ -141,6 +145,26 @@ export class ReviewSession {
   private pcm: Array<{ atMs: number; samples: Float32Array }> = [];
   private sampleRate = 48_000;
 
+  /**
+   * WHICH REVIEW THIS IS.
+   *
+   * Bumped by every `start` and every `stop`. Everything asynchronous — the
+   * two device handshakes, the sampling loop, an utterance in flight —
+   * captures it and checks it on the way back, because all three can outlive
+   * the review that launched them. Three bugs, all found in review, all the
+   * same shape:
+   *
+   *   · Stop pressed while the microphone handshake was still pending: `stop`
+   *     returned (the phase was `starting`, not `recording`) and `start` then
+   *     carried on into `recording` with both devices live and nobody holding
+   *     them — the component had already unmounted.
+   *   · Start pressed while a stop was awaiting its last transcription: the
+   *     new capture was opened, then the OLD stop's `grabber.stop()` closed
+   *     it, leaving the previous screen share running forever.
+   *   · An utterance resolving into a review that had already been reset.
+   */
+  private generation = 0;
+
   private startedAt: number | null = null;
   private state: ReviewState = {
     phase: 'idle',
@@ -150,6 +174,7 @@ export class ReviewSession {
     startedAt: null,
     sampled: 0,
     kept: 0,
+    pending: false,
   };
 
   constructor(deps: ReviewDeps) {
@@ -167,7 +192,10 @@ export class ReviewSession {
   }
 
   private set(patch: Partial<ReviewState>) {
-    this.state = { ...this.state, ...patch };
+    // `pending` is derived, never passed in: one source of truth for "is
+    // anything still in flight", and it cannot drift from the set that holds
+    // the work.
+    this.state = { ...this.state, ...patch, pending: this.inFlight.size > 0 };
     for (const cb of this.listeners) cb(this.state);
   }
 
@@ -189,22 +217,42 @@ export class ReviewSession {
    * the kind of thing that stops people trusting a feature).
    */
   async start(): Promise<void> {
-    if (this.state.phase === 'recording' || this.state.phase === 'starting') return;
+    // `stopping` too: a stop that is still waiting for its last transcription
+    // owns both devices, and starting underneath it means two live captures
+    // and one `stop()` call to share between them.
+    if (
+      this.state.phase === 'recording' ||
+      this.state.phase === 'starting' ||
+      this.state.phase === 'stopping'
+    )
+      return;
+    const mine = ++this.generation;
     this.set({ phase: 'starting', items: [], sampled: 0, kept: 0 });
     let grabber: FrameGrabber;
     try {
       grabber = await this.deps.startCapture();
     } catch (e) {
-      this.set({ phase: 'failed', error: msgOf(e) });
+      if (mine === this.generation) this.set({ phase: 'failed', error: msgOf(e) });
       throw e;
+    }
+    // CANCELLED WHILE THE PICKER WAS OPEN. Everything acquired so far has to
+    // go: the user has pressed stop, or the pane has gone.
+    if (mine !== this.generation) {
+      grabber.stop();
+      return;
     }
     let tap: AudioTap;
     try {
       tap = await this.deps.startAudio();
     } catch (e) {
       grabber.stop();
-      this.set({ phase: 'failed', error: msgOf(e) });
+      if (mine === this.generation) this.set({ phase: 'failed', error: msgOf(e) });
       throw e;
+    }
+    if (mine !== this.generation) {
+      grabber.stop();
+      tap.stop();
+      return;
     }
 
     this.grabber = grabber;
@@ -215,25 +263,85 @@ export class ReviewSession {
     this.startedAt = this.deps.now();
     this.set({ phase: 'recording', startedAt: this.startedAt, level: 0, speaking: false });
 
-    tap.onBlock((atMs, samples, rate) => this.onAudio(atMs, samples, rate));
+    // ONE CLOCK, AND IT IS THE SESSION'S.
+    //
+    // The tap stamps blocks against its own origin, which is set before an
+    // AudioWorklet finishes initialising — and the session's origin is set
+    // after. Measured in review with a mocked 2s worklet startup: audio at
+    // 2500ms against frames at 500ms, i.e. every note reaching for frames two
+    // seconds too late. The tap's number is discarded here; what a block is
+    // worth is WHEN IT ARRIVED on the same clock the frames are stamped with.
+    tap.onBlock((_tapMs, samples, rate) => this.onAudio(this.at(), samples, rate));
     this.tick();
   }
 
   /** Stop, close whatever sentence was in flight, and release both devices. */
   async stop(): Promise<void> {
+    // A stop DURING STARTUP must still count. The devices are being acquired
+    // right now; bumping the generation is what tells `start` to let them go
+    // when its awaits come back, and returning early here (as this used to)
+    // left a review running that nobody had a handle on.
+    if (this.state.phase === 'starting') {
+      this.generation++;
+      this.set({ phase: 'stopped', level: 0, speaking: false });
+      return;
+    }
     if (this.state.phase !== 'recording') return;
+    // NO GENERATION BUMP HERE, and that is deliberate. A stop does not
+    // ABANDON the review — it is about to wait for the work already in
+    // flight (`settle` below), and invalidating that work is how the first
+    // version of this fix left a pending note stuck with no text at all.
+    // `reset()` is the one that discards; `start()` refuses to run until this
+    // has finished, so nothing can overtake it meanwhile.
     this.set({ phase: 'stopping' });
     if (this.timer !== null) clearTimeout(this.timer);
     this.timer = null;
     const tail = this.segmenter.flush(this.at());
     this.tap?.stop();
     this.tap = null;
-    // The last thing said is the commonest thing to lose, because the way a
-    // review ends is "…and that's it" followed by reaching for the button.
-    if (tail?.type === 'end') await this.onUtterance(tail.startMs, tail.endMs);
-    this.grabber?.stop();
+    // ── RELEASE THE SCREEN FIRST, then wait for the words ──────────────────
+    //
+    // The tail utterance has to be transcribed and its frames uploaded, which
+    // is network time. Holding the screen share open across it means the
+    // browser's "you are sharing" bar stays up for seconds after the user
+    // pressed stop, over a review that is already over. The frames this note
+    // needs are bytes we already hold; the grabber is only needed to MARK
+    // them, so it is handed to the pending work and closed after.
+    const grabber = this.grabber;
     this.grabber = null;
-    this.set({ phase: 'stopped', level: 0, speaking: false });
+    try {
+      // The last thing said is the commonest thing to lose, because the way a
+      // review ends is "…and that's it" followed by reaching for the button.
+      if (tail?.type === 'end') await this.onUtterance(tail.startMs, tail.endMs);
+      // …and anything that ended on silence a moment earlier is still in
+      // flight. Waiting for it is the difference between a note that arrives
+      // and a note that is dropped by the Send the user presses next.
+      await this.settle();
+    } finally {
+      grabber?.stop();
+      this.set({ phase: 'stopped', level: 0, speaking: false });
+    }
+  }
+
+  /** Every utterance that is still being transcribed or uploaded. */
+  private readonly inFlight = new Set<Promise<void>>();
+
+  /**
+   * Wait for the work already started.
+   *
+   * A note is PENDING from the moment its silence ends until its text comes
+   * back. `stop()` used to wait only for the sentence that was open when it
+   * was pressed — so "…and the font is too small." followed, half a second
+   * later, by Stop and then Send, sent a review with that note missing and no
+   * sign it had ever existed.
+   */
+  private async settle(): Promise<void> {
+    while (this.inFlight.size > 0) await Promise.all([...this.inFlight]);
+  }
+
+  /** Is anything still being transcribed? The UI disables Send while true. */
+  get pending(): boolean {
+    return this.inFlight.size > 0;
   }
 
   /** Throw a note away. The panel's only edit in v1 — scrap or keep. */
@@ -243,6 +351,7 @@ export class ReviewSession {
 
   /** Forget the review entirely (after sending, or on dismiss). */
   reset() {
+    this.generation++;
     this.set({ phase: 'idle', items: [], startedAt: null, sampled: 0, kept: 0, level: 0 });
     this.ring.clear();
     this.maps = [];
@@ -278,19 +387,35 @@ export class ReviewSession {
       this.log(`dropped a ${event.endMs - event.startMs}ms noise`);
       return;
     }
-    if (event.type === 'end') void this.onUtterance(event.startMs, event.endMs);
+    if (event.type === 'end') this.track(this.onUtterance(event.startMs, event.endMs));
   }
 
-  /** The microphone history between two session times, as one WAV. */
+  /**
+   * The microphone history between two session times, as one WAV.
+   *
+   * TRIMMED TO THE SPAN, not rounded out to whole blocks. A block is ~43ms of
+   * 48 kHz audio, and taking every block that so much as touches the interval
+   * both lengthens the clip and repeats audio across a ceiling cut — measured
+   * in review as a 200ms WAV for a 100ms request. The arithmetic is in
+   * SAMPLES, because that is the only unit in which the two ends are exact.
+   */
   private sliceAudio(startMs: number, endMs: number): Blob | null {
-    const blocks = this.pcm
-      .filter((b) => {
-        const durMs = (b.samples.length / this.sampleRate) * 1000;
-        return b.atMs + durMs >= startMs && b.atMs <= endMs;
-      })
-      .map((b) => b.samples);
-    if (blocks.length === 0) return null;
-    const pcm = resample(concatPcm(blocks), this.sampleRate);
+    if (endMs <= startMs) return null;
+    const rate = this.sampleRate;
+    const parts: Float32Array[] = [];
+    for (const block of this.pcm) {
+      const blockMs = (block.samples.length / rate) * 1000;
+      const blockEnd = block.atMs + blockMs;
+      if (blockEnd <= startMs || block.atMs >= endMs) continue;
+      // Where this block's own window overlaps the one asked for.
+      const fromMs = Math.max(0, startMs - block.atMs);
+      const toMs = Math.min(blockMs, endMs - block.atMs);
+      const from = Math.max(0, Math.round((fromMs / 1000) * rate));
+      const to = Math.min(block.samples.length, Math.round((toMs / 1000) * rate));
+      if (to > from) parts.push(block.samples.subarray(from, to));
+    }
+    if (parts.length === 0) return null;
+    const pcm = resample(concatPcm(parts), rate);
     return pcm.length === 0 ? null : encodeWav(pcm);
   }
 
@@ -347,7 +472,20 @@ export class ReviewSession {
 
   // ── one utterance → notes ───────────────────────────────────────────────
 
+  /** Hold a piece of in-flight work so `stop()` can wait for it, and so the
+   *  UI can say "still transcribing" instead of quietly dropping it. */
+  private track(work: Promise<void>): Promise<void> {
+    const held = work.finally(() => {
+      this.inFlight.delete(held);
+      this.set({});
+    });
+    this.inFlight.add(held);
+    this.set({});
+    return held;
+  }
+
   private async onUtterance(startMs: number, endMs: number) {
+    const mine = this.generation;
     const audio = this.sliceAudio(startMs, endMs);
     if (!audio) {
       this.log(`no audio for ${startMs}–${endMs}ms`);
@@ -368,9 +506,13 @@ export class ReviewSession {
     try {
       text = await this.deps.transcribe(audio);
     } catch (e) {
+      if (mine !== this.generation) return;
       this.replace(id, { status: 'failed', error: msgOf(e) });
       return;
     }
+    // The review this belongs to is over and forgotten (reset, or a new one
+    // started). Its note has nowhere to land.
+    if (mine !== this.generation) return;
     if (!text.trim()) {
       // Nothing was said. Drop the row rather than leaving an empty note in a
       // panel the user is about to send.
@@ -383,6 +525,7 @@ export class ReviewSession {
     const picked = this.ring.pick(startMs, endMs);
     const paths = await this.uploadFrames(picked);
     const splits = await this.deps.split(text, paths.length);
+    if (mine !== this.generation) return;
 
     const items = splits.map((s, i) => ({
       id: i === 0 ? id : nextId(),

@@ -41,6 +41,7 @@ const state = (over: Partial<ReviewState> = {}): ReviewState => ({
   startedAt: 0,
   sampled: 12,
   kept: 4,
+  pending: false,
   ...over,
 });
 
