@@ -108,6 +108,19 @@ export type RunnerFrame =
        * next turn may be started by one of these finishing.
        */
       background?: number;
+      /**
+       * THIS TURN PUT NOTHING IN THE CHAT, and nobody typed it.
+       *
+       * No prose, no reply, no `muxpad say` — a cron fire that refreshed a
+       * card and stayed quiet, which is the shape muxpad's own instructions
+       * ask a scheduled job to have. The server reads it to decide whether to
+       * bold the chat in the sidebar: there is nothing new to read, so there
+       * is nothing to mark.
+       *
+       * Absent means "mark it", which is the old behaviour and what every
+       * backend that does not set it will keep getting.
+       */
+      silent?: true;
     }
   /**
    * The background set CHANGED SIZE outside a turn boundary — in practice, the

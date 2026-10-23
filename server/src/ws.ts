@@ -1994,7 +1994,27 @@ export function attachWsServer(deps: {
             // a tab that finished last week. The mark is not needed either way:
             // a retired sub-chat delivered its result to the parent, which is
             // what "reviewed" was asking about.
-            if (!chatHasLeftTheLiveList(paneId)) {
+            //
+            // …AND UNLESS THE TURN SAID NOTHING. Reported as "@Investing keeps
+            // showing as new message but nothing is happening there": that
+            // chat carries six scheduled jobs, one of them hourly, and the
+            // hourly one refreshes a card and is told in its own prompt to
+            // "say nothing". Every fire was a turn, every turn-done bolded the
+            // row, and the row then promised something to read that the log
+            // did not contain — the mark means "there is something new here",
+            // and there was not.
+            //
+            // The runner answers this, because it is the only party that can:
+            // prose, a reply and a `muxpad say` arrive by three different
+            // routes and `silent` is the one bit that covers all three (see
+            // silentField in backends/claude.ts). It is only ever set for a
+            // turn NOBODY TYPED — a human-started turn that ends quiet still
+            // marks, because somebody is waiting on it.
+            //
+            // A backend that never sends the field keeps today's behaviour
+            // exactly, which is the right failure direction: an extra bold
+            // mark is noise, a missing one loses news.
+            if (!chatHasLeftTheLiveList(paneId) && frame.silent !== true) {
               panes.setUnread(paneId, true);
               emitPaneUpdated(paneId);
             }

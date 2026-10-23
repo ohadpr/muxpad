@@ -82,7 +82,7 @@ async function boot() {
       turnActive: false,
     }),
   );
-  return { pane, open, runner };
+  return { pane, open, runner, db };
 }
 
 const settle = (ms = 150) => new Promise((r) => setTimeout(r, ms));
@@ -144,5 +144,57 @@ describe('the background-command count', () => {
     runner.send(JSON.stringify({ t: 'background', live: 'two' }));
     await settle();
     expect(seen.filter((f) => f.t === 'background')).toHaveLength(0);
+  });
+});
+
+/**
+ * THE BOLD MARK, AND THE TURN THAT HAS NOTHING TO SAY.
+ *
+ * Reported as "@Investing keeps showing as new message but nothing is
+ * happening there". That chat carries six scheduled jobs; the hourly one
+ * refreshes a card and is told in its own prompt to say nothing. Every fire
+ * was a turn, and every turn-done bolded the row — so the rail promised
+ * something to read that the log did not contain.
+ */
+describe('unread after a turn', () => {
+  const unread = (db: ReturnType<typeof openDb>, paneId: string) =>
+    (db.prepare('SELECT unread FROM panes WHERE id = ?').get(paneId) as { unread: number }).unread;
+
+  it('does NOT bold the chat for a silent machine turn', async () => {
+    const { pane, runner, db } = await boot();
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    await settle();
+    runner.send(JSON.stringify({ t: 'turn-done', ok: true, silent: true }));
+    await settle();
+    expect(unread(db, pane.id)).toBe(0);
+  });
+
+  it('bolds it when the turn said something', async () => {
+    const { pane, runner, db } = await boot();
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    await settle();
+    runner.send(JSON.stringify({ t: 'turn-done', ok: true }));
+    await settle();
+    expect(unread(db, pane.id)).toBe(1);
+  });
+
+  it('bolds it for a backend that has never heard of the field', async () => {
+    // The failure direction that matters: an extra mark is noise, a missing
+    // one loses news. codex and cursor send no `silent`, ever.
+    const { pane, runner, db } = await boot();
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    await settle();
+    runner.send(JSON.stringify({ t: 'turn-done', ok: true, silent: false }));
+    await settle();
+    expect(unread(db, pane.id)).toBe(1);
+  });
+
+  it('bolds it when a silent turn FAILED — an error is always news', async () => {
+    const { pane, runner, db } = await boot();
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    await settle();
+    runner.send(JSON.stringify({ t: 'turn-done', ok: false, error: 'boom' }));
+    await settle();
+    expect(unread(db, pane.id)).toBe(1);
   });
 });
