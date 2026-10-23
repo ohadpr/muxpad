@@ -42,6 +42,7 @@ import {
 import { bold, dim } from '../ansi.js';
 import { AuthHealPolicy, authGiveUpNotice, isAuthFailureText } from '../auth-heal.js';
 import { BackgroundCommands } from '../background-commands.js';
+import { RECOVERY_COMPACT_INSTRUCTIONS, contextHeal } from '../context-heal.js';
 import type { AgentMode, AgentQuestion, NotifyStatus, RunnerFrame } from '../protocol.js';
 import { ReplyBlockTracker, replyToolUseId } from '../reply-stream.js';
 import {
@@ -1256,6 +1257,15 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
    * reply guard; see needsReplyFallback.
    */
   let turnHuman = false;
+  /**
+   * The message whose send has already triggered ONE compaction.
+   *
+   * The budget is one per message, and this is the whole of it: a single
+   * message can be larger than the window on its own, and compacting the
+   * history again cannot make room for it — it would only spend the rest of
+   * the conversation in a loop that cannot succeed. See context-heal.ts.
+   */
+  let contextHealed: string | null = null;
 
   /** One-line snippet of assistant prose for a push body — strip the loudest
    *  markdown, collapse whitespace, truncate. Empty → undefined (caller falls
@@ -2715,6 +2725,9 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
               ...backgroundField(),
             });
           } else if (msg.subtype === 'success') {
+            // The conversation is moving again; a later overflow is a new
+            // situation and gets its own attempt.
+            contextHealed = null;
             log(dim(`✓ turn done · ${secs}s · $${msg.total_cost_usd.toFixed(2)}`));
             emit({
               t: 'turn-done',
@@ -2732,8 +2745,35 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
             if (!resumeSid && !titleGenerated) void generateTitle();
           } else {
             const error = msg.errors?.join('; ') || msg.subtype;
-            log(`✗ turn failed: ${error}`);
-            emit({ t: 'turn-done', ok, error, ...backgroundField() });
+            // ── THE CONTEXT IS FULL, AND THE CHAT IS NOW UNUSABLE ───────────
+            //
+            // Every send answers `Prompt is too long`, including the one that
+            // would ask for a compaction — so there is no way out from inside
+            // the conversation. muxpad does not compact on a percentage and
+            // still will not; it compacts HERE, after a send has already
+            // failed, once per message, and says so. See context-heal.ts for
+            // why that is a different decision from the one that was turned
+            // off.
+            const heal = contextHeal({
+              error,
+              pending: currentTurnText,
+              alreadyTried: contextHealed !== null && contextHealed === (currentTurnText ?? ''),
+            });
+            if (heal.act === 'compact') {
+              contextHealed = currentTurnText ?? '';
+              log(`✗ turn failed: ${error} — compacting and retrying`);
+              emit({ t: 'turn-done', ok: false, error: heal.notice, ...backgroundField() });
+              slash('compact', RECOVERY_COMPACT_INSTRUCTIONS);
+              // …and the message the user actually sent goes back on the queue
+              // BEHIND it, so the retry runs against the compacted session.
+              if (heal.retry) send(heal.retry);
+            } else if (heal.act === 'give-up') {
+              log(`✗ turn failed: ${error} — compaction did not make room`);
+              emit({ t: 'turn-done', ok: false, error: heal.notice, ...backgroundField() });
+            } else {
+              log(`✗ turn failed: ${error}`);
+              emit({ t: 'turn-done', ok, error, ...backgroundField() });
+            }
           }
           interruptRequested = false;
           kick(); // release the next queued send, if any
