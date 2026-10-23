@@ -2669,7 +2669,10 @@
 .navtree-rename {
   flex: 1;
   min-width: 0;
-  height: calc(var(--nt-row-tab) - 6px);
+  /* The row already pays 6px above and below its content. Keep the input,
+     including its border, inside that space instead of growing the grid. */
+  box-sizing: border-box;
+  height: calc(var(--nt-row-tab) - 12px);
   margin: 0 2px;
   padding: 0 6px;
   /* THE ELEVATED SURFACE OF WHATEVER ISLAND THIS IS IN — the only form of

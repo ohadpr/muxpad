@@ -1539,6 +1539,18 @@
   align-items: flex-end;
   pointer-events: none;
 }
+.chat-chip-progress-label {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  padding: 2px 0;
+  background: rgb(0 0 0 / 65%);
+  color: #fff;
+  text-align: center;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 14px;
+}
 .chat-chip-progress-fill {
   width: 100%;
   background: color-mix(in srgb, var(--chat-accent) 38%, transparent);
@@ -1589,11 +1601,8 @@
   background: color-mix(in srgb, #000 72%, transparent);
 }
 
-/* ── THE BATCH LINE ───────────────────────────────────────────────────────
-   One line above the chips while a pick is in flight. It answers the one
-   question the chips cannot — how much longer — and it is the only place a
-   cancel-everything lives. It is NOT drawn when nothing is uploading: a strip
-   that is always there is chrome, and this is news. */
+/* Upload errors stay visible in words until retry/remove. Routine progress
+   lives in the previews and never adds a temporary row to the composer. */
 .chat-uploads {
   display: flex;
   align-items: center;
@@ -1610,40 +1619,6 @@
   flex: 0 0 auto;
   white-space: nowrap;
 }
-.chat-uploads-track {
-  flex: 1 1 auto;
-  min-width: 40px;
-  height: 3px;
-  border-radius: 2px;
-  background: color-mix(in srgb, var(--chat-fg) 12%, transparent);
-  overflow: hidden;
-}
-.chat-uploads-fill {
-  display: block;
-  height: 100%;
-  background: var(--chat-accent);
-  transition: width 180ms linear;
-}
-@media (prefers-reduced-motion: reduce) {
-  .chat-uploads-fill {
-    transition: none;
-  }
-}
-.chat-uploads-cancel {
-  flex: 0 0 auto;
-  border: none;
-  background: transparent;
-  color: var(--chat-dim);
-  font: inherit;
-  padding: 2px 4px;
-  border-radius: 4px;
-  cursor: pointer;
-}
-.chat-uploads-cancel:hover {
-  color: var(--chat-fg);
-  background: color-mix(in srgb, var(--chat-fg) 8%, transparent);
-}
-
 /* Clickable image thumbnail inline in a history bubble (opens the lightbox). */
 .chat-img-thumb {
   /* Each image breaks onto its OWN line (block), and the frame shrink-wraps

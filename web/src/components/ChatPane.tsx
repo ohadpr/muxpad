@@ -133,13 +133,7 @@ import { documentVisible } from '../lib/seen-ack';
 import { composerAfterLateAck, watchdogVerdict } from '../lib/send-watchdog';
 import { NO_ROUNDS, loadSpawnRounds } from '../lib/spawn-rounds';
 import { uploadError } from '../lib/upload-error';
-import {
-  type UploadItem,
-  UploadQueue,
-  formatBytes,
-  summarize,
-  summaryLabel,
-} from '../lib/upload-queue';
+import { type UploadItem, UploadQueue, formatBytes, summarize } from '../lib/upload-queue';
 import type { AgentLink } from '../lib/voice/session';
 import { useVoice } from '../lib/voice/use-voice';
 import { workingVariantFor } from '../lib/working-variant';
@@ -2500,7 +2494,7 @@ export function ChatPane({
    * The old failure surface was a notice that said the file and the server's
    * sentence — which was itself the fix for "uploading videos just fails
    * silently". A tooltip on a 52px tile would have quietly undone that: nobody
-   * hovers a chip to discover that their upload died. So the batch line keeps
+   * hovers a chip to discover that their upload died. So a failure line keeps
    * saying it, in text, and it does not time out — it is cleared by retrying
    * or removing the chip, which are the two things that resolve it.
    */
@@ -5187,40 +5181,12 @@ export function ChatPane({
                 under the input — not a floating strip above it. */}
               {chips.length > 0 ? (
                 <>
-                  {/* ── THE BATCH LINE ────────────────────────────────────
-                      One line for the whole pick, and it only exists while
-                      there is something to say. It answers the question a row
-                      of chips cannot: how much longer. Progress is by BYTES
-                      (see summarize) because a file count sits still through
-                      the one big file that is the entire wait. */}
-                  {uploads.active > 0 || uploads.failed > 0 ? (
-                    <div
-                      className={`chat-uploads${uploads.failed > 0 && uploads.active === 0 ? ' -failed' : ''}`}
-                    >
-                      <span className="chat-uploads-label">
-                        {uploads.active > 0 ? summaryLabel(uploads) : failureLabel}
-                      </span>
-                      {uploads.active > 0 ? (
-                        <>
-                          <span className="chat-uploads-track" aria-hidden="true">
-                            <span
-                              className="chat-uploads-fill"
-                              style={{ width: `${uploads.pct}%` }}
-                            />
-                          </span>
-                          <button
-                            type="button"
-                            className="chat-uploads-cancel"
-                            onClick={() => {
-                              for (const c of chips)
-                                if (c.state === 'queued' || c.state === 'uploading')
-                                  uploader.cancel(c.id);
-                            }}
-                          >
-                            Cancel
-                          </button>
-                        </>
-                      ) : null}
+                  {/* Progress stays inside each preview so completing a
+                      small upload never removes a row from the composer.
+                      Failures remain visible in words until resolved. */}
+                  {uploads.failed > 0 ? (
+                    <div className="chat-uploads -failed" role="alert">
+                      <span className="chat-uploads-label">{failureLabel}</span>
                     </div>
                   ) : null}
                   <div className="chat-chips">
@@ -5281,11 +5247,29 @@ export function ChatPane({
                             </span>
                           )}
                           {busy ? (
-                            <span className="chat-chip-progress" aria-hidden="true">
+                            <span
+                              className="chat-chip-progress"
+                              role="progressbar"
+                              tabIndex={0}
+                              aria-label={`Uploading ${ch.name}`}
+                              aria-valuemin={0}
+                              aria-valuemax={100}
+                              aria-valuenow={Math.round(pct)}
+                              aria-valuetext={
+                                ch.state === 'queued'
+                                  ? 'Queued'
+                                  : pct >= 100
+                                    ? 'Processing'
+                                    : `${Math.round(pct)}%`
+                              }
+                            >
                               <span
                                 className="chat-chip-progress-fill"
                                 style={{ height: `${pct}%` }}
                               />
+                              <span className="chat-chip-progress-label" aria-hidden="true">
+                                {ch.state === 'queued' ? 'Queued' : `${Math.round(pct)}%`}
+                              </span>
                             </span>
                           ) : null}
                           {ch.state === 'error' || ch.state === 'canceled' ? (

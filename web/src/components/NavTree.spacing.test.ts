@@ -551,6 +551,19 @@ describe('what the pass was NOT allowed to move', () => {
     );
   });
 
+  it('rename input and row padding fit without increasing the chat row height', () => {
+    const rename = ruleBody(NAV_CSS, '.navtree-rename');
+    expect(decl(rename, 'box-sizing')).toBe('border-box');
+    const inputHeight = resolve(decl(rename, 'height'), BASE);
+    const pad = decl(ruleBody(NAV_CSS, '.navtree-tab-row'), 'padding');
+    expect(
+      inputHeight + resolve(side(pad, 'top'), BASE) + resolve(side(pad, 'bottom'), BASE),
+    ).toBeLessThanOrEqual(resolve(BASE['--nt-row-tab'] as string, BASE));
+    expect(resolve(decl(rename, 'height'), SHEET)).toBeLessThanOrEqual(
+      resolve(SHEET['--nt-row-tab'] as string, SHEET),
+    );
+  });
+
   it('the rail’s chip sits at its track’s HEAD, like the plate it replaced', () => {
     // Same load-bearing assumption as the icon plate above, restated for the
     // element that is actually rendered on the rail: the gap to the name is

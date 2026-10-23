@@ -299,6 +299,7 @@ it('draws the file before a byte moves, and tracks the bytes', async () => {
   const chip = () => host.querySelector('.chat-chip');
   expect(chip()).not.toBeNull();
   expect(chip()?.getAttribute('data-state')).toBe('uploading');
+  expect(host.querySelector('.chat-uploads')).toBeNull();
   // Send is held while bytes are in flight — a message that goes without its
   // attachment is the silent loss this is all about.
   expect(
@@ -307,12 +308,16 @@ it('draws the file before a byte moves, and tracks the bytes', async () => {
   await act(async () => {
     xhr.progress(400, 1000);
   });
-  expect(host.textContent).toContain('40%');
+  expect(host.querySelector('.chat-chip-progress-label')?.textContent).toBe('40%');
+  expect(chip()?.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow')).toBe('40');
+  expect(host.querySelector('.chat-uploads')).toBeNull();
+  expect(host.querySelector('.chat-chip-progress-label')?.closest('.chat-chip')).toBe(chip());
   await act(async () => {
     xhr.fire('load');
   });
   expect(chip()?.getAttribute('data-state')).toBe('done');
-  // …and the strip goes away when there is nothing left to say.
+  expect(chip()?.querySelector('[role="progressbar"]')).toBeNull();
+  // Progress disappears inside the existing tile; no batch row changes height.
   expect(host.querySelector('.chat-uploads')).toBeNull();
   expect(host.querySelector<HTMLButtonElement>('[aria-label="Send"]')).not.toBeNull();
 });
