@@ -1496,28 +1496,41 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
 
   const options: Options = {
     cwd: process.cwd(),
-    // ── NOTHING COMPACTS A CHAT EXCEPT THE PERSON READING IT ────────────────
+    // ── COMPACTION IS THE HARNESS'S JOB, AND IT ALWAYS WAS ─────────────────
     //
-    // This was `autoCompactWindow: 200_000`, to stop watchers resuming 900k
-    // conversations on every fire. It worked, and it was the wrong instrument:
-    // the window is per SESSION, so it also applied to the long threads a
-    // human is in the middle of. Measured on one of them — a deal thread —
-    // two automatic compactions in three hours, 216k -> 4.7k and 167k -> 6.3k,
-    // 372k tokens of verbatim history dropped without anybody asking.
+    // There is no `settings` override here on purpose. The whole episode, in
+    // two days and three commits:
     //
-    // A compaction is lossy and IRREVERSIBLE from inside the session. Deciding
-    // to take that is the user's call, every time, so muxpad does not make it:
-    // the context meter turns amber, a Compact button appears beside the model
-    // chip (SessionBar), and nothing happens until it is pressed.
+    //   85ad985  `autoCompactWindow: 200_000`, to stop watcher panes resuming
+    //            900k conversations on every fire. It worked on the bill and
+    //            moved EVERY chat's compaction five times earlier, to 200k on
+    //            a 1M model.
+    //      ↓     "i started noticing compaction messages that are very
+    //            concerning me … i didn't see these previously" — measured on
+    //            a deal thread: two compactions in three hours, 216k → 4.7k
+    //            and 167k → 6.3k.
+    //   a6d9979  compaction turned OFF entirely, which is not what was asked
+    //            for and is strictly worse: at the ceiling every send fails
+    //            with `Prompt is too long`, including the one that would ask
+    //            for a compaction. The chat is dead, not degraded.
+    //      ↓     "up until a week or two ago I never had to deal with
+    //            compaction it's probably just happened automatically at the
+    //            harness level" — correct, and the right reading of the whole
+    //            thing: the complaint was never that compaction exists.
     //
-    // `autoCompactEnabled: false`, NOT `DISABLE_COMPACT`: that env var also
-    // disables the manual /compact, which is the one this hands to the user.
+    // So: no window, no disable. The harness compacts when the window is
+    // actually running out, which is what it did before any of this and what
+    // nobody ever had to think about.
     //
-    // THE COST, STATED: a session that runs to the real window ceiling now
-    // fails its turn instead of silently compacting. That is the trade asked
-    // for — a hard edge you can see beats a quiet edit of your own history —
-    // and it is why the warning starts at 70%, not at 95%.
-    settings: { autoCompactEnabled: false },
+    // THE COST THAT STARTED IT still has a home, and a better one. A watcher
+    // resuming an enormous conversation on every fire is a CRON problem, and
+    // crons have `on_context=rotate` — summarise, start a fresh session, carry
+    // the briefing over (chat/summarize.ts). That targets the panes with the
+    // runaway bill instead of every chat a human is sitting in.
+    //
+    // What muxpad keeps is the part that was genuinely missing: the context
+    // meter, the Compact button beside the model chip, and the recovery in
+    // context-heal.ts for a send that fails for room anyway.
     // ─── ONE DELEGATION PRIMITIVE, AND IT IS THE SUB-CHAT ────────────────────
     //
     // `disallowedTools` removes a tool from the MODEL'S CONTEXT — it is not a

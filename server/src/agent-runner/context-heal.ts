@@ -5,33 +5,31 @@ import { COMPACT_INSTRUCTIONS } from '@muxpad/shared';
  *
  * ─── How we got here ───────────────────────────────────────────────────────
  *
- * muxpad turns the harness's automatic compaction OFF (`autoCompactEnabled:
- * false`, backends/claude.ts), and that was asked for in these words:
+ * The harness compacts on its own when the window runs out, and did so
+ * invisibly for as long as anybody had been using muxpad. Then, in two days:
+ * a 200k window was imposed on a 1M model to cap a watcher's recurring bill
+ * (which rewrote live threads — 216k → 4.7k on a deal thread), and the fix for
+ * THAT turned compaction off altogether (which wedged a chat at the ceiling:
+ * every send answering `Prompt is too long`, including the one that would ask
+ * for a compaction).
  *
- *   "don't auto-compact … but don't compact 1m down to 20k chars, be sensible.
- *    never auto compact on your own accord"
+ * Both overrides are gone. The harness's own compaction is back, which is what
+ * nobody ever had to think about.
  *
- * The reason was good and still holds: compaction is lossy and irreversible,
- * and two automatic ones were measured dropping 372k tokens of a deal thread
- * nobody had agreed to lose. The comment on that option states the price it
- * accepted — "a session that runs to the real window ceiling now fails its
- * turn instead of silently compacting".
- *
- * That price has now been paid, and it is worse than it reads. At the ceiling
- * EVERY send fails with a bare `Prompt is too long`, so the chat is not
- * degraded, it is DEAD: you cannot ask it anything, including to compact
- * itself. Reported with a screenshot of two such failures in a row at 98%.
+ * This module is what remains: the backstop for a send that fails for want of
+ * room ANYWAY. It is not the primary mechanism and must not become one — the
+ * harness compacts BEFORE the failure, and this only runs if something got
+ * past that (a backend with no compaction of its own, a single message larger
+ * than the window, a provider whose limit is lower than the harness thinks).
  *
  * ─── The distinction this module draws ─────────────────────────────────────
  *
- * Not compacting at 70% is a choice about a conversation that still works.
- * Not compacting at the wall is not a choice at all — the alternative to
- * compacting is a chat nobody can use again.
- *
- * So: nothing compacts on a percentage, ever. Compaction happens only AFTER a
- * send has actually failed for want of room, exactly once per message, and it
- * says so in the chat when it does. That is a recovery from a hard failure,
- * which is the one thing the user's instruction was never about.
+ * muxpad itself still compacts nothing on a percentage. What it does here is
+ * recover from a send that has ALREADY failed: exactly once per message, with
+ * the instructions the Compact button uses, and it says so in the chat. That
+ * is a recovery from a hard failure rather than a judgement about a
+ * conversation that still works, and it is the one thing "never auto compact
+ * on your own accord" was never about.
  *
  * ─── And when compaction itself cannot help ────────────────────────────────
  *
