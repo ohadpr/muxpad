@@ -3420,6 +3420,27 @@ body.sidenav-resizing iframe {
   color: var(--fg);
   font-weight: 400;
 }
+/* ── THE PINNED MARK ON A SHEET ROW ─────────────────────────────────────────
+   The same 2px accent bar the desktop row wears, in the same channel, with two
+   numbers changed for this surface:
+
+     · FULL HEIGHT, not inset 5px. A sheet row is a full-bleed band with no
+       radius (above) and no gap between rows, so an inset bar would read as a
+       floating tick rather than as the row's own edge — and on a list where
+       rows touch, the inset is what makes two adjacent pinned rows look like
+       one dashed line.
+     · `left: 0`, not 2px. There is no pill to sit inside here: the selected
+       row's fill is the band itself, edge to edge, so the rim IS x=0.
+
+   The row is already `position: relative` for the swipe shell, so this needs
+   no positioning context of its own. */
+.navtree[data-variant="sheet"] .navtree-pin-edge {
+  left: 0;
+  top: 0;
+  bottom: 0;
+  border-radius: 0;
+}
+
 /* The swipe shell is the row's real outer box on this surface, so it has to be
    square too — the shell CLIPS, and a rounded clip on a square band cuts the
    band's own corners off. */

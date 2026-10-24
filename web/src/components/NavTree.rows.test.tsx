@@ -402,6 +402,21 @@ describe('the sheet nests a child under its parent and files done chats away', (
     expect(html).not.toContain('navtree-row-pill-glyph');
   });
 
+  it('draws it ON THE SHEET TOO — the surface that has nothing else to say it', () => {
+    // Reported: "mobile sidebar render doesn't include many recent changes to
+    // desktop, for example I don't see pinned chat indicators". It was exactly
+    // that — the edge was designed on the desktop row and the sheet row was
+    // never given it, the same drift `data-child` had before it.
+    //
+    // And the sheet needs it MORE: the sidebar ALSO says pinned through its
+    // hover-revealed pin button, while a touch row carries no permanent
+    // controls at all by design (lib/nav-row-affordances.ts). Position cannot
+    // say it either — the pin divider was deleted when this mark arrived.
+    const html = sheetHtml([tab('pinned', { pinned: true }), tab('ordinary')]);
+    expect(count(html, 'navtree-pin-edge')).toBe(1);
+    expect(html).toContain('data-pinned="true"');
+  });
+
   it('marks the child row as a child, so the indent rule can reach it', () => {
     // `data-child` was emitted by the desktop row and not by the sheet's, so
     // even once the grouping arrived a child would have been an ordinary line.

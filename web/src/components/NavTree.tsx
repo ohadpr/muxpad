@@ -2758,6 +2758,18 @@ function TabRow({
       // attribute and not a CSS sibling test — on THIS surface the sibling
       // test could never have worked.
       data-child-last={childLast ? 'true' : undefined}
+      // PINNED, the same way the desktop row says it — and missing here for
+      // the same reason `data-child` above was: a mark gets designed on one
+      // surface and the other is left behind. Reported as "mobile sidebar
+      // render doesn't include many recent changes to desktop, for example I
+      // don't see pinned chat indicators".
+      //
+      // It matters MORE here than on desktop, not less: the sidebar also says
+      // pinned with a hover-revealed pin button, and the sheet deliberately
+      // has no permanent per-row controls at all (nav-row-affordances.ts), so
+      // without this nothing on a touch row says it. Position cannot: the pin
+      // divider was deleted when the edge was introduced.
+      data-pinned={tab.pinned ? 'true' : undefined}
       // No `data-state` here, and that is the design rather than an omission:
       // the left bar and the row tint in StateChip.css are keyed off it, and
       // the mobile rail has neither. Its state is one bit, drawn by the
@@ -2765,6 +2777,12 @@ function TabRow({
       data-unread={tab.unread ? 'true' : undefined}
       data-pressing={pressing ? 'true' : undefined}
     >
+      {/* THE PINNED MARK, same channel as the desktop row's: a 2px accent bar
+          on the leading rim, which nothing else on this surface paints in. The
+          sheet needs it MORE than the sidebar does — the sidebar also shows
+          pinned through its hover-revealed pin button, and a touch row has no
+          permanent controls at all by design. */}
+      {tab.pinned && <span className="navtree-pin-edge" aria-hidden="true" />}
       {sheetLeadCell}
       {isEditing ? (
         renameInput
