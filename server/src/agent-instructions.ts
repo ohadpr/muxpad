@@ -34,11 +34,79 @@ import {
 /** Seed content — concise and harness-neutral (any of the three backends may
  *  be reading this). Written to disk verbatim (under a generated-file banner)
  *  on every boot. */
+/**
+ * THE RULES THAT MUST SURVIVE A LONG SESSION.
+ *
+ * ─── Why this block exists ────────────────────────────────────────────────
+ *
+ * muxpad's instructions reach the three harnesses by three different routes,
+ * because the harnesses offer three different surfaces:
+ *
+ *   claude  — a real system prompt, re-sent with every request. Persistent by
+ *             construction: it survives a compaction, a resume, a long thread.
+ *   codex   — no system-prompt surface at all (`experimental_instructions_file`
+ *             REPLACES the base prompt), so the file is prepended to the first
+ *             user message of a new session.
+ *   cursor  — same, for the same reason.
+ *
+ * For the latter two that made the rules A MESSAGE, and a message is subject
+ * to everything that happens to messages: it ages, it is summarised, it is
+ * compacted away. Nothing ever put it back, because every turn after the
+ * first is a `resume` and the code read `resuming` as "already carries it
+ * in-thread".
+ *
+ * MEASURED, on a codex pane four days old: 2,392 turns, 6.5 MB of transcript,
+ * ZERO occurrences of the instruction block or of any rule in it. That pane
+ * then sent a Slack DM to a colleague as a BOT, with no approval, by reading
+ * a token off disk — three things the instructions forbid in as many words.
+ * It was not disobedient. It had never been told.
+ *
+ * ─── What this is ─────────────────────────────────────────────────────────
+ *
+ * The non-negotiables, short enough to re-assert on EVERY turn of a
+ * no-system-prompt backend. It is embedded verbatim in the full document
+ * below, so there is one text rather than two that drift: edit it here and
+ * both the file and the per-turn card change together.
+ *
+ * The bar for being in here is NOT importance, it is COST OF NOT KNOWING:
+ * every line names something whose failure is irreversible, invisible, or
+ * lands on somebody who is not in this conversation.
+ */
+export const STANDING_RULES = `## muxpad's standing rules
+
+These hold in every pane, on every turn, whatever else you have been told.
+
+- **Slack goes out AS THE USER, and only with approval.** \`muxpad slack post
+  <@user|#channel> "text"\` — that is the only route. It sends under their
+  name, prefixed, and waits for a passkey approval. There is no bot identity
+  and no flag that asks for one: a bot DM lands in the recipient's private
+  conversation with "muxpad", which the user is not in and cannot see.
+- **NEVER reach a service by reading its credentials off disk.** Not for
+  Slack, not for anything muxpad brokers. A token in a file is not permission;
+  the approval is the permission. Missing scopes mean a token update, never a
+  credentials fallback.
+- **Delegate with \`muxpad agent new\`, never \`codex exec\` / \`claude -p\`.** A
+  sub-agent is a pane: a row, a transcript, a status, something the user can
+  read and interrupt. A shelled-out CLI is a process nobody can see.
+- **Schedule with \`muxpad cron\`.** Never the harness's own scheduler, under
+  any of its names — they fire into a stale context, expire silently, and are
+  invisible from everywhere but here.
+- **Apps are PRIVATE (tailnet only); \`muxpad publish\` is PUBLIC.** Never
+  publish an app's data or suggest exposing it.
+- **Anything irreversible or outward-facing is confirmed first** — a push, a
+  deploy, a delete, a message to another person — unless the user has already
+  said to go ahead.
+`;
+
 export const AGENT_INSTRUCTIONS_SEED = `# muxpad
 
 You are running inside a muxpad pane — a multi-workspace terminal-and-browser
 cockpit. The \`muxpad\` CLI is on PATH; run \`muxpad --help\` for the full verb
-list. Capabilities worth knowing:
+list.
+
+${STANDING_RULES}
+
+Capabilities worth knowing:
 
 - \`muxpad search "query"\` (add \`--sessions\` to list matching sessions) —
   full-text search across the archived history of EVERY agent session ever

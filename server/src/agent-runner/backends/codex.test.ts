@@ -308,7 +308,7 @@ describe('codex backend', () => {
     expect(readLog('old-thread')).toEqual([]); // old file migrated away
   });
 
-  it('prepends muxpad instructions to the FIRST message of a NEW session only', async () => {
+  it('prepends the full instructions to a NEW session, and the standing rules to every turn after', async () => {
     writeFileSync(join(dataDir, 'agent-instructions.md'), 'use muxpad publish\n');
     const { b, calls } = await boot();
     b.send('hi');
@@ -325,11 +325,22 @@ describe('codex backend', () => {
     await tick();
     // …but the muxpad transcript records the RAW prompt (chat stays clean).
     expect((readLog('thr-instr')[0] as { text: string }).text).toBe('hi');
-    // The next turn RESUMES the thread → no re-injection.
+    // ── A RESUME RE-ASSERTS THE NON-NEGOTIABLES ──────────────────────────
+    // It used to send the bare prompt, on the reasoning that "a resume
+    // already carries it in-thread". That is true on day one and false ever
+    // after: the block is a MESSAGE, and a message is summarised and
+    // compacted away. Measured on a four-day-old pane — 2,392 turns, zero
+    // occurrences of any muxpad rule — which then DM'd a colleague on Slack
+    // as a bot, unapproved, from a token on disk.
     b.send('again');
     await tick();
     expect(calls[2]!.args.slice(0, 3)).toEqual(['exec', 'resume', 'thr-instr']);
-    expect(calls[2]!.args.at(-1)).toBe('again');
+    const resumed = calls[2]!.args.at(-1) as string;
+    expect(resumed.endsWith('again')).toBe(true);
+    expect(resumed).toContain('muxpad slack post');
+    // …and NOT the whole 33 KB document, which would pay for the rules in the
+    // context pressure that lost them.
+    expect(resumed).not.toContain('use muxpad publish');
   });
 
   it('missing instructions file → raw prompt, no error', async () => {
@@ -414,7 +425,14 @@ describe('codex backend', () => {
     b.send('second');
     await tick();
     expect(calls[2]!.args.slice(0, 3)).toEqual(['exec', 'resume', 'thr-mode']);
-    expect(calls[2]!.args.at(-1)).toBe('second');
+    // The PROMPT is the message plus muxpad's standing rules (preamble.ts)
+    // and nothing else: no <muxpad-mode> note, which is what this test is
+    // about. Asserting an exact string here made it a test of two things,
+    // and the second one changed.
+    const sent = calls[2]!.args.at(-1) as string;
+    expect(sent.endsWith('second')).toBe(true);
+    expect(sent).not.toContain('<muxpad-mode>');
+    expect(sent).not.toContain('be terse');
     expect(logs.some((l) => /Claude-only/i.test(l))).toBe(true);
   });
 
@@ -431,7 +449,14 @@ describe('codex backend', () => {
     b.setMode('agent'); // already agent — the server sends this on every hello
     b.send('second');
     await tick();
-    expect(calls[2]!.args.at(-1)).toBe('second');
+    // The PROMPT is the message plus muxpad's standing rules (preamble.ts)
+    // and nothing else: no <muxpad-mode> note, which is what this test is
+    // about. Asserting an exact string here made it a test of two things,
+    // and the second one changed.
+    const sent = calls[2]!.args.at(-1) as string;
+    expect(sent.endsWith('second')).toBe(true);
+    expect(sent).not.toContain('<muxpad-mode>');
+    expect(sent).not.toContain('be terse');
   });
 
   it('switching to Agent mode is a no-op — there was never anything to revoke', async () => {
@@ -446,7 +471,14 @@ describe('codex backend', () => {
     b.setMode('agent');
     b.send('second');
     await tick();
-    expect(calls[2]!.args.at(-1)).toBe('second');
+    // The PROMPT is the message plus muxpad's standing rules (preamble.ts)
+    // and nothing else: no <muxpad-mode> note, which is what this test is
+    // about. Asserting an exact string here made it a test of two things,
+    // and the second one changed.
+    const sent = calls[2]!.args.at(-1) as string;
+    expect(sent.endsWith('second')).toBe(true);
+    expect(sent).not.toContain('<muxpad-mode>');
+    expect(sent).not.toContain('be terse');
   });
 
   it('advertises its model list + default in the status frame (the picker)', async () => {

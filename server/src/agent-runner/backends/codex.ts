@@ -16,9 +16,9 @@ import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import type { ChatEvent } from '@muxpad/shared';
-import { readAgentInstructions, wrapAgentInstructions } from '../../agent-instructions.js';
 import { appendTranscriptEvent, migrateTranscript } from '../../chat/TranscriptReader.js';
 import { codexHome, readCodexDefaultModel, readCodexModels } from '../../codex-models.js';
+import { turnPreamble } from '../preamble.js';
 
 // Provider ids we adopt as the transcript-log filename + hello sid must satisfy
 // the server's charset gate, or the hello is rejected and the pane goes dark.
@@ -40,17 +40,6 @@ const CODEX_BIN = process.env.MUXPAD_CODEX_BIN || 'codex';
  * `modeOverlay` is <dataDir>/chat-mode.md, present only in Chat mode. Both
  * optional — with neither, the prompt is returned untouched.
  */
-export function withSessionPreamble(
-  prompt: string,
-  instructions: string | null,
-  modeOverlay: string | null,
-): string {
-  const blocks: string[] = [];
-  if (instructions?.trim()) blocks.push(wrapAgentInstructions(instructions));
-  // Behavior after capabilities, matching the Claude backend's append order.
-  if (modeOverlay?.trim()) blocks.push(`<muxpad-mode>\n${modeOverlay.trim()}\n</muxpad-mode>`);
-  return blocks.length ? `${blocks.join('\n\n')}\n\n${prompt}` : prompt;
-}
 
 // CODEX CANNOT COMMIT UNLESS WE SAY SO, AND THAT IS NOT A WORKTREE PROBLEM.
 //
@@ -303,9 +292,13 @@ export function createCodexBackend(
     //
     // NO mode overlay rides along any more: codex is Agent-mode only, and
     // Agent mode is by definition the harness exactly as it ships.
-    const finalPrompt = resuming
-      ? prompt
-      : withSessionPreamble(prompt, readAgentInstructions(), null);
+    // ONE RULE FOR EVERY HARNESS — see ../preamble.ts. A fresh session gets
+    // the full document; every turn after it gets the standing rules, because
+    // "a resume already carries it in-thread" was true on day one and false
+    // for the four days after (measured: 2,392 turns with zero occurrences of
+    // any muxpad rule, and a Slack DM sent as a bot by a pane that had never
+    // been told not to).
+    const finalPrompt = turnPreamble({ prompt, resuming, modeOverlay: null });
     const head = resuming ? ['exec', 'resume', sessionRef as string] : ['exec'];
     const common = [
       '--json',
