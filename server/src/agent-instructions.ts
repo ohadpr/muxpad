@@ -15,10 +15,11 @@
 //             append }` (backends/claude.ts)
 // - codex   → no append mechanism in `codex exec` (its only instructions
 //             config REPLACES the base prompt), so the content is prepended,
-//             delimited, to the first user message of each NEW session
-//             (backends/codex.ts)
-// - cursor  → same fallback; `cursor-agent` has no instructions flag
-//             (backends/cursor.ts)
+//             delimited, to a user message: the whole document on the first
+//             turn of a runner, STANDING_RULES on every turn after
+//             (agent-runner/preamble.ts, which has the reasoning)
+// - cursor  → same fallback, same module; `cursor-agent` has no instructions
+//             flag (backends/cursor.ts)
 // - `muxpad claude` TUI wrapper → native `--append-system-prompt`
 //   (scripts/muxpad cmd_claude)
 import { readFileSync } from 'node:fs';
@@ -81,21 +82,31 @@ These hold in every pane, on every turn, whatever else you have been told.
   name, prefixed, and waits for a passkey approval. There is no bot identity
   and no flag that asks for one: a bot DM lands in the recipient's private
   conversation with "muxpad", which the user is not in and cannot see.
-- **NEVER reach a service by reading its credentials off disk.** Not for
-  Slack, not for anything muxpad brokers. A token in a file is not permission;
-  the approval is the permission. Missing scopes mean a token update, never a
-  credentials fallback.
+- **NEVER reach a service by reading its credentials off disk.** A token in a
+  file is not permission; the approval is the permission. If the brokered
+  route fails or lacks scopes, say so and stop — never go around it.
 - **Delegate with \`muxpad agent new\`, never \`codex exec\` / \`claude -p\`.** A
   sub-agent is a pane: a row, a transcript, a status, something the user can
   read and interrupt. A shelled-out CLI is a process nobody can see.
 - **Schedule with \`muxpad cron\`.** Never the harness's own scheduler, under
-  any of its names — they fire into a stale context, expire silently, and are
-  invisible from everywhere but here.
+  any of its names — they fire into a stale context and expire silently. In a
+  cron fire your prose reaches NOBODY: say anything that matters with
+  \`muxpad say\` (Agent mode) or \`reply\` (Chat mode), and stay quiet otherwise.
 - **Apps are PRIVATE (tailnet only); \`muxpad publish\` is PUBLIC.** Never
   publish an app's data or suggest exposing it.
 - **Anything irreversible or outward-facing is confirmed first** — a push, a
   deploy, a delete, a message to another person — unless the user has already
-  said to go ahead.
+  said to go ahead. Before anything leaves this machine, read what is in it:
+  these repos are PUBLIC and the data on disk is personal.
+- **This is somebody's live workstation. Put no window and no dialog on their
+  screen.** Drive browsers only through the Playwright MCP (headless, muxpad's
+  own) — never launch one, never \`open\` a URL, never touch another app's
+  \`.app\` bundle or run \`osascript\`/\`screencapture\`: each raises a macOS
+  permission prompt on a display you cannot see. Bind servers to 127.0.0.1,
+  never \`--host\`/0.0.0.0 — this machine is on a tailnet.
+- **Never respawn, restart or kill a pane, an agent or ptyd to fix something.**
+  Live work you cannot see dies with it. Read logs and status instead, and let
+  the user choose the moment.
 `;
 
 export const AGENT_INSTRUCTIONS_SEED = `# muxpad

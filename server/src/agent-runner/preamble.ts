@@ -30,9 +30,15 @@ import {
  *
  * ─── The arrangement now ──────────────────────────────────────────────────
  *
- *   FIRST TURN of a session   the full instructions, as before.
+ *   FIRST TURN of a RUNNER    the full instructions.
  *   EVERY TURN after it       {@link STANDING_RULES} — the non-negotiables,
  *                             short enough to re-send forever.
+ *
+ * Keyed on the runner PROCESS rather than the session, because "is this a
+ * resume" is a question neither backend can answer honestly — see
+ * {@link turnPreamble}'s `instructionsInThread`. A pane start is the cheap,
+ * observable edge, and it is also the one moment a long session may have lost
+ * the document to its own compaction.
  *
  * Both texts come from one source (agent-instructions.ts embeds the standing
  * rules verbatim in the full document), so the card cannot drift from the
@@ -49,8 +55,24 @@ import {
 export function turnPreamble(opts: {
   /** The user's message. */
   prompt: string;
-  /** Is this continuing an existing session rather than opening one? */
-  resuming: boolean;
+  /**
+   * Has THIS RUNNER PROCESS already put the full document in-thread?
+   *
+   * Per PROCESS, not per session, and that distinction is load-bearing twice:
+   *
+   *   · A resumed session whose original injection was compacted away gets the
+   *     whole document back the next time its pane starts, so the how-to half
+   *     — publish, the browser handoff, crons — is not lost for good.
+   *   · `cursor-agent --resume <id-it-has-never-seen>` does not fail. It opens
+   *     a BRAND NEW session under that id, and muxpad hands it a locally-minted
+   *     placeholder id the moment a pane connects — so a cursor pane that
+   *     restarted before anybody typed used to look like a resume forever and
+   *     never saw the document at all. Keying on the process makes that
+   *     unobservable difference stop mattering.
+   *
+   * The cost is the document once per pane start, not once per turn.
+   */
+  instructionsInThread: boolean;
   /** Mode contract, where a backend has one. Appended after the rules. */
   modeOverlay?: string | null;
   /** Test seam: the full instruction document. */
@@ -62,12 +84,18 @@ export function turnPreamble(opts: {
   const full = opts.instructions === undefined ? readAgentInstructions() : opts.instructions;
   const card = opts.standing ?? STANDING_RULES;
 
-  if (!opts.resuming) {
-    // A fresh session gets everything — the capabilities, the worked examples,
-    // the reasoning. The standing rules are inside it (one source), so this
-    // never carries both.
-    if (full?.trim()) blocks.push(wrapAgentInstructions(full));
+  if (!opts.instructionsInThread && full?.trim()) {
+    // The first turn of a runner gets everything — the capabilities, the worked
+    // examples, the reasoning. The standing rules are inside it (one source),
+    // so this never carries both.
+    blocks.push(wrapAgentInstructions(full));
   } else if (card.trim()) {
+    // NO full document to send is not a reason to send NOTHING. The document is
+    // read off disk and is regenerated at boot; a missing, empty or unreadable
+    // file, or a data dir holding only the user's own notes, used to mean a
+    // fresh session with zero rules — the exact state the Slack incident was
+    // sent from. The card is compiled in and cannot go missing, so it is the
+    // floor.
     // …and every turn after it gets the part that must not be forgotten.
     // Wrapped in the SAME delimiter as the full block: a backend's transcript
     // then shows one recognisable kind of muxpad injection rather than two,

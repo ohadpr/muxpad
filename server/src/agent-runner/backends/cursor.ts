@@ -60,6 +60,8 @@ export function createCursorBackend(
   const spawnFn = deps.spawn ?? spawn;
   const listModels: ModelFetch = deps.listModels ?? (() => cursorModelFetch(spawnFn));
   let sessionRef: string | null = opts.requestedSid;
+  /** Has the full instruction document gone out in this process yet? */
+  let sentInstructions = false;
   let liveSid = opts.requestedSid ?? randomUUID();
   let model = opts.requestedModel;
 
@@ -190,7 +192,16 @@ export function createCursorBackend(
     // and that is the point: this logic was copied between the two backends
     // and was wrong in both, which is how a rule ends up holding on one
     // harness and evaporating on another.
-    const finalPrompt = turnPreamble({ prompt, resuming, modeOverlay: null });
+    const finalPrompt = turnPreamble({
+      prompt,
+      // Per RUNNER, not per session: a resumed session gets the document back
+      // on the first turn after a pane start (its own compaction may have
+      // eaten it), and every turn after that gets the card. See ../preamble.ts
+      // for why `resuming` alone is a question this backend cannot answer.
+      instructionsInThread: resuming && sentInstructions,
+      modeOverlay: null,
+    });
+    sentInstructions = true;
     if (resuming) args.push('--resume', sessionRef as string);
     if (model) args.push('--model', model);
     args.push(finalPrompt);

@@ -343,11 +343,44 @@ describe('codex backend', () => {
     expect(resumed).not.toContain('use muxpad publish');
   });
 
-  it('missing instructions file → raw prompt, no error', async () => {
+  it('missing instructions file → the standing rules alone, no error', async () => {
+    // No document to read is not a reason to send NOTHING: the file is
+    // generated at boot and can be absent, empty or unreadable, and the card
+    // is compiled in. A rule-less fresh session is the exact state the Slack
+    // DM was sent from.
     const { b, calls } = await boot();
     b.send('plain');
     await tick();
-    expect(calls[1]!.args.at(-1)).toBe('plain');
+    const sent = calls[1]!.args.at(-1) as string;
+    expect(sent).toContain('muxpad slack post');
+    expect(sent.endsWith('plain')).toBe(true);
+  });
+
+  it('gives the full document to the FIRST turn after a pane start, resume or not', async () => {
+    // The test the original bug would have failed. A runner that boots with a
+    // session id has no idea whether that session still carries the document
+    // — a server restart, a respawn, or codex's own compaction all look the
+    // same from here, and `cursor-agent --resume <unknown>` silently opens a
+    // new session rather than failing. So the document rides the first turn
+    // of the PROCESS, and the card every turn after.
+    writeFileSync(join(dataDir, 'agent-instructions.md'), 'use muxpad publish\n');
+    const { b, calls } = await boot('thr-old');
+    b.send('after a restart');
+    await tick();
+    expect(calls[1]!.args.slice(0, 3)).toEqual(['exec', 'resume', 'thr-old']);
+    const first = calls[1]!.args.at(-1) as string;
+    expect(first).toContain('use muxpad publish');
+    expect(first.endsWith('after a restart')).toBe(true);
+    const turn = calls[1]!.child;
+    line(turn, { type: 'thread.started', thread_id: 'thr-old' });
+    line(turn, { type: 'turn.completed' });
+    closeChild(turn, 0);
+    await tick();
+    b.send('and again');
+    await tick();
+    const second = calls[2]!.args.at(-1) as string;
+    expect(second).not.toContain('use muxpad publish');
+    expect(second).toContain('muxpad slack post');
   });
 
   // ── Chat mode ───────────────────────────────────────────────────────────
@@ -404,7 +437,11 @@ describe('codex backend', () => {
     const { b, calls } = await bootMode('chat');
     b.send('hi');
     await tick();
-    expect(calls[1]!.args.at(-1)).toBe('hi');
+    // The standing rules still ride along (preamble.ts) — what must be absent
+    // is a <muxpad-mode> block, because there is no overlay to deliver.
+    const sent = calls[1]!.args.at(-1) as string;
+    expect(sent).not.toContain('<muxpad-mode>');
+    expect(sent.endsWith('hi')).toBe(true);
   });
 
   it('a mid-session switch to Chat changes NOTHING about the prompt', async () => {

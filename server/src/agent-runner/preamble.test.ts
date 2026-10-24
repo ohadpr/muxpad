@@ -19,26 +19,34 @@ import { turnPreamble } from './preamble.js';
 const FULL = 'FULL DOCUMENT\n\n## muxpad’s standing rules\nthe rules\n';
 
 describe('turnPreamble', () => {
-  it('gives a FRESH session the whole document', () => {
-    const out = turnPreamble({ prompt: 'do the thing', resuming: false, instructions: FULL });
+  it('gives the first turn of a runner the whole document', () => {
+    const out = turnPreamble({
+      prompt: 'do the thing',
+      instructionsInThread: false,
+      instructions: FULL,
+    });
     expect(out).toContain('FULL DOCUMENT');
     expect(out).toContain('<muxpad-instructions>');
     expect(out.endsWith('do the thing')).toBe(true);
   });
 
-  it('gives EVERY RESUMED turn the standing rules — the whole point', () => {
-    const out = turnPreamble({ prompt: 'do the thing', resuming: true, instructions: FULL });
+  it('gives EVERY turn after it the standing rules — the whole point', () => {
+    const out = turnPreamble({
+      prompt: 'do the thing',
+      instructionsInThread: true,
+      instructions: FULL,
+    });
     expect(out).toContain(STANDING_RULES.split('\n')[0] as string);
     expect(out.endsWith('do the thing')).toBe(true);
   });
 
   it('never sends both — the card is inside the document', () => {
-    const fresh = turnPreamble({ prompt: 'x', resuming: false, instructions: FULL });
+    const fresh = turnPreamble({ prompt: 'x', instructionsInThread: false, instructions: FULL });
     expect(fresh.match(/<muxpad-instructions>/g)).toHaveLength(1);
   });
 
   it('carries the rules whose absence caused the incident', () => {
-    const resumed = turnPreamble({ prompt: 'x', resuming: true, instructions: FULL });
+    const resumed = turnPreamble({ prompt: 'x', instructionsInThread: true, instructions: FULL });
     // Slack identity, Slack approval, and the credentials fallback.
     expect(resumed).toMatch(/muxpad slack post/);
     expect(resumed.toLowerCase()).toMatch(/approval/);
@@ -58,20 +66,50 @@ describe('turnPreamble', () => {
   it('appends a mode overlay after the rules, not before', () => {
     const out = turnPreamble({
       prompt: 'x',
-      resuming: true,
+      instructionsInThread: true,
       instructions: FULL,
       modeOverlay: 'be terse',
     });
     expect(out.indexOf('<muxpad-instructions>')).toBeLessThan(out.indexOf('<muxpad-mode>'));
   });
 
+  it('falls back to the card when there is no document to send', () => {
+    // The document is read off disk. Missing, empty, or a data dir holding
+    // only the user's own notes used to mean a fresh session with ZERO rules
+    // — the state the Slack DM was sent from. The card is compiled in.
+    const out = turnPreamble({ prompt: 'x', instructionsInThread: false, instructions: null });
+    expect(out).toContain(STANDING_RULES.split('\n')[0] as string);
+    expect(out.endsWith('x')).toBe(true);
+    expect(
+      turnPreamble({ prompt: 'x', instructionsInThread: false, instructions: '   ' }),
+    ).toContain('muxpad slack post');
+  });
+
+  it('sends the document ONCE per runner, not once per turn', () => {
+    const first = turnPreamble({ prompt: 'x', instructionsInThread: false, instructions: FULL });
+    const rest = turnPreamble({ prompt: 'x', instructionsInThread: true, instructions: FULL });
+    expect(first).toContain('FULL DOCUMENT');
+    expect(rest).not.toContain('FULL DOCUMENT');
+    expect(rest).toContain('muxpad slack post');
+  });
+
   it('injects nothing when there is nothing to inject', () => {
     expect(
-      turnPreamble({ prompt: 'bare', resuming: false, instructions: null, standing: '' }),
+      turnPreamble({
+        prompt: 'bare',
+        instructionsInThread: false,
+        instructions: null,
+        standing: '',
+      }),
     ).toBe('bare');
-    expect(turnPreamble({ prompt: 'bare', resuming: true, instructions: null, standing: '' })).toBe(
-      'bare',
-    );
+    expect(
+      turnPreamble({
+        prompt: 'bare',
+        instructionsInThread: true,
+        instructions: null,
+        standing: '',
+      }),
+    ).toBe('bare');
   });
 });
 

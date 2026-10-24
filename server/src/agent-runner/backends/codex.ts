@@ -30,17 +30,6 @@ import type { AgentBackend, BackendOptions, RunnerHost } from './types.js';
 
 const CODEX_BIN = process.env.MUXPAD_CODEX_BIN || 'codex';
 
-/**
- * Build the delimited preamble prepended to a NEW session's first user
- * message — the injection mechanism for the spawn-per-turn backends
- * (codex + cursor), neither of which has an append-instructions surface.
- * Shared by both so they can't drift.
- *
- * `instructions` is the universal <dataDir>/agent-instructions.md;
- * `modeOverlay` is <dataDir>/chat-mode.md, present only in Chat mode. Both
- * optional — with neither, the prompt is returned untouched.
- */
-
 // CODEX CANNOT COMMIT UNLESS WE SAY SO, AND THAT IS NOT A WORKTREE PROBLEM.
 //
 // This used to add the git common dir only when it was OUTSIDE the cwd — i.e.
@@ -183,6 +172,8 @@ export function createCodexBackend(
   // minted before the first turn ever ran — see the resume-with-fallback in
   // runTurn) and becomes the real thread_id after `thread.started`.
   let sessionRef: string | null = opts.requestedSid;
+  /** Has the full instruction document gone out in this process yet? */
+  let sentInstructions = false;
   // The id used for the hello frame + the muxpad transcript log filename. Kept
   // stable so history survives even before codex mints its own thread id.
   let liveSid = opts.requestedSid ?? randomUUID();
@@ -298,7 +289,16 @@ export function createCodexBackend(
     // for the four days after (measured: 2,392 turns with zero occurrences of
     // any muxpad rule, and a Slack DM sent as a bot by a pane that had never
     // been told not to).
-    const finalPrompt = turnPreamble({ prompt, resuming, modeOverlay: null });
+    const finalPrompt = turnPreamble({
+      prompt,
+      // Per RUNNER, not per session: a resumed session gets the document back
+      // on the first turn after a pane start (its own compaction may have
+      // eaten it), and every turn after that gets the card. See ../preamble.ts
+      // for why `resuming` alone is a question this backend cannot answer.
+      instructionsInThread: resuming && sentInstructions,
+      modeOverlay: null,
+    });
+    sentInstructions = true;
     const head = resuming ? ['exec', 'resume', sessionRef as string] : ['exec'];
     const common = [
       '--json',

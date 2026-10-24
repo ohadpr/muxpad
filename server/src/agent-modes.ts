@@ -21,9 +21,11 @@
 //   - claude  → the Agent SDK's native `systemPrompt: { preset:
 //               'claude_code', append }`, with the overlay appended after the
 //               universal instructions (backends/claude.ts)
-//   - codex   → delimited block prepended to the first user message of each
-//               NEW session (`codex exec` has no append-instructions surface)
-//   - cursor  → same fallback (`cursor-agent` has no instructions flag)
+//   - codex   → delimited block prepended to a user message
+//               (agent-runner/preamble.ts); `codex exec` has no
+//               append-instructions surface. Moot in practice: codex is
+//               Agent-mode only, so no overlay is ever passed.
+//   - cursor  → same module, same reason (`cursor-agent` has no flag either)
 //   - `muxpad claude` TUI wrapper → native --append-system-prompt
 //     (scripts/muxpad cmd_claude)
 //
