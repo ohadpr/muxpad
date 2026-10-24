@@ -52,6 +52,7 @@ import { startPaneReaper } from './pane-reaper.js';
 import { PtydCache, decoratePane, decorateTab } from './ptyd-cache.js';
 import { PtydClient } from './ptyd-client/PtydClient.js';
 import { createPublicApp } from './public-server.js';
+import { expiryOf } from './publish-expiry.js';
 import { Presence, PushService, attachAttentionPush, createPaneNotifier } from './push.js';
 import { releaseResidentPane } from './resident-release.js';
 import { openAiTranscriber } from './review/transcribe.js';
@@ -544,7 +545,11 @@ const server = serve({ fetch: app.fetch, port: config.port, hostname: config.hos
 // default: the funnel proxies to 127.0.0.1, nothing else needs it.
 const publicDir = join(config.dataDir, 'public');
 mkdirSync(publicDir, { recursive: true });
-const publicApp = createPublicApp(publicDir);
+// Expiry is read PER REQUEST, not snapshotted at boot: `publish --extend` has
+// to take effect on the next click, not on the next restart.
+const publicApp = createPublicApp(publicDir, {
+  expiresAt: (segment) => expiryOf(config.dataDir, segment),
+});
 const publicServer = serve(
   { fetch: publicApp.fetch, port: config.publicPort, hostname: config.publicHost },
   (info) => {

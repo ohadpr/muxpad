@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type Database from 'better-sqlite3';
@@ -18,6 +18,22 @@ import {
 } from '../tunnel/TunnelApp.js';
 
 /**
+ * The on-disk slug for a published NAME.
+ *
+ * Every slug now carries 8 random characters (`site` → `site-7k3mqp2x`), so a
+ * test cannot derive the directory from the name it published under — which is
+ * the whole point of the id on a public host with no index and no login.
+ * Accepts a legacy id-less slug too, which is what a hand-made fixture dir is.
+ */
+function slugIn(publicDir: string, name: string): string {
+  if (existsSync(join(publicDir, name))) return name;
+  const hit = readdirSync(publicDir, { withFileTypes: true }).find(
+    (e) => e.isDirectory() && new RegExp(`^${name}-[a-z2-9]{8}$`).test(e.name),
+  );
+  return hit?.name ?? name;
+}
+
+/**
  * The tunnel through the HTTP surface: the announce/retract routes the in-pane
  * process uses, and the lazy start a publish performs.
  */
@@ -32,6 +48,7 @@ const localOnlyFunnel: Funnel = {
 };
 
 describe('publish tunnel routes', () => {
+  const slugOf = (name: string) => slugIn(join(dataDir, 'public'), name);
   let test: TestApp;
   let db: Database.Database;
   let dataDir: string;
@@ -99,7 +116,7 @@ describe('publish tunnel routes', () => {
     expect(app?.command).toBe('muxpad tunnel --port 7778');
     // It waited for a url that never came (no real cloudflared here) and then
     // answered anyway — a tunnel that will not start must never fail a publish.
-    expect((await res.json()) as { slug: string }).toMatchObject({ slug: 'report' });
+    expect(((await res.json()) as { slug: string }).slug).toMatch(/^report-[a-z2-9]{8}$/);
   });
 
   it('an announced url becomes the base every link is built from', async () => {
@@ -178,10 +195,11 @@ describe('publish tunnel routes', () => {
       body: JSON.stringify({ path: srcDir, name: 'report' }),
     });
     const body = (await res.json()) as {
+      slug: string;
       url: string;
       base: { durability: string; note?: string; source: string };
     };
-    expect(body.url).toBe(`${FIRST}/report/`);
+    expect(body.url).toBe(`${FIRST}/${body.slug}/`);
     expect(body.base.source).toBe('tunnel');
     expect(body.base.durability).toBe('ephemeral');
     expect(body.base.note).toContain('quick tunnel');
@@ -217,6 +235,7 @@ describe('publish tunnel routes', () => {
    * wins by default and the tunnel is something you ASK for.
    */
   describe('audience — the default link is the durable one', () => {
+    const slugOf = (name: string) => slugIn(join(dataDir, 'public'), name);
     const TAILNET = 'https://example-host.example-tailnet.ts.net:8443';
 
     const publish = (name: string, audience?: string) =>
@@ -235,10 +254,12 @@ describe('publish tunnel routes', () => {
 
     it('publishes under the tailnet base, not the tunnel', async () => {
       const body = (await (await publish('report')).json()) as {
+        slug: string;
+        name: string;
         url: string;
         base: { source: string; durability: string; note?: string };
       };
-      expect(body.url).toBe(`${TAILNET}/report/`);
+      expect(body.url).toBe(`${TAILNET}/${body.slug}/`);
       expect(body.base.durability).toBe('tailnet');
       // …and says what that means, in both directions.
       expect(body.base.note).toContain('every device on your tailnet');
@@ -247,10 +268,12 @@ describe('publish tunnel routes', () => {
 
     it('publishes under the tunnel when a public link is asked for', async () => {
       const body = (await (await publish('report', 'public')).json()) as {
+        slug: string;
+        name: string;
         url: string;
         base: { durability: string; note?: string };
       };
-      expect(body.url).toBe(`${FIRST}/report/`);
+      expect(body.url).toBe(`${FIRST}/${body.slug}/`);
       expect(body.base.durability).toBe('ephemeral');
       // The ephemeral warning is the whole reason `--public` is a flag and not
       // the default: you get the link you asked for AND its shelf life.
@@ -261,13 +284,15 @@ describe('publish tunnel routes', () => {
     it('the LISTING is durable by default — it is the recovery surface', async () => {
       await publish('report');
       const list = (await (await test.app.request('/api/publish')).json()) as {
-        publishes: Array<{ slug: string; url: string }>;
+        publishes: Array<{ slug: string; name: string; url: string }>;
       };
-      expect(list.publishes.find((p) => p.slug === 'report')?.url).toBe(`${TAILNET}/report/`);
+      const lrow = list.publishes.find((p) => p.name === 'report');
+      expect(lrow?.url).toBe(`${TAILNET}/${lrow?.slug}/`);
       const pub = (await (await test.app.request('/api/publish?audience=public')).json()) as {
-        publishes: Array<{ slug: string; url: string }>;
+        publishes: Array<{ slug: string; name: string; url: string }>;
       };
-      expect(pub.publishes.find((p) => p.slug === 'report')?.url).toBe(`${FIRST}/report/`);
+      const prow = pub.publishes.find((p) => p.name === 'report');
+      expect(prow?.url).toBe(`${FIRST}/${prow?.slug}/`);
     });
 
     it('`--base` reports the audience and orders its table to match', async () => {
@@ -294,8 +319,12 @@ describe('publish tunnel routes', () => {
       // A typo, or an older CLI. Guessing wrong in this direction prints a link
       // that works and is private; guessing wrong the other way prints one that
       // dies.
-      const body = (await (await publish('report', 'pubic')).json()) as { url: string };
-      expect(body.url).toBe(`${TAILNET}/report/`);
+      const body = (await (await publish('report', 'pubic')).json()) as {
+        slug: string;
+        name: string;
+        url: string;
+      };
+      expect(body.url).toBe(`${TAILNET}/${body.slug}/`);
     });
   });
 
@@ -314,6 +343,7 @@ describe('publish tunnel routes', () => {
 });
 
 describe('publish tunnel routes — MUXPAD_PUBLIC_BASE_URL is set', () => {
+  const slugOf = (name: string) => slugIn(join(dataDir, 'public'), name);
   let test: TestApp;
   let db: Database.Database;
   let dataDir: string;
@@ -366,9 +396,9 @@ describe('publish tunnel routes — MUXPAD_PUBLIC_BASE_URL is set', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ path: srcDir, name: 'report' }),
     });
-    expect((await res.json()) as { url: string }).toMatchObject({
-      url: 'https://artifacts.example.com/report/',
-    });
+    const envBody = (await res.json()) as { slug: string; name: string; url: string };
+    expect(envBody.url).toBe(`https://artifacts.example.com/${envBody.slug}/`);
+    expect(envBody.name).toBe('report');
     expect(new AppStore(db).getBySlug(TUNNEL_APP_SLUG)).toBeNull();
   });
 

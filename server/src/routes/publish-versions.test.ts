@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type Database from 'better-sqlite3';
@@ -9,6 +17,22 @@ import { openDb } from '../store/db.js';
 import { type TestApp, createTestApp } from '../test-helpers/createTestApp.js';
 import { PUBLISH_VERSIONS_KEEP, versionDirName } from './publish.js';
 
+/**
+ * The on-disk slug for a published NAME.
+ *
+ * Every slug now carries 8 random characters (`site` → `site-7k3mqp2x`), so a
+ * test cannot derive the directory from the name it published under — which is
+ * the whole point of the id on a public host with no index and no login.
+ * Accepts a legacy id-less slug too, which is what a hand-made fixture dir is.
+ */
+function slugIn(publicDir: string, name: string): string {
+  if (existsSync(join(publicDir, name))) return name;
+  const hit = readdirSync(publicDir, { withFileTypes: true }).find(
+    (e) => e.isDirectory() && new RegExp(`^${name}-[a-z2-9]{8}$`).test(e.name),
+  );
+  return hit?.name ?? name;
+}
+
 /** Never execs tailscale — these tests must be incapable of exposing anything. */
 const funnel: Funnel = {
   async ensure() {
@@ -18,6 +42,7 @@ const funnel: Funnel = {
 
 interface PublishBody {
   slug: string;
+  name: string;
   url: string;
   files: number;
   bytes: number;
@@ -26,12 +51,14 @@ interface PublishBody {
 interface ListBody {
   publishes: {
     slug: string;
+    name: string;
     url: string | null;
     versions: { n: number; files: number; bytes: number; created: number; url: string | null }[];
   }[];
 }
 
 describe('artifact versions', () => {
+  const slugOf = (name: string) => slugIn(join(dataDir, 'public'), name);
   let test: TestApp;
   let db: Database.Database;
   let dataDir: string;
@@ -74,24 +101,28 @@ describe('artifact versions', () => {
     await publish('site', 'v1');
     const second = await publish('site', 'v2');
     expect(second.res.status).toBe(201);
-    expect(publicFile('site')).toBe('v2');
-    expect(publicFile(versionDirName('site', 2))).toBe('v1');
-    expect(second.body.versions).toEqual([{ n: 2, url: 'https://example.ts.net:8443/site@2/' }]);
+    expect(publicFile(slugOf('site'))).toBe('v2');
+    expect(publicFile(versionDirName(slugOf('site'), 2))).toBe('v1');
+    expect(second.body.versions).toEqual([
+      { n: 2, url: `https://example.ts.net:8443/${slugOf('site')}@2/` },
+    ]);
   });
 
   it('shifts the chain up on every republish and caps retention', async () => {
     // KEEP previous versions means dirs @2 … @(KEEP+1).
     const total = PUBLISH_VERSIONS_KEEP + 3;
     for (let i = 1; i <= total; i++) await publish('site', `v${i}`);
-    expect(publicFile('site')).toBe(`v${total}`);
+    expect(publicFile(slugOf('site'))).toBe(`v${total}`);
     for (let n = 2; n <= PUBLISH_VERSIONS_KEEP + 1; n++) {
       // @2 is the previous publish, @3 the one before it, …
-      expect(publicFile(versionDirName('site', n))).toBe(`v${total - n + 1}`);
+      expect(publicFile(versionDirName(slugOf('site'), n))).toBe(`v${total - n + 1}`);
     }
     // Everything past the cap is gone — history is a rollback aid, not an
     // unbounded mirror of every build ever made.
     expect(
-      existsSync(join(dataDir, 'public', versionDirName('site', PUBLISH_VERSIONS_KEEP + 2))),
+      existsSync(
+        join(dataDir, 'public', versionDirName(slugOf('site'), PUBLISH_VERSIONS_KEEP + 2)),
+      ),
     ).toBe(false);
   });
 
@@ -104,10 +135,10 @@ describe('artifact versions', () => {
     await publish('site', 'v1');
     await publish('site', 'v2');
     const pub = createPublicApp(join(dataDir, 'public'));
-    expect(await (await pub.request('http://p/site/')).text()).toBe('v2');
-    expect(await (await pub.request('http://p/site@2/')).text()).toBe('v1');
+    expect(await (await pub.request(`http://p/${slugOf('site')}/`)).text()).toBe('v2');
+    expect(await (await pub.request(`http://p/${slugOf('site')}@2/`)).text()).toBe('v1');
     // …and a version that does not exist is a plain 404, not a listing.
-    expect((await pub.request('http://p/site@9/')).status).toBe(404);
+    expect((await pub.request(`http://p/${slugOf('site')}@9/`)).status).toBe(404);
   });
 
   it('the public root still 404s — there is no gallery', async () => {
@@ -126,12 +157,12 @@ describe('artifact versions', () => {
     await publish('site', 'v2');
     await publish('other', 'x');
     const list = (await (await test.app.request('/api/publish')).json()) as ListBody;
-    expect(list.publishes.map((p) => p.slug).sort()).toEqual(['other', 'site']);
-    const site = list.publishes.find((p) => p.slug === 'site');
+    expect(list.publishes.map((p) => p.name).sort()).toEqual(['other', 'site']);
+    const site = list.publishes.find((p) => p.name === 'site');
     expect(site?.versions).toHaveLength(1);
     expect(site?.versions[0]?.n).toBe(2);
     expect(site?.versions[0]?.files).toBe(1);
-    expect(site?.versions[0]?.url).toBe('https://example.ts.net:8443/site@2/');
+    expect(site?.versions[0]?.url).toBe(`https://example.ts.net:8443/${slugOf('site')}@2/`);
     // The CURRENT artifact's byte count is its own, not the whole history's —
     // one of the reasons versions are siblings rather than nested.
     expect(site?.versions[0]?.bytes).toBe(2);
@@ -155,19 +186,20 @@ describe('artifact versions', () => {
   it('deleting an artifact takes its versions off the internet too', async () => {
     await publish('site', 'v1');
     await publish('site', 'v2');
-    expect(existsSync(join(dataDir, 'public', versionDirName('site', 2)))).toBe(true);
+    expect(existsSync(join(dataDir, 'public', versionDirName(slugOf('site'), 2)))).toBe(true);
     const del = await test.app.request('/api/publish/site', { method: 'DELETE' });
     expect(del.status).toBe(204);
-    expect(existsSync(join(dataDir, 'public', 'site'))).toBe(false);
+    expect(existsSync(join(dataDir, 'public', slugOf('site')))).toBe(false);
     // Leaving @2 behind would keep serving content the user believed they had
     // removed from the internet.
-    expect(existsSync(join(dataDir, 'public', versionDirName('site', 2)))).toBe(false);
+    expect(existsSync(join(dataDir, 'public', versionDirName(slugOf('site'), 2)))).toBe(false);
     const pub = createPublicApp(join(dataDir, 'public'));
     expect((await pub.request('http://p/site@2/')).status).toBe(404);
   });
 });
 
 describe('publish --update', () => {
+  const slugOf = (name: string) => slugIn(join(dataDir, 'public'), name);
   let test: TestApp;
   let db: Database.Database;
   let dataDir: string;
@@ -198,7 +230,7 @@ describe('publish --update', () => {
   it('refuses to CREATE — a typo is a readable 404, not a seventh artifact', async () => {
     const res = await post({ path: join(srcDir, 'page.html'), name: 'typoo', update: true });
     expect(res.status).toBe(404);
-    expect(existsSync(join(dataDir, 'public', 'typoo'))).toBe(false);
+    expect(existsSync(join(dataDir, 'public', slugOf('typoo')))).toBe(false);
     const err = (await res.json()) as { error: { message: string } };
     expect(err.error.message).toMatch(/publish it first/);
   });
@@ -209,9 +241,13 @@ describe('publish --update', () => {
     const res = await post({ path: join(srcDir, 'page.html'), name: 'thing', update: true });
     expect(res.status).toBe(201);
     const body = (await res.json()) as PublishBody;
-    expect(body.slug).toBe('thing');
-    expect(readFileSync(join(dataDir, 'public', 'thing', 'index.html'), 'utf-8')).toBe('body2');
-    expect(readFileSync(join(dataDir, 'public', 'thing@2', 'index.html'), 'utf-8')).toBe('body');
+    expect(body.slug).toMatch(/^thing-[a-z2-9]{8}$/);
+    expect(readFileSync(join(dataDir, 'public', slugOf('thing'), 'index.html'), 'utf-8')).toBe(
+      'body2',
+    );
+    expect(
+      readFileSync(join(dataDir, 'public', `${slugOf('thing')}@2`, 'index.html'), 'utf-8'),
+    ).toBe('body');
   });
 
   it('requires a name — "update the unnamed one" is meaningless', async () => {
@@ -221,6 +257,7 @@ describe('publish --update', () => {
 });
 
 describe('the public base every link is built from', () => {
+  const slugOf = (name: string) => slugIn(join(dataDir, 'public'), name);
   let test: TestApp;
   let db: Database.Database;
   let dataDir: string;
@@ -280,6 +317,7 @@ describe('the public base every link is built from', () => {
   // own shell. It is the question that stops the macOS "access data from other
   // apps" prompt, so it has to be answerable CHEAPLY and without side effects.
   describe('discovery_needed — what the CLI asks before shelling out', () => {
+    const slugOf = (name: string) => slugIn(join(dataDir, 'public'), name);
     it('is true on a cold server and false once a base is pinned', async () => {
       const cold = (await (await req('/api/publish/base')).json()) as {
         discovery_needed: boolean;
@@ -339,14 +377,14 @@ describe('the public base every link is built from', () => {
     const body = (await (
       await publish({ path: join(srcDir, 'p.html'), name: 'demo', public_base_url: FUNNEL })
     ).json()) as PublishBody;
-    expect(body.url).toBe(`${TUNNEL}/demo/`);
+    expect(body.url).toBe(`${TUNNEL}/${body.slug}/`);
 
     // …and the listing agrees, because both go through one resolver. This is
     // the property that stops the UI and the CLI printing different links.
     const list = (await (await req('/api/publish')).json()) as ListBody & {
       base: { url: string; source: string; reachable: boolean | null };
     };
-    expect(list.publishes[0]?.url).toBe(`${TUNNEL}/demo/`);
+    expect(list.publishes[0]?.url).toBe(`${TUNNEL}/${list.publishes[0]?.slug}/`);
     expect(list.base).toMatchObject({ url: TUNNEL, source: 'pinned', reachable: true });
   });
 
@@ -357,8 +395,8 @@ describe('the public base every link is built from', () => {
     await publish({ path: join(srcDir, 'p.html'), name: 'demo', update: true });
     const list = (await (await req('/api/publish')).json()) as ListBody;
     const one = list.publishes[0];
-    expect(one?.url).toBe(`${TUNNEL}/demo/`);
-    expect(one?.versions[0]?.url).toBe(`${TUNNEL}/demo@2/`);
+    expect(one?.url).toBe(`${TUNNEL}/${one?.slug}/`);
+    expect(one?.versions[0]?.url).toBe(`${TUNNEL}/${one?.slug}@2/`);
   });
 
   it('reports a base that has stopped answering instead of handing out dead links', async () => {

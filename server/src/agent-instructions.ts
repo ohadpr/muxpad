@@ -132,6 +132,34 @@ Capabilities worth knowing:
   "host", "share", "link". Use \`--name=<slug>\` for a stable re-publishable
   URL; \`muxpad publish --rm <slug>\` takes one down.
 
+  **THE SLUG IS NOT THE NAME YOU ASKED FOR, AND THE LINK EXPIRES IN 7 DAYS.**
+  Two things about this domain decide how you must treat it: it is the OPEN
+  INTERNET, and it has no index, no listing and no login.
+
+  · **\`--name=foo\` yields \`foo-7k3mqp2x\`.** Every slug carries 8 random
+    characters, because a readable slug on an unauthenticated public host is a
+    door with a guessable name — a wordlist walks \`/trayo-pitch/\`,
+    \`/roof-office/\`, \`/lior-susan-background/\` in an afternoon, and what it
+    finds is somebody's pitch, apartment hunt and friends. **Always hand back
+    the url the command PRINTS.** Never retype one from the name you chose,
+    never guess a slug, never construct a link — it will 404, and you will have
+    told the user their artifact is lost when it is not.
+  · **A new link answers for 7 days, then 410s. The FILES ARE KEPT.** So
+    "extend that one" and "fix the bug on that page" both stay possible
+    forever: \`muxpad publish --extend=<slug>\` (another 7 days, from now, and
+    it revives an already-lapsed link), \`--days=N\` at publish time for a
+    different term, \`--days=0\` for a link that never expires — use that only
+    when the user says the link must keep working. \`--expire=<slug>\` takes a
+    live link down without deleting anything. \`--rm\` is still the one that
+    destroys bytes.
+  · **\`--list\` shows the full slug and what is left of each link's term**, so
+    that is where you look when the user says a link is dead. An EXPIRED row is
+    not a lost artifact: extend it.
+  · **Publishing a NON-HTML file works and gives a page**, not a 404 — muxpad
+    writes an index for it (markdown is rendered; audio, video and images are
+    embedded; anything else is listed). Still prefer handing over the directory
+    url the command printed.
+
   **UPDATING? REUSE THE SLUG. Run \`muxpad publish --list\` FIRST.** Before
   publishing anything, list what is already there and look for a slug that is
   the same THING you are about to publish — a newer draft of the same page,
