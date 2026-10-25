@@ -3987,10 +3987,19 @@ cmd_publish() {
     [ -z "$slug" ] && slug="$want_url"
     slug="${slug%%/*}"           # first path segment only
     slug="${slug%%\?*}"          # …without a query
-    local res found
+    local res found real
     res="$(http_request GET "/api/publish$aq")"
+    # EITHER HALF OF THE NAME. A slug is `<name>-<id>` now, and the id is the
+    # part nobody remembers — but this is the RECOVERY verb, reached for when a
+    # link has already stopped working, so it has to answer to the readable
+    # half. Exact slug first (what --list prints and what a dead URL contains),
+    # then the name. An ambiguous name takes the newest, which is the live one.
     found="$(printf '%s' "$res" | jq -r --arg s "${slug%%@*}" \
-      '(.publishes[]? | select(.slug == $s) | .url) // empty')"
+      '[.publishes[]? | select(.slug == $s or .name == $s)]
+       | sort_by(.created) | last | .url // empty')"
+    real="$(printf '%s' "$res" | jq -r --arg s "${slug%%@*}" \
+      '[.publishes[]? | select(.slug == $s or .name == $s)]
+       | sort_by(.created) | last | .slug // empty')"
     if [ -z "$found" ] || [ "$found" = "null" ]; then
       printf 'muxpad publish: no artifact named %s — `muxpad publish --list` shows what is here\n' \
         "${slug%%@*}" >&2
@@ -3999,7 +4008,10 @@ cmd_publish() {
     # A version suffix survives the round trip: `--url .../report@2/` answers
     # with the CURRENT link to that same version, not to the live one.
     case "$slug" in
-      *@*) printf '%s\n' "${found%/"${slug%%@*}"/}/${slug}/" ;;
+      # `--url .../report@2/` answers with the CURRENT link to that same
+      # version. Rebuilt from the RESOLVED slug, not from what was typed: the
+      # caller may have given a bare name whose real slug carries an id.
+      *@*) printf '%s\n' "${found%/"$real"/}/${real}@${slug#*@}" ;;
       *) printf '%s\n' "$found" ;;
     esac
     # The recovery verb now says what it just handed over. stdout stays JUST the
