@@ -24,6 +24,15 @@
      stays on --chrome-font. */
   --ui-font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 
+  /* The TERMINAL's font, as a token so a theme can own it like any other.
+     Default is settings.ts TERMINAL_FONT — Menlo, a system font on every
+     platform muxpad runs on, chosen so terminal startup never waits on a
+     webfont and never re-measures its cell. A theme overriding this inherits
+     that contract: name SYSTEM families, or one already declared in
+     fonts.css. A theme that points this at an unloaded webfont pays for it in
+     exactly the place a terminal cannot afford it. */
+  --term-font: Menlo, Monaco, monospace;
+
   /* The header-bar height — referenced from multiple places so it's one
      knob. 36px desktop / 40px mobile (set via media query at the bottom). */
   /* ─── THE ACTIVE PANE'S FACE ────────────────────────────────────────────
@@ -623,6 +632,132 @@
   --hit-rule: #8a5e00;
 }
 
+/* ─── DEMOSCENE ───────────────────────────────────────────────────────────────
+   A black-ground phosphor theme, and the first one that owns more than colour.
+
+   WHY IT IS ALSO FONTS. Every theme before this repainted a UI whose shapes
+   never moved: same proportional sans in the rail, same corner radii, same
+   sentence case. That is a palette, not a theme — and the look being asked for
+   here (a cracktro, an Amiga boot screen, a 90s terminal) is carried by the
+   TYPEFACE and the hard edges at least as much as by the colours. So the font
+   tokens moved into the theme layer: `--ui-font`, `--chrome-font` and
+   `--term-font` are overridable here exactly like `--accent`, and the shape
+   tokens below with them.
+
+   WHY NO WEBFONT. The obvious move is to ship a pixel face (Topaz, PxPlus IBM
+   VGA). Each MesloLGS NF face in fonts.css is ~1 MB, the terminal is Menlo
+   precisely so startup never waits on a download, and the phone is where this
+   app was just measured slow. So this names system and already-declared
+   families and degrades honestly: if you have a pixel font installed it is
+   used, otherwise you get the platform's monospace, which still reads as
+   "machine". Dropping a woff2 into web/src/fonts/ and naming it first in the
+   stack is the upgrade path, and it is a one-line change to this block.
+
+   CONTRAST. The ink pairs are checked by the same stylesheet tests every other
+   theme answers to (armed control, nav search, rename, chat chip), so these
+   are not vibes — a value that fails lands as a red test, not as a screenshot
+   somebody squints at. */
+[data-theme="demoscene"] {
+  /* THE WHOLE UI GOES MONOSPACE. This is the single biggest part of the look:
+     the rail's proportional sans is what makes muxpad read as an app rather
+     than as a machine, and taking it away does most of the work. */
+  --ui-font: "Px437 IBM VGA 8x16", "PxPlus IBM VGA8", "Topaz-8", Terminus, "MesloLGS NF",
+    ui-monospace, SFMono-Regular, Menlo, monospace;
+  --chrome-font: "Px437 IBM VGA 8x16", "PxPlus IBM VGA8", "Topaz-8", Terminus, "MesloLGS NF",
+    ui-monospace, SFMono-Regular, Menlo, monospace;
+  --term-font: "Px437 IBM VGA 8x16", "PxPlus IBM VGA8", Menlo, Monaco, monospace;
+
+  /* Ground: not pure black — a hair of blue keeps the CRT feel and stops OLED
+     smearing on the phone. */
+  --bg: #05070c;
+  --bg-elev: #0a0f17;
+  --bg-hover: #16202c;
+  --bg-chrome: #03050a;
+  --bg-tabbar: #010206;
+
+  /* Phosphor. The dim/faint steps are a green ramp rather than a grey one, so
+     recessive text still reads as the same substance as the bright text. */
+  --fg: #d6ffe4;
+  --fg-dim: #8fe0ab;
+  --fg-faint: #4f8f68;
+  --border: #16302280;
+  --border-strong: #2f6a46;
+
+  --accent: #35ff8b;
+  --accent-fg: #02130a;
+  --danger: #ff4d6d;
+
+  --rail-surface: #080d13;
+  --rail-ink: #d6ffe4;
+  --rail-ink-dim: #93dfae;
+  --rail-ink-faint: #548f6c;
+  --rail-hover: #112a1d;
+  --rail-border: #244a33;
+  --rail-seam: #1b3827;
+  --rail-accent: #35ff8b;
+  --rail-status-ready: #35ff8b;
+  --rail-status-working: #ffd24a;
+
+  --xterm-bg: #05070c;
+  --xterm-fg: #d6ffe4;
+
+  /* The dark-ground pair, not a third set of numbers: the fade rungs are
+     calibrated to the ground's polarity and ChatChip.css.test pins them. */
+  --fade-1: 0.61;
+  --fade-2: 0.39;
+  --clock-base: #1f4a33;
+  --hit-bg: #ffd24a;
+  --hit-ink: #0a0f06;
+  --hit-rule: #7a5e00;
+}
+
+/* ─── and the shapes ────────────────────────────────────────────────────────
+   Scoped to the theme rather than tokenised app-wide, deliberately: these are
+   the demoscene look, not a knob every future theme has to answer. Keeping
+   them here means the other six are untouched and this block is the whole
+   diff for the aesthetic. */
+[data-theme="demoscene"] .navtree,
+[data-theme="demoscene"] .chat-list,
+[data-theme="demoscene"] .chat-pane {
+  /* The glyph grid wants a little air; 8x16 cells read cramped at 1.0. */
+  letter-spacing: 0.01em;
+}
+[data-theme="demoscene"] .navtree-ws-label,
+[data-theme="demoscene"] .chat-queued-cron {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+/* Phosphor bloom on the one element that is meant to glow — the accent. Kept
+   to the accent and kept small: a UI-wide text-shadow is unreadable, and it is
+   the thing people actually mean when they say the screen "glows". */
+[data-theme="demoscene"] .navtree-row[data-active="true"] .navtree-tab-headline,
+[data-theme="demoscene"] .chat-queued-cron {
+  text-shadow: 0 0 6px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+/* Scanlines, at an intensity you stop noticing in a minute — the point is the
+   texture, not the gimmick. `pointer-events: none` and a fixed overlay so it
+   costs one composited layer and never intercepts a tap.
+   Switched off for anyone who asked the OS for less motion/contrast noise. */
+[data-theme="demoscene"] body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    to bottom,
+    #0000 0px,
+    #0000 2px,
+    #00000026 3px,
+    #00000026 3px
+  );
+}
+@media (prefers-reduced-motion: reduce), (prefers-contrast: more) {
+  [data-theme="demoscene"] body::after {
+    display: none;
+  }
+}
+
 * {
   box-sizing: border-box;
 }
@@ -654,7 +789,9 @@ body,
   height: 100svh;
   background: var(--bg);
   color: var(--fg);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", sans-serif;
+  /* Through the token, not around it: a theme that sets --ui-font has to reach
+     here too, or it changes the app everywhere except this. */
+  font-family: var(--ui-font);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow: hidden;

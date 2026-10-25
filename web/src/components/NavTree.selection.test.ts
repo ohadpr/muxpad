@@ -280,17 +280,20 @@ function vsRail(expr: string, t: Record<string, string>): number {
 }
 
 describe('the themes this file measures against', () => {
-  it('finds all six, each with the tokens the arithmetic needs', () => {
+  it('finds every theme in the stylesheet, each with the tokens the arithmetic needs', () => {
     // Guards the guard: a parser that silently found nothing would make every
     // `for (const theme of …)` below vacuously pass.
-    expect(Object.keys(THEMES).sort()).toEqual([
-      'acme',
-      'acme-dark',
-      'alucard',
-      'dracula',
-      'github-light',
-      'tokyo-night',
-    ]);
+    //
+    // A FLOOR AND A MEMBERSHIP CHECK, NOT A FIXED LIST. This enumerated the six
+    // themes that existed the day it was written, so adding a seventh
+    // (demoscene) failed it for a reason that had nothing to do with what it
+    // guards — the same stale-count trap as StateChip's `>= 3`. What matters is
+    // that the parser found the themes and that each carries the tokens the
+    // arithmetic below reads; the number of themes is the product's business.
+    const found = Object.keys(THEMES);
+    expect(found.length).toBeGreaterThanOrEqual(6);
+    for (const required of ['tokyo-night', 'dracula', 'alucard', 'github-light'])
+      expect(found).toContain(required);
     for (const [name, t] of Object.entries(THEMES))
       for (const token of ['--bg-tabbar', '--bg-hover', '--fg', '--accent'])
         expect({ name, token, has: typeof t[token] }).toEqual({ name, token, has: 'string' });
