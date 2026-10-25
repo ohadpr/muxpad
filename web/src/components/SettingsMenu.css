@@ -374,12 +374,34 @@
   .settings-close-x {
     display: none;
   }
-  /* …and it must never scroll away from the thing it closes. */
+  /* ─── THE STATUS BAR IS NOT YOURS ───────────────────────────────────────
+     index.html ships `viewport-fit=cover` with a BLACK-TRANSLUCENT status bar,
+     which is what makes an installed muxpad full-bleed — and it means the top
+     ~59px of this dialog is underneath the clock, the wifi icon and the
+     battery. Seven other stylesheets in this app already inset for that; this
+     one, the only surface that covers the whole screen, had none.
+     So the close control was rendered UNDER the battery icon, where the title
+     collided with the clock and the tap did not reach the button. That — not
+     the size of the glyph — is "I can't close it".
+     Insets on all four edges: a foldable unfolded is landscape, where the cut
+     out moves to a SIDE and `left`/`right` are the ones that matter. */
   .settings-chrome {
     position: sticky;
     top: 0;
     z-index: 2;
     background: var(--bg-elev);
+    padding-top: calc(6px + env(safe-area-inset-top, 0px));
+    padding-left: calc(18px + env(safe-area-inset-left, 0px));
+    padding-right: calc(8px + env(safe-area-inset-right, 0px));
+  }
+  .settings-body {
+    padding-bottom: calc(22px + env(safe-area-inset-bottom, 0px));
+    padding-left: calc(18px + env(safe-area-inset-left, 0px));
+    padding-right: calc(18px + env(safe-area-inset-right, 0px));
+  }
+  .settings-sidebar {
+    padding-left: calc(10px + env(safe-area-inset-left, 0px));
+    padding-right: calc(10px + env(safe-area-inset-right, 0px));
   }
   /* Reading size. The desktop dialog is 0.875rem on a screen held at arm's
      length; the same number on a phone is the "chrome is so tiny" report. */

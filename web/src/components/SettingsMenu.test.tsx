@@ -350,6 +350,23 @@ describe('settings can be dismissed by a thumb', () => {
     expect(touchArm).toMatch(/height:\s*44px/);
   });
 
+  it('clears the status bar — the actual reason the close was untappable', () => {
+    // index.html ships viewport-fit=cover + a black-translucent status bar, so
+    // the top ~59px of a full-screen dialog is UNDER the clock and the battery.
+    // Seven other stylesheets inset for this; this one had none, and the close
+    // control rendered beneath the battery icon.
+    expect(touchArm).toMatch(
+      /\.settings-chrome\s*\{[^}]*padding-top:\s*calc\([^)]*safe-area-inset-top/,
+    );
+  });
+
+  it('insets all four edges, because a foldable is landscape', () => {
+    // Unfolded, the cut-out is on a SIDE: left/right are the ones that matter.
+    expect(touchArm).toMatch(/safe-area-inset-left/);
+    expect(touchArm).toMatch(/safe-area-inset-right/);
+    expect(touchArm).toMatch(/safe-area-inset-bottom/);
+  });
+
   it('keeps the close pinned, so it cannot scroll out of reach', () => {
     expect(touchArm).toMatch(/\.settings-chrome\s*\{[^}]*position:\s*sticky/);
   });
