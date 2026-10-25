@@ -667,48 +667,64 @@
     ui-monospace, SFMono-Regular, Menlo, monospace;
   --term-font: "Px437 IBM VGA 8x16", "PxPlus IBM VGA8", Menlo, Monaco, monospace;
 
-  /* Ground: not pure black — a hair of blue keeps the CRT feel and stops OLED
-     smearing on the phone. */
-  --bg: #05070c;
-  --bg-elev: #0a0f17;
-  --bg-hover: #16202c;
-  --bg-chrome: #03050a;
-  --bg-tabbar: #010206;
+  /* VIOLET-BLACK, NOT GREY-BLACK. The first pass at this theme was green on
+     black, which is a SYSADMIN aesthetic — a VT220, an ops console. The scene
+     this is named after is Amiga cracktros: saturated magenta and cyan over a
+     deep violet ground, copper bars, gold. Green-on-black was the safe,
+     boring read of the brief and it looked it. */
+  /* The pane ground is LIFTED off the tab bar, which is the measurement
+     NavTree.selection actually makes: the selected row wears the pane's face,
+     so if the pane sits on top of the tab bar's own value the row you are on
+     is less distinct than the row you are merely pointing at. At #0a0618 this
+     theme measured 7.62 against a hover of 8.00 — it FAILED, and it failed
+     visibly, not just arithmetically. The healthy dark themes sit near 12–14.
+     #150c2e measures 12.36. */
+  --bg: #150c2e;
+  --bg-elev: #1d1140;
+  --bg-hover: #2b1a5c;
+  --bg-chrome: #0b0620;
+  --bg-tabbar: #04020c;
 
-  /* Phosphor. The dim/faint steps are a green ramp rather than a grey one, so
-     recessive text still reads as the same substance as the bright text. */
-  --fg: #d6ffe4;
-  --fg-dim: #8fe0ab;
-  --fg-faint: #4f8f68;
-  --border: #16302280;
-  --border-strong: #2f6a46;
+  --fg: #f3e9ff;
+  --fg-dim: #c0a8e8;
+  --fg-faint: #7b66a8;
+  --border: #2a1a4d80;
+  --border-strong: #4a2d85;
 
-  --accent: #35ff8b;
-  --accent-fg: #02130a;
-  --danger: #ff4d6d;
+  /* Hot magenta leads, cyan answers — the two hues a cracktro actually used,
+     and far enough apart in hue that the selected row and the working mark
+     never read as the same signal. */
+  --accent: #ff3ad6;
+  --accent-fg: #140220;
+  --danger: #ff2f6d;
 
-  --rail-surface: #080d13;
-  --rail-ink: #d6ffe4;
-  --rail-ink-dim: #93dfae;
-  --rail-ink-faint: #548f6c;
-  --rail-hover: #112a1d;
-  --rail-border: #244a33;
-  --rail-seam: #1b3827;
-  --rail-accent: #35ff8b;
-  --rail-status-ready: #35ff8b;
-  --rail-status-working: #ffd24a;
+  /* THE RAIL IS LIFTED OFF THE PANE, not laid beside it in the same violet.
+     First pass had rail #0d0722 against pane #0a0618 — four points apart, so
+     the selected row (which wears the PANE's face) barely separated from the
+     rail it sits in, and NavTree.selection's arithmetic said so: demoscene
+     joined acme on the list of themes where the fill alone cannot tell
+     selection from hover. The shape carries it either way, but a rail you
+     cannot see the edge of is a worse rail. Lifted, like tokyo-night's. */
+  --rail-surface: #241552;
+  --rail-ink: #f3e9ff;
+  --rail-ink-dim: #c9b4f2;
+  --rail-ink-faint: #9079c4;
+  --rail-hover: #2b1a5c;
+  --rail-border: #4b2f8a;
+  --rail-seam: #3a2370;
+  --rail-accent: #22e8ff;
+  --rail-status-ready: #2bff9a;
+  --rail-status-working: #ffb224;
 
-  --xterm-bg: #05070c;
-  --xterm-fg: #d6ffe4;
+  --xterm-bg: #0a0618;
+  --xterm-fg: #f3e9ff;
 
-  /* The dark-ground pair, not a third set of numbers: the fade rungs are
-     calibrated to the ground's polarity and ChatChip.css.test pins them. */
   --fade-1: 0.61;
   --fade-2: 0.39;
-  --clock-base: #1f4a33;
-  --hit-bg: #ffd24a;
-  --hit-ink: #0a0f06;
-  --hit-rule: #7a5e00;
+  --clock-base: #42296f;
+  --hit-bg: #ffb224;
+  --hit-ink: #1a0f02;
+  --hit-rule: #7a5200;
 }
 
 /* ─── and the shapes ────────────────────────────────────────────────────────
@@ -719,25 +735,39 @@
 [data-theme="demoscene"] .navtree,
 [data-theme="demoscene"] .chat-list,
 [data-theme="demoscene"] .chat-pane {
-  /* The glyph grid wants a little air; 8x16 cells read cramped at 1.0. */
   letter-spacing: 0.01em;
 }
-[data-theme="demoscene"] .navtree-ws-label,
-[data-theme="demoscene"] .chat-queued-cron {
+[data-theme="demoscene"] .navtree-ws-label {
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1em;
 }
-/* Phosphor bloom on the one element that is meant to glow — the accent. Kept
-   to the accent and kept small: a UI-wide text-shadow is unreadable, and it is
-   the thing people actually mean when they say the screen "glows". */
-[data-theme="demoscene"] .navtree-row[data-active="true"] .navtree-tab-headline,
-[data-theme="demoscene"] .chat-queued-cron {
-  text-shadow: 0 0 6px color-mix(in srgb, var(--accent) 55%, transparent);
+/* ─── THE COPPER BAR ────────────────────────────────────────────────────────
+   The one effect that says "scene" rather than "terminal": the Amiga's copper
+   chip could change the background colour every scanline, so every intro on
+   the platform opened with a band of smoothly cycling colour. It is the single
+   most recognisable thing about the look.
+   Here it is the SELECTED ROW — the element that is already saying "this one",
+   so the effect lands on something that means something instead of being
+   decoration sprayed over the chrome. */
+[data-theme="demoscene"] .navtree-tab-row[data-active="true"] {
+  background-image: linear-gradient(
+    90deg,
+    #ff3ad640 0%,
+    #ff8a2b40 22%,
+    #ffd84a33 42%,
+    #22e8ff33 68%,
+    #ff3ad600 100%
+  );
+}
+/* Gold on the thing that needs you — the scene's other signature colour, and
+   the same hue the status marks already use for "working". */
+[data-theme="demoscene"] .navtree-row[data-active="true"] .navtree-tab-headline {
+  text-shadow: 0 0 7px color-mix(in srgb, var(--accent) 60%, transparent);
 }
 /* Scanlines, at an intensity you stop noticing in a minute — the point is the
    texture, not the gimmick. `pointer-events: none` and a fixed overlay so it
    costs one composited layer and never intercepts a tap.
-   Switched off for anyone who asked the OS for less motion/contrast noise. */
+   Off for anyone who asked the OS for less motion or more contrast. */
 [data-theme="demoscene"] body::after {
   content: "";
   position: fixed;
@@ -748,8 +778,8 @@
     to bottom,
     #0000 0px,
     #0000 2px,
-    #00000026 3px,
-    #00000026 3px
+    #00000030 3px,
+    #00000030 3px
   );
 }
 @media (prefers-reduced-motion: reduce), (prefers-contrast: more) {

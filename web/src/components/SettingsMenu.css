@@ -25,10 +25,20 @@
   --settings-muted: color-mix(in srgb, var(--fg) 74%, var(--bg-elev));
   --settings-line: color-mix(in srgb, var(--fg) 14%, var(--bg-elev));
   --settings-soft: color-mix(in srgb, var(--fg) 3%, var(--bg-elev));
-  width: min(860px, calc(100vw - 40px));
-  height: min(700px, calc(100dvh - 40px));
+  /* SIZED TO ITS CONTENT, CAPPED — not a fixed 860x700 slab. Two rows of
+     settings in a 700px-tall box is ~60% empty, which reads as a page that
+     failed to load rather than a short one. `height: auto` lets a two-row
+     section be two rows tall; the cap keeps a long section scrollable instead
+     of taller than the screen. */
+  width: min(640px, calc(100vw - 40px));
+  /* `fit-content`, NOT `auto`. A <dialog> is absolutely positioned with
+     `inset: 0` by the UA, so `height: auto` resolves against that containing
+     block and STRETCHES to fill it — clamping at the max-height and
+     reproducing the exact 680px slab this was meant to remove. Chrome's own
+     default here is `fit-content`; `auto` overrode it. */
+  height: fit-content;
   max-width: none;
-  max-height: calc(100dvh - 40px);
+  max-height: min(680px, calc(100dvh - 40px));
   padding: 0;
   overflow: hidden;
   color: var(--fg);
@@ -69,8 +79,12 @@
 }
 .settings-layout {
   display: grid;
-  grid-template-columns: 172px minmax(0, 1fr);
-  flex: 1;
+  grid-template-columns: 132px minmax(0, 1fr);
+  /* `flex: 1` here defeated the dialog's `height: auto`: the layout grew to
+     whatever room the max-height allowed, so a two-row section still produced
+     a 680px box with 400px of nothing under it. Shrink to content, and only
+     then let the max-height cap it and the body scroll. */
+  flex: 0 1 auto;
   min-height: 0;
   overflow: hidden;
 }
@@ -149,17 +163,11 @@
 .settings-body {
   min-width: 0;
   min-height: 0;
-  padding: 28px 32px;
+  padding: 18px 26px 22px;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
-.settings-heading h2 {
-  margin: 0 0 24px;
-  font-size: 1.25rem;
-  line-height: 1.3;
-  font-weight: 600;
-  letter-spacing: -.35px;
-}
+
 .settings-row {
   display: flex;
   align-items: center;
@@ -180,6 +188,35 @@
 }
 .settings-row label {
   font-weight: 500;
+}
+/* THE ONE CONTROL THAT STILL LOOKED LIKE A WEB FORM. A bare <select> paints
+   itself from the platform, so in a dark dialog it arrived as a pale slab with
+   the OS's own arrow — the only element in here not wearing the app's surface.
+   `appearance: none` plus our own chevron, which is also what lets it match
+   the button beside it in the next row. */
+.settings-select {
+  appearance: none;
+  -webkit-appearance: none;
+  min-width: 13rem;
+  padding: 9px 34px 9px 12px;
+  font: inherit;
+  color: var(--fg);
+  background-color: var(--bg-elev);
+  background-image: linear-gradient(45deg, transparent 50%, var(--settings-muted) 50%),
+    linear-gradient(135deg, var(--settings-muted) 50%, transparent 50%);
+  background-position: calc(100% - 17px) calc(50% + 2px), calc(100% - 12px) calc(50% + 2px);
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  border: 1px solid var(--settings-line);
+  border-radius: 9px;
+  cursor: pointer;
+}
+.settings-select:hover {
+  border-color: color-mix(in srgb, var(--fg) 28%, var(--bg-elev));
+}
+.settings-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 .settings-push-actions {
   display: inline-flex;
@@ -346,6 +383,9 @@
    a phone, a foldable and a tablet all get the touch treatment and a 900px
    laptop window does not. */
 @media (max-width: 700px), (pointer: coarse) {
+  /* Full-bleed here, unlike the desktop dialog which hugs its content: a sheet
+     that shrink-wraps two rows floats in the middle of a phone screen looking
+     like a dropped alert. */
   .settings-dialog {
     width: calc(100vw - 16px);
     height: calc(100dvh - 16px);
@@ -435,10 +475,6 @@
   .settings-body {
     flex: 1;
     padding: 22px 18px;
-  }
-  .settings-heading h2 {
-    font-size: 1.1875rem;
-    margin-bottom: 20px;
   }
   .settings-dialog button,
   .settings-dialog select,
