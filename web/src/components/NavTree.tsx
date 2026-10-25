@@ -1915,6 +1915,14 @@ export interface ChatGroup {
  *      workspace, or was closed — makes the chat a TOP-level row rather than
  *      an orphan that vanishes. A chat is never invisible because of a dangling
  *      pointer.
+ *   THE AGENT INSTRUCTIONS DESCRIBE THIS RULE IN PROSE. muxpad tells every
+ *   agent, in server/src/agent-instructions.ts ("Delegating work"), where a
+ *   sub-agent becomes visible to the user — because agents are asked "where
+ *   did it go?" and answer from that document. It said "its own row" for weeks
+ *   after this function stopped giving it one, and users went looking for a
+ *   row, a card and a transcript that were not there. If you change what this
+ *   returns, change that paragraph in the same commit.
+ *
  *   3. A SUB-CHAT RETIRES ON ITS OWN, on delivery — it has no clock and it does
  *      not read its parent's. The moment its work finishes it leaves the live
  *      list, because its result has already come back to the parent as a card.

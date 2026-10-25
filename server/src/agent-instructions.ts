@@ -34,7 +34,25 @@ import {
 
 /** Seed content — concise and harness-neutral (any of the three backends may
  *  be reading this). Written to disk verbatim (under a generated-file banner)
- *  on every boot. */
+ *  on every boot.
+ *
+ *  ─── IF YOU CHANGE WHAT THE USER SEES, GREP THIS FILE ────────────────────
+ *
+ *  This document ASSERTS BEHAVIOUR, and most of those assertions cannot be
+ *  tested (agent-instructions-truth.test.ts pins the mechanical half — every
+ *  verb and flag named here must exist — and nothing can pin the rest).
+ *
+ *  So the rest is a habit, and it has failed three times:
+ *    · `--as-me` / `--as-bot` outlived the flags, and a pane that could not
+ *      make them work went looking for a token on disk;
+ *    · "a sub-agent shows up in the sidebar with its own row … and a card in
+ *      your log" outlived the row (now a pill), the live listing (a delivered
+ *      child retires) and the card (there has never been one at spawn time);
+ *    · `agent wait`'s exit codes were written as if 1 meant one thing.
+ *
+ *  Each one sent a user looking for something that was not there, in a voice
+ *  that sounded certain. A UI change that makes a sentence here false is not
+ *  finished until the sentence changes with it. */
 /**
  * THE RULES THAT MUST SURVIVE A LONG SESSION.
  *
@@ -602,10 +620,24 @@ one.
 
 **Every agent you put to work must be a muxpad pane.** \`muxpad agent new
 [--backend=<b>] [--model=<m>] [--name=<label>] "the brief"\` is how you start one,
-and run from inside a pane it lands as a SUB-AGENT of yours automatically. It then
-shows up in the sidebar with its own row, its own state mark, its own transcript,
-and a card in your log; the user can open it, read it, interrupt it, and see what
-it cost.
+and run from inside a pane it lands as a SUB-AGENT of yours automatically.
+
+**WHERE THE USER ACTUALLY SEES IT — say this correctly, because they will go
+looking.** A sub-agent is NOT a row of its own in the rail:
+
+ · **While it works** it is a PILL at the end of YOUR row ("2 · 1 running"),
+   shut by default — forty workers would otherwise be forty rows. Your own
+   state mark wears the loudest state in the family, so a blocked worker still
+   reaches a glance. Expanding the pill shows the children, and that sticks.
+ · **When it reports** a \`⇤ N sub-agents reported\` chip lands in YOUR chat,
+   carrying what it said and expanding to its final message.
+ · **After that it retires** and leaves the live list entirely — its result is
+   already in your conversation. It stays reachable through the done drawer's
+   sub-chat section and through \`@\`, and its transcript is never deleted.
+
+There is NO card at spawn time. If the user asks where their sub-agent went,
+the answer is the pill on this chat's row, then the chip in this chat — not a
+row of its own, and not a card you promised them when you started it.
 
 **THEIR REPORTS COME BACK TO YOU — you do not have to wait for them.** When a
 child finishes, muxpad delivers its result into THIS conversation as a message,
@@ -633,9 +665,13 @@ If you use it, two things will bite you, both observed:
    ULIDs minted in the same millisecond, so they share a long prefix and a
    careless grep takes the wrong one — \`01M3TP84G9AW…\` for \`01M3TP84G98A…\`.
    Read the pane id from \`muxpad agent list\`, not by parsing output.
- · **CHECK THE EXIT CODE.** 0 = finished, 1 = not an agent pane, 3 = timed out.
-   Waiting on a wrong id returns 1 IMMEDIATELY, and a loop that discards the
-   code reads that as "all done" and sails past three workers still typing.
+ · **CHECK THE EXIT CODE — AND DO NOT READ 1 AS "BAD ID".** 0 = finished,
+   2 = fatal, 3 = timed out. **1 is overloaded**: a bad id, a usage error, AND
+   a pane whose runner has not registered yet — which is the normal state for
+   the first second or two after \`muxpad agent new\`. A loop that treats 1 as
+   "not a real pane" therefore reads a freshly spawned worker as "all done"
+   and sails past it. On a 1, re-check \`muxpad agent list\`: if the pane is
+   there, wait and try again.
 
 **Do NOT shell out to a coding agent instead.** \`codex exec …\`, \`claude -p …\`,
 \`cursor-agent …\`, or any other CLI invocation from your Bash tool, is a process
