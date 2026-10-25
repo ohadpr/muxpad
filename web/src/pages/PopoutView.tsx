@@ -1,5 +1,10 @@
 import { useParams } from '@tanstack/react-router';
-import { XtermPane } from '../components/XtermPane';
+import { Suspense, lazy } from 'react';
+/** Lazily, for the reason in ShellPaneBody: the terminal emulator is ~300 KB
+ *  and must not sit on the critical path of a view that may never show one. */
+const XtermPane = lazy(() =>
+  import('../components/XtermPane').then((m) => ({ default: m.XtermPane })),
+);
 import { useDocumentTitle } from '../use-document-title';
 
 export function PopoutView() {
@@ -9,7 +14,9 @@ export function PopoutView() {
   useDocumentTitle(`muxpad — pane ${paneId.slice(-6)}`);
   return (
     <div style={{ height: '100vh', background: '#0b0e14' }}>
-      <XtermPane paneId={paneId} foregroundCmd={foregroundCmd} />
+      <Suspense fallback={null}>
+        <XtermPane paneId={paneId} foregroundCmd={foregroundCmd} />
+      </Suspense>
     </div>
   );
 }
