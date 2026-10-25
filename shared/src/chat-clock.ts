@@ -50,8 +50,7 @@ export const ChatClockSchema = z.object({
   /** Epoch ms the chat becomes done. Null when the clock is stopped. */
   expires_at: z.number().nullable(),
   /** 0 → 1: how much of the chip's tile is buried. 0 while fresh, 1 at
-   *  expiry. Continuous, because the fill is a continuous visual and the
-   *  server should not be the thing that makes it jump. */
+   *  expiry. QUANTISED — see FILL_STEPS. */
   fill: z.number(),
   /** Inside the final day — the chip drops its tile for a dashed outline. */
   last_day: z.boolean(),
@@ -59,6 +58,38 @@ export const ChatClockSchema = z.object({
   stopped: z.boolean(),
 });
 export type ChatClock = z.infer<typeof ChatClockSchema>;
+
+/**
+ * HOW FINE `fill` IS PUBLISHED, and why it is not continuous.
+ *
+ * It used to be the raw ratio, to sixteen digits, derived from `Date.now()` at
+ * serialization. That made every tab row DIFFERENT ON EVERY READ, forever, and
+ * it is hard to overstate what that cost:
+ *
+ *  · Measured on the live cockpit: two reads of one workspace six seconds
+ *    apart, with nothing happening, differed on 31 of 72 rows — every one of
+ *    them by `fill` alone. web/src/lib/all-tabs.ts carries its own note about
+ *    this, because its dedupe had to learn to ignore the field to work at all.
+ *  · It defeats HTTP revalidation outright. An etag over a body that cannot
+ *    repeat can never answer 304, so every poll of `/api/tabs` ships its full
+ *    payload — ~250 KB, every 2.5 seconds, on an idle page (server/src/
+ *    json-cache.ts has the measurements).
+ *
+ * A continuous value was the right instinct for the wrong consumer: the thing
+ * that draws this is `ChatChip`, and it draws `Math.floor(fill * 4)` — four
+ * rungs over four days. Nothing anywhere wants more.
+ *
+ * 96 steps is one per HOUR of a four-day life: still 24× finer than anything
+ * rendered, so a future thinner bar has room, while a given row's clock changes
+ * at most once an hour instead of on every read. FLOORED, not rounded, so the
+ * published value can never cross a rung boundary the real elapsed time has not
+ * crossed — a chat is never shown as more decayed than it is.
+ */
+export const FILL_STEPS = 96;
+
+export function quantiseFill(fill: number): number {
+  return Math.floor(Math.max(0, Math.min(1, fill)) * FILL_STEPS) / FILL_STEPS;
+}
 
 /**
  * Derive the published clock from a start time.
@@ -79,7 +110,7 @@ export function chatClock(opts: {
   }
   const expires_at = started_at + CHAT_DECAY_MS;
   const elapsed = now - started_at;
-  const fill = Math.max(0, Math.min(1, elapsed / CHAT_DECAY_MS));
+  const fill = quantiseFill(Math.max(0, Math.min(1, elapsed / CHAT_DECAY_MS)));
   return {
     started_at,
     expires_at,

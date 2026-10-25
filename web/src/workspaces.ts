@@ -1,6 +1,7 @@
 import type { Workspace } from '@muxpad/shared';
 import { useEffect, useState } from 'react';
 import { api } from './api';
+import { bootPending, bootWorkspaces } from './boot-prefetch';
 
 /**
  * Hook returning the list of top-level workspaces — INCLUDING hidden system
@@ -39,7 +40,17 @@ const channel: BroadcastChannel | null =
 export async function refreshWorkspaces(opts?: { broadcast?: boolean }): Promise<Workspace[]> {
   const shouldBroadcast = opts?.broadcast !== false;
   const myVersion = ++version;
-  const next = await api.listWorkspaces({ all: true });
+  // THE PREFETCH, FOR WHOEVER ASKS FIRST — and that is not always a mount.
+  // Measured: the events socket's reconnect handler calls this directly, and
+  // it wins the race on a cold load, so putting the adoption only in
+  // `refreshWorkspacesOnMount` left the head start unused and the request
+  // issued anyway.
+  //
+  // `settledAt === 0` is the whole guard: nothing has ever landed, so there is
+  // no newer answer to roll back and no write to read back. One line past
+  // that, this is the ordinary path.
+  const prefetched = settledAt === 0 && bootPending('workspaces') ? await bootWorkspaces() : null;
+  const next = prefetched ?? (await api.listWorkspaces({ all: true }));
   if (myVersion < version) return next;
   // Only a response that actually LANDS in the cache counts as "fresh".
   // Marking the discarded ones too would let a superseded reply (one thrown
@@ -125,6 +136,44 @@ let inFlightMount: Promise<Workspace[]> | null = null;
  */
 let settledAt = 0;
 const FRESH_MS = 2000;
+
+/**
+ * THE ROLLUP REFRESH, COALESCED — for callers that are reacting to a LIVE EVENT
+ * rather than to their own write.
+ *
+ * `tab.updated` is the busiest structural event muxpad has: a headline, an
+ * icon, a title, a status, a `busy` flip, a subagent count — all of them, on
+ * every open chat, several a second while an agent is working. main.tsx's event
+ * router answered each one with a full `refreshWorkspaces()`, because the event
+ * carries no workspace_id and the per-workspace attention rollup is exactly
+ * what it cannot address precisely.
+ *
+ * MEASURED on an idle cockpit with one agent working: 34 `GET
+ * /api/workspaces?all=1` in twenty seconds — 1.7 a second, against a list that
+ * holds a handful of rows and a 5s poll that was already covering it. Each one
+ * walks workspaces → tabs → panes synchronously through better-sqlite3 on the
+ * same event loop the agent panes run on, which is the cost that matters: the
+ * BYTES are now a 304 (server/src/json-cache.ts), the work on the server is
+ * not.
+ *
+ * 400ms, not longer: this is what repaints the attention dot on a collapsed
+ * workspace, and a dot that lags a visible half-second feels broken. A burst
+ * of forty events still costs one request.
+ *
+ * Deliberately NOT what post-mutation callers use. A caller reading back its
+ * own write needs the answer now, and `refreshWorkspaces` stays immediate for
+ * them.
+ */
+const ROLLUP_COALESCE_MS = 400;
+let rollupTimer: ReturnType<typeof setTimeout> | null = null;
+
+export function refreshWorkspacesSoon(): void {
+  if (rollupTimer !== null) return;
+  rollupTimer = setTimeout(() => {
+    rollupTimer = null;
+    void refreshWorkspaces();
+  }, ROLLUP_COALESCE_MS);
+}
 
 export function refreshWorkspacesOnMount(): void {
   if (inFlightMount) return;

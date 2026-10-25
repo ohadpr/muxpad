@@ -658,7 +658,7 @@ export function expandCronFire(text: string, id: string, ts: number | null): Cha
 /**
  * A batch of finished sub-chat reports arrives as `<muxpad-delivery …>…</…>` +
  * the reports themselves. Same split as `expandCronFire`, for the same reason:
- * the parent's transcript should read "⇤ 3 sub-chats reported" followed by what
+ * the parent's transcript should read "⇤ 3 sub-agents reported" followed by what
  * they said, not a wall of XML — and a human did not type any of it.
  *
  * Returns null for anything that isn't a delivery.
@@ -677,7 +677,7 @@ export function expandSpawnDelivery(
     id: `${id}:report`,
     ts,
     variant: 'report',
-    text: `${marker.count} sub-chat${marker.count === 1 ? '' : 's'} reported`,
+    text: `${marker.count} sub-agent${marker.count === 1 ? '' : 's'} reported`,
     ...(marker.from.length > 0 ? { from: marker.from } : {}),
   };
   const reports = body.trim();
@@ -685,7 +685,7 @@ export function expandSpawnDelivery(
   // this. It arrived as a user-role message because that is the only door into
   // a harness transcript, and rendering it as one put a wall of somebody
   // else's results in the reader's own voice — directly under the "⇤ 3
-  // sub-chats reported" chip and the per-child completion cards that already
+  // sub-agents reported" chip and the per-child completion cards that already
   // say it. Three drawings of one event.
   //
   // FOLDED AND NOT DROPPED, though the cards carry the same reports: the cards

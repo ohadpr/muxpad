@@ -338,7 +338,7 @@ describe('cursor backend', () => {
     expect(readLog('old-cloud')).toEqual([]);
   });
 
-  it('prepends muxpad instructions to the FIRST message of a NEW session only', async () => {
+  it('prepends the full instructions to a NEW session, and the standing rules to every turn after', async () => {
     writeFileSync(join(dataDir, 'agent-instructions.md'), 'use muxpad publish\n');
     const { b, calls } = await boot();
     b.send('hi');
@@ -354,18 +354,57 @@ describe('cursor backend', () => {
     await tick();
     // …but the muxpad transcript records the RAW prompt (chat stays clean).
     expect((readLog('cur-instr')[0] as { text: string }).text).toBe('hi');
-    // The next turn RESUMES the session → no re-injection.
+    // ── A RESUME RE-ASSERTS THE NON-NEGOTIABLES ──────────────────────────
+    // It used to send the bare prompt, on the reasoning that "a resume
+    // already carries it in-thread". True on day one, false ever after: the
+    // block is a MESSAGE, and messages are summarised and compacted away.
     b.send('again');
     await tick();
     expect(calls[2]!.args).toContain('--resume');
-    expect(calls[2]!.args.at(-1)).toBe('again');
+    const resumed = calls[2]!.args.at(-1) as string;
+    expect(resumed.endsWith('again')).toBe(true);
+    expect(resumed).toContain('muxpad slack post');
+    expect(resumed).not.toContain('use muxpad publish');
   });
 
-  it('missing instructions file → raw prompt, no error', async () => {
+  it('missing instructions file → the standing rules alone, no error', async () => {
+    // No document to read is not a reason to send NOTHING — the file is
+    // generated at boot and can be absent or empty, and the card is compiled
+    // in. See codex.test.ts for the same assertion and the reasoning.
     const { b, calls } = await boot();
     b.send('plain');
     await tick();
-    expect(calls[1]!.args.at(-1)).toBe('plain');
+    const sent = calls[1]!.args.at(-1) as string;
+    expect(sent).toContain('muxpad slack post');
+    expect(sent.endsWith('plain')).toBe(true);
+  });
+
+  it('gives the full document to the FIRST turn after a pane start, resume or not', async () => {
+    // THE CURSOR-SPECIFIC HOLE THIS CLOSES. muxpad mints a placeholder session
+    // id the moment a pane connects and writes it into the pane's startup
+    // command as `--resume <id>`. `cursor-agent --resume <id-it-has-never-
+    // seen>` does NOT fail — it opens a brand new session under that id — so
+    // a cursor pane that restarted before anybody typed looked like a resume
+    // forever and never saw the document at all. Keying the document on the
+    // PROCESS rather than the session makes that difference stop mattering.
+    writeFileSync(join(dataDir, 'agent-instructions.md'), 'use muxpad publish\n');
+    const { b, calls } = await boot('cur-placeholder');
+    b.send('after a restart');
+    await tick();
+    expect(calls[1]!.args).toContain('--resume');
+    const first = calls[1]!.args.at(-1) as string;
+    expect(first).toContain('use muxpad publish');
+    expect(first.endsWith('after a restart')).toBe(true);
+    const turn = calls[1]!.child;
+    line(turn, { type: 'system', subtype: 'init', session_id: 'cur-placeholder' });
+    line(turn, { type: 'result', subtype: 'success' });
+    closeChild(turn, 0);
+    await tick();
+    b.send('and again');
+    await tick();
+    const second = calls[2]!.args.at(-1) as string;
+    expect(second).not.toContain('use muxpad publish');
+    expect(second).toContain('muxpad slack post');
   });
 
   // ── Chat mode ───────────────────────────────────────────────────────────
@@ -420,7 +459,11 @@ describe('cursor backend', () => {
     const { b, calls } = await bootMode('chat');
     b.send('hi');
     await tick();
-    expect(calls[1]!.args.at(-1)).toBe('hi');
+    // The standing rules still ride along (preamble.ts) — what must be absent
+    // is a <muxpad-mode> block, because there is no overlay to deliver.
+    const sent = calls[1]!.args.at(-1) as string;
+    expect(sent).not.toContain('<muxpad-mode>');
+    expect(sent.endsWith('hi')).toBe(true);
   });
 
   it('a mid-session switch to Chat changes NOTHING about the prompt', async () => {
@@ -441,7 +484,14 @@ describe('cursor backend', () => {
     b.send('second');
     await tick();
     expect(calls[2]!.args).toContain('--resume');
-    expect(calls[2]!.args.at(-1)).toBe('second');
+    // The PROMPT is the message plus muxpad's standing rules (preamble.ts)
+    // and nothing else: no <muxpad-mode> note, which is what this test is
+    // about. Asserting an exact string here made it a test of two things,
+    // and the second one changed.
+    const sent = calls[2]!.args.at(-1) as string;
+    expect(sent.endsWith('second')).toBe(true);
+    expect(sent).not.toContain('<muxpad-mode>');
+    expect(sent).not.toContain('be terse');
     expect(logs.some((l) => /Claude-only/i.test(l))).toBe(true);
   });
 
@@ -458,7 +508,14 @@ describe('cursor backend', () => {
     b.setMode('agent');
     b.send('second');
     await tick();
-    expect(calls[2]!.args.at(-1)).toBe('second');
+    // The PROMPT is the message plus muxpad's standing rules (preamble.ts)
+    // and nothing else: no <muxpad-mode> note, which is what this test is
+    // about. Asserting an exact string here made it a test of two things,
+    // and the second one changed.
+    const sent = calls[2]!.args.at(-1) as string;
+    expect(sent.endsWith('second')).toBe(true);
+    expect(sent).not.toContain('<muxpad-mode>');
+    expect(sent).not.toContain('be terse');
   });
 
   it('advertises its model list + default in the status frame (the picker)', async () => {

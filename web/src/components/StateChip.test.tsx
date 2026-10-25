@@ -165,7 +165,13 @@ describe('the chip — state is never colour-only', () => {
     // regressed once (the sheet's pane rows shipped it inside the button).
     const tsx = readFileSync(join(import.meta.dirname, 'NavTree.tsx'), 'utf8');
     const sites = [...tsx.matchAll(/<StateChip[^>]*\/>/g)];
-    expect(sites.length).toBeGreaterThanOrEqual(3);
+    // A NON-VACUITY FLOOR, NOT A TARGET. This read `>= 3`, which was the number
+    // of render sites on the day it was written — so when `2592b58` deliberately
+    // dropped the chat row's own chip (its state moved into the row's name and
+    // mark), this test went red for a change that did not touch the rule it
+    // guards. A count is not the rule; the loop below is. The floor only has to
+    // stop that loop passing because it found nothing to check.
+    expect(sites.length).toBeGreaterThanOrEqual(1);
     for (const site of sites) {
       const before = tsx.slice(0, site.index);
       // The nearest enclosing element must not be a Link or a <button>: find

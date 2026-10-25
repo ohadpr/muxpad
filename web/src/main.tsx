@@ -19,7 +19,7 @@ import {
 } from './lib/push-target';
 import { router } from './router';
 import { refreshTabs } from './tabs';
-import { refreshWorkspaces } from './workspaces';
+import { refreshWorkspaces, refreshWorkspacesSoon } from './workspaces';
 import './styles.css';
 
 /**
@@ -206,8 +206,9 @@ subscribe((e) => {
     case 'tab.removed':
       void refreshTabs(e.workspace_id);
       // Also refresh workspaces so workspace.tab_count stays current —
-      // WorkspaceLayout's empty-state UI gates on it.
-      void refreshWorkspaces();
+      // WorkspaceLayout's empty-state UI gates on it. Coalesced: spawning a
+      // round of six sub-chats is six tab.added events in one tick.
+      refreshWorkspacesSoon();
       return;
     case 'tabs.reordered':
       // Re-fetch, don't patch: the event carries no rows precisely because a
@@ -226,7 +227,12 @@ subscribe((e) => {
       // What's left here is the workspace list, which tab.updated cannot
       // address precisely — the event carries no workspace_id — so the
       // rollup (attention dots, counts) is refreshed wholesale.
-      void refreshWorkspaces();
+      //
+      // COALESCED, because this is the busiest event there is: a working agent
+      // emits a tab.updated for every headline, title, status and busy flip,
+      // and answering each one with a full list walk measured at 1.7 requests
+      // a second on an idle cockpit. See refreshWorkspacesSoon.
+      refreshWorkspacesSoon();
       return;
     case 'pane.added':
     case 'pane.removed':

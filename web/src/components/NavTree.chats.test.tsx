@@ -376,8 +376,8 @@ describe('subChatChip', () => {
   const kid = (status?: Tab['status'], n = 0) => tab(`k${n}`, { spawned_by: 'a', status });
 
   it('counts the quiet case in the shortest form there is', () => {
-    expect(subChatChip([kid(), kid()])).toBe('2 sub-chats');
-    expect(subChatChip([kid()])).toBe('1 sub-chat');
+    expect(subChatChip([kid(), kid()])).toBe('2 sub-agents');
+    expect(subChatChip([kid()])).toBe('1 sub-agent');
   });
 
   it('leads with the total, then the states, loudest first', () => {
@@ -392,14 +392,14 @@ describe('subChatChip', () => {
   });
 
   it('spells the noun out in the TITLE, which has room for it', () => {
-    // The visible line cannot afford "sub-chats" — measured, 228px of text in
+    // The visible line cannot afford "sub-agents" — measured, 228px of text in
     // 204px, and the ellipsis would eat the `idle` segment that makes the
     // numbers add up. The glyph carries the noun on screen; the words live
     // here and in the accessible name.
     expect(subChatChipTitle([kid('ready', 1), kid(undefined, 2)])).toBe(
-      '2 sub-chats (1 ready \u00b7 1 idle)',
+      '2 sub-agents (1 ready \u00b7 1 idle)',
     );
-    expect(subChatChipTitle([kid(undefined, 1)])).toBe('1 sub-chat');
+    expect(subChatChipTitle([kid(undefined, 1)])).toBe('1 sub-agent');
   });
 
   it('ACCOUNTS FOR EVERYONE — the segments sum to the total', () => {

@@ -1356,6 +1356,10 @@
    the one row that is NOT rail-coloured would still be drawn in rail ink, i.e.
    white on near-white in every light theme. */
 .navtree-tab-row[data-active="true"] {
+  /* Controls inside the selected row need pane surfaces as well as pane ink.
+     Otherwise rename inherits the rail's dark --bg-elev under dark pane text. */
+  --bg-elev: var(--pane-elev);
+  --bg-hover: var(--pane-hover);
   --fg: var(--pane-ink);
   --fg-dim: var(--pane-ink-dim);
   --fg-faint: var(--pane-ink-faint);
@@ -1769,19 +1773,25 @@
   border-top-color: transparent;
   animation: navtree-state-spin 0.8s linear infinite;
 }
-.navtree-mark[data-state="ready"] {
-  background: var(--status-ready);
-  opacity: 0.9;
-}
-/* It wants you NOW — the one state that is about you rather than the machine,
-   and the only reason this mark is not simply "spinner or nothing". */
-.navtree-mark[data-state="blocked"] {
-  background: var(--status-blocked);
-}
-/* Findable, not shouting: a dead runner needs nothing until you decide it
-   does, so it gets the mark in the palette's quiet grey rather than in red. */
+.navtree-mark[data-state="ready"],
+.navtree-mark[data-state="blocked"],
 .navtree-mark[data-state="dead"] {
-  background: var(--status-dead);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+}
+.navtree-mark[data-state="ready"] {
+  color: var(--status-ready);
+}
+.navtree-mark[data-state="blocked"] {
+  color: var(--status-blocked);
+}
+.navtree-mark[data-state="dead"] {
+  color: var(--status-dead);
 }
 /* NO ACTIVE-ROW OVERRIDE, and its absence is the point. The status hues are
    tuned against the rail's background — which is exactly what a wash leaves
@@ -1884,8 +1894,7 @@
    ─── THE HUE IS A STATE, AND ONLY WHILE IT HAS TO BE ──────────────────────
    Shut, the pill speaks for children you cannot see and takes their loudest
    state.
-   Open, they draw their own marks, so it goes neutral and swaps the state dot
-   for the agent glyph — the same rule `rollupStatus` always had, now visible
+   Open, they draw their own marks, so it goes neutral and names only the count — the same rule `rollupStatus` always had, now visible
    in the thing itself rather than in a prop.
 
    The wash is the status channel's own, so a pill and a mark of the same state
@@ -1929,11 +1938,15 @@
    colouring this too would put the same fact on two objects — the exact
    duplication the sub-chat pill was built to remove. */
 .navtree-pane-pill,
-/* QUIET — idle, and every open group. The rail's own ink rather than a status
-   hue, because "nothing is happening" is not a state the status channel owns:
-   giving idle a colour would put a mark on every group in the list. */
-  .navtree-subs-pill[data-state="idle"],
-.navtree-subs-pill[data-open="true"] {
+/* QUIET — idle only. The rail's own ink rather than a status hue, because
+   "nothing is happening" is not a state the status channel owns: giving idle a
+   colour would put a mark on every group in the list.
+
+   OPEN GROUPS ARE NOT QUIET ANY MORE. They were, and the result was a row
+   whose only remaining state was the PARENT's: a chat with two running
+   sub-agents expanded under it wore a green tick and nothing else. The caret
+   says open; the hue says what the workers are doing. */
+  .navtree-subs-pill[data-state="idle"] {
   background: color-mix(in srgb, var(--fg) 11%, transparent);
   color: var(--fg-dim);
 }
@@ -1948,8 +1961,7 @@
   color: color-mix(in srgb, var(--pill-hue) 40%, var(--fg));
 }
 .navtree-tab-row[data-active="true"] .navtree-pane-pill,
-.navtree-tab-row[data-active="true"] .navtree-subs-pill[data-state="idle"],
-.navtree-tab-row[data-active="true"] .navtree-subs-pill[data-open="true"] {
+.navtree-tab-row[data-active="true"] .navtree-subs-pill[data-state="idle"] {
   background: color-mix(in srgb, var(--fg) 20%, transparent);
   color: var(--fg);
 }
@@ -1960,46 +1972,10 @@
   background: color-mix(in srgb, var(--pill-hue) 52%, transparent);
 }
 .navtree-pane-pill:hover,
-.navtree-subs-pill[data-state="idle"]:hover,
-.navtree-subs-pill[data-open="true"]:hover {
+.navtree-subs-pill[data-state="idle"]:hover {
   background: color-mix(in srgb, var(--fg) 18%, transparent);
 }
-/* THE STATE DOT. The same three shapes the rail's marks use, so the pill is
-   not a fourth vocabulary: a ring that turns for `working`, a filled disc for
-   anything settled, a hollow one for idle. It reuses `navtree-state-spin`
-   rather than declaring a second keyframe — ONE spin animation exists in this
-   rail, and a test enforces it. */
-.navtree-row-pill-dot {
-  width: 8px;
-  height: 8px;
-  flex: 0 0 auto;
-  border-radius: 50%;
-  background: currentColor;
-}
-.navtree-subs-pill[data-state="working"] .navtree-row-pill-dot {
-  background: none;
-  border: 1.5px solid currentColor;
-  border-top-color: transparent;
-  animation: navtree-state-spin 0.8s linear infinite;
-}
-.navtree-subs-pill[data-state="idle"] .navtree-row-pill-dot {
-  background: none;
-  border: 1.5px solid currentColor;
-  opacity: 0.75;
-}
-/* UNDER REDUCED MOTION IT FILLS INSTEAD OF STOPPING — the rail's own rule for
-   the mark this echoes, and not `animation: none`: a stilled ring with a gap
-   in it is a shape that means nothing, and a second `animation` declaration in
-   this sheet would break the one-animation invariant a test enforces.
-   `working` is then told by fill rather than by turning. */
-@media (prefers-reduced-motion: reduce) {
-  .navtree-subs-pill[data-state="working"] .navtree-row-pill-dot {
-    border-color: currentColor;
-    background: currentColor;
-  }
-}
-/* OPEN takes the agent glyph instead: the children are showing their own
-   states, so a dot here would be a mark for nothing. */
+/* Pane disclosures keep their layout glyph; sub-chat disclosures use words. */
 .navtree-row-pill-glyph {
   display: inline-flex;
   align-items: center;
@@ -2037,10 +2013,7 @@
   flex-shrink: 1;
   min-width: 0;
 }
-.navtree[data-variant="sheet"] .navtree-row-pill-dot {
-  width: 9px;
-  height: 9px;
-}
+
 /* The pane list opens INSTANTLY, so its caret flips instantly too — an
    animated chevron beside a snapping list reads as lag. (The rule it replaces
    rotated a right-chevron 90°; this one is already a down-caret, so `open`
@@ -2665,7 +2638,10 @@
 .navtree-rename {
   flex: 1;
   min-width: 0;
-  height: calc(var(--nt-row-tab) - 6px);
+  /* The row already pays 6px above and below its content. Keep the input,
+     including its border, inside that space instead of growing the grid. */
+  box-sizing: border-box;
+  height: calc(var(--nt-row-tab) - 12px);
   margin: 0 2px;
   padding: 0 6px;
   /* THE ELEVATED SURFACE OF WHATEVER ISLAND THIS IS IN — the only form of
@@ -3444,6 +3420,27 @@ body.sidenav-resizing iframe {
   color: var(--fg);
   font-weight: 400;
 }
+/* ── THE PINNED MARK ON A SHEET ROW ─────────────────────────────────────────
+   The same 2px accent bar the desktop row wears, in the same channel, with two
+   numbers changed for this surface:
+
+     · FULL HEIGHT, not inset 5px. A sheet row is a full-bleed band with no
+       radius (above) and no gap between rows, so an inset bar would read as a
+       floating tick rather than as the row's own edge — and on a list where
+       rows touch, the inset is what makes two adjacent pinned rows look like
+       one dashed line.
+     · `left: 0`, not 2px. There is no pill to sit inside here: the selected
+       row's fill is the band itself, edge to edge, so the rim IS x=0.
+
+   The row is already `position: relative` for the swipe shell, so this needs
+   no positioning context of its own. */
+.navtree[data-variant="sheet"] .navtree-pin-edge {
+  left: 0;
+  top: 0;
+  bottom: 0;
+  border-radius: 0;
+}
+
 /* The swipe shell is the row's real outer box on this surface, so it has to be
    square too — the shell CLIPS, and a rounded clip on a square band cuts the
    band's own corners off. */
@@ -3698,6 +3695,8 @@ body.sidenav-resizing iframe {
 .navtree-rail-mark {
   display: inline-flex;
   align-items: center;
+  /* The sheet's flex rail already supplies the gap. */
+  margin-left: 0;
 }
 
 /* ─── Selection ───────────────────────────────────────────────────────────

@@ -47,7 +47,13 @@ vi.mock('./events', () => ({
 }));
 
 const refreshWorkspaces = vi.fn(async () => {});
-vi.mock('./workspaces', () => ({ refreshWorkspaces: () => refreshWorkspaces() }));
+vi.mock('./workspaces', () => ({
+  refreshWorkspaces: () => refreshWorkspaces(),
+  // The rollup goes through the coalescer now (see refreshWorkspacesSoon).
+  // Counted as a refresh here: this suite asserts what a live event asks for,
+  // not when the timer lets it leave.
+  refreshWorkspacesSoon: () => refreshWorkspaces(),
+}));
 
 const WS = 'ws_01';
 const tab = (id: string, over: Partial<Tab> = {}): Tab =>

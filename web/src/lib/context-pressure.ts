@@ -1,3 +1,4 @@
+import { COMPACT_INSTRUCTIONS } from '@muxpad/shared';
 /**
  * HOW FULL IS THIS CONVERSATION, AND WHAT DOES THE CHAT SAY ABOUT IT.
  *
@@ -42,15 +43,11 @@ export function contextLevel(pct: number | undefined): ContextLevel {
  * number here would be a request it has no contract to honour. Naming the
  * CONTENT is a thing it can actually act on.
  */
-export const COMPACT_INSTRUCTIONS = [
-  'Preserve the specifics, not just the shape of the conversation.',
-  'Keep verbatim: names, roles and who owns what; numbers, prices, dates and deadlines;',
-  'file paths, ids, urls and commands; decisions taken and the reasoning given for them;',
-  'every question still open and every commitment made to someone.',
-  'Keep the most recent exchanges in full.',
-  'Drop: superseded drafts, tool output that can be re-read from disk, and repetition.',
-  'When in doubt about a detail that cannot be recovered from files or the repo, keep it.',
-].join(' ');
+// THE SAME WORDS THE SELF-HEAL USES. Moved to shared the day muxpad gained a
+// second caller (server/src/agent-runner/context-heal.ts, the recovery after a
+// send has already failed): two copies of the instruction that decides what
+// survives a compaction is exactly the thing that drifts unnoticed.
+export { COMPACT_INSTRUCTIONS };
 
 /** The sentence under the Compact button. Says what it costs, because the
  *  thing it costs is irreversible. */

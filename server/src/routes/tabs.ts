@@ -23,8 +23,9 @@ import { SpawnRoundStore } from '../store/SpawnRoundStore.js';
 import { TabStore } from '../store/TabStore.js';
 import { WorkspaceStore } from '../store/WorkspaceStore.js';
 import { pruneDeadPanes } from '../store/migrations.js';
-import { type TabActivity, compareUnpinnedTabs } from '../tab-activity.js';
+import type { TabActivity } from '../tab-activity.js';
 import { type ClockSnapshot, clockSnapshot, reviveChat, tabLifecycle } from '../tab-clock.js';
+import { orderedTabsForWorkspace } from '../tab-list.js';
 import { retireChat } from '../tab-retire.js';
 
 /**
@@ -209,39 +210,12 @@ export function tabsRoutes(deps: {
    * per-workspace list and the cross-workspace `?all=1` read so the search
    * results and the tree can never disagree about which tab comes first.
    */
-  function orderedForWorkspace(workspaceId: string, shared?: ClockSnapshot): Tab[] {
-    const raw = tabs.listByWorkspace(workspaceId);
-    // Fold in the two independent per-tab signals:
-    //   attention (red dot, "wants you NOW") = any pane rang BEL since you
-    //     last interacted. Purely runtime.
-    //   unread (bold name, "done, unreviewed") = the tab was manually marked
-    //     unread, OR any pane is unread (an agent finished a turn there while
-    //     you weren't looking). DB-persisted.
-    // Panes whose runtime isn't running (lazy-spawn, no client) contribute
-    // false to attention/busy; their persisted `unread` still counts.
-    // decorateTab is the ONE place this composition lives (mirroring
-    // decoratePane) — every tab.updated / tab.added emitter routes through it
-    // too, so the list and the live events can't describe a tab differently.
-    const manualUnreadIds = tabs.unreadIdsByWorkspace(workspaceId);
-    // One cron query per workspace (see cronsByTab) — the sidebar polls this
-    // route every 5s, so a per-row lookup would be the hottest query in the app.
-    const cronIds = cronsByTab(deps.db, workspaceId);
-    // And one clock read for the whole list, for the same reason — plus one of
-    // its own: a child chat's clock is its PARENT's, so resolving a row needs
-    // rows the workspace-scoped read above may not contain.
-    // (`/all` builds it once and passes it down — the index is global, so
-    //  rebuilding it per workspace there would be the same scan N times.)
-    const clocks = shared ?? clockSnapshot(deps.db);
-    const decorated = raw.map((t) =>
-      decorateTab(deps.cache, deps.db, t, manualUnreadIds, cronIds, clocks),
-    );
-    const positions = new Map(raw.map((t, i) => [t.id, i]));
-    const pinned = decorated.filter((t) => t.pinned);
-    const rest = decorated
-      .filter((t) => !t.pinned)
-      .sort((a, b) => compareUnpinnedTabs(a, b, positions));
-    return [...pinned, ...rest];
-  }
+  /** This workspace's tabs, decorated and ordered. The body moved to
+   *  ../tab-list.ts so `GET /api/boot` can serve the IDENTICAL list — a
+   *  prefetch that disagreed with the endpoint it stands in for would make the
+   *  sidebar render one order and then rearrange itself. */
+  const orderedForWorkspace = (workspaceId: string, shared?: ClockSnapshot): Tab[] =>
+    orderedTabsForWorkspace(deps.db, deps.cache, workspaceId, shared);
 
   /**
    * Every VISIBLE workspace's tabs in ONE request — the instant tier of the
@@ -431,36 +405,13 @@ export function tabsRoutes(deps: {
    * either way). Destructive delete is still DELETE /api/tabs/:id, where it
    * belongs — behind a menu, not a one-click ×.
    *
-   * ── A PINNED CHAT IS REFUSED, NOT QUIETLY ACCEPTED ─────────────────────────
-   * Pinning is the universal override: a pinned chat is never `done`, however
-   * it got there (tab-clock.ts, and `tab-clock.test.ts` "a pinned chat is
-   * never done, even archived"). That rule is right and is NOT what changes
-   * here. What changed is this route, which used to write the retirement and
-   * answer 204 anyway — so the × on a pinned row moved nothing on screen and
-   * said nothing about why, which reads as a broken button rather than a
-   * refused one. Worse, the write persisted: unpin a month later and the chat
-   * vanished into `done` on the strength of a click nobody remembers.
-   *
-   * 409 instead, with no write. The state is unreachable rather than stored
-   * and deferred, and the client has something specific to render — see F6.
-   * Auto-unpinning was the other option and is worse: it would let an
-   * implicit gesture overturn an explicit one, which is the single thing
-   * pinning is for.
+   * Explicit archive also removes the pin. Pins still protect against automatic
+   * decay; they do not prevent a person from deliberately archiving the chat.
    */
   app.post('/:id/archive', (c) => {
     const id = c.req.param('id');
     const tab = tabs.getById(id);
     if (!tab) return c.json({ error: { code: 'not_found', message: 'tab not found' } }, 404);
-    if (tab.pinned)
-      return c.json(
-        {
-          error: {
-            code: 'pinned',
-            message: 'a pinned chat cannot be archived — unpin it first',
-          },
-        },
-        409,
-      );
     retireChat({ db: deps.db, cache: deps.cache, events: deps.events }, id, 'archived');
     return c.body(null, 204);
   });

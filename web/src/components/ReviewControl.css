@@ -1,0 +1,311 @@
+/* Screen review's chrome. Same conventions as VoiceControl.css next door:
+   flat kebab-case blocks, `-modifier` / `is-state` classes, color-mix tints
+   over the --chat-* tokens, 36px round ghost buttons. Nothing here invents a
+   colour — a review strip that did not match the theme would read as a
+   notification from somewhere else. */
+
+.review-btn {
+  /* Pulled toward its neighbour for the same reason the mic is: two 36px
+     circles 8px apart put their glyphs 24px from each other and read as two
+     lone buttons rather than one cluster. */
+  margin-left: -4px;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--chat-dim);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: color 120ms ease, background 120ms ease, transform 120ms ease;
+}
+
+.review-btn:hover:not(:disabled) {
+  color: var(--chat-fg);
+  background: color-mix(in srgb, var(--chat-fg) 8%, transparent);
+}
+
+.review-btn:active:not(:disabled) {
+  transform: scale(0.92);
+}
+
+.review-btn:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+.review-btn:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* Live: an unmistakable stop, filled rather than ghost. A review holds a screen
+   capture and a microphone, so "am I still sharing?" must never be a question
+   you have to answer by looking elsewhere. */
+.review-btn.is-live {
+  color: #fff;
+  background: var(--chat-danger);
+}
+
+.review-btn.is-live:hover {
+  background: color-mix(in srgb, var(--chat-danger) 85%, #000);
+}
+
+/* ── The panel ────────────────────────────────────────────────────────────── */
+
+.review-panel {
+  margin: 0 0 6px;
+  padding: 6px 8px;
+  border: 1px solid color-mix(in srgb, var(--chat-accent) 45%, var(--chat-border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--chat-accent) 7%, var(--chat-elev));
+  font-family: var(--chrome-font);
+  font-size: 0.75rem;
+  color: var(--chat-dim);
+}
+
+.review-panel.-error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-color: color-mix(in srgb, var(--chat-danger) 45%, var(--chat-border));
+  background: color-mix(in srgb, var(--chat-danger) 7%, var(--chat-elev));
+  color: var(--chat-fg);
+}
+
+.review-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 26px;
+}
+
+.review-state {
+  font-weight: 600;
+  color: var(--chat-fg);
+  /* Reserve the widest label so the meter beside it never jitters. */
+  min-width: 66px;
+}
+
+.review-msg {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.review-small,
+.review-count,
+.review-clock {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  color: var(--chat-faint);
+}
+
+.review-small {
+  flex: 1 1 auto;
+}
+
+/* The meter. Deliberately wide and deliberately early in the row: it is the
+   one instrument that tells you the microphone is real before you have wasted
+   a review talking into a dead one. */
+.review-meter {
+  flex: 1 1 auto;
+  min-width: 48px;
+  max-width: 180px;
+  height: 6px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--chat-fg) 12%, transparent);
+  overflow: hidden;
+}
+
+.review-meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--chat-accent);
+  transition: width 80ms linear;
+}
+
+.review-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--chat-faint);
+}
+
+.review-dot.is-speaking {
+  background: var(--chat-accent);
+  animation: review-pulse 0.9s ease-in-out infinite;
+}
+
+@keyframes review-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.4;
+    transform: scale(0.72);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .review-dot.is-speaking {
+    animation: none;
+  }
+}
+
+.review-stop,
+.review-send,
+.review-dismiss {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.review-stop {
+  color: #fff;
+  background: var(--chat-danger);
+}
+
+.review-stop:hover {
+  background: color-mix(in srgb, var(--chat-danger) 85%, #000);
+}
+
+.review-send {
+  color: #fff;
+  background: var(--chat-accent);
+}
+
+.review-send:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--chat-accent) 85%, #000);
+}
+
+.review-send:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.review-dismiss {
+  color: var(--chat-dim);
+  background: transparent;
+  border-color: var(--chat-border);
+}
+
+.review-dismiss:hover {
+  color: var(--chat-fg);
+  background: var(--chat-hit-bg, color-mix(in srgb, var(--chat-fg) 8%, transparent));
+}
+
+/* ── The notes ────────────────────────────────────────────────────────────── */
+
+.review-notes {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  /* About five notes, then it scrolls. The panel sits over the last message in
+     the log, and a review of twenty things must not take the whole pane. */
+  max-height: 184px;
+  overflow-y: auto;
+}
+
+.review-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 4px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--chat-fg) 4%, transparent);
+}
+
+.review-note.is-pending {
+  opacity: 0.6;
+}
+
+.review-note.is-failed {
+  color: var(--chat-danger);
+}
+
+.review-note-frames {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 2px;
+}
+
+/* Small, but big enough to recognise WHICH screen — the thumbnail's job is to
+   let you tell note 2 from note 3 without opening anything. */
+.review-thumb {
+  width: 44px;
+  height: 28px;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid var(--chat-border);
+  background: var(--chat-elev);
+}
+
+.review-note-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--chat-fg);
+  /* Two lines, then clipped. The full text goes in the message; this row is for
+     recognising the note, not reading it. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
+.review-scrap {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--chat-faint);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.review-scrap:hover {
+  color: var(--chat-fg);
+  background: color-mix(in srgb, var(--chat-fg) 10%, transparent);
+}
+
+.review-hint,
+.review-log {
+  margin: 6px 2px 2px;
+  color: var(--chat-faint);
+}
+
+.review-log {
+  font-size: 0.7rem;
+}
+
+@media (max-width: 720px) {
+  .review-state {
+    min-width: 0;
+  }
+  /* The clock and the sample counts are the first things to go: on a phone the
+     row has to keep the meter and the Stop. */
+  .review-clock,
+  .review-small {
+    display: none;
+  }
+}

@@ -60,7 +60,13 @@ vi.mock('./events', () => ({
   },
 }));
 
-vi.mock('./workspaces', () => ({ refreshWorkspaces: async () => {} }));
+vi.mock('./workspaces', () => ({
+  refreshWorkspaces: async () => {},
+  // tabs.ts asks for the rollup through the coalescer now — a mock missing it
+  // throws from inside a live-event handler, which vitest reports as an
+  // unhandled error while every assertion still passes.
+  refreshWorkspacesSoon: () => {},
+}));
 
 const { cachedTabsFor, refreshTabs } = await import('./tabs');
 const { cachedAllTabs, loadAllTabs, resetAllTabsCache } = await import('./lib/all-tabs');

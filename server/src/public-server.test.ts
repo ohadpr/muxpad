@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -166,5 +166,68 @@ describe('public static server', () => {
       const res = await app.request('/site/index.html');
       expect(res.headers.get('access-control-allow-origin')).toBe('null');
     });
+  });
+});
+
+/**
+ * THE EXPIRED LINK.
+ *
+ * Links published here answer for a week by default. The gate is on the LINK,
+ * never on the bytes — an expired artifact is still on disk, because the next
+ * thing that happens is the user asking for it back.
+ */
+describe('an expired link', () => {
+  const withArtifact = () => {
+    const root = mkdtempSync(join(tmpdir(), 'mux-public-exp-'));
+    mkdirSync(join(root, 'report-7k3mqp2x'), { recursive: true });
+    writeFileSync(join(root, 'report-7k3mqp2x', 'index.html'), '<p>live</p>');
+    mkdirSync(join(root, 'report-7k3mqp2x@2'), { recursive: true });
+    writeFileSync(join(root, 'report-7k3mqp2x@2', 'index.html'), '<p>older</p>');
+    return root;
+  };
+
+  it('answers 410, not 404 — the artifact exists and can be extended', async () => {
+    const root = withArtifact();
+    const app = createPublicApp(root, { expiresAt: () => 1_000, now: () => 2_000 });
+    const res = await app.fetch(new Request('http://pub/report-7k3mqp2x/'));
+    expect(res.status).toBe(410);
+    expect(await res.text()).toMatch(/expired/i);
+  });
+
+  it('takes the rotations with it', async () => {
+    // Otherwise the previous version keeps serving from a url one character
+    // away, and "that link is down" is false.
+    const root = withArtifact();
+    const app = createPublicApp(root, {
+      expiresAt: (seg) => (seg.startsWith('report-7k3mqp2x') ? 1_000 : null),
+      now: () => 2_000,
+    });
+    expect((await app.fetch(new Request('http://pub/report-7k3mqp2x@2/'))).status).toBe(410);
+  });
+
+  it('leaves the bytes exactly where they were', async () => {
+    const root = withArtifact();
+    const app = createPublicApp(root, { expiresAt: () => 1_000, now: () => 2_000 });
+    await app.fetch(new Request('http://pub/report-7k3mqp2x/'));
+    expect(readFileSync(join(root, 'report-7k3mqp2x', 'index.html'), 'utf8')).toBe('<p>live</p>');
+  });
+
+  it('serves normally before the horizon, and after an extension', async () => {
+    const root = withArtifact();
+    const live = createPublicApp(root, { expiresAt: () => 5_000, now: () => 2_000 });
+    expect((await live.fetch(new Request('http://pub/report-7k3mqp2x/'))).status).toBe(200);
+  });
+
+  it('serves a slug with no horizon at all — the pre-expiry artifacts', async () => {
+    const root = withArtifact();
+    const app = createPublicApp(root, { expiresAt: () => null, now: () => 9e12 });
+    expect((await app.fetch(new Request('http://pub/report-7k3mqp2x/'))).status).toBe(200);
+  });
+
+  it('still carries the sandbox on the 410', async () => {
+    const root = withArtifact();
+    const app = createPublicApp(root, { expiresAt: () => 1_000, now: () => 2_000 });
+    const res = await app.fetch(new Request('http://pub/report-7k3mqp2x/'));
+    expect(res.headers.get('content-security-policy')).toMatch(/sandbox/);
   });
 });

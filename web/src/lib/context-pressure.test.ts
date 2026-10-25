@@ -66,9 +66,17 @@ describe('nothing compacts on its own', () => {
     'utf8',
   );
 
-  it('the runner disables auto-compaction rather than capping the window', () => {
-    expect(runner).toContain('autoCompactEnabled: false');
-    expect(runner).not.toMatch(/settings:\s*\{\s*autoCompactWindow/);
+  it("the runner overrides NOTHING — compaction is the harness's to run", () => {
+    // Both overrides are failures, in opposite directions: a window compacts
+    // threads nobody asked about (measured: 216k → 4.7k on a live deal
+    // thread), and a disable wedges them at the ceiling, where every send —
+    // including `/compact` itself — answers "Prompt is too long".
+    //
+    // Comments stripped: the runner's own note NAMES both, to explain why
+    // neither is used.
+    const code = runner.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+    expect(code).not.toContain('autoCompactEnabled');
+    expect(code).not.toContain('autoCompactWindow');
   });
 
   it('keeps the MANUAL compaction the button depends on', () => {
@@ -81,7 +89,6 @@ describe('nothing compacts on its own', () => {
     // mistake this repo already made once, reading a token name out of a CSS
     // comment.)
     const code = runner.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
-    expect(code).toContain('autoCompactEnabled: false');
     expect(code).not.toContain('DISABLE_COMPACT');
     expect(code).not.toContain('DISABLE_AUTO_COMPACT');
   });

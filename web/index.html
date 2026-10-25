@@ -23,6 +23,31 @@
   </head>
   <body>
     <div id="root"></div>
+    <!-- THE FIRST REQUEST, FIRED BEFORE THE BUNDLE HAS PARSED.
+         The sidebar's first two lists used to be a staircase that could not
+         start until React had mounted: measured cold at 4x CPU throttle, the
+         app's first request left at 227ms and the second had to wait for the
+         first to name a workspace id. This asks for both at ~10ms, in one
+         request, overlapped with the download.
+         Everything about it is optional: a failure, a 404 from an older
+         server, or a path with no workspace in it all leave the app on exactly
+         the path it took before. See web/src/boot-prefetch.ts. -->
+    <script>
+      try {
+        var m = location.pathname.match(/^\/w\/([^/]+)/);
+        // DECODED FIRST: `location.pathname` is already percent-encoded, so
+        // encoding it again sends `my%2520work` for a slug called `my work`.
+        var slug = m ? decodeURIComponent(m[1]) : '';
+        window.__muxpadBootAt = performance.now();
+        window.__muxpadBoot = fetch('/api/boot' + (slug ? '?w=' + encodeURIComponent(slug) : ''), {
+          headers: { accept: 'application/json' },
+        })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .catch(function () { return null; });
+      } catch (e) {
+        /* an optimisation that throws is not an optimisation */
+      }
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

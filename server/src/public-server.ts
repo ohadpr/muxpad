@@ -147,7 +147,19 @@ function contentType(name: string): string {
   return MIME[ext] ?? 'application/octet-stream';
 }
 
-export function createPublicApp(publicDir: string): Hono {
+export interface PublicAppDeps {
+  /**
+   * Epoch ms after which this path segment's link stops answering, or null for
+   * never. Injected rather than imported so this app stays a pure function of
+   * its inputs in tests — and so the expiry store can live outside the served
+   * tree, where this server cannot leak it.
+   */
+  expiresAt?: (segment: string) => number | null;
+  /** Test seam. */
+  now?: () => number;
+}
+
+export function createPublicApp(publicDir: string, deps: PublicAppDeps = {}): Hono {
   const app = new Hono();
 
   // Every response leaves with the sandbox, including 404s and the
@@ -188,6 +200,21 @@ export function createPublicApp(publicDir: string): Hono {
       segs.push(dec);
     }
     if (segs.length === 0) return notFound();
+
+    // ── THE LINK'S HORIZON, NOT THE FILE'S ────────────────────────────────
+    //
+    // Checked on the FIRST segment, which is the artifact: every file under an
+    // expired slug goes with it, including its `@2` rotations (baseSlugOf),
+    // because a link that has lapsed must not still serve its own previous
+    // version from a URL one character away.
+    //
+    // 410 rather than 404 on purpose: the artifact existed, the bytes are
+    // still on disk, and the next thing the reader does is ask for it back.
+    // A 404 would send them hunting for a typo instead.
+    const owner = segs[0] as string;
+    const horizon = deps.expiresAt?.(owner) ?? null;
+    if (horizon !== null && horizon <= (deps.now?.() ?? Date.now()))
+      return c.text('this link has expired — ask muxpad to extend it', 410);
 
     let filePath = join(publicDir, ...segs);
     let st: ReturnType<typeof statSync>;

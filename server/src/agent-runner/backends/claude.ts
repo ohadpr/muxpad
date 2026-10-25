@@ -42,6 +42,7 @@ import {
 import { bold, dim } from '../ansi.js';
 import { AuthHealPolicy, authGiveUpNotice, isAuthFailureText } from '../auth-heal.js';
 import { BackgroundCommands } from '../background-commands.js';
+import { RECOVERY_COMPACT_INSTRUCTIONS, contextHeal } from '../context-heal.js';
 import type { AgentMode, AgentQuestion, NotifyStatus, RunnerFrame } from '../protocol.js';
 import { ReplyBlockTracker, replyToolUseId } from '../reply-stream.js';
 import {
@@ -52,6 +53,7 @@ import {
   isApproval,
 } from '../reversibility.js';
 import { markSessionCleared, markSessionTurned, sessionHadTurn } from '../session-marks.js';
+import { isSilentTurn } from '../silent-turn.js';
 import { SubagentRoster } from '../subagent-roster.js';
 import type { AgentBackend, BackendOptions, RunnerHost } from './types.js';
 
@@ -897,7 +899,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
     'no-devices':
       'Not sent: no device is subscribed to push on this server, so notifications are a no-op here. Say it in your reply instead; do not call again.',
     'held-subchat':
-      "Not sent: this is a sub-chat, and a sub-chat does not ring the user's phone for its ordinary work. Your result reaches the chat that spawned you — put it there. Do not call again.",
+      "Not sent: this is a sub-agent, and a sub-agent does not ring the user's phone for its ordinary work. Your result reaches the chat that spawned you — put it there. Do not call again.",
     'rate-limited':
       'Dropped: this pane already sent a notification within the last minute. Put this in your reply instead; do not call again.',
     unavailable:
@@ -1071,6 +1073,20 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
    * turn, so it was visible most of the time.
    */
   let streamedTextThisTurn = false;
+  /**
+   * DID THIS TURN PUT ANYTHING IN THE CHAT?
+   *
+   * Prose, a reply, or a `muxpad say` — the three ways a turn reaches the log
+   * as something to read. Tool calls are not: they collapse into a run nobody
+   * expands (`dropSilentCardFires` drops the whole thing, chip included).
+   *
+   * It exists for the SIDEBAR's bold mark. An hourly card refresh that says
+   * nothing was bolding its chat every hour — reported as "@Investing keeps
+   * showing as new message but nothing is happening there" — because the
+   * server bolds on every turn-done and had no way to tell a turn that spoke
+   * from one that did not. See ws.ts's turn-done handler.
+   */
+  let saidSomethingThisTurn = false;
   // Reply tool calls currently being GENERATED, so their argument deltas can be
   // decoded into speakable text before the call runs (see reply-stream.ts).
   const replyBlocks = new ReplyBlockTracker();
@@ -1176,6 +1192,24 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
    */
   const backgroundField = (): { background?: number } =>
     backgroundCommands.size > 0 ? { background: backgroundCommands.size } : {};
+  /**
+   * `silent: true` when this turn put NOTHING in the chat — no prose, no
+   * reply, no `muxpad say`.
+   *
+   * Only for a turn nobody typed. A human-started turn that ends quiet still
+   * marks the chat: somebody is waiting on it, and "it finished" is news even
+   * when the agent had nothing to add. A cron's hourly card refresh is the
+   * opposite case, and it was bolding its chat every hour for nothing — see
+   * ws.ts, which is the only consumer.
+   *
+   * The field is ABSENT unless true, like `background` above: absent reads as
+   * "mark it" everywhere, which is both the old behaviour and what every other
+   * backend will keep sending.
+   */
+  const silentField = (): { silent?: true } =>
+    isSilentTurn({ human: turnHuman, said: saidSomethingThisTurn, replies: repliesThisTurn })
+      ? { silent: true }
+      : {};
   const reportBackground = (): void => {
     const live = backgroundCommands.size;
     if (live === lastBackgroundLive) return;
@@ -1223,6 +1257,15 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
    * reply guard; see needsReplyFallback.
    */
   let turnHuman = false;
+  /**
+   * The message whose send has already triggered ONE compaction.
+   *
+   * The budget is one per message, and this is the whole of it: a single
+   * message can be larger than the window on its own, and compacting the
+   * history again cannot make room for it — it would only spend the rest of
+   * the conversation in a loop that cannot succeed. See context-heal.ts.
+   */
+  let contextHealed: string | null = null;
 
   /** One-line snippet of assistant prose for a push body — strip the loudest
    *  markdown, collapse whitespace, truncate. Empty → undefined (caller falls
@@ -1350,6 +1393,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
         answeredThisTurn = false;
         repliesThisTurn = 0;
         streamedTextThisTurn = false;
+        saidSomethingThisTurn = false;
         firstReplyText = '';
         currentTurnText = text;
         authFailureThisTurn = null;
@@ -1452,28 +1496,41 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
 
   const options: Options = {
     cwd: process.cwd(),
-    // ── NOTHING COMPACTS A CHAT EXCEPT THE PERSON READING IT ────────────────
+    // ── COMPACTION IS THE HARNESS'S JOB, AND IT ALWAYS WAS ─────────────────
     //
-    // This was `autoCompactWindow: 200_000`, to stop watchers resuming 900k
-    // conversations on every fire. It worked, and it was the wrong instrument:
-    // the window is per SESSION, so it also applied to the long threads a
-    // human is in the middle of. Measured on one of them — a deal thread —
-    // two automatic compactions in three hours, 216k -> 4.7k and 167k -> 6.3k,
-    // 372k tokens of verbatim history dropped without anybody asking.
+    // There is no `settings` override here on purpose. The whole episode, in
+    // two days and three commits:
     //
-    // A compaction is lossy and IRREVERSIBLE from inside the session. Deciding
-    // to take that is the user's call, every time, so muxpad does not make it:
-    // the context meter turns amber, a Compact button appears beside the model
-    // chip (SessionBar), and nothing happens until it is pressed.
+    //   85ad985  `autoCompactWindow: 200_000`, to stop watcher panes resuming
+    //            900k conversations on every fire. It worked on the bill and
+    //            moved EVERY chat's compaction five times earlier, to 200k on
+    //            a 1M model.
+    //      ↓     "i started noticing compaction messages that are very
+    //            concerning me … i didn't see these previously" — measured on
+    //            a deal thread: two compactions in three hours, 216k → 4.7k
+    //            and 167k → 6.3k.
+    //   a6d9979  compaction turned OFF entirely, which is not what was asked
+    //            for and is strictly worse: at the ceiling every send fails
+    //            with `Prompt is too long`, including the one that would ask
+    //            for a compaction. The chat is dead, not degraded.
+    //      ↓     "up until a week or two ago I never had to deal with
+    //            compaction it's probably just happened automatically at the
+    //            harness level" — correct, and the right reading of the whole
+    //            thing: the complaint was never that compaction exists.
     //
-    // `autoCompactEnabled: false`, NOT `DISABLE_COMPACT`: that env var also
-    // disables the manual /compact, which is the one this hands to the user.
+    // So: no window, no disable. The harness compacts when the window is
+    // actually running out, which is what it did before any of this and what
+    // nobody ever had to think about.
     //
-    // THE COST, STATED: a session that runs to the real window ceiling now
-    // fails its turn instead of silently compacting. That is the trade asked
-    // for — a hard edge you can see beats a quiet edit of your own history —
-    // and it is why the warning starts at 70%, not at 95%.
-    settings: { autoCompactEnabled: false },
+    // THE COST THAT STARTED IT still has a home, and a better one. A watcher
+    // resuming an enormous conversation on every fire is a CRON problem, and
+    // crons have `on_context=rotate` — summarise, start a fresh session, carry
+    // the briefing over (chat/summarize.ts). That targets the panes with the
+    // runaway bill instead of every chat a human is sitting in.
+    //
+    // What muxpad keeps is the part that was genuinely missing: the context
+    // meter, the Compact button beside the model chip, and the recovery in
+    // context-heal.ts for a send that fails for room anyway.
     // ─── ONE DELEGATION PRIMITIVE, AND IT IS THE SUB-CHAT ────────────────────
     //
     // `disallowedTools` removes a tool from the MODEL'S CONTEXT — it is not a
@@ -2123,6 +2180,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
       answeredThisTurn = false;
       repliesThisTurn = 0;
       streamedTextThisTurn = false;
+      saidSomethingThisTurn = false;
       firstReplyText = '';
       // An autonomous turn has no text anyone is waiting on, so a re-exec has
       // nothing to put back — see the turn-result branch.
@@ -2211,6 +2269,19 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
             if (block.type === 'tool_result') {
               unresolvedTools.delete(block.tool_use_id);
               if (block.is_error) uncertainToolResult = true;
+              // `muxpad say` IS SPEECH, and it does not come through the
+              // model's own voice — it rides a Bash tool_result as a marker
+              // and is lifted out at render time (shared/chat-events.ts).
+              // A cron that only speaks this way (the shape muxpad's own
+              // instructions ask for) would otherwise look silent, and the
+              // one fire that HAD something to tell you would be the one that
+              // failed to mark the chat.
+              //
+              // The bare opening tag, not the keyed form: a false positive
+              // here only means the chat gets bolded, which is what used to
+              // happen to every turn anyway.
+              if (!saidSomethingThisTurn && blockText(block.content).includes('<muxpad-said k="'))
+                saidSomethingThisTurn = true;
             }
           }
         }
@@ -2361,6 +2432,13 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
           }
           // Keep the LATEST prose-bearing assistant message as the turn's summary.
           if (msgText) {
+            // Prose is the commonest way a turn says something — in AGENT
+            // mode. In Chat mode it is the scratchpad: the chat renders the
+            // `reply` tool and nothing else, so counting prose there would
+            // call every thinking-out-loud fire "spoken" and bold a row whose
+            // log gained nothing. `.trim()` because a lone newline is not
+            // speech in either mode.
+            if (currentMode !== 'chat' && msgText.trim()) saidSomethingThisTurn = true;
             lastAssistantText = msgText;
             lastAssistantTextId = msgTextId;
             // DID THIS TURN ALREADY ANSWER? A real model wrote it, and it is
@@ -2660,11 +2738,15 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
               ...backgroundField(),
             });
           } else if (msg.subtype === 'success') {
+            // The conversation is moving again; a later overflow is a new
+            // situation and gets its own attempt.
+            contextHealed = null;
             log(dim(`✓ turn done · ${secs}s · $${msg.total_cost_usd.toFixed(2)}`));
             emit({
               t: 'turn-done',
               ok: true,
               ...(summary ? { summary } : {}),
+              ...silentField(),
               // THE TURN IS OVER; THE WORK MAY NOT BE. A command the model
               // backgrounded outlives this frame, and its completion starts the
               // next turn — the shape that delivered four results 5h42m–7h51m
@@ -2676,8 +2758,35 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
             if (!resumeSid && !titleGenerated) void generateTitle();
           } else {
             const error = msg.errors?.join('; ') || msg.subtype;
-            log(`✗ turn failed: ${error}`);
-            emit({ t: 'turn-done', ok, error, ...backgroundField() });
+            // ── THE CONTEXT IS FULL, AND THE CHAT IS NOW UNUSABLE ───────────
+            //
+            // Every send answers `Prompt is too long`, including the one that
+            // would ask for a compaction — so there is no way out from inside
+            // the conversation. muxpad does not compact on a percentage and
+            // still will not; it compacts HERE, after a send has already
+            // failed, once per message, and says so. See context-heal.ts for
+            // why that is a different decision from the one that was turned
+            // off.
+            const heal = contextHeal({
+              error,
+              pending: currentTurnText,
+              alreadyTried: contextHealed !== null && contextHealed === (currentTurnText ?? ''),
+            });
+            if (heal.act === 'compact') {
+              contextHealed = currentTurnText ?? '';
+              log(`✗ turn failed: ${error} — compacting and retrying`);
+              emit({ t: 'turn-done', ok: false, error: heal.notice, ...backgroundField() });
+              slash('compact', RECOVERY_COMPACT_INSTRUCTIONS);
+              // …and the message the user actually sent goes back on the queue
+              // BEHIND it, so the retry runs against the compacted session.
+              if (heal.retry) send(heal.retry);
+            } else if (heal.act === 'give-up') {
+              log(`✗ turn failed: ${error} — compaction did not make room`);
+              emit({ t: 'turn-done', ok: false, error: heal.notice, ...backgroundField() });
+            } else {
+              log(`✗ turn failed: ${error}`);
+              emit({ t: 'turn-done', ok, error, ...backgroundField() });
+            }
           }
           interruptRequested = false;
           kick(); // release the next queued send, if any

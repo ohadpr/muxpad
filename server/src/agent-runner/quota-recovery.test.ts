@@ -359,15 +359,30 @@ describe('Claude quota recovery through real backend loop', () => {
  * This asserted the opposite — a 200k window, to stop watchers resuming huge
  * conversations — and that cap silently rewrote the history of threads a human
  * was working in: two automatic compactions in three hours on one of them,
- * 372k tokens of verbatim detail gone, nobody asked. The meter and the Compact
- * button replace it, and the point of this test is that the setting cannot
- * come back by accident.
+ * 372k tokens of verbatim detail gone, nobody asked.
+ *
+ * ─── AND THE OVER-CORRECTION THAT FOLLOWED ────────────────────────────────
+ * The next commit turned compaction OFF entirely, and this test pinned that.
+ * It was the wrong target: at the window's real ceiling every send then fails
+ * with `Prompt is too long` — including the one that would ask for a
+ * compaction — so the chat is dead rather than degraded. Reported two days
+ * later as "up until a week or two ago I never had to deal with compaction
+ * it's probably just happened automatically at the harness level", which is
+ * exactly right and is the whole point: the complaint was never that
+ * compaction exists, it was that muxpad had moved it five times earlier.
+ *
+ * So what this test guards is the ABSENCE of an override, in both directions:
+ * no window (which compacts threads nobody asked about) and no disable (which
+ * wedges them). The harness compacts when the window actually runs out, which
+ * is what it did before any of this.
  */
-it('never compacts on its own — and keeps manual /compact available', () => {
-  const settings = fakeSession().options.settings as Record<string, unknown>;
-  expect(settings).toMatchObject({ autoCompactEnabled: false });
-  // `autoCompactWindow` would re-arm the automatic path by the back door; and
-  // DISABLE_COMPACT (the env var) would take the manual one away with it.
+it('leaves compaction to the harness — no window, no disable', () => {
+  const settings = (fakeSession().options.settings ?? {}) as Record<string, unknown>;
+  // A WINDOW is the thing that rewrote live threads.
   expect(settings.autoCompactWindow).toBeUndefined();
+  // …and a DISABLE is the thing that wedged them at the ceiling.
+  expect(settings.autoCompactEnabled).toBeUndefined();
+  // DISABLE_COMPACT would take the manual `/compact` away with it, which is
+  // the path the Compact button and the self-heal both use.
   expect(process.env.DISABLE_COMPACT).toBeUndefined();
 });

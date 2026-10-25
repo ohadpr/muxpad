@@ -11,14 +11,18 @@ import { browserHostEntry } from './browser/hostEntry.js';
 import type { CronScheduler } from './cron/CronScheduler.js';
 import { EventBus } from './events.js';
 import { type Funnel, localFunnel } from './funnel.js';
+import { jsonCache } from './json-cache.js';
 import { initPaneKeys } from './pane-key.js';
+import { decorateWorkspace } from './ptyd-cache.js';
 import type { PtydCache } from './ptyd-cache.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
 import type { Presence, PushService } from './push.js';
+import type { Transcriber } from './review/transcribe.js';
 import { agentLaunchRoutes } from './routes/agent-launch.js';
 import { agentSessionsRoutes } from './routes/agent-sessions.js';
 import { appsRoutes } from './routes/apps.js';
 import { attachmentsRoutes } from './routes/attachments.js';
+import { bootRoutes } from './routes/boot.js';
 import { browserProxyRoutes, browsersRoutes } from './routes/browsers.js';
 import { cardsRoutes } from './routes/cards.js';
 import { cronsRoutes } from './routes/crons.js';
@@ -28,6 +32,7 @@ import { paneIoRoutes } from './routes/pane-io.js';
 import { panesScopedRoutes, panesTabScopedRoutes } from './routes/panes.js';
 import { publishRoutes } from './routes/publish.js';
 import { pushRoutes } from './routes/push.js';
+import { reviewRoutes } from './routes/review.js';
 import { archiveRoutes, searchRoutes } from './routes/search.js';
 import { slackRoutes } from './routes/slack.js';
 import { summaryRoutes } from './routes/summary.js';
@@ -36,7 +41,10 @@ import { voiceRoutes } from './routes/voice.js';
 import { workspacesRoutes } from './routes/workspaces.js';
 import { sameOriginGuard } from './same-origin.js';
 import { readOrCreateSayKey } from './say-key.js';
+import { WorkspaceStore } from './store/WorkspaceStore.js';
 import type { TabActivity } from './tab-activity.js';
+import { clockSnapshot } from './tab-clock.js';
+import { orderedTabsForWorkspace } from './tab-list.js';
 import type { VoiceSessionManager } from './voice/VoiceSessionManager.js';
 
 export interface AppDeps {
@@ -162,6 +170,16 @@ export interface AppDeps {
    */
   voice?: VoiceSessionManager;
   /**
+   * Screen review's two stateless calls (review/): the transcriber for one
+   * utterance of audio, and the install's vocabulary to bias it with. Optional
+   * for the same reason voice is — /api/review stays mounted and answers
+   * `configured: false` / 503 rather than 404.
+   */
+  review?: {
+    transcribe?: Transcriber | undefined;
+    glossary?: (() => readonly string[]) | undefined;
+  };
+  /**
    * Extra hostnames the CSRF guard trusts as an Origin, on top of loopback
    * and "same hostname as Host". Production reads MUXPAD_ALLOWED_ORIGINS;
    * this is the injection seam for tests. See same-origin.ts.
@@ -184,6 +202,21 @@ export function createApp(deps: AppDeps): Hono {
   // route below, including ones not yet written. See same-origin.ts for what
   // is allowed and why the CLI (which sends no Origin) still works.
   app.use('*', sameOriginGuard(deps.allowedOrigins ? { allowedOrigins: deps.allowedOrigins } : {}));
+  // A VALIDATOR AND A COMPRESSOR ON EVERY JSON GET.
+  //
+  // Measured on an idle page with 537 tabs: ~2.2 MB of JSON every twenty
+  // seconds, nearly all of it byte-identical to what the client already held,
+  // because the UI polls to catch edges the push bus can miss. An etag turns
+  // each of those into a 304 with no body; compression handles the ones that
+  // genuinely changed (the 497 KB tab list gzips to ~60 KB). Nothing on the
+  // client changes — the browser does the revalidation itself. See
+  // json-cache.ts, which also lists what it must never touch (the SSE feed
+  // above all).
+  //
+  // Mounted straight after the origin guard so it covers every route below,
+  // including ones not yet written: the set of endpoints something polls is
+  // not a list anybody maintains.
+  app.use('/api/*', jsonCache());
   app.get('/api/health', (c) => c.json({ ok: true }));
   // Active-device heartbeat: the web app POSTs this while foregrounded and
   // interacted-with, so push notifications hold off while you're at a device.
@@ -206,6 +239,23 @@ export function createApp(deps: AppDeps): Hono {
   app.get('/api/say/key', (c) => c.json({ key: theSayKey }));
 
   app.route('/api/slack', slackRoutes({ db: resolved.db, dataDir: resolved.dataDir }));
+  // ONE request for the sidebar's first two rungs, fired by an inline script
+  // in index.html while the bundle is still downloading. See routes/boot.ts
+  // for the cold-load trace that justifies it.
+  app.route(
+    '/api/boot',
+    bootRoutes({
+      // DECORATED THE SAME WAY `/api/workspaces` decorates them — the whole
+      // value of a prefetch is that the app can use it verbatim.
+      listWorkspaces: (opts) => {
+        const clocks = clockSnapshot(resolved.db);
+        return new WorkspaceStore(resolved.db)
+          .list(opts)
+          .map((w) => decorateWorkspace(resolved.cache, resolved.db, w, clocks));
+      },
+      listTabs: (workspaceId) => orderedTabsForWorkspace(resolved.db, resolved.cache, workspaceId),
+    }),
+  );
   app.route('/api/tabs', tabsRoutes(resolved));
   app.route('/api/tabs', panesTabScopedRoutes(resolved));
   // Chat cards — named persistent blocks pinned in a conversation. Tab-scoped
@@ -219,6 +269,15 @@ export function createApp(deps: AppDeps): Hono {
   // Voice mode's SDP relay + its cost controls. Always mounted (see
   // routes/voice.ts): "no API key" must be an answer, not a 404.
   app.route('/api/voice', voiceRoutes({ voice: resolved.voice }));
+  // Screen review — talk while you point, get back addressed notes. Same
+  // always-mounted contract as voice; see routes/review.ts.
+  app.route(
+    '/api/review',
+    reviewRoutes({
+      transcribe: resolved.review?.transcribe,
+      glossary: resolved.review?.glossary,
+    }),
+  );
   // SSE mirror of /ws/events — curl-able subscription for scripts/agents.
   app.route('/api/events', eventsRoutes(resolved));
   app.route('/api/agent-sessions', agentSessionsRoutes(resolved));

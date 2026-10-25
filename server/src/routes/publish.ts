@@ -8,6 +8,7 @@ import {
   renameSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from 'node:fs';
 import { basename, isAbsolute, join, resolve, sep } from 'node:path';
 import type Database from 'better-sqlite3';
@@ -21,6 +22,15 @@ import {
   durabilityNote,
   normalizeBaseUrl,
 } from '../public-base.js';
+import {
+  DEFAULT_LIFESPAN_DAYS,
+  clearLifespan,
+  expireNow,
+  expiryOf,
+  extendLifespan,
+  setLifespan,
+} from '../publish-expiry.js';
+import { indexForFiles } from '../publish-index.js';
 import {
   type TunnelEnsureResult,
   noteTunnelDown,
@@ -107,6 +117,79 @@ import { probeUrlHealth } from '../url-health.js';
  */
 
 const SLUG_RE = /^[a-z0-9-]{1,64}$/;
+
+/**
+ * THE RANDOM TAIL EVERY SLUG CARRIES, AND WHY A NAME IS ONLY A PREFIX.
+ *
+ * This domain is the open internet and has no index, no listing and no auth —
+ * so the ONLY thing standing between a published artifact and anybody who
+ * thinks to try `/trayo-pitch/` is whether the slug can be guessed. Named
+ * slugs were plain words: `roof-office`, `lior-susan-background`,
+ * `muxpad-slack-setup`. A scraper with a wordlist walks that domain in an
+ * afternoon, and what it finds is personal — pitches, apartment hunts, named
+ * people.
+ *
+ * So `--name=foo` now means "a link whose name BEGINS foo": the stored slug is
+ * `foo-<id>`, and the id is 40 bits of crypto randomness (8 chars of base32,
+ * ~1.1e12 possibilities). The readable half survives because the user still
+ * has to recognise their own links in a list.
+ *
+ * REPUBLISHING STILL LANDS IN PLACE. `--name=foo` finds the existing `foo-<id>`
+ * and overwrites that (rotating it to `@2`), rather than minting a second id —
+ * which would recreate, under a new mechanism, exactly the acme-creative2…6
+ * pile `--update` was introduced to stop.
+ */
+const SLUG_ID_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789'; // no look-alikes
+const SLUG_ID_LEN = 8;
+
+export function mintSlugId(): string {
+  // Rejection-free: 31 symbols from a byte is biased, so take 5 bits a time
+  // and re-roll the 1-in-32 that falls off the end of the alphabet.
+  let out = '';
+  while (out.length < SLUG_ID_LEN) {
+    for (const b of randomBytes(SLUG_ID_LEN)) {
+      const i = b & 31;
+      if (i < SLUG_ID_ALPHABET.length) out += SLUG_ID_ALPHABET[i];
+      if (out.length === SLUG_ID_LEN) break;
+    }
+  }
+  return out;
+}
+
+const SLUG_ID_RE = new RegExp(`-[${SLUG_ID_ALPHABET}]{${SLUG_ID_LEN}}$`);
+
+/** The readable half of a slug — what the user typed as `--name`. */
+export function slugBaseName(slug: string): string {
+  return slug.replace(SLUG_ID_RE, '');
+}
+
+/**
+ * Resolve a user-supplied name to the slug it ALREADY has on disk, if any.
+ *
+ * Accepts either half: the full `foo-7k3mqp2x` (what the CLI prints and what
+ * `--update` is given), or the bare `foo` the user remembers. A legacy slug
+ * with no id at all — everything published before this — matches exactly, so
+ * republishing one keeps its old URL working rather than orphaning it.
+ */
+export function findExistingSlug(publicDir: string, name: string): string | null {
+  if (existsSync(join(publicDir, name))) return name;
+  let best: { slug: string; mtime: number } | null = null;
+  let entries: import('node:fs').Dirent[];
+  try {
+    entries = readdirSync(publicDir, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  for (const e of entries) {
+    if (!e.isDirectory() || !SLUG_RE.test(e.name)) continue;
+    if (slugBaseName(e.name) !== name || e.name === name) continue;
+    const mtime = statSync(join(publicDir, e.name)).mtimeMs;
+    // Several ids under one name should not happen, but if an older build left
+    // two, the NEWEST is the live one — the others are already orphaned links.
+    if (!best || mtime > best.mtime) best = { slug: e.name, mtime };
+  }
+  return best?.slug ?? null;
+}
 
 /**
  * How many PREVIOUS versions of a named slug survive a republish. Three is a
@@ -335,6 +418,7 @@ export function publishRoutes(deps: {
       update?: unknown;
       public_base_url?: unknown;
       audience?: unknown;
+      days?: unknown;
     } | null;
     const src = typeof body?.path === 'string' ? body.path : '';
     if (!src || !isAbsolute(src))
@@ -400,20 +484,27 @@ export function publishRoutes(deps: {
     // Named slug: republish-in-place semantics (the previous tree rotates to
     // @2). Random slug: 8 hex chars of crypto randomness, retried on the
     // ~impossible collision.
-    let slug = typeof name === 'string' ? name : '';
-    if (update && !existsSync(join(publicDir, slug)))
-      return c.json(
-        {
-          error: {
-            code: 'not_found',
-            message: `no published artifact named ${slug} — publish it first, or drop --update to create it`,
+    // EVERY slug carries a random id (see mintSlugId) — a name is a prefix,
+    // not the whole address. A republish of a name that already exists lands on
+    // the SAME slug so the link the user already sent keeps working.
+    let slug = '';
+    if (typeof name === 'string') {
+      const existing = findExistingSlug(publicDir, name);
+      if (update && !existing)
+        return c.json(
+          {
+            error: {
+              code: 'not_found',
+              message: `no published artifact named ${name} — publish it first, or drop --update to create it`,
+            },
           },
-        },
-        404,
-      );
+          404,
+        );
+      slug = existing ?? `${slugBaseName(name)}-${mintSlugId()}`;
+    }
     if (!slug) {
       do {
-        slug = randomBytes(4).toString('hex');
+        slug = mintSlugId();
       } while (existsSync(join(publicDir, slug)));
     }
     // STAGE THEN SWAP. A republish used to `rmSync(dest)` and copy straight
@@ -457,10 +548,35 @@ export function publishRoutes(deps: {
     try {
       if (st.isDirectory()) {
         copyDereferenced(srcPath, staging, realPub);
+        // Same reasoning as the single-file branch below: a directory with no
+        // index.html is a 404 at the url we are about to print. The server must
+        // not list directories (one opaque origin, no discovery), so the
+        // publisher writes the listing instead — this is where the kippah-*
+        // and data-biz-* slugs lost their links.
+        if (!existsSync(join(staging, 'index.html'))) {
+          const top = readdirSync(staging, { withFileTypes: true })
+            .filter((e) => e.isFile())
+            .map((e) => e.name)
+            .sort();
+          if (top.length)
+            writeFileSync(join(staging, 'index.html'), indexForFiles(top, slugBaseName(slug)));
+        }
       } else {
         // A lone HTML file becomes the slug's index so the URL is just /<slug>/.
-        const fname = /\.html?$/i.test(srcPath) ? 'index.html' : basename(srcPath);
+        const html = /\.html?$/i.test(srcPath);
+        const fname = html ? 'index.html' : basename(srcPath);
         copyFileSync(srcPath, join(staging, fname));
+        // ── AND ANYTHING ELSE GETS AN INDEX WRITTEN FOR IT ────────────────
+        //
+        // Without this, publishing one `.md` (or `.mp3`, or `.stl`) produced a
+        // directory with no index.html — and the URL handed back is the
+        // DIRECTORY, which this server 404s by design. The file was served
+        // perfectly one path segment away, so the artifact looked lost when it
+        // was fine. Measured on the live tree before the fix: 21 of 208 slugs,
+        // 15 markdown and 6 STL, every one of them a link that had been handed
+        // over and did not open. Reported twice ("…/reshet-opener-sample/ not
+        // found") and worked around by republishing by hand, never diagnosed.
+        if (!html) writeFileSync(join(staging, 'index.html'), indexForFiles([fname]));
       }
     } catch (err) {
       rmSync(staging, { recursive: true, force: true });
@@ -532,12 +648,30 @@ export function publishRoutes(deps: {
         console.error('[tunnel] ensure failed during publish (link may be local-only)', err);
       }
     }
+    // ── THE LINK'S SHELF LIFE ─────────────────────────────────────────────
+    //
+    // Set on every publish, including a republish — the horizon runs from the
+    // last time somebody actually wanted this artifact, not from whenever the
+    // first version happened to go up. `days: 0` means "no expiry", for the
+    // rare link that is meant to outlive the week.
+    const rawDays = body?.days;
+    const days =
+      typeof rawDays === 'number' && Number.isFinite(rawDays) && rawDays >= 0
+        ? Math.min(rawDays, 3650)
+        : DEFAULT_LIFESPAN_DAYS;
+    let expires: number | null = null;
+    if (days === 0) clearLifespan(deps.dataDir, slug);
+    else expires = setLifespan(deps.dataDir, slug, days);
+
     const audience = audienceOf(body?.audience);
     const resolved = await resolveForPublish(hint, audience);
     return c.json(
       {
         slug,
+        /** The readable half the caller asked for — the slug is name + id. */
+        name: slugBaseName(slug),
         url: `${resolved.baseUrl}/${slug}/`,
+        ...(expires !== null ? { expires, lifespan_days: days } : { expires: null }),
         files,
         bytes,
         versions: listVersionDirs(publicDir, slug).map((n) => ({
@@ -593,11 +727,19 @@ export function publishRoutes(deps: {
       .map((e) => {
         const dir = join(publicDir, e.name);
         const { files, bytes } = dirStats(dir);
+        const expires = expiryOf(deps.dataDir, e.name);
         return {
           slug: e.name,
+          /** The readable half, so a listing is scannable by name. */
+          name: slugBaseName(e.name),
           files,
           bytes,
           created: Math.round(statSync(dir).birthtimeMs),
+          // null = never expires (everything published before links had a
+          // shelf life). An expiry in the PAST is reported as-is rather than
+          // hidden: the bytes are still here and `--extend` brings it back.
+          expires,
+          expired: expires !== null && expires <= Date.now(),
           url: baseUrl ? `${baseUrl}/${e.name}/` : null,
           versions: listVersionDirs(publicDir, e.name).map((n) => {
             const vdir = join(publicDir, versionDirName(e.name, n));
@@ -751,10 +893,15 @@ export function publishRoutes(deps: {
   });
 
   app.delete('/:slug', (c) => {
-    const slug = c.req.param('slug');
-    if (!SLUG_RE.test(slug))
+    const asked = c.req.param('slug');
+    if (!SLUG_RE.test(asked))
       return c.json({ error: { code: 'bad_request', message: 'bad slug' } }, 400);
     const publicDir = publicDirOf(deps.dataDir);
+    // Either half of the name, like `--name` and `--extend`: the full
+    // `report-7k3mqp2x` the CLI printed, or the `report` the user remembers.
+    const slug = existsSync(join(publicDir, asked))
+      ? asked
+      : (findExistingSlug(publicDir, asked) ?? asked);
     const dir = join(publicDir, slug);
     let isDir = false;
     try {
@@ -763,7 +910,7 @@ export function publishRoutes(deps: {
       /* fall through to 404 */
     }
     if (!isDir)
-      return c.json({ error: { code: 'not_found', message: `no such publish: ${slug}` } }, 404);
+      return c.json({ error: { code: 'not_found', message: `no such publish: ${asked}` } }, 404);
     // NOTE: deleting the last publish does NOT tear down the funnel — see
     // the plan doc. `tailscale funnel --https=8443 off` turns it off by hand.
     rmSync(dir, { recursive: true, force: true });
@@ -782,7 +929,57 @@ export function publishRoutes(deps: {
       if (!/^\d+$/.test(e.name.slice(slug.length + 1))) continue;
       rmSync(join(publicDir, e.name), { recursive: true, force: true });
     }
+    // The horizon goes with the bytes, or the store accretes a record per
+    // artifact ever published and a later slug reusing the name inherits a
+    // stranger's expiry.
+    clearLifespan(deps.dataDir, slug);
     return c.body(null, 204);
+  });
+
+  /**
+   * THE LINK'S SHELF LIFE, AFTER THE FACT.
+   *
+   * `publish` puts a 7-day horizon on every link. This is how it moves:
+   *
+   *   days > 0   extend — from NOW, not from the old expiry, so a link that
+   *              lapsed a fortnight ago comes back for the full term. That is
+   *              the whole reason this verb exists: "get me that page back".
+   *   days = 0   never expires.
+   *   expire     dead now, bytes kept.
+   *
+   * The bytes are NEVER touched here. Deleting is `DELETE /:slug`, deliberately
+   * a different verb with a different name — expiry is about who can read the
+   * link, deletion is about whether the artifact exists at all.
+   */
+  app.post('/:slug/lifespan', async (c) => {
+    const slug = c.req.param('slug');
+    if (!SLUG_RE.test(slug))
+      return c.json({ error: { code: 'bad_request', message: 'bad slug' } }, 400);
+    const publicDir = publicDirOf(deps.dataDir);
+    // Accept either half of the name, exactly like `publish --name` — the user
+    // extending a link is working from memory, not from a copied slug.
+    const resolved = existsSync(join(publicDir, slug)) ? slug : findExistingSlug(publicDir, slug);
+    if (!resolved)
+      return c.json({ error: { code: 'not_found', message: `no such publish: ${slug}` } }, 404);
+    const body = (await c.req.json().catch(() => null)) as {
+      days?: unknown;
+      expire?: unknown;
+    } | null;
+    if (body?.expire === true) {
+      expireNow(deps.dataDir, resolved);
+      return c.json({ slug: resolved, expires: Date.now(), expired: true });
+    }
+    const raw = body?.days;
+    const days =
+      typeof raw === 'number' && Number.isFinite(raw) && raw >= 0
+        ? Math.min(raw, 3650)
+        : DEFAULT_LIFESPAN_DAYS;
+    if (days === 0) {
+      clearLifespan(deps.dataDir, resolved);
+      return c.json({ slug: resolved, expires: null, expired: false });
+    }
+    const expires = extendLifespan(deps.dataDir, resolved, days);
+    return c.json({ slug: resolved, expires, expired: false, lifespan_days: days });
   });
 
   return app;

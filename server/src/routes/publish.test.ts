@@ -21,6 +21,22 @@ import { type TestApp, createTestApp } from '../test-helpers/createTestApp.js';
 import { PUBLIC_BASE_URL_KEY } from './publish.js';
 
 /**
+ * The on-disk slug for a published NAME.
+ *
+ * Every slug now carries 8 random characters (`site` → `site-7k3mqp2x`), so a
+ * test cannot derive the directory from the name it published under — which is
+ * the whole point of the id on a public host with no index and no login.
+ * Accepts a legacy id-less slug too, which is what a hand-made fixture dir is.
+ */
+function slugIn(publicDir: string, name: string): string {
+  if (existsSync(join(publicDir, name))) return name;
+  const hit = readdirSync(publicDir, { withFileTypes: true }).find(
+    (e) => e.isDirectory() && new RegExp(`^${name}-[a-z2-9]{8}$`).test(e.name),
+  );
+  return hit?.name ?? name;
+}
+
+/**
  * A funnel stub that records ensure() calls and never execs anything —
  * these tests must be incapable of exposing content publicly.
  */
@@ -36,6 +52,7 @@ function stubFunnel(state: FunnelState): Funnel & { calls: number } {
 }
 
 describe('publish routes', () => {
+  const slugOf = (name: string) => slugIn(join(dataDir, 'public'), name);
   let test: TestApp;
   let db: Database.Database;
   let dataDir: string;
@@ -70,12 +87,16 @@ describe('publish routes', () => {
     expect(res.status).toBe(201);
     const body = (await res.json()) as {
       slug: string;
+      name: string;
       url: string;
       files: number;
       bytes: number;
       warning?: string;
     };
-    expect(body.slug).toMatch(/^[0-9a-f]{8}$/);
+    // An unnamed publish is 8 chars of crypto randomness from a look-alike-free
+    // alphabet — the only thing between an artifact and a wordlist walking this
+    // domain, which has no index and no login.
+    expect(body.slug).toMatch(/^[a-z2-9]{8}$/);
     expect(body.url).toBe(`https://example.ts.net:8443/${body.slug}/`);
     expect(body.files).toBe(1);
     expect(body.bytes).toBe(11);
@@ -90,9 +111,12 @@ describe('publish routes', () => {
     writeFileSync(src, 'a,b\n1,2\n');
     const res = await post({ path: src, name: 'my-data' });
     expect(res.status).toBe(201);
-    const body = (await res.json()) as { slug: string; url: string };
-    expect(body.slug).toBe('my-data');
-    expect(readFileSync(join(dataDir, 'public', 'my-data', 'data.csv'), 'utf-8')).toBe(
+    const body = (await res.json()) as { slug: string; name: string; url: string };
+    // A NAME IS A PREFIX, NOT THE ADDRESS. `--name=my-data` yields
+    // `my-data-<id>`: readable enough to recognise in a listing, unguessable
+    // enough that knowing the hostname reveals nothing.
+    expect(body.slug).toMatch(/^my-data-[a-z2-9]{8}$/);
+    expect(readFileSync(join(dataDir, 'public', slugOf('my-data'), 'data.csv'), 'utf-8')).toBe(
       'a,b\n1,2\n',
     );
   });
@@ -109,7 +133,7 @@ describe('publish routes', () => {
     expect(res.status).toBe(201);
     const body = (await res.json()) as { files: number };
     expect(body.files).toBe(3);
-    const linked = join(dataDir, 'public', 'site', 'linked.txt');
+    const linked = join(dataDir, 'public', slugOf('site'), 'linked.txt');
     expect(readFileSync(linked, 'utf-8')).toBe('outside');
     // The public tree must hold only regular files — the source symlink was
     // dereferenced on copy, so the static server's containment check is moot.
@@ -123,7 +147,9 @@ describe('publish routes', () => {
     writeFileSync(src, 'v2 longer');
     const res = await post({ path: src, name: 'page' });
     expect(res.status).toBe(201);
-    expect(readFileSync(join(dataDir, 'public', 'page', 'index.html'), 'utf-8')).toBe('v2 longer');
+    expect(readFileSync(join(dataDir, 'public', slugOf('page'), 'index.html'), 'utf-8')).toBe(
+      'v2 longer',
+    );
   });
 
   it('a failed republish leaves the previous version intact and complete', async () => {
@@ -150,13 +176,13 @@ describe('publish routes', () => {
     }
     expect(res.status).toBe(500);
     // v1 is still there, whole, and there is no half-written replacement.
-    expect(readFileSync(join(dataDir, 'public', 'page', 'index.html'), 'utf-8')).toBe('v1');
-    expect(existsSync(join(dataDir, 'public', 'page', 'deep'))).toBe(false);
+    expect(readFileSync(join(dataDir, 'public', slugOf('page'), 'index.html'), 'utf-8')).toBe('v1');
+    expect(existsSync(join(dataDir, 'public', slugOf('page'), 'deep'))).toBe(false);
     // The staging dir is cleaned up, and never shows up as a publish.
     const listed = (await (await test.app.request('/api/publish')).json()) as {
       publishes: Array<{ slug: string }>;
     };
-    expect(listed.publishes.map((p) => p.slug)).toEqual(['page']);
+    expect(listed.publishes.map((p) => p.slug)).toEqual([slugOf('page')]);
     expect(readdirSync(join(dataDir, 'public')).filter((e) => e.startsWith('.'))).toEqual([]);
   });
 
@@ -176,9 +202,131 @@ describe('publish routes', () => {
     expect((await post({ path: dir, name: 'site' })).status).toBe(201);
     const res = await post({ path: dir, name: 'site' });
     expect(res.status).toBe(201);
-    expect(readFileSync(join(publicDir, 'site', 'index.html'), 'utf-8')).toBe('ok');
-    expect(existsSync(join(publicDir, 'site', 'loop'))).toBe(false);
+    // The republish landed on the SAME slug (that is what `--name` means now),
+    // so the loop had a real directory to point at on the second pass.
+    expect(readFileSync(join(publicDir, slugOf('site'), 'index.html'), 'utf-8')).toBe('ok');
+    expect(existsSync(join(publicDir, slugOf('site'), 'loop'))).toBe(false);
     expect((await res.json()) as { files: number }).toMatchObject({ files: 1 });
+  });
+
+  it('writes an index for a non-html file, so the url it printed opens', async () => {
+    // THE DEFECT: publish hands back `/<slug>/`, and the public server serves
+    // index.html or nothing. A lone `.md` therefore produced a link that 404'd
+    // while the file itself served perfectly one segment away. 21 of 208 live
+    // slugs were in that state; the user reported it twice as "not found".
+    const src = join(srcDir, 'proposal.md');
+    writeFileSync(src, '# Proposal\n\nbody\n');
+    const res = await post({ path: src, name: 'prop' });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { slug: string };
+    const dir = join(dataDir, 'public', body.slug);
+    expect(existsSync(join(dir, 'index.html'))).toBe(true);
+    expect(readFileSync(join(dir, 'proposal.md'), 'utf-8')).toContain('# Proposal');
+    expect(readFileSync(join(dir, 'index.html'), 'utf-8')).toContain('proposal.md');
+  });
+
+  it('writes an index for a DIRECTORY that has none', async () => {
+    // The kippah-*/data-biz-* shape: several files, not one of them html.
+    const dir = join(srcDir, 'bundle');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'a.stl'), 'solid');
+    writeFileSync(join(dir, 'NOTES.md'), '# notes');
+    const res = await post({ path: dir, name: 'bundle' });
+    const body = (await res.json()) as { slug: string };
+    const out = readFileSync(join(dataDir, 'public', body.slug, 'index.html'), 'utf-8');
+    expect(out).toContain('a.stl');
+    expect(out).toContain('NOTES.md');
+  });
+
+  it('never overwrites an index.html the artifact brought itself', async () => {
+    const dir = join(srcDir, 'site2');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'index.html'), '<h1>mine</h1>');
+    const res = await post({ path: dir, name: 'site2' });
+    const body = (await res.json()) as { slug: string };
+    expect(readFileSync(join(dataDir, 'public', body.slug, 'index.html'), 'utf-8')).toBe(
+      '<h1>mine</h1>',
+    );
+  });
+
+  it('gives a NAME a random tail, and republishing lands on the same slug', async () => {
+    // The scraping fix: a readable slug on an unauthenticated public host with
+    // no index is a door with a guessable name. The name survives as a PREFIX
+    // so a listing is still scannable, and `--name` still means "replace that
+    // artifact" rather than "mint a lookalike".
+    const src = join(srcDir, 'r.html');
+    writeFileSync(src, 'v1');
+    const first = (await (await post({ path: src, name: 'again' })).json()) as { slug: string };
+    expect(first.slug).toMatch(/^again-[a-z2-9]{8}$/);
+    writeFileSync(src, 'v2');
+    const second = (await (await post({ path: src, name: 'again' })).json()) as { slug: string };
+    expect(second.slug).toBe(first.slug);
+    expect(readFileSync(join(dataDir, 'public', first.slug, 'index.html'), 'utf-8')).toBe('v2');
+  });
+
+  it('accepts the FULL slug as a name too — what the CLI prints', async () => {
+    const src = join(srcDir, 'r2.html');
+    writeFileSync(src, 'v1');
+    const first = (await (await post({ path: src, name: 'byfull' })).json()) as { slug: string };
+    writeFileSync(src, 'v2');
+    const again = (await (await post({ path: src, name: first.slug })).json()) as { slug: string };
+    expect(again.slug).toBe(first.slug);
+  });
+
+  it('puts a 7-day horizon on a new link and says so in the response', async () => {
+    const src = join(srcDir, 'e.html');
+    writeFileSync(src, 'x');
+    const body = (await (await post({ path: src, name: 'horizon' })).json()) as {
+      slug: string;
+      expires: number;
+      lifespan_days: number;
+    };
+    expect(body.lifespan_days).toBe(7);
+    const week = 7 * 86_400_000;
+    expect(body.expires).toBeGreaterThan(Date.now() + week - 60_000);
+    expect(body.expires).toBeLessThan(Date.now() + week + 60_000);
+  });
+
+  it('days: 0 means a link that never expires', async () => {
+    const src = join(srcDir, 'f.html');
+    writeFileSync(src, 'x');
+    const body = (await (await post({ path: src, name: 'forever', days: 0 })).json()) as {
+      expires: number | null;
+    };
+    expect(body.expires).toBeNull();
+  });
+
+  it('extends a lapsed link WITHOUT touching the bytes', async () => {
+    const src = join(srcDir, 'g.html');
+    writeFileSync(src, 'precious');
+    const pub = (await (await post({ path: src, name: 'lapsed' })).json()) as { slug: string };
+    // Take it down, then bring it back — the two verbs the user asked for.
+    const dead = await test.app.request(`/api/publish/${pub.slug}/lifespan`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ expire: true }),
+    });
+    expect(((await dead.json()) as { expired: boolean }).expired).toBe(true);
+    const back = await test.app.request('/api/publish/lapsed/lifespan', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ days: 7 }),
+    });
+    const revived = (await back.json()) as { slug: string; expires: number; expired: boolean };
+    expect(revived.slug).toBe(pub.slug);
+    expect(revived.expired).toBe(false);
+    expect(revived.expires).toBeGreaterThan(Date.now());
+    // The whole point: the artifact was never at risk.
+    expect(readFileSync(join(dataDir, 'public', pub.slug, 'index.html'), 'utf-8')).toBe('precious');
+  });
+
+  it('404s a lifespan change for something that was never published', async () => {
+    const res = await test.app.request('/api/publish/nope/lifespan', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ days: 7 }),
+    });
+    expect(res.status).toBe(404);
   });
 
   it('rejects invalid names', async () => {
@@ -204,7 +352,11 @@ describe('publish routes', () => {
     const src = join(srcDir, 'a.txt');
     writeFileSync(src, 'a');
     await post({ path: src, name: 'seed' });
-    for (const path of [join(dataDir, 'public'), dataDir, join(dataDir, 'public', 'seed')]) {
+    for (const path of [
+      join(dataDir, 'public'),
+      dataDir,
+      join(dataDir, 'public', slugOf('seed')),
+    ]) {
       const res = await post({ path });
       expect(res.status, path).toBe(400);
     }
@@ -228,8 +380,8 @@ describe('publish routes', () => {
     symlinkSync(dataDir, join(dir, 'sneaky')); // ancestor of publicDir
     const res = await post({ path: dir, name: 'sym' });
     expect(res.status).toBe(201);
-    expect(readFileSync(join(dataDir, 'public', 'sym', 'index.html'), 'utf-8')).toBe('ok');
-    expect(existsSync(join(dataDir, 'public', 'sym', 'sneaky'))).toBe(false);
+    expect(readFileSync(join(dataDir, 'public', slugOf('sym'), 'index.html'), 'utf-8')).toBe('ok');
+    expect(existsSync(join(dataDir, 'public', slugOf('sym'), 'sneaky'))).toBe(false);
   });
 
   it('still publishes (with warning + local url) when the funnel is down', async () => {
@@ -251,8 +403,13 @@ describe('publish routes', () => {
         body: JSON.stringify({ path: src, name: 'r' }),
       });
       expect(res.status).toBe(201);
-      const body = (await res.json()) as { url: string; warning?: string };
-      expect(body.url).toBe('http://127.0.0.1:7778/r/');
+      const body = (await res.json()) as {
+        slug: string;
+        name: string;
+        url: string;
+        warning?: string;
+      };
+      expect(body.url).toBe(`http://127.0.0.1:7778/${body.slug}/`);
       expect(body.warning).toContain('funnel unavailable');
     } finally {
       await down.cleanup();
@@ -268,8 +425,13 @@ describe('publish routes', () => {
       public_base_url: 'https://example-host.example-tailnet.ts.net:8443/',
     });
     expect(res.status).toBe(201);
-    const body = (await res.json()) as { url: string; warning?: string };
-    expect(body.url).toBe('https://example-host.example-tailnet.ts.net:8443/hinted/');
+    const body = (await res.json()) as {
+      slug: string;
+      name: string;
+      url: string;
+      warning?: string;
+    };
+    expect(body.url).toBe(`https://example-host.example-tailnet.ts.net:8443/${body.slug}/`);
     expect(body.warning).toBeUndefined();
     // Hint short-circuits discovery entirely (launchd path: the server-side
     // CLI can't run anyway) and is persisted for later hint-less publishes.
@@ -328,8 +490,13 @@ describe('publish routes', () => {
         body: JSON.stringify({ path: src, name: 'f' }),
       });
       expect(res.status).toBe(201);
-      const body = (await res.json()) as { url: string; warning?: string };
-      expect(body.url).toBe('https://saved.ts.net:8443/f/');
+      const body = (await res.json()) as {
+        slug: string;
+        name: string;
+        url: string;
+        warning?: string;
+      };
+      expect(body.url).toBe(`https://saved.ts.net:8443/${body.slug}/`);
       // A persisted base is a known-public URL — the discovery warning is
       // NOT surfaced.
       expect(body.warning).toBeUndefined();
@@ -353,9 +520,16 @@ describe('publish routes', () => {
     const res = await test.app.request('/api/publish');
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
-      publishes: Array<{ slug: string; files: number; bytes: number; created: number }>;
+      publishes: Array<{
+        slug: string;
+        name: string;
+        files: number;
+        bytes: number;
+        created: number;
+      }>;
     };
-    expect(body.publishes.map((p) => p.slug).sort()).toEqual(['one', 'two']);
+    // `name` is the readable half, which is what a human scans a listing by.
+    expect(body.publishes.map((p) => p.name).sort()).toEqual(['one', 'two']);
     for (const p of body.publishes) {
       expect(p.files).toBe(1);
       expect(p.bytes).toBe(2);

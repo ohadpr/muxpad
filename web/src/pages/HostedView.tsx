@@ -481,7 +481,15 @@ export function HostedAppView() {
           )
         ) : app ? (
           app.state === 'running' || app.state === 'starting' ? (
-            <iframe className="hosted-app-frame" src={app.url} title={app.name} />
+            // Same delegation as a web pane: an app you host here is an app you
+            // chose to run, and a screen recorder that cannot ask for the screen
+            // looks broken rather than restricted. Every item still prompts.
+            <iframe
+              className="hosted-app-frame"
+              src={app.url}
+              title={app.name}
+              allow="display-capture; microphone; camera; fullscreen; autoplay; clipboard-write"
+            />
           ) : (
             <div className="hosted-empty">
               <p className="hosted-empty-line">

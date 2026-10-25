@@ -321,6 +321,12 @@ describe('artifacts, end to end', () => {
       body: JSON.stringify({ path: src, name: 'demo', update: true }),
     });
     expect(second.status).toBe(201);
+    // The slug is `demo-<id>` now and `--update` lands on the SAME one, which
+    // is the property this test is really about: the link the user already
+    // sent keeps working across a republish.
+    const slug = ((await second.clone().json()) as { slug: string }).slug;
+    expect(slug).toMatch(/^demo-[a-z2-9]{8}$/);
+    expect(((await first.clone().json()) as { slug: string }).slug).toBe(slug);
 
     // Served by the REAL public app, over HTTP, on its own port — the same
     // listener the funnel points at.
@@ -331,13 +337,15 @@ describe('artifacts, end to end', () => {
     try {
       await until(async () => {
         try {
-          return (await fetch(`http://127.0.0.1:${port}/demo/`)).ok;
+          return (await fetch(`http://127.0.0.1:${port}/${slug}/`)).ok;
         } catch {
           return false;
         }
       }, 5000);
-      expect(await (await fetch(`http://127.0.0.1:${port}/demo/`)).text()).toBe('<h1>two</h1>');
-      expect(await (await fetch(`http://127.0.0.1:${port}/demo@2/`)).text()).toBe('<h1>one</h1>');
+      expect(await (await fetch(`http://127.0.0.1:${port}/${slug}/`)).text()).toBe('<h1>two</h1>');
+      expect(await (await fetch(`http://127.0.0.1:${port}/${slug}@2/`)).text()).toBe(
+        '<h1>one</h1>',
+      );
       // And the root reveals nothing: no gallery, on the one port that faces
       // the open internet.
       expect((await fetch(`http://127.0.0.1:${port}/`)).status).toBe(404);

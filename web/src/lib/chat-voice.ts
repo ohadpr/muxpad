@@ -399,7 +399,7 @@ export function fireTime(ts: number | null): string {
  * ONE FINISHED WORKER SHOULD NOT BE THREE ROWS.
  *
  * A sub-chat that ran and reported drew: a LAUNCH card, a COMPLETION card
- * carrying its report, and a "⇤ 1 sub-chat reported" chip for the delivery that
+ * carrying its report, and a "⇤ 1 sub-agent reported" chip for the delivery that
  * brought the same words into this chat. Reported as exactly that — "one sub
  * chat yielded three messages" — and the third is the one with nothing of its
  * own to say: the card above it already has the name, the state and the text.

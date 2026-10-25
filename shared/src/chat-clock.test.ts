@@ -3,8 +3,10 @@ import {
   CHAT_DECAY_MS,
   CHAT_STAGGER_MS,
   DAY_MS,
+  FILL_STEPS,
   chatClock,
   chatClockDone,
+  quantiseFill,
   staggeredClockStart,
 } from './chat-clock.js';
 
@@ -158,5 +160,42 @@ describe('staggeredClockStart', () => {
     const perMinute = new Map<number, number>();
     for (const m of minutes) perMinute.set(m, (perMinute.get(m) ?? 0) + 1);
     expect(Math.max(...perMinute.values())).toBeLessThanOrEqual(2);
+  });
+});
+
+describe('quantiseFill', () => {
+  it('publishes a value that REPEATS, which is the whole point', () => {
+    // Two reads a minute apart must be byte-identical, or an etag can never
+    // answer 304 and every poll ships its full payload.
+    const start = 1_000_000;
+    const a = chatClock({ started_at: start, now: start + (10 * DAY_MS) / 10, pinned: false });
+    const b = chatClock({
+      started_at: start,
+      now: start + (10 * DAY_MS) / 10 + 60_000,
+      pinned: false,
+    });
+    expect(b.fill).toBe(a.fill);
+  });
+
+  it('is a multiple of 1/96 and never ahead of the truth', () => {
+    for (const raw of [0, 0.004, 0.33333, 0.9999, 1]) {
+      const q = quantiseFill(raw);
+      expect(q).toBeLessThanOrEqual(raw);
+      expect(Math.round(q * FILL_STEPS)).toBeCloseTo(q * FILL_STEPS, 9);
+    }
+  });
+
+  it('still preserves the four rungs ChatChip draws', () => {
+    // floor(fill * 4) must be unchanged by the quantisation — 96 steps is 24
+    // per rung, so a floored value cannot cross a boundary the raw one had not.
+    for (let i = 0; i <= 1000; i++) {
+      const raw = i / 1000;
+      expect(Math.floor(quantiseFill(raw) * 4)).toBe(Math.floor(raw * 4));
+    }
+  });
+
+  it('clamps nonsense rather than publishing it', () => {
+    expect(quantiseFill(-1)).toBe(0);
+    expect(quantiseFill(5)).toBe(1);
   });
 });

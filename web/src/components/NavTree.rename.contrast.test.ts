@@ -110,3 +110,20 @@ describe('the inline rename field', () => {
     expect(TREE.slice(i, TREE.indexOf('}', i))).toContain('background-color: var(--swipe-surface)');
   });
 });
+
+it('pairs the selected row’s pane ink with pane control surfaces in every theme', () => {
+  const css = TREE.replace(/\/\*[\s\S]*?\*\//g, '');
+  const selected = [...css.matchAll(/\.navtree-tab-row\[data-active="true"\]\s*\{([^}]*)\}/g)]
+    .map((match) => match[1])
+    .join('\n');
+  expect(selected).toContain('--fg: var(--pane-ink)');
+  expect(selected).toContain('--bg-elev: var(--pane-elev)');
+  expect(selected).toContain('--bg-hover: var(--pane-hover)');
+  // Selected rows leave the rail island. Evaluate the matched pair rather
+  // than only the unselected sidebar and sheet, which missed this state.
+  for (const t of themes()) {
+    expect(ratio(rgb(t.fg), rgb(t.bgElev)), `${t.name} selected rename`).toBeGreaterThanOrEqual(
+      4.5,
+    );
+  }
+});
