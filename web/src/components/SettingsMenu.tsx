@@ -104,14 +104,16 @@ export function SettingsMenu() {
                   ))}
                 </nav>
               </aside>
+              {/* NO SECTION HEADING. It printed the selected nav item back at
+                  you — "General" in the list, "General" again as an h2 three
+                  centimetres to its right — which is a title for a page that
+                  already has one. The nav IS the heading. */}
               <div className="settings-body">
-                <header className="settings-heading">
-                  <h2>{section.charAt(0).toUpperCase() + section.slice(1)}</h2>
-                </header>
                 <section hidden={section !== 'general'} aria-label="General settings">
                   <div className="settings-row">
                     <label htmlFor="theme">Theme</label>
                     <select
+                      className="settings-select"
                       id="theme"
                       value={settings.theme}
                       onChange={(e) => updateSettings({ theme: e.target.value as ThemeChoice })}
