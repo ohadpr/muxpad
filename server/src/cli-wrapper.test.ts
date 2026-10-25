@@ -222,7 +222,11 @@ describe('scripts/muxpad HTTP wrapper', () => {
       env,
       encoding: 'utf-8',
     });
-    expect(first.stdout.trim()).toBe('https://stub-host.ts.net:8443/cli-hint/');
+    // The slug carries a random id now, so the test pins the BASE (which is
+    // what this case is about) and the name, not the whole address.
+    expect(first.stdout.trim()).toMatch(
+      /^https:\/\/stub-host\.ts\.net:8443\/cli-hint-[a-z2-9]{8}\/$/,
+    );
     // stdout stays JUST the url, so `$(muxpad publish …)` keeps working — the
     // caveat goes to stderr. And there IS a caveat: this assertion once read
     // `stderr === ''` with the comment "no warning — the URL is public", which
@@ -247,7 +251,9 @@ describe('scripts/muxpad HTTP wrapper', () => {
       env: { ...env, MUXPAD_TAILSCALE_BIN: join(tmp, 'does-not-exist') },
       encoding: 'utf-8',
     });
-    expect(second.stdout.trim()).toBe('https://stub-host.ts.net:8443/cli-fallback/');
+    expect(second.stdout.trim()).toMatch(
+      /^https:\/\/stub-host\.ts\.net:8443\/cli-fallback-[a-z2-9]{8}\/$/,
+    );
     expect(second.stderr).toContain('every device on your tailnet');
 
     // Phase 3: THE BUG. tailscale is available again, and the CLI must still
@@ -267,7 +273,9 @@ describe('scripts/muxpad HTTP wrapper', () => {
       env: { ...env, MUXPAD_TAILSCALE_BIN: quietStub },
       encoding: 'utf-8',
     });
-    expect(third.stdout.trim()).toBe('https://stub-host.ts.net:8443/cli-cached/');
+    expect(third.stdout.trim()).toMatch(
+      /^https:\/\/stub-host\.ts\.net:8443\/cli-cached-[a-z2-9]{8}\/$/,
+    );
     expect(existsSync(quietLog), 'publish execed tailscale despite a known base').toBe(false);
   });
 
@@ -298,7 +306,7 @@ describe('scripts/muxpad HTTP wrapper', () => {
         env: env(),
         encoding: 'utf-8',
       });
-      expect(stdout.trim()).toMatch(/\/recoverable\/$/);
+      expect(stdout.trim()).toMatch(/\/recoverable-[a-z2-9]{8}\/$/);
     });
 
     it('accepts the whole dead URL and reads the slug out of its path', async () => {
@@ -307,7 +315,7 @@ describe('scripts/muxpad HTTP wrapper', () => {
         env: env(),
         encoding: 'utf-8',
       });
-      expect(stdout.trim()).toMatch(/\/recoverable\/$/);
+      expect(stdout.trim()).toMatch(/\/recoverable-[a-z2-9]{8}\/$/);
       // The whole point: the answer is NOT the host it was handed.
       expect(stdout).not.toContain('search-particle-rules-ten');
     });
@@ -323,7 +331,9 @@ describe('scripts/muxpad HTTP wrapper', () => {
         env: env(),
         encoding: 'utf-8',
       });
-      expect(stdout.trim()).toBe('https://stub-host.ts.net:8443/recoverable/');
+      expect(stdout.trim()).toMatch(
+        /^https:\/\/stub-host\.ts\.net:8443\/recoverable-[a-z2-9]{8}\/$/,
+      );
       expect(stdout).not.toContain('trycloudflare');
     });
 
@@ -336,7 +346,9 @@ describe('scripts/muxpad HTTP wrapper', () => {
         ['publish', '--url', 'recoverable', '--public'],
         { env: env(), encoding: 'utf-8' },
       );
-      expect(stdout.trim()).toBe('https://stub-host.ts.net:8443/recoverable/');
+      expect(stdout.trim()).toMatch(
+        /^https:\/\/stub-host\.ts\.net:8443\/recoverable-[a-z2-9]{8}\/$/,
+      );
       expect(stderr).toContain('no public base is available');
       expect(stderr).toContain('cannot open it');
     });
@@ -902,7 +914,11 @@ exit 0`);
         },
         encoding: 'utf-8',
       });
-      expect(stdout.trim()).toBe(`https://${host}:8443/cold/`);
+      // The BASE is what this pins — the slug's random id is not this test's
+      // subject, only its host is.
+      expect(stdout.trim()).toMatch(
+        new RegExp(`^https://${host.replace(/\./g, '\\.')}:8443/cold-[a-z2-9]{8}/$`),
+      );
       expect(existsSync(log), 'a cold publish execed tailscale instead of using the PTR').toBe(
         false,
       );

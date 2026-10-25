@@ -1350,12 +1350,29 @@
 
 /* ── Subagent live progress (under a running Task row) ─────────────────── */
 /* ── Agent question card (ask_user chips) ──────────────────────────────── */
+/* ── HOW TALL THIS IS ALLOWED TO BE ──────────────────────────────────────────
+   Reported, with a screenshot of a three-question card: "option selector is
+   too big u gotta style it so it takes less vertical space".
+   Measured on that exact card (3 questions, 12 options): 825px → 577px, and
+   NOTHING is hidden to get there — no clamp, no truncation, no tooltip-only
+   text. Three changes do it:
+     · the description runs INLINE after the label ("Label — description")
+       instead of on its own line, which is the big one: a short description
+       costs no extra line at all, and a long one costs fewer;
+     · a wider card, so fewer wraps (the chat column is 768px; 620 fits inside
+       it with room, and at that width no option in the measured card exceeded
+       two lines — a 2-line clamp was priced and bought exactly 0px, which is
+       why there isn't one);
+     · smaller paddings and gaps throughout.
+   The thing NOT to do here is hide option text. These are the choices a reader
+   is deciding between — the one place in the product where truncating to save
+   space costs the user the decision. */
 .chat-question {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  max-width: 560px;
-  padding: 12px 14px;
+  gap: 10px;
+  max-width: 620px;
+  padding: 10px 12px;
   border: 1px solid color-mix(in srgb, var(--chat-accent) 35%, var(--chat-border));
   border-radius: 12px;
   background: color-mix(in srgb, var(--chat-accent) 6%, var(--chat-panel));
@@ -1363,7 +1380,7 @@
 .chat-question-block {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 5px;
 }
 .chat-question-head {
   display: flex;
@@ -1390,18 +1407,18 @@
 .chat-question-options {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
+/* ONE FLOWING LINE, not a stacked pair. The label and its description are one
+   sentence about one choice, and giving the description its own line cost a
+   line per option even when it was four words long. `display: block` is what
+   lets them share a line and wrap together. */
 .chat-question-option {
-  display: flex;
-  flex-direction: column;
-  /* The strip sits on the pill's surface, so the only thing holding it off the
-     text below is this. 2px read as crammed — enough space to be a separate
-     line, not enough to be a separate thought. */
-  gap: 6px;
-  padding: 8px 11px;
+  display: block;
+  padding: 5px 10px;
+  line-height: 1.38;
   border: 1px solid var(--chat-border);
-  border-radius: 10px;
+  border-radius: 8px;
   background: var(--chat-panel);
   color: var(--chat-fg);
   text-align: left;
@@ -1422,6 +1439,15 @@
 .chat-question-option-desc {
   font-size: 0.75rem;
   color: var(--chat-faint);
+}
+/* Inline, with the separator in CSS so the markup stays two clean spans — and
+   so an option with no description (every "Other…") gets no stray dash. */
+.chat-question-option-label,
+.chat-question-option-desc {
+  display: inline;
+}
+.chat-question-option-desc::before {
+  content: " — ";
 }
 .chat-question-other .chat-question-option-label {
   color: var(--chat-dim);
@@ -1539,6 +1565,18 @@
   align-items: flex-end;
   pointer-events: none;
 }
+.chat-chip-progress-label {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  padding: 2px 0;
+  background: rgb(0 0 0 / 65%);
+  color: #fff;
+  text-align: center;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 14px;
+}
 .chat-chip-progress-fill {
   width: 100%;
   background: color-mix(in srgb, var(--chat-accent) 38%, transparent);
@@ -1589,11 +1627,8 @@
   background: color-mix(in srgb, #000 72%, transparent);
 }
 
-/* ── THE BATCH LINE ───────────────────────────────────────────────────────
-   One line above the chips while a pick is in flight. It answers the one
-   question the chips cannot — how much longer — and it is the only place a
-   cancel-everything lives. It is NOT drawn when nothing is uploading: a strip
-   that is always there is chrome, and this is news. */
+/* Upload errors stay visible in words until retry/remove. Routine progress
+   lives in the previews and never adds a temporary row to the composer. */
 .chat-uploads {
   display: flex;
   align-items: center;
@@ -1610,40 +1645,6 @@
   flex: 0 0 auto;
   white-space: nowrap;
 }
-.chat-uploads-track {
-  flex: 1 1 auto;
-  min-width: 40px;
-  height: 3px;
-  border-radius: 2px;
-  background: color-mix(in srgb, var(--chat-fg) 12%, transparent);
-  overflow: hidden;
-}
-.chat-uploads-fill {
-  display: block;
-  height: 100%;
-  background: var(--chat-accent);
-  transition: width 180ms linear;
-}
-@media (prefers-reduced-motion: reduce) {
-  .chat-uploads-fill {
-    transition: none;
-  }
-}
-.chat-uploads-cancel {
-  flex: 0 0 auto;
-  border: none;
-  background: transparent;
-  color: var(--chat-dim);
-  font: inherit;
-  padding: 2px 4px;
-  border-radius: 4px;
-  cursor: pointer;
-}
-.chat-uploads-cancel:hover {
-  color: var(--chat-fg);
-  background: color-mix(in srgb, var(--chat-fg) 8%, transparent);
-}
-
 /* Clickable image thumbnail inline in a history bubble (opens the lightbox). */
 .chat-img-thumb {
   /* Each image breaks onto its OWN line (block), and the frame shrink-wraps
@@ -2360,6 +2361,30 @@
    signal. Amber while there is room to decide, danger once the next long turn
    could hit the ceiling — and never a bar on the strip itself, because the
    bar lives in the panel this opens, next to the button that acts on it. */
+/* ── BACKGROUND SHELL COMMANDS ───────────────────────────────────────────────
+   A Bash call the agent left running after its turn. Quiet: this is a fact
+   about the session, not a warning and not a call to action — the context
+   cell below is the one allowed to be loud, and it earns that by being about
+   something the user has to act on.
+
+   NO ANIMATION. The rail's "only `working` moves" invariant is about the rail,
+   but the reasoning travels: a composer strip that pulses while a build runs
+   puts motion at the bottom of the screen for minutes at a time, next to the
+   thing you are typing in.
+
+   `min-width: max-content` for the same reason the context cell has it — this
+   cell is two short words and must not be the one the line clips to `1 sh…`. */
+.chat-status-seg.-bg {
+  flex-shrink: 0;
+  min-width: max-content;
+  gap: 5px;
+  color: var(--chat-dim);
+}
+.chat-status-seg.-bg svg {
+  color: inherit;
+  opacity: 0.9;
+}
+
 .chat-status-seg.-ctx {
   flex-shrink: 0;
   min-width: max-content;

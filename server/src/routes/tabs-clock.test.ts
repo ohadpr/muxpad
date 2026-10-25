@@ -236,35 +236,37 @@ describe('the chat clock on the wire', () => {
       );
     });
 
-    it('REFUSES a pinned chat instead of accepting a click that does nothing', async () => {
-      // F6. Pinning is the universal override, so a pinned chat is never
-      // `done` however it got there — that rule is untouched. What was wrong
-      // was this route answering 204 to a press of × that moved nothing on
-      // screen and explained nothing, which reads as a broken button. Worse,
-      // it WROTE the retirement: unpin a month later and the chat dropped
-      // into `done` on the strength of a click nobody remembers.
+    it('archives a pinned chat directly, unpins it and announces the resulting state', async () => {
       const t = await newTab('kept');
-      await test.app.request(`/api/tabs/${t.id}`, {
-        method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ pinned: true }),
+      tabs.setPinned(t.id, true);
+      const seen: Tab[] = [];
+      events.subscribe((e: MuxpadEvent) => {
+        if (e.type === 'tab.updated' && e.tab.id === t.id) seen.push(e.tab);
       });
-
       const res = await test.app.request(`/api/tabs/${t.id}/archive`, { method: 'POST' });
-      expect(res.status).toBe(409);
-      expect(((await res.json()) as { error: { code: string } }).error.code).toBe('pinned');
+      expect(res.status).toBe(204);
+      const row = (await listTabs()).find((r) => r.id === t.id) as Tab;
+      expect(row).toMatchObject({ pinned: false, done: true, done_reason: 'archived' });
+      expect(seen.at(-1)).toMatchObject({ pinned: false, done: true });
+      const stamp = tabs.clockRow(t.id)?.retired_at;
+      expect((await test.app.request(`/api/tabs/${t.id}/archive`, { method: 'POST' })).status).toBe(
+        204,
+      );
+      expect(tabs.clockRow(t.id)?.retired_at).toBe(stamp);
+    });
 
-      // And nothing was stored, so there is no delayed detonation on unpin.
-      // Read the raw column: `retired_at` is deliberately not on the wire
-      // (`done`/`done_reason` are what the client is told), so the only place
-      // a stored-but-invisible retirement would show up is the table itself.
-      expect(tabs.clockRow(t.id)?.retired_at).toBeNull();
-      await test.app.request(`/api/tabs/${t.id}`, {
-        method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ pinned: false }),
+    it('unpins and announces a legacy pinned chat that already has an archive stamp', async () => {
+      const t = await newTab('legacy');
+      tabs.retire(t.id, 'archived');
+      tabs.setPinned(t.id, true);
+      const seen: Tab[] = [];
+      events.subscribe((e: MuxpadEvent) => {
+        if (e.type === 'tab.updated' && e.tab.id === t.id) seen.push(e.tab);
       });
-      expect(((await listTabs()).find((r) => r.id === t.id) as Tab).done).toBe(false);
+      expect((await test.app.request(`/api/tabs/${t.id}/archive`, { method: 'POST' })).status).toBe(
+        204,
+      );
+      expect(seen.at(-1)).toMatchObject({ pinned: false, done: true });
     });
 
     it('archives a sub-chat by hand without calling it delivered', async () => {

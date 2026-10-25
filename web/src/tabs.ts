@@ -1,10 +1,11 @@
 import { type Tab, sortSidebarTabs } from '@muxpad/shared';
 import { useEffect, useState } from 'react';
 import { api } from './api';
+import { bootPending, bootTabs } from './boot-prefetch';
 import { subscribe, subscribeReconnect } from './events';
 import { mergeWorkspaceTabs, refreshCorpusForTab } from './lib/all-tabs';
 import { unreadRowPatch } from './lib/tab-unread';
-import { refreshWorkspaces } from './workspaces';
+import { refreshWorkspaces, refreshWorkspacesSoon } from './workspaces';
 
 /**
  * Per-workspace tabs hook. Each workspace has its own cache slot, so
@@ -35,7 +36,14 @@ export async function refreshTabs(workspaceId: string): Promise<void> {
   if (!workspaceId) return;
   const myVersion = (versions.get(workspaceId) ?? 0) + 1;
   versions.set(workspaceId, myVersion);
-  const next = await api.listTabs(workspaceId);
+  // THE PREFETCH FIRST, on a cold cache. index.html asked for this workspace's
+  // tabs before the bundle parsed (boot-prefetch.ts), so the ordinary request
+  // here would be a second copy of bytes already in flight — and would arrive
+  // after them. Only when nothing has landed for this workspace yet; the
+  // version check below still owns the "superseded" case either way.
+  const prefetched =
+    !settledAt.has(workspaceId) && bootPending('tabs') ? await bootTabs(workspaceId) : null;
+  const next = prefetched ?? (await api.listTabs(workspaceId));
   if ((versions.get(workspaceId) ?? 0) > myVersion) {
     // A newer writer superseded us, so this answer is stale and MUST NOT land.
     //
@@ -175,8 +183,10 @@ function scheduleLiveRefresh(): void {
     const wss = [...pendingWorkspaceRefresh];
     pendingWorkspaceRefresh.clear();
     for (const wsId of wss) void refreshTabs(wsId);
-    // Keep the collapsed-workspace attention rollup live too.
-    void refreshWorkspaces();
+    // Keep the collapsed-workspace attention rollup live too. Through the
+    // coalescer, so this pass and main.tsx's event router cannot both ask
+    // within the same beat — they fire on the same events.
+    refreshWorkspacesSoon();
   }, 250);
 }
 

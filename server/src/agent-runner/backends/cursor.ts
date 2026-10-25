@@ -13,16 +13,11 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import type { ChatEvent } from '@muxpad/shared';
-import { readAgentInstructions } from '../../agent-instructions.js';
 import { appendTranscriptEvent, migrateTranscript } from '../../chat/TranscriptReader.js';
 import { bold, dim } from '../ansi.js';
+import { turnPreamble } from '../preamble.js';
 import type { AgentMode, RunnerFrame } from '../protocol.js';
-import {
-  type BackendDeps,
-  type ModelFetch,
-  killDescendants,
-  withSessionPreamble,
-} from './codex.js';
+import { type BackendDeps, type ModelFetch, killDescendants } from './codex.js';
 import type { AgentBackend, BackendOptions, RunnerHost } from './types.js';
 
 const CURSOR_BIN = process.env.MUXPAD_CURSOR_BIN || 'cursor-agent';
@@ -65,6 +60,8 @@ export function createCursorBackend(
   const spawnFn = deps.spawn ?? spawn;
   const listModels: ModelFetch = deps.listModels ?? (() => cursorModelFetch(spawnFn));
   let sessionRef: string | null = opts.requestedSid;
+  /** Has the full instruction document gone out in this process yet? */
+  let sentInstructions = false;
   let liveSid = opts.requestedSid ?? randomUUID();
   let model = opts.requestedModel;
 
@@ -191,9 +188,20 @@ export function createCursorBackend(
     // before this), so rendered chat history stays clean.
     //
     // NO mode overlay: cursor is Agent-mode only — see currentMode above.
-    const finalPrompt = resuming
-      ? prompt
-      : withSessionPreamble(prompt, readAgentInstructions(), null);
+    // ONE RULE FOR EVERY HARNESS — see ../preamble.ts. Identical to codex's,
+    // and that is the point: this logic was copied between the two backends
+    // and was wrong in both, which is how a rule ends up holding on one
+    // harness and evaporating on another.
+    const finalPrompt = turnPreamble({
+      prompt,
+      // Per RUNNER, not per session: a resumed session gets the document back
+      // on the first turn after a pane start (its own compaction may have
+      // eaten it), and every turn after that gets the card. See ../preamble.ts
+      // for why `resuming` alone is a question this backend cannot answer.
+      instructionsInThread: resuming && sentInstructions,
+      modeOverlay: null,
+    });
+    sentInstructions = true;
     if (resuming) args.push('--resume', sessionRef as string);
     if (model) args.push('--model', model);
     args.push(finalPrompt);

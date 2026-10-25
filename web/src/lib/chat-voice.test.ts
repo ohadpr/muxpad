@@ -36,7 +36,7 @@ const reportChip = (): ChatEvent => ({
   id: id(),
   ts: 0,
   variant: 'report',
-  text: '3 sub-chats reported',
+  text: '3 sub-agents reported',
 });
 /** The harness's "[Request interrupted by user]", as the normalizer emits it. */
 const stopped = (): ChatEvent => ({

@@ -111,13 +111,13 @@ describe('a batch of sub-chat reports previewed the same way', () => {
     const host = render(<QueuedText text={delivery} />);
     expect(host.textContent).not.toContain('muxpad-delivery');
     expect(host.textContent).not.toContain('01M51ZCVPRMBP26F88V45EHDE2');
-    expect(host.querySelector('.chat-queued-cron')?.textContent).toContain('2 sub-chats reported');
+    expect(host.querySelector('.chat-queued-cron')?.textContent).toContain('2 sub-agents reported');
   });
 
-  it('says "1 sub-chat" for one, like the chip it will become', () => {
+  it('says "1 sub-agent" for one, like the chip it will become', () => {
     const one = renderSpawnDelivery([{ tabId: 't1', name: 'x', state: 'ok', report: 'y' }]);
     const host = render(<QueuedText text={one} />);
-    expect(host.querySelector('.chat-queued-cron')?.textContent).toContain('1 sub-chat reported');
+    expect(host.querySelector('.chat-queued-cron')?.textContent).toContain('1 sub-agent reported');
   });
 
   it('does not eat a message that merely mentions the tag', () => {
