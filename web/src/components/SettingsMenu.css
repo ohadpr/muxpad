@@ -115,6 +115,10 @@
   outline: 2px solid var(--accent);
   outline-offset: 3px;
 }
+/* The word only exists for touch — see the touch arm at the bottom. */
+.settings-close-word {
+  display: none;
+}
 .settings-dialog .settings-close {
   display: grid;
   place-items: center;
@@ -333,7 +337,15 @@
   margin-top: 16px;
   font-size: 0.8125rem;
 }
-@media (max-width: 700px) {
+/* ─── TOUCH, WHICH IS NOT THE SAME QUESTION AS NARROW ──────────────────────
+   This arm was `max-width: 700px` alone, and that is wrong on exactly the
+   device it was reported from: a foldable open is ~890 CSS px wide and still a
+   phone held in two hands. It got the DESKTOP dialog — a 172px sidebar and
+   0.8125rem labels on a 7.6" screen — because it is "wide". Width stopped
+   being a proxy for input method; `pointer: coarse` asks the real question, so
+   a phone, a foldable and a tablet all get the touch treatment and a 900px
+   laptop window does not. */
+@media (max-width: 700px), (pointer: coarse) {
   .settings-dialog {
     width: calc(100vw - 16px);
     height: calc(100dvh - 16px);
@@ -343,10 +355,39 @@
   .settings-chrome {
     padding: 6px 8px 6px 18px;
   }
+  /* A WORD, NOT A GLYPH. The only other ways out are a key this device does
+     not have and an 8px strip of backdrop. */
   .settings-dialog .settings-close {
-    flex-basis: 44px;
-    width: 44px;
+    flex: 0 0 auto;
+    width: auto;
+    min-width: 72px;
     height: 44px;
+    padding: 0 14px;
+    font: 600 0.9375rem / 1 var(--ui-font);
+    color: var(--fg);
+    background: color-mix(in srgb, var(--fg) 10%, transparent);
+    border-radius: 10px;
+  }
+  .settings-close-word {
+    display: block;
+  }
+  .settings-close-x {
+    display: none;
+  }
+  /* …and it must never scroll away from the thing it closes. */
+  .settings-chrome {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: var(--bg-elev);
+  }
+  /* Reading size. The desktop dialog is 0.875rem on a screen held at arm's
+     length; the same number on a phone is the "chrome is so tiny" report. */
+  .settings-dialog {
+    font-size: 1rem;
+  }
+  .settings-sidebar nav button {
+    font-size: 0.9375rem;
   }
   .settings-layout {
     display: flex;
