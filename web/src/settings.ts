@@ -1,6 +1,13 @@
 import { useEffect, useState } from 'react';
 
-export type Theme = 'tokyo-night' | 'dracula' | 'alucard' | 'github-light' | 'acme' | 'acme-dark';
+export type Theme =
+  | 'tokyo-night'
+  | 'dracula'
+  | 'alucard'
+  | 'github-light'
+  | 'acme'
+  | 'acme-dark'
+  | 'demoscene';
 
 /** What the picker offers: a theme, or "whatever the OS is doing". */
 export type ThemeChoice = Theme | 'system';
@@ -20,6 +27,7 @@ export const THEMES: { value: Theme; label: string }[] = [
   { value: 'github-light', label: 'GitHub Light' },
   { value: 'acme', label: 'Acme' },
   { value: 'acme-dark', label: 'Acme Dark' },
+  { value: 'demoscene', label: 'Demoscene' },
 ];
 
 const VALID_THEMES = new Set<Theme>(THEMES.map((t) => t.value));
@@ -196,6 +204,26 @@ export function updateSettings(patch: Partial<Settings>): void {
  * the re-measure entirely.
  */
 export const TERMINAL_FONT = 'Menlo, Monaco, monospace';
+
+/**
+ * …unless the THEME says otherwise.
+ *
+ * Fonts became a theme's business with the demoscene theme (styles.css): a
+ * look built out of a typeface and hard edges cannot be expressed as a
+ * palette. `--term-font` is the terminal's share of that, and it is read from
+ * the cascade rather than passed down, for the same reason the palette is —
+ * the theme is a document-level fact, and the terminal is rebuilt whenever it
+ * changes.
+ *
+ * Falls back to {@link TERMINAL_FONT} whenever the variable is missing or
+ * empty, which keeps the no-webfont, no-re-measure contract intact for every
+ * theme that does not care.
+ */
+export function resolvedTerminalFont(): string {
+  if (typeof window === 'undefined' || !document?.documentElement) return TERMINAL_FONT;
+  const v = getComputedStyle(document.documentElement).getPropertyValue('--term-font').trim();
+  return v || TERMINAL_FONT;
+}
 
 export function useResolvedTheme(): Theme {
   const s = useSettings();
