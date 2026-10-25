@@ -68,13 +68,25 @@ export function SettingsMenu() {
           >
             <header className="settings-chrome">
               <h2 id="settings-title">Settings</h2>
+              {/* TWO LABELS, ONE CONTROL. On a pointer device the × is obvious
+                  and Escape works. On a phone there is no Escape key, and the
+                  dialog covers the screen to within 8px — so the backdrop tap
+                  that dismisses it on desktop has no target worth aiming at,
+                  and a muted 1.5rem glyph in the corner was the only way out.
+                  Reported as "I can't close it". The word is the affordance;
+                  the glyph stays for the pointer case. */}
               <button
                 type="button"
                 className="settings-close"
                 aria-label="Close settings"
                 onClick={() => setOpen(false)}
               >
-                ×
+                <span className="settings-close-word" aria-hidden="true">
+                  Done
+                </span>
+                <span className="settings-close-x" aria-hidden="true">
+                  ×
+                </span>
               </button>
             </header>
             <div className="settings-layout">

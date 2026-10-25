@@ -1,6 +1,9 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getPushState } from '../lib/push';
 import { passkeyAPI, passkeyCeremony } from '../lib/slack-passkey';
 import { SettingsMenu } from './SettingsMenu';
@@ -310,4 +313,61 @@ it('a deliberately renewed or restarted enrollment clears only the obsolete loca
   await click('Settings');
   expect(document.querySelector('pre')).toBeNull();
   expect(document.querySelector('input[type=password]')).not.toBeNull();
+});
+
+/**
+ * GETTING OUT OF SETTINGS ON A PHONE.
+ *
+ * Reported from a foldable: "settings is weird on mobile I can't close it, the
+ * chrome is so tiny". Two compounding causes, both checked here against the
+ * stylesheet because both are CSS facts:
+ *
+ *   1. The touch treatment was keyed on `max-width: 700px`. A foldable open is
+ *      ~890 CSS px and still a phone, so it got the DESKTOP dialog: a 172px
+ *      sidebar and 0.8125rem labels on a 7.6" screen.
+ *   2. The only ways out were Escape (no key), an 8px strip of backdrop (the
+ *      dialog covers the screen to within 8px), and a muted 1.5rem `×`.
+ */
+describe('settings can be dismissed by a thumb', () => {
+  const CSS = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), 'SettingsMenu.css'),
+    'utf8',
+  );
+  const touchArm = (() => {
+    const i = CSS.indexOf('@media (max-width: 700px), (pointer: coarse)');
+    return i === -1 ? '' : CSS.slice(i, CSS.length);
+  })();
+
+  it('asks about the INPUT, not just the width', () => {
+    // The foldable is the case width gets wrong, in both directions.
+    expect(CSS).toMatch(/@media \(max-width: 700px\), \(pointer: coarse\)/);
+  });
+
+  it('gives the close control a word and a real target on touch', () => {
+    expect(touchArm).toMatch(/\.settings-close-word\s*\{[^}]*display:\s*block/);
+    expect(touchArm).toMatch(/\.settings-close-x\s*\{[^}]*display:\s*none/);
+    // 44px is the floor every other touch target in this file already uses.
+    expect(touchArm).toMatch(/height:\s*44px/);
+  });
+
+  it('keeps the close pinned, so it cannot scroll out of reach', () => {
+    expect(touchArm).toMatch(/\.settings-chrome\s*\{[^}]*position:\s*sticky/);
+  });
+
+  it('the word is hidden for pointer devices, which keep the glyph', () => {
+    const before = CSS.slice(0, CSS.indexOf('@media (max-width: 700px), (pointer: coarse)'));
+    expect(before).toMatch(/\.settings-close-word\s*\{\s*display:\s*none/);
+  });
+
+  it('renders both labels in one control, with one accessible name', () => {
+    const tsx = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), 'SettingsMenu.tsx'),
+      'utf8',
+    );
+    expect(tsx).toMatch(/aria-label="Close settings"/);
+    expect(tsx).toMatch(/settings-close-word[\s\S]{0,80}Done/);
+    // Both spans are decorative: the button already has its name.
+    expect(tsx).toMatch(/className="settings-close-word" aria-hidden="true"/);
+    expect(tsx).toMatch(/className="settings-close-x" aria-hidden="true"/);
+  });
 });
