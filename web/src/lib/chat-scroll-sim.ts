@@ -168,6 +168,19 @@ export class SimScroller implements ScrollSurface {
    * lifecycle and not a number: contact, then the glide that outlives it.
    * `fling()` drives both.
    */
+  /**
+   * The reader is holding a text selection in this surface.
+   *
+   * A knob rather than a constant, because the bug it models is about what the
+   * mechanism MUST NOT DO while it is true — and "must not write" is only
+   * provable by setting it and watching the writes stay empty.
+   */
+  selectingNow = false;
+
+  selecting(): boolean {
+    return this.selectingNow;
+  }
+
   inMotion(): boolean {
     return this.motion;
   }

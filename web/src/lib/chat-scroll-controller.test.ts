@@ -1367,3 +1367,71 @@ describe.each(ENGINES)('a send follows to the end — $name', ({ paysAnchoring }
     expect(c.phase(true)).toBe('FOLLOWING');
   });
 });
+
+/**
+ * A SELECTION IS THE READER OWNING THE VIEW.
+ *
+ * Reported as "text selection on mobile at the bottom of chat scrolls the chat
+ * up". The bottom is where it shows, because that is where the composer's
+ * clearance row sits and where the keyboard inset changes as iOS raises the
+ * selection callout — a resize, which reaches the ResizeObserver, which calls
+ * `place()`, which re-seats the view on the anchor and takes the words out
+ * from under the finger. On iOS the selection goes with them.
+ *
+ * `inMotion()` cannot cover this: a finger resting on a word is perfectly
+ * still. No scroll, no touchmove, no key — the surface looks idle the whole
+ * time it is least idle.
+ */
+describe('a held selection freezes the mechanism', () => {
+  const make = () => new SimScroller(simRows(40, 60), { clientHeight: 400, paysAnchoring: true });
+
+  it('writes NOTHING while the reader is selecting', () => {
+    const sim = make();
+    const c = new ChatScrollController(sim);
+    c.dispatch({ t: 'shown', mem: PARKED('m15') });
+    c.place();
+    sim.writes.length = 0;
+
+    sim.selectingNow = true;
+    // Everything that would normally re-seat the view: a resize, a commit, a
+    // second thought. The surface must come out of it untouched.
+    const before = sim.scrollTop;
+    c.place();
+    c.place(false);
+    expect(sim.writes).toEqual([]);
+    expect(sim.scrollTop).toBe(before);
+  });
+
+  it('resumes writing the moment the selection is released', () => {
+    // The guard must be a PAUSE, not an off switch. Asserting that it writes
+    // again — rather than asserting a particular scrollTop — is deliberate:
+    // where the view belongs after a selection is the ordinary mechanism's
+    // business (the reader may well have moved), and pinning a number here
+    // would be this test inventing a policy the mechanism never promised.
+    // `paysAnchoring: false` — the iOS configuration, where the engine pays
+    // nothing for a prepend and the mechanism itself owes the correction. That
+    // is what makes "it has to write after release" a real obligation rather
+    // than something the browser would have done anyway.
+    const sim = new SimScroller(simRows(40, 60), {
+      clientHeight: 400,
+      paysAnchoring: false,
+    });
+    const c = new ChatScrollController(sim);
+    c.dispatch({ t: 'shown', mem: PARKED('m15') });
+    c.place();
+
+    // History arrives above the parked reader WHILE they are selecting — the
+    // one thing that genuinely requires a write to hold their place.
+    sim.selectingNow = true;
+    sim.prepend(simRows(5, 60, 'older'));
+    sim.writes.length = 0;
+    c.place();
+    expect(sim.writes, 'wrote while the reader held a selection').toEqual([]);
+
+    // Released: the same unpaid prepend is still owed, so the mechanism has to
+    // act on it now.
+    sim.selectingNow = false;
+    c.place();
+    expect(sim.writes.length, 'stayed frozen after the selection was released').toBeGreaterThan(0);
+  });
+});
