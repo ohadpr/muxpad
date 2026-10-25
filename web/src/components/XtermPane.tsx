@@ -89,10 +89,10 @@ const XTERM_THEMES: Record<
   // Matches the stylesheet's `[data-theme="demoscene"]` --xterm-* pair; the
   // cursor is the accent, so the caret glows like the rest of the theme.
   demoscene: {
-    background: '#05070c',
-    foreground: '#d6ffe4',
-    cursor: '#35ff8b',
-    selectionBackground: '#1b4a31',
+    background: '#101619',
+    foreground: '#d8f6ff',
+    cursor: '#19ffd0',
+    selectionBackground: '#1d3a40',
   },
   'tokyo-night': {
     background: '#1a1b26',
