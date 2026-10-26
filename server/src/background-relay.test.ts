@@ -226,6 +226,21 @@ describe('push notifications and the silent turn', () => {
     expect(pushes).toEqual([]);
   });
 
+  it('does NOT push while somebody has the chat OPEN', async () => {
+    // The dominant source of "a ton of push notifications": the gate asked
+    // when the user last TYPED, so any turn over two minutes buzzed a phone —
+    // including one they were watching. 938 of 4,094 turns in this install
+    // qualified, 463 of them in one foreground chat.
+    const { pane, open, runner } = await boot();
+    await open(`/ws/chat/${pane.id}`);
+    await settle();
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    await settle();
+    runner.send(JSON.stringify({ t: 'turn-done', ok: true, summary: 'done' }));
+    await settle();
+    expect(pushes).toEqual([]);
+  });
+
   it('pushes when the turn actually said something', async () => {
     const { pane, runner } = await boot();
     runner.send(JSON.stringify({ t: 'turn-start' }));

@@ -1960,8 +1960,30 @@ export function attachWsServer(deps: {
             // A FAILED silent turn still pushes: `silent` is already false for
             // those (see isSilentTurn), because an error is news whatever was
             // or wasn't said.
+            // ─── AND NOBODY IS LOOKING AT IT ──────────────────────────────
+            //
+            // `lastHumanSendAt` answers "when did you last TYPE", and the
+            // question is "are you LOOKING" — the same mismatch this file
+            // already records for the bold mark, which was moved OUT of this
+            // gate for it. For the push it fails the other way: ANY turn over
+            // two minutes buzzes a phone, including the one you are sitting
+            // there watching.
+            //
+            // Measured across this install's agent logs: 938 of 4,094 turns
+            // (23%) ran past the threshold, 463 of them in a single
+            // foreground chat. Reported as "I keep getting a ton of push
+            // notifications".
+            //
+            // `chatClients` is the live answer and is already trusted for the
+            // decision this file calls the one unforgivable version of its
+            // feature — parking a chat somebody is reading. A chat nobody has
+            // open still pushes, which is the case the feature is for.
+            //
+            // An EXPLICIT `notify` is untouched: the agent was told to
+            // interrupt somebody, and that judgement outranks this one.
             if (
               frame.silent !== true &&
+              !chatClients.has(paneId) &&
               Date.now() - conn.lastHumanSendAt > INTERACTIVE_PUSH_SUPPRESS_MS
             ) {
               // …unless the agent just notified DELIBERATELY. It already said
