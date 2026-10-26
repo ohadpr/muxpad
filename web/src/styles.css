@@ -729,14 +729,54 @@
   letter-spacing: 0.1em;
 }
 
-/* ─── THE COPPER BAR ────────────────────────────────────────────────────────
-   The effect that says "scene" rather than "terminal". The Amiga's copper chip
-   could change the background colour every scanline, so every intro on the
-   platform opened with a band of cycling colour. On a black ground it reads as
-   light rather than as a purple wash — which is exactly why the surfaces went
-   back to near-black.
-   It lands on the SELECTED ROW: the element already saying "this one", so the
-   effect means something instead of being decoration. */
+/* ─── EVERY MARK IS A BLOCK ─────────────────────────────────────────────────
+   The single highest-yield line in this theme. A circle is a dot on a design
+   system; a SQUARE on a monospace grid is a character cell, and the moment the
+   status marks stop being round the rail reads as a text-mode screen rather
+   than as an app wearing dark colours. Costs one declaration. */
+[data-theme="demoscene"] .navtree-mark,
+[data-theme="demoscene"] .navtree-state-dot {
+  border-radius: 0;
+}
+
+/* ─── DITHER ────────────────────────────────────────────────────────────────
+   A 2px checkerboard at 3% ink on raised surfaces. This is how a 16-colour
+   machine faked a gradient, and it is the texture — not the hue — that dates a
+   screen to the era. Invisible as pattern at arm's length; what you notice is
+   that the surface is not flat. One background-image, no element, no paint
+   beyond what the surface already does. */
+[data-theme="demoscene"] .chat-card,
+[data-theme="demoscene"] .settings-dialog,
+[data-theme="demoscene"] .chat-composer {
+  background-image: repeating-conic-gradient(
+    color-mix(in srgb, var(--fg) 3%, transparent) 0% 25%,
+    transparent 0% 50%
+  );
+  background-size: 4px 4px;
+}
+
+/* ─── DOUBLE RULE ═══════════════════════════════════════════════════════════
+   The rail's seam becomes a box-drawing double line — two hairlines with a gap,
+   which is literally what ═ is. Drawn with a gradient rather than a glyph so it
+   survives at any width and costs no font. */
+[data-theme="demoscene"] .navtree-head,
+[data-theme="demoscene"] .chat-pane-head {
+  border-bottom: 3px solid transparent;
+  border-image: repeating-linear-gradient(
+      to bottom,
+      var(--rail-border) 0 1px,
+      transparent 1px 2px,
+      var(--rail-border) 2px 3px
+    )
+    3;
+}
+
+/* ─── THE COPPER BAR, NOW MOVING ────────────────────────────────────────────
+   The Amiga's copper changed the background colour every scanline, and in an
+   intro those bands SLID. A still gradient was the sketch; this is the effect.
+   Slow — 9s for a full pass, so it reads as a shimmer on the row you are on
+   rather than as something demanding attention. Stops dead under
+   prefers-reduced-motion, where it falls back to the static bar. */
 [data-theme="demoscene"] .navtree-tab-row[data-active="true"] {
   background-image: linear-gradient(
     90deg,
@@ -744,51 +784,45 @@
     #22e8ff40 18%,
     #ff2fd040 42%,
     #ffb22433 64%,
-    #19ffd000 100%
+    #19ffd04d 100%
   );
+  background-size: 220% 100%;
+  animation: demoscene-copper 9s linear infinite;
 }
-[data-theme="demoscene"] .navtree-row[data-active="true"] .navtree-tab-headline {
-  text-shadow: 0 0 7px color-mix(in srgb, var(--accent) 55%, transparent);
+@keyframes demoscene-copper {
+  to {
+    background-position: -220% 0;
+  }
 }
 
-/* ─── CHROME TYPE ───────────────────────────────────────────────────────────
-   Every scene logo was chrome: a vertical metal gradient with a hot band
-   across the middle. It costs one gradient on one element — the wordmark —
-   and it is the detail that makes the whole thing read as a demo rather than
-   as a dark theme with a green tint. */
+/* ─── CHROMATIC ABERRATION ──────────────────────────────────────────────────
+   A shadow mask never converged perfectly: the red and blue guns landed a
+   fraction either side of the green. One cyan and one magenta shadow, half a
+   pixel out, on the wordmark only — enough to read as a tube, nowhere near
+   enough to blur anything you have to read. */
 [data-theme="demoscene"] .brand-text {
-  background: linear-gradient(
-    180deg,
-    #ffffff 0%,
-    #bfe9f5 34%,
-    #19ffd0 52%,
-    #2f6a7a 60%,
-    #d8f6ff 100%
-  );
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+  text-shadow: -0.5px 0 color-mix(in srgb, #ff2fd0 65%, transparent), 0.5px 0
+    color-mix(in srgb, #22e8ff 65%, transparent);
 }
 
-/* ─── STARFIELD ─────────────────────────────────────────────────────────────
-   Under the rail, where the list runs out — the one place in this UI with
-   genuinely empty space, which is where a scene intro would have put one.
-   Static: four radial gradients, no animation, no element, no paint cost
-   beyond the rail's own background. */
-[data-theme="demoscene"] .navtree {
-  background-image: radial-gradient(1px 1px at 18% 72%, #d8f6ff66 50%, transparent 50%),
-    radial-gradient(1px 1px at 62% 81%, #19ffd059 50%, transparent 50%),
-    radial-gradient(1px 1px at 34% 90%, #ffffff40 50%, transparent 50%),
-    radial-gradient(1px 1px at 78% 95%, #ff2fd04d 50%, transparent 50%);
-  background-repeat: no-repeat;
+/* ─── A BLOCK SCROLLBAR ─────────────────────────────────────────────────────
+   Square, hard-edged, and sized to the glyph grid. The rounded translucent
+   pill is the single most modern-looking object in the chrome. */
+[data-theme="demoscene"] .navtree-scroll::-webkit-scrollbar-thumb,
+[data-theme="demoscene"] .chat-list::-webkit-scrollbar-thumb {
+  border-radius: 0;
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+[data-theme="demoscene"] .navtree-scroll::-webkit-scrollbar,
+[data-theme="demoscene"] .chat-list::-webkit-scrollbar {
+  width: 8px;
 }
 
 /* ─── THE TUBE ──────────────────────────────────────────────────────────────
-   Scanlines plus a corner vignette: a CRT was never evenly lit, and the
-   vignette is what stops the scanlines reading as a filter laid over a flat
-   screen. Both on one fixed pseudo-element, `pointer-events: none`, so the
-   pair costs one composited layer and never intercepts a tap.
-   Off for anyone who asked the OS for less motion or more contrast. */
+   Scanlines plus a corner vignette on one fixed pseudo-element: a CRT was
+   never evenly lit, and the vignette is what stops the lines reading as a
+   filter laid over a flat screen. `pointer-events: none`, so the pair costs
+   one composited layer and never intercepts a tap. */
 [data-theme="demoscene"] body::after {
   content: "";
   position: fixed;
@@ -806,6 +840,10 @@
 @media (prefers-reduced-motion: reduce), (prefers-contrast: more) {
   [data-theme="demoscene"] body::after {
     display: none;
+  }
+  [data-theme="demoscene"] .navtree-tab-row[data-active="true"] {
+    animation: none;
+    background-size: 100% 100%;
   }
 }
 
