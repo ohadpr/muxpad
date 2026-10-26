@@ -568,15 +568,24 @@
 }
 
 /* Reasoning aside: dimmed, italic, smaller, quiet left rail. */
-/* A message the HARNESS spoke because the turn ended without a `reply` call
-   (chat-voice.ts). It is the agent's own final words, promoted — so it reads as
-   a normal message — but the dotted rule says "nobody chose to send this",
-   which is the difference between a reply and a fallback. Muted enough to be a
-   footnote, present enough that a screenshot shows it. */
-.chat-turn-assistant[data-voice="fallback"] .chat-msg {
-  border-left: 2px dotted var(--chat-border-strong);
-  padding-left: 10px;
-}
+/* THE DOTTED RULE IS GONE, and this is the record of why.
+   It marked a message the harness promoted because the turn ended without a
+   `reply` call — "nobody chose to send this". Reported as "sometimes messages
+   have a vertical dotted line, sometimes they don't… what is this line helping
+   me with?", and investigated rather than defended. It marked nothing a reader
+   could act on:
+     · In the sessions where it fired most it fired on ~100% of messages
+       (one pane: 131 of 134 turns), so it distinguished nothing — and there
+       the promoted text IS the answer, median 995 characters, a third of them
+       ending in a question to the user.
+     · In healthy sessions it looked identical on a 2,000-character deliverable
+       and on a 133-character "waiting on CI" note, which is the one
+       distinction a reader would actually use.
+     · And it was silent about the real loss — the turns where a longer finding
+       stayed private while a status line was promoted. That is now fixed in
+       chat-voice.ts rather than labelled here.
+   `data-voice` stays on the element: it costs nothing, it is what the tests
+   assert against, and it is what makes this greppable from a screenshot. */
 
 .chat-thinking {
   flex: 1 1 auto;

@@ -208,6 +208,8 @@ export function applyChatVoice(events: readonly ChatEvent[], opts: ChatVoiceOpts
 
     let replies = 0;
     let lastProse = -1;
+    /** Every prose block in the turn, so the promotion can pick. */
+    const prose: { i: number; len: number }[] = [];
     // Did the user press Stop inside this turn? The harness writes
     // "[Request interrupted by user]" into the transcript and the normalizer
     // turns it into an `interrupted` notice — the only durable signal a
@@ -220,15 +222,41 @@ export function applyChatVoice(events: readonly ChatEvent[], opts: ChatVoiceOpts
       if (e?.kind === 'notice' && e.variant === 'interrupted') interrupted = true;
       if (e?.kind !== 'assistant') continue;
       if (e.voice === 'reply') replies++;
-      else lastProse = i;
+      else {
+        lastProse = i;
+        prose.push({ i, len: e.text.trim().length });
+      }
     }
     if (!needsReplyFallback({ mode: 'chat', humanInitiated: true, replies, interrupted })) continue;
     // Nothing the agent actually wrote → nothing to promote. The harness logs
     // the miss; inventing a sentence here would be the one thing this whole
     // mechanism exists to avoid.
     if (lastProse < 0) continue;
-    const e = out[lastProse] as Extract<ChatEvent, { kind: 'assistant' }>;
-    out[lastProse] = { ...e, voice: 'fallback' };
+    /**
+     * WHICH BLOCK IS THE ANSWER — not always the last one.
+     *
+     * This promoted `lastProse` unconditionally, and a turn's final words are
+     * very often a status note rather than its result: "Transcription of the 9
+     * chunks is running (~3 min)… Waiting on it". Measured over one pane's 131
+     * promoted turns, 18 of them hid an earlier block of more than 300
+     * characters that was LONGER than the one shown — in the worst case the
+     * finding ("the 08:00 bulletin ran ~8 minutes… it was being cut ~3 min
+     * short") stayed private while the status line was promoted.
+     *
+     * So: the last block, unless an earlier one is materially bigger. The
+     * thresholds come from that measurement rather than from taste — interim
+     * notes in healthy sessions have a median length of 133 characters, real
+     * deliverables run to four figures, so "three times longer AND past 300"
+     * separates them without being able to fire on two ordinary paragraphs.
+     */
+    const last = prose[prose.length - 1] as { i: number; len: number };
+    const biggest = prose.reduce((a, b) => (b.len > a.len ? b : a), last);
+    const chosen =
+      biggest.i !== last.i && biggest.len >= 300 && biggest.len >= last.len * 3
+        ? biggest.i
+        : last.i;
+    const e = out[chosen] as Extract<ChatEvent, { kind: 'assistant' }>;
+    out[chosen] = { ...e, voice: 'fallback' };
   }
 
   // Pass 3 — drop the sign-off. A model that has already replied very often
