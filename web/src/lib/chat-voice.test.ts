@@ -488,3 +488,50 @@ describe('the dotted rule is about the REPLY, not the mode', () => {
     ).toEqual(['user', 'reply', 'user', 'fallback']);
   });
 });
+
+/**
+ * THE FINDING, NOT THE STATUS LINE.
+ *
+ * A turn's final words are very often a note about what is still running
+ * rather than its result. Measured over one pane's 131 promoted turns, 18 hid
+ * an earlier block of 300+ characters that was LONGER than the one shown —
+ * worst case, the finding stayed private and "Transcription is running…
+ * Waiting on it" was promoted in its place.
+ */
+describe('promotion picks the answer, not merely the last thing said', () => {
+  const long = (n: number) => 'x'.repeat(n);
+
+  it('promotes an earlier block that is materially bigger than the trailing note', () => {
+    expect(voices([user('go'), prose(long(1200)), prose('Waiting on it (~3 min).')])).toEqual([
+      'user',
+      'fallback',
+      'private',
+    ]);
+  });
+
+  it('keeps the LAST block when the turn simply ends with its answer', () => {
+    expect(voices([user('go'), prose('thinking about it'), prose(long(1200))])).toEqual([
+      'user',
+      'private',
+      'fallback',
+    ]);
+  });
+
+  it('does not fire between two ordinary paragraphs', () => {
+    // 3x AND 300+ — two normal blocks must not trip it, or the rule would be
+    // reordering turns that were fine.
+    expect(voices([user('go'), prose(long(400)), prose(long(200))])).toEqual([
+      'user',
+      'private',
+      'fallback',
+    ]);
+  });
+
+  it('needs real size, not just a ratio — a short turn keeps its last word', () => {
+    expect(voices([user('go'), prose(long(120)), prose('ok')])).toEqual([
+      'user',
+      'private',
+      'fallback',
+    ]);
+  });
+});
