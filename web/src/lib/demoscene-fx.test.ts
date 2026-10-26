@@ -1,127 +1,159 @@
 import { describe, expect, it } from 'vitest';
 import {
-  FX_DECAY_MS,
-  FX_RADIUS,
-  type FxState,
+  DROP_BAND,
+  DROP_LIFE_MS,
+  DROP_MAX_RADIUS,
+  DROP_MIN_DISTANCE_PX,
+  DROP_MIN_INTERVAL_MS,
+  DROP_PEAK,
+  type Drop,
   GLYPHS,
   corruptLine,
-  corruptionChance,
+  corruptionAt,
   fxWanted,
-  nextFx,
+  liveDrops,
+  ringStrength,
+  shouldDrop,
 } from './demoscene-fx';
 
 /**
- * THE EFFECT HAS TO BE QUIET WHEN NOBODY IS MOVING.
+ * RAIN DROPS, NOT A SPOTLIGHT.
  *
- * It sits over a READING SURFACE, which is the worst place in the app for
- * motion — so the interesting property is not that it lights up, it is that it
- * goes away and stays away. That is arithmetic, and arithmetic can be checked
- * without a browser.
+ * The build before this corrupted a disc of characters that followed the
+ * cursor and faded slowly — "I want it to dissipate much faster and feel a bit
+ * subtler", pointed at ASCII rain-drop animations. That is a different SHAPE,
+ * not a different intensity: a drop is an event with a place and a birth time,
+ * leaving one ring that expands, thins and dies.
+ *
+ * The arithmetic is the whole of the behaviour, and it is the only part that
+ * can be checked without a browser — so the properties that matter (it goes
+ * away, it stays thin, it never reflows the page) are pinned here.
  */
-const at = (x: number, y: number, intensity: number): FxState => ({ x, y, intensity });
+const drop = (x: number, y: number, born = 0): Drop => ({ x, y, born });
 
-describe('the pointer interference', () => {
-  it('fades to nothing while the pointer is still', () => {
-    let s = at(100, 100, 1);
-    for (let i = 0; i < 12; i++) s = nextFx(s, { x: 100, y: 100, dtMs: 500, moved: 0 });
-    expect(s.intensity).toBeLessThan(0.01);
+describe('a drop’s ring', () => {
+  it('dies on its own, with no decay to wait out', () => {
+    expect(ringStrength(0, DROP_LIFE_MS)).toBe(0);
+    expect(ringStrength(100, DROP_LIFE_MS + 500)).toBe(0);
+    expect(liveDrops([drop(0, 0, 0)], DROP_LIFE_MS + 1)).toEqual([]);
+    expect(liveDrops([drop(0, 0, 0)], DROP_LIFE_MS - 1)).toHaveLength(1);
   });
 
-  it('decays by roughly 1/e over its own decay constant', () => {
-    const s = nextFx(at(0, 0, 1), { x: 0, y: 0, dtMs: FX_DECAY_MS, moved: 0 });
-    expect(s.intensity).toBeCloseTo(1 / Math.E, 2);
+  it('travels OUTWARD — the crest is further away as it ages', () => {
+    const crest = (age: number) => {
+      let best = 0;
+      let bestD = 0;
+      for (let d = 0; d < DROP_MAX_RADIUS; d += 1) {
+        const v = ringStrength(d, age);
+        if (v > best) {
+          best = v;
+          bestD = d;
+        }
+      }
+      return bestD;
+    };
+    expect(crest(200)).toBeGreaterThan(crest(60));
+    expect(crest(400)).toBeGreaterThan(crest(200));
   });
 
-  it('a resting hand cannot SUSTAIN the glow — jitter is not movement', () => {
-    // The property is monotone decay under sub-threshold movement, not a
-    // particular number at a particular time: from 0.5, a 900ms constant still
-    // leaves 0.054 after two seconds, and asserting "< 0.01" there would be
-    // this test inventing a deadline the effect never promised.
-    let s = at(10, 10, 0.5);
-    const seen: number[] = [];
-    for (let i = 0; i < 20; i++) {
-      s = nextFx(s, { x: 11, y: 10, dtMs: 100, moved: 1 });
-      seen.push(s.intensity);
-    }
-    for (let i = 1; i < seen.length; i++)
-      expect(seen[i] as number).toBeLessThan(seen[i - 1] as number);
-    expect(s.intensity).toBeLessThan(0.1);
-    // …and it does reach nothing, given its own time.
-    for (let i = 0; i < 40; i++) s = nextFx(s, { x: 11, y: 10, dtMs: 100, moved: 1 });
-    expect(s.intensity).toBeLessThan(0.001);
+  it('is a thin band, not a disc — the centre is quiet once it has left', () => {
+    // EARLY in the life, because the ring is also fading: by 400ms of a 620ms
+    // life it is down to 0.13 on its own crest by design, and asserting a big
+    // number there would be testing the fade rather than the band.
+    const age = 120;
+    const radius = (age / 1000) * 300;
+    expect(ringStrength(radius, age)).toBeGreaterThan(0.5);
+    // Well inside the ring, where a spotlight would still be blazing.
+    expect(ringStrength(radius + DROP_BAND * 4, age)).toBeLessThan(0.05);
   });
 
-  it('brightens with movement but never past full', () => {
-    let s = at(0, 0, 0);
-    for (let i = 0; i < 40; i++) s = nextFx(s, { x: i * 50, y: 0, dtMs: 16, moved: 400 });
-    expect(s.intensity).toBe(1);
-  });
-
-  it('follows the pointer exactly — the light is where the hand is', () => {
-    const s = nextFx(at(0, 0, 0.4), { x: 640, y: 480, dtMs: 16, moved: 30 });
-    expect([s.x, s.y]).toEqual([640, 480]);
-  });
-
-  it('exists only for the demoscene theme, and never under reduced motion', () => {
-    expect(fxWanted('demoscene', false)).toBe(true);
-    expect(fxWanted('demoscene', true)).toBe(false);
-    expect(fxWanted('tokyo-night', false)).toBe(false);
-    expect(fxWanted(null, false)).toBe(false);
+  it('weakens as it ages, so a ring thins rather than vanishing mid-screen', () => {
+    const at = (age: number) => ringStrength((age / 1000) * 300, age);
+    expect(at(120)).toBeGreaterThan(at(300));
+    expect(at(300)).toBeGreaterThan(at(520));
   });
 });
 
-/**
- * CHARACTER-LEVEL, ON THE REAL TEXT.
- *
- * Two earlier builds dodged this — a canvas of glyphs over the chat ("does not
- * affect the text"), then paragraph transforms ("bouncing paragraphs, don't be
- * cute"). Both avoided touching text because touching text is the risky
- * option. These are the properties that make it safe to do anyway.
- */
+describe('shedding drops', () => {
+  it('always sheds the first one', () => {
+    expect(shouldDrop(undefined, { x: 0, y: 0 }, 0)).toBe(true);
+  });
+
+  it('refuses to hammer one spot — that is what made it feel like a spotlight', () => {
+    const last = drop(100, 100, 0);
+    expect(shouldDrop(last, { x: 102, y: 101 }, DROP_MIN_INTERVAL_MS * 4)).toBe(false);
+  });
+
+  it('refuses to smear — a fast sweep leaves a trail, not a stripe', () => {
+    const last = drop(100, 100, 0);
+    expect(shouldDrop(last, { x: 400, y: 400 }, DROP_MIN_INTERVAL_MS - 10)).toBe(false);
+  });
+
+  it('sheds when both time and distance have passed', () => {
+    const last = drop(100, 100, 0);
+    expect(
+      shouldDrop(last, { x: 100 + DROP_MIN_DISTANCE_PX, y: 100 }, DROP_MIN_INTERVAL_MS + 1),
+    ).toBe(true);
+  });
+});
+
 describe('corrupting the text itself', () => {
   const grid = (perLine: number) => (i: number) => ({
     x: (i % perLine) * 8,
     y: Math.floor(i / perLine) * 18,
   });
-  const always = () => 0; // rand() = 0 → every eligible character corrupts
+  const always = () => 0;
   const never = () => 0.999;
+  // A ring that has just reached the start of the line.
+  const onTheLine = [drop(0, 0, -100)];
 
   it('NEVER changes the length — a reflow would move the page under the reader', () => {
     const src = 'the quick brown fox jumps over the lazy dog';
-    const out = corruptLine(src, grid(40), { x: 0, y: 0 }, 1, always);
+    const out = corruptLine(src, grid(40), onTheLine, 0, always);
     expect(out).toHaveLength(src.length);
   });
 
   it('leaves whitespace alone, or damaged text reads as a bar chart', () => {
     const src = 'a b  c\td';
-    const out = corruptLine(src, grid(40), { x: 0, y: 0 }, 1, always);
+    const out = corruptLine(src, grid(40), onTheLine, 0, always);
     for (let i = 0; i < src.length; i++) {
       if (/\s/.test(src[i] as string)) expect(out[i]).toBe(src[i]);
     }
   });
 
   it('only uses the text-mode glyph set', () => {
-    const out = corruptLine('abcdefghij', grid(40), { x: 0, y: 0 }, 1, always);
+    const src = 'abcdefghij';
+    const out = corruptLine(src, grid(40), onTheLine, 0, always);
     for (let i = 0; i < out.length; i++) {
-      if (out[i] !== 'abcdefghij'[i]) expect(GLYPHS).toContain(out[i] as string);
+      if (out[i] !== src[i]) expect(GLYPHS).toContain(out[i] as string);
     }
   });
 
   it('returns the SAME string when nothing is disturbed — no needless DOM writes', () => {
     const src = 'untouched';
-    expect(corruptLine(src, grid(40), { x: 0, y: 0 }, 1, never)).toBe(src);
-    expect(corruptLine(src, grid(40), { x: 0, y: 0 }, 0, always)).toBe(src);
-    // Far from the pointer is the common case: most of the log, every frame.
-    expect(corruptLine(src, grid(40), { x: 9999, y: 9999 }, 1, always)).toBe(src);
+    expect(corruptLine(src, grid(40), onTheLine, 0, never)).toBe(src);
+    expect(corruptLine(src, grid(40), [], 0, always)).toBe(src);
+    // Far from every ring: the common case, on most of the log, every frame.
+    expect(corruptLine(src, grid(40), [drop(9999, 9999, 0)], 0, always)).toBe(src);
   });
 
-  it('damages most heavily at the pointer and not at all past the radius', () => {
-    expect(corruptionChance(0, 1)).toBeGreaterThan(corruptionChance(FX_RADIUS / 2, 1));
-    expect(corruptionChance(FX_RADIUS, 1)).toBe(0);
-    expect(corruptionChance(10, 0)).toBe(0);
+  it('never corrupts a cell outright — it has to flicker back to stay readable', () => {
+    expect(corruptionAt({ x: 0, y: 0 }, [drop(0, 0, 0)], 0)).toBeLessThan(1);
+    expect(DROP_PEAK).toBeLessThan(0.5);
   });
 
-  it('never corrupts a cell outright — it has to flicker back to be readable', () => {
-    expect(corruptionChance(0, 1)).toBeLessThan(1);
+  it('takes the strongest ring rather than stacking them', () => {
+    // Overlapping drops must not add up into a solid block of noise.
+    const many = [drop(0, 0, -100), drop(0, 0, -100), drop(0, 0, -100)];
+    expect(corruptionAt({ x: 30, y: 0 }, many, 0)).toBeLessThanOrEqual(DROP_PEAK);
+  });
+});
+
+describe('when the effect exists at all', () => {
+  it('is demoscene-only, and never under reduced motion', () => {
+    expect(fxWanted('demoscene', false)).toBe(true);
+    expect(fxWanted('demoscene', true)).toBe(false);
+    expect(fxWanted('tokyo-night', false)).toBe(false);
+    expect(fxWanted(null, false)).toBe(false);
   });
 });
