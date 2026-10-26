@@ -32,48 +32,47 @@
  * OS for less motion.
  */
 
-/** How long the ripple keeps running after the pointer stops, in ms. */
-export const FX_DECAY_MS = 900;
+/**
+ * ─── DROPS, NOT A SPOTLIGHT ───────────────────────────────────────────────
+ * The previous build corrupted a disc of characters that followed the cursor
+ * around and faded slowly: "improving… I want it to dissipate much faster and
+ * feel a bit subtler", pointed at ASCII rain-drop animations.
+ *
+ * That is a different shape, not a different intensity. A drop is an EVENT
+ * with a place and a birth time: it leaves one ring that expands, thins and
+ * dies. Moving the pointer sheds drops along the way, so what the reader sees
+ * is disturbance travelling outward from where the cursor has BEEN — not a
+ * blob parked under where it IS.
+ *
+ * Thin rings are also quieter than a filled disc for free: at any instant only
+ * the characters inside a narrow band are touched, so the same peak rate reads
+ * as a fraction of the damage.
+ */
 
-/** Below this, a move is the hand resting — not worth a frame. */
-export const MOVE_EPSILON_PX = 2;
+/** How long one drop's ring lives, in ms. Short — this has to dissipate. */
+export const DROP_LIFE_MS = 620;
 
-/** How far from the pointer the disturbance reaches, in px. */
-export const FX_RADIUS = 340;
+/** How fast the ring expands, px/sec. */
+export const DROP_SPEED = 300;
 
-/** Peak sideways displacement of a line of text, in px. */
-export const FX_AMPLITUDE = 11;
+/** Half-width of the ring band, in px. A couple of character cells. */
+export const DROP_BAND = 13;
 
-/** Distance between wave crests, in px. Roughly three lines of chat. */
-export const FX_WAVELENGTH = 110;
+/** Peak corruption rate, on the band, at birth. */
+export const DROP_PEAK = 0.3;
 
-/** How fast the wave travels outward, in px/second. */
-export const FX_SPEED = 170;
+/** A drop is shed at most this often, and only after this much movement. */
+export const DROP_MIN_INTERVAL_MS = 110;
+export const DROP_MIN_DISTANCE_PX = 34;
 
-export interface FxState {
+/** The glyph set a corrupted text-mode screen falls back to. */
+export const GLYPHS = '░▒▓█▄▀▌▐│─┼╬╔╗╚╝═║◆◢◣▲▼<>/\\|*+=#@$%&';
+
+export interface Drop {
   x: number;
   y: number;
-  /** 0–1. Driven by movement, decays on its own. */
-  intensity: number;
-}
-
-/**
- * The pure half: what the next frame should look like.
- *
- * Separated because the interesting rules — a still pointer fades, a fast one
- * brightens but never past 1, a resting hand produces nothing — are arithmetic,
- * and arithmetic is the only part checkable without a browser. The effect being
- * QUIET when it should be is the property that matters; it moves text somebody
- * is trying to read.
- */
-export function nextFx(
-  prev: FxState,
-  input: { x: number; y: number; dtMs: number; moved: number },
-): FxState {
-  const decay = Math.exp(-input.dtMs / FX_DECAY_MS);
-  const faded = prev.intensity * decay;
-  const fed = input.moved < MOVE_EPSILON_PX ? faded : Math.min(1, faded + input.moved / 260);
-  return { x: input.x, y: input.y, intensity: fed };
+  /** performance.now() at impact. */
+  born: number;
 }
 
 /** Is the effect wanted at all? Theme AND the reader's motion preference. */
@@ -81,83 +80,94 @@ export function fxWanted(theme: string | null | undefined, reducedMotion: boolea
   return theme === 'demoscene' && !reducedMotion;
 }
 
-/**
- * The glyph set a corrupted text-mode screen falls back to. Box drawing,
- * blocks, shading, and the punctuation that reads as noise — a random unicode
- * soup would look like mojibake, this looks like a machine losing sync.
- */
-export const GLYPHS = '░▒▓█▄▀▌▐│─┼╬╔╗╚╝═║◆◢◣▲▼<>/\\|*+=#@$%&';
-
-/** Fraction of characters corrupted at the very centre of the disturbance. */
-export const FX_PEAK_CORRUPTION = 0.55;
+/** Drops that still have a ring to draw. */
+export function liveDrops(drops: readonly Drop[], now: number): Drop[] {
+  return drops.filter((d) => now - d.born < DROP_LIFE_MS);
+}
 
 /**
- * How likely the character at `distance` px from the pointer is corrupted.
+ * Should the pointer shed a new drop here?
  *
- * ─── WHY THIS IS CHARACTER-LEVEL AND NOT A TRANSFORM ──────────────────────
- * Two earlier builds dodged this. The first painted glyphs on a canvas ABOVE
- * the text ("super noisy and does not affect the text"); the second displaced
- * whole paragraphs with `translateX`/`skewX` ("bouncing paragraphs… don't be
- * cute"). Both were avoiding the real thing because touching text is the
- * expensive, risky option. It is also the only one that is actually ASCII
- * distortion, so this does it.
- *
- * What makes it safe is the theme itself: demoscene sets a MONOSPACE family
- * for the whole UI, so substituting one character for another of the same
- * width changes no metric — no reflow, no line rewrap, no scroll jump. The
- * same effect under a proportional font would move text under the reader's
- * eye on every frame, which is why it is bound to this theme rather than
- * offered as a general one.
- *
- * Bounded on purpose: a cell that is always corrupted is unreadable, so even
- * at the centre it is a coin-flip per frame and the character flickers back.
+ * Rate AND distance, both: a fast sweep should leave a trail rather than a
+ * smear, and a pointer jittering in place should not keep hammering the same
+ * spot — which is what made the old effect feel like a spotlight.
  */
-export function corruptionChance(distance: number, intensity: number): number {
-  if (intensity <= 0.01 || distance >= FX_RADIUS) return 0;
-  const falloff = (1 - distance / FX_RADIUS) ** 2;
-  return falloff * intensity * FX_PEAK_CORRUPTION;
+export function shouldDrop(
+  last: Drop | undefined,
+  at: { x: number; y: number },
+  now: number,
+): boolean {
+  if (!last) return true;
+  if (now - last.born < DROP_MIN_INTERVAL_MS) return false;
+  return Math.hypot(at.x - last.x, at.y - last.y) >= DROP_MIN_DISTANCE_PX;
+}
+
+/**
+ * How strongly one drop disturbs a character `distance` px away, right now.
+ *
+ * A gaussian band riding an expanding radius: nothing at the centre once the
+ * ring has left, nothing outside it, and the whole thing fading as it ages so
+ * a ring thins out rather than vanishing mid-screen.
+ */
+export function ringStrength(distance: number, ageMs: number): number {
+  if (ageMs < 0 || ageMs >= DROP_LIFE_MS) return 0;
+  const radius = (ageMs / 1000) * DROP_SPEED;
+  const band = Math.exp(-((distance - radius) ** 2) / (2 * DROP_BAND ** 2));
+  const fade = 1 - ageMs / DROP_LIFE_MS;
+  return band * fade * fade;
+}
+
+/** The chance a character at this point is corrupted, over every live drop. */
+export function corruptionAt(
+  point: { x: number; y: number },
+  drops: readonly Drop[],
+  now: number,
+): number {
+  let strongest = 0;
+  for (const d of drops) {
+    const s = ringStrength(Math.hypot(point.x - d.x, point.y - d.y), now - d.born);
+    if (s > strongest) strongest = s;
+  }
+  return strongest * DROP_PEAK;
 }
 
 /**
  * Corrupt one line of text, returning the damaged copy.
  *
- * Same length, always — the caller depends on it (see `corruptionChance` for
- * why a length change would move the page). Whitespace is left alone: a line
- * whose spaces turn into blocks stops looking like damaged TEXT and starts
- * looking like a bar chart.
+ * Same length, always — the caller depends on it: the theme is monospace, so a
+ * same-width substitution changes no metric and nothing reflows. Whitespace is
+ * left alone, or a damaged line reads as a bar chart rather than as text.
  */
 export function corruptLine(
   text: string,
-  charX: (index: number) => { x: number; y: number },
-  pointer: { x: number; y: number },
-  intensity: number,
+  charAt: (index: number) => { x: number; y: number },
+  drops: readonly Drop[],
+  now: number,
   rand: () => number = Math.random,
 ): string {
-  if (intensity <= 0.01) return text;
+  if (drops.length === 0) return text;
   let out: string[] | null = null;
   for (let i = 0; i < text.length; i++) {
     const ch = text[i] as string;
     if (ch === ' ' || ch === '\n' || ch === '\t') continue;
-    const p = charX(i);
-    const d = Math.hypot(p.x - pointer.x, p.y - pointer.y);
-    if (rand() >= corruptionChance(d, intensity)) continue;
+    if (rand() >= corruptionAt(charAt(i), drops, now)) continue;
     if (!out) out = [...text];
     out[i] = GLYPHS[(rand() * GLYPHS.length) | 0] as string;
   }
   return out ? out.join('') : text;
 }
 
+/** The furthest a live ring can have travelled — the cull radius for rows. */
+export const DROP_MAX_RADIUS = (DROP_LIFE_MS / 1000) * DROP_SPEED + DROP_BAND * 3;
+
 export function installDemosceneFx(doc: Document = document): () => void {
   const win = doc.defaultView;
   const reduced = win?.matchMedia('(prefers-reduced-motion: reduce)');
   let raf = 0;
-  let last = 0;
-  let state: FxState = { x: -9999, y: -9999, intensity: 0 };
-  let pending: { x: number; y: number } | null = null;
+  let drops: Drop[] = [];
   let detachPointer: (() => void) | null = null;
   /** Every text node currently damaged, with the text it really holds. */
   const damaged = new Map<Text, string>();
-  /** Monospace advance width, measured once per attach. */
   let cellW = 0;
   let lineH = 0;
 
@@ -193,17 +203,29 @@ export function installDemosceneFx(doc: Document = document): () => void {
       ),
     );
 
-  const damage = () => {
+  const damage = (now: number) => {
     if (!win) return;
     // Put everything back first: a node damaged last frame and out of reach
     // this one must not keep its scars.
     restore();
-    if (state.intensity <= 0.01 || selecting()) return;
+    if (drops.length === 0 || selecting()) return;
+
+    // One bounding box for every live ring, so a paragraph nowhere near any of
+    // them is skipped before a single character is considered.
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+    for (const d of drops) {
+      minX = Math.min(minX, d.x - DROP_MAX_RADIUS);
+      maxX = Math.max(maxX, d.x + DROP_MAX_RADIUS);
+      minY = Math.min(minY, d.y - DROP_MAX_RADIUS);
+      maxY = Math.max(maxY, d.y + DROP_MAX_RADIUS);
+    }
 
     for (const el of paragraphs()) {
       const r = el.getBoundingClientRect();
-      if (r.bottom < state.y - FX_RADIUS || r.top > state.y + FX_RADIUS) continue;
-      if (r.right < state.x - FX_RADIUS || r.left > state.x + FX_RADIUS) continue;
+      if (r.bottom < minY || r.top > maxY || r.right < minX || r.left > maxX) continue;
       if (!cellW) measureCell(el);
       const perLine = Math.max(1, Math.floor(r.width / (cellW || 8)));
       const walker = doc.createTreeWalker(el, NodeFilter.SHOW_TEXT);
@@ -214,7 +236,7 @@ export function installDemosceneFx(doc: Document = document): () => void {
         if (text.trim()) {
           // Where a character sits, assuming the monospace grid the theme
           // guarantees. Approximate across inline markup — exact enough for a
-          // radial falloff, and free, where a Range rect per character is not.
+          // ring, and free, where a Range rect per character is not.
           const base = consumed;
           const charAt = (i: number) => {
             const k = base + i;
@@ -223,7 +245,7 @@ export function installDemosceneFx(doc: Document = document): () => void {
               y: r.top + (Math.floor(k / perLine) + 0.5) * (lineH || 18),
             };
           };
-          const next = corruptLine(text, charAt, { x: state.x, y: state.y }, state.intensity);
+          const next = corruptLine(text, charAt, drops, now);
           if (next !== text) {
             damaged.set(n, text);
             n.nodeValue = next;
@@ -237,22 +259,19 @@ export function installDemosceneFx(doc: Document = document): () => void {
 
   const frame = (now: number) => {
     raf = 0;
-    const dt = last ? now - last : 16;
-    last = now;
-    const p = pending;
-    const moved = p ? Math.hypot(p.x - state.x, p.y - state.y) : 0;
-    state = nextFx(state, { x: p?.x ?? state.x, y: p?.y ?? state.y, dtMs: dt, moved });
-    pending = null;
-    damage();
-    if (state.intensity > 0.01) raf = requestAnimationFrame(frame);
-    else {
-      last = 0;
-      restore();
-    }
+    drops = liveDrops(drops, now);
+    damage(now);
+    // The rings expire on their own, so the loop ends when the last one does —
+    // no decay to wait out and nothing running under a still pointer.
+    if (drops.length) raf = requestAnimationFrame(frame);
+    else restore();
   };
 
   const onMove = (e: PointerEvent) => {
-    pending = { x: e.clientX, y: e.clientY };
+    const now = performance.now();
+    const at = { x: e.clientX, y: e.clientY };
+    if (!shouldDrop(drops[drops.length - 1], at, now)) return;
+    drops.push({ ...at, born: now });
     if (!raf) raf = requestAnimationFrame(frame);
   };
 
@@ -267,8 +286,7 @@ export function installDemosceneFx(doc: Document = document): () => void {
     detachPointer = null;
     if (raf) cancelAnimationFrame(raf);
     raf = 0;
-    last = 0;
-    state = { ...state, intensity: 0 };
+    drops = [];
     cellW = 0;
     restore();
   };
