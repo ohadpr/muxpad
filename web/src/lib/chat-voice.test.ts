@@ -174,15 +174,28 @@ describe('THE GUARD — the render half', () => {
     ]);
   });
 
-  it('does NOT fire for a SUB-CHAT REPORT turn either — same reason', () => {
-    // The set that got forgotten: this predicate read `variant === 'cron'` and
-    // nothing else, so when the join landed a batch of reports counted as a
-    // person starting a turn — promoting the reply into a bubble addressed to
-    // a reader who never asked anything.
+  it('DOES fire for a sub-chat report turn — that answer was asked for', () => {
+    // REVERSED, and the reversal is the bug fix. This asserted the opposite on
+    // the grounds that a report is machine-injected like a cron fire, so
+    // promoting its prose would address "a reader who never asked anything".
+    //
+    // A cron is genuinely unsolicited. A REPORT is not: a delivery exists only
+    // because this conversation dispatched the work, and bringing the result
+    // back is the whole point of the join. Treating the two the same cost a
+    // user a day — in the "signal archive" chat the sub-agents reported, the
+    // chat wrote a 1,998-character verdict, and the verdict stayed `private`:
+    // muted, folded inside an action run. "Hasn't returned yet."
+    //
+    // WHAT THIS TRADE COSTS, stated rather than discovered later: a fan-out
+    // that a CRON started also promotes now, because the event stream at this
+    // point knows what started THIS turn and not what started the chain. An
+    // occasional unsolicited bubble is the price of never silently dropping an
+    // answer somebody is waiting for, and those two failures are not the same
+    // size.
     expect(voices([reportChip(), user('## worker a\n\nfound it'), prose('acting on it')])).toEqual([
       'notice',
       'user',
-      'private',
+      'fallback',
     ]);
   });
 
