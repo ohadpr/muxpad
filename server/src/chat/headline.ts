@@ -1017,22 +1017,38 @@ const TIMEOUT_MS = 30_000;
 export function readRecentTurns(
   db: Database.Database,
   paneId: string,
-): { conversation: string; turns: number } {
+): { conversation: string; turns: number; said: number } {
   const sessions = new AgentSessionStore(db);
   const sess = sessions.getByPane(paneId);
   const sid = sess?.current_sid;
-  if (!sid) return { conversation: '', turns: 0 };
+  if (!sid) return { conversation: '', turns: 0, said: 0 };
   const path = (sess.assistant === 'claude' ? findTranscript(sid) : null) ?? muxpadLocate(sid);
-  if (!path) return { conversation: '', turns: 0 };
+  if (!path) return { conversation: '', turns: 0, said: 0 };
   let lines: string[];
   try {
     lines = readTailLines(path, TAIL_BYTES);
   } catch {
-    return { conversation: '', turns: 0 };
+    return { conversation: '', turns: 0, said: 0 };
   }
   const normalize = sess.assistant === 'claude' ? normalizeTranscriptLine : identityNormalize;
   const out: string[] = [];
   let turns = 0;
+  /**
+   * How many of those turns the WORKER said, as opposed to was told.
+   *
+   * `turns` counts user and assistant alike, which is right for "is there
+   * enough here to summarise" and catastrophically wrong for "did this worker
+   * do anything": a session holding only the prompt it was dispatched with
+   * counts 1, passes the gate, and hands the summariser a transcript that is
+   * purely an instruction. The summariser then writes the instruction back as
+   * an accomplishment — "wrote the critique to a markdown file and completed
+   * the task", naming a file that never existed.
+   *
+   * Reported three times in one session against a hung codex worker that
+   * produced no output at all. A fabricated success is worse than no report:
+   * a parent agent acts on it.
+   */
+  let said = 0;
   for (const line of lines) {
     let obj: unknown;
     try {
@@ -1043,10 +1059,11 @@ export function readRecentTurns(
     for (const ev of normalize(obj) as ChatEvent[]) {
       if ((ev.kind !== 'user' && ev.kind !== 'assistant') || !ev.text) continue;
       turns += 1;
+      if (ev.kind === 'assistant') said += 1;
       out.push(`${ev.kind}: ${ev.text}`);
     }
   }
-  return { conversation: out.join('\n').slice(-MAX_PROMPT_CHARS), turns };
+  return { conversation: out.join('\n').slice(-MAX_PROMPT_CHARS), turns, said };
 }
 
 /**
