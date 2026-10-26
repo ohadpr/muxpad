@@ -905,43 +905,22 @@
   width: 8px;
 }
 
-/* ─── THE POINTER'S PHOSPHOR ────────────────────────────────────────────────
-   Installed by lib/demoscene-glow.ts, which owns when it exists; this owns
-   what it looks like. Centred on the pointer via a translate, so the element's
-   own box is offset by half its size here rather than in script.
+/* ─── POINTER INTERFERENCE ──────────────────────────────────────────────────
+   The canvas lib/demoscene-fx.ts paints on; that module owns when it exists
+   and what it draws, this owns where it sits. Full-viewport and inert — the
+   effect must never be able to take a click, a drag-select or a scroll, and
+   the only way to be sure of that is for the surface it lives on to be
+   incapable of receiving them.
 
-   `screen` blending is the whole trick: on a near-black ground it ADDS light
-   and cannot darken anything, so text under it stays exactly as legible as it
-   was. Cyan core with a magenta fringe — the two hues this theme already uses
-   — which is what a misconverged tube does to a bright spot.
-
-   Sized generously and faded to nothing well before its edge: a hard-edged
-   circle reads as a cursor gimmick, a soft one reads as the surface glowing. */
-[data-theme="demoscene"] .demoscene-glow {
+   BELOW the scanline overlay (9998 against 9999) so the tube's lines fall
+   across the interference too, rather than the glitch floating in front of the
+   screen it is supposed to be part of. */
+[data-theme="demoscene"] .demoscene-fx {
   position: fixed;
-  top: 0;
-  left: 0;
+  inset: 0;
   z-index: 9998;
-  width: 420px;
-  height: 420px;
-  margin: -210px 0 0 -210px;
   pointer-events: none;
-  opacity: 0;
-  mix-blend-mode: screen;
-  will-change: transform, opacity;
-  background: radial-gradient(
-      circle,
-      color-mix(in srgb, #19ffd0 16%, transparent) 0%,
-      transparent 62%
-    ), radial-gradient(circle, color-mix(in srgb, #ff2fd0 9%, transparent) 0%, transparent 46%);
 }
-/* It lives on <body> and follows the pointer everywhere, the rail included.
-   A rule to dim it over the rail was written and removed rather than shipped:
-   the glow is a CHILD OF BODY, not a sibling of the rail, so
-   `.navtree:hover ~ * .demoscene-glow` could never match — a dead selector
-   that would have read as an implemented feature. Over the rail the bloom is
-   simply light on a dark panel, which is the same thing it is everywhere else,
-   and it is faint enough that it does not need the exception. */
 
 /* ─── THE TUBE ──────────────────────────────────────────────────────────────
    Scanlines plus a corner vignette on one fixed pseudo-element: a CRT was
