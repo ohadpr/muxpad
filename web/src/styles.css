@@ -729,6 +729,93 @@
   letter-spacing: 0.1em;
 }
 
+/* ─── IT WAS FLAT BECAUSE IT HAD NO STRUCTURE ───────────────────────────────
+   First pass at the texture was all surface and no frame: 3% dither and
+   scanlines at 18% black over an already-black ground — invisible, which is
+   another word for flat. And the rail paints no background and no right
+   border of its own, so the whole window was ONE unbroken dark field with
+   text floating in it.
+   A text-mode screen is made of EDGES: panels have walls, the selection has a
+   cursor, section headers are drawn in rule characters. That is structure, and
+   it is what the rest of this block adds. */
+
+/* THE RAIL HAS A WALL. A double line, the ║ of a box-drawing frame, in the
+   accent rather than in a grey — on a black ground a coloured edge is the
+   thing that says "panel" at a glance. */
+[data-theme="demoscene"] .sidenav {
+  border-right: 3px solid transparent;
+  border-image: repeating-linear-gradient(
+      to right,
+      color-mix(in srgb, var(--accent) 55%, transparent) 0 1px,
+      transparent 1px 2px,
+      color-mix(in srgb, var(--accent) 55%, transparent) 2px 3px
+    )
+    3;
+}
+
+/* THE SELECTION HAS A CURSOR. `▶` in the gutter of the active row — the
+   single most recognisable thing about a TUI, and the one element here that a
+   reader identifies instantly without being told what it is. */
+[data-theme="demoscene"] .navtree-tab-row[data-active="true"] .navtree-tab-titleline::before {
+  content: "▶";
+  flex: 0 0 auto;
+  margin-right: 6px;
+  color: var(--accent);
+  font-weight: 700;
+  text-shadow: 0 0 6px color-mix(in srgb, var(--accent) 70%, transparent);
+}
+
+/* SECTION HEADERS ARE RULES. `══` either side of the workspace name, drawn
+   with real box-drawing characters — the ASCII, not an impression of it. The
+   trailing rule runs to the end of the row as a gradient, because a repeated
+   glyph cannot know how wide the rail is. */
+[data-theme="demoscene"] .navtree-ws-row .navtree-name-text::before {
+  content: "══ ";
+  color: color-mix(in srgb, var(--accent) 70%, transparent);
+}
+/* The trailing rule is DRAWN, not typed. A run of `═` was the obvious move and
+   the wrong one: the name is a truncating flex child, so the glyphs went into
+   its ellipsis and the header read "PERSONAL ───… " — a mistake, not a rule.
+   A gradient fills whatever width is left, at any rail size, and cannot be
+   truncated because it is not text. */
+[data-theme="demoscene"] .navtree-ws-name::after {
+  content: "";
+  flex: 1 1 auto;
+  min-width: 12px;
+  height: 3px;
+  margin-left: 8px;
+  background: repeating-linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--accent) 34%, transparent) 0 1px,
+    transparent 1px 2px,
+    color-mix(in srgb, var(--accent) 34%, transparent) 2px 3px
+  );
+}
+[data-theme="demoscene"] .navtree-ws-name {
+  display: flex;
+  align-items: center;
+}
+
+/* THE CHAT HAS A FRAME TOO, or the rail's wall is the only edge on screen and
+   the content half still reads as a void. */
+[data-theme="demoscene"] .chat-composer {
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, transparent);
+  border-radius: 0;
+}
+
+/* AND THE TEXTURE, AT A STRENGTH YOU CAN SEE. The first pass hedged at 3% ink
+   and 18% black; both are now where a 1990s tube actually sat. The scanline
+   period is 3px so it reads as lines rather than as a grey wash. */
+[data-theme="demoscene"] .chat-card,
+[data-theme="demoscene"] .settings-dialog,
+[data-theme="demoscene"] .chat-composer {
+  background-image: repeating-conic-gradient(
+    color-mix(in srgb, var(--fg) 8%, transparent) 0% 25%,
+    transparent 0% 50%
+  );
+  background-size: 4px 4px;
+}
+
 /* ─── EVERY MARK IS A BLOCK ─────────────────────────────────────────────────
    The single highest-yield line in this theme. A circle is a dot on a design
    system; a SQUARE on a monospace grid is a character cell, and the moment the
