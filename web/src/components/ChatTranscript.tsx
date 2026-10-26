@@ -381,7 +381,21 @@ export const ChatRow = memo(function ChatRow({
           // report) without putting an apology in the conversation.
           data-voice={event.voice === 'fallback' ? 'fallback' : undefined}
         >
-          <div className="chat-msg">
+          <div
+            className="chat-msg"
+            // THE MARK HAS TO BE ABLE TO EXPLAIN ITSELF. The dotted rule was
+            // reported as "sometimes messages have a vertical dotted line,
+            // sometimes they don't — I don't know what it means", which is a
+            // fair description of an unlabelled mark. It is cheap to answer in
+            // place; the alternative is a reader inventing a theory (the one
+            // offered was chat mode vs agent mode, which is close enough to
+            // be convincing and wrong).
+            title={
+              event.voice === 'fallback'
+                ? 'The agent ended its turn without sending a reply — muxpad surfaced its final note so it would not be lost.'
+                : undefined
+            }
+          >
             <AssistantText text={event.text} onOpenImage={onOpenImage} hl={hl} />
           </div>
         </div>
