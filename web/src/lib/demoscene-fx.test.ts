@@ -14,6 +14,7 @@ import {
   corruptionAt,
   fxWanted,
   liveDrops,
+  mayDisturb,
   ringMask,
   ringStrength,
   shouldDrop,
@@ -204,5 +205,34 @@ describe('the ring dims what it crosses', () => {
     expect(ringMask(box, [drop(5000, 5000, 0)], 0)).toBeNull();
     expect(ringMask(box, [], 0)).toBeNull();
     expect(ringMask(box, [drop(300, 40, -DROP_LIFE_MS - 1)], 0)).toBeNull();
+  });
+});
+
+/**
+ * SELECTING TEXT MUST NOT BE A FIGHT.
+ *
+ * Reported as "text selection is a bit harder now" — and "a bit" is the tell.
+ * The first guard asked "is there a selection", which is only true AFTER one
+ * exists, so the whole of a drag-select slipped through it: drops kept
+ * shedding and text nodes kept being rewritten under the gesture reaching for
+ * them. Rewriting a node moves the anchor the browser extends from, so the
+ * drag fought back on exactly the frames a character under the cursor
+ * corrupted — intermittently, which is why it degraded rather than broke.
+ */
+describe('hands off while the reader is selecting', () => {
+  it('stops the moment the pointer goes down, before any selection exists', () => {
+    expect(mayDisturb({ pointerDown: true, hasSelection: false })).toBe(false);
+  });
+
+  it('stays off while a finished selection is held', () => {
+    expect(mayDisturb({ pointerDown: false, hasSelection: true })).toBe(false);
+  });
+
+  it('is off for both at once — the middle of a drag', () => {
+    expect(mayDisturb({ pointerDown: true, hasSelection: true })).toBe(false);
+  });
+
+  it('runs only with the hand off the text entirely', () => {
+    expect(mayDisturb({ pointerDown: false, hasSelection: false })).toBe(true);
   });
 });
