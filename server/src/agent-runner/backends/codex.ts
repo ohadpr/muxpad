@@ -30,6 +30,44 @@ import type { AgentBackend, BackendOptions, RunnerHost } from './types.js';
 
 const CODEX_BIN = process.env.MUXPAD_CODEX_BIN || 'codex';
 
+/**
+ * The human-readable sentence out of a codex error, whatever shape it arrived
+ * in.
+ *
+ * Three shapes, all seen in one failing run:
+ *   · a plain string;
+ *   · `{ message: "…" }` — what `turn.failed` carries, and the reason the old
+ *     `typeof err === 'string'` test threw the message away and substituted
+ *     "codex turn failed";
+ *   · `{ message: "{\"type\":\"error\",\"error\":{\"message\":\"…\"}}" }` — the
+ *     provider's own JSON, stringified INTO the message field. Unwrapped,
+ *     because the sentence a person needs is the innermost one: "The 'astra'
+ *     model is not supported when using Codex with a ChatGPT account."
+ *
+ * Returns null when there is nothing quotable, so callers keep their own
+ * fallback rather than rendering "undefined" at the user.
+ */
+export function codexErrorText(err: unknown): string | null {
+  if (typeof err === 'string') return unwrapProviderJson(err);
+  if (!err || typeof err !== 'object') return null;
+  const m = (err as { message?: unknown }).message;
+  if (typeof m === 'string' && m.trim()) return unwrapProviderJson(m);
+  return null;
+}
+
+function unwrapProviderJson(text: string): string {
+  const t = text.trim();
+  if (!t.startsWith('{')) return t;
+  try {
+    const o = JSON.parse(t) as { error?: { message?: unknown }; message?: unknown };
+    const inner = o.error?.message ?? o.message;
+    if (typeof inner === 'string' && inner.trim()) return inner.trim();
+  } catch {
+    // Not JSON after all — the raw text is still the best thing we have.
+  }
+  return t;
+}
+
 // CODEX CANNOT COMMIT UNLESS WE SAY SO, AND THAT IS NOT A WORKTREE PROBLEM.
 //
 // This used to add the git common dir only when it was OUTSIDE the cwd — i.e.
@@ -211,6 +249,9 @@ export function createCodexBackend(
 
   const queue: string[] = [];
   let turnActive = false;
+  /** The last quotable error codex emitted as a standalone `error` event —
+   *  the only place the real sentence appears. Cleared per turn. */
+  let lastError: string | null = null;
   let child: ReturnType<typeof spawn> | null = null;
   let interrupted = false;
   let closed = false;
@@ -433,8 +474,24 @@ export function createCodexBackend(
     } else if (type === 'turn.completed') {
       finishTurn(true);
     } else if (type === 'turn.failed') {
-      const err = ev.error;
-      finishTurn(false, typeof err === 'string' ? err : 'codex turn failed');
+      // `turn.failed`'s own payload first; the standalone `error` event it
+      // follows is the fallback, and between them the user sees the provider's
+      // actual words instead of "codex turn failed".
+      finishTurn(false, codexErrorText(ev.error) ?? lastError ?? 'codex turn failed');
+    } else if (type === 'error') {
+      // A TOP-LEVEL ERROR, WHICH HAD NO BRANCH AT ALL.
+      //
+      // codex emits the real failure here, as a sibling of `turn.failed`
+      // rather than inside it. With nothing reading it the message was
+      // dropped on the floor and the pane simply went idle — which is how
+      // "the 'astra' model is not supported when using Codex with a ChatGPT
+      // account" (a 400, returned in under a second) reached the user as an
+      // agent that "hangs and never runs", three times.
+      //
+      // Recorded, not finished on: `turn.failed` follows and owns the
+      // transition. This is the only place the WORDS exist.
+      lastError = codexErrorText(ev) ?? lastError;
+      if (lastError) log(dim(`codex: ${lastError}`));
     }
   }
 
@@ -445,6 +502,7 @@ export function createCodexBackend(
     // spawns a second child for the same session (leaking the first, wiping its
     // transcript buffer).
     turnActive = true;
+    lastError = null;
     // Per TURN, not per process: the separator rule below is "every message
     // after the first one of this turn".
     streamedTextThisTurn = false;

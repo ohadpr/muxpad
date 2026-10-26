@@ -7,7 +7,7 @@ import type { ChatEvent } from '@muxpad/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { muxpadTranscriptPath } from '../../chat/TranscriptReader.js';
 import type { RunnerFrame } from '../protocol.js';
-import { createCodexBackend } from './codex.js';
+import { codexErrorText, createCodexBackend } from './codex.js';
 import type { RunnerHost } from './types.js';
 
 // ── fake spawn ──────────────────────────────────────────────────────────────
@@ -611,5 +611,85 @@ describe('codex backend', () => {
       .filter((f) => f.t === 'stream')
       .map((f) => (f as { t: 'stream'; delta: string }).delta);
     expect(deltas.join('')).toBe('b');
+  });
+  /**
+   * THE FAILURE THAT LOOKED LIKE A HANG.
+   *
+   * Reported as "codex + model astra HANGS and never runs — no tokens, no tool
+   * calls, indefinitely", three times. It never hung. Run by hand, the same
+   * command fails in under a second:
+   *
+   *   {"type":"item.completed","item":{"type":"error","message":"Model metadata
+   *     for `astra` not found…"}}
+   *   {"type":"error","message":"{\"status\":400,\"error\":{\"message\":\"The
+   *     'astra' model is not supported when using Codex with a ChatGPT
+   *     account.\"}}"}
+   *   {"type":"turn.failed","error":{"message":"…same…"}}
+   *
+   * muxpad showed none of it. `turn.failed` carries an OBJECT and the handler
+   * tested `typeof err === 'string'`, so the message was replaced with the
+   * generic "codex turn failed"; and the standalone `error` event — where the
+   * sentence actually lives — had no branch at all. The pane went idle in
+   * silence, which reads exactly like a hang.
+   */
+  describe('codex surfaces the provider error instead of going quiet', () => {
+    const PROVIDER = JSON.stringify({
+      type: 'error',
+      status: 400,
+      error: {
+        message: "The 'astra' model is not supported when using Codex with a ChatGPT account.",
+      },
+    });
+
+    it('unwraps the provider JSON buried in a message field', () => {
+      expect(codexErrorText({ message: PROVIDER })).toBe(
+        "The 'astra' model is not supported when using Codex with a ChatGPT account.",
+      );
+    });
+
+    it('takes a plain string, and an ordinary {message} object', () => {
+      expect(codexErrorText('rate limited')).toBe('rate limited');
+      expect(codexErrorText({ message: 'rate limited' })).toBe('rate limited');
+    });
+
+    it('returns null when there is nothing quotable, so callers keep their fallback', () => {
+      expect(codexErrorText(undefined)).toBeNull();
+      expect(codexErrorText({})).toBeNull();
+      expect(codexErrorText({ message: '   ' })).toBeNull();
+    });
+
+    it('reports the real sentence on turn-done, not "codex turn failed"', async () => {
+      const { b, calls, frames } = await boot();
+      b.send('critique the plan');
+      await tick();
+      const turn = calls[1]!.child;
+      line(turn, { type: 'thread.started', thread_id: 'thr-astra' });
+      // The order codex actually emits: the standalone error, THEN turn.failed.
+      line(turn, { type: 'error', message: PROVIDER });
+      line(turn, { type: 'turn.failed', error: { message: PROVIDER } });
+      closeChild(turn, 1);
+      await tick();
+      const done = frames.filter((f) => f.t === 'turn-done').at(-1) as
+        | { ok?: boolean; error?: string }
+        | undefined;
+      expect(done?.ok).toBe(false);
+      expect(done?.error).toContain('not supported when using Codex');
+    });
+
+    it('still falls back when turn.failed arrives with nothing usable', async () => {
+      const { b, calls, frames } = await boot();
+      b.send('go');
+      await tick();
+      const turn = calls[1]!.child;
+      line(turn, { type: 'thread.started', thread_id: 'thr-bare' });
+      line(turn, { type: 'turn.failed', error: {} });
+      closeChild(turn, 1);
+      await tick();
+      const done = frames.filter((f) => f.t === 'turn-done').at(-1) as
+        | { ok?: boolean; error?: string }
+        | undefined;
+      expect(done?.ok).toBe(false);
+      expect(done?.error).toBe('codex turn failed');
+    });
   });
 });

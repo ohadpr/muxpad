@@ -601,7 +601,7 @@ export async function maybeWriteSpawnReport(
 
   // A bounded tail read, not a model call — the expensive thing is still behind
   // the gate. The turn count the gate needs is only knowable from it.
-  const { conversation, turns } = readRecentTurns(db, paneId);
+  const { conversation, turns, said } = readRecentTurns(db, paneId);
   // A WORKER THAT FINISHED AND LEFT NO TRANSCRIPT IS A FAILURE, NOT A SUCCESS.
   //
   // This returned `fallback()` with no argument, and for an ordinary (not
@@ -642,6 +642,41 @@ export async function maybeWriteSpawnReport(
   // The silence this branch exists to fix was never the missing ROW; it was
   // that nothing anywhere said why. One log line fixes that, and leaves the
   // judgement to the gate that already knows how to make it.
+  // ─── A WORKER THAT NEVER SPOKE HAS NOTHING TO REPORT ─────────────────────
+  //
+  // The transcript EXISTS and is non-empty — it holds the prompt we dispatched
+  // — so the `!conversation` branch below never fires, and `turns` counts user
+  // and assistant alike, so the gate above lets this through. What reaches the
+  // summariser is an instruction and nothing else, and what comes back is that
+  // instruction restated as an accomplishment:
+  //
+  //   "wrote the critique to a markdown file and completed the task"
+  //   …naming /tmp/first20/astra_critique.md, which never existed.
+  //
+  // Three times in one session, against a codex worker hung on stdin that
+  // produced no output whatsoever. The user only caught it by checking for the
+  // file. A parent agent would have acted on it — and that is the whole point
+  // of the join, so a fabricated success here poisons exactly the thing this
+  // feature exists to make trustworthy.
+  //
+  // No model call: there is nothing to summarise, and asking anyway is how the
+  // fabrication happens. The report states the one fact we have.
+  if (conversation && said === 0) {
+    console.warn(
+      `[spawn-report] tab ${tabId} (pane ${paneId}): worker produced NO assistant output — reporting that, not summarising its prompt`,
+    );
+    const write: SpawnReportWrite = {
+      report:
+        'No output. This worker produced no assistant messages at all — it was dispatched and never ran, or its backend failed to capture anything. Nothing it was asked to do can be assumed done; check it before relying on this.',
+      state: endState === 'ok' ? 'failed' : endState,
+    };
+    if (writeTab()) {
+      tabs.setSpawnArtifacts(tabId, []);
+      tabs.setSpawnReport(tabId, write, now);
+    }
+    return write;
+  }
+
   if (!conversation) {
     const sid = new AgentSessionStore(db).getByPane(paneId)?.current_sid;
     if (sid) {
