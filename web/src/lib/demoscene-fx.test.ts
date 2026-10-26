@@ -3,7 +3,9 @@ import {
   FX_DECAY_MS,
   FX_RADIUS,
   type FxState,
-  cellFalloff,
+  GLYPHS,
+  corruptLine,
+  corruptionChance,
   fxWanted,
   nextFx,
 } from './demoscene-fx';
@@ -68,21 +70,58 @@ describe('the pointer interference', () => {
   });
 });
 
-describe('the disturbed region', () => {
-  it('falls to nothing at the radius — no circle drawn on the screen', () => {
-    expect(cellFalloff(FX_RADIUS, 1)).toBe(0);
-    expect(cellFalloff(FX_RADIUS + 50, 1)).toBe(0);
+/**
+ * CHARACTER-LEVEL, ON THE REAL TEXT.
+ *
+ * Two earlier builds dodged this — a canvas of glyphs over the chat ("does not
+ * affect the text"), then paragraph transforms ("bouncing paragraphs, don't be
+ * cute"). Both avoided touching text because touching text is the risky
+ * option. These are the properties that make it safe to do anyway.
+ */
+describe('corrupting the text itself', () => {
+  const grid = (perLine: number) => (i: number) => ({
+    x: (i % perLine) * 8,
+    y: Math.floor(i / perLine) * 18,
+  });
+  const always = () => 0; // rand() = 0 → every eligible character corrupts
+  const never = () => 0.999;
+
+  it('NEVER changes the length — a reflow would move the page under the reader', () => {
+    const src = 'the quick brown fox jumps over the lazy dog';
+    const out = corruptLine(src, grid(40), { x: 0, y: 0 }, 1, always);
+    expect(out).toHaveLength(src.length);
   });
 
-  it('is strongest under the pointer and eases outward', () => {
-    const near = cellFalloff(0, 1);
-    const mid = cellFalloff(FX_RADIUS / 2, 1);
-    expect(near).toBeGreaterThan(mid);
-    expect(mid).toBeGreaterThan(cellFalloff(FX_RADIUS * 0.9, 1));
+  it('leaves whitespace alone, or damaged text reads as a bar chart', () => {
+    const src = 'a b  c\td';
+    const out = corruptLine(src, grid(40), { x: 0, y: 0 }, 1, always);
+    for (let i = 0; i < src.length; i++) {
+      if (/\s/.test(src[i] as string)) expect(out[i]).toBe(src[i]);
+    }
   });
 
-  it('scales with intensity, so a faded effect disturbs nothing', () => {
-    expect(cellFalloff(10, 0)).toBe(0);
-    expect(cellFalloff(10, 0.5)).toBeCloseTo(cellFalloff(10, 1) / 2, 5);
+  it('only uses the text-mode glyph set', () => {
+    const out = corruptLine('abcdefghij', grid(40), { x: 0, y: 0 }, 1, always);
+    for (let i = 0; i < out.length; i++) {
+      if (out[i] !== 'abcdefghij'[i]) expect(GLYPHS).toContain(out[i] as string);
+    }
+  });
+
+  it('returns the SAME string when nothing is disturbed — no needless DOM writes', () => {
+    const src = 'untouched';
+    expect(corruptLine(src, grid(40), { x: 0, y: 0 }, 1, never)).toBe(src);
+    expect(corruptLine(src, grid(40), { x: 0, y: 0 }, 0, always)).toBe(src);
+    // Far from the pointer is the common case: most of the log, every frame.
+    expect(corruptLine(src, grid(40), { x: 9999, y: 9999 }, 1, always)).toBe(src);
+  });
+
+  it('damages most heavily at the pointer and not at all past the radius', () => {
+    expect(corruptionChance(0, 1)).toBeGreaterThan(corruptionChance(FX_RADIUS / 2, 1));
+    expect(corruptionChance(FX_RADIUS, 1)).toBe(0);
+    expect(corruptionChance(10, 0)).toBe(0);
+  });
+
+  it('never corrupts a cell outright — it has to flicker back to be readable', () => {
+    expect(corruptionChance(0, 1)).toBeLessThan(1);
   });
 });
