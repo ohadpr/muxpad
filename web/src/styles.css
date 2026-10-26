@@ -905,22 +905,18 @@
   width: 8px;
 }
 
-/* ─── POINTER INTERFERENCE ──────────────────────────────────────────────────
-   The canvas lib/demoscene-fx.ts paints on; that module owns when it exists
-   and what it draws, this owns where it sits. Full-viewport and inert — the
-   effect must never be able to take a click, a drag-select or a scroll, and
-   the only way to be sure of that is for the surface it lives on to be
-   incapable of receiving them.
+/* ─── THE DISTORTION IS IN THE CHARACTERS ──────────────────────────────────
+   Nothing to style: lib/demoscene-fx.ts rewrites the text nodes themselves,
+   swapping characters for box-drawing glyphs near the pointer. There is no
+   overlay, no transform and no element — which is the point. Two earlier
+   builds had both, and both were reported as not touching the text, because
+   they did not.
 
-   BELOW the scanline overlay (9998 against 9999) so the tube's lines fall
-   across the interference too, rather than the glitch floating in front of the
-   screen it is supposed to be part of. */
-[data-theme="demoscene"] .demoscene-fx {
-  position: fixed;
-  inset: 0;
-  z-index: 9998;
-  pointer-events: none;
-}
+   The reason it can do that safely is THIS THEME's monospace family: a
+   same-width substitution changes no metric, so nothing reflows, nothing
+   rewraps, and the scroll cannot jump. Under a proportional font the same
+   effect would shove text sideways on every frame, which is why it is bound to
+   demoscene rather than offered to every theme. */
 
 /* ─── THE TUBE ──────────────────────────────────────────────────────────────
    Scanlines plus a corner vignette on one fixed pseudo-element: a CRT was

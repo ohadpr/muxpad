@@ -32,25 +32,23 @@
  * OS for less motion.
  */
 
-/** How long the interference lingers after the pointer stops, in ms. */
-export const FX_DECAY_MS = 620;
+/** How long the ripple keeps running after the pointer stops, in ms. */
+export const FX_DECAY_MS = 900;
 
 /** Below this, a move is the hand resting — not worth a frame. */
 export const MOVE_EPSILON_PX = 2;
 
-/** Radius of the disturbed region, in px. */
-export const FX_RADIUS = 190;
+/** How far from the pointer the disturbance reaches, in px. */
+export const FX_RADIUS = 340;
 
-/** The cell the glyph grid snaps to. Close to a monospace cell at 13–14px. */
-export const CELL_W = 9;
-export const CELL_H = 15;
+/** Peak sideways displacement of a line of text, in px. */
+export const FX_AMPLITUDE = 11;
 
-/**
- * The glyph set. Deliberately the characters a text-mode screen could draw —
- * box drawing, blocks, shading, and the punctuation that reads as noise. A
- * random unicode soup would look like mojibake; this looks like a machine.
- */
-export const GLYPHS = '░▒▓█▄▀▌▐│─┼╬╔╗╚╝═║01<>/\\|*+.:;=#$%&@';
+/** Distance between wave crests, in px. Roughly three lines of chat. */
+export const FX_WAVELENGTH = 110;
+
+/** How fast the wave travels outward, in px/second. */
+export const FX_SPEED = 170;
 
 export interface FxState {
   x: number;
@@ -64,9 +62,9 @@ export interface FxState {
  *
  * Separated because the interesting rules — a still pointer fades, a fast one
  * brightens but never past 1, a resting hand produces nothing — are arithmetic,
- * and arithmetic is the only part that can be checked without a browser. The
- * effect being QUIET when it should be is the property that matters; it sits
- * over text somebody is trying to read.
+ * and arithmetic is the only part checkable without a browser. The effect being
+ * QUIET when it should be is the property that matters; it moves text somebody
+ * is trying to read.
  */
 export function nextFx(
   prev: FxState,
@@ -74,7 +72,7 @@ export function nextFx(
 ): FxState {
   const decay = Math.exp(-input.dtMs / FX_DECAY_MS);
   const faded = prev.intensity * decay;
-  const fed = input.moved < MOVE_EPSILON_PX ? faded : Math.min(1, faded + input.moved / 220);
+  const fed = input.moved < MOVE_EPSILON_PX ? faded : Math.min(1, faded + input.moved / 260);
   return { x: input.x, y: input.y, intensity: fed };
 }
 
@@ -84,105 +82,156 @@ export function fxWanted(theme: string | null | undefined, reducedMotion: boolea
 }
 
 /**
- * How strongly a cell at `dist` from the pointer is disturbed, 0–1.
- *
- * Falls to nothing at the radius rather than stopping at an edge: a hard
- * boundary reads as a circle drawn on the screen, which is a cursor gimmick,
- * and the thing being imitated has no edge.
+ * The glyph set a corrupted text-mode screen falls back to. Box drawing,
+ * blocks, shading, and the punctuation that reads as noise — a random unicode
+ * soup would look like mojibake, this looks like a machine losing sync.
  */
-export function cellFalloff(dist: number, intensity: number): number {
-  if (dist >= FX_RADIUS) return 0;
-  const t = 1 - dist / FX_RADIUS;
-  return t * t * intensity;
+export const GLYPHS = '░▒▓█▄▀▌▐│─┼╬╔╗╚╝═║◆◢◣▲▼<>/\\|*+=#@$%&';
+
+/** Fraction of characters corrupted at the very centre of the disturbance. */
+export const FX_PEAK_CORRUPTION = 0.55;
+
+/**
+ * How likely the character at `distance` px from the pointer is corrupted.
+ *
+ * ─── WHY THIS IS CHARACTER-LEVEL AND NOT A TRANSFORM ──────────────────────
+ * Two earlier builds dodged this. The first painted glyphs on a canvas ABOVE
+ * the text ("super noisy and does not affect the text"); the second displaced
+ * whole paragraphs with `translateX`/`skewX` ("bouncing paragraphs… don't be
+ * cute"). Both were avoiding the real thing because touching text is the
+ * expensive, risky option. It is also the only one that is actually ASCII
+ * distortion, so this does it.
+ *
+ * What makes it safe is the theme itself: demoscene sets a MONOSPACE family
+ * for the whole UI, so substituting one character for another of the same
+ * width changes no metric — no reflow, no line rewrap, no scroll jump. The
+ * same effect under a proportional font would move text under the reader's
+ * eye on every frame, which is why it is bound to this theme rather than
+ * offered as a general one.
+ *
+ * Bounded on purpose: a cell that is always corrupted is unreadable, so even
+ * at the centre it is a coin-flip per frame and the character flickers back.
+ */
+export function corruptionChance(distance: number, intensity: number): number {
+  if (intensity <= 0.01 || distance >= FX_RADIUS) return 0;
+  const falloff = (1 - distance / FX_RADIUS) ** 2;
+  return falloff * intensity * FX_PEAK_CORRUPTION;
+}
+
+/**
+ * Corrupt one line of text, returning the damaged copy.
+ *
+ * Same length, always — the caller depends on it (see `corruptionChance` for
+ * why a length change would move the page). Whitespace is left alone: a line
+ * whose spaces turn into blocks stops looking like damaged TEXT and starts
+ * looking like a bar chart.
+ */
+export function corruptLine(
+  text: string,
+  charX: (index: number) => { x: number; y: number },
+  pointer: { x: number; y: number },
+  intensity: number,
+  rand: () => number = Math.random,
+): string {
+  if (intensity <= 0.01) return text;
+  let out: string[] | null = null;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i] as string;
+    if (ch === ' ' || ch === '\n' || ch === '\t') continue;
+    const p = charX(i);
+    const d = Math.hypot(p.x - pointer.x, p.y - pointer.y);
+    if (rand() >= corruptionChance(d, intensity)) continue;
+    if (!out) out = [...text];
+    out[i] = GLYPHS[(rand() * GLYPHS.length) | 0] as string;
+  }
+  return out ? out.join('') : text;
 }
 
 export function installDemosceneFx(doc: Document = document): () => void {
   const win = doc.defaultView;
   const reduced = win?.matchMedia('(prefers-reduced-motion: reduce)');
-  let canvas: HTMLCanvasElement | null = null;
-  let ctx: CanvasRenderingContext2D | null = null;
   let raf = 0;
   let last = 0;
   let state: FxState = { x: -9999, y: -9999, intensity: 0 };
   let pending: { x: number; y: number } | null = null;
   let detachPointer: (() => void) | null = null;
+  /** Every text node currently damaged, with the text it really holds. */
+  const damaged = new Map<Text, string>();
+  /** Monospace advance width, measured once per attach. */
+  let cellW = 0;
+  let lineH = 0;
 
-  const ensure = (): CanvasRenderingContext2D | null => {
-    if (ctx && canvas) return ctx;
-    const c = doc.createElement('canvas');
-    c.className = 'demoscene-fx';
-    c.setAttribute('aria-hidden', 'true');
-    doc.body.appendChild(c);
-    canvas = c;
-    ctx = c.getContext('2d');
-    size();
-    return ctx;
+  const measureCell = (sample: HTMLElement) => {
+    const cs = getComputedStyle(sample);
+    const canvas = doc.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.font = `${cs.fontSize} ${cs.fontFamily}`;
+    cellW = ctx.measureText('M').width || 8;
+    lineH = Number.parseFloat(cs.lineHeight) || Number.parseFloat(cs.fontSize) * 1.5;
   };
 
-  const size = () => {
-    if (!canvas || !win) return;
-    const dpr = Math.min(win.devicePixelRatio || 1, 2);
-    canvas.width = Math.floor(win.innerWidth * dpr);
-    canvas.height = Math.floor(win.innerHeight * dpr);
-    canvas.style.width = `${win.innerWidth}px`;
-    canvas.style.height = `${win.innerHeight}px`;
-    ctx?.setTransform(dpr, 0, 0, dpr, 0, 0);
+  /**
+   * A live selection means the reader's hand is on this text. Rewriting it
+   * would collapse the selection — the same rule the scroll mechanism follows
+   * (chat-scroll-dom's `selecting`), for the same reason.
+   */
+  const selecting = (): boolean => {
+    const sel = doc.getSelection();
+    return !!sel && !sel.isCollapsed && sel.rangeCount > 0;
   };
 
-  const accent = () =>
-    getComputedStyle(doc.documentElement).getPropertyValue('--accent').trim() || '#19ffd0';
+  const restore = () => {
+    for (const [node, text] of damaged) node.nodeValue = text;
+    damaged.clear();
+  };
 
-  const draw = () => {
-    const c = ensure();
-    if (!c || !win) return;
-    c.clearRect(0, 0, win.innerWidth, win.innerHeight);
-    const { x, y, intensity } = state;
-    if (intensity <= 0.01) return;
+  const paragraphs = (): HTMLElement[] =>
+    Array.from(
+      doc.querySelectorAll<HTMLElement>(
+        '.chat-list .chat-msg p, .chat-list .chat-msg li, .chat-list .chat-msg pre, .chat-list .chat-thinking',
+      ),
+    );
 
-    // ── THE GLYPH FIELD ────────────────────────────────────────────────────
-    c.save();
-    c.font = `${CELL_H - 3}px ui-monospace, Menlo, monospace`;
-    c.textBaseline = 'top';
-    const ink = accent();
-    const cols = Math.ceil(FX_RADIUS / CELL_W);
-    const rows = Math.ceil(FX_RADIUS / CELL_H);
-    const ox = Math.round(x / CELL_W) * CELL_W;
-    const oy = Math.round(y / CELL_H) * CELL_H;
-    for (let i = -cols; i <= cols; i++) {
-      for (let j = -rows; j <= rows; j++) {
-        const cx = ox + i * CELL_W;
-        const cy = oy + j * CELL_H;
-        const d = Math.hypot(cx - x, cy - y);
-        const a = cellFalloff(d, intensity);
-        // Sparse on purpose: every cell filled is a block of noise, a few
-        // cells filled is interference.
-        // Density, tuned by looking: at 0.55 the field was so sparse it read
-        // as a few stray characters rather than as interference, which is the
-        // same failure the bloom had — too timid to be the thing asked for.
-        if (a < 0.05 || Math.random() > a * 0.9) continue;
-        c.globalAlpha = Math.min(0.72, a * 1.05);
-        c.fillStyle = ink;
-        c.fillText(GLYPHS[(Math.random() * GLYPHS.length) | 0] as string, cx, cy);
+  const damage = () => {
+    if (!win) return;
+    // Put everything back first: a node damaged last frame and out of reach
+    // this one must not keep its scars.
+    restore();
+    if (state.intensity <= 0.01 || selecting()) return;
+
+    for (const el of paragraphs()) {
+      const r = el.getBoundingClientRect();
+      if (r.bottom < state.y - FX_RADIUS || r.top > state.y + FX_RADIUS) continue;
+      if (r.right < state.x - FX_RADIUS || r.left > state.x + FX_RADIUS) continue;
+      if (!cellW) measureCell(el);
+      const perLine = Math.max(1, Math.floor(r.width / (cellW || 8)));
+      const walker = doc.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      let n = walker.nextNode() as Text | null;
+      let consumed = 0;
+      while (n) {
+        const text = n.nodeValue ?? '';
+        if (text.trim()) {
+          // Where a character sits, assuming the monospace grid the theme
+          // guarantees. Approximate across inline markup — exact enough for a
+          // radial falloff, and free, where a Range rect per character is not.
+          const base = consumed;
+          const charAt = (i: number) => {
+            const k = base + i;
+            return {
+              x: r.left + ((k % perLine) + 0.5) * (cellW || 8),
+              y: r.top + (Math.floor(k / perLine) + 0.5) * (lineH || 18),
+            };
+          };
+          const next = corruptLine(text, charAt, { x: state.x, y: state.y }, state.intensity);
+          if (next !== text) {
+            damaged.set(n, text);
+            n.nodeValue = next;
+          }
+          consumed += text.length;
+        }
+        n = walker.nextNode() as Text | null;
       }
-    }
-    c.restore();
-
-    // ── THE TEAR ───────────────────────────────────────────────────────────
-    // `difference` inverts what is already on the screen, so these bands
-    // distort the PAGE's own text rather than covering it. One or two, thin,
-    // and only while the effect is strong.
-    if (intensity > 0.18) {
-      c.save();
-      c.globalCompositeOperation = 'difference';
-      const bands = intensity > 0.6 ? 3 : 2;
-      for (let b = 0; b < bands; b++) {
-        const by = y + (Math.random() * 2 - 1) * FX_RADIUS * 0.6;
-        const h = 2 + Math.random() * 3;
-        c.globalAlpha = 0.72 * intensity;
-        c.fillStyle = '#ffffff';
-        c.fillRect(x - FX_RADIUS, by, FX_RADIUS * 2, h);
-      }
-      c.restore();
     }
   };
 
@@ -194,9 +243,12 @@ export function installDemosceneFx(doc: Document = document): () => void {
     const moved = p ? Math.hypot(p.x - state.x, p.y - state.y) : 0;
     state = nextFx(state, { x: p?.x ?? state.x, y: p?.y ?? state.y, dtMs: dt, moved });
     pending = null;
-    draw();
+    damage();
     if (state.intensity > 0.01) raf = requestAnimationFrame(frame);
-    else last = 0;
+    else {
+      last = 0;
+      restore();
+    }
   };
 
   const onMove = (e: PointerEvent) => {
@@ -207,11 +259,7 @@ export function installDemosceneFx(doc: Document = document): () => void {
   const attach = () => {
     if (detachPointer) return;
     doc.addEventListener('pointermove', onMove, { passive: true });
-    win?.addEventListener('resize', size);
-    detachPointer = () => {
-      doc.removeEventListener('pointermove', onMove);
-      win?.removeEventListener('resize', size);
-    };
+    detachPointer = () => doc.removeEventListener('pointermove', onMove);
   };
 
   const detach = () => {
@@ -221,9 +269,8 @@ export function installDemosceneFx(doc: Document = document): () => void {
     raf = 0;
     last = 0;
     state = { ...state, intensity: 0 };
-    canvas?.remove();
-    canvas = null;
-    ctx = null;
+    cellW = 0;
+    restore();
   };
 
   const sync = () => {
