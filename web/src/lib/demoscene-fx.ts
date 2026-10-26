@@ -225,6 +225,28 @@ export function ringMask(
   );
 }
 
+/**
+ * May the effect touch the text at all right now?
+ *
+ * ─── THE CASE THE FIRST GUARD MISSED ──────────────────────────────────────
+ * The original check was "is there a selection", which is only true AFTER one
+ * exists. The whole of a drag-select — pointer down, dragging, selection still
+ * collapsed or growing — passed it, so drops kept shedding and text nodes kept
+ * being rewritten underneath the gesture that was trying to select them.
+ * Rewriting a text node moves the anchor the browser is extending from, which
+ * is why selecting got "a bit harder" rather than outright broken: it fought
+ * back intermittently, on the frames a character under the cursor happened to
+ * corrupt.
+ *
+ * So the real question is whether the reader's hand is ON the text, and a
+ * pointer that is DOWN answers yes before any selection exists. Both
+ * conditions, because they cover different halves: the button answers during
+ * the drag, the selection answers afterwards while it is still held.
+ */
+export function mayDisturb(input: { pointerDown: boolean; hasSelection: boolean }): boolean {
+  return !input.pointerDown && !input.hasSelection;
+}
+
 /** The furthest a live ring can have travelled — the cull radius for rows. */
 export const DROP_MAX_RADIUS = (DROP_LIFE_MS / 1000) * DROP_SPEED + DROP_BAND * 3;
 
@@ -233,6 +255,7 @@ export function installDemosceneFx(doc: Document = document): () => void {
   const reduced = win?.matchMedia('(prefers-reduced-motion: reduce)');
   let raf = 0;
   let drops: Drop[] = [];
+  let pointerDown = false;
   let detachPointer: (() => void) | null = null;
   /** Every text node currently damaged, with the text it really holds. */
   const damaged = new Map<Text, string>();
@@ -256,10 +279,13 @@ export function installDemosceneFx(doc: Document = document): () => void {
    * would collapse the selection — the same rule the scroll mechanism follows
    * (chat-scroll-dom's `selecting`), for the same reason.
    */
-  const selecting = (): boolean => {
+  const hasSelection = (): boolean => {
     const sel = doc.getSelection();
     return !!sel && !sel.isCollapsed && sel.rangeCount > 0;
   };
+
+  /** The reader's hand is on the text — see mayDisturb. */
+  const handsOff = (): boolean => !mayDisturb({ pointerDown, hasSelection: hasSelection() });
 
   const restore = () => {
     for (const [node, text] of damaged) node.nodeValue = text;
@@ -283,7 +309,7 @@ export function installDemosceneFx(doc: Document = document): () => void {
     // Put everything back first: a node damaged last frame and out of reach
     // this one must not keep its scars.
     restore();
-    if (drops.length === 0 || selecting()) return;
+    if (drops.length === 0 || handsOff()) return;
 
     // One bounding box for every live ring, so a paragraph nowhere near any of
     // them is skipped before a single character is considered.
@@ -351,6 +377,9 @@ export function installDemosceneFx(doc: Document = document): () => void {
   };
 
   const onMove = (e: PointerEvent) => {
+    // Nothing is shed while a drag is in flight: a drop created now would be
+    // rewriting text the gesture is still reaching for.
+    if (handsOff()) return;
     const now = performance.now();
     const at = { x: e.clientX, y: e.clientY };
     if (!shouldDrop(drops[drops.length - 1], at, now)) return;
@@ -358,10 +387,44 @@ export function installDemosceneFx(doc: Document = document): () => void {
     if (!raf) raf = requestAnimationFrame(frame);
   };
 
+  /**
+   * A press is the START of a possible selection: everything stops and the
+   * text goes back.
+   *
+   * ─── IN THE CAPTURE PHASE, AND THAT IS THE WHOLE FIX ──────────────────────
+   * Restoring on a BUBBLING pointerdown was worse than not restoring at all.
+   * The browser places the selection anchor in the default action, after
+   * bubbling listeners have run — so the sequence was: anchor lands on a
+   * corrupted text node, we rewrite that node, the anchor it refers to is
+   * destroyed, and the drag selects nothing. Measured against a control: 69
+   * characters selected under another theme, 0 under this one. "Selection is a
+   * bit harder" was generous.
+   *
+   * Capture runs BEFORE the target sees the event and before that default
+   * action, so the text is already clean when the anchor is placed, and the
+   * anchor lands on a node nothing is going to touch.
+   */
+  const onDown = () => {
+    pointerDown = true;
+    drops = [];
+    restore();
+  };
+  const onUp = () => {
+    pointerDown = false;
+  };
+
   const attach = () => {
     if (detachPointer) return;
     doc.addEventListener('pointermove', onMove, { passive: true });
-    detachPointer = () => doc.removeEventListener('pointermove', onMove);
+    doc.addEventListener('pointerdown', onDown, { passive: true, capture: true });
+    doc.addEventListener('pointerup', onUp, { passive: true });
+    doc.addEventListener('pointercancel', onUp, { passive: true });
+    detachPointer = () => {
+      doc.removeEventListener('pointermove', onMove);
+      doc.removeEventListener('pointerdown', onDown, { capture: true });
+      doc.removeEventListener('pointerup', onUp);
+      doc.removeEventListener('pointercancel', onUp);
+    };
   };
 
   const detach = () => {
@@ -370,6 +433,7 @@ export function installDemosceneFx(doc: Document = document): () => void {
     if (raf) cancelAnimationFrame(raf);
     raf = 0;
     drops = [];
+    pointerDown = false;
     cellW = 0;
     restore();
   };
