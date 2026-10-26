@@ -157,6 +157,66 @@ export function corruptLine(
   return out ? out.join('') : text;
 }
 
+/** How far the ring dims the characters it passes over, 0–1. */
+export const DROP_DIM = 0.15;
+
+/**
+ * A CSS mask that dims the characters a ring is currently crossing.
+ *
+ * ─── WHY A MASK, AND NOT SPANS ────────────────────────────────────────────
+ * Corrupting a character is a text-node write, which is cheap. DIMMING one is
+ * not: colour applies to elements, so per-character brightness means wrapping
+ * every glyph in a span — the thing this whole effect has avoided from the
+ * start, because it costs the DOM, the scroll mechanism and text selection.
+ *
+ * A mask reaches the same place from the other side. `mask-image` multiplies a
+ * paragraph's alpha per PIXEL, so a radial gradient with a slightly
+ * transparent band at the ring's radius dims exactly the characters the ring
+ * is passing over, in their own shape, with no markup at all and no layout.
+ *
+ * One drop per element, the nearest: masks do not add without
+ * `mask-composite`, and the gain from a second ring on the same paragraph is
+ * not worth a second gradient in a string rebuilt every frame.
+ *
+ * Returns null when nothing is close enough, so the caller can clear the
+ * property rather than writing an identity mask.
+ */
+export function ringMask(
+  rect: { left: number; top: number; width: number; height: number },
+  drops: readonly Drop[],
+  now: number,
+): string | null {
+  let best: { d: Drop; radius: number; fade: number } | null = null;
+  for (const d of drops) {
+    const age = now - d.born;
+    if (age < 0 || age >= DROP_LIFE_MS) continue;
+    const radius = (age / 1000) * DROP_SPEED;
+    const fade = (1 - age / DROP_LIFE_MS) ** 2;
+    // Does this ring actually cross the box? Cheap rejection on the nearest
+    // corner/edge distance, so an untouched paragraph costs one comparison.
+    const cx = Math.max(rect.left, Math.min(d.x, rect.left + rect.width));
+    const cy = Math.max(rect.top, Math.min(d.y, rect.top + rect.height));
+    const near = Math.hypot(d.x - cx, d.y - cy);
+    const far = Math.hypot(
+      Math.max(Math.abs(d.x - rect.left), Math.abs(d.x - rect.left - rect.width)),
+      Math.max(Math.abs(d.y - rect.top), Math.abs(d.y - rect.top - rect.height)),
+    );
+    if (radius + DROP_BAND * 2 < near || radius - DROP_BAND * 2 > far) continue;
+    if (!best || fade > best.fade) best = { d, radius, fade };
+  }
+  if (!best) return null;
+  const alpha = (1 - DROP_DIM * best.fade).toFixed(3);
+  const x = (best.d.x - rect.left).toFixed(1);
+  const y = (best.d.y - rect.top).toFixed(1);
+  const inner = Math.max(0, best.radius - DROP_BAND).toFixed(1);
+  const mid = best.radius.toFixed(1);
+  const outer = (best.radius + DROP_BAND).toFixed(1);
+  return (
+    `radial-gradient(circle at ${x}px ${y}px, ` +
+    `#000 ${inner}px, rgba(0,0,0,${alpha}) ${mid}px, #000 ${outer}px)`
+  );
+}
+
 /** The furthest a live ring can have travelled — the cull radius for rows. */
 export const DROP_MAX_RADIUS = (DROP_LIFE_MS / 1000) * DROP_SPEED + DROP_BAND * 3;
 
@@ -168,6 +228,8 @@ export function installDemosceneFx(doc: Document = document): () => void {
   let detachPointer: (() => void) | null = null;
   /** Every text node currently damaged, with the text it really holds. */
   const damaged = new Map<Text, string>();
+  /** Every element currently wearing a ring mask, so it can be cleared. */
+  let masked: HTMLElement[] = [];
   let cellW = 0;
   let lineH = 0;
 
@@ -194,6 +256,11 @@ export function installDemosceneFx(doc: Document = document): () => void {
   const restore = () => {
     for (const [node, text] of damaged) node.nodeValue = text;
     damaged.clear();
+    for (const el of masked) {
+      el.style.maskImage = '';
+      el.style.webkitMaskImage = '';
+    }
+    masked = [];
   };
 
   const paragraphs = (): HTMLElement[] =>
@@ -226,6 +293,14 @@ export function installDemosceneFx(doc: Document = document): () => void {
     for (const el of paragraphs()) {
       const r = el.getBoundingClientRect();
       if (r.bottom < minY || r.top > maxY || r.right < minX || r.left > maxX) continue;
+      // The ring DIMS what it crosses as well as corrupting it — the part that
+      // makes it read as a wave rather than as scattered glyphs.
+      const mask = ringMask(r, drops, now);
+      if (mask) {
+        el.style.maskImage = mask;
+        el.style.webkitMaskImage = mask;
+        masked.push(el);
+      }
       if (!cellW) measureCell(el);
       const perLine = Math.max(1, Math.floor(r.width / (cellW || 8)));
       const walker = doc.createTreeWalker(el, NodeFilter.SHOW_TEXT);

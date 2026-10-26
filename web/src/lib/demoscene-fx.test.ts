@@ -1,17 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import {
   DROP_BAND,
+  DROP_DIM,
   DROP_LIFE_MS,
   DROP_MAX_RADIUS,
   DROP_MIN_DISTANCE_PX,
   DROP_MIN_INTERVAL_MS,
   DROP_PEAK,
+  DROP_SPEED,
   type Drop,
   GLYPHS,
   corruptLine,
   corruptionAt,
   fxWanted,
   liveDrops,
+  ringMask,
   ringStrength,
   shouldDrop,
 } from './demoscene-fx';
@@ -155,5 +158,50 @@ describe('when the effect exists at all', () => {
     expect(fxWanted('demoscene', true)).toBe(false);
     expect(fxWanted('tokyo-night', false)).toBe(false);
     expect(fxWanted(null, false)).toBe(false);
+  });
+});
+
+/**
+ * THE DIM IS WHAT MAKES IT A RIPPLE.
+ *
+ * "I don't see a ripple… make the ripple itself also adjust down the
+ * brightness of characters by up to 15%." Corruption alone is scattered
+ * glyphs; a band of dimmed text is a wave front you can follow.
+ *
+ * Done with a mask rather than with colour, because colour applies to
+ * elements: per-character brightness would mean a span per glyph, which is the
+ * cost this effect has refused from the start.
+ */
+describe('the ring dims what it crosses', () => {
+  const box = { left: 0, top: 0, width: 600, height: 80 };
+  const at = (age: number) => ringMask(box, [drop(300, 40, -age)], 0);
+
+  it('dims by at most the stated amount, and never brightens', () => {
+    for (let age = 0; age < DROP_LIFE_MS; age += 20) {
+      const m = at(age);
+      if (!m) continue;
+      const alpha = Number(/rgba\(0,0,0,([\d.]+)\)/.exec(m)?.[1] ?? '1');
+      expect(alpha).toBeLessThanOrEqual(1);
+      expect(alpha).toBeGreaterThanOrEqual(1 - DROP_DIM - 1e-9);
+    }
+  });
+
+  it('is strongest when the drop is young and eases off as it dies', () => {
+    const alpha = (age: number) => Number(/rgba\(0,0,0,([\d.]+)\)/.exec(at(age) ?? '')?.[1] ?? '1');
+    expect(alpha(60)).toBeLessThan(alpha(300));
+    expect(alpha(300)).toBeLessThan(alpha(560));
+  });
+
+  it('puts the dark band exactly where the ring is', () => {
+    const age = 200;
+    const m = at(age) ?? '';
+    const radius = (age / 1000) * DROP_SPEED;
+    expect(m).toContain(`${radius.toFixed(1)}px`);
+  });
+
+  it('declines to mask a paragraph no ring reaches — no identity masks', () => {
+    expect(ringMask(box, [drop(5000, 5000, 0)], 0)).toBeNull();
+    expect(ringMask(box, [], 0)).toBeNull();
+    expect(ringMask(box, [drop(300, 40, -DROP_LIFE_MS - 1)], 0)).toBeNull();
   });
 });
