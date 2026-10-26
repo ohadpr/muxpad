@@ -157,8 +157,16 @@ export function corruptLine(
   return out ? out.join('') : text;
 }
 
-/** How far the ring dims the characters it passes over, 0–1. */
-export const DROP_DIM = 0.15;
+/**
+ * How far the ring dims the characters it passes over, 0–1.
+ *
+ * Started at 0.15 and raised to 0.33 on the evidence: at 15% the band was
+ * real but near-invisible in motion, which is the same failure every earlier
+ * version of this effect had — technically present, not actually seen. A third
+ * is a shadow passing over the text rather than a suggestion of one, and still
+ * nowhere near losing a character.
+ */
+export const DROP_DIM = 0.33;
 
 /**
  * A CSS mask that dims the characters a ring is currently crossing.

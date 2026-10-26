@@ -164,8 +164,9 @@ describe('when the effect exists at all', () => {
 /**
  * THE DIM IS WHAT MAKES IT A RIPPLE.
  *
- * "I don't see a ripple… make the ripple itself also adjust down the
- * brightness of characters by up to 15%." Corruption alone is scattered
+ * "I don't see a ripple… adjust down the brightness of characters" — at 15%
+ * first, raised to 33% because the band was there and nobody could see it.
+ * Corruption alone is scattered
  * glyphs; a band of dimmed text is a wave front you can follow.
  *
  * Done with a mask rather than with colour, because colour applies to
