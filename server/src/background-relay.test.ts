@@ -34,7 +34,10 @@ afterEach(() => {
   for (const h of servers.splice(0)) h.close();
 });
 
+const pushes: Array<[string, string]> = [];
+
 async function boot() {
+  pushes.length = 0;
   const db = openDb(':memory:');
   const workspace = new WorkspaceStore(db).create({ name: 'W' });
   const tab = new TabStore(db).create({ name: 'T', layout: '', workspace_id: workspace.id });
@@ -47,6 +50,10 @@ async function boot() {
     events: new EventBus(),
     cache: new PtydCache(),
     ptyd: { on: () => {} } as unknown as PtydClient,
+    notifyPane: (paneId: string, body: string) => {
+      pushes.push([paneId, body]);
+      return 'sent';
+    },
   });
   await new Promise<void>((resolve) => http.listen(0, '127.0.0.1', resolve));
   const port = (http.address() as AddressInfo).port;
@@ -196,5 +203,47 @@ describe('unread after a turn', () => {
     runner.send(JSON.stringify({ t: 'turn-done', ok: false, error: 'boom' }));
     await settle();
     expect(unread(db, pane.id)).toBe(1);
+  });
+});
+
+/**
+ * THE QUIET CHANNEL AND THE LOUD ONE HAVE TO AGREE.
+ *
+ * The bold mark asks `silent`; the PUSH did not. So a scheduled job told to
+ * say nothing left the sidebar correctly unbolded and still vibrated a phone
+ * on every fire — found on a half-hourly cron whose only job is to rewrite a
+ * card:
+ * "every hour or so it sends me a push notification about a card being
+ * updated". The channel nobody can ignore was the one being noisy.
+ */
+describe('push notifications and the silent turn', () => {
+  it('does NOT push for a silent machine turn', async () => {
+    const { runner } = await boot();
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    await settle();
+    runner.send(JSON.stringify({ t: 'turn-done', ok: true, silent: true }));
+    await settle();
+    expect(pushes).toEqual([]);
+  });
+
+  it('pushes when the turn actually said something', async () => {
+    const { pane, runner } = await boot();
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    await settle();
+    runner.send(JSON.stringify({ t: 'turn-done', ok: true, summary: 'card refreshed' }));
+    await settle();
+    expect(pushes.map(([id]) => id)).toEqual([pane.id]);
+  });
+
+  it('STILL pushes a silent turn that FAILED — an error is news', async () => {
+    // `silent` is already false for a failed turn (isSilentTurn), so this is
+    // the belt: a future change that starts sending `silent: true` alongside a
+    // failure must not take the error notification with it.
+    const { pane, runner } = await boot();
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    await settle();
+    runner.send(JSON.stringify({ t: 'turn-done', ok: false, error: 'boom' }));
+    await settle();
+    expect(pushes.map(([id]) => id)).toEqual([pane.id]);
   });
 });

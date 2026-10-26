@@ -1945,7 +1945,25 @@ export function attachWsServer(deps: {
             // driving (every reply would buzz their phone mid-chat).
             // Long-running turns (the user walked away) and autonomous
             // wakeup/cron turns (no recent send) do push.
-            if (Date.now() - conn.lastHumanSendAt > INTERACTIVE_PUSH_SUPPRESS_MS) {
+            // ─── A SILENT TURN HAS NOTHING TO PUSH ABOUT ──────────────────
+            // The bold mark below already asks this (`frame.silent !== true`)
+            // and the push did not, so the two channels disagreed about the
+            // same turn: a scheduled job that is TOLD to say nothing left the
+            // row unbolded — correctly — and still vibrated a phone, every
+            // fire, for ever.
+            //
+            // Found on `feed-card`, a */30 cron whose whole job is to
+            // rewrite a card: "every hour or so it sends me a push
+            // notification about a card being updated". The quiet channel was
+            // quiet and the loud one was not, which is exactly backwards.
+            //
+            // A FAILED silent turn still pushes: `silent` is already false for
+            // those (see isSilentTurn), because an error is news whatever was
+            // or wasn't said.
+            if (
+              frame.silent !== true &&
+              Date.now() - conn.lastHumanSendAt > INTERACTIVE_PUSH_SUPPRESS_MS
+            ) {
               // …unless the agent just notified DELIBERATELY. It already said
               // the specific thing; "finished its turn" landing on top of it a
               // few seconds later is a second buzz carrying less information
