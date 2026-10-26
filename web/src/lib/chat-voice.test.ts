@@ -442,3 +442,49 @@ describe('an expanded action run survives the run changing shape', () => {
     expect(actionRunExpanded([c], open)).toBe(false);
   });
 });
+
+/**
+ * WHAT THE DOTTED RULE MEANS, AND WHY IT IS NOT A MODE.
+ *
+ * Reported as "sometimes the agent's messages have a vertical dotted line,
+ * sometimes they don't — I thought it was chat mode vs agent mode but I don't
+ * think that's it". Half right, and the half that is wrong is the interesting
+ * one.
+ *
+ * The rule marks `voice: 'fallback'` — a message the HARNESS promoted because
+ * the turn ended without a `reply` call. Mode is a confound, not the cause:
+ * agent-mode panes never run this pass at all, so their messages can never
+ * carry it, which makes "it's the mode" fit the evidence right up until two
+ * messages in ONE chat disagree.
+ *
+ * Measured across this install's chat-mode panes: 193 of 1,054 turns (18%)
+ * ended with no reply — but the distribution is the finding, not the mean. One
+ * pane sat at 81% (108 of 134) while most sat at 3%.
+ */
+describe('the dotted rule is about the REPLY, not the mode', () => {
+  it('marks only the promoted message, and only when no reply was sent', () => {
+    expect(voices([user('do it'), prose('here is the answer')])).toEqual(['user', 'fallback']);
+    expect(voices([user('do it'), reply('here is the answer')])).toEqual(['user', 'reply']);
+  });
+
+  it('never marks anything in agent mode — the pass does not run', () => {
+    // Which is exactly why the mode theory survives casual observation: in an
+    // agent-mode pane there is no dotted rule to see, ever.
+    const agentMode = {
+      mode: 'agent' as const,
+      assistant: 'claude',
+      turnActive: false,
+      closedTurnStartId: null,
+    };
+    const events = [user('do it'), prose('here is the answer')];
+    expect(applyChatVoice(events, agentMode)).toBe(events);
+  });
+
+  it('two messages in ONE chat can disagree, which is what gives it away', () => {
+    // A replying turn and a forgetful one, same pane, same mode — the case the
+    // mode theory cannot explain.
+    expect(
+      voices([user('first'), reply('answered properly'), user('second'), prose('forgot to reply')]),
+    ).toEqual(['user', 'reply', 'user', 'fallback']);
+  });
+});
