@@ -120,7 +120,29 @@ export function chatVoiceActive(opts: ChatVoiceOpts): boolean {
  * a person starting a turn. In Chat mode that promotes the reply to a bubble
  * addressed to a reader who never asked anything.
  */
-const MACHINE_TURN_VARIANTS = new Set(['cron', 'report']);
+/**
+ * A CRON IS UNSOLICITED. A REPORT IS THE ANSWER TO SOMETHING YOU ASKED FOR.
+ *
+ * Both arrive as muxpad-injected user messages, which is why they were one
+ * set — and treating them the same cost a user a day of work.
+ *
+ * Measured, in the "signal archive" chat: the user asked it to cross-check 20
+ * transcripts with sub-agents. Three workers ran, reported at 04:37:14, and
+ * the chat wrote a 1,998-character consolidated verdict at 04:38:45 — which
+ * nobody ever saw. The turn was started by the DELIVERY, so it was not a
+ * "human turn start", so the reply fallback below was skipped, so the verdict
+ * stayed `private`: muted scratchpad treatment, folded inside an action run.
+ * Reported as "a day ago it said it's going to check stuff with sub agents,
+ * hasn't returned yet".
+ *
+ * A delivery exists ONLY because this conversation dispatched the work. Its
+ * arrival is the continuation of a request a person made, and bringing the
+ * result back to them is the entire point of the join. A cron is the opposite
+ * — nobody asked, today — and that one stays excluded, which is what the
+ * original note about "a bubble addressed to a reader who never asked
+ * anything" was actually protecting.
+ */
+const MACHINE_TURN_VARIANTS = new Set(['cron']);
 
 function isHumanTurnStart(events: readonly ChatEvent[], i: number): boolean {
   if (events[i]?.kind !== 'user') return false;
