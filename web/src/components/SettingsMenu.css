@@ -383,14 +383,39 @@
    a phone, a foldable and a tablet all get the touch treatment and a 900px
    laptop window does not. */
 @media (max-width: 700px), (pointer: coarse) {
-  /* Full-bleed here, unlike the desktop dialog which hugs its content: a sheet
-     that shrink-wraps two rows floats in the middle of a phone screen looking
-     like a dropped alert. */
+  /* ─── A BOTTOM SHEET, NOT A FULL-SCREEN SLAB ──────────────────────────
+     This was full-bleed — `100dvh - 16px` — on the reasoning that a dialog
+     hugging two rows would float mid-screen like a dropped alert. True, and
+     the cure was worse: an 858px sheet holding 130px of content, four fifths
+     of it empty, which reads as a page that failed to load.
+     Anchored to the BOTTOM instead, which is the phone idiom for exactly this
+     and has the two properties the floating box lacked — it has an edge the
+     screen gives it, and its controls are where the thumb already is. It hugs
+     its content and only grows if there is content to grow for. */
   .settings-dialog {
-    width: calc(100vw - 16px);
-    height: calc(100dvh - 16px);
-    max-height: calc(100dvh - 16px);
-    border-radius: 12px;
+    width: 100%;
+    max-width: none;
+    height: fit-content;
+    max-height: 88dvh;
+    margin: auto auto 0;
+    border-radius: 20px 20px 0 0;
+    border-bottom: 0;
+  }
+  /* The grab handle. Not draggable — it is the one glyph that says "sheet"
+     rather than "window", and without it the rounded top reads as a crop. */
+  .settings-chrome::before {
+    content: "";
+    position: absolute;
+    top: 7px;
+    left: 50%;
+    width: 36px;
+    height: 4px;
+    border-radius: 2px;
+    transform: translateX(-50%);
+    background: color-mix(in srgb, var(--fg) 22%, transparent);
+  }
+  .settings-chrome {
+    position: relative;
   }
   .settings-chrome {
     padding: 6px 8px 6px 18px;
@@ -430,7 +455,10 @@
     top: 0;
     z-index: 2;
     background: var(--bg-elev);
-    padding-top: calc(6px + env(safe-area-inset-top, 0px));
+    /* 16px clears the grab handle above the title. The safe-area term stays
+       for the landscape/notch case even though the sheet is bottom-anchored —
+       a foldable unfolded puts the cut-out on a side. */
+    padding-top: calc(16px + env(safe-area-inset-top, 0px));
     padding-left: calc(18px + env(safe-area-inset-left, 0px));
     padding-right: calc(8px + env(safe-area-inset-right, 0px));
   }
