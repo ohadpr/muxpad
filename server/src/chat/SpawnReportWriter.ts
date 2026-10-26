@@ -322,6 +322,30 @@ export class SpawnReportWriter {
   state(tabId: string, text: string): void {
     const trimmed = text.trim();
     if (!trimmed) return;
+    // ─── A REPORT NEEDS SOMEBODY TO REPORT TO ────────────────────────────
+    //
+    // `report` is offered to EVERY chat, and its description says it speaks to
+    // "the chat that spawned you". A top-level chat has no such chat — so the
+    // sentence landed in this map, where only a round close reads it, and a
+    // top-level chat has no rounds either. It sat there for the life of the
+    // process and nobody ever saw it.
+    //
+    // Found in the "signal archive" chat (spawned_by NULL, zero rounds), where
+    // the transcript reads: a long answer, then a `report` call, then more
+    // prose — with the middle step doing nothing at all. Reported as "I don't
+    // know if the whole lifecycle and reporting mechanism is working".
+    //
+    // Dropping it here is honest about what already happened; the log line is
+    // the part that was missing. The real repair is not OFFERING the tool to a
+    // chat with no parent, which needs the runner to know its own parentage —
+    // a different change, in the spawn plumbing.
+    const parent = new TabStore(this.db).getById(tabId)?.spawned_by;
+    if (!parent) {
+      console.warn(
+        `[report] tab ${tabId} stated a report but has no parent chat — nothing to deliver it to. The tool is for sub-chats; a top-level chat should say this in the conversation instead.`,
+      );
+      return;
+    }
     this.stated.set(tabId, trimmed.slice(0, STATED_REPORT_MAX_CHARS));
   }
 
