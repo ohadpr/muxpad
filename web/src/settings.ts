@@ -11,7 +11,7 @@ export type Theme =
   | 'blueprint'
   | 'abyss'
   | 'riso'
-  | 'hazard';
+  | 'memphis';
 
 /** What the picker offers: a theme, or "whatever the OS is doing". */
 export type ThemeChoice = Theme | 'system';
@@ -35,7 +35,7 @@ export const THEMES: { value: Theme; label: string }[] = [
   { value: 'blueprint', label: 'Blueprint' },
   { value: 'abyss', label: 'Abyss' },
   { value: 'riso', label: 'Riso' },
-  { value: 'hazard', label: 'Hazard' },
+  { value: 'memphis', label: 'Memphis' },
 ];
 
 const VALID_THEMES = new Set<Theme>(THEMES.map((t) => t.value));
@@ -83,6 +83,7 @@ const THEME_ALIASES: Record<string, Theme> = {
   // Thrown out, not renamed — but anyone sitting on it gets the loud light
   // theme that replaced it rather than a silent reset to the default.
   thermal: 'riso',
+  hazard: 'memphis',
   'solarized-light': 'github-light',
   'solarized-dark': 'tokyo-night',
   latte: 'github-light',
