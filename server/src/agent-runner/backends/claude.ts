@@ -42,6 +42,7 @@ import {
 import { bold, dim } from '../ansi.js';
 import { AuthHealPolicy, authGiveUpNotice, isAuthFailureText } from '../auth-heal.js';
 import { BackgroundCommands } from '../background-commands.js';
+import { compactionOverrideOnDisk } from '../compaction-settings.js';
 import { RECOVERY_COMPACT_INSTRUCTIONS, contextHeal } from '../context-heal.js';
 import type { AgentMode, AgentQuestion, NotifyStatus, RunnerFrame } from '../protocol.js';
 import { ReplyBlockTracker, replyToolUseId } from '../reply-stream.js';
@@ -1493,6 +1494,13 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
   //    answer on the user's behalf; the contract is "no expiry".)
   const gateOn = gateEnabled(opts.mode, process.env);
   if (gateOn) log(dim('reversibility gate on — irreversible actions will ask first'));
+
+  // An override in ~/.claude/settings.json beats everything below, silently,
+  // for every claude process on the machine. The one muxpad wrote on Oct 21
+  // outlived its own revert by six days and turned this session's automatic
+  // compaction off for all of them. Say it out loud. See compaction-settings.ts.
+  const compactionWarning = compactionOverrideOnDisk();
+  if (compactionWarning) log(bold(`⚠ ${compactionWarning}`));
 
   const options: Options = {
     cwd: process.cwd(),
