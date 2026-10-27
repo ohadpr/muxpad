@@ -880,39 +880,47 @@
     3;
 }
 
-/* ─── THE COPPER BAR, NOW MOVING ────────────────────────────────────────────
+/* ─── THE COPPER BAR IS A BAR, NOT A WASH ───────────────────────────────────
    The Amiga's copper changed the background colour every scanline, and in an
-   intro those bands SLID. A still gradient was the sketch; this is the effect.
-   Slow — 9s for a full pass, so it reads as a shimmer on the row you are on
-   rather than as something demanding attention. Stops dead under
-   prefers-reduced-motion, where it falls back to the static bar. */
+   intro those bands SLID. Reproducing that as a translucent gradient across
+   the whole selected row was wrong twice over, and the second report says it
+   plainly: "demoscene active chat bg in sidebar not good, it should use the
+   same color as the chat itself."
+
+   It should, and it is supposed to — muxpad's selected row IS the chat pane's
+   surface (`--bg-pane-face`), continued into the rail by the funnel. Any wash
+   laid over that lifts the row off the colour it is meant to be matching. The
+   first attempt went muddy (magenta and amber averaging to brown over dark
+   teal); the second, cyan-only, was clean and STILL a different colour from
+   the pane, because a wash that is visible is by definition a wash that
+   changed the surface.
+
+   So the fill goes untouched and the copper moves to a 3px strip on the row's
+   leading edge — which is what a copper bar actually was: vivid OPAQUE bands,
+   not a tint. Vertical, scrolling, all four hues, and none of it on the
+   surface the funnel is matching.
+
+   Done with a background LAYER rather than a pseudo-element: on this row
+   `::before` is the state track and `::after` is the funnel's elbow, and the
+   last two times a third claimant took one of those it painted a blob in the
+   wrong place (NavTree.selection.test.ts). */
 [data-theme="demoscene"] .navtree-tab-row[data-active="true"] {
-  /* ── ONE HUE FAMILY, OR IT GOES MUDDY ──────────────────────────────────
-     The bar used to run cyan → ice → MAGENTA → AMBER → cyan, which is the
-     Amiga palette and is right on an Amiga: there a copper bar was opaque
-     vivid bands on black. Here it is a translucent wash over a dark teal
-     surface, and a magenta and an amber at 20–25% over that do not read as
-     magenta and amber — they average into brown. Reported twice, the second
-     time as "still weird color bg", and the screenshot is a muddy mauve row
-     in a theme whose whole palette is cyan.
-     A wash can only stay clean in the hue family of what is under it. So the
-     bar is cyan → ice → cyan: still moving, still a copper bar, and it now
-     reads as the pane's own surface catching the light rather than as a
-     different colour sitting on the row. */
   background-image: linear-gradient(
-    90deg,
-    #19ffd038 0%,
-    #22e8ff1f 26%,
-    #19ffd00f 50%,
-    #22e8ff1f 74%,
-    #19ffd038 100%
+    180deg,
+    #19ffd0 0%,
+    #22e8ff 22%,
+    #ff2fd0 48%,
+    #ffb224 72%,
+    #19ffd0 100%
   );
-  background-size: 220% 100%;
+  background-size: 3px 220%;
+  background-repeat: no-repeat;
+  background-position: left top;
   animation: demoscene-copper 9s linear infinite;
 }
 @keyframes demoscene-copper {
   to {
-    background-position: -220% 0;
+    background-position: left -220%;
   }
 }
 
@@ -975,9 +983,11 @@
   [data-theme="demoscene"] body::after {
     display: none;
   }
+  /* The strip stays — it is a 3px edge, not motion. Only the scroll stops,
+     and `background-size` must keep its 3px width or "stopped" would mean
+     "the bar fills the row", which is the thing the strip exists to avoid. */
   [data-theme="demoscene"] .navtree-tab-row[data-active="true"] {
     animation: none;
-    background-size: 100% 100%;
   }
 }
 
