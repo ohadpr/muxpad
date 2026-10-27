@@ -61,6 +61,15 @@ export const DROP_BAND = 13;
 /** Peak corruption rate, on the band, at birth. */
 export const DROP_PEAK = 0.3;
 
+/**
+ * How long damaged text may sit before it is put back regardless.
+ *
+ * The undo normally happens on the next animation frame. This is the floor
+ * under that: a tab hidden mid-ripple stops getting frames, and without a
+ * timer the glyphs would still be there when the reader came back.
+ */
+export const WATCHDOG_MS = 1200;
+
 /** A drop is shed at most this often, and only after this much movement. */
 export const DROP_MIN_INTERVAL_MS = 110;
 export const DROP_MIN_DISTANCE_PX = 34;
@@ -257,8 +266,19 @@ export function installDemosceneFx(doc: Document = document): () => void {
   let drops: Drop[] = [];
   let pointerDown = false;
   let detachPointer: (() => void) | null = null;
-  /** Every text node currently damaged, with the text it really holds. */
-  const damaged = new Map<Text, string>();
+  /**
+   * Every text node currently damaged.
+   *
+   * `was` is the real text; `wrote` is what we put there. Both, because
+   * restoring blindly is how this clobbers somebody else's work: a streaming
+   * message rewrites its own text nodes, and if React has changed a node since
+   * we damaged it then `was` is STALE and writing it back would undo a real
+   * update. If the node no longer holds exactly what we wrote, it is not ours
+   * any more and we leave it alone.
+   */
+  const damaged = new Map<Text, { was: string; wrote: string }>();
+  /** Fires if a damaged frame is never followed by another one. */
+  let watchdog: ReturnType<typeof setTimeout> | null = null;
   /** Every element currently wearing a ring mask, so it can be cleared. */
   let masked: HTMLElement[] = [];
   let cellW = 0;
@@ -288,8 +308,15 @@ export function installDemosceneFx(doc: Document = document): () => void {
   const handsOff = (): boolean => !mayDisturb({ pointerDown, hasSelection: hasSelection() });
 
   const restore = () => {
-    for (const [node, text] of damaged) node.nodeValue = text;
+    for (const [node, { was, wrote }] of damaged) {
+      // Only if it is still OUR damage sitting there — see `damaged`.
+      if (node.nodeValue === wrote) node.nodeValue = was;
+    }
     damaged.clear();
+    if (watchdog) {
+      clearTimeout(watchdog);
+      watchdog = null;
+    }
     for (const el of masked) {
       el.style.maskImage = '';
       el.style.webkitMaskImage = '';
@@ -356,7 +383,7 @@ export function installDemosceneFx(doc: Document = document): () => void {
           };
           const next = corruptLine(text, charAt, drops, now);
           if (next !== text) {
-            damaged.set(n, text);
+            damaged.set(n, { was: text, wrote: next });
             n.nodeValue = next;
           }
           consumed += text.length;
@@ -366,10 +393,33 @@ export function installDemosceneFx(doc: Document = document): () => void {
     }
   };
 
-  const frame = (now: number) => {
+  const frame = () => {
     raf = 0;
+    // ONE CLOCK. This used the timestamp rAF hands in, while a drop's `born`
+    // comes from performance.now() — two clocks that agree in a browser and do
+    // not have to. Where they disagree every drop is either stillborn or
+    // immortal, and the effect silently does nothing. Read the same clock the
+    // drops were stamped with.
+    const now = performance.now();
     drops = liveDrops(drops, now);
-    damage(now);
+    try {
+      damage(now);
+    } catch (err) {
+      // A THROW MUST NOT STRAND THE TEXT. Damage is applied in one frame and
+      // undone in the next, so anything that stops the next frame — an
+      // exception here, a theme change mid-flight, the tab being hidden, React
+      // unmounting the message — leaves corrupted characters on screen for
+      // good. Reported exactly that way: a bullet list left permanently
+      // garbled. Put it back, then let it fail loudly.
+      restore();
+      drops = [];
+      console.error('[demoscene-fx] damage failed; text restored', err);
+      return;
+    }
+    // …and if no further frame arrives for any reason, this does the undo.
+    if (damaged.size && !watchdog) {
+      watchdog = setTimeout(restore, WATCHDOG_MS);
+    }
     // The rings expire on their own, so the loop ends when the last one does —
     // no decay to wait out and nothing running under a still pointer.
     if (drops.length) raf = requestAnimationFrame(frame);
@@ -412,6 +462,10 @@ export function installDemosceneFx(doc: Document = document): () => void {
   const onUp = () => {
     pointerDown = false;
   };
+  const onHide = () => {
+    drops = [];
+    restore();
+  };
 
   const attach = () => {
     if (detachPointer) return;
@@ -419,7 +473,13 @@ export function installDemosceneFx(doc: Document = document): () => void {
     doc.addEventListener('pointerdown', onDown, { passive: true, capture: true });
     doc.addEventListener('pointerup', onUp, { passive: true });
     doc.addEventListener('pointercancel', onUp, { passive: true });
+    // A tab that goes away mid-ripple stops getting frames; put the text back
+    // now rather than leaving it damaged until it returns.
+    doc.addEventListener('visibilitychange', onHide);
+    win?.addEventListener('blur', onHide);
     detachPointer = () => {
+      doc.removeEventListener('visibilitychange', onHide);
+      win?.removeEventListener('blur', onHide);
       doc.removeEventListener('pointermove', onMove);
       doc.removeEventListener('pointerdown', onDown, { capture: true });
       doc.removeEventListener('pointerup', onUp);
