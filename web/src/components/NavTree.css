@@ -3909,3 +3909,72 @@ body.sidenav-resizing iframe {
   );
   padding-inline-end: 0;
 }
+
+/* ─── THE WORKING SET ───────────────────────────────────────────────────────
+   The chats you are moving between, in slots that do not move. The algorithm
+   and the measurements behind the cap and the decay are in
+   shared/src/working-set.ts; what lives here is only how it sits in the rail.
+
+   ABOVE THE SCROLLER, not inside it. A strip you have to scroll to is a strip
+   you will search for, which is the thing it exists to end — and it is six
+   rows at most, so it costs the tree nothing it will miss.
+
+   Its rows are the ORDINARY `.navtree-tab-row`, so they inherit the grid, the
+   icon column, the status mark and the selection treatment without a second
+   copy of any of it. A different visual language for the same object is how a
+   sidebar stops being scannable, and a chat is deliberately in both places at
+   once: the strip is a SHORTCUT, not a move, and its workspace must not start
+   lying about what it contains. */
+.navtree-workingset {
+  flex: 0 0 auto;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--rail-seam, var(--border));
+}
+.navtree-workingset-head {
+  padding: 10px var(--nt-pad) 4px;
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  /* --fg-dim, never --fg-faint: the faint token measures under 3.1:1 on both
+     rails and this is 10px text, which is where a failing ratio is least
+     forgivable. Same call the collapsed-count chip already made. */
+  color: var(--fg-dim);
+}
+/* The slot number, and the reason it can exist at all: the slots are stable,
+   so a number means the same row tomorrow. Hidden while the pointer is on the
+   row, where the × takes its place — two controls in one 18px cell would be a
+   fight, and neither is worth widening the gutter for. */
+.navtree-slot-key {
+  font: 0.625rem / 1 var(--chrome-font);
+  color: var(--fg-faint);
+  letter-spacing: 0.02em;
+}
+.navtree-ws-slot:hover .navtree-slot-key,
+.navtree-ws-slot:has(:focus-visible) .navtree-slot-key {
+  display: none;
+}
+/* …and the × is the mirror image: absent until you reach for the row. It means
+   "not now" — it frees the slot and nothing else, which is why it is not
+   danger-styled and never arms. */
+.navtree-ws-slot .navtree-slot-drop {
+  width: 18px;
+  height: 18px;
+  display: none;
+  place-items: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg-faint);
+  font-size: 0.875rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.navtree-ws-slot:hover .navtree-slot-drop,
+.navtree-ws-slot:has(:focus-visible) .navtree-slot-drop {
+  display: grid;
+}
+.navtree-ws-slot .navtree-slot-drop:hover {
+  background: color-mix(in srgb, var(--fg) 14%, transparent);
+  color: var(--fg);
+}
