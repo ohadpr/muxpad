@@ -236,3 +236,39 @@ describe('a send follows the reader to the end', () => {
     expect(followed.length).toBe(sends.length);
   });
 });
+
+describe('the mention picker’s ceiling is MEASURED, not derived', () => {
+  it('publishes where the composer actually is, not just how tall it is', () => {
+    // `100dvh - composerH - keyboardInset - safeArea` was the old bound, and
+    // iOS breaks it: with the software keyboard up, `dvh` stays at the FULL
+    // screen height, so the sum believed there was most of a phone above a
+    // composer that had been lifted into the middle of one. The picker ran
+    // past the top of the screen, its header sat under the clock and the
+    // carrier, and the overflow was ABOVE the scroll box so there was no way
+    // to bring it back.
+    expect(tsx).toContain("'--chat-composer-top'");
+    expect(tsx).toContain('getBoundingClientRect().top');
+  });
+
+  it('re-measures on the events a ResizeObserver cannot see', () => {
+    // The keyboard moves the composer without changing its box, so the one
+    // event that matters most for the top is the one the observer misses.
+    expect(tsx).toMatch(/vv\?\.addEventListener\('resize', measure\)/);
+    expect(tsx).toMatch(/vv\?\.addEventListener\('scroll', measure\)/);
+    expect(tsx).toMatch(/vv\?\.removeEventListener\('resize', measure\)/);
+  });
+
+  it('and the picker is bounded by it', () => {
+    // Comments stripped: the note explaining why the old derivation was wrong
+    // NAMES it, and prose about a declaration is not one.
+    const css = readFileSync(join(__dirname, 'ChatMentionPicker.css'), 'utf8').replace(
+      /\/\*[\s\S]*?\*\//g,
+      '',
+    );
+    const box = /\.chat-mention \{([\s\S]*?)\n\}/.exec(css)?.[1] ?? '';
+    expect(box).toContain('var(--chat-composer-top');
+    expect(box).toContain('env(safe-area-inset-top');
+    // The derivation that was wrong must not survive alongside its replacement.
+    expect(box).not.toContain('--chat-keyboard-inset');
+  });
+});

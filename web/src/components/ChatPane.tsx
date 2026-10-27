@@ -1506,6 +1506,9 @@ export function ChatPane({
   // multi-line input + the mobile safe-area, so a fixed guess isn't enough).
   const composerRef = useRef<HTMLDivElement>(null);
   const [composerH, setComposerH] = useState(0);
+  /** The composer's distance from the top of the screen — the mention picker's
+   *  real ceiling. See the measure effect. */
+  const [composerTop, setComposerTop] = useState(0);
   // Live assistant text streamed from the headless turn (token-level), shown
   // as a preview until the final message lands in the transcript tail.
   const [streamingText, setStreamingText] = useState('');
@@ -2651,13 +2654,42 @@ export function ChatPane({
     // works. So: measure only a element that actually has a box. Same shape
     // as the MobileInputBar fix, for the same reason.
     const measure = () => {
+      // HEIGHT stays `offsetHeight` — the guard above is about a display:none
+      // ancestor collapsing it, and swapping in getBoundingClientRect().height
+      // silently broke the two tests that stub `offsetHeight` to drive it.
       const h = el.offsetHeight;
       if (h > 0) setComposerH(h);
+      // ── HOW MUCH ROOM IS ABOVE THE COMPOSER ───────────────────────────────
+      // The mention picker opens upward from here, and the height it may take
+      // is exactly this number less the notch. It used to be DERIVED —
+      // `100dvh - composerH - keyboardInset - safe-area` — and the derivation
+      // is wrong on the one surface it was written for: with the keyboard up,
+      // iOS leaves `dvh` at the full screen, so the formula believed there was
+      // most of a phone above a composer that had been lifted to the middle of
+      // it. Reported with a screenshot of the picker's header under the clock
+      // and the carrier, with no way to scroll it back down.
+      //
+      // `rect.top` is not a derivation. The wrap is already translated by
+      // `--chat-keyboard-inset`, so this is where the composer IS, on screen,
+      // whatever moved it.
+      setComposerTop(Math.max(0, Math.round(el.getBoundingClientRect().top)));
     };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
-    return () => ro.disconnect();
+    // A ResizeObserver fires on the element's own BOX. The keyboard changes
+    // where it sits without changing its size, so the one event that matters
+    // most for `composerTop` is the one the observer cannot see.
+    const vv = window.visualViewport;
+    vv?.addEventListener('resize', measure);
+    vv?.addEventListener('scroll', measure);
+    window.addEventListener('resize', measure);
+    return () => {
+      ro.disconnect();
+      vv?.removeEventListener('resize', measure);
+      vv?.removeEventListener('scroll', measure);
+      window.removeEventListener('resize', measure);
+    };
   }, [session?.current_sid]);
 
   // ── Lift the composer off the software keyboard ───────────────────────────
@@ -4985,7 +5017,10 @@ export function ChatPane({
             // ChatMentionPicker.css).
             style={
               composerH
-                ? ({ '--chat-composer-h': `${composerH}px` } as React.CSSProperties)
+                ? ({
+                    '--chat-composer-h': `${composerH}px`,
+                    '--chat-composer-top': `${composerTop}px`,
+                  } as React.CSSProperties)
                 : undefined
             }
           >
