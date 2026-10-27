@@ -189,35 +189,154 @@
 .settings-row label {
   font-weight: 500;
 }
-/* THE ONE CONTROL THAT STILL LOOKED LIKE A WEB FORM. A bare <select> paints
-   itself from the platform, so in a dark dialog it arrived as a pale slab with
-   the OS's own arrow — the only element in here not wearing the app's surface.
-   `appearance: none` plus our own chevron, which is also what lets it match
-   the button beside it in the next row. */
-.settings-select {
-  appearance: none;
-  -webkit-appearance: none;
-  min-width: 13rem;
-  padding: 9px 34px 9px 12px;
-  font: inherit;
-  color: var(--fg);
-  background-color: var(--bg-elev);
-  background-image: linear-gradient(45deg, transparent 50%, var(--settings-muted) 50%),
-    linear-gradient(135deg, var(--settings-muted) 50%, transparent 50%);
-  background-position: calc(100% - 17px) calc(50% + 2px), calc(100% - 12px) calc(50% + 2px);
-  background-size: 5px 5px, 5px 5px;
-  background-repeat: no-repeat;
-  border: 1px solid var(--settings-line);
-  border-radius: 9px;
+/* ─── THE THEME PICKER ──────────────────────────────────────────────────────
+   Was a <select>, which is a control for choosing between things you can
+   already name. These cannot be named — demoscene is a typeface and a grid of
+   box-drawing characters, thermal is a receipt — so the list shows them.
+
+   The whole mechanism is one attribute: a tile carries `data-theme`, every
+   theme block in styles.css is an ATTRIBUTE selector rather than a :root rule,
+   and so the tile resolves the real tokens, --ui-font included. No second copy
+   of any colour lives in this file, and a theme added later needs no change
+   here at all. */
+.settings-themes {
+  display: block;
+  margin: 0;
+  padding: 18px 0;
+  border: 0;
+  border-bottom: 1px solid var(--settings-line);
+}
+.settings-themes legend {
+  padding: 0;
+  font-weight: 500;
+}
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+.theme-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   cursor: pointer;
+  border-radius: 10px;
+  /* The ring is drawn INSIDE, as a border on the tile rather than an outline
+     on the input: an outline on a visually-hidden radio is the thing that
+     produced the enormous double halo in the screenshot that started this. */
+  border: 2px solid transparent;
+  padding: 3px;
 }
-.settings-select:hover {
-  border-color: color-mix(in srgb, var(--fg) 28%, var(--bg-elev));
+.theme-tile input {
+  /* Present for the keyboard and the a11y tree, painted by nothing. Not
+     `display: none` — that takes it out of the radiogroup entirely and with it
+     the arrow-key navigation this control exists to get. */
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
 }
-.settings-select:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+.theme-tile:hover {
+  border-color: color-mix(in srgb, var(--fg) 18%, transparent);
 }
+.theme-tile[data-chosen="true"] {
+  border-color: var(--accent);
+}
+.theme-tile:has(input:focus-visible) {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.theme-tile-name {
+  font-size: 0.75rem;
+  color: var(--settings-muted);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.theme-tile[data-chosen="true"] .theme-tile-name {
+  color: var(--fg);
+  font-weight: 600;
+}
+.theme-tile-preview {
+  display: block;
+  position: relative;
+  height: 72px;
+  border-radius: 7px;
+  overflow: hidden;
+  border: 1px solid var(--settings-line);
+}
+/* System is two themes, so it is two previews cut on the diagonal. */
+.theme-tile-split .theme-mock:last-child {
+  position: absolute;
+  inset: 0;
+  clip-path: polygon(100% 0, 100% 100%, 0 100%);
+}
+
+/* ─── THE MINIATURE ─────────────────────────────────────────────────────────
+   A rail with a selected row, and a page with two lines and the typeface. Flat
+   colour only: a tile at 118px that tried to reproduce the scanlines and the
+   dither would read as noise, and the structural rules in styles.css are
+   scoped to real components rather than to these. */
+.theme-mock {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  background: var(--bg);
+  font: 0.625rem / 1 var(--ui-font);
+}
+.theme-mock-rail {
+  flex: 0 0 30%;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 7px 5px;
+  background: var(--rail-surface);
+  border-right: 1px solid var(--rail-border);
+}
+.theme-mock-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--rail-accent);
+}
+.theme-mock-row {
+  height: 5px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--rail-ink) 30%, transparent);
+}
+.theme-mock-row--on {
+  background: var(--rail-accent);
+}
+.theme-mock-page {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  padding: 7px 8px;
+  min-width: 0;
+}
+.theme-mock-aa {
+  font: 700 0.8125rem / 1 var(--ui-font);
+  color: var(--fg);
+  letter-spacing: 0.02em;
+}
+.theme-mock-line {
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--fg) 34%, transparent);
+}
+.theme-mock-line--short {
+  width: 55%;
+  background: var(--accent);
+}
+
 .settings-push-actions {
   display: inline-flex;
   align-items: center;

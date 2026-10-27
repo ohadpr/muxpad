@@ -94,6 +94,27 @@ const XTERM_THEMES: Record<
     cursor: '#19ffd0',
     selectionBackground: '#1d3a40',
   },
+  // The three objects, not three palettes — see the stylesheet's block for
+  // each. The cursor is the theme's accent in all of them, so the caret is
+  // the drafting pencil / the stamp / the glow respectively.
+  blueprint: {
+    background: '#0a2342',
+    foreground: '#e8f1ff',
+    cursor: '#9fe3ff',
+    selectionBackground: '#1a4a7a',
+  },
+  thermal: {
+    background: '#f3efe4',
+    foreground: '#1b1a17',
+    cursor: '#c0271b',
+    selectionBackground: '#ddd6c3',
+  },
+  abyss: {
+    background: '#060a16',
+    foreground: '#dce7ff',
+    cursor: '#b06cff',
+    selectionBackground: '#2a2155',
+  },
   'tokyo-night': {
     background: '#1a1b26',
     foreground: '#c0caf5',

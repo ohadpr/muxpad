@@ -18,7 +18,11 @@ vi.mock('../lib/push', () => ({
 vi.mock('../settings', () => ({
   useSettings: () => ({ theme: 'system' }),
   updateSettings: vi.fn(),
-  THEME_CHOICES: [{ value: 'system', label: 'System' }],
+  THEME_CHOICES: [
+    { value: 'system', label: 'System' },
+    { value: 'demoscene', label: 'Demoscene' },
+  ],
+  SYSTEM_PAIR: { light: 'alucard', dark: 'dracula' },
 }));
 let root: ReturnType<typeof createRoot>;
 let host: HTMLDivElement;

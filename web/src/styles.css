@@ -947,6 +947,439 @@
   }
 }
 
+/* ════════════════════════════════════════════════════════════════════════════
+   THREE MORE THEMES THAT CHANGE THE SHAPE, NOT JUST THE HUE.
+
+   demoscene established that a theme may own the typeface and draw its own
+   structure. The six before it were palettes: same proportional sans, same
+   rounded cards, same dots, different colours — which is why the picker read
+   as six shades of one app. These three each commit to a different PHYSICAL
+   OBJECT, and the palette is the smallest part of that:
+
+     blueprint   a cyanotype drafting sheet — grid paper, dashed rules,
+                 condensed technical lettering, corner ticks, hairlines.
+     thermal     a receipt off a till — cream stock, typewriter face,
+                 perforated tear-lines, caps, a rubber-stamp red, no curves.
+     abyss       bioluminescence at 4,000m — ink-black water, soft round
+                 shapes, light that GLOWS rather than fills, a drifting
+                 current under the row you are on.
+
+   Each follows the demoscene pattern: one token block (which every theme-wide
+   test sweeps and holds to the same contrast arithmetic), then a scoped
+   structural section that no other theme pays for.
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* ─── BLUEPRINT ─────────────────────────────────────────────────────────────
+   A cyanotype is white lines on Prussian blue because that is what the process
+   produced — the ground is the chemistry, not a choice, and the drawing is
+   nothing but line weight. So: no fills, no soft shadows, one amber pencil for
+   the thing you are pointing at, and a grid under all of it. */
+[data-theme="blueprint"] {
+  /* Condensed technical lettering — the drafting-machine hand. All system
+     families: Bahnschrift ships on Windows, Avenir Next Condensed and DIN
+     Alternate on macOS, and the stack falls through to the UI sans rather than
+     fetching anything.
+
+     ORDER MEASURED, not guessed. DIN Alternate was first and it is barely
+     condensed — 263px against system-ui's 276px for the same string, a 5%
+     narrowing nobody would notice. Avenir Next Condensed is 231px, 16% in,
+     which is the width a drafting hand actually has. DIN stays in the stack
+     as the machine that has neither. */
+  --ui-font: Bahnschrift, "Avenir Next Condensed", "Roboto Condensed", "Arial Narrow",
+    "DIN Alternate", system-ui, sans-serif;
+  --chrome-font: Bahnschrift, "Avenir Next Condensed", "Roboto Condensed", "Arial Narrow",
+    "DIN Alternate", system-ui, sans-serif;
+  --term-font: "SF Mono", Menlo, Monaco, monospace;
+
+  --bg: #0a2342;
+  --bg-elev: #0e2d52;
+  --bg-hover: #16406e;
+  --bg-chrome: #071b33;
+  --bg-tabbar: #04121f;
+
+  --fg: #e8f1ff;
+  --fg-dim: #a9c6e8;
+  --fg-faint: #6b8fb8;
+  --border: #16406e;
+  --border-strong: #2a5f9b;
+
+  /* Chalk-cyan leads: on a cyanotype the brightest thing on the sheet is the
+     unexposed paper, which is the line itself. Amber is the correction pencil
+     — the one warm mark a drafter ever makes. */
+  --accent: #9fe3ff;
+  --accent-fg: #06243f;
+  --danger: #ff7a6b;
+
+  --rail-surface: #0e2f57;
+  --rail-ink: #eaf3ff;
+  --rail-ink-dim: #b4cfee;
+  --rail-ink-faint: #7795bb;
+  --rail-hover: #17406f;
+  --rail-border: #2b5c92;
+  --rail-seam: #1d4a7c;
+  --rail-accent: #ffcf6b;
+  --rail-status-ready: #5ddba0;
+  --rail-status-working: #ffcf6b;
+
+  --xterm-bg: #0a2342;
+  --xterm-fg: #e8f1ff;
+
+  --fade-1: 0.61;
+  --fade-2: 0.39;
+  --clock-base: #2b4e75;
+  --hit-bg: #ffd166;
+  --hit-ink: #1a1200;
+  --hit-rule: #8a6200;
+}
+
+/* THE SHEET IS RULED. Two grids at once, which is what drafting paper is: a
+   fine 8px field for setting out and a heavy 96px division over it. Fixed and
+   pointer-events: none, so it costs one composited layer and intercepts
+   nothing — the same contract as demoscene's scanlines. */
+[data-theme="blueprint"] body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+  background-image: linear-gradient(to right, #9fe3ff0f 0 1px, transparent 1px 100%),
+    linear-gradient(to bottom, #9fe3ff0f 0 1px, transparent 1px 100%),
+    linear-gradient(to right, #9fe3ff1c 0 1px, transparent 1px 100%),
+    linear-gradient(to bottom, #9fe3ff1c 0 1px, transparent 1px 100%);
+  background-size: 8px 8px, 8px 8px, 96px 96px, 96px 96px;
+}
+
+/* EVERY EDGE IS A DRAWN LINE, SO NOTHING IS ROUNDED. A radius is a moulded
+   object; a drawing has corners. */
+[data-theme="blueprint"] .chat-card,
+[data-theme="blueprint"] .chat-bubble,
+[data-theme="blueprint"] .chat-composer,
+[data-theme="blueprint"] .navtree-mark,
+[data-theme="blueprint"] .navtree-state-dot {
+  border-radius: 2px;
+}
+
+/* THE RAIL IS A DASHED CUT LINE — the edge of the drawing, marked rather than
+   walled. Dashes, not demoscene's solid double rule: this is paper. */
+[data-theme="blueprint"] .sidenav {
+  border-right: 1px dashed color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+/* ANNOTATION IS SET IN CAPS WITH WIDE TRACKING, because a drafter letters by
+   hand against a guide and lowercase does not survive it. */
+[data-theme="blueprint"] .navtree-ws-label,
+[data-theme="blueprint"] .navtree-ws-name {
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+}
+
+/* SECTION RULES ARE DASHED, at the weight a pencil leaves. */
+[data-theme="blueprint"] .navtree-head,
+[data-theme="blueprint"] .chat-pane-head {
+  border-bottom: 1px dashed color-mix(in srgb, var(--accent) 34%, transparent);
+}
+
+/* THE COMPOSER IS A TITLE BLOCK — the boxed panel in the corner of every
+   drawing, with its corner ticks. Four tiny gradients, one element. */
+[data-theme="blueprint"] .chat-composer {
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  background-image: linear-gradient(var(--accent), var(--accent)),
+    linear-gradient(var(--accent), var(--accent)), linear-gradient(var(--accent), var(--accent)),
+    linear-gradient(var(--accent), var(--accent));
+  background-size: 7px 1px, 1px 7px, 7px 1px, 1px 7px;
+  background-position: left top, left top, right bottom, right bottom;
+  background-repeat: no-repeat;
+}
+
+/* A SQUARE BLOCK SCROLLBAR, sized to the fine grid. */
+[data-theme="blueprint"] .navtree-scroll::-webkit-scrollbar-thumb,
+[data-theme="blueprint"] .chat-list::-webkit-scrollbar-thumb {
+  border-radius: 0;
+  background: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+/* ─── THERMAL ───────────────────────────────────────────────────────────────
+   A till receipt. The constraints are the printer's: one ink, one width, one
+   typeface, no curves, and a perforation wherever something ends. The red is
+   the only thing on the whole object that was not printed by the head — it is
+   a rubber stamp, so it is spent exactly where a stamp goes. */
+[data-theme="thermal"] {
+  /* A receipt is monospace because the head has a fixed carriage. Courier is
+     on every machine that has ever existed; American Typewriter is the macOS
+     face that reads as struck rather than set. */
+  --ui-font: "American Typewriter", "Courier New", Courier, ui-monospace, monospace;
+  --chrome-font: "American Typewriter", "Courier New", Courier, ui-monospace, monospace;
+  --term-font: "Courier New", Courier, Menlo, monospace;
+
+  --bg: #f3efe4;
+  --bg-elev: #faf7ee;
+  --bg-hover: #e6e0cf;
+  --bg-chrome: #ece6d8;
+  --bg-tabbar: #ddd6c3;
+
+  --fg: #1b1a17;
+  --fg-dim: #4a473f;
+  /* Decorative only — see the --hit-* note in :root; never text. */
+  --fg-faint: #938c79;
+  --border: #d8d2c0;
+  --border-strong: #b2aa94;
+
+  --accent: #c0271b;
+  --accent-fg: #fff8ee;
+  --danger: #a81f14;
+
+  --rail-surface: #2b2721;
+  --rail-ink: #f7f3e8;
+  --rail-ink-dim: #cfc8b8;
+  --rail-ink-faint: #9b9484;
+  --rail-hover: #3a352c;
+  --rail-border: #4b4539;
+  --rail-seam: #3a352c;
+  --rail-accent: #e8604f;
+  --rail-status-ready: #8fb98a;
+  --rail-status-working: #d6b36a;
+
+  --xterm-bg: #f3efe4;
+  --xterm-fg: #1b1a17;
+
+  --fade-1: 0.7;
+  --fade-2: 0.46;
+  --clock-base: #ddd6c3;
+
+  /* Light re-step (see :root), on a WARM stock — the greys carry the paper's
+     cream rather than a cool neutral, or the quiet state reads as a different
+     material from everything around it. */
+  --status-blocked: #a81f14;
+  --status-working: #8a6410;
+  --status-ready: #2f6b3d;
+  --status-quiet: #b2aa94;
+  --status-dead: #6e685a;
+  --status-wash: 10%;
+  --status-chip-wash: 18%;
+  --status-ink-mix: 50%;
+
+  --hit-bg: #f2dc6a;
+  --hit-ink: #1b1a17;
+  --hit-rule: #7d6410;
+}
+
+/* NOTHING IS ROUNDED, because a printer head cannot draw a curve and scissors
+   do not either. This single declaration does more for the look than the
+   palette does. */
+[data-theme="thermal"] .chat-card,
+[data-theme="thermal"] .chat-bubble,
+[data-theme="thermal"] .chat-composer,
+[data-theme="thermal"] .settings-dialog,
+[data-theme="thermal"] .navtree-mark,
+[data-theme="thermal"] .navtree-state-dot,
+[data-theme="thermal"] .navtree-scroll::-webkit-scrollbar-thumb,
+[data-theme="thermal"] .chat-list::-webkit-scrollbar-thumb {
+  border-radius: 0;
+}
+
+/* EVERY DIVISION IS A PERFORATION. A dashed rule is what a receipt uses to say
+   "this part ends here", and it is the one piece of punctuation the object
+   has. */
+[data-theme="thermal"] .navtree-head,
+[data-theme="thermal"] .chat-pane-head {
+  border-bottom: 1px dashed var(--border-strong);
+}
+[data-theme="thermal"] .chat-composer {
+  border-top: 2px dashed var(--border-strong);
+  border-radius: 0;
+}
+
+/* HEADERS ARE STRUCK IN CAPS. A receipt has no bold and no second size worth
+   the name — emphasis is capitals and spacing, which is exactly what a fixed
+   carriage can do. */
+[data-theme="thermal"] .navtree-ws-label,
+[data-theme="thermal"] .navtree-ws-name,
+[data-theme="thermal"] .chat-pane-head {
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+/* THE PAPER IS NOT FLAT. Thermal stock has a grain, and a scan of one is never
+   an even field — two near-invisible gradients at ~2% give it a direction,
+   which is the difference between "cream" and "paper". */
+[data-theme="thermal"] .chat-card,
+[data-theme="thermal"] .chat-bubble,
+[data-theme="thermal"] .chat-composer,
+[data-theme="thermal"] .settings-dialog {
+  background-image: repeating-linear-gradient(to bottom, #1b1a1708 0 1px, transparent 1px 3px),
+    repeating-linear-gradient(to right, #1b1a1705 0 1px, transparent 1px 2px);
+}
+
+/* A MESSAGE IS A SLIP OF THE ROLL. One dashed edge and square corners is the
+   whole of it — a rounded bubble is the single most "chat app" shape there is,
+   and it was the one thing left on screen saying so. */
+[data-theme="thermal"] .chat-bubble {
+  border: 1px dashed var(--border-strong);
+}
+
+/* THE INK FADES AT THE EDGE OF THE HEAD. A thermal print is darkest in the
+   middle of the line and lighter at the margins; one soft text-shadow in the
+   ink colour is enough to suggest the bleed without touching legibility. */
+[data-theme="thermal"] .chat-list {
+  text-shadow: 0 0 0.35px color-mix(in srgb, var(--fg) 45%, transparent);
+}
+
+/* ─── ABYSS ─────────────────────────────────────────────────────────────────
+   Four thousand metres down there is no ambient light at all, so every bright
+   thing on the screen is a thing that MAKES light. That is the whole rule, and
+   it is the opposite of every other theme here: nothing is filled, everything
+   is haloed, and the shapes are soft because nothing at that depth has a
+   straight edge. */
+[data-theme="abyss"] {
+  /* Rounded humanist — the one non-angular stack on the machine. Against
+     demoscene's pixel grid and thermal's carriage, this is what keeps the
+     three from reading as variations. `ui-rounded` first: it is the generic
+     that resolves to SF Pro Rounded on Apple platforms, and it is the only
+     entry here that is actually ROUND rather than merely soft. */
+  --ui-font: ui-rounded, "SF Pro Rounded", "Hiragino Maru Gothic ProN", "Nunito Sans", "Avenir Next",
+    Avenir, system-ui, sans-serif;
+  --chrome-font: ui-rounded, "SF Pro Rounded", "Hiragino Maru Gothic ProN", "Nunito Sans",
+    "Avenir Next", Avenir, system-ui, sans-serif;
+  --term-font: Menlo, Monaco, monospace;
+
+  --bg: #060a16;
+  --bg-elev: #0b1124;
+  --bg-hover: #141c38;
+  --bg-chrome: #03050d;
+  --bg-tabbar: #01030a;
+
+  --fg: #dce7ff;
+  --fg-dim: #9db3d8;
+  --fg-faint: #5f7196;
+  --border: #16203f;
+  --border-strong: #27345c;
+
+  /* Jelly violet leads and a siphonophore pink answers on the rail. The teals
+     are kept for the status marks only — the creatures that glow green down
+     there are the ones signalling something. */
+  --accent: #b06cff;
+  --accent-fg: #0b0418;
+  --danger: #ff5f7a;
+
+  --rail-surface: #101733;
+  --rail-ink: #e3ecff;
+  --rail-ink-dim: #b0c0e4;
+  --rail-ink-faint: #73849f;
+  --rail-hover: #1a2348;
+  --rail-border: #2b376a;
+  --rail-seam: #1d2750;
+  --rail-accent: #ff5fa2;
+  --rail-status-ready: #3ff0c0;
+  --rail-status-working: #ffc46b;
+
+  --xterm-bg: #060a16;
+  --xterm-fg: #dce7ff;
+
+  --fade-1: 0.61;
+  --fade-2: 0.39;
+  --clock-base: #2c3a66;
+  --hit-bg: #ffc46b;
+  --hit-ink: #1a1002;
+  --hit-rule: #8a5c00;
+}
+
+/* SOFT BODIES. Large radii everywhere a box exists — the single cheapest way
+   to say "this is not a machine". */
+[data-theme="abyss"] .chat-card,
+[data-theme="abyss"] .chat-bubble,
+[data-theme="abyss"] .chat-composer,
+[data-theme="abyss"] .settings-dialog {
+  border-radius: 18px;
+}
+[data-theme="abyss"] .navtree-tab-row,
+[data-theme="abyss"] .navtree-ws-row {
+  border-radius: 12px;
+}
+
+/* LIGHT IS EMITTED, NOT APPLIED. The status marks and the accent carry their
+   own halo, which is what makes a pinprick on a black field read as alive
+   rather than as a dot somebody drew. */
+[data-theme="abyss"] .navtree-mark,
+[data-theme="abyss"] .navtree-state-dot {
+  box-shadow: 0 0 7px 1px currentColor;
+}
+[data-theme="abyss"] .brand-text {
+  text-shadow: 0 0 14px color-mix(in srgb, var(--rail-accent) 70%, transparent);
+}
+
+/* THE CURRENT. The row you are on drifts — a slow violet-to-pink pass, 24s
+   for a full cycle, which is under the threshold where motion in the corner of
+   an eye asks for attention. Dead under prefers-reduced-motion. */
+[data-theme="abyss"] .navtree-tab-row[data-active="true"] {
+  background-image: linear-gradient(
+    100deg,
+    #b06cff5c 0%,
+    #ff5fa23d 30%,
+    #3ff0c030 58%,
+    #b06cff5c 100%
+  );
+  background-size: 260% 100%;
+  animation: abyss-current 24s linear infinite;
+}
+@keyframes abyss-current {
+  to {
+    background-position: -260% 0;
+  }
+}
+
+/* ─── DEPTH IS A GRADIENT, AND IT IS THE WHOLE THEME ────────────────────────
+   The first pass was a palette and a vignette, and it read as "another dark
+   theme" — correctly, because every dark theme here is an EVEN field and so
+   was that one. Water is not even. There is a little light left at the top of
+   the frame and none at all at the bottom, and that one fact is what the eye
+   reads as being under something rather than in front of it.
+   Painted on the app's own ground rather than on the overlay, so the text sits
+   IN the water instead of behind a sheet of it. */
+[data-theme="abyss"] body {
+  background-image: linear-gradient(to bottom, #1b2a5a4d 0%, #0a0f2600 38%, #00010800 100%);
+  background-attachment: fixed;
+}
+
+/* …and the overlay is the part that closes in at the edges: at 4,000m the lamp
+   you have does not reach the corners of the frame at all. */
+[data-theme="abyss"] body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+  background: radial-gradient(118% 100% at 50% 30%, #0000 34%, #000208b8 100%);
+}
+
+/* EVERY SURFACE IS LIT FROM INSIDE. A card down here is not a sheet of paper
+   with a shadow under it — it is the only thing emitting, so it carries a wide
+   soft halo in the accent and a hairline that glows rather than divides. */
+[data-theme="abyss"] .chat-bubble,
+[data-theme="abyss"] .chat-composer {
+  box-shadow: 0 0 24px -6px color-mix(in srgb, var(--accent) 34%, transparent);
+}
+[data-theme="abyss"] .chat-composer:focus-within {
+  box-shadow: 0 0 34px -4px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+/* CODE AND LINKS GLOW TOO, because the accent is a LIGHT SOURCE in this theme
+   and a flat accent-coloured word would be the one dead thing on the screen. */
+[data-theme="abyss"] a,
+[data-theme="abyss"] .chat-pane-head strong {
+  text-shadow: 0 0 10px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce), (prefers-contrast: more) {
+  [data-theme="abyss"] .navtree-tab-row[data-active="true"] {
+    animation: none;
+    background-size: 100% 100%;
+  }
+  [data-theme="abyss"] body::after,
+  [data-theme="blueprint"] body::after {
+    display: none;
+  }
+}
+
 * {
   box-sizing: border-box;
 }

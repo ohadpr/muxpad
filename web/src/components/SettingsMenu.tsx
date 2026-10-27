@@ -1,7 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { type PushState, disablePush, enablePush, getPushState, sendTestPush } from '../lib/push';
-import { THEME_CHOICES, type ThemeChoice, updateSettings, useSettings } from '../settings';
+import {
+  SYSTEM_PAIR,
+  THEME_CHOICES,
+  type ThemeChoice,
+  updateSettings,
+  useSettings,
+} from '../settings';
 import { SlackPasskeySettings } from './SlackPasskeySettings';
 import './SettingsMenu.css';
 
@@ -110,21 +116,7 @@ export function SettingsMenu() {
                   already has one. The nav IS the heading. */}
               <div className="settings-body">
                 <section hidden={section !== 'general'} aria-label="General settings">
-                  <div className="settings-row">
-                    <label htmlFor="theme">Theme</label>
-                    <select
-                      className="settings-select"
-                      id="theme"
-                      value={settings.theme}
-                      onChange={(e) => updateSettings({ theme: e.target.value as ThemeChoice })}
-                    >
-                      {THEME_CHOICES.map((t) => (
-                        <option key={t.value} value={t.value}>
-                          {t.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                  <ThemePicker chosen={settings.theme} />
 
                   <PushRow />
                 </section>
@@ -135,6 +127,80 @@ export function SettingsMenu() {
           document.body,
         )}
     </div>
+  );
+}
+
+/**
+ * THE PICKER HAS TO SHOW THE THEME, NOT NAME IT.
+ *
+ * It was a <select>. "System (Dracula / Alucard)" in a dropdown tells you
+ * nothing about what any of them look like, and since demoscene a theme may
+ * own the TYPEFACE and draw its own structure — so the thing the list was
+ * hiding had grown to be most of what a theme is.
+ *
+ * Each tile paints itself with the real tokens. `[data-theme="x"]` is an
+ * attribute selector, not a :root rule, so setting the attribute on a 96px
+ * div inside the dialog gives that div the whole palette AND --ui-font. The
+ * preview therefore cannot drift from the theme: there is no second copy of
+ * the colours here, and a theme added later gets a correct tile for free.
+ *
+ * Real radio inputs rather than buttons with aria-checked: a radiogroup is one
+ * tab stop with arrow keys inside it, which is the behaviour a grid of
+ * mutually exclusive choices should have and the behaviour nobody writes
+ * correctly by hand.
+ */
+function ThemePicker({ chosen }: { chosen: ThemeChoice }) {
+  return (
+    <fieldset className="settings-row settings-themes">
+      <legend>Theme</legend>
+      <div className="theme-grid">
+        {THEME_CHOICES.map((t) => (
+          <label key={t.value} className="theme-tile" data-chosen={t.value === chosen}>
+            <input
+              type="radio"
+              name="theme"
+              value={t.value}
+              checked={t.value === chosen}
+              onChange={() => updateSettings({ theme: t.value })}
+            />
+            {/* System is the only choice that is two themes, so its tile is
+                two previews cut on the diagonal — the light one over the dark
+                one, which is the thing the label was trying to say in words. */}
+            {t.value === 'system' ? (
+              <span className="theme-tile-preview theme-tile-split">
+                <ThemeMock theme={SYSTEM_PAIR.dark} />
+                <ThemeMock theme={SYSTEM_PAIR.light} />
+              </span>
+            ) : (
+              <span className="theme-tile-preview">
+                <ThemeMock theme={t.value} />
+              </span>
+            )}
+            <span className="theme-tile-name">{t.label}</span>
+          </label>
+        ))}
+      </div>
+    </fieldset>
+  );
+}
+
+/** A muxpad in miniature: the rail, a head, and three lines of a chat. */
+function ThemeMock({ theme }: { theme: string }) {
+  return (
+    <span className="theme-mock" data-theme={theme} aria-hidden="true">
+      <span className="theme-mock-rail">
+        <i className="theme-mock-dot" />
+        <i className="theme-mock-row" />
+        <i className="theme-mock-row theme-mock-row--on" />
+      </span>
+      <span className="theme-mock-page">
+        {/* "Aa" in the theme's own --ui-font: on half of these the typeface
+            is the headline and the palette is the footnote. */}
+        <b className="theme-mock-aa">Aa</b>
+        <i className="theme-mock-line" />
+        <i className="theme-mock-line theme-mock-line--short" />
+      </span>
+    </span>
   );
 }
 
