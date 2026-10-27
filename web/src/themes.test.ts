@@ -200,3 +200,42 @@ describe('theme rules point at elements that exist', () => {
     expect(dead, 'these theme rules match nothing').toEqual([]);
   });
 });
+
+/**
+ * THE SELECTED ROW IS THE PANE'S SURFACE, REACHING INTO THE RAIL.
+ *
+ * Not a highlight. `.navtree-tab-row[data-active]` takes `--bg-pane-face` and
+ * `.navtree-tab-funnel` draws the two concave fillets that flare one into the
+ * other, which is why the row and the pane read as one shape rather than as a
+ * list item that happens to be lit.
+ *
+ * Two themes broke it the same way — riso with a flat pink, memphis with a
+ * flat yellow — and the symptom is not the colour, it is the JOIN: the funnel
+ * goes on flaring the pane's surface into a row that is no longer that
+ * surface, so the edge is abrupt. Reported as "the yellow here or red in
+ * another theme look good but the cut is abrupt… theoretically the active
+ * colour should be the bg colour of the main view".
+ *
+ * A theme may paint an IMAGE over the selected row — demoscene's copper bar
+ * does, and the face still shows beneath it. It may not replace the colour.
+ */
+describe('no theme replaces the selected row’s fill', () => {
+  const bare = STYLES.replace(/\/\*[\s\S]*?\*\//g, '');
+  const activeRules = [...bare.matchAll(/([^{}]*)\{([^{}]*)\}/g)]
+    .map((m) => ({ sel: (m[1] ?? '').trim().replace(/\s+/g, ' '), body: m[2] ?? '' }))
+    .filter(
+      (r) =>
+        r.sel.includes('[data-theme=') && /\.navtree-tab-row\[data-active="true"\]\s*$/.test(r.sel),
+    );
+
+  it('finds the rules at all, so this cannot pass vacuously', () => {
+    expect(activeRules.length).toBeGreaterThan(0);
+  });
+
+  it.each(activeRules.map((r) => [r.sel, r] as const))('%s sets no background-color', (_s, r) => {
+    expect(r.body).not.toMatch(/(?:^|;)\s*background-color\s*:/);
+    // `background:` shorthand sets the colour too, and resets it to
+    // `transparent` even when only an image is given.
+    expect(r.body).not.toMatch(/(?:^|;)\s*background\s*:/);
+  });
+});

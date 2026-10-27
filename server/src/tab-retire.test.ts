@@ -9,7 +9,13 @@ import { TabStore } from './store/TabStore.js';
 import { WorkspaceStore } from './store/WorkspaceStore.js';
 import { runMigrations } from './store/migrations.js';
 import { clockIndex, resolveTabClock } from './tab-clock.js';
-import { ChatRetirer, clearReadyMarks, reconcileDeadChats, retireChat } from './tab-retire.js';
+import {
+  ChatRetirer,
+  HOLD_FLOOR_MS,
+  clearReadyMarks,
+  reconcileDeadChats,
+  retireChat,
+} from './tab-retire.js';
 
 /**
  * The 41-agent sidebar, in a test. Every row READY, every one finished hours
@@ -275,6 +281,59 @@ describe('retiring a sub-chat when it delivers', () => {
       ).run('a3', child.pane, 'image/png', '/tmp/shot.png', Date.now());
       db.prepare('UPDATE tabs SET spawn_artifacts = ? WHERE id = ?').run('[]', child.tab);
       expect(finishJob(new ChatRetirer(deps), child.pane)).toBe(false);
+      expect(isDone(child.tab)).toBe(false);
+    });
+
+    it('…and NOT once the REPORT is on the card, with no artifact scraped', () => {
+      // THE LEAK. `spawn_artifacts` is SCRAPED from the worker's prose, and a
+      // worker that produced a file without citing a path in its answer
+      // scrapes to the empty list — which `setSpawnReport` COALESCEs to "leave
+      // the column alone". So the column stayed NULL and the hold waited for a
+      // publication that could not happen.
+      //
+      // Measured: two rows stuck exactly here, each with ONE attachment and
+      // `spawn_artifacts` NULL — `why agents skip reply` (23h) and `feed
+      // defect scan + replace` (8h). The hold's own reason is "the output is
+      // ONLY in there", and a card carrying the answer is the output not being
+      // only in there.
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      db.prepare(
+        'INSERT INTO attachments (id, pane_id, mime, path, created_at) VALUES (?,?,?,?,?)',
+      ).run('a4', child.pane, 'image/png', '/tmp/shot.png', Date.now());
+      db.prepare('UPDATE tabs SET spawn_report = ? WHERE id = ?').run(
+        'I rebuilt the dial and loaded it at both sizes.',
+        child.tab,
+      );
+      expect(finishJob(new ChatRetirer(deps), child.pane)).toBe(true);
+      expect(isDone(child.tab)).toBe(true);
+    });
+
+    it('NOTHING is held past the floor — the backstop under all of these', () => {
+      // Two of these reasons have now leaked in production and each got its own
+      // fix. This is what makes a third survivable: a hold claims "there is
+      // something in here you have not seen", and after HOLD_FLOOR_MS of a
+      // worker that has not spoken that claim is false whatever produced it.
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      db.prepare(
+        'INSERT INTO attachments (id, pane_id, mime, path, created_at) VALUES (?,?,?,?,?)',
+      ).run('a5', child.pane, 'image/png', '/tmp/shot.png', Date.now());
+      // Still held at four hours less a minute…
+      const justUnder = new ChatRetirer(deps, undefined, () => Date.now() + HOLD_FLOOR_MS - 60_000);
+      expect(finishJob(justUnder, child.pane)).toBe(false);
+      expect(isDone(child.tab)).toBe(false);
+      // …and gone a minute the other side of it.
+      const justOver = new ChatRetirer(deps, undefined, () => Date.now() + HOLD_FLOOR_MS + 60_000);
+      expect(finishJob(justOver, child.pane)).toBe(true);
+      expect(isDone(child.tab)).toBe(true);
+    });
+
+    it('a FATAL run is exempt from the floor — a crash is a thing you go and read', () => {
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      const old = new ChatRetirer(deps, undefined, () => Date.now() + HOLD_FLOOR_MS * 10);
+      expect(finishJob(old, child.pane, 'fatal')).toBe(false);
       expect(isDone(child.tab)).toBe(false);
     });
 
