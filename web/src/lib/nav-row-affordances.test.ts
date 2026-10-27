@@ -13,8 +13,7 @@ const row = (o: Partial<Parameters<typeof tabRowAffordances>[0]> = {}) =>
 describe('tab row affordances — desktop sidebar', () => {
   it('offers the hover-revealed pin, and none of the touch controls', () => {
     expect(row({ variant: 'sidebar', paneCount: 3 })).toEqual({
-      pinButton: true,
-      closeButton: true,
+      menuButton: true,
       paneExpander: false,
     });
   });
@@ -32,22 +31,19 @@ describe('tab row affordances — mobile sheet', () => {
     // past". Both controls moved under the row, behind a deliberate left
     // swipe (see swipe-axis). Desktop is untouched.
     const a = row({ variant: 'sheet', paneCount: 1 });
-    expect(a.pinButton).toBe(false);
-    expect(a.closeButton).toBe(false);
+    expect(a.menuButton).toBe(false);
   });
 
   it('a SINGLE-pane tab is a plain row: emoji, name, nothing else', () => {
     expect(row({ variant: 'sheet', paneCount: 1 })).toEqual({
-      pinButton: false,
-      closeButton: false,
+      menuButton: false,
       paneExpander: false,
     });
   });
 
   it('a MULTI-pane tab gets ONE extra thing: the chevron that opens its panes', () => {
     expect(row({ variant: 'sheet', paneCount: 4 })).toEqual({
-      pinButton: false,
-      closeButton: false,
+      menuButton: false,
       paneExpander: true,
     });
   });
@@ -68,13 +64,12 @@ describe('tab row affordances — mobile sheet', () => {
 
   it('an inline rename stands every row control down', () => {
     const a = row({ variant: 'sheet', paneCount: 4, isEditing: true });
-    expect(a.closeButton).toBe(false);
+    expect(a.menuButton).toBe(false);
     expect(a.paneExpander).toBe(false);
     // Desktop too: the × and pin would otherwise sit beside the input and
     // steal the width the name needs while you're typing into it.
     const d = row({ variant: 'sidebar', paneCount: 1, isEditing: true });
-    expect(d.pinButton).toBe(false);
-    expect(d.closeButton).toBe(false);
+    expect(d.menuButton).toBe(false);
   });
 });
 

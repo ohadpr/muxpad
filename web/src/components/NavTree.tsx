@@ -1445,7 +1445,13 @@ export function TabList({
    *  switches the row's mark from a tile to a dot in its parent's chip column,
    *  and what puts the one indent step on the row. Nothing about a clock — a
    *  sub-chat has none, and the row reads its own. */
-  const renderRow = (t: Tab, parent?: Tab, group?: SubsGroup, childLast?: boolean) => (
+  const renderRow = (
+    t: Tab,
+    parent?: Tab,
+    group?: SubsGroup,
+    childLast?: boolean,
+    family?: boolean,
+  ) => (
     <TabRow
       key={t.id}
       tab={t}
@@ -1469,6 +1475,12 @@ export function TabList({
       // all dead in the product while their CSS and their grouping rule were
       // both correct. Pinned by NavTree.rows.test.tsx.
       {...(parent ? { parent } : {})}
+      // THE FAMILY READS AS ONE BLOCK. Reported: "you stand on a chat that has
+      // sub-chats, then the sub-chats don't get a semi-selected background".
+      // They are the same piece of work and looked like strangers who happen
+      // to be adjacent. Set in both directions — stand on a child and the
+      // parent takes it too, so you can always see what a worker belongs to.
+      {...(family ? { family: true } : {})}
       workspace={workspace}
       isActiveTab={isActiveWorkspace && t.slug === activeTabSlug}
       variant={variant}
@@ -1519,6 +1531,14 @@ export function TabList({
     // where you are, not a disclosure you opened, so leaving the chat
     // re-shuts the group.
     const holdsActive = isActiveWorkspace && g.children.some((k) => k.slug === activeTabSlug);
+    // ── THE WHOLE FAMILY, IN BOTH DIRECTIONS ────────────────────────────────
+    // `holdsActive` is only half of it: it asks whether a CHILD is the row you
+    // are on. Standing on the PARENT puts you in the same family, and the
+    // first pass of this missed it by asking each row about its own parent
+    // instead of asking the group once — so a sibling of the active child
+    // compared `signal archive` against the active slug, which is the child's,
+    // and every row came back false. One question, asked of the group.
+    const familyHoldsActive = holdsActive || (isActiveWorkspace && g.chat.slug === activeTabSlug);
     const open = openSubs.has(g.chat.id) || holdsActive;
     const foldable = !g.contextOnly && g.children.length > 0;
     return (
@@ -1556,6 +1576,13 @@ export function TabList({
                   onToggle: () => toggleSubs(g.chat.id),
                 }
               : undefined,
+            undefined,
+            // The family holds the row you are standing on, and THIS IS NOT
+            // THAT ROW. Without the second half the parent tinted itself while
+            // you were standing on it, and the tint won against the selection
+            // — the row you were in came out fainter than the ones beside it.
+            // See the data-family note in NavTree.css.
+            familyHoldsActive && g.chat.slug !== activeTabSlug,
           )
         )}
         {/* NO ROW OF ITS OWN ANY MORE. The disclosure, the count, the agent
@@ -1567,7 +1594,15 @@ export function TabList({
             which also lets the rollup state and the count stop being two
             drawings of one fact. */}
         {!foldable || open
-          ? g.children.map((k, i) => renderRow(k, g.chat, undefined, i === g.children.length - 1))
+          ? g.children.map((k, i) =>
+              renderRow(
+                k,
+                g.chat,
+                undefined,
+                i === g.children.length - 1,
+                familyHoldsActive && k.slug !== activeTabSlug,
+              ),
+            )
           : null}
       </Fragment>
     );
@@ -1826,6 +1861,8 @@ interface TabRowProps {
   /** The chat that spawned this one, when it is a child. Supplies the clock
    *  they share, and switches the row's leading mark from tile to dot. */
   parent?: Tab | undefined;
+  /** This row belongs to the same parent/child family as the active row. */
+  family?: boolean | undefined;
   /**
    * This is the LAST child in its parent's run, so its trunk segment stops at
    * the elbow instead of carrying on into whatever follows.
@@ -2378,23 +2415,26 @@ export interface SubsGroup {
 function SubsPill({ group }: { group: SubsGroup }) {
   const { total, parts, open, status, title, parentName, onToggle } = group;
   const hue = status ?? 'idle';
-  const noun = `${total} ${total === 1 ? 'sub-agent' : 'sub-agents'}`;
   const wording = (text: string) =>
     text.replace(/\bready\b/g, 'unread').replace(/\bdead\b/g, 'stopped');
-  // A homogeneous group can say "2 running". For mixed states, retain the
-  // total and name the most urgent subset; the title keeps the full breakdown.
+  // ── THE LABEL IS THE COUNT, AND THE COUNT IS ALL ──────────────────────────
   //
-  // SAID WHETHER OR NOT THE GROUP IS OPEN. It used to fall back to the bare
-  // noun once expanded, on the reasoning that the children's own rows say it
-  // better — but the row the pill sits on is the family's header, and with it
-  // mute the only state left there is the parent's. A chat with two running
-  // workers under it then reads as finished.
-  const label =
-    parts.length === 0
-      ? noun
-      : parts.length === 1
-        ? wording(parts[0]!)
-        : `${total} · ${wording(parts[0]!)}`;
+  // It used to be a sentence: "1 running", "2 · 1 unread". Measured on a 272px
+  // row that pill was 91px — a THIRD of the row — and the name it was crowding
+  // got 55. Reported as "all these '1 running', '2 · 1 unread' statuses are
+  // odd" and "chat names can get tiny".
+  //
+  // The sentence was answering a question nobody asks a sidebar. What you want
+  // from a rail is "is there anything under here, and is any of it still
+  // going" — which is a number and a colour, both of which this object already
+  // had. The words were a third encoding of the same two facts.
+  //
+  // They are not lost: `title` and the accessible name still carry the whole
+  // breakdown, which is where a sentence belongs. (Reviewed against Slack,
+  // Linear, VS Code, Mail, GitHub, Discord and Notion — none of them spells a
+  // state out on a list row; every one of them uses a count badge plus a
+  // disclosure, with the words on hover.)
+  const label = String(total);
   const description = wording(title);
   return (
     <button
@@ -2419,9 +2459,21 @@ function SubsPill({ group }: { group: SubsGroup }) {
   );
 }
 
+/** The row's one control: three dots, the universal "more actions". */
+function SvgRowMenu() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true" fill="currentColor">
+      <circle cx="3.2" cy="8" r="1.35" />
+      <circle cx="8" cy="8" r="1.35" />
+      <circle cx="12.8" cy="8" r="1.35" />
+    </svg>
+  );
+}
+
 function TabRow({
   tab,
   parent,
+  family,
   childLast,
   group,
   workspace,
@@ -2762,6 +2814,7 @@ function TabRow({
       // would have rendered as an ordinary line — indistinguishable from the
       // chat that spawned it, sitting directly beneath it.
       data-child={parent ? 'true' : undefined}
+      data-family={family ? 'true' : undefined}
       // THE LAST ONE STOPS THE TRUNK. See renderRow for why this is an
       // attribute and not a CSS sibling test — on THIS surface the sibling
       // test could never have worked.
@@ -2944,6 +2997,7 @@ function TabRow({
       // went deliberately — see RowMark. The row's state is now told exactly
       // once, by the 10px mark at its right edge.
       data-child={parent ? 'true' : undefined}
+      data-family={family ? 'true' : undefined}
       data-child-last={childLast ? 'true' : undefined}
       // Pinned is a 2px accent EDGE on the row's leading rim — see NavTree.css.
       // Off the ink entirely, because the name's colour already says
@@ -3083,35 +3137,30 @@ function TabRow({
           {/* THE SCHEDULE YIELDS. A chat with live workers has something more
               urgent to say than when its cron next fires, and both will not
               fit beside a name on a 240px row — measured, the name drops to
-              55px and `Trayo Builder` truncates. The time is still on the
+              55px and `Orbit Builder` truncates. The time is still on the
               row's own title. Only on a row that HAS sub-chats: a chat
               without them keeps its `◷ 09:00` exactly as before. */}
           {tab.crons && !group ? <CronMark tab={tab} /> : null}
-          {affords.pinButton ? (
+          {/* ONE control, and it opens the menu that already had everything.
+              See TabRowAffordances.menuButton for the measurement that
+              collapsed the pin and the archive into it. Keyboard reaches it by
+              tab — the rail reveals on :has(:focus-visible) — and touch never
+              renders it, using long-press instead. */}
+          {affords.menuButton ? (
             <button
               type="button"
-              className={`navtree-close navtree-pin${tab.pinned ? ' is-pinned' : ''}`}
+              className="navtree-close navtree-rowmenu"
               onClick={(e) => {
                 e.stopPropagation();
                 e.preventDefault();
-                onSetPinned(!tab.pinned);
+                const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                setMenu({ x: r.right, y: r.bottom });
               }}
-              title={tab.pinned ? 'Unpin tab' : 'Pin tab to the top'}
-              aria-label={tab.pinned ? `Unpin tab ${tab.name}` : `Pin tab ${tab.name}`}
-              aria-pressed={tab.pinned === true}
+              title="Chat actions"
+              aria-label={`Actions for ${tab.name}`}
+              aria-haspopup="menu"
             >
-              <SvgPin size={14} filled={tab.pinned === true} />
-            </button>
-          ) : null}
-          {affords.closeButton ? (
-            <button
-              type="button"
-              className="navtree-close navtree-archive"
-              onClick={onArchive}
-              title="Archive — moves to done, a message brings it back"
-              aria-label={`Archive chat ${tab.name}`}
-            >
-              <SvgArchive size={15} />
+              <SvgRowMenu />
             </button>
           ) : null}
           {group ? <SubsPill group={group} /> : null}
