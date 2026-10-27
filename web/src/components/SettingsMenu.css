@@ -212,8 +212,8 @@
 }
 .theme-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 8px;
   margin-top: 12px;
 }
 .theme-tile {
@@ -266,7 +266,11 @@
 .theme-tile-preview {
   display: block;
   position: relative;
-  height: 72px;
+  /* 72px once. A preview is a SAMPLE — it has to show the rail, the page, the
+     ink and the typeface, and 56px shows all four. The extra 16 was buying
+     nothing and costing a scrollbar in the rail's popover, where eleven of
+     these have to fit above a composer. */
+  height: 56px;
   border-radius: 7px;
   overflow: hidden;
   border: 1px solid var(--settings-line);
@@ -294,8 +298,8 @@
   flex: 0 0 30%;
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  padding: 7px 5px;
+  gap: 4px;
+  padding: 5px 4px;
   background: var(--rail-surface);
   border-right: 1px solid var(--rail-border);
 }
@@ -318,12 +322,12 @@
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 5px;
-  padding: 7px 8px;
+  gap: 4px;
+  padding: 5px 7px;
   min-width: 0;
 }
 .theme-mock-aa {
-  font: 700 0.8125rem / 1 var(--ui-font);
+  font: 700 0.75rem / 1 var(--ui-font);
   color: var(--fg);
   letter-spacing: 0.02em;
 }
@@ -877,9 +881,10 @@
   padding: 10px 0 0;
   border-bottom: 0;
 }
+/* THREE ACROSS, AND NO SCROLL. Eleven themes at two columns was six rows and
+   a scrollbar — in a picker whose whole job is letting you COMPARE, which you
+   cannot do with half of them off the bottom. Three columns of the smaller
+   tile is four rows, and it fits. */
 .themeswitch-pop .theme-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  max-height: min(52vh, 420px);
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }

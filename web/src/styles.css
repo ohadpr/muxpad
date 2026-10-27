@@ -724,6 +724,23 @@
 [data-theme="demoscene"] .chat-pane {
   letter-spacing: 0.01em;
 }
+/* ─── NO THEME PUTS A WALL ON THE RAIL'S RIGHT EDGE ─────────────────────────
+   Two of them did — demoscene's box-drawing double line and blueprint's heavy
+   drafting rule — and both were drawn in exactly the place the SELECTED ROW
+   crosses. muxpad's selection is the chat pane's surface continuing into the
+   rail, with `.navtree-tab-funnel` flaring one into the other; a border sits
+   outside the padding box of everything, so it rules a line straight through
+   that join. Reported against blueprint: "remove vertical border line it
+   blocks nice flow of selected tab bg".
+
+   It is not a tuning question, it is structural: the rail's right edge is
+   WHERE THE PANE JOINS IT, so anything painted there is in the way by
+   construction, in every theme, for ever. themes.test.ts fails it now.
+
+   The idea both themes wanted is not lost — a panel still reads as a panel
+   from its own surface, its brand plate and its section rules, all of which
+   they already have. */
+
 /* ─── THE SELECTORS THAT MATCHED NOTHING ────────────────────────────────────
    `.navtree-ws-label`, `.navtree-head` and `.chat-pane-head` do not exist and
    never did. The rail's header is `.sidenav-brand`, the workspace name is
@@ -746,20 +763,6 @@
    A text-mode screen is made of EDGES: panels have walls, the selection has a
    cursor, section headers are drawn in rule characters. That is structure, and
    it is what the rest of this block adds. */
-
-/* THE RAIL HAS A WALL. A double line, the ║ of a box-drawing frame, in the
-   accent rather than in a grey — on a black ground a coloured edge is the
-   thing that says "panel" at a glance. */
-[data-theme="demoscene"] .sidenav {
-  border-right: 3px solid transparent;
-  border-image: repeating-linear-gradient(
-      to right,
-      color-mix(in srgb, var(--accent) 55%, transparent) 0 1px,
-      transparent 1px 2px,
-      color-mix(in srgb, var(--accent) 55%, transparent) 2px 3px
-    )
-    3;
-}
 
 /* THE SELECTION HAS A CURSOR. `▶` in the gutter of the active row — the
    single most recognisable thing about a TUI, and the one element here that a
@@ -1146,13 +1149,6 @@
 [data-theme="blueprint"] .navtree-mark,
 [data-theme="blueprint"] .navtree-state-dot {
   border-radius: 2px;
-}
-
-/* AND IT IS RULED OFF THE SHEET. A title block is bounded by the heaviest
-   line on the drawing, not by a hairline — and with the surfaces now a real
-   step apart the border is confirming an edge rather than inventing one. */
-[data-theme="blueprint"] .sidenav {
-  border-right: 3px solid color-mix(in srgb, var(--accent) 65%, transparent);
 }
 
 /* ANNOTATION IS SET IN CAPS WITH WIDE TRACKING, because a drafter letters by
