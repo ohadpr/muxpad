@@ -54,7 +54,7 @@ import {
   isApproval,
 } from '../reversibility.js';
 import { markSessionCleared, markSessionTurned, sessionHadTurn } from '../session-marks.js';
-import { isSilentTurn } from '../silent-turn.js';
+import { isSilentTurn, proseSpeaks } from '../silent-turn.js';
 import { SubagentRoster } from '../subagent-roster.js';
 import type { AgentBackend, BackendOptions, RunnerHost } from './types.js';
 
@@ -1258,6 +1258,8 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
    * reply guard; see needsReplyFallback.
    */
   let turnHuman = false;
+  /** This turn was fired by a cron — see proseSpeaks. */
+  let turnCron = false;
   /**
    * The message whose send has already triggered ONE compaction.
    *
@@ -1408,7 +1410,8 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
         // `isHumanMessage` does — a flag would be lost across the durable queue
         // and a server restart. A slash command is the user talking to the
         // SESSION (`/compact`, `/clear`), not asking the agent anything.
-        turnHuman = parseCronMarker(text) === null && !text.startsWith('/');
+        turnCron = parseCronMarker(text) !== null;
+        turnHuman = !turnCron && !text.startsWith('/');
         // `/clear` is the one message whose SIDE EFFECT is a new session id.
         // Remembered from here (not from slash(), which only queues it) so the
         // id rotation it causes can be told apart from a drift nobody asked
@@ -2203,6 +2206,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
       // harness never drew: they applied "you must always reply" everywhere,
       // which is unenforceable, instead of enforcing it where it is true.)
       turnHuman = false;
+      turnCron = false;
       emit({ t: 'turn-start' });
       log(dim('▸ autonomous turn (wakeup/cron/background)'));
     };
@@ -2440,13 +2444,14 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
           }
           // Keep the LATEST prose-bearing assistant message as the turn's summary.
           if (msgText) {
-            // Prose is the commonest way a turn says something — in AGENT
-            // mode. In Chat mode it is the scratchpad: the chat renders the
-            // `reply` tool and nothing else, so counting prose there would
-            // call every thinking-out-loud fire "spoken" and bold a row whose
-            // log gained nothing. `.trim()` because a lone newline is not
-            // speech in either mode.
-            if (currentMode !== 'chat' && msgText.trim()) saidSomethingThisTurn = true;
+            // Prose is the commonest way a turn says something, except in the
+            // two places where it is machinery — Chat mode's scratchpad, and a
+            // cron fire, whose prose the chat already refuses to promote. See
+            // proseSpeaks for the push that disagreed with the log for a
+            // weekday hour at a time. `.trim()` because a lone newline is not
+            // speech anywhere.
+            if (msgText.trim() && proseSpeaks({ mode: currentMode, cron: turnCron }))
+              saidSomethingThisTurn = true;
             lastAssistantText = msgText;
             lastAssistantTextId = msgTextId;
             // DID THIS TURN ALREADY ANSWER? A real model wrote it, and it is
