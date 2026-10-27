@@ -7,7 +7,10 @@ export type Theme =
   | 'github-light'
   | 'acme'
   | 'acme-dark'
-  | 'demoscene';
+  | 'demoscene'
+  | 'blueprint'
+  | 'thermal'
+  | 'abyss';
 
 /** What the picker offers: a theme, or "whatever the OS is doing". */
 export type ThemeChoice = Theme | 'system';
@@ -23,18 +26,30 @@ export const SYSTEM_PAIR = { light: 'alucard', dark: 'dracula' } as const;
 export const THEMES: { value: Theme; label: string }[] = [
   { value: 'tokyo-night', label: 'Tokyo Night' },
   { value: 'dracula', label: 'Dracula' },
-  { value: 'alucard', label: 'Alucard (Dracula Light)' },
+  { value: 'alucard', label: 'Alucard' },
   { value: 'github-light', label: 'GitHub Light' },
   { value: 'acme', label: 'Acme' },
   { value: 'acme-dark', label: 'Acme Dark' },
   { value: 'demoscene', label: 'Demoscene' },
+  { value: 'blueprint', label: 'Blueprint' },
+  { value: 'thermal', label: 'Thermal' },
+  { value: 'abyss', label: 'Abyss' },
 ];
 
 const VALID_THEMES = new Set<Theme>(THEMES.map((t) => t.value));
 
-/** The picker's options: System first, because it is the recommended default. */
+/**
+ * The picker's options: System first, because it is the recommended default.
+ *
+ * The labels are SHORT — "Alucard", not "Alucard (Dracula Light)"; "System",
+ * not "System (Dracula / Alucard)". They were long because a <select> had to
+ * say in words what a theme looks like. The picker now paints each one, and
+ * System's tile is literally the two halves cut on the diagonal, so the
+ * parenthetical was describing the thing directly above it — and was the only
+ * reason two of the tiles ellipsised their own names.
+ */
 export const THEME_CHOICES: { value: ThemeChoice; label: string }[] = [
-  { value: 'system', label: 'System (Dracula / Alucard)' },
+  { value: 'system', label: 'System' },
   ...THEMES,
 ];
 
