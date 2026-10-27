@@ -266,3 +266,47 @@ describe('no theme walls off the rail', () => {
     expect(offenders, 'these rule a line through the selection’s join').toEqual([]);
   });
 });
+
+/**
+ * THE RAIL AND THE PANE ARE TWO SURFACES, AND THE EYE MUST BE ABLE TO SAY SO.
+ *
+ * muxpad's selected row is the pane's surface continuing into the rail. That
+ * only reads as continuity if there is something to continue FROM: when the
+ * rail and the pane are the same dark, the funnel bridges two halves of one
+ * unbroken field and the join is invisible.
+ *
+ * demoscene measured 1.09:1 — effectively one surface — and was reported as
+ * "not good connection of content bg to active chat bg… in general we could
+ * use some bg color for content or sidebar". Both halves of that sentence are
+ * this number.
+ *
+ * The floor is 1.25. Every theme that ships clears it with margin (the next
+ * lowest is tokyo-night at 1.39), so this fails a NEW theme that forgets,
+ * which is the only way it can be forgotten.
+ */
+describe('every theme separates the rail from the pane', () => {
+  const srgb = (hex: string) => {
+    const h = hex.replace('#', '');
+    return [0, 2, 4].map((i) => Number.parseInt(h.slice(i, i + 2), 16));
+  };
+  const lum = (c: number[]) =>
+    c
+      .map((v) => {
+        const s = v / 255;
+        return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+      })
+      .reduce((a, v, i) => a + v * [0.2126, 0.7152, 0.0722][i]!, 0);
+  const ratio = (a: string, b: string) => {
+    const [la, lb] = [lum(srgb(a)), lum(srgb(b))];
+    return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+  };
+
+  it.each(THEMES.map((t) => t.value))('%s', (name) => {
+    const body = block(name);
+    const rail = /--rail-surface:\s*(#[0-9a-f]{6})/i.exec(body)?.[1];
+    const pane = /--bg:\s*(#[0-9a-f]{6})/i.exec(body)?.[1];
+    expect(rail, `${name} has no --rail-surface`).toBeTruthy();
+    expect(pane, `${name} has no --bg`).toBeTruthy();
+    expect(ratio(rail as string, pane as string)).toBeGreaterThanOrEqual(1.25);
+  });
+});
