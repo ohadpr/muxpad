@@ -103,17 +103,23 @@ const XTERM_THEMES: Record<
     cursor: '#9fe3ff',
     selectionBackground: '#1a4a7a',
   },
-  thermal: {
-    background: '#f3efe4',
-    foreground: '#1b1a17',
-    cursor: '#c0271b',
-    selectionBackground: '#ddd6c3',
+  riso: {
+    background: '#f7f4ec',
+    foreground: '#17161c',
+    cursor: '#e0005f',
+    selectionBackground: '#ffe1ef',
+  },
+  hazard: {
+    background: '#e6e4df',
+    foreground: '#16161a',
+    cursor: '#c23600',
+    selectionBackground: '#ffe9a3',
   },
   abyss: {
-    background: '#060a16',
-    foreground: '#dce7ff',
-    cursor: '#b06cff',
-    selectionBackground: '#2a2155',
+    background: '#141d3a',
+    foreground: '#e4ecff',
+    cursor: '#b98cff',
+    selectionBackground: '#3b2f74',
   },
   'tokyo-night': {
     background: '#1a1b26',

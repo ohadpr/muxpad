@@ -9,8 +9,9 @@ export type Theme =
   | 'acme-dark'
   | 'demoscene'
   | 'blueprint'
-  | 'thermal'
-  | 'abyss';
+  | 'abyss'
+  | 'riso'
+  | 'hazard';
 
 /** What the picker offers: a theme, or "whatever the OS is doing". */
 export type ThemeChoice = Theme | 'system';
@@ -32,8 +33,9 @@ export const THEMES: { value: Theme; label: string }[] = [
   { value: 'acme-dark', label: 'Acme Dark' },
   { value: 'demoscene', label: 'Demoscene' },
   { value: 'blueprint', label: 'Blueprint' },
-  { value: 'thermal', label: 'Thermal' },
   { value: 'abyss', label: 'Abyss' },
+  { value: 'riso', label: 'Riso' },
+  { value: 'hazard', label: 'Hazard' },
 ];
 
 const VALID_THEMES = new Set<Theme>(THEMES.map((t) => t.value));
@@ -78,6 +80,9 @@ const THEME_ALIASES: Record<string, Theme> = {
   'soft-dark': 'tokyo-night',
   nord: 'tokyo-night',
   light: 'github-light',
+  // Thrown out, not renamed — but anyone sitting on it gets the loud light
+  // theme that replaced it rather than a silent reset to the default.
+  thermal: 'riso',
   'solarized-light': 'github-light',
   'solarized-dark': 'tokyo-night',
   latte: 'github-light',
