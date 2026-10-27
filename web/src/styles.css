@@ -1616,11 +1616,22 @@
 }
 
 /* THE SELECTED ROW IS A SECOND PASS OF PINK, knocked out of the blue —
-   printed over, not tinted. */
+   printed over, not tinted.
+
+   AND THE NAME ON IT IS INK, not paper. The row inherited --rail-ink, which
+   is white, and white on this pink measures 3.09:1 — under the floor before
+   the dot field takes another bite out of it. Black reads 5.82:1 on the same
+   fill, and it is also what a riso does: the dark pass is printed LAST, over
+   the colour. The screen comes down with it, because a 25% white dot every
+   4px under a 13px name is contrast spent on texture. */
 [data-theme="riso"] .navtree-tab-row[data-active="true"] {
   background-color: var(--rail-accent);
-  background-image: radial-gradient(#ffffff40 40%, transparent 41%);
+  background-image: radial-gradient(#ffffff2b 40%, transparent 41%);
   background-size: 4px 4px;
+}
+[data-theme="riso"] .navtree-tab-row[data-active="true"] .navtree-name-text {
+  color: var(--fg);
+  font-weight: 700;
 }
 
 @media (prefers-reduced-motion: reduce), (prefers-contrast: more) {
@@ -1732,12 +1743,12 @@
    words. */
 [data-theme="memphis"] .chat-pane,
 [data-theme="memphis"] .workspace-body {
-  background-image: radial-gradient(5px 5px at 12% 18%, #ffd400 98%, #0000),
-    radial-gradient(4px 4px at 78% 9%, #00c2e0 98%, #0000),
-    radial-gradient(6px 6px at 43% 62%, #d6006e 98%, #0000),
-    radial-gradient(4px 4px at 91% 71%, #7b4dff 98%, #0000),
-    radial-gradient(5px 5px at 27% 88%, #00d49a 98%, #0000),
-    repeating-linear-gradient(45deg, #1210161c 0 3px, #0000 3px 17px);
+  background-image: radial-gradient(5px 5px at 12% 18%, #ffd40085 98%, #0000),
+    radial-gradient(4px 4px at 78% 9%, #00c2e08c 98%, #0000),
+    radial-gradient(6px 6px at 43% 62%, #d6006e7a 98%, #0000),
+    radial-gradient(4px 4px at 91% 71%, #7b4dff80 98%, #0000),
+    radial-gradient(5px 5px at 27% 88%, #00d49a8c 98%, #0000),
+    repeating-linear-gradient(45deg, #12101612 0 3px, #0000 3px 17px);
   background-size: 190px 190px, 150px 150px, 230px 230px, 170px 170px, 210px 210px, 58px 58px;
   background-attachment: fixed;
 }
