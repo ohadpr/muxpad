@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -137,5 +137,61 @@ describe('the theme picker previews the real tokens', () => {
     );
     expect(tile).toMatch(/clip-path/);
     expect(tile).not.toMatch(/display:\s*none/);
+  });
+});
+
+/**
+ * A RULE THAT MATCHES NOTHING LOOKS EXACTLY LIKE A RULE THAT WORKS.
+ *
+ * Three themes styled `.navtree-ws-label` — uppercase, tracking, and in one
+ * case a whole rubber stamp. There is no such element: the workspace name is
+ * `.navtree-ws-name > .navtree-name-text`. Nothing failed, nothing warned, and
+ * the two earlier themes had shipped with the dead rule for as long as they
+ * existed, because the only way to notice is to render the theme and look for
+ * a thing you only half expected to see.
+ *
+ * So: every class a theme block names must exist in the markup.
+ */
+describe('theme rules point at elements that exist', () => {
+  const COMPONENTS = (() => {
+    const out: string[] = [];
+    const walk = (dir: string) => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const p = join(dir, e.name);
+        if (e.isDirectory()) walk(p);
+        else if (/\.tsx?$/.test(e.name) && !/\.test\./.test(e.name))
+          out.push(readFileSync(p, 'utf8'));
+      }
+    };
+    walk(HERE);
+    return out.join('\n');
+  })();
+
+  /** Every `.class` named inside a `[data-theme=…] …` selector. */
+  const themed = (): { theme: string; cls: string }[] => {
+    const out: { theme: string; cls: string }[] = [];
+    for (const m of STYLES.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(
+      /\[data-theme="([\w-]+)"\]([^{,]*)[,{]/g,
+    )) {
+      const [, theme, rest] = m;
+      for (const c of (rest ?? '').matchAll(/\.([\w-]+)/g))
+        out.push({ theme: theme as string, cls: c[1] as string });
+    }
+    return out;
+  };
+
+  it('finds the themed rules at all', () => {
+    expect(themed().length).toBeGreaterThan(20);
+  });
+
+  it('names no class the app never renders', () => {
+    const dead = [
+      ...new Set(
+        themed()
+          .filter(({ cls }) => !COMPONENTS.includes(cls))
+          .map(({ theme, cls }) => `${theme}: .${cls}`),
+      ),
+    ];
+    expect(dead, 'these theme rules match nothing').toEqual([]);
   });
 });

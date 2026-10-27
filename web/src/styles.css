@@ -724,7 +724,15 @@
 [data-theme="demoscene"] .chat-pane {
   letter-spacing: 0.01em;
 }
-[data-theme="demoscene"] .navtree-ws-label {
+/* ─── THE SELECTORS THAT MATCHED NOTHING ────────────────────────────────────
+   `.navtree-ws-label`, `.navtree-head` and `.chat-pane-head` do not exist and
+   never did. The rail's header is `.sidenav-brand`, the workspace name is
+   `.navtree-ws-name > .navtree-name-text`, and the chat pane has no head at
+   all — it is `.chat-scroll` + `.chat-composer-wrap`. demoscene shipped three
+   of these from the day it landed and two later themes copied them, because a
+   rule that matches nothing renders exactly like a rule that works.
+   themes.test.ts now fails on any class the app never renders. */
+[data-theme="demoscene"] .navtree-ws-name {
   text-transform: uppercase;
   letter-spacing: 0.1em;
 }
@@ -846,8 +854,7 @@
    The rail's seam becomes a box-drawing double line — two hairlines with a gap,
    which is literally what ═ is. Drawn with a gradient rather than a glyph so it
    survives at any width and costs no font. */
-[data-theme="demoscene"] .navtree-head,
-[data-theme="demoscene"] .chat-pane-head {
+[data-theme="demoscene"] .sidenav-brand {
   border-bottom: 3px solid transparent;
   border-image: repeating-linear-gradient(
       to bottom,
@@ -1046,15 +1053,34 @@
 [data-theme="blueprint"] .chat-pane,
 [data-theme="blueprint"] .pane-web,
 [data-theme="blueprint"] .workspace-body {
-  background-image: linear-gradient(to right, #9fe3ff12 0 1px, transparent 1px 100%),
-    linear-gradient(to bottom, #9fe3ff12 0 1px, transparent 1px 100%),
-    linear-gradient(to right, #9fe3ff26 0 1px, transparent 1px 100%),
-    linear-gradient(to bottom, #9fe3ff26 0 1px, transparent 1px 100%);
-  background-size: 8px 8px, 8px 8px, 96px 96px, 96px 96px;
+  background-image: linear-gradient(to right, #9fe3ff1f 0 1px, transparent 1px 100%),
+    linear-gradient(to bottom, #9fe3ff1f 0 1px, transparent 1px 100%);
+  background-size: 96px 96px, 96px 96px;
   /* FIXED, so every panel's grid is one continuous sheet rather than four
      that restart at their own top-left — which is what a sheet IS, and what
      an overlay got right for free and a per-element background does not. */
   background-attachment: fixed;
+}
+
+/* ─── AND THE READING COLUMN IS A PANEL ON THE SHEET ────────────────────────
+   "extremely hard to read", a second time, with the grid already behind the
+   glyphs rather than over them. Behind was not enough and the arithmetic says
+   why: ink measures 13.9:1 on this ground, so CONTRAST was never the problem.
+   DENSITY was. A 1px rule every 8px puts ~2.5 edges inside the x-height of
+   every character in a paragraph, and the eye re-acquires the baseline on
+   every one of them — a cost that does not appear in any ratio.
+
+   Two changes, and the second is the one that matters. The fine field is gone
+   entirely: a 96px division is still unmistakably drafting paper and is 12×
+   sparser. And the column you actually READ in gets a panel — which is how a
+   drawing has always carried its notes. You do not letter over the setting-out
+   grid; you draw a box and letter inside it. The grid stays crisp in the
+   margins, at the heads, behind the rail and in every empty part of the pane,
+   where it is scenery rather than interference. */
+[data-theme="blueprint"] .chat-msg,
+[data-theme="blueprint"] .chat-bubble {
+  background-color: var(--bg);
+  box-shadow: 0 0 0 7px var(--bg);
 }
 
 /* The rail and the composer paint their own ground and so stay off the grid,
@@ -1066,7 +1092,6 @@
 /* LETTERING IS LETTERING. The rail's names and the pane heads take the
    condensed hand; the paragraph you are reading does not. */
 [data-theme="blueprint"] .navtree,
-[data-theme="blueprint"] .chat-pane-head,
 [data-theme="blueprint"] .sidenav-brand {
   font-family: var(--chrome-font);
   letter-spacing: 0.02em;
@@ -1090,15 +1115,13 @@
 
 /* ANNOTATION IS SET IN CAPS WITH WIDE TRACKING, because a drafter letters by
    hand against a guide and lowercase does not survive it. */
-[data-theme="blueprint"] .navtree-ws-label,
 [data-theme="blueprint"] .navtree-ws-name {
   text-transform: uppercase;
   letter-spacing: 0.14em;
 }
 
 /* SECTION RULES ARE DASHED, at the weight a pencil leaves. */
-[data-theme="blueprint"] .navtree-head,
-[data-theme="blueprint"] .chat-pane-head {
+[data-theme="blueprint"] .sidenav-brand {
   border-bottom: 1px dashed color-mix(in srgb, var(--accent) 34%, transparent);
 }
 
@@ -1203,8 +1226,7 @@
 /* EVERY DIVISION IS A PERFORATION. A dashed rule is what a receipt uses to say
    "this part ends here", and it is the one piece of punctuation the object
    has. */
-[data-theme="thermal"] .navtree-head,
-[data-theme="thermal"] .chat-pane-head {
+[data-theme="thermal"] .sidenav-brand {
   border-bottom: 1px dashed var(--border-strong);
 }
 [data-theme="thermal"] .chat-composer {
@@ -1215,9 +1237,7 @@
 /* HEADERS ARE STRUCK IN CAPS. A receipt has no bold and no second size worth
    the name — emphasis is capitals and spacing, which is exactly what a fixed
    carriage can do. */
-[data-theme="thermal"] .navtree-ws-label,
-[data-theme="thermal"] .navtree-ws-name,
-[data-theme="thermal"] .chat-pane-head {
+[data-theme="thermal"] .navtree-ws-name {
   text-transform: uppercase;
   letter-spacing: 0.12em;
 }
@@ -1321,6 +1341,71 @@
 [data-theme="thermal"] .agent-block.is-expanded {
   border: 1px dashed var(--border-strong);
   border-radius: 0;
+}
+
+/* ─── AND THE PARTS THAT MAKE IT AN OBJECT RATHER THAN A STYLE ──────────────
+   "thermal is boring" — and it was, because everything above is correct and
+   none of it is FUN. demoscene earns its name on a moving copper bar, a ▶ and
+   a CRT; a receipt has its own four, and they are the ones a person actually
+   notices about a receipt. */
+
+/* ✂ ON THE PERFORATION. The glyph is the joke the object makes about itself,
+   and it is the single most recognisable mark on a printed slip. Sits ON the
+   dashed rule with the paper knocked out behind it. */
+[data-theme="thermal"] .chat-turn + .chat-turn::after {
+  content: "✂";
+  position: absolute;
+  left: 8px;
+  top: -14px;
+  transform: translateY(-50%);
+  padding: 0 5px;
+  background: var(--bg);
+  color: color-mix(in srgb, var(--fg) 42%, transparent);
+  font-size: 0.75rem;
+  line-height: 1;
+}
+
+/* A BARCODE AT THE FOOT OF THE RAIL. Every till slip ends in one, nobody has
+   ever read one, and it is instantly the most "receipt" thing on the screen.
+   Drawn as bars of four widths, so it has the irregular rhythm of a real
+   symbology rather than the even comb a single repeating-gradient gives. */
+[data-theme="thermal"] .sidenav-footer {
+  border-top: 1px dashed var(--rail-border);
+}
+[data-theme="thermal"] .sidenav-build::after {
+  content: "";
+  flex: 1 1 auto;
+  height: 15px;
+  margin-left: 10px;
+  background-image: repeating-linear-gradient(to right, var(--rail-ink) 0 2px, transparent 2px 5px),
+    repeating-linear-gradient(to right, var(--rail-ink) 0 1px, transparent 1px 9px),
+    repeating-linear-gradient(to right, var(--rail-ink) 0 3px, transparent 3px 17px);
+  opacity: 0.55;
+}
+
+/* THE WORKSPACE NAME IS STAMPED, NOT PRINTED. The one mark on a receipt that
+   a human made: inked rubber, set crooked, in the only colour the printer
+   could not produce. */
+/* `.navtree-ws-label` does not exist in the markup — the visible element is
+   `.navtree-ws-name > .navtree-name-text`. (demoscene styles the same dead
+   selector, which is how this was missed: a rule that matches nothing looks
+   exactly like a rule that works, in a stylesheet nobody renders twice.) */
+[data-theme="thermal"] .navtree-ws-name .navtree-name-text {
+  display: inline-block;
+  padding: 1px 7px;
+  color: var(--rail-accent);
+  border: 2px solid var(--rail-accent);
+  border-radius: 2px;
+  transform: rotate(-2.5deg);
+  opacity: 0.88;
+}
+
+/* THE SEND KEY IS A KEY. Square, red, and the only saturated thing on the
+   paper — the button on the till, not a chat app's round arrow. */
+[data-theme="thermal"] .chat-send {
+  border-radius: 0;
+  background: var(--accent);
+  color: var(--accent-fg);
 }
 
 /* ─── ABYSS ─────────────────────────────────────────────────────────────────
@@ -1464,7 +1549,7 @@
 /* CODE AND LINKS GLOW TOO, because the accent is a LIGHT SOURCE in this theme
    and a flat accent-coloured word would be the one dead thing on the screen. */
 [data-theme="abyss"] a,
-[data-theme="abyss"] .chat-pane-head strong {
+[data-theme="abyss"] .navtree-tab-row[data-active="true"] .navtree-name-text {
   text-shadow: 0 0 10px color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
@@ -1516,12 +1601,81 @@
   border-right: 1px solid #0000;
 }
 
+/* ─── THE THINGS DOWN HERE ARE ALIVE ────────────────────────────────────────
+   "abyss bowring" — and snow alone is weather, not life. Bioluminescence is
+   not a steady lamp: it PULSES, which is the whole reason it is visible from
+   a distance and the whole reason a still glow reads as a CSS shadow instead
+   of as a creature.
+
+   Every status mark breathes, on its own clock. Four periods seeded off
+   nth-child so no two rows in the rail are ever in phase — a rail of marks
+   blinking together would read as a progress indicator, which is the one
+   thing it must not. */
+[data-theme="abyss"] .navtree-mark,
+[data-theme="abyss"] .navtree-state-dot {
+  animation: abyss-pulse 5.5s ease-in-out infinite;
+}
+[data-theme="abyss"] .navtree-tab-row:nth-child(3n) .navtree-mark {
+  animation-duration: 7.5s;
+  animation-delay: -2.1s;
+}
+[data-theme="abyss"] .navtree-tab-row:nth-child(3n + 1) .navtree-mark {
+  animation-duration: 4.5s;
+  animation-delay: -3.4s;
+}
+@keyframes abyss-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 5px 0 currentColor;
+  }
+  50% {
+    box-shadow: 0 0 13px 2px currentColor;
+  }
+}
+
+/* SOMETHING LARGE GOES PAST. One enormous soft bloom crossing the window on a
+   70s path — a siphonophore at the edge of the lamp, which is the other half
+   of what the deep ocean looks like and the part a static vignette can never
+   be. Low enough in z to sit under the snow, blurred wide enough that it is
+   never a SHAPE, only a brightening. */
+[data-theme="abyss"] .chat-pane::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: radial-gradient(38% 42% at 20% 30%, #b06cff26, #0000 70%),
+    radial-gradient(26% 30% at 70% 72%, #ff5fa21f, #0000 70%);
+  animation: abyss-drift 70s ease-in-out infinite alternate;
+}
+@keyframes abyss-drift {
+  to {
+    transform: translate(16%, -12%) scale(1.25);
+  }
+}
+
+/* SELECTING TEXT IS SHINING A LIGHT ON IT. */
+[data-theme="abyss"] ::selection {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+  color: #fff;
+}
+
+/* EVEN THE SCROLLBAR EMITS. */
+[data-theme="abyss"] .navtree-scroll::-webkit-scrollbar-thumb,
+[data-theme="abyss"] .chat-list::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--accent) 50%, transparent);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+
 @media (prefers-reduced-motion: reduce), (prefers-contrast: more) {
   [data-theme="abyss"] .navtree-tab-row[data-active="true"] {
     animation: none;
     background-size: 100% 100%;
   }
-  [data-theme="abyss"] body::before {
+  [data-theme="abyss"] body::before,
+  [data-theme="abyss"] .chat-pane::before,
+  [data-theme="abyss"] .navtree-mark,
+  [data-theme="abyss"] .navtree-state-dot {
     animation: none;
   }
   [data-theme="abyss"] body::after {
