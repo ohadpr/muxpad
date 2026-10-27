@@ -1077,10 +1077,25 @@
    grid; you draw a box and letter inside it. The grid stays crisp in the
    margins, at the heads, behind the rail and in every empty part of the pane,
    where it is scenery rather than interference. */
-[data-theme="blueprint"] .chat-msg,
-[data-theme="blueprint"] .chat-bubble {
+[data-theme="blueprint"] .chat-msg {
   background-color: var(--bg);
   box-shadow: 0 0 0 7px var(--bg);
+}
+
+/* ─── AND YOUR OWN MESSAGES ARE A DRAWN BOX ON IT ───────────────────────────
+   The rule above gave the bubble the SAME ground as the page — which is what
+   "user messages blend with bg" is: I painted the panel over the one element
+   that had its own elevation and took it away. (--bg-elev would not have
+   saved it either: #0e2d52 measures 1.14:1 against this page, and a surface
+   that close is a surface nobody can see.)
+
+   So the bubble gets a step that is actually a step — 1.83:1, past where a
+   distinct panel reads, with ink still at 7.6:1 on it — and a drawn edge,
+   because on a drawing an annotation is a BOX somebody ruled, not a tint. */
+[data-theme="blueprint"] .chat-bubble {
+  background-color: #1b4d82;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  box-shadow: none;
 }
 
 /* The rail and the composer paint their own ground and so stay off the grid,
