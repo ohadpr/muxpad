@@ -239,3 +239,30 @@ describe('no theme replaces the selected row’s fill', () => {
     expect(r.body).not.toMatch(/(?:^|;)\s*background\s*:/);
   });
 });
+
+/**
+ * NOTHING IS PAINTED WHERE THE PANE JOINS THE RAIL.
+ *
+ * The selected row is the chat pane's own surface continuing into the rail,
+ * with `.navtree-tab-funnel` drawing the fillets that flare one into the
+ * other. A border on `.sidenav`'s right edge sits outside the padding box of
+ * all of it and rules a line straight through that join.
+ *
+ * Two themes did it — demoscene's box-drawing wall, blueprint's drafting rule
+ * — and it is structural rather than a matter of taste: the rail's right edge
+ * is WHERE THE PANE JOINS IT. Reported as "remove vertical border line it
+ * blocks nice flow of selected tab bg".
+ */
+describe('no theme walls off the rail', () => {
+  const bare = STYLES.replace(/\/\*[\s\S]*?\*\//g, '');
+  const railRules = [...bare.matchAll(/([^{}]*)\{([^{}]*)\}/g)]
+    .map((m) => ({ sel: (m[1] ?? '').trim().replace(/\s+/g, ' '), body: m[2] ?? '' }))
+    .filter((r) => r.sel.includes('[data-theme=') && /\.sidenav\s*$/.test(r.sel));
+
+  it('no [data-theme] rule gives .sidenav a right border at all', () => {
+    const offenders = railRules
+      .filter((r) => /border-right\s*:|border-image\s*:|(?:^|;)\s*border\s*:/.test(r.body))
+      .map((r) => r.sel);
+    expect(offenders, 'these rule a line through the selection’s join').toEqual([]);
+  });
+});
