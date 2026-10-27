@@ -3919,41 +3919,88 @@ body.sidenav-resizing iframe {
    you will search for, which is the thing it exists to end — and it is six
    rows at most, so it costs the tree nothing it will miss.
 
-   Its rows are the ORDINARY `.navtree-tab-row`, so they inherit the grid, the
-   icon column, the status mark and the selection treatment without a second
-   copy of any of it. A different visual language for the same object is how a
-   sidebar stops being scannable, and a chat is deliberately in both places at
-   once: the strip is a SHORTCUT, not a move, and its workspace must not start
-   lying about what it contains. */
+   ─── FULL BLEED, NOT A FLOATING TRAY ───────────────────────────────────────
+   The obvious styling is an inset card with rounded corners, and it is wrong
+   here for one reason: insetting it by 8px moves the icon column 8px, so the
+   strip's rows no longer line up with the tree's. A rail is scanned down its
+   left edge — it is the same argument that put every status mark on one x —
+   and a band that breaks the column to look like an object costs more than
+   the object is worth. So it is a BAND: its own ground, the full width, and
+   every row still on the tree's grid.
+
+   Its rows are the ORDINARY `.navtree-tab-row`, inheriting the grid, the icon
+   column, the status mark and the selection treatment without a second copy
+   of any of it. A chat is deliberately in both places at once: the strip is a
+   SHORTCUT, not a move, and its workspace must not start lying about what it
+   contains. */
 .navtree-workingset {
   flex: 0 0 auto;
-  padding-bottom: 6px;
+  padding: 2px 0 5px;
+  /* A sixth of the ink over the rail — the same recipe `--rail-elev` uses for
+     the search field, so the two raised surfaces in the chrome are one
+     colour on every theme rather than two guesses at the same idea. */
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
   border-bottom: 1px solid var(--rail-seam, var(--border));
 }
+
+/* The heading is a LABEL, not a section header: lower-case-height caps, wide,
+   quiet, and carrying a small accent tick so the band has one piece of colour
+   that is not a status. Deliberately NOT the workspace-header treatment —
+   that one is a destination you can click and collapse, and this is neither. */
 .navtree-workingset-head {
-  padding: 10px var(--nt-pad) 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px calc(var(--nt-pad) * 2) 5px;
   font-size: 0.625rem;
   font-weight: 600;
-  letter-spacing: 0.09em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   /* --fg-dim, never --fg-faint: the faint token measures under 3.1:1 on both
      rails and this is 10px text, which is where a failing ratio is least
      forgivable. Same call the collapsed-count chip already made. */
   color: var(--fg-dim);
 }
-/* The slot number, and the reason it can exist at all: the slots are stable,
-   so a number means the same row tomorrow. Hidden while the pointer is on the
-   row, where the × takes its place — two controls in one 18px cell would be a
-   fight, and neither is worth widening the gutter for. */
-.navtree-slot-key {
-  font: 0.625rem / 1 var(--chrome-font);
-  color: var(--fg-faint);
-  letter-spacing: 0.02em;
+.navtree-workingset-head::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 5px;
+  height: 5px;
+  border-radius: 1px;
+  background: var(--accent);
 }
+/* …and a rule running out to the edge, which is what stops a short label from
+   reading as a stray word above a list. Drawn, not typed: a row of dashes
+   cannot know how wide the rail is, and the rail is resizable. */
+.navtree-workingset-head::after {
+  content: "";
+  flex: 1 1 auto;
+  min-width: 8px;
+  height: 1px;
+  background: color-mix(in srgb, var(--fg) 12%, transparent);
+}
+
+/* THE SLOT NUMBER, and the reason it can exist at all: the slots are stable,
+   so ⌃3 means the same row tomorrow. Set as a KEY — a bordered cap in the
+   chrome face — because it is something you press, and a bare "⌃3" in the
+   gutter reads as a label about the row instead. */
+.navtree-slot-key {
+  padding: 1px 4px;
+  font: 0.5625rem / 1.5 var(--chrome-font);
+  letter-spacing: 0.02em;
+  color: var(--fg-faint);
+  border: 1px solid color-mix(in srgb, var(--fg) 16%, transparent);
+  border-radius: 4px;
+  white-space: nowrap;
+}
+/* Hidden while the pointer is on the row, where the × takes its place. Two
+   controls in one 18px cell would be a fight, and neither is worth widening
+   the gutter for — the gutter is the thing that keeps the names aligned. */
 .navtree-ws-slot:hover .navtree-slot-key,
 .navtree-ws-slot:has(:focus-visible) .navtree-slot-key {
   display: none;
 }
+
 /* …and the × is the mirror image: absent until you reach for the row. It means
    "not now" — it frees the slot and nothing else, which is why it is not
    danger-styled and never arms. */
@@ -3962,6 +4009,7 @@ body.sidenav-resizing iframe {
   height: 18px;
   display: none;
   place-items: center;
+  padding: 0;
   border: 0;
   border-radius: 4px;
   background: transparent;
@@ -3977,4 +4025,11 @@ body.sidenav-resizing iframe {
 .navtree-ws-slot .navtree-slot-drop:hover {
   background: color-mix(in srgb, var(--fg) 14%, transparent);
   color: var(--fg);
+}
+
+/* THE BAND'S OWN GROUND IS ALREADY A LIFT, so a row's hover has to lift again
+   from THAT or the pointer lands on nothing. Measured in the dark themes: the
+   tree's hover over the band's 5% was a 1% step, invisible. */
+.navtree-workingset .navtree-tab-row:hover {
+  background-color: color-mix(in srgb, var(--fg) 9%, transparent);
 }
