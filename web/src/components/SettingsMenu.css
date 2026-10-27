@@ -834,3 +834,52 @@
     padding: 11px 0;
   }
 }
+
+/* ─── THE RAIL'S THEME POPOVER ──────────────────────────────────────────────
+   The same `<ThemePicker>` the dialog mounts, in a popover on the sidebar's
+   foot. Only the frame is new: every tile rule above is deliberately written
+   against `.theme-grid` / `.theme-tile` rather than scoped inside
+   `.settings-dialog`, so a second surface costs this block and nothing else.
+
+   It opens UPWARD, because the foot of the rail is the bottom of the screen.
+   The theme tokens here are the APP's, not the rail island's: a popover is not
+   part of the rail, and inheriting --rail-ink would have painted it in the
+   rail's inverted ink on the app's surface. */
+/* NOT a containing block. The popover is 272px and the button is 20px at the
+   far right of the footer, so anchoring to the BUTTON put its left edge at
+   -32px — off the screen, with the tiles half-drawn. It anchors to
+   `.sidenav-footer` instead, which is already positioned and is exactly the
+   rail's width; the same trick the settings popover beside it has always
+   used. */
+.themeswitch {
+  display: inline-flex;
+  height: 100%;
+}
+.themeswitch-pop {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 60;
+  width: max(272px, 100%);
+  max-width: calc(100vw - 24px);
+  padding: 4px 12px 10px;
+  color: var(--fg);
+  background: var(--bg-elev);
+  border: 1px solid color-mix(in srgb, var(--fg) 14%, var(--bg-elev));
+  border-radius: 12px;
+  box-shadow: 0 18px 46px #0005;
+  font: 0.875rem / 1.5 var(--ui-font);
+}
+/* The fieldset inside is the dialog's row; here it is the whole popover, so
+   its row border and padding would draw a rule across the bottom of a box
+   that already has one. */
+.themeswitch-pop .settings-themes {
+  padding: 10px 0 0;
+  border-bottom: 0;
+}
+.themeswitch-pop .theme-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  max-height: min(52vh, 420px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}

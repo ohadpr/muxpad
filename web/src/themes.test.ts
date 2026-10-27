@@ -128,7 +128,12 @@ describe('the theme picker previews the real tokens', () => {
 
   it('is a radiogroup, not a row of buttons — arrow keys are the point', () => {
     expect(SETTINGS_TSX).toMatch(/type="radio"/);
-    expect(SETTINGS_TSX).toMatch(/name="theme"/);
+    // The group NAME is a prop now, because the picker is mounted twice — the
+    // settings dialog and the rail's switch — and two radio groups sharing one
+    // name are ONE group to the browser: the checked radios fight and arrow
+    // keys walk between surfaces. Default `theme`, the rail passes its own.
+    expect(SETTINGS_TSX).toMatch(/name=\{group\}/);
+    expect(SETTINGS_TSX).toMatch(/group = 'theme'/);
     // display:none would drop the inputs out of the group and take the arrow
     // keys with them; the hidden style must be the clip-path kind.
     const tile = SETTINGS_CSS.slice(

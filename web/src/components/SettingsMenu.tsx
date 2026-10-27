@@ -149,7 +149,7 @@ export function SettingsMenu() {
  * mutually exclusive choices should have and the behaviour nobody writes
  * correctly by hand.
  */
-function ThemePicker({ chosen }: { chosen: ThemeChoice }) {
+export function ThemePicker({ chosen, group = 'theme' }: { chosen: ThemeChoice; group?: string }) {
   return (
     <fieldset className="settings-row settings-themes">
       <legend>Theme</legend>
@@ -158,7 +158,7 @@ function ThemePicker({ chosen }: { chosen: ThemeChoice }) {
           <label key={t.value} className="theme-tile" data-chosen={t.value === chosen}>
             <input
               type="radio"
-              name="theme"
+              name={group}
               value={t.value}
               checked={t.value === chosen}
               onChange={() => updateSettings({ theme: t.value })}

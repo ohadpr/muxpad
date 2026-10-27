@@ -12,6 +12,7 @@ import { MoveUndoToast } from './MoveUndoToast';
 import { NavTree } from './NavTree';
 import { NoticeToast } from './NoticeToast';
 import { SettingsMenu } from './SettingsMenu';
+import { ThemeSwitch } from './ThemeSwitch';
 import { UpdateBanner } from './UpdateBanner';
 import { WorkspaceShell } from './WorkspaceLayout';
 
@@ -129,6 +130,7 @@ export function AppLayout() {
                 >
                   {__MUXPAD_VERSION__}
                 </a>
+                <ThemeSwitch />
                 <SettingsMenu />
               </div>
             </aside>
