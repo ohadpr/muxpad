@@ -1017,13 +1017,25 @@
   --accent-fg: #06243f;
   --danger: #ff7a6b;
 
-  --rail-surface: #0e2f57;
+  /* ── THE RAIL IS THE TITLE BLOCK, AND IT IS LIT ──────────────────────
+     At #0e2f57 the rail measured 1.17:1 against the page — a boundary you
+     cannot see, which is "sidebar needs more contrast from right side
+     content" exactly.
+
+     The instinct is to push a rail DOWN, the way every other theme here
+     does. It cannot work on this one: the page is already #0a2342, so the
+     whole range left below it is black, and the darkest rail that exists
+     still only reaches 1.27:1. Upward there is room — this is 2.11:1 —
+     and it is also the truer object. On a drawing the title block is not
+     a shadow at the edge of the sheet; it is the one panel that is filled
+     in. */
+  --rail-surface: #1d5693;
   --rail-ink: #eaf3ff;
-  --rail-ink-dim: #b4cfee;
-  --rail-ink-faint: #7795bb;
-  --rail-hover: #17406f;
-  --rail-border: #2b5c92;
-  --rail-seam: #1d4a7c;
+  --rail-ink-dim: #d2e3f8;
+  --rail-ink-faint: #9fbddb;
+  --rail-hover: #27689f;
+  --rail-border: #5491ca;
+  --rail-seam: #2a6099;
   --rail-accent: #ffcf6b;
   --rail-status-ready: #5ddba0;
   --rail-status-working: #ffcf6b;
@@ -1129,10 +1141,11 @@
   border-radius: 2px;
 }
 
-/* THE RAIL IS A DASHED CUT LINE — the edge of the drawing, marked rather than
-   walled. Dashes, not demoscene's solid double rule: this is paper. */
+/* AND IT IS RULED OFF THE SHEET. A title block is bounded by the heaviest
+   line on the drawing, not by a hairline — and with the surfaces now a real
+   step apart the border is confirming an edge rather than inventing one. */
 [data-theme="blueprint"] .sidenav {
-  border-right: 1px dashed color-mix(in srgb, var(--accent) 45%, transparent);
+  border-right: 3px solid color-mix(in srgb, var(--accent) 65%, transparent);
 }
 
 /* ANNOTATION IS SET IN CAPS WITH WIDE TRACKING, because a drafter letters by
