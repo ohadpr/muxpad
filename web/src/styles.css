@@ -975,18 +975,18 @@
    nothing but line weight. So: no fills, no soft shadows, one amber pencil for
    the thing you are pointing at, and a grid under all of it. */
 [data-theme="blueprint"] {
-  /* Condensed technical lettering — the drafting-machine hand. All system
-     families: Bahnschrift ships on Windows, Avenir Next Condensed and DIN
-     Alternate on macOS, and the stack falls through to the UI sans rather than
-     fetching anything.
+  /* ── THE CONDENSED FACE IS FOR LETTERING, NOT FOR READING ──────────────
+     First pass set BOTH tokens to a condensed stack, and the report was "hard
+     to read" — correctly. A drafter letters LABELS by hand against a guide:
+     the title block, the dimensions, the part names. The notes are typed, and
+     16% of the width taken out of every glyph in a paragraph is 16% less
+     counter to tell an a from an o by, on a saturated ground, under a grid.
 
-     ORDER MEASURED, not guessed. DIN Alternate was first and it is barely
-     condensed — 263px against system-ui's 276px for the same string, a 5%
-     narrowing nobody would notice. Avenir Next Condensed is 231px, 16% in,
-     which is the width a drafting hand actually has. DIN stays in the stack
-     as the machine that has neither. */
-  --ui-font: Bahnschrift, "Avenir Next Condensed", "Roboto Condensed", "Arial Narrow",
-    "DIN Alternate", system-ui, sans-serif;
+     So the hand is kept where lettering actually appears — --chrome-font,
+     which is the rail, the heads, the chips — and the reading face is a
+     monoline humanist that holds up at 14px. Both still read as one drawing,
+     because the lettering is the part you SEE as lettering. */
+  --ui-font: "Avenir Next", Avenir, "Segoe UI", system-ui, sans-serif;
   --chrome-font: Bahnschrift, "Avenir Next Condensed", "Roboto Condensed", "Arial Narrow",
     "DIN Alternate", system-ui, sans-serif;
   --term-font: "SF Mono", Menlo, Monaco, monospace;
@@ -1032,21 +1032,44 @@
   --hit-rule: #8a6200;
 }
 
-/* THE SHEET IS RULED. Two grids at once, which is what drafting paper is: a
-   fine 8px field for setting out and a heavy 96px division over it. Fixed and
-   pointer-events: none, so it costs one composited layer and intercepts
-   nothing — the same contract as demoscene's scanlines. */
-[data-theme="blueprint"] body::after {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: 9999;
-  pointer-events: none;
-  background-image: linear-gradient(to right, #9fe3ff0f 0 1px, transparent 1px 100%),
-    linear-gradient(to bottom, #9fe3ff0f 0 1px, transparent 1px 100%),
-    linear-gradient(to right, #9fe3ff1c 0 1px, transparent 1px 100%),
-    linear-gradient(to bottom, #9fe3ff1c 0 1px, transparent 1px 100%);
+/* THE SHEET IS RULED, AND THE RULES ARE UNDER THE DRAWING.
+   Two grids, which is what drafting paper is: a fine 8px field for setting out
+   and a heavy 96px division over it.
+
+   On the PANELS' own backgrounds, not on a fixed overlay. The overlay version
+   drew both grids OVER the glyphs — a 1px line every 8px crossing the x-height of
+   every character in the app — which is the other half of "hard to read", and
+   is not what paper does either: you draw on top of the grid, you do not rule
+   over the drawing. `background-attachment: fixed` keeps it still while the
+   chat scrolls, so it still reads as the sheet rather than as wallpaper. */
+[data-theme="blueprint"] body,
+[data-theme="blueprint"] .chat-pane,
+[data-theme="blueprint"] .pane-web,
+[data-theme="blueprint"] .workspace-body {
+  background-image: linear-gradient(to right, #9fe3ff12 0 1px, transparent 1px 100%),
+    linear-gradient(to bottom, #9fe3ff12 0 1px, transparent 1px 100%),
+    linear-gradient(to right, #9fe3ff26 0 1px, transparent 1px 100%),
+    linear-gradient(to bottom, #9fe3ff26 0 1px, transparent 1px 100%);
   background-size: 8px 8px, 8px 8px, 96px 96px, 96px 96px;
+  /* FIXED, so every panel's grid is one continuous sheet rather than four
+     that restart at their own top-left — which is what a sheet IS, and what
+     an overlay got right for free and a per-element background does not. */
+  background-attachment: fixed;
+}
+
+/* The rail and the composer paint their own ground and so stay off the grid,
+   which is correct: a title block is drawn ON the sheet, it is not a hole in
+   it. The chat pane, on the other hand, paints --bg — so putting the grid on
+   the body alone made it invisible everywhere it mattered, which is how the
+   first fix for "hard to read" also deleted the theme. It is listed above. */
+
+/* LETTERING IS LETTERING. The rail's names and the pane heads take the
+   condensed hand; the paragraph you are reading does not. */
+[data-theme="blueprint"] .navtree,
+[data-theme="blueprint"] .chat-pane-head,
+[data-theme="blueprint"] .sidenav-brand {
+  font-family: var(--chrome-font);
+  letter-spacing: 0.02em;
 }
 
 /* EVERY EDGE IS A DRAWN LINE, SO NOTHING IS ROUNDED. A radius is a moulded
@@ -1224,6 +1247,82 @@
   text-shadow: 0 0 0.35px color-mix(in srgb, var(--fg) 45%, transparent);
 }
 
+/* ─── THE THING THAT MAKES IT A RECEIPT AND NOT A CREAM THEME ───────────────
+   First pass was a palette, a typewriter face and square corners, and the
+   report was "not unique enough" — fair: all three are surface, and the chat
+   underneath was still a chat. A receipt is a SEQUENCE OF PRINTED ENTRIES
+   separated by perforations, and that is a property of the LIST, not of the
+   colours. So the list gets it. */
+
+/* EVERY TURN IS TORN OFF THE ONE BEFORE IT. A full-width perforation between
+   entries — the single most recognisable thing about the object, and the one
+   piece of punctuation a till printer has. */
+[data-theme="thermal"] .chat-turn + .chat-turn {
+  position: relative;
+  margin-top: 26px;
+}
+[data-theme="thermal"] .chat-turn + .chat-turn::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -14px;
+  border-top: 1px dashed color-mix(in srgb, var(--fg) 30%, transparent);
+}
+
+/* THE SELECTED ROW IS STRUCK IN SOLID INK. A receipt has no highlight colour
+   and no wash: the printer either fired the element or it did not, so the
+   emphatic state is a black block with the paper showing through the letters.
+   This is the inversion every other theme here deliberately avoids — and it is
+   right in exactly the one place where the medium has nothing else. */
+[data-theme="thermal"] .navtree-tab-row[data-active="true"] {
+  background-color: var(--rail-ink);
+  background-image: none;
+}
+[data-theme="thermal"] .navtree-tab-row[data-active="true"] .navtree-name-text {
+  color: var(--rail-surface);
+  font-weight: 700;
+}
+
+/* LINE ITEMS GET A DOTTED LEADER. The folded tool rows are the receipt's
+   itemisation — "8 ACTIONS ……… BASH ×8" — and a leader running out to the
+   figure is how every printed statement in the world sets that line.
+
+   DRAWN, not typed, for the reason demoscene's workspace rule is: a run of `.`
+   is text, so it lands inside the summary's own ellipsis and the row reads
+   "8 ACTIONS ………" with the figure truncated away. A flex child that grows
+   fills whatever is left at any width and cannot be truncated. */
+[data-theme="thermal"] .chat-action-group-head {
+  /* FULL WIDTH, or there is no "left" for the leader to run across: a button
+     is shrink-to-fit, so flex: 1 on the rule below filled the remaining space
+     of a box that was already exactly as wide as its text. */
+  width: 100%;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+[data-theme="thermal"] .chat-action-group-chevron {
+  order: -2;
+}
+[data-theme="thermal"] .chat-action-group-count {
+  order: -1;
+}
+[data-theme="thermal"] .chat-action-group-head::after {
+  content: "";
+  order: 0;
+  flex: 1 1 auto;
+  min-width: 16px;
+  align-self: center;
+  border-bottom: 1px dotted color-mix(in srgb, var(--fg) 38%, transparent);
+}
+[data-theme="thermal"] .chat-action-group-summary,
+[data-theme="thermal"] .chat-action-group-failed {
+  order: 1;
+}
+[data-theme="thermal"] .agent-block.is-expanded {
+  border: 1px dashed var(--border-strong);
+  border-radius: 0;
+}
+
 /* ─── ABYSS ─────────────────────────────────────────────────────────────────
    Four thousand metres down there is no ambient light at all, so every bright
    thing on the screen is a thing that MAKES light. That is the whole rule, and
@@ -1369,15 +1468,67 @@
   text-shadow: 0 0 10px color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
+/* ─── MARINE SNOW, AND THE LAST OF THE LIGHT ────────────────────────────────
+   Still "not unique enough", and the reason is that everything so far was
+   STILL: a gradient, a vignette, some glow. Nothing about a dark picture says
+   water. What says water is that the medium is OCCUPIED — there is matter
+   drifting through it, constantly, and the light coming down through it is
+   broken into shafts.
+
+   Both on one fixed pseudo-element, under the vignette:
+     · four radial-gradient fields at different sizes and offsets, which is
+       marine snow — detritus falling, forever, which is the actual visual
+       signature of the deep ocean and the thing no other theme here could
+       accidentally resemble;
+     · two wide skewed shafts, barely there, which is what is left of the
+       surface at this depth.
+   One animation moves the snow DOWN its own tile height and the shafts a few
+   percent sideways — 38s, slow enough to be a condition rather than an
+   effect. pointer-events: none, so it intercepts nothing. */
+[data-theme="abyss"] body::before {
+  content: "";
+  position: fixed;
+  inset: -20% 0 -20%;
+  z-index: 9998;
+  pointer-events: none;
+  background-image: radial-gradient(2.2px 2.2px at 18% 12%, #dbe9ffb0, #0000 62%),
+    radial-gradient(1.6px 1.6px at 72% 34%, #c3dbff96, #0000 62%),
+    radial-gradient(2.8px 2.8px at 44% 71%, #eaf2ff8a, #0000 62%),
+    radial-gradient(1.6px 1.6px at 88% 86%, #b6cfff80, #0000 62%),
+    radial-gradient(1.2px 1.2px at 7% 54%, #cfe0ff73, #0000 62%),
+    radial-gradient(2px 2px at 61% 7%, #d7c8ff73, #0000 62%),
+    linear-gradient(97deg, #0000 36%, #7fa8ff1a 44%, #0000 52%),
+    linear-gradient(94deg, #0000 60%, #9c7fff16 68%, #0000 76%);
+  background-size: 190px 190px, 150px 150px, 260px 260px, 120px 120px, 95px 95px, 210px 210px, 100%
+    100%, 100% 100%;
+  animation: abyss-snow 38s linear infinite;
+}
+@keyframes abyss-snow {
+  to {
+    background-position: 0 190px, 0 150px, 0 260px, 0 120px, 0 95px, 0 210px, 6% 0, -5% 0;
+  }
+}
+
+/* THE WATER IS BETWEEN YOU AND EVERYTHING. A rail at this depth is not a panel
+   with an edge — it is a shape you can almost make out, so its seam goes and
+   its surface is barely a step off the ground. */
+[data-theme="abyss"] .sidenav {
+  border-right: 1px solid #0000;
+}
+
 @media (prefers-reduced-motion: reduce), (prefers-contrast: more) {
   [data-theme="abyss"] .navtree-tab-row[data-active="true"] {
     animation: none;
     background-size: 100% 100%;
   }
-  [data-theme="abyss"] body::after,
-  [data-theme="blueprint"] body::after {
+  [data-theme="abyss"] body::before {
+    animation: none;
+  }
+  [data-theme="abyss"] body::after {
     display: none;
   }
+  /* blueprint's grid is a background, not an overlay — there is nothing here
+     to hide and nothing moving. */
 }
 
 * {
