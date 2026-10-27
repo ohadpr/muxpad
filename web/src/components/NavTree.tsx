@@ -20,6 +20,7 @@ import { isExpanded, toggleExpanded, useNavExpansion } from '../lib/nav-expansio
 import { tabRowAffordances } from '../lib/nav-row-affordances';
 import { nextCronLabel, railCronLabel } from '../lib/next-cron-label';
 import { noticeFromError } from '../lib/notice-store';
+import { dropFromWorkingSet, useWorkingSet } from '../working-set';
 
 import { recallOpenSubChats, rememberOpenSubChats } from '../lib/rail-folds';
 import { reorderByDrop } from '../lib/reorder';
@@ -302,6 +303,133 @@ export function NavTree({ activeWorkspaceSlug, activeTabSlug, variant, onNavigat
  * default to "expanded iff active", so the dominant flow — switching tabs
  * inside the current workspace — is always one click.
  */
+/**
+ * THE WORKING-SET STRIP.
+ *
+ * The chats you are moving between, in slots that do not move. All of the
+ * reasoning — why not MRU, why six, why eight hours — is in
+ * shared/src/working-set.ts, because that is where the algorithm is and a
+ * decision explained beside its implementation is one that survives.
+ *
+ * Renders NOTHING when empty, including the heading. A section that says
+ * "WORKING ON" above no rows is a promise the rail is not keeping, and on a
+ * fresh install or after a long break that is the normal state.
+ *
+ * The rows are the ORDINARY rows — same component, same icon, same status
+ * column, same family tint. A second visual language for the same object is
+ * how a sidebar stops being scannable, and the chat appearing twice is correct:
+ * the strip is a shortcut, not a move. Its own workspace must not start lying
+ * about what it contains.
+ */
+function WorkingSetStrip({
+  activeTabSlug,
+  onNavigate,
+}: {
+  activeTabSlug: string | null;
+  onNavigate?: (() => void) | undefined;
+}) {
+  const rows = useWorkingSet();
+  const navigate = useNavigate();
+
+  // ⌃1…⌃6, and NOT ⌘ — Chrome binds ⌘1-9 to its own tab switcher, and a
+  // shortcut that fights the browser is a shortcut nobody can use. Control is
+  // free on both platforms here.
+  //
+  // The slots' stability is the whole reason a numbered shortcut is worth
+  // having: a number pointing at a list that renumbers itself is worse than no
+  // number at all, because you learn it and it lies.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      const n = Number(e.key);
+      if (!Number.isInteger(n) || n < 1 || n > rows.length) return;
+      const hit = rows[n - 1];
+      if (!hit) return;
+      e.preventDefault();
+      void navigate({
+        to: '/w/$wsSlug/t/$tabSlug',
+        params: { wsSlug: hit.workspace.slug, tabSlug: hit.tab.slug },
+      });
+      onNavigate?.();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [rows, navigate, onNavigate]);
+
+  if (rows.length === 0) return null;
+  return (
+    <div className="navtree-workingset" aria-label="Working on">
+      <div className="navtree-workingset-head" aria-hidden="true">
+        Working on
+      </div>
+      {rows.map(({ tab, workspace }, i) => (
+        <WorkingSetRow
+          key={tab.id}
+          tab={tab}
+          workspace={workspace}
+          slot={i + 1}
+          active={tab.slug === activeTabSlug}
+          {...(onNavigate ? { onNavigate } : {})}
+        />
+      ))}
+    </div>
+  );
+}
+
+/** One slot. The `×` means "not now" — it frees the slot and nothing else. */
+function WorkingSetRow({
+  tab,
+  workspace,
+  slot,
+  active,
+  onNavigate,
+}: {
+  tab: Tab;
+  workspace: { slug: string; name: string };
+  slot: number;
+  active: boolean;
+  onNavigate?: (() => void) | undefined;
+}) {
+  return (
+    <div className="navtree-tab-row navtree-ws-slot" data-active={active ? 'true' : undefined}>
+      <span className="chatchip navtree-tab-chip" data-density="row" data-shape="tile">
+        <b className="chatchip-glyph">{tab.icon ?? fallbackTabIcon(tab.id)}</b>
+      </span>
+      <Link
+        to="/w/$wsSlug/t/$tabSlug"
+        params={{ wsSlug: workspace.slug, tabSlug: tab.slug }}
+        className="navtree-tab-link"
+        draggable={false}
+        title={`${tab.name} · ${workspace.name}`}
+        onClick={() => onNavigate?.()}
+      >
+        <span className="navtree-tab-titleline">
+          <span className="navtree-name-text" dir="auto">
+            {tab.name}
+          </span>
+        </span>
+      </Link>
+      <span className="navtree-tab-rail">
+        <kbd className="navtree-slot-key">{`⌃${slot}`}</kbd>
+        <button
+          type="button"
+          className="navtree-close navtree-slot-drop"
+          title="Not now — free this slot"
+          aria-label={`Remove ${tab.name} from Working on`}
+          onClick={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            void dropFromWorkingSet(tab.id);
+          }}
+        >
+          ×
+        </button>
+      </span>
+      <RowMark status={tab.status} />
+    </div>
+  );
+}
+
 function SidebarTree({
   activeWorkspaceSlug,
   activeTabSlug,
@@ -376,6 +504,12 @@ function SidebarTree({
         <span className="navtree-search-label">Search chats</span>
         <kbd className="navtree-search-kbd">{paletteChordLabel()}</kbd>
       </button>
+      {/* ─── THE WORKING SET ──────────────────────────────────────────────
+          Above the scroller, not inside it, and that is the point: a strip you
+          have to scroll to is a strip you will search for, which is the thing
+          it exists to end. It is six rows at most — see shared/working-set.ts
+          for the simulation behind the number. */}
+      <WorkingSetStrip activeTabSlug={activeTabSlug} {...(onNavigate ? { onNavigate } : {})} />
       <div className="navtree-scroll">
         {/* NO CREATE CONTROL HERE, and none in the list either. It is on each
             WORKSPACE HEADER — see WorkspaceNode. That is the row the action is
