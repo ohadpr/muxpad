@@ -406,8 +406,22 @@ describe('it does not become a second buzz', () => {
   });
 
   it('…but a turn that did NOT notify still pushes, exactly as before', async () => {
-    const fx = await boot();
+    // AGENT mode, deliberately. `boot()` defaults to CHAT, where prose is the
+    // scratchpad and not speech — so this fed the one kind of output that
+    // cannot push and asserted that it did. It had been red since the silent
+    // turn landed, saying nothing about the behaviour it is named for.
+    const fx = await boot({ mode: 'agent' });
     await fx.runner.feed([sdk.init(), sdk.text('all done'), sdk.result('success')]);
     expect(fx.pushes.map(([, body]) => body)).toEqual(['all done']);
+  });
+
+  it('…and a turn that only THOUGHT does not, because nothing was said', async () => {
+    // The case the test above was accidentally covering. In Chat mode the log
+    // renders the `reply` tool and prose is the scratchpad, so a turn of pure
+    // prose gained the chat nothing — and a push is the loudest possible way
+    // to announce nothing.
+    const fx = await boot({ mode: 'chat' });
+    await fx.runner.feed([sdk.init(), sdk.text('thinking out loud'), sdk.result('success')]);
+    expect(fx.pushes).toHaveLength(0);
   });
 });
