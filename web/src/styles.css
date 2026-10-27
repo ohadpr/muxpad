@@ -955,21 +955,28 @@
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
-   THREE MORE THEMES THAT CHANGE THE SHAPE, NOT JUST THE HUE.
+   THE THEMES THAT CHANGE THE SHAPE, NOT JUST THE HUE.
 
    demoscene established that a theme may own the typeface and draw its own
    structure. The six before it were palettes: same proportional sans, same
    rounded cards, same dots, different colours — which is why the picker read
-   as six shades of one app. These three each commit to a different PHYSICAL
-   OBJECT, and the palette is the smallest part of that:
+   as six shades of one app. These each commit to a different PHYSICAL OBJECT,
+   and the palette is the smallest part of that:
 
      blueprint   a cyanotype drafting sheet — grid paper, dashed rules,
-                 condensed technical lettering, corner ticks, hairlines.
-     thermal     a receipt off a till — cream stock, typewriter face,
-                 perforated tear-lines, caps, a rubber-stamp red, no curves.
-     abyss       bioluminescence at 4,000m — ink-black water, soft round
-                 shapes, light that GLOWS rather than fills, a drifting
-                 current under the row you are on.
+                 condensed lettering, corner ticks, hairlines.
+     riso        a risograph zine — fluorescent spot inks, a drum that
+                 cannot hold register, halftone instead of flats.
+     memphis     1981 postmodern — hard offset shadows, 3px rules,
+                 confetti, primaries, and nothing square to anything.
+
+   Three others passed through and were thrown out — thermal (a till
+   receipt), hazard (industrial safety), abyss (bioluminescence at 4,000m).
+   Each failed the same way and it is worth writing down: they were
+   ATMOSPHERES rather than objects, so every idea in them landed on the
+   surfaces instead of in the structure, and a theme whose whole proposition
+   is a mood reads as "another dark one" the second time you look at it.
+   Their ids are aliased (settings.ts), never reused.
 
    Each follows the demoscene pattern: one token block (which every theme-wide
    test sweeps and holds to the same contrast arithmetic), then a scoped
@@ -1177,294 +1184,6 @@
 [data-theme="blueprint"] .chat-list::-webkit-scrollbar-thumb {
   border-radius: 0;
   background: color-mix(in srgb, var(--accent) 40%, transparent);
-}
-
-/* ─── ABYSS ─────────────────────────────────────────────────────────────────
-   Every bright thing on the screen is a thing that MAKES light. That is the
-   whole rule, and it is the opposite of every other theme here: nothing is
-   filled, everything is haloed, and the shapes are soft because nothing at
-   that depth has a straight edge.
-
-   NOT THE BOTTOM, THOUGH. "abyss is just too dark" — and the fix is not less
-   glow, it is less depth. The first ground was #060a16, which is the aphotic
-   zone: no light reaches it, so the surfaces had nothing to BE, and every
-   piece of chrome that is a step off the background (a hover, a border, a
-   seam) had no room to make that step in. This sits in the twilight instead —
-   the last depth where there is still something to see by. Every surface
-   comes up with it, so the ladder between them survives; only the ceiling
-   moved. */
-[data-theme="abyss"] {
-  /* Rounded humanist — the one non-angular stack on the machine. Against
-     demoscene's pixel grid and blueprint's drafting hand, this is what keeps
-     them from reading as variations. `ui-rounded` first: it is the generic
-     that resolves to SF Pro Rounded on Apple platforms, and it is the only
-     entry here that is actually ROUND rather than merely soft. */
-  --ui-font: ui-rounded, "SF Pro Rounded", "Hiragino Maru Gothic ProN", "Nunito Sans", "Avenir Next",
-    Avenir, system-ui, sans-serif;
-  --chrome-font: ui-rounded, "SF Pro Rounded", "Hiragino Maru Gothic ProN", "Nunito Sans",
-    "Avenir Next", Avenir, system-ui, sans-serif;
-  --term-font: Menlo, Monaco, monospace;
-
-  --bg: #141d3a;
-  --bg-elev: #1b2650;
-  --bg-hover: #28356b;
-  --bg-chrome: #0d1428;
-  --bg-tabbar: #080d1c;
-
-  --fg: #e4ecff;
-  --fg-dim: #b0c0e8;
-  --fg-faint: #7286b0;
-  --border: #2a3769;
-  --border-strong: #3e4f8c;
-
-  /* Jelly violet leads and a siphonophore pink answers on the rail. The teals
-     are kept for the status marks only — the creatures that glow green down
-     there are the ones signalling something. */
-  --accent: #b98cff;
-  --accent-fg: #120725;
-  --danger: #ff6f88;
-
-  --rail-surface: #1d2a52;
-  --rail-ink: #eaf0ff;
-  --rail-ink-dim: #bccbf0;
-  --rail-ink-faint: #8294bd;
-  --rail-hover: #26356a;
-  --rail-border: #3b4b86;
-  --rail-seam: #2a3a70;
-  --rail-accent: #ff7ab5;
-  --rail-status-ready: #4ff0c8;
-  --rail-status-working: #ffcb77;
-
-  --xterm-bg: #141d3a;
-  --xterm-fg: #e4ecff;
-
-  --fade-1: 0.61;
-  --fade-2: 0.39;
-  --clock-base: #35457d;
-  --hit-bg: #ffc46b;
-  --hit-ink: #1a1002;
-  --hit-rule: #8a5c00;
-}
-
-/* SOFT BODIES. Large radii everywhere a box exists — the single cheapest way
-   to say "this is not a machine". */
-[data-theme="abyss"] .chat-card,
-[data-theme="abyss"] .chat-bubble,
-[data-theme="abyss"] .chat-composer,
-[data-theme="abyss"] .settings-dialog {
-  border-radius: 18px;
-}
-[data-theme="abyss"] .navtree-tab-row,
-[data-theme="abyss"] .navtree-ws-row {
-  border-radius: 12px;
-}
-
-/* LIGHT IS EMITTED, NOT APPLIED. The status marks and the accent carry their
-   own halo, which is what makes a pinprick on a black field read as alive
-   rather than as a dot somebody drew. */
-[data-theme="abyss"] .navtree-mark,
-[data-theme="abyss"] .navtree-state-dot {
-  box-shadow: 0 0 7px 1px currentColor;
-}
-[data-theme="abyss"] .brand-text {
-  text-shadow: 0 0 14px color-mix(in srgb, var(--rail-accent) 70%, transparent);
-}
-
-/* THE CURRENT. The row you are on drifts — a slow violet-to-pink pass, 24s
-   for a full cycle, which is under the threshold where motion in the corner of
-   an eye asks for attention. Dead under prefers-reduced-motion. */
-[data-theme="abyss"] .navtree-tab-row[data-active="true"] {
-  background-image: linear-gradient(
-    100deg,
-    #b06cff5c 0%,
-    #ff5fa23d 30%,
-    #3ff0c030 58%,
-    #b06cff5c 100%
-  );
-  background-size: 260% 100%;
-  animation: abyss-current 24s linear infinite;
-}
-@keyframes abyss-current {
-  to {
-    background-position: -260% 0;
-  }
-}
-
-/* ─── DEPTH IS A GRADIENT, AND IT IS THE WHOLE THEME ────────────────────────
-   The first pass was a palette and a vignette, and it read as "another dark
-   theme" — correctly, because every dark theme here is an EVEN field and so
-   was that one. Water is not even. There is a little light left at the top of
-   the frame and none at all at the bottom, and that one fact is what the eye
-   reads as being under something rather than in front of it.
-   Painted on the app's own ground rather than on the overlay, so the text sits
-   IN the water instead of behind a sheet of it. */
-[data-theme="abyss"] body {
-  background-image: linear-gradient(to bottom, #38539e4d 0%, #1b254a00 42%, #10162e00 100%);
-  background-attachment: fixed;
-}
-
-/* …and the overlay is the part that closes in at the edges: at 4,000m the lamp
-   you have does not reach the corners of the frame at all. */
-[data-theme="abyss"] body::after {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: 9999;
-  pointer-events: none;
-  /* Lifted with the ground: against the old floor this closed to #000208 at
-     b8, which on the new one would put the corners back where the whole
-     theme just came up from. */
-  background: radial-gradient(124% 104% at 50% 28%, #0000 40%, #070c2080 100%);
-}
-
-/* EVERY SURFACE IS LIT FROM INSIDE. A card down here is not a sheet of paper
-   with a shadow under it — it is the only thing emitting, so it carries a wide
-   soft halo in the accent and a hairline that glows rather than divides. */
-[data-theme="abyss"] .chat-bubble,
-[data-theme="abyss"] .chat-composer {
-  box-shadow: 0 0 24px -6px color-mix(in srgb, var(--accent) 34%, transparent);
-}
-[data-theme="abyss"] .chat-composer:focus-within {
-  box-shadow: 0 0 34px -4px color-mix(in srgb, var(--accent) 55%, transparent);
-}
-
-/* CODE AND LINKS GLOW TOO, because the accent is a LIGHT SOURCE in this theme
-   and a flat accent-coloured word would be the one dead thing on the screen. */
-[data-theme="abyss"] a,
-[data-theme="abyss"] .navtree-tab-row[data-active="true"] .navtree-name-text {
-  text-shadow: 0 0 10px color-mix(in srgb, var(--accent) 45%, transparent);
-}
-
-/* ─── MARINE SNOW, AND THE LAST OF THE LIGHT ────────────────────────────────
-   Still "not unique enough", and the reason is that everything so far was
-   STILL: a gradient, a vignette, some glow. Nothing about a dark picture says
-   water. What says water is that the medium is OCCUPIED — there is matter
-   drifting through it, constantly, and the light coming down through it is
-   broken into shafts.
-
-   Both on one fixed pseudo-element, under the vignette:
-     · four radial-gradient fields at different sizes and offsets, which is
-       marine snow — detritus falling, forever, which is the actual visual
-       signature of the deep ocean and the thing no other theme here could
-       accidentally resemble;
-     · two wide skewed shafts, barely there, which is what is left of the
-       surface at this depth.
-   One animation moves the snow DOWN its own tile height and the shafts a few
-   percent sideways — 38s, slow enough to be a condition rather than an
-   effect. pointer-events: none, so it intercepts nothing. */
-[data-theme="abyss"] body::before {
-  content: "";
-  position: fixed;
-  inset: -20% 0 -20%;
-  z-index: 9998;
-  pointer-events: none;
-  background-image: radial-gradient(2.2px 2.2px at 18% 12%, #dbe9ffb0, #0000 62%),
-    radial-gradient(1.6px 1.6px at 72% 34%, #c3dbff96, #0000 62%),
-    radial-gradient(2.8px 2.8px at 44% 71%, #eaf2ff8a, #0000 62%),
-    radial-gradient(1.6px 1.6px at 88% 86%, #b6cfff80, #0000 62%),
-    radial-gradient(1.2px 1.2px at 7% 54%, #cfe0ff73, #0000 62%),
-    radial-gradient(2px 2px at 61% 7%, #d7c8ff73, #0000 62%),
-    linear-gradient(97deg, #0000 36%, #7fa8ff1a 44%, #0000 52%),
-    linear-gradient(94deg, #0000 60%, #9c7fff16 68%, #0000 76%);
-  background-size: 190px 190px, 150px 150px, 260px 260px, 120px 120px, 95px 95px, 210px 210px, 100%
-    100%, 100% 100%;
-  animation: abyss-snow 38s linear infinite;
-}
-@keyframes abyss-snow {
-  to {
-    background-position: 0 190px, 0 150px, 0 260px, 0 120px, 0 95px, 0 210px, 6% 0, -5% 0;
-  }
-}
-
-/* THE WATER IS BETWEEN YOU AND EVERYTHING. A rail at this depth is not a panel
-   with an edge — it is a shape you can almost make out, so its seam goes and
-   its surface is barely a step off the ground. */
-[data-theme="abyss"] .sidenav {
-  border-right: 1px solid #0000;
-}
-
-/* ─── THE THINGS DOWN HERE ARE ALIVE ────────────────────────────────────────
-   "abyss bowring" — and snow alone is weather, not life. Bioluminescence is
-   not a steady lamp: it PULSES, which is the whole reason it is visible from
-   a distance and the whole reason a still glow reads as a CSS shadow instead
-   of as a creature.
-
-   Every status mark breathes, on its own clock. Four periods seeded off
-   nth-child so no two rows in the rail are ever in phase — a rail of marks
-   blinking together would read as a progress indicator, which is the one
-   thing it must not. */
-[data-theme="abyss"] .navtree-mark,
-[data-theme="abyss"] .navtree-state-dot {
-  animation: abyss-pulse 5.5s ease-in-out infinite;
-}
-[data-theme="abyss"] .navtree-tab-row:nth-child(3n) .navtree-mark {
-  animation-duration: 7.5s;
-  animation-delay: -2.1s;
-}
-[data-theme="abyss"] .navtree-tab-row:nth-child(3n + 1) .navtree-mark {
-  animation-duration: 4.5s;
-  animation-delay: -3.4s;
-}
-@keyframes abyss-pulse {
-  0%,
-  100% {
-    box-shadow: 0 0 5px 0 currentColor;
-  }
-  50% {
-    box-shadow: 0 0 13px 2px currentColor;
-  }
-}
-
-/* SOMETHING LARGE GOES PAST. One enormous soft bloom crossing the window on a
-   70s path — a siphonophore at the edge of the lamp, which is the other half
-   of what the deep ocean looks like and the part a static vignette can never
-   be. Low enough in z to sit under the snow, blurred wide enough that it is
-   never a SHAPE, only a brightening. */
-[data-theme="abyss"] .chat-pane::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  background: radial-gradient(38% 42% at 20% 30%, #b06cff26, #0000 70%),
-    radial-gradient(26% 30% at 70% 72%, #ff5fa21f, #0000 70%);
-  animation: abyss-drift 70s ease-in-out infinite alternate;
-}
-@keyframes abyss-drift {
-  to {
-    transform: translate(16%, -12%) scale(1.25);
-  }
-}
-
-/* SELECTING TEXT IS SHINING A LIGHT ON IT. */
-[data-theme="abyss"] ::selection {
-  background: color-mix(in srgb, var(--accent) 45%, transparent);
-  color: #fff;
-}
-
-/* EVEN THE SCROLLBAR EMITS. */
-[data-theme="abyss"] .navtree-scroll::-webkit-scrollbar-thumb,
-[data-theme="abyss"] .chat-list::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--accent) 50%, transparent);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 60%, transparent);
-}
-
-@media (prefers-reduced-motion: reduce), (prefers-contrast: more) {
-  [data-theme="abyss"] .navtree-tab-row[data-active="true"] {
-    animation: none;
-    background-size: 100% 100%;
-  }
-  [data-theme="abyss"] body::before,
-  [data-theme="abyss"] .chat-pane::before,
-  [data-theme="abyss"] .navtree-mark,
-  [data-theme="abyss"] .navtree-state-dot {
-    animation: none;
-  }
-  [data-theme="abyss"] body::after {
-    display: none;
-  }
-  /* blueprint's grid is a background, not an overlay — there is nothing here
-     to hide and nothing moving. */
 }
 
 /* ─── RISO ──────────────────────────────────────────────────────────────────

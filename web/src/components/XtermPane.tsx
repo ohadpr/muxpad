@@ -115,12 +115,6 @@ const XTERM_THEMES: Record<
     cursor: '#d6006e',
     selectionBackground: '#ffe8f3',
   },
-  abyss: {
-    background: '#141d3a',
-    foreground: '#e4ecff',
-    cursor: '#b98cff',
-    selectionBackground: '#3b2f74',
-  },
   'tokyo-night': {
     background: '#1a1b26',
     foreground: '#c0caf5',

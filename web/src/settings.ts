@@ -9,7 +9,6 @@ export type Theme =
   | 'acme-dark'
   | 'demoscene'
   | 'blueprint'
-  | 'abyss'
   | 'riso'
   | 'memphis';
 
@@ -33,7 +32,6 @@ export const THEMES: { value: Theme; label: string }[] = [
   { value: 'acme-dark', label: 'Acme Dark' },
   { value: 'demoscene', label: 'Demoscene' },
   { value: 'blueprint', label: 'Blueprint' },
-  { value: 'abyss', label: 'Abyss' },
   { value: 'riso', label: 'Riso' },
   { value: 'memphis', label: 'Memphis' },
 ];
@@ -84,6 +82,7 @@ const THEME_ALIASES: Record<string, Theme> = {
   // theme that replaced it rather than a silent reset to the default.
   thermal: 'riso',
   hazard: 'memphis',
+  abyss: 'dracula',
   'solarized-light': 'github-light',
   'solarized-dark': 'tokyo-night',
   latte: 'github-light',
