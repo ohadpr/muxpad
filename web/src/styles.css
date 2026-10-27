@@ -699,18 +699,18 @@
      A selection that IS the pane's surface has nothing to read as
      continuing FROM when the thing it continues into looks identical.
 
-     Lifted to 1.42:1 — a slate the ground is clearly not, and still far
+     Lifted to 1.50:1 — a slate the ground is clearly not, and still far
      darker than any lit panel: a cracktro ran on black and the colour
      was in the effects, which is unchanged. The ladder above it (hover,
      border, seam) re-steps with it, and the dim ink lands at 6.2:1 on
      its own field against the 4.5 floor. */
-  --rail-surface: #213440;
+  --rail-surface: #1c3a3d;
   --rail-ink: #d8f6ff;
   --rail-ink-dim: #a7cad4;
-  --rail-ink-faint: #7b9aa6;
-  --rail-hover: #2b4352;
-  --rail-border: #3c5c6c;
-  --rail-seam: #2e4858;
+  --rail-ink-faint: #7ba39f;
+  --rail-hover: #254b4e;
+  --rail-border: #376a6c;
+  --rail-seam: #2a5457;
   --rail-accent: #ff2fd0;
   --rail-status-ready: #2bff9a;
   --rail-status-working: #ffb224;
@@ -887,18 +887,25 @@
    rather than as something demanding attention. Stops dead under
    prefers-reduced-motion, where it falls back to the static bar. */
 [data-theme="demoscene"] .navtree-tab-row[data-active="true"] {
-  /* …and it SHIMMERS ON the pane's surface rather than replacing it. The
-     stops were half again as strong, from when the rail and the pane were
-     the same near-black and the bar was the only thing making the row
-     visible. With a real surface underneath, that much ink hides the join
-     the bar is supposed to be riding on. */
+  /* ── ONE HUE FAMILY, OR IT GOES MUDDY ──────────────────────────────────
+     The bar used to run cyan → ice → MAGENTA → AMBER → cyan, which is the
+     Amiga palette and is right on an Amiga: there a copper bar was opaque
+     vivid bands on black. Here it is a translucent wash over a dark teal
+     surface, and a magenta and an amber at 20–25% over that do not read as
+     magenta and amber — they average into brown. Reported twice, the second
+     time as "still weird color bg", and the screenshot is a muddy mauve row
+     in a theme whose whole palette is cyan.
+     A wash can only stay clean in the hue family of what is under it. So the
+     bar is cyan → ice → cyan: still moving, still a copper bar, and it now
+     reads as the pane's own surface catching the light rather than as a
+     different colour sitting on the row. */
   background-image: linear-gradient(
     90deg,
-    #19ffd033 0%,
-    #22e8ff29 18%,
-    #ff2fd029 42%,
-    #ffb22420 64%,
-    #19ffd033 100%
+    #19ffd038 0%,
+    #22e8ff1f 26%,
+    #19ffd00f 50%,
+    #22e8ff1f 74%,
+    #19ffd038 100%
   );
   background-size: 220% 100%;
   animation: demoscene-copper 9s linear infinite;
