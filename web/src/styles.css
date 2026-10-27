@@ -1334,20 +1334,25 @@
   font-weight: 700;
 }
 
-/* THE SELECTED ROW IS A SECOND PASS OF PINK, knocked out of the blue —
-   printed over, not tinted.
+/* ─── THE SELECTED ROW IS THE PAGE, REACHING INTO THE RAIL ──────────────────
+   This was a second pass of pink with a white halftone knocked out of it, and
+   it was wrong twice over.
 
-   AND THE NAME ON IT IS INK, not paper. The row inherited --rail-ink, which
-   is white, and white on this pink measures 3.09:1 — under the floor before
-   the dot field takes another bite out of it. Black reads 5.82:1 on the same
-   fill, and it is also what a riso does: the dark pass is printed LAST, over
-   the colour. The screen comes down with it, because a 25% white dot every
-   4px under a 13px name is contrast spent on texture. */
-[data-theme="riso"] .navtree-tab-row[data-active="true"] {
-  background-color: var(--rail-accent);
-  background-image: radial-gradient(#ffffff2b 40%, transparent 41%);
-  background-size: 4px 4px;
-}
+   Noisy, first — a 4px dot field under a 13px name is contrast spent on
+   texture, and it was the loudest object in the whole app.
+
+   But the deeper mistake was that it OPTED OUT. muxpad's selected row is not
+   a highlight; it is the chat pane's own surface (--bg-pane-face) continuing
+   into the rail, with .navtree-tab-funnel drawing the two fillets that flare
+   one into the other. That is why the row and the pane read as one shape
+   instead of as a list item that happens to be lit. Painting the row a flat
+   accent threw the mechanism away and left the funnel flaring into a colour
+   the pane does not have.
+
+   So riso renders it the way every other theme does — the pane's pale second
+   ink arriving in an ultramarine rail, which is a more striking object than
+   the pink ever was BECAUSE it is the page and not a marker. The ink steps to
+   the paper's, because the surface under it is now paper. */
 [data-theme="riso"] .navtree-tab-row[data-active="true"] .navtree-name-text {
   color: var(--fg);
   font-weight: 700;
