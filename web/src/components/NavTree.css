@@ -1712,6 +1712,50 @@
   border-top: 1.5px solid var(--nt-trunk-ink);
 }
 
+/* ─── THE FAMILY YOU ARE STANDING IN ────────────────────────────────────────
+   Reported: "you stand on a chat that has sub-chats, then the sub-chats don't
+   get a semi-selected background — I think it's worth improving."
+
+   Right. The parent and its workers are ONE piece of work, and until now they
+   looked like strangers who happen to be adjacent: the selection painted one
+   row and the rest of the family was indistinguishable from the chats above
+   and below it.
+
+   A tint at 7% of the ink — a third of the selected row's weight, so it reads
+   as "related to the thing you are in" and could never be mistaken for "this
+   is the thing you are in". `data-family` is set in BOTH directions (see
+   NavTree.tsx `inFamily`): stand on a parent and the children take it, stand
+   on a child and the parent does, which is the half a selection highlight
+   cannot do on its own.
+
+   Deliberately NOT the accent. The accent is already spent on selection and
+   focus throughout the rail, and a weak accent wash beside a strong one is the
+   pair every theme reviewed here measured worst — "which of these two am I
+   actually on" is the one question a rail must never raise. A neutral lift
+   answers "same group" without entering that conversation at all. */
+/* `:not([data-active])` is a BELT, not the mechanism — NavTree.tsx already
+   declines to set the attribute on the row you are standing on. It is here
+   because this rule is more specific than the selected row's and would win if
+   the two ever met, which is the one failure this tint must not have. */
+.navtree .navtree-tab-row[data-family="true"]:not([data-active="true"]) {
+  background-color: color-mix(in srgb, var(--fg) 7%, transparent);
+}
+/* …and the trunk that joins them brightens with it, because the line IS the
+   relationship and a tint alone leaves it drawn in the same grey as every
+   other family's.
+
+   DONE BY RE-POINTING THE TOKEN, never by writing a rule for the pseudos. A
+   first pass styled `[data-family]::before, [data-family]::after` directly and
+   NavTree.selection.test.ts failed it on sight — correctly, and that test is
+   the scar from two shipped bugs: `::before` on a tab row is the state track
+   AND the child's trunk, `::after` is the elbow AND was once the active row's
+   fillet, and both times a second claimant over-constrained the box and
+   painted something in the wrong place. The ownership is the invariant.
+   `--nt-trunk-ink` inherits into both pseudos and nothing else changes. */
+.navtree .navtree-tab-row[data-family="true"] {
+  --nt-trunk-ink: color-mix(in srgb, var(--fg) 52%, transparent);
+}
+
 /* NO BULLET. The child wore a dot in its mark column, from when the dot was the
    ONLY thing saying "this is a child" — an indent alone could not do that job,
    so the mark had to. The trunk says it now, and says it better, which leaves

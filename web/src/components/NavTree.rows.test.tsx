@@ -396,8 +396,11 @@ describe('the sheet nests a child under its parent and files done chats away', (
     expect(html).toContain('title="Unread reply in this chat"');
     expect(html).toContain('navtree-mark navtree-rail-mark" data-state="working"');
     // …and the pill says what the worker is doing, open or shut (see the rail
-    // test of the same case).
-    expect(html).toContain('>1 running</span>');
+    // test of the same case) — in its hue and its tooltip, with the count as
+    // the only thing it spends width on.
+    expect(html).toContain('navtree-subs-pill');
+    expect(html).toMatch(/navtree-subs-pill[^>]*data-state="working"/);
+    expect(html).toMatch(/navtree-row-pill-n">1</);
     expect(html).not.toContain('navtree-row-pill-dot');
     expect(html).not.toContain('navtree-row-pill-glyph');
   });
@@ -580,7 +583,7 @@ describe('sub-chats are collapsed, and the collapse still tells the truth', () =
 
   it('the schedule yields to it, and only on a row that has sub-chats', () => {
     // Both will not fit beside a name on a 240px row — measured, the name
-    // drops to 55px and `Trayo Builder` truncates. A chat with live workers
+    // drops to 55px and `Orbit Builder` truncates. A chat with live workers
     // has more to say than when its cron next fires, and the time stays on the
     // row's title. A chat WITHOUT sub-chats is untouched.
     const crons = [{ name: 'sweep', next_at: NOW + 3_600_000 }] as unknown as Tab['crons'];
@@ -692,7 +695,15 @@ describe('sub-chat status wording', () => {
   const pill = (html: string) =>
     /<button[^>]*navtree-subs-pill[^>]*>[\s\S]*?<\/button>/.exec(html)?.[0] ?? '';
   const text = (html: string) => pill(html).replace(/<[^>]+>/g, '');
+  /** The sentence lives in the tooltip now — see SubsPill. */
+  const spoken = (html: string) => /title="([^"]*)"/.exec(pill(html))?.[1] ?? '';
 
+  // THE LABEL IS THE COUNT; THE SENTENCE IS THE TOOLTIP. It used to be the
+  // other way round and the pill measured 91px of a 272px row — a third of it,
+  // to say two numbers the hue and the digit already carry. Reported as "all
+  // these '1 running', '2 · 1 unread' statuses are odd" and "chat names can
+  // get tiny". Nothing is lost: every word below is still spoken, to a
+  // pointer and to a screen reader.
   it.each([
     ['idle', '1 sub-agent'],
     ['working', '1 running'],
@@ -701,7 +712,8 @@ describe('sub-chat status wording', () => {
     ['dead', '1 stopped'],
   ] as const)('names %s hidden children without a status-symbol legend', (status, label) => {
     const html = railHtml([tab('root'), tab('child', { spawned_by: 'root', status, clock: null })]);
-    expect(text(html)).toBe(label);
+    expect(text(html)).toBe('1');
+    expect(spoken(html)).toContain(label.replace('1 ', ''));
     expect(pill(html)).not.toContain('navtree-row-pill-dot');
     expect(pill(html)).not.toContain('navtree-row-pill-glyph');
   });
@@ -723,7 +735,8 @@ describe('sub-chat status wording', () => {
       tab('root', { status: 'ready' }),
       tab('child', { spawned_by: 'root', status: 'working', clock: null }),
     ]);
-    expect(text(html)).toBe('1 running');
+    expect(text(html)).toBe('1');
+    expect(spoken(html)).toContain('running');
     expect(pill(html)).toContain('data-state="working"');
     expect(html).toContain('title="Unread reply in this chat"');
     expect(html).toMatch(/navtree-mark" data-state="ready"[^>]*>✓<\/span>/);
@@ -744,8 +757,10 @@ describe('sub-chat status wording', () => {
     ]);
     expect(pill(shut)).toContain('data-state="blocked"');
     expect(pill(open)).toContain('data-state="blocked"');
-    expect(text(shut)).toBe('1 needs you');
-    expect(text(open)).toBe('1 needs you');
+    expect(text(shut)).toBe('1');
+    expect(text(open)).toBe('1');
+    expect(spoken(shut)).toContain('needs you');
+    expect(spoken(open)).toContain('needs you');
   });
 
   it('retains the total and counts the urgent subset for mixed children', () => {
@@ -755,8 +770,9 @@ describe('sub-chat status wording', () => {
       tab('two', { spawned_by: 'root', status: 'working', clock: null }),
       tab('three', { spawned_by: 'root', status: 'idle', clock: null }),
     ]);
-    expect(text(html)).toBe('3 · 1 needs you');
-    expect(pill(html)).toContain('1 running');
-    expect(pill(html)).toContain('1 idle');
+    expect(text(html)).toBe('3');
+    expect(spoken(html)).toContain('1 needs you');
+    expect(spoken(html)).toContain('1 running');
+    expect(spoken(html)).toContain('1 idle');
   });
 });
