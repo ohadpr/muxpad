@@ -109,11 +109,11 @@ const XTERM_THEMES: Record<
     cursor: '#e0005f',
     selectionBackground: '#ffe1ef',
   },
-  hazard: {
-    background: '#e6e4df',
-    foreground: '#16161a',
-    cursor: '#c23600',
-    selectionBackground: '#ffe9a3',
+  memphis: {
+    background: '#fbf8f1',
+    foreground: '#121016',
+    cursor: '#d6006e',
+    selectionBackground: '#ffe8f3',
   },
   abyss: {
     background: '#141d3a',

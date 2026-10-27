@@ -1536,15 +1536,18 @@
 }
 
 /* THE DRUM IS OFF, AND IT DRIFTS. Misregistration is the signature of the
-   process: the second pass lands a hair from the first, and it is never the
-   same hair twice, because the paper is fed by rubber. One pink ghost and one
-   blue ghost on the headings, wandering ±1px over 11s — slow enough to read as
-   a machine that cannot hold register rather than as an animation. */
-[data-theme="riso"] .chat-msg h1,
-[data-theme="riso"] .chat-msg h2,
-[data-theme="riso"] .chat-msg h3,
-[data-theme="riso"] .chat-msg strong,
-[data-theme="riso"] .brand {
+   process: the second pass lands a hair from the first, and never the same
+   hair twice, because the paper is fed by rubber. A pink ghost and a blue
+   ghost, wandering ±1px over 11s — slow enough to read as a machine that
+   cannot hold register rather than as an animation.
+
+   ON THE LETTERING ONLY. The first version put it on every heading and every
+   bold run in the chat, which is a coloured double image on the words a
+   paragraph leans hardest on — "tweak it to be more legible" is largely this.
+   A zine's cover is out of register; its body copy is the one thing the
+   printer tries hardest to land, because nobody can read a ghosted 14px. */
+[data-theme="riso"] .brand,
+[data-theme="riso"] .navtree-ws-name {
   animation: riso-register 11s steps(1, end) infinite;
 }
 @keyframes riso-register {
@@ -1559,21 +1562,35 @@
   }
 }
 
-/* THE INK IS DOTS, NOT A FLAT. A 3px halftone over the paper — coarse enough
-   to see at arm's length, which is the whole point of the process. */
+/* THE INK IS DOTS, NOT A FLAT. A halftone over the paper — coarse enough to
+   see at arm's length, which is the whole point of the process.
+
+   Half the strength it was, and KNOCKED OUT behind running text. A 4px dot
+   field under a 14px line is the same defect as blueprint's 8px grid: it adds
+   an edge inside the x-height of every character, and no contrast ratio
+   reports it. Same fix, for the same reason — the paper is dotted, the column
+   you read in is a flat, and a zine has always worked exactly that way. */
 [data-theme="riso"] .chat-pane,
 [data-theme="riso"] .settings-dialog {
-  background-image: radial-gradient(#e0005f1a 36%, transparent 37%);
-  background-size: 4px 4px;
+  background-image: radial-gradient(#e0005f12 34%, transparent 35%);
+  background-size: 5px 5px;
+}
+[data-theme="riso"] .chat-msg {
+  background-color: var(--bg);
+  box-shadow: 0 0 0 7px var(--bg);
 }
 
 /* AND A HEAVIER ONE WHERE A FLAT WOULD HAVE BEEN. The user's own messages are
    a solid in the second ink — except a riso cannot print a solid, so it is a
    50% dot field with the paper showing through. */
 [data-theme="riso"] .chat-bubble {
-  background-color: #dbe2ff;
-  background-image: radial-gradient(#1333c43d 42%, transparent 43%);
-  background-size: 5px 5px;
+  /* A FLAT, and no dots under the words. The screened version put the second
+     ink's halftone behind the one block of text in the chat that is yours,
+     which is the same mistake as the page field and was kept one round too
+     long because it was the clever one. The tint and a 2px rule carry it; ink
+     reads 15:1 on this. */
+  background-color: #e4eaff;
+  background-image: none;
   border: 2px solid var(--fg);
 }
 
@@ -1593,161 +1610,188 @@
   background-size: 4px 4px;
 }
 
-/* ─── HAZARD ────────────────────────────────────────────────────────────────
-   The other end of the same argument: a machine that is not trying to be
-   pretty. Industrial safety has a palette because the palette is REGULATED —
-   high-vis yellow against black is the most visible pairing available to a
-   human eye, and nobody chose it for how it looks. Concrete, stencilled
-   lettering, and a diagonal stripe wherever something is live. */
-[data-theme="hazard"] {
-  /* Signage, not editorial. Verdana's wide sturdy letterforms are what gets
-     screen-printed on a machine housing; Arial Black is the heading weight a
-     warning plate uses, and both are on every machine. */
-  --ui-font: Verdana, "DejaVu Sans", Tahoma, Geneva, sans-serif;
-  --chrome-font: "Arial Black", "Helvetica Neue", Impact, Haettenschweiler, sans-serif;
+@media (prefers-reduced-motion: reduce), (prefers-contrast: more) {
+  [data-theme="riso"] .brand,
+  [data-theme="riso"] .navtree-ws-name {
+    animation: none;
+  }
+}
+
+/* ─── MEMPHIS ───────────────────────────────────────────────────────────────
+   "super legible super crazy" sounds like a contradiction and is not one,
+   because the two live in different places. Legibility is a property of the
+   TEXT COLUMN: ink, size, and nothing behind it. Everything else on the screen
+   — the rail, the margins, the frames, the marks, the empty half of the pane —
+   is free, and every theme before this one spent its ideas IN the column and
+   then had to walk them back (blueprint's grid, riso's dot field, both of them
+   knocked out behind the words in the end).
+
+   So this one never puts anything there to begin with. 17.8:1 near-black on
+   warm white, set in the typeface literally designed for screen legibility,
+   with the entire Memphis Group vocabulary — primaries, confetti, hard offset
+   shadows, 3px rules, nothing aligned to anything — happening around it. */
+[data-theme="memphis"] {
+  /* Verdana is here for one reason and it is not period accuracy: it was drawn
+     for screen reading at small sizes, with open counters and wide spacing,
+     and it is on every machine. The display face carries the era. */
+  --ui-font: Verdana, "DejaVu Sans", Geneva, Tahoma, sans-serif;
+  --chrome-font: "Gill Sans", "Gill Sans MT", "Trebuchet MS", "Century Gothic", system-ui,
+    sans-serif;
   --term-font: "SF Mono", Menlo, Monaco, monospace;
 
-  --bg: #e6e4df;
-  --bg-elev: #f2f1ec;
-  --bg-hover: #d6d3cb;
-  --bg-chrome: #dbd8d1;
-  --bg-tabbar: #c8c5bd;
+  --bg: #fbf8f1;
+  --bg-elev: #ffffff;
+  --bg-hover: #ffe8f3;
+  --bg-chrome: #f2eee4;
+  --bg-tabbar: #e6e1d4;
 
-  --fg: #16161a;
-  --fg-dim: #45454b;
+  --fg: #121016;
+  --fg-dim: #45414d;
   /* Decorative only — see the --hit-* note in :root; never text. */
-  --fg-faint: #83828a;
-  --border: #cbc8c0;
-  --border-strong: #a5a29a;
+  --fg-faint: #8b8694;
+  --border: #121016;
+  --border-strong: #121016;
 
-  /* Yellow is the SIGNAL, not the accent: #ffd200 on a light ground is 1.3:1
-     and unreadable as text, so it is spent on stripes and marks only. The
-     accent a control wears is safety orange, which clears 5.2:1. */
-  --accent: #c23600;
-  --accent-fg: #fff8f2;
-  --danger: #b00014;
+  --accent: #d6006e;
+  --accent-fg: #fffdfa;
+  --danger: #e01b2e;
 
-  --rail-surface: #22221f;
-  --rail-ink: #f5f3ec;
-  --rail-ink-dim: #ccc9bf;
-  --rail-ink-faint: #94918a;
-  --rail-hover: #32322d;
-  --rail-border: #45453e;
-  --rail-seam: #32322d;
-  --rail-accent: #ffd200;
-  --rail-status-ready: #6fbf3a;
-  --rail-status-working: #ffd200;
+  --rail-surface: #17151d;
+  --rail-ink: #fbf8f1;
+  --rail-ink-dim: #cfc9d6;
+  --rail-ink-faint: #928ca0;
+  --rail-hover: #272333;
+  --rail-border: #46405c;
+  --rail-seam: #2e2a3d;
+  --rail-accent: #ffd400;
+  --rail-status-ready: #00d49a;
+  --rail-status-working: #ffd400;
 
-  --xterm-bg: #e6e4df;
-  --xterm-fg: #16161a;
+  --xterm-bg: #fbf8f1;
+  --xterm-fg: #121016;
 
   --fade-1: 0.7;
   --fade-2: 0.46;
-  --clock-base: #c8c5bd;
+  --clock-base: #e6e1d4;
 
-  /* Light re-step (see :root), on a NEUTRAL concrete. */
-  --status-blocked: #b00014;
+  /* Light re-step (see :root), on a WARM stock. */
+  --status-blocked: #c4001b;
   --status-working: #8a6400;
-  --status-ready: #2f6b1f;
-  --status-quiet: #a5a29a;
-  --status-dead: #6a6861;
+  --status-ready: #10724f;
+  --status-quiet: #b5afa2;
+  --status-dead: #6b6760;
   --status-wash: 10%;
   --status-chip-wash: 18%;
   --status-ink-mix: 50%;
 
-  --hit-bg: #ffd200;
-  --hit-ink: #16161a;
+  --hit-bg: #ffd400;
+  --hit-ink: #121016;
   --hit-rule: #8a6a00;
 }
 
-/* SQUARE, EVERYWHERE. Nothing on a machine housing has a radius that was not
-   forced on it by a tool. */
-[data-theme="hazard"] .chat-card,
-[data-theme="hazard"] .chat-bubble,
-[data-theme="hazard"] .chat-composer,
-[data-theme="hazard"] .settings-dialog,
-[data-theme="hazard"] .navtree-mark,
-[data-theme="hazard"] .navtree-state-dot,
-[data-theme="hazard"] .navtree-scroll::-webkit-scrollbar-thumb,
-[data-theme="hazard"] .chat-list::-webkit-scrollbar-thumb {
-  border-radius: 0;
-}
-
-/* THE STRIPES MOVE. A caution band is a diagonal hatch, and on anything
-   actually running it is a barber pole — which is exactly what a selected row
-   is: the one that is live. 2.4s, the speed a conveyor warning turns.
-   This is hazard's copper bar, and it is the thing you will recognise the
-   theme by from across a room. */
-[data-theme="hazard"] .navtree-tab-row[data-active="true"] {
-  background-image: repeating-linear-gradient(-45deg, #ffd200 0 11px, #22221f 11px 22px);
-  background-size: 31px 31px;
-  animation: hazard-march 2.4s linear infinite;
-}
-/* The name needs a plate to be legible over a barber pole — but PADDING for
-   it costs layout, and a truncating flex child pays that in characters: the
-   first version rendered "muxp…". A box-shadow spreads the same plate and
-   takes no width. */
-[data-theme="hazard"] .navtree-tab-row[data-active="true"] .navtree-name-text {
-  background: var(--rail-surface);
-  box-shadow: 0 0 0 4px var(--rail-surface);
-  color: var(--rail-ink);
-}
-@keyframes hazard-march {
-  to {
-    background-position: 31px 0;
-  }
-}
-
-/* A WARNING BAND ACROSS THE TOP OF THE PANE, because a plate on a machine
-   always has one and because it is the fastest way to say "this is the live
-   one" without spending a colour on it. */
-[data-theme="hazard"] .chat-pane::before {
-  content: "";
-  position: absolute;
-  inset: 0 0 auto;
-  height: 6px;
-  z-index: 2;
-  pointer-events: none;
-  background: repeating-linear-gradient(-45deg, #ffd200 0 9px, #22221f 9px 18px);
-}
-
-/* LETTERING IS STENCILLED. Heavy, caps, tight — the way it is cut into a
-   plate rather than set on a page. */
-[data-theme="hazard"] .navtree-ws-name,
-[data-theme="hazard"] .brand,
-[data-theme="hazard"] .chat-action-group-count {
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-
-/* THE COMPOSER IS A CONTROL PANEL. Heavy black frame, square, and a send key
-   in the one colour a button is ever allowed to be. */
-[data-theme="hazard"] .chat-composer {
-  border: 3px solid var(--fg);
-  border-radius: 0;
-}
-[data-theme="hazard"] .chat-send {
-  border-radius: 0;
-  background: var(--accent);
-  color: var(--accent-fg);
-}
-
-/* AND THE USER'S OWN MESSAGES ARE A PLATE, bolted on: a thick rule and the
-   elevated concrete, which is the only "surface" this theme recognises. */
-[data-theme="hazard"] .chat-bubble {
+/* EVERYTHING IS A STICKER. A 3px black rule and a hard offset shadow with no
+   blur — the one move that defines the whole look, and the reason nothing here
+   needs a gradient. Memphis objects sit ON the surface; they are not part of
+   it. */
+[data-theme="memphis"] .chat-bubble,
+[data-theme="memphis"] .chat-composer,
+[data-theme="memphis"] .settings-dialog,
+[data-theme="memphis"] .chat-card {
   background-color: var(--bg-elev);
   border: 3px solid var(--fg);
+  border-radius: 0;
+  box-shadow: 6px 6px 0 var(--accent);
+}
+[data-theme="memphis"] .chat-composer:focus-within {
+  box-shadow: 6px 6px 0 #00c2e0;
 }
 
-@media (prefers-reduced-motion: reduce), (prefers-contrast: more) {
-  [data-theme="hazard"] .navtree-tab-row[data-active="true"],
-  [data-theme="riso"] .chat-msg h1,
-  [data-theme="riso"] .chat-msg h2,
-  [data-theme="riso"] .chat-msg h3,
-  [data-theme="riso"] .chat-msg strong,
-  [data-theme="riso"] .brand {
-    animation: none;
-  }
+/* CONFETTI IN THE MARGINS, AND ONLY THE MARGINS. Dots, bars and a zigzag in
+   the four primaries, scattered on the pane's own ground — where the reading
+   column then knocks a flat out of it, exactly as in riso and blueprint. The
+   difference is that here it was never a texture pretending to be subtle: it
+   is loud, and it stays off the words.
+
+   The hatch is at 11% and a 17px period. At full ink and 11px — where it
+   started — it was not confetti, it was a fill: the pane read as a hatched
+   block with a white hole punched in it, and the hole was the only part you
+   could look at. Confetti is what you see when you are NOT looking at the
+   words. */
+[data-theme="memphis"] .chat-pane,
+[data-theme="memphis"] .workspace-body {
+  background-image: radial-gradient(5px 5px at 12% 18%, #ffd400 98%, #0000),
+    radial-gradient(4px 4px at 78% 9%, #00c2e0 98%, #0000),
+    radial-gradient(6px 6px at 43% 62%, #d6006e 98%, #0000),
+    radial-gradient(4px 4px at 91% 71%, #7b4dff 98%, #0000),
+    radial-gradient(5px 5px at 27% 88%, #00d49a 98%, #0000),
+    repeating-linear-gradient(45deg, #1210161c 0 3px, #0000 3px 17px);
+  background-size: 190px 190px, 150px 150px, 230px 230px, 170px 170px, 210px 210px, 58px 58px;
+  background-attachment: fixed;
+}
+[data-theme="memphis"] .chat-msg {
+  background-color: var(--bg);
+  box-shadow: 0 0 0 8px var(--bg);
+}
+
+/* THE MARKS ARE SHAPES, NOT DOTS. A circle, a square and a bar is the Memphis
+   alphabet, and a rail of them reads as a pattern rather than as a legend —
+   which is the point: you learn the colours, not the shapes. */
+[data-theme="memphis"] .navtree-mark {
+  border-radius: 0;
+}
+[data-theme="memphis"] .navtree-tab-row:nth-child(3n) .navtree-mark {
+  border-radius: 50%;
+}
+[data-theme="memphis"] .navtree-tab-row:nth-child(3n + 1) .navtree-mark {
+  border-radius: 0;
+  transform: rotate(45deg);
+}
+
+/* THE SELECTED ROW IS A BLOCK OF COLOUR WITH A BAR BESIDE IT — no wash, no
+   tint, no 20% anything. Memphis has no opacity. */
+[data-theme="memphis"] .navtree-tab-row[data-active="true"] {
+  background-color: var(--rail-accent);
+  background-image: none;
+}
+[data-theme="memphis"] .navtree-tab-row[data-active="true"] .navtree-name-text {
+  color: #121016;
+  font-weight: 700;
+}
+
+/* SECTION NAMES ARE SET LIKE A POSTER, and sit crooked, because in this
+   vocabulary nothing is square to anything else. */
+[data-theme="memphis"] .navtree-ws-name .navtree-name-text {
+  display: inline-block;
+  padding: 1px 8px;
+  background: #00c2e0;
+  color: #121016;
+  font-family: var(--chrome-font);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  transform: rotate(-2deg);
+}
+
+/* THE SEND KEY IS A STICKER TOO. */
+[data-theme="memphis"] .chat-send {
+  border-radius: 0;
+  border: 3px solid var(--fg);
+  background: var(--rail-accent);
+  color: #121016;
+  box-shadow: 3px 3px 0 var(--fg);
+}
+
+/* AND THE WORDMARK WEARS THE WHOLE PALETTE, which is the one place a theme
+   gets to simply show off. */
+[data-theme="memphis"] .brand-text {
+  font-family: var(--chrome-font);
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  background: linear-gradient(92deg, #ffd400, #00c2e0 34%, #d6006e 66%, #7b4dff);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 
 * {
