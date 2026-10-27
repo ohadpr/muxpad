@@ -1546,16 +1546,24 @@
 
 /* SECTION NAMES ARE SET LIKE A POSTER, and sit crooked, because in this
    vocabulary nothing is square to anything else. */
+/* ─── …AND THE SECTION NAME IS RULED, NOT STUCK ON ──────────────────────────
+   It was a solid cyan block set at -2°, and "cool but a bit much" is fair:
+   two section headers are the most repeated object in the rail, and a
+   crooked filled label repeated down a list stops reading as a flourish and
+   starts reading as a mistake — the eye keeps trying to straighten it.
+
+   The bar survives, under the name instead of behind it. Same flat hard-edged
+   cyan, same Memphis grammar, none of the shouting — and the name goes back
+   to being ink on the rail, which is what a section header is. */
 [data-theme="memphis"] .navtree-ws-name .navtree-name-text {
   display: inline-block;
-  padding: 1px 8px;
-  background: #00c2e0;
-  color: #121016;
+  padding-bottom: 2px;
+  border-bottom: 3px solid #00c2e0;
+  color: var(--rail-ink);
   font-family: var(--chrome-font);
   font-weight: 700;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  transform: rotate(-2deg);
 }
 
 /* THE SEND KEY IS A STICKER TOO. */
@@ -1569,15 +1577,23 @@
 
 /* AND THE WORDMARK WEARS THE WHOLE PALETTE, which is the one place a theme
    gets to simply show off. */
+/* ─── THE WORDMARK IS ONE COLOUR ────────────────────────────────────────────
+   It wore all four primaries at once, clipped through the text, and the
+   report was "too weird, missing out" — which is the right reading: a
+   gradient across six 13px letters gives each one a different hue and no two
+   the same weight on the ground, so the word stops being a word and becomes
+   six marks. The yellow M went nearly invisible beside the violet D.
+
+   A gradient needs AREA. Memphis puts colour in blocks and shapes, which is
+   exactly what the mark beside the wordmark already is — so the colour lives
+   there and the name is set in ink. Caps and the tracking stay; they were
+   never the problem. */
 [data-theme="memphis"] .brand-text {
   font-family: var(--chrome-font);
   font-weight: 700;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
-  background: linear-gradient(92deg, #ffd400, #00c2e0 34%, #d6006e 66%, #7b4dff);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+  color: var(--rail-ink);
 }
 
 * {
