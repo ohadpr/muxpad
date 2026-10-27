@@ -25,26 +25,26 @@
   max-width: 768px;
   margin: 0 auto 6px;
   /* ─── IT MUST NOT GROW PAST THE TOP OF THE SCREEN ────────────────────────
-     It opens UPWARD from the composer (`bottom: 100%`), and `min(46vh, 320px)`
-     knows nothing about where the composer is — so on a phone, with the
-     keyboard up and little room above, the list simply ran off the top and the
-     first rows sat under the status bar (the clock and the carrier), unreadable
-     and untappable.
-     The third term is the real bound: everything above the composer, less the
-     notch. `--chat-composer-h` is the wrap's measured height (ChatPane
-     publishes it) and `--chat-keyboard-inset` is how far the composer itself
-     has been lifted by the software keyboard; both are 0 or absent on desktop,
-     where this resolves to the 320px it always was. */
+     It opens UPWARD from the composer (`bottom: 100%`), so the height it may
+     take is "everything above the composer, less the notch".
+
+     THAT NUMBER IS MEASURED NOW, NOT DERIVED. It used to be
+     `100dvh - --chat-composer-h - --chat-keyboard-inset - safe-area`, and the
+     derivation is wrong on the one surface it was written for: with the
+     software keyboard up, iOS leaves `dvh` at the FULL SCREEN HEIGHT, so the
+     sum believed there was most of a phone above a composer that had been
+     lifted into the middle of one. The list ran past the top, its header sat
+     under the clock and the carrier, and because the overflow was above the
+     scroll box there was no way to bring it back.
+
+     `--chat-composer-top` is the wrap's `getBoundingClientRect().top` — where
+     the composer actually IS, after whatever moved it (ChatPane publishes it
+     from the same effect as the height). The fallback keeps desktop on the
+     320px it always was. */
   max-height: min(
     46vh,
     320px,
-    calc(
-      100dvh -
-      var(--chat-composer-h, 96px) -
-      var(--chat-keyboard-inset, 0px) -
-      env(safe-area-inset-top, 0px) -
-      16px
-    )
+    calc(var(--chat-composer-top, 100dvh) - env(safe-area-inset-top, 0px) - 10px)
   );
   overflow-y: auto;
   overscroll-behavior: contain;
