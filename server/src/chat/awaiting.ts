@@ -124,14 +124,46 @@ export function endsAwaitingUser(text: string): boolean {
 export function paneAwaitsUser(db: Database.Database, paneId: string): boolean {
   const { conversation } = readRecentTurns(db, paneId);
   if (!conversation) return false;
-  // Walk back to the last ASSISTANT line. Anything after it would be a user
-  // message, which means the ball is already back in the worker's court.
+  // ── THE LAST MESSAGE, NOT ITS FIRST LINE ──────────────────────────────────
+  //
+  // `readRecentTurns` pushes each message WHOLE — `assistant: <everything it
+  // said>` — and joins the list with newlines, so a multi-line message's
+  // second line onward carries no prefix at all. This used to walk back for a
+  // line starting `assistant: `, which is a message's OPENING, and judge that.
+  // The function's own name and docstring say it reads the last thing the
+  // worker said; it read the first.
+  //
+  // Measured on `feed variant · 24h dial`, held in the live rail for nine
+  // hours. Its final message is two lines, and line one ends:
+  //
+  //     "A gold hand sweeps to whichever hour you pick."
+  //
+  // `you pick` matches INVITATION, so a sentence describing a clock face read
+  // as "the worker stopped to ask you something" and ChatRetirer held the row
+  // open for ever. The real last line matches nothing.
+  //
+  // So: collect the lines of the final message and hand the whole thing to
+  // `endsAwaitingUser`, which already knows to read its tail.
   const lines = conversation.split('\n');
+  let start = -1;
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i] as string;
-    if (line.startsWith('user: ')) return false;
-    if (!line.startsWith('assistant: ')) continue;
-    return endsAwaitingUser(line.slice('assistant: '.length));
+    // A USER line after the last assistant one means the ball is already back
+    // in the worker's court — and a user line BEFORE it ends the search for
+    // where the assistant's message began.
+    if (line.startsWith('user: ')) {
+      if (start === -1) return false;
+      break;
+    }
+    if (line.startsWith('assistant: ')) {
+      start = i;
+      break;
+    }
+    // An unprefixed line is a continuation of whatever message is above it.
   }
-  return false;
+  if (start === -1) return false;
+  const message = [lines[start]?.slice('assistant: '.length) ?? '', ...lines.slice(start + 1)].join(
+    '\n',
+  );
+  return endsAwaitingUser(message);
 }

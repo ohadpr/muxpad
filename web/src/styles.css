@@ -1481,28 +1481,46 @@
   box-shadow: 0 0 0 8px var(--bg);
 }
 
-/* THE MARKS ARE SHAPES, NOT DOTS. A circle, a square and a bar is the Memphis
-   alphabet, and a rail of them reads as a pattern rather than as a legend —
-   which is the point: you learn the colours, not the shapes. */
-[data-theme="memphis"] .navtree-mark {
+/* ─── THE MARK IS A SQUARE, AND THAT IS ALL IT IS ───────────────────────────
+   This used to vary by position — circle, square, diamond by nth-child — on
+   the theory that a rail of shapes reads as a pattern. It does. It also
+   ROTATED A GLYPH: `.navtree-mark` is not only the working dot, it is the box
+   that holds `✓` for unread, `!` for blocked and `×` for stopped, and a ✓ at
+   45° is a tilted V nobody can name. Reported as exactly that — "what is this
+   weird tilted V indicator?"
+
+   A decoration that lands on a channel carrying meaning is not a decoration.
+   Square corners are the whole of it now, which was the part that was doing
+   the work anyway: on a grid of hard-edged stickers a round dot was the one
+   moulded object left. */
+[data-theme="memphis"] .navtree-mark,
+[data-theme="memphis"] .navtree-state-dot {
   border-radius: 0;
-}
-[data-theme="memphis"] .navtree-tab-row:nth-child(3n) .navtree-mark {
-  border-radius: 50%;
-}
-[data-theme="memphis"] .navtree-tab-row:nth-child(3n + 1) .navtree-mark {
-  border-radius: 0;
-  transform: rotate(45deg);
 }
 
-/* THE SELECTED ROW IS A BLOCK OF COLOUR WITH A BAR BESIDE IT — no wash, no
-   tint, no 20% anything. Memphis has no opacity. */
+/* ─── THE SELECTED ROW IS THE PAGE, NOT A HIGHLIGHT ─────────────────────────
+   It was a solid block of `--rail-accent`, and the report was "the yellow
+   looks good but the CUT is abrupt" — with the right diagnosis attached:
+   "theoretically the active colour should be the bg colour of the main view".
+
+   That is exactly what it is, everywhere else. muxpad's selected row takes
+   `--bg-pane-face` — the chat pane's own surface — and `.navtree-tab-funnel`
+   draws two concave fillets that flare one into the other, so the row and the
+   pane read as one shape. Painting the row a flat accent did not just change
+   its colour: it left the funnel flaring the PANE's surface into a row that
+   was no longer that surface, which is the abrupt edge. The bridge was still
+   being drawn; there was just nothing on the far side of it.
+
+   So memphis stops overriding the fill, like riso before it, and keeps its
+   loudness where it costs nothing: the black rule and the hard offset shadow
+   that every other surface in this theme already wears. See the
+   `active-row-fill` test in themes.test.ts — a theme may paint an IMAGE over
+   the selected row (demoscene's copper bar does) but may not replace the
+   colour underneath, because that colour is the join. */
 [data-theme="memphis"] .navtree-tab-row[data-active="true"] {
-  background-color: var(--rail-accent);
-  background-image: none;
+  box-shadow: 3px 3px 0 var(--rail-accent);
 }
 [data-theme="memphis"] .navtree-tab-row[data-active="true"] .navtree-name-text {
-  color: #121016;
   font-weight: 700;
 }
 
