@@ -1089,12 +1089,19 @@
    the body alone made it invisible everywhere it mattered, which is how the
    first fix for "hard to read" also deleted the theme. It is listed above. */
 
-/* LETTERING IS LETTERING. The rail's names and the pane heads take the
-   condensed hand; the paragraph you are reading does not. */
-[data-theme="blueprint"] .navtree,
-[data-theme="blueprint"] .sidenav-brand {
+/* LETTERING IS FOR LABELS, AND A CHAT TITLE IS NOT A LABEL.
+   The whole rail took the condensed hand, and "sidebar font for blueprint too
+   narrow" is the same complaint as the body text one, in the place it was
+   moved TO. A rail is thirty rows of proper nouns at 13px — the hardest
+   reading in the app, not the easiest.
+
+   So the hand is kept for the two things that are genuinely LETTERED on a
+   drawing: the title plate, and the section names. Both are short, both are
+   set in caps, and neither is something you read a column of. */
+[data-theme="blueprint"] .sidenav-brand,
+[data-theme="blueprint"] .navtree-ws-name {
   font-family: var(--chrome-font);
-  letter-spacing: 0.02em;
+  letter-spacing: 0.06em;
 }
 
 /* EVERY EDGE IS A DRAWN LINE, SO NOTHING IS ROUNDED. A radius is a moulded
@@ -1406,6 +1413,73 @@
   border-radius: 0;
   background: var(--accent);
   color: var(--accent-fg);
+}
+
+/* ─── STILL BORING, AND THE REASON IS THAT IT WAS A SURFACE ─────────────────
+   A perforation, a leader and a barcode are all things a receipt HAS. They do
+   not add up to a receipt, because the thing a receipt IS is a strip of paper
+   torn off a roll and stamped by somebody. Those two are missing, and they are
+   the two a person would describe first. */
+
+/* THE TOP OF THE PANE IS A TORN EDGE. A zigzag cut across the full width,
+   drawn with two conic gradients the way every sawtooth border is — so it
+   survives any width, costs no element and no image. This is the single most
+   "it is a receipt" mark available, and it was not there. */
+[data-theme="thermal"] .chat-pane::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 11px;
+  z-index: 2;
+  pointer-events: none;
+  /* The teeth are what is BEYOND the paper, so they wear the darkest surface
+     in the theme. The first pass used --bg-chrome, which is four steps off the
+     paper, and a sawtooth you cannot see is a gradient. */
+  background: var(--bg-tabbar);
+  mask-image: conic-gradient(from -45deg at 50% 100%, #0000 0 90deg, #000 0);
+  mask-size: 18px 11px;
+  mask-repeat: repeat-x;
+}
+
+/* AND SOMEBODY STAMPED IT. The one mark on the object a human made, over the
+   print rather than under it, because that is where a rubber stamp goes. Low
+   enough to read through, crooked because nobody lines one up, and in the ink
+   the printer could not produce. */
+[data-theme="thermal"] .chat-pane::after {
+  content: "PAID";
+  position: absolute;
+  top: 22%;
+  left: 50%;
+  z-index: 1;
+  pointer-events: none;
+  padding: 10px 34px;
+  transform: translate(-50%, 0) rotate(-16deg);
+  color: var(--accent);
+  border: 6px double var(--accent);
+  border-radius: 6px;
+  font: 700 3.75rem / 1 var(--ui-font);
+  letter-spacing: 0.16em;
+  opacity: 0.14;
+}
+
+/* THE HEAD UNDER-FIRES IN BANDS. A thermal print is never evenly dark across
+   the roll — the element cools, and you get faint horizontal banding at a much
+   longer period than the grain. Two percent, 7px apart. */
+[data-theme="thermal"] .chat-pane {
+  background-image: repeating-linear-gradient(to bottom, #1b1a1705 0 3px, transparent 3px 7px);
+}
+
+/* AND THE ROLL HAS A HEADER, the way every till slip does. */
+[data-theme="thermal"] .brand::before,
+[data-theme="thermal"] .brand::after {
+  content: "*";
+  color: var(--rail-ink-faint);
+  font-weight: 700;
+}
+[data-theme="thermal"] .brand {
+  gap: 7px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
 }
 
 /* ─── ABYSS ─────────────────────────────────────────────────────────────────
