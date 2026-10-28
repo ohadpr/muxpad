@@ -65,10 +65,17 @@ describe('stop is attached to the turn it stops', () => {
   });
 
   it('is quiet until hovered — the turn block is saying "still going", not "stop me"', () => {
-    const rest = CSS.slice(CSS.indexOf('.chat-turn-stop {'));
+    // COMMENTS STRIPPED FIRST: the rule's own note NAMES --chat-faint, to say
+    // why it is not the token being used. A test reading the raw file would
+    // fail on the sentence explaining the correct choice.
+    const flat = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+    const rest = flat.slice(flat.indexOf('.chat-turn-stop {'));
     const rule = rest.slice(0, rest.indexOf('}'));
     expect(rule).toMatch(/background:\s*transparent/);
-    expect(rule).toMatch(/color:\s*var\(--chat-faint\)/);
+    expect(rule).toMatch(/color:\s*var\(--chat-dim\)/);
+    // NOT --chat-faint: measured 2.1–3.3:1 across the ten themes that ship,
+    // on the only control that stops a running turn.
+    expect(rule).not.toMatch(/--chat-faint/);
     expect(CSS).toMatch(/\.chat-turn-stop:hover[\s\S]{0,160}--chat-danger/);
   });
 });

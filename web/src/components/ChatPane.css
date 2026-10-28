@@ -90,7 +90,9 @@
   text-overflow: ellipsis;
   font-family: var(--chrome-font, inherit);
   font-size: 0.75rem;
-  color: var(--chat-faint);
+  /* Quieter than the chat name by WEIGHT (600 vs 400) and size, not by an ink
+     under AA — see .chat-tool-btn for the measurements. */
+  color: var(--chat-dim);
 }
 .chat-head-ws::before {
   content: "·";
@@ -1237,7 +1239,12 @@
   border: 0;
   border-radius: 7px;
   background: transparent;
-  color: var(--chat-faint);
+  /* --chat-dim, NOT --chat-faint. Measured across the ten themes that ship,
+     the faint token sits at 2.1–3.3:1 on the composer's own surface — under
+     AA everywhere, on a 12px label. The quiet here is carried by the SHAPE
+     (no fill, no border) and the size; it must not be carried by an ink
+     nobody can read. Same call .navtree-ws-count and the rail search made. */
+  color: var(--chat-dim);
   font-family: var(--ui-font, inherit);
   font-size: 0.75rem;
   line-height: 1.35;
@@ -1264,7 +1271,12 @@
   padding-right: 4px;
   font-family: var(--ui-font, inherit);
   font-size: 0.6875rem;
-  color: color-mix(in srgb, var(--chat-faint) 80%, transparent);
+  /* Faded faint measured 1.9–2.9:1 here, which is a hint nobody can read —
+     and an unreadable hint is worse than none, because it still costs the
+     width. It is held back by SIZE and by being at the far end of the row,
+     not by hue. */
+  color: var(--chat-dim);
+  opacity: 0.85;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1472,7 +1484,10 @@
   border: 1px solid color-mix(in srgb, var(--chat-fg) 18%, transparent);
   border-radius: 999px;
   background: transparent;
-  color: var(--chat-faint);
+  /* Quiet, but legible: this is the only way to stop a running turn and it
+     sits on the conversation's own ground. --chat-faint measures under AA on
+     every theme that ships. */
+  color: var(--chat-dim);
   font: inherit;
   font-size: 0.75rem;
   line-height: 1.4;
@@ -2444,7 +2459,10 @@
   padding: 0 7px;
   border: none;
   background: transparent;
-  color: var(--chat-faint);
+  /* It was --chat-faint while it was a 11px line under the composer that
+     nobody was meant to read. It is a control in the pane's head now, and
+     faint measures 2.1–3.3:1 against the surfaces it sits on. */
+  color: var(--chat-dim);
   font-family: var(--chrome-font, inherit);
   font-size: 0.6875rem;
   line-height: 1rem;

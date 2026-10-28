@@ -3967,7 +3967,20 @@ body.sidenav-resizing iframe {
      colour in the rail that is not a status, so a wash of it says "this is a
      different kind of thing" without claiming anything about the chats on it.
      Low enough (10%) that the rows keep their own contrast. */
-  background: color-mix(in srgb, var(--rail-accent, var(--accent)) 13%, transparent);
+  /* ── THE GROUND IS A LIFT, THE ACCENT IS THE SEAM ──────────────────────
+     An accent WASH was the obvious way to make this band its own kind of
+     thing, and measured across the ten themes that ship it does not survive
+     them: a tint only separates from the rail when the accent's luminance
+     differs from the rail's, and on riso the two are within 1.04:1 — a band
+     nobody can see. Worse, at 13% it pushed tokyo-night's row ink to 4.26:1,
+     under AA, so the themes where it DID show paid for it in legibility.
+
+     A mix from --fg always moves AWAY from the surface — it darkens a light
+     rail and lightens a dark one — which is why every other raised surface in
+     this app is built from it. Measured at 9%: row ink 4.45–11.2:1 on all
+     ten. The accent then does the part a wash cannot, as the one drawn line
+     the band has (see the seam below) and in the heading's own ink. */
+  background: color-mix(in srgb, var(--fg) 9%, transparent);
   /* ── ONE LINE, NOT FOUR ─────────────────────────────────────────────────
      The top of this rail had become a stack of hairlines: the brand's, this
      band's top border, its bottom border, an inset highlight inside the top
@@ -3978,7 +3991,10 @@ body.sidenav-resizing iframe {
      differs from. The brand's hairline is above it (and is load-bearing: it
      lines up with the pane's tab strip), so this keeps exactly one — the seam
      at the bottom, where the band stops and the ordinary rail begins. */
-  border-bottom: 1px solid var(--rail-seam, var(--border));
+  /* AND THE SEAM IS THE ACCENT, which is what makes this a different kind of
+     shelf rather than a brighter piece of rail. Measured 1.4–3.5:1 against
+     the band on every theme — visible everywhere, loud nowhere. */
+  border-bottom: 1px solid color-mix(in srgb, var(--rail-accent, var(--accent)) 45%, transparent);
 }
 
 /* The heading is a LABEL, not a section header: small caps, wide, quiet.
