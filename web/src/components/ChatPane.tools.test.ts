@@ -106,12 +106,27 @@ describe('faithful to the mock', () => {
     expect(rule).not.toMatch(/--chrome-font/);
   });
 
-  it('keeps the tool row flush with the input, not inset like a toolbar', () => {
+  it('puts its icons on the same vertical line as the text above them', () => {
+    // A tool button carries 8px of its own padding, so a row with no margin
+    // starts its icons 8px right of the first letter of the input — close
+    // enough to read as a mistake rather than as a second row.
+    //
+    // The pill spends ONE inset (12px). The input pays 4 of it back as its
+    // own padding; the row pulls 4 out as a negative margin. Both land on 16.
     const rest = CSS.slice(CSS.indexOf('.chat-composer-tools {'));
     const rule = rest.slice(0, rest.indexOf('}'));
-    // No side padding of its own: the pill's padding already set the text
-    // column, and the icons line up with the first letter you type.
-    expect(rule).toMatch(/padding:\s*0 0 2px/);
+    const pill = CSS.slice(CSS.indexOf('.chat-composer {'));
+    const pillPad = /padding:\s*(\d+)px (\d+)px/.exec(pill.slice(0, pill.indexOf('}')));
+    const input = CSS.slice(CSS.indexOf('.chat-input {'));
+    const inputPad = /padding:\s*[\d.]+rem (\d+)px/.exec(input.slice(0, input.indexOf('}')));
+    const btn = CSS.slice(CSS.indexOf('.chat-tool-btn {'));
+    const btnPad = /padding:\s*\d+px (\d+)px/.exec(btn.slice(0, btn.indexOf('}')));
+    const rowMargin = /margin:\s*0 (-?\d+)px/.exec(rule);
+    expect(pillPad?.[2], 'pill side padding').toBeTruthy();
+    const side = Number(pillPad?.[2]);
+    const text = side + Number(inputPad?.[1]);
+    const icon = side + Number(rowMargin?.[1]) + Number(btnPad?.[1]);
+    expect(icon, `text at ${text}, icon at ${icon}`).toBe(text);
   });
 });
 
