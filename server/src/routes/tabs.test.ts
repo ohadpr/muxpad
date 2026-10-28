@@ -604,4 +604,52 @@ describe('tabs routes', () => {
       expect(received).toEqual([]);
     });
   });
+
+  describe('a chat carries its own theme', () => {
+    /**
+     * The theme has been a device setting since there was one. On the row it
+     * becomes a fact about the CHAT: open the same conversation from a phone
+     * and it looks the same.
+     */
+    const patch = (id: string, body: object) =>
+      test.app.request(`/api/tabs/${id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+    it('is born with no opinion, takes one, and gives it back with null', async () => {
+      const made = (await (await postTab({ name: 'T' })).json()) as { id: string };
+      // NOT a copy of whichever device created it: that setting is per-device,
+      // and this row is shared.
+      const tabs = new TabStore(db);
+      expect(tabs.getById(made.id)?.theme).toBeNull();
+
+      const set = await patch(made.id, { theme: 'memphis' });
+      expect(set.status).toBe(200);
+      expect(((await set.json()) as { theme: string }).theme).toBe('memphis');
+      expect(tabs.getById(made.id)?.theme).toBe('memphis');
+
+      // NULL is a value, not "unchanged" — it is the only way back to the
+      // device default, and a nullish coalesce in the store swallows it.
+      expect((await patch(made.id, { theme: null })).status).toBe(200);
+      expect(tabs.getById(made.id)?.theme).toBeNull();
+    });
+
+    it('leaves the theme alone when the patch is about something else', async () => {
+      const made = (await (await postTab({ name: 'T' })).json()) as { id: string };
+      await patch(made.id, { theme: 'riso' });
+      await patch(made.id, { name: 'renamed' });
+      expect(new TabStore(db).getById(made.id)?.theme).toBe('riso');
+    });
+
+    it('accepts a theme name it has never heard of', async () => {
+      // A client may be newer than the server. Refusing an unknown name would
+      // make a new theme unselectable until both sides ship; the CLIENT
+      // resolves one it does not know to its own default.
+      const made = (await (await postTab({ name: 'T' })).json()) as { id: string };
+      expect((await patch(made.id, { theme: 'theme-from-the-future' })).status).toBe(200);
+      expect(new TabStore(db).getById(made.id)?.theme).toBe('theme-from-the-future');
+    });
+  });
 });

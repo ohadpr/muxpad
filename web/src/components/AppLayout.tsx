@@ -1,5 +1,6 @@
 import { Outlet, useRouterState } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
+import { useChatTheme } from '../lib/chat-theme';
 import { MOBILE_BREAKPOINT } from '../lib/mobile-layout';
 import { SIDENAV_MIN_WIDTH, updateSettings, useSettings } from '../settings';
 import { useMediaQuery } from '../use-media-query';
@@ -44,6 +45,10 @@ export function AppLayout() {
   // with no surface in which to clear it, since clearing needs a tab the
   // navigator can reach. An alert you cannot dismiss is worse than no alert.
   useWindowAttention(visibleWorkspaces(workspaces));
+  // A chat may carry its own theme (see lib/chat-theme): the whole window
+  // follows the tab you are in, and falls back to the device's default for a
+  // chat that has no opinion.
+  useChatTheme(activeTabSlug);
   const activeWorkspace = wsSlug ? workspaces.find((w) => w.slug === wsSlug) : null;
   const isMobile = useMediaQuery(MOBILE_BREAKPOINT);
   const settings = useSettings();
