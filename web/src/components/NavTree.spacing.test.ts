@@ -1438,12 +1438,29 @@ describe('the at-hand band lines up with the groups', () => {
     return re.exec(flat)?.[1] ?? '';
   };
 
-  it('pays the scroller inset and the group inset, like a row below it does', () => {
+  it('pays the GROUP’s inset, and the scroller’s only once', () => {
+    // The band is inside the scroller, so the scroller's own padding applies
+    // to it exactly as it applies to a group. What it owes on top of that is
+    // the group's share — `--nt-pad`, once, on each side.
+    //
+    // It used to double the left, from when it was pinned ABOVE the scroller
+    // and had to pay that inset itself. On the rail that was a near-miss; on
+    // the sheet, whose scroller has no side padding, it was the whole error:
+    // "on mobile they're placed in a different horizontal position for recent
+    // chats and for the other chats in the sidebar".
     const band = rule('.navtree-workingset');
-    // Derived from the tokens, never literals: the two insets are
-    // `--nt-pad` each, so left is twice it and right is one.
-    expect(band).toMatch(/padding:[^;]*calc\(var\(--nt-pad\) \* 2\)/);
-    expect(band).toMatch(/padding:\s*\S+\s+var\(--nt-pad\)/);
+    expect(band).toMatch(/padding:\s*\S+\s+var\(--nt-pad\)\s+\S+\s*;/);
+    expect(band).not.toMatch(/calc\(var\(--nt-pad\) \* 2\)/);
+  });
+
+  it('is INSIDE the scroller on both surfaces, which is what makes that true', () => {
+    const tsx = readFileSync(join(__dirname, 'NavTree.tsx'), 'utf8');
+    for (const host of ['function SidebarTree', 'function SheetRail']) {
+      const surface = tsx.slice(tsx.indexOf(host));
+      expect(surface.indexOf('className="navtree-scroll"'), host).toBeLessThan(
+        surface.indexOf('<WorkingSetStrip'),
+      );
+    }
   });
 
   it('pays it as PADDING, so the shelf still runs the full width', () => {
