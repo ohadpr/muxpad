@@ -136,13 +136,14 @@ describe('the session line cannot become two lines', () => {
     expect(decl('.chat-status-bar', 'max-width')).toBeNull();
   });
 
-  it('is right-aligned, at the far end of the head', () => {
-    // It was CENTRED while it was a full-width row under the pill, to keep the
-    // always-populated live cell out of a phone's bottom corner radius.
-    // Sharing the head with the chat's name, right is the only end left — and
-    // it is where every other "about this pane" control in the app lives.
+  it('is right-aligned, at the far end of the composer tool row', () => {
+    // It was CENTRED while it was a full-width row under the pill, to keep
+    // the always-populated live cell out of a phone's bottom corner radius.
+    // Sharing a row with the tools, right is the only end left — and the gap
+    // between what you can ADD to a message and what the chat is RUNNING is
+    // the row's whole structure.
     expect(decl('.chat-status-bar', 'justify-content')).toBe('flex-end');
-    expect(decl('.chat-head > .chat-status-bar', 'margin-left')).toBe('auto');
+    expect(decl('.chat-composer-tools > .chat-status-bar', 'margin-left')).toBe('auto');
     // AND IT IS IN FLOW. One revision hung it off the composer's top edge —
     // which cost no row, and painted over the last line of the transcript.
     expect(decl('.chat-status-bar', 'position')).toBeNull();
@@ -216,17 +217,19 @@ describe('the session line sits outside the composer pill', () => {
     SRC.indexOf('// Everything that draws an ALREADY-ARRIVED message'),
   );
 
-  it('is the head on a desktop and the composer tool row on a phone', () => {
+  it('is in the composer tool row, on every layout', () => {
     // It has been under the pill, above the pill, inside the pill's tool row,
-    // in the app's top bar, and in a head of its own on both layouts. Two
-    // facts survived all of it: the bottom of a chat belongs to the composer,
-    // and a phone has no room for a head. So the desktop gets the head the
-    // mock-up draws, and the phone keeps the strip at the end of the screen
-    // the thumb is already at — "it should be closer to the composer".
+    // in the app's top bar, and in a head of its own — twice. The question
+    // came back every time it went to the top of the pane: "why is this at
+    // the top right of the chat window?" Because a mock-up drew a header
+    // there, and that mock-up's phone had no sidebar naming the chat.
+    //
+    // The tool row is the chat's own control surface and is already where you
+    // attach a file. One place, both layouts.
     expect(WRAP.length).toBeGreaterThan(100);
-    expect(SRC).toMatch(/\{!touchLayout \? \(\s*<div className="chat-head">/);
+    expect(SRC).not.toMatch(/chat-head/);
     expect(SRC).toMatch(
-      /<div className="chat-composer-tools" data-touch="true">\s*\{sessionStrip\}/,
+      /<div className="chat-composer-tools">\s*\{composerTools\}\s*\{sessionStrip\}/,
     );
     // …and never portalled out of the pane, which read as window chrome and
     // opened its menus over the carrier and the clock.
@@ -632,21 +635,16 @@ describe('the branch button', () => {
 });
 
 /**
- * THE HEAD'S MENUS OPEN DOWNWARD.
- *
- * `.chat-status-menu` anchors to `bottom: calc(100% + 6px)` because the strip
- * spent its whole life at the BOTTOM of the pane, where up is the only
- * direction with room. In the head, up is off the top: clipped by the pane's
- * own `overflow: hidden` on a desktop, and — while the strip was portalled
- * into the app's top bar — painted over the carrier and the clock on a phone.
+ * AND ITS MENUS RISE, which is the default and now the only case: the strip
+ * is at the bottom of the pane, where up is the one direction with room. The
+ * downward anchor existed for the head, which is gone.
  */
-describe('a menu opened from the head', () => {
-  it('drops down from the chip instead of rising off the pane', () => {
-    expect(decl('.chat-head .chat-status-menu', 'top')).toBe('calc(100% + 6px)');
-    expect(decl('.chat-head .chat-status-menu', 'bottom')).toBe('auto');
+describe('a menu opened from the strip', () => {
+  it('rises from the chip', () => {
+    expect(decl('.chat-status-menu', 'bottom')).toBe('calc(100% + 6px)');
   });
 
-  it('still rises everywhere else, where the strip is at the bottom', () => {
-    expect(decl('.chat-status-menu', 'bottom')).toBe('calc(100% + 6px)');
+  it('has no downward variant left over from the head', () => {
+    expect(bare(css).includes('.chat-head')).toBe(false);
   });
 });
