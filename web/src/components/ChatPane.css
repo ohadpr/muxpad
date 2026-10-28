@@ -1184,16 +1184,28 @@
 .chat-composer {
   display: flex;
   flex-direction: column;
-  /* The strip sits on the pill's surface, so the only thing holding it off the
-     text below is this. 2px read as crammed — enough space to be a separate
-     line, not enough to be a separate thought. */
-  gap: 6px;
+  /* Between the input and the tool row. 2px read as crammed — enough space to
+     be a separate line, not enough to be a separate thought. */
+  gap: 4px;
   max-width: 768px;
   margin: 0 auto;
-  /* Symmetric side insets: the filled send circle carries more visual weight
-     than the small camera glyph, so equal padding reads balanced rather than
-     edge-hugging. */
-  padding: 4px 10px 6px;
+  /* ── ONE INSET, AND EVERYTHING INSIDE LINES UP ON IT ──────────────────
+     Reported: "margin for message being typed is too tight on left and
+     potentially top, button the same too close to top and potentially too
+     close to the right."
+
+     All three were the same miss — the pill's padding was being spent
+     unevenly by what sits inside it. The text had 10px of pill and nothing of
+     its own; the send circle is 36px against a 40px line, so a 4px top gave
+     it 6px of air against 10px at its right; and the tool row's buttons carry
+     8px of their own, so their icons sat 8px right of the text above them.
+
+     The number is 12px, and it is the only one: the input pays 4 of it back
+     as its own padding (text at 16), the tool row pulls 4 out as a negative
+     margin so an 8px-padded button's icon lands on that same 16, and the hint
+     does the mirror image on the right. Everything on both rows is then on
+     one of two vertical lines. */
+  padding: 8px 12px;
   background: color-mix(in srgb, var(--chat-elev) 92%, var(--chat-fg));
   border: 1px solid color-mix(in srgb, var(--chat-fg) 12%, var(--chat-border));
   /* 26px was the radius of a ONE-ROW pill, where a deep curve is the shape of
@@ -1236,8 +1248,15 @@
   display: flex;
   align-items: center;
   gap: 2px;
-  min-height: 24px;
-  padding: 0 0 2px;
+  min-height: 26px;
+  padding: 0;
+  /* THE NEGATIVE MARGIN IS THE ALIGNMENT. A tool button carries 8px of its
+     own padding, so without this its icon starts 8px right of the first
+     letter of the text above it — close enough to read as a mistake rather
+     than as a second row. -4 against the input's +4 puts both on 16px from
+     the pill's edge, and the mirror image on the right lines the hint up with
+     the send button. */
+  margin: 0 -4px;
 }
 
 /* NOTHING ABOUT THE SESSION LIVES HERE. The session chip spent one revision
@@ -1416,7 +1435,11 @@
   height: 2.5rem;
   min-height: 2.5rem;
   max-height: 12.5rem;
-  padding: 0.5625rem 0;
+  /* 4px of side padding on top of the pill's 12 — see the pill for why the
+     two are split rather than spent in one place. The vertical 9px is load
+     bearing: 22px line + 2×9 = the 40px above, and ChatPane.composer.css.test
+     checks that arithmetic. */
+  padding: 0.5625rem 4px;
   border: 0;
   background: transparent;
   color: var(--chat-fg);

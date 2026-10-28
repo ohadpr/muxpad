@@ -116,3 +116,44 @@ describe('a one-line composer is a known height', () => {
     expect(linePx + top * 2).toBe(40);
   });
 });
+
+/**
+ * THE PILL SPENDS ONE INSET, AND EVERYTHING INSIDE LINES UP ON IT.
+ *
+ * "Margin for message being typed is too tight on left and potentially top,
+ * button the same too close to top and potentially too close to the right."
+ * Three symptoms, one cause: the padding was being spent unevenly by what sat
+ * inside it. The text had the pill's 10px and nothing of its own; the send
+ * circle is 36px against a 40px line, so a 4px top gave it 6px of air against
+ * 10px at its right; and the tool row's buttons carry 8px of their own, so
+ * their icons sat 8px right of the text above them.
+ */
+describe('the composer pill is spaced from one number', () => {
+  const sideOf = (sel: string, re: RegExp): number => {
+    const rest = css.slice(css.indexOf(`${sel} {`));
+    const body = rest.slice(0, rest.indexOf('}'));
+    return Number(re.exec(body)?.[1] ?? Number.NaN);
+  };
+
+  it('insets the same amount on both sides', () => {
+    const pad = (decl('.chat-composer', 'padding') ?? '').split(/\s+/);
+    expect(pad).toHaveLength(2);
+    expect(Number.parseFloat(pad[1] ?? '')).toBeGreaterThanOrEqual(12);
+  });
+
+  it('gives the send circle the air its ink needs at the top', () => {
+    // The circle is 36px in a 40px row, so it starts 2px in. With a 4px pill
+    // padding that was 6px of air above against 10px beside — which reads as
+    // "too close to the top" because it is.
+    const pad = (decl('.chat-composer', 'padding') ?? '').split(/\s+/);
+    const top = Number.parseFloat(pad[0] ?? '');
+    const side = Number.parseFloat(pad[1] ?? '');
+    expect(top + 2).toBeGreaterThanOrEqual(side - 2);
+  });
+
+  it('starts the text at the inset, counting both paddings', () => {
+    const side = sideOf('.chat-composer', /padding:\s*\d+px (\d+)px/);
+    const input = sideOf('.chat-input', /padding:\s*[\d.]+rem (\d+)px/);
+    expect(side + input).toBe(16);
+  });
+});
