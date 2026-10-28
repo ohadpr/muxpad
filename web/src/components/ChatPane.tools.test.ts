@@ -54,42 +54,31 @@ describe('the composer tools', () => {
     expect(expanded).toMatch(/className="chat-attach"/);
   });
 
-  it('spends ONE row, on every layout, carrying both halves', () => {
-    // The tools used to sit beside the input on touch, because the row below
-    // held only a `+` and a row for one button is not worth its height. It
-    // holds the session chip and Branch now — the chat's own controls, which
-    // had been at the top of the pane and kept being asked about — so it
-    // earns the height everywhere and the tools go back into it.
+  it('spends a ROW only on a desktop, and nothing on a phone', () => {
+    // "I don't want that stuff to take up another line." It does not have to:
+    // the `+` beside the input already opens a surface for everything you can
+    // do to this chat, so on touch the tools AND the session chip live in
+    // that sheet — on screen while you use it, gone the rest of the time.
     expect(SRC).toMatch(
-      /<div className="chat-composer-tools">\s*\{composerTools\}\s*\{sessionStrip\}/,
+      /\{labelledTools \? \(\s*<div className="chat-composer-tools">\s*\{composerTools\}\s*\{sessionStrip\}/,
     );
-    expect(SRC).not.toMatch(/\{!labelledTools \? composerTools : null\}/);
+    // …and the `+` is beside the input when there is no row to hold it.
+    expect(SRC).toMatch(/\{!labelledTools \? composerTools : null\}/);
+    // The sheet carries the chip, which is what makes the row unnecessary.
+    expect(SRC).toMatch(/<div className="chat-tools-session">\{sessionStrip\}<\/div>/);
   });
 
-  it('pops a LIVE control back out of the sheet', () => {
-    // A recording in progress is not an action waiting to be taken, it is the
-    // thing you are doing — its elapsed time and its stop have to stay
-    // reachable, which they are not from behind a `+`.
-    expect(SRC).toMatch(
-      /toolsIdle =\s*review\.state\.phase === 'idle' && !voiceIsLive\(voice\.state\)/,
-    );
-  });
-
-  it('closes the sheet when the + that opened it goes away', () => {
-    // A control going live (or a rotation to the desktop layout) removes the
-    // button the sheet hangs from; the sheet must not outlive it.
-    expect(SRC).toMatch(/if \(!collapsedTools\) setToolsOpen\(false\);/);
-  });
-
-  it('still has the full row to fall back to, for a LIVE control', () => {
-    // The expanded branch is not dead code: it is what renders while a screen
-    // review or the mic is running, because that is state rather than an
-    // action and its stop has to stay reachable.
+  it('keeps btw with the commands, not on the session strip', () => {
+    // It was an icon on the strip — the one chip there that was a verb. "I
+    // don't want the branch icon, give me another command on the left bottom
+    // where we already have commands, call it 'btw'."
+    expect(SRC).toMatch(/btw…/);
+    const start = readFileSync(join(__dirname, 'ChatStart.tsx'), 'utf8');
+    expect(start).not.toMatch(/chat-status-seg -branch/);
+    // Both surfaces: the labelled row AND the sheet.
     const el = SRC.slice(SRC.indexOf('const composerTools = collapsedTools ? ('));
-    const expanded = el.slice(el.indexOf(') : labelledTools ? ('));
-    expect(expanded).toMatch(/<ReviewButton/);
-    expect(expanded).toMatch(/<VoiceControl/);
-    expect(expanded).toMatch(/className="chat-attach"/);
+    const sheet = el.slice(0, el.indexOf(') : labelledTools ? ('));
+    expect(sheet).toMatch(/btw…/);
   });
 
   it('opens its sheet upward, away from the bottom of the screen', () => {
@@ -101,9 +90,9 @@ describe('the composer tools', () => {
 });
 
 /**
- * THE MOCK-UP'S ARRANGEMENT, point by point — because the last three
- * revisions each drifted from it in a different place and the report each
- * time was a version of "that is not what you drew".
+ * THE MOCK-UP'S ARRANGEMENT, point by point — because several revisions each
+ * drifted from it in a different place, and the report each time was a
+ * version of "that is not what you drew".
  */
 describe('faithful to the mock', () => {
   it('puts the mic in the SEND slot, not a label on the tool row', () => {

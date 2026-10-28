@@ -247,6 +247,30 @@ function SvgAttach() {
   );
 }
 
+/** The branch mark — the same one the rail draws for a spawned chat, which is
+ *  the nearest thing muxpad has to a word for "another conversation, from
+ *  here". Menu scale, like the two below it. */
+function SvgBranch() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="6" cy="5.5" r="2.4" />
+      <circle cx="6" cy="18.5" r="2.4" />
+      <circle cx="18" cy="8" r="2.4" />
+      <path d="M6 7.9v8.2M8.4 5.5h4.2a3 3 0 0 1 3 3v.4" />
+    </svg>
+  );
+}
+
 /** Paperclip at menu scale — beside 13px text in the desktop tool row. */
 function SvgScreenlessAttach() {
   return (
@@ -4784,6 +4808,28 @@ export function ChatPane({
     );
   }
 
+  const sessionStrip = (
+    <SessionBar
+      paneId={paneId}
+      folder={folder}
+      status={agentStatus}
+      {...(session?.assistant ? { assistant: session.assistant } : {})}
+      liveLabel={liveLabel}
+      agents={rosterAgents}
+      background={backgroundLive}
+      onOpenChat={openChat}
+      mode={mode}
+      send={(obj) => {
+        const sock = wsRef.current;
+        if (!sock || sock.readyState !== WebSocket.OPEN) {
+          setNotice({ text: 'Not connected — try again in a moment.', tone: 'info' });
+          return;
+        }
+        sock.send(JSON.stringify(obj));
+      }}
+    />
+  );
+
   /**
    * THE COMPOSER'S TOOLS — one element, placed differently by layout.
    *
@@ -4856,6 +4902,26 @@ export function ChatPane({
               Dictate
             </button>
           ) : null}
+          <button
+            type="button"
+            role="menuitem"
+            className="chat-tools-item"
+            disabled={branching}
+            onClick={() => {
+              setToolsOpen(false);
+              void branch();
+            }}
+          >
+            <SvgBranch />
+            btw…
+          </button>
+          {/* ── AND THE SESSION, IN THE SHEET ────────────────────────────
+              A phone does not get a tool row: "I don't want that stuff to
+              take up another line". The `+` already opens a surface for
+              everything you can do to this chat, so the model chip rides it
+              too — one more row in a sheet that is only on screen while you
+              are using it, rather than a permanent line under the input. */}
+          <div className="chat-tools-session">{sessionStrip}</div>
         </div>
       ) : null}
     </div>
@@ -4885,6 +4951,23 @@ export function ChatPane({
           while the field is empty (mic → send → queue, as drawn): dictation
           REPLACES typing, where everything else here adds something to a
           message you are writing. */}
+      {/* ── btw ─────────────────────────────────────────────────────────
+          A new chat beside this one, in the same folder, pre-filled to read
+          it. It was an icon on the session strip — the one chip there that
+          was a verb — and it is a COMMAND, so it sits with the commands under
+          the name the report gave it. The tooltip carries what it does;
+          "btw…" is what you reach for when the thing you want to say is not
+          this conversation. */}
+      <button
+        type="button"
+        className="chat-tool-btn"
+        disabled={branching}
+        onClick={() => void branch()}
+        title="btw — a new chat in this folder, pre-filled to read this one. This chat keeps running."
+      >
+        <SvgBranch />
+        btw…
+      </button>
     </>
   ) : (
     <>
@@ -4917,30 +5000,6 @@ export function ChatPane({
         />
       ) : null}
     </>
-  );
-
-  const sessionStrip = (
-    <SessionBar
-      paneId={paneId}
-      folder={folder}
-      status={agentStatus}
-      {...(session?.assistant ? { assistant: session.assistant } : {})}
-      liveLabel={liveLabel}
-      agents={rosterAgents}
-      background={backgroundLive}
-      onOpenChat={openChat}
-      mode={mode}
-      onBranch={() => void branch()}
-      branching={branching}
-      send={(obj) => {
-        const sock = wsRef.current;
-        if (!sock || sock.readyState !== WebSocket.OPEN) {
-          setNotice({ text: 'Not connected — try again in a moment.', tone: 'info' });
-          return;
-        }
-        sock.send(JSON.stringify(obj));
-      }}
-    />
   );
 
   return (
@@ -5488,7 +5547,10 @@ export function ChatPane({
                 onChange={onPickFiles}
               />
               <div className="chat-composer-main">
-                {/* NOTHING BUT THE FIELD AND ITS BUTTON. The tools used to sit
+                {/* The `+` is here on touch and in the row below on a desktop
+                    — see the tool row for why a phone gets no row. */}
+                {!labelledTools ? composerTools : null}
+                {/* NOTHING ELSE BUT THE FIELD AND ITS BUTTON. The tools used to sit
                     here on touch, because the row below held only a `+` and a
                     row for one button is not worth its height. It holds the
                     session chip and Branch now, so it earns the height on
@@ -5779,33 +5841,24 @@ export function ChatPane({
                   </div>
                 </>
               ) : null}
-              {/* ── THE TOOL ROW ────────────────────────────────────────
+              {/* ── THE TOOL ROW — DESKTOP ONLY ─────────────────────────
                   Everything that is about this chat rather than about the
-                  words in the box: what you can add to the message on the
-                  left, the model chip and Branch on the right.
+                  words in the box: Attach, Review a screen and btw on the
+                  left, the model chip at the far end.
 
-                  AND THERE IS NO HEAD ANY MORE. The chip spent revisions at
-                  the top of the pane — in a head of its own, and before that
-                  portalled into the app's top bar — and the question each
-                  time was the same one: "why is this at the top right of the
-                  chat window?" Because the mock-up drew a header there. The
-                  mock-up's phone also had no sidebar naming the chat, which
-                  this app does, so the head was carrying a name you can
-                  already read two inches to its left and two controls that
-                  had nowhere else to go.
-
-                  They have somewhere now. This row is the chat's own control
-                  surface — it is already where you attach a file or start a
-                  screen review — and it is at the end of the pane you are
-                  looking at when you act on a chat.
-
-                  The LABELS are the one thing that stays layout-dependent: a
-                  desktop has room for "Review a screen", a phone gets the
-                  same actions behind one `+`. */}
-              <div className="chat-composer-tools">
-                {composerTools}
-                {sessionStrip}
-              </div>
+                  A PHONE GETS NO ROW. "I don't want that stuff to take up
+                  another line." It does not have to: the `+` beside the input
+                  already opens a surface for everything you can do to this
+                  chat, so on touch the tools AND the session chip live in
+                  that sheet — on screen while you are using it, gone the rest
+                  of the time. The row costs a desktop nothing it has a
+                  shortage of; a phone it costs the one thing it is short of. */}
+              {labelledTools ? (
+                <div className="chat-composer-tools">
+                  {composerTools}
+                  {sessionStrip}
+                </div>
+              ) : null}
             </div>
           </div>
         ) : null}
