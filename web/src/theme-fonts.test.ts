@@ -90,3 +90,54 @@ describe('fonts are a theme token', () => {
     expect(pane).toMatch(/resolvedTerminalFont\(\)/);
   });
 });
+
+/**
+ * A CHARACTER GRID NEEDS A MONOSPACE TOKEN, AND --chrome-font IS NOT ONE.
+ *
+ * `--chrome-font` is the face a theme owns for its small chrome, and since
+ * themes started owning typefaces it is routinely PROPORTIONAL — blueprint's
+ * condensed drafting hand, riso's Futura, memphis's Gill Sans. The BASE value
+ * is monospace, which is exactly why this went unnoticed: on the seven themes
+ * that do not override it everything looked right, and on the ones that do,
+ * every code block in the app rendered in a proportional face with its columns
+ * out of line. Reported as "font of text code blocks too narrow, maybe it's
+ * not even monospaced".
+ *
+ * `--term-font` is the token that means "this theme's monospace": every theme
+ * sets it, the terminal reads it, and the test above requires its default to
+ * stay a system mono.
+ */
+describe('anything with columns uses the monospace token', () => {
+  const chat = readFileSync(join(HERE, 'components', 'ChatPane.css'), 'utf8');
+  const body = (selector: string): string => {
+    const flat = chat.replace(/\/\*[\s\S]*?\*\//g, '');
+    const re = new RegExp(
+      `(?:^|})\\s*${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{([^}]*)\\}`,
+      'm',
+    );
+    return re.exec(flat)?.[1] ?? '';
+  };
+
+  it.each([
+    ['.chat-md pre code', 'a fenced code block'],
+    ['.chat-md :not(pre) > code', 'inline code'],
+    ['.chat-modal-block', 'tool output'],
+    ['.chat-diff', 'a diff'],
+  ])('%s — %s', (selector) => {
+    const rule = body(selector);
+    expect(rule, `${selector} not found`).not.toBe('');
+    expect(rule).toMatch(/font-family:\s*var\(--term-font/);
+    expect(rule).not.toMatch(/font-family:\s*var\(--chrome-font/);
+  });
+
+  it('every theme that renames --chrome-font still ships a MONOSPACE --term-font', () => {
+    // The two tokens are independent on purpose: a theme may letter its chrome
+    // however it likes, and must not be able to take the grid with it.
+    for (const t of THEMES) {
+      const block = STYLES.match(new RegExp(`\\[data-theme="${t.value}"\\]\\s*\\{([^}]*)\\}`))?.[1];
+      const term = /--term-font:([^;]*);/.exec(block ?? '')?.[1];
+      if (!term) continue; // inherits the base, which the test above pins
+      expect(term, `${t.value}'s --term-font`).toMatch(/mono|Menlo|Monaco|Courier|Consolas/i);
+    }
+  });
+});
