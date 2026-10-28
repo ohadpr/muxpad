@@ -513,16 +513,26 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  margin: 6px var(--nt-pad) 2px calc(var(--nt-pad) * 2);
-  padding: 0 6px 0 8px;
-  height: 30px;
-  /* The rail is resizable down to 160px; the button shrinks with it. */
+  margin: 4px var(--nt-pad) 2px calc(var(--nt-pad) * 2);
+  padding: 0 4px 0 6px;
+  /* ── IT IS A SHORTCUT, SO IT IS THE SIZE OF ONE ────────────────────────
+     It wore a field's clothes — 30px tall, a border, its own raised ground —
+     from back when it WAS a field that filtered the tree in place. It is a
+     button that opens the palette now, and at field size it was "taking up
+     too much space where it's just a shortcut/reminder to the bigger search
+     modal". 24px, no border, no fill: a line of dim text with a key cap,
+     which is what it says.
+     The frame comes back on hover and focus, where the thing being pressed
+     has to be visible — see the rule below. */
+  height: 24px;
   min-width: 0;
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   border-radius: 7px;
-  background: var(--bg-elev);
-  /* --fg-dim, not the mock's --fg-faint: this is TEXT, and the faint token
-     fails AA on both rails (see .navtree-ws-count). */
+  background: transparent;
+  /* --fg-dim, never --fg-faint, even now that the box is gone: this is TEXT,
+     and the faint token measures under AA on both rails (same call
+     .navtree-ws-count made). A quieter SHAPE is the diet here; a quieter ink
+     would be an unreadable one. */
   color: var(--fg-dim);
   font-family: var(--ui-font);
   font-size: var(--chrome-size);
@@ -531,7 +541,8 @@
 }
 .navtree-search:hover,
 .navtree-search:focus-visible {
-  border-color: var(--accent);
+  border-color: var(--border);
+  background: var(--bg-elev);
   color: var(--fg);
 }
 .navtree-search:focus-visible {
@@ -547,15 +558,19 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The key cap stays drawn even when the button is not — it is the whole
+   point of the row (the shortcut is faster than the click) and it is the one
+   part a reminder cannot drop. */
 .navtree-search-kbd {
   flex: none;
   font-family: inherit;
-  font-size: 0.6875rem;
+  font-size: 0.625rem;
   line-height: 1;
-  padding: 3px 5px;
+  padding: 2px 4px;
   color: inherit;
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in srgb, var(--fg) 16%, transparent);
   border-radius: 4px;
+  opacity: 0.85;
 }
 
 /* Desktop has no section header (dropped as redundant under the brand),
@@ -3935,59 +3950,50 @@ body.sidenav-resizing iframe {
    contains. */
 .navtree-workingset {
   flex: 0 0 auto;
-  padding: 2px 0 5px;
-  /* ── IT HAS TO LOOK LIKE A SHELF, NOT LIKE THE TOP OF THE LIST ─────────
-     At 5% over the rail the band was a lift you had to be told about:
-     "give 'working on' section a slightly differentiated bg/wrapper/something
-     it blends with everything else right now". Measured on blueprint, whose
-     rail is the lit one (#1d5693), 5% of the ink moved it by about one step
-     of a 256-level channel.
-
-     Three changes, all of them the same idea — give the band two edges and a
-     ground that is clearly not the rail's:
-      · twice the ink (10%), which is a step you can see on every theme
-        because it is mixed from --fg and therefore darkens a light rail and
-        lightens a dark one;
-      · a seam on BOTH sides, not just the bottom, so it reads as a band
-        rather than as the list starting high;
-      · a hairline highlight inside the top edge, the standard recipe for a
-        surface sitting ON something rather than cut into it.
-
-     What does NOT change is the horizontal geometry: no inset, no margin, no
-     rounding. Its rows stay on the tree's grid, because every status mark in
-     the rail lands on one vertical line and a band that indents to look like
-     an object costs more than the object is worth. */
-  background: color-mix(in srgb, var(--fg) 10%, transparent);
+  /* ── ITS ROWS LINE UP WITH EVERY OTHER ROW ──────────────────────────────
+     A row inside a workspace carries TWO insets this band had neither of: the
+     scroller's 4px and the group's 4px. So its chips sat 8px left of every
+     chip below it — "the chats there are not horizontally aligned with the
+     rest of the chats below that are in the other sections". The right side
+     is the same story for the status marks, which is one column in this rail
+     and must stay one.
+     Padding, not margin, so the ground below still runs the full width: the
+     band is a shelf across the rail, and a shelf with side gaps is a card. */
+  padding: 2px var(--nt-pad) 5px calc(var(--nt-pad) * 2);
+  /* ── AND IT IS TINTED FROM THE ACCENT, NOT FROM THE INK ─────────────────
+     A neutral lift is what every other raised surface in the chrome uses, so
+     the band read as "the rail, slightly brighter" — "the working on can be
+     more unique compared to the rest of the sidebar". The accent is the one
+     colour in the rail that is not a status, so a wash of it says "this is a
+     different kind of thing" without claiming anything about the chats on it.
+     Low enough (10%) that the rows keep their own contrast. */
+  background: color-mix(in srgb, var(--rail-accent, var(--accent)) 10%, transparent);
   border-top: 1px solid var(--rail-seam, var(--border));
   border-bottom: 1px solid var(--rail-seam, var(--border));
   box-shadow: inset 0 1px 0 color-mix(in srgb, var(--fg) 8%, transparent);
 }
 
-/* The heading is a LABEL, not a section header: lower-case-height caps, wide,
-   quiet, and carrying a small accent tick so the band has one piece of colour
-   that is not a status. Deliberately NOT the workspace-header treatment —
-   that one is a destination you can click and collapse, and this is neither. */
+/* The heading is a LABEL, not a section header: small caps, wide, quiet.
+   Deliberately NOT the workspace-header treatment — that one is a destination
+   you can click and collapse, and this is neither. */
 .navtree-workingset-head {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 7px calc(var(--nt-pad) * 2) 5px;
+  gap: 7px;
+  padding: 6px calc(var(--nt-pad) + var(--nt-indent)) 4px;
   font-size: 0.625rem;
   font-weight: 600;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
-  /* --fg-dim, never --fg-faint: the faint token measures under 3.1:1 on both
-     rails and this is 10px text, which is where a failing ratio is least
-     forgivable. Same call the collapsed-count chip already made. */
-  color: var(--fg-dim);
-}
-.navtree-workingset-head::before {
-  content: "";
-  flex: 0 0 auto;
-  width: 5px;
-  height: 5px;
-  border-radius: 1px;
-  background: var(--accent);
+  /* ── THE DOT IS GONE ──────────────────────────────────────────────────
+     There was a 5px accent square in front of this label. In a rail whose
+     ONLY other coloured marks are status — a dot for wants-you, a tick for
+     ready, an amber ring for working — a small coloured square beside a
+     heading reads as one of them: "the red dot looks like an error
+     indicator". It was decoration doing an impression of state.
+     The colour moves into the LABEL instead, where nothing is ever a status,
+     and the band's own accent wash (above) carries the rest. */
+  color: color-mix(in srgb, var(--rail-accent, var(--accent)) 72%, var(--fg-dim));
 }
 /* …and a rule running out to the edge, which is what stops a short label from
    reading as a stray word above a list. Drawn, not typed: a row of dashes
@@ -3997,7 +4003,7 @@ body.sidenav-resizing iframe {
   flex: 1 1 auto;
   min-width: 8px;
   height: 1px;
-  background: color-mix(in srgb, var(--fg) 12%, transparent);
+  background: color-mix(in srgb, var(--rail-accent, var(--accent)) 28%, transparent);
 }
 
 /* ── NO SLOT NUMBER ──────────────────────────────────────────────────────
