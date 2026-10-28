@@ -793,14 +793,22 @@ describe('the working-set strip reaches the sheet', () => {
     expect(tsx.match(/<WorkingSetStrip/g) ?? []).toHaveLength(2);
   });
 
-  it('the sheet renders it OUTSIDE the scroller, like the rail', () => {
-    // A strip you have to scroll to is a strip you will search for, which is
-    // the thing it exists to end.
-    const sheet = tsx.slice(tsx.indexOf('function SheetRail'));
-    const strip = sheet.indexOf('<WorkingSetStrip');
-    const scroll = sheet.indexOf('className="navtree-scroll"');
-    expect(strip).toBeGreaterThan(-1);
-    expect(strip).toBeLessThan(scroll);
+  it('renders INSIDE the scroller on both surfaces, as the first thing in it', () => {
+    // It was pinned above the scroller — "a strip you have to scroll to is a
+    // strip you will search for" — and that assumed a rail mostly below the
+    // fold. It is not: the band is six rows at most and sits at the top, so
+    // on any rail taller than about ten rows it is on screen either way. What
+    // pinning actually bought was a fixed object the list slid under: "I'm
+    // not entirely sold on having the recent chats be fixed. I think you
+    // should be able to scroll through the whole thing."
+    for (const host of ['function SidebarTree', 'function SheetRail']) {
+      const surface = tsx.slice(tsx.indexOf(host));
+      const strip = surface.indexOf('<WorkingSetStrip');
+      const scroll = surface.indexOf('className="navtree-scroll"');
+      expect(strip, host).toBeGreaterThan(-1);
+      expect(scroll, host).toBeGreaterThan(-1);
+      expect(scroll, host).toBeLessThan(strip);
+    }
   });
 
   it('carries NO standing control on touch, and no slot cap anywhere', () => {
@@ -868,3 +876,25 @@ function rule(css: string, sel: string): string {
   const i = flat.indexOf(`${sel} {`);
   return i < 0 ? '' : flat.slice(i, flat.indexOf('}', i));
 }
+
+/**
+ * THE PREFIX IS FOR THE ROWS FROM SOMEWHERE ELSE.
+ *
+ * Every row carried its workspace, and in the common case every row in the
+ * band is from the one you are already in — five identical "Personal /"
+ * prefixes down a six-row band, which is repetition reading as information.
+ */
+describe('the workspace prefix earns its place', () => {
+  const src = readFileSync(join(__dirname, 'NavTree.tsx'), 'utf8');
+
+  it('is decided by the workspace you are looking at, not by the row alone', () => {
+    expect(src).toMatch(/elsewhere=\{workspace\.slug !== activeWorkspaceSlug\}/);
+  });
+
+  it('renders nothing at all when the chat is from here', () => {
+    const row = src.slice(src.indexOf('function WorkingSetRow'));
+    expect(row.slice(0, row.indexOf('\nfunction '))).toMatch(
+      /\{elsewhere \? \([\s\S]{0,200}navtree-ws-prefix/,
+    );
+  });
+});

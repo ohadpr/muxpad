@@ -127,7 +127,7 @@ describe('the recently-active band, on every theme', () => {
     const flat = TREE.replace(/\/\*[\s\S]*?\*\//g, '');
     const rest = flat.slice(flat.indexOf('.navtree-workingset {'));
     const rule = rest.slice(0, rest.indexOf('}'));
-    expect(rule).toMatch(/background:\s*color-mix\(in srgb,\s*var\(--fg\)\s*9%/);
+    expect(rule).toMatch(/background:\s*color-mix\(in srgb,\s*var\(--fg\)\s*6%/);
     // …and the accent is the SEAM, which is the part a wash cannot do on a
     // theme whose accent and rail share a luminance.
     expect(rule).toMatch(/border-bottom:[^;]*--rail-accent/);
@@ -136,13 +136,13 @@ describe('the recently-active band, on every theme', () => {
   it.each(rails.map((t) => [t.name, t] as const))(
     '%s keeps its rows readable on the band',
     (_n, theme) => {
-      const band = mix(theme.tokens.fg as string, theme.tokens['rail-surface'] as string, 9);
+      const band = mix(theme.tokens.fg as string, theme.tokens['rail-surface'] as string, 6);
       expect(ratio(rgb(theme.tokens['rail-ink-dim'] as string), band)).toBeGreaterThanOrEqual(4.4);
     },
   );
 
   it.each(rails.map((t) => [t.name, t] as const))('%s draws a visible seam', (_n, theme) => {
-    const band = mix(theme.tokens.fg as string, theme.tokens['rail-surface'] as string, 9);
+    const band = mix(theme.tokens.fg as string, theme.tokens['rail-surface'] as string, 6);
     const accent = theme.tokens['rail-accent'] ?? theme.tokens.accent;
     if (!accent) return;
     const seam = rgb(accent).map((v, i) => Math.round(v * 0.45 + (band[i] as number) * 0.55));

@@ -4978,41 +4978,37 @@ export function ChatPane({
           TOUCH SKIPS IT. The app's own top bar is already a header on a phone
           — workspace, chat name, pane controls — and a second one under it
           would be the row this whole exercise is about, moved. */}
-        {/* ── THE CHAT'S OWN HEAD, ON BOTH LAYOUTS ─────────────────────────
-          It belongs to the PANE, so it lives in the pane.
+        {/* ── THE CHAT'S HEAD — DESKTOP ONLY ──────────────────────────────
+          The chat's name on the left, Branch and the session chip on the
+          right, as the mock-up draws it.
 
-          On touch it spent one revision portalled into the app's top bar —
-          the argument being that the top bar IS this pane's header on a
-          phone, so a second one under it would be the row this exercise
-          exists to remove. Two things were wrong with that. It reads as
-          window chrome rather than as part of the conversation ("why did you
-          move the model and branch buttons to top right of the entire chat?
-          it's weird"), and the menus behind those chips open UPWARD — out of
-          the top bar means off the top of the screen, over the carrier and
-          the clock.
+          A PHONE GETS NO HEAD, after two tries at giving it one. Portalled
+          into the app's top bar it read as window chrome rather than as part
+          of the conversation; rendered as its own row in the pane it was
+          still "a bar at the top under the sidebar bar", and still the wrong
+          end of the screen: "I don't think this information about the current
+          model and the branch button should be at the top. I think it should
+          be closer to the composer."
 
-          So: the same element in the same place on both, and the phone drops
-          only the NAME, because the top bar is already saying it. What is
-          left there is one right-aligned row of chips at the top of the log —
-          about 30px, at the end of the screen the keyboard never reaches. */}
-        <div className="chat-head" data-touch={touchLayout ? 'true' : undefined}>
-          {!touchLayout ? (
-            <>
-              {/* The chat's own name, from the corpus the mention picker and
-                  the rail both read — one source, so the head can never
-                  disagree with the row you clicked to get here. */}
-              <span className="chat-head-name" dir="auto">
-                {myChat?.tabName ?? ''}
+          So on touch the strip rides the composer instead (see the tool row
+          below) — the end of the screen your thumb is already at, and the
+          surface everything else you can do to this chat is on. */}
+        {!touchLayout ? (
+          <div className="chat-head">
+            {/* The chat's own name, from the corpus the mention picker and the
+                rail both read — one source, so the head can never disagree
+                with the row you clicked to get here. */}
+            <span className="chat-head-name" dir="auto">
+              {myChat?.tabName ?? ''}
+            </span>
+            {myChat?.workspaceName ? (
+              <span className="chat-head-ws" dir="auto">
+                {myChat.workspaceName}
               </span>
-              {myChat?.workspaceName ? (
-                <span className="chat-head-ws" dir="auto">
-                  {myChat.workspaceName}
-                </span>
-              ) : null}
-            </>
-          ) : null}
-          {sessionStrip}
-        </div>
+            ) : null}
+            {sessionStrip}
+          </div>
+        ) : null}
         {/* Keep approval reachable while the chat transport is still connecting. */}
         {active && !session?.current_sid && <SlackApprovalAlert paneId={paneId} />}
         {/* Fixed-position, draws nothing until you take the wheel. Mounted here
@@ -5799,15 +5795,18 @@ export function ChatPane({
                 </>
               ) : null}
               {/* ── THE TOOL ROW ────────────────────────────────────────
-                  DESKTOP ONLY. One line under the input holding what you can
-                  add to this message, and — at the far end — what Enter will
-                  do with it, which is the one thing about this composer that
-                  changes while you use it.
+                  DESKTOP: what you can add to this message, and — at the far
+                  end — what Enter will do with it, which is the one thing
+                  about this composer that changes while you use it. Its tools
+                  are here because there is room for their labels; a phone's
+                  are one `+` beside the input instead.
 
-                  A phone gets neither: its tools are one `+` beside the
-                  input (see composerTools), and a whole row for a single
-                  button is the cost this exercise exists to remove. The
-                  mock-up's phone has no tool row for the same reason. */}
+                  TOUCH: the same row, carrying the SESSION STRIP instead —
+                  the model chip and Branch, which on a phone have nowhere
+                  better to be. They were at the top of the pane and that was
+                  the wrong end of the screen ("it should be closer to the
+                  composer"): this is the end the thumb is already at, and the
+                  surface every other thing you can do to this chat is on. */}
               {labelledTools ? (
                 <div className="chat-composer-tools">
                   {composerTools}
@@ -5815,7 +5814,11 @@ export function ChatPane({
                     {sending ? 'queues behind the running turn' : '⏎ send · ⇧⏎ newline'}
                   </span>
                 </div>
-              ) : null}
+              ) : (
+                <div className="chat-composer-tools" data-touch="true">
+                  {sessionStrip}
+                </div>
+              )}
             </div>
           </div>
         ) : null}
