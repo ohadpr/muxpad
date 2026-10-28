@@ -784,7 +784,16 @@ export function SessionBar({
   // Chat mode surfaces no folder control at all — see ChatReadyGreeting. The
   // path is still reachable (the session menu behind the model chip lists it),
   // it just isn't presented as a dial in the mode that doesn't have one.
-  const folderChipVisible = mode !== 'chat' && showFolderChip(folder);
+  // ── THE FOLDER IS NEVER ITS OWN CELL ANY MORE ──────────────────────────
+  // It was a cell whenever the pane sat in a project, which is most of them.
+  // The strip is now a single chip docked on the composer's rim rather than a
+  // row under it, and identity that changes about never does not get to be one
+  // of the two things on that rim. It is the FIRST row of the session menu,
+  // one tap away, with the full path and the same switcher.
+  //
+  // `showFolderChip` is still imported and still right about WHEN a folder is
+  // worth mentioning at all — it just no longer decides a cell.
+  const folderChipVisible = false;
   const folderPanel =
     folder && panel === 'folder' ? (
       // biome-ignore lint/a11y/useSemanticElements: a <dialog> would take the top layer and trap focus; this is a popover anchored to its button and dismissed by clicking out.
@@ -910,94 +919,18 @@ export function SessionBar({
         </div>
       ) : null}
 
-      {/* CHAT SHOWS NO MODEL AND NO CONTEXT METER. Both are dials, and Chat
-          has none: it runs the default model and compacts itself. A percentage
-          is worse than merely redundant — it is a number that asks to be
-          watched, in the one mode whose whole promise is that you do not have
-          to. `/compact` and `/clear` are slash commands typed in the composer,
-          so nothing here is the only way to reach them. Agent mode keeps the
-          chip: there the model IS your choice and the meter is the budget you
-          are spending. */}
-      {/* ── CONTEXT PRESSURE ──────────────────────────────────────────────
-          A cell that is not there until it is needed, in every mode — Chat
-          mode deliberately hides the model chip and its meter, which is right
-          for a number nobody should have to watch and wrong for the one
-          moment it stops being routine.
+      {/* ── THERE IS NO CONTEXT CELL, IN ANY MODE ────────────────────────
+          A cell appeared here past 70% and turned the danger colour past 88%,
+          because muxpad used to compact nothing by itself and the decision was
+          the reader's. Compaction is automatic again (see auto-compact in the
+          runner), so the cell was asking a person to carry a number that
+          nothing needs them to act on: "I don't want the user to be thinking
+          about compaction. Compaction should just happen."
 
-          It exists because muxpad no longer compacts anything by itself. The
-          window cap that used to do it silently rewrote long threads (two
-          compactions in three hours on a deal thread, 372k tokens of detail
-          gone), so the decision moved here: the bar says the chat is filling
-          up, and the button under it is the only thing that compacts. */}
-      {ctxLevel !== 'ok' && ctx ? (
-        <div className="chat-status-seg-wrap -ctx">
-          <button
-            type="button"
-            className={`chat-status-seg -ctx${panel === 'ctx' ? ' is-open' : ''}`}
-            data-level={ctxLevel}
-            onClick={() => toggle('ctx')}
-            aria-haspopup="menu"
-            aria-expanded={panel === 'ctx'}
-            title={`Context ${ctx.pct}% full (${kTokens(ctx.tokens)} of ${kTokens(
-              ctx.max,
-            )} tokens) — nothing is compacted automatically`}
-          >
-            <span className="chat-ctx-glyph" aria-hidden="true">
-              <svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true">
-                <path
-                  d="M6 1.4 11 10.6H1z"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.3"
-                  strokeLinejoin="round"
-                />
-                <path d="M6 5v2.4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-                <circle cx="6" cy="9.2" r="0.7" fill="currentColor" />
-              </svg>
-            </span>
-            <span className="chat-status-seg-label">{ctx.pct}% full</span>
-          </button>
-          {panel === 'ctx' ? (
-            // biome-ignore lint/a11y/useSemanticElements: an anchored popover, not a modal.
-            <div className="chat-status-menu chat-session-menu" role="dialog">
-              <div className="chat-session-head">Context</div>
-              <div className="chat-session-context">
-                <div className="chat-session-bar">
-                  <div
-                    className="chat-session-bar-fill"
-                    data-level={ctxLevel}
-                    style={{ width: `${Math.min(100, ctx.pct)}%` }}
-                  />
-                </div>
-                <span className="chat-session-context-label">
-                  {ctx.pct}% · {kTokens(ctx.tokens)} / {kTokens(ctx.max)} tokens
-                </span>
-              </div>
-              <button
-                type="button"
-                className="chat-session-item"
-                onClick={() => {
-                  send({ t: 'slash', cmd: 'compact', args: COMPACT_INSTRUCTIONS });
-                  setPanel(null);
-                }}
-              >
-                <span className="chat-session-item-label">Compact now</span>
-                <span className="chat-session-item-desc">
-                  {compactionBlurb(ctx.tokens, ctx.max)}
-                </span>
-              </button>
-              {/* The honest alternative, and often the better one: a long
-                  thread that has done its work is finished, not compressible. */}
-              <div className="chat-session-item -static">
-                <span className="chat-session-item-desc">
-                  Or keep it whole and start a new chat — nothing here is compacted unless you press
-                  the button.
-                </span>
-              </div>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
+          The meter did not disappear with it — it is in the session menu
+          below, with the token counts and Compact now, for the moments you
+          actually want to know. What is gone is the part that volunteered
+          itself. */}
       {mode !== 'chat' && (status || assistant) ? (
         <div className="chat-status-seg-wrap">
           <button
@@ -1158,38 +1091,39 @@ export function SessionBar({
         </div>
       ) : null}
 
-      {liveLabel ? (
+      {/* ── "WORKING…" IS NOT A CELL ──────────────────────────────────────
+          The live cell used to render whenever a turn was running, and with no
+          subagents its whole content was the word "Working…" — the third place
+          the same fact was being told, after the working block in the log and
+          the Stop button attached to it. "I don't think that the working
+          indicator is very valuable because we have a working indicator inside
+          the chat itself."
+
+          What survives is the part that is NOT a restatement: the ROSTER. When
+          there are subagents this is the only way to see who they are and open
+          them, so the cell renders then and only then. */}
+      {liveLabel && agents.length > 0 ? (
         // `-live` on the WRAPPER, not just the button: the wrapper is the bar's
         // flex item, so this is where "never shrink" has to be declared for
         // "12 agents" to survive 320px whole.
         <div className="chat-status-seg-wrap -live">
-          {/* A BUTTON only when there is a roster to open. With no subagents the
-              label is "Working…", and the panel below renders nothing for an
-              empty roster — so a button there would be a control that visibly
-              does nothing. Same static chip the mode indicator uses. */}
-          {agents.length > 0 ? (
-            <button
-              type="button"
-              className={`chat-status-seg -live${panel === 'live' ? ' is-open' : ''}`}
-              onClick={() => toggle('live')}
-              aria-expanded={panel === 'live'}
-              aria-label={liveLabel}
-              title={liveLabel}
-            >
-              <span className="chat-roster-spin -head" aria-hidden="true">
-                <RosterSpinner />
-              </span>
-              <span className="chat-status-seg-label">{liveLabel}</span>
-            </button>
-          ) : (
-            <div className="chat-status-seg -live -static" aria-label={liveLabel} title={liveLabel}>
-              <span className="chat-roster-spin -head" aria-hidden="true">
-                <RosterSpinner />
-              </span>
-              <span className="chat-status-seg-label">{liveLabel}</span>
-            </div>
-          )}
-          {panel === 'live' && agents.length > 0 ? (
+          {/* Always a BUTTON here now: the cell only exists when there is a
+              roster behind it, so there is no longer an "it would do nothing"
+              case to render a static chip for. */}
+          <button
+            type="button"
+            className={`chat-status-seg -live${panel === 'live' ? ' is-open' : ''}`}
+            onClick={() => toggle('live')}
+            aria-expanded={panel === 'live'}
+            aria-label={liveLabel}
+            title={liveLabel}
+          >
+            <span className="chat-roster-spin -head" aria-hidden="true">
+              <RosterSpinner />
+            </span>
+            <span className="chat-status-seg-label">{liveLabel}</span>
+          </button>
+          {panel === 'live' ? (
             // biome-ignore lint/a11y/useSemanticElements: same — an anchored popover, not a modal that owns the screen.
             <div className="chat-status-menu chat-live-menu" role="dialog">
               {/* "Subagents" only while that is all there is. A child chat in

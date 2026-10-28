@@ -77,25 +77,33 @@ describe('the status strip is a line, not a second object', () => {
     expect(decl('.chat-status-bar', 'background')).toBeNull();
   });
 
-  it('costs one line and one gap \u2014 the whole budget, wherever it sits', () => {
-    // Two things could hold the strip off the text below — its own bottom
-    // margin and the composer's row gap — and having both is how a bar drifts
-    // taller one nudge at a time.
+  it('costs the composer NOTHING, because it is out of the flow', () => {
+    // It used to cost one line plus one gap, and the budget was the point:
+    // two things could hold the strip off the text below — its own margin and
+    // the composer's row gap — and having both is how a bar drifts taller one
+    // nudge at a time.
     //
-    // Below the pill now, so the one separation is the strip's TOP margin and
-    // the bottom one must be zero. The side is checked rather than assumed
-    // because the margin outlived two moves on the wrong side of the strip —
-    // see the same assertion in ChatPane.statusline.test.tsx, which owns the
-    // reasoning; this file owns the BUDGET the two of them add up to.
+    // It now costs zero. The strip is a chip hung off the top of the composer
+    // wrap by `position: absolute; bottom: 100%`, so the wrap's height — which
+    // is what `--chat-composer-h` publishes, and therefore what the transcript
+    // gives up — does not contain it at all. Reported as "it pushes the
+    // composer disproportionately upwards, meaning that it reduces the amount
+    // of content we can show in the window".
+    expect(decl('.chat-status-bar', 'position')).toBe('absolute');
+    expect(decl('.chat-status-bar', 'bottom')).toBe('100%');
+    // The gap it owns is the one BELOW it, down to the pill — the side flipped
+    // with the strip, and the margin has outlived two moves on the wrong side
+    // of it. See the same assertion in ChatPane.statusline.test.tsx.
     const own = (decl('.chat-status-bar', 'margin') ?? '').split(/\s+/);
-    const above = Number((own[0] ?? '').replace('px', ''));
+    expect((own[0] ?? '').trim()).toBe('0');
     const below = Number((own[2] ?? '').replace('px', ''));
-    expect(above).toBeGreaterThan(0);
-    expect(below).toBe(0);
-    // And the line is FIXED, not a value its content can grow — which is what
-    // makes this a budget rather than a hope. See ChatPane.statusline.test.tsx.
+    expect(below).toBeGreaterThan(0);
+    expect(below).toBeLessThanOrEqual(16);
+    // And the line is FIXED, not a value its content can grow — so a chip that
+    // floats over the transcript can never become a block that hides it.
     const h = px(decl('.chat-status-bar', 'height'));
-    expect(h + above).toBeLessThanOrEqual(32);
+    expect(h).toBeGreaterThan(0);
+    expect(h).toBeLessThanOrEqual(24);
   });
 });
 
