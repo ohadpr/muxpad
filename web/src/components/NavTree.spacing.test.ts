@@ -1444,3 +1444,37 @@ describe('the at-hand band lines up with the groups', () => {
     expect(NAV_CSS).not.toMatch(/\.navtree-workingset-head::before/);
   });
 });
+
+/**
+ * THE TOP OF THE RAIL IS NOT A STACK OF HAIRLINES.
+ *
+ * It had five horizontal strokes in about 160px: the brand's, the band's top
+ * border, its bottom border, an inset highlight inside its top edge, and a
+ * rule trailing the heading. Reported as "top area still messy".
+ */
+describe('the recently-active band draws one line', () => {
+  const body = (selector: string): string => {
+    const flat = NAV_CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+    const re = new RegExp(
+      `(?:^|})\\s*${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{([^}]*)\\}`,
+      'm',
+    );
+    return re.exec(flat)?.[1] ?? '';
+  };
+
+  it('keeps the seam where the band STOPS, and nothing on the side above it', () => {
+    // The brand's hairline is already there, and it is load-bearing: it lines
+    // up with the pane's tab strip.
+    const band = body('.navtree-workingset');
+    expect(band).toMatch(/border-bottom:/);
+    expect(band).not.toMatch(/border-top:/);
+    expect(band).not.toMatch(/box-shadow:/);
+  });
+
+  it('has a ground instead of a rule after the heading', () => {
+    // The rule existed because a short heading over a list read as a stray
+    // word. With a ground of its own the label is clearly ON something.
+    expect(NAV_CSS).not.toMatch(/\.navtree-workingset-head::after/);
+    expect(body('.navtree-workingset')).toMatch(/background:\s*color-mix/);
+  });
+});
