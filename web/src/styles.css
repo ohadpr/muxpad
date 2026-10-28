@@ -1576,7 +1576,12 @@
    colour, and it is already how this theme sets a title. The hue stays where
    it means something. */
 [data-theme="memphis"] .navtree-ws-name .navtree-name-text {
-  color: var(--rail-ink);
+  /* --fg, NOT --rail-ink. The rail island rebinds --fg to the rail's ink, so
+     inside the rail they are the same value — and the MOBILE SHEET is not an
+     island: it sits on the app's own light ground, where this theme's
+     --rail-ink (near-white, for a black rail) measured 1.3:1. A section
+     header nobody can read. */
+  color: var(--fg);
   font-family: var(--chrome-font);
   font-weight: 700;
   letter-spacing: 0.14em;
@@ -1610,7 +1615,9 @@
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: var(--rail-ink);
+  /* --fg for the same reason as the section name above: the brand is drawn in
+     the rail AND in the app's top bar, and only one of those is an island. */
+  color: var(--fg);
 }
 
 * {

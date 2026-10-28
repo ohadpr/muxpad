@@ -1535,7 +1535,7 @@
      re-points --accent to the PANE's, which is correct for everything painted
      ON the pill and wrong for this, which is painted beside it: a dark pane
      accent on the dark rail is the "barely visible" half of the same bug. */
-  background: var(--rail-accent, var(--accent));
+  background: var(--accent);
   z-index: 1;
 }
 /* Hover on the row you are already on has almost nothing to say, so it says it
@@ -4034,6 +4034,14 @@ body.sidenav-resizing iframe {
      as the one drawn line the band has (see the seam below) and in the
      heading's own ink.
 
+     `--accent`, NOT `--rail-accent`. The rail island rebinds --accent to the
+     rail's value, so inside the rail the two are the same thing — and on the
+     MOBILE SHEET, which is not an island (it sits on the app's own light
+     ground), --rail-accent is a colour chosen to carry on a deep rail.
+     Memphis's rail is black and its rail accent is yellow: on the sheet's
+     cream that label measured 1.7:1. Asking for the rail token by name is
+     what pinned a deep-surface colour onto a light one.
+
      9% → 6% when the band stopped being pinned. A fixed shelf has to hold its
      own against a list sliding under it; a band that scrolls WITH the list is
      a section of it, and at 9% over a cream rail (memphis) the step read as a
@@ -4052,7 +4060,7 @@ body.sidenav-resizing iframe {
   /* AND THE SEAM IS THE ACCENT, which is what makes this a different kind of
      shelf rather than a brighter piece of rail. Measured 1.4–3.5:1 against
      the band on every theme — visible everywhere, loud nowhere. */
-  border-bottom: 1px solid color-mix(in srgb, var(--rail-accent, var(--accent)) 45%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
 /* The heading is a LABEL, not a section header: small caps, wide, quiet.
@@ -4075,7 +4083,13 @@ body.sidenav-resizing iframe {
      indicator". It was decoration doing an impression of state.
      The colour moves into the LABEL instead, where nothing is ever a status,
      and the band's own accent wash (above) carries the rest. */
-  color: color-mix(in srgb, var(--rail-accent, var(--accent)) 72%, var(--fg-dim));
+  /* Mixed into the FULL ink, not the dim one. The label is 10px caps — the
+     smallest type in the rail — and an accent diluted with a dim token
+     measured 3.3:1 at its worst (demoscene's rail) however the ratio was
+     tuned: both ends of the mix were already quiet. Against full ink the same
+     hue reads at 4.6–12:1 on both surfaces, and it is still unmistakably the
+     accent rather than the body colour. */
+  color: color-mix(in srgb, var(--accent) 55%, var(--fg));
 }
 /* NO RULE AFTER THE LABEL EITHER. It was there to stop a short heading from
    reading as a stray word above a list — a real problem when the band had no

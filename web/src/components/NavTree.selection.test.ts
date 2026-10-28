@@ -965,7 +965,10 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     // PANE's, which is right for everything that belongs to the pane and wrong
     // for a mark that means the same thing on every row: a dark pane accent
     // was invisible on the dark rail, which is exactly how it was reported.
-    expect(decl(edge, 'background')).toBe('var(--rail-accent, var(--accent))');
+    // `--accent`, not the rail token by name: the island rebinds it, so the
+    // rail gets the rail's value and the mobile sheet — which is NOT an island
+    // — gets the app's. See NavSheet.contrast.test.
+    expect(decl(edge, 'background')).toBe('var(--accent)');
 
     // AND IT SITS ON THE ROW — which took three goes.
     //
