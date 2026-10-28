@@ -54,12 +54,42 @@ describe('the composer tools', () => {
     expect(expanded).toMatch(/className="chat-attach"/);
   });
 
-  it('spends a whole ROW on the tools only where there are labels to carry', () => {
-    // A phone keeps its `+` beside the input: a row for one button is the
-    // cost this exercise exists to remove, and the mock-up's phone has no
-    // tool row at all.
-    expect(SRC).toMatch(/\{!labelledTools \? composerTools : null\}/);
-    expect(SRC).toMatch(/\{labelledTools \? \(\s*<div className="chat-composer-tools">/);
+  it('spends ONE row, on every layout, carrying both halves', () => {
+    // The tools used to sit beside the input on touch, because the row below
+    // held only a `+` and a row for one button is not worth its height. It
+    // holds the session chip and Branch now — the chat's own controls, which
+    // had been at the top of the pane and kept being asked about — so it
+    // earns the height everywhere and the tools go back into it.
+    expect(SRC).toMatch(
+      /<div className="chat-composer-tools">\s*\{composerTools\}\s*\{sessionStrip\}/,
+    );
+    expect(SRC).not.toMatch(/\{!labelledTools \? composerTools : null\}/);
+  });
+
+  it('pops a LIVE control back out of the sheet', () => {
+    // A recording in progress is not an action waiting to be taken, it is the
+    // thing you are doing — its elapsed time and its stop have to stay
+    // reachable, which they are not from behind a `+`.
+    expect(SRC).toMatch(
+      /toolsIdle =\s*review\.state\.phase === 'idle' && !voiceIsLive\(voice\.state\)/,
+    );
+  });
+
+  it('closes the sheet when the + that opened it goes away', () => {
+    // A control going live (or a rotation to the desktop layout) removes the
+    // button the sheet hangs from; the sheet must not outlive it.
+    expect(SRC).toMatch(/if \(!collapsedTools\) setToolsOpen\(false\);/);
+  });
+
+  it('still has the full row to fall back to, for a LIVE control', () => {
+    // The expanded branch is not dead code: it is what renders while a screen
+    // review or the mic is running, because that is state rather than an
+    // action and its stop has to stay reachable.
+    const el = SRC.slice(SRC.indexOf('const composerTools = collapsedTools ? ('));
+    const expanded = el.slice(el.indexOf(') : labelledTools ? ('));
+    expect(expanded).toMatch(/<ReviewButton/);
+    expect(expanded).toMatch(/<VoiceControl/);
+    expect(expanded).toMatch(/className="chat-attach"/);
   });
 
   it('opens its sheet upward, away from the bottom of the screen', () => {
@@ -90,10 +120,15 @@ describe('faithful to the mock', () => {
     expect(labelled.slice(0, labelled.lastIndexOf(') : ('))).not.toMatch(/Dictate\n/);
   });
 
-  it('ends the tool row with what Enter does right now', () => {
-    expect(SRC).toMatch(/className="chat-tools-hint"/);
-    expect(SRC).toMatch(/⏎ send · ⇧⏎ newline/);
-    expect(SRC).toMatch(/queues behind the running turn/);
+  it('ends the tool row with the chat, not with a keyboard hint', () => {
+    // The row ended with "⏎ send · ⇧⏎ newline" while it had nothing else to
+    // put there. It carries the model chip and Branch now — real controls,
+    // which had been sitting at the top of the pane getting asked about — and
+    // a third thing on the right would be the crowding that moved them.
+    // Enter-to-send is also the one convention in this product nobody has to
+    // be taught.
+    expect(SRC).not.toMatch(/chat-tools-hint/);
+    expect(CSS).not.toMatch(/\.chat-tools-hint\s*\{/);
   });
 
   it('sets the tool row in the UI face, never the chrome face', () => {

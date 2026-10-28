@@ -47,89 +47,22 @@
   position: relative; /* anchors the scroll-down arrow + tool modal */
 }
 
-/* ── THE CHAT'S HEAD ──────────────────────────────────────────────────────
-   The pane's own title bar: its name on the left, Branch and the session chip
-   on the right. Desktop only — on a phone the app's top bar is already this.
+/* ── THERE IS NO CHAT HEAD, AND THE RULES ARE GONE WITH IT ───────────────
+   `.chat-head`, `.chat-head-name`, `.chat-head-ws` and the downward menu
+   anchor that went with them styled a title bar at the top of the pane: the
+   chat's name on the left, the model chip and Branch on the right, as the
+   mock-up drew it.
 
-   WHY IT IS AT THE TOP AT ALL, after three attempts at the bottom: everything
-   in it is ABOUT THE PANE, and none of it is about the message you are
-   writing. The bottom of a chat is the composer's, and anything parked there
-   either steals a row from the conversation or floats over it.
+   It was asked about every time it shipped — in a head of its own, and before
+   that portalled into the app's top bar — and the question was always the
+   same: why is this at the top right of the chat window. Because a mock-up
+   drew a header there, and that mock-up's phone had no sidebar naming the
+   chat. This app does. So the head was carrying a name you can already read
+   two inches to its left, plus two controls that had nowhere else to go.
 
-   It is a HAIRLINE, not a bar: no fill, one seam, and the name set at the
-   chat's own size. The log scrolls under the seam, which is what keeps it
-   reading as the top edge of the conversation rather than as a second
-   toolbar. */
-.chat-head {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 34px;
-  padding: 0 10px 0 14px;
-  border-bottom: 1px solid var(--chat-border);
-  background: transparent;
-}
-.chat-head-name {
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font-family: var(--chrome-font, inherit);
-  font-size: 0.8125rem;
-  font-weight: 600;
-  color: var(--chat-fg);
-}
-/* The workspace, quieter and dropped first when the pane is narrow — the chat
-   name is the thing you came for; the workspace is where it lives. */
-.chat-head-ws {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font-family: var(--chrome-font, inherit);
-  font-size: 0.75rem;
-  /* Quieter than the chat name by WEIGHT (600 vs 400) and size, not by an ink
-     under AA — see .chat-tool-btn for the measurements. */
-  color: var(--chat-dim);
-}
-.chat-head-ws::before {
-  content: "·";
-  margin-right: 6px;
-}
-/* The strip takes the rest of the row and right-aligns in it, so the chip
-   lands on the pane's right edge whatever the name is doing. */
-.chat-head > .chat-status-bar {
-  flex: 1 1 auto;
-  margin-left: auto;
-}
-/* ── THE MENUS OPEN DOWNWARD FROM THE HEAD ──────────────────────────────
-   `.chat-status-menu` anchors to `bottom: calc(100% + 6px)` because this
-   strip spent its whole life at the BOTTOM of the pane, where up is the only
-   direction with room. In the head, up is off the top of the pane — clipped
-   by `.chat-pane`'s own `overflow: hidden` on a desktop, and on a phone (where
-   the strip was briefly portalled into the app's top bar) painted over the
-   carrier and the clock. */
-.chat-head .chat-status-menu {
-  top: calc(100% + 6px);
-  bottom: auto;
-}
-/* ── ON TOUCH THE STRIP RIDES THE COMPOSER ───────────────────────────────
-   There is no head on a phone (see ChatPane.tsx), so the tool row carries the
-   session chip and Branch instead — right-aligned, inside the pill, under the
-   input. The row is the same object as the desktop's; only its cargo differs,
-   because a phone has no room for three labels and nowhere better to put the
-   chips than the surface the thumb is already on. */
-.chat-composer-tools[data-touch="true"] {
-  justify-content: flex-end;
-  min-height: 26px;
-}
-.chat-composer-tools[data-touch="true"] > .chat-status-bar {
-  flex: 0 1 auto;
-}
-/* …and its menus open UPWARD again, which is the default — the strip is back
-   at the bottom of the pane, where up is the only direction with room. */
+   They have somewhere: the composer's tool row, which is the chat's own
+   control surface and is already where you attach a file. See
+   `.chat-composer-tools`. */
 
 .chat-scroll {
   flex: 1 1 auto;
@@ -1258,6 +1191,15 @@
      the send button. */
   margin: 0 -4px;
 }
+/* THE STRIP SITS AT THE FAR END OF THE ROW. The tools are what you can add
+   to the message, the chip is what the chat is running, and the gap between
+   them is the row's whole structure. Its menus open UPWARD, which is the
+   default: the strip is at the bottom of the pane, where up is the only
+   direction with room. */
+.chat-composer-tools > .chat-status-bar {
+  flex: 0 1 auto;
+  margin-left: auto;
+}
 
 /* NOTHING ABOUT THE SESSION LIVES HERE. The session chip spent one revision
    at the right-hand end of this row, which was better than floating over the
@@ -1307,24 +1249,10 @@
   color: inherit;
   opacity: 0.85;
 }
-/* The keyboard hint, at the far end — what Enter does right now, which is the
-   one thing about this composer that CHANGES while you use it. Not a control,
-   so it is quieter than the buttons and never a target. */
-.chat-tools-hint {
-  margin-left: auto;
-  padding-right: 4px;
-  font-family: var(--ui-font, inherit);
-  font-size: 0.6875rem;
-  /* Faded faint measured 1.9–2.9:1 here, which is a hint nobody can read —
-     and an unreadable hint is worse than none, because it still costs the
-     width. It is held back by SIZE and by being at the far end of the row,
-     not by hue. */
-  color: var(--chat-dim);
-  opacity: 0.85;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+/* NO KEYBOARD HINT. The row ended with "⏎ send · ⇧⏎ newline" while it had
+   nothing else to put at that end. It carries the session chip and Branch
+   now, and a third thing on the right would be the crowding that moved them
+   off the top of the pane in the first place. */
 
 /* ── THE COLLAPSED LEFT CLUSTER ───────────────────────────────────────────
    One `+` standing for attach / review a screen / dictate, on touch layouts
