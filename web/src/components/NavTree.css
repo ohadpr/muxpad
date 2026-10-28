@@ -156,11 +156,28 @@
      peripheral vision down the whole list. That is two channels on the thing
      your eye is already scanning, and it costs no width.
 
-     So: read steps DOWN, unread goes to full ink. Measured against this rail,
-     ΔE 0.0 -> 30.0 (ΔL* 28.6), with read still at 6.81:1 and unread 14.95:1. */
-  --nt-ink-read: color-mix(in srgb, var(--fg-dim) 55%, var(--fg-faint));
-  /* A child is subordinate, so it sits one rung quieter again — 5.05:1. */
-  --nt-ink-read-child: var(--fg-faint);
+     So: read steps DOWN, unread goes to full ink.
+
+     ── AND THE STEP DOWN IS ONE RUNG, NOT TWO ──────────────────────────────
+     It was `color-mix(--fg-dim 55%, --fg-faint)` — a value BETWEEN the dim
+     and faint tokens — and measured across the ten themes that ship it put
+     ordinary chat names at 4.39–8.38:1 on the rail and 3.82–8.38:1 inside the
+     recently-active band, where four themes were under AA. Reported as
+     "improve contrast for chat names in this theme and others", on riso.
+
+     The step exists to separate read from unread, and it still does: unread
+     is full ink AND bold, which is 6.69–17:1 and a weight change. Spending a
+     second rung on the read state bought nothing but an unreadable name — so
+     read is simply --fg-dim now (5.51–11.2 on the rail, 4.79–11.2 on the
+     band, AA everywhere), and the distance to unread is carried by the two
+     channels that were always doing the work. */
+  --nt-ink-read: var(--fg-dim);
+  /* A child is subordinate, so it sits one rung quieter again — and that rung
+     is the one the read state just vacated. It was --fg-faint outright, which
+     measured 3.26–5.58:1 and failed AA on EIGHT of the ten themes: the rows
+     most likely to be the thing you were waiting for, set in the ink nobody
+     can read. 4.73–9.26 now. */
+  --nt-ink-read-child: color-mix(in srgb, var(--fg-dim) 70%, var(--fg-faint));
 
   /* ─── The two surfaces a row can take, and why they are DERIVED ──────────
      Selection and hover are one scale with three rungs, and all three are
@@ -1390,8 +1407,8 @@
      it: left on the rail's value, a selected pinned chat's name would be a
      rail-ink mix sitting on a pane-coloured row — the same substitution trap,
      one token further along. */
-  --nt-ink-read: color-mix(in srgb, var(--fg-dim) 55%, var(--fg-faint));
-  --nt-ink-read-child: var(--fg-faint);
+  --nt-ink-read: var(--fg-dim);
+  --nt-ink-read-child: color-mix(in srgb, var(--fg-dim) 70%, var(--fg-faint));
   --nt-hover: color-mix(in srgb, var(--fg) 6%, transparent);
   --nt-sel: color-mix(in srgb, var(--accent) 20%, transparent);
   --nt-sel-hover: color-mix(in srgb, var(--accent) 26%, transparent);
@@ -1437,8 +1454,8 @@
      it: left on the rail's value, a selected pinned chat's name would be a
      rail-ink mix sitting on a pane-coloured row — the same substitution trap,
      one token further along. */
-  --nt-ink-read: color-mix(in srgb, var(--fg-dim) 55%, var(--fg-faint));
-  --nt-ink-read-child: var(--fg-faint);
+  --nt-ink-read: var(--fg-dim);
+  --nt-ink-read-child: color-mix(in srgb, var(--fg-dim) 70%, var(--fg-faint));
   --nt-hover: color-mix(in srgb, var(--fg) 6%, transparent);
   --nt-sel: color-mix(in srgb, var(--accent) 20%, transparent);
   --nt-sel-hover: color-mix(in srgb, var(--accent) 26%, transparent);
@@ -1596,7 +1613,8 @@
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  color: var(--fg-faint);
+  /* --fg-faint measured 3.26–5.58:1 on the rails; this is TEXT. */
+  color: var(--nt-ink-read-child);
   font-weight: 400;
 }
 .navtree-ws-prefix::after {
@@ -1632,7 +1650,8 @@
   text-align: left;
   font-size: 0.71875rem;
   line-height: 0.9375rem;
-  color: var(--fg-faint);
+  /* --fg-faint measured 3.26–5.58:1 on the rails; this is TEXT. */
+  color: var(--nt-ink-read-child);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1938,7 +1957,8 @@
   font-family: inherit;
   font-size: 0.8125rem;
   font-weight: 600;
-  color: var(--fg-faint);
+  /* --fg-faint measured 3.26–5.58:1 on the rails; this is TEXT. */
+  color: var(--nt-ink-read-child);
   text-align: left;
   cursor: pointer;
 }
@@ -2134,7 +2154,8 @@
   padding: 8px var(--nt-air) 2px calc(var(--nt-pad) + var(--nt-indent) * 2);
   font-size: 0.71875rem;
   font-weight: 600;
-  color: var(--fg-faint);
+  /* --fg-faint measured 3.26–5.58:1 on the rails; this is TEXT. */
+  color: var(--nt-ink-read-child);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4098,6 +4119,24 @@ body.sidenav-resizing iframe {
 .navtree-ws-slot .navtree-slot-drop:hover {
   background: color-mix(in srgb, var(--fg) 14%, transparent);
   color: var(--fg);
+}
+
+/* ── NO CHILD RUNG INSIDE THE BAND ───────────────────────────────────────
+   The tree sets a sub-chat one rung quieter than its parent, which is right
+   where the two are drawn as a hierarchy — the child is indented under the
+   row it belongs to and the ink says the same thing.
+
+   The band is not a tree. It is a flat list of chats you have been in, with
+   no parents on it, so a quieter rung there communicates nothing — and it
+   costs something real: the band's own ground is a lift, and the child ink on
+   top of it measured 4.11:1 on tokyo-night, under AA. Rows here read at the
+   list's ordinary ink.
+
+   `[data-variant]` carries this to (0,6,0) deliberately: the child rule it
+   has to beat is (0,5,0), and a tie would be decided by file order — which is
+   a bundler's business, not a design decision. */
+.navtree[data-variant] .navtree-workingset .navtree-tab-row[data-child="true"] .navtree-name-text {
+  color: var(--nt-ink-read);
 }
 
 /* THE BAND'S OWN GROUND IS ALREADY A LIFT, so a row's hover has to lift again
