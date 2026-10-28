@@ -15,7 +15,7 @@ import { AGENT_MODE_LABELS, type AgentMode, type AgentSessionStatus } from '@mux
 import { useEffect, useRef, useState } from 'react';
 import { type RecentFolder, api } from '../api';
 import { AGENT_BACKENDS, type AgentBackendId, backendLabel } from '../lib/agent-backend';
-import { COMPACT_INSTRUCTIONS, compactionBlurb, contextLevel } from '../lib/context-pressure';
+import { COMPACT_INSTRUCTIONS } from '../lib/context-pressure';
 import { sessionModelLabel } from '../lib/live-status';
 import { showFolderChip } from '../lib/nav-row-affordances';
 import { useDismissable } from '../lib/use-dismissable';
@@ -767,7 +767,6 @@ export function SessionBar({
     : undefined;
   const modelLabel = current?.displayName ?? status?.model ?? '';
   const ctx = status?.context;
-  const ctxLevel = contextLevel(ctx?.pct);
   const kTokens = (n: number) => `${Math.round(n / 1000)}k`;
 
   // Does the folder deserve a cell in the header at all?

@@ -1,33 +1,20 @@
 import { COMPACT_INSTRUCTIONS } from '@muxpad/shared';
 /**
- * HOW FULL IS THIS CONVERSATION, AND WHAT DOES THE CHAT SAY ABOUT IT.
+ * HOW FULL IS THIS CONVERSATION — AND WHO IS SUPPOSED TO CARE.
  *
- * muxpad does not compact anything on its own any more. The runner sets
- * `autoCompactEnabled: false`, which replaced a 200k window that was quietly
- * rewriting people's threads — measured on one of them, two automatic
- * compactions in three hours, 372k tokens of verbatim history dropped without
- * anybody being asked. A compaction cannot be undone from inside the session,
- * so it is a decision, and decisions belong to the person reading the chat.
+ * Not the reader, any more. muxpad compacts automatically again (see
+ * server/src/agent-runner/auto-compact.ts, which fires at 90% of the model's
+ * real window, between turns, with the instructions below), so the chat shows
+ * no percentage, no warning cell and no colour change: "I don't want the user
+ * to be thinking about compaction. Compaction should just happen."
  *
- * That trade only works if the chat can SEE the pressure coming, which is what
- * this module is for: the thresholds, and the words that go with them.
+ * The meter did not disappear with the cell — it is in the session menu with
+ * the token counts and a Compact button, for the moments somebody does want to
+ * know. What is gone is the part that volunteered itself.
+ *
+ * WHAT IS LEFT HERE is the thing both compactions — the automatic one and the
+ * button — have to agree on: what a compaction must keep.
  */
-
-export type ContextLevel = 'ok' | 'warn' | 'high';
-
-/** Below this the meter stays in the session menu where it has always lived —
- *  a number nobody needs to watch should not be on screen. */
-export const CONTEXT_WARN_PCT = 70;
-/** Past this the chat is close enough to the ceiling that the next long turn
- *  could hit it, and the cell says so in the danger colour. */
-export const CONTEXT_HIGH_PCT = 88;
-
-export function contextLevel(pct: number | undefined): ContextLevel {
-  if (typeof pct !== 'number' || !Number.isFinite(pct)) return 'ok';
-  if (pct >= CONTEXT_HIGH_PCT) return 'high';
-  if (pct >= CONTEXT_WARN_PCT) return 'warn';
-  return 'ok';
-}
 
 /**
  * What the compaction must keep — sent as `/compact <instructions>`.
