@@ -107,10 +107,22 @@ describe('the rail search button, on every theme that ships', () => {
     expect([...TREE.matchAll(/--bg-elev:\s*var\(--rail-elev\);/g)]).toHaveLength(islands.length);
   });
 
-  it('paints the button on that surface, which is what the arithmetic is about', () => {
+  it('paints the button on that surface WHEN it is painted at all', () => {
+    // The button lost its resting fill when it stopped pretending to be a
+    // field — it is a shortcut to the palette, and at field size it was
+    // "taking up too much space". The raised surface is still what it wears on
+    // hover and focus, which is the state this arithmetic is about: at rest
+    // the label sits on the rail itself, which is MORE contrast, not less
+    // (mixing ink into the surface moves the two together).
     const flat = TREE.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\s+/g, ' ');
-    const body = flat.match(/(?:^|\}) ?\.navtree-search \{([^}]*)\}/)?.[1] ?? '';
-    expect(body).toMatch(/background:\s*var\(--bg-elev\)/);
+    const rest = flat.match(/(?:^|\}) ?\.navtree-search \{([^}]*)\}/)?.[1] ?? '';
+    expect(rest).toMatch(/background:\s*transparent/);
+    // …and the resting ink is the DIM token, never the faint one, which
+    // measures under AA on both rails.
+    expect(rest).toMatch(/color:\s*var\(--fg-dim\)/);
+    const hover =
+      flat.match(/\.navtree-search:hover, \.navtree-search:focus-visible \{([^}]*)\}/)?.[1] ?? '';
+    expect(hover).toMatch(/background:\s*var\(--bg-elev\)/);
   });
 
   it('keeps the field distinguishable from the rail behind it', () => {

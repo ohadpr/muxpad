@@ -1403,3 +1403,44 @@ describe('the working-set strip keeps the status column', () => {
     expect(drop).toMatch(/display:\s*none/);
   });
 });
+
+/**
+ * THE BAND'S ROWS ARE ON THE SAME TWO COLUMNS AS EVERY OTHER ROW.
+ *
+ * A chat inside a workspace carries two insets the band had neither of: the
+ * scroller's and the group's. So its chips sat 8px left of every chip below
+ * them — "the chats there are not horizontally aligned with the rest of the
+ * chats below that are in the other sections" — and its status marks sat 4px
+ * right of a column this rail keeps to 0.00px.
+ */
+describe('the at-hand band lines up with the groups', () => {
+  const rule = (selector: string): string => {
+    const flat = NAV_CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+    const re = new RegExp(
+      `(?:^|})\\s*${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{([^}]*)\\}`,
+      'm',
+    );
+    return re.exec(flat)?.[1] ?? '';
+  };
+
+  it('pays the scroller inset and the group inset, like a row below it does', () => {
+    const band = rule('.navtree-workingset');
+    // Derived from the tokens, never literals: the two insets are
+    // `--nt-pad` each, so left is twice it and right is one.
+    expect(band).toMatch(/padding:[^;]*calc\(var\(--nt-pad\) \* 2\)/);
+    expect(band).toMatch(/padding:\s*\S+\s+var\(--nt-pad\)/);
+  });
+
+  it('pays it as PADDING, so the shelf still runs the full width', () => {
+    // Margin would inset the ground too, and a band with side gaps is a card.
+    expect(rule('.navtree-workingset')).not.toMatch(/margin:/);
+  });
+
+  it('carries no status-coloured mark on its heading', () => {
+    // The only coloured marks in this rail are status — a dot for wants-you, a
+    // tick for ready, an amber ring for working. A 5px accent square beside a
+    // heading reads as one of them: "the red dot looks like an error
+    // indicator".
+    expect(NAV_CSS).not.toMatch(/\.navtree-workingset-head::before/);
+  });
+});

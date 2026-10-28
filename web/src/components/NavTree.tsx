@@ -362,9 +362,15 @@ function WorkingSetStrip({
 
   if (rows.length === 0) return null;
   return (
-    <div className="navtree-workingset" aria-label="Working on">
+    /* ── THE NAME ──────────────────────────────────────────────────────────
+       "Working on" was the first one and it was flat: a gerund that reads as a
+       status the app is reporting about you, in a rail where everything else
+       is a noun you can click. "at hand" is the shelf these chats are on —
+       the handful you keep reaching for — and it says what the band IS rather
+       than what you are doing. */
+    <div className="navtree-workingset" aria-label="At hand">
       <div className="navtree-workingset-head" aria-hidden="true">
-        Working on
+        at hand
       </div>
       {rows.map(({ tab, workspace }) => (
         <WorkingSetRow
@@ -434,7 +440,7 @@ function WorkingSetRow({
           type="button"
           className="navtree-close navtree-slot-drop"
           title="Not now — free this slot"
-          aria-label={`Remove ${tab.name} from Working on`}
+          aria-label={`Remove ${tab.name} from At hand`}
           onClick={(e) => {
             e.stopPropagation();
             e.preventDefault();
