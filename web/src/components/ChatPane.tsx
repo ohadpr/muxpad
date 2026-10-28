@@ -4801,6 +4801,141 @@ export function ChatPane({
     );
   }
 
+  /**
+   * THE COMPOSER'S TOOLS — one element, placed differently by layout.
+   *
+   * DESKTOP puts it on a row of its own under the input, with the labels on
+   * and the keyboard hint at the far end. TOUCH puts the same element back
+   * beside the input, because a phone must not spend a whole row on a single
+   * `+`: the row exists to carry three labels and a hint, and a phone is
+   * carrying none of those. The mock-up's phone has no tool row for exactly
+   * this reason.
+   *
+   * Three states, and only the first two are about layout:
+   *  · collapsed  — one `+` and a sheet (touch, everything idle)
+   *  · labelled   — Attach / Review a screen, named (desktop, everything idle)
+   *  · expanded   — the real controls, whenever one of them is LIVE. A
+   *    recording is not an action waiting to be taken, it is the thing you are
+   *    doing, and its elapsed time and its stop cannot sit behind a `+`.
+   */
+  const composerTools = collapsedTools ? (
+    <div className="chat-tools" ref={toolsRef}>
+      <button
+        type="button"
+        className="chat-attach"
+        onClick={() => setToolsOpen((o) => !o)}
+        aria-haspopup="menu"
+        aria-expanded={toolsOpen}
+        aria-label="Add to this message"
+        title="Add to this message"
+      >
+        <SvgPlus />
+      </button>
+      {toolsOpen ? (
+        <div className="chat-tools-sheet" role="menu">
+          <button
+            type="button"
+            role="menuitem"
+            className="chat-tools-item"
+            onClick={() => {
+              setToolsOpen(false);
+              fileInputRef.current?.click();
+            }}
+          >
+            <SvgScreenlessAttach />
+            Attach a file
+          </button>
+          {review.available ? (
+            <button
+              type="button"
+              role="menuitem"
+              className="chat-tools-item"
+              onClick={() => {
+                setToolsOpen(false);
+                void review.start();
+              }}
+            >
+              <SvgScreen />
+              Review a screen
+            </button>
+          ) : null}
+          {voiceOn && voice.supported ? (
+            <button
+              type="button"
+              role="menuitem"
+              className="chat-tools-item"
+              onClick={() => {
+                setToolsOpen(false);
+                voice.start();
+              }}
+            >
+              <SvgMic />
+              Dictate
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  ) : labelledTools ? (
+    <>
+      <button
+        type="button"
+        className="chat-tool-btn"
+        onClick={() => fileInputRef.current?.click()}
+        title="Attach a file"
+      >
+        <SvgScreenlessAttach />
+        Attach
+      </button>
+      {review.available ? (
+        <button
+          type="button"
+          className="chat-tool-btn"
+          onClick={() => void review.start()}
+          title="Review a screen — talk while you point"
+        >
+          <SvgScreen />
+          Review a screen
+        </button>
+      ) : null}
+      {/* NO DICTATE BUTTON. The mic is the composer's own right-hand button
+          while the field is empty (mic → send → queue, as drawn): dictation
+          REPLACES typing, where everything else here adds something to a
+          message you are writing. */}
+    </>
+  ) : (
+    <>
+      <button
+        type="button"
+        className="chat-attach"
+        onClick={() => fileInputRef.current?.click()}
+        aria-label="Attach a file"
+        title="Attach a file"
+      >
+        <SvgAttach />
+      </button>
+      <ReviewButton
+        state={review.state}
+        available={review.available}
+        unconfigured={review.unconfigured}
+        onStart={() => void review.start()}
+        onStop={() => void review.stop()}
+      />
+      {voiceOn ? (
+        <VoiceControl
+          state={voice.state}
+          detail={voice.detail}
+          status={voice.status}
+          supported={voice.supported}
+          minutesLeft={voice.minutesLeft}
+          elapsedMs={voice.elapsedMs}
+          onStart={voice.start}
+          onStop={() => voice.stop('user')}
+        />
+      ) : null}
+    </>
+  );
+
   const sessionStrip = (
     <SessionBar
       paneId={paneId}
@@ -5381,6 +5516,9 @@ export function ChatPane({
                 onChange={onPickFiles}
               />
               <div className="chat-composer-main">
+                {/* A phone keeps its tools beside the input — see
+                    composerTools. The desktop's row is below the chips. */}
+                {!labelledTools ? composerTools : null}
                 <ChatDraft
                   ref={inputRef}
                   className="chat-input"
@@ -5666,167 +5804,24 @@ export function ChatPane({
                   </div>
                 </>
               ) : null}
-              {/* ── THE TOOL ROW, INSIDE THE PILL ─────────────────────────
-                  Everything that is ABOUT the message or the session, on
-                  one line under the input: the + that adds to your
-                  message on the left, the session chip and Branch on the
-                  right.
+              {/* ── THE TOOL ROW ────────────────────────────────────────
+                  DESKTOP ONLY. One line under the input holding what you can
+                  add to this message, and — at the far end — what Enter will
+                  do with it, which is the one thing about this composer that
+                  changes while you use it.
 
-                  It is here, and not floating above the pill, because the
-                  first attempt hung these chips off the composer's top
-                  edge — out of flow, so they cost no row, but painting
-                  over the last line of the transcript. Reported as "a
-                  bunch of fixed new elements on the top right of the
-                  composer". Inside the pill they are in the one surface
-                  that is already about composing, they cover nothing, and
-                  the row they add is smaller than the status row they
-                  replaced. */}
-              <div className="chat-composer-tools">
-                {/* ONE BUTTON, and it only adds to your message — a file, a
-                    screen, your voice. Nothing about the session is behind it;
-                    that lives on the chip at the other end of this row, which
-                    is the distinction the first attempt got wrong by putting
-                    both behind one `+`. See collapsedTools for why this is no
-                    longer a desktop/touch split. */}
-                {collapsedTools ? (
-                  <div className="chat-tools" ref={toolsRef}>
-                    <button
-                      type="button"
-                      className="chat-attach chat-tools-toggle"
-                      onClick={() => setToolsOpen((o) => !o)}
-                      aria-haspopup="menu"
-                      aria-expanded={toolsOpen}
-                      aria-label="Add to this message"
-                      title="Add to this message"
-                    >
-                      <SvgPlus />
-                    </button>
-                    {toolsOpen ? (
-                      <div className="chat-tools-sheet" role="menu">
-                        <button
-                          type="button"
-                          role="menuitem"
-                          className="chat-tools-item"
-                          onClick={() => {
-                            setToolsOpen(false);
-                            fileInputRef.current?.click();
-                          }}
-                        >
-                          <SvgAttach />
-                          Attach a file
-                        </button>
-                        {review.available ? (
-                          <button
-                            type="button"
-                            role="menuitem"
-                            className="chat-tools-item"
-                            onClick={() => {
-                              setToolsOpen(false);
-                              void review.start();
-                            }}
-                          >
-                            <SvgScreen />
-                            Review a screen
-                          </button>
-                        ) : null}
-                        {voiceOn && voice.supported ? (
-                          <button
-                            type="button"
-                            role="menuitem"
-                            className="chat-tools-item"
-                            onClick={() => {
-                              setToolsOpen(false);
-                              voice.start();
-                            }}
-                          >
-                            <SvgMic />
-                            Dictate
-                          </button>
-                        ) : null}
-                      </div>
-                    ) : null}
-                  </div>
-                ) : labelledTools ? (
-                  /* DESKTOP: the same actions, with their names on them.
-                     A row of bare icons beside the input is exactly what "I
-                     see multiple buttons on the left, doesn't feel like
-                     anything changed" was looking at — an icon row IS
-                     indistinguishable from the one it replaced. The labels are
-                     what make a tool row read as a tool row, and a desktop
-                     pointer has the width to spend on them. */
-                  <>
-                    <button
-                      type="button"
-                      className="chat-tool-btn"
-                      onClick={() => fileInputRef.current?.click()}
-                      title="Attach a file"
-                    >
-                      <SvgScreenlessAttach />
-                      Attach
-                    </button>
-                    {review.available ? (
-                      <button
-                        type="button"
-                        className="chat-tool-btn"
-                        onClick={() => void review.start()}
-                        title="Review a screen — talk while you point"
-                      >
-                        <SvgScreen />
-                        Review a screen
-                      </button>
-                    ) : null}
-                    {/* NO DICTATE HERE. The mic is the composer's own
-                        right-hand button while the field is empty (mic → send
-                        → queue, as drawn): dictation REPLACES typing, it does
-                        not add something to a message you are writing, which
-                        is what every other row here does. */}
-                    <span className="chat-tools-hint" aria-hidden="true">
-                      {sending ? 'queues behind the running turn' : '⏎ send · ⇧⏎ newline'}
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    <button
-                      type="button"
-                      className="chat-attach"
-                      onClick={() => fileInputRef.current?.click()}
-                      aria-label="Attach a file"
-                      title="Attach a file"
-                    >
-                      {/* NOT DISABLED DURING AN UPLOAD ANY MORE. It was, because
-                            a spinner on the paperclip was the only upload
-                            indicator there was, so the button had to BE the
-                            status. Progress now lives on the chips and the strip
-                            above them, and adding a sixth file to a running batch
-                            is the thing a queue exists to allow. */}
-                      <SvgAttach />
-                    </button>
-                    {/* Both modes, unlike the mic: the thing you review is
-                        usually the app the agent in THIS pane is building. */}
-                    <ReviewButton
-                      state={review.state}
-                      available={review.available}
-                      unconfigured={review.unconfigured}
-                      onStart={() => void review.start()}
-                      onStop={() => void review.stop()}
-                    />
-                    {/* Chat mode only — Agent mode is raw, and `voiceOn` is the
-                        same predicate that governs Chat mode's written voice. */}
-                    {voiceOn ? (
-                      <VoiceControl
-                        state={voice.state}
-                        detail={voice.detail}
-                        status={voice.status}
-                        supported={voice.supported}
-                        minutesLeft={voice.minutesLeft}
-                        elapsedMs={voice.elapsedMs}
-                        onStart={voice.start}
-                        onStop={() => voice.stop('user')}
-                      />
-                    ) : null}
-                  </>
-                )}
-              </div>
+                  A phone gets neither: its tools are one `+` beside the
+                  input (see composerTools), and a whole row for a single
+                  button is the cost this exercise exists to remove. The
+                  mock-up's phone has no tool row for the same reason. */}
+              {labelledTools ? (
+                <div className="chat-composer-tools">
+                  {composerTools}
+                  <span className="chat-tools-hint" aria-hidden="true">
+                    {sending ? 'queues behind the running turn' : '⏎ send · ⇧⏎ newline'}
+                  </span>
+                </div>
+              ) : null}
             </div>
           </div>
         ) : null}

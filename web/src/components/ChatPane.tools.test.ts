@@ -25,7 +25,7 @@ describe('the composer tools', () => {
     expect(SRC).toMatch(/const collapsedTools = toolsIdle && touchLayout;/);
     expect(SRC).toMatch(/const labelledTools = toolsIdle && !touchLayout;/);
     const labelled = SRC.slice(SRC.indexOf(') : labelledTools ? ('));
-    expect(labelled.slice(0, labelled.indexOf(') : ('))).toMatch(/chat-tool-btn/);
+    expect(labelled.slice(0, labelled.lastIndexOf(') : ('))).toMatch(/chat-tool-btn/);
   });
 
   it('pops a LIVE control back out of the sheet', () => {
@@ -47,11 +47,19 @@ describe('the composer tools', () => {
     // The expanded branch is not dead code: it is what renders while a screen
     // review or the mic is running, because that is state rather than an
     // action and its stop has to stay reachable.
-    const branch = SRC.slice(SRC.indexOf('{collapsedTools ? ('));
-    const expanded = branch.slice(branch.indexOf(') : ('));
+    const el = SRC.slice(SRC.indexOf('const composerTools = collapsedTools ? ('));
+    const expanded = el.slice(el.indexOf(') : labelledTools ? ('));
     expect(expanded).toMatch(/<ReviewButton/);
     expect(expanded).toMatch(/<VoiceControl/);
     expect(expanded).toMatch(/className="chat-attach"/);
+  });
+
+  it('spends a whole ROW on the tools only where there are labels to carry', () => {
+    // A phone keeps its `+` beside the input: a row for one button is the
+    // cost this exercise exists to remove, and the mock-up's phone has no
+    // tool row at all.
+    expect(SRC).toMatch(/\{!labelledTools \? composerTools : null\}/);
+    expect(SRC).toMatch(/\{labelledTools \? \(\s*<div className="chat-composer-tools">/);
   });
 
   it('opens its sheet upward, away from the bottom of the screen', () => {
@@ -75,7 +83,7 @@ describe('faithful to the mock', () => {
     expect(SRC).toMatch(/micInsteadOfSend \? \(/);
     expect(SRC).toMatch(/className="chat-send is-mic"/);
     const labelled = SRC.slice(SRC.indexOf(') : labelledTools ? ('));
-    expect(labelled.slice(0, labelled.indexOf(') : ('))).not.toMatch(/Dictate/);
+    expect(labelled.slice(0, labelled.lastIndexOf(') : ('))).not.toMatch(/Dictate\n/);
   });
 
   it('ends the tool row with what Enter does right now', () => {
