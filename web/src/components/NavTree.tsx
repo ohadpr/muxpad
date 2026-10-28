@@ -551,16 +551,6 @@ function SidebarTree({
 
   return (
     <nav className="navtree" data-variant={variant} aria-label="Workspaces and tabs">
-      {/* SEARCH IS THE PALETTE. This was an inline field that swapped the
-          tree for its own result list — the same engine as ⌘K, in a second
-          surface with its own query state, keyboard contract and focus rules.
-          One search is enough; this is the door to it, and it says which key
-          opens it so the button teaches the chord. */}
-      <button type="button" className="navtree-search" onClick={openCommandPalette}>
-        <SvgSearchGlyph size={14} />
-        <span className="navtree-search-label">Search chats</span>
-        <kbd className="navtree-search-kbd">{paletteChordLabel()}</kbd>
-      </button>
       <div className="navtree-scroll">
         {/* ─── THE RECENTLY-ACTIVE BAND ─────────────────────────────────────
           INSIDE the scroller, as the first thing in it. It was pinned above —
@@ -658,6 +648,37 @@ function SvgHosted() {
       <path d="M2 16l10 5 10-5" />
       <path d="M2 12l10 5 10-5" />
     </svg>
+  );
+}
+
+/**
+ * THE DOOR TO THE PALETTE, AND IT DOES NOT GET A ROW.
+ *
+ * This was an inline field that swapped the tree for its own result list —
+ * the same engine as ⌘K in a second surface with its own query state,
+ * keyboard contract and focus rules. One search is enough, so it became a
+ * button that opens the palette.
+ *
+ * Then it kept the field's clothes for a while, and then a field-sized row of
+ * its own: "search chats feels weird because you don't search there, it's
+ * just a hotkey reminder — maybe it doesn't need to take up so much space."
+ * It does not. A reminder belongs beside the thing it is a reminder about, so
+ * it rides the BRAND ROW, which already exists and has nothing in its left
+ * third. Zero rows, and the chord is still printed where a pointer can find
+ * it — in the tooltip, which is where a reminder you have already learned
+ * should live.
+ */
+export function RailSearchButton() {
+  return (
+    <button
+      type="button"
+      className="navtree-search"
+      onClick={openCommandPalette}
+      aria-label={`Search chats (${paletteChordLabel()})`}
+      title={`Search chats — ${paletteChordLabel()}`}
+    >
+      <SvgSearchGlyph size={15} />
+    </button>
   );
 }
 

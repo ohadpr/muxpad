@@ -10,7 +10,7 @@ import { Brand } from './Brand';
 import { CommandPalette } from './CommandPalette';
 import { MobileNavSwitcher } from './MobileNavSwitcher';
 import { MoveUndoToast } from './MoveUndoToast';
-import { NavTree } from './NavTree';
+import { NavTree, RailSearchButton } from './NavTree';
 import { NoticeToast } from './NoticeToast';
 import { SettingsMenu } from './SettingsMenu';
 import { ThemeSwitch } from './ThemeSwitch';
@@ -117,7 +117,12 @@ export function AppLayout() {
               style={{ flexBasis: `${settings.sidebarWidth}px` }}
             >
               <div className="sidenav-brand">
+                {/* Search rides the brand row rather than owning one of its
+                    own — see RailSearchButton. The spacer on the other side
+                    keeps the wordmark optically centred. */}
+                <RailSearchButton />
                 <Brand asLink={true} responsive={false} />
+                <span className="sidenav-brand-spacer" aria-hidden="true" />
               </div>
               <NavTree
                 variant="sidebar"

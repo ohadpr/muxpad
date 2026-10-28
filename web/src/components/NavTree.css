@@ -516,78 +516,46 @@
      makes the statement true instead of hopeful. */
   scrollbar-width: none;
 }
-/* ─── "Search chats" — the door to the ⌘K palette ─────────────────────────
-   It was an inline field that filtered by swapping the tree for its results;
-   now it is a button wearing the field's clothes, because what you do with it
-   is still "search", and the palette it opens is the stronger search (the
-   same engine, in a surface every layout can reach).
-   Sits between the brand hairline and the tree on the rows' own edges: a row's
-   inset is the scroller's (`--nt-pad` left, nothing right) plus the group's
-   (`--nt-pad` both sides), so 8 left and 4 right. Derived from the token, not
-   written as literals — NavTree.spacing.test pins the arithmetic. */
+/* ─── THE SEARCH BUTTON, IN THE BRAND ROW ─────────────────────────────────
+   It has been three things: an inline field that swapped the tree for its own
+   results, a button wearing that field's clothes, and a slimmed-down row of
+   its own. All three owned a row at the top of the rail, and the last report
+   is the one that settles it — "you don't search there, it's just a hotkey
+   reminder, maybe it doesn't need to take up so much space".
+
+   It does not need any. The brand row already exists and has nothing in its
+   left third, so the button goes there: an icon, 28px, no label and no key
+   cap. The chord is in the tooltip, which is where a reminder you have
+   already learned belongs. The rail gets a whole row back. */
 .navtree-search {
   flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  margin: 4px var(--nt-pad) 2px calc(var(--nt-pad) * 2);
-  padding: 0 4px 0 6px;
-  /* ── IT IS A SHORTCUT, SO IT IS THE SIZE OF ONE ────────────────────────
-     It wore a field's clothes — 30px tall, a border, its own raised ground —
-     from back when it WAS a field that filtered the tree in place. It is a
-     button that opens the palette now, and at field size it was "taking up
-     too much space where it's just a shortcut/reminder to the bigger search
-     modal". 24px, no border, no fill: a line of dim text with a key cap,
-     which is what it says.
-     The frame comes back on hover and focus, where the thing being pressed
-     has to be visible — see the rule below. */
-  height: 24px;
-  min-width: 0;
-  border: 1px solid transparent;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin-left: 6px;
+  padding: 0;
+  border: 0;
   border-radius: 7px;
   background: transparent;
-  /* --fg-dim, never --fg-faint, even now that the box is gone: this is TEXT,
-     and the faint token measures under AA on both rails (same call
-     .navtree-ws-count made). A quieter SHAPE is the diet here; a quieter ink
-     would be an unreadable one. */
+  /* --fg-dim, never --fg-faint: it is a 15px glyph on the rail, and the faint
+     token measures under 3:1 on several of them. */
   color: var(--fg-dim);
-  font-family: var(--ui-font);
-  font-size: var(--chrome-size);
-  text-align: left;
   cursor: pointer;
 }
 .navtree-search:hover,
 .navtree-search:focus-visible {
-  border-color: var(--border);
-  background: var(--bg-elev);
+  background: var(--nt-hover);
   color: var(--fg);
 }
 .navtree-search:focus-visible {
   outline: none;
 }
-.navtree-search > svg {
-  flex: none;
-}
-.navtree-search-label {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-/* The key cap stays drawn even when the button is not — it is the whole
-   point of the row (the shortcut is faster than the click) and it is the one
-   part a reminder cannot drop. */
-.navtree-search-kbd {
-  flex: none;
-  font-family: inherit;
-  font-size: 0.625rem;
-  line-height: 1;
-  padding: 2px 4px;
-  color: inherit;
-  border: 1px solid color-mix(in srgb, var(--fg) 16%, transparent);
-  border-radius: 4px;
-  opacity: 0.85;
+/* …and the other side of the brand row, so the wordmark stays optically
+   centred rather than shifted half a button to the right. */
+.sidenav-brand-spacer {
+  flex: 0 0 auto;
+  width: 34px;
 }
 
 /* Desktop has no section header (dropped as redundant under the brand),
@@ -4133,6 +4101,37 @@ body.sidenav-resizing iframe {
 .navtree-ws-slot .navtree-slot-drop:hover {
   background: color-mix(in srgb, var(--fg) 14%, transparent);
   color: var(--fg);
+}
+
+/* ── THE BAND'S SELECTION DOES NOT REACH FOR THE PANE ────────────────────
+   A selected row in the TREE is the pane's own surface continuing into the
+   rail: pane face, rounded on the left, square and bleeding on the right, and
+   a funnel node drawing the two concave fillets that flare one into the
+   other. It is one shape with the thing beside it.
+
+   The band borrowed the fill and the radius and got none of the rest: the
+   funnel renders only on a tree row (see NavTree.tsx), so the band's selected
+   row reached for a join it could not make — "recently active tabs have a
+   selector indicator which connects with the tab contents, but that doesn't
+   happen with the nice rounded elements… maybe the selection indicator for
+   the recently active should not try to connect to the chat."
+
+   It should not. The chat's real row is two inches below and does that job
+   properly; a shortcut list pointing at the same pane twice is two claims on
+   one surface. So here selection is an ordinary selection — the rail's own
+   `--nt-sel`, rounded on BOTH ends, inside the band rather than running out
+   of it. */
+.navtree-workingset .navtree-tab-row[data-active="true"] {
+  background-color: var(--nt-sel);
+  border-radius: var(--nt-pill);
+  box-shadow: none;
+  /* The tree row bleeds its right edge past the group's padding to touch the
+     pane. This one stays home. */
+  margin-right: 0;
+  padding-right: var(--nt-air);
+}
+.navtree-workingset .navtree-tab-row[data-active="true"]:hover {
+  background-color: var(--nt-sel-hover, var(--nt-sel));
 }
 
 /* ── NO CHILD RUNG INSIDE THE BAND ───────────────────────────────────────
