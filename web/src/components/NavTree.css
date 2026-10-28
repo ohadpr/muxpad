@@ -1577,6 +1577,38 @@
   text-decoration: none;
 }
 /* Line one — name, plus the chips that qualify it. */
+/* ── THE WORKSPACE PREFIX, IN THE RECENTLY-ACTIVE BAND ───────────────────
+   The band is the one place in the rail where rows from different workspaces
+   sit together, so it is the one place a row has to say which one it is from.
+
+   IT GIVES WAY FIRST, AND THAT IS THE WHOLE RULE. `flex-shrink` is 1 against
+   the name's 0, so a narrow rail eats the workspace and keeps the chat —
+   which is the right way round: you are looking for the chat, the workspace
+   only disambiguates it. The separator is drawn (`/`) rather than typed, so
+   it cannot be selected or read out, and the prefix is aria-hidden because
+   the link's own title already says "<chat> · <workspace>" in full.
+
+   Quieter than the name by ink and weight, never by size: a second type size
+   on a 34px row is one more thing for the eye to resolve. */
+.navtree-ws-prefix {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--fg-faint);
+  font-weight: 400;
+}
+.navtree-ws-prefix::after {
+  content: "/";
+  margin: 0 1px 0 4px;
+  color: color-mix(in srgb, var(--fg) 25%, transparent);
+}
+/* …and the chat's own name never shrinks while there is a prefix beside it. */
+.navtree-ws-slot .navtree-name-text {
+  flex: 0 1 auto;
+}
+
 .navtree-tab-titleline {
   display: flex;
   align-items: center;
