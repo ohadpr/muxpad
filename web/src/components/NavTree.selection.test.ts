@@ -1003,3 +1003,89 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     }
   });
 });
+
+/**
+ * THE NAME INK, MEASURED ON EVERY THEME THAT SHIPS.
+ *
+ * "Improve contrast for chat names in this theme and others." Read names were
+ * `color-mix(--fg-dim 55%, --fg-faint)` — a value BETWEEN the two tokens —
+ * which put them at 4.39–8.38:1 on the rail and 3.82–8.38:1 inside the
+ * recently-active band, where four themes were under AA. Child rows were
+ * --fg-faint outright: 3.26–5.58:1, failing on eight of the ten.
+ */
+describe('a chat name is legible on every rail', () => {
+  const STYLES = readFileSync(join(__dirname, '..', 'styles.css'), 'utf8');
+
+  interface Rail {
+    name: string;
+    surface: string;
+    dim: string;
+    faint: string;
+    fg: string;
+  }
+  const rails: Rail[] = [];
+  for (const m of STYLES.matchAll(/\[data-theme="([^"]+)"\]\s*\{([\s\S]*?)\n\}/g)) {
+    const [, name, body] = m;
+    if (!name || !body) continue;
+    const tok = (k: string) => new RegExp(`--${k}:\\s*(#[0-9a-fA-F]{3,8});`).exec(body)?.[1];
+    const surface = tok('rail-surface');
+    const dim = tok('rail-ink-dim');
+    const faint = tok('rail-ink-faint');
+    const fg = tok('fg');
+    if (surface && dim && faint && fg) rails.push({ name, surface, dim, faint, fg });
+  }
+
+  const rgb = (hex: string) => {
+    const h = hex.replace('#', '');
+    const full = h.length === 3 ? [...h].map((c) => c + c).join('') : h;
+    return [0, 2, 4].map((i) => Number.parseInt(full.slice(i, i + 2), 16));
+  };
+  const lum = (c: number[]) => {
+    const [r, g, b] = c.map((v) => {
+      const s = v / 255;
+      return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+    }) as [number, number, number];
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const ratio = (a: number[], b: number[]) =>
+    (Math.max(lum(a), lum(b)) + 0.05) / (Math.min(lum(a), lum(b)) + 0.05);
+  const mix = (a: string, b: string, pct: number) =>
+    rgb(a).map((v, i) => Math.round((v * pct) / 100 + (rgb(b)[i] as number) * (1 - pct / 100)));
+  /** The recently-active band: a 6% lift of --fg over the rail. */
+  const band = (r: Rail) => mix(r.fg, r.surface, 6);
+
+  it('finds the rails to measure at all', () => {
+    expect(rails.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it('reads the tokens this test assumes out of the stylesheet', () => {
+    // The arithmetic below is only true while these are the values in use.
+    expect(NT_TOKENS['--nt-ink-read']).toBe('var(--fg-dim)');
+    expect(NT_TOKENS['--nt-ink-read-child']).toMatch(/--fg-dim\) 70%/);
+  });
+
+  it.each(rails.map((r) => [r.name, r] as const))(
+    '%s clears AA for a read name, on the rail and in the band',
+    (_n, rail) => {
+      expect(ratio(rgb(rail.dim), rgb(rail.surface))).toBeGreaterThanOrEqual(4.5);
+      expect(ratio(rgb(rail.dim), band(rail))).toBeGreaterThanOrEqual(4.5);
+    },
+  );
+
+  it.each(rails.map((r) => [r.name, r] as const))(
+    '%s clears AA for a sub-chat name on the rail',
+    (_n, rail) => {
+      expect(ratio(mix(rail.dim, rail.faint, 70), rgb(rail.surface))).toBeGreaterThanOrEqual(4.5);
+    },
+  );
+
+  it('spends no child rung inside the band, where there is no hierarchy to say', () => {
+    // The band is a flat list of chats with no parents on it, so a quieter
+    // rung there says nothing — and on top of the band's own lift it measured
+    // 4.11:1 on tokyo-night. (0,6,0) against the child rule's (0,5,0), because
+    // a tie is decided by file order.
+    expect(NAV_CSS).toMatch(
+      /\.navtree\[data-variant\] \.navtree-workingset \.navtree-tab-row\[data-child="true"\] \.navtree-name-text \{\s*color: var\(--nt-ink-read\)/,
+    );
+  });
+});
