@@ -4779,6 +4779,29 @@ export function ChatPane({
                     ) : null}
                   </div>
                 )}
+                {/* ── STOP LIVES WITH THE TURN IT STOPS ─────────────────────
+                    It was a second circle in the composer, beside Queue — two
+                    buttons on one edge acting on two different subjects. Here
+                    it is attached to the thing it acts on: the foot of the
+                    running turn, which is also where the eye already is while
+                    waiting.
+
+                    OUTSIDE the streaming/working ternary on purpose. The
+                    indicator block only renders while there is nothing to
+                    stream; a turn that IS streaming prose had no indicator at
+                    all, so hanging Stop off the indicator would have left the
+                    longest turns — the ones you actually want to stop —
+                    without a stop. */}
+                <button
+                  type="button"
+                  className="chat-turn-stop"
+                  onClick={stop}
+                  aria-label="Stop this turn"
+                  title="Stop this turn"
+                >
+                  <span className="chat-turn-stop-glyph" aria-hidden="true" />
+                  Stop
+                </button>
               </div>
             ) : null}
             {question ? (
@@ -5244,31 +5267,39 @@ export function ChatPane({
                   }
                 />
                 {sending && !question ? (
-                  <>
-                    {/* Busy + composed text → Queue it (the server holds it and
-                      feeds it when the agent frees up) alongside Stop, instead
-                      of the old dead-end where a typed message wouldn't send. */}
-                    {input.trim() || chips.length > 0 ? (
-                      <button
-                        type="button"
-                        className="chat-send is-queue"
-                        onClick={sendMessage}
-                        aria-label="Queue message — sends when the agent is free"
-                        title="Queue — sends when the agent is free"
-                      >
-                        <SvgQueue />
-                      </button>
-                    ) : null}
-                    <button
-                      type="button"
-                      className="chat-send is-stop"
-                      onClick={stop}
-                      aria-label="Stop"
-                      title="Stop"
-                    >
-                      <span className="chat-send-glyph" aria-hidden="true" />
-                    </button>
-                  </>
+                  /* ── ONE BUTTON, IN EVERY STATE ────────────────────────────
+                     This used to be TWO circles side by side — Queue and Stop
+                     — whenever a turn was running and you had typed something.
+                     Reported as "you have both a send and a stop button and
+                     they're both horizontally presented".
+
+                     The fix is a category one rather than a layout one. This
+                     button has always acted on YOUR DRAFT: send it, or queue
+                     it. Stopping acts on THE AGENT'S TURN, which is a
+                     different subject that already has its own indicator — so
+                     Stop moved onto the working block in the log (see
+                     `chat-working-stop`), where the turn is being reported,
+                     and the composer's right side is one button again.
+
+                     Busy + composed text → Queue (the server holds it and
+                     feeds it when the agent frees up). Busy + nothing typed →
+                     the same button, disabled, exactly as Send is when there
+                     is nothing to send: the slot does not change shape under
+                     the thumb depending on whether you have started typing. */
+                  <button
+                    type="button"
+                    className="chat-send is-queue"
+                    onClick={sendMessage}
+                    disabled={uploadsInFlight || (!input.trim() && chips.length === 0)}
+                    aria-label="Queue message — sends when the agent is free"
+                    title={
+                      uploadsInFlight
+                        ? 'Waiting for uploads to finish — cancel one to queue now'
+                        : 'Queue — sends when the agent is free'
+                    }
+                  >
+                    <SvgQueue />
+                  </button>
                 ) : (
                   <button
                     type="button"

@@ -1251,14 +1251,44 @@
   font-weight: 700;
   line-height: 1;
 }
-.chat-send.is-stop {
-  background: var(--chat-fg);
-  color: var(--chat-bg);
+/* ── THERE IS NO STOP BUTTON IN THE COMPOSER ──────────────────────────────
+   `.chat-send.is-stop` lived here, and it was the second circle on an edge
+   that should only ever hold one. The composer's button acts on YOUR DRAFT;
+   stopping acts on THE AGENT'S TURN. Stop is now `.chat-turn-stop`, at the
+   foot of the running turn itself. Do not bring it back here — the pair of
+   circles is the reported defect, not the styling of either one. */
+
+/* STOP, AT THE FOOT OF THE RUNNING TURN.
+   Quiet at rest: the turn block's job is to say "still going", and a loud
+   button beside it would read as the thing to do rather than the exception.
+   It warms to the danger ink only on hover, which is also the only moment the
+   reader is considering it. */
+.chat-turn-stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 3px 10px 3px 8px;
+  border: 1px solid color-mix(in srgb, var(--chat-fg) 18%, transparent);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--chat-faint);
+  font: inherit;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
 }
-.chat-send.is-stop .chat-send-glyph {
-  width: 12px;
-  height: 12px;
-  border-radius: 3px;
+.chat-turn-stop:hover,
+.chat-turn-stop:focus-visible {
+  color: var(--chat-danger);
+  border-color: color-mix(in srgb, var(--chat-danger) 55%, transparent);
+  background: color-mix(in srgb, var(--chat-danger) 8%, transparent);
+}
+.chat-turn-stop-glyph {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
   background: currentColor;
 }
 /* Queue button: an OUTLINE accent circle — distinct from the filled Send and
@@ -1328,8 +1358,8 @@
   color: var(--chat-fg);
 }
 .chat-queued-cancel:hover {
-  background: color-mix(in srgb, var(--chat-danger, #e5484d) 14%, transparent);
-  color: var(--chat-danger, #e5484d);
+  background: color-mix(in srgb, var(--chat-danger) 14%, transparent);
+  color: var(--chat-danger);
 }
 
 @media (prefers-reduced-motion: reduce) {
