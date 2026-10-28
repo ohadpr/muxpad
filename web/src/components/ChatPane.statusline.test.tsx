@@ -136,18 +136,15 @@ describe('the session line cannot become two lines', () => {
     expect(decl('.chat-status-bar', 'max-width')).toBeNull();
   });
 
-  it('is right-aligned, at the far end of the tool row', () => {
+  it('is right-aligned, at the far end of the head', () => {
     // It was CENTRED while it was a full-width row under the pill, to keep the
-    // always-populated live cell out of a phone's bottom corner radius — where
-    // the display curve cut into the last word of "Working…".
-    //
-    // Sharing a row with the `+`, right is the only end left, and it is where
-    // every other "about this pane" control in the app lives.
+    // always-populated live cell out of a phone's bottom corner radius.
+    // Sharing the head with the chat's name, right is the only end left — and
+    // it is where every other "about this pane" control in the app lives.
     expect(decl('.chat-status-bar', 'justify-content')).toBe('flex-end');
-    expect(decl('.chat-composer-tools > .chat-status-bar', 'margin-left')).toBe('auto');
-    // AND IT IS IN FLOW AGAIN. The revision this replaced hung it off the
-    // pill's top edge — which cost no row, and painted over the last line of
-    // the transcript.
+    expect(decl('.chat-head > .chat-status-bar', 'margin-left')).toBe('auto');
+    // AND IT IS IN FLOW. One revision hung it off the composer's top edge —
+    // which cost no row, and painted over the last line of the transcript.
     expect(decl('.chat-status-bar', 'position')).toBeNull();
   });
 
@@ -219,39 +216,18 @@ describe('the session line sits outside the composer pill', () => {
     SRC.indexOf('// Everything that draws an ALREADY-ARRIVED message'),
   );
 
-  it('renders the bar as a SIBLING of the pill, UNDER it', () => {
-    // A slice that missed its anchor makes every assertion below vacuously
-    // true, which is how this test passed while saying nothing.
+  it('is not in the composer at all any more — it is the head', () => {
+    // It has been under the pill, above the pill, and inside the pill's tool
+    // row. All three were the same mistake in different places: the bottom of
+    // a chat belongs to the composer, and none of this is about the message
+    // you are writing. It is the pane's own head now, at the top.
     expect(WRAP.length).toBeGreaterThan(100);
-    expect(WRAP).toContain('<SessionBar');
-    // Order is the assertion, and it reversed deliberately: the line is
-    // reference, not conversation, so it sits BELOW the pill rather than
-    // between the pill and the last message. Still a sibling — never a child —
-    // which is what keeps it out of the pill's own layout.
-    expect(WRAP.indexOf('<SessionBar')).toBeGreaterThan(
-      WRAP.indexOf('<div className="chat-composer">'),
-    );
-  });
-
-  it('is not a second box — no border and no background of its own', () => {
-    // Kept from the height work that put it in the pill in the first place.
-    // Out of the pill does NOT mean back to a bordered, filled strip floating
-    // above it: that arrangement cost 37px of a 119px bar. A quiet line on the
-    // transparent gap costs its own text and nothing else.
-    expect(decl('.chat-status-bar', 'border')).toBeNull();
-    expect(decl('.chat-status-bar', 'background')).toBeNull();
-  });
-
-  it('owns no gap at all, because there is nothing to hold it off', () => {
-    // THE SIDE USED TO BE THE ASSERTION, and the side kept flipping: inside
-    // the pill, above it, below it, above it again. The margin outlived two of
-    // those moves and ended up facing nothing.
-    //
-    // It is back inside the pill, sharing the tool row — so the separation is
-    // the row's own gap and the strip's margin is zero on every side. One
-    // owner, no drift.
-    expect(decl('.chat-status-bar', 'margin')).toBe('0');
-    expect(decl('.chat-composer-tools', 'gap')).toBeTruthy();
+    expect(WRAP).not.toContain('<SessionBar');
+    expect(SRC).toMatch(/<div className="chat-head">/);
+    expect(SRC).toMatch(/\{sessionStrip\}/);
+    // …and on touch it is portalled into the app's top bar, which is already
+    // this pane's header there — never rendered as a second one.
+    expect(SRC).toMatch(/<MobilePaneChrome active=\{active\}>\{sessionStrip\}<\/MobilePaneChrome>/);
   });
 
   it('cannot move the composer, because its height is not a variable', () => {

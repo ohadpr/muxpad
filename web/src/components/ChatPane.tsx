@@ -41,6 +41,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { createPortal } from 'react-dom';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { type AgentLaunchOptions, type RecentFolder, api } from '../api';
@@ -211,7 +212,9 @@ import {
   workingRowLabel,
 } from '../lib/live-status';
 import { isMobileLayout } from '../lib/mobile-layout';
+import { MOBILE_BREAKPOINT } from '../lib/mobile-layout';
 import { useDismissable } from '../lib/use-dismissable';
+import { useMediaQuery } from '../use-media-query';
 import { SlackApprovalAlert } from './SlackApprovalAlert';
 import './ChatPane.css';
 
@@ -238,6 +241,37 @@ function SvgAttach() {
         d="M17.5 9.5 10.9 16.1a3 3 0 0 1-4.24-4.24l7.07-7.07a2 2 0 0 1 2.83 2.83l-7.08 7.07a1 1 0 0 1-1.41-1.41l6.36-6.37"
         stroke="currentColor"
         strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/**
+ * Paints into the mobile top bar's pane-controls slot (`#mobile-pane-chrome`,
+ * rendered by AppLayout — the same slot TabView uses for the face switch).
+ *
+ * Renders nothing when the slot is absent (desktop, or no active workspace)
+ * and nothing for an inactive pane: the slot is a single shared node, so two
+ * kept-alive tabs would otherwise both paint their chip into it.
+ */
+function MobilePaneChrome({ active, children }: { active: boolean; children: ReactNode }) {
+  const [host, setHost] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    setHost(document.getElementById('mobile-pane-chrome'));
+  }, []);
+  return host && active ? createPortal(children, host) : null;
+}
+
+/** Paperclip at menu scale — beside 13px text in the desktop tool row. */
+function SvgScreenlessAttach() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" fill="none">
+      <path
+        d="M17.5 9.5 10.9 16.1a3 3 0 0 1-4.24-4.24l7.07-7.07a2 2 0 0 1 2.83 2.83l-7.08 7.07a1 1 0 0 1-1.41-1.41l6.36-6.37"
+        stroke="currentColor"
+        strokeWidth="1.7"
         strokeLinecap="round"
         strokeLinejoin="round"
       />
@@ -3622,7 +3656,16 @@ export function ChatPane({
   // doing. Its elapsed time and its stop cannot live behind a `+`, so a live
   // control leaves the sheet and sits back in the row until it is finished.
   const toolsIdle = review.state.phase === 'idle' && !voiceIsLive(voice.state);
-  const collapsedTools = toolsIdle;
+  // …and WHERE the idle controls go is a layout question, because the two
+  // layouts have different amounts of room and different pointers:
+  //   · a phone gets one `+` and a sheet, the shape every composer on that
+  //     screen size uses;
+  //   · a desktop gets the same actions as LABELLED buttons on the tool row —
+  //     a row of bare icons beside the input was the arrangement that read as
+  //     "nothing changed", and labels are what make a tool row a tool row.
+  const touchLayout = useMediaQuery(MOBILE_BREAKPOINT);
+  const collapsedTools = toolsIdle && touchLayout;
+  const labelledTools = toolsIdle && !touchLayout;
   const [toolsOpen, setToolsOpen] = useState(false);
   const toolsRef = useRef<HTMLDivElement>(null);
   useDismissable(toolsOpen, toolsRef, () => setToolsOpen(false));
@@ -4754,6 +4797,30 @@ export function ChatPane({
     );
   }
 
+  const sessionStrip = (
+    <SessionBar
+      paneId={paneId}
+      folder={folder}
+      status={agentStatus}
+      {...(session?.assistant ? { assistant: session.assistant } : {})}
+      liveLabel={liveLabel}
+      agents={rosterAgents}
+      background={backgroundLive}
+      onOpenChat={openChat}
+      mode={mode}
+      onBranch={() => void branch()}
+      branching={branching}
+      send={(obj) => {
+        const sock = wsRef.current;
+        if (!sock || sock.readyState !== WebSocket.OPEN) {
+          setNotice({ text: 'Not connected — try again in a moment.', tone: 'info' });
+          return;
+        }
+        sock.send(JSON.stringify(obj));
+      }}
+    />
+  );
+
   return (
     // Every mention in the log resolves through this: rows are rendered by a
     // memoized component reached from several call sites, and a resolver
@@ -4768,6 +4835,51 @@ export function ChatPane({
         data-slack-active={active}
         data-slack-session={!!session?.current_sid}
       >
+        {/* ── THE CHAT'S OWN HEAD ──────────────────────────────────────────
+          Where the session lives: its name on the left, Branch and the session
+          chip on the right.
+
+          IT TOOK THREE TRIES TO PUT IT HERE. A full-width strip UNDER the
+          composer cost a permanent row at the bottom of a phone ("it pushes
+          the composer disproportionately upwards"). Hung off the composer's
+          top edge it cost no row and painted over the last line of the
+          transcript ("a bunch of fixed new elements on the top right of the
+          composer"). Folded into the composer's own tool row it was neither,
+          and it was still the wrong object: the composer is about the message
+          you are writing, and none of this is.
+
+          A head is the ordinary answer and the one the mock-up drew. It is
+          ABOUT THE PANE, it is at the top where every other app puts that, and
+          the room it costs is taken from the top of a scrolling log rather
+          than from the bottom, where the keyboard already is.
+
+          TOUCH SKIPS IT. The app's own top bar is already a header on a phone
+          — workspace, chat name, pane controls — and a second one under it
+          would be the row this whole exercise is about, moved. */}
+        {!touchLayout ? (
+          <div className="chat-head">
+            {/* The chat's own name, from the corpus the mention picker and
+                the rail both read — one source, so the head can never disagree
+                with the row you clicked to get here. */}
+            <span className="chat-head-name" dir="auto">
+              {myChat?.tabName ?? ''}
+            </span>
+            {myChat?.workspaceName ? (
+              <span className="chat-head-ws" dir="auto">
+                {myChat.workspaceName}
+              </span>
+            ) : null}
+            {sessionStrip}
+          </div>
+        ) : (
+          /* TOUCH: the same strip, portalled into the app's own top bar —
+             which IS this pane's header on a phone (workspace, chat name,
+             pane controls). A second header under it would be the row this
+             whole exercise is about, moved up the screen. Only the ACTIVE
+             pane paints there: the slot is one shared node, so two kept-alive
+             tabs would otherwise both put a chip in it. */
+          <MobilePaneChrome active={active}>{sessionStrip}</MobilePaneChrome>
+        )}
         {/* Keep approval reachable while the chat transport is still connecting. */}
         {active && !session?.current_sid && <SlackApprovalAlert paneId={paneId} />}
         {/* Fixed-position, draws nothing until you take the wheel. Mounted here
@@ -5609,6 +5721,47 @@ export function ChatPane({
                       </div>
                     ) : null}
                   </div>
+                ) : labelledTools ? (
+                  /* DESKTOP: the same actions, with their names on them.
+                     A row of bare icons beside the input is exactly what "I
+                     see multiple buttons on the left, doesn't feel like
+                     anything changed" was looking at — an icon row IS
+                     indistinguishable from the one it replaced. The labels are
+                     what make a tool row read as a tool row, and a desktop
+                     pointer has the width to spend on them. */
+                  <>
+                    <button
+                      type="button"
+                      className="chat-tool-btn"
+                      onClick={() => fileInputRef.current?.click()}
+                      title="Attach a file"
+                    >
+                      <SvgScreenlessAttach />
+                      Attach
+                    </button>
+                    {review.available ? (
+                      <button
+                        type="button"
+                        className="chat-tool-btn"
+                        onClick={() => void review.start()}
+                        title="Review a screen — talk while you point"
+                      >
+                        <SvgScreen />
+                        Review a screen
+                      </button>
+                    ) : null}
+                    {voiceOn && voice.supported ? (
+                      <button
+                        type="button"
+                        className="chat-tool-btn"
+                        onClick={() => voice.start()}
+                        title="Dictate"
+                      >
+                        <SvgMic />
+                        Dictate
+                      </button>
+                    ) : null}
+                  </>
                 ) : (
                   <>
                     <button
@@ -5651,27 +5804,6 @@ export function ChatPane({
                     ) : null}
                   </>
                 )}
-                <SessionBar
-                  paneId={paneId}
-                  folder={folder}
-                  status={agentStatus}
-                  {...(session?.assistant ? { assistant: session.assistant } : {})}
-                  liveLabel={liveLabel}
-                  agents={rosterAgents}
-                  background={backgroundLive}
-                  onOpenChat={openChat}
-                  mode={mode}
-                  onBranch={() => void branch()}
-                  branching={branching}
-                  send={(obj) => {
-                    const sock = wsRef.current;
-                    if (!sock || sock.readyState !== WebSocket.OPEN) {
-                      setNotice({ text: 'Not connected — try again in a moment.', tone: 'info' });
-                      return;
-                    }
-                    sock.send(JSON.stringify(obj));
-                  }}
-                />
               </div>
             </div>
           </div>

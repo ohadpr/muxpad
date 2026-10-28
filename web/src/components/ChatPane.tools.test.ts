@@ -17,15 +17,15 @@ const SRC = readFileSync(join(__dirname, 'ChatPane.tsx'), 'utf8');
 const CSS = readFileSync(join(__dirname, 'ChatPane.css'), 'utf8');
 
 describe('the composer tools', () => {
-  it('collapses on EVERY layout, not just touch', () => {
-    // It was touch-only for one revision, on the argument that a mouse has
-    // room and hover where a thumb has neither. That lost to the report — "I
-    // see multiple buttons on the left, doesn't feel like anything changed" —
-    // and it was the wrong argument anyway: room is not a reason to spend it,
-    // and a composer whose left edge means different things on two screens is
-    // one you have to learn twice.
-    expect(SRC).toMatch(/const collapsedTools = toolsIdle;/);
-    expect(SRC).not.toMatch(/collapsedTools = touchLayout/);
+  it('gives each layout the shape that layout can read', () => {
+    // Touch gets one `+` and a sheet. Desktop gets the same actions as
+    // LABELLED buttons on the tool row — not bare icons, which is what "I see
+    // multiple buttons on the left, doesn't feel like anything changed" was
+    // looking at, and which really is indistinguishable from what it replaced.
+    expect(SRC).toMatch(/const collapsedTools = toolsIdle && touchLayout;/);
+    expect(SRC).toMatch(/const labelledTools = toolsIdle && !touchLayout;/);
+    const labelled = SRC.slice(SRC.indexOf(') : labelledTools ? ('));
+    expect(labelled.slice(0, labelled.indexOf(') : ('))).toMatch(/chat-tool-btn/);
   });
 
   it('pops a LIVE control back out of the sheet', () => {
