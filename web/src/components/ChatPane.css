@@ -104,6 +104,27 @@
   flex: 1 1 auto;
   margin-left: auto;
 }
+/* ── THE MENUS OPEN DOWNWARD FROM THE HEAD ──────────────────────────────
+   `.chat-status-menu` anchors to `bottom: calc(100% + 6px)` because this
+   strip spent its whole life at the BOTTOM of the pane, where up is the only
+   direction with room. In the head, up is off the top of the pane — clipped
+   by `.chat-pane`'s own `overflow: hidden` on a desktop, and on a phone (where
+   the strip was briefly portalled into the app's top bar) painted over the
+   carrier and the clock. */
+.chat-head .chat-status-menu {
+  top: calc(100% + 6px);
+  bottom: auto;
+}
+/* ON TOUCH IT IS CHIPS ONLY. The app's top bar already names the workspace and
+   the chat, so repeating them here would be the duplicate that sent this strip
+   into the top bar in the first place. What is left is one right-aligned row —
+   the pane's own controls, in the pane, at the end of the screen the keyboard
+   never reaches. */
+.chat-head[data-touch="true"] {
+  justify-content: flex-end;
+  min-height: 30px;
+  padding-right: 8px;
+}
 
 .chat-scroll {
   flex: 1 1 auto;

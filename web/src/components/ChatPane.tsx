@@ -41,7 +41,6 @@ import {
   useRef,
   useState,
 } from 'react';
-import { createPortal } from 'react-dom';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { type AgentLaunchOptions, type RecentFolder, api } from '../api';
@@ -246,22 +245,6 @@ function SvgAttach() {
       />
     </svg>
   );
-}
-
-/**
- * Paints into the mobile top bar's pane-controls slot (`#mobile-pane-chrome`,
- * rendered by AppLayout — the same slot TabView uses for the face switch).
- *
- * Renders nothing when the slot is absent (desktop, or no active workspace)
- * and nothing for an inactive pane: the slot is a single shared node, so two
- * kept-alive tabs would otherwise both paint their chip into it.
- */
-function MobilePaneChrome({ active, children }: { active: boolean; children: ReactNode }) {
-  const [host, setHost] = useState<HTMLElement | null>(null);
-  useEffect(() => {
-    setHost(document.getElementById('mobile-pane-chrome'));
-  }, []);
-  return host && active ? createPortal(children, host) : null;
 }
 
 /** Paperclip at menu scale — beside 13px text in the desktop tool row. */
@@ -4995,30 +4978,41 @@ export function ChatPane({
           TOUCH SKIPS IT. The app's own top bar is already a header on a phone
           — workspace, chat name, pane controls — and a second one under it
           would be the row this whole exercise is about, moved. */}
-        {!touchLayout ? (
-          <div className="chat-head">
-            {/* The chat's own name, from the corpus the mention picker and
-                the rail both read — one source, so the head can never disagree
-                with the row you clicked to get here. */}
-            <span className="chat-head-name" dir="auto">
-              {myChat?.tabName ?? ''}
-            </span>
-            {myChat?.workspaceName ? (
-              <span className="chat-head-ws" dir="auto">
-                {myChat.workspaceName}
+        {/* ── THE CHAT'S OWN HEAD, ON BOTH LAYOUTS ─────────────────────────
+          It belongs to the PANE, so it lives in the pane.
+
+          On touch it spent one revision portalled into the app's top bar —
+          the argument being that the top bar IS this pane's header on a
+          phone, so a second one under it would be the row this exercise
+          exists to remove. Two things were wrong with that. It reads as
+          window chrome rather than as part of the conversation ("why did you
+          move the model and branch buttons to top right of the entire chat?
+          it's weird"), and the menus behind those chips open UPWARD — out of
+          the top bar means off the top of the screen, over the carrier and
+          the clock.
+
+          So: the same element in the same place on both, and the phone drops
+          only the NAME, because the top bar is already saying it. What is
+          left there is one right-aligned row of chips at the top of the log —
+          about 30px, at the end of the screen the keyboard never reaches. */}
+        <div className="chat-head" data-touch={touchLayout ? 'true' : undefined}>
+          {!touchLayout ? (
+            <>
+              {/* The chat's own name, from the corpus the mention picker and
+                  the rail both read — one source, so the head can never
+                  disagree with the row you clicked to get here. */}
+              <span className="chat-head-name" dir="auto">
+                {myChat?.tabName ?? ''}
               </span>
-            ) : null}
-            {sessionStrip}
-          </div>
-        ) : (
-          /* TOUCH: the same strip, portalled into the app's own top bar —
-             which IS this pane's header on a phone (workspace, chat name,
-             pane controls). A second header under it would be the row this
-             whole exercise is about, moved up the screen. Only the ACTIVE
-             pane paints there: the slot is one shared node, so two kept-alive
-             tabs would otherwise both put a chip in it. */
-          <MobilePaneChrome active={active}>{sessionStrip}</MobilePaneChrome>
-        )}
+              {myChat?.workspaceName ? (
+                <span className="chat-head-ws" dir="auto">
+                  {myChat.workspaceName}
+                </span>
+              ) : null}
+            </>
+          ) : null}
+          {sessionStrip}
+        </div>
         {/* Keep approval reachable while the chat transport is still connecting. */}
         {active && !session?.current_sid && <SlackApprovalAlert paneId={paneId} />}
         {/* Fixed-position, draws nothing until you take the wheel. Mounted here
