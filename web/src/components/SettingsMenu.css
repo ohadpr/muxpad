@@ -341,6 +341,27 @@
   background: var(--accent);
 }
 
+/* ── A SECTION'S OWN HEADING AND ITS SENTENCE ────────────────────────────
+   Notifications moved out of General, where a lone Enable button six pixels
+   under the theme grid read as an action on the tiles. A section has room for
+   what a row never did: a reader deciding whether to grant a browser
+   permission is the one reader in this dialog who needs a sentence.
+
+   The heading matches the theme fieldset's legend — same weight, same size —
+   so the two sections read as siblings rather than as two different kinds of
+   thing. */
+.settings-heading {
+  margin: 0;
+  font-size: inherit;
+  font-weight: 500;
+}
+.settings-blurb {
+  margin: 8px 0 16px;
+  max-width: 54ch;
+  color: var(--settings-muted);
+  font-size: 0.8125rem;
+  line-height: 1.55;
+}
 .settings-push-actions {
   display: inline-flex;
   align-items: center;

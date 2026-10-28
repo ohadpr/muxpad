@@ -265,7 +265,10 @@ it('shows the current Slack state without a completed setup checklist or empty r
   const approvals = integration;
   expect(
     [...document.querySelectorAll('.settings-sidebar button')].map((b) => b.textContent),
-  ).toEqual(['General', 'Integrations']);
+    // Notifications has its own section: as the last row of General, under
+    // the theme grid, its lone Enable button read as an action on the tiles
+    // above it ("they feel like the action button for picking a theme").
+  ).toEqual(['General', 'Notifications', 'Integrations']);
   expect(document.querySelector('[aria-label="Slack approvals"]')).toBeNull();
   expect(approvals.textContent).toContain('Ask each time.');
   expect(
@@ -391,4 +394,23 @@ describe('settings can be dismissed by a thumb', () => {
     expect(tsx).toMatch(/className="settings-close-word" aria-hidden="true"/);
     expect(tsx).toMatch(/className="settings-close-x" aria-hidden="true"/);
   });
+});
+
+it('keeps notifications in their own section, not under the theme grid', async () => {
+  // THE PROXIMITY WAS THE BUG. A lone "Enable" six pixels under a grid of
+  // theme tiles is a button a reader attaches to the thing above it, whatever
+  // the label beside it says. It is not a General setting either: General is
+  // what the app LOOKS like, and this is a permission a browser grants to a
+  // device.
+  await open();
+  const general = document.querySelector('[aria-label="General settings"]');
+  expect(general?.textContent).toContain('Theme');
+  expect(general?.textContent).not.toContain('Notifications');
+
+  const notifications = document.querySelector('[aria-label="Notification settings"]');
+  expect(notifications).not.toBeNull();
+  expect(notifications?.textContent).toContain('Notifications');
+  // …and the section says what granting it actually gets you, which the row
+  // had no room for.
+  expect(notifications?.querySelector('.settings-blurb')?.textContent ?? '').toMatch(/phone/i);
 });

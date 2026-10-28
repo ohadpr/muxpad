@@ -17,7 +17,19 @@ export function SettingsMenu() {
   const [openedOnce, setOpenedOnce] = useState(false);
   const dialog = useRef<HTMLDialogElement | null>(null);
   const trigger = useRef<HTMLButtonElement | null>(null);
-  const [section, setSection] = useState<'general' | 'integrations'>('general');
+  // ── NOTIFICATIONS IS ITS OWN SECTION ──────────────────────────────────
+  // It was the last row of General, directly under the theme grid, and that
+  // is where it read as part of the grid: "move the notifications thing to
+  // another tab/place, they feel like the action button for picking a theme."
+  // A lone "Enable" button on the right of a row, six pixels under a row of
+  // theme tiles, is a button a reader will reasonably attach to the thing
+  // above it — the proximity says so louder than the label does.
+  //
+  // It is not a General setting anyway: General is what this app LOOKS like,
+  // and this is a permission the browser grants to a device. Its own section
+  // also gives the push state somewhere to explain itself (see PushSection),
+  // which a one-line row never had room for.
+  const [section, setSection] = useState<'general' | 'notifications' | 'integrations'>('general');
   useEffect(() => {
     if (!open) return;
     const el = dialog.current;
@@ -98,7 +110,7 @@ export function SettingsMenu() {
             <div className="settings-layout">
               <aside className="settings-sidebar">
                 <nav aria-label="Settings sections">
-                  {(['general', 'integrations'] as const).map((item) => (
+                  {(['general', 'notifications', 'integrations'] as const).map((item) => (
                     <button
                       key={item}
                       type="button"
@@ -117,8 +129,9 @@ export function SettingsMenu() {
               <div className="settings-body">
                 <section hidden={section !== 'general'} aria-label="General settings">
                   <ThemePicker chosen={settings.theme} />
-
-                  <PushRow />
+                </section>
+                <section hidden={section !== 'notifications'} aria-label="Notification settings">
+                  <PushSection />
                 </section>
                 <SlackPasskeySettings active={open} section={section} />
               </div>
@@ -205,12 +218,20 @@ function ThemeMock({ theme }: { theme: string }) {
 }
 
 /**
- * Push-notification toggle. Web Push needs https + (on iOS) the installed
- * PWA; where those don't hold the row says why instead of offering a
- * button that can't work. Enable must run inside the click handler —
- * iOS auto-denies permission prompts that don't come from a gesture.
+ * PUSH NOTIFICATIONS, as a section rather than a row.
+ *
+ * Web Push needs https and, on iOS, the installed PWA; where those do not
+ * hold this says why instead of offering a button that cannot work. Enable
+ * must run inside the click handler — iOS auto-denies a permission prompt
+ * that does not come from a gesture.
+ *
+ * It was one row at the foot of General, under the theme grid, where its lone
+ * Enable button read as an action on the tiles above it. With a section of
+ * its own there is room to say what the thing actually does, which a row
+ * never had: a reader deciding whether to grant a permission is the one
+ * reader in this dialog who needs a sentence.
  */
-function PushRow() {
+function PushSection() {
   const [state, setState] = useState<PushState | 'loading'>('loading');
   const [busy, setBusy] = useState(false);
 
@@ -231,12 +252,23 @@ function PushRow() {
   };
 
   return (
-    <div className="settings-row">
-      <label htmlFor="push-toggle">Notifications</label>
+    <>
+      <h3 className="settings-heading">Notifications</h3>
+      <p className="settings-blurb">
+        A push on your phone and your desktop when a chat needs you — a question, a finished run, a
+        watch you asked for. Nothing routine: a turn that ends while you are looking at it sends
+        nothing.
+      </p>
       {state === 'unsupported' ? (
-        <span className="settings-note">needs https</span>
+        <p className="settings-note">
+          Not available here — web push needs https, and on iOS it needs muxpad added to the home
+          screen.
+        </p>
       ) : state === 'denied' ? (
-        <span className="settings-note">denied in browser settings</span>
+        <p className="settings-note">
+          Blocked in your browser settings for this site. Allow notifications there and reopen this
+          dialog.
+        </p>
       ) : (
         <div className="settings-push-actions">
           <button
@@ -245,7 +277,7 @@ function PushRow() {
             disabled={busy || state === 'loading'}
             onClick={() => void toggle()}
           >
-            {state === 'enabled' ? 'Disable' : 'Enable'}
+            {state === 'enabled' ? 'Disable notifications' : 'Enable notifications'}
           </button>
           {state === 'enabled' && (
             <button
@@ -253,12 +285,12 @@ function PushRow() {
               disabled={busy}
               onClick={() => void sendTestPush().catch((err) => console.error(err))}
             >
-              Test
+              Send a test
             </button>
           )}
         </div>
       )}
-    </div>
+    </>
   );
 }
 
