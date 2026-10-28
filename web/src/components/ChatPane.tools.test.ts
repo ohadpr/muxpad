@@ -61,3 +61,44 @@ describe('the composer tools', () => {
     expect(rule).toMatch(/left:\s*0/);
   });
 });
+
+/**
+ * THE MOCK-UP'S ARRANGEMENT, point by point — because the last three
+ * revisions each drifted from it in a different place and the report each
+ * time was a version of "that is not what you drew".
+ */
+describe('faithful to the mock', () => {
+  it('puts the mic in the SEND slot, not a label on the tool row', () => {
+    // mic → send → queue, one slot. Dictation replaces typing; it does not add
+    // something to a message you are writing, which is what every row on the
+    // tool row does.
+    expect(SRC).toMatch(/micInsteadOfSend \? \(/);
+    expect(SRC).toMatch(/className="chat-send is-mic"/);
+    const labelled = SRC.slice(SRC.indexOf(') : labelledTools ? ('));
+    expect(labelled.slice(0, labelled.indexOf(') : ('))).not.toMatch(/Dictate/);
+  });
+
+  it('ends the tool row with what Enter does right now', () => {
+    expect(SRC).toMatch(/className="chat-tools-hint"/);
+    expect(SRC).toMatch(/⏎ send · ⇧⏎ newline/);
+    expect(SRC).toMatch(/queues behind the running turn/);
+  });
+
+  it('sets the tool row in the UI face, never the chrome face', () => {
+    // --chrome-font is a MONO on several themes (blueprint, riso, demoscene),
+    // and three mono labels inside a surface that is otherwise all prose read
+    // as terminal output bolted into the composer.
+    const rest = CSS.slice(CSS.indexOf('.chat-tool-btn {'));
+    const rule = rest.slice(0, rest.indexOf('}'));
+    expect(rule).toMatch(/font-family:\s*var\(--ui-font/);
+    expect(rule).not.toMatch(/--chrome-font/);
+  });
+
+  it('keeps the tool row flush with the input, not inset like a toolbar', () => {
+    const rest = CSS.slice(CSS.indexOf('.chat-composer-tools {'));
+    const rule = rest.slice(0, rest.indexOf('}'));
+    // No side padding of its own: the pill's padding already set the text
+    // column, and the icons line up with the first letter you type.
+    expect(rule).toMatch(/padding:\s*0 0 2px/);
+  });
+});

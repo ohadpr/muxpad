@@ -3664,6 +3664,10 @@ export function ChatPane({
   //     a row of bare icons beside the input was the arrangement that read as
   //     "nothing changed", and labels are what make a tool row a tool row.
   const touchLayout = useMediaQuery(MOBILE_BREAKPOINT);
+  // Nothing typed, nothing attached, voice available and idle → the send slot
+  // holds the mic instead. See the button for why this beats a disabled Send.
+  const micInsteadOfSend =
+    voiceOn && voice.supported && !voiceIsLive(voice.state) && !input.trim() && chips.length === 0;
   const collapsedTools = toolsIdle && touchLayout;
   const labelledTools = toolsIdle && !touchLayout;
   const [toolsOpen, setToolsOpen] = useState(false);
@@ -5497,6 +5501,27 @@ export function ChatPane({
                   >
                     <SvgQueue />
                   </button>
+                ) : micInsteadOfSend ? (
+                  /* ── MIC → SEND → QUEUE, ONE SLOT ──────────────────────────
+                     With nothing typed there is nothing to send, so the slot
+                     holds the thing you would do INSTEAD of typing. This is
+                     the arrangement the mock-up drew, and it is why Dictate is
+                     not a label on the tool row: dictation replaces typing
+                     rather than adding to a draft.
+
+                     A disabled Send was the alternative, and it is strictly
+                     worse — a dead target in the most valuable 36px of the
+                     composer, which is exactly where the one action available
+                     to an empty composer should be. */
+                  <button
+                    type="button"
+                    className="chat-send is-mic"
+                    onClick={() => voice.start()}
+                    aria-label="Dictate"
+                    title="Dictate — speak instead of typing"
+                  >
+                    <SvgMic />
+                  </button>
                 ) : (
                   <button
                     type="button"
@@ -5750,17 +5775,14 @@ export function ChatPane({
                         Review a screen
                       </button>
                     ) : null}
-                    {voiceOn && voice.supported ? (
-                      <button
-                        type="button"
-                        className="chat-tool-btn"
-                        onClick={() => voice.start()}
-                        title="Dictate"
-                      >
-                        <SvgMic />
-                        Dictate
-                      </button>
-                    ) : null}
+                    {/* NO DICTATE HERE. The mic is the composer's own
+                        right-hand button while the field is empty (mic → send
+                        → queue, as drawn): dictation REPLACES typing, it does
+                        not add something to a message you are writing, which
+                        is what every other row here does. */}
+                    <span className="chat-tools-hint" aria-hidden="true">
+                      {sending ? 'queues behind the running turn' : '⏎ send · ⇧⏎ newline'}
+                    </span>
                   </>
                 ) : (
                   <>
