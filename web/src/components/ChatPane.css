@@ -1166,10 +1166,15 @@
   /* Symmetric side insets: the filled send circle carries more visual weight
      than the small camera glyph, so equal padding reads balanced rather than
      edge-hugging. */
-  padding: 4px 8px;
+  padding: 4px 10px 6px;
   background: color-mix(in srgb, var(--chat-elev) 92%, var(--chat-fg));
   border: 1px solid color-mix(in srgb, var(--chat-fg) 12%, var(--chat-border));
-  border-radius: 26px;
+  /* 26px was the radius of a ONE-ROW pill, where a deep curve is the shape of
+     the object. With a tool row under the input the pill is twice as tall and
+     a near-capsule corner starts eating the ends of that row — the first icon
+     and the last word of the hint sit inside the curve. 20px keeps the pill
+     soft and leaves both rows their full width. */
+  border-radius: 20px;
   /* Floats over the conversation (the wrap behind it is transparent) — a real
      drop shadow so the pill reads as lifted above the content directly behind it. */
   box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.45), 0 2px 8px -4px rgba(0, 0, 0, 0.35);
@@ -1192,20 +1197,22 @@
 /* Photo/attach button on the left (opens the OS photo picker → uploads via the
    same attachments endpoint the TUI composer uses). Quiet ghost button. */
 /* ── THE PILL'S TOOL ROW ──────────────────────────────────────────────────
-   One line under the input holding the two things that are ABOUT a message
-   rather than part of it: the `+` that adds to it, and — at the far end — the
-   session chip, Branch, and the roster when there is one.
+   One quiet line under the input: what you can add to this message, and what
+   Enter will do with it.
 
-   It replaces the full-width strip that used to sit UNDER the pill, and it is
-   cheaper than it was: no 16px gap to clear a drop shadow, no second surface,
-   and the row is shared by two things that each used to want their own. */
+   IT IS NOT A SECOND BAR. The input above it already carries the pill's
+   padding, so this row adds none of its own on the sides — the icons line up
+   with the first letter of what you type, which is what keeps the two rows
+   reading as one object rather than as a field with a toolbar bolted under
+   it. */
 .chat-composer-tools {
   display: flex;
   align-items: center;
-  gap: 4px;
-  min-height: 30px;
-  padding: 0 2px;
+  gap: 2px;
+  min-height: 24px;
+  padding: 0 0 2px;
 }
+
 /* NOTHING ABOUT THE SESSION LIVES HERE. The session chip spent one revision
    at the right-hand end of this row, which was better than floating over the
    transcript and still the wrong object: this row is about the MESSAGE — what
@@ -1215,19 +1222,26 @@
 /* THE DESKTOP TOOL ROW'S BUTTONS — icon AND name. A row of bare icons is
    indistinguishable from the cluster it replaced ("doesn't feel like anything
    changed"); the label is the difference, and a desktop pointer has the width
-   for it. Quiet by default: these are available, not urgent. */
+   for it. Quiet by default: these are available, not urgent.
+
+   THE FACE IS `--ui-font`, NOT `--chrome-font`. On a theme whose chrome face
+   is a mono (blueprint, riso, demoscene) these three labels came out as
+   letter-spaced typewriter text inside the one surface that is otherwise all
+   prose — the tool row read as terminal output sitting in the composer. The
+   rest of the composer sets its text in the UI face; so does this. */
 .chat-tool-btn {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  padding: 4px 9px;
+  gap: 6px;
+  padding: 3px 8px;
   border: 0;
-  border-radius: 8px;
+  border-radius: 7px;
   background: transparent;
   color: var(--chat-faint);
-  font-family: var(--chrome-font, inherit);
-  font-size: 0.78125rem;
-  line-height: 1.4;
+  font-family: var(--ui-font, inherit);
+  font-size: 0.75rem;
+  line-height: 1.35;
+  letter-spacing: 0;
   cursor: pointer;
   white-space: nowrap;
   transition: background 120ms ease, color 120ms ease;
@@ -1240,6 +1254,20 @@
 .chat-tool-btn svg {
   flex: 0 0 auto;
   color: inherit;
+  opacity: 0.85;
+}
+/* The keyboard hint, at the far end — what Enter does right now, which is the
+   one thing about this composer that CHANGES while you use it. Not a control,
+   so it is quieter than the buttons and never a target. */
+.chat-tools-hint {
+  margin-left: auto;
+  padding-right: 4px;
+  font-family: var(--ui-font, inherit);
+  font-size: 0.6875rem;
+  color: color-mix(in srgb, var(--chat-faint) 80%, transparent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ── THE COLLAPSED LEFT CLUSTER ───────────────────────────────────────────
@@ -1465,6 +1493,18 @@
 }
 /* Queue button: an OUTLINE accent circle — distinct from the filled Send and
    the dark Stop, so "this queues, it doesn't send now" reads at a glance. */
+/* The mic, in the send slot, while there is nothing to send. Not filled: it
+   is the one thing available rather than the thing you are about to do, and a
+   filled accent circle on an empty composer reads as "send" with no target. */
+.chat-send.is-mic {
+  background: transparent;
+  color: var(--chat-dim);
+  box-shadow: none;
+}
+.chat-send.is-mic:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--chat-fg) 10%, transparent);
+  color: var(--chat-fg);
+}
 .chat-send.is-queue {
   background: transparent;
   color: var(--chat-accent);

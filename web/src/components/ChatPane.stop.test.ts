@@ -27,13 +27,24 @@ describe('the composer holds one button', () => {
     // Same disabled rule as Send: the slot must not change shape under the
     // thumb depending on whether you have started typing.
     const busy = SRC.slice(SRC.indexOf('{sending && !question ? ('));
-    const queue = busy.slice(0, busy.indexOf(') : ('));
+    // …to the NEXT branch, which is the mic that stands in for Send while the
+    // composer is empty — not to the final `) : (`, which is three branches
+    // down now.
+    const queue = busy.slice(0, busy.indexOf(') : micInsteadOfSend ? ('));
     expect(queue).toMatch(/className="chat-send is-queue"/);
     expect(queue).toMatch(
       /disabled=\{uploadsInFlight \|\| \(!input\.trim\(\) && chips\.length === 0\)\}/,
     );
-    // …and exactly one <button> in that branch.
+    // …and exactly one <button> in that branch. The whole point: the right
+    // edge of the composer holds ONE target in every state — queue while a
+    // turn runs, send when there is something to send, the mic when there is
+    // not. Never two side by side.
     expect(queue.match(/<button/g) ?? []).toHaveLength(1);
+    for (const branch of ['micInsteadOfSend ? (', '} else nothing'])
+      if (SRC.includes(branch)) {
+        const slice = SRC.slice(SRC.indexOf(branch));
+        expect(slice.slice(0, slice.indexOf(') : (')).match(/<button/g) ?? []).toHaveLength(1);
+      }
   });
 });
 
