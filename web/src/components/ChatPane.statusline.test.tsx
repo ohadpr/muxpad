@@ -223,11 +223,15 @@ describe('the session line sits outside the composer pill', () => {
     // you are writing. It is the pane's own head now, at the top.
     expect(WRAP.length).toBeGreaterThan(100);
     expect(WRAP).not.toContain('<SessionBar');
-    expect(SRC).toMatch(/<div className="chat-head">/);
+    expect(SRC).toMatch(/<div className="chat-head"/);
     expect(SRC).toMatch(/\{sessionStrip\}/);
-    // …and on touch it is portalled into the app's top bar, which is already
-    // this pane's header there — never rendered as a second one.
-    expect(SRC).toMatch(/<MobilePaneChrome active=\{active\}>\{sessionStrip\}<\/MobilePaneChrome>/);
+    // …and it is IN THE PANE on both layouts. It spent one revision portalled
+    // into the app's top bar on touch, where it read as window chrome rather
+    // than as part of the conversation — and where its menus, which open
+    // upward, landed over the carrier and the clock.
+    expect(SRC).not.toMatch(/MobilePaneChrome/);
+    const head = SRC.slice(SRC.indexOf('<div className="chat-head"'));
+    expect(head.slice(0, head.indexOf('</div>'))).toMatch(/!touchLayout \? \(/);
   });
 
   it('cannot move the composer, because its height is not a variable', () => {
@@ -625,5 +629,25 @@ describe('the branch button', () => {
       box.querySelector<HTMLButtonElement>('.chat-status-seg.-branch')?.click();
     });
     expect(fired).toBe(1);
+  });
+});
+
+/**
+ * THE HEAD'S MENUS OPEN DOWNWARD.
+ *
+ * `.chat-status-menu` anchors to `bottom: calc(100% + 6px)` because the strip
+ * spent its whole life at the BOTTOM of the pane, where up is the only
+ * direction with room. In the head, up is off the top: clipped by the pane's
+ * own `overflow: hidden` on a desktop, and — while the strip was portalled
+ * into the app's top bar — painted over the carrier and the clock on a phone.
+ */
+describe('a menu opened from the head', () => {
+  it('drops down from the chip instead of rising off the pane', () => {
+    expect(decl('.chat-head .chat-status-menu', 'top')).toBe('calc(100% + 6px)');
+    expect(decl('.chat-head .chat-status-menu', 'bottom')).toBe('auto');
+  });
+
+  it('still rises everywhere else, where the strip is at the bottom', () => {
+    expect(decl('.chat-status-menu', 'bottom')).toBe('calc(100% + 6px)');
   });
 });
