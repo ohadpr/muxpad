@@ -3936,11 +3936,31 @@ body.sidenav-resizing iframe {
 .navtree-workingset {
   flex: 0 0 auto;
   padding: 2px 0 5px;
-  /* A sixth of the ink over the rail — the same recipe `--rail-elev` uses for
-     the search field, so the two raised surfaces in the chrome are one
-     colour on every theme rather than two guesses at the same idea. */
-  background: color-mix(in srgb, var(--fg) 5%, transparent);
+  /* ── IT HAS TO LOOK LIKE A SHELF, NOT LIKE THE TOP OF THE LIST ─────────
+     At 5% over the rail the band was a lift you had to be told about:
+     "give 'working on' section a slightly differentiated bg/wrapper/something
+     it blends with everything else right now". Measured on blueprint, whose
+     rail is the lit one (#1d5693), 5% of the ink moved it by about one step
+     of a 256-level channel.
+
+     Three changes, all of them the same idea — give the band two edges and a
+     ground that is clearly not the rail's:
+      · twice the ink (10%), which is a step you can see on every theme
+        because it is mixed from --fg and therefore darkens a light rail and
+        lightens a dark one;
+      · a seam on BOTH sides, not just the bottom, so it reads as a band
+        rather than as the list starting high;
+      · a hairline highlight inside the top edge, the standard recipe for a
+        surface sitting ON something rather than cut into it.
+
+     What does NOT change is the horizontal geometry: no inset, no margin, no
+     rounding. Its rows stay on the tree's grid, because every status mark in
+     the rail lands on one vertical line and a band that indents to look like
+     an object costs more than the object is worth. */
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
+  border-top: 1px solid var(--rail-seam, var(--border));
   border-bottom: 1px solid var(--rail-seam, var(--border));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--fg) 8%, transparent);
 }
 
 /* The heading is a LABEL, not a section header: lower-case-height caps, wide,
@@ -3980,46 +4000,14 @@ body.sidenav-resizing iframe {
   background: color-mix(in srgb, var(--fg) 12%, transparent);
 }
 
-/* THE SLOT NUMBER, and the reason it can exist at all: the slots are stable,
-   so ⌃3 means the same row tomorrow. Set as a KEY — a bordered cap in the
-   chrome face — because it is something you press, and a bare "⌃3" in the
-   gutter reads as a label about the row instead. */
-/* ── IT TAKES NO LAYOUT WIDTH, AND THAT IS THE WHOLE RULE ─────────────────
-   The row is a four-track grid whose LAST track is the status mark, and every
-   mark in the rail lands on one vertical line because nothing in front of it
-   is free to size itself — the hover controls are zero-width at rest for
-   exactly this reason (see .navtree-tab-controls).
+/* ── NO SLOT NUMBER ──────────────────────────────────────────────────────
+   There was a `⌃3` cap in each row's gutter, labelling the shortcut. It is
+   gone: six bordered caps down the strip is six pieces of chrome arguing with
+   the status marks for the one column the eye scans, in a band whose whole
+   job is to be read at a glance. "remove ^1 etc keys" was the report.
 
-   In flow, this cap is ~26px of PERMANENT content in the track before the
-   mark, so the strip's marks sat 26px left of the tree's and the right edge of
-   the rail stopped being a column. Reported as "sidebar status icons on right
-   not aligned".
-
-   Out of flow instead: the row is already `position: relative`, and the offset
-   is the status cell's own width plus its gutter, so the cap ends exactly
-   where a mark would begin. `pointer-events: none` because it is a label for
-   a key, not a target. */
-.navtree-slot-key {
-  position: absolute;
-  right: calc(10px + var(--nt-gutter) + var(--nt-pad));
-  top: 50%;
-  transform: translateY(-50%);
-  pointer-events: none;
-  padding: 1px 4px;
-  font: 0.5625rem / 1.5 var(--chrome-font);
-  letter-spacing: 0.02em;
-  color: var(--fg-faint);
-  border: 1px solid color-mix(in srgb, var(--fg) 16%, transparent);
-  border-radius: 4px;
-  white-space: nowrap;
-}
-/* Hidden while the pointer is on the row, where the × takes its place. Two
-   controls in one 18px cell would be a fight, and neither is worth widening
-   the gutter for — the gutter is the thing that keeps the names aligned. */
-.navtree-ws-slot:hover .navtree-slot-key,
-.navtree-ws-slot:has(:focus-visible) .navtree-slot-key {
-  display: none;
-}
+   The SHORTCUTS still work — ⌃1–⌃6, stable slots, same rows — they are simply
+   no longer announced on every row. */
 
 /* …and the × is the mirror image: absent until you reach for the row. It means
    "not now" — it frees the slot and nothing else, which is why it is not
@@ -4054,7 +4042,13 @@ body.sidenav-resizing iframe {
 /* THE BAND'S OWN GROUND IS ALREADY A LIFT, so a row's hover has to lift again
    from THAT or the pointer lands on nothing. Measured in the dark themes: the
    tree's hover over the band's 5% was a 1% step, invisible. */
-.navtree-workingset .navtree-tab-row:hover {
+/* `:not([data-active="true"])` is the MECHANISM here, not a belt. The active
+   row's hover rule (`.navtree-tab-row[data-active="true"]:hover`, which holds
+   the pane face so the join does not break) has the same specificity as this
+   one and loses on source order, so without the exclusion a hover over the
+   row you are already on replaced the pane's own surface with a grey wash.
+   Reported as "hover over active tab in 'working on' gives bad bg color". */
+.navtree-workingset .navtree-tab-row:not([data-active="true"]):hover {
   background-color: color-mix(in srgb, var(--fg) 9%, transparent);
 }
 

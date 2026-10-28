@@ -803,10 +803,18 @@ describe('the working-set strip reaches the sheet', () => {
     expect(strip).toBeLessThan(scroll);
   });
 
-  it('carries NO standing control on touch, and no key to press', () => {
+  it('carries NO standing control on touch, and no slot cap anywhere', () => {
     // Every other row on the sheet follows this (tabRowAffordances): no hover
     // to reveal a control, no Control key to label.
-    expect(tsx).toMatch(/touch \? null : <kbd className="navtree-slot-key"/);
+    //
+    // The `⌃3` cap is gone from the DESKTOP rows too — six bordered caps down
+    // the band fought the status marks for the one column the eye scans
+    // ("remove ^1 etc keys"). The shortcut itself is untouched, which is what
+    // the `if (touch) return;` guard below still pins.
+    expect(tsx).not.toMatch(/navtree-slot-key/);
+    expect(readFileSync(join(__dirname, 'NavTree.css'), 'utf8')).not.toMatch(
+      /navtree-slot-key\s*\{/,
+    );
     expect(tsx).toMatch(/if \(touch\) return;/);
     const css = readFileSync(join(__dirname, 'NavTree.css'), 'utf8');
     expect(css).toMatch(/\[data-touch="true"\] \.navtree-slot-drop \{\s*display: none/);
