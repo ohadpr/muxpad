@@ -1212,23 +1212,38 @@ describe('the row’s right-hand side holds one thing at a time', () => {
  * Asserted as ARITHMETIC against the same tokens, not as a literal pair, so the
  * two cannot drift apart again when the gutter changes.
  */
-describe('the search button sits on the rows’ own edges', () => {
-  // It was the inline `.navsearch` field; it is now the button that opens the
-  // ⌘K palette, and it inherited the field's place and this rule with it.
-  const scroll = ruleBody(NAV_CSS, '.navtree-scroll');
-  const group = ruleBody(NAV_CSS, '.navtree-group');
+/**
+ * THE SEARCH BUTTON IS NOT ON THE ROWS' EDGES, BECAUSE IT IS NOT A ROW.
+ *
+ * It was an inline field, then a button wearing that field's clothes, then a
+ * slimmed-down row — all three aligned to the rows below them, because all
+ * three owned a row at the top of the rail. "You don't search there, it's
+ * just a hotkey reminder, maybe it doesn't need to take up so much space."
+ * It rides the brand row now: an icon in the left third of a row that already
+ * exists, which is zero rows and no alignment to inherit.
+ */
+describe('the search button costs the rail no row', () => {
   const search = ruleBody(NAV_CSS, '.navtree-search');
 
-  const rowInset = (which: 'left' | 'right') =>
-    resolve(side(decl(scroll, 'padding'), which), BASE) +
-    resolve(side(decl(group, 'padding'), which), BASE);
-
-  it.each(['left', 'right'] as const)('matches the rows on the %s', (which) => {
-    expect(resolve(side(decl(search, 'margin'), which), BASE)).toBe(rowInset(which));
+  it('is a square icon button, not a labelled bar', () => {
+    expect(decl(search, 'width')).toBe('28px');
+    expect(decl(search, 'height')).toBe('28px');
   });
 
-  it('and the rows are where they were — this moved the box, not the list', () => {
-    expect([rowInset('left'), rowInset('right')]).toEqual([8, 4]);
+  it('renders no label and no key cap', () => {
+    // The chord moved into the tooltip, which is where a reminder you have
+    // already learned belongs.
+    expect(NAV_CSS).not.toMatch(/\.navtree-search-label/);
+    expect(NAV_CSS).not.toMatch(/\.navtree-search-kbd/);
+  });
+
+  it('leaves the rows where they were — this removed a box, not a list', () => {
+    const scroll = ruleBody(NAV_CSS, '.navtree-scroll');
+    const group = ruleBody(NAV_CSS, '.navtree-group');
+    const inset = (which: 'left' | 'right') =>
+      resolve(side(decl(scroll, 'padding'), which), BASE) +
+      resolve(side(decl(group, 'padding'), which), BASE);
+    expect([inset('left'), inset('right')]).toEqual([8, 4]);
   });
 });
 

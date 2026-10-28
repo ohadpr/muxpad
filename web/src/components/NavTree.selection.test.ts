@@ -1092,3 +1092,51 @@ describe('a chat name is legible on every rail', () => {
     );
   });
 });
+
+/**
+ * THE BAND'S SELECTION DOES NOT REACH FOR THE PANE.
+ *
+ * A selected row in the TREE is the pane's own surface continuing into the
+ * rail: pane face, rounded left, square and bleeding right, and a funnel node
+ * drawing the two concave fillets that flare one into the other.
+ *
+ * The band borrowed the fill and the radius and got none of the rest — the
+ * funnel renders only on a tree row — so its selected row reached for a join
+ * it could not make. Reported as "recently active tabs have a selector
+ * indicator which connects with the tab contents, but that doesn't happen
+ * with the nice rounded elements… maybe the selection indicator for the
+ * recently active should not try to connect to the chat."
+ */
+describe('a selected row in the recently-active band', () => {
+  const rule = (() => {
+    const flat = NAV_CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+    const i = flat.indexOf('.navtree-workingset .navtree-tab-row[data-active="true"] {');
+    return i < 0 ? '' : flat.slice(i, flat.indexOf('}', i));
+  })();
+
+  it('wears an ordinary selection, not the pane’s surface', () => {
+    expect(rule, 'the band has no active-row rule').not.toBe('');
+    expect(rule).toMatch(/background-color:\s*var\(--nt-sel\)/);
+    expect(rule).not.toMatch(/--bg-pane-face/);
+  });
+
+  it('is rounded at BOTH ends and stays inside the band', () => {
+    // The tree row is square on the right and bleeds past the group's padding
+    // so it touches the pane. This one has nothing to touch.
+    expect(rule).toMatch(/border-radius:\s*var\(--nt-pill\);/);
+    expect(rule).toMatch(/margin-right:\s*0/);
+  });
+
+  it('draws no silhouette hairline, which belonged to the join', () => {
+    expect(rule).toMatch(/box-shadow:\s*none/);
+  });
+
+  it('never gets a funnel, which is what the join is made of', () => {
+    // Belt: the funnel is rendered by the tree row component only, but the
+    // band's rows ARE `.navtree-tab-row`s, so this is one `&&` away from
+    // being wrong.
+    const tsx = readFileSync(join(__dirname, 'NavTree.tsx'), 'utf8');
+    const row = tsx.slice(tsx.indexOf('function WorkingSetRow'));
+    expect(row.slice(0, row.indexOf('\nfunction '))).not.toMatch(/navtree-tab-funnel/);
+  });
+});
