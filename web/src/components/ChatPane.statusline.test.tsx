@@ -83,12 +83,15 @@ describe('the session line cannot become two lines', () => {
     // the only one of the three that both reserves the line AND refuses a
     // second one. With `max-height` the children would still lay out two rows
     // and merely be clipped, which is how you get a half-visible second line.
-    expect(decl('.chat-status-bar', 'height')).toBe('1rem');
+    expect(decl('.chat-status-bar', 'height')).toBe('1.375rem');
     const h = px(decl('.chat-status-bar', 'height'));
     expect(h).toBeGreaterThan(0);
-    // …and the number is the line, not a guess: the cell's line-height with no
-    // block padding of its own. Same arithmetic tie the composer's 40px has.
-    expect(px(decl('.chat-status-seg', 'line-height'))).toBe(h);
+    // …and the number is the line plus the chip's own border, not a guess: the
+    // cell's line-height, and the chip surface sized to the same height so the
+    // two cannot drift. The chip exists because the strip floats over the
+    // transcript now — see the note in the css.
+    expect(px(decl('.chat-status-bar .chat-status-seg', 'height'))).toBe(h);
+    expect(px(decl('.chat-status-seg', 'line-height'))).toBeLessThanOrEqual(h);
     const pad = (decl('.chat-status-seg', 'padding') ?? '').split(/\s+/);
     expect(pad[0]).toBe('0');
   });
@@ -138,17 +141,21 @@ describe('the session line cannot become two lines', () => {
     expect(decl('.chat-status-bar', 'max-width')).toBe(decl('.chat-composer', 'max-width'));
   });
 
-  it("centres, so neither end of it sits in a phone's bottom corner radius", () => {
-    // It was right-aligned, which put the live cell — the one cell that is
-    // always populated — into the bottom-RIGHT corner of the screen, exactly
-    // where an iPhone's display curve cuts in: the last word of "Working…" sat
-    // under it. Centred is the only alignment whose content is far from BOTH
-    // bottom corners, so this is the assertion, not "not flex-end".
-    expect(decl('.chat-status-bar', 'justify-content')).toBe('center');
-    // …and the strip's own side padding stays symmetric, or centred content is
-    // centred on an off-centre box.
-    const pad = (decl('.chat-status-bar', 'padding') ?? '').split(/\s+/);
-    expect(pad).toHaveLength(2);
+  it('is right-aligned, and out of flow so it cannot push the composer', () => {
+    // It was CENTRED, which was the right call for a full-width row under the
+    // pill: right-alignment put the always-populated live cell into the
+    // bottom-RIGHT corner of a phone, exactly where the display curve cuts in.
+    //
+    // Neither half of that argument survives the strip becoming a chip ABOVE
+    // the pill. It is nowhere near a bottom corner, and the right edge is
+    // where every other "about this pane" control in the app lives.
+    expect(decl('.chat-status-bar', 'justify-content')).toBe('flex-end');
+    // THE DECLARATION THAT BUYS THE ROW BACK. Out of flow, hung off the top of
+    // the composer wrap, so the wrap's height — which is what
+    // `--chat-composer-h` publishes, and therefore what the transcript gives
+    // up — no longer contains the strip at all.
+    expect(decl('.chat-status-bar', 'position')).toBe('absolute');
+    expect(decl('.chat-status-bar', 'bottom')).toBe('100%');
   });
 
   it('clears the home indicator by max(), never by adding to it', () => {
@@ -243,21 +250,20 @@ describe('the session line sits outside the composer pill', () => {
   });
 
   it('owns the gap to the pill, on the side the pill is actually on', () => {
-    // THE SIDE IS THE ASSERTION. Inside the pill, the pill's row gap held the
-    // strip off the input; outside and ABOVE it, the strip's own bottom margin
-    // did. The strip then moved BELOW the composer and the margin stayed where
-    // it was, which is a gap facing nothing — 6px of dead space under the line
-    // and the line pressed against the pill. Pinning "non-zero" could not catch
-    // that, because the wrong side is also non-zero.
+    // THE SIDE IS THE ASSERTION, and the side flipped with the strip. It has
+    // been inside the pill (the pill's row gap held it off the input), above
+    // it (its own bottom margin did), and below it (where the margin stayed on
+    // the wrong side and left 6px of dead space facing nothing). It is above
+    // again, as a chip hung off the composer's top edge — so the gap it owns
+    // is the one BELOW it, down to the pill.
     const margin = (decl('.chat-status-bar', 'margin') ?? '').split(/\s+/);
-    const above = Number((margin[0] ?? '').replace('px', ''));
+    const above = (margin[0] ?? '').trim();
     const below = Number((margin[2] ?? '').replace('px', ''));
-    expect(above).toBeGreaterThan(0);
-    expect(below).toBe(0);
-    // And it stays a GAP, never a box again: the arrangement this replaced cost
-    // 37px of a 119px bar in border, background and padding. The strip's whole
-    // cost is its one line plus this.
-    expect(above).toBeLessThanOrEqual(16);
+    expect(above).toBe('0');
+    expect(below).toBeGreaterThan(0);
+    // And it stays a chip, never a box across the pane: the arrangement this
+    // replaced cost 37px of a 119px bar in border, background and padding.
+    expect(below).toBeLessThanOrEqual(16);
   });
 
   it('cannot move the composer, because its height is not a variable', () => {
@@ -266,8 +272,11 @@ describe('the session line sits outside the composer pill', () => {
     // strip pushed the input down. Its height is now a constant in the
     // stylesheet and the only inline style the composer measures is the
     // reserve's — nothing in this component sizes the strip at runtime.
-    expect(decl('.chat-status-bar', 'height')).toBe('1rem');
+    expect(decl('.chat-status-bar', 'height')).toBe('1.375rem');
     expect(SRC).not.toMatch(/className="chat-status-bar"[\s\S]{0,200}style=/);
+    // …and it cannot move the composer at all now, in either direction: it is
+    // out of the wrap's flow entirely.
+    expect(decl('.chat-status-bar', 'position')).toBe('absolute');
   });
 });
 
@@ -327,69 +336,53 @@ describe('the session line spends its width on what changes', () => {
   });
 
   /**
-   * ── THE ONE CELL THAT MAY APPEAR IN CHAT MODE ────────────────────────────
+   * ── THERE IS NO CONTEXT CELL ANY MORE, IN EITHER MODE ────────────────────
    *
-   * The count above is the rule: Chat mode has no dials. This is the single
-   * exception, and it earns it by not being a dial — it is absent until the
-   * conversation is nearly full, and it is the only route to the one action
-   * that can do something about that.
+   * There was one, and it was the single exception to "Chat mode has no
+   * dials": absent until the conversation was nearly full, then present in
+   * warn and then danger ink, as the only route to Compact.
    *
-   * It exists because muxpad stopped compacting on its own. The 200k window
-   * that used to do it silently rewrote long threads (measured: two
-   * compactions in three hours on one, 372k tokens of detail dropped). With
-   * that gone, the chat has to say the pressure is coming, or the first news
-   * of the ceiling is a failed turn.
+   * It earned that exception only while muxpad compacted nothing by itself —
+   * with no automatic compaction, the chat had to say the ceiling was coming
+   * or the first news of it would be a failed turn. Compaction is automatic
+   * again (see the runner's auto-compact), so the cell went back to being a
+   * number asking to be watched for no action: "I don't want the user to be
+   * thinking about compaction. Compaction should just happen."
+   *
+   * The METER did not go with it. It is in the session menu, with the token
+   * counts and Compact now — strictly more information, one tap away, for the
+   * moments somebody actually wants to know.
    */
-  it('stays out of the way below the warning threshold', () => {
-    const box = mount({ mode: 'chat', status: STATUS }); // 25%
-    expect(box.querySelector('.chat-status-seg.-ctx')).toBeNull();
-    expect(cells(box)).toHaveLength(2);
+  it('shows no context cell, at any fullness, in either mode', () => {
+    for (const mode of ['chat', 'agent'] as const) {
+      for (const pct of [25, 72, 93, 99]) {
+        const box = mount({
+          mode,
+          status: { ...STATUS, context: { pct, tokens: pct * 10_000, max: 1_000_000 } },
+        });
+        expect(box.querySelector('.chat-status-seg.-ctx'), `${mode} @ ${pct}%`).toBeNull();
+      }
+    }
   });
 
-  it('appears in CHAT mode once the chat is filling up', () => {
-    const box = mount({
-      mode: 'chat',
-      status: { ...STATUS, context: { pct: 72, tokens: 720_000, max: 1_000_000 } },
-    });
-    const cell = box.querySelector('.chat-status-seg.-ctx');
-    expect(cell).not.toBeNull();
-    expect(cell?.getAttribute('data-level')).toBe('warn');
-    expect(cell?.textContent).toContain('72%');
-    // It names the numbers and the policy in the tooltip, because the cell
-    // itself is two words wide.
-    expect(cell?.getAttribute('title')).toContain('nothing is compacted automatically');
-  });
-
-  it('turns danger-coloured when the next long turn could hit the ceiling', () => {
-    const box = mount({
-      mode: 'agent',
-      status: { ...STATUS, context: { pct: 93, tokens: 930_000, max: 1_000_000 } },
-    });
-    expect(box.querySelector('.chat-status-seg.-ctx')?.getAttribute('data-level')).toBe('high');
-  });
-
-  it('compacts only when pressed, and says what to keep when it does', async () => {
+  it('keeps the meter and Compact one tap away, in the session menu', async () => {
     const sent: unknown[] = [];
     const box = mount({
-      mode: 'chat',
+      mode: 'agent',
       status: { ...STATUS, context: { pct: 80, tokens: 800_000, max: 1_000_000 } },
       send: (m: unknown) => sent.push(m),
     });
-    // Opening the panel is not compacting.
     await act(async () => {
-      box.querySelector<HTMLButtonElement>('.chat-status-seg.-ctx')?.click();
+      box.querySelector<HTMLButtonElement>('.chat-status-seg')?.click();
     });
-    expect(sent).toHaveLength(0);
+    expect(box.querySelector('.chat-session-bar-fill')).not.toBeNull();
     const compact = [...box.querySelectorAll<HTMLButtonElement>('.chat-session-item')].find((b) =>
-      b.textContent?.includes('Compact now'),
+      b.textContent?.includes('Compact'),
     );
     expect(compact).toBeTruthy();
-    // The cost is stated where the decision is taken.
-    expect(compact?.textContent).toContain('cannot be undone');
     await act(async () => {
       compact?.click();
     });
-    expect(sent).toHaveLength(1);
     const msg = sent[0] as { t: string; cmd: string; args?: string };
     expect(msg.t).toBe('slash');
     expect(msg.cmd).toBe('compact');

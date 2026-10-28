@@ -2104,70 +2104,103 @@
 }
 
 /* ── The session line ─────────────────────────────────────────────────────
- * A quiet line ABOUT the session (folder | model | live), sitting on the
- * transparent gap above the composer pill. Each cell opens its own upward
- * panel; only one at a time.
+ * ONE CHIP ON THE COMPOSER'S RIM, NOT A ROW UNDER IT.
  *
- * IT IS NOT IN THE BOX, AND IT IS NOT A BOX. Both halves matter, because this
- * strip has now been wrong in both directions. As a floating object above the
- * pill it carried a border, a background and a 10px gap — 37px of a 119px bar
- * for a line you read and almost never press. Moved ONTO the pill's surface to
- * pay that back, it became chrome inside the thing you type in, crammed against
- * the input: "it's all too tight there." So it is out of the pill again but
- * keeps the diet — no border, no background, no second surface. It costs its
- * own line of text plus the 6px that separates it from the pill, which is
- * exactly what the pill's row gap used to spend on it. Out of the box for free.
+ * This was a full-width centred row of four cells — folder | context | model |
+ * live — sitting under the pill. Reported, accurately: "it is taking a full
+ * row… it is a bit noisy, and it pushes the composer disproportionately
+ * upwards, meaning that it reduces the amount of content we can show."
+ *
+ * It cost a line of text plus a 16px gap, permanently, at the bottom of a
+ * phone whose keyboard already owns half the screen. And three of its four
+ * cells were already one tap away inside the session menu.
+ *
+ * TWO CHANGES, AND THE SECOND IS THE ONE THAT BUYS THE PIXELS:
+ *
+ *  1. The cells are down to what is not a restatement. The folder moved into
+ *     the session menu (identity that changes about never), the context cell
+ *     is gone outright now that compaction is automatic, and "Working…" is
+ *     gone because the log already says it and Stop is attached to the turn.
+ *     What is left is the session chip, the subagent roster when there IS one,
+ *     and background shell commands when there are any.
+ *
+ *  2. It is OUT OF FLOW. `position: absolute; bottom: 100%` hangs it off the
+ *     top edge of the composer wrap, so the wrap — whose height is what
+ *     `--chat-composer-h` publishes and therefore what the transcript gives up
+ *     — no longer contains it at all. The row's entire 32px goes back to the
+ *     conversation.
+ *
+ * WHICH IS WHY IT NOW HAS A SURFACE, reversing the "no border, no background,
+ * no second surface" rule that held while it was in flow. In flow it sat on a
+ * transparent gap that belonged to it; out of flow it floats OVER the last
+ * line of the transcript, and a bare 11px label over arbitrary prose is
+ * unreadable. The surface is the smallest one that fixes that: the chat's own
+ * elevated ground, a hairline, a pill radius.
+ *
+ * RIGHT-ALIGNED, not centred. Centring was a deliberate choice when the strip
+ * was the full width of the pill and its live cell would otherwise have landed
+ * in the phone's bottom-right corner radius. Neither applies to a chip above
+ * the pill, and the right edge is where every other "about this pane" control
+ * in the app lives.
  *
  * ── ONE LINE, BY CONSTRUCTION ──
- * `height` is the load-bearing declaration: a FIXED one-line height, not a
- * min-height and not a max-height. A min-height lets content add a second row;
- * a max-height lets it lay one out and merely clips it, which shows as a
+ * `height` is still the load-bearing declaration: a FIXED one-line height, not
+ * a min-height and not a max-height. A min-height lets content add a second
+ * row; a max-height lets it lay one out and merely clips it, which shows as a
  * half-visible line. With a fixed height there is no second row to clip.
  *
  * Everything else serves that: `flex-wrap: nowrap` said out loud (it is the
  * initial value, so an explicit declaration is what a future edit has to
- * consciously delete rather than silently override); `min-width: 0` on the cells
- * so a long label ellipsizes instead of winning the argument and overflowing the
- * pane; and `flex-shrink: 0` on the live cell alone, so when the width runs out
- * it is the folder and the model that give way and never "2 agents".
+ * consciously delete rather than silently override); `min-width: 0` on the
+ * cells so a long label ellipsizes instead of winning the argument and
+ * overflowing the pane; and `flex-shrink: 0` on the live cell alone, so when
+ * the width runs out it is the model that gives way and never "2 agents".
  *
  * ChatPane.statusline.test.tsx pins this set and fails if any rule in the strip
  * ever acquires a declaration that would permit a second line. */
 .chat-status-bar {
+  /* OUT OF FLOW — this is the declaration that returns the row's height to the
+     transcript. The wrap is `position: absolute`, so it is the containing
+     block, and `bottom: 100%` puts the chip immediately above its top edge. */
+  position: absolute;
+  bottom: 100%;
+  left: max(12px, env(safe-area-inset-left, 0px));
+  right: max(12px, env(safe-area-inset-right, 0px));
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
-  /* CENTRED, not right-aligned. Right-alignment put the live cell — the one
-     cell that is always populated — into the bottom-RIGHT corner of the screen,
-     which on a phone is exactly where the display's corner radius cuts in; the
-     last word of "Working…" sat under the curve. Centred, the strip's content
-     is as far from both bottom corners as the line can get, and it still reads
-     as belonging to the pill because it shares the pill's 768px box. */
-  justify-content: center;
-  /* ONE LINE. Equal to the cells' line-height, which carry no block padding —
-     see the arithmetic tie in ChatPane.statusline.test.tsx. */
-  height: 1rem;
-  /* The pill's own centering, repeated — that is the idiom every child of
-     `.chat-composer-wrap` uses (see .chat-notice), and it is what makes this
-     line centre on the PILL on a wide desktop instead of on the whole pane. */
-  width: 100%;
+  /* Right-aligned: see the note above. The pill's own 768px box is kept so the
+     chip lands on the PILL's right edge on a wide desktop, not the pane's. */
+  justify-content: flex-end;
+  /* ONE LINE. The cells carry no block padding of their own; the chip surface
+     below adds its padding inside this height. */
+  height: 1.375rem;
+  width: auto;
   max-width: 768px;
-  /* THE GAP IS ON TOP, because the strip is UNDER the pill now. It was written
-     bottom-first when the strip floated ABOVE the input, and the move left the
-     number on the side facing nothing: 6px of dead space below the line and the
-     line itself jammed against the pill it had just been moved out of.
-     Reported as "the folder model working bar needs to be pushed down more from
-     the input box."
-     16px, after two passes at it: the pill carries a real drop shadow, and a
-     gap under a shadow has to clear the shadow before it starts reading as a
-     gap at all. This is the strip's ENTIRE cost besides its one line of text;
-     it is not allowed to grow into a box again (both css tests cap it). */
-  margin: 16px auto 0;
-  padding: 0 2px;
+  margin: 0 auto 6px;
+  padding: 0;
   /* Menus escape via position:absolute on .chat-status-menu; segment buttons
      clip their own labels so long model names can't paint over the live cell. */
   overflow: visible;
 }
+/* THE SURFACE, and it exists only because the strip is out of flow (see the
+   note above): floating over the transcript's last line, a bare 11px label on
+   arbitrary prose cannot be read. Applied to the SEGMENTS rather than the bar
+   so each chip is its own object and the gaps between them stay transparent. */
+.chat-status-bar .chat-status-seg {
+  height: 1.375rem;
+  padding: 0 9px;
+  border: 1px solid color-mix(in srgb, var(--chat-fg) 14%, transparent);
+  border-radius: 999px;
+  background: var(--chat-elev);
+}
+.chat-status-bar .chat-status-seg-wrap + .chat-status-seg-wrap,
+.chat-status-bar .chat-status-seg + .chat-status-seg,
+.chat-status-bar .chat-status-seg-wrap + .chat-status-seg,
+.chat-status-bar .chat-status-seg + .chat-status-seg-wrap {
+  margin-left: 6px;
+}
+
 /* `flex: 0 1 auto` — sized by content, never STRETCHED to fill the 768px above
    (which would spread three cells across the whole pill), and shrinkable, which
    is what hands the width to the live cell when it runs short. */
