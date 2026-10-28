@@ -1548,28 +1548,34 @@
    `active-row-fill` test in themes.test.ts — a theme may paint an IMAGE over
    the selected row (demoscene's copper bar does) but may not replace the
    colour underneath, because that colour is the join. */
-[data-theme="memphis"] .navtree-tab-row[data-active="true"] {
-  box-shadow: 3px 3px 0 var(--rail-accent);
-}
+/* ── THE STICKER SHADOW STAYS IN THE CHAT ───────────────────────────────
+   The offset hard shadow is this theme's signature and it is right on a
+   bubble, a composer, a card — objects you look AT, one or two at a time.
+
+   In the rail it was a third device on the same row: the funnel already
+   continues the pane's surface into the selected row (that IS the selection),
+   the name already goes bold, and the shadow then drew a 3px bar under the
+   row as well. Stacked with the band's seam and the section rules a screen
+   away, the rail read as "a bit gaudy" — which it was. The chat side keeps
+   every sticker it had. */
 [data-theme="memphis"] .navtree-tab-row[data-active="true"] .navtree-name-text {
   font-weight: 700;
 }
 
-/* SECTION NAMES ARE SET LIKE A POSTER, and sit crooked, because in this
-   vocabulary nothing is square to anything else. */
-/* ─── …AND THE SECTION NAME IS RULED, NOT STUCK ON ──────────────────────────
-   It was a solid cyan block set at -2°, and "cool but a bit much" is fair:
-   two section headers are the most repeated object in the rail, and a
-   crooked filled label repeated down a list stops reading as a flourish and
-   starts reading as a mistake — the eye keeps trying to straighten it.
+/* ─── THE SECTION NAME IS SET LIKE A POSTER, AND THAT IS ALL ───────────────
+   Three goes at this. A solid cyan block at -2° was "cool but a bit much" —
+   a crooked filled label repeated down a list stops reading as a flourish and
+   starts reading as a mistake. Then the block became a 3px cyan rule under
+   the name, which was quieter and still a THIRD hue in a rail that already
+   spends yellow on the band's seam, its label and its status marks, and the
+   pane's own cream on the selected row. Counted on one screen: five accent
+   devices in the top 200px.
 
-   The bar survives, under the name instead of behind it. Same flat hard-edged
-   cyan, same Memphis grammar, none of the shouting — and the name goes back
-   to being ink on the rail, which is what a section header is. */
+   What is left is the lettering itself — the chrome face, bold, caps, wide
+   tracking. That is Memphis grammar too, it is the one device that costs no
+   colour, and it is already how this theme sets a title. The hue stays where
+   it means something. */
 [data-theme="memphis"] .navtree-ws-name .navtree-name-text {
-  display: inline-block;
-  padding-bottom: 2px;
-  border-bottom: 3px solid #00c2e0;
   color: var(--rail-ink);
   font-family: var(--chrome-font);
   font-weight: 700;
