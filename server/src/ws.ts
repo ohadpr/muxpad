@@ -6,6 +6,7 @@ import {
   isBootstrapTabName,
   isMachineMessage,
   modeForBackend,
+  parseCronMarker,
   sanitizeAgentStatus,
 } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
@@ -686,6 +687,11 @@ export function attachWsServer(deps: {
      * the cron `quiet_mins` policy (don't barge into a live conversation).
      */
     lastHumanSendAt: number;
+    /** The message that started the turn in flight was a CRON FIRE. See the
+     *  push gate's note: a fire's prose is machinery, and this is the half of
+     *  that rule the SERVER can enforce without waiting for a runner to
+     *  respawn. */
+    turnFromCron: boolean;
     /**
      * When this pane's last EXPLICIT `notify` push actually went out (held and
      * dropped calls don't count — they spent none of the user's attention).
@@ -1357,6 +1363,7 @@ export function attachWsServer(deps: {
       conn.lastSendAt = Date.now();
       conn.pendingSendText = next.text;
       if (isHumanMessage(next.text)) conn.lastHumanSendAt = conn.lastSendAt;
+      conn.turnFromCron = parseCronMarker(next.text) !== null;
       deps.cache.setAgentBusy(paneId, true);
       emitOptimisticTurnStart(paneId, next.id);
       queue.remove(next.id, paneId);
@@ -1413,6 +1420,7 @@ export function attachWsServer(deps: {
         conn.lastSendAt = Date.now();
         conn.pendingSendText = t;
         if (isHumanMessage(t)) conn.lastHumanSendAt = conn.lastSendAt;
+        conn.turnFromCron = parseCronMarker(t) !== null;
         // Same D14 mirroring as drainQueue: turn state, pane status and the
         // bus must not disagree for the duration of the round trip.
         deps.cache.setAgentBusy(paneId, true);
@@ -1669,6 +1677,7 @@ export function attachWsServer(deps: {
           status: null,
           lastSendAt: 0,
           lastHumanSendAt: 0,
+          turnFromCron: false,
           lastExplicitNotifyAt: 0,
           pendingSendText: null,
         };
@@ -1981,8 +1990,36 @@ export function attachWsServer(deps: {
             //
             // An EXPLICIT `notify` is untouched: the agent was told to
             // interrupt somebody, and that judgement outranks this one.
+            // ─── AND A CRON FIRE DOES NOT PUSH ON ITS PROSE ───────────────
+            //
+            // The runner already answers this (`proseSpeaks`, silent-turn.ts):
+            // muxpad's instructions say a scheduled turn is machinery end to
+            // end, the chat refuses to promote a fire's prose
+            // (MACHINE_TURN_VARIANTS), and `muxpad say` is the one channel
+            // that speaks. So `frame.silent` should already be true here.
+            //
+            // It is asked AGAIN, here, because that answer lives in a
+            // long-lived process. `nw-hourly` kept buzzing a phone after the
+            // runner fix shipped — its runner had been up for seven days, so
+            // the fix was simply not in it, and the second screenshot said
+            // "Quiet.", which is the agent's own prose being read as news.
+            //
+            // The server restarts on every deploy; a runner does not, and must
+            // not be respawned to deliver a fix (it would kill background
+            // subagents and wakeups). A push channel that has now leaked twice
+            // gets the half that ships immediately.
+            //
+            // An explicit `notify` is untouched: it does not come through
+            // here, and the agent judging that it must interrupt somebody
+            // outranks every heuristic in this file.
             if (
               frame.silent !== true &&
+              // …EXCEPT A FAILURE, which is news whatever started the turn and
+              // whatever it said. Caught by the test on the first run: the
+              // gate was unconditional and took the error notification with
+              // it, which is the one thing a scheduled job most needs to be
+              // able to send — nobody is watching it.
+              (!conn.turnFromCron || frame.ok === false) &&
               !chatClients.has(paneId) &&
               Date.now() - conn.lastHumanSendAt > INTERACTIVE_PUSH_SUPPRESS_MS
             ) {
