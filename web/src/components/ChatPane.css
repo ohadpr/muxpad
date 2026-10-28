@@ -388,7 +388,16 @@
 .chat-md pre code {
   display: block;
   font-family: var(--term-font, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 0.796875rem;
+  /* ── em, NOT rem, AND THAT IS THE WHOLE BUG ──────────────────────────────
+     The pane steps its prose up on a phone (see the max-width: 720px block:
+     0.96875rem → 1.1125rem, +15%). Everything in the conversation that was
+     sized in REM did not come with it, so the ratio of code to prose went
+     from 1.22 on a desktop to 1.40 on a phone — the code block quietly
+     shrank, relatively, in the place it had the least room. Reported as
+     "font sizes don't seem to be calibrated on mobile".
+     The headings, inline code and tables here were already `em` and were
+     always right. These four are the ones that were not. */
+  font-size: 0.8225em;
   line-height: 1.55;
   color: var(--chat-dim);
   white-space: pre;
@@ -579,7 +588,8 @@
 /* Context next to the dots — names the tool during long silent calls. */
 .chat-working-label {
   margin-left: 10px;
-  font-size: 0.75rem;
+  /* em — see .chat-md pre code */
+  font-size: 0.775em;
   color: var(--chat-faint);
 }
 
@@ -670,7 +680,8 @@
   overflow-wrap: anywhere;
   color: var(--chat-faint);
   font-style: italic;
-  font-size: 0.84375rem;
+  /* em — see .chat-md pre code */
+  font-size: 0.87em;
   line-height: 1.55;
   padding: 2px 0 2px 12px;
   border-left: 2px solid var(--chat-border-strong);
@@ -883,7 +894,8 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font-family: var(--term-font, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 0.78125rem;
+  /* em — see .chat-md pre code. */
+  font-size: 0.806em;
   line-height: 1.5;
   color: var(--chat-dim);
 }
@@ -1059,7 +1071,8 @@
 /* ── Diffs ─────────────────────────────────────────────────────────────── */
 .chat-diff {
   font-family: var(--term-font, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 0.75rem;
+  /* em — see .chat-md pre code */
+  font-size: 0.775em;
   line-height: 1.5;
 }
 .chat-diff-file {
@@ -1584,6 +1597,34 @@
 @media (max-width: 720px) {
   .chat-pane {
     font-size: 1.1125rem;
+  }
+  /* ── A CODE BLOCK WRAPS ON A PHONE ──────────────────────────────────────
+     `white-space: pre` plus `overflow-x: auto` is the right call on a
+     desktop: code is indentation-sensitive and there is a mouse, a trackpad
+     and a visible scrollbar to move it with.
+     On a phone it is the worst of both. The block sits inside a vertically
+     scrolling log, so a horizontal drag inside it fights the scroll it is
+     nested in, and nothing on screen says there is anything to the right —
+     the measured case was an email in a fence: 75-character lines in a
+     393px viewport, every one of them cut mid-sentence at the pane's edge
+     with no affordance at all.
+     So it wraps. The cost is real and it is the smaller one: wrapped code
+     loses the shape of its indentation, where clipped code loses the words.
+     The copy button's 48px of padding finally does its job here too — with
+     `pre` a long line simply scrolled underneath it. */
+  .chat-md pre {
+    overflow-x: hidden;
+  }
+  .chat-md pre code {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  /* Stop stays 12px — it is chrome, not conversation, so it does not grow
+     with the prose — but it gets a thumb to press. 22px tall is a desktop
+     target; this is the one control on screen that cancels work in flight. */
+  .chat-turn-stop {
+    min-height: 32px;
+    padding: 6px 13px 6px 11px;
   }
   /* Composer ≥16px: matches the bigger prose AND stops iOS from auto-zooming
      the viewport when the field takes focus (it zooms any input under 16px). */
