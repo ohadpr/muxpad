@@ -1514,16 +1514,26 @@
    started — it was not confetti, it was a fill: the pane read as a hatched
    block with a white hole punched in it, and the hole was the only part you
    could look at. Confetti is what you see when you are NOT looking at the
-   words. */
+   words.
+
+   ── AND IT CAME DOWN AGAIN ─────────────────────────────────────────────
+   "Tone down the background graphics even a bit more." Two levers, both
+   turned, because they do different things: the dots lost ~40% of their alpha
+   (0x54–0x61 → 0x32–0x3a, i.e. about 33–38% down to 20–23%) so each one is
+   quieter, and their tiles grew ~20% (190–230px → 225–270px) so there are
+   fewer of them on a screen. Fainter alone keeps the same busy rhythm at
+   lower contrast; sparser alone keeps the same shout at wider intervals. The
+   hatch went 4% → 3%, which at a 3px stripe is the difference between a
+   texture you notice and one you feel. */
 [data-theme="memphis"] .chat-pane,
 [data-theme="memphis"] .workspace-body {
-  background-image: radial-gradient(5px 5px at 12% 18%, #ffd4005c 98%, #0000),
-    radial-gradient(4px 4px at 78% 9%, #00c2e061 98%, #0000),
-    radial-gradient(6px 6px at 43% 62%, #d6006e54 98%, #0000),
-    radial-gradient(4px 4px at 91% 71%, #7b4dff59 98%, #0000),
-    radial-gradient(5px 5px at 27% 88%, #00d49a61 98%, #0000),
-    repeating-linear-gradient(45deg, #1210160a 0 3px, #0000 3px 17px);
-  background-size: 190px 190px, 150px 150px, 230px 230px, 170px 170px, 210px 210px, 58px 58px;
+  background-image: radial-gradient(5px 5px at 12% 18%, #ffd40037 98%, #0000),
+    radial-gradient(4px 4px at 78% 9%, #00c2e03a 98%, #0000),
+    radial-gradient(6px 6px at 43% 62%, #d6006e32 98%, #0000),
+    radial-gradient(4px 4px at 91% 71%, #7b4dff35 98%, #0000),
+    radial-gradient(5px 5px at 27% 88%, #00d49a3a 98%, #0000),
+    repeating-linear-gradient(45deg, #12101607 0 3px, #0000 3px 17px);
+  background-size: 225px 225px, 180px 180px, 270px 270px, 205px 205px, 250px 250px, 58px 58px;
   background-attachment: fixed;
 }
 [data-theme="memphis"] .chat-msg {
