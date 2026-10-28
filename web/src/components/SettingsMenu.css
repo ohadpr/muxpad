@@ -25,20 +25,28 @@
   --settings-muted: color-mix(in srgb, var(--fg) 74%, var(--bg-elev));
   --settings-line: color-mix(in srgb, var(--fg) 14%, var(--bg-elev));
   --settings-soft: color-mix(in srgb, var(--fg) 3%, var(--bg-elev));
-  /* SIZED TO ITS CONTENT, CAPPED — not a fixed 860x700 slab. Two rows of
-     settings in a 700px-tall box is ~60% empty, which reads as a page that
-     failed to load rather than a short one. `height: auto` lets a two-row
-     section be two rows tall; the cap keeps a long section scrollable instead
-     of taller than the screen. */
+  /* ── ONE HEIGHT, FOR EVERY SECTION ───────────────────────────────────
+     It used to size to its content, on the argument that two rows of settings
+     in a 700px box is ~60% empty and reads as a page that failed to load.
+     That was written when the dialog had two sections and one of them was a
+     theme grid; with three it means the box jumps every time you change tabs,
+     and the thing you clicked moves out from under the pointer. "Keep
+     settings modal fixed height, don't change height per tab."
+
+     A dialog that resizes under you is worse than one with space in it: the
+     empty room costs a glance, the movement costs your place. So the height
+     is fixed, the body scrolls when a section is longer than it, and only the
+     VIEWPORT shrinks it. 560px is the tallest section (the theme grid at
+     three rows) plus its padding — chosen so the common case is full rather
+     than so the longest one fits. */
   width: min(640px, calc(100vw - 40px));
-  /* `fit-content`, NOT `auto`. A <dialog> is absolutely positioned with
-     `inset: 0` by the UA, so `height: auto` resolves against that containing
-     block and STRETCHES to fill it — clamping at the max-height and
-     reproducing the exact 680px slab this was meant to remove. Chrome's own
-     default here is `fit-content`; `auto` overrode it. */
-  height: fit-content;
+  /* Not `fit-content` and not `auto`. A <dialog> is absolutely positioned with
+     `inset: 0` by the UA, so `auto` resolves against that containing block and
+     stretches to fill it; `fit-content` is what made the height follow the
+     section. An explicit number does neither. */
+  height: min(560px, calc(100dvh - 40px));
   max-width: none;
-  max-height: min(680px, calc(100dvh - 40px));
+  max-height: calc(100dvh - 40px);
   padding: 0;
   overflow: hidden;
   color: var(--fg);
@@ -80,11 +88,12 @@
 .settings-layout {
   display: grid;
   grid-template-columns: 132px minmax(0, 1fr);
-  /* `flex: 1` here defeated the dialog's `height: auto`: the layout grew to
-     whatever room the max-height allowed, so a two-row section still produced
-     a 680px box with 400px of nothing under it. Shrink to content, and only
-     then let the max-height cap it and the body scroll. */
-  flex: 0 1 auto;
+  /* FILLS the dialog now, rather than shrinking to its content. `flex: 0 1
+     auto` was what let the box follow the section — the layout shrank, the
+     dialog shrank with it, and the height changed per tab. With a fixed
+     height the layout takes what is left under the chrome, and the body
+     inside it scrolls. */
+  flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
 }
@@ -534,12 +543,17 @@
      of it empty, which reads as a page that failed to load.
      Anchored to the BOTTOM instead, which is the phone idiom for exactly this
      and has the two properties the floating box lacked — it has an edge the
-     screen gives it, and its controls are where the thumb already is. It hugs
-     its content and only grows if there is content to grow for. */
+     screen gives it, and its controls are where the thumb already is.
+
+     It no longer hugs its content: see the height below. */
   .settings-dialog {
     width: 100%;
     max-width: none;
-    height: fit-content;
+    /* Same rule as the desktop: ONE height, whichever section is showing. A
+       sheet that grows and shrinks under the thumb moves the row you were
+       reaching for. 72dvh leaves the top of the screen visible so it still
+       reads as a sheet over the app rather than as a new page. */
+    height: 72dvh;
     max-height: 88dvh;
     margin: auto auto 0;
     border-radius: 20px 20px 0 0;

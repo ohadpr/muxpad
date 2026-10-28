@@ -414,3 +414,47 @@ it('keeps notifications in their own section, not under the theme grid', async (
   // had no room for.
   expect(notifications?.querySelector('.settings-blurb')?.textContent ?? '').toMatch(/phone/i);
 });
+
+/**
+ * ONE HEIGHT, FOR EVERY SECTION.
+ *
+ * The dialog used to size to its content — right when it had two sections and
+ * one was a theme grid, wrong at three: the box jumped on every tab change
+ * and the thing you had just clicked moved out from under the pointer. "Keep
+ * settings modal fixed height, don't change height per tab."
+ */
+describe('the settings dialog does not resize under you', () => {
+  const CSS = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), 'SettingsMenu.css'),
+    'utf8',
+  );
+
+  it('is one height whatever section is showing', () => {
+    // It used to size to its content — right when the dialog had two sections
+    // and one was a theme grid, wrong at three: the box jumped on every tab
+    // change and the thing you had just clicked moved out from under the
+    // pointer. "Keep settings modal fixed height, don't change height per tab."
+    //
+    // A dialog that resizes under you is worse than one with space in it: the
+    // empty room costs a glance, the movement costs your place.
+    const flat = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+    const dialog = flat.slice(flat.indexOf('.settings-dialog {'));
+    const rule = dialog.slice(0, dialog.indexOf('}'));
+    expect(rule).not.toMatch(/height:\s*(fit-content|auto)/);
+    expect(rule).toMatch(/height:\s*min\(\d+px,/);
+    // …and the layout fills it rather than shrinking to the section, which is
+    // what made the height follow the content in the first place.
+    const layout = flat.slice(flat.indexOf('.settings-layout {'));
+    expect(layout.slice(0, layout.indexOf('}'))).toMatch(/flex:\s*1 1 auto/);
+    // The body is what scrolls when a section is longer than the box.
+    const body = flat.slice(flat.indexOf('.settings-body {'));
+    expect(body.slice(0, body.indexOf('}'))).toMatch(/overflow-y:\s*auto/);
+  });
+
+  it('fixes the phone sheet too, where a resize moves the row under the thumb', () => {
+    const flat = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+    const arm = flat.slice(flat.indexOf('@media (max-width: 700px)'));
+    const dialog = arm.slice(arm.indexOf('.settings-dialog {'));
+    expect(dialog.slice(0, dialog.indexOf('}'))).toMatch(/height:\s*\d+dvh/);
+  });
+});
