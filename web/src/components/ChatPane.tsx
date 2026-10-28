@@ -211,9 +211,7 @@ import {
   workingRowLabel,
 } from '../lib/live-status';
 import { isMobileLayout } from '../lib/mobile-layout';
-import { MOBILE_BREAKPOINT } from '../lib/mobile-layout';
 import { useDismissable } from '../lib/use-dismissable';
-import { useMediaQuery } from '../use-media-query';
 import { SlackApprovalAlert } from './SlackApprovalAlert';
 import './ChatPane.css';
 
@@ -3608,16 +3606,23 @@ export function ChatPane({
   // against a mishearing or a bad split, both of which read plausibly.
   const review = useReview(paneId);
 
-  // ── THE LEFT CLUSTER, COLLAPSED ON TOUCH ──────────────────────────────────
-  // See the `+` in the composer for the argument. The two conditions are
-  // independent on purpose: the LAYOUT decides whether there is room for a
-  // row, and the STATE decides whether any of them is currently more than a
-  // button. A live mic or a running screen review is not an action waiting to
-  // be taken — it is the thing you are doing — so it leaves the sheet and sits
-  // back in the pill where its elapsed time and its stop are reachable.
-  const touchLayout = useMediaQuery(MOBILE_BREAKPOINT);
+  // ── THE LEFT CLUSTER IS ONE BUTTON, ON EVERY LAYOUT ───────────────────────
+  // It was three permanent targets (attach, review a screen, dictate) and then,
+  // for one revision, three on desktop and one on touch — on the argument that
+  // a mouse has room and hover where a thumb has neither.
+  //
+  // That argument lost to the report: "idk I see multiple buttons on the left,
+  // doesn't feel like anything changed". It was also the wrong argument. Room
+  // is not the reason to spend it, these are actions taken a few times a day
+  // each, and a composer whose left edge means different things on two screens
+  // is a composer you have to learn twice.
+  //
+  // WHAT IS STILL CONDITIONAL IS STATE, and that part is real: a recording in
+  // progress is not an action waiting to be taken, it is the thing you are
+  // doing. Its elapsed time and its stop cannot live behind a `+`, so a live
+  // control leaves the sheet and sits back in the row until it is finished.
   const toolsIdle = review.state.phase === 'idle' && !voiceIsLive(voice.state);
-  const collapsedTools = touchLayout && toolsIdle;
+  const collapsedTools = toolsIdle;
   const [toolsOpen, setToolsOpen] = useState(false);
   const toolsRef = useRef<HTMLDivElement>(null);
   useDismissable(toolsOpen, toolsRef, () => setToolsOpen(false));
@@ -5260,123 +5265,6 @@ export function ChatPane({
                 onChange={onPickFiles}
               />
               <div className="chat-composer-main">
-                {/* ── THE LEFT CLUSTER ──────────────────────────────────────
-                    Three permanent targets — attach, review a screen, dictate
-                    — for actions taken a few times a day each. On a phone
-                    that is ~90px of a 360px pill: "there are too many buttons
-                    in the composer window itself on mobile."
-
-                    So on a touch layout they collapse behind one `+`, which
-                    is what iMessage, Slack, Discord and every other composer
-                    on that screen size does. Desktop keeps the row: a mouse
-                    has room and hover, a thumb has neither.
-
-                    …BUT ONLY WHILE THEY ARE IDLE. A recording in progress is
-                    not an action waiting to be taken, it is STATE — the
-                    elapsed time, the level, the stop. Hiding a live mic
-                    behind a `+` would be the one case where collapsing costs
-                    something real, so an active control pops back out and the
-                    `+` keeps the rest. */}
-                {collapsedTools ? (
-                  <div className="chat-tools" ref={toolsRef}>
-                    <button
-                      type="button"
-                      className="chat-attach chat-tools-toggle"
-                      onClick={() => setToolsOpen((o) => !o)}
-                      aria-haspopup="menu"
-                      aria-expanded={toolsOpen}
-                      aria-label="Add to this message"
-                      title="Add to this message"
-                    >
-                      <SvgPlus />
-                    </button>
-                    {toolsOpen ? (
-                      <div className="chat-tools-sheet" role="menu">
-                        <button
-                          type="button"
-                          role="menuitem"
-                          className="chat-tools-item"
-                          onClick={() => {
-                            setToolsOpen(false);
-                            fileInputRef.current?.click();
-                          }}
-                        >
-                          <SvgAttach />
-                          Attach a file
-                        </button>
-                        {review.available ? (
-                          <button
-                            type="button"
-                            role="menuitem"
-                            className="chat-tools-item"
-                            onClick={() => {
-                              setToolsOpen(false);
-                              void review.start();
-                            }}
-                          >
-                            <SvgScreen />
-                            Review a screen
-                          </button>
-                        ) : null}
-                        {voiceOn && voice.supported ? (
-                          <button
-                            type="button"
-                            role="menuitem"
-                            className="chat-tools-item"
-                            onClick={() => {
-                              setToolsOpen(false);
-                              voice.start();
-                            }}
-                          >
-                            <SvgMic />
-                            Dictate
-                          </button>
-                        ) : null}
-                      </div>
-                    ) : null}
-                  </div>
-                ) : (
-                  <>
-                    <button
-                      type="button"
-                      className="chat-attach"
-                      onClick={() => fileInputRef.current?.click()}
-                      aria-label="Attach a file"
-                      title="Attach a file"
-                    >
-                      {/* NOT DISABLED DURING AN UPLOAD ANY MORE. It was, because
-                          a spinner on the paperclip was the only upload
-                          indicator there was, so the button had to BE the
-                          status. Progress now lives on the chips and the strip
-                          above them, and adding a sixth file to a running batch
-                          is the thing a queue exists to allow. */}
-                      <SvgAttach />
-                    </button>
-                    {/* Both modes, unlike the mic: the thing you review is
-                      usually the app the agent in THIS pane is building. */}
-                    <ReviewButton
-                      state={review.state}
-                      available={review.available}
-                      unconfigured={review.unconfigured}
-                      onStart={() => void review.start()}
-                      onStop={() => void review.stop()}
-                    />
-                    {/* Chat mode only — Agent mode is raw, and `voiceOn` is the
-                      same predicate that governs Chat mode's written voice. */}
-                    {voiceOn ? (
-                      <VoiceControl
-                        state={voice.state}
-                        detail={voice.detail}
-                        status={voice.status}
-                        supported={voice.supported}
-                        minutesLeft={voice.minutesLeft}
-                        elapsedMs={voice.elapsedMs}
-                        onStart={voice.start}
-                        onStop={() => voice.stop('user')}
-                      />
-                    ) : null}
-                  </>
-                )}
                 <ChatDraft
                   ref={inputRef}
                   className="chat-input"
@@ -5641,28 +5529,151 @@ export function ChatPane({
                   </div>
                 </>
               ) : null}
+              {/* ── THE TOOL ROW, INSIDE THE PILL ─────────────────────────
+                  Everything that is ABOUT the message or the session, on
+                  one line under the input: the + that adds to your
+                  message on the left, the session chip and Branch on the
+                  right.
+
+                  It is here, and not floating above the pill, because the
+                  first attempt hung these chips off the composer's top
+                  edge — out of flow, so they cost no row, but painting
+                  over the last line of the transcript. Reported as "a
+                  bunch of fixed new elements on the top right of the
+                  composer". Inside the pill they are in the one surface
+                  that is already about composing, they cover nothing, and
+                  the row they add is smaller than the status row they
+                  replaced. */}
+              <div className="chat-composer-tools">
+                {/* ONE BUTTON, and it only adds to your message — a file, a
+                    screen, your voice. Nothing about the session is behind it;
+                    that lives on the chip at the other end of this row, which
+                    is the distinction the first attempt got wrong by putting
+                    both behind one `+`. See collapsedTools for why this is no
+                    longer a desktop/touch split. */}
+                {collapsedTools ? (
+                  <div className="chat-tools" ref={toolsRef}>
+                    <button
+                      type="button"
+                      className="chat-attach chat-tools-toggle"
+                      onClick={() => setToolsOpen((o) => !o)}
+                      aria-haspopup="menu"
+                      aria-expanded={toolsOpen}
+                      aria-label="Add to this message"
+                      title="Add to this message"
+                    >
+                      <SvgPlus />
+                    </button>
+                    {toolsOpen ? (
+                      <div className="chat-tools-sheet" role="menu">
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className="chat-tools-item"
+                          onClick={() => {
+                            setToolsOpen(false);
+                            fileInputRef.current?.click();
+                          }}
+                        >
+                          <SvgAttach />
+                          Attach a file
+                        </button>
+                        {review.available ? (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className="chat-tools-item"
+                            onClick={() => {
+                              setToolsOpen(false);
+                              void review.start();
+                            }}
+                          >
+                            <SvgScreen />
+                            Review a screen
+                          </button>
+                        ) : null}
+                        {voiceOn && voice.supported ? (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className="chat-tools-item"
+                            onClick={() => {
+                              setToolsOpen(false);
+                              voice.start();
+                            }}
+                          >
+                            <SvgMic />
+                            Dictate
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      className="chat-attach"
+                      onClick={() => fileInputRef.current?.click()}
+                      aria-label="Attach a file"
+                      title="Attach a file"
+                    >
+                      {/* NOT DISABLED DURING AN UPLOAD ANY MORE. It was, because
+                            a spinner on the paperclip was the only upload
+                            indicator there was, so the button had to BE the
+                            status. Progress now lives on the chips and the strip
+                            above them, and adding a sixth file to a running batch
+                            is the thing a queue exists to allow. */}
+                      <SvgAttach />
+                    </button>
+                    {/* Both modes, unlike the mic: the thing you review is
+                        usually the app the agent in THIS pane is building. */}
+                    <ReviewButton
+                      state={review.state}
+                      available={review.available}
+                      unconfigured={review.unconfigured}
+                      onStart={() => void review.start()}
+                      onStop={() => void review.stop()}
+                    />
+                    {/* Chat mode only — Agent mode is raw, and `voiceOn` is the
+                        same predicate that governs Chat mode's written voice. */}
+                    {voiceOn ? (
+                      <VoiceControl
+                        state={voice.state}
+                        detail={voice.detail}
+                        status={voice.status}
+                        supported={voice.supported}
+                        minutesLeft={voice.minutesLeft}
+                        elapsedMs={voice.elapsedMs}
+                        onStart={voice.start}
+                        onStop={() => voice.stop('user')}
+                      />
+                    ) : null}
+                  </>
+                )}
+                <SessionBar
+                  paneId={paneId}
+                  folder={folder}
+                  status={agentStatus}
+                  {...(session?.assistant ? { assistant: session.assistant } : {})}
+                  liveLabel={liveLabel}
+                  agents={rosterAgents}
+                  background={backgroundLive}
+                  onOpenChat={openChat}
+                  mode={mode}
+                  onBranch={() => void branch()}
+                  branching={branching}
+                  send={(obj) => {
+                    const sock = wsRef.current;
+                    if (!sock || sock.readyState !== WebSocket.OPEN) {
+                      setNotice({ text: 'Not connected — try again in a moment.', tone: 'info' });
+                      return;
+                    }
+                    sock.send(JSON.stringify(obj));
+                  }}
+                />
+              </div>
             </div>
-            <SessionBar
-              paneId={paneId}
-              folder={folder}
-              status={agentStatus}
-              {...(session?.assistant ? { assistant: session.assistant } : {})}
-              liveLabel={liveLabel}
-              agents={rosterAgents}
-              background={backgroundLive}
-              onOpenChat={openChat}
-              mode={mode}
-              onBranch={() => void branch()}
-              branching={branching}
-              send={(obj) => {
-                const sock = wsRef.current;
-                if (!sock || sock.readyState !== WebSocket.OPEN) {
-                  setNotice({ text: 'Not connected — try again in a moment.', tone: 'info' });
-                  return;
-                }
-                sock.send(JSON.stringify(obj));
-              }}
-            />
           </div>
         ) : null}
       </div>

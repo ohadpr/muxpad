@@ -1135,6 +1135,29 @@
 
 /* Photo/attach button on the left (opens the OS photo picker → uploads via the
    same attachments endpoint the TUI composer uses). Quiet ghost button. */
+/* ── THE PILL'S TOOL ROW ──────────────────────────────────────────────────
+   One line under the input holding the two things that are ABOUT a message
+   rather than part of it: the `+` that adds to it, and — at the far end — the
+   session chip, Branch, and the roster when there is one.
+
+   It replaces the full-width strip that used to sit UNDER the pill, and it is
+   cheaper than it was: no 16px gap to clear a drop shadow, no second surface,
+   and the row is shared by two things that each used to want their own. */
+.chat-composer-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 30px;
+  padding: 0 2px;
+}
+/* The strip takes the whole remaining width and right-aligns inside it, which
+   is what puts the session chip at the pill's right edge whatever the left
+   cluster is currently doing. */
+.chat-composer-tools > .chat-status-bar {
+  flex: 1 1 auto;
+  margin-left: auto;
+}
+
 /* ── THE COLLAPSED LEFT CLUSTER ───────────────────────────────────────────
    One `+` standing for attach / review a screen / dictate, on touch layouts
    only, and only while all three are idle. The wrapper is the anchor the sheet
@@ -1187,6 +1210,17 @@
 }
 .chat-tools-item:hover svg {
   color: inherit;
+}
+
+/* The `+` lives in the tool row now, not beside the input, so it is sized to
+   that row rather than to the 40px input line. */
+.chat-composer-tools .chat-attach {
+  width: 28px;
+  height: 28px;
+}
+.chat-composer-tools .chat-attach svg {
+  width: 18px;
+  height: 18px;
 }
 
 .chat-attach {
@@ -2213,46 +2247,35 @@
  * ChatPane.statusline.test.tsx pins this set and fails if any rule in the strip
  * ever acquires a declaration that would permit a second line. */
 .chat-status-bar {
-  /* OUT OF FLOW — this is the declaration that returns the row's height to the
-     transcript. The wrap is `position: absolute`, so it is the containing
-     block, and `bottom: 100%` puts the chip immediately above its top edge. */
-  position: absolute;
-  bottom: 100%;
-  left: max(12px, env(safe-area-inset-left, 0px));
-  right: max(12px, env(safe-area-inset-right, 0px));
+  /* IN FLOW AGAIN, and inside the composer pill. The previous revision hung it
+     off the pill's top edge with `position: absolute` — which did buy the row
+     back, and did paint over the last line of the transcript: "a bunch of
+     fixed new elements on the top right of the composer".
+     It is the right-hand end of the pill's own tool row now: no row of its own,
+     nothing covered, and in the one surface that is already about composing. */
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
-  /* Right-aligned: see the note above. The pill's own 768px box is kept so the
-     chip lands on the PILL's right edge on a wide desktop, not the pane's. */
   justify-content: flex-end;
-  /* ONE LINE. The cells carry no block padding of their own; the chip surface
-     below adds its padding inside this height. */
-  height: 1.375rem;
-  width: auto;
-  max-width: 768px;
-  margin: 0 auto 6px;
+  /* The tool row sets the height; the strip is one of its two items. */
+  height: 100%;
+  min-width: 0;
+  margin: 0;
   padding: 0;
   /* Menus escape via position:absolute on .chat-status-menu; segment buttons
      clip their own labels so long model names can't paint over the live cell. */
   overflow: visible;
 }
-/* THE SURFACE, and it exists only because the strip is out of flow (see the
-   note above): floating over the transcript's last line, a bare 11px label on
-   arbitrary prose cannot be read. Applied to the SEGMENTS rather than the bar
-   so each chip is its own object and the gaps between them stay transparent. */
-.chat-status-bar .chat-status-seg {
-  height: 1.375rem;
-  padding: 0 9px;
-  border: 1px solid color-mix(in srgb, var(--chat-fg) 14%, transparent);
-  border-radius: 999px;
-  background: var(--chat-elev);
-}
+/* NO SURFACE ON THE SEGMENTS. They had a border, a pill radius and a raised
+   ground for exactly one revision — the one where the strip floated over the
+   transcript and an 11px label on arbitrary prose could not be read. Back
+   inside the pill there is nothing to lift off, and three bordered chips in a
+   row were the thing that made this read as bolted on. */
 .chat-status-bar .chat-status-seg-wrap + .chat-status-seg-wrap,
 .chat-status-bar .chat-status-seg + .chat-status-seg,
 .chat-status-bar .chat-status-seg-wrap + .chat-status-seg,
 .chat-status-bar .chat-status-seg + .chat-status-seg-wrap {
-  margin-left: 6px;
+  margin-left: 2px;
 }
 
 /* `flex: 0 1 auto` — sized by content, never STRETCHED to fill the 768px above

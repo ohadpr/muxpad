@@ -17,11 +17,15 @@ const SRC = readFileSync(join(__dirname, 'ChatPane.tsx'), 'utf8');
 const CSS = readFileSync(join(__dirname, 'ChatPane.css'), 'utf8');
 
 describe('the composer tools', () => {
-  it('collapses only on a touch LAYOUT, from the shared breakpoint', () => {
-    // Not a user-agent sniff and not a second number: the same media query
-    // every other mobile decision in the app reads.
-    expect(SRC).toMatch(/useMediaQuery\(MOBILE_BREAKPOINT\)/);
-    expect(SRC).toMatch(/collapsedTools = touchLayout && toolsIdle/);
+  it('collapses on EVERY layout, not just touch', () => {
+    // It was touch-only for one revision, on the argument that a mouse has
+    // room and hover where a thumb has neither. That lost to the report — "I
+    // see multiple buttons on the left, doesn't feel like anything changed" —
+    // and it was the wrong argument anyway: room is not a reason to spend it,
+    // and a composer whose left edge means different things on two screens is
+    // one you have to learn twice.
+    expect(SRC).toMatch(/const collapsedTools = toolsIdle;/);
+    expect(SRC).not.toMatch(/collapsedTools = touchLayout/);
   });
 
   it('pops a LIVE control back out of the sheet', () => {
@@ -39,12 +43,15 @@ describe('the composer tools', () => {
     expect(SRC).toMatch(/if \(!collapsedTools\) setToolsOpen\(false\);/);
   });
 
-  it('keeps the full row on desktop, where there is room and hover', () => {
+  it('still has the full row to fall back to, for a LIVE control', () => {
+    // The expanded branch is not dead code: it is what renders while a screen
+    // review or the mic is running, because that is state rather than an
+    // action and its stop has to stay reachable.
     const branch = SRC.slice(SRC.indexOf('{collapsedTools ? ('));
-    const desktop = branch.slice(branch.indexOf(') : ('));
-    expect(desktop).toMatch(/<ReviewButton/);
-    expect(desktop).toMatch(/<VoiceControl/);
-    expect(desktop).toMatch(/className="chat-attach"/);
+    const expanded = branch.slice(branch.indexOf(') : ('));
+    expect(expanded).toMatch(/<ReviewButton/);
+    expect(expanded).toMatch(/<VoiceControl/);
+    expect(expanded).toMatch(/className="chat-attach"/);
   });
 
   it('opens its sheet upward, away from the bottom of the screen', () => {
