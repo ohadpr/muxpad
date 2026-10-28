@@ -47,6 +47,62 @@
   position: relative; /* anchors the scroll-down arrow + tool modal */
 }
 
+/* ── THE CHAT'S HEAD ──────────────────────────────────────────────────────
+   The pane's own title bar: its name on the left, Branch and the session chip
+   on the right. Desktop only — on a phone the app's top bar is already this.
+
+   WHY IT IS AT THE TOP AT ALL, after three attempts at the bottom: everything
+   in it is ABOUT THE PANE, and none of it is about the message you are
+   writing. The bottom of a chat is the composer's, and anything parked there
+   either steals a row from the conversation or floats over it.
+
+   It is a HAIRLINE, not a bar: no fill, one seam, and the name set at the
+   chat's own size. The log scrolls under the seam, which is what keeps it
+   reading as the top edge of the conversation rather than as a second
+   toolbar. */
+.chat-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 10px 0 14px;
+  border-bottom: 1px solid var(--chat-border);
+  background: transparent;
+}
+.chat-head-name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: var(--chrome-font, inherit);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--chat-fg);
+}
+/* The workspace, quieter and dropped first when the pane is narrow — the chat
+   name is the thing you came for; the workspace is where it lives. */
+.chat-head-ws {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: var(--chrome-font, inherit);
+  font-size: 0.75rem;
+  color: var(--chat-faint);
+}
+.chat-head-ws::before {
+  content: "·";
+  margin-right: 6px;
+}
+/* The strip takes the rest of the row and right-aligns in it, so the chip
+   lands on the pane's right edge whatever the name is doing. */
+.chat-head > .chat-status-bar {
+  flex: 1 1 auto;
+  margin-left: auto;
+}
+
 .chat-scroll {
   flex: 1 1 auto;
   overflow-y: auto;
@@ -1150,12 +1206,40 @@
   min-height: 30px;
   padding: 0 2px;
 }
-/* The strip takes the whole remaining width and right-aligns inside it, which
-   is what puts the session chip at the pill's right edge whatever the left
-   cluster is currently doing. */
-.chat-composer-tools > .chat-status-bar {
-  flex: 1 1 auto;
-  margin-left: auto;
+/* NOTHING ABOUT THE SESSION LIVES HERE. The session chip spent one revision
+   at the right-hand end of this row, which was better than floating over the
+   transcript and still the wrong object: this row is about the MESSAGE — what
+   you can add to it — and the chip is about the PANE. It is in the head now
+   (.chat-head). */
+
+/* THE DESKTOP TOOL ROW'S BUTTONS — icon AND name. A row of bare icons is
+   indistinguishable from the cluster it replaced ("doesn't feel like anything
+   changed"); the label is the difference, and a desktop pointer has the width
+   for it. Quiet by default: these are available, not urgent. */
+.chat-tool-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 9px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--chat-faint);
+  font-family: var(--chrome-font, inherit);
+  font-size: 0.78125rem;
+  line-height: 1.4;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 120ms ease, color 120ms ease;
+}
+.chat-tool-btn:hover:not(:disabled),
+.chat-tool-btn:focus-visible {
+  background: color-mix(in srgb, var(--chat-fg) 9%, transparent);
+  color: var(--chat-fg);
+}
+.chat-tool-btn svg {
+  flex: 0 0 auto;
+  color: inherit;
 }
 
 /* ── THE COLLAPSED LEFT CLUSTER ───────────────────────────────────────────
