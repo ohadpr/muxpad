@@ -1526,6 +1526,26 @@
   flex: 1 1 auto;
 }
 
+/* ── …EXCEPT WHEN THE TURN IS ONE LINE TALL ──────────────────────────────
+   The column above is right for a streaming ANSWER: paragraphs, tables, code
+   — Stop belongs under them. It is wrong for the working indicator, which is
+   a single line: stacking a button under it spends a whole row on a control
+   that fits beside the thing it acts on, and leaves it floating in the margin
+   under a prompt glyph. "Stop is now on its own line to the right below the
+   progress indicator."
+
+   So the body is a ROW while the indicator is what it holds, and a column the
+   moment there is prose. One render site, one element, and the shape follows
+   the content rather than a second branch in the JSX. */
+.chat-turn-body:has(> .chat-working) {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+.chat-turn-body:has(> .chat-working) .chat-turn-stop {
+  margin-top: 0;
+}
+
 /* STOP, AT THE FOOT OF THE RUNNING TURN.
    Quiet at rest: the turn block's job is to say "still going", and a loud
    button beside it would read as the thing to do rather than the exception.
