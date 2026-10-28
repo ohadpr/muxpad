@@ -1474,12 +1474,31 @@
    it. */
 [data-theme="memphis"] .chat-bubble,
 [data-theme="memphis"] .chat-composer,
-[data-theme="memphis"] .settings-dialog,
-[data-theme="memphis"] .chat-card {
+[data-theme="memphis"] .settings-dialog {
   background-color: var(--bg-elev);
   border: 3px solid var(--fg);
   border-radius: 0;
   box-shadow: 6px 6px 0 var(--accent);
+}
+
+/* ── A CARD IS ONE STEP DOWN FROM A MESSAGE ──────────────────────────────
+   It used to be in the rule above, wearing the same 3px frame and the same
+   6px offset shadow as a bubble and the composer — three objects of equal
+   weight stacked on one screen, two of which you wrote and one of which is
+   furniture. Reported as "they are grabbing too much attention… they should
+   be one step down in terms of visible hierarchy and importance".
+
+   The card keeps the GEOMETRY, because that is the theme talking: square
+   corners, a hard edge, no blur. It gives up the two things that were
+   claiming equal rank — the shadow, which is what makes a Memphis object
+   look stuck ON the page, and half the border's weight.
+
+   The base rule in ChatCards.css already says this in the app's own terms
+   ("present rather than loud"); this is the same sentence in Memphis. */
+[data-theme="memphis"] .chat-card {
+  border-radius: 0;
+  border: 2px solid color-mix(in srgb, var(--fg) 45%, transparent);
+  box-shadow: none;
 }
 [data-theme="memphis"] .chat-composer:focus-within {
   box-shadow: 6px 6px 0 #00c2e0;
