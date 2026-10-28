@@ -678,8 +678,6 @@ export function SessionBar({
   background = 0,
   onOpenChat,
   mode,
-  onBranch,
-  branching = false,
 }: {
   paneId: string;
   folder: { cwd: string; hasProject: boolean } | null;
@@ -694,12 +692,7 @@ export function SessionBar({
   onOpenChat?: ((chat: { workspaceSlug: string; tabSlug: string }) => void) | undefined;
   /** The pane's mode, or null when the server hasn't told us — no chip. */
   mode: AgentMode | null;
-  /** Open a new chat beside this one, in the same folder, pre-filled to read
-   *  this one (see lib/chat-branch). Absent → no branch button. */
-  onBranch?: (() => void) | undefined;
-  /** The branch is mid-create — the button is disabled rather than hidden, so
-   *  the strip does not change width under the pointer. */
-  branching?: boolean | undefined;
+
   /** Optimistic local echo + the "here is what actually just happened" notice.
    *  The authoritative value still arrives on the next session frame. */
 }) {
@@ -1098,45 +1091,14 @@ export function SessionBar({
         </div>
       ) : null}
 
-      {/* ── BRANCH ───────────────────────────────────────────────────────
-          A new chat beside this one, same folder, pre-filled to go and read
-          this one. It is a BUTTON and not a menu row on purpose: "I think in
-          some of the harnesses this is implemented by a /command, but we don't
-          want /commands. We want a button."
+      {/* ── BRANCH IS NOT A CHIP HERE ANY MORE ───────────────────────────
+          It was an icon-only button on this strip — the one cell that was a
+          verb rather than a fact. It is a COMMAND, and the composer already
+          has a place for commands: the tool row on a desktop, the `+` sheet on
+          a phone, where it sits beside Attach and Review a screen under the
+          name the report gave it, "btw". See composerTools in ChatPane.
 
-          Icon-only, because the strip is a rim with at most three chips on it
-          and this is the only one that is a verb rather than a fact. The glyph
-          is the same branch mark the rail uses for a spawned chat, which is
-          the nearest thing muxpad has to a word for "another conversation,
-          from here". */}
-      {onBranch ? (
-        <button
-          type="button"
-          className="chat-status-seg -branch"
-          onClick={onBranch}
-          disabled={branching}
-          aria-label="Branch a new chat from this one"
-          title="Branch — a new chat in this folder, pre-filled to read this one. This chat keeps running."
-        >
-          <svg
-            width="12"
-            height="12"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.9"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
-          >
-            <circle cx="6" cy="5.5" r="2.4" />
-            <circle cx="6" cy="18.5" r="2.4" />
-            <circle cx="18" cy="8" r="2.4" />
-            <path d="M6 7.9v8.2M8.4 5.5h4.2a3 3 0 0 1 3 3v.4" />
-          </svg>
-        </button>
-      ) : null}
-
+          This strip is back to being only facts about the session. */}
       {/* ── "WORKING…" IS NOT A CELL ──────────────────────────────────────
           The live cell used to render whenever a turn was running, and with no
           subagents its whole content was the word "Working…" — the third place
