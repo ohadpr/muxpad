@@ -1135,6 +1135,60 @@
 
 /* Photo/attach button on the left (opens the OS photo picker → uploads via the
    same attachments endpoint the TUI composer uses). Quiet ghost button. */
+/* ── THE COLLAPSED LEFT CLUSTER ───────────────────────────────────────────
+   One `+` standing for attach / review a screen / dictate, on touch layouts
+   only, and only while all three are idle. The wrapper is the anchor the sheet
+   hangs from; it takes no width of its own beyond the button inside it. */
+.chat-tools {
+  position: relative;
+  flex: 0 0 auto;
+  align-self: center;
+  display: flex;
+}
+/* The sheet OPENS UPWARD and is anchored to the button's left edge, because
+   the button is at the pill's left edge and the pill is at the bottom of the
+   screen — the two directions with room. It is deliberately narrow: three rows
+   of one short phrase, not a menu with sections. */
+.chat-tools-sheet {
+  position: absolute;
+  z-index: 30;
+  bottom: calc(100% + 8px);
+  left: 0;
+  min-width: 190px;
+  padding: 5px;
+  border: 1px solid var(--chat-border-strong);
+  border-radius: 14px;
+  background: var(--chat-elev);
+  box-shadow: 0 18px 44px -12px rgb(0 0 0 / 55%);
+}
+.chat-tools-item {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--chat-dim);
+  font: inherit;
+  font-size: 0.875rem;
+  text-align: left;
+  cursor: pointer;
+}
+.chat-tools-item:hover,
+.chat-tools-item:focus-visible {
+  background: color-mix(in srgb, var(--chat-fg) 10%, transparent);
+  color: var(--chat-fg);
+}
+.chat-tools-item svg {
+  flex: 0 0 auto;
+  color: var(--chat-faint);
+}
+.chat-tools-item:hover svg {
+  color: inherit;
+}
+
 .chat-attach {
   flex: 0 0 auto;
   align-self: center;

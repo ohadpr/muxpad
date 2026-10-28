@@ -185,7 +185,7 @@ import { CopyablePre } from './CopyablePre';
 import { FromAgentMessage } from './FromAgentMessage';
 import { SvgAgentGlyph, SvgGlobe, SvgTerminalGlyph } from './PaneWebSwitch';
 import { ReviewButton, ReviewPanel, sendableNotes } from './ReviewControl';
-import { VoiceBar, VoiceControl } from './VoiceControl';
+import { VoiceBar, VoiceControl, isLive as voiceIsLive } from './VoiceControl';
 
 /** Open a media item in the lightbox (image or video). */
 import {
@@ -211,7 +211,9 @@ import {
   workingRowLabel,
 } from '../lib/live-status';
 import { isMobileLayout } from '../lib/mobile-layout';
+import { MOBILE_BREAKPOINT } from '../lib/mobile-layout';
 import { useDismissable } from '../lib/use-dismissable';
+import { useMediaQuery } from '../use-media-query';
 import { SlackApprovalAlert } from './SlackApprovalAlert';
 import './ChatPane.css';
 
@@ -240,6 +242,41 @@ function SvgAttach() {
         strokeWidth="1.6"
         strokeLinecap="round"
         strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/** The `+` that stands for the whole left cluster on a touch layout. */
+function SvgPlus() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true" fill="none">
+      <path d="M12 6v12M6 12h12" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** Screen glyph — the sheet's "Review a screen" row. Smaller than the button
+ *  glyphs above: in a menu it sits beside 14px text, not alone in a circle. */
+function SvgScreen() {
+  return (
+    <svg width="17" height="17" viewBox="0 0 24 24" aria-hidden="true" fill="none">
+      <rect x="2.5" y="4" width="19" height="13" rx="2" stroke="currentColor" strokeWidth="1.7" />
+      <path d="M8.5 20.5h7" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** Mic glyph — the sheet's "Dictate" row. Same size argument as SvgScreen. */
+function SvgMic() {
+  return (
+    <svg width="17" height="17" viewBox="0 0 24 24" aria-hidden="true" fill="none">
+      <rect x="9" y="2.5" width="6" height="11" rx="3" stroke="currentColor" strokeWidth="1.7" />
+      <path
+        d="M5 11a7 7 0 0 0 14 0M12 18v3.5"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
       />
     </svg>
   );
@@ -3050,6 +3087,7 @@ export function ChatPane({
     [mode, sending, session?.assistant, closedTurnStartId],
   );
   const voiceOn = chatVoiceActive(voiceOpts);
+
   // ONE VARIANT PER TURN. Keyed on the turn's own start event rather than
   // advanced on mount: the indicator unmounts the moment the first token
   // streams and remounts if the stream clears, so a mount-time pick would
@@ -3569,6 +3607,26 @@ export function ChatPane({
   // list is the review-before-send affordance, and it is the only defence
   // against a mishearing or a bad split, both of which read plausibly.
   const review = useReview(paneId);
+
+  // ── THE LEFT CLUSTER, COLLAPSED ON TOUCH ──────────────────────────────────
+  // See the `+` in the composer for the argument. The two conditions are
+  // independent on purpose: the LAYOUT decides whether there is room for a
+  // row, and the STATE decides whether any of them is currently more than a
+  // button. A live mic or a running screen review is not an action waiting to
+  // be taken — it is the thing you are doing — so it leaves the sheet and sits
+  // back in the pill where its elapsed time and its stop are reachable.
+  const touchLayout = useMediaQuery(MOBILE_BREAKPOINT);
+  const toolsIdle = review.state.phase === 'idle' && !voiceIsLive(voice.state);
+  const collapsedTools = touchLayout && toolsIdle;
+  const [toolsOpen, setToolsOpen] = useState(false);
+  const toolsRef = useRef<HTMLDivElement>(null);
+  useDismissable(toolsOpen, toolsRef, () => setToolsOpen(false));
+  // A control that goes live while the sheet is open (or a rotation into the
+  // desktop layout) takes the `+` away with it — the sheet must not outlive
+  // the button it hangs from.
+  useEffect(() => {
+    if (!collapsedTools) setToolsOpen(false);
+  }, [collapsedTools]);
   const sendReview = () => {
     const outgoing = composeReviewMessage(sendableNotes(review.state.items));
     if (!outgoing) return;
@@ -5202,44 +5260,123 @@ export function ChatPane({
                 onChange={onPickFiles}
               />
               <div className="chat-composer-main">
-                <button
-                  type="button"
-                  className="chat-attach"
-                  onClick={() => fileInputRef.current?.click()}
-                  aria-label="Attach a file"
-                  title="Attach a file"
-                >
-                  {/* NOT DISABLED DURING AN UPLOAD ANY MORE. It was, because a
-                      spinner on the paperclip was the only upload indicator
-                      there was, so the button had to BE the status. Progress
-                      now lives on the chips and the strip above them, and
-                      adding a sixth file to a running batch is the thing a
-                      queue exists to allow. */}
-                  <SvgAttach />
-                </button>
-                {/* Both modes, unlike the mic: the thing you review is usually
-                  the app the agent in THIS pane is building. */}
-                <ReviewButton
-                  state={review.state}
-                  available={review.available}
-                  unconfigured={review.unconfigured}
-                  onStart={() => void review.start()}
-                  onStop={() => void review.stop()}
-                />
-                {/* Chat mode only — Agent mode is raw, and `voiceOn` is the same
-                  predicate that governs Chat mode's written voice. */}
-                {voiceOn ? (
-                  <VoiceControl
-                    state={voice.state}
-                    detail={voice.detail}
-                    status={voice.status}
-                    supported={voice.supported}
-                    minutesLeft={voice.minutesLeft}
-                    elapsedMs={voice.elapsedMs}
-                    onStart={voice.start}
-                    onStop={() => voice.stop('user')}
-                  />
-                ) : null}
+                {/* ── THE LEFT CLUSTER ──────────────────────────────────────
+                    Three permanent targets — attach, review a screen, dictate
+                    — for actions taken a few times a day each. On a phone
+                    that is ~90px of a 360px pill: "there are too many buttons
+                    in the composer window itself on mobile."
+
+                    So on a touch layout they collapse behind one `+`, which
+                    is what iMessage, Slack, Discord and every other composer
+                    on that screen size does. Desktop keeps the row: a mouse
+                    has room and hover, a thumb has neither.
+
+                    …BUT ONLY WHILE THEY ARE IDLE. A recording in progress is
+                    not an action waiting to be taken, it is STATE — the
+                    elapsed time, the level, the stop. Hiding a live mic
+                    behind a `+` would be the one case where collapsing costs
+                    something real, so an active control pops back out and the
+                    `+` keeps the rest. */}
+                {collapsedTools ? (
+                  <div className="chat-tools" ref={toolsRef}>
+                    <button
+                      type="button"
+                      className="chat-attach chat-tools-toggle"
+                      onClick={() => setToolsOpen((o) => !o)}
+                      aria-haspopup="menu"
+                      aria-expanded={toolsOpen}
+                      aria-label="Add to this message"
+                      title="Add to this message"
+                    >
+                      <SvgPlus />
+                    </button>
+                    {toolsOpen ? (
+                      <div className="chat-tools-sheet" role="menu">
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className="chat-tools-item"
+                          onClick={() => {
+                            setToolsOpen(false);
+                            fileInputRef.current?.click();
+                          }}
+                        >
+                          <SvgAttach />
+                          Attach a file
+                        </button>
+                        {review.available ? (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className="chat-tools-item"
+                            onClick={() => {
+                              setToolsOpen(false);
+                              void review.start();
+                            }}
+                          >
+                            <SvgScreen />
+                            Review a screen
+                          </button>
+                        ) : null}
+                        {voiceOn && voice.supported ? (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className="chat-tools-item"
+                            onClick={() => {
+                              setToolsOpen(false);
+                              voice.start();
+                            }}
+                          >
+                            <SvgMic />
+                            Dictate
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      className="chat-attach"
+                      onClick={() => fileInputRef.current?.click()}
+                      aria-label="Attach a file"
+                      title="Attach a file"
+                    >
+                      {/* NOT DISABLED DURING AN UPLOAD ANY MORE. It was, because
+                          a spinner on the paperclip was the only upload
+                          indicator there was, so the button had to BE the
+                          status. Progress now lives on the chips and the strip
+                          above them, and adding a sixth file to a running batch
+                          is the thing a queue exists to allow. */}
+                      <SvgAttach />
+                    </button>
+                    {/* Both modes, unlike the mic: the thing you review is
+                      usually the app the agent in THIS pane is building. */}
+                    <ReviewButton
+                      state={review.state}
+                      available={review.available}
+                      unconfigured={review.unconfigured}
+                      onStart={() => void review.start()}
+                      onStop={() => void review.stop()}
+                    />
+                    {/* Chat mode only — Agent mode is raw, and `voiceOn` is the
+                      same predicate that governs Chat mode's written voice. */}
+                    {voiceOn ? (
+                      <VoiceControl
+                        state={voice.state}
+                        detail={voice.detail}
+                        status={voice.status}
+                        supported={voice.supported}
+                        minutesLeft={voice.minutesLeft}
+                        elapsedMs={voice.elapsedMs}
+                        onStart={voice.start}
+                        onStop={() => voice.stop('user')}
+                      />
+                    ) : null}
+                  </>
+                )}
                 <ChatDraft
                   ref={inputRef}
                   className="chat-input"
