@@ -2475,32 +2475,17 @@
   opacity: 0.9;
 }
 
-.chat-status-seg.-ctx {
-  flex-shrink: 0;
-  min-width: max-content;
-  gap: 5px;
-  font-weight: 600;
-  color: var(--status-working, #b7791f);
-}
-.chat-status-seg.-ctx[data-level="high"] {
-  color: var(--danger);
-}
-.chat-status-seg.-ctx .chat-ctx-glyph {
-  display: inline-flex;
-  flex: 0 0 auto;
-}
-/* The one place the strip's own svg rule must not win: that rule paints every
-   icon --chat-dim so icons read as identity marks, and this icon is the
-   warning itself. */
-.chat-status-seg.-ctx svg {
-  color: inherit;
-}
-.chat-session-bar-fill[data-level="warn"] {
-  background: var(--status-working, #b7791f);
-}
-.chat-session-bar-fill[data-level="high"] {
-  background: var(--danger);
-}
+/* ── THE CONTEXT CELL IS GONE, AND SO IS ITS COLOUR ──────────────────────
+   `.chat-status-seg.-ctx` warmed at 70% and went danger-red at 88%, and the
+   meter's fill was levelled the same way. That was the right UI for a chat
+   that compacted nothing by itself: the colour was the only warning before a
+   failed send.
+
+   muxpad compacts automatically again (server auto-compact.ts), so a red cell
+   would be an alarm about something already handled — "I don't want the user
+   to be thinking about compaction". The meter survives in the session menu,
+   in ONE colour, because there it answers a question somebody went looking
+   for rather than raising one they did not ask. */
 
 .chat-session-context-label {
   display: block;
