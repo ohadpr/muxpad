@@ -69,8 +69,10 @@ describe('stop is attached to the turn it stops', () => {
     // COMMENTS STRIPPED FIRST: the rule's own note NAMES --chat-faint, to say
     // why it is not the token being used. A test reading the raw file would
     // fail on the sentence explaining the correct choice.
+    // The rule ITSELF, anchored at a line start — `.chat-turn-stop {` also
+    // appears as the tail of the `:has()` rule above it.
     const flat = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
-    const rest = flat.slice(flat.indexOf('.chat-turn-stop {'));
+    const rest = flat.slice(flat.indexOf('\n.chat-turn-stop {'));
     const rule = rest.slice(0, rest.indexOf('}'));
     expect(rule).toMatch(/background:\s*transparent/);
     expect(rule).toMatch(/color:\s*var\(--chat-dim\)/);
@@ -109,10 +111,43 @@ describe('stop sits under the answer, not beside it', () => {
   });
 
   it('never stretches, wherever it is dropped', () => {
+    // The rule ITSELF, anchored at a line start — `.chat-turn-stop {` also
+    // appears as the tail of the `:has()` rule above it.
     const flat = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
-    const rest = flat.slice(flat.indexOf('.chat-turn-stop {'));
+    const rest = flat.slice(flat.indexOf('\n.chat-turn-stop {'));
     const rule = rest.slice(0, rest.indexOf('}'));
     expect(rule).toMatch(/flex:\s*0 0 auto/);
     expect(rule).toMatch(/align-self:\s*flex-start/);
+  });
+});
+
+/**
+ * …AND BESIDE IT WHEN THE TURN IS ONE LINE TALL.
+ *
+ * The column is right for a streaming answer — paragraphs, tables, code — and
+ * wrong for the working indicator, which is a single line: a button stacked
+ * under it spends a whole row on a control that fits beside the thing it acts
+ * on. Reported as "stop is now on its own line to the right below the
+ * progress indicator".
+ */
+describe('stop follows the shape of the turn', () => {
+  it('is a row while the indicator is what the turn holds', () => {
+    const flat = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+    const i = flat.indexOf('.chat-turn-body:has(> .chat-working) {');
+    expect(i).toBeGreaterThan(-1);
+    const rule = flat.slice(i, flat.indexOf('}', i));
+    expect(rule).toMatch(/flex-direction:\s*row/);
+    expect(rule).toMatch(/align-items:\s*center/);
+  });
+
+  it('stays a column for prose, which is what the wrapper was added for', () => {
+    const flat = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+    const i = flat.indexOf('.chat-turn-body {');
+    expect(flat.slice(i, flat.indexOf('}', i))).toMatch(/flex-direction:\s*column/);
+  });
+
+  it('decides it from the content, not from a second branch in the JSX', () => {
+    // One render site: the shape follows what the turn is holding.
+    expect((SRC.match(/className="chat-turn-stop"/g) ?? []).length).toBe(1);
   });
 });
