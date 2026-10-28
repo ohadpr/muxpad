@@ -130,7 +130,11 @@ describe('the recently-active band, on every theme', () => {
     expect(rule).toMatch(/background:\s*color-mix\(in srgb,\s*var\(--fg\)\s*6%/);
     // …and the accent is the SEAM, which is the part a wash cannot do on a
     // theme whose accent and rail share a luminance.
-    expect(rule).toMatch(/border-bottom:[^;]*--rail-accent/);
+    // `--accent`, not `--rail-accent`: the island rebinds it, so the rail
+    // gets the rail's value and the sheet gets the app's. Asking for the rail
+    // token by name is what pinned a deep-surface colour onto a light one —
+    // see NavSheet.contrast.test.
+    expect(rule).toMatch(/border-bottom:[^;]*var\(--accent\)/);
   });
 
   it.each(rails.map((t) => [t.name, t] as const))(
