@@ -78,20 +78,15 @@ const px = (v: string | null) => {
 };
 
 describe('the session line cannot become two lines', () => {
-  it('fixes the bar at exactly one line of text, so content cannot grow it', () => {
-    // `height`, not `min-height` and not `max-height` alone: a fixed height is
-    // the only one of the three that both reserves the line AND refuses a
-    // second one. With `max-height` the children would still lay out two rows
-    // and merely be clipped, which is how you get a half-visible second line.
-    expect(decl('.chat-status-bar', 'height')).toBe('1.375rem');
-    const h = px(decl('.chat-status-bar', 'height'));
-    expect(h).toBeGreaterThan(0);
-    // …and the number is the line plus the chip's own border, not a guess: the
-    // cell's line-height, and the chip surface sized to the same height so the
-    // two cannot drift. The chip exists because the strip floats over the
-    // transcript now — see the note in the css.
-    expect(px(decl('.chat-status-bar .chat-status-seg', 'height'))).toBe(h);
-    expect(px(decl('.chat-status-seg', 'line-height'))).toBeLessThanOrEqual(h);
+  it('is one line, sized by the tool row it sits in', () => {
+    // The bar has owned its own height twice — a fixed 1rem under the pill,
+    // then 1.375rem as a floating chip. Inside the pill's tool row it is one
+    // of two items on a line the ROW sizes, so the invariant moves: the row
+    // has a one-line floor, and the bar fills it.
+    expect(decl('.chat-status-bar', 'height')).toBe('100%');
+    const row = px(decl('.chat-composer-tools', 'min-height'));
+    expect(row).toBeGreaterThan(0);
+    expect(row).toBeLessThanOrEqual(32);
     const pad = (decl('.chat-status-seg', 'padding') ?? '').split(/\s+/);
     expect(pad[0]).toBe('0');
   });
@@ -133,29 +128,27 @@ describe('the session line cannot become two lines', () => {
     expect(decl('.chat-status-seg', 'flex-shrink')).not.toBe('0');
   });
 
-  it('aligns to the PILL, not to the pane, so the desktop inherits the phone', () => {
-    // Designed at 390px, where the pill is the full width. On a wide desktop the
-    // pill is 768px centered, so a strip laid out against the PANE would sit a
-    // long way out from the thing it describes. Same box as the pill and the
-    // notice, so the line centres on the pill at every width.
-    expect(decl('.chat-status-bar', 'max-width')).toBe(decl('.chat-composer', 'max-width'));
+  it('aligns to the PILL, because it is now INSIDE the pill', () => {
+    // It used to carry the pill's own 768px box, so a strip laid out against
+    // the pane would not sit a long way out from the thing it describes. It no
+    // longer needs one: it is a child of the composer, so the pill's box is
+    // its box by construction.
+    expect(decl('.chat-status-bar', 'max-width')).toBeNull();
   });
 
-  it('is right-aligned, and out of flow so it cannot push the composer', () => {
-    // It was CENTRED, which was the right call for a full-width row under the
-    // pill: right-alignment put the always-populated live cell into the
-    // bottom-RIGHT corner of a phone, exactly where the display curve cuts in.
+  it('is right-aligned, at the far end of the tool row', () => {
+    // It was CENTRED while it was a full-width row under the pill, to keep the
+    // always-populated live cell out of a phone's bottom corner radius — where
+    // the display curve cut into the last word of "Working…".
     //
-    // Neither half of that argument survives the strip becoming a chip ABOVE
-    // the pill. It is nowhere near a bottom corner, and the right edge is
-    // where every other "about this pane" control in the app lives.
+    // Sharing a row with the `+`, right is the only end left, and it is where
+    // every other "about this pane" control in the app lives.
     expect(decl('.chat-status-bar', 'justify-content')).toBe('flex-end');
-    // THE DECLARATION THAT BUYS THE ROW BACK. Out of flow, hung off the top of
-    // the composer wrap, so the wrap's height — which is what
-    // `--chat-composer-h` publishes, and therefore what the transcript gives
-    // up — no longer contains the strip at all.
-    expect(decl('.chat-status-bar', 'position')).toBe('absolute');
-    expect(decl('.chat-status-bar', 'bottom')).toBe('100%');
+    expect(decl('.chat-composer-tools > .chat-status-bar', 'margin-left')).toBe('auto');
+    // AND IT IS IN FLOW AGAIN. The revision this replaced hung it off the
+    // pill's top edge — which cost no row, and painted over the last line of
+    // the transcript.
+    expect(decl('.chat-status-bar', 'position')).toBeNull();
   });
 
   it('clears the home indicator by max(), never by adding to it', () => {
@@ -249,21 +242,16 @@ describe('the session line sits outside the composer pill', () => {
     expect(decl('.chat-status-bar', 'background')).toBeNull();
   });
 
-  it('owns the gap to the pill, on the side the pill is actually on', () => {
-    // THE SIDE IS THE ASSERTION, and the side flipped with the strip. It has
-    // been inside the pill (the pill's row gap held it off the input), above
-    // it (its own bottom margin did), and below it (where the margin stayed on
-    // the wrong side and left 6px of dead space facing nothing). It is above
-    // again, as a chip hung off the composer's top edge — so the gap it owns
-    // is the one BELOW it, down to the pill.
-    const margin = (decl('.chat-status-bar', 'margin') ?? '').split(/\s+/);
-    const above = (margin[0] ?? '').trim();
-    const below = Number((margin[2] ?? '').replace('px', ''));
-    expect(above).toBe('0');
-    expect(below).toBeGreaterThan(0);
-    // And it stays a chip, never a box across the pane: the arrangement this
-    // replaced cost 37px of a 119px bar in border, background and padding.
-    expect(below).toBeLessThanOrEqual(16);
+  it('owns no gap at all, because there is nothing to hold it off', () => {
+    // THE SIDE USED TO BE THE ASSERTION, and the side kept flipping: inside
+    // the pill, above it, below it, above it again. The margin outlived two of
+    // those moves and ended up facing nothing.
+    //
+    // It is back inside the pill, sharing the tool row — so the separation is
+    // the row's own gap and the strip's margin is zero on every side. One
+    // owner, no drift.
+    expect(decl('.chat-status-bar', 'margin')).toBe('0');
+    expect(decl('.chat-composer-tools', 'gap')).toBeTruthy();
   });
 
   it('cannot move the composer, because its height is not a variable', () => {
@@ -272,11 +260,8 @@ describe('the session line sits outside the composer pill', () => {
     // strip pushed the input down. Its height is now a constant in the
     // stylesheet and the only inline style the composer measures is the
     // reserve's — nothing in this component sizes the strip at runtime.
-    expect(decl('.chat-status-bar', 'height')).toBe('1.375rem');
+    expect(decl('.chat-composer-tools', 'min-height')).toBeTruthy();
     expect(SRC).not.toMatch(/className="chat-status-bar"[\s\S]{0,200}style=/);
-    // …and it cannot move the composer at all now, in either direction: it is
-    // out of the wrap's flow entirely.
-    expect(decl('.chat-status-bar', 'position')).toBe('absolute');
   });
 });
 
