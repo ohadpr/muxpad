@@ -324,9 +324,12 @@ export function NavTree({ activeWorkspaceSlug, activeTabSlug, variant, onNavigat
 function WorkingSetStrip({
   activeTabSlug,
   onNavigate,
+  touch,
 }: {
   activeTabSlug: string | null;
   onNavigate?: (() => void) | undefined;
+  /** The sheet. No hover to reveal a control and no Control key to press. */
+  touch?: boolean | undefined;
 }) {
   const rows = useWorkingSet();
   const navigate = useNavigate();
@@ -339,6 +342,7 @@ function WorkingSetStrip({
   // having: a number pointing at a list that renumbers itself is worse than no
   // number at all, because you learn it and it lies.
   useEffect(() => {
+    if (touch) return; // no keyboard to bind, and two listeners would double-fire
     const onKey = (e: KeyboardEvent) => {
       if (!e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
       const n = Number(e.key);
@@ -354,7 +358,7 @@ function WorkingSetStrip({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [rows, navigate, onNavigate]);
+  }, [rows, navigate, onNavigate, touch]);
 
   if (rows.length === 0) return null;
   return (
@@ -369,6 +373,7 @@ function WorkingSetStrip({
           workspace={workspace}
           slot={i + 1}
           active={tab.slug === activeTabSlug}
+          {...(touch ? { touch: true } : {})}
           {...(onNavigate ? { onNavigate } : {})}
         />
       ))}
@@ -383,15 +388,21 @@ function WorkingSetRow({
   slot,
   active,
   onNavigate,
+  touch,
 }: {
   tab: Tab;
   workspace: { slug: string; name: string };
   slot: number;
   active: boolean;
   onNavigate?: (() => void) | undefined;
+  touch?: boolean | undefined;
 }) {
   return (
-    <div className="navtree-tab-row navtree-ws-slot" data-active={active ? 'true' : undefined}>
+    <div
+      className="navtree-tab-row navtree-ws-slot"
+      data-active={active ? 'true' : undefined}
+      data-touch={touch ? 'true' : undefined}
+    >
       <span className="chatchip navtree-tab-chip" data-density="row" data-shape="tile">
         <b className="chatchip-glyph">{tab.icon ?? fallbackTabIcon(tab.id)}</b>
       </span>
@@ -409,8 +420,13 @@ function WorkingSetRow({
           </span>
         </span>
       </Link>
+      {/* NO CONTROLS ON TOUCH, which is the rule every other row here already
+          follows (tabRowAffordances): a phone has no hover to reveal one and
+          no Control key to label. The slot still decays on its own and is
+          still evictable from the desktop, so nothing is unreachable — the
+          strip's job on a phone is one tap to the chat. */}
       <span className="navtree-tab-rail">
-        <kbd className="navtree-slot-key">{`⌃${slot}`}</kbd>
+        {touch ? null : <kbd className="navtree-slot-key">{`⌃${slot}`}</kbd>}
         <button
           type="button"
           className="navtree-close navtree-slot-drop"
@@ -752,6 +768,16 @@ function SheetRail({
               which is the guess this navigator keeps being redesigned to
               avoid. */}
       </div>
+      {/* ─── THE WORKING SET, ON THE PHONE TOO ─────────────────────────────
+          Above the scroller, same as the rail. The cost of hunting for a chat
+          is HIGHER here, not lower — the list is the whole screen and there is
+          no ⌘K chord on a thumb — so leaving it off the surface that needs it
+          most was simply a miss. */}
+      <WorkingSetStrip
+        activeTabSlug={activeTabSlug}
+        touch={true}
+        {...(onNavigate ? { onNavigate } : {})}
+      />
       <div className="navtree-scroll">
         {/* EVERY WORKSPACE, like the desktop rail. The sheet used to render one
             workspace's TabList and reach the others through a picker that

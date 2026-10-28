@@ -4033,3 +4033,20 @@ body.sidenav-resizing iframe {
 .navtree-workingset .navtree-tab-row:hover {
   background-color: color-mix(in srgb, var(--fg) 9%, transparent);
 }
+
+/* THE STRIP ON TOUCH. No controls at all — the same rule every other row on
+   the sheet follows (see tabRowAffordances): a phone has no hover to reveal
+   one and no Control key to label, and a permanently visible × would be the
+   only standing control in a surface that deliberately has none. The slot
+   still decays on its own and is still evictable from the desktop, so nothing
+   here is unreachable; the strip's job on a phone is one tap to the chat.
+
+   The row keeps the sheet's 44px floor rather than the rail's 34, because it
+   is the sheet's row — a smaller target in the one place everything is a
+   thumb would be the worst row on the screen. */
+.navtree-ws-slot[data-touch="true"] {
+  height: 44px;
+}
+.navtree-ws-slot[data-touch="true"] .navtree-slot-drop {
+  display: none;
+}

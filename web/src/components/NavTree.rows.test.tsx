@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { type Tab, type Workspace, chatClock } from '@muxpad/shared';
 import { type ReactNode, act } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -774,5 +776,41 @@ describe('sub-chat status wording', () => {
     expect(spoken(html)).toContain('1 needs you');
     expect(spoken(html)).toContain('1 running');
     expect(spoken(html)).toContain('1 idle');
+  });
+});
+
+/**
+ * THE WORKING SET IS ON BOTH SURFACES.
+ *
+ * It shipped on the desktop rail only — reported as "I don't see the recent
+ * section in sidebar on mobile". The cost of hunting for a chat is HIGHER on
+ * a phone: the list is the whole screen and there is no ⌘K chord on a thumb.
+ */
+describe('the working-set strip reaches the sheet', () => {
+  const tsx = readFileSync(join(__dirname, 'NavTree.tsx'), 'utf8');
+
+  it('is rendered by BOTH the rail and the sheet', () => {
+    expect(tsx.match(/<WorkingSetStrip/g) ?? []).toHaveLength(2);
+  });
+
+  it('the sheet renders it OUTSIDE the scroller, like the rail', () => {
+    // A strip you have to scroll to is a strip you will search for, which is
+    // the thing it exists to end.
+    const sheet = tsx.slice(tsx.indexOf('function SheetRail'));
+    const strip = sheet.indexOf('<WorkingSetStrip');
+    const scroll = sheet.indexOf('className="navtree-scroll"');
+    expect(strip).toBeGreaterThan(-1);
+    expect(strip).toBeLessThan(scroll);
+  });
+
+  it('carries NO standing control on touch, and no key to press', () => {
+    // Every other row on the sheet follows this (tabRowAffordances): no hover
+    // to reveal a control, no Control key to label.
+    expect(tsx).toMatch(/touch \? null : <kbd className="navtree-slot-key"/);
+    expect(tsx).toMatch(/if \(touch\) return;/);
+    const css = readFileSync(join(__dirname, 'NavTree.css'), 'utf8');
+    expect(css).toMatch(/\[data-touch="true"\] \.navtree-slot-drop \{\s*display: none/);
+    // …and it keeps the sheet's 44px touch floor rather than the rail's 34.
+    expect(css).toMatch(/\.navtree-ws-slot\[data-touch="true"\] \{\s*height: 44px/);
   });
 });
