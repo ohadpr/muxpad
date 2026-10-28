@@ -5121,29 +5121,41 @@ export function ChatPane({
             ) : null}
             {agentWorking && !question ? (
               <div className="chat-turn chat-turn-assistant">
-                {/* In Chat mode the token stream IS the private scratchpad — the
+                {/* ── A COLUMN, BECAUSE A TURN IS A ROW ─────────────────────
+                    `.chat-turn` is `display: flex`, so Stop — added as a
+                    sibling of the message — became a flex ITEM beside it and
+                    stretched to the turn's full height: a 350px pill floating
+                    to the right of a streaming table. "Stop button goes crazy
+                    when agent streams response."
+
+                    The message and its Stop are one column inside that row.
+                    Wrapped here rather than fixed with `align-self`, because
+                    the intent is "at the FOOT of the turn" — which is a
+                    stacking order, not a stretch to suppress. */}
+                <div className="chat-turn-body">
+                  {/* In Chat mode the token stream IS the private scratchpad — the
                   `reply` tool's argument streams as input_json, which the
                   runner does not forward — so showing it would put reasoning on
                   screen live and then take it back at turn end. The working
                   indicator is what a Chat-mode turn shows instead, and it names
                   the running tool so a silent pane never reads as stuck. */}
-                {streamingText && !voiceOn ? (
-                  <div className="chat-msg">
-                    <Markdown text={streamingText} />
-                    <span className="chat-cursor" aria-hidden="true" />
-                  </div>
-                ) : (
-                  <div
-                    className="chat-msg chat-working"
-                    aria-label={`${assistantLabel(session?.assistant)} is working`}
-                  >
-                    <ChatWorking variant={workingVariant} />
-                    {workingLabel ? (
-                      <span className="chat-working-label">{workingLabel}</span>
-                    ) : null}
-                  </div>
-                )}
-                {/* ── STOP LIVES WITH THE TURN IT STOPS ─────────────────────
+                  {streamingText && !voiceOn ? (
+                    <div className="chat-msg">
+                      <Markdown text={streamingText} />
+                      <span className="chat-cursor" aria-hidden="true" />
+                    </div>
+                  ) : (
+                    <div
+                      className="chat-msg chat-working"
+                      aria-label={`${assistantLabel(session?.assistant)} is working`}
+                    >
+                      <ChatWorking variant={workingVariant} />
+                      {workingLabel ? (
+                        <span className="chat-working-label">{workingLabel}</span>
+                      ) : null}
+                    </div>
+                  )}
+                  {/* ── STOP LIVES WITH THE TURN IT STOPS ─────────────────────
                     It was a second circle in the composer, beside Queue — two
                     buttons on one edge acting on two different subjects. Here
                     it is attached to the thing it acts on: the foot of the
@@ -5156,16 +5168,17 @@ export function ChatPane({
                     all, so hanging Stop off the indicator would have left the
                     longest turns — the ones you actually want to stop —
                     without a stop. */}
-                <button
-                  type="button"
-                  className="chat-turn-stop"
-                  onClick={stop}
-                  aria-label="Stop this turn"
-                  title="Stop this turn"
-                >
-                  <span className="chat-turn-stop-glyph" aria-hidden="true" />
-                  Stop
-                </button>
+                  <button
+                    type="button"
+                    className="chat-turn-stop"
+                    onClick={stop}
+                    aria-label="Stop this turn"
+                    title="Stop this turn"
+                  >
+                    <span className="chat-turn-stop-glyph" aria-hidden="true" />
+                    Stop
+                  </button>
+                </div>
               </div>
             ) : null}
             {question ? (

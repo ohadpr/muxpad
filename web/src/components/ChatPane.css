@@ -1510,6 +1510,22 @@
    foot of the running turn itself. Do not bring it back here — the pair of
    circles is the reported defect, not the styling of either one. */
 
+/* The running turn's column: the message, and Stop under it.
+   `.chat-turn` is a flex ROW (it has a gutter for turns that use one), so
+   anything added beside the message becomes a full-height flex item — which
+   is what turned Stop into a 350px pill down the side of a streaming answer.
+   One column inside the row, and the order on screen is the order in the
+   markup. */
+.chat-turn-body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+  /* It is the turn's content, so it takes the width the row has — otherwise a
+     long answer would be as narrow as the Stop button under it. */
+  flex: 1 1 auto;
+}
+
 /* STOP, AT THE FOOT OF THE RUNNING TURN.
    Quiet at rest: the turn block's job is to say "still going", and a loud
    button beside it would read as the thing to do rather than the exception.
@@ -1518,6 +1534,10 @@
 .chat-turn-stop {
   display: inline-flex;
   align-items: center;
+  /* Belt for the braces above: never a stretched flex item, whatever it is
+     dropped into. */
+  flex: 0 0 auto;
+  align-self: flex-start;
   gap: 6px;
   margin-top: 6px;
   padding: 3px 10px 3px 8px;

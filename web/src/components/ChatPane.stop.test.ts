@@ -59,8 +59,9 @@ describe('stop is attached to the turn it stops', () => {
     // want to stop — with no stop at all.
     const turn = SRC.slice(SRC.indexOf('{agentWorking && !question ? ('));
     const stopAt = turn.indexOf('className="chat-turn-stop"');
-    const closeTernary = turn.indexOf('\n                )}');
+    const closeTernary = turn.indexOf('\n                  )}');
     expect(stopAt).toBeGreaterThan(-1);
+    expect(closeTernary).toBeGreaterThan(-1);
     expect(stopAt).toBeGreaterThan(closeTernary);
   });
 
@@ -77,5 +78,41 @@ describe('stop is attached to the turn it stops', () => {
     // on the only control that stops a running turn.
     expect(rule).not.toMatch(/--chat-faint/);
     expect(CSS).toMatch(/\.chat-turn-stop:hover[\s\S]{0,160}--chat-danger/);
+  });
+});
+
+/**
+ * AND IT MUST NOT BECOME A FULL-HEIGHT PILL DOWN THE SIDE OF THE ANSWER.
+ *
+ * `.chat-turn` is `display: flex`, so Stop — added as a sibling of the
+ * message — became a flex ITEM beside it and stretched to the turn's height:
+ * a 350px rounded pill floating to the right of a streaming table. Reported
+ * as "stop button goes crazy when agent streams response".
+ */
+describe('stop sits under the answer, not beside it', () => {
+  it('shares a COLUMN with the message rather than a row', () => {
+    const turn = SRC.slice(SRC.indexOf('{agentWorking && !question ? ('));
+    const body = turn.slice(0, turn.indexOf('\n            ) : null}'));
+    expect(body).toMatch(/<div className="chat-turn-body">/);
+    // The message comes first, Stop after it: the order on screen is the
+    // order in the markup, which is what "at the foot of the turn" means.
+    expect(body.indexOf('chat-turn-body')).toBeLessThan(body.indexOf('chat-msg'));
+    expect(body.indexOf('chat-msg')).toBeLessThan(body.indexOf('chat-turn-stop'));
+  });
+
+  it("gives that column the row's width, so the answer is not button-wide", () => {
+    const rest = CSS.slice(CSS.indexOf('.chat-turn-body {'));
+    const rule = rest.slice(0, rest.indexOf('}'));
+    expect(rule).toMatch(/flex-direction:\s*column/);
+    expect(rule).toMatch(/align-items:\s*flex-start/);
+    expect(rule).toMatch(/flex:\s*1 1 auto/);
+  });
+
+  it('never stretches, wherever it is dropped', () => {
+    const flat = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+    const rest = flat.slice(flat.indexOf('.chat-turn-stop {'));
+    const rule = rest.slice(0, rest.indexOf('}'));
+    expect(rule).toMatch(/flex:\s*0 0 auto/);
+    expect(rule).toMatch(/align-self:\s*flex-start/);
   });
 });
