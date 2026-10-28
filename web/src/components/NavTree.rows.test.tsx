@@ -822,3 +822,49 @@ describe('the working-set strip reaches the sheet', () => {
     expect(css).toMatch(/\.navtree-ws-slot\[data-touch="true"\] \{\s*height: 44px/);
   });
 });
+
+/**
+ * THE BAND NAMES THE WORKSPACE, BECAUSE IT IS THE ONLY PLACE THAT HAS TO.
+ *
+ * Everywhere else in the rail a chat sits under a header that names its
+ * workspace. The recently-active band mixes them, and two workspaces on this
+ * install have a chat called "Main".
+ */
+describe('a recently-active row carries its workspace', () => {
+  const tsx = readFileSync(join(__dirname, 'NavTree.tsx'), 'utf8');
+  const css = readFileSync(join(__dirname, 'NavTree.css'), 'utf8');
+  const row = tsx.slice(tsx.indexOf('function WorkingSetRow'));
+  const body = row.slice(0, row.indexOf('\nfunction '));
+
+  it('prints it in front of the chat name, on the same line', () => {
+    // A second line would break the band's rows off the tree's grid, and a
+    // trailing chip would take width from the status column.
+    expect(body).toMatch(/navtree-ws-prefix[\s\S]{0,120}\{workspace\.name\}/);
+    expect(body.indexOf('navtree-ws-prefix')).toBeLessThan(body.indexOf('navtree-name-text'));
+  });
+
+  it('is the part that gives way when the rail is narrow', () => {
+    // You are looking for the chat; the workspace only disambiguates it.
+    const rule = (sel: string) => {
+      const flat = css.replace(/\/\*[\s\S]*?\*\//g, '');
+      const i = flat.indexOf(`${sel} {`);
+      return i < 0 ? '' : flat.slice(i, flat.indexOf('}', i));
+    };
+    expect(rule('.navtree-ws-prefix')).toMatch(/flex:\s*0 1 auto/);
+    expect(rule('.navtree-ws-prefix')).toMatch(/text-overflow:\s*ellipsis/);
+    expect(rule('.navtree-ws-slot .navtree-name-text')).toMatch(/flex:\s*0 1 auto/);
+  });
+
+  it('draws its separator rather than typing one', () => {
+    // A typed "/" is selectable and read out; this one is neither, and the
+    // link's own title already says "<chat> · <workspace>" in full.
+    expect(rule(css, '.navtree-ws-prefix::after')).toMatch(/content:\s*"\/"/);
+    expect(body).toMatch(/aria-hidden="true">\s*\{workspace\.name\}/);
+  });
+});
+
+function rule(css: string, sel: string): string {
+  const flat = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const i = flat.indexOf(`${sel} {`);
+  return i < 0 ? '' : flat.slice(i, flat.indexOf('}', i));
+}
