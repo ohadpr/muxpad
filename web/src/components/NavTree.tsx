@@ -366,12 +366,11 @@ function WorkingSetStrip({
       <div className="navtree-workingset-head" aria-hidden="true">
         Working on
       </div>
-      {rows.map(({ tab, workspace }, i) => (
+      {rows.map(({ tab, workspace }) => (
         <WorkingSetRow
           key={tab.id}
           tab={tab}
           workspace={workspace}
-          slot={i + 1}
           active={tab.slug === activeTabSlug}
           {...(touch ? { touch: true } : {})}
           {...(onNavigate ? { onNavigate } : {})}
@@ -385,14 +384,12 @@ function WorkingSetStrip({
 function WorkingSetRow({
   tab,
   workspace,
-  slot,
   active,
   onNavigate,
   touch,
 }: {
   tab: Tab;
   workspace: { slug: string; name: string };
-  slot: number;
   active: boolean;
   onNavigate?: (() => void) | undefined;
   touch?: boolean | undefined;
@@ -424,9 +421,15 @@ function WorkingSetRow({
           follows (tabRowAffordances): a phone has no hover to reveal one and
           no Control key to label. The slot still decays on its own and is
           still evictable from the desktop, so nothing is unreachable — the
-          strip's job on a phone is one tap to the chat. */}
+          strip's job on a phone is one tap to the chat.
+
+          AND NO SLOT NUMBER ANYWHERE, touch or not. Each row used to carry a
+          `⌃{slot}` cap in its gutter; six of them down a six-row band is six
+          pieces of chrome in the one column the eye scans. The shortcut still
+          works (see the ⌃1–⌃6 handler above) — it is simply not announced on
+          every row — the strip's own handler binds by position, so the row no
+          longer needs to know its number at all. */}
       <span className="navtree-tab-rail">
-        {touch ? null : <kbd className="navtree-slot-key">{`⌃${slot}`}</kbd>}
         <button
           type="button"
           className="navtree-close navtree-slot-drop"

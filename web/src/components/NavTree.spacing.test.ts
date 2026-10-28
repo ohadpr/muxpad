@@ -1390,13 +1390,11 @@ describe('the working-set strip keeps the status column', () => {
     return re.exec(flat)?.[1] ?? '';
   };
 
-  it('the slot key is OUT OF FLOW, so it occupies no track', () => {
-    const key = rule('.navtree-slot-key');
-    expect(key, '.navtree-slot-key not found').not.toBe('');
-    expect(key).toMatch(/position:\s*absolute/);
-    // …and offset by the status cell's own width plus its gutter, so it ends
-    // exactly where a mark would begin rather than at a guessed number.
-    expect(key).toMatch(/right:\s*calc\([^)]*--nt-gutter/);
+  it('carries no slot cap at all, in or out of flow', () => {
+    // The cap was first put OUT of flow to stop it taking a track; it is now
+    // gone outright, which is the same guarantee by a shorter route. Pinned
+    // negatively so a future pass cannot reintroduce it in flow.
+    expect(NAV_CSS).not.toMatch(/navtree-slot-key/);
   });
 
   it('the × is absent at rest, like every other hover control here', () => {
