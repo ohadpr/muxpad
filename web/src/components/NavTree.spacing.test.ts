@@ -1370,3 +1370,38 @@ describe('the sheet’s workspace controls clear the touch floor', () => {
     expect(px(decl(item, 'min-height'))).toBeGreaterThanOrEqual(44);
   });
 });
+
+/**
+ * THE STATUS COLUMN IS A COLUMN, AND THE STRIP MUST NOT BREAK IT.
+ *
+ * Every mark in the rail lands on one vertical line because nothing in front
+ * of it is free to size itself — the hover controls are zero-width at rest
+ * for exactly that reason. The working-set strip added a permanent `⌃3` cap
+ * in the track BEFORE the mark, so its rows' marks sat ~26px left of the
+ * tree's. Reported as "sidebar status icons on right not aligned".
+ */
+describe('the working-set strip keeps the status column', () => {
+  const rule = (selector: string): string => {
+    const flat = NAV_CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+    const re = new RegExp(
+      `(?:^|})\\s*${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{([^}]*)\\}`,
+      'm',
+    );
+    return re.exec(flat)?.[1] ?? '';
+  };
+
+  it('the slot key is OUT OF FLOW, so it occupies no track', () => {
+    const key = rule('.navtree-slot-key');
+    expect(key, '.navtree-slot-key not found').not.toBe('');
+    expect(key).toMatch(/position:\s*absolute/);
+    // …and offset by the status cell's own width plus its gutter, so it ends
+    // exactly where a mark would begin rather than at a guessed number.
+    expect(key).toMatch(/right:\s*calc\([^)]*--nt-gutter/);
+  });
+
+  it('the × is absent at rest, like every other hover control here', () => {
+    const drop = rule('.navtree-ws-slot .navtree-slot-drop');
+    expect(drop, 'slot drop not found').not.toBe('');
+    expect(drop).toMatch(/display:\s*none/);
+  });
+});
