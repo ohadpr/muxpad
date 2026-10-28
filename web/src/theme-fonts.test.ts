@@ -175,3 +175,45 @@ describe('no theme puts a narrow face on text', () => {
     expect(value).not.toMatch(NARROW);
   });
 });
+
+/**
+ * EVERY THEME READS AT THE SAME SIZE, WHATEVER FACE IT PICKS.
+ *
+ * A theme owns the typeface, and no theme sets a font-size — yet memphis read
+ * visibly larger than riso at identical declarations. What you perceive as
+ * "size" is x-height, not the em box, and the faces in use are far apart on
+ * it: Verdana 0.545 (memphis), system ~0.52, Helvetica Neue 0.517 (riso),
+ * Avenir Next 0.473 (blueprint). So memphis ran ~5% large and blueprint ~9%
+ * small. Reported as "some of the themes changed the font sizes
+ * meaningfully… I prefer riso, which I believe uses the size most of the
+ * other themes use".
+ */
+describe('the type scale survives a change of typeface', () => {
+  const bare = STYLES.replace(/\/\*[\s\S]*?\*\//g, '');
+
+  it('normalises x-height on the body, to riso’s face', () => {
+    const body = bare.slice(bare.indexOf('\nbody {'));
+    expect(body.slice(0, body.indexOf('}'))).toMatch(/font-size-adjust:\s*0\.517/);
+  });
+
+  it('still lets a theme own the typeface — this is not a font lock', () => {
+    // The point is that picking a face stops changing the SIZE, not that a
+    // theme stops picking one.
+    expect(bare).toMatch(/\[data-theme="memphis"\][\s\S]{0,400}--ui-font:\s*Verdana/);
+    expect(bare).toMatch(/\[data-theme="riso"\][\s\S]{0,400}--ui-font:\s*"Helvetica Neue"/);
+  });
+
+  it('exempts the bitmap face, which has no sizes between its own', () => {
+    // Px437 IBM VGA is an 8x16 pixel font: correct at its integer sizes and
+    // blurred at everything else. An x-height ratio lands between them by
+    // definition.
+    expect(bare).toMatch(/\[data-theme="demoscene"\][^{]*\{[^}]*font-size-adjust:\s*none/);
+  });
+
+  it('exempts the terminal, which measures its own cell', () => {
+    // xterm.js computes a character box from the computed style and lays the
+    // grid on it; shifting glyphs under that measurement is how a TUI starts
+    // drawing boxes that do not meet.
+    expect(bare).toMatch(/\.xterm[^{]*\{[^}]*font-size-adjust:\s*none/);
+  });
+});
