@@ -3984,7 +3984,27 @@ body.sidenav-resizing iframe {
    so ⌃3 means the same row tomorrow. Set as a KEY — a bordered cap in the
    chrome face — because it is something you press, and a bare "⌃3" in the
    gutter reads as a label about the row instead. */
+/* ── IT TAKES NO LAYOUT WIDTH, AND THAT IS THE WHOLE RULE ─────────────────
+   The row is a four-track grid whose LAST track is the status mark, and every
+   mark in the rail lands on one vertical line because nothing in front of it
+   is free to size itself — the hover controls are zero-width at rest for
+   exactly this reason (see .navtree-tab-controls).
+
+   In flow, this cap is ~26px of PERMANENT content in the track before the
+   mark, so the strip's marks sat 26px left of the tree's and the right edge of
+   the rail stopped being a column. Reported as "sidebar status icons on right
+   not aligned".
+
+   Out of flow instead: the row is already `position: relative`, and the offset
+   is the status cell's own width plus its gutter, so the cap ends exactly
+   where a mark would begin. `pointer-events: none` because it is a label for
+   a key, not a target. */
 .navtree-slot-key {
+  position: absolute;
+  right: calc(10px + var(--nt-gutter) + var(--nt-pad));
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
   padding: 1px 4px;
   font: 0.5625rem / 1.5 var(--chrome-font);
   letter-spacing: 0.02em;
@@ -4004,6 +4024,10 @@ body.sidenav-resizing iframe {
 /* …and the × is the mirror image: absent until you reach for the row. It means
    "not now" — it frees the slot and nothing else, which is why it is not
    danger-styled and never arms. */
+/* The × IS revealed on hover and does take width then — like every other
+   hover control on this rail, which is the case the grid's trailing `auto`
+   track exists to absorb. At rest it is `display: none`, so it is no track at
+   all and the marks keep their column. */
 .navtree-ws-slot .navtree-slot-drop {
   width: 18px;
   height: 18px;
