@@ -1497,28 +1497,45 @@
   border-radius: 2px;
   background: currentColor;
 }
-/* Queue button: an OUTLINE accent circle — distinct from the filled Send and
-   the dark Stop, so "this queues, it doesn't send now" reads at a glance. */
-/* The mic, in the send slot, while there is nothing to send. Not filled: it
-   is the one thing available rather than the thing you are about to do, and a
-   filled accent circle on an empty composer reads as "send" with no target. */
-.chat-send.is-mic {
+/* ── QUEUE WEARS THE SEND BUTTON; ONLY THE GLYPH CHANGES ─────────────────
+   Queue was an OUTLINE accent circle — "this queues, it doesn't send now" at
+   a glance — and on memphis, riso and blueprint it was not, because those
+   themes style `.chat-send` at (0,2,0), this rule tied, and the theme won on
+   file order. A distinction that holds on some themes and silently vanishes
+   on others is worse than none.
+
+   The specificity race is the wrong way out. Queue IS the primary action of
+   the composer in that state — you typed something, and pressing it is what
+   happens to it — so the theme is right to own the button. What actually
+   separates the two is the GLYPH: an arrow settling onto a baseline rather
+   than an arrow leaving, which reads on every theme because no theme draws
+   it. The words are in the title and the aria-label.
+
+   ── AND THE MIC IS NOT A `.chat-send` AT ALL ───────────────────────────
+   Same fight, opposite resolution. `.chat-send` means "the primary action of
+   this composer"; the mic is what is available when there is nothing to send,
+   so it has no business claiming the class — it rendered as memphis's filled
+   yellow send button on an empty composer, a primary action with no target.
+   Dropping the class ends the cascade fight by construction: no theme has to
+   know about it, and the two cannot drift. */
+.chat-mic {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
   background: transparent;
   color: var(--chat-dim);
-  box-shadow: none;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
 }
-.chat-send.is-mic:hover:not(:disabled) {
+.chat-mic:hover,
+.chat-mic:focus-visible {
   background: color-mix(in srgb, var(--chat-fg) 10%, transparent);
   color: var(--chat-fg);
-}
-.chat-send.is-queue {
-  background: transparent;
-  color: var(--chat-accent);
-  border: 1.5px solid color-mix(in srgb, var(--chat-accent) 55%, transparent);
-  box-shadow: none;
-}
-.chat-send.is-queue:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--chat-accent) 12%, transparent);
 }
 
 /* ── Queued messages ───────────────────────────────────────────────────
@@ -1530,7 +1547,32 @@
   align-items: center;
   gap: 8px;
 }
+/* ── PENDING HAS TO SURVIVE A THEME ──────────────────────────────────────
+   This was written as a dashed border and an accent wash — a restyle of the
+   sent bubble — and three themes erase both of them. `[data-theme="memphis"]
+   .chat-bubble` is specificity (0,2,0) against this rule's (0,1,0), so on
+   memphis, riso and blueprint a queued message rendered as an ordinary sent
+   one: same solid border, same offset shadow, nothing to say it had not gone
+   anywhere. Reported as "in some themes, pending messages are not styled
+   differently from regular messages".
+
+   THE FIX IS NOT A SPECIFICITY RACE. `.chat-bubble.chat-bubble-queued` would
+   tie with the theme and win on file order — which holds exactly until
+   somebody writes `[data-theme="x"] .chat-bubble.something`, and a theme is
+   SUPPOSED to own the bubble's shape. What a theme must not own is whether
+   the message has been sent.
+
+   So the pending signal moves to properties no theme sets, and it is
+   additive rather than a restyle:
+     · `opacity` — orthogonal to every border, fill and shadow a theme draws,
+       and it reads as "not yet" on a light ground and a dark one alike;
+     · an `outline`, which is a separate box from `border` and survives one
+       being replaced;
+     · and a word, because colour and dash are conventions a reader has to
+       know and "Queued" is not.
+   The old declarations stay for the themes that leave the bubble alone. */
 .chat-bubble-queued {
+  position: relative;
   /* Same shape as a sent user bubble, restyled as pending. */
   max-width: 82%;
   white-space: pre-wrap;
@@ -1540,6 +1582,24 @@
   border: 1px dashed color-mix(in srgb, var(--chat-accent) 55%, transparent);
   background: color-mix(in srgb, var(--chat-accent) 8%, transparent);
   color: color-mix(in srgb, var(--chat-fg) 80%, transparent);
+  /* The three a theme cannot take away. */
+  opacity: 0.74;
+  outline: 1px dashed color-mix(in srgb, var(--chat-accent) 60%, transparent);
+  outline-offset: 3px;
+}
+/* The word. Set on the bubble rather than rendered in the transcript because
+   it belongs to the bubble's own chrome — it must not become a line of the
+   message that a copy or a screen reader treats as content. */
+.chat-bubble-queued::before {
+  content: "Queued";
+  display: block;
+  margin-bottom: 4px;
+  font-family: var(--chrome-font, inherit);
+  font-size: 0.6875em;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--chat-accent);
 }
 /* Edit + cancel — a quiet column of round buttons to the LEFT of the pending
    bubble. Both act on the SERVER-owned queue (they follow the user across

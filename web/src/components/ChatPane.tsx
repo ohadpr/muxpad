@@ -5653,7 +5653,7 @@ export function ChatPane({
                      to an empty composer should be. */
                   <button
                     type="button"
-                    className="chat-send is-mic"
+                    className="chat-mic"
                     onClick={() => voice.start()}
                     aria-label="Dictate"
                     title="Dictate — speak instead of typing"

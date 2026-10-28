@@ -81,7 +81,11 @@ describe('faithful to the mock', () => {
     // something to a message you are writing, which is what every row on the
     // tool row does.
     expect(SRC).toMatch(/micInsteadOfSend \? \(/);
-    expect(SRC).toMatch(/className="chat-send is-mic"/);
+    // NOT `.chat-send`: that class means "the primary action of this
+    // composer", three themes style it, and the mic is what is available when
+    // there is nothing to send. See the css for the cascade fight this ends.
+    expect(SRC).toMatch(/className="chat-mic"/);
+    expect(SRC).not.toMatch(/chat-send is-mic/);
     const labelled = SRC.slice(SRC.indexOf(') : labelledTools ? ('));
     expect(labelled.slice(0, labelled.lastIndexOf(') : ('))).not.toMatch(/Dictate\n/);
   });
