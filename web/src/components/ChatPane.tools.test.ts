@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -108,5 +108,48 @@ describe('faithful to the mock', () => {
     // No side padding of its own: the pill's padding already set the text
     // column, and the icons line up with the first letter you type.
     expect(rule).toMatch(/padding:\s*0 0 2px/);
+  });
+});
+
+/**
+ * NO DEAD RULES IN THE CHAT'S OWN STYLESHEET.
+ *
+ * themes.test.ts already fails on a THEME selector that matches nothing —
+ * "a rule that matches nothing renders exactly like a rule that works" — and
+ * the component's own sheet had four of them: the caret that used to reveal a
+ * folded cron's prompt (`.chat-sysnote-chevron`, `.chat-sysnote-body` and its
+ * folded width), the paperclip's upload spinner (`.chat-attach-spin`), and the
+ * wrapper of the folder cell (`.chat-folder`) that the pane head replaced.
+ */
+describe('ChatPane.css names nothing the app never renders', () => {
+  const RENDERED = (() => {
+    const read = (dir: string): string => {
+      let out = '';
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) out += read(full);
+        else if (/\.tsx?$/.test(entry.name) && !entry.name.includes('.test.'))
+          out += readFileSync(full, 'utf8');
+      }
+      return out;
+    };
+    return read(join(__dirname, '..'));
+  })();
+
+  it('finds the classes to check at all', () => {
+    expect(RENDERED.length).toBeGreaterThan(10_000);
+  });
+
+  it('has no chat-* class the source never mentions', () => {
+    // Comments stripped: several of them NAME a deleted class to say why it
+    // is gone. Dynamic names count as rendered — `chat-sysnote-${variant}`
+    // builds `.chat-sysnote-report` from NOTICE_ICON, so the substring test
+    // is deliberate rather than lazy.
+    const flat = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+    const styled = new Set([...flat.matchAll(/\.(chat-[a-z0-9-]+)/g)].map((m) => m[1] as string));
+    const dead = [...styled].filter(
+      (c) => !RENDERED.includes(c) && !RENDERED.includes(c.replace(/-[a-z0-9]+$/, '-$')),
+    );
+    expect(dead, 'these rules match nothing').toEqual([]);
   });
 });
