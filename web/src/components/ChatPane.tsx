@@ -47,6 +47,7 @@ import { type AgentLaunchOptions, type RecentFolder, api } from '../api';
 import {
   AGENT_BACKENDS,
   type AgentBackendId,
+  HOUSE_CHAT_CREATE,
   backendLabel,
   conversionFailure,
 } from '../lib/agent-backend';
@@ -58,6 +59,7 @@ import {
 } from '../lib/attachments';
 import { browserOpenIntent, injectBrowserMoments } from '../lib/browser-card';
 import { useBrowserFontSize } from '../lib/browser-font';
+import { branchPrefill, draftKeyFor } from '../lib/chat-branch';
 import {
   type DirectedWork,
   directedIsStale,
@@ -139,6 +141,7 @@ import { type UploadItem, UploadQueue, formatBytes, summarize } from '../lib/upl
 import type { AgentLink } from '../lib/voice/session';
 import { useVoice } from '../lib/voice/use-voice';
 import { workingVariantFor } from '../lib/working-variant';
+import { insertTabRow } from '../tabs';
 import { AgentBackendLogo, backendFromAssistant } from './AgentLogos';
 import { BrowserCard } from './BrowserCard';
 import { useBrowsers } from './BrowserCards';
@@ -1225,6 +1228,7 @@ export function ChatPane({
     },
     [navigate],
   );
+
   // What every rendered mention in the log resolves through. Memoized so the
   // transcript re-renders when the corpus lands, not on every frame around it.
 
@@ -1558,6 +1562,62 @@ export function ChatPane({
   // null = no runner status yet (TUI-view chats never get one).
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
   const [folder, setFolder] = useState<{ cwd: string; hasProject: boolean } | null>(null);
+
+  // ── BRANCH ────────────────────────────────────────────────────────────────
+  // A new chat beside this one, in the same folder, pre-filled to go and read
+  // this one. For "a long running, big context task… that contains context you
+  // want to consult with or do something parallel with".
+  //
+  // A PEER, NOT A SUB-CHAT, and that is the whole design decision — see
+  // lib/chat-branch.ts. A child would report its findings back into a
+  // conversation you walked away from and then retire itself underneath you,
+  // which is the opposite of a chat you intend to sit in.
+  const [branching, setBranching] = useState(false);
+  const branch = useCallback(async () => {
+    if (branching) return;
+    setBranching(true);
+    try {
+      const groups = cachedAllTabs() ?? (await loadAllTabs());
+      const group = groups.find((g) => g.tabs.some((t) => t.id === tabId));
+      if (!group) return;
+      const here = group.tabs.find((t) => t.id === tabId);
+      const made = await api.createTab(group.id, {
+        ...HOUSE_CHAT_CREATE,
+        // Same folder, because the point is to work on the same thing. The
+        // MODE is deliberately not copied: a branch is a chat you are going to
+        // talk to, so it gets the house arrangement like every other new chat.
+        ...(folder?.cwd ? { cwd: folder.cwd } : {}),
+      });
+      // The draft is seeded on the NEW pane's key before we navigate, so the
+      // chat mounts with it already in the box — there is no frame where the
+      // composer is empty and then fills in, and nothing is sent for you.
+      try {
+        const full = await api.getTab(made.id);
+        const fresh = full.panes?.[0];
+        if (fresh)
+          localStorage.setItem(
+            draftKeyFor(fresh.id),
+            branchPrefill({ name: here?.name ?? 'the other chat', paneId }),
+          );
+      } catch {
+        // No draft, then. The chat still opens, in the right folder, and the
+        // user can say what they want — strictly better than failing the whole
+        // branch over a prefill.
+      }
+      insertTabRow(group.id, made);
+      void navigate({
+        to: '/w/$wsSlug/t/$tabSlug',
+        params: { wsSlug: group.slug, tabSlug: made.slug },
+      });
+    } catch (e) {
+      setNotice({
+        text: e instanceof Error ? `Could not branch: ${e.message}` : 'Could not branch.',
+        tone: 'danger',
+      });
+    } finally {
+      setBranching(false);
+    }
+  }, [branching, tabId, folder, paneId, navigate]);
   // Authoritative emptiness, from the server (see the session frame). Starts
   // TRUE — "assume there is history until told otherwise" — so a slow first
   // frame can never flash the alternatives over someone's conversation.
@@ -5455,6 +5515,8 @@ export function ChatPane({
               background={backgroundLive}
               onOpenChat={openChat}
               mode={mode}
+              onBranch={() => void branch()}
+              branching={branching}
               send={(obj) => {
                 const sock = wsRef.current;
                 if (!sock || sock.readyState !== WebSocket.OPEN) {

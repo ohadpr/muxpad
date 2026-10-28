@@ -2475,6 +2475,29 @@
   opacity: 0.9;
 }
 
+/* BRANCH — the one cell on the rim that is a verb.
+   Icon-only and square, so it reads as a control beside chips that are facts,
+   and it never takes width from the model name. */
+.chat-status-seg.-branch {
+  flex: 0 0 auto;
+  width: 1.375rem;
+  min-width: 1.375rem;
+  padding: 0;
+  justify-content: center;
+  color: var(--chat-dim);
+}
+.chat-status-seg.-branch:hover:not(:disabled) {
+  color: var(--chat-fg);
+  border-color: color-mix(in srgb, var(--chat-accent) 55%, transparent);
+}
+.chat-status-seg.-branch:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.chat-status-seg.-branch svg {
+  color: inherit;
+}
+
 /* ── THE CONTEXT CELL IS GONE, AND SO IS ITS COLOUR ──────────────────────
    `.chat-status-seg.-ctx` warmed at 70% and went danger-red at 88%, and the
    meter's fill was levelled the same way. That was the right UI for a chat

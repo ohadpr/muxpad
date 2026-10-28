@@ -590,3 +590,79 @@ describe('the background-command cell', () => {
     expect(box.querySelector('.chat-status-seg.-mode')).not.toBeNull();
   });
 });
+
+/**
+ * ── BRANCH ─────────────────────────────────────────────────────────────────
+ *
+ * "When you have a long running, big context task… but it contains context you
+ * want to consult with or do something parallel with, I want a button that
+ * opens a new chat and pre-fills it… I think in some of the harnesses this is
+ * implemented by a /command, but we don't want /commands. We want a button."
+ */
+describe('the branch button', () => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+  function bar(props: Partial<Parameters<typeof SessionBar>[0]>): HTMLElement {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    act(() => {
+      root.render(
+        <SessionBar
+          paneId="p1"
+          folder={null}
+          status={{
+            model: 'claude-opus-5',
+            activeModel: 'claude-opus-5',
+            context: { pct: 25, tokens: 50_000, max: 200_000 },
+            models: [{ value: 'default', displayName: 'Opus', resolvedModel: 'claude-opus-5' }],
+          }}
+          send={() => {}}
+          liveLabel={null}
+          agents={[]}
+          mode="chat"
+          {...props}
+        />,
+      );
+    });
+    return host;
+  }
+
+  it('is absent when the host gives it nothing to do', () => {
+    expect(bar({}).querySelector('.chat-status-seg.-branch')).toBeNull();
+  });
+
+  it('is a BUTTON on the strip, not a row inside a menu', () => {
+    const b = bar({ onBranch: () => {} }).querySelector('.chat-status-seg.-branch');
+    expect(b).not.toBeNull();
+    expect(b?.tagName).toBe('BUTTON');
+  });
+
+  it('says what it will do, including that this chat keeps running', () => {
+    const b = bar({ onBranch: () => {} }).querySelector('.chat-status-seg.-branch');
+    expect(b?.getAttribute('title')).toMatch(/keeps running/);
+  });
+
+  it('disables rather than disappears while the branch is being made', () => {
+    // A control that vanishes mid-press moves everything beside it under the
+    // pointer. The strip's width must not depend on a transient.
+    const b = bar({ onBranch: () => {}, branching: true }).querySelector<HTMLButtonElement>(
+      '.chat-status-seg.-branch',
+    );
+    expect(b).not.toBeNull();
+    expect(b?.disabled).toBe(true);
+  });
+
+  it('fires once per press', () => {
+    let fired = 0;
+    const box = bar({
+      onBranch: () => {
+        fired++;
+      },
+    });
+    act(() => {
+      box.querySelector<HTMLButtonElement>('.chat-status-seg.-branch')?.click();
+    });
+    expect(fired).toBe(1);
+  });
+});
