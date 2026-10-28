@@ -1649,6 +1649,52 @@ html {
 }
 body {
   font-size: 0.875rem;
+  /* ── EVERY THEME READS AT THE SAME SIZE, WHATEVER FACE IT PICKS ────────
+     A theme may own the TYPEFACE (demoscene made that a feature, and three
+     more themes followed), and no theme sets a font-size — yet memphis read
+     visibly larger than riso at identical numbers. The cause is x-height:
+     what you perceive as "size" is the height of a lower-case letter, not the
+     em box, and the faces in use are far apart on it —
+
+       Verdana        0.545   memphis
+       SF Pro / system 0.52   the themes that pick nothing
+       Helvetica Neue 0.517   riso
+       Avenir Next    0.473   blueprint
+
+     — so memphis ran ~5% large and blueprint ~9% small against the same
+     declarations. Reported as "some of the themes changed the font sizes
+     meaningfully… memphis feels bigger than riso, and I prefer riso, which I
+     believe uses the size most of the other themes use".
+
+     `font-size-adjust` is the property for exactly this: it scales the
+     computed size so the first available font's x-height hits the ratio
+     given. 0.517 is riso's Helvetica Neue — the value the report named, and
+     within 0.6% of the system face every other theme already uses. Faces that
+     are already there barely move; the outliers come back to the pack.
+
+     Unsupported engines ignore it and get today's behaviour, which is why
+     this is safe to apply globally rather than per-theme. */
+  font-size-adjust: 0.517;
+}
+/* ── TWO OPT-OUTS, BOTH FOR THINGS THAT ARE NOT PROSE ────────────────────
+   A BITMAP FACE HAS NO SPARE SIZES. demoscene's Px437 IBM VGA is an 8x16
+   pixel font: it is correct at its integer sizes and blurs at everything
+   else, and scaling it by an x-height ratio lands between them by
+   definition. Its size being "wrong" is the point of it.
+
+   A TERMINAL MEASURES ITS OWN CELL. xterm.js computes a character box from
+   the computed style and lays the grid out on it; shifting the glyphs under
+   that measurement is how a TUI starts drawing boxes that do not meet. */
+/* Written as a DESCENDANT rule on purpose: `[data-theme="x"] {` with the
+   brace straight after the bracket is how this stylesheet's tests find a
+   theme's TOKEN block, and a second block wearing that shape makes the parser
+   read this one as demoscene's palette. */
+[data-theme="demoscene"] body {
+  font-size-adjust: none;
+}
+.xterm,
+.xterm * {
+  font-size-adjust: none;
 }
 html,
 body,
