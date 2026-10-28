@@ -386,6 +386,33 @@ export function applyTabOrder(workspaceId: string, ids: string[]): void {
  * a sibling row lagging by one request — and the refetch behind this fixes
  * them all at once.
  */
+/**
+ * Write one field onto a cached tab row, in this workspace's list and in the
+ * all-tabs corpus, without waiting for the server.
+ *
+ * Used by the theme picker: the document repaints on the press, and the row
+ * behind it has to agree immediately or switching away and back would resolve
+ * the OLD theme out of the cache and repaint again. The PATCH that follows is
+ * what makes it true everywhere else.
+ */
+export function patchTabRow(workspaceId: string, tabId: string, patch: Partial<Tab>): void {
+  const list = caches.get(workspaceId);
+  if (list) {
+    const i = list.findIndex((t) => t.id === tabId);
+    if (i >= 0) {
+      const next = [...list];
+      next[i] = { ...(list[i] as Tab), ...patch };
+      versions.set(workspaceId, (versions.get(workspaceId) ?? 0) + 1);
+      caches.set(workspaceId, next);
+      const subs = listenersByWs.get(workspaceId);
+      if (subs) for (const fn of subs) fn(next);
+    }
+  }
+  // …and the corpus the rail, the mention picker and the theme resolver all
+  // read. Without this the press would stick in one list and not the other.
+  mergeWorkspaceTabs(workspaceId, cachedTabsFor(workspaceId));
+}
+
 export function applyTabUnread(tabId: string, unread: boolean): void {
   for (const [wsId, list] of caches) {
     const i = list.findIndex((t) => t.id === tabId);

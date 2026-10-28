@@ -421,6 +421,17 @@ export const TabSchema = z.object({
   // way, so flipping back restores the tiling. Optional for rows/servers
   // that predate the column.
   view_mode: z.enum(['split', 'tabbed']).optional(),
+  // ── THE CHAT'S OWN THEME, OR NULL TO FOLLOW THE DEVICE'S ────────────────
+  // The theme has been a device setting since there was one — a fact about
+  // the browser you are sitting at. This makes it a fact about the CHAT too:
+  // open the same conversation from a phone and it looks the same, because
+  // the value is on the row rather than in that browser's storage.
+  //
+  // NOT validated against the theme list on purpose. A server that is older
+  // or newer than the client it is talking to must not drop a name it has not
+  // heard of; the client resolves an unknown value to its default, which is
+  // the same thing it does for a theme that was removed.
+  theme: z.string().nullable().optional(),
   created_at: z.number(),
   updated_at: z.number(),
   // Runtime-only flag. True iff at least one pane in this tab has

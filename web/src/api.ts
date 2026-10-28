@@ -254,6 +254,11 @@ export const api = {
       /** Living sidebar: hold this tab at the top of its workspace block, in
        *  the manual drag order (unpinned tabs are auto-sorted). */
       pinned?: boolean;
+      /** The chat's own theme, or `null` to follow the device's default. A
+       *  bare string rather than the ThemeChoice union: the server stores
+       *  whatever it is given, and a client older than the theme it is being
+       *  handed must not be the thing that refuses it. */
+      theme?: string | null;
     },
   ) =>
     req<Tab>(`/api/tabs/${id}`, {

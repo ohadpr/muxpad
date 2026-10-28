@@ -172,9 +172,50 @@ const listeners = new Set<(s: Settings) => void>();
 
 let current: Settings = typeof window === 'undefined' ? DEFAULTS : read();
 
+/**
+ * ── THE CHAT YOU ARE IN MAY OVERRIDE THE DEVICE'S THEME ────────────────────
+ *
+ * A theme used to be one fact: what this browser looks like. It is two now —
+ * the device's default (here, in localStorage) and the chat's own (on the tab
+ * row, so it follows you to every device). The chat wins while you are in it;
+ * `null` means it has no opinion and the default shows through.
+ *
+ * It lives in this module rather than in a React store because the theme is a
+ * DOCUMENT-level fact: the `data-theme` attribute is on `<html>`, the OS
+ * dark-mode listener below already writes it, and the terminal reads its
+ * palette out of the cascade. A second owner would be a second answer to
+ * "what theme is it right now".
+ */
+let chatTheme: ThemeChoice | null = null;
+
+/** What the document is actually wearing: the chat's theme, else the device's. */
+function themeInForce(s: Settings): ThemeChoice {
+  return chatTheme ?? s.theme;
+}
+
 function applyToDocument(s: Settings) {
   if (typeof document === 'undefined') return;
-  document.documentElement.dataset.theme = resolveTheme(s.theme, systemPrefersDark());
+  document.documentElement.dataset.theme = resolveTheme(themeInForce(s), systemPrefersDark());
+}
+
+/**
+ * Point the document at the active chat's theme, or `null` to go back to the
+ * device default. Called when the active tab changes and when its row does.
+ *
+ * A no-op when nothing changes, because this runs on every tab switch and a
+ * repaint of every themed surface (the terminal rebuilds its palette) is not
+ * free.
+ */
+export function setChatTheme(choice: ThemeChoice | null): void {
+  if (chatTheme === choice) return;
+  chatTheme = choice;
+  applyToDocument(current);
+  for (const fn of listeners) fn({ ...current });
+}
+
+/** The chat's own theme, or null when it follows the device. */
+export function getChatTheme(): ThemeChoice | null {
+  return chatTheme;
 }
 
 /**
@@ -189,7 +230,10 @@ function applyToDocument(s: Settings) {
 if (typeof window !== 'undefined' && window.matchMedia) {
   const mq = window.matchMedia(DARK_QUERY);
   const onFlip = () => {
-    if (current.theme !== 'system') return;
+    // `themeInForce`, not `current.theme`: when the chat you are in has
+    // chosen 'system' the device default is irrelevant, and when the chat has
+    // chosen a named theme an OS flip must not repaint anything.
+    if (themeInForce(current) !== 'system') return;
     applyToDocument(current);
     for (const fn of listeners) fn({ ...current });
   };
@@ -260,7 +304,7 @@ export function useResolvedTheme(): Theme {
     mq.addListener?.(onFlip);
     return () => mq.removeListener?.(onFlip);
   }, []);
-  return resolveTheme(s.theme, prefersDark);
+  return resolveTheme(themeInForce(s), prefersDark);
 }
 
 export function useSettings(): Settings {

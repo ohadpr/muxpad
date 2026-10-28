@@ -219,6 +219,19 @@
   padding: 0;
   font-weight: 500;
 }
+/* The way back to the default. Quiet — it is the exception, not the action
+   you came for — and full width so it reads as belonging to the grid above
+   rather than floating beside it. */
+.settings-theme-default {
+  margin-top: 10px;
+  width: 100%;
+  font-size: 0.8125rem;
+  color: var(--settings-muted);
+}
+.settings-theme-default:hover {
+  color: var(--fg);
+}
+
 .theme-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));

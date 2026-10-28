@@ -1,13 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { api } from '../api';
+import { useActiveTab } from '../lib/chat-theme';
 import { type PushState, disablePush, enablePush, getPushState, sendTestPush } from '../lib/push';
 import {
   SYSTEM_PAIR,
   THEME_CHOICES,
   type ThemeChoice,
+  setChatTheme,
   updateSettings,
   useSettings,
 } from '../settings';
+import { patchTabRow } from '../tabs';
 import { SlackPasskeySettings } from './SlackPasskeySettings';
 import './SettingsMenu.css';
 
@@ -162,7 +166,39 @@ export function SettingsMenu() {
  * mutually exclusive choices should have and the behaviour nobody writes
  * correctly by hand.
  */
+/**
+ * THE GRID SETS THE CHAT YOU ARE IN, NOT THE DEVICE.
+ *
+ * A theme is two facts now: the device's default, and the chat's own (on the
+ * tab row, so it follows you to every device — see lib/chat-theme). This
+ * picker writes the CHAT's, because that is what you are looking at while you
+ * use it; "Use for every chat" writes the default and clears the override, so
+ * the way back is one press rather than a second control.
+ *
+ * With no chat open — the workspace picker — there is nothing to override, so
+ * it writes the default directly and the button does not render.
+ */
 export function ThemePicker({ chosen, group = 'theme' }: { chosen: ThemeChoice; group?: string }) {
+  const tab = useActiveTab();
+  const pick = (value: ThemeChoice) => {
+    if (!tab) {
+      updateSettings({ theme: value });
+      return;
+    }
+    // Optimistic: the document repaints on the press, and the row catches up.
+    // A theme that waited for a round trip would feel like a toggle that
+    // sticks, and a failed write is recoverable by pressing it again.
+    setChatTheme(value);
+    patchTabRow(tab.workspaceId, tab.id, { theme: value });
+    void api.patchTab(tab.id, { theme: value }).catch(() => {});
+  };
+  const useEverywhere = () => {
+    if (!tab) return;
+    updateSettings({ theme: chosen });
+    setChatTheme(null);
+    patchTabRow(tab.workspaceId, tab.id, { theme: null });
+    void api.patchTab(tab.id, { theme: null }).catch(() => {});
+  };
   return (
     <fieldset className="settings-row settings-themes">
       <legend>Theme</legend>
@@ -174,7 +210,7 @@ export function ThemePicker({ chosen, group = 'theme' }: { chosen: ThemeChoice; 
               name={group}
               value={t.value}
               checked={t.value === chosen}
-              onChange={() => updateSettings({ theme: t.value })}
+              onChange={() => pick(t.value)}
             />
             {/* System is the only choice that is two themes, so its tile is
                 two previews cut on the diagonal — the light one over the dark
@@ -193,6 +229,14 @@ export function ThemePicker({ chosen, group = 'theme' }: { chosen: ThemeChoice; 
           </label>
         ))}
       </div>
+      {/* The way back. Without it a chat that has been given a theme can never
+          be handed back to the default, and the default itself would be
+          unreachable from the only grid in the app. */}
+      {tab ? (
+        <button type="button" className="settings-theme-default" onClick={useEverywhere}>
+          Use for every chat
+        </button>
+      ) : null}
     </fieldset>
   );
 }
