@@ -159,7 +159,7 @@
   border: 1px solid var(--chat-border);
   border-radius: 6px;
   padding: 1px 6px;
-  font-family: var(--chrome-font, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-family: var(--term-font, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-size: 0.78125rem;
   color: var(--chat-dim);
 }
@@ -286,9 +286,27 @@
   font-size: 1em;
 }
 
+/* ─── A CHARACTER GRID NEEDS --term-font, NEVER --chrome-font ───────────────
+   `--chrome-font` is the face a THEME owns for its small chrome, and since
+   the themes started owning typefaces it is routinely PROPORTIONAL:
+   blueprint's condensed drafting hand, riso's Futura, memphis's Gill Sans.
+   The base value happens to be monospace, which is why this survived — every
+   code block in the app has been rendering in whatever the theme picked, and
+   on blueprint that is a condensed sans. Reported as "font of text code
+   blocks too narrow, maybe it's not even monospaced". It was not.
+
+   The `ui-monospace` fallback in those declarations never fired: a fallback
+   only applies when the variable is UNDEFINED, and `:root` always defines it.
+
+   `--term-font` is the token that means "this theme's monospace" — every
+   theme sets it, the terminal reads it, and its default is required to stay
+   a system mono (theme-fonts.test.ts). So anything whose meaning depends on
+   columns lining up points here: fenced blocks, inline code, tool output and
+   diffs. Labels and chips keep --chrome-font; they have no grid to keep. */
+
 /* Inline code — subtle chip, monospace. */
 .chat-md :not(pre) > code {
-  font-family: var(--chrome-font, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-family: var(--term-font, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-size: 0.86em;
   padding: 0.12em 0.4em;
   border-radius: 5px;
@@ -311,7 +329,7 @@
 }
 .chat-md pre code {
   display: block;
-  font-family: var(--chrome-font, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-family: var(--term-font, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-size: 0.796875rem;
   line-height: 1.55;
   color: var(--chat-dim);
@@ -806,7 +824,7 @@
   background: var(--chat-panel);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font-family: var(--chrome-font, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-family: var(--term-font, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-size: 0.78125rem;
   line-height: 1.5;
   color: var(--chat-dim);
@@ -996,7 +1014,7 @@
 
 /* ── Diffs ─────────────────────────────────────────────────────────────── */
 .chat-diff {
-  font-family: var(--chrome-font, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-family: var(--term-font, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-size: 0.75rem;
   line-height: 1.5;
 }
