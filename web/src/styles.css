@@ -1026,20 +1026,21 @@
    nothing but line weight. So: no fills, no soft shadows, one amber pencil for
    the thing you are pointing at, and a grid under all of it. */
 [data-theme="blueprint"] {
-  /* ── THE CONDENSED FACE IS FOR LETTERING, NOT FOR READING ──────────────
-     First pass set BOTH tokens to a condensed stack, and the report was "hard
-     to read" — correctly. A drafter letters LABELS by hand against a guide:
-     the title block, the dimensions, the part names. The notes are typed, and
-     16% of the width taken out of every glyph in a paragraph is 16% less
-     counter to tell an a from an o by, on a saturated ground, under a grid.
+  /* ── NO CONDENSED FACE ANYWHERE, IN THE END ────────────────────────────
+     This began as a condensed drafting hand on BOTH tokens, which made the
+     body text hard to read; then on --chrome-font alone, which made the rail
+     hard to read; and the third report was simply "I still see some usage of
+     narrow fonts in this blue theme" — which was right, because
+     --chrome-font is not two labels, it is every chip, action row, tool row,
+     agent block and settings control in the app.
 
-     So the hand is kept where lettering actually appears — --chrome-font,
-     which is the rail, the heads, the chips — and the reading face is a
-     monoline humanist that holds up at 14px. Both still read as one drawing,
-     because the lettering is the part you SEE as lettering. */
+     The honest reading of three rounds: a condensed face is a DISPLAY face.
+     It is for a title block set once at size, not for a token spent on
+     several dozen small UI strings. What actually reads as a drafting hand
+     here is the CAPS and the TRACKING, and those are applied where the
+     lettering is (below) and cost nothing anywhere else. */
   --ui-font: "Avenir Next", Avenir, "Segoe UI", system-ui, sans-serif;
-  --chrome-font: Bahnschrift, "Avenir Next Condensed", "Roboto Condensed", "Arial Narrow",
-    "DIN Alternate", system-ui, sans-serif;
+  --chrome-font: "Avenir Next", Avenir, "Segoe UI", system-ui, sans-serif;
   --term-font: "SF Mono", Menlo, Monaco, monospace;
 
   --bg: #0a2342;
@@ -1160,19 +1161,15 @@
    the body alone made it invisible everywhere it mattered, which is how the
    first fix for "hard to read" also deleted the theme. It is listed above. */
 
-/* LETTERING IS FOR LABELS, AND A CHAT TITLE IS NOT A LABEL.
-   The whole rail took the condensed hand, and "sidebar font for blueprint too
-   narrow" is the same complaint as the body text one, in the place it was
-   moved TO. A rail is thirty rows of proper nouns at 13px — the hardest
-   reading in the app, not the easiest.
-
-   So the hand is kept for the two things that are genuinely LETTERED on a
-   drawing: the title plate, and the section names. Both are short, both are
-   set in caps, and neither is something you read a column of. */
+/* LETTERING IS CAPS AND TRACKING, not a narrower face. The two things a
+   drawing genuinely LETTERS — the title plate and the section names — are
+   short, set in caps, and not something you read a column of. That is the
+   whole of the drafting hand now; see the token note above for the three
+   rounds it took to get here. */
 [data-theme="blueprint"] .sidenav-brand,
 [data-theme="blueprint"] .navtree-ws-name {
-  font-family: var(--chrome-font);
-  letter-spacing: 0.06em;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 /* EVERY EDGE IS A DRAWN LINE, SO NOTHING IS ROUNDED. A radius is a moulded

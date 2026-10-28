@@ -141,3 +141,37 @@ describe('anything with columns uses the monospace token', () => {
     }
   });
 });
+
+/**
+ * NO THEME SETS A CONDENSED FACE ON TEXT.
+ *
+ * Blueprint took three rounds to learn this and the lesson generalises: a
+ * condensed face is a DISPLAY face. It is for a title block set once at size,
+ * not for a token spent on body copy (round one: "extremely hard to read"),
+ * nor on a rail of thirty proper nouns at 13px (round two: "sidebar font too
+ * narrow"), nor on `--chrome-font`, which is not two labels — it is every
+ * chip, action row, tool row, agent block and settings control in the app
+ * (round three: "I still see some usage of narrow fonts in this blue theme").
+ *
+ * What reads as a drafting hand is CAPS and TRACKING, and those are free to
+ * apply exactly where the lettering is.
+ */
+describe('no theme puts a narrow face on text', () => {
+  const NARROW = /condensed|narrow|bahnschrift|impact|haettenschweiler|oswald|din alternate/i;
+  const cases = THEMES.flatMap((t) => {
+    const block = STYLES.match(new RegExp(`\\[data-theme="${t.value}"\\]\\s*\\{([^}]*)\\}`))?.[1];
+    if (!block) return [];
+    return (['--ui-font', '--chrome-font'] as const).flatMap((tok) => {
+      const v = new RegExp(`${tok}:([^;]*);`).exec(block)?.[1];
+      return v ? [[`${t.value} ${tok}`, v] as const] : [];
+    });
+  });
+
+  it('finds the font tokens at all, so this cannot pass vacuously', () => {
+    expect(cases.length).toBeGreaterThanOrEqual(6);
+  });
+
+  it.each(cases)('%s', (_name, value) => {
+    expect(value).not.toMatch(NARROW);
+  });
+});
