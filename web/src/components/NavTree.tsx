@@ -322,10 +322,14 @@ export function NavTree({ activeWorkspaceSlug, activeTabSlug, variant, onNavigat
  * about what it contains.
  */
 function WorkingSetStrip({
+  activeWorkspaceSlug,
   activeTabSlug,
   onNavigate,
   touch,
 }: {
+  /** Which workspace the reader is in — decides whether a row needs to say
+   *  where it is from. See the prefix in WorkingSetRow. */
+  activeWorkspaceSlug: string;
   activeTabSlug: string | null;
   onNavigate?: (() => void) | undefined;
   /** The sheet. No hover to reveal a control and no Control key to press. */
@@ -378,6 +382,13 @@ function WorkingSetStrip({
           key={tab.id}
           tab={tab}
           workspace={workspace}
+          // ── THE PREFIX IS FOR THE ONES FROM SOMEWHERE ELSE ───────────────
+          // Every row carried its workspace, and in the common case every row
+          // in the band is from the one you are in — five identical "Personal
+          // /" prefixes down a six-row band, which is repetition reading as
+          // information. It earns its place exactly when it disambiguates:
+          // when the chat is NOT from the workspace you are looking at.
+          elsewhere={workspace.slug !== activeWorkspaceSlug}
           active={tab.slug === activeTabSlug}
           {...(touch ? { touch: true } : {})}
           {...(onNavigate ? { onNavigate } : {})}
@@ -391,12 +402,15 @@ function WorkingSetStrip({
 function WorkingSetRow({
   tab,
   workspace,
+  elsewhere,
   active,
   onNavigate,
   touch,
 }: {
   tab: Tab;
   workspace: { slug: string; name: string };
+  /** The chat is from another workspace — see the prefix below. */
+  elsewhere: boolean;
   active: boolean;
   onNavigate?: (() => void) | undefined;
   touch?: boolean | undefined;
@@ -431,9 +445,11 @@ function WorkingSetRow({
               one line on the tree's grid. It shrinks first and ellipsizes
               first (see .navtree-ws-prefix) — when the rail is narrow the
               chat's own name is the part you need. */}
-          <span className="navtree-ws-prefix" aria-hidden="true">
-            {workspace.name}
-          </span>
+          {elsewhere ? (
+            <span className="navtree-ws-prefix" aria-hidden="true">
+              {workspace.name}
+            </span>
+          ) : null}
           <span className="navtree-name-text" dir="auto">
             {tab.name}
           </span>
@@ -545,13 +561,25 @@ function SidebarTree({
         <span className="navtree-search-label">Search chats</span>
         <kbd className="navtree-search-kbd">{paletteChordLabel()}</kbd>
       </button>
-      {/* ─── THE WORKING SET ──────────────────────────────────────────────
-          Above the scroller, not inside it, and that is the point: a strip you
-          have to scroll to is a strip you will search for, which is the thing
-          it exists to end. It is six rows at most — see shared/working-set.ts
-          for the simulation behind the number. */}
-      <WorkingSetStrip activeTabSlug={activeTabSlug} {...(onNavigate ? { onNavigate } : {})} />
       <div className="navtree-scroll">
+        {/* ─── THE RECENTLY-ACTIVE BAND ─────────────────────────────────────
+          INSIDE the scroller, as the first thing in it. It was pinned above —
+          "a strip you have to scroll to is a strip you will search for" — and
+          that reasoning assumed a rail that is mostly below the fold. It is
+          not: the band is six rows at most (see shared/working-set.ts for the
+          simulation behind the number) and it is already at the top, so on
+          any rail taller than about ten rows it is on screen whether it is
+          pinned or not. What pinning actually bought was a fixed object the
+          list slid under: "I'm not entirely sold on having the recent chats
+          be fixed. I think you should be able to scroll through the whole
+          thing."
+
+          So it scrolls with everything else, and the rail is one list again. */}
+        <WorkingSetStrip
+          activeWorkspaceSlug={activeWorkspaceSlug}
+          activeTabSlug={activeTabSlug}
+          {...(onNavigate ? { onNavigate } : {})}
+        />
         {/* NO CREATE CONTROL HERE, and none in the list either. It is on each
             WORKSPACE HEADER — see WorkspaceNode. That is the row the action is
             about, so the button needs no label saying where it creates and
@@ -793,17 +821,19 @@ function SheetRail({
               which is the guess this navigator keeps being redesigned to
               avoid. */}
       </div>
-      {/* ─── THE WORKING SET, ON THE PHONE TOO ─────────────────────────────
-          Above the scroller, same as the rail. The cost of hunting for a chat
-          is HIGHER here, not lower — the list is the whole screen and there is
-          no ⌘K chord on a thumb — so leaving it off the surface that needs it
-          most was simply a miss. */}
-      <WorkingSetStrip
-        activeTabSlug={activeTabSlug}
-        touch={true}
-        {...(onNavigate ? { onNavigate } : {})}
-      />
       <div className="navtree-scroll">
+        {/* ─── THE SAME BAND, AND THE SAME PLACE ──────────────────────────
+            Inside the scroller here too — see the rail above for why it
+            stopped being pinned. The cost of hunting for a chat is HIGHER on
+            a phone (the list is the whole screen and there is no ⌘K chord on
+            a thumb), which is an argument for the band EXISTING, not for it
+            holding a fixed slice of a screen this small. */}
+        <WorkingSetStrip
+          activeWorkspaceSlug={activeWorkspaceSlug}
+          activeTabSlug={activeTabSlug}
+          touch={true}
+          {...(onNavigate ? { onNavigate } : {})}
+        />
         {/* EVERY WORKSPACE, like the desktop rail. The sheet used to render one
             workspace's TabList and reach the others through a picker that
             replaced the whole list — so moving between them was a mode change,

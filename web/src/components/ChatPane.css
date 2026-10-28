@@ -115,16 +115,21 @@
   top: calc(100% + 6px);
   bottom: auto;
 }
-/* ON TOUCH IT IS CHIPS ONLY. The app's top bar already names the workspace and
-   the chat, so repeating them here would be the duplicate that sent this strip
-   into the top bar in the first place. What is left is one right-aligned row —
-   the pane's own controls, in the pane, at the end of the screen the keyboard
-   never reaches. */
-.chat-head[data-touch="true"] {
+/* ── ON TOUCH THE STRIP RIDES THE COMPOSER ───────────────────────────────
+   There is no head on a phone (see ChatPane.tsx), so the tool row carries the
+   session chip and Branch instead — right-aligned, inside the pill, under the
+   input. The row is the same object as the desktop's; only its cargo differs,
+   because a phone has no room for three labels and nowhere better to put the
+   chips than the surface the thumb is already on. */
+.chat-composer-tools[data-touch="true"] {
   justify-content: flex-end;
-  min-height: 30px;
-  padding-right: 8px;
+  min-height: 26px;
 }
+.chat-composer-tools[data-touch="true"] > .chat-status-bar {
+  flex: 0 1 auto;
+}
+/* …and its menus open UPWARD again, which is the default — the strip is back
+   at the bottom of the pane, where up is the only direction with room. */
 
 .chat-scroll {
   flex: 1 1 auto;

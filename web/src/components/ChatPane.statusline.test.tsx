@@ -216,22 +216,21 @@ describe('the session line sits outside the composer pill', () => {
     SRC.indexOf('// Everything that draws an ALREADY-ARRIVED message'),
   );
 
-  it('is not in the composer at all any more — it is the head', () => {
-    // It has been under the pill, above the pill, and inside the pill's tool
-    // row. All three were the same mistake in different places: the bottom of
-    // a chat belongs to the composer, and none of this is about the message
-    // you are writing. It is the pane's own head now, at the top.
+  it('is the head on a desktop and the composer tool row on a phone', () => {
+    // It has been under the pill, above the pill, inside the pill's tool row,
+    // in the app's top bar, and in a head of its own on both layouts. Two
+    // facts survived all of it: the bottom of a chat belongs to the composer,
+    // and a phone has no room for a head. So the desktop gets the head the
+    // mock-up draws, and the phone keeps the strip at the end of the screen
+    // the thumb is already at — "it should be closer to the composer".
     expect(WRAP.length).toBeGreaterThan(100);
-    expect(WRAP).not.toContain('<SessionBar');
-    expect(SRC).toMatch(/<div className="chat-head"/);
-    expect(SRC).toMatch(/\{sessionStrip\}/);
-    // …and it is IN THE PANE on both layouts. It spent one revision portalled
-    // into the app's top bar on touch, where it read as window chrome rather
-    // than as part of the conversation — and where its menus, which open
-    // upward, landed over the carrier and the clock.
+    expect(SRC).toMatch(/\{!touchLayout \? \(\s*<div className="chat-head">/);
+    expect(SRC).toMatch(
+      /<div className="chat-composer-tools" data-touch="true">\s*\{sessionStrip\}/,
+    );
+    // …and never portalled out of the pane, which read as window chrome and
+    // opened its menus over the carrier and the clock.
     expect(SRC).not.toMatch(/MobilePaneChrome/);
-    const head = SRC.slice(SRC.indexOf('<div className="chat-head"'));
-    expect(head.slice(0, head.indexOf('</div>'))).toMatch(/!touchLayout \? \(/);
   });
 
   it('cannot move the composer, because its height is not a variable', () => {
