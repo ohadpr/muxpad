@@ -4219,7 +4219,7 @@ body.sidenav-resizing iframe {
      the clean light slab the tree draws two inches below, which is what the
      original report was about: two identical pills for one chat. One pill,
      one quieter mark, two different things. */
-  background-color: color-mix(in srgb, var(--band-ink) 14%, transparent);
+  background-color: color-mix(in srgb, var(--band-ink) 11%, transparent);
   border-radius: var(--nt-pill);
   box-shadow: none;
   /* The tree row bleeds its right edge past the group's padding to touch the
@@ -4244,6 +4244,13 @@ body.sidenav-resizing iframe {
   /* The BAND's ink, captured above — not --fg and not --nt-ink-read, both of
      which the active row re-points at the pane's palette. */
   color: var(--band-ink);
+}
+/* …AND THE WORKSPACE TAG BESIDE IT, for the identical reason. It is derived
+   from --fg-dim and --fg-faint, both of which the active row re-points at the
+   pane, so on the active row it measured 1.33–2.25:1 against the band's own
+   ground while every other row's tag was fine. */
+.navtree-workingset .navtree-tab-row[data-active="true"] .navtree-ws-tag {
+  color: color-mix(in srgb, var(--band-ink-dim) 55%, transparent);
 }
 .navtree-workingset .navtree-tab-row[data-active="true"]:hover {
   /* It is still a link, and the band is the one place the row you are on is

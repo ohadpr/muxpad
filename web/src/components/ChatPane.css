@@ -1292,6 +1292,12 @@
   gap: 2px;
   min-height: 26px;
   padding: 0;
+  /* A QUERY CONTAINER, because the thing that runs out of room is this ROW and
+     a pane's width has nothing to do with the viewport's. Two panes side by
+     side on a 1500px screen each get a ~400px row, and a media query would
+     have called both of them wide. */
+  container-type: inline-size;
+  container-name: composer-tools;
   /* THE NEGATIVE MARGIN IS THE ALIGNMENT. A tool button carries 8px of its
      own padding, so without this its icon starts 8px right of the first
      letter of the text above it — close enough to read as a mistake rather
@@ -2731,6 +2737,30 @@
   color: color-mix(in srgb, var(--chat-accent) 55%, var(--chat-fg));
   font-weight: 600;
 }
+/* ── …UNTIL THERE IS NOWHERE LEFT TO YIELD ──────────────────────────────
+   "Never shrink" is right while something else can give way, and the model
+   chip is the only thing that can. Once it is down to its own icon the live
+   cell goes on refusing and simply paints over its neighbour: measured
+   overlapping "btw…" from a 430px row with a long label, and from 340px even
+   with "1 agent".
+
+   Below that it ellipsizes like every other cell. A clipped "2 agents · 1 sub…"
+   still says the thing the cell is for — that work is running, and how much —
+   and the roster behind it has the whole list. Two words on top of another
+   control say nothing and break both. */
+@container composer-tools (max-width: 440px) {
+  .chat-status-seg.-live {
+    flex-shrink: 1;
+    min-width: 0;
+    overflow: hidden;
+  }
+  .chat-status-seg.-live .chat-status-seg-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
 /* A 16px line is a fine thing to READ and a poor thing to hit with a thumb. This
    is the cell you actually press — it opens the roster of running children — so
    its hit area is extended OFF-LAYOUT rather than by growing the row: the strip
