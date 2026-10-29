@@ -4007,6 +4007,10 @@ body.sidenav-resizing iframe {
      sheet's own on a phone — and the active row below substitutes nothing. */
   --band-ink: var(--fg);
   --band-ink-dim: var(--fg-dim);
+  /* The tag's ink, captured the same way and for the same reason. Its own
+     token is derived from --fg-dim AND --fg-faint, both of which the active
+     row re-points at the pane. */
+  --band-ws-tag-ink: var(--nt-ws-tag-ink);
   flex: 0 0 auto;
   /* ── ITS ROWS LINE UP WITH EVERY OTHER ROW ──────────────────────────────
      A row inside a workspace carries two insets: the scroller's and the
@@ -4250,7 +4254,12 @@ body.sidenav-resizing iframe {
    pane, so on the active row it measured 1.33–2.25:1 against the band's own
    ground while every other row's tag was fine. */
 .navtree-workingset .navtree-tab-row[data-active="true"] .navtree-ws-tag {
-  color: color-mix(in srgb, var(--band-ink-dim) 55%, transparent);
+  /* EXACTLY what every other row in the band shows. The first attempt mixed
+     its own value — 55% of the dim ink against transparent — and measured
+     2.17–3.24:1, worse than the rows around it. The tag's overall faintness
+     is a separate decision ("make the workspace label a bit smaller and
+     fainter"); this row has no business being a different one. */
+  color: var(--band-ws-tag-ink);
 }
 .navtree-workingset .navtree-tab-row[data-active="true"]:hover {
   /* It is still a link, and the band is the one place the row you are on is
