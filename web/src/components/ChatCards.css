@@ -222,6 +222,31 @@
   padding-right: 0;
 }
 
+/* A COLLAPSED HTML CARD IS THE SAME ONE-ROW SHAPE, so it gets the same layout.
+   `-peek` means the frame is cut to its first element — a summary row the same
+   height as a markdown card's single line — and the tail has to be centred
+   against it for exactly the reason it did there. The grid item in column 1 is
+   the frame's wrapper rather than the value, which is the only difference. */
+.chat-card.-peek {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 8px;
+  padding-right: 10px;
+}
+.chat-card.-peek > .chat-card-age {
+  position: static;
+  grid-column: 2;
+  grid-row: 1;
+}
+.chat-card.-peek > .chat-card-body {
+  grid-column: 1;
+  grid-row: 1;
+  /* The 46px that reserved the tail is the grid column's job now. */
+  padding-right: 0;
+  overflow: hidden;
+}
+
 .chat-card-sr {
   position: absolute;
   width: 1px;

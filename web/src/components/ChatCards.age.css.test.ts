@@ -16,8 +16,12 @@ import { describe, expect, it } from 'vitest';
  * lands on top of the value.
  */
 const css = readFileSync(join(__dirname, 'ChatCards.css'), 'utf8');
+// ANCHORED AT A RULE START, not anywhere in the file. A bare indexOf for
+// `.chat-card-body {` also matches inside `.chat-card.-peek > .chat-card-body {`
+// and then reads the WRONG rule's declarations — which is how adding the peek
+// layout made this file claim the body had stopped reserving the tail's width.
 const rule = (sel: string) => {
-  const i = css.indexOf(`${sel} {`);
+  const i = css.search(new RegExp(`^${sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{`, 'm'));
   return i < 0 ? null : css.slice(i, css.indexOf('\n}', i));
 };
 const decl = (body: string | null, prop: string) => {

@@ -1105,6 +1105,17 @@
   color: var(--chat-accent);
 }
 
+/* A compaction. QUIETER THAN THE OTHERS — the dimmest mark in the log, on
+   purpose. A cron fire and a sub-chat report both say something happened that
+   a reader may want to act on; this says the machine made room for itself,
+   which is the kind of fact you want findable and never want announced: "not
+   a big fan of showing the user the compaction mechanics". The icon takes the
+   faint ink rather than the accent for exactly that reason. */
+.chat-sysnote-compacted .chat-sysnote-icon,
+.chat-sysnote-compacted .chat-sysnote-text {
+  color: var(--chat-faint);
+}
+
 /* ── Diffs ─────────────────────────────────────────────────────────────── */
 .chat-diff {
   font-family: var(--term-font, ui-monospace, SFMono-Regular, Menlo, monospace);

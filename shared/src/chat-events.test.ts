@@ -7,6 +7,7 @@ import {
   REPLY_TOOL_NAME,
   blockText,
   expandChatEvent,
+  expandCompaction,
   expandSpawnDelivery,
   isAgentLaunchTool,
   isInterruptMarker,
@@ -653,5 +654,57 @@ describe("an @mention's handles are for the agent, not the reader", () => {
     // Identity matters: a plain message must not be rebuilt on every render.
     const e = { kind: 'user' as const, id: 'u1', ts: MS, text: 'plain' };
     expect(expandChatEvent(e)[0]).toBe(e);
+  });
+});
+
+/**
+ * A COMPACTION IS A MARK, NOT A MESSAGE.
+ *
+ * The harness reopens a summarised session with the whole summary as a USER
+ * message, so the chat printed thousands of words of "1. Primary Request and
+ * Intent:" in the middle of a conversation about signal archives, in the voice
+ * of somebody who never typed it.
+ */
+describe('a compacted session', () => {
+  const OPENER =
+    'This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.';
+  const text = `${OPENER}\n\nSummary:\n1. Primary Request and Intent:\n  The project is signalarchive.example`;
+
+  it('becomes a quiet mark plus a folded body, never a bubble', () => {
+    const out = expandCompaction(text, 'u1', MS);
+    expect(out).not.toBeNull();
+    const [notice, body] = out as ChatEvent[];
+    expect(notice).toMatchObject({ kind: 'notice', variant: 'compacted' });
+    // The mark says what happened in a line; it does not quote the summary.
+    expect((notice as { text: string }).text).not.toContain('Primary Request');
+    expect(body).toMatchObject({ kind: 'user', folded: true });
+  });
+
+  it('keeps the summary rather than dropping it', () => {
+    // It is the ONLY copy: the turns it replaced are gone from the agent's
+    // context, so what a compaction chose to keep is occasionally the thing
+    // you need. One disclosure away, not deleted.
+    const [, body] = expandCompaction(text, 'u1', MS) as ChatEvent[];
+    expect((body as { text: string }).text).toContain('signalarchive.example');
+  });
+
+  it('is reached by the real transcript path, not only when called directly', () => {
+    const out = normalizeTranscriptLine({
+      type: 'user',
+      uuid: 'u9',
+      timestamp: new Date(MS).toISOString(),
+      message: { content: text },
+    });
+    expect(out.map((e) => e.kind)).toEqual(['notice', 'user']);
+    expect(out[0]).toMatchObject({ variant: 'compacted' });
+  });
+
+  it('does not fire on a message that merely mentions compaction', () => {
+    // The match is the harness's own opening sentence, anchored at the start.
+    expect(expandCompaction('can you explain how compaction works?', 'u1', MS)).toBeNull();
+    expect(
+      expandCompaction(`what does this mean: "${OPENER}"`, 'u1', MS),
+      'quoted mid-message is somebody asking about it',
+    ).toBeNull();
   });
 });
