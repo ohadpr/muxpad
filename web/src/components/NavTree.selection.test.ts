@@ -1124,9 +1124,9 @@ describe('a selected row in the recently-active band', () => {
     // chat highlight is just trash". ANY ground here is a second claim on one
     // surface, so the assertion is the absence rather than a particular token.
     expect(rule, 'the band has no active-row rule').not.toBe('');
-    // Built from --fg like every other raised surface here, which is the one
-    // construction that survives ten themes.
-    expect(rule).toMatch(/background-color:\s*color-mix\(in srgb, var\(--fg\)/);
+    // Built from the BAND's captured ink — not --fg, which this very selector
+    // re-points at the pane's palette (see --band-ink).
+    expect(rule).toMatch(/background-color:\s*color-mix\(in srgb, var\(--band-ink\)/);
     // Not the tree's slab, and not the accent wash that read as muddy plum.
     expect(rule).not.toMatch(/background-color:\s*var\(--(bg-pane-face|nt-sel|accent)/);
   });
@@ -1135,7 +1135,7 @@ describe('a selected row in the recently-active band', () => {
     // With no ground at all the two were separated by font-weight alone — 640
     // against 700 — and against a read row that ink step measures 1.31:1 on
     // tokyo-night. Two different facts, one invisible difference.
-    const lift = /color-mix\(in srgb, var\(--fg\) (\d+)%/.exec(rule)?.[1];
+    const lift = /color-mix\(in srgb, var\(--band-ink\) (\d+)%/.exec(rule)?.[1];
     expect(Number(lift)).toBeGreaterThan(0);
   });
 
@@ -1178,5 +1178,48 @@ describe('a selected row in the recently-active band', () => {
     const tsx = readFileSync(join(__dirname, 'NavTree.tsx'), 'utf8');
     const row = tsx.slice(tsx.indexOf('function WorkingSetRow'));
     expect(row.slice(0, row.indexOf('\nfunction '))).not.toMatch(/navtree-tab-funnel/);
+  });
+});
+
+/**
+ * ── THE BAND DOES NOT LEAVE THE ISLAND ───────────────────────────────────
+ *
+ * `.navtree-tab-row[data-active="true"]` swaps --fg, --fg-dim and the whole
+ * --nt-ink-* family to the PANE's palette. That is right in the TREE, where
+ * the row is painted in the pane's face. In the BAND there is no pane face,
+ * and the substitution put pane ink on rail ground: 1.19:1 on memphis, 1.58
+ * alucard, 2.07 riso, against 5.6-9.6 for the read rows beside it.
+ *
+ * Two attempts failed before this one, both because they named a token the
+ * active row re-derives: `var(--fg)` and then `var(--nt-ink-read)`.
+ */
+describe('the band captures its own ink', () => {
+  const css = NAV_CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+
+  it('captures it on the BAND, where the rail still owns the tokens', () => {
+    const i = css.indexOf('.navtree-workingset {');
+    const body = css.slice(i, css.indexOf('}', i));
+    expect(body).toMatch(/--band-ink:\s*var\(--fg\)/);
+  });
+
+  it('is declared OUTSIDE the selector that rebinds the palette', () => {
+    // A custom property's var() resolves where it is DECLARED. Declaring it on
+    // the active row itself would capture the pane's ink — which is the bug.
+    const active = css.indexOf('.navtree-tab-row[data-active="true"] {');
+    const band = css.indexOf('--band-ink:');
+    expect(band).toBeGreaterThan(-1);
+    const activeBody = css.slice(active, css.indexOf('}', active));
+    expect(activeBody).not.toContain('--band-ink');
+  });
+
+  it('uses it for BOTH the ink and the ground', () => {
+    // The ground was mixed from --fg too, which is why the dark themes got
+    // worse rather than better on the first attempt (5.60 -> 3.75).
+    const i = css.indexOf('.navtree-workingset .navtree-tab-row[data-active="true"] {');
+    expect(css.slice(i, css.indexOf('}', i))).toContain('var(--band-ink)');
+    const j = css.indexOf(
+      '.navtree-workingset .navtree-tab-row[data-active="true"] .navtree-name-text',
+    );
+    expect(css.slice(j, css.indexOf('}', j))).toContain('var(--band-ink)');
   });
 });

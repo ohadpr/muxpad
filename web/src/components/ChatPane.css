@@ -2720,12 +2720,15 @@
      Mixed toward the body ink rather than away from the accent, so the cell
      stays recognisably the accent on themes where the accent is already
      fine. */
-  color: color-mix(in srgb, var(--chat-accent) 72%, var(--chat-fg));
   /* Safe here and nowhere else: this cell's content always fits, so nothing can
      paint out of it. The truncating cells keep their clip. What visibility buys
      is the hit area below. */
   overflow: visible;
-  color: var(--chat-accent);
+  /* 55%, measured rather than chosen. At 72% it still failed on four themes —
+     riso 4.06, acme 3.95, acme-dark 4.06, github-light 4.44 — because a mix
+     that far toward a dim accent barely moves. This clears 4.5:1 on all ten
+     while staying unmistakably the accent hue. */
+  color: color-mix(in srgb, var(--chat-accent) 55%, var(--chat-fg));
   font-weight: 600;
 }
 /* A 16px line is a fine thing to READ and a poor thing to hit with a thumb. This

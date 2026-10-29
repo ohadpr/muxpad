@@ -745,3 +745,40 @@ describe('the older-build cell', () => {
     expect(rule).toContain('min-width: max-content');
   });
 });
+
+/**
+ * ── THE LIVE CELL'S COLOUR IS DECLARED ONCE ──────────────────────────────
+ *
+ * It was measured at 4.06:1 on riso at 11px/600 — below AA, and the dimmest
+ * text on a strip where every other cell sat at 8.08. A saturated accent is
+ * frequently the dimmest colour a theme owns.
+ *
+ * The first fix changed nothing, because the rule already ended with
+ * `color: var(--chat-accent)` five lines further down and the later
+ * declaration won. That is the failure this test exists for: not the value,
+ * the DUPLICATE.
+ */
+describe('the live cell’s ink', () => {
+  const rule = (() => {
+    const flat = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    const i = flat.indexOf('.chat-status-seg.-live {');
+    return i < 0 ? '' : flat.slice(i, flat.indexOf('}', i));
+  })();
+
+  it('declares `color` exactly once', () => {
+    expect(rule, 'the live rule is missing').not.toBe('');
+    expect(rule.match(/(^|[\s;])color:/g) ?? []).toHaveLength(1);
+  });
+
+  it('is mixed toward the body ink, not the bare accent', () => {
+    expect(rule).toMatch(/color:\s*color-mix\(in srgb, var\(--chat-accent\)/);
+    expect(rule).not.toMatch(/color:\s*var\(--chat-accent\)\s*;/);
+  });
+
+  it('leaves the spinning MARK on the pure accent', () => {
+    // A ring has no reading threshold to clear, and it is what carries the hue.
+    const flat = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    const i = flat.indexOf('.chat-status-seg.-live svg {');
+    expect(flat.slice(i, flat.indexOf('}', i))).toMatch(/color:\s*var\(--chat-accent\)/);
+  });
+});

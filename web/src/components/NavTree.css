@@ -3992,6 +3992,21 @@ body.sidenav-resizing iframe {
    SHORTCUT, not a move, and its workspace must not start lying about what it
    contains. */
 .navtree-workingset {
+  /* ── THE BAND'S OWN INK, CAPTURED BEFORE A ROW CAN REBIND IT ───────────
+     `.navtree-tab-row[data-active="true"]` swaps --fg, --fg-dim and the whole
+     --nt-ink-* family to the PANE's palette, and it is right to: in the tree
+     that row is painted in the pane's face and its funnel flares that surface
+     into the rail, so pane ink is what belongs on it.
+     The band has no pane face. The same substitution put the pane's content
+     ink on the band's own ground and measured 1.19:1 on memphis, 1.58 on
+     alucard, 2.07 on riso — the chat you are IN became the least readable row
+     in the band. Reaching for --nt-ink-read instead did not help, because that
+     token is re-derived in the same block.
+     A custom property's var() is resolved where it is DECLARED, so these
+     capture whatever the ink means HERE — rail on the desktop island, the
+     sheet's own on a phone — and the active row below substitutes nothing. */
+  --band-ink: var(--fg);
+  --band-ink-dim: var(--fg-dim);
   flex: 0 0 auto;
   /* ── ITS ROWS LINE UP WITH EVERY OTHER ROW ──────────────────────────────
      A row inside a workspace carries two insets: the scroller's and the
@@ -4204,7 +4219,7 @@ body.sidenav-resizing iframe {
      the clean light slab the tree draws two inches below, which is what the
      original report was about: two identical pills for one chat. One pill,
      one quieter mark, two different things. */
-  background-color: color-mix(in srgb, var(--fg) 14%, transparent);
+  background-color: color-mix(in srgb, var(--band-ink) 14%, transparent);
   border-radius: var(--nt-pill);
   box-shadow: none;
   /* The tree row bleeds its right edge past the group's padding to touch the
@@ -4226,14 +4241,16 @@ body.sidenav-resizing iframe {
    the ink alone. One rung brighter than a read row, from the same family, so
    it cannot drift away from the rail the way an app-level token did. */
 .navtree-workingset .navtree-tab-row[data-active="true"] .navtree-name-text {
-  color: var(--nt-ink-read);
+  /* The BAND's ink, captured above — not --fg and not --nt-ink-read, both of
+     which the active row re-points at the pane's palette. */
+  color: var(--band-ink);
 }
 .navtree-workingset .navtree-tab-row[data-active="true"]:hover {
   /* It is still a link, and the band is the one place the row you are on is
      worth pressing — it is how you get back after wandering. One step up from
      its resting ground, NOT `--nt-hover`: that is a 6% wash, which over this
      row's own 8% is a change nobody can see. */
-  background-color: color-mix(in srgb, var(--fg) 19%, transparent);
+  background-color: color-mix(in srgb, var(--band-ink) 19%, transparent);
 }
 
 /* ── NO CHILD RUNG INSIDE THE BAND ───────────────────────────────────────
