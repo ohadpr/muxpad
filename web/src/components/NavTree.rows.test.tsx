@@ -844,30 +844,37 @@ describe('a recently-active row carries its workspace', () => {
   const row = tsx.slice(tsx.indexOf('function WorkingSetRow'));
   const body = row.slice(0, row.indexOf('\nfunction '));
 
-  it('prints it in front of the chat name, on the same line', () => {
+  it('prints it AFTER the chat name, on the same line', () => {
+    // It was a prefix. A rail is scanned down its left edge — the same
+    // argument that keeps every status mark on one x — and a leading
+    // "Orbit /" pushed that row's NAME 70px right of every other name in the
+    // band: the thing you are looking for stopped starting where its
+    // neighbours start, to make room for the thing you are not.
+    expect(body).toMatch(/navtree-ws-tag[\s\S]{0,120}\{workspace\.name\}/);
+    expect(body.indexOf('navtree-name-text')).toBeLessThan(body.indexOf('navtree-ws-tag'));
     // A second line would break the band's rows off the tree's grid, and a
-    // trailing chip would take width from the status column.
-    expect(body).toMatch(/navtree-ws-prefix[\s\S]{0,120}\{workspace\.name\}/);
-    expect(body.indexOf('navtree-ws-prefix')).toBeLessThan(body.indexOf('navtree-name-text'));
+    // chip would take width from the status column.
+    expect(body).not.toMatch(/navtree-ws-prefix/);
   });
 
   it('is the part that gives way when the rail is narrow', () => {
     // You are looking for the chat; the workspace only disambiguates it.
-    const rule = (sel: string) => {
-      const flat = css.replace(/\/\*[\s\S]*?\*\//g, '');
-      const i = flat.indexOf(`${sel} {`);
-      return i < 0 ? '' : flat.slice(i, flat.indexOf('}', i));
-    };
-    expect(rule('.navtree-ws-prefix')).toMatch(/flex:\s*0 1 auto/);
-    expect(rule('.navtree-ws-prefix')).toMatch(/text-overflow:\s*ellipsis/);
-    expect(rule('.navtree-ws-slot .navtree-name-text')).toMatch(/flex:\s*0 1 auto/);
+    expect(rule(css, '.navtree-ws-tag')).toMatch(/flex:\s*0 1 auto/);
+    expect(rule(css, '.navtree-ws-tag')).toMatch(/text-overflow:\s*ellipsis/);
+    expect(rule(css, '.navtree-ws-slot .navtree-name-text')).toMatch(/flex:\s*0 1 auto/);
   });
 
-  it('draws its separator rather than typing one', () => {
-    // A typed "/" is selectable and read out; this one is neither, and the
-    // link's own title already says "<chat> · <workspace>" in full.
-    expect(rule(css, '.navtree-ws-prefix::after')).toMatch(/content:\s*"\/"/);
+  it('is quieter by ink and size, never by weight', () => {
+    // At 13px a lighter weight is just blur.
+    const tag = rule(css, '.navtree-ws-tag');
+    expect(tag).toMatch(/color:\s*var\(--nt-ink-read-child\)/);
+    expect(tag).toMatch(/font-size:/);
+    expect(tag).not.toMatch(/font-weight:/);
+  });
+
+  it('is not read twice — the link’s title already says the pair', () => {
     expect(body).toMatch(/aria-hidden="true">\s*\{workspace\.name\}/);
+    expect(body).toMatch(/title=\{`\$\{tab\.name\} · \$\{workspace\.name\}`\}/);
   });
 });
 
@@ -894,7 +901,7 @@ describe('the workspace prefix earns its place', () => {
   it('renders nothing at all when the chat is from here', () => {
     const row = src.slice(src.indexOf('function WorkingSetRow'));
     expect(row.slice(0, row.indexOf('\nfunction '))).toMatch(
-      /\{elsewhere \? \([\s\S]{0,200}navtree-ws-prefix/,
+      /\{elsewhere \? \([\s\S]{0,200}navtree-ws-tag/,
     );
   });
 });
