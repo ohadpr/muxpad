@@ -433,26 +433,32 @@ function WorkingSetRow({
         onClick={() => onNavigate?.()}
       >
         <span className="navtree-tab-titleline">
-          {/* ── THE WORKSPACE, IN FRONT OF THE NAME ─────────────────────────
+          {/* ── THE WORKSPACE, AFTER THE NAME AND QUIETER ───────────────────
               This band is the one place in the rail where rows from DIFFERENT
-              workspaces sit together — everywhere else a chat is under the
-              header that names its workspace, so the row never has to say it.
-              Here "Main" could be any of four, and two workspaces on this
-              install have a chat called exactly that.
+              workspaces sit together — everywhere else a chat sits under the
+              header that names its workspace — so it is the one place a row
+              has to say where it is from. It says it only when that is NEWS:
+              a row from the workspace you are already in gets nothing, which
+              is why Personal rows are bare and only the Orbit one is tagged.
 
-              A PREFIX, inside the same line, not a second line and not a
-              trailing chip: the band's rows are the tree's rows and must stay
-              one line on the tree's grid. It shrinks first and ellipsizes
-              first (see .navtree-ws-prefix) — when the rail is narrow the
-              chat's own name is the part you need. */}
-          {elsewhere ? (
-            <span className="navtree-ws-prefix" aria-hidden="true">
-              {workspace.name}
-            </span>
-          ) : null}
+              IT WAS A PREFIX FIRST, AND THAT WAS THE WRONG END. A rail is
+              scanned down its left edge — the same argument that keeps every
+              status mark on one x — and a leading "Orbit /" pushed that row's
+              NAME 70px right of every other name in the band. The thing you
+              are looking for stopped starting in the same place as its
+              neighbours, to make room for the thing you are not.
+
+              So: name first, workspace after it, dimmer and smaller. It also
+              shrinks and ellipsizes first (see the css) — on a narrow rail
+              the chat's own name is the part you need. */}
           <span className="navtree-name-text" dir="auto">
             {tab.name}
           </span>
+          {elsewhere ? (
+            <span className="navtree-ws-tag" aria-hidden="true">
+              {workspace.name}
+            </span>
+          ) : null}
         </span>
       </Link>
       {/* NO CONTROLS ON TOUCH, which is the rule every other row here already
