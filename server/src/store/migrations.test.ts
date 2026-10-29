@@ -521,7 +521,7 @@ describe('migrations v21 — agent modes + the living sidebar', () => {
     expect(v.version).toBe(LATEST_SCHEMA_VERSION);
     // Bumped with the migration that adds it, deliberately: a number that
     // tracks the list automatically would make this assertion say nothing.
-    expect(LATEST_SCHEMA_VERSION).toBe(46);
+    expect(LATEST_SCHEMA_VERSION).toBe(47);
   });
 
   /**
