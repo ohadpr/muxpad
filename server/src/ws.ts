@@ -53,6 +53,7 @@ import {
   RESPAWN_STARTUP_GRACE_MS,
   RESPAWN_SWEEP_MS,
 } from './respawn-policy.js';
+import { runnerIsStale } from './runner-build.js';
 import { safeCwd } from './safe-cwd.js';
 import { checkOrigin, parseAllowedOrigins } from './same-origin.js';
 import { AgentQueueStore } from './store/AgentQueueStore.js';
@@ -603,6 +604,15 @@ export function attachWsServer(deps: {
     sid: string | null;
     /** Which harness drives this pane (claude|codex|cursor); set at hello. */
     backend: string;
+    /**
+     * The build the runner reported at hello — the code it is ACTUALLY
+     * executing, not the code this server runs. Compared against
+     * {@link currentBuildId} to decide whether the pane is behind; see
+     * runner-build.ts for why that is the question rather than "how old is
+     * it". `null` until a hello arrives, and a hello without the field means
+     * a runner predating it (stale by definition).
+     */
+    build: string | null;
     turnActive: boolean;
     /**
      * Questions awaiting the user, oldest first (Map preserves insertion
@@ -763,6 +773,19 @@ export function attachWsServer(deps: {
   // `isMachineMessage` owns the list so the next injected type cannot miss it.
   const isHumanMessage = (text: string) => !isMachineMessage(text);
   const agentRunners = new Map<string, AgentRunnerConn>();
+  /**
+   * Is this pane's runner executing a different build from the one the server
+   * would start for it now? (runner-build.ts has the definition and the
+   * reasoning about what it deliberately is NOT.)
+   *
+   * False for a pane with NO runner — nothing is running the wrong code, and
+   * "this chat has no agent" is a sentence the empty state already says
+   * better. Only an attached runner can be behind.
+   */
+  const staleRunner = (paneId: string): boolean => {
+    const conn = agentRunners.get(paneId);
+    return conn ? runnerIsStale(conn.build ?? undefined) : false;
+  };
   /**
    * Publish the pane's subagent count to the cache — the number `GET /api/panes`
    * renders as `agents:` and `getStatus` reads as "working".
@@ -1667,6 +1690,7 @@ export function attachWsServer(deps: {
           ws,
           sid: null,
           backend: 'claude',
+          build: null,
           turnActive: false,
           pendingQuestions: new Map(),
           subagents: new Map(),
@@ -1763,6 +1787,12 @@ export function attachWsServer(deps: {
             // safe both as a DB label AND baked into the self-heal shell cmd.
             const backendId = isBackendId(frame.backend) ? frame.backend : 'claude';
             conn.backend = backendId;
+            // The build the runner is executing. Taken as an opaque label and
+            // never interpreted beyond equality, so an untrusted value cannot
+            // do anything but make the pane read stale (which is the safe way
+            // to be wrong). Length-capped because it rides the session frame.
+            conn.build =
+              typeof frame.build === 'string' && frame.build.length <= 64 ? frame.build : null;
             // Registering is a claim of recovery, not proof of it: a runner
             // that can't resume its session says hello and dies seconds later.
             // Clear the respawn record only after it has held the pane for the
@@ -2503,6 +2533,10 @@ export function attachWsServer(deps: {
             // runner's keepalive must NOT re-push the whole session frame.
             subagents: [...(agentRunners.get(chatPaneId)?.subagents.keys() ?? [])].sort().join(','),
             background: agentRunners.get(chatPaneId)?.backgroundLive ?? 0,
+            // In the fingerprint so the flag can arrive LATE: a pane that was
+            // current when this socket connected becomes stale the moment a
+            // build lands under it, with no hello and no other frame to ride.
+            stale: staleRunner(chatPaneId),
           });
           if (first || hello !== lastHello) {
             lastHello = hello;
@@ -2542,6 +2576,14 @@ export function attachWsServer(deps: {
               // Only when there is something to say — absent reads as zero
               // everywhere, and every other backend sends no such field.
               ...(runner?.backgroundLive ? { background: runner.backgroundLive } : {}),
+              // ── THIS PANE IS RUNNING CODE THE SERVER NO LONGER RUNS ─────
+              // Only when true, so a healthy frame is the same bytes it has
+              // always been. See runner-build.ts: this is NOT "the runner is
+              // old" and NOT "it predates this server process" — it is "it is
+              // executing a different build", which is the only version of
+              // the question that neither cries wolf after an ordinary
+              // restart nor stays quiet for a pane that really is behind.
+              ...(staleRunner(chatPaneId) ? { staleRunner: true } : {}),
             });
           }
           // ── THE RESUME TARGET MUST ACTUALLY HAVE A TRANSCRIPT ──────────

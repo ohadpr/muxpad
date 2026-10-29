@@ -658,3 +658,90 @@ describe('the mode chip', () => {
     expect(panel?.querySelectorAll('button')).toHaveLength(0);
   });
 });
+
+/**
+ * ── THE "older build" CELL ───────────────────────────────────────────────
+ *
+ * A runner outlives every server restart (restarting one kills its in-flight
+ * work), so a pane can sit for days on code the server no longer runs — and
+ * the only symptom is an agent that does not know about something that
+ * shipped since, which reads as the agent being wrong. server/src/
+ * runner-build.ts defines what "stale" means; this is the part that says so.
+ */
+describe('the older-build cell', () => {
+  let host: HTMLElement | null = null;
+  let root: ReturnType<typeof createRoot> | null = null;
+  afterEach(() => {
+    act(() => root?.unmount());
+    host?.remove();
+    host = null;
+    root = null;
+  });
+
+  function bar(props: Partial<Parameters<typeof SessionBar>[0]>) {
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+    act(() => {
+      root?.render(
+        <SessionBar
+          paneId="p1"
+          folder={null}
+          status={null}
+          send={() => {}}
+          liveLabel={null}
+          agents={[]}
+          mode="agent"
+          {...props}
+        />,
+      );
+    });
+    return host;
+  }
+  const cell = (box: HTMLElement) =>
+    box.querySelector<HTMLElement>('[data-testid="chat-status-stale"]');
+
+  it('is absent in the healthy case — which is almost every pane', () => {
+    expect(cell(bar({}))).toBeNull();
+    expect(cell(bar({ stale: false }))).toBeNull();
+  });
+
+  it('appears when the runner is on another build, in either mode', () => {
+    expect(cell(bar({ stale: true }))?.textContent).toBe('older build');
+    expect(cell(bar({ stale: true, mode: 'chat' }))).not.toBeNull();
+  });
+
+  it('opens a panel that says what is missing and what restarting costs', () => {
+    const box = bar({ stale: true });
+    act(() => {
+      cell(box)?.click();
+    });
+    const text = box.querySelector('.chat-status-menu')?.textContent ?? '';
+    // The consequence, not the mechanism: the agent is missing what shipped
+    // since it started.
+    expect(text).toMatch(/instructions/i);
+    // …and the cost of the fix, because respawning kills background work.
+    expect(text).toMatch(/background work/i);
+    expect(text).toMatch(/wake-ups/i);
+  });
+
+  it('offers no restart button — the moment is the user’s to pick', () => {
+    // A control here would respawn the pane in passing, ending background
+    // subagents and scheduled wake-ups it may be holding.
+    const box = bar({ stale: true });
+    act(() => {
+      cell(box)?.click();
+    });
+    expect(box.querySelector('.chat-status-menu')?.querySelectorAll('button')).toHaveLength(0);
+  });
+
+  it('is a warning tone, never the danger colour — nothing is broken', () => {
+    // The old folder cell's red `!` told people their chat was broken when it
+    // was merely not a project. Same mistake, same cell, do not repeat it.
+    const rule = /\.chat-status-seg\.-stale\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(rule).not.toContain('--chat-danger');
+    expect(rule).toContain('--warn');
+    // Two words that ellipsize to "older…" say nothing.
+    expect(rule).toContain('min-width: max-content');
+  });
+});

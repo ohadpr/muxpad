@@ -413,6 +413,11 @@ type ServerMsg =
       // True when a headless turn is already in flight for this pane — a
       // reconnect mid-turn restores the working/Stop state from this.
       turnRunning?: boolean;
+      /** This pane's runner is executing a different build from the one the
+       *  server would start now (server/src/runner-build.ts). Sent only when
+       *  true, and it can arrive LATE — a build landing under an open chat
+       *  makes a current pane stale with no hello to ride. */
+      staleRunner?: boolean;
       // The turn's streamed text so far, so that reconnect shows the partial
       // assistant message instead of a bare typing indicator.
       streamText?: string;
@@ -1544,6 +1549,11 @@ export function ChatPane({
   // recovers. tone 'danger' = a real failure (turn failed, send rejected)
   // that keeps the loud styling and sticks until the next turn.
   const [notice, setNotice] = useState<{ text: string; tone: 'info' | 'danger' } | null>(null);
+  /** See ServerMsg.staleRunner. Not a `notice`: that banner is cleared by the
+   *  next turn-done and by every reconnect, and a pane being behind the build
+   *  is a standing fact rather than an event — it belongs on the session strip
+   *  with the other things that are true about this chat. */
+  const [staleRunner, setStaleRunner] = useState(false);
   // Older-history pagination: the server opens with just the recent tail; we
   // page earlier messages in on scroll-up. `hasMoreOlder` starts true and is
   // corrected by the server's `older-done`.
@@ -1798,6 +1808,10 @@ export function ChatPane({
           hasMoreOlderRef.current = true;
         }
         if (newSid) renderedSid.current = newSid;
+        // Absent reads as false, which is the point: the server omits the
+        // field in the healthy case, and a pane that gets respawned onto the
+        // current build clears the cell by the same omission.
+        setStaleRunner(msg.staleRunner === true);
         setSession(
           msg.session
             ? {
@@ -4819,6 +4833,7 @@ export function ChatPane({
       background={backgroundLive}
       onOpenChat={openChat}
       mode={mode}
+      stale={staleRunner}
       send={(obj) => {
         const sock = wsRef.current;
         if (!sock || sock.readyState !== WebSocket.OPEN) {

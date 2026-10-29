@@ -84,3 +84,38 @@ describe('what moves the id', () => {
     expect(buildIdOf(dir)).toBe(before);
   });
 });
+
+/**
+ * ── THE WIRING, ASSERTED AT THE SOURCE ───────────────────────────────────
+ *
+ * Two properties that no unit test of `runnerIsStale` can see, and both of
+ * which would silently turn the whole check into a tautology or a no-op.
+ */
+describe('how the build reaches the server', () => {
+  const read = (p: string) => readFileSync(join(import.meta.dirname, p), 'utf8');
+
+  it('is captured ONCE, at runner startup — not per hello', () => {
+    // A recomputed value would agree with the server every single time and
+    // the comparison would always say "fresh". The whole point is that the
+    // runner reports the build it was BORN with.
+    const src = read('agent-runner/index.ts');
+    expect(src).toMatch(/const myBuild = currentBuildId\(\)/);
+    // One choke point in sendFrame, because all three backends build their
+    // own hello and two of them re-emit it on an internal re-handshake.
+    expect(src).toMatch(/frame\.t === 'hello' \? \{ \.\.\.frame, build: myBuild \}/);
+    const perBackend = ['backends/claude.ts', 'backends/codex.ts', 'backends/cursor.ts'].filter(
+      (f) => /build:/.test(read(`agent-runner/${f}`)),
+    );
+    expect(perBackend).toEqual([]);
+  });
+
+  it('marks no pane stale when there is no runner at all', () => {
+    // "This chat has no agent" is a sentence the empty state already says
+    // better, and an absent runner is not running the wrong code.
+    const ws = read('ws.ts');
+    expect(ws).toMatch(/conn \? runnerIsStale\(conn\.build \?\? undefined\) : false/);
+    // In the session-frame fingerprint, so the flag can arrive LATE: a build
+    // landing under an open chat has no hello to ride.
+    expect(ws).toMatch(/stale: staleRunner\(chatPaneId\)/);
+  });
+});

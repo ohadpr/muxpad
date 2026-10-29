@@ -18,6 +18,7 @@ import { appendFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import WebSocket from 'ws';
+import { currentBuildId } from '../runner-build.js';
 import { dim } from './ansi.js';
 import { RUNNER_USAGE, parseRunnerArgs } from './args.js';
 import { createBackend } from './backends/index.js';
@@ -201,8 +202,25 @@ const wsUrl = `${apiUrl.replace(/^http/, 'ws')}/ws/agent-runner/${paneId}`;
 let ws: WebSocket | null = null;
 let closed = false;
 
+/**
+ * THE BUILD THIS PROCESS IS EXECUTING — read ONCE, on purpose.
+ *
+ * A runner outlives every `muxpad restart` (restarting one kills its
+ * in-flight work, so the server leaves it alone), which is how a pane ends up
+ * days behind the code the server would start for it today. The server can
+ * only know by being told, and it has to be told the value from STARTUP: a
+ * recomputed one would simply agree with the server every time and the check
+ * would be a tautology. See server/src/runner-build.ts for what "stale" means.
+ */
+const myBuild = currentBuildId();
+
 function sendFrame(frame: RunnerFrame): void {
-  if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(frame));
+  if (ws?.readyState !== WebSocket.OPEN) return;
+  // Stamped HERE rather than in each backend's `hello()`: all three build
+  // their own, and two of them re-emit it on an internal re-handshake
+  // (backends/*.ts). One choke point, so no backend can forget.
+  const out = frame.t === 'hello' ? { ...frame, build: myBuild } : frame;
+  ws.send(JSON.stringify(out));
 }
 
 const host: RunnerHost = {
