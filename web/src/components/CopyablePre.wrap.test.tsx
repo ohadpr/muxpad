@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -129,5 +132,48 @@ describe('the wrap toggle', () => {
     });
     expect(first?.querySelector('pre')?.dataset.wrap).toBe('true');
     expect(second?.querySelector('pre')?.dataset.wrap).toBeUndefined();
+  });
+});
+
+/**
+ * …AND IT HAS TO BE SOMEWHERE YOU CAN SEE IT.
+ *
+ * `.copyable-block-wrap` and `.copyable-block-button` are both one class —
+ * (0,1,0) each — so a tie is decided by SOURCE ORDER. The offset rule sat
+ * before the base rule, the base `right: 6px` won, and the wrap button
+ * rendered exactly underneath copy: in the DOM, on top of nothing, invisible.
+ * "Text blocks don't have the wordwrap icon we discussed" — they did, in the
+ * same 30 pixels as the other one.
+ */
+describe('the two buttons do not stack', () => {
+  const CSS = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), 'CopyablePre.css'),
+    'utf8',
+  );
+
+  it('offsets the wrap button AFTER the rule it has to beat', () => {
+    const flat = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+    const base = flat.indexOf('.copyable-block-button {');
+    const wrap = flat.indexOf('.copyable-block-wrap {');
+    expect(base).toBeGreaterThan(-1);
+    expect(wrap).toBeGreaterThan(-1);
+    expect(wrap, 'the offset must come after the base rule or it loses the tie').toBeGreaterThan(
+      base,
+    );
+  });
+
+  it('puts them at different offsets, by more than their own width', () => {
+    const flat = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+    const at = (sel: string) => {
+      const i = flat.indexOf(`${sel} {`);
+      const body = flat.slice(i, flat.indexOf('}', i));
+      return Number.parseFloat(/right:\s*([\d.]+)px/.exec(body)?.[1] ?? 'NaN');
+    };
+    const size = (() => {
+      const i = flat.indexOf('.copyable-block-button {');
+      const body = flat.slice(i, flat.indexOf('}', i));
+      return Number.parseFloat(/width:\s*([\d.]+)px/.exec(body)?.[1] ?? 'NaN');
+    })();
+    expect(at('.copyable-block-wrap') - at('.copyable-block-button')).toBeGreaterThanOrEqual(size);
   });
 });
