@@ -177,3 +177,40 @@ describe('the two buttons do not stack', () => {
     expect(at('.copyable-block-wrap') - at('.copyable-block-button')).toBeGreaterThanOrEqual(size);
   });
 });
+
+/**
+ * ── AND THE RULE HAS TO REACH THE TEXT ───────────────────────────────────
+ *
+ * The toggle flipped `data-wrap` correctly and nothing moved: a fenced block
+ * is `<pre><code>…`, `.chat-md pre code` declares its own `white-space: pre`,
+ * and `white-space` is inherited — so the pre's value never reached the lines
+ * it was meant to wrap. "Word wrap icon clickable but doesn't cause contents
+ * to wrap."
+ */
+describe('the wrap rule reaches the code element', () => {
+  const HERE = dirname(fileURLToPath(import.meta.url));
+  const CSS = readFileSync(join(HERE, 'CopyablePre.css'), 'utf8');
+  const CHAT = readFileSync(join(HERE, 'ChatPane.css'), 'utf8');
+  const flat = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+
+  it('targets the code child, not only the pre', () => {
+    const i = flat.indexOf('.copyable-block > pre[data-wrap="true"] code');
+    expect(i, 'the selector that actually owns the text is missing').toBeGreaterThan(-1);
+    const body = flat.slice(i, flat.indexOf('}', i));
+    expect(body).toMatch(/white-space:\s*pre-wrap/);
+    expect(body).toMatch(/overflow-wrap:\s*anywhere/);
+  });
+
+  it('out-ranks the rule it has to beat, rather than relying on order', () => {
+    // `.chat-md pre code` is (0,1,2); this is (0,2,2). Order would be a
+    // bundler's business, and this sheet and ChatPane.css are two files.
+    expect(CHAT).toMatch(/\.chat-md pre code \{/);
+    expect(flat).toMatch(/\.copyable-block > pre\[data-wrap="true"\] code/);
+  });
+
+  it('keeps the scroll lock on the PRE, which is the box that scrolls', () => {
+    const i = flat.lastIndexOf('.copyable-block > pre[data-wrap="true"] {');
+    const body = flat.slice(i, flat.indexOf('}', i));
+    expect(body).toMatch(/overflow-x:\s*hidden/);
+  });
+});
