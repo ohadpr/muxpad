@@ -2942,7 +2942,10 @@
    beside the model already says which arrangement you are in, and the word was
    the longest redundant thing on the line). Never ellipsized: the label is one
    short word, and a truncated "Ch…" would be worse than no chip at all. */
-.chat-status-seg.-mode.-static {
+/* `-static` is gone from the mode chip: it opens a panel that EXPLAINS the
+   mode (never one that switches it — see the component). The rule stays for
+   anything else that wears the class without being pressable. */
+.chat-status-seg.-static {
   cursor: default;
 }
 
