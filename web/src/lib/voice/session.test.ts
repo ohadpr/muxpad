@@ -19,6 +19,7 @@ import {
   MUTE_RUNNER_DETAIL,
   MUTE_RUNNER_GRACE_MS,
   MUTE_RUNNER_LINE,
+  QUEUE_DROP_GRACE_MS,
   SETTLE_MAX_MS,
   SETTLE_QUIET_MS,
   type Scheduler,
@@ -2149,6 +2150,9 @@ describe('sub-agents reporting back', () => {
     h.delegate('d1', 2100);
     h.settle();
     h.turnStart('research the competitors.');
+    // The hand-off itself — the ONLY thing that arms the watch. A request
+    // that dispatched nothing has nothing to hear back from.
+    h.agent.frame({ t: 'subagent', progress: { label: 'competitor scan' } });
     h.agent.frame({ t: 'speak', id: 'r1', text: 'Three agents are on it.', n: 1 });
     h.agent.frame({ t: 'turn-done', ok: true });
     h.clock.advance(2000);
@@ -2227,5 +2231,195 @@ describe('sub-agents reporting back', () => {
     h.agent.frame({ t: 'turn-done', ok: true });
     h.clock.advance(2000);
     expect(h.everything()).toContain('Pricing is here.');
+  });
+});
+
+/**
+ * ── AND IT MUST NOT READ OUT SOMEBODY ELSE'S REPORT ──────────────────────
+ *
+ * Every one of these is a defect found in the first version of the delivery
+ * adoption, by a review that drove the real session code.
+ */
+describe('whose agents reported, exactly', () => {
+  const DELIVERY = '<muxpad-delivery count="3" from="t1,t2,t3">\nreports\n</muxpad-delivery>';
+
+  /** A voice request that dispatched NOTHING — just an answer. */
+  function askedSomethingSimple() {
+    const h = harness();
+    h.started();
+    h.hear('what time is it in tokyo?', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.turnStart('what time is it in tokyo?');
+    h.agent.frame({ t: 'speak', id: 'r1', text: 'Just after midnight.', n: 1 });
+    h.agent.frame({ t: 'turn-done', ok: true });
+    h.clock.advance(2000);
+    return h;
+  }
+
+  it('does not credit a TYPED fan-out to a voice question that dispatched nothing', () => {
+    // The found bug, verbatim: ask the time aloud, then type something that
+    // fans out, and voice announced "the agents you sent off have reported
+    // back on: what time is it in tokyo" and read out a billing audit.
+    const h = askedSomethingSimple();
+    h.turnStart(DELIVERY);
+    h.agent.frame({ t: 'speak', id: 'r2', text: 'The billing audit found three issues.', n: 1 });
+    h.clock.advance(2000);
+    expect(h.everything()).not.toContain('The billing audit found three issues.');
+    expect(h.everything()).not.toMatch(/reported back on: what time/i);
+  });
+
+  it('keeps a watch per delegating request, not one slot for all of them', () => {
+    // With one slot, a quick question completing after a delegating one
+    // overwrote it: the first batch was announced under the second
+    // question's words, and the second batch was dropped in silence.
+    const h = harness();
+    h.started();
+    const delegating = (text: string, id: string, at: number) => {
+      h.hear(text, at, at + 1000);
+      h.delegate(id, at + 1100);
+      h.settle();
+      h.turnStart(text);
+      h.agent.frame({ t: 'subagent', progress: { label: 'worker' } });
+      h.agent.frame({ t: 'turn-done', ok: true });
+      h.clock.advance(2000);
+    };
+    delegating('research the competitors.', 'd1', 1000);
+    delegating('audit the billing code.', 'd2', 50_000);
+
+    h.turnStart(DELIVERY);
+    h.agent.frame({ t: 'speak', id: 'r1', text: 'First batch.', n: 1 });
+    h.agent.frame({ t: 'turn-done', ok: true });
+    h.clock.advance(2000);
+    h.turnStart(DELIVERY);
+    h.agent.frame({ t: 'speak', id: 'r2', text: 'Second batch.', n: 1 });
+    h.agent.frame({ t: 'turn-done', ok: true });
+    h.clock.advance(2000);
+    // BOTH are heard. That is the whole point of the list.
+    expect(h.everything()).toContain('First batch.');
+    expect(h.everything()).toContain('Second batch.');
+  });
+
+  it('does not name the question when two are outstanding — a confident wrong label is worse', () => {
+    const h = harness();
+    h.started();
+    for (const [text, id, at] of [
+      ['research the competitors.', 'd1', 1000],
+      ['audit the billing code.', 'd2', 50_000],
+    ] as const) {
+      h.hear(text, at, at + 1000);
+      h.delegate(id, at + 1100);
+      h.settle();
+      h.turnStart(text);
+      h.agent.frame({ t: 'subagent', progress: { label: 'worker' } });
+      h.agent.frame({ t: 'turn-done', ok: true });
+      h.clock.advance(2000);
+    }
+    const n = h.commentary().length;
+    h.turnStart(DELIVERY);
+    h.clock.advance(1000);
+    const said = h.commentary().slice(n).join(' ');
+    expect(said).toMatch(/some of the agents you sent off/i);
+    expect(said).not.toMatch(/reported back on:/);
+  });
+
+  it('drops the watch when the user cancels the work that armed it', () => {
+    // "I don't want this any more" has to cover the agents it dispatched, or
+    // their report arrives minutes later under the abandoned question.
+    const h = harness();
+    h.started();
+    h.hear('research the competitors.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.turnStart('research the competitors.');
+    h.agent.frame({ t: 'subagent', progress: { label: 'worker' } });
+    // Cancelled WHILE the agents are running, which is when a cancel can
+    // happen at all — the agents keep going and report minutes later.
+    h.hear('stop.', 10_000, 10_600);
+    h.probe();
+    expect(h.session.stats.cancels).toBe(1);
+    h.agent.frame({ t: 'turn-done', ok: false });
+    h.clock.advance(2000);
+    const n = h.commentary().length;
+    h.turnStart(DELIVERY);
+    h.agent.frame({ t: 'speak', id: 'r2', text: 'Abandoned work.', n: 1 });
+    h.clock.advance(2000);
+    expect(h.commentary().slice(n).join(' ')).not.toContain('Abandoned work.');
+  });
+
+  it('speaks under the delegation the model actually created', () => {
+    // A minted id is one the realtime API never issued; if it validates ids,
+    // every append under it is refused and this whole path is silently inert.
+    const h = harness();
+    h.started();
+    h.hear('research the competitors.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.turnStart('research the competitors.');
+    h.agent.frame({ t: 'subagent', progress: { label: 'worker' } });
+    h.agent.frame({ t: 'turn-done', ok: true });
+    h.clock.advance(2000);
+    const n = h.transport.sent.length;
+    h.turnStart(DELIVERY);
+    h.agent.frame({ t: 'speak', id: 'r2', text: 'Acme is the biggest.', n: 1 });
+    h.clock.advance(2000);
+    const after = h.transport.sent.slice(n);
+    expect(after.length).toBeGreaterThan(0);
+    for (const e of after) expect(e.delegation_id).toBe('d1');
+  });
+});
+
+/**
+ * A row leaves the server's queue for two opposite reasons — it was CANCELLED,
+ * or it RAN — and across a disconnect the signal that tells them apart
+ * (`turn-start`) is exactly what is missing.
+ */
+describe('settling our tasks against the snapshot', () => {
+  it('does not call a request "cancelled" when it actually ran', () => {
+    const h = harness();
+    h.started();
+    h.hear('deploy to prod.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.agent.frame({ t: 'queued', id: 'q1', text: 'deploy to prod.' });
+    // The gap: turn-start and turn-done both lost, and the row drained.
+    h.agent.frame({ t: 'session', turnRunning: false, runnerAttached: true, queue: [] });
+    h.clock.advance(QUEUE_DROP_GRACE_MS + 5000);
+    expect(h.everything()).not.toMatch(/cancelled before it ran/i);
+    expect(h.everything()).toMatch(/finished that one while we were disconnected/);
+  });
+
+  it('retires a task whose turn-start was ALSO lost — the hang by a second road', () => {
+    // Sent while the agent was idle, so there is no queue row and nothing
+    // ever bound. It used to sit `queued` forever with no heartbeat, and
+    // asking again was refused as a duplicate. That is a phone locking right
+    // after you speak.
+    const h = harness();
+    h.started();
+    h.hear('run the tests.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.agent.frame({ t: 'session', turnRunning: false, runnerAttached: true, queue: [] });
+    h.clock.advance(1000);
+    expect(h.everything()).toMatch(/finished that one while we were disconnected/);
+    h.clock.advance(3 * 60_000);
+    expect(h.commentary().join(' ')).not.toMatch(/Still working on it/);
+  });
+
+  it('leaves a task that is genuinely still parked', () => {
+    const h = harness();
+    h.started();
+    h.hear('deploy to prod.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.agent.frame({ t: 'queued', id: 'q1', text: 'deploy to prod.' });
+    h.agent.frame({
+      t: 'session',
+      turnRunning: false,
+      runnerAttached: true,
+      queue: [{ id: 'q1', text: 'deploy to prod.' }],
+    });
+    h.clock.advance(1000);
+    expect(h.everything()).not.toMatch(/disconnected/);
   });
 });

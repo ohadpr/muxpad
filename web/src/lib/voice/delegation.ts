@@ -176,6 +176,26 @@ export class DelegationRegistry {
     return task;
   }
 
+  /**
+   * Put a RETIRED task back in the live set, under its own id.
+   *
+   * For exactly one case: the work a request dispatched reports back in a
+   * LATER turn (session.ts `adoptDelivery`). That answer belongs to the
+   * question the user asked, so it has to be delivered under the delegation
+   * the model created for it — "multiple appends per delegation are
+   * explicitly supported" is the protocol's own words, and a made-up id is
+   * something the model never issued.
+   *
+   * It does NOT re-claim: `seen` is untouched, so duplicate suppression still
+   * works, and the task keeps the REVISION it was claimed with — a fence
+   * raised in the meantime must still make it stale, which is the whole point
+   * of the fence.
+   */
+  readmit(task: VoiceTask): void {
+    if (this.isFenced(task)) return;
+    this.live.set(task.id, task);
+  }
+
   /** Has this id ever been claimed? Duplicate detection for callers that want
    *  to log the duplicate rather than silently drop it. */
   hasSeen(id: string): boolean {
