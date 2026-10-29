@@ -9,6 +9,42 @@
 .copyable-block > pre.chat-modal-block {
   padding-right: 48px;
 }
+/* …and room for TWO when the wrap toggle is there. Keyed on the container
+   having one — the button renders only for a block with content past its
+   edge, so an ordinary block keeps the inset it always had, and a wrapped
+   one does not run its first line under the controls. */
+.chat-md .copyable-block:has(.copyable-block-wrap) > pre,
+.doc-chat-assistant .copyable-block:has(.copyable-block-wrap) > pre,
+.copyable-block:has(.copyable-block-wrap) > pre.chat-modal-block {
+  padding-right: 84px;
+}
+
+/* ── WRAP ────────────────────────────────────────────────────────────────
+   The `pre` keeps `white-space: pre` by default — indentation is meaning in
+   code, and a desktop has a scrollbar and a pointer. This is the opt-in for
+   the other thing these blocks hold: an email, a prompt, a paragraph, where
+   the sentence runs off the right edge and reading it means dragging a bar
+   one screen at a time.
+
+   `overflow-wrap: anywhere` as well as `pre-wrap`, because the lines that
+   overflow are frequently ONE long token — a url, a path, a base64 blob —
+   which `pre-wrap` alone will not break and which would go on overflowing
+   with the toggle switched on, i.e. a button that visibly does nothing. */
+.copyable-block > pre[data-wrap="true"] {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow-x: hidden;
+}
+/* The toggle sits to the LEFT of copy. Copy is the action this corner has
+   always had and it does not move; the wrap button appears beside it only
+   when the block has something past its edge. */
+.copyable-block-wrap {
+  right: 42px;
+}
+.copyable-block-wrap[aria-pressed="true"] {
+  color: var(--chat-fg, var(--fg));
+  background: var(--bg-hover);
+}
 
 .copyable-block-button {
   position: absolute;
@@ -30,6 +66,7 @@
 
 .copyable-block:hover > .copyable-block-button,
 .copyable-block:focus-within > .copyable-block-button,
+.copyable-block-wrap[aria-pressed="true"],
 .copyable-block-button[data-status="copied"],
 .copyable-block-button[data-status="failed"] {
   opacity: 1;
