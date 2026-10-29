@@ -307,7 +307,7 @@ export function NavTree({ activeWorkspaceSlug, activeTabSlug, variant, onNavigat
  * THE WORKING-SET STRIP.
  *
  * The chats you are moving between, in slots that do not move. All of the
- * reasoning — why not MRU, why six, why eight hours — is in
+ * reasoning — why not MRU, why six, why sixteen hours — is in
  * shared/src/working-set.ts, because that is where the algorithm is and a
  * decision explained beside its implementation is one that survives.
  *
@@ -367,7 +367,7 @@ function WorkingSetStrip({
        hand" was a shelf nobody asked for. "Recently active" is the name the
        report used — and it is also the only one of the three that states the
        RULE the band actually runs on: these are the chats with the newest
-       activity, decayed out after eight hours. A label that names the
+       activity, decayed out after sixteen hours. A label that names the
        mechanism cannot drift from it. */
     <div className="navtree-workingset" aria-label="Recently active">
       <div className="navtree-workingset-head" aria-hidden="true">
