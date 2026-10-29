@@ -590,3 +590,71 @@ describe('a menu opened from the strip', () => {
     expect(bare(css).includes('.chat-head')).toBe(false);
   });
 });
+
+/**
+ * THE MODE CHIP EXPLAINS ITSELF — AND IS STILL NOT A SWITCH.
+ *
+ * It carried a native `title` and nothing else, which failed the only reader
+ * who needs it: "add some on-hover info, a sentence or something saying what
+ * this is." A `title` takes about a second to appear, is unstyled, and does
+ * not exist at all on a phone — where this chip lives inside the composer's
+ * `+` sheet.
+ */
+describe('the mode chip', () => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+  function chat(): HTMLElement {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    act(() => {
+      root.render(
+        <SessionBar
+          paneId="p1"
+          folder={null}
+          status={null}
+          send={() => {}}
+          liveLabel={null}
+          agents={[]}
+          mode="chat"
+        />,
+      );
+    });
+    return host;
+  }
+
+  it('is pressable, and opens a panel rather than a menu of modes', () => {
+    const box = chat();
+    const chip = box.querySelector<HTMLButtonElement>('.chat-status-seg.-mode');
+    expect(chip?.tagName).toBe('BUTTON');
+    act(() => chip?.click());
+    const panel = box.querySelector('.chat-status-menu');
+    expect(panel).not.toBeNull();
+    expect(panel?.getAttribute('role')).toBe('dialog');
+  });
+
+  it('says what the mode IS, in the words that define it', () => {
+    const box = chat();
+    act(() => box.querySelector<HTMLButtonElement>('.chat-status-seg.-mode')?.click());
+    expect(box.querySelector('.chat-status-menu')?.textContent).toMatch(/muxpad’s assistant/);
+  });
+
+  it('answers the next question: how to actually change it', () => {
+    // No harness can rewrite a running session's instructions, so a switch
+    // here could only deliver the new contract as a message the conversation
+    // drifts from. Saying so beats offering a control that under-delivers.
+    const box = chat();
+    act(() => box.querySelector<HTMLButtonElement>('.chat-status-seg.-mode')?.click());
+    const text = box.querySelector('.chat-status-menu')?.textContent ?? '';
+    expect(text).toMatch(/keeps the mode it was created in/);
+    expect(text).toMatch(/open a new chat in Agent mode/i);
+  });
+
+  it('offers no way to switch the running pane', () => {
+    const box = chat();
+    act(() => box.querySelector<HTMLButtonElement>('.chat-status-seg.-mode')?.click());
+    const panel = box.querySelector('.chat-status-menu');
+    // Nothing in there is actionable: it is an explanation, not a picker.
+    expect(panel?.querySelectorAll('button')).toHaveLength(0);
+  });
+});

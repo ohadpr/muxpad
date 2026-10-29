@@ -114,7 +114,7 @@ export function assistantLabel(a: string | null | undefined): string {
 /** Session status pushed by the agent runner — shape shared with the server
  * pipeline via @muxpad/shared so the two ends can't drift apart. */
 export type AgentStatus = AgentSessionStatus;
-export type StatusPanel = 'folder' | 'model' | 'live' | 'ctx' | null;
+export type StatusPanel = 'folder' | 'model' | 'live' | 'ctx' | 'mode' | null;
 
 export interface RosterAgent {
   id: string;
@@ -707,6 +707,7 @@ export function SessionBar({
     if (panel === 'live' && !liveLabel) setPanel(null);
     else if (panel === 'model' && (!status || mode === 'chat')) setPanel(null);
     else if (panel === 'folder' && !folder) setPanel(null);
+    else if (panel === 'mode' && !mode) setPanel(null);
   }, [panel, liveLabel, status, folder, mode]);
 
   // ── Folder switcher state ────────────────────────────────────────────
@@ -851,14 +852,54 @@ export function SessionBar({
           same spot. Chat mode has no model cell and no folder cell, so here the
           word is the only thing identifying the pane and it stays. */}
       {mode === 'chat' ? (
-        <div
-          className="chat-status-seg -mode -static"
-          title={`${AGENT_MODE_LABELS[mode]} mode — ${
-            MODE_CHOICES.find((m) => m.id === mode)?.desc ?? ''
-          }`}
-        >
-          <SvgModeGlyph mode={mode} />
-          <span className="chat-status-seg-label">{AGENT_MODE_LABELS[mode]}</span>
+        /* ── IT EXPLAINS ITSELF, AND IT IS STILL NOT A SWITCH ──────────────
+           This carried a native `title` and nothing else, which failed the
+           only reader who needs it: "add some on-hover info, a sentence or
+           something saying what this is." A `title` takes about a second to
+           appear, is unstyled, and does not exist AT ALL on a phone — where
+           this chip now lives inside the composer's `+` sheet.
+
+           So it opens a panel, like every other cell on this strip. What it
+           must NOT become is a mode PICKER: no harness can rewrite a live
+           session's system prompt (agent-modes.ts has the evidence backend by
+           backend), so a switch here could only deliver the new contract as a
+           message the conversation drifts from. The panel says what the mode
+           is and how to actually change it — open a new pane in the one you
+           want — which is the honest version of the control. */
+        <div className="chat-status-seg-wrap">
+          <button
+            type="button"
+            className={`chat-status-seg -mode${panel === 'mode' ? ' is-open' : ''}`}
+            onClick={() => toggle('mode')}
+            aria-haspopup="dialog"
+            aria-expanded={panel === 'mode'}
+            title={`${AGENT_MODE_LABELS[mode]} mode — ${
+              MODE_CHOICES.find((m) => m.id === mode)?.desc ?? ''
+            }`}
+          >
+            <SvgModeGlyph mode={mode} />
+            <span className="chat-status-seg-label">{AGENT_MODE_LABELS[mode]}</span>
+          </button>
+          {panel === 'mode' ? (
+            // biome-ignore lint/a11y/useSemanticElements: an anchored popover, not a modal that owns the screen.
+            <div className="chat-status-menu chat-session-menu" role="dialog">
+              <div className="chat-session-head">{AGENT_MODE_LABELS[mode]} mode</div>
+              <div className="chat-session-item -static">
+                <span className="chat-session-item-desc">
+                  {MODE_CHOICES.find((m) => m.id === mode)?.desc ?? ''}
+                </span>
+              </div>
+              <div className="chat-session-item -static">
+                <span className="chat-session-item-desc">
+                  {/* The one thing a reader asks next, answered before they
+                      have to find out the hard way. */}
+                  A pane keeps the mode it was created in — no harness can rewrite a running
+                  session’s instructions. To work the other way, open a new chat in{' '}
+                  {AGENT_MODE_LABELS[mode === 'chat' ? 'agent' : 'chat']} mode.
+                </span>
+              </div>
+            </div>
+          ) : null}
         </div>
       ) : null}
 
