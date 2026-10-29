@@ -1143,8 +1143,16 @@
      max() means: clear the home indicator where there is one, keep the 10px
      where there isn't. The sides are the same idea for the rounded corners —
      the strip below the pill used to run into the bottom-right curve. */
+  /* ── THE FLOOR IS 16, NOT 10 ────────────────────────────────────────────
+     The pill floats over the conversation and carries a real drop shadow, and
+     on a theme that draws a hard offset one (memphis puts it 6px down and to
+     the right) ten pixels of padding left about four of visible gap: "composer
+     needs a bit of margin from bottom". A gap under a shadow has to clear the
+     shadow before it starts reading as a gap at all — the same lesson the
+     status strip above the pill learned in its own 16px.
+     Still a `max()`, never a sum: see below. */
   padding: 6px max(12px, env(safe-area-inset-right, 0px))
-    max(10px, env(safe-area-inset-bottom, 0px)) max(12px, env(safe-area-inset-left, 0px));
+    max(16px, env(safe-area-inset-bottom, 0px)) max(12px, env(safe-area-inset-left, 0px));
   background: transparent;
   pointer-events: none; /* the transparent gaps don't eat scroll/clicks… */
 }

@@ -156,7 +156,10 @@ describe('the session line cannot become two lines', () => {
     // the indicator where there is one and keeps the 10px where there isn't.
     const pad = decl('.chat-composer-wrap', 'padding') ?? '';
     expect(pad).not.toMatch(/\+\s*env\(safe-area-inset-bottom/);
-    expect(pad).toMatch(/max\(10px,\s*env\(safe-area-inset-bottom/);
+    // 16px, not the original 10: the pill carries a drop shadow, and on a
+    // theme that draws a hard offset one the ten left about four of visible
+    // gap. The ARITHMETIC is what this test is about — a floor, never a sum.
+    expect(pad).toMatch(/max\(16px,\s*env\(safe-area-inset-bottom/);
     // The sides are the rounded corners in landscape, same idiom.
     expect(pad).toMatch(/max\(12px,\s*env\(safe-area-inset-left/);
     expect(pad).toMatch(/max\(12px,\s*env\(safe-area-inset-right/);
