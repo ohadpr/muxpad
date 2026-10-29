@@ -1510,3 +1510,41 @@ describe('the recently-active band draws one line', () => {
     expect(body('.navtree-workingset')).toMatch(/background:\s*color-mix/);
   });
 });
+
+/**
+ * THE BAND'S LABEL IS NOT SITTING ON ITS FIRST ROW.
+ *
+ * "Recently active too close to actual chats." It had 4px under it. The
+ * comparison that settles the number is the workspace header two sections
+ * down: a 32px row with a 10px label centred in it, which gives that label
+ * ~11px of air on each side by construction. This heading is not a row, so it
+ * has to say the same thing in padding.
+ */
+describe('the recently-active heading has room', () => {
+  const body = (() => {
+    const flat = NAV_CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+    const i = flat.indexOf('.navtree-workingset-head {');
+    return flat.slice(i, flat.indexOf('}', i));
+  })();
+  // The side value is a `calc()`, so a naive split on whitespace tears it
+  // into pieces and both numbers come out NaN — which is a test that passes
+  // nothing rather than one that fails.
+  // The side value is a nested `calc()`, so neither a whitespace split nor a
+  // `[^)]*` ever gets past it — both produce NaN, which is a test that
+  // asserts nothing rather than one that fails. Take the first px and the
+  // last px in the declaration: top and bottom, whatever sits between them.
+  const shorthand = /padding:\s*([\d.]+)px[\s\S]*?([\d.]+)px;/.exec(body);
+  const px = (v: string | undefined) => Number.parseFloat(v ?? '');
+  const padding = { top: px(shorthand?.[1]), bottom: px(shorthand?.[2]) };
+
+  it('gives the label a full line of air before the first row', () => {
+    // The label is 0.625rem = 10px. Less than its own height reads as the
+    // heading being stuck to the row rather than labelling the band.
+    expect(shorthand, 'padding shorthand not found').not.toBeNull();
+    expect(padding.bottom).toBeGreaterThanOrEqual(10);
+  });
+
+  it('is not tighter below than above — a label belongs to what is under it', () => {
+    expect(padding.bottom).toBeGreaterThanOrEqual(padding.top);
+  });
+});
