@@ -531,6 +531,12 @@
   flex: 0 0 auto;
   display: grid;
   place-items: center;
+  /* `align-self`, because the brand row stretches its children: without it
+     the button takes the row's full height, its glyph lands at the top of
+     that box, and the magnifier sits visibly above the wordmark beside it —
+     "place the search icon more centered vertically, it's unnecessarily
+     weird". */
+  align-self: center;
   width: 28px;
   height: 28px;
   margin-left: 6px;
@@ -4132,7 +4138,14 @@ body.sidenav-resizing iframe {
    `--nt-sel`, rounded on BOTH ends, inside the band rather than running out
    of it. */
 .navtree-workingset .navtree-tab-row[data-active="true"] {
-  background-color: var(--nt-sel);
+  /* THE PANE'S OWN FACE, like a selected row in the tree. The first attempt
+     at un-joining this row swapped the fill as well — `--nt-sel`, the rail's
+     20% accent wash — and on a dark rail that is a muddy plum slab beside the
+     clean light row the tree draws two inches below: "active in recently
+     active chat highlight is just trash".
+     The FILL was never the problem; the JOIN was. So the surface is the same
+     one the tree uses and only the geometry changes. */
+  background-color: var(--bg-pane-face);
   border-radius: var(--nt-pill);
   box-shadow: none;
   /* The tree row bleeds its right edge past the group's padding to touch the
@@ -4141,7 +4154,9 @@ body.sidenav-resizing iframe {
   padding-right: var(--nt-air);
 }
 .navtree-workingset .navtree-tab-row[data-active="true"]:hover {
-  background-color: var(--nt-sel-hover, var(--nt-sel));
+  /* Hover on the row you are already on says almost nothing, so it says it in
+     the same colour — see the tree's own rule. */
+  background-color: var(--bg-pane-face);
 }
 
 /* ── NO CHILD RUNG INSIDE THE BAND ───────────────────────────────────────
