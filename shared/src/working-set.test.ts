@@ -89,6 +89,30 @@ describe('decay', () => {
     expect(pruneWorkingSet(s, T0 + WORKING_SET_DECAY_MS + 1)).toHaveLength(0);
   });
 
+  /**
+   * THE BREAK THE SIMULATION DID NOT WEIGH: a night.
+   *
+   * Every other return is a few hours and the metric treated them all alike.
+   * A night is the return where the strip is worth the most — the morning is
+   * spent picking up what you put down — and it is the one 8h could not
+   * survive: stop at 18:00 and the strip is empty by 02:00, with no bedtime
+   * late enough and no morning early enough to save it. Reported exactly that
+   * way: "overnight I go to sleep and wake up and some of them are out".
+   *
+   * Pinned as a PROPERTY rather than as the number, so the constant can be
+   * tuned and this stays the floor it cannot be tuned under.
+   */
+  it('survives a night — stop after work, return the next morning', () => {
+    const hours = (n: number) => n * 60 * 60 * 1000;
+    const lastMessage = Date.UTC(2026, 0, 5, 16, 0); // a 16:00 finish, early
+    const nextMorning = Date.UTC(2026, 0, 6, 8, 0); // …and an 08:00 return
+    const s = [{ tabId: 'yesterday', at: lastMessage }];
+    expect(ids(pruneWorkingSet(s, nextMorning))).toEqual(['yesterday']);
+    // …and it still lets go of the day before that, which is the half of
+    // decay that keeps the strip from becoming the 85-row list again.
+    expect(pruneWorkingSet(s, lastMessage + hours(25))).toHaveLength(0);
+  });
+
   it('a decayed slot frees room rather than evicting a live one', () => {
     let s: WorkingSlot[] = [];
     for (let i = 0; i < WORKING_SET_SIZE; i++) s = touchWorkingSet(s, `t${i}`, T0);

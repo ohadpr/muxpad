@@ -23,7 +23,7 @@
  * used it, which is what makes muscle memory — and a numbered shortcut —
  * possible.
  *
- * ─── Why six, and why eight hours ─────────────────────────────────────────
+ * ─── Why six, and why sixteen hours ───────────────────────────────────────
  * Both simulated against 5,208 real messages over 21 days, replaying the
  * stream through this algorithm and counting how often a return found its slot
  * still there.
@@ -45,7 +45,26 @@
  *   85-row list with extra steps. 8h showed 31 slots of which 52% were used
  *   again within two hours; 24h showed 66 at 38%; never showed 80 at 31%.
  *   After a six-hour break: 8h → 67% relevant, never → 22%. Eight hours shows
- *   FEWER AND BETTER. It is the knee, not a round number.
+ *   FEWER AND BETTER. It looked like the knee.
+ *
+ * ─── WHY IT IS NOT EIGHT HOURS ────────────────────────────────────────────
+ * The simulation scored every break the same way, and one break is not like
+ * the others: A NIGHT. "Overnight I go to sleep and wake up and some of them
+ * are out" — and that is the one return where the strip is worth the most,
+ * because the whole morning is spent picking up exactly what you put down.
+ *
+ * Eight hours cannot survive it. Stop at 18:00 and the strip is empty by
+ * 02:00; there is no bedtime late enough and no morning early enough to get
+ * a working day across an 8h gap. The sampled breaks were mostly mid-day
+ * ones, so the metric never saw this and the number looked fine.
+ *
+ * SIXTEEN. It covers the realistic night end to end — stop as early as 16:00,
+ * return as late as 08:00 — which is the whole point. It stops short of 24h,
+ * where a chat you touched once yesterday afternoon is still holding a slot
+ * through the following evening, and where the simulation measured the
+ * precision actually falling off (66 slots at 38% relevance against 31 at
+ * 52%). The cap of six bounds the damage either way: decay decides whether
+ * the strip is THERE in the morning, and capacity decides what is in it.
  */
 
 /** One occupied slot. `at` is the last time you sent this chat a message. */
@@ -58,7 +77,7 @@ export interface WorkingSlot {
 export const WORKING_SET_SIZE = 6;
 
 /** How long a slot survives without a message from you. See the file note. */
-export const WORKING_SET_DECAY_MS = 8 * 60 * 60 * 1000;
+export const WORKING_SET_DECAY_MS = 16 * 60 * 60 * 1000;
 
 /**
  * Drop slots nobody has touched inside the decay window.
