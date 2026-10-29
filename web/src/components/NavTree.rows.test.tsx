@@ -864,6 +864,35 @@ describe('a recently-active row carries its workspace', () => {
     expect(rule(css, '.navtree-ws-slot .navtree-name-text')).toMatch(/flex:\s*0 1 auto/);
   });
 
+  it('sits on the name’s baseline, not in the middle of its own box', () => {
+    // The title line is `align-items: center`, which centres each item's BOX —
+    // and two font sizes then have two baselines, the smaller one lower. The
+    // tag read as sagging below the name it qualifies.
+    const line = rule(css, '.navtree-ws-slot .navtree-tab-titleline');
+    expect(line).toMatch(/align-items:\s*baseline/);
+  });
+
+  it('steps up on hover, which is when you are asking the question', () => {
+    // Matched on the text rather than through `rule()`, because the selector
+    // shares its block with the focus-visible arm.
+    const i = css.indexOf('.navtree-tab-row:hover .navtree-ws-tag');
+    expect(i, 'no hover rule for the tag').toBeGreaterThan(-1);
+    expect(css.slice(i, css.indexOf('}', i))).toMatch(/color:\s*var\(--nt-ws-tag-ink-hot\)/);
+    // …and the resting ink is the fainter of the two, or the hover says
+    // nothing.
+    expect(css).toMatch(/--nt-ws-tag-ink:\s*color-mix\(in srgb, var\(--fg-faint\)/);
+    expect(css).toMatch(/--nt-ws-tag-ink-hot:\s*var\(--nt-ink-read\)/);
+  });
+
+  it('keeps every re-derivation of the token in step', () => {
+    // The token is re-stated wherever the palette changes surface (the
+    // selected row, the sheet). A definition left behind is a tag that goes
+    // on wearing the old ink on exactly one kind of row.
+    const rest = (css.match(/--nt-ws-tag-ink:/g) ?? []).length;
+    const hot = (css.match(/--nt-ws-tag-ink-hot:/g) ?? []).length;
+    expect(hot).toBe(rest);
+  });
+
   it('is quieter by ink and size, never by weight', () => {
     // At 13px a lighter weight is just blur.
     const tag = rule(css, '.navtree-ws-tag');
