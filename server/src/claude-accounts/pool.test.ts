@@ -542,3 +542,47 @@ it('does not round a floating-point 7% reading up to 8% on the card', () => {
   pool.record('backup', { status: 'allowed', rateLimitType: 'seven_day', utilization: 0.07 });
   expect(Math.ceil(pool.usage('backup')[0]?.utilization ?? 0)).toBe(7);
 });
+
+/**
+ * ── A PROFILE DIRECTORY IS NOT WHERE THE TOKEN LIVES ─────────────────────
+ *
+ * On macOS the CLI keeps the subscription token in the KEYCHAIN, under an item
+ * it names from CLAUDE_SECURESTORAGE_CONFIG_DIR — falling back to a hash of
+ * CLAUDE_CONFIG_DIR only when the first is undefined. So the namespace is
+ * chosen by which variable happens to be set, and a login done with one can
+ * land on a different item from a read done with the other.
+ *
+ * Measured on this machine: a second account logged in with CLAUDE_CONFIG_DIR
+ * alone wrote the right email and account uuid into its profile and still
+ * answered "Failed to authenticate: OAuth session expired and could not be
+ * refreshed" on its first real call.
+ */
+describe('the credential namespace travels with the profile', () => {
+  const account = { id: 'backup', configDir: '/tmp/muxpad-acct-backup', priority: 2 };
+
+  it('sets BOTH variables to the same directory', () => {
+    const env = accountEnv(account as never, {});
+    expect(env.CLAUDE_CONFIG_DIR).toBe(account.configDir);
+    expect(env.CLAUDE_SECURESTORAGE_CONFIG_DIR).toBe(account.configDir);
+  });
+
+  it('does not let a parent env leak another account’s namespace', () => {
+    // The whole failure mode is one variable pointing somewhere the other
+    // does not, so inheriting a stale one is exactly the bug.
+    const env = accountEnv(account as never, {
+      CLAUDE_CONFIG_DIR: '/somewhere/else',
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: '/somewhere/else',
+    });
+    expect(env.CLAUDE_CONFIG_DIR).toBe(account.configDir);
+    expect(env.CLAUDE_SECURESTORAGE_CONFIG_DIR).toBe(account.configDir);
+  });
+
+  it('still refuses every variable that would bill an API key instead', () => {
+    const env = accountEnv(account as never, {
+      ANTHROPIC_API_KEY: 'sk-x',
+      CLAUDE_CODE_OAUTH_TOKEN: 't',
+    });
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+  });
+});

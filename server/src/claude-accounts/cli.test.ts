@@ -106,7 +106,12 @@ describe('add', () => {
     // The EXISTING login stays preferred. Adding a spare is not a request to
     // start using it.
     expect(c.preferred).toBe('primary');
-    expect(out).toContain('claude auth login');
+    // Both variables, always — see `loginLine`. CLAUDE_CONFIG_DIR moves the
+    // profile; the TOKEN lives in the Keychain under an item named from
+    // CLAUDE_SECURESTORAGE_CONFIG_DIR, and a login done with one can land on
+    // a different item from a read done with the other.
+    expect(out).toContain('claude /login');
+    expect(out).toContain('CLAUDE_SECURESTORAGE_CONFIG_DIR=');
   });
 
   it('shares the transcript root, because a failover mid-session must resume', () => {
@@ -216,7 +221,9 @@ describe('the ways add used to go wrong', () => {
   it('prints a login line that survives a space in the path', () => {
     const dest = join(home, 'Claude Backup');
     const { out } = run('add', 'backup', `--dir=${dest}`);
-    expect(out).toContain(`CLAUDE_CONFIG_DIR='${dest}' claude auth login`);
+    expect(out).toContain(
+      `CLAUDE_CONFIG_DIR='${dest}' CLAUDE_SECURESTORAGE_CONFIG_DIR='${dest}' claude /login`,
+    );
   });
 
   it('loses no account when adds race', async () => {

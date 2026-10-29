@@ -236,7 +236,7 @@ function add(): void {
     console.log('');
     console.log('IT HAS NO LOGIN YET. Sign it in — a DIFFERENT Anthropic account:');
     console.log('');
-    console.log(`  CLAUDE_CONFIG_DIR=${shellQuote(configDir)} claude auth login`);
+    console.log(`  ${loginLine(configDir)}`);
     console.log('');
     console.log(
       `Then: muxpad claude-account status. New Claude panes prefer "${existing?.preferred ?? first.id}"`,
@@ -278,6 +278,31 @@ function removeLocked(pool: AccountPool | null): void {
  * It is an existence check, not an authentication: a stale or expired login
  * leaves the file in place. It answers "has this profile ever been signed in",
  * which is the question a half-finished `add` leaves open. */
+/**
+ * THE LOGIN LINE, AND WHY IT SETS TWO VARIABLES.
+ *
+ * `CLAUDE_CONFIG_DIR` moves the PROFILE — history, settings, the identity in
+ * `.claude.json`. It does not move the TOKEN: on macOS that lives in the
+ * Keychain, under an item the CLI names from
+ * `CLAUDE_SECURESTORAGE_CONFIG_DIR`, falling back to a hash of
+ * `CLAUDE_CONFIG_DIR` only when the first is undefined.
+ *
+ * So the namespace depends on which variable happens to be set, and a login
+ * done with one can land on a different item from a read done with the other.
+ * Measured here: an account logged in with `CLAUDE_CONFIG_DIR` alone wrote the
+ * right email and the right account uuid into its profile and still answered
+ * `Failed to authenticate: OAuth session expired and could not be refreshed`
+ * on its first real call. Signed in everywhere a human would look, and not
+ * signed in at all.
+ *
+ * Both, every time, so the hash is of one string whoever computes it — and the
+ * same pair the runner uses (see accountEnv).
+ */
+function loginLine(configDir: string): string {
+  const d = shellQuote(configDir);
+  return `CLAUDE_CONFIG_DIR=${d} CLAUDE_SECURESTORAGE_CONFIG_DIR=${d} claude /login`;
+}
+
 function hasLogin(a: Account): boolean {
   if (existsSync(join(a.configDir, '.claude.json'))) return true;
   return a.configDir === join(homedir(), '.claude') && existsSync(join(homedir(), '.claude.json'));
@@ -329,7 +354,7 @@ function report(pool: AccountPool | null): void {
     // and the sentence has to name the one action that fixes it.
     const dead = pool?.credential(a.id).state === 'dead';
     const state = dead
-      ? `signed out — run: CLAUDE_CONFIG_DIR=${a.configDir} claude /login`
+      ? `signed out — run: ${loginLine(a.configDir)}`
       : cool
         ? `blocked until ${new Date(cool.until_ms).toLocaleString()} (${cool.reason})`
         : use
