@@ -39,6 +39,7 @@ import {
   isAgentLaunchTool,
   needsReplyFallback,
   parseSpawnDelivery,
+  pickSpokenBlock,
 } from '@muxpad/shared';
 
 export interface ChatVoiceOpts {
@@ -102,6 +103,29 @@ export interface ChatVoiceOpts {
 /** Is Chat mode's voice actually in force for this pane? */
 export function chatVoiceActive(opts: ChatVoiceOpts): boolean {
   return opts.mode === 'chat' && backendSupportsChatMode(opts.assistant);
+}
+
+/**
+ * Can this pane be TALKED to — the mic, GPT-Live, the spoken session?
+ *
+ * A DIFFERENT QUESTION FROM `chatVoiceActive`, and they were one predicate
+ * until Agent mode got a voice. That one decides how the WRITTEN transcript is
+ * treated: Chat mode demotes the model's prose to a private scratchpad and
+ * promotes its `reply` calls, which is a Chat-mode contract and must never be
+ * applied to an Agent pane — there, the prose IS the conversation and hiding
+ * it would blank the chat.
+ *
+ * Spoken voice does not need any of that. It needs something to say, and the
+ * server now produces it for a mode with no `reply` tool (see
+ * server/src/spoken-answer.ts), from the stream buffer every backend fills.
+ * So the mic is offered wherever there is an agent to talk to.
+ *
+ * A pane with no mode yet — the instant before its runner hellos — gets no
+ * mic, because "no agent here" and "an agent in some mode" are not the same
+ * state and only the second one can answer.
+ */
+export function voiceSpokenAvailable(opts: Pick<ChatVoiceOpts, 'mode'>): boolean {
+  return opts.mode === 'chat' || opts.mode === 'agent';
 }
 
 /**
@@ -209,7 +233,7 @@ export function applyChatVoice(events: readonly ChatEvent[], opts: ChatVoiceOpts
     let replies = 0;
     let lastProse = -1;
     /** Every prose block in the turn, so the promotion can pick. */
-    const prose: { i: number; len: number }[] = [];
+    const prose: { i: number; text: string }[] = [];
     // Did the user press Stop inside this turn? The harness writes
     // "[Request interrupted by user]" into the transcript and the normalizer
     // turns it into an `interrupted` notice — the only durable signal a
@@ -224,7 +248,7 @@ export function applyChatVoice(events: readonly ChatEvent[], opts: ChatVoiceOpts
       if (e.voice === 'reply') replies++;
       else {
         lastProse = i;
-        prose.push({ i, len: e.text.trim().length });
+        prose.push({ i, text: e.text });
       }
     }
     if (!needsReplyFallback({ mode: 'chat', humanInitiated: true, replies, interrupted })) continue;
@@ -249,12 +273,12 @@ export function applyChatVoice(events: readonly ChatEvent[], opts: ChatVoiceOpts
      * deliverables run to four figures, so "three times longer AND past 300"
      * separates them without being able to fire on two ordinary paragraphs.
      */
-    const last = prose[prose.length - 1] as { i: number; len: number };
-    const biggest = prose.reduce((a, b) => (b.len > a.len ? b : a), last);
-    const chosen =
-      biggest.i !== last.i && biggest.len >= 300 && biggest.len >= last.len * 3
-        ? biggest.i
-        : last.i;
+    // The rule and its measurement moved to shared/chat-events (see
+    // `pickSpokenBlock`): the server now asks the same question of an
+    // Agent-mode turn, for voice, and two copies would drift into promoting
+    // different sentences out of the same turn.
+    const picked = pickSpokenBlock(prose.map((b) => b.text));
+    const chosen = (prose[picked] as { i: number }).i;
     const e = out[chosen] as Extract<ChatEvent, { kind: 'assistant' }>;
     out[chosen] = { ...e, voice: 'fallback' };
   }

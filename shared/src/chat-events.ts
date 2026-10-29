@@ -340,6 +340,42 @@ export function replyTextOf(input: unknown): string {
  * background subagent finishing, a scheduled wakeup — legitimately ends silent.
  * Nobody is waiting. A turn a human started may not.
  */
+/**
+ * WHICH BLOCK OF A TURN'S PROSE IS THE ANSWER — not always the last one.
+ *
+ * Returns an index into `blocks`, or -1 when there is nothing to choose.
+ *
+ * The naive rule is "the last thing it said", and a turn's final words are
+ * very often a status note rather than its result: "Transcription of the 9
+ * chunks is running (~3 min)… Waiting on it". Measured over one pane's 131
+ * promoted turns, 18 of them hid an earlier block of more than 300 characters
+ * that was LONGER than the one shown — in the worst case the finding ("the
+ * 08:00 bulletin ran ~8 minutes… it was being cut ~3 min short") stayed
+ * private while the status line was promoted.
+ *
+ * So: the last block, unless an earlier one is materially bigger. The
+ * thresholds come from that measurement rather than from taste — interim notes
+ * in healthy sessions have a median length of 133 characters, real
+ * deliverables run to four figures, so "three times longer AND past 300"
+ * separates them without being able to fire on two ordinary paragraphs.
+ *
+ * SHARED because two callers now need the same answer to the same question:
+ * the chat client, promoting a Chat-mode turn that made no `reply` call, and
+ * the server, giving a VOICE session something to say about an Agent-mode
+ * turn (which has no `reply` tool at all). Two copies of this rule would
+ * drift, and the drift would be invisible — each side would be promoting a
+ * different sentence from the same turn.
+ */
+export function pickSpokenBlock(blocks: readonly string[]): number {
+  const sized = blocks.map((text, i) => ({ i, len: text.trim().length })).filter((b) => b.len > 0);
+  const last = sized[sized.length - 1];
+  if (!last) return -1;
+  const biggest = sized.reduce((a, b) => (b.len > a.len ? b : a), last);
+  return biggest.i !== last.i && biggest.len >= 300 && biggest.len >= last.len * 3
+    ? biggest.i
+    : last.i;
+}
+
 export function needsReplyFallback(turn: {
   mode: AgentMode;
   /** Did a person (or another agent's `muxpad agent send`) start this turn? */
