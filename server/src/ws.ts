@@ -2537,6 +2537,11 @@ export function attachWsServer(deps: {
             // current when this socket connected becomes stale the moment a
             // build lands under it, with no hello and no other frame to ride.
             stale: staleRunner(chatPaneId),
+            // In the fingerprint so the snapshot is RE-SENT the moment a
+            // runner attaches. That re-send is what carries the truth after a
+            // restart: the first frame says "no runner, cannot tell", and the
+            // second says whether the turn is still running.
+            runner: !!agentRunners.get(chatPaneId),
           });
           if (first || hello !== lastHello) {
             lastHello = hello;
@@ -2544,6 +2549,20 @@ export function attachWsServer(deps: {
             lastSentProvision = provision;
             const runner = agentRunners.get(chatPaneId);
             const turnRunning = runner?.turnActive === true;
+            // ── IS THERE A RUNNER AT ALL ──────────────────────────────────
+            // `turnRunning: false` is two different facts wearing one value:
+            // "the turn finished" and "nobody is attached to this pane yet".
+            // A voice session reads this to decide whether a turn it is
+            // waiting on has ended, and the two are opposite answers.
+            //
+            // THE CASE THAT MADE THIS NECESSARY is an ordinary `muxpad
+            // restart`. The browser's chat socket comes back in about a
+            // second; the runner retries on a fixed two. So for that second
+            // the pane HAS a live chat socket and NO runner, the snapshot
+            // says `turnRunning: false` about a turn that is still running,
+            // and voice retired it and announced an answer that had not
+            // arrived yet.
+            const runnerAttached = !!runner;
             const streamText = streamBufs.get(chatPaneId);
             const question = frontQuestion(runner);
             const cwd = deps.cache.getCwd(chatPaneId) ?? session?.cwd ?? null;
@@ -2556,6 +2575,7 @@ export function attachWsServer(deps: {
               // client, and the healthy frame stays exactly the bytes it was.
               ...(provision ? { provisionError: provision } : {}),
               turnRunning,
+              runnerAttached,
               // Server-owned pending queue so a (re)connecting or reloaded
               // client renders the same bubbles — the queue is authoritative
               // state, not this socket's local memory.

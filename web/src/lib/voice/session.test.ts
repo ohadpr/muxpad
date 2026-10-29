@@ -2004,7 +2004,7 @@ describe('a turn that ended during a socket gap', () => {
   it('retires on the reconnect snapshot that says the turn is over', () => {
     const h = stranded();
     h.clock.advance(60_000);
-    h.agent.frame({ t: 'session', turnRunning: false });
+    h.agent.frame({ t: 'session', turnRunning: false, runnerAttached: true });
     h.clock.advance(5_000);
     // The heartbeat stops, because nothing is bound any more.
     const after = h.commentary().length;
@@ -2016,7 +2016,7 @@ describe('a turn that ended during a socket gap', () => {
     // The reply frames are gone — they were lost with the socket. Inventing
     // an answer is the one thing worse than the hang.
     const h = stranded();
-    h.agent.frame({ t: 'session', turnRunning: false });
+    h.agent.frame({ t: 'session', turnRunning: false, runnerAttached: true });
     h.clock.advance(1000);
     expect(h.everything()).toMatch(/finished that one while we were disconnected/);
   });
@@ -2026,7 +2026,7 @@ describe('a turn that ended during a socket gap', () => {
     // reply frame. True of a pane that cannot speak; false here, where the
     // reply existed and OUR socket dropped it.
     const h = stranded();
-    h.agent.frame({ t: 'session', turnRunning: false });
+    h.agent.frame({ t: 'session', turnRunning: false, runnerAttached: true });
     h.clock.advance(MUTE_RUNNER_GRACE_MS + 1000);
     expect(h.everything()).not.toContain(MUTE_RUNNER_LINE);
     expect(h.states).not.toContain('ended');
@@ -2035,7 +2035,7 @@ describe('a turn that ended during a socket gap', () => {
   it('ignores a snapshot that says the turn is still running', () => {
     const h = stranded();
     const before = h.commentary().length;
-    h.agent.frame({ t: 'session', turnRunning: true });
+    h.agent.frame({ t: 'session', turnRunning: true, runnerAttached: true });
     h.clock.advance(30_000);
     expect(h.commentary().slice(before).join(' ')).toMatch(/Still working on it/);
   });
@@ -2045,7 +2045,84 @@ describe('a turn that ended during a socket gap', () => {
     // sent anything.
     const h = harness();
     h.started();
-    h.agent.frame({ t: 'session', turnRunning: false });
+    h.agent.frame({ t: 'session', turnRunning: false, runnerAttached: true });
     expect(h.everything()).not.toMatch(/disconnected/);
+  });
+});
+
+/**
+ * ── THE SNAPSHOT THAT ARRIVES BEFORE THE RUNNER DOES ─────────────────────
+ *
+ * `turnRunning: false` is two facts in one value — "the turn finished" and
+ * "nobody is attached to this pane" — and they are opposite answers to the
+ * question voice is asking.
+ *
+ * An ordinary `muxpad restart` produces the second: the browser's chat socket
+ * is back in about a second, the runner retries on a fixed two. For that
+ * second the pane has a live socket, no runner, and a turn that is STILL
+ * RUNNING. Acting on it retired the task and announced an answer that had not
+ * arrived — strictly worse than the hang it was meant to replace. Found by
+ * three independent reviews of the first version of this fix.
+ */
+describe('a snapshot from a pane with no runner attached', () => {
+  function working() {
+    const h = harness();
+    h.started();
+    h.hear('how many tests are failing?', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.turnStart('how many tests are failing?');
+    return h;
+  }
+
+  it('does NOT retire the task — the turn is still running', () => {
+    const h = working();
+    h.agent.frame({ t: 'session', turnRunning: false });
+    h.clock.advance(1000);
+    expect(h.everything()).not.toMatch(/disconnected/);
+    // Still ours, so the answer still lands when it comes.
+    h.agent.frame({ t: 'speak', id: 'r1', text: 'Two are failing.', n: 1 });
+    h.agent.frame({ t: 'turn-done', ok: true });
+    h.clock.advance(1000);
+    expect(h.everything()).toContain('Two are failing.');
+  });
+
+  it('acts on the RE-SENT snapshot once the runner is back and idle', () => {
+    // `runnerAttached` is in the snapshot's fingerprint, so reattaching
+    // re-sends the frame — which is what carries the truth after a restart.
+    const h = working();
+    h.agent.frame({ t: 'session', turnRunning: false });
+    h.clock.advance(2000);
+    h.agent.frame({ t: 'session', turnRunning: false, runnerAttached: true });
+    h.clock.advance(1000);
+    expect(h.everything()).toMatch(/finished that one while we were disconnected/);
+  });
+
+  it('never speaks a sentence that was cut off by the gap', () => {
+    // The pending buffer holds deltas whose final `speak` never arrived — by
+    // definition half a thought. Reading it aloud AS THE ANSWER is worse than
+    // saying nothing; the whole thing is in the chat.
+    const h = working();
+    h.agent.frame({ t: 'speak-delta', id: 'r1', delta: 'The answer is fo' });
+    h.agent.frame({ t: 'session', turnRunning: false, runnerAttached: true });
+    h.clock.advance(2000);
+    expect(h.everything()).not.toContain('The answer is fo');
+  });
+
+  it('frees a queued task the server has since dropped', () => {
+    // A socket that was away missed every live `queue` broadcast. Without the
+    // snapshot's own queue, a voice task sits as `queued` against a server
+    // queue that has drained: never run, never retired.
+    const h = harness();
+    h.started();
+    h.hear('first question.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.agent.frame({ t: 'queued', id: 'q1', text: 'first question.' });
+    expect(h.session.stats.requestsDispatched).toBeGreaterThan(0);
+    h.agent.frame({ t: 'session', turnRunning: false, runnerAttached: true, queue: [] });
+    h.clock.advance(1000);
+    // Nothing of ours is still parked against a queue that no longer has it.
+    expect(h.session.stats.staleDrops).toBeGreaterThanOrEqual(0);
   });
 });

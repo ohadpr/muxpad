@@ -102,8 +102,27 @@ export type VoiceChatFrame =
    *
    * `turnRunning` is the server's authoritative answer, computed from the
    * runner registry rather than from whatever this socket happened to catch.
+   *
+   * `runnerAttached` is what makes it SAFE to act on. `turnRunning: false` is
+   * two facts in one value — "the turn finished" and "nobody is attached to
+   * this pane yet" — and those are opposite answers to the question voice is
+   * asking. After an ordinary `muxpad restart` the browser's socket is back in
+   * about a second and the runner retries on a fixed two, so there is a window
+   * where the pane has a chat socket, no runner, and a turn that is still
+   * running. Without this field voice retired that task and announced an
+   * answer that had not arrived.
    */
-  | { t: 'session'; turnRunning?: boolean };
+  | {
+      t: 'session';
+      turnRunning?: boolean;
+      runnerAttached?: boolean;
+      /** The pane's pending queue, same shape as the `queue` frame. Carried
+       *  for the same reason the rest of this frame is: a socket that was away
+       *  missed the live `queue` broadcasts, and a voice task left sitting as
+       *  `queued` against a server queue that has since drained is a request
+       *  that will never run and can never be retired. */
+      queue?: Array<{ id: string; text: string }>;
+    };
 
 export interface VoiceQuestion {
   question: string;
@@ -309,13 +328,18 @@ export class SpeakBridge {
         ];
       }
 
-      // The snapshot itself says nothing — session.ts decides whether it means
-      // a turn of ours ended unseen. What it does do is flush a reply tail
-      // buffered from before the gap, which would otherwise be eaten.
+      // The snapshot says NOTHING ALOUD. session.ts decides what it means.
+      //
+      // And it deliberately does not flush the pending reply buffer, which is
+      // what it did first. That buffer holds deltas whose final `speak` never
+      // arrived — by definition a sentence cut off mid-word, from before the
+      // gap — so flushing it made voice read out half a thought and present it
+      // as the answer. Dropped instead: the answer is in the chat, intact, and
+      // half of it spoken aloud is worse than none of it.
       case 'session': {
-        if (frame.turnRunning === false) {
+        if (frame.turnRunning === false && frame.runnerAttached === true) {
           this.turnRunning = false;
-          return this.flushAll();
+          this.replies.clear();
         }
         return [];
       }
