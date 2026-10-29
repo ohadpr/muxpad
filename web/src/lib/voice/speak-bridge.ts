@@ -328,18 +328,30 @@ export class SpeakBridge {
         ];
       }
 
-      // The snapshot says NOTHING ALOUD. session.ts decides what it means.
-      //
-      // And it deliberately does not flush the pending reply buffer, which is
-      // what it did first. That buffer holds deltas whose final `speak` never
-      // arrived — by definition a sentence cut off mid-word, from before the
-      // gap — so flushing it made voice read out half a thought and present it
-      // as the answer. Dropped instead: the answer is in the chat, intact, and
-      // half of it spoken aloud is worse than none of it.
+      /**
+       * The snapshot says nothing BY ITSELF — session.ts decides what it
+       * means. What it has to decide HERE is what to do with a reply buffer
+       * stranded by the gap, and the answer is "it depends, and you can tell".
+       *
+       * The buffer holds deltas whose final `speak` never arrived. Usually
+       * that is a sentence cut off mid-word, and reading half a thought aloud
+       * AS THE ANSWER is worse than saying nothing — the whole thing is in the
+       * chat. But the final `speak` is also partly redundant: a reply can have
+       * arrived complete, in deltas, and lost only the frame that confirmed
+       * it. Clearing unconditionally threw away "Done, all 212 tests pass" and
+       * said "the answer is on screen" instead.
+       *
+       * So: speak it if it ENDS LIKE A FINISHED SENTENCE, drop it otherwise.
+       * That is a guess, and it is the right way round — the failure it can
+       * still make is staying quiet about a complete answer that happened not
+       * to end in punctuation, which costs a glance at the screen.
+       */
       case 'session': {
         if (frame.turnRunning === false && frame.runnerAttached === true) {
           this.turnRunning = false;
+          const out = this.flushComplete();
           this.replies.clear();
+          return out;
         }
         return [];
       }
@@ -433,6 +445,21 @@ export class SpeakBridge {
     s.finalized = true;
     const tail = full.slice(keep).trim();
     return tail ? [{ kind: 'commentary', text: tail }] : [];
+  }
+
+  /** Pending text that reads as a finished sentence — see the `session` case.
+   *  Deliberately strict: a trailing word, a half-written path or a cut-off
+   *  clause all fail it, which is the case this exists to stay quiet about. */
+  private flushComplete(): AppendIntent[] {
+    const out: AppendIntent[] = [];
+    for (const s of this.replies.values()) {
+      const text = s.pending.trim();
+      if (!text || !/[.!?:)\]"'’”]$/.test(text)) continue;
+      s.emitted += s.pending;
+      s.pending = '';
+      out.push({ kind: 'commentary', text });
+    }
+    return out;
   }
 
   private flushAll(): AppendIntent[] {

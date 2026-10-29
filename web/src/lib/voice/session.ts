@@ -509,12 +509,22 @@ export class VoiceSession {
    * Held as a window rather than a flag so it cannot leak into the next call:
    * see {@link DELIVERY_WATCH_MS}.
    */
-  private deliveryWatch: { request: string; until: number } | null = null;
+  private deliveryWatches: Array<{ task: VoiceTask; until: number }> = [];
+  /**
+   * Did the turn now bound actually HAND WORK OFF?
+   *
+   * The watch is armed on this and nothing else, and it is the guard that
+   * keeps voice from reading out somebody else's report. Without it, any
+   * completed request opened the watch — so asking "what time is it in
+   * Tokyo" aloud and then TYPING a fan-out made voice announce "the agents
+   * you sent off have reported back on: what time is it in Tokyo" and read
+   * out a billing audit. A request that dispatched nothing has nothing to
+   * hear back from.
+   */
+  private sawSubagent = false;
   /** Ids of tasks that were ADOPTED from a delivery turn rather than sent.
-   *  They must not re-arm the watch when they finish, or one request's
-   *  sub-agents could announce themselves forever: each adopted turn would
-   *  complete, arm a fresh watch, and adopt the next delivery in its own
-   *  right. One announcement per thing the user asked for. */
+   *  They must not arm a watch of their own when they finish, or one
+   *  request's sub-agents could announce themselves forever. */
   private readonly adopted = new Set<string>();
   private lastCancelAt = Number.NEGATIVE_INFINITY;
   /**
@@ -997,11 +1007,7 @@ export class VoiceSession {
     if (frame.t === 'turn-start') this.bindTurn(frame.text);
     if (frame.t === 'queued') this.noteQueued(frame.id, frame.text);
     if (frame.t === 'queue') this.reconcileQueue(frame.items ?? []);
-    // The reconnect snapshot carries the queue too, and a socket that was away
-    // missed every live `queue` broadcast in between. Without this a voice
-    // task sits as `queued` against a server queue that has since drained —
-    // never run, never retired, and re-asking is refused as a duplicate.
-    if (frame.t === 'session' && frame.queue) this.reconcileQueue(frame.queue);
+    if (frame.t === 'session') this.settleAgainstSnapshot(frame);
     // The question is remembered whether or not it belongs to a task of OURS: a
     // turn the user TYPED can block the pane just as hard, and once it has, the
     // only thing that moves is an answer. Speaking one should work either way.
@@ -1009,6 +1015,9 @@ export class VoiceSession {
       this.pendingQuestion = { qid: frame.qid, questions: frame.questions };
       if (this.bound) this.registry.setStatus(this.bound.id, 'input_required');
     }
+    // Did this turn hand work off? The ONLY thing that arms the delivery
+    // watch — see `sawSubagent`.
+    if (frame.t === 'subagent' && this.bound) this.sawSubagent = true;
     if (frame.t === 'question-done') {
       if (this.pendingQuestion?.qid === frame.qid) this.pendingQuestion = null;
       if (this.bound?.status === 'input_required')
@@ -1214,6 +1223,7 @@ export class VoiceSession {
     }
     if (!owner) return;
     this.registry.setStatus(owner.id, 'working');
+    this.sawSubagent = false;
     owner.queueId = null;
     this.clearOrphanTimer(owner.id);
     this.bound = owner;
@@ -1343,48 +1353,119 @@ export class VoiceSession {
    * continues. It exists so the answer has somewhere to be delivered to, and
    * so the heartbeat describes it while the agent consolidates.
    */
+  /**
+   * Settle OUR tasks against the server's snapshot of the pane.
+   *
+   * A socket that was away missed every live frame in between — `turn-start`,
+   * `turn-done`, and every `queue` broadcast — so a task of ours can be
+   * sitting as `queued` against work that has already run and finished. It
+   * never retires, nothing says so, and asking again is refused as a
+   * duplicate: the original hang, by a second road.
+   *
+   * ── WHY NOT JUST REUSE `reconcileQueue` ───────────────────────────────
+   *
+   * Because a row leaves the server's queue for two opposite reasons: it was
+   * CANCELLED, or it RAN. The live path can tell them apart — a row that ran
+   * produces a `turn-start`, which moves the task off `queued` — and across a
+   * disconnect that signal is exactly what is missing. Routing the snapshot
+   * through it announced "That request was cancelled before it ran" about a
+   * deploy that had deployed, and then threw the answer away.
+   *
+   * The snapshot answers it directly instead: the runner is attached, no turn
+   * is running, and this task is not in the queue — so its turn ran and
+   * ended while we were not listening. Which is a completion, not a cancel.
+   */
+  private settleAgainstSnapshot(frame: Extract<VoiceChatFrame, { t: 'session' }>): void {
+    // `turnRunning: false` only means something when there is a runner there
+    // to be idle — see the long note at the call site in `onChatFrame`.
+    if (frame.runnerAttached !== true || frame.turnRunning !== false) return;
+    const parked = new Set((frame.queue ?? []).map((i) => i.id));
+    for (const task of [...this.pipeline]) {
+      if (task.status !== 'queued') continue;
+      // Still parked server-side: it has not run, and it will.
+      if (task.queueId && parked.has(task.queueId)) continue;
+      this.deliver(
+        task,
+        {
+          kind: 'commentary',
+          text: 'The agent finished that one while we were disconnected — the answer is on screen.',
+        },
+        'when_idle',
+        true,
+      );
+      this.retire(task, 'completed');
+    }
+  }
+
   private adoptDelivery(stamp: string): boolean {
-    const watch = this.deliveryWatch;
-    if (!watch || this.sched.now() > watch.until) return false;
     if (parseSpawnDelivery(stamp) === null) return false;
-    const id = `delivery:${this.sched.now()}`;
-    const task = this.registry.claim(id, { now: this.sched.now(), offsetMs: 0 });
-    if (!task) return false;
-    // It never went out as a send, so it has no stamp of its own to match —
-    // but it DOES carry the request it continues, which is what the heartbeat
-    // and the moved-on test read.
-    task.request = watch.request;
-    task.dispatchedAt = this.sched.now();
+    const now = this.sched.now();
+    this.deliveryWatches = this.deliveryWatches.filter((w) => now <= w.until);
+    const watch = this.deliveryWatches.shift();
+    if (!watch) return false;
+    const task = watch.task;
+    if (this.registry.isFenced(task)) return false;
+    // UNDER THE ORIGINAL DELEGATION ID. The protocol says multiple appends per
+    // delegation are supported; a minted `delivery:<ms>` id is one the model
+    // never issued, and if the API checks ids every append under it is
+    // refused — which would make this whole path silently inert, visible only
+    // as a protocolErrors count nobody reads.
+    this.registry.readmit(task);
     this.registry.setStatus(task.id, 'working');
     this.adopted.add(task.id);
+    task.dispatchedAt = now;
     this.pipeline.push(task);
     this.bound = task;
     this.lastTool = null;
-    // One line, because the user asked this minutes ago and has had a whole
-    // conversation since: an answer that arrives with no re-anchoring reads
-    // as a non-sequitur.
+    this.sawSubagent = false;
+    // ── NAME IT ONLY WHEN WE KNOW WHICH ONE IT IS ─────────────────────────
+    // The delivery's `from=` ids identify the sub-chats, and voice has no map
+    // from those to the request that spawned them — the frames it reads carry
+    // labels, not tab ids. So with ONE watch open the attribution is certain
+    // and the question is worth repeating (the user asked it minutes ago and
+    // has had a whole conversation since). With more than one it is a guess,
+    // and a confident wrong label is worse than a vague right one.
+    const certain = this.deliveryWatches.length === 0;
     this.deliver(task, {
       kind: 'commentary',
-      text: `The agents you sent off have reported back on: ${watch.request.slice(0, 120)}`,
+      text: certain
+        ? `The agents you sent off have reported back on: ${task.request.slice(0, 120)}`
+        : 'Some of the agents you sent off have reported back.',
     });
+    // It is a live turn like any other, so it gets the same progress updates
+    // — a consolidation turn can run for minutes and used to pass in total
+    // silence.
+    this.armHeartbeat();
     this.trace(`adopted a delivery turn for ${task.id}`);
-    // One delivery per request. A second batch for the same work is the
-    // agent's business, not a second announcement.
-    this.deliveryWatch = null;
     return true;
   }
 
   private retire(task: VoiceTask, status: 'completed' | 'failed' | 'cancelled'): void {
-    // A COMPLETED request arms the delivery watch: if the agent handed the
-    // work to sub-chats, their answer arrives in a later turn and would
-    // otherwise be dropped (see `deliveryWatch`). Only `completed` — a failed
-    // or cancelled request dispatched nothing worth waiting for, and a
-    // cancelled one was silenced on purpose.
-    if (status === 'completed' && task.request.trim() && !this.adopted.has(task.id)) {
-      this.deliveryWatch = {
-        request: task.request,
-        until: this.sched.now() + DELIVERY_WATCH_MS,
-      };
+    // A request that HANDED WORK OFF arms a delivery watch: the sub-chats'
+    // answer arrives in a later turn and would otherwise be dropped (see
+    // `deliveryWatches`). Three conditions, each one a defect that was found
+    // in the version without it:
+    //
+    //  · `completed` — a failed request dispatched nothing, and a cancelled
+    //    one was silenced on purpose. Cancelling also drops any watch it had
+    //    already armed (see `cancelAll`).
+    //  · `sawSubagent` — THIS turn launched sub-agents. Without it, any
+    //    completed request opened the watch and the next delivery to arrive,
+    //    including one the user started by TYPING, was announced under it.
+    //  · not itself adopted — or one request's agents announce themselves
+    //    forever, each adopted turn arming the next.
+    if (
+      status === 'completed' &&
+      this.sawSubagent &&
+      task.request.trim() &&
+      !this.adopted.has(task.id)
+    ) {
+      // A LIST, not a slot. Two delegating requests in one call is ordinary,
+      // and with one slot the second overwrote the first: the first batch's
+      // results were announced under the second question's words, and the
+      // second batch was dropped without a sound.
+      this.deliveryWatches.push({ task, until: this.sched.now() + DELIVERY_WATCH_MS });
+      if (this.deliveryWatches.length > 4) this.deliveryWatches.shift();
     }
     this.registry.setStatus(task.id, status);
     this.pipeline = this.pipeline.filter((d) => d.id !== task.id);
@@ -1565,6 +1646,14 @@ export class VoiceSession {
     this.pipeline = [];
     this.bound = null;
     this.lastTool = null;
+    this.sawSubagent = false;
+    // AND THE DELIVERY WATCHES. A cancel says "I don't want this any more",
+    // and that has to cover the sub-agents the cancelled work dispatched —
+    // otherwise their report arrives minutes later and is announced under the
+    // question the user just abandoned. (The fence below would catch a watch
+    // armed BEFORE the cancel; this covers the rest, and says so out loud
+    // rather than relying on a second mechanism to be right.)
+    this.deliveryWatches = [];
     // Anything still held for delivery belonged to work that no longer exists.
     this.pending.clear();
     // Everything claimed before now is abandoned; a late reply from the dying
