@@ -71,9 +71,16 @@
   pointer-events: none;
 }
 
+/* ── AND THE PRESSED STATE IS NO LONGER A REASON TO SHOW IT ──────────────
+   `.copyable-block-wrap[aria-pressed="true"]` was in this list when wrapping
+   was the OPT-IN: pressed meant a reader had asked for something unusual and
+   the control had to stay visible to be given back. Wrapped is the default
+   now, so pressed is the ordinary state — and the rule lit a permanent button
+   on every block in the log while the unusual state, unwrapped, went back to
+   hiding until hover. Exactly inverted. Both buttons behave the same way now:
+   on hover, or always on a touch screen (see the media query below). */
 .copyable-block:hover > .copyable-block-button,
 .copyable-block:focus-within > .copyable-block-button,
-.copyable-block-wrap[aria-pressed="true"],
 .copyable-block-button[data-status="copied"],
 .copyable-block-button[data-status="failed"] {
   opacity: 1;

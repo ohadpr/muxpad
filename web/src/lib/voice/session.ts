@@ -511,17 +511,29 @@ export class VoiceSession {
    */
   private deliveryWatches: Array<{ task: VoiceTask; until: number }> = [];
   /**
-   * Did the turn now bound actually HAND WORK OFF?
+   * Has a turn WE DID NOT START run since the watches were armed?
    *
-   * The watch is armed on this and nothing else, and it is the guard that
-   * keeps voice from reading out somebody else's report. Without it, any
-   * completed request opened the watch — so asking "what time is it in
-   * Tokyo" aloud and then TYPING a fan-out made voice announce "the agents
-   * you sent off have reported back on: what time is it in Tokyo" and read
-   * out a billing audit. A request that dispatched nothing has nothing to
-   * hear back from.
+   * This is the guard that keeps voice from reading out somebody else's
+   * report, and it is the SECOND thing to hold that job. The first was "did
+   * this turn launch sub-agents", read off `{t:'subagent'}` frames — which is
+   * correct in principle and never fires in practice: those frames come from
+   * the runner's Task/Agent roster, Chat mode blocks those tools outright, and
+   * real delegation is `muxpad agent new` run through Bash, which puts nothing
+   * on this socket at all. The guard silently made the whole feature dead and
+   * the tests passed because they injected the frame by hand.
+   *
+   * What voice CAN see is every turn-start on its pane. A fan-out the user
+   * started by TYPING announces itself as a turn whose stamp matches nothing
+   * we sent — so if one of those has happened, a delivery arriving afterwards
+   * might be its, and we stop claiming it. The watch fails toward silence,
+   * which is the right way for this one to be wrong.
    */
-  private sawSubagent = false;
+  private foreignTurnSinceWatch = false;
+  /** The pane's agent mode, as the server last reported it. Null until the
+   *  first session frame, which is why the one reader of it treats null as
+   *  "assume Chat" — the conservative end, because that is the mode whose
+   *  hang-up is real. */
+  private paneMode: string | null = null;
   /** Ids of tasks that were ADOPTED from a delivery turn rather than sent.
    *  They must not arm a watch of their own when they finish, or one
    *  request's sub-agents could announce themselves forever. */
@@ -1007,7 +1019,10 @@ export class VoiceSession {
     if (frame.t === 'turn-start') this.bindTurn(frame.text);
     if (frame.t === 'queued') this.noteQueued(frame.id, frame.text);
     if (frame.t === 'queue') this.reconcileQueue(frame.items ?? []);
-    if (frame.t === 'session') this.settleAgainstSnapshot(frame);
+    if (frame.t === 'session') {
+      if (typeof frame.mode === 'string') this.paneMode = frame.mode;
+      this.settleAgainstSnapshot(frame);
+    }
     // The question is remembered whether or not it belongs to a task of OURS: a
     // turn the user TYPED can block the pane just as hard, and once it has, the
     // only thing that moves is an answer. Speaking one should work either way.
@@ -1015,9 +1030,6 @@ export class VoiceSession {
       this.pendingQuestion = { qid: frame.qid, questions: frame.questions };
       if (this.bound) this.registry.setStatus(this.bound.id, 'input_required');
     }
-    // Did this turn hand work off? The ONLY thing that arms the delivery
-    // watch — see `sawSubagent`.
-    if (frame.t === 'subagent' && this.bound) this.sawSubagent = true;
     if (frame.t === 'question-done') {
       if (this.pendingQuestion?.qid === frame.qid) this.pendingQuestion = null;
       if (this.bound?.status === 'input_required')
@@ -1190,7 +1202,11 @@ export class VoiceSession {
       // minutes ago and retired its task. So this check has to come BEFORE
       // the early return, not after the match below: the delivery case is
       // precisely the case with an empty pipeline.
-      if (stamped) this.adoptDelivery(text as string);
+      if (stamped && this.adoptDelivery(text as string)) return;
+      // A turn we did not start, with nothing of ours waiting: somebody typed
+      // into this pane, or a schedule fired. Either way a delivery after this
+      // one may belong to it.
+      this.foreignTurnSinceWatch = true;
       return;
     }
     let owner: VoiceTask | undefined;
@@ -1205,6 +1221,7 @@ export class VoiceSession {
         // no match is possible — and it is still our answer. See
         // `deliveryWatch`.
         if (this.adoptDelivery(text as string)) return;
+        this.foreignTurnSinceWatch = true;
         this.trace('turn-start belongs to another sender — not binding');
         return;
       }
@@ -1223,7 +1240,6 @@ export class VoiceSession {
     }
     if (!owner) return;
     this.registry.setStatus(owner.id, 'working');
-    this.sawSubagent = false;
     owner.queueId = null;
     this.clearOrphanTimer(owner.id);
     this.bound = owner;
@@ -1399,6 +1415,9 @@ export class VoiceSession {
 
   private adoptDelivery(stamp: string): boolean {
     if (parseSpawnDelivery(stamp) === null) return false;
+    // Somebody started a turn on this pane that was not us, so the agents now
+    // reporting may be THEIRS. See `foreignTurnSinceWatch`.
+    if (this.foreignTurnSinceWatch) return false;
     const now = this.sched.now();
     this.deliveryWatches = this.deliveryWatches.filter((w) => now <= w.until);
     const watch = this.deliveryWatches.shift();
@@ -1417,7 +1436,6 @@ export class VoiceSession {
     this.pipeline.push(task);
     this.bound = task;
     this.lastTool = null;
-    this.sawSubagent = false;
     // ── NAME IT ONLY WHEN WE KNOW WHICH ONE IT IS ─────────────────────────
     // The delivery's `from=` ids identify the sub-chats, and voice has no map
     // from those to the request that spawned them — the frames it reads carry
@@ -1449,17 +1467,15 @@ export class VoiceSession {
     //  · `completed` — a failed request dispatched nothing, and a cancelled
     //    one was silenced on purpose. Cancelling also drops any watch it had
     //    already armed (see `cancelAll`).
-    //  · `sawSubagent` — THIS turn launched sub-agents. Without it, any
-    //    completed request opened the watch and the next delivery to arrive,
-    //    including one the user started by TYPING, was announced under it.
     //  · not itself adopted — or one request's agents announce themselves
     //    forever, each adopted turn arming the next.
-    if (
-      status === 'completed' &&
-      this.sawSubagent &&
-      task.request.trim() &&
-      !this.adopted.has(task.id)
-    ) {
+    //
+    // WHAT IS NOT A CONDITION, any more: "this turn launched sub-agents". It
+    // is the right question and it was read off `{t:'subagent'}` frames, which
+    // real delegation never sends — see `foreignTurnSinceWatch`, which answers
+    // the same worry with something voice can actually observe.
+    if (status === 'completed' && task.request.trim() && !this.adopted.has(task.id)) {
+      this.foreignTurnSinceWatch = false;
       // A LIST, not a slot. Two delegating requests in one call is ordinary,
       // and with one slot the second overwrote the first: the first batch's
       // results were announced under the second question's words, and the
@@ -1500,6 +1516,15 @@ export class VoiceSession {
    * silent because the user silenced it.
    */
   private checkRunnerCanSpeak(task: VoiceTask): void {
+    // ── NOT IN AGENT MODE ─────────────────────────────────────────────────
+    // Every word of the line this is about to say — "too old to have the reply
+    // tool… restart the agent pane" — is false there. Agent mode has no reply
+    // tool BY DESIGN and never will; its answers are synthesised from the
+    // turn's prose (server/src/spoken-answer.ts). A turn of pure tool work
+    // legitimately writes nothing, produces no synthesised speak, and would
+    // have hung the call up on the user's FIRST request with advice that
+    // cannot help them.
+    if (this.paneMode && this.paneMode !== 'chat') return;
     if (this.muteRunnerDeclared || this.bridge.canSpeak) return;
     if (task.status === 'cancelled') return;
     this.muteRunnerDeclared = true;
@@ -1646,7 +1671,6 @@ export class VoiceSession {
     this.pipeline = [];
     this.bound = null;
     this.lastTool = null;
-    this.sawSubagent = false;
     // AND THE DELIVERY WATCHES. A cancel says "I don't want this any more",
     // and that has to cover the sub-agents the cancelled work dispatched —
     // otherwise their report arrives minutes later and is announced under the

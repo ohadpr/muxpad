@@ -4187,8 +4187,24 @@ body.sidenav-resizing iframe {
 
      The row does not leave the band, which is the alternative and is worse:
      hiding it would shift every row under it up as you navigate and back down
-     as you leave — exactly the churn the stable slots exist to prevent. */
-  background-color: transparent;
+     as you leave — exactly the churn the stable slots exist to prevent.
+
+     ── AND "NO GROUND AT ALL" WENT TOO FAR ───────────────────────────────
+     Measured across all ten themes afterwards: the active row and an UNREAD
+     row were then separated by font-weight alone, 640 against 700, and
+     against a read row the ink step is 1.31:1 on tokyo-night, 1.55 on
+     blueprint, 1.65 on demoscene. Two different facts — "you are here" and
+     "this one has something to say" — on one channel, at a difference you
+     cannot see.
+
+     So the ground comes back, as a LIFT rather than as the pane's face: a
+     neutral mix from --fg, which is how every other raised surface in this
+     app is built and the one construction that survives ten themes (an accent
+     wash does not — see the band's own ground note above). It is visibly not
+     the clean light slab the tree draws two inches below, which is what the
+     original report was about: two identical pills for one chat. One pill,
+     one quieter mark, two different things. */
+  background-color: color-mix(in srgb, var(--fg) 8%, transparent);
   border-radius: var(--nt-pill);
   box-shadow: none;
   /* The tree row bleeds its right edge past the group's padding to touch the
@@ -4198,9 +4214,10 @@ body.sidenav-resizing iframe {
 }
 .navtree-workingset .navtree-tab-row[data-active="true"]:hover {
   /* It is still a link, and the band is the one place the row you are on is
-     worth pressing — it is how you get back after wandering. So hover says
-     the ordinary thing rather than nothing. */
-  background-color: var(--nt-hover);
+     worth pressing — it is how you get back after wandering. One step up from
+     its resting ground, NOT `--nt-hover`: that is a 6% wash, which over this
+     row's own 8% is a change nobody can see. */
+  background-color: color-mix(in srgb, var(--fg) 13%, transparent);
 }
 
 /* ── NO CHILD RUNG INSIDE THE BAND ───────────────────────────────────────
