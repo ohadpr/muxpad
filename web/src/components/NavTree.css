@@ -797,7 +797,17 @@
 .navtree-ws-row .navtree-name-text {
   font-size: 0.6875rem;
   font-weight: 700;
-  letter-spacing: 0.07em;
+  /* ── TRACKING, AND WHY IT IS THIS NUMBER ───────────────────────────────
+     Bold caps at 11px need air between the letters or they read as one dark
+     block: the counters close up, the word loses its shape, and what you see
+     is a smudge the right length — "label looks squished".
+
+     0.12em, not the 0.07 it had, and the number is not a taste: it is the
+     tracking the OTHER uppercase label in this rail already uses (the
+     recently-active heading). Two caps labels in one list that are tracked
+     differently read as two kinds of thing, and there is only one kind of
+     thing here — a section name. */
+  letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--fg-dim);
 }

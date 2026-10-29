@@ -1548,3 +1548,35 @@ describe('the recently-active heading has room', () => {
     expect(padding.bottom).toBeGreaterThanOrEqual(padding.top);
   });
 });
+
+/**
+ * THE RAIL'S TWO UPPERCASE LABELS ARE TRACKED THE SAME.
+ *
+ * Bold caps at 11px need air between the letters or they read as one dark
+ * block: the counters close up, the word loses its shape, and what is left is
+ * a smudge the right length. "Label looks squished."
+ *
+ * The workspace name had 0.07em and the recently-active heading 0.12em — two
+ * caps labels in one list, tracked differently, reading as two kinds of thing
+ * when there is only one kind of thing here: a section name.
+ */
+describe('section labels share their tracking', () => {
+  const tracking = (selector: string): number => {
+    const flat = NAV_CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+    const i = flat.indexOf(`${selector} {`);
+    expect(i, `${selector} not found`).toBeGreaterThan(-1);
+    const body = flat.slice(i, flat.indexOf('}', i));
+    return Number.parseFloat(/letter-spacing:\s*([\d.]+)em/.exec(body)?.[1] ?? 'NaN');
+  };
+
+  it('tracks the workspace name like the band’s heading', () => {
+    expect(tracking('.navtree-ws-row .navtree-name-text')).toBe(
+      tracking('.navtree-workingset-head'),
+    );
+  });
+
+  it('tracks them enough for bold caps at 11px to hold their shape', () => {
+    // Below about 0.1em the counters close at this size and weight.
+    expect(tracking('.navtree-workingset-head')).toBeGreaterThanOrEqual(0.1);
+  });
+});
