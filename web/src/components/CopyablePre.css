@@ -35,17 +35,6 @@
   overflow-wrap: anywhere;
   overflow-x: hidden;
 }
-/* The toggle sits to the LEFT of copy. Copy is the action this corner has
-   always had and it does not move; the wrap button appears beside it only
-   when the block has something past its edge. */
-.copyable-block-wrap {
-  right: 42px;
-}
-.copyable-block-wrap[aria-pressed="true"] {
-  color: var(--chat-fg, var(--fg));
-  background: var(--bg-hover);
-}
-
 .copyable-block-button {
   position: absolute;
   top: 6px;
@@ -81,6 +70,27 @@
 .copyable-block-button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+/* ── THE TOGGLE SITS TO THE LEFT OF COPY, AND THIS RULE MUST COME AFTER ──
+   Copy is the action this corner has always had and it does not move; the
+   wrap button appears beside it only when the block has something past its
+   edge.
+
+   ORDER IS THE WHOLE RULE HERE. `.copyable-block-wrap` and
+   `.copyable-block-button` are both one class — (0,1,0) each — so a tie is
+   broken by source order, and this block used to sit BEFORE the base rule.
+   The base `right: 6px` therefore won, both buttons were positioned at the
+   same corner, and the wrap button rendered exactly underneath copy: present
+   in the DOM, hit-testable nowhere, invisible. Reported as "text blocks
+   don't have the wordwrap icon we discussed" — they did, in the same 30
+   pixels as the other one. */
+.copyable-block-wrap {
+  right: 42px;
+}
+.copyable-block-wrap[aria-pressed="true"] {
+  color: var(--chat-fg, var(--fg));
+  background: var(--bg-hover);
 }
 
 .copyable-block-status {
