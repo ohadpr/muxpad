@@ -1114,10 +1114,14 @@ describe('a selected row in the recently-active band', () => {
     return i < 0 ? '' : flat.slice(i, flat.indexOf('}', i));
   })();
 
-  it('wears an ordinary selection, not the pane’s surface', () => {
+  it('keeps the tree’s SURFACE — the fill was never the problem', () => {
+    // The first attempt at un-joining this row swapped the fill too, for the
+    // rail's 20% accent wash. On a dark rail that is a muddy plum slab beside
+    // the clean light row the tree draws two inches below: "active in
+    // recently active chat highlight is just trash". The JOIN was the
+    // problem; the colour is the one thing that should match.
     expect(rule, 'the band has no active-row rule').not.toBe('');
-    expect(rule).toMatch(/background-color:\s*var\(--nt-sel\)/);
-    expect(rule).not.toMatch(/--bg-pane-face/);
+    expect(rule).toMatch(/background-color:\s*var\(--bg-pane-face\)/);
   });
 
   it('is rounded at BOTH ends and stays inside the band', () => {

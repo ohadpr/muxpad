@@ -1706,6 +1706,17 @@ body {
 .xterm * {
   font-size-adjust: none;
 }
+/* A WORDMARK IS A LOGO, NOT PROSE. Normalising its x-height is the same
+   mistake as doing it to the bitmap face: a lockup is drawn at a size and a
+   weight somebody chose, and a theme that sets the brand in a small-x-height
+   display face (Gill Sans at 0.46 — memphis, riso) had it scaled up ~12%
+   inside a row whose height is fixed to the pane's tab strip. The result was
+   a wordmark pressed against its own row: "just doesn't look good, a bit
+   squished". */
+.brand-text,
+.brand-mark {
+  font-size-adjust: none;
+}
 html,
 body,
 #root {

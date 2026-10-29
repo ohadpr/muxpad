@@ -217,3 +217,20 @@ describe('the type scale survives a change of typeface', () => {
     expect(bare).toMatch(/\.xterm[^{]*\{[^}]*font-size-adjust:\s*none/);
   });
 });
+
+/**
+ * …AND A WORDMARK IS A LOGO, NOT PROSE.
+ *
+ * Normalising its x-height is the same mistake as doing it to the bitmap
+ * face: a lockup is drawn at a size and a weight somebody chose. A theme that
+ * sets the brand in a small-x-height display face (Gill Sans at 0.46 —
+ * memphis, riso) had it scaled up ~12% inside a row whose height is pinned to
+ * the pane's tab strip, and the wordmark ended up pressed against its own
+ * row: "just doesn't look good, a bit squished".
+ */
+describe('the brand opts out of the x-height normalisation', () => {
+  it('exempts the wordmark and the mark', () => {
+    const bare = STYLES.replace(/\/\*[\s\S]*?\*\//g, '');
+    expect(bare).toMatch(/\.brand-text,\s*\.brand-mark \{\s*font-size-adjust:\s*none/);
+  });
+});
