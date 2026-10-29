@@ -458,3 +458,29 @@ describe('the settings dialog does not resize under you', () => {
     expect(dialog.slice(0, dialog.indexOf('}'))).toMatch(/height:\s*\d+dvh/);
   });
 });
+
+/**
+ * A FAILED THEME WRITE UNDOES ITSELF, LOUDLY.
+ *
+ * The first version swallowed the error, so a server that could not store the
+ * value — one running from before the migration that adds the column, which
+ * is every server until it restarts — produced the worst possible shape: the
+ * window repainted, the next poll delivered the unchanged row, and the theme
+ * snapped back with no explanation. "Tried to change the theme on a chat and
+ * it just didn't work, flickered and returned to the theme it was on."
+ */
+it('reverts and says so when the chat’s theme cannot be stored', async () => {
+  const src = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), 'SettingsMenu.tsx'),
+    'utf8',
+  );
+  // The optimistic write captures what it is replacing…
+  expect(src).toMatch(/const before = getChatTheme\(\)/);
+  // …puts it back on failure, in the document AND in the cached row…
+  expect(src).toMatch(/\.catch\(\(err\) => \{[\s\S]{0,320}setChatTheme\(before\)/);
+  expect(src).toMatch(/\.catch\(\(err\) => \{[\s\S]{0,420}patchTabRow\([^)]*theme: before/);
+  // …and never swallows it.
+  expect(src).not.toMatch(/patchTab\([^)]*\)\.catch\(\(\) => \{\}\)/);
+  // The note names the cause a user can act on.
+  expect(src).toMatch(/Restart muxpad and try again/);
+});
