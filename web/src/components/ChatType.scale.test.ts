@@ -65,23 +65,42 @@ describe('conversation text is sized relative to the pane', () => {
   });
 });
 
-describe('a fenced block on a phone', () => {
+/**
+ * A fenced block wraps — and it is no longer the media query that says so.
+ *
+ * It used to be: `.chat-md pre code { white-space: pre-wrap }` inside the
+ * phone breakpoint, because a horizontal drag inside a vertically scrolling
+ * log fights the scroll it is nested in and nothing on screen says there is
+ * anything to the right. The measured case was an email in a fence: 75
+ * characters in a 393px viewport, every line cut mid-sentence.
+ *
+ * Every block is wrapped by default now, on every surface (CopyablePre), so
+ * the phone gets that for free. The override had to GO rather than be left
+ * as a belt: it is unconditional, so it beat the unwrap toggle on a phone and
+ * the control did nothing when pressed.
+ */
+describe('a fenced block', () => {
   const i = FLAT.indexOf('@media (max-width: 720px)');
   const block = FLAT.slice(i, FLAT.indexOf('\n}\n', i));
 
-  it('wraps instead of clipping at the pane edge', () => {
-    // A horizontal drag inside a vertically scrolling log fights the scroll it
-    // is nested in, and nothing on screen says there is anything to the right.
-    // The measured case was an email in a fence: 75-character lines in a 393px
-    // viewport, every one cut mid-sentence.
-    expect(block).toMatch(/\.chat-md pre code\s*\{[^}]*white-space:\s*pre-wrap/);
-    expect(block).toMatch(/\.chat-md pre code\s*\{[^}]*overflow-wrap:\s*anywhere/);
+  it('is not force-wrapped by the phone breakpoint any more', () => {
+    // Unconditional, so it outranked `pre[data-wrap]` being absent — which is
+    // how "show the original line breaks" became a button that did nothing on
+    // the one surface where this rule applied.
+    expect(block).not.toMatch(/\.chat-md pre code\s*\{[^}]*white-space:\s*pre-wrap/);
   });
 
-  it('still scrolls on a desktop, where code keeps its indentation', () => {
-    // Wrapped code loses the shape of its indentation; clipped code loses the
-    // words. The phone pays the smaller of the two, and only the phone.
-    expect(sizeOf('.chat-md pre code')).toBeTruthy();
+  it('wraps by default, from the component, on every surface', () => {
+    const copyable = readFileSync(join(import.meta.dirname, 'CopyablePre.tsx'), 'utf8');
+    expect(copyable).toMatch(/const \[wrap, setWrap\] = useState\(true\)/);
+    const css = readFileSync(join(import.meta.dirname, 'CopyablePre.css'), 'utf8');
+    expect(css).toMatch(/pre\[data-wrap="true"\] code/);
+  });
+
+  it('still has somewhere to scroll when a reader unwraps it', () => {
+    // Wrapped text loses the shape of its indentation; clipped text loses the
+    // words. The default pays the smaller cost and the toggle buys the other
+    // back — which needs the desktop's scroller to still be there.
     const desktop = FLAT.slice(0, i);
     expect(desktop).toMatch(/\.chat-md pre\s*\{[^}]*overflow-x:\s*auto/);
     expect(desktop).toMatch(/\.chat-md pre code\s*\{[^}]*white-space:\s*pre;/);

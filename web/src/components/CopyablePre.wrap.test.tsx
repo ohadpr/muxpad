@@ -7,25 +7,36 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CopyablePre } from './CopyablePre';
 
 /**
- * LINES THAT RUN OFF THE EDGE CAN BE ASKED TO WRAP.
+ * A BLOCK IS WRAPPED BY DEFAULT, AND THE BUTTON UNWRAPS IT.
  *
- * A block keeps `white-space: pre`, which is right for code — indentation is
- * meaning, and a desktop has a scrollbar. It is wrong for what these blocks
- * actually hold most of the time: an email, a prompt, a paragraph, where the
- * sentence disappears past the right edge and reading it means dragging a bar
- * one screen at a time. "Add another button next to copy which collapses
- * overflowed lines, so it's easier to read the whole text if needed."
+ * It began the other way round — `white-space: pre`, right for code, with an
+ * opt-in button for the rest. That was the wrong default, because most of
+ * these blocks are not code: they are an email, a prompt, a report, prose the
+ * agent put in a fence. For those, `pre` means the sentence disappears past
+ * the right edge with nothing on screen saying there is more, and the reader
+ * has to notice a control and guess what it does in order to see text written
+ * to be read. "Default wrap so the text is visible."
+ *
+ * The cost lands where it can be paid: indentation is one press away; words
+ * clipped at an edge you cannot see are not recoverable, because you never
+ * knew they were there.
  */
 let host: HTMLDivElement | null = null;
 let root: ReturnType<typeof createRoot> | null = null;
 
-/** jsdom lays nothing out, so overflow has to be declared by the fixture:
- *  `scrollWidth` and `clientWidth` are both 0 unless we say otherwise. */
-function withOverflow(overflowing: boolean) {
+/** jsdom lays nothing out, so the fixture has to declare the geometry: every
+ *  one of these reads 0 unless we say otherwise.
+ *
+ *  `long` means "this block has a line that does not fit the box" — which the
+ *  component asks TWO different ways, so the fixture answers both. Wrapped, it
+ *  compares height against the logical line count; unwrapped, width against
+ *  the box. One fixture flag, because it is one fact about the content. */
+function withLongLines(long: boolean, lines = 1) {
+  const LH = 20;
   Object.defineProperty(HTMLElement.prototype, 'scrollWidth', {
     configurable: true,
     get() {
-      return overflowing ? 900 : 300;
+      return long ? 900 : 300;
     },
   });
   Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
@@ -34,6 +45,18 @@ function withOverflow(overflowing: boolean) {
       return 300;
     },
   });
+  // Wrapped: a long line becomes several visual ones, so the block is taller
+  // than its own line count.
+  Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
+    configurable: true,
+    get() {
+      return long ? (lines + 2) * LH : lines * LH;
+    },
+  });
+  vi.stubGlobal(
+    'getComputedStyle',
+    () => ({ lineHeight: `${LH}px` }) as unknown as CSSStyleDeclaration,
+  );
 }
 
 const mount = (text: string) => {
@@ -64,57 +87,78 @@ afterEach(() => {
 });
 
 describe('the wrap toggle', () => {
-  it('is absent when nothing runs off the edge', () => {
+  it('starts wrapped — the text is visible without anybody pressing anything', () => {
+    withLongLines(true, 1);
+    const box = mount('a very long line that runs past the right-hand edge of the block');
+    expect(box.querySelector('pre')?.dataset.wrap).toBe('true');
+  });
+
+  it('is absent when nothing is actually being wrapped', () => {
     // A control that does nothing is worse than no control: it is one of two
     // things in that corner, and a reader will press it once.
-    withOverflow(false);
+    withLongLines(false);
     const box = mount('short');
     expect(box.querySelector('.copyable-block-wrap')).toBeNull();
     // …and copy is still there, which is the one that never moves.
     expect(box.querySelectorAll('.copyable-block-button')).toHaveLength(1);
   });
 
-  it('appears beside copy when the block overflows', () => {
-    withOverflow(true);
+  it('appears beside copy when lines are being wrapped', () => {
+    withLongLines(true, 1);
     const box = mount('a very long line that runs past the right-hand edge of the block');
     const wrap = box.querySelector('.copyable-block-wrap');
     expect(wrap).not.toBeNull();
-    expect(wrap?.getAttribute('aria-pressed')).toBe('false');
+    // Pressed, because wrapping is ON: the button reports the state it is in.
+    expect(wrap?.getAttribute('aria-pressed')).toBe('true');
     // Before copy in the DOM, so copy keeps its position at the corner.
     const buttons = [...box.querySelectorAll('.copyable-block-button')];
     expect(buttons[0]).toBe(wrap);
   });
 
-  it('wraps the block, and says it is pressed', () => {
-    withOverflow(true);
+  it('unwraps on a press, which is what the button is for now', () => {
+    withLongLines(true, 1);
     const box = mount('a very long line');
-    act(() => {
-      box.querySelector<HTMLButtonElement>('.copyable-block-wrap')?.click();
-    });
-    expect(box.querySelector('pre')?.dataset.wrap).toBe('true');
-    expect(box.querySelector('.copyable-block-wrap')?.getAttribute('aria-pressed')).toBe('true');
-  });
-
-  it('stays reachable once pressed, even though wrapping ends the overflow', () => {
-    // The measurement that put the button there stops being true the moment
-    // it works. Without this the control would vanish under the pointer and
-    // the reader could never turn it back off.
-    withOverflow(true);
-    const box = mount('a very long line');
-    act(() => {
-      box.querySelector<HTMLButtonElement>('.copyable-block-wrap')?.click();
-    });
-    withOverflow(false);
     act(() => {
       box.querySelector<HTMLButtonElement>('.copyable-block-wrap')?.click();
     });
     expect(box.querySelector('pre')?.dataset.wrap).toBeUndefined();
+    expect(box.querySelector('.copyable-block-wrap')?.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('stays reachable while unwrapped, so you can get back', () => {
+    // Unwrapping ends the condition that put the button there. Without the
+    // `!wrap` half of the test the control would vanish under the pointer and
+    // the reader could never turn wrapping back on.
+    withLongLines(true, 1);
+    const box = mount('a very long line');
+    act(() => {
+      box.querySelector<HTMLButtonElement>('.copyable-block-wrap')?.click();
+    });
+    expect(box.querySelector('.copyable-block-wrap')).not.toBeNull();
+    act(() => {
+      box.querySelector<HTMLButtonElement>('.copyable-block-wrap')?.click();
+    });
+    expect(box.querySelector('pre')?.dataset.wrap).toBe('true');
+  });
+
+  it('says what the press will DO, not what the block is', () => {
+    // A toggle whose label describes the current state reads as an
+    // instruction to do the thing it is already doing.
+    withLongLines(true, 1);
+    const box = mount('a very long line');
+    const btn = box.querySelector('.copyable-block-wrap');
+    expect(btn?.getAttribute('aria-label')).toMatch(/original line breaks/i);
+    act(() => {
+      (btn as HTMLButtonElement | null)?.click();
+    });
+    expect(box.querySelector('.copyable-block-wrap')?.getAttribute('aria-label')).toMatch(
+      /^Wrap long lines$/,
+    );
   });
 
   it('is per block, not a setting', () => {
-    // Two blocks, one pressed: the other is untouched. The default stays the
-    // one that is right for code.
-    withOverflow(true);
+    // Two blocks, one unwrapped: the other keeps the default.
+    withLongLines(true, 1);
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);
@@ -130,8 +174,8 @@ describe('the wrap toggle', () => {
     act(() => {
       first?.querySelector<HTMLButtonElement>('.copyable-block-wrap')?.click();
     });
-    expect(first?.querySelector('pre')?.dataset.wrap).toBe('true');
-    expect(second?.querySelector('pre')?.dataset.wrap).toBeUndefined();
+    expect(first?.querySelector('pre')?.dataset.wrap).toBeUndefined();
+    expect(second?.querySelector('pre')?.dataset.wrap).toBe('true');
   });
 });
 
