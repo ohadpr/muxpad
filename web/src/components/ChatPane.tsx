@@ -3668,7 +3668,7 @@ export function ChatPane({
       return () => frameTaps.current.delete(cb);
     },
   };
-  const voice = useVoice({ paneId, enabled: voiceMic, agent: agentLink });
+  const voice = useVoice({ paneId, enabled: voiceMic, agent: agentLink, mode });
 
   // ── SCREEN REVIEW ──────────────────────────────────────────────────────────
   //

@@ -314,6 +314,9 @@ export interface VoiceSessionOpts {
   settleQuietMs?: number;
   settleMaxMs?: number;
   cancelProbeQuietMs?: number;
+  /** The pane's agent mode, from the client that already knows it. See
+   *  UseVoiceOpts.mode for why the server's snapshot cannot be relied on. */
+  mode?: string;
   heartbeatMs?: number;
   dispatchFillerMs?: number;
   /** Quiet on the input transcript before a held append is released. */
@@ -527,7 +530,22 @@ export class VoiceSession {
    * we sent — so if one of those has happened, a delivery arriving afterwards
    * might be its, and we stop claiming it. The watch fails toward silence,
    * which is the right way for this one to be wrong.
+   *
+   * ── AND IT IS STICKY FOR THE WHOLE CALL ───────────────────────────────
+   * It used to reset each time a request of ours completed, which erased any
+   * foreign turn that came BEFORE it — so typing a fan-out and then asking
+   * "what time is it in Tokyo" aloud made voice read the billing report out
+   * as "reported back on: what time is it". The agents that delivery belongs
+   * to were dispatched before we ever spoke; a flag scoped to "since the last
+   * watch" cannot see that, and no ordering of it can.
+   *
+   * So once anything else has started a turn on this pane, voice stops
+   * claiming deliveries for the rest of the call. That is a real cost — see
+   * `markForeignTurn` for what is deliberately NOT counted — and it is the
+   * cheaper of the two: the alternative is reading somebody else's report
+   * aloud and naming it as the answer to your question.
    */
+  private snapshotRecheck: number | null = null;
   private foreignTurnSinceWatch = false;
   /** The pane's agent mode, as the server last reported it. Null until the
    *  first session frame, which is why the one reader of it treats null as
@@ -578,6 +596,7 @@ export class VoiceSession {
     this.settleMaxMs = opts.settleMaxMs ?? SETTLE_MAX_MS;
     this.cancelProbeQuietMs = opts.cancelProbeQuietMs ?? CANCEL_PROBE_QUIET_MS;
     this.heartbeatMs = opts.heartbeatMs ?? HEARTBEAT_MS;
+    this.paneMode = opts.mode ?? null;
     this.dispatchFillerMs = opts.dispatchFillerMs ?? DISPATCH_FILLER_MS;
     this.idleQuietMs = opts.idleQuietMs ?? IDLE_QUIET_MS;
     this.withContext = opts.withContext ?? true;
@@ -1203,10 +1222,7 @@ export class VoiceSession {
       // the early return, not after the match below: the delivery case is
       // precisely the case with an empty pipeline.
       if (stamped && this.adoptDelivery(text as string)) return;
-      // A turn we did not start, with nothing of ours waiting: somebody typed
-      // into this pane, or a schedule fired. Either way a delivery after this
-      // one may belong to it.
-      this.foreignTurnSinceWatch = true;
+      if (stamped) this.markForeignTurn(text as string);
       return;
     }
     let owner: VoiceTask | undefined;
@@ -1221,7 +1237,7 @@ export class VoiceSession {
         // no match is possible — and it is still our answer. See
         // `deliveryWatch`.
         if (this.adoptDelivery(text as string)) return;
-        this.foreignTurnSinceWatch = true;
+        this.markForeignTurn(text as string);
         this.trace('turn-start belongs to another sender — not binding');
         return;
       }
@@ -1413,7 +1429,15 @@ export class VoiceSession {
       // The window is network-latency-sized (the server marks the turn active
       // the moment it relays, so any snapshot computed after that says so), and
       // this is the same grace the queue-drop path uses for the same reason.
-      if (now - task.dispatchedAt < QUEUE_DROP_GRACE_MS) continue;
+      if (now - task.dispatchedAt < QUEUE_DROP_GRACE_MS) {
+        // …and COME BACK TO IT. Skipping alone strands the other case: a quick
+        // turn that runs and finishes inside a blip of under four seconds is
+        // never settled by anything later, so the request sits `queued` for
+        // ever and asking again is refused as a duplicate. One timer re-asks
+        // the same question with the state as it is then.
+        this.recheckSnapshot(frame);
+        continue;
+      }
       this.deliver(
         task,
         {
@@ -1425,6 +1449,47 @@ export class VoiceSession {
       );
       this.retire(task, 'completed');
     }
+  }
+
+  /**
+   * Somebody else started a turn here. Should that stop us claiming the next
+   * delivery?
+   *
+   * ONLY FOR A TURN THAT COULD HAVE DISPATCHED WORK — a message somebody
+   * typed, or a schedule firing, both of which can fan out to sub-chats whose
+   * report would then arrive looking exactly like ours.
+   *
+   * NOT for a DELIVERY. One batch reporting is not a reason to disown the
+   * next: a single voice request routinely produces two, and counting the
+   * first as "somebody else" silenced the second. (`adoptDelivery` has
+   * already had its chance at this stamp by the time we get here; if it
+   * declined, the watch list was empty or expired, which is not evidence
+   * about anything.)
+   *
+   * NOT for an UNSTAMPED start either — those are a mid-turn runner
+   * reconnect re-announcing a turn that was already running, and the callers
+   * return before reaching this. Named here so the omission is a decision
+   * rather than a gap.
+   */
+  private markForeignTurn(stamp: string): void {
+    if (parseSpawnDelivery(stamp) !== null) return;
+    this.foreignTurnSinceWatch = true;
+    this.trace('a turn we did not start ran here — no longer claiming deliveries');
+  }
+
+  /** Re-run {@link settleAgainstSnapshot} once the youngest task has aged past
+   *  the grace. One timer at a time: the snapshot is re-sent often enough that
+   *  arming one per frame would stack them. */
+  private recheckSnapshot(frame: Extract<VoiceChatFrame, { t: 'session' }>): void {
+    if (this.snapshotRecheck != null) return;
+    this.snapshotRecheck = this.sched.setTimeout(() => {
+      this.snapshotRecheck = null;
+      if (this.disposed) return;
+      // The turn may have started in the meantime, which moves the task off
+      // `queued` and makes this a no-op — which is the common case and the
+      // point.
+      this.settleAgainstSnapshot(frame);
+    }, QUEUE_DROP_GRACE_MS);
   }
 
   private adoptDelivery(stamp: string): boolean {
@@ -1489,7 +1554,6 @@ export class VoiceSession {
     // real delegation never sends — see `foreignTurnSinceWatch`, which answers
     // the same worry with something voice can actually observe.
     if (status === 'completed' && task.request.trim() && !this.adopted.has(task.id)) {
-      this.foreignTurnSinceWatch = false;
       // A LIST, not a slot. Two delegating requests in one call is ordinary,
       // and with one slot the second overwrote the first: the first batch's
       // results were announced under the second question's words, and the
@@ -1702,6 +1766,10 @@ export class VoiceSession {
     this.clearHeartbeat();
     this.clearFiller();
     this.clearOrphanTimers();
+    if (this.snapshotRecheck != null) {
+      this.sched.clearTimeout(this.snapshotRecheck);
+      this.snapshotRecheck = null;
+    }
     this.turnRunning = false;
     this.stats.cancels += 1;
     this.trace(`cancelled (${source})`);
@@ -1887,6 +1955,10 @@ export class VoiceSession {
     this.clearHeartbeat();
     this.clearFiller();
     this.clearOrphanTimers();
+    if (this.snapshotRecheck != null) {
+      this.sched.clearTimeout(this.snapshotRecheck);
+      this.snapshotRecheck = null;
+    }
     if (this.cancelProbeTimer != null) this.sched.clearTimeout(this.cancelProbeTimer);
     this.cancelProbeTimer = null;
     if (this.floorTimer != null) this.sched.clearTimeout(this.floorTimer);

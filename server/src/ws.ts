@@ -659,6 +659,8 @@ export function attachWsServer(deps: {
      * the live path.
      */
     stoppedThisTurn: boolean;
+    /** When that Stop was issued — see {@link markStopped}. */
+    stoppedAt: number;
     /** Latest per-task subagent progress for mid-turn (re)connects. */
     subagents: Map<string, SubagentProgress>;
     /**
@@ -802,6 +804,20 @@ export function attachWsServer(deps: {
    * "this chat has no agent" is a sentence the empty state already says
    * better. Only an attached runner can be behind.
    */
+  /**
+   * A Stop was issued. Both doors go through here — the chat socket's and
+   * `agentBridge.stop` (the CLI, a cron, a supervisor) — because the thing it
+   * guards, the Agent-mode voice synthesis, cannot tell them apart and must
+   * not read out the working-out of a turn somebody cut short.
+   *
+   * `stoppedAt` exists for the race: a Stop can be sent BEFORE the runner's
+   * `turn-start` arrives (a send relayed, stopped a beat later), and turn-start
+   * clearing the flag unconditionally erased it. See the clear site.
+   */
+  const markStopped = (conn: AgentRunnerConn): void => {
+    conn.stoppedThisTurn = true;
+    conn.stoppedAt = Date.now();
+  };
   const staleRunner = (paneId: string): boolean => {
     const conn = agentRunners.get(paneId);
     return conn ? runnerIsStale(conn.build ?? undefined) : false;
@@ -924,6 +940,11 @@ export function attachWsServer(deps: {
       // A Stop ABANDONS the relayed send, exactly as the socket path does —
       // leaving the stamp on would let the next autonomous turn wear it.
       conn.pendingSendText = null;
+      // …and it is a Stop like any other. This path (`muxpad agent stop`, a
+      // cron, a supervisor) did not set the flag, so the Agent-mode voice
+      // synthesis still read out the scratchpad of a turn somebody stopped
+      // from the CLI. One rule, both doors.
+      markStopped(conn);
       return sendToRunner(paneId, { t: 'stop' });
     };
     deps.agentBridge.blocked = (paneId) =>
@@ -1714,6 +1735,7 @@ export function attachWsServer(deps: {
           turnActive: false,
           spokeThisTurn: false,
           stoppedThisTurn: false,
+          stoppedAt: 0,
           pendingQuestions: new Map(),
           subagents: new Map(),
           subagentChangedAt: new Map(),
@@ -1923,7 +1945,11 @@ export function attachWsServer(deps: {
           } else if (frame.t === 'turn-start') {
             conn.turnActive = true;
             conn.spokeThisTurn = false;
-            conn.stoppedThisTurn = false;
+            // NOT UNCONDITIONALLY. A Stop can be issued before the runner's
+            // turn-start reaches us — the send is relayed, the user stops it a
+            // beat later, and the runner announces the turn it is already
+            // cancelling. Clearing here erased the Stop and the turn spoke.
+            if (Date.now() - conn.stoppedAt > 5_000) conn.stoppedThisTurn = false;
             streamBufs.set(paneId, '');
             agents.setStatus(paneId, 'running');
             // Busy propagates via the cache's own paneChange → pane.updated
@@ -2814,7 +2840,7 @@ export function attachWsServer(deps: {
               // as the answer to the user's question.
               conn.pendingSendText = null;
               // Silence is what Stop asks for — see `stoppedThisTurn`.
-              conn.stoppedThisTurn = true;
+              markStopped(conn);
               sendToRunner(chatPaneId, { t: 'stop' });
             } else {
               send({ t: 'turn-done', ok: true });
