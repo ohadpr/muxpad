@@ -653,12 +653,31 @@ export function coalesceCronFires(events: readonly ChatEvent[]): ChatEvent[] {
   };
 
   const absorbed = new Set<number>();
-  const counts = new Map<number, { fires: number; names: string[]; lastTs: number | null }>();
+  const counts = new Map<
+    number,
+    {
+      fires: number;
+      names: string[];
+      lastTs: number | null;
+      /** One row per schedule — the chip's evidence. See NoticeEvent.fired. */
+      byName: Map<string, { name: string; fires: number; lastTs: number | null }>;
+    }
+  >();
   let n = 0;
   while (n < fires.length) {
     const head = fires[n] as number;
     const headEv = events[head] as Extract<ChatEvent, { kind: 'notice' }>;
-    const group = { fires: 1, names: [headEv.text], lastTs: headEv.ts };
+    // `byName` is the chip's evidence: the fires it absorbs are removed from
+    // the log, so the only place their detail can live is on the chip that
+    // replaced them. One row per schedule, in the order they first fired.
+    const group = {
+      fires: 1,
+      names: [headEv.text],
+      lastTs: headEv.ts,
+      byName: new Map<string, { name: string; fires: number; lastTs: number | null }>([
+        [headEv.text, { name: headEv.text, fires: 1, lastTs: headEv.ts }],
+      ]),
+    };
     let m = n;
     // `sep(m)`: nothing visible separates this fire from the next.
     // `mute(m + 1)`: the next one has no message of its own to be left chipless.
@@ -670,6 +689,11 @@ export function coalesceCronFires(events: readonly ChatEvent[]): ChatEvent[] {
       group.fires++;
       group.lastTs = ev.ts;
       if (!group.names.includes(ev.text)) group.names.push(ev.text);
+      const seen = group.byName.get(ev.text);
+      if (seen) {
+        seen.fires++;
+        seen.lastTs = ev.ts;
+      } else group.byName.set(ev.text, { name: ev.text, fires: 1, lastTs: ev.ts });
     }
     if (group.fires > 1) counts.set(head, group);
     n = m + 1;
@@ -693,7 +717,8 @@ export function coalesceCronFires(events: readonly ChatEvent[]): ChatEvent[] {
     // which.
     const text = c.names.length <= 2 ? c.names.join(' · ') : `${c.names.length} schedules`;
     const detail = last ? `${c.fires} fires · last ${last}` : `${c.fires} fires`;
-    out.push({ ...e, text, detail });
+    // …and the evidence, so the chip can be opened. See NoticeEvent.fired.
+    out.push({ ...e, text, detail, fired: [...c.byName.values()] });
   }
   return out;
 }

@@ -224,3 +224,51 @@ describe('coalesceCronFires — the two questions that are not the same question
     expect(chips(out)[0]?.detail).toMatch(/^4 fires/);
   });
 });
+
+/**
+ * AND THE CHIP CARRIES WHAT IT REPLACED.
+ *
+ * The fires a chip absorbs are REMOVED from the rendered log, so "6 schedules
+ * · 11 fires · last 01:49 PM" is the only trace left of eleven things that
+ * happened — readable, and with nowhere to go: "I see it but I can't dig to
+ * understand what these are."
+ */
+describe('a collapsed chip keeps its evidence', () => {
+  it('lists each schedule once, with how many times it fired', () => {
+    const out = run([
+      ...quiet('nw-hourly'),
+      ...quiet('pr-sweep'),
+      ...quiet('nw-hourly'),
+      ...quiet('nw-hourly'),
+    ]);
+    const fired = chips(out)[0]?.fired;
+    expect(fired?.map((f) => [f.name, f.fires])).toEqual([
+      ['nw-hourly', 3],
+      ['pr-sweep', 1],
+    ]);
+  });
+
+  it('counts add up to the number the chip claims', () => {
+    // The two are computed separately, which is exactly how a summary and its
+    // detail drift apart.
+    const out = run([...quiet('a'), ...quiet('b'), ...quiet('a'), ...quiet('c')]);
+    const chip = chips(out)[0];
+    const total = (chip?.fired ?? []).reduce((n, f) => n + f.fires, 0);
+    expect(chip?.detail).toMatch(new RegExp(`^${total} fires`));
+  });
+
+  it('remembers when each schedule last fired, not just the run', () => {
+    const out = run([...quiet('early'), ...quiet('late')]);
+    const fired = chips(out)[0]?.fired ?? [];
+    expect(fired).toHaveLength(2);
+    for (const f of fired) expect(typeof f.lastTs === 'number' || f.lastTs === null).toBe(true);
+  });
+
+  it('gives a LONE fire no evidence, because it is already the whole truth', () => {
+    // The disclosure exists for a chip that stands in for rows you can no
+    // longer reach. A single fire replaced nothing.
+    const out = run(quiet('nw-hourly'));
+    expect(chips(out)).toHaveLength(1);
+    expect(chips(out)[0]?.fired).toBeUndefined();
+  });
+});
