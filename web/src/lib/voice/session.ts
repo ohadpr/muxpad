@@ -1396,10 +1396,24 @@ export class VoiceSession {
     // to be idle — see the long note at the call site in `onChatFrame`.
     if (frame.runnerAttached !== true || frame.turnRunning !== false) return;
     const parked = new Set((frame.queue ?? []).map((i) => i.id));
+    const now = this.sched.now();
     for (const task of [...this.pipeline]) {
       if (task.status !== 'queued') continue;
       // Still parked server-side: it has not run, and it will.
       if (task.queueId && parked.has(task.queueId)) continue;
+      // ── A REQUEST THAT HAS ONLY JUST GONE OUT HAS NOT "ALREADY RUN" ────
+      // Every dispatched task is `queued` with no queue id until `turn-start`
+      // comes back, so for a moment it looks exactly like one whose turn ran
+      // and ended unseen. A snapshot already in flight when the send left —
+      // and today's fingerprint makes those more common, since it re-sends
+      // whenever a build lands or a runner reattaches — would retire the
+      // request, announce "the agent finished that one", and then fail to
+      // bind the real turn, so the answer was never spoken. Reproduced.
+      //
+      // The window is network-latency-sized (the server marks the turn active
+      // the moment it relays, so any snapshot computed after that says so), and
+      // this is the same grace the queue-drop path uses for the same reason.
+      if (now - task.dispatchedAt < QUEUE_DROP_GRACE_MS) continue;
       this.deliver(
         task,
         {

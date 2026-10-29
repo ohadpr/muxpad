@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { spokenAnswerFrom } from './spoken-answer.js';
 
@@ -57,5 +59,32 @@ describe('the spoken answer in an agent turn', () => {
     const buf = 'First part.\n\nThe actual answer is forty-two.';
     const out = spokenAnswerFrom(buf) as string;
     expect(buf).toContain(out);
+  });
+});
+
+/**
+ * A STOPPED TURN SAYS NOTHING. Claude reports an interrupted turn as
+ * `turn-done ok:true` — it did stop cleanly — so `ok` cannot tell the two
+ * apart, and without a separate flag the Agent-mode synthesis would read out
+ * the scratchpad of a turn somebody deliberately cut short. The written chat
+ * has guarded exactly this for ages (needsReplyFallback's `interrupted`).
+ */
+describe('what the server refuses to speak', () => {
+  const WS = readFileSync(join(import.meta.dirname, 'ws.ts'), 'utf8');
+
+  it('tracks Stop separately from turn failure', () => {
+    expect(WS).toMatch(/stoppedThisTurn: boolean;/);
+    // Set where Stop is relayed, cleared at turn-start.
+    expect(WS).toMatch(
+      /conn\.stoppedThisTurn = true;\s*\n\s*sendToRunner\(chatPaneId, \{ t: 'stop' \}\)/,
+    );
+    expect(WS).toMatch(/conn\.stoppedThisTurn = false;/);
+  });
+
+  it('gates the synthesis on it, not only on ok', () => {
+    const i = WS.indexOf('spokenAnswerFrom(');
+    const guard = WS.slice(Math.max(0, i - 1400), i);
+    expect(guard).toContain('!conn.stoppedThisTurn');
+    expect(guard).toContain('!conn.spokeThisTurn');
   });
 });

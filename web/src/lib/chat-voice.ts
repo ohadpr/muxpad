@@ -278,7 +278,13 @@ export function applyChatVoice(events: readonly ChatEvent[], opts: ChatVoiceOpts
     // Agent-mode turn, for voice, and two copies would drift into promoting
     // different sentences out of the same turn.
     const picked = pickSpokenBlock(prose.map((b) => b.text));
-    const chosen = (prose[picked] as { i: number }).i;
+    // -1 when every block is whitespace. The Claude normalizer drops blank
+    // text today so this cannot happen through that door, but the old code
+    // indexed `prose` directly and could not return -1 at all — an invariant
+    // that moved into another file is one nobody will check again.
+    const block = picked >= 0 ? prose[picked] : undefined;
+    if (!block) continue;
+    const chosen = block.i;
     const e = out[chosen] as Extract<ChatEvent, { kind: 'assistant' }>;
     out[chosen] = { ...e, voice: 'fallback' };
   }

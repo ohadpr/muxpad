@@ -648,6 +648,17 @@ export function attachWsServer(deps: {
      * turn be given a voice at all — see the synthesis at `turn-done`.
      */
     spokeThisTurn: boolean;
+    /**
+     * The user pressed Stop on the running turn.
+     *
+     * Claude reports an interrupted turn as `turn-done ok:true` — it did stop
+     * cleanly — so "ok" cannot tell the two apart, and the Agent-mode voice
+     * synthesis would otherwise speak the scratchpad of a turn somebody
+     * deliberately cut short. The written chat has guarded this for ages
+     * (`needsReplyFallback`'s `interrupted` rule); this is the same guard on
+     * the live path.
+     */
+    stoppedThisTurn: boolean;
     /** Latest per-task subagent progress for mid-turn (re)connects. */
     subagents: Map<string, SubagentProgress>;
     /**
@@ -1702,6 +1713,7 @@ export function attachWsServer(deps: {
           build: null,
           turnActive: false,
           spokeThisTurn: false,
+          stoppedThisTurn: false,
           pendingQuestions: new Map(),
           subagents: new Map(),
           subagentChangedAt: new Map(),
@@ -1911,6 +1923,7 @@ export function attachWsServer(deps: {
           } else if (frame.t === 'turn-start') {
             conn.turnActive = true;
             conn.spokeThisTurn = false;
+            conn.stoppedThisTurn = false;
             streamBufs.set(paneId, '');
             agents.setStatus(paneId, 'running');
             // Busy propagates via the cache's own paneChange → pane.updated
@@ -2003,6 +2016,11 @@ export function attachWsServer(deps: {
             // the prose is already on screen as prose.
             if (
               frame.ok !== false &&
+              // A turn the user STOPPED reports ok — it stopped cleanly — so
+              // `ok` cannot tell the two apart, and speaking the scratchpad of
+              // a turn somebody cut short is the one thing this whole
+              // mechanism exists to avoid.
+              !conn.stoppedThisTurn &&
               !conn.spokeThisTurn &&
               panes.getById(paneId)?.mode !== 'chat'
             ) {
@@ -2795,6 +2813,8 @@ export function attachWsServer(deps: {
               // which is silence; a wrongly stamped one speaks a cron's output
               // as the answer to the user's question.
               conn.pendingSendText = null;
+              // Silence is what Stop asks for — see `stoppedThisTurn`.
+              conn.stoppedThisTurn = true;
               sendToRunner(chatPaneId, { t: 'stop' });
             } else {
               send({ t: 'turn-done', ok: true });
