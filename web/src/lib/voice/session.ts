@@ -87,6 +87,7 @@
 // addressable so that such a module stays possible; do not sprinkle heuristics
 // for it through this file.
 
+import { parseSpawnDelivery } from '@muxpad/shared';
 import { type ArrivalPolicy, arrivalPolicyFor } from './cancel';
 import { chunkForAppend } from './chunk';
 import { DelegationRegistry, type VoiceTask } from './delegation';
@@ -258,6 +259,17 @@ export const SPEAKING_DECAY_MS = 900;
  * sentences of speech, generously.
  */
 export const MUTE_RUNNER_GRACE_MS = 10_000;
+
+/**
+ * How long after a voice request finishes we keep listening for the SUB-AGENTS
+ * it dispatched to report back.
+ *
+ * A delegating turn ends in a minute with "three agents are on it"; the agents
+ * themselves take as long as they take. 20 minutes is long enough for the
+ * common batch and short enough that it cannot outlive a call — a voice
+ * session that has been idle for 20 minutes is over in every other sense too.
+ */
+export const DELIVERY_WATCH_MS = 20 * 60_000;
 
 /** What the user hears. It names the defect, points at where the answer IS,
  *  and says why the call is ending — a hang-up with no reason reads as a
@@ -472,6 +484,38 @@ export class VoiceSession {
   private bound: VoiceTask | null = null;
   /** Last tool the bound turn started, for the progress update. Name only. */
   private lastTool: string | null = null;
+  /**
+   * ── THE ANSWER THAT ARRIVES IN A LATER TURN ────────────────────────────
+   *
+   * A voice request that the agent DELEGATES ends its turn in about a minute,
+   * saying "three agents are on it". The real answer lands much later, in a
+   * different turn — the one muxpad starts when the sub-chats report back,
+   * stamped `<muxpad-delivery …>`.
+   *
+   * Voice dropped that turn on the floor. It binds a turn by matching its
+   * stamp against a request voice sent, the delivery's stamp matches nothing,
+   * so the turn read as "somebody else's" and every frame of it — the answer
+   * included — was discarded in silence. Measured in the signal-archive chat:
+   * three workers reported, the chat wrote a 1,998-character verdict, and
+   * nobody ever heard it.
+   *
+   * The rendered transcript already draws exactly this distinction and for
+   * exactly this reason (see MACHINE_TURN_VARIANTS in lib/chat-voice.ts): a
+   * CRON is unsolicited and stays excluded, a DELIVERY exists only because
+   * this conversation dispatched the work, so its arrival is the continuation
+   * of something a person asked for. This is that same rule, applied to the
+   * thing a person asked for ALOUD.
+   *
+   * Held as a window rather than a flag so it cannot leak into the next call:
+   * see {@link DELIVERY_WATCH_MS}.
+   */
+  private deliveryWatch: { request: string; until: number } | null = null;
+  /** Ids of tasks that were ADOPTED from a delivery turn rather than sent.
+   *  They must not re-arm the watch when they finish, or one request's
+   *  sub-agents could announce themselves forever: each adopted turn would
+   *  complete, arm a fresh watch, and adopt the next delivery in its own
+   *  right. One announcement per thing the user asked for. */
+  private readonly adopted = new Set<string>();
   private lastCancelAt = Number.NEGATIVE_INFINITY;
   /**
    * The agent question currently waiting on the user, if any.
@@ -1131,7 +1175,15 @@ export class VoiceSession {
     if (stamped) this.serverStampsTurns = true;
     if (this.bound) return;
     const waiting = this.pipeline.filter((d) => d.status === 'queued');
-    if (waiting.length === 0) return;
+    if (waiting.length === 0) {
+      // NOTHING OF OURS IS WAITING — which is the normal state when our
+      // sub-agents report, because the turn that dispatched them finished
+      // minutes ago and retired its task. So this check has to come BEFORE
+      // the early return, not after the match below: the delivery case is
+      // precisely the case with an empty pipeline.
+      if (stamped) this.adoptDelivery(text as string);
+      return;
+    }
     let owner: VoiceTask | undefined;
     if (stamped) {
       // Exact text match, oldest first — the server stamped the turn, so a
@@ -1139,6 +1191,11 @@ export class VoiceSession {
       const t = (text as string).trim();
       owner = waiting.find((d) => d.request.trim() === t);
       if (!owner) {
+        // …unless it is the SUB-AGENTS of a request of ours reporting back.
+        // That turn's stamp is the delivery block, not anything voice sent, so
+        // no match is possible — and it is still our answer. See
+        // `deliveryWatch`.
+        if (this.adoptDelivery(text as string)) return;
         this.trace('turn-start belongs to another sender — not binding');
         return;
       }
@@ -1262,7 +1319,73 @@ export class VoiceSession {
 
   /** This task's work is over. Status first so diagnostics can tell "answered"
    *  from "cancelled", then release its slot in the pipeline. */
+  /**
+   * Is this turn our own sub-agents reporting back? If so, claim it.
+   *
+   * Three guards, and each one is the difference between this and narrating
+   * somebody else's conversation out loud:
+   *
+   *  · The stamp must PARSE as a delivery. `parseSpawnDelivery` is the same
+   *    function the server and the transcript renderer use, so "is this a
+   *    delivery" has one answer everywhere rather than a regex per reader.
+   *  · The watch must be open — a request of OURS completed recently (see
+   *    {@link DELIVERY_WATCH_MS}). Without it, a delivery for work the user
+   *    dispatched by TYPING, before the call started, would be read aloud.
+   *  · Nothing of ours may already be bound, which the caller has checked.
+   *
+   * A CRON fire is deliberately not adopted even though it arrives the same
+   * way: nobody asked for it, today. That is the same line lib/chat-voice.ts
+   * draws for the written transcript, and it is drawn here by asking only
+   * about deliveries.
+   *
+   * The adopted task is SYNTHETIC — the model never delegated it, so it has
+   * no delegation id of its own and takes one derived from the request it
+   * continues. It exists so the answer has somewhere to be delivered to, and
+   * so the heartbeat describes it while the agent consolidates.
+   */
+  private adoptDelivery(stamp: string): boolean {
+    const watch = this.deliveryWatch;
+    if (!watch || this.sched.now() > watch.until) return false;
+    if (parseSpawnDelivery(stamp) === null) return false;
+    const id = `delivery:${this.sched.now()}`;
+    const task = this.registry.claim(id, { now: this.sched.now(), offsetMs: 0 });
+    if (!task) return false;
+    // It never went out as a send, so it has no stamp of its own to match —
+    // but it DOES carry the request it continues, which is what the heartbeat
+    // and the moved-on test read.
+    task.request = watch.request;
+    task.dispatchedAt = this.sched.now();
+    this.registry.setStatus(task.id, 'working');
+    this.adopted.add(task.id);
+    this.pipeline.push(task);
+    this.bound = task;
+    this.lastTool = null;
+    // One line, because the user asked this minutes ago and has had a whole
+    // conversation since: an answer that arrives with no re-anchoring reads
+    // as a non-sequitur.
+    this.deliver(task, {
+      kind: 'commentary',
+      text: `The agents you sent off have reported back on: ${watch.request.slice(0, 120)}`,
+    });
+    this.trace(`adopted a delivery turn for ${task.id}`);
+    // One delivery per request. A second batch for the same work is the
+    // agent's business, not a second announcement.
+    this.deliveryWatch = null;
+    return true;
+  }
+
   private retire(task: VoiceTask, status: 'completed' | 'failed' | 'cancelled'): void {
+    // A COMPLETED request arms the delivery watch: if the agent handed the
+    // work to sub-chats, their answer arrives in a later turn and would
+    // otherwise be dropped (see `deliveryWatch`). Only `completed` — a failed
+    // or cancelled request dispatched nothing worth waiting for, and a
+    // cancelled one was silenced on purpose.
+    if (status === 'completed' && task.request.trim() && !this.adopted.has(task.id)) {
+      this.deliveryWatch = {
+        request: task.request,
+        until: this.sched.now() + DELIVERY_WATCH_MS,
+      };
+    }
     this.registry.setStatus(task.id, status);
     this.pipeline = this.pipeline.filter((d) => d.id !== task.id);
     this.clearOrphanTimer(task.id);
