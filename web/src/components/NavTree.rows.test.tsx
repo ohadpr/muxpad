@@ -885,23 +885,30 @@ function rule(css: string, sel: string): string {
 }
 
 /**
- * THE PREFIX IS FOR THE ROWS FROM SOMEWHERE ELSE.
+ * AND IT IS ON EVERY ROW.
  *
- * Every row carried its workspace, and in the common case every row in the
- * band is from the one you are already in — five identical "Personal /"
- * prefixes down a six-row band, which is repetition reading as information.
+ * It rendered only when the chat was from ANOTHER workspace, on the argument
+ * that five identical "Personal" tags down a six-row band is repetition
+ * rather than information. That is true of the TAG and false of the BAND: a
+ * column present on some rows and absent on others is one you cannot scan,
+ * and a reader who has learned that a bare row means "here" has learned a
+ * rule instead of reading a label. Repetition in a column is what a column
+ * IS.
  */
-describe('the workspace prefix earns its place', () => {
+describe('every row says where it is from', () => {
   const src = readFileSync(join(__dirname, 'NavTree.tsx'), 'utf8');
+  const row = src.slice(src.indexOf('function WorkingSetRow'));
+  const body = row.slice(0, row.indexOf('\nfunction '));
 
-  it('is decided by the workspace you are looking at, not by the row alone', () => {
-    expect(src).toMatch(/elsewhere=\{workspace\.slug !== activeWorkspaceSlug\}/);
+  it('renders the tag unconditionally', () => {
+    expect(body).toMatch(/<span className="navtree-ws-tag" aria-hidden="true">/);
+    expect(body).not.toMatch(/elsewhere/);
   });
 
-  it('renders nothing at all when the chat is from here', () => {
-    const row = src.slice(src.indexOf('function WorkingSetRow'));
-    expect(row.slice(0, row.indexOf('\nfunction '))).toMatch(
-      /\{elsewhere \? \([\s\S]{0,200}navtree-ws-tag/,
-    );
+  it('needs no idea of which workspace you are in', () => {
+    // The strip took `activeWorkspaceSlug` for exactly one reason — deciding
+    // whether a row was "elsewhere" — so it goes with the condition.
+    const strip = src.slice(src.indexOf('function WorkingSetStrip'));
+    expect(strip.slice(0, strip.indexOf('\nfunction '))).not.toMatch(/activeWorkspaceSlug/);
   });
 });

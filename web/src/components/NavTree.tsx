@@ -322,14 +322,10 @@ export function NavTree({ activeWorkspaceSlug, activeTabSlug, variant, onNavigat
  * about what it contains.
  */
 function WorkingSetStrip({
-  activeWorkspaceSlug,
   activeTabSlug,
   onNavigate,
   touch,
 }: {
-  /** Which workspace the reader is in — decides whether a row needs to say
-   *  where it is from. See the prefix in WorkingSetRow. */
-  activeWorkspaceSlug: string;
   activeTabSlug: string | null;
   onNavigate?: (() => void) | undefined;
   /** The sheet. No hover to reveal a control and no Control key to press. */
@@ -382,13 +378,6 @@ function WorkingSetStrip({
           key={tab.id}
           tab={tab}
           workspace={workspace}
-          // ── THE PREFIX IS FOR THE ONES FROM SOMEWHERE ELSE ───────────────
-          // Every row carried its workspace, and in the common case every row
-          // in the band is from the one you are in — five identical "Personal
-          // /" prefixes down a six-row band, which is repetition reading as
-          // information. It earns its place exactly when it disambiguates:
-          // when the chat is NOT from the workspace you are looking at.
-          elsewhere={workspace.slug !== activeWorkspaceSlug}
           active={tab.slug === activeTabSlug}
           {...(touch ? { touch: true } : {})}
           {...(onNavigate ? { onNavigate } : {})}
@@ -402,15 +391,12 @@ function WorkingSetStrip({
 function WorkingSetRow({
   tab,
   workspace,
-  elsewhere,
   active,
   onNavigate,
   touch,
 }: {
   tab: Tab;
   workspace: { slug: string; name: string };
-  /** The chat is from another workspace — see the prefix below. */
-  elsewhere: boolean;
   active: boolean;
   onNavigate?: (() => void) | undefined;
   touch?: boolean | undefined;
@@ -433,32 +419,34 @@ function WorkingSetRow({
         onClick={() => onNavigate?.()}
       >
         <span className="navtree-tab-titleline">
-          {/* ── THE WORKSPACE, AFTER THE NAME AND QUIETER ───────────────────
-              This band is the one place in the rail where rows from DIFFERENT
+          {/* ── THE WORKSPACE, ON EVERY ROW, AFTER THE NAME ─────────────────
+              This band is the one place in the rail where rows from different
               workspaces sit together — everywhere else a chat sits under the
               header that names its workspace — so it is the one place a row
-              has to say where it is from. It says it only when that is NEWS:
-              a row from the workspace you are already in gets nothing, which
-              is why Personal rows are bare and only the Orbit one is tagged.
+              has to say where it is from.
 
-              IT WAS A PREFIX FIRST, AND THAT WAS THE WRONG END. A rail is
+              IT SAYS SO ON EVERY ROW. It used to render only when the chat
+              was from ANOTHER workspace, on the argument that five identical
+              "Personal" tags down a six-row band is repetition rather than
+              information. That is true of the TAG and false of the BAND: a
+              column that is present on some rows and absent on others is one
+              you cannot scan, and a reader who has learned that a bare row
+              means "here" has learned a rule instead of reading a label.
+              Repetition in a column is what a column IS.
+
+              AFTER THE NAME, AND QUIETER. It was a prefix, and a rail is
               scanned down its left edge — the same argument that keeps every
-              status mark on one x — and a leading "Orbit /" pushed that row's
-              NAME 70px right of every other name in the band. The thing you
-              are looking for stopped starting in the same place as its
-              neighbours, to make room for the thing you are not.
-
-              So: name first, workspace after it, dimmer and smaller. It also
-              shrinks and ellipsizes first (see the css) — on a narrow rail
-              the chat's own name is the part you need. */}
+              status mark on one x. A leading "Orbit /" pushed that row's NAME
+              right of every other name in the band: the thing you are looking
+              for stopped starting where its neighbours start, to make room
+              for the thing you are not. It also gives way first on a narrow
+              rail (see the css). */}
           <span className="navtree-name-text" dir="auto">
             {tab.name}
           </span>
-          {elsewhere ? (
-            <span className="navtree-ws-tag" aria-hidden="true">
-              {workspace.name}
-            </span>
-          ) : null}
+          <span className="navtree-ws-tag" aria-hidden="true">
+            {workspace.name}
+          </span>
         </span>
       </Link>
       {/* NO CONTROLS ON TOUCH, which is the rule every other row here already
@@ -571,11 +559,7 @@ function SidebarTree({
           thing."
 
           So it scrolls with everything else, and the rail is one list again. */}
-        <WorkingSetStrip
-          activeWorkspaceSlug={activeWorkspaceSlug}
-          activeTabSlug={activeTabSlug}
-          {...(onNavigate ? { onNavigate } : {})}
-        />
+        <WorkingSetStrip activeTabSlug={activeTabSlug} {...(onNavigate ? { onNavigate } : {})} />
         {/* NO CREATE CONTROL HERE, and none in the list either. It is on each
             WORKSPACE HEADER — see WorkspaceNode. That is the row the action is
             about, so the button needs no label saying where it creates and
@@ -856,7 +840,6 @@ function SheetRail({
             a thumb), which is an argument for the band EXISTING, not for it
             holding a fixed slice of a screen this small. */}
         <WorkingSetStrip
-          activeWorkspaceSlug={activeWorkspaceSlug}
           activeTabSlug={activeTabSlug}
           touch={true}
           {...(onNavigate ? { onNavigate } : {})}
