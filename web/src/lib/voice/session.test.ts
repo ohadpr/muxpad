@@ -17,6 +17,7 @@ import {
   DISPATCH_FILLER_MS,
   MUTE_RUNNER_DETAIL,
   MUTE_RUNNER_GRACE_MS,
+  MUTE_RUNNER_LINE,
   SETTLE_MAX_MS,
   SETTLE_QUIET_MS,
   type Scheduler,
@@ -1963,5 +1964,88 @@ describe('the cancel debounce measures from the cancel that actually fired', () 
     h.settle();
     expect(h.agent.stops).toBe(1);
     expect(h.commentary().filter((t) => /stopped\./i.test(t))).toHaveLength(1);
+  });
+});
+
+/**
+ * ── THE TURN THAT ENDED WHILE WE WERE NOT LISTENING ──────────────────────
+ *
+ * `turn-done` is a live broadcast and nothing re-sends it. The runner drops
+ * frames while its socket is down; the server sends only to sockets open at
+ * that instant. So one blip — a phone locking its screen, the no-pong check,
+ * a server restart — swallows the end of a turn, and the bound task never
+ * retires: the heartbeat repeats "Still working on it — 176 seconds in"
+ * while the chat shows a finished answer.
+ *
+ * Reported as: "the voice waited for 3 minutes (and then i killed it) while
+ * the agent already replied/wrapped up."
+ */
+describe('a turn that ended during a socket gap', () => {
+  /** Bind a task, then lose the reply and the turn-done with the socket. */
+  function stranded() {
+    const h = harness();
+    h.started();
+    h.hear('how many tests are failing?', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.turnStart('how many tests are failing?');
+    return h;
+  }
+
+  it('used to hang forever — the filler is the symptom', () => {
+    const h = stranded();
+    const before = h.commentary().length;
+    h.clock.advance(3 * 60_000);
+    // This is the bug as the user met it, and it is still what happens with
+    // no snapshot to repair it.
+    expect(h.commentary().slice(before).join(' ')).toMatch(/Still working on it/);
+  });
+
+  it('retires on the reconnect snapshot that says the turn is over', () => {
+    const h = stranded();
+    h.clock.advance(60_000);
+    h.agent.frame({ t: 'session', turnRunning: false });
+    h.clock.advance(5_000);
+    // The heartbeat stops, because nothing is bound any more.
+    const after = h.commentary().length;
+    h.clock.advance(3 * 60_000);
+    expect(h.commentary().slice(after)).toEqual([]);
+  });
+
+  it('says where the answer is rather than pretending to have it', () => {
+    // The reply frames are gone — they were lost with the socket. Inventing
+    // an answer is the one thing worse than the hang.
+    const h = stranded();
+    h.agent.frame({ t: 'session', turnRunning: false });
+    h.clock.advance(1000);
+    expect(h.everything()).toMatch(/finished that one while we were disconnected/);
+  });
+
+  it('does NOT hang up the call — that is the muted-runner path, not this one', () => {
+    // `checkRunnerCanSpeak` ends the session when a turn succeeds with no
+    // reply frame. True of a pane that cannot speak; false here, where the
+    // reply existed and OUR socket dropped it.
+    const h = stranded();
+    h.agent.frame({ t: 'session', turnRunning: false });
+    h.clock.advance(MUTE_RUNNER_GRACE_MS + 1000);
+    expect(h.everything()).not.toContain(MUTE_RUNNER_LINE);
+    expect(h.states).not.toContain('ended');
+  });
+
+  it('ignores a snapshot that says the turn is still running', () => {
+    const h = stranded();
+    const before = h.commentary().length;
+    h.agent.frame({ t: 'session', turnRunning: true });
+    h.clock.advance(30_000);
+    expect(h.commentary().slice(before).join(' ')).toMatch(/Still working on it/);
+  });
+
+  it('retires nothing when no task is bound', () => {
+    // Every socket gets this frame on connect, including one that has never
+    // sent anything.
+    const h = harness();
+    h.started();
+    h.agent.frame({ t: 'session', turnRunning: false });
+    expect(h.everything()).not.toMatch(/disconnected/);
   });
 });

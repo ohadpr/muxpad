@@ -969,6 +969,49 @@ export class VoiceSession {
     const intents = this.bridge.onFrame(frame);
     this.turnRunning = this.bridge.isTurnRunning();
 
+    // ── A TURN THAT ENDED WHILE WE WERE NOT LISTENING ──────────────────────
+    //
+    // `turn-done` is a live broadcast and nothing re-sends it. The runner
+    // drops frames while its socket is down; the server sends only to sockets
+    // open at that instant. So one blip — a phone locking its screen, the
+    // no-pong check, a server restart — can swallow the end of a turn, and the
+    // bound task then never retires: the heartbeat keeps saying "Still working
+    // on it — 176 seconds in" while the chat two inches away shows the
+    // finished answer. "the voice waited for 3 minutes while the agent already
+    // replied/wrapped up."
+    //
+    // The reconnect snapshot is the repair, and it is the ONLY frame that can
+    // be: it carries the server's own `turnRunning`, computed from the runner
+    // registry rather than from what this socket caught, and a fresh socket
+    // always gets one. False while something of ours is bound means the turn
+    // we are waiting on is already over.
+    //
+    // Treated as `turn-done` with ok, via the same path, so the retire, the
+    // mute-runner check and the pipeline all behave exactly as they would
+    // have. The one thing that cannot be recovered is the ANSWER — those
+    // frames are gone — so it says where to find it rather than pretending.
+    if (frame.t === 'session' && frame.turnRunning === false && this.bound) {
+      const task = this.bound;
+      for (const intent of intents) this.deliver(task, intent, 'when_idle', true);
+      this.deliver(
+        task,
+        {
+          kind: 'commentary',
+          text: 'The agent finished that one while we were disconnected — the answer is on screen.',
+        },
+        'when_idle',
+        true,
+      );
+      // NOT `checkRunnerCanSpeak`. That hangs the session up on the grounds
+      // that a turn succeeded with no reply frame, so this pane cannot answer
+      // aloud — a correct read of a muted runner and exactly the wrong read
+      // here, where the reply frames EXISTED and were lost with the socket.
+      // Ending the call because of our own gap is worse than the hang.
+      this.retire(task, 'completed');
+      this.recomputeState();
+      return;
+    }
+
     const task = this.targetFor(frame);
     if (task) {
       // Pipecat's envelope: `started` (the dispatch ack), `intermediate`
