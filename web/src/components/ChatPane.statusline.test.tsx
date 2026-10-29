@@ -782,3 +782,36 @@ describe('the live cell’s ink', () => {
     expect(flat.slice(i, flat.indexOf('}', i))).toMatch(/color:\s*var\(--chat-accent\)/);
   });
 });
+
+/**
+ * ── THE LIVE CELL YIELDS WHEN NOTHING ELSE CAN ───────────────────────────
+ *
+ * The first attempt at this measured as doing nothing, twice over: it targeted
+ * `.chat-status-seg.-live` when the flex item is the WRAPPER (that rule says
+ * so in its own comment), and it sat EARLIER in the file than the label rule
+ * it had to beat. Both are pinned here, because "I wrote a rule" and "the rule
+ * wins" are different claims and only the second one matters.
+ */
+describe('the live cell under a narrow composer', () => {
+  const flat = css.replace(/\/\*[\s\S]*?\*\//g, '');
+
+  it('makes the composer tool row a query container', () => {
+    // A pane's width has nothing to do with the viewport's: two panes side by
+    // side on a 1500px screen each get a ~400px row.
+    const i = flat.indexOf('.chat-composer-tools {');
+    const body = flat.slice(i, flat.indexOf('}', i));
+    expect(body).toMatch(/container-type:\s*inline-size/);
+    expect(body).toMatch(/container-name:\s*composer-tools/);
+  });
+
+  it('targets the WRAPPER, which is the flex item', () => {
+    const q = flat.slice(flat.indexOf('@container composer-tools'));
+    expect(q.slice(0, q.indexOf('\n}\n'))).toContain('.chat-status-seg-wrap.-live');
+  });
+
+  it('is declared AFTER the rules it has to beat', () => {
+    const q = flat.indexOf('@container composer-tools');
+    expect(q).toBeGreaterThan(flat.indexOf('.chat-status-seg-wrap.-live {'));
+    expect(q).toBeGreaterThan(flat.indexOf('.chat-status-seg.-live .chat-status-seg-label {'));
+  });
+});
