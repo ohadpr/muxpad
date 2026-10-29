@@ -4053,7 +4053,17 @@ body.sidenav-resizing iframe {
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 6px calc(var(--nt-pad) + var(--nt-indent)) 4px;
+  /* ── THE LABEL NEEDS A LINE OF AIR UNDER IT ────────────────────────────
+     It had 4px, and the first row sat straight under the heading —
+     "recently active too close to actual chats". The comparison that settles
+     the number is the workspace header two sections down: a 32px row with a
+     10px label centred in it, so that label carries ~11px of air on each
+     side by construction. This heading is not a row, so it has to say the
+     same thing in padding.
+     10px below, 8 above: a section label belongs to what is BELOW it, so the
+     gap that separates it from its own first row is the one that must not be
+     the tighter of the two. */
+  padding: 8px calc(var(--nt-pad) + var(--nt-indent)) 10px;
   font-size: 0.625rem;
   font-weight: 600;
   letter-spacing: 0.12em;
