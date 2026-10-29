@@ -7,6 +7,7 @@ import {
   SYSTEM_PAIR,
   THEME_CHOICES,
   type ThemeChoice,
+  getChatTheme,
   setChatTheme,
   updateSettings,
   useSettings,
@@ -180,24 +181,46 @@ export function SettingsMenu() {
  */
 export function ThemePicker({ chosen, group = 'theme' }: { chosen: ThemeChoice; group?: string }) {
   const tab = useActiveTab();
+  const [failed, setFailed] = useState(false);
+  /**
+   * Optimistic, and it UNDOES ITSELF when the write fails.
+   *
+   * The repaint has to happen on the press — a theme that waited for a round
+   * trip feels like a toggle that sticks. But the first version swallowed the
+   * error, so a server that could not store the value (one running from
+   * before the migration that adds the column, which is every server until it
+   * restarts) produced the worst possible shape: the window repainted, the
+   * next poll delivered the unchanged row, and the theme snapped back with no
+   * explanation. Reported as "tried to change the theme on a chat and it just
+   * didn't work, flickered and returned to the theme it was on".
+   *
+   * Reverting here makes the failure immediate and legible instead of
+   * arriving 5 seconds later as a flicker, and the line under the grid says
+   * what to do about it.
+   */
+  const write = (value: ThemeChoice | null, chat: { id: string; workspaceId: string }) => {
+    const before = getChatTheme();
+    setFailed(false);
+    setChatTheme(value);
+    patchTabRow(chat.workspaceId, chat.id, { theme: value });
+    void api.patchTab(chat.id, { theme: value }).catch((err) => {
+      console.error('could not store the chat theme', err);
+      setChatTheme(before);
+      patchTabRow(chat.workspaceId, chat.id, { theme: before });
+      setFailed(true);
+    });
+  };
   const pick = (value: ThemeChoice) => {
     if (!tab) {
       updateSettings({ theme: value });
       return;
     }
-    // Optimistic: the document repaints on the press, and the row catches up.
-    // A theme that waited for a round trip would feel like a toggle that
-    // sticks, and a failed write is recoverable by pressing it again.
-    setChatTheme(value);
-    patchTabRow(tab.workspaceId, tab.id, { theme: value });
-    void api.patchTab(tab.id, { theme: value }).catch(() => {});
+    write(value, tab);
   };
   const useEverywhere = () => {
     if (!tab) return;
     updateSettings({ theme: chosen });
-    setChatTheme(null);
-    patchTabRow(tab.workspaceId, tab.id, { theme: null });
-    void api.patchTab(tab.id, { theme: null }).catch(() => {});
+    write(null, tab);
   };
   return (
     <fieldset className="settings-row settings-themes">
@@ -236,6 +259,12 @@ export function ThemePicker({ chosen, group = 'theme' }: { chosen: ThemeChoice; 
         <button type="button" className="settings-theme-default" onClick={useEverywhere}>
           Use for every chat
         </button>
+      ) : null}
+      {failed ? (
+        <p className="settings-note" role="alert">
+          Couldn’t save this chat’s theme — the server is running a build without the column it
+          lives in. Restart muxpad and try again.
+        </p>
       ) : null}
     </fieldset>
   );
