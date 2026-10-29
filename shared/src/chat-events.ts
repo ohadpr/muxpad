@@ -115,7 +115,7 @@ export interface NoticeEvent extends Base {
    *  for, so its scratchpad must never be promoted into a bubble. Without a
    *  transcript-level marker a reload cannot tell a stopped turn from a
    *  silent one, and the two halves of the guard would disagree. */
-  variant: 'task' | 'reminder' | 'cron' | 'interrupted' | 'report';
+  variant: 'task' | 'reminder' | 'cron' | 'interrupted' | 'report' | 'compacted';
   text: string;
   /** Secondary line, e.g. a task-notification's status. */
   detail?: string;
@@ -671,6 +671,52 @@ export function expandCronFire(text: string, id: string, ts: number | null): Cha
 }
 
 /**
+ * ── A COMPACTION IS A MARK, NOT A MESSAGE ────────────────────────────────
+ *
+ * When a session runs out of room the harness summarises it and reopens the
+ * conversation with that summary as a USER message — "This session is being
+ * continued from a previous conversation that ran out of context." followed
+ * by the whole summary, which routinely runs to thousands of words.
+ *
+ * It rendered as an ordinary bubble, so the chat showed a wall of
+ * "1. Primary Request and Intent:" in the middle of a conversation about
+ * signal archives, in the voice of someone who never typed it. Reported as
+ * "not a big fan of showing the user the compaction mechanics, at least not
+ * dumping the entire compaction message into the chat".
+ *
+ * Same treatment as a cron fire and a sub-chat delivery, which arrive by the
+ * same door and for the same reason — a user-role message is the only way
+ * into a conversation, so everything injected wears that costume. The mark
+ * says it happened; the summary stays one disclosure away for the times you
+ * want to know what survived.
+ *
+ * Matched on the harness's own opening sentence rather than on a muxpad
+ * marker, because muxpad does not write this one — the harness does, on both
+ * the automatic path (auto-compact) and `/compact`. A wording change upstream
+ * makes this stop firing, which degrades to today's behaviour rather than to
+ * a wrong one.
+ */
+const COMPACTION_OPENER =
+  /^this session is being continued from a previous conversation that (?:ran out of context|ran out of|is being summarized)/i;
+
+export function expandCompaction(text: string, id: string, ts: number | null): ChatEvent[] | null {
+  const t = text.trimStart();
+  if (!COMPACTION_OPENER.test(t)) return null;
+  const notice: NoticeEvent = {
+    kind: 'notice',
+    // Distinct id from the bubble's — they are two React rows.
+    id: `${id}:compacted`,
+    ts,
+    variant: 'compacted',
+    text: 'Compacted — the earlier conversation was summarised',
+  };
+  // FOLDED, like a cron's injected prompt. Kept rather than dropped: what a
+  // compaction decided to keep is occasionally the thing you need, and it is
+  // the only copy — the turns it replaced are gone from the agent's context.
+  return [notice, { kind: 'user', id, ts, text: t, folded: true }];
+}
+
+/**
  * A batch of finished sub-chat reports arrives as `<muxpad-delivery …>…</…>` +
  * the reports themselves. Same split as `expandCronFire`, for the same reason:
  * the parent's transcript should read "⇤ 3 sub-agents reported" followed by what
@@ -743,7 +789,8 @@ export function expandChatEvent(event: ChatEvent): ChatEvent[] {
   if (event.kind !== 'user') return [event];
   return (
     expandCronFire(event.text, event.id, event.ts) ??
-    expandSpawnDelivery(event.text, event.id, event.ts) ?? [forDisplay(event)]
+    expandSpawnDelivery(event.text, event.id, event.ts) ??
+    expandCompaction(event.text, event.id, event.ts) ?? [forDisplay(event)]
   );
 }
 
@@ -860,6 +907,9 @@ export function normalizeTranscriptLine(line: unknown): ChatEvent[] {
       // …and so is a batch of sub-chat reports.
       const reports = expandSpawnDelivery(content, id, ts);
       if (reports) return reports;
+      // …and so is the summary the harness reopens a compacted session with.
+      const compacted = expandCompaction(content, id, ts);
+      if (compacted) return compacted;
       // An `@mention`'s handles are for the agent, not the reader — see
       // `forDisplay`.
       return [{ kind: 'user', id, ts, text: stripMentionContext(content) }];

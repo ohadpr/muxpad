@@ -1141,6 +1141,12 @@ const NOTICE_ICON: Record<NoticeEvent['variant'], string> = {
   // inward arrow, because the direction is the whole fact — every other notice
   // is about this chat, and this one is about work that happened elsewhere.
   report: '⇤',
+  // The conversation was summarised to make room. An arrow pointing INTO a
+  // smaller space — not an hourglass (nothing is waiting) and not a warning
+  // (nothing went wrong); it is a thing that happened, and the only reason it
+  // is in the log at all is so a reader who scrolls back does not find a hole
+  // where an hour of talk used to be.
+  compacted: '⇥',
 };
 
 /** Harness control message (background-task update / session reminder), or a

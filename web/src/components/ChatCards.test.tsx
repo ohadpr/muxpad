@@ -319,17 +319,42 @@ describe('pinned chat cards', () => {
     // …and the card still names itself on demand, via its title.
     expect(host.querySelector('.chat-card')?.getAttribute('title')).toBe('build');
   });
-  it('an html card renders whole, and is NOT a control', async () => {
-    // It has nothing to expand — it already draws everything and measures
-    // itself — so making it clickable offered a gesture that changed nothing on
-    // screen: "clicking the line changes it a bit but doesn't expand".
+  it('a single-element html card is NOT a control — folding it would do nothing', async () => {
+    // The guarantee `togglable = !isHtml` used to provide, kept. If the first
+    // element IS the whole body then the folded height equals the full height,
+    // and making that clickable brings back the complaint the old line existed
+    // to kill: "clicking the line changes it a bit but doesn't expand".
     const host = await mount([card({ name: 'market', format: 'html', content: '<b>x</b>' })]);
     const section = host.querySelector('.chat-card') as HTMLElement;
     expect(host.querySelector('iframe')).not.toBeNull();
     expect(host.querySelector('.chat-card-line')).toBeNull();
     expect(section.getAttribute('role')).toBeNull();
-    expect(section.getAttribute('aria-expanded')).toBeNull();
     expect(section.className).not.toContain('-togglable');
+    expect(section.className).not.toContain('-peek');
+  });
+
+  it('an html card whose frame reports a short first row DOES fold', async () => {
+    // Only the frame can see the document's layout, so it is the frame that
+    // decides: it measures its first child and the body, and the parent folds
+    // only when the two differ enough to be worth a gesture.
+    const host = await mount([
+      card({ name: 'market', format: 'html', content: '<div>row</div><div>detail</div>' }),
+    ]);
+    const frame = host.querySelector('iframe') as HTMLIFrameElement;
+    await act(async () => {
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: { muxpadCard: 1, h: 220, h1: 34 },
+          source: frame.contentWindow,
+        }),
+      );
+    });
+    const section = host.querySelector('.chat-card') as HTMLElement;
+    expect(section.className).toContain('-togglable');
+    expect(section.className).toContain('-peek');
+    expect(section.getAttribute('aria-expanded')).toBe('false');
+    // folded to the first row, not the whole document
+    expect(frame.style.height).toBe('34px');
   });
   it('puts a markdown card on the one line, flattened', async () => {
     // `Markdown` emits block elements; the css forces them inline so one <p>
