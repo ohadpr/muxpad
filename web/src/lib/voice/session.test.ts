@@ -2115,17 +2115,46 @@ describe('a snapshot from a pane with no runner attached', () => {
     // A socket that was away missed every live `queue` broadcast. Without the
     // snapshot's own queue, a voice task sits as `queued` against a server
     // queue that has drained: never run, never retired.
+    //
+    // This asserted `staleDrops >= 0`, which is true of every number this
+    // field can hold — a test that could not fail. It asserts the OUTCOME now.
     const h = harness();
     h.started();
     h.hear('first question.', 1000, 2000);
     h.delegate('d1', 2100);
     h.settle();
     h.agent.frame({ t: 'queued', id: 'q1', text: 'first question.' });
-    expect(h.session.stats.requestsDispatched).toBeGreaterThan(0);
+    h.clock.advance(QUEUE_DROP_GRACE_MS + 1000);
     h.agent.frame({ t: 'session', turnRunning: false, runnerAttached: true, queue: [] });
     h.clock.advance(1000);
-    // Nothing of ours is still parked against a queue that no longer has it.
-    expect(h.session.stats.staleDrops).toBeGreaterThanOrEqual(0);
+    expect(h.everything()).toMatch(/finished that one while we were disconnected/);
+    // …and the slot is free, so asking again is not refused as a duplicate.
+    h.hear('second question.', 300_000, 301_000);
+    h.delegate('d2', 301_100);
+    h.settle();
+    expect(h.agent.sends).toContain('second question.');
+  });
+
+  it('does NOT retire a request that has only just gone out', () => {
+    // Every dispatched task is `queued` with no queue id until `turn-start`
+    // comes back, so for a moment it looks exactly like one whose turn ran
+    // and ended unseen. A snapshot already in flight when the send left used
+    // to retire it, announce "the agent finished that one", and then fail to
+    // bind the real turn — so the answer was never spoken.
+    const h = harness();
+    h.started();
+    h.hear('run the tests.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.agent.frame({ t: 'session', turnRunning: false, runnerAttached: true, queue: [] });
+    h.clock.advance(200);
+    expect(h.everything()).not.toMatch(/disconnected/);
+    // The real turn still binds, and its answer is still spoken.
+    h.turnStart('run the tests.');
+    h.agent.frame({ t: 'speak', id: 'r1', text: 'All 212 pass.', n: 1 });
+    h.agent.frame({ t: 'turn-done', ok: true });
+    h.clock.advance(2000);
+    expect(h.everything()).toContain('All 212 pass.');
   });
 });
 
@@ -2404,7 +2433,10 @@ describe('settling our tasks against the snapshot', () => {
     h.delegate('d1', 2100);
     h.settle();
     h.agent.frame({ t: 'queued', id: 'q1', text: 'deploy to prod.' });
-    // The gap: turn-start and turn-done both lost, and the row drained.
+    // The gap: turn-start and turn-done both lost, and the row drained. A
+    // real one lasts longer than the grace that protects a just-sent request
+    // (see "does NOT retire a request that has only just gone out").
+    h.clock.advance(QUEUE_DROP_GRACE_MS + 1000);
     h.agent.frame({ t: 'session', turnRunning: false, runnerAttached: true, queue: [] });
     h.clock.advance(QUEUE_DROP_GRACE_MS + 5000);
     expect(h.everything()).not.toMatch(/cancelled before it ran/i);
@@ -2421,6 +2453,7 @@ describe('settling our tasks against the snapshot', () => {
     h.hear('run the tests.', 1000, 2000);
     h.delegate('d1', 2100);
     h.settle();
+    h.clock.advance(QUEUE_DROP_GRACE_MS + 1000);
     h.agent.frame({ t: 'session', turnRunning: false, runnerAttached: true, queue: [] });
     h.clock.advance(1000);
     expect(h.everything()).toMatch(/finished that one while we were disconnected/);
