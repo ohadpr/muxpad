@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   AccountPool,
+  CREDENTIAL_RETRY_MS,
   accountEnv,
   assertSharedHistory,
   assistantQuota,
@@ -64,22 +65,64 @@ describe('shared Claude account pool', () => {
    * THE INCIDENT THIS CAME FROM. The preferred account's login died; the pool
    * knew nothing about logins, so it kept handing every new session to it, and
    * each one failed four times and gave up with a healthy account sitting idle
-   * beside it. A dead credential is not a quota block and must not be stored
-   * as one: it has no reset time, and it ends when a person runs /login.
+   * beside it.
+   *
+   * ── AND THE SECOND INCIDENT, WHICH THE FIRST FIX CAUSED ────────────────
+   * The mark was then PERMANENT — "no timer lifts this", on the reasoning
+   * that a dead credential has no reset time and ends when a person runs
+   * /login. True of a revoked login and false of the observation: what muxpad
+   * records is one failed call, and a five-second blip during a token refresh
+   * writes exactly the same row. Failover then disappears silently and stays
+   * gone until somebody notices, which on this machine meant an account
+   * benched for eleven days.
+   *
+   * So the mark EXPIRES (CREDENTIAL_RETRY_MS) and the account gets one
+   * attempt per window. That is not the first incident returning: there, a
+   * dead account was chosen on every send. Here it is chosen once, and a
+   * still-broken login re-marks it with a fresh stamp and is benched again.
    */
-  it('skips a signed-out account, and keeps skipping it — no timer lifts this', () => {
+  it('skips a signed-out account until the mark expires, then tries once more', () => {
     const { pool, advance } = fixture();
     expect(pool.choose('pane-a', 'opus')?.id).toBe('primary');
     pool.markCredential('primary', 'dead', 'Not logged in · Please run /login');
     expect(pool.choose('pane-b', 'opus')?.id).toBe('backup');
-    // Not even the sticky assignment brings it back: the pane that was ON the
-    // dead account is exactly the one that must move.
+    // Not even the sticky assignment brings it back inside the window: the
+    // pane that was ON the dead account is exactly the one that must move.
     expect(pool.choose('pane-a', 'opus', new Set(), 'primary')?.id).toBe('backup');
-    advance(7 * 24 * 3600 * 1000);
+    advance(CREDENTIAL_RETRY_MS - 1000);
+    expect(pool.choose('pane-c', 'opus')?.id).toBe('backup');
+    // …and past the window it is a candidate again.
+    advance(2000);
+    expect(pool.choose('pane-d', 'opus')?.id).toBe('primary');
+  });
+
+  it('benches it again for a full window when it is still broken', () => {
+    // The cost of being wrong is ONE failed call per account per window, not
+    // one per send — which is the first incident, and must not come back.
+    const { pool, advance } = fixture();
+    pool.markCredential('primary', 'dead', 'Not logged in');
+    advance(CREDENTIAL_RETRY_MS + 1000);
+    expect(pool.choose('pane-a', 'opus')?.id).toBe('primary');
+    pool.markCredential('primary', 'dead', 'Not logged in');
+    expect(pool.choose('pane-b', 'opus')?.id).toBe('backup');
+    advance(CREDENTIAL_RETRY_MS - 1000);
     expect(pool.choose('pane-c', 'opus')?.id).toBe('backup');
   });
 
-  it('comes back on evidence — a working turn or a probe, never on time passing', () => {
+  it('says which of the two states it is in', () => {
+    // "Signed out" and "signed out, and we will try again shortly" are
+    // different sentences, and the CLI prints different lines for them.
+    const { pool, advance } = fixture();
+    pool.markCredential('primary', 'dead', 'Not logged in');
+    expect(pool.credential('primary').state).toBe('dead');
+    expect(pool.credential('primary').expiresAt).toBeGreaterThan(0);
+    advance(CREDENTIAL_RETRY_MS + 1000);
+    const after = pool.credential('primary');
+    expect(after.state, 'expired: back in the rotation').toBe('ok');
+    expect(after.expiresAt, 'but still known to have failed').toBeGreaterThan(0);
+  });
+
+  it('comes back on evidence too — a working turn clears it immediately', () => {
     const { pool } = fixture();
     pool.markCredential('primary', 'dead', 'Not logged in');
     expect(pool.choose('pane-a', 'opus')?.id).toBe('backup');

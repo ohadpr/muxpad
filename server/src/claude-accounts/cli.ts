@@ -352,7 +352,13 @@ function report(pool: AccountPool | null): void {
     // SIGNED OUT OUTRANKS EVERYTHING ELSE on this line, including a quota
     // block: an account that cannot authenticate is not waiting for a reset,
     // and the sentence has to name the one action that fixes it.
-    const dead = pool?.credential(a.id).state === 'dead';
+    const cred = pool?.credential(a.id);
+    const dead = cred?.state === 'dead';
+    // A mark that has EXPIRED is not the same sentence. The account is back in
+    // the rotation and muxpad will try it on the next send; saying "signed
+    // out" about one it is about to use would be a lie, and saying nothing at
+    // all would hide a login that may still be broken.
+    const retrying = cred?.state === 'ok' && cred.expiresAt > 0;
     const state = dead
       ? `signed out — run: ${loginLine(a.configDir)}`
       : cool
@@ -360,7 +366,11 @@ function report(pool: AccountPool | null): void {
         : use
           ? `${Math.ceil(use.utilization)}% of ${use.scope}`
           : 'no reading yet';
-    const signedIn = hasLogin(a) ? '' : '  — NO LOGIN FOUND';
+    const signedIn = hasLogin(a)
+      ? retrying
+        ? '  — last attempt failed to authenticate; muxpad will try again on the next send'
+        : ''
+      : '  — NO LOGIN FOUND';
     console.log(`${mark} ${a.id.padEnd(10)} ${state}${signedIn}`);
     console.log(`  ${' '.repeat(10)} ${a.configDir}`);
   }
