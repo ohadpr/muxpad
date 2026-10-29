@@ -76,6 +76,8 @@ export function CopyablePre({ children, ...props }: ComponentPropsWithoutRef<'pr
       // lines showed no button at all — it took roughly ten extra wrapped rows
       // before one appeared. The pre's padding was in `scrollHeight` too,
       // paying for another half-row of slack in the same direction.
+      // The `code` when there is one; the `pre` itself for a block with no
+      // code child (the tool modal's `.chat-modal-block` renders bare text).
       const box = (el.firstElementChild as HTMLElement | null) ?? el;
       const lh = Number.parseFloat(getComputedStyle(box).lineHeight);
       if (!Number.isFinite(lh) || lh <= 0) {
@@ -88,7 +90,18 @@ export function CopyablePre({ children, ...props }: ComponentPropsWithoutRef<'pr
       // A trailing newline is not a line — a fenced block almost always has
       // one, and counting it bought a whole row of false slack.
       const lines = (box.textContent ?? '').replace(/\n$/, '').split('\n').length;
-      setUseful(box.getBoundingClientRect().height > lines * lh + 1);
+      // MINUS THE BOX'S OWN CHROME when the box IS the pre, which is the case
+      // with no code child: its rect includes 22px of padding and 2px of
+      // border, so `height > lines × lh` was true of every block in the tool
+      // modal — a one-line, nine-character block got an unwrap button that
+      // did nothing. A `code` child has neither, so this is zero there.
+      const cs = getComputedStyle(box);
+      const chrome =
+        (Number.parseFloat(cs.paddingTop) || 0) +
+        (Number.parseFloat(cs.paddingBottom) || 0) +
+        (Number.parseFloat(cs.borderTopWidth) || 0) +
+        (Number.parseFloat(cs.borderBottomWidth) || 0);
+      setUseful(box.getBoundingClientRect().height - chrome > lines * lh + 1);
     };
     measure();
     if (typeof ResizeObserver === 'undefined') return;

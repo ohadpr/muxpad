@@ -4204,7 +4204,7 @@ body.sidenav-resizing iframe {
      the clean light slab the tree draws two inches below, which is what the
      original report was about: two identical pills for one chat. One pill,
      one quieter mark, two different things. */
-  background-color: color-mix(in srgb, var(--fg) 8%, transparent);
+  background-color: color-mix(in srgb, var(--fg) 14%, transparent);
   border-radius: var(--nt-pill);
   box-shadow: none;
   /* The tree row bleeds its right edge past the group's padding to touch the
@@ -4212,12 +4212,28 @@ body.sidenav-resizing iframe {
   margin-right: 0;
   padding-right: var(--nt-air);
 }
+/* ── AND THE NAME KEEPS THE BAND'S OWN INK ───────────────────────────────
+   The shared active-row rule paints the name `--fg`, which is right in the
+   TREE: that row sits on the pane's light face, so the app's content ink is
+   exactly what belongs on it. The band has no pane face, so the same ink
+   landed on the band's own ground and measured 1.19:1 on memphis, 1.58 on
+   alucard, 2.07 on riso — the chat you are IN became the least readable row
+   in the band, which is the precise opposite of the point. (Read rows were
+   fine at 5.6–9.6 the whole time, because they use the rail's ink.)
+
+   So the band's active row carries "you are here" in the two channels that
+   work on this surface — the ground above and the weight below — and leaves
+   the ink alone. One rung brighter than a read row, from the same family, so
+   it cannot drift away from the rail the way an app-level token did. */
+.navtree-workingset .navtree-tab-row[data-active="true"] .navtree-name-text {
+  color: var(--nt-ink-read);
+}
 .navtree-workingset .navtree-tab-row[data-active="true"]:hover {
   /* It is still a link, and the band is the one place the row you are on is
      worth pressing — it is how you get back after wandering. One step up from
      its resting ground, NOT `--nt-hover`: that is a 6% wash, which over this
      row's own 8% is a change nobody can see. */
-  background-color: color-mix(in srgb, var(--fg) 13%, transparent);
+  background-color: color-mix(in srgb, var(--fg) 19%, transparent);
 }
 
 /* ── NO CHILD RUNG INSIDE THE BAND ───────────────────────────────────────

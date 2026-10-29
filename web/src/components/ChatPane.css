@@ -877,6 +877,13 @@
      block, including one-liners, and pressing it did nothing. The default is
      unchanged; it now comes from the one place that can also undo it. */
   overflow-wrap: anywhere;
+  /* …AND IT HAS TO SCROLL WHEN IT IS UNWRAPPED. `overflow-x` was `visible`,
+     which nothing noticed while the block could not be unwrapped: now that it
+     can, a long line ran straight through the block's own border and gave the
+     whole modal body a horizontal scrollbar. A chat block has carried
+     `overflow-x: auto` for exactly this reason since before the toggle
+     existed. */
+  overflow-x: auto;
   font-family: var(--term-font, ui-monospace, SFMono-Regular, Menlo, monospace);
   /* em — see .chat-md pre code. */
   font-size: 0.806em;
@@ -2703,6 +2710,17 @@
   width: auto;
   max-width: none;
   min-width: max-content;
+  /* ── LOUD BY HUE AND WEIGHT, NOT BY BEING HARD TO READ ─────────────────
+     Measured across themes at 11px/600: riso 4.06:1 against the composer,
+     below AA, and the LOWEST-contrast text on a strip where every other cell
+     sits at 8.08. Saturated accents are frequently the dimmest colour a theme
+     owns; this cell wants to catch the eye, which it does with hue and
+     weight, and it must not pay for that in legibility.
+
+     Mixed toward the body ink rather than away from the accent, so the cell
+     stays recognisably the accent on themes where the accent is already
+     fine. */
+  color: color-mix(in srgb, var(--chat-accent) 72%, var(--chat-fg));
   /* Safe here and nowhere else: this cell's content always fits, so nothing can
      paint out of it. The truncating cells keep their clip. What visibility buys
      is the hit area below. */
@@ -2764,8 +2782,34 @@
   color: var(--chat-fg);
 }
 .chat-status-seg.-live svg {
+  /* The MARK keeps the pure accent — it is a 11px spinning ring, not text, so
+     it has no reading threshold to clear and it is what carries the hue. */
   color: var(--chat-accent);
 }
+/* ── A CELL YIELDS ITS LABEL, NOT ITS EXISTENCE ──────────────────────────
+   The live cell refuses to shrink, by design: it is the one thing on the strip
+   that changes. Everything else therefore gives way to it — and with nothing
+   stopping it, the model chip kept shrinking past its own icon. Measured at a
+   380px tool row: the wrapper was 14px wide while the 12px logo kept its
+   floor, so the icon spilled across the separator and sat ON the live cell's
+   spinner. Read, reasonably, as a second spinner that nobody could find in the
+   source ("two marks before 1 agent").
+
+   So a cell that can no longer show anything useful stops taking part. The
+   floor is the icon plus its gap plus a couple of characters: below that the
+   label is "O…" and the chip has stopped being identity and started being
+   decoration. The model is still one tap away in the session menu, which is
+   where its full id has always lived. */
+.chat-status-seg-wrap:not(.-live) {
+  /* The cell clips its OWN contents. The icon is `flex: 0 0 auto` with a 12px
+     floor, so once the wrapper is narrower than that it simply painted
+     outside itself — this is the one line that keeps a shrinking cell inside
+     its own box instead of on its neighbour. A clipped logo reads as a logo
+     running out of room, which is what is happening; a logo sitting on the
+     spinner reads as a second spinner. */
+  overflow: hidden;
+}
+
 /* Where the truncation actually happens. `min-width: 0` is what lets a flex item
    go below its min-content width at all — without it the label refuses to
    shrink and the strip overflows the pane instead of ellipsizing. */
