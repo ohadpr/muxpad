@@ -794,11 +794,19 @@ export function decorateTab(
    *  between a sub-chat and a root (see tab-clock.ts / TabStore.clockRows).
    *  The `now` rides along so one list is one snapshot (see ClockSnapshot). */
   clocks?: ClockSnapshot,
+  /** Pre-read panes for EVERY tab in the workspace, keyed by tab id — the
+   *  last per-row query on the list path, and the only one that scaled with
+   *  the number of chats rather than the number of workspaces. See
+   *  PaneStore.byTabForWorkspace. */
+  panesByTabId?: ReadonlyMap<string, PaneSpec[]>,
 ): Tab {
-  const panes = new PaneStore(db);
   const tabs = new TabStore(db);
   const manualUnread = manualUnreadIds?.has(tab.id) ?? tabs.isUnread(tab.id);
-  const tabPanes = panes.listByTab(tab.id);
+  // The map is authoritative when it is given: a tab with no panes is absent
+  // from it, which is an empty list and not a cache miss.
+  const tabPanes = panesByTabId
+    ? (panesByTabId.get(tab.id) ?? [])
+    : new PaneStore(db).listByTab(tab.id);
   const attention = tabPanes.some((p) => cache.getAttention(p.id));
   const unread = manualUnread || tabPanes.some((p) => p.unread);
   // The tab's status is the highest-precedence status among its panes, and a
