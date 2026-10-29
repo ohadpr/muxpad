@@ -69,6 +69,37 @@ export function SvgShellGlyph({ size = 12 }: { size?: number } = {}) {
   );
 }
 
+/**
+ * A CLOCK RUN BACKWARDS — the mark for "this process is on an older build".
+ *
+ * Not a warning triangle and not an exclamation: nothing is broken here, and
+ * the red `!` on the old folder cell is precisely the mistake this avoids
+ * ("it told the user their chat was BROKEN, when nothing was wrong"). A clock
+ * with its hand swept anticlockwise says *behind*, which is the fact.
+ */
+export function SvgStaleGlyph({ size = 12 }: { size?: number } = {}) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" aria-hidden="true" fill="none">
+      <circle cx="8" cy="8.4" r="5.6" stroke="currentColor" strokeWidth="1.3" />
+      <path
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M8 5.6v2.8l-2 1.4"
+      />
+      {/* The anticlockwise arrowhead, outside the dial so it reads at 12px. */}
+      <path
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M2.4 4.2v2.6H5"
+      />
+    </svg>
+  );
+}
+
 export function SvgModeGlyph({ mode, size = 12 }: { mode: AgentMode; size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" aria-hidden="true" fill="none">
@@ -114,7 +145,7 @@ export function assistantLabel(a: string | null | undefined): string {
 /** Session status pushed by the agent runner — shape shared with the server
  * pipeline via @muxpad/shared so the two ends can't drift apart. */
 export type AgentStatus = AgentSessionStatus;
-export type StatusPanel = 'folder' | 'model' | 'live' | 'ctx' | 'mode' | null;
+export type StatusPanel = 'folder' | 'model' | 'live' | 'ctx' | 'mode' | 'stale' | null;
 
 export interface RosterAgent {
   id: string;
@@ -678,6 +709,7 @@ export function SessionBar({
   background = 0,
   onOpenChat,
   mode,
+  stale = false,
 }: {
   paneId: string;
   folder: { cwd: string; hasProject: boolean } | null;
@@ -692,6 +724,10 @@ export function SessionBar({
   onOpenChat?: ((chat: { workspaceSlug: string; tabSlug: string }) => void) | undefined;
   /** The pane's mode, or null when the server hasn't told us — no chip. */
   mode: AgentMode | null;
+  /** This pane's runner is executing a different build from the one the
+   *  server would start now (server/src/runner-build.ts). Rare; no cell at
+   *  all when false. */
+  stale?: boolean;
 
   /** Optimistic local echo + the "here is what actually just happened" notice.
    *  The authoritative value still arrives on the next session frame. */
@@ -708,7 +744,8 @@ export function SessionBar({
     else if (panel === 'model' && (!status || mode === 'chat')) setPanel(null);
     else if (panel === 'folder' && !folder) setPanel(null);
     else if (panel === 'mode' && !mode) setPanel(null);
-  }, [panel, liveLabel, status, folder, mode]);
+    else if (panel === 'stale' && !stale) setPanel(null);
+  }, [panel, liveLabel, status, folder, mode, stale]);
 
   // ── Folder switcher state ────────────────────────────────────────────
   const [draft, setDraft] = useState(folder?.cwd ?? '');
@@ -936,6 +973,70 @@ export function SessionBar({
           <span className="chat-status-seg-label">
             {background} bg command{background === 1 ? '' : 's'}
           </span>
+        </div>
+      ) : null}
+
+      {/* ── THIS PANE IS BEHIND THE BUILD ──────────────────────────────────
+          A cell that exists only when something is actually wrong, which is
+          why it can afford to look like a warning.
+
+          WHAT IT IS SAYING, precisely: the process driving this chat is
+          executing a different build of muxpad from the one the server would
+          start for it now. Not "it is old" — a runner from three weeks ago on
+          a build nothing has changed since is current, and a runner from ten
+          minutes ago can be behind. Not "it started before this server
+          process" either, which would light up every open pane after an
+          ordinary restart and teach everybody to ignore it. The definition and
+          the rejected alternatives are in server/src/runner-build.ts.
+
+          IT MATTERS BECAUSE THE SYMPTOM IS INVISIBLE OTHERWISE. A runner here
+          predating the standing-rules change was asked to send a Slack message
+          and said it did not know how — correct for the context it had, and
+          indistinguishable from the agent simply being wrong. Measured on this
+          install at the time: 21 of 28 runners were behind.
+
+          Clickable rather than a `title`: a tooltip takes a second, is
+          unstyled, and does not exist at all on the phone, where this chip
+          lives inside the composer's `+` sheet. */}
+      {stale ? (
+        <div className="chat-status-seg-wrap">
+          <button
+            type="button"
+            className={`chat-status-seg -stale${panel === 'stale' ? ' is-open' : ''}`}
+            data-testid="chat-status-stale"
+            onClick={() => toggle('stale')}
+            aria-haspopup="dialog"
+            aria-expanded={panel === 'stale'}
+            title="This agent is running an older build of muxpad than the server"
+          >
+            <SvgStaleGlyph />
+            <span className="chat-status-seg-label">older build</span>
+          </button>
+          {panel === 'stale' ? (
+            // biome-ignore lint/a11y/useSemanticElements: an anchored popover, not a modal that owns the screen.
+            <div className="chat-status-menu chat-session-menu" role="dialog">
+              <div className="chat-session-head">Running an older build</div>
+              <div className="chat-session-item -static">
+                <span className="chat-session-item-desc">
+                  This agent’s process started on a different build of muxpad from the one running
+                  now. It keeps the code — and the instructions — it was born with, so anything
+                  added since is missing from it: it may not know about tools or rules that exist
+                  today, and will say so honestly rather than guess.
+                </span>
+              </div>
+              <div className="chat-session-item -static">
+                <span className="chat-session-item-desc">
+                  {/* No button. Respawning kills whatever the pane has in
+                      flight — background subagents, wakeups, a running turn —
+                      so the moment is the user's to pick, not a control's to
+                      offer in passing. */}
+                  Restarting this agent picks up the current build. It also ends any background work
+                  and scheduled wake-ups this pane is holding, so do it when the pane is quiet — or
+                  just open a new chat, which starts current.
+                </span>
+              </div>
+            </div>
+          ) : null}
         </div>
       ) : null}
 

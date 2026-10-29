@@ -2703,6 +2703,36 @@
   position: absolute;
   inset: -6px 0 -4px;
 }
+/* ── "older build" ───────────────────────────────────────────────────────
+   Present only when the pane's runner is on a different build from the
+   server's (SvgStaleGlyph's comment has the why). So it is allowed to be
+   louder than the identity cells beside it — but NOT danger-coloured: nothing
+   is broken, the agent simply has an older context, and painting that red is
+   the same mistake as the old folder cell's `!` ("told the user their chat was
+   BROKEN, when nothing was wrong").
+
+   `--warn`, falling back to the amber the hit-mark already uses, so a theme
+   that defines no warning tone still gets a tone rather than inheriting the
+   dim body colour and vanishing.
+
+   Never shrinks: two words that ellipsize to "older…" say nothing. */
+.chat-status-seg.-stale {
+  flex-shrink: 0;
+  width: auto;
+  max-width: none;
+  min-width: max-content;
+  color: var(--warn, var(--hit-bg, #f2c55c));
+}
+.chat-status-seg.-stale svg,
+.chat-status-seg.-stale:hover svg,
+.chat-status-seg.-stale.is-open svg {
+  color: inherit;
+}
+.chat-status-seg.-stale:hover,
+.chat-status-seg.-stale.is-open {
+  color: var(--warn, var(--hit-bg, #f2c55c));
+  background: color-mix(in srgb, var(--warn, var(--hit-bg, #f2c55c)) 12%, transparent);
+}
 .chat-status-seg.-live .chat-roster-spin {
   flex: 0 0 auto;
   color: inherit;

@@ -50,6 +50,15 @@ export type RunnerFrame =
       turnActive: boolean;
       /** Which backend drives this session (absent = legacy runner = claude). */
       backend?: BackendId;
+      /**
+       * WHICH BUILD THIS RUNNER IS EXECUTING (see server/src/runner-build.ts).
+       *
+       * Captured once at startup and never recomputed, which is the whole
+       * point: a runner keeps the code it was born with across every server
+       * restart, and this is the only way the server can tell. Absent = a
+       * runner predating the field, which counts as stale.
+       */
+      build?: string;
     }
   | { t: 'turn-start' }
   | { t: 'stream'; delta: string }
