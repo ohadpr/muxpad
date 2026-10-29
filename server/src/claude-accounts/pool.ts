@@ -395,7 +395,36 @@ export function accountEnv(
   account: Account,
   parent: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...parent, CLAUDE_CONFIG_DIR: account.configDir };
+  const env: NodeJS.ProcessEnv = {
+    ...parent,
+    CLAUDE_CONFIG_DIR: account.configDir,
+    // ── AND THE CREDENTIAL NAMESPACE, EXPLICITLY ─────────────────────────
+    //
+    // A profile directory is not where the token lives. On macOS the CLI keeps
+    // the subscription token in the KEYCHAIN, under an item whose name it
+    // derives like this (verbatim from the bundle):
+    //
+    //   n        = env.CLAUDE_SECURESTORAGE_CONFIG_DIR
+    //   isDefault = n !== undefined ? !n : !env.CLAUDE_CONFIG_DIR
+    //   dir       = n !== undefined ? n : configDir()
+    //   suffix    = isDefault ? '' : `-${sha256(dir).slice(0, 8)}`
+    //
+    // So the namespace is chosen by WHICH VARIABLE HAPPENS TO BE SET, and a
+    // login performed with one of them set can land on a different Keychain
+    // item from the read performed with the other. Measured on this machine:
+    // a second account logged in under CLAUDE_CONFIG_DIR alone wrote its
+    // identity into .claude.json (the right email, the right account uuid)
+    // and still answered `Failed to authenticate: OAuth session expired and
+    // could not be refreshed` on the first real call — an account that looks
+    // signed in everywhere a human would check, and is not.
+    //
+    // Setting BOTH pins the namespace to one value that cannot drift: the
+    // hash is then of the same string whoever computes it. Nothing here needs
+    // the Keychain to be readable, and it deliberately never reads it —
+    // `security find-generic-password` raises a system dialog on the user's
+    // physical screen, which is not a thing a background pane may do.
+    CLAUDE_SECURESTORAGE_CONFIG_DIR: account.configDir,
+  };
   // These override subscription login. Never accidentally charge an API key.
   for (const name of [
     'ANTHROPIC_API_KEY',
