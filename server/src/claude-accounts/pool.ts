@@ -318,15 +318,50 @@ export class AccountPool {
       )
       .run(id, state, detail, this.now());
   }
-  /** What we last learned about this account's login. Unknown reads as `ok`:
-   *  an account nobody has tried yet is a candidate, not a suspect. */
-  credential(id: string): { state: 'ok' | 'dead'; detail: string; updatedAt: number } {
+  /**
+   * What we last learned about this account's login. Unknown reads as `ok`:
+   * an account nobody has tried yet is a candidate, not a suspect.
+   *
+   * ── AND A DEAD MARK EXPIRES ───────────────────────────────────────────
+   *
+   * It used to be permanent. One auth failure benched an account until a
+   * human typed `reset`, and nothing ever asked again — so a five-second
+   * network blip during a token refresh looked exactly like a revoked login:
+   * failover silently gone, and nobody the wiser until the other account hit
+   * its weekly cap.
+   *
+   * After {@link CREDENTIAL_RETRY_MS} the account becomes a candidate again.
+   * If it is still broken the next attempt re-marks it with a fresh stamp and
+   * it is benched for another window, so the cost of being wrong is ONE
+   * failed call per account per window — and that call is one muxpad was
+   * about to make anyway, against an account it would otherwise have had to
+   * refuse. If it has recovered, it is simply back.
+   *
+   * `expiresAt` is returned rather than hidden so the CLI can say which of
+   * the two states a reader is looking at. "Signed out" and "signed out, and
+   * we will try again shortly" are different sentences.
+   */
+  credential(id: string): {
+    state: 'ok' | 'dead';
+    detail: string;
+    updatedAt: number;
+    /** When the dead mark stops suppressing this account. 0 when not dead. */
+    expiresAt: number;
+  } {
     const row = this.db
       .prepare('SELECT state, detail, updated_at AS updatedAt FROM credentials WHERE account = ?')
       .get(id) as { state: string; detail: string; updatedAt: number } | undefined;
-    return row?.state === 'dead'
-      ? { state: 'dead', detail: row.detail, updatedAt: row.updatedAt }
-      : { state: 'ok', detail: row?.detail ?? '', updatedAt: row?.updatedAt ?? 0 };
+    if (row?.state !== 'dead')
+      return {
+        state: 'ok',
+        detail: row?.detail ?? '',
+        updatedAt: row?.updatedAt ?? 0,
+        expiresAt: 0,
+      };
+    const expiresAt = row.updatedAt + CREDENTIAL_RETRY_MS;
+    return this.now() >= expiresAt
+      ? { state: 'ok', detail: row.detail, updatedAt: row.updatedAt, expiresAt }
+      : { state: 'dead', detail: row.detail, updatedAt: row.updatedAt, expiresAt };
   }
   block(id: string, block: QuotaBlock): void {
     this.db
@@ -390,6 +425,16 @@ export function assertSharedHistory(accounts: Account[]): void {
       'Claude account profiles must share the same projects directory before failover is enabled',
     );
 }
+
+/**
+ * How long one auth failure benches an account before muxpad tries it again.
+ *
+ * Long enough that a genuinely broken login is not retried on every send —
+ * the whole point of recording the failure — and short enough that a blip
+ * costs one window rather than the rest of the day. The retry is not free and
+ * not expensive: one call that fails fast, per account, per window.
+ */
+export const CREDENTIAL_RETRY_MS = 20 * 60_000;
 
 export function accountEnv(
   account: Account,
