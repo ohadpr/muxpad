@@ -54,7 +54,7 @@ const USAGE = `muxpad claude-account — run Claude Code panes across more than 
                            create a second profile, share history with the first, enable failover
   remove <id>              drop an account from the pool (its profile directory is left alone)
   use <id|auto>            prefer one account for new sessions; auto restores priority order
-  reset <id>               clear a recorded cooldown after you have fixed the account
+  reset <id>               clear a cooldown or a signed-out mark after you fix an account
 
 With no accounts file muxpad uses your ordinary Claude Code login and nothing
 else — one account, no failover, nothing to configure. 'add' is the step up.`;
@@ -414,7 +414,19 @@ try {
         if (!pool.accounts().some((a) => a.id === id))
           throw new Error('Usage: muxpad claude-account reset <account-id>');
         pool.db.prepare('DELETE FROM cooldowns WHERE account = ?').run(id);
-        console.log(`Cleared cooldown for ${id}. Blocked panes can use /retry.`);
+        // ── AND THE SIGNED-OUT MARK ───────────────────────────────────────
+        // It is a STICKY row, written the first time a runner saw this
+        // account fail to authenticate, and nothing re-probes it. So an
+        // account whose login has since been fixed stayed skipped for ever
+        // with no command that could say otherwise — `reset` cleared
+        // cooldowns only, and its own help already promises "after you have
+        // fixed the account", which is exactly this case.
+        const revived = pool.db.prepare('DELETE FROM credentials WHERE account = ?').run(id);
+        console.log(
+          revived.changes > 0
+            ? `Cleared cooldown and the signed-out mark for ${id}. Blocked panes can use /retry.`
+            : `Cleared cooldown for ${id}. Blocked panes can use /retry.`,
+        );
       } else throw new Error(USAGE);
     } finally {
       pool?.close();

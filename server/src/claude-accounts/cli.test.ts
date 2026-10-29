@@ -288,3 +288,29 @@ describe('the ways add used to go wrong', () => {
     expect(added.configDir).toBe(realpathSync(added.configDir));
   });
 });
+
+/**
+ * ── A FIXED LOGIN HAS TO BE SAYABLE ──────────────────────────────────────
+ *
+ * "signed out" is a STICKY row, written the first time a runner saw an
+ * account fail to authenticate, and nothing re-probes it. So an account whose
+ * login was later fixed stayed skipped for ever: `reset` cleared cooldowns
+ * only, and there was no other command. Its own help has always promised
+ * "after you have fixed the account", which is precisely this case.
+ */
+describe('reset revives a signed-out account', () => {
+  it('clears the credential row as well as the cooldown', () => {
+    const src = readFileSync(join(import.meta.dirname, 'cli.ts'), 'utf8');
+    const i = src.indexOf("verb === 'reset'");
+    const body = src.slice(i, i + 1600);
+    expect(body).toContain('DELETE FROM cooldowns WHERE account = ?');
+    expect(body).toContain('DELETE FROM credentials WHERE account = ?');
+  });
+
+  it('says which of the two it actually cleared', () => {
+    // "Cleared cooldown" about an account that had no cooldown and a dead
+    // credential is a sentence that describes nothing the user did.
+    const src = readFileSync(join(import.meta.dirname, 'cli.ts'), 'utf8');
+    expect(src).toContain('signed-out mark for');
+  });
+});
