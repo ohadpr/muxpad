@@ -1806,13 +1806,14 @@
      loses the shape of its indentation, where clipped code loses the words.
      The copy button's 48px of padding finally does its job here too — with
      `pre` a long line simply scrolled underneath it. */
-  .chat-md pre {
-    overflow-x: hidden;
-  }
-  .chat-md pre code {
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-  }
+  /* …AND IT IS NO LONGER THIS RULE THAT DOES IT. A block is wrapped by
+     default on every surface now (CopyablePre), so the phone gets wrapping
+     without a media query — and the unconditional override here had become
+     the thing that BROKE the control: every `pre` in the chat is a
+     CopyablePre, the toggle sets `data-wrap`, and this rule won on a phone
+     regardless, so pressing "show the original line breaks" did nothing.
+     A control that does nothing is the defect this whole corner exists to
+     avoid, so the forcing is gone and the toggle is honoured here too. */
   /* Stop stays 12px — it is chrome, not conversation, so it does not grow
      with the prose — but it gets a thumb to press. 22px tall is a desktop
      target; this is the one control on screen that cancels work in flight. */

@@ -9,32 +9,47 @@ export function CopyablePre({ children, ...props }: ComponentPropsWithoutRef<'pr
   const reset = useRef<ReturnType<typeof setTimeout>>();
   const [status, setStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
   /**
-   * ── WRAP, FOR THE LINES THAT RUN OFF THE EDGE ──────────────────────────
+   * ── WRAPPED BY DEFAULT. THE TEXT IS THE POINT ──────────────────────────
    *
-   * A block keeps `white-space: pre` on a desktop, which is right for code:
-   * indentation is meaning, and there is a scrollbar and a pointer to move
-   * it with. It is wrong for the thing people actually paste into these
-   * blocks most often — an email, a prompt, a paragraph of prose — where the
-   * sentence simply disappears past the right edge and the only way to read
-   * it is to drag a bar sideways, one screen at a time, losing your line
-   * each time you come back.
+   * This started as an opt-in: the block kept `white-space: pre`, which is
+   * right for CODE — indentation is meaning, and a desktop has a scrollbar
+   * and a pointer to move it with — and a reader who wanted the whole
+   * sentence pressed a button for it, per block, in the moment.
    *
-   * So: a second button. Not a setting and not a default — the block keeps
-   * the behaviour that is right for code, and a reader who needs the whole
-   * sentence asks for it, per block, in the moment.
+   * That was the wrong default, and the reason is what these blocks actually
+   * hold. Most of them are not code. They are an email, a prompt, a report, a
+   * paragraph of prose the agent put in a fence — and for those, `pre` means
+   * the sentence simply disappears past the right edge, with nothing on
+   * screen saying there is anything to the right. The reader has to notice a
+   * control, guess what it does, and press it, in order to see text that was
+   * written to be read. "Default wrap so the text is visible."
+   *
+   * So the default is wrapped and the button now does the other thing: give
+   * me back the original line structure, for the minority of blocks where the
+   * shape IS the content. The cost lands on the case that can afford it —
+   * indentation is recoverable with one press; words clipped at an edge you
+   * cannot see are not recoverable at all, because you never knew they were
+   * there.
    */
-  const [wrap, setWrap] = useState(false);
+  const [wrap, setWrap] = useState(true);
   /**
-   * …and the button only exists when there is something to unwrap.
+   * …and the button only exists when it would DO something.
    *
-   * A control that does nothing is worse than no control: it is the only
-   * thing in this corner, a reader will press it once, and nothing will
-   * happen. `scrollWidth > clientWidth` is the question asked exactly — does
-   * this block have content past its right edge — rather than a guess from
-   * the character count, which is wrong for a proportional face and wrong
-   * again at every pane width.
+   * A control that does nothing is worse than no control: it is one of two
+   * things in that corner, a reader will press it once, and nothing will
+   * happen. So the question is asked exactly, and it is a different question
+   * in each state:
+   *
+   *   WRAPPED (the default) — is anything actually being wrapped? Compare the
+   *     rendered height against the logical line count times the line height.
+   *     A block whose lines all fit needs no unwrap button.
+   *   UNWRAPPED — is anything past the right edge? `scrollWidth >
+   *     clientWidth`, the original measurement, still exactly right here.
+   *
+   * Both are measurements rather than guesses from the character count, which
+   * is wrong for a proportional face and wrong again at every pane width.
    */
-  const [overflows, setOverflows] = useState(false);
+  const [useful, setUseful] = useState(false);
 
   useEffect(() => () => clearTimeout(reset.current), []);
 
@@ -45,15 +60,33 @@ export function CopyablePre({ children, ...props }: ComponentPropsWithoutRef<'pr
   useEffect(() => {
     const el = content.current;
     if (!el) return;
-    const measure = () => setOverflows(el.scrollWidth > el.clientWidth + 1);
+    const measure = () => {
+      if (!wrap) {
+        setUseful(el.scrollWidth > el.clientWidth + 1);
+        return;
+      }
+      // Wrapped: a logical line that became two visual ones makes the block
+      // taller than its own line count. `lineHeight` can read `normal`, which
+      // is not a number — fail toward the control EXISTING, because the
+      // default is now wrapped and the risk of being wrong is a reader who
+      // cannot get the original shape back.
+      const lh = Number.parseFloat(getComputedStyle(el).lineHeight);
+      if (!Number.isFinite(lh) || lh <= 0) {
+        setUseful(true);
+        return;
+      }
+      const lines = (el.textContent ?? '').split('\n').length;
+      setUseful(el.scrollHeight > lines * lh + 1);
+    };
     measure();
     if (typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
     // `children` is in the deps because a streaming block grows line by line:
-    // the first token does not overflow and the fortieth does.
-  }, [children]);
+    // the first token does not wrap and the fortieth does. `wrap` is in them
+    // because the two states ask different questions.
+  }, [children, wrap]);
 
   async function copy() {
     const text = content.current?.textContent;
@@ -66,7 +99,7 @@ export function CopyablePre({ children, ...props }: ComponentPropsWithoutRef<'pr
 
   const label =
     status === 'copied' ? 'Copied' : status === 'failed' ? 'Copy failed — try again' : 'Copy block';
-  const wrapLabel = wrap ? 'Stop wrapping long lines' : 'Wrap long lines';
+  const wrapLabel = wrap ? 'Show the original line breaks' : 'Wrap long lines';
   return (
     <div className="copyable-block">
       <pre dir="ltr" {...props} ref={content} data-wrap={wrap ? 'true' : undefined}>
@@ -76,7 +109,7 @@ export function CopyablePre({ children, ...props }: ComponentPropsWithoutRef<'pr
           screen: copy is the action this corner has always had, and a control
           that appears and disappears with the content must not be the one
           that moves the stable one around. */}
-      {overflows || wrap ? (
+      {useful || !wrap ? (
         <button
           type="button"
           className="copyable-block-button copyable-block-wrap"
