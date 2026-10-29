@@ -953,6 +953,11 @@ export class VoiceSession {
     if (frame.t === 'turn-start') this.bindTurn(frame.text);
     if (frame.t === 'queued') this.noteQueued(frame.id, frame.text);
     if (frame.t === 'queue') this.reconcileQueue(frame.items ?? []);
+    // The reconnect snapshot carries the queue too, and a socket that was away
+    // missed every live `queue` broadcast in between. Without this a voice
+    // task sits as `queued` against a server queue that has since drained —
+    // never run, never retired, and re-asking is refused as a duplicate.
+    if (frame.t === 'session' && frame.queue) this.reconcileQueue(frame.queue);
     // The question is remembered whether or not it belongs to a task of OURS: a
     // turn the user TYPED can block the pane just as hard, and once it has, the
     // only thing that moves is an answer. Speaking one should work either way.
@@ -990,7 +995,22 @@ export class VoiceSession {
     // mute-runner check and the pipeline all behave exactly as they would
     // have. The one thing that cannot be recovered is the ANSWER — those
     // frames are gone — so it says where to find it rather than pretending.
-    if (frame.t === 'session' && frame.turnRunning === false && this.bound) {
+    //
+    // ── AND IT WAITS FOR A RUNNER TO BE THERE TO ASK ──────────────────────
+    // `turnRunning: false` alone is not enough, because it is two facts in one
+    // value: "the turn finished" and "nobody is attached to this pane". An
+    // ordinary `muxpad restart` produces the second — the browser's socket is
+    // back in about a second, the runner retries on a fixed two — and acting
+    // on it retired a task that was still running and announced an answer that
+    // had not arrived, which is strictly worse than the hang it replaced.
+    // `runnerAttached` separates them, and it is in the snapshot's fingerprint
+    // so the frame is RE-SENT when the runner comes back with the real answer.
+    if (
+      frame.t === 'session' &&
+      frame.turnRunning === false &&
+      frame.runnerAttached === true &&
+      this.bound
+    ) {
       const task = this.bound;
       for (const intent of intents) this.deliver(task, intent, 'when_idle', true);
       this.deliver(
