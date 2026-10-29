@@ -809,6 +809,17 @@ describe('the live cell under a narrow composer', () => {
     expect(q.slice(0, q.indexOf('\n}\n'))).toContain('.chat-status-seg-wrap.-live');
   });
 
+  it('undoes every "never give way" the base rule sets', () => {
+    // The base rule pins flex-shrink, width, max-width and min-width. Naming
+    // only min-width and overflow left the button at full width inside a
+    // wrapper that had shrunk, so the label was hard-clipped mid-word instead
+    // of ellipsized — measured, twice.
+    const q = flat.slice(flat.indexOf('@container composer-tools'));
+    const block = q.slice(0, q.indexOf('\n}\n'));
+    expect(block).toMatch(/flex-shrink:\s*1/);
+    expect(block).toMatch(/text-overflow:\s*ellipsis/);
+  });
+
   it('is declared AFTER the rules it has to beat', () => {
     const q = flat.indexOf('@container composer-tools');
     expect(q).toBeGreaterThan(flat.indexOf('.chat-status-seg-wrap.-live {'));

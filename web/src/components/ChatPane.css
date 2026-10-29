@@ -2859,6 +2859,13 @@
     overflow: hidden;
   }
   .chat-status-seg.-live {
+    /* AND flex-shrink, which the base rule sets to 0 four hundred lines up.
+       Without it the button keeps its full width inside a wrapper that has
+       already shrunk, so the label is HARD-CLIPPED mid-word rather than
+       ellipsized — the text just stops. Every property the base rule sets to
+       "never give way" has to be named here; `min-width` and `overflow` alone
+       were two thirds of it. */
+    flex-shrink: 1;
     min-width: 0;
     overflow: hidden;
   }
