@@ -14,6 +14,7 @@ import {
   type AgentLink,
   CANCEL_DEBOUNCE_MS,
   CANCEL_PROBE_QUIET_MS,
+  DELIVERY_WATCH_MS,
   DISPATCH_FILLER_MS,
   MUTE_RUNNER_DETAIL,
   MUTE_RUNNER_GRACE_MS,
@@ -2124,5 +2125,107 @@ describe('a snapshot from a pane with no runner attached', () => {
     h.clock.advance(1000);
     // Nothing of ours is still parked against a queue that no longer has it.
     expect(h.session.stats.staleDrops).toBeGreaterThanOrEqual(0);
+  });
+});
+
+/**
+ * ── THE ANSWER THAT ARRIVES IN A LATER TURN ──────────────────────────────
+ *
+ * A delegated request ends its turn in about a minute with "three agents are
+ * on it". The real answer lands later, in the turn muxpad starts when the
+ * sub-chats report, stamped `<muxpad-delivery …>` — which matches nothing
+ * voice sent, so voice read the whole turn as somebody else's and discarded
+ * the answer in silence. Measured in the signal-archive chat: three workers
+ * reported, the chat wrote a 1,998-character verdict, nobody heard it.
+ */
+describe('sub-agents reporting back', () => {
+  const DELIVERY = '<muxpad-delivery count="3" from="t1,t2,t3">\nreports\n</muxpad-delivery>';
+
+  /** Ask, get "agents are on it", let the turn end. */
+  function delegated() {
+    const h = harness();
+    h.started();
+    h.hear('research the competitors.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.turnStart('research the competitors.');
+    h.agent.frame({ t: 'speak', id: 'r1', text: 'Three agents are on it.', n: 1 });
+    h.agent.frame({ t: 'turn-done', ok: true });
+    h.clock.advance(2000);
+    return h;
+  }
+
+  it('speaks the answer that arrives in the delivery turn', () => {
+    const h = delegated();
+    h.clock.advance(120_000);
+    h.turnStart(DELIVERY);
+    h.agent.frame({ t: 'speak', id: 'r2', text: 'Acme is the biggest competitor.', n: 1 });
+    h.agent.frame({ t: 'turn-done', ok: true });
+    h.clock.advance(2000);
+    expect(h.everything()).toContain('Acme is the biggest competitor.');
+  });
+
+  it('re-anchors it, because the conversation moved on minutes ago', () => {
+    const h = delegated();
+    h.clock.advance(120_000);
+    h.turnStart(DELIVERY);
+    h.clock.advance(100);
+    expect(h.everything()).toMatch(/agents you sent off have reported back on: research/i);
+  });
+
+  it('adopts it ONCE — a second batch is the agent’s business', () => {
+    const h = delegated();
+    h.turnStart(DELIVERY);
+    h.agent.frame({ t: 'turn-done', ok: true });
+    h.clock.advance(1000);
+    const n = h.commentary().length;
+    h.turnStart(DELIVERY);
+    h.clock.advance(1000);
+    expect(h.commentary().slice(n).join(' ')).not.toMatch(/reported back on/);
+  });
+
+  it('ignores a delivery for work nobody asked for ALOUD', () => {
+    // No completed voice request, so nothing of ours dispatched those agents
+    // — the user typed it before the call. Narrating it would be reading
+    // somebody else's conversation out loud.
+    const h = harness();
+    h.started();
+    h.turnStart(DELIVERY);
+    h.agent.frame({ t: 'speak', id: 'r9', text: 'Something the user typed.', n: 1 });
+    h.clock.advance(2000);
+    expect(h.everything()).not.toContain('Something the user typed.');
+  });
+
+  it('ignores a CRON turn, which nobody asked for today', () => {
+    // Arrives by the same door and is the opposite case. Same line the written
+    // transcript draws (MACHINE_TURN_VARIANTS in lib/chat-voice.ts).
+    const h = delegated();
+    h.turnStart('<muxpad-cron name="nw-close" missed="0">run the close snapshot</muxpad-cron>');
+    h.agent.frame({ t: 'speak', id: 'r3', text: 'NW closed at 3.91M.', n: 1 });
+    h.clock.advance(2000);
+    expect(h.everything()).not.toContain('NW closed at 3.91M.');
+  });
+
+  it('lets the watch expire rather than carrying into the next call', () => {
+    const h = delegated();
+    h.clock.advance(DELIVERY_WATCH_MS + 60_000);
+    h.turnStart(DELIVERY);
+    h.agent.frame({ t: 'speak', id: 'r4', text: 'Far too late.', n: 1 });
+    h.clock.advance(2000);
+    expect(h.everything()).not.toContain('Far too late.');
+  });
+
+  it('does not steal a turn that a live request of ours is waiting for', () => {
+    // A normal request in flight still binds by stamp; the delivery path is
+    // only reached when nothing matched.
+    const h = delegated();
+    h.hear('and what about pricing?', 200_000, 201_000);
+    h.delegate('d2', 201_100);
+    h.settle();
+    h.turnStart('and what about pricing?');
+    h.agent.frame({ t: 'speak', id: 'r5', text: 'Pricing is here.', n: 1 });
+    h.agent.frame({ t: 'turn-done', ok: true });
+    h.clock.advance(2000);
+    expect(h.everything()).toContain('Pricing is here.');
   });
 });
