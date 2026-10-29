@@ -30,9 +30,27 @@
    overflow are frequently ONE long token — a url, a path, a base64 blob —
    which `pre-wrap` alone will not break and which would go on overflowing
    with the toggle switched on, i.e. a button that visibly does nothing. */
-.copyable-block > pre[data-wrap="true"] {
+/* ── IT HAS TO REACH THE `code`, WHICH IS WHERE THE TEXT ACTUALLY IS ──────
+   This set `white-space` on the `pre` alone and the button did nothing: a
+   fenced block is `<pre><code>…`, and `.chat-md pre code` carries its own
+   `white-space: pre`. `white-space` is inherited, so the pre's value never
+   reached the text — the child's own declaration won for the child's own
+   lines. "word wrap icon clickable but doesn't cause contents to wrap."
+
+   The mobile rule twenty lines away was already right about this: it wraps a
+   code block by targeting `.chat-md pre code`, not the pre. This is the same
+   fact, so it is the same selector, one step more specific — (0,2,2) against
+   that rule's (0,1,2), which also means it holds on a phone where the block
+   is wrapped already and the toggle is a no-op rather than a fight.
+
+   `overflow-x: hidden` stays on the PRE, because that is the box that
+   scrolls. */
+.copyable-block > pre[data-wrap="true"],
+.copyable-block > pre[data-wrap="true"] code {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+.copyable-block > pre[data-wrap="true"] {
   overflow-x: hidden;
 }
 .copyable-block-button {
