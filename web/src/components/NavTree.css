@@ -4164,25 +4164,43 @@ body.sidenav-resizing iframe {
    `--nt-sel`, rounded on BOTH ends, inside the band rather than running out
    of it. */
 .navtree-workingset .navtree-tab-row[data-active="true"] {
-  /* THE PANE'S OWN FACE, like a selected row in the tree. The first attempt
-     at un-joining this row swapped the fill as well — `--nt-sel`, the rail's
-     20% accent wash — and on a dark rail that is a muddy plum slab beside the
-     clean light row the tree draws two inches below: "active in recently
-     active chat highlight is just trash".
-     The FILL was never the problem; the JOIN was. So the surface is the same
-     one the tree uses and only the geometry changes. */
-  background-color: var(--bg-pane-face);
+  /* ── NO SLAB. THE CHAT YOU ARE IN IS SELECTED ONCE PER SCREEN ───────────
+     This wore `--bg-pane-face` — the tree's own selected fill — so the chat
+     you were in appeared as two identical pills about 450px apart, one here
+     and one in its workspace below. "It feels a little bit messy": the top of
+     the rail was reading as a lower-contrast copy of the middle of it.
+
+     The fix is NOT another fill. The last attempt at distinguishing these two
+     swapped in `--nt-sel`, the rail's 20% accent wash, and on a dark rail that
+     is a muddy plum slab beside the clean light row below — "active in
+     recently active chat highlight is just trash". Any colour put here is a
+     second claim on one surface; the question was never WHICH colour.
+
+     So the band's current row is marked the way the rail already marks the
+     row you are on everywhere else it cannot draw a pane: the name at full
+     ink and weight, the icon at full saturation (see the desaturation rule),
+     and no ground at all — all of which the row already has from the shared
+     active-row rule (`--fg` at 640, deliberately under the unread 700), so
+     this rule only has to take the ground away. The slab stays in the tree,
+     where the chat actually lives and where it can finish the shape by
+     joining the pane.
+
+     The row does not leave the band, which is the alternative and is worse:
+     hiding it would shift every row under it up as you navigate and back down
+     as you leave — exactly the churn the stable slots exist to prevent. */
+  background-color: transparent;
   border-radius: var(--nt-pill);
   box-shadow: none;
   /* The tree row bleeds its right edge past the group's padding to touch the
-     pane. This one stays home. */
+     pane. This one has nothing to reach for. */
   margin-right: 0;
   padding-right: var(--nt-air);
 }
 .navtree-workingset .navtree-tab-row[data-active="true"]:hover {
-  /* Hover on the row you are already on says almost nothing, so it says it in
-     the same colour — see the tree's own rule. */
-  background-color: var(--bg-pane-face);
+  /* It is still a link, and the band is the one place the row you are on is
+     worth pressing — it is how you get back after wandering. So hover says
+     the ordinary thing rather than nothing. */
+  background-color: var(--nt-hover);
 }
 
 /* ── NO CHILD RUNG INSIDE THE BAND ───────────────────────────────────────

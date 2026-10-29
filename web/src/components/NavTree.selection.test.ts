@@ -1114,14 +1114,39 @@ describe('a selected row in the recently-active band', () => {
     return i < 0 ? '' : flat.slice(i, flat.indexOf('}', i));
   })();
 
-  it('keeps the tree’s SURFACE — the fill was never the problem', () => {
-    // The first attempt at un-joining this row swapped the fill too, for the
-    // rail's 20% accent wash. On a dark rail that is a muddy plum slab beside
-    // the clean light row the tree draws two inches below: "active in
-    // recently active chat highlight is just trash". The JOIN was the
-    // problem; the colour is the one thing that should match.
+  it('has NO fill at all — one selection per screen', () => {
+    // It wore `--bg-pane-face`, the tree's own selected fill, so the chat you
+    // were in was two identical pills ~450px apart: one here, one in its
+    // workspace below. "It feels a little bit messy."
+    //
+    // And the fix is not another colour. The attempt before this one swapped
+    // in `--nt-sel`, the rail's 20% accent wash — "active in recently active
+    // chat highlight is just trash". ANY ground here is a second claim on one
+    // surface, so the assertion is the absence rather than a particular token.
     expect(rule, 'the band has no active-row rule').not.toBe('');
-    expect(rule).toMatch(/background-color:\s*var\(--bg-pane-face\)/);
+    expect(rule).toMatch(/background-color:\s*transparent/);
+    expect(rule).not.toMatch(/background-color:\s*var\(--(bg-pane-face|nt-sel|accent)/);
+  });
+
+  it('still says "you are here", in the channel the rail already uses', () => {
+    // Taking the ground away must not leave the row indistinguishable. The
+    // shared active-row rule does it in type — full ink at 640, a step under
+    // the unread 700 — and that rule is unscoped, so it reaches the band.
+    const active = /\.navtree-tab-row\[data-active="true"\] \.navtree-name-text \{([^}]*)\}/.exec(
+      NAV_CSS.replace(/\/\*[\s\S]*?\*\//g, ''),
+    )?.[1];
+    expect(active).toMatch(/color:\s*var\(--fg\)/);
+    expect(active).toMatch(/font-weight:\s*640/);
+  });
+
+  it('does not solve it by hiding the row, which would move the rest', () => {
+    // The other way to stop drawing the chat twice is to drop it from the
+    // band — and then every row under it rises as you navigate in and falls
+    // as you leave, which is the churn the stable slots exist to prevent.
+    const tsx = readFileSync(join(__dirname, 'NavTree.tsx'), 'utf8');
+    const strip = tsx.slice(tsx.indexOf('function WorkingSetStrip'));
+    const body = strip.slice(0, strip.indexOf('\nfunction '));
+    expect(body).not.toMatch(/filter\([^)]*activeTabSlug/);
   });
 
   it('is rounded at BOTH ends and stays inside the band', () => {
