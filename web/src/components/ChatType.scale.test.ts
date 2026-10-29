@@ -87,3 +87,47 @@ describe('a fenced block on a phone', () => {
     expect(desktop).toMatch(/\.chat-md pre code\s*\{[^}]*white-space:\s*pre;/);
   });
 });
+
+/**
+ * AN INLINE BOX IN RUNNING TEXT HAS TO SURVIVE BEING BROKEN.
+ *
+ * A span of code inside a sentence is a box: padding, a border, a radius. By
+ * default a browser SPLITS that decoration across a line break, so the first
+ * fragment ends with an open right edge and the second starts with an open
+ * left one — two halves of a rounded rectangle on different lines, neither of
+ * them closed. `kill: operation not permitted` in the middle of a sentence
+ * showed it exactly.
+ */
+describe('inline code that wraps', () => {
+  const rule = (selector: string): string => {
+    const i = FLAT.indexOf(`${selector} {`);
+    expect(i, `${selector} not found`).toBeGreaterThan(-1);
+    return FLAT.slice(i, FLAT.indexOf('}', i));
+  };
+
+  it('draws a complete box on every fragment', () => {
+    const body = rule('.chat-md :not(pre) > code');
+    expect(body).toMatch(/box-decoration-break:\s*clone/);
+    // WebKit still ships this behind the prefix, and Safari is half the
+    // devices this runs on.
+    expect(body).toMatch(/-webkit-box-decoration-break:\s*clone/);
+  });
+
+  it('is not taller than the line it sits in', () => {
+    // Vertical padding plus a 1px border on a 0.86em face pushed the box past
+    // the line box, so a wrapped fragment overlapped the line above it. The
+    // paragraph's line-height is 1.62 — the box has to fit inside that.
+    const body = rule('.chat-md :not(pre) > code');
+    const top = Number.parseFloat(/padding:\s*([\d.]+)em/.exec(body)?.[1] ?? 'NaN');
+    const size = Number.parseFloat(/font-size:\s*([\d.]+)em/.exec(body)?.[1] ?? 'NaN');
+    // (2 × padding + 2 × 1px border) in em of the PARAGRAPH, against the 0.62
+    // em of leading a 1.62 line-height gives it.
+    expect(top * 2 * size + 2 / 16).toBeLessThan(0.62);
+  });
+
+  it('is matched by the search highlight, which breaks the same way', () => {
+    // `.chat-hit` got there first — a match that wraps must be filled and
+    // ruled on both fragments or the second half loses its background.
+    expect(rule('.chat-hit')).toMatch(/box-decoration-break:\s*clone/);
+  });
+});

@@ -322,14 +322,34 @@
    diffs. Labels and chips keep --chrome-font; they have no grid to keep. */
 
 /* Inline code — subtle chip, monospace. */
+/* ── INLINE CODE, INCLUDING THE BIT THAT WRAPS ───────────────────────────
+   A span of code inside a sentence is a BOX, and a box in running text has
+   to survive being broken across two lines. By default it does not: the
+   browser splits the padding, the border and the radius between the two
+   fragments, so the first ends with an open right edge and the second starts
+   with an open left one — two halves of a rounded rectangle, neither of them
+   closed, sitting on different lines. `kill: operation not permitted` in a
+   sentence showed it exactly.
+
+   `box-decoration-break: clone` is the fix and the whole fix: each fragment
+   is drawn as its own complete box, padding and radius and all. Prefixed as
+   well as standard — WebKit still ships this one behind `-webkit-`.
+
+   AND THE BOX MUST NOT BE TALLER THAN ITS LINE. Vertical padding plus a 1px
+   border on a 0.86em face pushed the box past the line box, so a wrapped
+   fragment overlapped the line above it. Padding is down to the amount that
+   fits inside a 1.62 line-height at this size, and the box leans on its fill
+   and its border for presence rather than on height it does not have. */
 .chat-md :not(pre) > code {
   font-family: var(--term-font, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-size: 0.86em;
-  padding: 0.12em 0.4em;
+  padding: 0.05em 0.4em;
   border-radius: 5px;
   background: color-mix(in srgb, var(--chat-fg) 8%, var(--chat-panel));
   border: 1px solid var(--chat-border);
   overflow-wrap: anywhere;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
 }
 
 /* Fenced code block — quiet panel, rounded, scrolls horizontally on overflow.
