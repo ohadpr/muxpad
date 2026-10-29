@@ -66,17 +66,29 @@ export function CopyablePre({ children, ...props }: ComponentPropsWithoutRef<'pr
         return;
       }
       // Wrapped: a logical line that became two visual ones makes the block
-      // taller than its own line count. `lineHeight` can read `normal`, which
-      // is not a number — fail toward the control EXISTING, because the
-      // default is now wrapped and the risk of being wrong is a reader who
-      // cannot get the original shape back.
-      const lh = Number.parseFloat(getComputedStyle(el).lineHeight);
+      // taller than its own line count.
+      //
+      // MEASURED ON THE `code`, NOT THE `pre`, and that one word was the whole
+      // bug. The text lives in the code element at its own font and leading
+      // (0.8225em, 1.55 — about 19.8px); the pre carries the conversation's
+      // prose leading, about 25.1px. Reading the bigger number and comparing
+      // it against the smaller rows meant a 40-line block with five wrapping
+      // lines showed no button at all — it took roughly ten extra wrapped rows
+      // before one appeared. The pre's padding was in `scrollHeight` too,
+      // paying for another half-row of slack in the same direction.
+      const box = (el.firstElementChild as HTMLElement | null) ?? el;
+      const lh = Number.parseFloat(getComputedStyle(box).lineHeight);
       if (!Number.isFinite(lh) || lh <= 0) {
+        // `normal` is not a number. Fail toward the control EXISTING: the
+        // default is wrapped, so being wrong costs a button nobody needs
+        // rather than a reader who cannot get the original shape back.
         setUseful(true);
         return;
       }
-      const lines = (el.textContent ?? '').split('\n').length;
-      setUseful(el.scrollHeight > lines * lh + 1);
+      // A trailing newline is not a line — a fenced block almost always has
+      // one, and counting it bought a whole row of false slack.
+      const lines = (box.textContent ?? '').replace(/\n$/, '').split('\n').length;
+      setUseful(box.getBoundingClientRect().height > lines * lh + 1);
     };
     measure();
     if (typeof ResizeObserver === 'undefined') return;

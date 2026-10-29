@@ -870,7 +870,12 @@
   border: 1px solid var(--chat-border);
   border-radius: 10px;
   background: var(--chat-panel);
-  white-space: pre-wrap;
+  /* NO `white-space` HERE. It hard-coded `pre-wrap`, which is the right
+     DEFAULT and the wrong way to get it: CopyablePre wraps every block by
+     default now, and an unconditional rule on the element itself simply beat
+     the unwrap toggle — so in the tool modal the button appeared on every
+     block, including one-liners, and pressing it did nothing. The default is
+     unchanged; it now comes from the one place that can also undo it. */
   overflow-wrap: anywhere;
   font-family: var(--term-font, ui-monospace, SFMono-Regular, Menlo, monospace);
   /* em — see .chat-md pre code. */

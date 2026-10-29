@@ -2257,16 +2257,38 @@ describe('whose agents reported, exactly', () => {
     return h;
   }
 
-  it('does not credit a TYPED fan-out to a voice question that dispatched nothing', () => {
+  it('does not credit a TYPED fan-out to a voice question', () => {
     // The found bug, verbatim: ask the time aloud, then type something that
     // fans out, and voice announced "the agents you sent off have reported
     // back on: what time is it in tokyo" and read out a billing audit.
+    //
+    // THE TYPED TURN IS THE POINT, and the first version of this test left it
+    // out — it jumped straight to the delivery, which is not what happens and
+    // is not what the guard reads. A message somebody types announces itself
+    // as a turn whose stamp matches nothing we sent; that is the observable
+    // thing, and the one the guard is built on.
     const h = askedSomethingSimple();
+    h.turnStart('audit the billing code with three agents');
+    h.agent.frame({ t: 'turn-done', ok: true });
+    h.clock.advance(1000);
     h.turnStart(DELIVERY);
     h.agent.frame({ t: 'speak', id: 'r2', text: 'The billing audit found three issues.', n: 1 });
     h.clock.advance(2000);
     expect(h.everything()).not.toContain('The billing audit found three issues.');
     expect(h.everything()).not.toMatch(/reported back on: what time/i);
+  });
+
+  it('DOES speak a delivery that follows our own request with nothing in between', () => {
+    // The case the old guard killed outright: real delegation is `muxpad agent
+    // new` run through Bash, which puts no `subagent` frame on this socket, so
+    // requiring one made the whole feature dead in production while the tests
+    // passed by injecting the frame by hand.
+    const h = askedSomethingSimple();
+    h.turnStart(DELIVERY);
+    h.agent.frame({ t: 'speak', id: 'r2', text: 'Acme is the biggest.', n: 1 });
+    h.agent.frame({ t: 'turn-done', ok: true });
+    h.clock.advance(2000);
+    expect(h.everything()).toContain('Acme is the biggest.');
   });
 
   it('keeps a watch per delegating request, not one slot for all of them', () => {
@@ -2421,5 +2443,54 @@ describe('settling our tasks against the snapshot', () => {
     });
     h.clock.advance(1000);
     expect(h.everything()).not.toMatch(/disconnected/);
+  });
+});
+
+/**
+ * Agent mode has no `reply` tool BY DESIGN and never will — its answers are
+ * synthesised from the turn's prose (server/src/spoken-answer.ts). So the
+ * hang-up that fires when a turn succeeds with no reply ("too old to have the
+ * reply tool… restart the agent pane") is false there in every word, and it
+ * fired on the user's FIRST request if that turn happened to be pure tool work.
+ */
+describe('the muted-runner hang-up in Agent mode', () => {
+  function silentTurn(mode: string) {
+    const h = harness();
+    h.started();
+    h.agent.frame({ t: 'session', turnRunning: false, runnerAttached: true, mode });
+    h.hear('rename the files.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.turnStart('rename the files.');
+    // Pure tool work: no reply, no prose, nothing to synthesise.
+    h.agent.frame({ t: 'turn-done', ok: true });
+    h.clock.advance(MUTE_RUNNER_GRACE_MS + 2000);
+    return h;
+  }
+
+  it('does not hang up an Agent pane for a silent turn', () => {
+    const h = silentTurn('agent');
+    expect(h.everything()).not.toContain(MUTE_RUNNER_LINE);
+    expect(h.states).not.toContain('ended');
+  });
+
+  it('still hangs up a Chat pane, where the advice is true', () => {
+    // There the silence really does mean no reply tool, every future request
+    // ends the same way, and saying so beats a meter running on nothing.
+    const h = silentTurn('chat');
+    expect(h.everything()).toContain(MUTE_RUNNER_LINE);
+  });
+
+  it('assumes Chat before the server has said which mode it is', () => {
+    // The conservative end: that is the mode whose hang-up is real.
+    const h = harness();
+    h.started();
+    h.hear('rename the files.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.turnStart('rename the files.');
+    h.agent.frame({ t: 'turn-done', ok: true });
+    h.clock.advance(1000);
+    expect(h.everything()).toContain(MUTE_RUNNER_LINE);
   });
 });

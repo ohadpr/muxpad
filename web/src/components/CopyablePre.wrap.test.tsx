@@ -46,13 +46,30 @@ function withLongLines(long: boolean, lines = 1) {
     },
   });
   // Wrapped: a long line becomes several visual ones, so the block is taller
-  // than its own line count.
+  // than its own line count. Measured off the rendered box, not `scrollHeight`
+  // — the component reads the element the TEXT is in (see its comment: the
+  // `pre` carries the prose leading, the `code` carries the code's), and
+  // `scrollHeight` also includes the pre's padding.
   Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
     configurable: true,
     get() {
       return long ? (lines + 2) * LH : lines * LH;
     },
   });
+  HTMLElement.prototype.getBoundingClientRect = (): DOMRect => {
+    const height = long ? (lines + 2) * LH : lines * LH;
+    return {
+      height,
+      width: 300,
+      top: 0,
+      left: 0,
+      right: 300,
+      bottom: height,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect;
+  };
   vi.stubGlobal(
     'getComputedStyle',
     () => ({ lineHeight: `${LH}px` }) as unknown as CSSStyleDeclaration,
@@ -256,5 +273,52 @@ describe('the wrap rule reaches the code element', () => {
     const i = flat.lastIndexOf('.copyable-block > pre[data-wrap="true"] {');
     const body = flat.slice(i, flat.indexOf('}', i));
     expect(body).toMatch(/overflow-x:\s*hidden/);
+  });
+});
+
+/**
+ * ── THE MEASUREMENT READS THE ELEMENT THE TEXT IS IN ─────────────────────
+ *
+ * A fenced block is `<pre><code>`, and the two carry different leading: the
+ * code is at 0.8225em/1.55 (about 19.8px), the pre at the conversation's prose
+ * leading (about 25.1px). Reading the pre's number and comparing it against
+ * rows laid out at the code's meant a 40-line block with five wrapping lines
+ * showed NO button — measured in a headless browser, it took roughly ten extra
+ * wrapped rows before one appeared. The pre's 22px of padding rode along in
+ * `scrollHeight` for another half-row in the same direction.
+ */
+describe('what the wrap measurement looks at', () => {
+  const SRC = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), 'CopyablePre.tsx'),
+    'utf8',
+  );
+
+  it('measures the code child when there is one', () => {
+    expect(SRC).toMatch(/firstElementChild as HTMLElement \| null\)? \?\? el/);
+    expect(SRC).toMatch(/getComputedStyle\(box\)/);
+  });
+
+  it('uses the rendered box, not scrollHeight, so padding is not counted', () => {
+    expect(SRC).toMatch(/box\.getBoundingClientRect\(\)\.height/);
+    expect(SRC).not.toMatch(/el\.scrollHeight > lines/);
+  });
+
+  it('does not count a trailing newline as a line', () => {
+    // A fenced block almost always ends in one, and counting it bought a whole
+    // row of false slack in the direction that hides the button.
+    expect(SRC).toContain("replace(/\\n$/, '')");
+  });
+
+  it('does not keep the button lit just because wrapping is on', () => {
+    // `[aria-pressed="true"]` was in the always-visible list while wrapping
+    // was the opt-in. Wrapped is the default now, so that rule lit a permanent
+    // button on every block and hid the UNUSUAL state behind hover.
+    const css = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), 'CopyablePre.css'),
+      'utf8',
+    ).replace(/\/\*[\s\S]*?\*\//g, '');
+    const i = css.indexOf('opacity: 1;');
+    const block = css.slice(Math.max(0, css.lastIndexOf('}', i)), i);
+    expect(block).not.toContain('aria-pressed');
   });
 });

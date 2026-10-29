@@ -1,5 +1,5 @@
 import { type Dirent, readdirSync, statSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /**
@@ -77,6 +77,11 @@ function newestMTime(dir: string, deadline: number): number {
       continue;
     }
     if (!entry.isFile() || !entry.name.endsWith('.js')) continue;
+    // NOT THE TESTS. `tsc` writes `*.test.js` into dist beside the code, and a
+    // rebuild that touched only a test is not a different build of anything a
+    // runner executes — it marked every open pane stale for a change that
+    // could not affect one.
+    if (entry.name.endsWith('.test.js')) continue;
     try {
       newest = Math.max(newest, statSync(full).mtimeMs);
     } catch {
@@ -92,14 +97,36 @@ export function buildIdOf(root: string, now: number = Date.now()): string {
   return Math.round(newestMTime(root, now + 250)).toString(36);
 }
 
+/**
+ * THE TREES TO MEASURE, resolved to the SAME absolute paths from either side.
+ *
+ * This used to be "my own directory", which is wrong in the one environment
+ * where it matters most. A runner ALWAYS starts from `server/dist` (see
+ * scripts/muxpad), but in development the server itself runs from `server/src`
+ * under tsx — a directory with no `.js` files in it at all. Measured: dist
+ * `mvtw9gbv`, src `0`. So every pane on a dev machine read as stale, for ever,
+ * which is precisely the "notice that cries wolf" this module's own header
+ * says it exists to avoid.
+ *
+ * Naming the trees explicitly also fixes the quieter half: `shared/dist` is
+ * imported by every runner and was not measured at all, so a change confined
+ * to `@muxpad/shared` — the agent instructions among them — moved nothing.
+ */
+function treesToMeasure(): string[] {
+  const here = dirname(fileURLToPath(import.meta.url));
+  // `server/dist` from either `server/dist` (compiled) or `server/src` (tsx).
+  const serverDist = here.endsWith(`${sep}dist`) ? here : join(here, '..', 'dist');
+  return [serverDist, join(serverDist, '..', '..', 'shared', 'dist')];
+}
+
 /** The build this process is running, as a short stable string. */
 export function currentBuildId(now: number = Date.now()): string {
   if (cached && now - cached.at < CACHE_MS) return cached.id;
-  // `dist/` — this file lives in `dist/` once compiled, so its own directory
-  // IS the tree to measure. In a test or a ts-node run it resolves to `src`,
-  // which is equally correct: the point is "the code this process loads".
-  const root = dirname(fileURLToPath(import.meta.url));
-  const id = buildIdOf(root, now);
+  const newest = treesToMeasure().reduce((max, root) => {
+    const n = newestMTime(root, now + 250);
+    return n > max ? n : max;
+  }, 0);
+  const id = Math.round(newest).toString(36);
   cached = { at: now, id };
   return id;
 }

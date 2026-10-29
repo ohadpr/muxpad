@@ -1114,7 +1114,7 @@ describe('a selected row in the recently-active band', () => {
     return i < 0 ? '' : flat.slice(i, flat.indexOf('}', i));
   })();
 
-  it('has NO fill at all — one selection per screen', () => {
+  it('is a quiet LIFT, never the tree’s own selected surface', () => {
     // It wore `--bg-pane-face`, the tree's own selected fill, so the chat you
     // were in was two identical pills ~450px apart: one here, one in its
     // workspace below. "It feels a little bit messy."
@@ -1124,8 +1124,19 @@ describe('a selected row in the recently-active band', () => {
     // chat highlight is just trash". ANY ground here is a second claim on one
     // surface, so the assertion is the absence rather than a particular token.
     expect(rule, 'the band has no active-row rule').not.toBe('');
-    expect(rule).toMatch(/background-color:\s*transparent/);
+    // Built from --fg like every other raised surface here, which is the one
+    // construction that survives ten themes.
+    expect(rule).toMatch(/background-color:\s*color-mix\(in srgb, var\(--fg\)/);
+    // Not the tree's slab, and not the accent wash that read as muddy plum.
     expect(rule).not.toMatch(/background-color:\s*var\(--(bg-pane-face|nt-sel|accent)/);
+  });
+
+  it('does not leave "you are here" and "unread" on one channel', () => {
+    // With no ground at all the two were separated by font-weight alone — 640
+    // against 700 — and against a read row that ink step measures 1.31:1 on
+    // tokyo-night. Two different facts, one invisible difference.
+    const lift = /color-mix\(in srgb, var\(--fg\) (\d+)%/.exec(rule)?.[1];
+    expect(Number(lift)).toBeGreaterThan(0);
   });
 
   it('still says "you are here", in the channel the rail already uses', () => {

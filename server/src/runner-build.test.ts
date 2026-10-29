@@ -119,3 +119,44 @@ describe('how the build reaches the server', () => {
     expect(ws).toMatch(/stale: staleRunner\(chatPaneId\)/);
   });
 });
+
+/**
+ * ── THE ID MUST NOT DEPEND ON WHERE THE READER IS RUNNING FROM ───────────
+ *
+ * A runner ALWAYS starts from `server/dist` (scripts/muxpad). In development
+ * the server runs from `server/src` under tsx — a directory with no `.js` in
+ * it — so "measure my own directory" gave the server `0` and every runner a
+ * real id, and every pane on a dev machine read as stale for ever. Which is
+ * exactly the notice-that-cries-wolf this module's header says it exists to
+ * avoid.
+ */
+describe('where the id is measured from', () => {
+  const src = readFileSync(join(import.meta.dirname, 'runner-build.ts'), 'utf8');
+
+  it('names the dist trees instead of its own directory', () => {
+    expect(src).toMatch(/here\.endsWith\(`\$\{sep\}dist`\) \? here : join\(here, '\.\.', 'dist'\)/);
+    // …and both callers resolve the SAME absolute path, which is the property
+    // that actually matters.
+    expect(src).not.toMatch(/const root = dirname\(fileURLToPath/);
+  });
+
+  it('measures shared/dist too, which every runner imports', () => {
+    // A change confined to @muxpad/shared — the agent instructions among them
+    // — moved nothing, so the one kind of staleness this was built for could
+    // go unreported.
+    expect(src).toMatch(/'\.\.', '\.\.', 'shared', 'dist'/);
+  });
+
+  it('ignores the test files tsc writes into dist', () => {
+    // A rebuild that touched only a test is not a different build of anything
+    // a runner executes.
+    expect(src).toMatch(/endsWith\('\.test\.js'\)/);
+    const dir = mkdtempSync(join(tmpdir(), 'muxpad-build-'));
+    writeFileSync(join(dir, 'index.js'), 'entry');
+    const old = new Date(Date.now() - 86_400_000);
+    utimesSync(join(dir, 'index.js'), old, old);
+    const before = buildIdOf(dir);
+    writeFileSync(join(dir, 'thing.test.js'), 'a test');
+    expect(buildIdOf(dir)).toBe(before);
+  });
+});

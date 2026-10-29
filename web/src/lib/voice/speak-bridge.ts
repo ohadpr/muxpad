@@ -116,6 +116,11 @@ export type VoiceChatFrame =
       t: 'session';
       turnRunning?: boolean;
       runnerAttached?: boolean;
+      /** The pane's agent mode. Read for ONE decision — see
+       *  `VoiceSession.checkRunnerCanSpeak`, which hangs the call up on a pane
+       *  that cannot answer aloud, and whose entire reasoning is about the
+       *  `reply` tool that only Chat mode has. */
+      mode?: string;
       /** The pane's pending queue, same shape as the `queue` frame. Carried
        *  for the same reason the rest of this frame is: a socket that was away
        *  missed the live `queue` broadcasts, and a voice task left sitting as
