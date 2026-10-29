@@ -867,8 +867,13 @@ describe('a recently-active row carries its workspace', () => {
   it('is quieter by ink and size, never by weight', () => {
     // At 13px a lighter weight is just blur.
     const tag = rule(css, '.navtree-ws-tag');
-    expect(tag).toMatch(/color:\s*var\(--nt-ink-read-child\)/);
-    expect(tag).toMatch(/font-size:/);
+    // Its own ink, a step below the dim the read rows wear — it is the least
+    // important thing on a line whose names it must not compete with.
+    expect(tag).toMatch(/color:\s*var\(--nt-ws-tag-ink\)/);
+    expect(css).toMatch(/--nt-ws-tag-ink:/);
+    // …and smaller than the name beside it, which is 0.9375rem.
+    const size = /font-size:\s*([\d.]+)rem/.exec(tag)?.[1];
+    expect(Number(size)).toBeLessThan(0.75);
     expect(tag).not.toMatch(/font-weight:/);
   });
 
