@@ -1020,6 +1020,64 @@
 .chat-sysnote.-foldable:hover {
   background: color-mix(in srgb, var(--chat-border-strong) 70%, transparent);
 }
+/* ── A COLLAPSED CHIP OPENS ──────────────────────────────────────────────
+   Only the one that stands in for fires it removed from the log — see the
+   notice renderer for the line between a chip that labels something and a
+   chip that replaced it. It wears the same pill; what marks it as pressable
+   is the caret and the hover, not a second shape. */
+.chat-sysnote.-openable {
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+.chat-sysnote.-openable:hover,
+.chat-sysnote.-openable:focus-visible {
+  color: var(--chat-fg);
+  border-color: color-mix(in srgb, var(--chat-fg) 28%, transparent);
+}
+.chat-sysnote-caret {
+  margin-left: 2px;
+  font-size: 0.625rem;
+  opacity: 0.8;
+}
+/* The evidence. A list, not prose: three columns the eye can scan down —
+   which schedule, how many times, when last — because the question it answers
+   is "what are these", and a sentence per row would bury the names. */
+.chat-sysnote-fired {
+  margin: 5px 0 0;
+  padding: 6px 2px 2px;
+  list-style: none;
+  display: grid;
+  gap: 3px;
+  font-family: var(--chrome-font, inherit);
+  font-size: 0.75rem;
+  color: var(--chat-dim);
+}
+.chat-sysnote-fired li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.chat-sysnote-fired-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The count and the time are pushed to the right together, so the names form
+   a column you can read down and the numbers form one you can compare. */
+.chat-sysnote-fired-count {
+  margin-left: auto;
+  color: var(--chat-faint);
+  font-variant-numeric: tabular-nums;
+}
+.chat-sysnote-fired-at {
+  min-width: 5.5em;
+  text-align: right;
+  color: var(--chat-faint);
+  font-variant-numeric: tabular-nums;
+}
+
 /* A batch of sub-chat reports landing. The same quiet pill as a cron fire, and
    for the same reason: it states who started this turn — workers you spawned,
    not you — which is a fact about the message rather than an alert. */

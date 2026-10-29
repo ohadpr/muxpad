@@ -120,6 +120,21 @@ export interface NoticeEvent extends Base {
   /** Secondary line, e.g. a task-notification's status. */
   detail?: string;
   /**
+   * WHAT A COLLAPSED CHIP IS STANDING IN FOR.
+   *
+   * A run of cron fires with nothing visible between them collapses into one
+   * chip — "6 schedules · 11 fires · last 01:49 PM" — and the fires it
+   * absorbed are removed from the rendered log. That summary is readable and
+   * unopenable: "I see it but I can't dig to understand what these are."
+   *
+   * So the chip carries its own evidence: one row per schedule, how many
+   * times it fired in the run, and when it last did. Present ONLY on a
+   * collapsed group — a single fire is already the whole truth and gets no
+   * disclosure (see the notice renderer for why a notice is otherwise a mark
+   * and not a control).
+   */
+  fired?: Array<{ name: string; fires: number; lastTs: number | null }>;
+  /**
    * Content folded behind a caret — present only when there IS something to
    * unfold. A quiet cron's prompt lives here instead of in a bubble of its own:
    * the fire stays in the log and stays inspectable, while the plumbing it
