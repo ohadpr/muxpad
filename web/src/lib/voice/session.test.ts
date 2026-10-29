@@ -156,6 +156,7 @@ function harness(
     withContext?: boolean;
     micGate?: MicGate;
     heartbeatMs?: number;
+    mode?: string;
     onProtocolError?: (line: string) => void;
   } = {},
 ) {
@@ -177,6 +178,7 @@ function harness(
     },
     withContext: opts.withContext ?? false,
     ...(opts.heartbeatMs ? { heartbeatMs: opts.heartbeatMs } : {}),
+    ...(opts.mode ? { mode: opts.mode } : {}),
     ...(opts.micGate ? { micGate: opts.micGate } : {}),
     ...(opts.onProtocolError ? { onProtocolError: opts.onProtocolError } : {}),
   });
@@ -2514,8 +2516,24 @@ describe('the muted-runner hang-up in Agent mode', () => {
     expect(h.everything()).toContain(MUTE_RUNNER_LINE);
   });
 
-  it('assumes Chat before the server has said which mode it is', () => {
-    // The conservative end: that is the mode whose hang-up is real.
+  it('takes the mode from the CLIENT, which does not have to wait for a frame', () => {
+    // The snapshot is re-sent only when its fingerprint changes, the
+    // fingerprint does not include whether a turn is running, and the frame
+    // taps do not replay the socket's first frame — so a call started on a
+    // pane that was already open never saw one, and the guard never engaged.
+    // ChatPane has had the mode all along.
+    const h = harness({ mode: 'agent' });
+    h.started();
+    h.hear('rename the files.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.turnStart('rename the files.');
+    h.agent.frame({ t: 'turn-done', ok: true });
+    h.clock.advance(MUTE_RUNNER_GRACE_MS + 2000);
+    expect(h.everything()).not.toContain(MUTE_RUNNER_LINE);
+  });
+
+  it('still assumes Chat when nobody has said — the mode whose hang-up is real', () => {
     const h = harness();
     h.started();
     h.hear('rename the files.', 1000, 2000);
@@ -2525,5 +2543,96 @@ describe('the muted-runner hang-up in Agent mode', () => {
     h.agent.frame({ t: 'turn-done', ok: true });
     h.clock.advance(1000);
     expect(h.everything()).toContain(MUTE_RUNNER_LINE);
+  });
+});
+
+/**
+ * ── WHOSE AGENTS, IN EITHER ORDER ────────────────────────────────────────
+ *
+ * The first guard was scoped to "since the last watch was armed", which
+ * erases a foreign turn that came BEFORE it — so typing a fan-out and then
+ * asking a question aloud made voice read the typed work's report out as the
+ * answer to the spoken one. No ordering of a resettable flag can see that.
+ */
+describe('a foreign turn is remembered for the whole call', () => {
+  const DELIVERY = '<muxpad-delivery count="3" from="t1,t2,t3">\nreports\n</muxpad-delivery>';
+
+  it('does not claim a delivery for work typed BEFORE the question', () => {
+    const h = harness();
+    h.started();
+    // Typed first: a fan-out nobody asked for aloud.
+    h.turnStart('audit the billing code with three agents');
+    h.agent.frame({ t: 'turn-done', ok: true });
+    h.clock.advance(1000);
+    // Then a spoken question, which completes.
+    h.hear('what time is it in tokyo?', 10_000, 11_000);
+    h.delegate('d1', 11_100);
+    h.settle();
+    h.turnStart('what time is it in tokyo?');
+    h.agent.frame({ t: 'speak', id: 'r1', text: 'Just after midnight.', n: 1 });
+    h.agent.frame({ t: 'turn-done', ok: true });
+    h.clock.advance(2000);
+    // The typed work's agents now report.
+    h.turnStart(DELIVERY);
+    h.agent.frame({ t: 'speak', id: 'r2', text: 'The billing audit found three issues.', n: 1 });
+    h.clock.advance(2000);
+    expect(h.everything()).not.toContain('The billing audit found three issues.');
+    expect(h.everything()).not.toMatch(/reported back on: what time/i);
+  });
+
+  it('does not treat one delivery as a reason to disown the next', () => {
+    // A single request routinely produces two batches; counting the first as
+    // "somebody else" silenced the second.
+    const h = harness();
+    h.started();
+    h.hear('research the competitors.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.turnStart('research the competitors.');
+    h.agent.frame({ t: 'turn-done', ok: true });
+    h.clock.advance(2000);
+    h.turnStart(DELIVERY);
+    h.agent.frame({ t: 'speak', id: 'r1', text: 'First batch.', n: 1 });
+    h.agent.frame({ t: 'turn-done', ok: true });
+    h.clock.advance(2000);
+    expect(h.everything()).toContain('First batch.');
+  });
+});
+
+/**
+ * A quick turn that runs and finishes inside a blip SHORTER than the grace was
+ * never settled by anything afterwards: the request sat `queued` for ever and
+ * asking again was refused as a duplicate.
+ */
+describe('a request stranded by a SHORT disconnect', () => {
+  it('is settled by the re-check, not left queued for ever', () => {
+    const h = harness();
+    h.started();
+    h.hear('run the tests.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    // Inside the grace: skipped, and re-armed.
+    h.agent.frame({ t: 'session', turnRunning: false, runnerAttached: true, queue: [] });
+    h.clock.advance(500);
+    expect(h.everything()).not.toMatch(/disconnected/);
+    // The re-check fires once the request has aged past it.
+    h.clock.advance(QUEUE_DROP_GRACE_MS + 1000);
+    expect(h.everything()).toMatch(/finished that one while we were disconnected/);
+  });
+
+  it('the re-check is a no-op once the turn has actually started', () => {
+    const h = harness();
+    h.started();
+    h.hear('run the tests.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.agent.frame({ t: 'session', turnRunning: false, runnerAttached: true, queue: [] });
+    h.turnStart('run the tests.');
+    h.clock.advance(QUEUE_DROP_GRACE_MS + 2000);
+    expect(h.everything()).not.toMatch(/disconnected/);
+    h.agent.frame({ t: 'speak', id: 'r1', text: 'All 212 pass.', n: 1 });
+    h.agent.frame({ t: 'turn-done', ok: true });
+    h.clock.advance(1000);
+    expect(h.everything()).toContain('All 212 pass.');
   });
 });

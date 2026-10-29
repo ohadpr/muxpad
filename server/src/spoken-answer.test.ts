@@ -74,11 +74,23 @@ describe('what the server refuses to speak', () => {
 
   it('tracks Stop separately from turn failure', () => {
     expect(WS).toMatch(/stoppedThisTurn: boolean;/);
-    // Set where Stop is relayed, cleared at turn-start.
-    expect(WS).toMatch(
-      /conn\.stoppedThisTurn = true;\s*\n\s*sendToRunner\(chatPaneId, \{ t: 'stop' \}\)/,
-    );
-    expect(WS).toMatch(/conn\.stoppedThisTurn = false;/);
+  });
+
+  it('marks BOTH stop routes, not just the chat socket', () => {
+    // `agentBridge.stop` is what `muxpad agent stop`, a cron and a supervisor
+    // use. It did not set the flag, so a turn stopped from the CLI still had
+    // its working-out read aloud.
+    const marks = WS.match(/markStopped\(conn\)/g) ?? [];
+    expect(marks.length).toBeGreaterThanOrEqual(2);
+    const bridge = WS.slice(WS.indexOf('deps.agentBridge.stop = '));
+    expect(bridge.slice(0, bridge.indexOf('};'))).toContain('markStopped(conn)');
+  });
+
+  it('does not let turn-start erase a Stop that beat it', () => {
+    // A Stop can be issued before the runner's turn-start arrives — the send
+    // is relayed, the user stops it a beat later, and the runner announces the
+    // turn it is already cancelling. Clearing unconditionally erased it.
+    expect(WS).toContain('conn.stoppedAt > 5_000) conn.stoppedThisTurn = false');
   });
 
   it('gates the synthesis on it, not only on ok', () => {
