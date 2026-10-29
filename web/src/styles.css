@@ -1384,7 +1384,11 @@
    ink arriving in an ultramarine rail, which is a more striking object than
    the pink ever was BECAUSE it is the page and not a marker. The ink steps to
    the paper's, because the surface under it is now paper. */
-[data-theme="riso"] .navtree-tab-row[data-active="true"] .navtree-name-text {
+/* …IN THE TREE. The band has no pane under it, so there is no paper for the
+   ink to step to — this rule put the pane's pale second ink on the rail's own
+   ground there and measured 3.07:1. See --band-ink in NavTree.css, which the
+   band's own rule uses; this one stops reaching into it. */
+[data-theme="riso"] .navtree-tab-row[data-active="true"]:not(.navtree-ws-slot) .navtree-name-text {
   color: var(--fg);
   font-weight: 700;
 }
