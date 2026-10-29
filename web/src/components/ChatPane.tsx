@@ -114,6 +114,7 @@ import {
   isDeliveryText,
   lastTurnStartId,
   toggleActionRun,
+  voiceSpokenAvailable,
 } from '../lib/chat-voice';
 import { canAutoPageHistory, showLoadEarlier } from '../lib/history-budget';
 import { NO_SENDERS, loadInboundSenders, matchInboundSenders } from '../lib/inbound-senders';
@@ -3140,6 +3141,23 @@ export function ChatPane({
     [mode, sending, session?.assistant, closedTurnStartId],
   );
   const voiceOn = chatVoiceActive(voiceOpts);
+  /**
+   * THE MIC IS OFFERED IN BOTH MODES; `voiceOn` IS ABOUT THE WRITTEN CHAT.
+   *
+   * They were one predicate, and the comment here used to say so with some
+   * pride: "the mic can never appear in Agent mode… one predicate, no second
+   * door". The door was in the wrong place. `voiceOn` decides whether this
+   * pane's prose is a PRIVATE SCRATCHPAD — a Chat-mode contract that must not
+   * touch an Agent pane, where the prose is the conversation — and that has
+   * nothing to do with whether you can talk to it.
+   *
+   * What stopped Agent mode from being spoken to was having nothing to say
+   * back: a voice session hears only `speak` frames, which come from the
+   * `reply` tool, which Agent mode deliberately does not have. The server now
+   * says it on the turn's behalf (server/src/spoken-answer.ts), so the
+   * remaining reason is gone.
+   */
+  const voiceMic = voiceSpokenAvailable(voiceOpts);
 
   // ONE VARIANT PER TURN. Keyed on the turn's own start event rather than
   // advanced on mount: the indicator unmounts the moment the first token
@@ -3621,9 +3639,9 @@ export function ChatPane({
 
   // ── SPOKEN voice (GPT-Live) ────────────────────────────────────────────────
   //
-  // Reuses `voiceOn` — the SAME predicate that decides Chat mode's written
-  // voice — so the mic can never appear in Agent mode, and can never appear on
-  // a backend Chat mode doesn't support. One predicate, no second door.
+  // Offered in BOTH modes — see `voiceMic` above for why that is a different
+  // question from `voiceOn`, and what had to exist before Agent mode could be
+  // spoken to at all.
   //
   // The link below is the ONLY path from the voice layer to the agent, and it
   // is the path the composer already uses: `{t:'send'}` and `{t:'stop'}` on
@@ -3650,7 +3668,7 @@ export function ChatPane({
       return () => frameTaps.current.delete(cb);
     },
   };
-  const voice = useVoice({ paneId, enabled: voiceOn, agent: agentLink });
+  const voice = useVoice({ paneId, enabled: voiceMic, agent: agentLink });
 
   // ── SCREEN REVIEW ──────────────────────────────────────────────────────────
   //
@@ -3688,7 +3706,7 @@ export function ChatPane({
   // Nothing typed, nothing attached, voice available and idle → the send slot
   // holds the mic instead. See the button for why this beats a disabled Send.
   const micInsteadOfSend =
-    voiceOn && voice.supported && !voiceIsLive(voice.state) && !input.trim() && chips.length === 0;
+    voiceMic && voice.supported && !voiceIsLive(voice.state) && !input.trim() && chips.length === 0;
   const collapsedTools = toolsIdle && touchLayout;
   const labelledTools = toolsIdle && !touchLayout;
   const [toolsOpen, setToolsOpen] = useState(false);
@@ -4903,7 +4921,7 @@ export function ChatPane({
               Review a screen
             </button>
           ) : null}
-          {voiceOn && voice.supported ? (
+          {voiceMic && voice.supported ? (
             <button
               type="button"
               role="menuitem"
@@ -5002,7 +5020,7 @@ export function ChatPane({
         onStart={() => void review.start()}
         onStop={() => void review.stop()}
       />
-      {voiceOn ? (
+      {voiceMic ? (
         <VoiceControl
           state={voice.state}
           detail={voice.detail}
@@ -5489,7 +5507,7 @@ export function ChatPane({
                 {notice.text}
               </div>
             ) : null}
-            {voiceOn ? (
+            {voiceMic ? (
               <VoiceBar
                 state={voice.state}
                 detail={voice.detail}

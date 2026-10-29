@@ -56,6 +56,7 @@ import {
 import { runnerIsStale } from './runner-build.js';
 import { safeCwd } from './safe-cwd.js';
 import { checkOrigin, parseAllowedOrigins } from './same-origin.js';
+import { spokenAnswerFrom } from './spoken-answer.js';
 import { AgentQueueStore } from './store/AgentQueueStore.js';
 import { AgentSessionStore } from './store/AgentSessionStore.js';
 import { PaneStore } from './store/PaneStore.js';
@@ -639,6 +640,14 @@ export function attachWsServer(deps: {
      * this side of the wire — no new frame, no client change.
      */
     pendingQuestions: Map<string, AgentQuestion[]>;
+    /**
+     * Did the running turn produce a SPOKEN reply (a `speak` frame)?
+     *
+     * Only Chat mode can: `reply` is the one tool that emits those, and it is
+     * registered in Chat mode alone. This is the flag that lets an Agent-mode
+     * turn be given a voice at all — see the synthesis at `turn-done`.
+     */
+    spokeThisTurn: boolean;
     /** Latest per-task subagent progress for mid-turn (re)connects. */
     subagents: Map<string, SubagentProgress>;
     /**
@@ -1692,6 +1701,7 @@ export function attachWsServer(deps: {
           backend: 'claude',
           build: null,
           turnActive: false,
+          spokeThisTurn: false,
           pendingQuestions: new Map(),
           subagents: new Map(),
           subagentChangedAt: new Map(),
@@ -1900,6 +1910,7 @@ export function attachWsServer(deps: {
             drainQueue(paneId);
           } else if (frame.t === 'turn-start') {
             conn.turnActive = true;
+            conn.spokeThisTurn = false;
             streamBufs.set(paneId, '');
             agents.setStatus(paneId, 'running');
             // Busy propagates via the cache's own paneChange → pane.updated
@@ -1938,6 +1949,7 @@ export function attachWsServer(deps: {
             if (typeof frame.id !== 'string' || !frame.id) return;
             if (frame.t === 'speak') {
               if (typeof frame.text !== 'string' || !frame.text) return;
+              conn.spokeThisTurn = true;
               bcast({ t: 'speak', id: frame.id, text: frame.text, n: frame.n });
             } else {
               if (typeof frame.delta !== 'string' || !frame.delta) return;
@@ -1963,6 +1975,45 @@ export function attachWsServer(deps: {
             // the turn ended — with no way to rebuild, since the roster rode
             // only the (now-empty) session snapshot. Entries leave on their
             // runner's `done` frame or on teardown, and nowhere else.
+            // ── AN AGENT-MODE TURN GETS A VOICE ────────────────────────
+            //
+            // A voice session hears exactly one thing: `speak` frames. Those
+            // come from the `reply` tool, and `reply` is registered in Chat
+            // mode ONLY — deliberately, because when it was offered in both,
+            // 3 of 5 live Agent turns called it AND wrote a closing recap, so
+            // the user got the same answer twice, the second time in the
+            // third person. Not offering it is the mechanism.
+            //
+            // The consequence was that voice could not exist in Agent mode at
+            // all. It can: an Agent-mode turn's plain text IS its answer (the
+            // contract says so in those words — "write your answer as ordinary
+            // text and make it the LAST thing in your turn; muxpad delivers
+            // it"), and the whole turn's prose is already here in the stream
+            // buffer. So the server says it on the turn's behalf.
+            //
+            // WHY THE SERVER AND NOT THE RUNNER: every backend emits `stream`,
+            // so one site here covers claude, codex and cursor, and none of
+            // them needs to learn what a voice session is. It also cannot
+            // double-speak — `spokeThisTurn` is set by the only other source
+            // of `speak` frames there is.
+            //
+            // It is NOT a second written reply. This frame is relayed to
+            // voice and to nothing else: the chat UI has no branch for
+            // `speak` (see the note on the relay above), and in Agent mode
+            // the prose is already on screen as prose.
+            if (
+              frame.ok !== false &&
+              !conn.spokeThisTurn &&
+              panes.getById(paneId)?.mode !== 'chat'
+            ) {
+              const spoken = spokenAnswerFrom(streamBufs.get(paneId));
+              // A turn that wrote nothing at all (pure tool work) has nothing
+              // to say, and inventing a sentence is the one thing this whole
+              // mechanism exists to avoid.
+              if (spoken) {
+                bcast({ t: 'speak', id: `agent:${paneId}:${Date.now()}`, text: spoken, n: 1 });
+              }
+            }
             streamBufs.delete(paneId);
             agents.setStatus(paneId, 'idle');
             deps.cache.setAgentBusy(paneId, false);
