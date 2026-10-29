@@ -84,7 +84,26 @@ export type VoiceChatFrame =
   | { t: 'subagent'; progress: { label?: string; lastTool?: string; done?: boolean } }
   | { t: 'error'; message: string }
   | { t: 'notice'; message: string }
-  | { t: 'stream'; delta: string };
+  | { t: 'stream'; delta: string }
+  /**
+   * THE SERVER'S SNAPSHOT OF THE PANE, sent to every socket that connects.
+   *
+   * Says nothing aloud by itself. It is here because it is the ONLY frame
+   * that can tell voice a turn ended that it did not see end.
+   *
+   * Voice learns a turn is over from a live `turn-done`, and nothing re-sends
+   * one: the runner drops frames while its socket is down, and the server
+   * broadcasts only to sockets open at that instant. One blip during a voice
+   * turn — a phone locking its screen, the no-pong check, a server restart —
+   * and the task stays bound forever, repeating "Still working on it — 176
+   * seconds in" while the chat shows a finished answer. Reported exactly
+   * that way: "the voice waited for 3 minutes while the agent already
+   * replied/wrapped up".
+   *
+   * `turnRunning` is the server's authoritative answer, computed from the
+   * runner registry rather than from whatever this socket happened to catch.
+   */
+  | { t: 'session'; turnRunning?: boolean };
 
 export interface VoiceQuestion {
   question: string;
@@ -106,6 +125,7 @@ const FRAME_KINDS = new Set([
   'error',
   'notice',
   'stream',
+  'session',
 ]);
 
 /** Narrow an arbitrary chat frame to one this module handles. Anything
@@ -287,6 +307,17 @@ export class SpeakBridge {
               : "The agent's turn failed without saying why.",
           },
         ];
+      }
+
+      // The snapshot itself says nothing — session.ts decides whether it means
+      // a turn of ours ended unseen. What it does do is flush a reply tail
+      // buffered from before the gap, which would otherwise be eaten.
+      case 'session': {
+        if (frame.turnRunning === false) {
+          this.turnRunning = false;
+          return this.flushAll();
+        }
+        return [];
       }
 
       case 'subagent': {
