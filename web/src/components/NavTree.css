@@ -178,7 +178,14 @@
      most likely to be the thing you were waiting for, set in the ink nobody
      can read. 4.73–9.26 now. */
   --nt-ink-read-child: color-mix(in srgb, var(--fg-dim) 70%, var(--fg-faint));
-  --nt-ws-tag-ink: color-mix(in srgb, var(--fg-dim) 25%, var(--fg-faint));
+  /* A step fainter again — it is the least important thing on the line and
+     only has to be legible when you deliberately look at it. The hover below
+     is what makes it readable at the moment you actually want it. */
+  --nt-ws-tag-ink: color-mix(in srgb, var(--fg-faint) 80%, transparent);
+  /* …and ON HOVER it steps up to the ink the row's own name wears when read.
+     The row you are pointing at is the one row you are asking a question
+     about, so that is the moment the answer should be easy to read. */
+  --nt-ws-tag-ink-hot: var(--nt-ink-read);
 
   /* ─── The two surfaces a row can take, and why they are DERIVED ──────────
      Selection and hover are one scale with three rungs, and all three are
@@ -1394,7 +1401,11 @@
      one token further along. */
   --nt-ink-read: var(--fg-dim);
   --nt-ink-read-child: color-mix(in srgb, var(--fg-dim) 70%, var(--fg-faint));
-  --nt-ws-tag-ink: color-mix(in srgb, var(--fg-dim) 25%, var(--fg-faint));
+  /* Same derivations as the rail's, one surface along — see the definitions
+     at the top. They have to be re-stated here or the tag goes on wearing
+     rail ink on a pane-coloured row. */
+  --nt-ws-tag-ink: color-mix(in srgb, var(--fg-faint) 80%, transparent);
+  --nt-ws-tag-ink-hot: var(--nt-ink-read);
   --nt-hover: color-mix(in srgb, var(--fg) 6%, transparent);
   --nt-sel: color-mix(in srgb, var(--accent) 20%, transparent);
   --nt-sel-hover: color-mix(in srgb, var(--accent) 26%, transparent);
@@ -1442,7 +1453,11 @@
      one token further along. */
   --nt-ink-read: var(--fg-dim);
   --nt-ink-read-child: color-mix(in srgb, var(--fg-dim) 70%, var(--fg-faint));
-  --nt-ws-tag-ink: color-mix(in srgb, var(--fg-dim) 25%, var(--fg-faint));
+  /* Same derivations as the rail's, one surface along — see the definitions
+     at the top. They have to be re-stated here or the tag goes on wearing
+     rail ink on a pane-coloured row. */
+  --nt-ws-tag-ink: color-mix(in srgb, var(--fg-faint) 80%, transparent);
+  --nt-ws-tag-ink-hot: var(--nt-ink-read);
   --nt-hover: color-mix(in srgb, var(--fg) 6%, transparent);
   --nt-sel: color-mix(in srgb, var(--accent) 20%, transparent);
   --nt-sel-hover: color-mix(in srgb, var(--accent) 26%, transparent);
@@ -1598,6 +1613,19 @@
    by weight: at this size a lighter weight is just blur. The link's own
    `title` still says "<chat> · <workspace>" in full, and the tag is
    aria-hidden so it is not read twice. */
+/* ── IT SITS ON THE NAME'S BASELINE, NOT IN THE MIDDLE OF ITS BOX ───────
+   The title line is `align-items: center`, which centres each item's BOX.
+   Two different font sizes then have two different baselines — the smaller
+   one lower by half the leading difference — and the tag read as sagging
+   below the name it qualifies. Reported as "the workspace name is not
+   properly vertically aligned".
+
+   Baseline, on the band's line only. Every item on it is text, so there is a
+   real baseline group to join; the tree's title line carries chips that are
+   not text and keeps its centring. */
+.navtree-ws-slot .navtree-tab-titleline {
+  align-items: baseline;
+}
 .navtree-ws-tag {
   flex: 0 1 auto;
   min-width: 0;
@@ -1611,6 +1639,11 @@
      legible when you deliberately look at it. */
   color: var(--nt-ws-tag-ink);
   font-size: 0.6875rem;
+  transition: color 120ms ease;
+}
+.navtree-tab-row:hover .navtree-ws-tag,
+.navtree-tab-row:has(:focus-visible) .navtree-ws-tag {
+  color: var(--nt-ws-tag-ink-hot);
 }
 /* …and the chat's own name never shrinks while there is a tag beside it. */
 .navtree-ws-slot .navtree-name-text {
@@ -4011,6 +4044,7 @@ body.sidenav-resizing iframe {
      token is derived from --fg-dim AND --fg-faint, both of which the active
      row re-points at the pane. */
   --band-ws-tag-ink: var(--nt-ws-tag-ink);
+  --band-ws-tag-ink-hot: var(--nt-ws-tag-ink-hot);
   flex: 0 0 auto;
   /* ── ITS ROWS LINE UP WITH EVERY OTHER ROW ──────────────────────────────
      A row inside a workspace carries two insets: the scroller's and the
@@ -4260,6 +4294,9 @@ body.sidenav-resizing iframe {
      is a separate decision ("make the workspace label a bit smaller and
      fainter"); this row has no business being a different one. */
   color: var(--band-ws-tag-ink);
+}
+.navtree-workingset .navtree-tab-row[data-active="true"]:hover .navtree-ws-tag {
+  color: var(--band-ws-tag-ink-hot);
 }
 .navtree-workingset .navtree-tab-row[data-active="true"]:hover {
   /* It is still a link, and the band is the one place the row you are on is
