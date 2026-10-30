@@ -4175,6 +4175,35 @@ body.sidenav-resizing iframe {
    hover control on this rail, which is the case the grid's trailing `auto`
    track exists to absorb. At rest it is `display: none`, so it is no track at
    all and the marks keep their column. */
+/* ── THE AGE, IN THE TRAILING GUTTER ─────────────────────────────────────
+   The band is ordered by SLOT and never by recency — that is the whole design,
+   so rows do not move under you — and the cost is that nothing on the row says
+   whether you left this chat ten minutes ago or this morning. This column is
+   what the ordering gives up, handed back.
+
+   QUIETER THAN THE WORKSPACE TAG, which is already the quiet thing on the
+   line: the tag answers "which chat is this", the age answers "how stale",
+   and only the first is ever what you are scanning for. Tabular figures so a
+   column of them does not jitter as the numbers tick.
+
+   `--band-ink-dim` for the same reason everything else in this band uses a
+   captured token: the active row re-points --fg and --fg-dim at the pane's
+   palette, and a value reaching for those lands pane ink on rail ground. */
+.navtree-slot-age {
+  flex: 0 0 auto;
+  margin-left: 6px;
+  color: color-mix(in srgb, var(--band-ink-dim) 60%, transparent);
+  font-size: 0.625rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* THE × TAKES THIS SPACE. The age is a thing you read and the × is a thing you
+   do; the one you are reaching for wins, and showing both would widen the
+   gutter on hover and shuffle the name. */
+.navtree-ws-slot:hover .navtree-slot-age,
+.navtree-ws-slot:has(:focus-visible) .navtree-slot-age {
+  display: none;
+}
 .navtree-ws-slot .navtree-slot-drop {
   width: 18px;
   height: 18px;

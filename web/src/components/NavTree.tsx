@@ -20,6 +20,7 @@ import { isExpanded, toggleExpanded, useNavExpansion } from '../lib/nav-expansio
 import { tabRowAffordances } from '../lib/nav-row-affordances';
 import { nextCronLabel, railCronLabel } from '../lib/next-cron-label';
 import { noticeFromError } from '../lib/notice-store';
+import { activeAge } from '../lib/short-age';
 import { dropFromWorkingSet, useWorkingSet } from '../working-set';
 
 import { recallOpenSubChats, rememberOpenSubChats } from '../lib/rail-folds';
@@ -333,6 +334,21 @@ function WorkingSetStrip({
 }) {
   const rows = useWorkingSet();
   const navigate = useNavigate();
+  /**
+   * The clock the ages are read against.
+   *
+   * 30s, which is finer than anything this column can SAY — the band's window
+   * is sixteen hours, so its ages are minutes and hours — and that is the
+   * point: the tick exists so a row that has just turned over does so within
+   * half a minute rather than whenever something else happens to re-render
+   * the rail. The strip holds it once; six rows reading one number cannot
+   * disagree about what time it is.
+   */
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, []);
 
   // ⌃1…⌃6, and NOT ⌘ — Chrome binds ⌘1-9 to its own tab switcher, and a
   // shortcut that fights the browser is a shortcut nobody can use. Control is
@@ -373,11 +389,12 @@ function WorkingSetStrip({
       <div className="navtree-workingset-head" aria-hidden="true">
         recently active
       </div>
-      {rows.map(({ tab, workspace }) => (
+      {rows.map(({ tab, workspace, at }) => (
         <WorkingSetRow
           key={tab.id}
           tab={tab}
           workspace={workspace}
+          age={now - at}
           active={tab.slug === activeTabSlug}
           {...(touch ? { touch: true } : {})}
           {...(onNavigate ? { onNavigate } : {})}
@@ -391,12 +408,17 @@ function WorkingSetStrip({
 function WorkingSetRow({
   tab,
   workspace,
+  age,
   active,
   onNavigate,
   touch,
 }: {
   tab: Tab;
   workspace: { slug: string; name: string };
+  /** Milliseconds since you last sent this chat a message — the same stamp
+   *  the slot decays on, so the number on screen and the rule that evicts the
+   *  row are reading the one clock. */
+  age: number;
   active: boolean;
   onNavigate?: (() => void) | undefined;
   touch?: boolean | undefined;
@@ -461,6 +483,20 @@ function WorkingSetRow({
           works (see the ⌃1–⌃6 handler above) — it is simply not announced on
           every row — the strip's own handler binds by position, so the row no
           longer needs to know its number at all. */}
+      {/* ── HOW LONG AGO ──────────────────────────────────────────────────
+          The band is ordered by SLOT, not by recency — that is the whole
+          design, so the rows do not move under you — which means the reader
+          has no way to tell a chat you left ten minutes ago from one you left
+          this morning. The column is what the ordering deliberately gives up.
+
+          It is the quietest thing on the row and it sits in the trailing
+          gutter, where the eye already goes for "when" and where it cannot
+          push the name. On hover the × takes this space (see the css): the
+          age is a thing you read, the × is a thing you do, and the one you
+          are reaching for wins. */}
+      <span className="navtree-slot-age" aria-hidden="true">
+        {activeAge(age)}
+      </span>
       <span className="navtree-tab-rail">
         <button
           type="button"
