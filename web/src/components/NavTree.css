@@ -1635,7 +1635,19 @@
    The link is the grid item in the `minmax(0, 1fr)` track, so its width is
    handed to it by the grid and containment costs nothing. Querying it asks
    the same question about the same space. */
-.navtree-ws-slot .navtree-tab-link {
+/* THE DESKTOP RAIL ONLY, and that scope is the whole correctness of it.
+   `container-type: inline-size` computes the element's width without looking
+   at its contents, so it may only go on a box whose width is handed to it by
+   layout. On the rail the link is a grid item in a `minmax(0, 1fr)` track, so
+   it is.
+
+   ON THE SHEET IT IS NOT: that row is a flex line and the link is
+   `flex: 0 1 auto`, i.e. sized BY its contents. Containment collapsed it to
+   zero and every chat name in the mobile band disappeared — the same mistake
+   this rule was moved here to fix, one surface along. The sheet is a phone
+   width wide and has room for the tag anyway, so it simply does not need the
+   query. */
+.navtree[data-variant="sidebar"] .navtree-ws-slot .navtree-tab-link {
   container-type: inline-size;
   container-name: slot-line;
 }
