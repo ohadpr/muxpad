@@ -988,11 +988,27 @@ describe('a recently-active row says how long ago', () => {
     expect(rule(css, '.navtree-slot-age')).toMatch(/font-variant-numeric:\s*tabular-nums/);
   });
 
-  it('yields the gutter to the × on hover', () => {
-    // The age is a thing you read, the × is a thing you do. Showing both
-    // would widen the gutter on hover and shuffle the name.
-    const i = css.indexOf('.navtree-ws-slot:hover .navtree-slot-age');
-    expect(i).toBeGreaterThan(-1);
-    expect(css.slice(i, css.indexOf('}', i))).toMatch(/display:\s*none/);
+  it('lives on the TITLE LINE, not as a fifth track of a four-track grid', () => {
+    // It was a sibling of the row, which has four columns — so it wrapped,
+    // every row grew a second line, and the status mark (the tick, the
+    // chevron) went down with it.
+    const line = body.slice(body.indexOf('navtree-tab-titleline'));
+    const i = line.indexOf('navtree-slot-age');
+    expect(i, 'the age is not on the title line').toBeGreaterThan(-1);
+    expect(i, 'it must come after the workspace tag').toBeGreaterThan(
+      line.indexOf('navtree-ws-tag'),
+    );
+  });
+
+  it('never shrinks — the tag gives way first', () => {
+    // A clipped "Orb…" still reads; a clipped "3…" does not.
+    expect(rule(css, '.navtree-slot-age')).toMatch(/flex:\s*0 0 auto/);
+    expect(rule(css, '.navtree-ws-tag')).toMatch(/flex:\s*0 1 auto/);
+  });
+
+  it('does not disappear on the one row you are pointing at', () => {
+    expect(css).not.toMatch(
+      /\.navtree-ws-slot:hover \.navtree-slot-age[^{]*\{[^}]*display:\s*none/,
+    );
   });
 });
