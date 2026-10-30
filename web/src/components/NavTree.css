@@ -1625,9 +1625,17 @@
    not text and keeps its centring. */
 .navtree-ws-slot .navtree-tab-titleline {
   align-items: baseline;
-  /* A QUERY CONTAINER, so the line can decide what it has room for. The rail
-     is about 280px and this line is being asked to carry four things; what it
-     ran out of was the NAME, which is the one thing nobody is scanning past. */
+}
+/* ── THE CONTAINER IS THE LINK, NOT THE LINE ───────────────────────────────
+   `container-type: inline-size` applies INLINE-AXIS CONTAINMENT: the element's
+   width is computed without looking at its contents. On the title line — a
+   flex item whose width comes FROM its contents — that collapses it to zero,
+   and the chat names disappeared entirely.
+
+   The link is the grid item in the `minmax(0, 1fr)` track, so its width is
+   handed to it by the grid and containment costs nothing. Querying it asks
+   the same question about the same space. */
+.navtree-ws-slot .navtree-tab-link {
   container-type: inline-size;
   container-name: slot-line;
 }

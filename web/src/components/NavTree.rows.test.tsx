@@ -1049,3 +1049,27 @@ describe('rule() finds the rule it was asked for', () => {
     expect(rule(css, '.nothing-here')).toBe('');
   });
 });
+
+/**
+ * ── WHERE CONTAINMENT MAY GO ─────────────────────────────────────────────
+ *
+ * `container-type: inline-size` computes the element's width WITHOUT looking
+ * at its contents. Putting it on a flex item whose width comes from its
+ * contents collapses it to zero — which is what happened: every chat name in
+ * the band vanished.
+ */
+describe('the band’s query container', () => {
+  const css = readFileSync(join(__dirname, 'NavTree.css'), 'utf8');
+
+  it('is not on the content-sized title line', () => {
+    expect(rule(css, '.navtree-ws-slot .navtree-tab-titleline')).not.toContain('container-type');
+  });
+
+  it('is on the LINK, whose width the grid hands it', () => {
+    // `minmax(0, 1fr)`: the track decides, so containment costs nothing and
+    // the query asks about the same space either way.
+    expect(rule(css, '.navtree-ws-slot .navtree-tab-link')).toMatch(
+      /container-type:\s*inline-size/,
+    );
+  });
+});
