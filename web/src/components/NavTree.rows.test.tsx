@@ -1068,8 +1068,24 @@ describe('the band’s query container', () => {
   it('is on the LINK, whose width the grid hands it', () => {
     // `minmax(0, 1fr)`: the track decides, so containment costs nothing and
     // the query asks about the same space either way.
-    expect(rule(css, '.navtree-ws-slot .navtree-tab-link')).toMatch(
-      /container-type:\s*inline-size/,
+    expect(
+      rule(css, '.navtree[data-variant="sidebar"] .navtree-ws-slot .navtree-tab-link'),
+    ).toMatch(/container-type:\s*inline-size/);
+  });
+
+  it('is scoped to the RAIL, where the link is a grid item', () => {
+    // On the sheet the row is a flex line and the link is `flex: 0 1 auto` —
+    // sized BY its contents — so containment collapsed it to zero and every
+    // chat name in the mobile band disappeared. Same mistake, one surface
+    // along.
+    const flat = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    const i = flat.indexOf('container-type: inline-size');
+    const line = flat.lastIndexOf('{', i);
+    const selector = flat.slice(flat.lastIndexOf('}', line) + 1, line);
+    expect(selector).toContain('[data-variant="sidebar"]');
+    // …and the sheet's own link rule is still content-sized, which is why.
+    expect(rule(css, '.navtree[data-variant="sheet"] .navtree-tab-link')).toMatch(
+      /flex:\s*0 1 auto/,
     );
   });
 });
