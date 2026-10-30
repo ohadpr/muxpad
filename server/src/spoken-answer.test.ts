@@ -90,7 +90,15 @@ describe('what the server refuses to speak', () => {
     // A Stop can be issued before the runner's turn-start arrives — the send
     // is relayed, the user stops it a beat later, and the runner announces the
     // turn it is already cancelling. Clearing unconditionally erased it.
-    expect(WS).toContain('conn.stoppedAt > 5_000) conn.stoppedThisTurn = false');
+    expect(WS).toContain('conn.lastSendAt > conn.stoppedAt) conn.stoppedThisTurn = false');
+  });
+
+  it('clears it on a NEW SEND, not on a clock', () => {
+    // The first fix used a five-second grace and bought a worse bug: stop A,
+    // send B, and B's perfectly good answer was suppressed too because B
+    // started inside A's window. A send is unambiguous evidence the user
+    // wants to hear this one.
+    expect(WS).not.toMatch(/stoppedAt > \d+_?\d*\)/);
   });
 
   it('gates the synthesis on it, not only on ok', () => {

@@ -261,7 +261,7 @@ describe('the happy path', () => {
     h.hear('run the tests.', 1000, 2000);
     h.delegate('d1', 2100);
     h.settle();
-    h.agent.frame({ t: 'turn-start' });
+    h.agent.frame({ t: 'turn-start', text: 'run the tests.' });
     h.agent.frame({ t: 'speak', id: 'r1', text: 'They pass.', n: 1 });
     expect(h.transport.sent.length).toBeGreaterThan(0);
     for (const e of h.transport.sent) expect(e.delegation_id).toBe('d1');
@@ -299,7 +299,7 @@ describe('duplicate delivery must not start the same work twice', () => {
     h.delegate('d1', 2100);
     h.delegate('d1', 2100); // redelivery mid-settle
     h.settle();
-    h.agent.frame({ t: 'turn-start' });
+    h.agent.frame({ t: 'turn-start', text: 'run the tests.' });
     h.agent.frame({ t: 'speak', id: 'r1', text: 'They pass.', n: 1 });
     expect(h.agent.sends).toHaveLength(1);
     expect(h.commentary()).toContain('They pass.');
@@ -311,7 +311,7 @@ describe('duplicate delivery must not start the same work twice', () => {
     h.hear('run the tests.', 1000, 2000);
     h.delegate('d1', 2100);
     h.settle();
-    h.agent.frame({ t: 'turn-start' });
+    h.agent.frame({ t: 'turn-start', text: 'run the tests.' });
     h.agent.frame({ t: 'turn-done', ok: true });
     h.delegate('d1', 2100);
     h.settle();
@@ -464,7 +464,14 @@ describe('ATTRIBUTION with two tasks in flight', () => {
     expect(blue?.delegation_id).toBe('dB');
   });
 
-  it('binds in submit order when the server does not stamp the turn', () => {
+  it('claims NOTHING when the turn arrives unstamped', () => {
+    // This used to bind in submit order "for an older server". The stamp
+    // comes from the SERVER, which is one process and always current — a turn
+    // started by our own send is always stamped — so an unstamped start is
+    // never ours. The fallback protected nothing and cost the one
+    // mis-attribution a voice session must never make: an autonomous turn (a
+    // cron, a wakeup) arriving while a request waits was handed that
+    // request, and its output was spoken as the answer.
     const h = harness();
     h.started();
     h.hear('first thing.', 1000, 2000);
@@ -473,8 +480,12 @@ describe('ATTRIBUTION with two tasks in flight', () => {
     h.hear('second thing.', 4000, 6000);
     h.delegate('dB', 6100);
     h.settle();
-    h.turnStart(); // old server: no text
-    h.agent.frame({ t: 'speak', id: 'rA', text: 'Did the first.', n: 1 });
+    h.turnStart(); // a cron, a wakeup — nobody's send
+    h.agent.frame({ t: 'speak', id: 'rA', text: 'Output of a turn nobody asked for.', n: 1 });
+    expect(h.everything()).not.toContain('Output of a turn nobody asked for.');
+    // …and the real turn still binds and is still spoken.
+    h.turnStart('first thing.');
+    h.agent.frame({ t: 'speak', id: 'rB', text: 'Did the first.', n: 1 });
     expect(h.transport.sent.find((e) => e.content.includes('Did the first.'))?.delegation_id).toBe(
       'dA',
     );
@@ -577,19 +588,17 @@ describe('an unstamped turn-start is not evidence of an old server', () => {
     expect(h.commentary().join(' ')).toContain('Did the second.');
   });
 
-  it('still falls back to submit order against a server that has never stamped', () => {
-    // The legacy path is not removed, only narrowed: with no stamped turn ever
-    // seen, order is still the best available answer.
+  it('does not claim one even before any stamped turn has been seen', () => {
+    // This was the window the fallback left open, and it is exactly when an
+    // autonomous turn is most likely to be the first thing that happens.
     const h = harness();
     h.started();
     h.hear('first thing.', 1000, 2000);
     h.delegate('dA', 2100);
     h.settle();
     h.turnStart();
-    h.agent.frame({ t: 'speak', id: 'rA', text: 'Did the first.', n: 1 });
-    expect(h.transport.sent.find((e) => e.content.includes('Did the first.'))?.delegation_id).toBe(
-      'dA',
-    );
+    h.agent.frame({ t: 'speak', id: 'rA', text: 'Not an answer to anything.', n: 1 });
+    expect(h.everything()).not.toContain('Not an answer to anything.');
   });
 });
 
@@ -818,7 +827,7 @@ describe('narrating an agent that takes minutes', () => {
     h.hear('do a big thing.', 1000, 2000);
     h.delegate('d1', 2100);
     h.settle();
-    h.agent.frame({ t: 'turn-start' });
+    h.agent.frame({ t: 'turn-start', text: 'do a big thing.' });
     expect(h.session.state).toBe('thinking');
     // Two minutes of work, and the session is still alive and still narrating —
     // ALOUD. A silent `thinking` heartbeat is two minutes of dead air.
@@ -834,7 +843,7 @@ describe('narrating an agent that takes minutes', () => {
     h.hear('do a big thing.', 1000, 2000);
     h.delegate('d1', 2100);
     h.settle();
-    h.agent.frame({ t: 'turn-start' });
+    h.agent.frame({ t: 'turn-start', text: 'do a big thing.' });
     h.agent.frame({ t: 'speak-delta', id: 'r1', delta: 'Found the bug. ' });
     h.agent.frame({ t: 'speak-delta', id: 'r1', delta: 'Fixing it now. ' });
     h.agent.frame({ t: 'speak', id: 'r1', text: 'Found the bug. Fixing it now. Done.' });
@@ -849,7 +858,7 @@ describe('narrating an agent that takes minutes', () => {
     h.hear('ship it.', 1000, 2000);
     h.delegate('d1', 2100);
     h.settle();
-    h.agent.frame({ t: 'turn-start' });
+    h.agent.frame({ t: 'turn-start', text: 'ship it.' });
     h.agent.frame({
       t: 'question',
       qid: 'q1',
@@ -871,7 +880,7 @@ describe('narrating an agent that takes minutes', () => {
     h.hear('do a thing.', 1000, 2000);
     h.delegate('d1', 2100);
     h.settle();
-    h.agent.frame({ t: 'turn-start' });
+    h.agent.frame({ t: 'turn-start', text: 'do a thing.' });
     h.agent.frame({ t: 'stream', delta: 'The user is probably wrong about this.' });
     h.agent.frame({ t: 'stream', delta: ' I will not say that out loud.' });
     const everything = h.transport.sent.map((e) => e.content).join(' ');
@@ -882,7 +891,7 @@ describe('narrating an agent that takes minutes', () => {
   it('drops frames from a turn the user started by TYPING — there is no delegation to speak under', () => {
     const h = harness();
     h.started();
-    h.agent.frame({ t: 'turn-start' });
+    h.agent.frame({ t: 'turn-start', text: 'do a thing.' });
     h.agent.frame({ t: 'speak', id: 'r1', text: 'Answer to a typed question.', n: 1 });
     expect(h.transport.sent).toEqual([]);
     expect(h.session.stats.staleDrops).toBeGreaterThan(0);
@@ -894,7 +903,7 @@ describe('narrating an agent that takes minutes', () => {
     h.hear('do a thing.', 1000, 2000);
     h.delegate('d1', 2100);
     h.settle();
-    h.agent.frame({ t: 'turn-start' });
+    h.agent.frame({ t: 'turn-start', text: 'do a thing.' });
     h.agent.frame({ t: 'speak-delta', id: 'r1', delta: 'the tail with no full stop' });
     h.agent.frame({ t: 'turn-done', ok: true });
     expect(h.commentary().join(' ')).toContain('the tail with no full stop');
@@ -908,7 +917,7 @@ describe('the 500-token cap', () => {
     h.hear('explain everything.', 1000, 2000);
     h.delegate('d1', 2100);
     h.settle();
-    h.agent.frame({ t: 'turn-start' });
+    h.agent.frame({ t: 'turn-start', text: 'explain everything.' });
     const huge = 'The router now resolves nested tabs correctly. '.repeat(300);
     h.agent.frame({ t: 'speak', id: 'r1', text: huge, n: 1 });
     const parts = h.commentary();
@@ -1156,7 +1165,7 @@ describe('UI state', () => {
     h.hear('do a thing.', 1000, 2000);
     h.delegate('d1', 2100);
     h.settle();
-    h.agent.frame({ t: 'turn-start' });
+    h.agent.frame({ t: 'turn-start', text: 'do a thing.' });
     expect(h.session.state).toBe('thinking');
     h.agent.frame({ t: 'turn-done', ok: true });
     expect(h.session.state).toBe('listening');
@@ -1189,7 +1198,7 @@ describe('dispose', () => {
     h.hear('do a thing.', 1000, 2000);
     h.delegate('d1', 2100);
     h.settle();
-    h.agent.frame({ t: 'turn-start' });
+    h.agent.frame({ t: 'turn-start', text: 'do a thing.' });
     h.session.dispose('user');
     expect(h.clock.pending).toBe(0);
   });
@@ -1258,7 +1267,7 @@ describe('the append wire format', () => {
     h.hear('run the tests.', 1000, 2000);
     h.delegate('d1', 2100);
     h.settle();
-    h.agent.frame({ t: 'turn-start' });
+    h.agent.frame({ t: 'turn-start', text: 'run the tests.' });
     h.agent.frame({ t: 'speak', id: 'r1', text: 'They pass.', n: 1 });
 
     expect(h.transport.sent.length).toBeGreaterThan(0);
