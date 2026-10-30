@@ -744,7 +744,11 @@ describe('the older-build cell', () => {
     // was merely not a project. Same mistake, same cell, do not repeat it.
     const rule = /\.chat-status-seg\.-stale\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
     expect(rule).not.toContain('--chat-danger');
-    expect(rule).toContain('--warn');
+    // `--chat-warn`, which resolves to the amber every theme tunes. The
+    // assertion used to be `toContain('--warn')` — which `--chat-warn` also
+    // satisfies, so it would have gone on passing while the cell was
+    // unreadable. See the suite below for what it is actually pinned to now.
+    expect(rule).toContain('--chat-warn');
     // Two words that ellipsize to "older…" say nothing.
     expect(rule).toContain('min-width: max-content');
   });
@@ -828,5 +832,39 @@ describe('the live cell under a narrow composer', () => {
     const q = flat.indexOf('@container composer-tools');
     expect(q).toBeGreaterThan(flat.indexOf('.chat-status-seg-wrap.-live {'));
     expect(q).toBeGreaterThan(flat.indexOf('.chat-status-seg.-live .chat-status-seg-label {'));
+  });
+});
+
+/**
+ * ── THE WARNING HUE COMES FROM A TOKEN THEMES DEFINE ─────────────────────
+ *
+ * It named `--warn`, which NO theme defines, so every one of them fell
+ * through to `--hit-bg` — the search-highlight BACKGROUND, a colour chosen to
+ * sit behind black text. As text on a light composer that measured about
+ * 1.8:1: the one cell whose job is to be noticed, in the one colour nobody
+ * could read.
+ */
+describe('the older-build cell’s colour', () => {
+  const flat = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const appCss = readFileSync(join(import.meta.dirname, '..', 'styles.css'), 'utf8');
+
+  it('does not reach for a token no theme sets', () => {
+    expect(flat).not.toMatch(/var\(--warn[,)]/);
+    expect(appCss, 'if a theme ever defines --warn this test should be revisited').not.toMatch(
+      /--warn:/,
+    );
+  });
+
+  it('never uses a search-highlight BACKGROUND as text', () => {
+    const rule = flat.slice(flat.indexOf('.chat-status-seg.-stale {'));
+    expect(rule.slice(0, rule.indexOf('}'))).not.toContain('--hit-bg');
+  });
+
+  it('uses the amber the themes actually tune', () => {
+    // --status-working is per-theme: #e8b34b on the dark rails, #8a6410 and
+    // #96650b on the light ones, which is the whole point.
+    expect(flat).toMatch(/--chat-warn:\s*var\(--status-working/);
+    const themed = (appCss.match(/--status-working:/g) ?? []).length;
+    expect(themed, 'every theme tunes it').toBeGreaterThan(5);
   });
 });
