@@ -14,6 +14,16 @@
   --chat-accent: var(--accent, #4a9eff);
   --chat-accent-fg: var(--accent-fg, #0b0c12);
   --chat-danger: var(--danger, #f7768e);
+  /* ── THE WARNING HUE, FROM A TOKEN THEMES ACTUALLY DEFINE ───────────────
+     This was `var(--warn, var(--hit-bg, #f2c55c))`, and `--warn` is defined
+     by NO theme — so every one of them fell through to `--hit-bg`, which is
+     the SEARCH-HIGHLIGHT BACKGROUND. A colour chosen to sit behind black text
+     measured about 1.8:1 as text on a light composer: the one cell on the
+     strip whose job is to be noticed was the one nobody could read.
+     `--status-working` is the amber this app already owns and the only one
+     tuned per theme — #e8b34b on the dark rails, #8a6410 and #96650b on the
+     light ones, which is the whole point. */
+  --chat-warn: var(--status-working, #b8860b);
   --chat-user-bubble: color-mix(in srgb, var(--fg, #d7dae0) 9%, var(--bg, #12131a));
   /* Search-hit highlight — derived like every other chat token, with dark
      fallbacks for a pane rendered before a theme is applied. See the
@@ -2760,9 +2770,11 @@
    the same mistake as the old folder cell's `!` ("told the user their chat was
    BROKEN, when nothing was wrong").
 
-   `--warn`, falling back to the amber the hit-mark already uses, so a theme
-   that defines no warning tone still gets a tone rather than inheriting the
-   dim body colour and vanishing.
+   `--chat-warn` — see the token's own note. The first version named `--warn`,
+   which no theme defines, so every one of them fell through to the
+   SEARCH-HIGHLIGHT BACKGROUND and the cell measured about 1.8:1 as text on a
+   light composer. A cell whose whole job is to be noticed, in the one colour
+   nobody could read.
 
    Never shrinks: two words that ellipsize to "older…" say nothing. */
 .chat-status-seg.-stale {
@@ -2770,7 +2782,7 @@
   width: auto;
   max-width: none;
   min-width: max-content;
-  color: var(--warn, var(--hit-bg, #f2c55c));
+  color: var(--chat-warn);
 }
 .chat-status-seg.-stale svg,
 .chat-status-seg.-stale:hover svg,
@@ -2779,8 +2791,8 @@
 }
 .chat-status-seg.-stale:hover,
 .chat-status-seg.-stale.is-open {
-  color: var(--warn, var(--hit-bg, #f2c55c));
-  background: color-mix(in srgb, var(--warn, var(--hit-bg, #f2c55c)) 12%, transparent);
+  color: var(--chat-warn);
+  background: color-mix(in srgb, var(--chat-warn) 12%, transparent);
 }
 .chat-status-seg.-live .chat-roster-spin {
   flex: 0 0 auto;
