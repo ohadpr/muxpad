@@ -414,7 +414,11 @@ export function useVoice(opts: UseVoiceOpts): UseVoiceResult {
         void fetchVoiceStatus().then(setStatus);
       }
     })();
-  }, [enabled, supported, paneId, stop, clearSoundCheck]);
+    // `mode` is in the deps because the callback CAPTURES it: a pane that
+    // re-rendered Chat→Agent before the call started still built a session
+    // saying `chat`, and an Agent turn with no prose then tripped the
+    // mute-runner hang-up with advice that is false there.
+  }, [enabled, supported, paneId, stop, clearSoundCheck, mode]);
 
   // The meter. Ticks locally rather than polling the server — this number is
   // shown next to a running cost, so it should never freeze because a fetch

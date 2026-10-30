@@ -2653,7 +2653,12 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
           // about that mark expires on its own. Only on a TRANSITION: this
           // runs after every turn, and the common case must not be a write.
           authHeal.ok();
-          if (accountPool && account && accountPool.credential(account.id).state === 'dead') {
+          // `state` reads 'ok' once the mark has EXPIRED (see credential()), so
+          // testing it alone skipped the clear on exactly the turn that proves
+          // the account recovered — the row stayed `dead`, and status went on
+          // saying another retry was pending after real work had succeeded.
+          // `expiresAt` is non-zero for both halves of that state.
+          if (accountPool && account && accountPool.credential(account.id).expiresAt > 0) {
             accountPool.markCredential(account.id, 'ok');
             log(dim(`Claude account ${account.id}: credential works again`));
           }

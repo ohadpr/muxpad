@@ -208,6 +208,23 @@ export class AccountPool {
         );
         const chosen = candidates[0];
         if (!chosen) return null;
+        // ── A RETRY IS RESERVED, NOT JUST ALLOWED ─────────────────────────
+        // The expiry above makes a dead account a candidate again, and the
+        // transaction serialises SELECTIONS without limiting ATTEMPTS: eight
+        // selections across two connections all chose the same expired
+        // account before any of them had a result to report. The window only
+        // moved when something finally failed, which is far too late — that
+        // is the original incident, a dead account chosen on every send.
+        //
+        // So taking the retry CONSUMES it, here, inside the same transaction
+        // that hands the account out. Whoever wins the race gets the attempt
+        // and everybody behind them sees a fresh mark and goes elsewhere. If
+        // the attempt succeeds the row is cleared outright (the runner's
+        // credential(). expiresAt check); if it fails the mark is rewritten
+        // with the same effect it would have had anyway.
+        const cred = this.credential(chosen.id);
+        if (cred.expiresAt > 0 && cred.state === 'ok')
+          this.markCredential(chosen.id, 'dead', cred.detail);
         this.db
           .prepare('INSERT OR REPLACE INTO assignments VALUES (?, ?, ?)')
           .run(pane, chosen.id, this.now());

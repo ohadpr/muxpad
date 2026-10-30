@@ -629,3 +629,43 @@ describe('the credential namespace travels with the profile', () => {
     expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
   });
 });
+
+/**
+ * ── ONE RETRY PER WINDOW, AND IT HAS TO BE *ONE* ─────────────────────────
+ *
+ * The expiry was shipped claiming "one failed call per account per window".
+ * It did not hold: the transaction serialises SELECTIONS without limiting
+ * ATTEMPTS, so eight selections across two connections all chose the same
+ * expired account before any of them had a result to report. The window only
+ * moved when something finally failed — far too late, and exactly the
+ * original incident (a dead account chosen on every send).
+ */
+describe('the retry after expiry is reserved, not merely allowed', () => {
+  it('hands the retry to ONE caller; everyone behind it goes elsewhere', () => {
+    const { pool, dir, advance } = fixture();
+    const second = new AccountPool(dir, pool.now);
+    pools.push(second);
+    pool.markCredential('primary', 'dead', 'Not logged in');
+    advance(CREDENTIAL_RETRY_MS + 1000);
+    // The first selection takes the attempt…
+    expect(pool.choose('pane-a', 'opus')?.id).toBe('primary');
+    // …and every other selector, including one on a separate connection, is
+    // sent to the healthy account rather than piling onto the same retry.
+    expect(pool.choose('pane-b', 'opus')?.id).toBe('backup');
+    expect(second.choose('pane-c', 'opus')?.id).toBe('backup');
+    expect(second.choose('pane-d', 'opus')?.id).toBe('backup');
+  });
+
+  it('a success clears the mark even though it had already expired', () => {
+    // `state` reads 'ok' once expired, so testing it alone skipped the clear
+    // on exactly the turn that proves recovery: the row stayed dead and the
+    // CLI went on saying a retry was pending after real work succeeded.
+    const { pool, advance } = fixture();
+    pool.markCredential('primary', 'dead', 'Not logged in');
+    advance(CREDENTIAL_RETRY_MS + 1000);
+    expect(pool.credential('primary').expiresAt).toBeGreaterThan(0);
+    pool.markCredential('primary', 'ok');
+    expect(pool.credential('primary').expiresAt).toBe(0);
+    expect(pool.choose('pane-a', 'opus')?.id).toBe('primary');
+  });
+});

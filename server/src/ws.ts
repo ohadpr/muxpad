@@ -1945,11 +1945,21 @@ export function attachWsServer(deps: {
           } else if (frame.t === 'turn-start') {
             conn.turnActive = true;
             conn.spokeThisTurn = false;
-            // NOT UNCONDITIONALLY. A Stop can be issued before the runner's
-            // turn-start reaches us — the send is relayed, the user stops it a
-            // beat later, and the runner announces the turn it is already
-            // cancelling. Clearing here erased the Stop and the turn spoke.
-            if (Date.now() - conn.stoppedAt > 5_000) conn.stoppedThisTurn = false;
+            // NOT UNCONDITIONALLY, and not on a timer either.
+            //
+            // A Stop can be issued BEFORE the runner's turn-start reaches us —
+            // the send is relayed, the user stops it a beat later, and the
+            // runner announces the turn it is already cancelling. Clearing
+            // here erased the Stop and the turn spoke. A five-second grace
+            // fixed that and bought a worse one: stop A, send B, and B's
+            // perfectly good answer was suppressed too, because B started
+            // inside A's window.
+            //
+            // A NEW SEND IS THE SIGNAL, not the clock. The user asking for
+            // something is unambiguous evidence they want to hear the answer,
+            // and it is already recorded — `lastSendAt` moves on every relay.
+            // So the mark survives only while no send has happened since.
+            if (conn.lastSendAt > conn.stoppedAt) conn.stoppedThisTurn = false;
             streamBufs.set(paneId, '');
             agents.setStatus(paneId, 'running');
             // Busy propagates via the cache's own paneChange → pane.updated

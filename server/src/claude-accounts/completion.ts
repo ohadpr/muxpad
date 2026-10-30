@@ -1,4 +1,5 @@
 import type { Options, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
+import { isAuthFailureText } from '../agent-runner/auth-heal.js';
 import {
   AccountPool,
   type QuotaBlock,
@@ -22,6 +23,9 @@ export async function* accountCompletion(args: {
       const account = pool?.choose('housekeeping', args.options.model ?? 'haiku', tried);
       if (pool && !account) throw new Error('All Claude accounts are unavailable');
       let denied: QuotaBlock | null = null;
+      /** The account's login is dead — a different failure from a quota
+       *  block, and it has to fail over to the next account just the same. */
+      let authDead: string | null = null;
       const session = query({
         prompt: args.prompt,
         options: {
@@ -73,6 +77,20 @@ export async function* accountCompletion(args: {
               .map((v) => (typeof v === 'string' ? v : ''))
               .join(' ');
             denied ??= resultQuota(text);
+            // ── AND A DEAD LOGIN IS NOT A QUOTA BLOCK ─────────────────────
+            // This path only ever asked "was I refused for fullness". An
+            // AUTH failure answers no to that, so it marked nothing and
+            // failed over to nobody — and once a dead mark expires and the
+            // account becomes a candidate again, every housekeeping call in a
+            // row picked the same broken account and failed, indefinitely,
+            // with a healthy one sitting beside it. Proved by the review with
+            // three sequential calls through the real path.
+            if (!denied && isAuthFailureText(text)) authDead = text.trim().slice(0, 200);
+          }
+          if (authDead && pool && account) {
+            pool.markCredential(account.id, 'dead', authDead);
+            tried.add(account.id);
+            break;
           }
           if (denied && pool && account) {
             pool.block(account.id, denied);
@@ -84,7 +102,9 @@ export async function* accountCompletion(args: {
       } finally {
         session.close?.();
       }
-      if (!denied || !pool) return;
+      // Either kind of refusal means "try the next account"; anything else
+      // means this one answered and the generator is done.
+      if ((!denied && !authDead) || !pool) return;
     }
   } finally {
     pool?.close();

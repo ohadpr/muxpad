@@ -512,7 +512,7 @@ export class VoiceSession {
    * Held as a window rather than a flag so it cannot leak into the next call:
    * see {@link DELIVERY_WATCH_MS}.
    */
-  private deliveryWatches: Array<{ task: VoiceTask; until: number }> = [];
+  private deliveryWatches: Array<{ task: VoiceTask; until: number; announced?: boolean }> = [];
   /**
    * Has a turn WE DID NOT START run since the watches were armed?
    *
@@ -546,6 +546,9 @@ export class VoiceSession {
    * aloud and naming it as the answer to your question.
    */
   private snapshotRecheck: number | null = null;
+  /** The most recent `session` frame. See the note at the call site: the
+   *  re-check must act on the newest facts, not the ones that armed it. */
+  private lastSnapshot: Extract<VoiceChatFrame, { t: 'session' }> | null = null;
   private foreignTurnSinceWatch = false;
   /** The pane's agent mode, as the server last reported it. Null until the
    *  first session frame, which is why the one reader of it treats null as
@@ -1040,6 +1043,13 @@ export class VoiceSession {
     if (frame.t === 'queue') this.reconcileQueue(frame.items ?? []);
     if (frame.t === 'session') {
       if (typeof frame.mode === 'string') this.paneMode = frame.mode;
+      // THE LATEST ONE WINS. The re-check timer used to hold the frame it was
+      // armed with, so a newer snapshot saying the request was still queued —
+      // or that a turn was running — could not call it off: the timer fired
+      // on the stale idle frame, announced the turn finished, retired the
+      // task and dropped the answer. Keeping the newest here means the timer
+      // asks the question again against what is true when it fires.
+      this.lastSnapshot = frame;
       this.settleAgainstSnapshot(frame);
     }
     // The question is remembered whether or not it belongs to a task of OURS: a
@@ -1250,9 +1260,21 @@ export class VoiceSession {
       this.trace('unstamped turn-start from a stamping server — not binding');
       return;
     } else {
-      // Unstamped (older server): fall back to submit order, which is the order
-      // the server runs them in.
-      owner = waiting[0];
+      // ── AN UNSTAMPED START CLAIMS NOTHING ───────────────────────────────
+      // This fell back to submit order "for an older server", on the grounds
+      // that the server runs sends in that order. The latch above means the
+      // fallback only ran before the FIRST stamped start had been seen — and
+      // that window is exactly when a cron, a wakeup or any other autonomous
+      // turn can arrive unstamped and be handed the voice request that is
+      // waiting. Reproduced: an autonomous turn's output spoken as the answer
+      // to the user's first question.
+      //
+      // The stamp comes from the SERVER, and a muxpad server is one process
+      // that is always current — there is no "older server" on the other end
+      // of this socket. So the fallback protected nothing and cost the one
+      // mis-attribution a voice session must never make.
+      this.trace('unstamped turn-start — claiming nothing');
+      return;
     }
     if (!owner) return;
     this.registry.setStatus(owner.id, 'working');
@@ -1435,7 +1457,7 @@ export class VoiceSession {
         // never settled by anything later, so the request sits `queued` for
         // ever and asking again is refused as a duplicate. One timer re-asks
         // the same question with the state as it is then.
-        this.recheckSnapshot(frame);
+        this.recheckSnapshot();
         continue;
       }
       this.deliver(
@@ -1480,15 +1502,20 @@ export class VoiceSession {
   /** Re-run {@link settleAgainstSnapshot} once the youngest task has aged past
    *  the grace. One timer at a time: the snapshot is re-sent often enough that
    *  arming one per frame would stack them. */
-  private recheckSnapshot(frame: Extract<VoiceChatFrame, { t: 'session' }>): void {
+  private recheckSnapshot(): void {
     if (this.snapshotRecheck != null) return;
     this.snapshotRecheck = this.sched.setTimeout(() => {
       this.snapshotRecheck = null;
       if (this.disposed) return;
-      // The turn may have started in the meantime, which moves the task off
-      // `queued` and makes this a no-op — which is the common case and the
-      // point.
-      this.settleAgainstSnapshot(frame);
+      // THE NEWEST SNAPSHOT, not the one that armed this. A frame arriving in
+      // between can say the request is still parked, or that a turn is
+      // running — both of which mean "do not settle" — and acting on the
+      // captured one announced a completion that had not happened.
+      //
+      // The turn may also have started, which moves the task off `queued` and
+      // makes this a no-op. That is the common case and the point.
+      const latest = this.lastSnapshot;
+      if (latest) this.settleAgainstSnapshot(latest);
     }, QUEUE_DROP_GRACE_MS);
   }
 
@@ -1499,7 +1526,11 @@ export class VoiceSession {
     if (this.foreignTurnSinceWatch) return false;
     const now = this.sched.now();
     this.deliveryWatches = this.deliveryWatches.filter((w) => now <= w.until);
-    const watch = this.deliveryWatches.shift();
+    // NOT `shift()`. A single request routinely produces more than one batch —
+    // three workers reporting as two deliveries is ordinary — and consuming
+    // the watch on the first meant the second was dropped without a sound.
+    // The watch lives until it expires; what happens once is the ANNOUNCEMENT.
+    const watch = this.deliveryWatches[0];
     if (!watch) return false;
     const task = watch.task;
     if (this.registry.isFenced(task)) return false;
@@ -1522,13 +1553,27 @@ export class VoiceSession {
     // and the question is worth repeating (the user asked it minutes ago and
     // has had a whole conversation since). With more than one it is a guess,
     // and a confident wrong label is worse than a vague right one.
-    const certain = this.deliveryWatches.length === 0;
-    this.deliver(task, {
-      kind: 'commentary',
-      text: certain
-        ? `The agents you sent off have reported back on: ${task.request.slice(0, 120)}`
-        : 'Some of the agents you sent off have reported back.',
-    });
+    // ONCE PER REQUEST, not once per batch. The watch survives the first
+    // delivery (see above) so a second batch is still spoken — but
+    // re-announcing "the agents you sent off have reported back on X" for
+    // every batch of one request is the same sentence twice.
+    if (!watch.announced) {
+      watch.announced = true;
+      // NAME IT ONLY WHEN WE KNOW WHICH ONE IT IS. The delivery's `from=` ids
+      // identify the sub-chats, and voice has no map from those to the
+      // request that spawned them — the frames it reads carry labels, not tab
+      // ids. With ONE watch open the attribution is certain and the question
+      // is worth repeating (the user asked it minutes ago and has had a whole
+      // conversation since). With more than one it is a guess, and a
+      // confident wrong label is worse than a vague right one.
+      const certain = this.deliveryWatches.length === 1;
+      this.deliver(task, {
+        kind: 'commentary',
+        text: certain
+          ? `The agents you sent off have reported back on: ${task.request.slice(0, 120)}`
+          : 'Some of the agents you sent off have reported back.',
+      });
+    }
     // It is a live turn like any other, so it gets the same progress updates
     // — a consolidation turn can run for minutes and used to pass in total
     // silence.

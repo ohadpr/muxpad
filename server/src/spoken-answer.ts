@@ -44,6 +44,16 @@ const BLOCK_SPLIT = /\n{2,}/;
  */
 const SPOKEN_CAP = 1200;
 
+/**
+ * How many trailing paragraphs count as "the answer" when the block rule
+ * picks a point near the end.
+ *
+ * Four, because the cap above is what actually bounds this — the paragraphs
+ * are a floor so a short multi-paragraph answer is not cut to its last line,
+ * and the cap is the ceiling so a long one does not become a recital.
+ */
+const ANSWER_PARAGRAPHS = 4;
+
 /** Cut at the last sentence end before the cap, so the model is handed a
  *  whole thought rather than a severed clause. Falls back to the cap itself
  *  for prose with no punctuation in range. */
@@ -65,12 +75,29 @@ export function spokenAnswerFrom(buffer: string | undefined): string | null {
   const text = (buffer ?? '').trim();
   if (!text) return null;
   const blocks = text.split(BLOCK_SPLIT);
-  // The same measured rule the chat client uses to promote a Chat-mode turn
-  // that made no reply: the last block, unless an earlier one is materially
-  // bigger (see pickSpokenBlock — a turn's final words are very often a status
-  // note rather than its result).
+  // ── THE TAIL, NOT ONE PARAGRAPH OF IT ──────────────────────────────────
+  //
+  // `pickSpokenBlock` is the chat client's rule and it is measured on whole
+  // assistant MESSAGES: the last one, unless an earlier one is three times
+  // longer and past 300 characters, because a turn's final words are so often
+  // a status note over the finding they hid.
+  //
+  // Those thresholds do not survive being applied to PARAGRAPHS. Measured: a
+  // 372-character preliminary status paragraph followed by a short
+  // three-paragraph answer selects the status and discards the answer
+  // entirely — at message granularity those would have been one block each,
+  // and at paragraph granularity the "earlier and much bigger" test fires on
+  // the wrong thing.
+  //
+  // So the server asks the question it can actually answer here: what did the
+  // turn say LAST. Everything from the chosen point to the end, not a single
+  // paragraph out of the middle — an answer that runs to three paragraphs is
+  // three paragraphs of answer.
   const i = pickSpokenBlock(blocks);
   if (i < 0) return null;
-  const chosen = (blocks[i] ?? '').trim();
-  return chosen ? trimToSentence(chosen, SPOKEN_CAP) : null;
+  const tail = blocks
+    .slice(Math.max(i, blocks.length - ANSWER_PARAGRAPHS))
+    .join('\n\n')
+    .trim();
+  return tail ? trimToSentence(tail, SPOKEN_CAP) : null;
 }
