@@ -469,6 +469,24 @@ function WorkingSetRow({
           <span className="navtree-ws-tag" aria-hidden="true">
             {workspace.name}
           </span>
+          {/* ── HOW LONG AGO ────────────────────────────────────────────
+              The band is ordered by SLOT, never by recency — that is the
+              whole design, so rows do not move under you — and the cost is
+              that nothing said whether you left this chat ten minutes ago or
+              this morning. This is what the ordering gives up, handed back.
+
+              ON THE TITLE LINE, not in the trailing gutter. It was a fifth
+              child of a four-track grid, so it wrapped: every row grew a
+              second line and the status mark — the tick, the chevron — went
+              with it. Here it is one more item on the line that already
+              knows how to give way, and the row keeps its four tracks.
+
+              It never shrinks, and the workspace tag still yields first: the
+              tag answers "which chat", the age answers "how stale", and a
+              clipped "Orb…" still reads while a clipped "3…" does not. */}
+          <span className="navtree-slot-age" aria-hidden="true">
+            {activeAge(age)}
+          </span>
         </span>
       </Link>
       {/* NO CONTROLS ON TOUCH, which is the rule every other row here already
@@ -483,20 +501,6 @@ function WorkingSetRow({
           works (see the ⌃1–⌃6 handler above) — it is simply not announced on
           every row — the strip's own handler binds by position, so the row no
           longer needs to know its number at all. */}
-      {/* ── HOW LONG AGO ──────────────────────────────────────────────────
-          The band is ordered by SLOT, not by recency — that is the whole
-          design, so the rows do not move under you — which means the reader
-          has no way to tell a chat you left ten minutes ago from one you left
-          this morning. The column is what the ordering deliberately gives up.
-
-          It is the quietest thing on the row and it sits in the trailing
-          gutter, where the eye already goes for "when" and where it cannot
-          push the name. On hover the × takes this space (see the css): the
-          age is a thing you read, the × is a thing you do, and the one you
-          are reaching for wins. */}
-      <span className="navtree-slot-age" aria-hidden="true">
-        {activeAge(age)}
-      </span>
       <span className="navtree-tab-rail">
         <button
           type="button"

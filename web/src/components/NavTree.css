@@ -4190,20 +4190,20 @@ body.sidenav-resizing iframe {
    captured token: the active row re-points --fg and --fg-dim at the pane's
    palette, and a value reaching for those lands pane ink on rail ground. */
 .navtree-slot-age {
+  /* NEVER SHRINKS, and it is last on the line, so the order of giving way is
+     workspace tag, then chat name, then nothing — which is the order of how
+     much a clipped version still tells you. */
   flex: 0 0 auto;
-  margin-left: 6px;
+  margin-left: 8px;
   color: color-mix(in srgb, var(--band-ink-dim) 60%, transparent);
   font-size: 0.625rem;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-/* THE × TAKES THIS SPACE. The age is a thing you read and the × is a thing you
-   do; the one you are reaching for wins, and showing both would widen the
-   gutter on hover and shuffle the name. */
-.navtree-ws-slot:hover .navtree-slot-age,
-.navtree-ws-slot:has(:focus-visible) .navtree-slot-age {
-  display: none;
-}
+/* IT STAYS ON HOVER. The first version hid it so the × could have the gutter,
+   which was a trailing-column problem and is gone with the column: the age is
+   on the title line now and the × has its own track. Hiding it would also mean
+   the one row you are pointing at is the one row that stops saying when. */
 .navtree-ws-slot .navtree-slot-drop {
   width: 18px;
   height: 18px;
