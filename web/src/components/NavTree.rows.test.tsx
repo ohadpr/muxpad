@@ -912,10 +912,23 @@ describe('a recently-active row carries its workspace', () => {
   });
 });
 
+/**
+ * The body of one rule, found by its selector.
+ *
+ * ANCHORED TO A RULE START, which is the whole correctness of it: a plain
+ * `indexOf('.navtree-ws-tag {')` also matches INSIDE
+ * `.navtree-ws-slot .navtree-ws-tag {`, so adding a scoped override silently
+ * redirected four assertions to the wrong block and they failed describing
+ * the wrong rule. (The card tests were fixed for exactly this a few hours
+ * earlier; the same helper existed here and was not.)
+ */
 function rule(css: string, sel: string): string {
   const flat = css.replace(/\/\*[\s\S]*?\*\//g, '');
-  const i = flat.indexOf(`${sel} {`);
-  return i < 0 ? '' : flat.slice(i, flat.indexOf('}', i));
+  const at = new RegExp(`(^|[}\\n])\\s*${sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{`);
+  const m = at.exec(flat);
+  if (!m) return '';
+  const i = m.index + m[0].length - 1;
+  return flat.slice(i, flat.indexOf('}', i));
 }
 
 /**
@@ -1010,5 +1023,29 @@ describe('a recently-active row says how long ago', () => {
     expect(css).not.toMatch(
       /\.navtree-ws-slot:hover \.navtree-slot-age[^{]*\{[^}]*display:\s*none/,
     );
+  });
+});
+
+/**
+ * ── THE HELPER THAT READS A RULE ─────────────────────────────────────────
+ *
+ * It matched a selector anywhere, so `.navtree-ws-tag` also found
+ * `.navtree-ws-slot .navtree-ws-tag` — and the moment a scoped override was
+ * added, four assertions quietly started describing the wrong block. They
+ * failed, which was luck: the same mistake can just as easily pass.
+ */
+describe('rule() finds the rule it was asked for', () => {
+  const css = [
+    '.a .target { color: red; }',
+    '.target { color: green; }',
+    '.target .b { color: blue; }',
+  ].join('\n');
+
+  it('does not match a selector used as a DESCENDANT', () => {
+    expect(rule(css, '.target')).toContain('green');
+  });
+
+  it('returns empty for a selector that is not a rule of its own', () => {
+    expect(rule(css, '.nothing-here')).toBe('');
   });
 });
