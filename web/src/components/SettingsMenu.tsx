@@ -9,6 +9,7 @@ import {
   type ThemeChoice,
   getChatTheme,
   setChatTheme,
+  themeInForce,
   updateSettings,
   useSettings,
 } from '../settings';
@@ -133,7 +134,7 @@ export function SettingsMenu() {
                   already has one. The nav IS the heading. */}
               <div className="settings-body">
                 <section hidden={section !== 'general'} aria-label="General settings">
-                  <ThemePicker chosen={settings.theme} />
+                  <ThemePicker chosen={themeInForce(settings)} />
                 </section>
                 <section hidden={section !== 'notifications'} aria-label="Notification settings">
                   <PushSection />
@@ -219,6 +220,14 @@ export function ThemePicker({ chosen, group = 'theme' }: { chosen: ThemeChoice; 
   };
   const useEverywhere = () => {
     if (!tab) return;
+    // `chosen` is the theme in force — the chat's own if it has one. That is
+    // the whole point of the button: take what this chat is wearing and make
+    // it the default, then clear the chat's override so it follows along.
+    //
+    // It used to be the DEVICE DEFAULT, because that is what the caller
+    // passed, so pressing it saved the value that was already the default and
+    // then cleared the pick you had just made — the button did the opposite
+    // of its label, silently.
     updateSettings({ theme: chosen });
     write(null, tab);
   };

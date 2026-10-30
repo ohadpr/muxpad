@@ -7,6 +7,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ThemeSwitch } from './ThemeSwitch';
 
 vi.mock('../settings', () => ({
+  // The picker asks the same question the painter does — the chat's theme if
+  // it has one, the device default otherwise. Mocked as the identity on the
+  // device default, which is what these tests set up.
+  themeInForce: (s: { theme: string }) => s.theme,
+  getChatTheme: () => null,
+  setChatTheme: vi.fn(),
   useSettings: () => ({ theme: 'system' }),
   updateSettings: vi.fn(),
   SYSTEM_PAIR: { light: 'alucard', dark: 'dracula' },
