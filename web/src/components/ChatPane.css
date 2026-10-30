@@ -1194,8 +1194,13 @@
      shadow before it starts reading as a gap at all — the same lesson the
      status strip above the pill learned in its own 16px.
      Still a `max()`, never a sum: see below. */
+  /* 16 → 22 ON A SECOND LOOK, for the same reason again: the themes that draw
+     an offset shadow spend six of it before any gap begins, so sixteen read as
+     ten — and ten was already the number that was too tight. Twenty-two leaves
+     a visible gap under the loudest shadow and is a comfortable margin on the
+     themes with none. */
   padding: 6px max(12px, env(safe-area-inset-right, 0px))
-    max(16px, env(safe-area-inset-bottom, 0px)) max(12px, env(safe-area-inset-left, 0px));
+    max(22px, env(safe-area-inset-bottom, 0px)) max(12px, env(safe-area-inset-left, 0px));
   background: transparent;
   pointer-events: none; /* the transparent gaps don't eat scroll/clicks… */
 }
