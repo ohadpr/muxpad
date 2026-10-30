@@ -946,3 +946,53 @@ describe('every row says where it is from', () => {
     expect(strip.slice(0, strip.indexOf('\nfunction '))).not.toMatch(/activeWorkspaceSlug/);
   });
 });
+
+/**
+ * ── HOW LONG AGO ─────────────────────────────────────────────────────────
+ *
+ * The band is ordered by SLOT and never by recency — that is the whole design,
+ * so rows do not move under you — and the cost is that nothing said whether
+ * you left a chat ten minutes ago or this morning. This column is what the
+ * ordering gives up, handed back.
+ */
+describe('a recently-active row says how long ago', () => {
+  const tsx = readFileSync(join(__dirname, 'NavTree.tsx'), 'utf8');
+  const css = readFileSync(join(__dirname, 'NavTree.css'), 'utf8');
+  // The STRIP holds the clock and passes the age down, so both halves are in
+  // scope here rather than just the row.
+  const strip = tsx.slice(tsx.indexOf('function WorkingSetStrip'));
+  const body = strip.slice(0, strip.indexOf('\nfunction SidebarTree'));
+
+  it('reads the SAME stamp the slot decays on', () => {
+    // The number on screen and the rule that evicts the row have to be one
+    // clock, or a row can read "2m" and vanish.
+    expect(body).toMatch(/age=\{now - at\}/);
+    expect(body).toMatch(/rows\.map\(\(\{ tab, workspace, at \}\)/);
+  });
+
+  it('ticks on its own rather than waiting for something else to render', () => {
+    expect(body).toMatch(/setInterval\(\(\) => setNow\(Date\.now\(\)\), 30_000\)/);
+  });
+
+  it('is quieter than the workspace tag, which is already the quiet thing', () => {
+    // The tag answers "which chat is this"; the age answers "how stale". Only
+    // the first is ever what you are scanning for.
+    const age = rule(css, '.navtree-slot-age');
+    expect(age).toMatch(/color:\s*color-mix\(in srgb, var\(--band-ink-dim\)/);
+    const tagSize = /font-size:\s*([\d.]+)rem/.exec(rule(css, '.navtree-ws-tag'))?.[1];
+    const ageSize = /font-size:\s*([\d.]+)rem/.exec(age)?.[1];
+    expect(Number(ageSize)).toBeLessThan(Number(tagSize));
+  });
+
+  it('does not jitter as the numbers tick', () => {
+    expect(rule(css, '.navtree-slot-age')).toMatch(/font-variant-numeric:\s*tabular-nums/);
+  });
+
+  it('yields the gutter to the × on hover', () => {
+    // The age is a thing you read, the × is a thing you do. Showing both
+    // would widen the gutter on hover and shuffle the name.
+    const i = css.indexOf('.navtree-ws-slot:hover .navtree-slot-age');
+    expect(i).toBeGreaterThan(-1);
+    expect(css.slice(i, css.indexOf('}', i))).toMatch(/display:\s*none/);
+  });
+});
