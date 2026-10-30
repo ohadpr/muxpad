@@ -1073,3 +1073,22 @@ describe('the band’s query container', () => {
     );
   });
 });
+
+/**
+ * "How long ago was this active" is a question about a chat you are NOT in.
+ * On the active row the answer is "you are looking at it" — and that row
+ * carries the live mark and the heaviest type, so it was the first to clip.
+ */
+describe('the age is not on the row you are in', () => {
+  const css = readFileSync(join(__dirname, 'NavTree.css'), 'utf8');
+
+  it('hides on the active band row', () => {
+    expect(
+      rule(css, '.navtree-workingset .navtree-tab-row[data-active="true"] .navtree-slot-age'),
+    ).toMatch(/display:\s*none/);
+  });
+
+  it('and nowhere else — every other row still says when', () => {
+    expect(rule(css, '.navtree-slot-age')).not.toMatch(/display:\s*none/);
+  });
+});

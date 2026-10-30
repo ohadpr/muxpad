@@ -4232,6 +4232,17 @@ body.sidenav-resizing iframe {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+/* ── NOT ON THE ROW YOU ARE IN ───────────────────────────────────────────
+   "How long ago was this active" is a question about a chat you are NOT in.
+   On the active row the answer is "you are looking at it", the number is the
+   least useful thing on the busiest line in the band, and it is the one row
+   whose age you can read off the conversation itself.
+
+   Dropping it is also what buys that row its name back: the active row
+   carries the live mark and the heaviest type, so it was the first to clip. */
+.navtree-workingset .navtree-tab-row[data-active="true"] .navtree-slot-age {
+  display: none;
+}
 /* IT STAYS ON HOVER. The first version hid it so the × could have the gutter,
    which was a trailing-column problem and is gone with the column: the age is
    on the title line now and the × has its own track. Hiding it would also mean
