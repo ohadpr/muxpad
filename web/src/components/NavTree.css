@@ -1625,6 +1625,30 @@
    not text and keeps its centring. */
 .navtree-ws-slot .navtree-tab-titleline {
   align-items: baseline;
+  /* A QUERY CONTAINER, so the line can decide what it has room for. The rail
+     is about 280px and this line is being asked to carry four things; what it
+     ran out of was the NAME, which is the one thing nobody is scanning past. */
+  container-type: inline-size;
+  container-name: slot-line;
+}
+/* ── A TWO-LETTER WORKSPACE TELLS YOU NOTHING ──────────────────────────────
+   The tag already gave way first, but giving way meant ELLIPSISING, so a tight
+   row spent twenty pixels on "Tr…" while the name it was qualifying was cut to
+   "Investi…". Both halves unreadable, to say one thing.
+
+   So it leaves instead. The row is still scannable — the name is back, the age
+   is still there — and the workspace is one hover away in the link's title.
+   This is the same rule as before ("it gives way first"), taken to its
+   conclusion: the thing that yields should yield all the way rather than
+   linger as a stub. */
+@container slot-line (max-width: 200px) {
+  /* Scoped to the slot, not bare `.navtree-ws-tag`. A bare one is a second
+     block with that exact selector, and every test that looks the rule up by
+     `indexOf('.navtree-ws-tag {')` would silently read THIS one instead — the
+     same false-match the card tests were just fixed for. */
+  .navtree-ws-slot .navtree-ws-tag {
+    display: none;
+  }
 }
 .navtree-ws-tag {
   flex: 0 1 auto;
@@ -4194,7 +4218,7 @@ body.sidenav-resizing iframe {
      workspace tag, then chat name, then nothing — which is the order of how
      much a clipped version still tells you. */
   flex: 0 0 auto;
-  margin-left: 8px;
+  margin-left: 7px;
   color: color-mix(in srgb, var(--band-ink-dim) 60%, transparent);
   font-size: 0.625rem;
   font-variant-numeric: tabular-nums;
