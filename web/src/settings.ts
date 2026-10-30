@@ -189,7 +189,19 @@ let current: Settings = typeof window === 'undefined' ? DEFAULTS : read();
 let chatTheme: ThemeChoice | null = null;
 
 /** What the document is actually wearing: the chat's theme, else the device's. */
-function themeInForce(s: Settings): ThemeChoice {
+/**
+ * The theme ACTUALLY IN FORCE — the chat's own if it has one, otherwise the
+ * device default.
+ *
+ * Exported because the PICKER has to ask the same question the painter does.
+ * It was reading `settings.theme` — the device default — while a pick made
+ * inside a chat writes the chat's theme, so the two disagreed by
+ * construction: the window repainted and the selection ring stayed where it
+ * was. Every theme looked unselectable, which is how this surfaced ("memphis
+ * is not selectable"), and "Use for every chat" then saved the ring's value
+ * rather than the one on screen and cleared the pick.
+ */
+export function themeInForce(s: Settings): ThemeChoice {
   return chatTheme ?? s.theme;
 }
 

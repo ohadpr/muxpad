@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useSettings } from '../settings';
+import { themeInForce, useSettings } from '../settings';
 import { ThemePicker } from './SettingsMenu';
 import './SettingsMenu.css';
 
@@ -61,7 +61,7 @@ export function ThemeSwitch() {
               group to the browser, so the dialog's checked radio and this
               one's fight over a single selection and arrow-keys walk between
               surfaces. */}
-          <ThemePicker chosen={settings.theme} group="theme-rail" />
+          <ThemePicker chosen={themeInForce(settings)} group="theme-rail" />
         </div>
       )}
     </div>
