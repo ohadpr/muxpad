@@ -2857,6 +2857,48 @@ export function ChatPane({
     return trackKeyboardInset(pane, { viewport: window.visualViewport ?? null });
   }, [active, pendingPick, session?.current_sid]);
 
+  /**
+   * ── ARRIVING AT A CHAT PUTS THE CARET IN IT ────────────────────────────
+   *
+   * Switching to a chat — from the sidebar, the switcher, a deep link — is
+   * almost always the first half of "and now say something". Type-to-focus
+   * below already covers the case where you start typing anyway; this covers
+   * the half second before that, where the caret is nowhere and the first
+   * keystroke has to be caught rather than placed.
+   *
+   * `showEpoch` is in the deps for the same reason the re-entry effect has
+   * it: a pane that was already mounted and merely became visible again never
+   * re-runs on `active` alone.
+   *
+   * NOT ON A PHONE. Focusing a field there raises the keyboard over half the
+   * screen, and arriving at a chat is at least as often about READING it. The
+   * composer is one tap away, and that tap is the signal.
+   *
+   * And it never TAKES focus from somewhere else: the search modal, a rename
+   * field, the picker. Arriving with something already focused means the
+   * arrival was incidental to whatever you are doing.
+   */
+  useEffect(() => {
+    if (!active || openTool || openImage || isMobileLayout()) return;
+    const ae = document.activeElement as HTMLElement | null;
+    if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return;
+    // One frame late: the pane is still being placed on this one (see the
+    // re-entry effect), and focusing mid-placement scrolls the log.
+    const h = requestAnimationFrame(() => {
+      const draft = inputRef.current;
+      if (!draft) return;
+      // `setCaret` rather than `focus`, with the caret at the END — a restored
+      // draft is a sentence you were part way through, and landing at its
+      // start is the one place you were not.
+      draft.setCaret(input.length);
+    });
+    return () => cancelAnimationFrame(h);
+    // biome-ignore lint/correctness/useExhaustiveDependencies: showEpoch is a re-run trigger — becoming visible again must re-place the caret.
+    // `input` is deliberately NOT a dependency: this places the caret on
+    // ARRIVAL, and re-running it on every keystroke would fight the caret the
+    // user is moving themselves.
+  }, [active, paneId, showEpoch, openTool, openImage]);
+
   // Type-to-focus: when this chat is the visible face and you start typing a
   // printable character with nothing else focused, jump focus to the composer so
   // the keystroke lands there (same as Slack/Discord). Skips modifier combos

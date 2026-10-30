@@ -196,3 +196,44 @@ describe('ChatPane.css names nothing the app never renders', () => {
     expect(dead, 'these rules match nothing').toEqual([]);
   });
 });
+
+/**
+ * ── ARRIVING AT A CHAT PUTS THE CARET IN IT ──────────────────────────────
+ *
+ * Switching to a chat is almost always the first half of "and now say
+ * something". Type-to-focus already covers the moment you start typing; this
+ * covers the half second before, where the caret is nowhere.
+ */
+describe('the composer takes focus on arrival', () => {
+  const SRC = readFileSync(join(import.meta.dirname, 'ChatPane.tsx'), 'utf8');
+  const effect = (() => {
+    const i = SRC.indexOf('ARRIVING AT A CHAT PUTS THE CARET IN IT');
+    return i < 0 ? '' : SRC.slice(i, SRC.indexOf('Type-to-focus:', i));
+  })();
+
+  it('exists, and re-runs when the pane becomes visible again', () => {
+    // A pane that was already mounted and merely became visible never
+    // re-runs on `active` alone — the same reason the re-entry effect has it.
+    expect(effect, 'no arrival-focus effect').not.toBe('');
+    expect(effect).toMatch(/\[active, paneId, showEpoch, openTool, openImage\]/);
+  });
+
+  it('does not raise the keyboard on a phone', () => {
+    // Arriving at a chat there is at least as often about READING it, and the
+    // keyboard covers half the screen. The composer is one tap away.
+    expect(effect).toContain('isMobileLayout()');
+  });
+
+  it('never steals focus from another field', () => {
+    // The search modal, a rename, the picker: arriving with something already
+    // focused means the arrival was incidental to what you are doing.
+    expect(effect).toMatch(/ae\.tagName === 'INPUT' \|\| ae\.tagName === 'TEXTAREA'/);
+    expect(effect).toContain('ae.isContentEditable');
+  });
+
+  it('lands at the END of a restored draft', () => {
+    // A restored draft is a sentence you were part way through, and its start
+    // is the one place you were not.
+    expect(effect).toMatch(/setCaret\(input\.length\)/);
+  });
+});
