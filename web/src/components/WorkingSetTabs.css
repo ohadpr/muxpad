@@ -65,13 +65,23 @@
   min-width: 128px;
   max-width: 224px;
   margin-right: 3px;
-  border: 1px solid var(--rail-border);
+  /* ── A STEP THE STRIP CAN BE SEEN THROUGH ──────────────────────────────
+     The body was `--rail-elev`, a 6% lift tuned for a CONTROL sitting on the
+     rail with space around it. Six tabs edge to edge on the same surface do
+     not have that space: on blueprint the strip and the tabs became one blue
+     block and only the hairlines told them apart ("tab bar background is same
+     color as tab background so it all mixes").
+     13% is the smallest step that reads as a separate object across the ten
+     themes while leaving the ACTIVE tab — which is the pane's face, a much
+     bigger jump — still obviously the loud one. Derived from the rail's ink
+     rather than listed per theme, so a theme added later cannot forget it. */
+  border: 1px solid color-mix(in srgb, var(--rail-ink) 20%, transparent);
   border-bottom: 0;
   border-radius: 8px 8px 0 0;
-  background: var(--rail-elev);
+  background: color-mix(in srgb, var(--rail-ink) 13%, var(--rail-surface));
 }
 .wstab:hover {
-  background: var(--rail-hover);
+  background: color-mix(in srgb, var(--rail-ink) 20%, var(--rail-surface));
 }
 /* ── THE TAB YOU ARE IN ────────────────────────────────────────────────
    The pane's own surface, continuing up into the strip — the tab IS the thing
@@ -81,8 +91,24 @@
    shape rather than two stacked ones. */
 .wstab[data-active="true"],
 .wstab[data-active="true"]:hover {
+  /* ── AND IT LEAVES THE ISLAND ────────────────────────────────────────
+     It is painted in the PANE's face, so its ink has to be the pane's ink —
+     the same rule, for the same reason, as the rail's selected row. Without
+     it the one tab that is not rail-coloured is still drawn in rail ink:
+     white on near-white in every light theme, which is exactly what the
+     screenshot showed ("active tab highlight borks the readability of tab
+     because tab name doesn't change color"). */
+  --fg: var(--pane-ink);
+  --fg-dim: var(--pane-ink-dim);
+  --fg-faint: var(--pane-ink-faint);
+  --bg-hover: var(--pane-hover);
+  --accent: var(--pane-accent);
+  --status-ready: var(--pane-status-ready);
+  --status-working: var(--pane-status-working);
+  --status-blocked: var(--pane-status-blocked);
+  --status-dead: var(--pane-status-dead);
   background: var(--bg-pane-face, var(--bg));
-  border-color: var(--rail-border);
+  border-color: color-mix(in srgb, var(--pane-ink) 18%, transparent);
   box-shadow: 0 1px 0 0 var(--bg-pane-face, var(--bg));
 }
 

@@ -120,7 +120,8 @@ describe('the strip is drawn as navigation', () => {
     // is read by word.
     const tab = /\.wstab \{([^}]*)\}/.exec(CSS)?.[1] ?? '';
     expect(tab).toMatch(/border-radius:\s*8px 8px 0 0/);
-    expect(tab).toMatch(/background:\s*var\(--rail-elev\)/);
+    // A lift off the strip's own surface — see the suite below for how far.
+    expect(tab).toMatch(/background:\s*color-mix\(in srgb, var\(--rail-ink\)/);
     expect(tab).toMatch(/border:\s*1px solid/);
   });
 
@@ -145,13 +146,15 @@ describe('the strip is drawn as navigation', () => {
     // The one state a nav element must carry: it is the reason you would
     // look at the strip at all.
     expect(SRC).toMatch(/data-unread=\{tab\.unread \? 'true' : undefined\}/);
-    const unread = /\.wstab\[data-unread=["']true["']\] \.wstab-name \{([^}]*)\}/.exec(CSS)?.[1] ?? '';
+    const unread =
+      /\.wstab\[data-unread=["']true["']\] \.wstab-name \{([^}]*)\}/.exec(CSS)?.[1] ?? '';
     expect(unread).toMatch(/font-weight:\s*700/);
     expect(unread).toMatch(/color:\s*var\(--fg\)/);
   });
 
   it('keeps unread louder than active, so a tab that is both says the louder thing', () => {
-    const active = /\.wstab\[data-active=["']true["']\] \.wstab-name \{([^}]*)\}/.exec(CSS)?.[1] ?? '';
+    const active =
+      /\.wstab\[data-active=["']true["']\] \.wstab-name \{([^}]*)\}/.exec(CSS)?.[1] ?? '';
     const activeW = Number(/font-weight:\s*(\d+)/.exec(active)?.[1]);
     const unreadW = Number(
       /font-weight:\s*(\d+)/.exec(
@@ -159,5 +162,60 @@ describe('the strip is drawn as navigation', () => {
       )?.[1],
     );
     expect(unreadW).toBeGreaterThan(activeW);
+  });
+});
+
+/**
+ * ── TWO SURFACES, AND THE ONE THAT LEAVES THE ISLAND ─────────────────────
+ *
+ * Reported from a blueprint screenshot: "tab bar background is same color as
+ * tab background so it all mixes", and "active tab highlight borks the
+ * readability of tab because tab name doesn't change color".
+ */
+describe('the strip and the tabs on it are two surfaces', () => {
+  it('lifts a tab well clear of the strip it sits on', () => {
+    // `--rail-elev` is a 6% lift tuned for a control with space around it.
+    // Six tabs edge to edge do not have that space — on blueprint the strip
+    // and the tabs became one blue block.
+    const tab = /\.wstab \{([^}]*)\}/.exec(CSS)?.[1] ?? '';
+    const lift = Number(/var\(--rail-ink\) (\d+)%, var\(--rail-surface\)/.exec(tab)?.[1]);
+    expect(lift).toBeGreaterThanOrEqual(10);
+    expect(tab).not.toMatch(/background:\s*var\(--rail-elev\)/);
+  });
+
+  it('derives both surfaces from the rail, so a new theme cannot forget one', () => {
+    const tab = /\.wstab \{([^}]*)\}/.exec(CSS)?.[1] ?? '';
+    expect(tab).toMatch(/color-mix\(in srgb, var\(--rail-ink\)/);
+    expect(/\.wstabs \{([^}]*)\}/.exec(CSS)?.[1] ?? '').toMatch(
+      /background:\s*var\(--rail-surface\)/,
+    );
+  });
+});
+
+describe('the active tab leaves the island', () => {
+  const active = (() => {
+    const i = CSS.search(/\.wstab\[data-active=["']true["']\],/);
+    return i < 0 ? '' : CSS.slice(i, CSS.indexOf('}', i));
+  })();
+
+  it('re-points the ink at the PANE, because it is painted in the pane’s face', () => {
+    // The same rule, for the same reason, as the rail's selected row.
+    // Without it the one tab that is not rail-coloured is drawn in rail ink:
+    // white on near-white in every light theme.
+    expect(active).toMatch(/--fg:\s*var\(--pane-ink\)/);
+    expect(active).toMatch(/--fg-dim:\s*var\(--pane-ink-dim\)/);
+  });
+
+  it('re-points the STATUS colours too, not just the text', () => {
+    // The dot sits on the pane's face as well, and a rail status hue is
+    // chosen to carry on a deep surface.
+    expect(active).toMatch(/--status-working:\s*var\(--pane-status-working\)/);
+    expect(active).toMatch(/--status-blocked:\s*var\(--pane-status-blocked\)/);
+  });
+
+  it('is the only thing wearing the pane face', () => {
+    // If an inactive tab took it too, "which one am I in" would be a
+    // question about a border rather than an answer about a surface.
+    expect((CSS.match(/background:\s*var\(--bg-pane-face/g) ?? []).length).toBe(1);
   });
 });
