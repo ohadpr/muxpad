@@ -305,7 +305,7 @@ function pairProps(pair: string) {
  *
  * The artifact row used to print the raw url, which carried its own notice:
  * a string beginning `https://` is visibly not a place in this app. Now it
- * reads `trayo plan card demo`, which looks exactly like every other piece of
+ * reads `orbit plan card demo`, which looks exactly like every other piece of
  * text on the card, and the only thing distinguishing it is the accent — a
  * colour, which says "pressable" and not "pressable, and the page goes away".
  *

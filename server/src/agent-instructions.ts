@@ -156,7 +156,7 @@ Capabilities worth knowing:
 
   · **\`--name=foo\` yields \`foo-7k3mqp2x\`.** Every slug carries 8 random
     characters, because a readable slug on an unauthenticated public host is a
-    door with a guessable name — a wordlist walks \`/trayo-pitch/\`,
+    door with a guessable name — a wordlist walks \`/orbit-pitch/\`,
     \`/roof-office/\`, \`/lior-susan-background/\` in an afternoon, and what it
     finds is somebody's pitch, apartment hunt and friends. **Always hand back
     the url the command PRINTS.** Never retype one from the name you chose,
