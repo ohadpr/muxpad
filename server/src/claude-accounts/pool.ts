@@ -151,6 +151,13 @@ export class AccountPool {
       CREATE TABLE IF NOT EXISTS credentials (
         account TEXT PRIMARY KEY, state TEXT NOT NULL, detail TEXT NOT NULL,
         updated_at INTEGER NOT NULL);
+      -- WHO IS CURRENTLY SPENDING AN ACCOUNT'S ONE RETRY. See choose(): an
+      -- expired dead mark makes the account a candidate again, and the first
+      -- pane to take it owns the attempt until the window passes. The pane is
+      -- the whole point -- a selector re-asking for the account it is already
+      -- using must not be turned away by its own reservation.
+      CREATE TABLE IF NOT EXISTS reservations (
+        account TEXT PRIMARY KEY, pane TEXT NOT NULL, at INTEGER NOT NULL);
     `);
     // TWO RUNNERS OPEN THIS DATABASE AT ONCE. `CREATE TABLE IF NOT EXISTS` is
     // safe for that; a check-then-ALTER is not — both see the column missing,
@@ -172,8 +179,16 @@ export class AccountPool {
   accounts(): Account[] {
     return readAccountConfigOrNull(this.dir)?.accounts ?? [];
   }
-  private eligible(account: Account, model: string): boolean {
+  private eligible(account: Account, model: string, pane?: string): boolean {
     if (!account.enabled) return false;
+    // ── SOMEBODY ELSE IS SPENDING THIS ACCOUNT'S ONE RETRY ────────────────
+    // An expired dead mark makes the account a candidate again (see
+    // `credential`), and exactly one pane gets that attempt. The holder may
+    // re-select it as often as it likes — the Claude backend asks once at
+    // startup and again before dispatch — and everybody else waits for the
+    // next window.
+    const held = this.reservation(account.id);
+    if (held && held.pane !== pane && this.now() - held.at < CREDENTIAL_RETRY_MS) return false;
     // A DEAD CREDENTIAL IS NOT A CANDIDATE. Cheaper than any quota question and
     // asked first, because an account that cannot authenticate cannot do work
     // of any size on any model.
@@ -198,7 +213,7 @@ export class AccountPool {
         const config = readAccountConfigOrNull(this.dir);
         if (!config) return null;
         const candidates = config.accounts.filter(
-          (a) => !excluded.has(a.id) && this.eligible(a, model),
+          (a) => !excluded.has(a.id) && this.eligible(a, model, pane),
         );
         candidates.sort(
           (a, b) =>
@@ -216,15 +231,25 @@ export class AccountPool {
         // moved when something finally failed, which is far too late — that
         // is the original incident, a dead account chosen on every send.
         //
-        // So taking the retry CONSUMES it, here, inside the same transaction
-        // that hands the account out. Whoever wins the race gets the attempt
-        // and everybody behind them sees a fresh mark and goes elsewhere. If
-        // the attempt succeeds the row is cleared outright (the runner's
-        // credential(). expiresAt check); if it fails the mark is rewritten
-        // with the same effect it would have had anyway.
+        // So taking the retry RESERVES it, here, inside the same transaction
+        // that hands the account out — and the reservation belongs to the PANE
+        // that took it.
+        //
+        // IT USED TO BE A DEAD MARK, which was worse than the bug it fixed.
+        // The Claude backend selects at startup and selects AGAIN before
+        // dispatch, so its own reservation made the account ineligible on the
+        // second call: "All Claude accounts are unavailable", request saved,
+        // zero prompts delivered to the SDK. A reservation nobody owns cannot
+        // tell the holder from a stranger.
+        // ONLY for the expired-dead case. A healthy account has no retry to
+        // spend, and reserving one would turn every ordinary selection into an
+        // exclusive lock — which is what the first version of this did.
         const cred = this.credential(chosen.id);
         if (cred.expiresAt > 0 && cred.state === 'ok')
-          this.markCredential(chosen.id, 'dead', cred.detail);
+          this.db
+            .prepare(`INSERT INTO reservations VALUES (?, ?, ?)
+              ON CONFLICT(account) DO UPDATE SET pane = excluded.pane, at = excluded.at`)
+            .run(chosen.id, pane, this.now());
         this.db
           .prepare('INSERT OR REPLACE INTO assignments VALUES (?, ?, ?)')
           .run(pane, chosen.id, this.now());
@@ -327,6 +352,10 @@ export class AccountPool {
    * table.
    */
   markCredential(id: string, state: 'ok' | 'dead', detail = ''): void {
+    // The attempt is over either way, so the reservation it held is spent. A
+    // failure re-arms the window through the fresh dead mark; a success
+    // clears the row outright and the account is simply back.
+    this.db.prepare('DELETE FROM reservations WHERE account = ?').run(id);
     this.db
       .prepare(
         `INSERT INTO credentials VALUES (?, ?, ?, ?) ON CONFLICT(account)
@@ -358,6 +387,14 @@ export class AccountPool {
    * the two states a reader is looking at. "Signed out" and "signed out, and
    * we will try again shortly" are different sentences.
    */
+  /** Who holds this account's one retry, if anybody. See `choose`. */
+  private reservation(id: string): { pane: string; at: number } | null {
+    return (
+      (this.db.prepare('SELECT pane, at FROM reservations WHERE account = ?').get(id) as
+        | { pane: string; at: number }
+        | undefined) ?? null
+    );
+  }
   credential(id: string): {
     state: 'ok' | 'dead';
     detail: string;

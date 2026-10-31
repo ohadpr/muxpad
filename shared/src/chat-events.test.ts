@@ -708,3 +708,28 @@ describe('a compacted session', () => {
     ).toBeNull();
   });
 });
+
+/**
+ * There is NO provenance on these messages — a compaction arrives as a
+ * user-role message exactly like a typed one — so the opening sentence is the
+ * only guard there is, and it has to be the whole sentence.
+ */
+describe('the compaction match is the harness’s sentence, not a fragment', () => {
+  it('does not fold a human continuation that merely starts the same way', () => {
+    // The first version allowed a bare "ran out of".
+    expect(
+      expandCompaction(
+        'This session is being continued from a previous conversation that ran out of time, so I am re-asking.',
+        'u1',
+        MS,
+      ),
+    ).toBeNull();
+  });
+
+  it('still matches the two wordings the harness actually writes', () => {
+    for (const tail of ['ran out of context.', 'is being summarized.']) {
+      const text = `This session is being continued from a previous conversation that ${tail}\n\nSummary:\nthings`;
+      expect(expandCompaction(text, 'u1', MS), tail).not.toBeNull();
+    }
+  });
+});

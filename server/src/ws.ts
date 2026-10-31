@@ -1972,6 +1972,18 @@ export function attachWsServer(deps: {
             // is what tells a listening client "this one isn't yours".
             const startedBy = conn.pendingSendText;
             conn.pendingSendText = null;
+            // ── AND THE CRON FLAG BELONGS TO THIS TURN, NOT THE LAST ──────
+            // It was set when a send was relayed and cleared by nothing else,
+            // so after a cron finished, the next AUTONOMOUS turn — a wakeup, a
+            // background completion — inherited its notification suppression
+            // and went unannounced until some unrelated send overwrote the
+            // flag. Reproduced over real sockets, and it affects panes with no
+            // voice session at all.
+            //
+            // A turn nobody sent carries no marker, which is exactly the
+            // question `parseCronMarker` answers, so the stamp decides it: a
+            // stamped cron turn is from a cron, anything else is not.
+            conn.turnFromCron = startedBy ? parseCronMarker(startedBy) !== null : false;
             bcast({ t: 'turn-start', ...(startedBy ? { text: startedBy } : {}) });
             emitTurn('start');
           } else if (frame.t === 'stream') {

@@ -23,34 +23,37 @@ describe('the spoken answer in an agent turn', () => {
     expect(spokenAnswerFrom('   \n\n  ')).toBeNull();
   });
 
-  it('takes the last block when the turn simply answers', () => {
+  it('hands over what the turn said, tail first', () => {
+    // It does not try to SELECT the answer out of the prose. The voice model
+    // paraphrases whatever it is given, so a little narration riding along
+    // costs a clause and a missing paragraph costs the answer.
     const buf = 'Let me check the tests.\n\nAll 212 pass.';
-    expect(spokenAnswerFrom(buf)).toBe('All 212 pass.');
+    expect(spokenAnswerFrom(buf)).toContain('All 212 pass.');
   });
 
-  it('does not read out a status line over the finding it hid', () => {
-    // The measured failure: a turn's final words are very often a status note
-    // rather than its result.
-    const finding = `The 08:00 bulletin ran about eight minutes, so it was being cut roughly three minutes short. ${'x'.repeat(400)}`;
+  it('keeps an earlier finding AND the status line after it', () => {
+    // The old rule chose between them and could choose wrong. Both fit under
+    // the cap, so both go — the model decides what to say about them.
+    const finding =
+      'The 08:00 bulletin ran about eight minutes, so it was being cut roughly three minutes short.';
     const buf = `${finding}\n\nTranscription of the 9 chunks is running (~3 min)… waiting on it.`;
-    expect(spokenAnswerFrom(buf)).toContain('cut roughly three minutes short');
+    const out = spokenAnswerFrom(buf) as string;
+    expect(out).toContain('cut roughly three minutes short');
+    expect(out).toContain('waiting on it');
   });
 
-  it('keeps the last block when the two are ordinary paragraphs', () => {
-    // The thresholds must not fire on prose that is merely longer.
+  it('does not drop a paragraph just because another one is longer', () => {
     const a = 'A paragraph about the first thing, of a perfectly normal length for prose.';
     const b = 'And the answer, which is shorter.';
-    expect(spokenAnswerFrom(`${a}\n\n${b}`)).toBe(b);
+    expect(spokenAnswerFrom(`${a}\n\n${b}`)).toContain(b);
   });
 
-  it('stops at a sentence rather than reading an essay aloud', () => {
-    // A long agent answer is a WRITTEN artifact — tables, paths, code — and
-    // the screen keeps the rest.
+  it('stops at a sentence rather than starting mid-clause', () => {
     const long = `${'This is a sentence that goes on. '.repeat(80)}END.`;
     const out = spokenAnswerFrom(long) as string;
     expect(out.length).toBeLessThan(1300);
-    expect(out.endsWith('.')).toBe(true);
-    expect(out).not.toContain('END.');
+    expect(out).toContain('END.');
+    expect(out.startsWith('This is')).toBe(true);
   });
 
   it('is a selection, never a composition', () => {
@@ -106,5 +109,34 @@ describe('what the server refuses to speak', () => {
     const guard = WS.slice(Math.max(0, i - 1400), i);
     expect(guard).toContain('!conn.stoppedThisTurn');
     expect(guard).toContain('!conn.spokeThisTurn');
+  });
+});
+
+/**
+ * An answer that runs to several paragraphs arrives whole. The first version
+ * sliced with `Math.max(i, length - 4)` and the selector ordinarily returns
+ * the LAST paragraph, so the max always won and the allowance kept exactly
+ * one — a three-paragraph explanation was spoken as its final sentence.
+ */
+describe('a multi-paragraph answer', () => {
+  it('is not cut down to its last line', () => {
+    const buf = [
+      'Let me look at the build.',
+      'The failure is a missing peer dependency, not your change.',
+      'Install it with pnpm add -D vite-plugin-foo.',
+      'Then retry the build.',
+    ].join('\n\n');
+    const out = spokenAnswerFrom(buf) as string;
+    expect(out).toContain('missing peer dependency');
+    expect(out).toContain('Then retry the build.');
+  });
+
+  it('cuts from the END when the turn is long, never from the answer', () => {
+    // The answer is at the end of a turn, so an over-long buffer loses its
+    // beginning.
+    const long = `${'Narration that goes on and on. '.repeat(80)}THE ANSWER IS FORTY-TWO.`;
+    const out = spokenAnswerFrom(long) as string;
+    expect(out).toContain('THE ANSWER IS FORTY-TWO.');
+    expect(out.length).toBeLessThan(1300);
   });
 });
