@@ -83,7 +83,10 @@
      Derived from --chat-bg rather than --chat-elev deliberately: in dracula
      elev is DARKER than bg, so every elev-based card sat at ΔL* 1.1 no matter
      how much tint went into it. */
-  background: color-mix(in srgb, var(--chat-accent) 9%, var(--chat-bg));
+  /* Named, so a rule that means "keep the resting surface" can say exactly
+     that. The hover arm below tried `inherit` and got the PARENT's. */
+  --chat-card-face: color-mix(in srgb, var(--chat-accent) 9%, var(--chat-bg));
+  background: var(--chat-card-face);
   border: 1px solid color-mix(in srgb, var(--chat-accent) 20%, transparent);
   box-shadow: 0 1px 2px color-mix(in srgb, var(--chat-accent) 8%, transparent);
   overflow: hidden;
@@ -107,7 +110,25 @@
 .chat-card.-togglable {
   cursor: pointer;
 }
-.chat-card.-togglable:hover {
+/* ── NO HOVER WASH ON AN HTML CARD ────────────────────────────────────────
+   The frame is painted with the card's RESTING surface — it has to be, because
+   a transparent root hands the canvas to the UA default and a dark-mode browser
+   renders every card as a black slab inside a light app. The consequence is
+   that a background change on the card cannot reach the frame: hovering lit up
+   only the strip beside it, which read as "the right side is a separate
+   button". A uniform no-op beats a highlight on 46px of a 600px card; the
+   pointer cursor is the affordance. */
+/* NO WASH, AND `inherit` IS NOT HOW YOU SAY THAT. `.chat-card` paints a
+   color-mix of its own, so `inherit` takes the PARENT's background — the card
+   went transparent on hover, the strip showed the chat ground and the frame
+   kept the card surface. The exact split this rule was added to remove,
+   inverted. Measured in a browser: strip 245,232,229 against frame
+   245,222,223.
+   So it names the card's OWN surface. */
+.chat-card.-togglable.-html:hover {
+  background: var(--chat-card-face);
+}
+.chat-card.-togglable:not(.-html):hover {
   background: color-mix(
     in srgb,
     var(--chat-fg) 4%,
@@ -262,6 +283,16 @@
   /* Top padding, which the row used to provide: the body is the first thing in
      the card now. Right clears the tail on the first line. */
   padding: 7px 46px 10px 13px;
+  /* ── THE CEILING LIVES HERE, AND IT SCROLLS ───────────────────────────
+     A pinned card that grows without limit pushes the conversation off the
+     screen, so there is a maximum. It used to be applied to the FRAME, whose
+     own document is `overflow: hidden` — so a 975px card was simply truncated
+     at 600 with no way to see the rest: wheel and End both did nothing.
+     The frame gets its full height now and this box is what stops. A wheel
+     over the frame lands here because the frame does not take the pointer. */
+  max-height: 600px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 /* An html card is the one format with no single line to show, so it renders
    whole and styles itself. It keeps no padding of its own — the frame's

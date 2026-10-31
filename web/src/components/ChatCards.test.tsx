@@ -355,6 +355,90 @@ describe('pinned chat cards', () => {
     expect(section.getAttribute('aria-expanded')).toBe('false');
     // folded to the first row, not the whole document
     expect(frame.style.height).toBe('34px');
+    // ...and the frame does not swallow the click that unfolds it. An iframe is
+    // a separate document, so a click on it never reaches the card: folded, the
+    // card was only clickable on the tail strip the frame does not cover.
+    expect(frame.style.pointerEvents).toBe('none');
+  });
+
+  it('an open html card with a LINK is interactive again', async () => {
+    // The frame takes the pointer only when it is open AND has something a
+    // pointer is for — the frame reports that as `live`. A card that is just
+    // a value stays one button in both states, because the alternative is the
+    // reported bug: fold works, unfold only on the 46px tail strip.
+    const host = await mount([
+      card({ name: 'market', format: 'html', content: '<div>row</div><div>detail</div>' }),
+    ]);
+    const frame = host.querySelector('iframe') as HTMLIFrameElement;
+    await act(async () => {
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: { muxpadCard: 1, h: 220, h1: 34, live: true },
+          source: frame.contentWindow,
+        }),
+      );
+    });
+    const section = host.querySelector('.chat-card') as HTMLElement;
+    await act(async () => {
+      section.click();
+    });
+    expect(section.getAttribute('aria-expanded')).toBe('true');
+    expect(frame.style.height).toBe('220px');
+    expect(frame.style.pointerEvents).toBe('auto');
+  });
+
+  it('an open card with nothing to click stays one button', async () => {
+    // THE REPORTED BUG: "collapse/reopen sometimes only responds to click on
+    // narrow strip in right of card". Folded, the whole card toggled; open,
+    // the frame swallowed the click and only the ~46px age strip worked.
+    const host = await mount([
+      card({ name: 'market', format: 'html', content: '<div>row</div><div>detail</div>' }),
+    ]);
+    const frame = host.querySelector('iframe') as HTMLIFrameElement;
+    await act(async () => {
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: { muxpadCard: 1, h: 220, h1: 34, live: false },
+          source: frame.contentWindow,
+        }),
+      );
+    });
+    const section = host.querySelector('.chat-card') as HTMLElement;
+    await act(async () => {
+      section.click();
+    });
+    expect(section.getAttribute('aria-expanded')).toBe('true');
+    // Open, and the frame STILL does not take the click — so clicking the
+    // middle of the card closes it again.
+    expect(frame.style.pointerEvents).toBe('none');
+    await act(async () => {
+      section.click();
+    });
+    expect(section.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('gives a tall card a body that scrolls instead of truncating it', async () => {
+    // The ceiling used to be applied to the FRAME, whose document is
+    // overflow:hidden — so a 975px card was cut at 600 with no way to see the
+    // rest. Measured: wheel and End both did nothing.
+    const host = await mount([
+      card({ name: 'tall', format: 'html', content: '<div>a</div><div>b</div>' }),
+    ]);
+    const frame = host.querySelector('iframe') as HTMLIFrameElement;
+    await act(async () => {
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: { muxpadCard: 1, h: 975, h1: 40, live: false },
+          source: frame.contentWindow,
+        }),
+      );
+    });
+    const section = host.querySelector('.chat-card') as HTMLElement;
+    await act(async () => {
+      section.click();
+    });
+    // The frame gets its FULL height; the body is what stops.
+    expect(frame.style.height).toBe('975px');
   });
   it('puts a markdown card on the one line, flattened', async () => {
     // `Markdown` emits block elements; the css forces them inline so one <p>
