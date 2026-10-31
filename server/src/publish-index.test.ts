@@ -23,7 +23,7 @@ describe('the generated index', () => {
 
   it('embeds audio rather than linking it', () => {
     // A published recording whose link opens a download has not been published
-    // to anybody. This was the reshet-opener-sample report.
+    // to anybody. This was the feed-opener-sample report.
     const html = indexForFiles(['sample.mp3', 'spec.png']);
     expect(html).toContain('<audio controls src="sample.mp3">');
     expect(html).toContain('<img src="spec.png"');

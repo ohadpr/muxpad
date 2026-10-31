@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   AccountPool,
+  CREDENTIAL_RETRY_MS,
   accountEnv,
   assertSharedHistory,
   assistantQuota,
@@ -64,22 +65,64 @@ describe('shared Claude account pool', () => {
    * THE INCIDENT THIS CAME FROM. The preferred account's login died; the pool
    * knew nothing about logins, so it kept handing every new session to it, and
    * each one failed four times and gave up with a healthy account sitting idle
-   * beside it. A dead credential is not a quota block and must not be stored
-   * as one: it has no reset time, and it ends when a person runs /login.
+   * beside it.
+   *
+   * ── AND THE SECOND INCIDENT, WHICH THE FIRST FIX CAUSED ────────────────
+   * The mark was then PERMANENT — "no timer lifts this", on the reasoning
+   * that a dead credential has no reset time and ends when a person runs
+   * /login. True of a revoked login and false of the observation: what muxpad
+   * records is one failed call, and a five-second blip during a token refresh
+   * writes exactly the same row. Failover then disappears silently and stays
+   * gone until somebody notices, which on this machine meant an account
+   * benched for eleven days.
+   *
+   * So the mark EXPIRES (CREDENTIAL_RETRY_MS) and the account gets one
+   * attempt per window. That is not the first incident returning: there, a
+   * dead account was chosen on every send. Here it is chosen once, and a
+   * still-broken login re-marks it with a fresh stamp and is benched again.
    */
-  it('skips a signed-out account, and keeps skipping it — no timer lifts this', () => {
+  it('skips a signed-out account until the mark expires, then tries once more', () => {
     const { pool, advance } = fixture();
     expect(pool.choose('pane-a', 'opus')?.id).toBe('primary');
     pool.markCredential('primary', 'dead', 'Not logged in · Please run /login');
     expect(pool.choose('pane-b', 'opus')?.id).toBe('backup');
-    // Not even the sticky assignment brings it back: the pane that was ON the
-    // dead account is exactly the one that must move.
+    // Not even the sticky assignment brings it back inside the window: the
+    // pane that was ON the dead account is exactly the one that must move.
     expect(pool.choose('pane-a', 'opus', new Set(), 'primary')?.id).toBe('backup');
-    advance(7 * 24 * 3600 * 1000);
+    advance(CREDENTIAL_RETRY_MS - 1000);
+    expect(pool.choose('pane-c', 'opus')?.id).toBe('backup');
+    // …and past the window it is a candidate again.
+    advance(2000);
+    expect(pool.choose('pane-d', 'opus')?.id).toBe('primary');
+  });
+
+  it('benches it again for a full window when it is still broken', () => {
+    // The cost of being wrong is ONE failed call per account per window, not
+    // one per send — which is the first incident, and must not come back.
+    const { pool, advance } = fixture();
+    pool.markCredential('primary', 'dead', 'Not logged in');
+    advance(CREDENTIAL_RETRY_MS + 1000);
+    expect(pool.choose('pane-a', 'opus')?.id).toBe('primary');
+    pool.markCredential('primary', 'dead', 'Not logged in');
+    expect(pool.choose('pane-b', 'opus')?.id).toBe('backup');
+    advance(CREDENTIAL_RETRY_MS - 1000);
     expect(pool.choose('pane-c', 'opus')?.id).toBe('backup');
   });
 
-  it('comes back on evidence — a working turn or a probe, never on time passing', () => {
+  it('says which of the two states it is in', () => {
+    // "Signed out" and "signed out, and we will try again shortly" are
+    // different sentences, and the CLI prints different lines for them.
+    const { pool, advance } = fixture();
+    pool.markCredential('primary', 'dead', 'Not logged in');
+    expect(pool.credential('primary').state).toBe('dead');
+    expect(pool.credential('primary').expiresAt).toBeGreaterThan(0);
+    advance(CREDENTIAL_RETRY_MS + 1000);
+    const after = pool.credential('primary');
+    expect(after.state, 'expired: back in the rotation').toBe('ok');
+    expect(after.expiresAt, 'but still known to have failed').toBeGreaterThan(0);
+  });
+
+  it('comes back on evidence too — a working turn clears it immediately', () => {
     const { pool } = fixture();
     pool.markCredential('primary', 'dead', 'Not logged in');
     expect(pool.choose('pane-a', 'opus')?.id).toBe('backup');
@@ -541,4 +584,134 @@ it('does not round a floating-point 7% reading up to 8% on the card', () => {
   const { pool } = fixture();
   pool.record('backup', { status: 'allowed', rateLimitType: 'seven_day', utilization: 0.07 });
   expect(Math.ceil(pool.usage('backup')[0]?.utilization ?? 0)).toBe(7);
+});
+
+/**
+ * ── A PROFILE DIRECTORY IS NOT WHERE THE TOKEN LIVES ─────────────────────
+ *
+ * On macOS the CLI keeps the subscription token in the KEYCHAIN, under an item
+ * it names from CLAUDE_SECURESTORAGE_CONFIG_DIR — falling back to a hash of
+ * CLAUDE_CONFIG_DIR only when the first is undefined. So the namespace is
+ * chosen by which variable happens to be set, and a login done with one can
+ * land on a different item from a read done with the other.
+ *
+ * Measured on this machine: a second account logged in with CLAUDE_CONFIG_DIR
+ * alone wrote the right email and account uuid into its profile and still
+ * answered "Failed to authenticate: OAuth session expired and could not be
+ * refreshed" on its first real call.
+ */
+describe('the credential namespace travels with the profile', () => {
+  const account = { id: 'backup', configDir: '/tmp/muxpad-acct-backup', priority: 2 };
+
+  it('sets BOTH variables to the same directory', () => {
+    const env = accountEnv(account as never, {});
+    expect(env.CLAUDE_CONFIG_DIR).toBe(account.configDir);
+    expect(env.CLAUDE_SECURESTORAGE_CONFIG_DIR).toBe(account.configDir);
+  });
+
+  it('does not let a parent env leak another account’s namespace', () => {
+    // The whole failure mode is one variable pointing somewhere the other
+    // does not, so inheriting a stale one is exactly the bug.
+    const env = accountEnv(account as never, {
+      CLAUDE_CONFIG_DIR: '/somewhere/else',
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: '/somewhere/else',
+    });
+    expect(env.CLAUDE_CONFIG_DIR).toBe(account.configDir);
+    expect(env.CLAUDE_SECURESTORAGE_CONFIG_DIR).toBe(account.configDir);
+  });
+
+  it('still refuses every variable that would bill an API key instead', () => {
+    const env = accountEnv(account as never, {
+      ANTHROPIC_API_KEY: 'sk-x',
+      CLAUDE_CODE_OAUTH_TOKEN: 't',
+    });
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+  });
+});
+
+/**
+ * ── ONE RETRY PER WINDOW, AND IT HAS TO BE *ONE* ─────────────────────────
+ *
+ * The expiry was shipped claiming "one failed call per account per window".
+ * It did not hold: the transaction serialises SELECTIONS without limiting
+ * ATTEMPTS, so eight selections across two connections all chose the same
+ * expired account before any of them had a result to report. The window only
+ * moved when something finally failed — far too late, and exactly the
+ * original incident (a dead account chosen on every send).
+ */
+describe('the retry after expiry is reserved, not merely allowed', () => {
+  it('hands the retry to ONE caller; everyone behind it goes elsewhere', () => {
+    const { pool, dir, advance } = fixture();
+    const second = new AccountPool(dir, pool.now);
+    pools.push(second);
+    pool.markCredential('primary', 'dead', 'Not logged in');
+    advance(CREDENTIAL_RETRY_MS + 1000);
+    // The first selection takes the attempt…
+    expect(pool.choose('pane-a', 'opus')?.id).toBe('primary');
+    // …and every other selector, including one on a separate connection, is
+    // sent to the healthy account rather than piling onto the same retry.
+    expect(pool.choose('pane-b', 'opus')?.id).toBe('backup');
+    expect(second.choose('pane-c', 'opus')?.id).toBe('backup');
+    expect(second.choose('pane-d', 'opus')?.id).toBe('backup');
+  });
+
+  it('a success clears the mark even though it had already expired', () => {
+    // `state` reads 'ok' once expired, so testing it alone skipped the clear
+    // on exactly the turn that proves recovery: the row stayed dead and the
+    // CLI went on saying a retry was pending after real work succeeded.
+    const { pool, advance } = fixture();
+    pool.markCredential('primary', 'dead', 'Not logged in');
+    advance(CREDENTIAL_RETRY_MS + 1000);
+    expect(pool.credential('primary').expiresAt).toBeGreaterThan(0);
+    pool.markCredential('primary', 'ok');
+    expect(pool.credential('primary').expiresAt).toBe(0);
+    expect(pool.choose('pane-a', 'opus')?.id).toBe('primary');
+  });
+});
+
+/**
+ * ── THE HOLDER MAY RE-SELECT ITS OWN RETRY ───────────────────────────────
+ *
+ * The first version of the reservation was a fresh dead mark, which is worse
+ * than the bug it fixed: the Claude backend selects at startup and AGAIN
+ * before dispatch, so its own reservation made the account ineligible on the
+ * second call — "All Claude accounts are unavailable", request saved, zero
+ * prompts delivered to the SDK. A reservation nobody owns cannot tell the
+ * holder from a stranger.
+ */
+describe('a reserved retry belongs to a pane', () => {
+  it('lets the holder select it again, which every backend does', () => {
+    const { pool, advance } = fixture();
+    pool.markCredential('primary', 'dead', 'Not logged in');
+    advance(CREDENTIAL_RETRY_MS + 1000);
+    expect(pool.choose('pane-a', 'opus')?.id).toBe('primary');
+    // startup, then again before dispatch — same pane, same attempt.
+    expect(pool.choose('pane-a', 'opus')?.id).toBe('primary');
+    expect(pool.choose('pane-a', 'opus', new Set(), 'primary')?.id).toBe('primary');
+  });
+
+  it('still sends everybody else elsewhere', () => {
+    const { pool, advance } = fixture();
+    pool.markCredential('primary', 'dead', 'Not logged in');
+    advance(CREDENTIAL_RETRY_MS + 1000);
+    expect(pool.choose('pane-a', 'opus')?.id).toBe('primary');
+    expect(pool.choose('pane-b', 'opus')?.id).toBe('backup');
+  });
+
+  it('does not reserve a HEALTHY account, which would be an exclusive lock', () => {
+    // Reserving on every selection turns the pool into one-pane-at-a-time.
+    const { pool } = fixture();
+    expect(pool.choose('pane-a', 'opus')?.id).toBe('primary');
+    expect(pool.choose('pane-b', 'opus')?.id).toBe('primary');
+  });
+
+  it('releases the reservation when the attempt settles, either way', () => {
+    const { pool, advance } = fixture();
+    pool.markCredential('primary', 'dead', 'x');
+    advance(CREDENTIAL_RETRY_MS + 1000);
+    expect(pool.choose('pane-a', 'opus')?.id).toBe('primary');
+    pool.markCredential('primary', 'ok'); // it worked
+    expect(pool.choose('pane-b', 'opus')?.id).toBe('primary');
+  });
 });

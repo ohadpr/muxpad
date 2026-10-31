@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { type Tab, type Workspace, chatClock } from '@muxpad/shared';
 import { type ReactNode, act } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -396,8 +398,11 @@ describe('the sheet nests a child under its parent and files done chats away', (
     expect(html).toContain('title="Unread reply in this chat"');
     expect(html).toContain('navtree-mark navtree-rail-mark" data-state="working"');
     // …and the pill says what the worker is doing, open or shut (see the rail
-    // test of the same case).
-    expect(html).toContain('>1 running</span>');
+    // test of the same case) — in its hue and its tooltip, with the count as
+    // the only thing it spends width on.
+    expect(html).toContain('navtree-subs-pill');
+    expect(html).toMatch(/navtree-subs-pill[^>]*data-state="working"/);
+    expect(html).toMatch(/navtree-row-pill-n">1</);
     expect(html).not.toContain('navtree-row-pill-dot');
     expect(html).not.toContain('navtree-row-pill-glyph');
   });
@@ -580,7 +585,7 @@ describe('sub-chats are collapsed, and the collapse still tells the truth', () =
 
   it('the schedule yields to it, and only on a row that has sub-chats', () => {
     // Both will not fit beside a name on a 240px row — measured, the name
-    // drops to 55px and `Trayo Builder` truncates. A chat with live workers
+    // drops to 55px and `Orbit Builder` truncates. A chat with live workers
     // has more to say than when its cron next fires, and the time stays on the
     // row's title. A chat WITHOUT sub-chats is untouched.
     const crons = [{ name: 'sweep', next_at: NOW + 3_600_000 }] as unknown as Tab['crons'];
@@ -692,7 +697,15 @@ describe('sub-chat status wording', () => {
   const pill = (html: string) =>
     /<button[^>]*navtree-subs-pill[^>]*>[\s\S]*?<\/button>/.exec(html)?.[0] ?? '';
   const text = (html: string) => pill(html).replace(/<[^>]+>/g, '');
+  /** The sentence lives in the tooltip now — see SubsPill. */
+  const spoken = (html: string) => /title="([^"]*)"/.exec(pill(html))?.[1] ?? '';
 
+  // THE LABEL IS THE COUNT; THE SENTENCE IS THE TOOLTIP. It used to be the
+  // other way round and the pill measured 91px of a 272px row — a third of it,
+  // to say two numbers the hue and the digit already carry. Reported as "all
+  // these '1 running', '2 · 1 unread' statuses are odd" and "chat names can
+  // get tiny". Nothing is lost: every word below is still spoken, to a
+  // pointer and to a screen reader.
   it.each([
     ['idle', '1 sub-agent'],
     ['working', '1 running'],
@@ -701,7 +714,8 @@ describe('sub-chat status wording', () => {
     ['dead', '1 stopped'],
   ] as const)('names %s hidden children without a status-symbol legend', (status, label) => {
     const html = railHtml([tab('root'), tab('child', { spawned_by: 'root', status, clock: null })]);
-    expect(text(html)).toBe(label);
+    expect(text(html)).toBe('1');
+    expect(spoken(html)).toContain(label.replace('1 ', ''));
     expect(pill(html)).not.toContain('navtree-row-pill-dot');
     expect(pill(html)).not.toContain('navtree-row-pill-glyph');
   });
@@ -723,7 +737,8 @@ describe('sub-chat status wording', () => {
       tab('root', { status: 'ready' }),
       tab('child', { spawned_by: 'root', status: 'working', clock: null }),
     ]);
-    expect(text(html)).toBe('1 running');
+    expect(text(html)).toBe('1');
+    expect(spoken(html)).toContain('running');
     expect(pill(html)).toContain('data-state="working"');
     expect(html).toContain('title="Unread reply in this chat"');
     expect(html).toMatch(/navtree-mark" data-state="ready"[^>]*>✓<\/span>/);
@@ -744,8 +759,10 @@ describe('sub-chat status wording', () => {
     ]);
     expect(pill(shut)).toContain('data-state="blocked"');
     expect(pill(open)).toContain('data-state="blocked"');
-    expect(text(shut)).toBe('1 needs you');
-    expect(text(open)).toBe('1 needs you');
+    expect(text(shut)).toBe('1');
+    expect(text(open)).toBe('1');
+    expect(spoken(shut)).toContain('needs you');
+    expect(spoken(open)).toContain('needs you');
   });
 
   it('retains the total and counts the urgent subset for mixed children', () => {
@@ -755,8 +772,339 @@ describe('sub-chat status wording', () => {
       tab('two', { spawned_by: 'root', status: 'working', clock: null }),
       tab('three', { spawned_by: 'root', status: 'idle', clock: null }),
     ]);
-    expect(text(html)).toBe('3 · 1 needs you');
-    expect(pill(html)).toContain('1 running');
-    expect(pill(html)).toContain('1 idle');
+    expect(text(html)).toBe('3');
+    expect(spoken(html)).toContain('1 needs you');
+    expect(spoken(html)).toContain('1 running');
+    expect(spoken(html)).toContain('1 idle');
+  });
+});
+
+/**
+ * THE WORKING SET IS ON BOTH SURFACES.
+ *
+ * It shipped on the desktop rail only — reported as "I don't see the recent
+ * section in sidebar on mobile". The cost of hunting for a chat is HIGHER on
+ * a phone: the list is the whole screen and there is no ⌘K chord on a thumb.
+ */
+describe('the working-set strip reaches the sheet', () => {
+  const tsx = readFileSync(join(__dirname, 'NavTree.tsx'), 'utf8');
+
+  it('is rendered by BOTH the rail and the sheet', () => {
+    expect(tsx.match(/<WorkingSetStrip/g) ?? []).toHaveLength(2);
+  });
+
+  it('renders INSIDE the scroller on both surfaces, as the first thing in it', () => {
+    // It was pinned above the scroller — "a strip you have to scroll to is a
+    // strip you will search for" — and that assumed a rail mostly below the
+    // fold. It is not: the band is six rows at most and sits at the top, so
+    // on any rail taller than about ten rows it is on screen either way. What
+    // pinning actually bought was a fixed object the list slid under: "I'm
+    // not entirely sold on having the recent chats be fixed. I think you
+    // should be able to scroll through the whole thing."
+    for (const host of ['function SidebarTree', 'function SheetRail']) {
+      const surface = tsx.slice(tsx.indexOf(host));
+      const strip = surface.indexOf('<WorkingSetStrip');
+      const scroll = surface.indexOf('className="navtree-scroll"');
+      expect(strip, host).toBeGreaterThan(-1);
+      expect(scroll, host).toBeGreaterThan(-1);
+      expect(scroll, host).toBeLessThan(strip);
+    }
+  });
+
+  it('carries NO standing control on touch, and no slot cap anywhere', () => {
+    // Every other row on the sheet follows this (tabRowAffordances): no hover
+    // to reveal a control, no Control key to label.
+    //
+    // The `⌃3` cap is gone from the DESKTOP rows too — six bordered caps down
+    // the band fought the status marks for the one column the eye scans
+    // ("remove ^1 etc keys"). The shortcut itself is untouched, which is what
+    // the `if (touch) return;` guard below still pins.
+    expect(tsx).not.toMatch(/navtree-slot-key/);
+    expect(readFileSync(join(__dirname, 'NavTree.css'), 'utf8')).not.toMatch(
+      /navtree-slot-key\s*\{/,
+    );
+    expect(tsx).toMatch(/if \(touch\) return;/);
+    const css = readFileSync(join(__dirname, 'NavTree.css'), 'utf8');
+    expect(css).toMatch(/\[data-touch="true"\] \.navtree-slot-drop \{\s*display: none/);
+    // …and it keeps the sheet's 44px touch floor rather than the rail's 34.
+    expect(css).toMatch(/\.navtree-ws-slot\[data-touch="true"\] \{\s*height: 44px/);
+  });
+});
+
+/**
+ * THE BAND NAMES THE WORKSPACE, BECAUSE IT IS THE ONLY PLACE THAT HAS TO.
+ *
+ * Everywhere else in the rail a chat sits under a header that names its
+ * workspace. The recently-active band mixes them, and two workspaces on this
+ * install have a chat called "Main".
+ */
+describe('a recently-active row carries its workspace', () => {
+  const tsx = readFileSync(join(__dirname, 'NavTree.tsx'), 'utf8');
+  const css = readFileSync(join(__dirname, 'NavTree.css'), 'utf8');
+  const row = tsx.slice(tsx.indexOf('function WorkingSetRow'));
+  const body = row.slice(0, row.indexOf('\nfunction '));
+
+  it('prints it AFTER the chat name, on the same line', () => {
+    // It was a prefix. A rail is scanned down its left edge — the same
+    // argument that keeps every status mark on one x — and a leading
+    // "Orbit /" pushed that row's NAME 70px right of every other name in the
+    // band: the thing you are looking for stopped starting where its
+    // neighbours start, to make room for the thing you are not.
+    expect(body).toMatch(/navtree-ws-tag[\s\S]{0,120}\{workspace\.name\}/);
+    expect(body.indexOf('navtree-name-text')).toBeLessThan(body.indexOf('navtree-ws-tag'));
+    // A second line would break the band's rows off the tree's grid, and a
+    // chip would take width from the status column.
+    expect(body).not.toMatch(/navtree-ws-prefix/);
+  });
+
+  it('is the part that gives way when the rail is narrow', () => {
+    // You are looking for the chat; the workspace only disambiguates it.
+    expect(rule(css, '.navtree-ws-tag')).toMatch(/flex:\s*0 1 auto/);
+    expect(rule(css, '.navtree-ws-tag')).toMatch(/text-overflow:\s*ellipsis/);
+    expect(rule(css, '.navtree-ws-slot .navtree-name-text')).toMatch(/flex:\s*0 1 auto/);
+  });
+
+  it('sits on the name’s baseline, not in the middle of its own box', () => {
+    // The title line is `align-items: center`, which centres each item's BOX —
+    // and two font sizes then have two baselines, the smaller one lower. The
+    // tag read as sagging below the name it qualifies.
+    const line = rule(css, '.navtree-ws-slot .navtree-tab-titleline');
+    expect(line).toMatch(/align-items:\s*baseline/);
+  });
+
+  it('steps up on hover, which is when you are asking the question', () => {
+    // Matched on the text rather than through `rule()`, because the selector
+    // shares its block with the focus-visible arm.
+    const i = css.indexOf('.navtree-tab-row:hover .navtree-ws-tag');
+    expect(i, 'no hover rule for the tag').toBeGreaterThan(-1);
+    expect(css.slice(i, css.indexOf('}', i))).toMatch(/color:\s*var\(--nt-ws-tag-ink-hot\)/);
+    // …and the resting ink is the fainter of the two, or the hover says
+    // nothing.
+    expect(css).toMatch(/--nt-ws-tag-ink:\s*color-mix\(in srgb, var\(--fg-faint\)/);
+    expect(css).toMatch(/--nt-ws-tag-ink-hot:\s*var\(--nt-ink-read\)/);
+  });
+
+  it('keeps every re-derivation of the token in step', () => {
+    // The token is re-stated wherever the palette changes surface (the
+    // selected row, the sheet). A definition left behind is a tag that goes
+    // on wearing the old ink on exactly one kind of row.
+    const rest = (css.match(/--nt-ws-tag-ink:/g) ?? []).length;
+    const hot = (css.match(/--nt-ws-tag-ink-hot:/g) ?? []).length;
+    expect(hot).toBe(rest);
+  });
+
+  it('is quieter by ink and size, never by weight', () => {
+    // At 13px a lighter weight is just blur.
+    const tag = rule(css, '.navtree-ws-tag');
+    // Its own ink, a step below the dim the read rows wear — it is the least
+    // important thing on a line whose names it must not compete with.
+    expect(tag).toMatch(/color:\s*var\(--nt-ws-tag-ink\)/);
+    expect(css).toMatch(/--nt-ws-tag-ink:/);
+    // …and smaller than the name beside it, which is 0.9375rem.
+    const size = /font-size:\s*([\d.]+)rem/.exec(tag)?.[1];
+    expect(Number(size)).toBeLessThan(0.75);
+    expect(tag).not.toMatch(/font-weight:/);
+  });
+
+  it('is not read twice — the link’s title already says the pair', () => {
+    expect(body).toMatch(/aria-hidden="true">\s*\{workspace\.name\}/);
+    expect(body).toMatch(/title=\{`\$\{tab\.name\} · \$\{workspace\.name\}`\}/);
+  });
+});
+
+/**
+ * The body of one rule, found by its selector.
+ *
+ * ANCHORED TO A RULE START, which is the whole correctness of it: a plain
+ * `indexOf('.navtree-ws-tag {')` also matches INSIDE
+ * `.navtree-ws-slot .navtree-ws-tag {`, so adding a scoped override silently
+ * redirected four assertions to the wrong block and they failed describing
+ * the wrong rule. (The card tests were fixed for exactly this a few hours
+ * earlier; the same helper existed here and was not.)
+ */
+function rule(css: string, sel: string): string {
+  const flat = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const at = new RegExp(`(^|[}\\n])\\s*${sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{`);
+  const m = at.exec(flat);
+  if (!m) return '';
+  const i = m.index + m[0].length - 1;
+  return flat.slice(i, flat.indexOf('}', i));
+}
+
+/**
+ * AND IT IS ON EVERY ROW.
+ *
+ * It rendered only when the chat was from ANOTHER workspace, on the argument
+ * that five identical "Personal" tags down a six-row band is repetition
+ * rather than information. That is true of the TAG and false of the BAND: a
+ * column present on some rows and absent on others is one you cannot scan,
+ * and a reader who has learned that a bare row means "here" has learned a
+ * rule instead of reading a label. Repetition in a column is what a column
+ * IS.
+ */
+describe('every row says where it is from', () => {
+  const src = readFileSync(join(__dirname, 'NavTree.tsx'), 'utf8');
+  const row = src.slice(src.indexOf('function WorkingSetRow'));
+  const body = row.slice(0, row.indexOf('\nfunction '));
+
+  it('renders the tag unconditionally', () => {
+    expect(body).toMatch(/<span className="navtree-ws-tag" aria-hidden="true">/);
+    expect(body).not.toMatch(/elsewhere/);
+  });
+
+  it('needs no idea of which workspace you are in', () => {
+    // The strip took `activeWorkspaceSlug` for exactly one reason — deciding
+    // whether a row was "elsewhere" — so it goes with the condition.
+    const strip = src.slice(src.indexOf('function WorkingSetStrip'));
+    expect(strip.slice(0, strip.indexOf('\nfunction '))).not.toMatch(/activeWorkspaceSlug/);
+  });
+});
+
+/**
+ * ── HOW LONG AGO ─────────────────────────────────────────────────────────
+ *
+ * The band is ordered by SLOT and never by recency — that is the whole design,
+ * so rows do not move under you — and the cost is that nothing said whether
+ * you left a chat ten minutes ago or this morning. This column is what the
+ * ordering gives up, handed back.
+ */
+describe('a recently-active row says how long ago', () => {
+  const tsx = readFileSync(join(__dirname, 'NavTree.tsx'), 'utf8');
+  const css = readFileSync(join(__dirname, 'NavTree.css'), 'utf8');
+  // The STRIP holds the clock and passes the age down, so both halves are in
+  // scope here rather than just the row.
+  const strip = tsx.slice(tsx.indexOf('function WorkingSetStrip'));
+  const body = strip.slice(0, strip.indexOf('\nfunction SidebarTree'));
+
+  it('reads the SAME stamp the slot decays on', () => {
+    // The number on screen and the rule that evicts the row have to be one
+    // clock, or a row can read "2m" and vanish.
+    expect(body).toMatch(/age=\{now - at\}/);
+    expect(body).toMatch(/rows\.map\(\(\{ tab, workspace, at \}\)/);
+  });
+
+  it('ticks on its own rather than waiting for something else to render', () => {
+    expect(body).toMatch(/setInterval\(\(\) => setNow\(Date\.now\(\)\), 30_000\)/);
+  });
+
+  it('is quieter than the workspace tag, which is already the quiet thing', () => {
+    // The tag answers "which chat is this"; the age answers "how stale". Only
+    // the first is ever what you are scanning for.
+    const age = rule(css, '.navtree-slot-age');
+    expect(age).toMatch(/color:\s*color-mix\(in srgb, var\(--band-ink-dim\)/);
+    const tagSize = /font-size:\s*([\d.]+)rem/.exec(rule(css, '.navtree-ws-tag'))?.[1];
+    const ageSize = /font-size:\s*([\d.]+)rem/.exec(age)?.[1];
+    expect(Number(ageSize)).toBeLessThan(Number(tagSize));
+  });
+
+  it('does not jitter as the numbers tick', () => {
+    expect(rule(css, '.navtree-slot-age')).toMatch(/font-variant-numeric:\s*tabular-nums/);
+  });
+
+  it('lives on the TITLE LINE, not as a fifth track of a four-track grid', () => {
+    // It was a sibling of the row, which has four columns — so it wrapped,
+    // every row grew a second line, and the status mark (the tick, the
+    // chevron) went down with it.
+    const line = body.slice(body.indexOf('navtree-tab-titleline'));
+    const i = line.indexOf('navtree-slot-age');
+    expect(i, 'the age is not on the title line').toBeGreaterThan(-1);
+    expect(i, 'it must come after the workspace tag').toBeGreaterThan(
+      line.indexOf('navtree-ws-tag'),
+    );
+  });
+
+  it('never shrinks — the tag gives way first', () => {
+    // A clipped "Orb…" still reads; a clipped "3…" does not.
+    expect(rule(css, '.navtree-slot-age')).toMatch(/flex:\s*0 0 auto/);
+    expect(rule(css, '.navtree-ws-tag')).toMatch(/flex:\s*0 1 auto/);
+  });
+
+  it('does not disappear on the one row you are pointing at', () => {
+    expect(css).not.toMatch(
+      /\.navtree-ws-slot:hover \.navtree-slot-age[^{]*\{[^}]*display:\s*none/,
+    );
+  });
+});
+
+/**
+ * ── THE HELPER THAT READS A RULE ─────────────────────────────────────────
+ *
+ * It matched a selector anywhere, so `.navtree-ws-tag` also found
+ * `.navtree-ws-slot .navtree-ws-tag` — and the moment a scoped override was
+ * added, four assertions quietly started describing the wrong block. They
+ * failed, which was luck: the same mistake can just as easily pass.
+ */
+describe('rule() finds the rule it was asked for', () => {
+  const css = [
+    '.a .target { color: red; }',
+    '.target { color: green; }',
+    '.target .b { color: blue; }',
+  ].join('\n');
+
+  it('does not match a selector used as a DESCENDANT', () => {
+    expect(rule(css, '.target')).toContain('green');
+  });
+
+  it('returns empty for a selector that is not a rule of its own', () => {
+    expect(rule(css, '.nothing-here')).toBe('');
+  });
+});
+
+/**
+ * ── WHERE CONTAINMENT MAY GO ─────────────────────────────────────────────
+ *
+ * `container-type: inline-size` computes the element's width WITHOUT looking
+ * at its contents. Putting it on a flex item whose width comes from its
+ * contents collapses it to zero — which is what happened: every chat name in
+ * the band vanished.
+ */
+describe('the band’s query container', () => {
+  const css = readFileSync(join(__dirname, 'NavTree.css'), 'utf8');
+
+  it('is not on the content-sized title line', () => {
+    expect(rule(css, '.navtree-ws-slot .navtree-tab-titleline')).not.toContain('container-type');
+  });
+
+  it('is on the LINK, whose width the grid hands it', () => {
+    // `minmax(0, 1fr)`: the track decides, so containment costs nothing and
+    // the query asks about the same space either way.
+    expect(
+      rule(css, '.navtree[data-variant="sidebar"] .navtree-ws-slot .navtree-tab-link'),
+    ).toMatch(/container-type:\s*inline-size/);
+  });
+
+  it('is scoped to the RAIL, where the link is a grid item', () => {
+    // On the sheet the row is a flex line and the link is `flex: 0 1 auto` —
+    // sized BY its contents — so containment collapsed it to zero and every
+    // chat name in the mobile band disappeared. Same mistake, one surface
+    // along.
+    const flat = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    const i = flat.indexOf('container-type: inline-size');
+    const line = flat.lastIndexOf('{', i);
+    const selector = flat.slice(flat.lastIndexOf('}', line) + 1, line);
+    expect(selector).toContain('[data-variant="sidebar"]');
+    // …and the sheet's own link rule is still content-sized, which is why.
+    expect(rule(css, '.navtree[data-variant="sheet"] .navtree-tab-link')).toMatch(
+      /flex:\s*0 1 auto/,
+    );
+  });
+});
+
+/**
+ * "How long ago was this active" is a question about a chat you are NOT in.
+ * On the active row the answer is "you are looking at it" — and that row
+ * carries the live mark and the heaviest type, so it was the first to clip.
+ */
+describe('the age is not on the row you are in', () => {
+  const css = readFileSync(join(__dirname, 'NavTree.css'), 'utf8');
+
+  it('hides on the active band row', () => {
+    expect(
+      rule(css, '.navtree-workingset .navtree-tab-row[data-active="true"] .navtree-slot-age'),
+    ).toMatch(/display:\s*none/);
+  });
+
+  it('and nowhere else — every other row still says when', () => {
+    expect(rule(css, '.navtree-slot-age')).not.toMatch(/display:\s*none/);
   });
 });

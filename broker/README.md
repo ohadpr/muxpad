@@ -101,7 +101,7 @@ OS, HTTPS and real-browser isolation still need verification before activation.
    cookies from a proxy that trusts only the port. No arbitrary muxpad content may be served through
    this protected origin. The daemon itself never binds a public/tailnet interface.
 4. Rotate the Slack user OAuth token in Slack. Keep the fresh token out of agent
-   chats/files. Identify Trayo's Slack team ID (`T…`) and your normal HTTPS muxpad URL.
+   chats/files. Identify Orbit's Slack team ID (`T…`) and your normal HTTPS muxpad URL.
 5. **Do not sudo the installer in this checkout.** Prepare an unsigned review bundle
    as the ordinary user:
 
@@ -168,7 +168,7 @@ OS, HTTPS and real-browser isolation still need verification before activation.
    the installer chooses `"session"` for the one-click UX.
 8. Add `MUXPAD_SLACK_BROKER_URL=https://APPROVAL_HOST:9443` to muxpad's server
    environment, merge/build this branch and restart only muxpad's server with
-   notice. Do not restart ptyd. Enable Slack in Trayo's workspace settings.
+   notice. Do not restart ptyd. Enable Slack in Orbit's workspace settings.
 9. Complete the security review's deployment acceptance checks. Reject a read and
    deliberately approve a test-channel send once only when you intend it to reach
    Slack. CLI commands enqueue the request; the modal appears automatically in the

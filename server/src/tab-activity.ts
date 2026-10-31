@@ -14,6 +14,7 @@ import { PaneStore } from './store/PaneStore.js';
 import { SpawnRoundStore } from './store/SpawnRoundStore.js';
 import { TabStore } from './store/TabStore.js';
 import { clockIndex, isSubChat, resetChatClock } from './tab-clock.js';
+import { WorkingSet } from './working-set.js';
 
 /** Output may reorder within one visible-poll interval, at most 12 writes/min
  * per continuously active tab. Sixty seconds made ordinary work look stale. */
@@ -33,6 +34,8 @@ export const ACTIVITY_BOOT_GRACE_MS = 90_000;
 export class TabActivity {
   private readonly db: Database.Database;
   private readonly tabs: TabStore;
+  private readonly workingSet: WorkingSet;
+  private readonly onWorkingSet: (() => void) | undefined;
   private readonly panes: PaneStore;
   /** tabId → epoch ms of the last write we performed (forced or throttled). */
   private readonly lastWriteAt = new Map<string, number>();
@@ -86,9 +89,13 @@ export class TabActivity {
       /** Injected in tests so the grace window can be driven deterministically. */
       startedAt?: number;
       onWrite?: (tabId: string) => void;
+      /** The strip changed shape — see WorkingSet.touch. */
+      onWorkingSet?: (() => void) | undefined;
     } = {},
   ) {
     this.db = db;
+    this.workingSet = new WorkingSet(db);
+    this.onWorkingSet = opts.onWorkingSet;
     this.tabs = new TabStore(db);
     this.panes = new PaneStore(db);
     this.throttleMs = opts.throttleMs ?? ACTIVITY_THROTTLE_MS;
@@ -212,7 +219,20 @@ export class TabActivity {
     // Idempotent while a round is open, which is what makes it safe here: three
     // lines typed while the worker is mid-turn are one round, because the queue
     // delivers them to the same turn.
-    if (isSubChat(clockIndex(this.db), tabId)) new SpawnRoundStore(this.db).open(tabId, at);
+    const sub = isSubChat(clockIndex(this.db), tabId);
+    if (sub) new SpawnRoundStore(this.db).open(tabId, at);
+    // ── THE WORKING SET ──────────────────────────────────────────────────
+    // This method is the single funnel for every message into every agent
+    // pane, which makes it the one place that sees you COMMIT to a chat —
+    // and committing, not opening, is what the strip is a record of. (Opening
+    // is how you look at something; typing is how you pick it. Measured: 24
+    // chats saw activity in a day and 18 saw a message.)
+    //
+    // A SUB-CHAT NEVER ENTERS, and does not count for its parent either.
+    // Answering a worker is work inside a chat, not a choice to be in one, and
+    // a parent whose three workers are busy is not a parent you are typing in
+    // — the row would hold a slot for hours of someone else's activity.
+    if (!sub && this.workingSet.touch(tabId)) this.onWorkingSet?.();
     const affected = resetChatClock(this.db, tabId, at);
     const { emitted } = this.writeTabInner(tabId, at);
     if (!this.onWrite) return;

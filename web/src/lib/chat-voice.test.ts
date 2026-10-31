@@ -174,15 +174,28 @@ describe('THE GUARD — the render half', () => {
     ]);
   });
 
-  it('does NOT fire for a SUB-CHAT REPORT turn either — same reason', () => {
-    // The set that got forgotten: this predicate read `variant === 'cron'` and
-    // nothing else, so when the join landed a batch of reports counted as a
-    // person starting a turn — promoting the reply into a bubble addressed to
-    // a reader who never asked anything.
+  it('DOES fire for a sub-chat report turn — that answer was asked for', () => {
+    // REVERSED, and the reversal is the bug fix. This asserted the opposite on
+    // the grounds that a report is machine-injected like a cron fire, so
+    // promoting its prose would address "a reader who never asked anything".
+    //
+    // A cron is genuinely unsolicited. A REPORT is not: a delivery exists only
+    // because this conversation dispatched the work, and bringing the result
+    // back is the whole point of the join. Treating the two the same cost a
+    // user a day — in the "signal archive" chat the sub-agents reported, the
+    // chat wrote a 1,998-character verdict, and the verdict stayed `private`:
+    // muted, folded inside an action run. "Hasn't returned yet."
+    //
+    // WHAT THIS TRADE COSTS, stated rather than discovered later: a fan-out
+    // that a CRON started also promotes now, because the event stream at this
+    // point knows what started THIS turn and not what started the chain. An
+    // occasional unsolicited bubble is the price of never silently dropping an
+    // answer somebody is waiting for, and those two failures are not the same
+    // size.
     expect(voices([reportChip(), user('## worker a\n\nfound it'), prose('acting on it')])).toEqual([
       'notice',
       'user',
-      'private',
+      'fallback',
     ]);
   });
 
@@ -427,5 +440,98 @@ describe('an expanded action run survives the run changing shape', () => {
   it('does not open a DIFFERENT run', () => {
     const open = toggleActionRun([a, b], new Set<string>());
     expect(actionRunExpanded([c], open)).toBe(false);
+  });
+});
+
+/**
+ * WHAT THE DOTTED RULE MEANS, AND WHY IT IS NOT A MODE.
+ *
+ * Reported as "sometimes the agent's messages have a vertical dotted line,
+ * sometimes they don't — I thought it was chat mode vs agent mode but I don't
+ * think that's it". Half right, and the half that is wrong is the interesting
+ * one.
+ *
+ * The rule marks `voice: 'fallback'` — a message the HARNESS promoted because
+ * the turn ended without a `reply` call. Mode is a confound, not the cause:
+ * agent-mode panes never run this pass at all, so their messages can never
+ * carry it, which makes "it's the mode" fit the evidence right up until two
+ * messages in ONE chat disagree.
+ *
+ * Measured across this install's chat-mode panes: 193 of 1,054 turns (18%)
+ * ended with no reply — but the distribution is the finding, not the mean. One
+ * pane sat at 81% (108 of 134) while most sat at 3%.
+ */
+describe('the dotted rule is about the REPLY, not the mode', () => {
+  it('marks only the promoted message, and only when no reply was sent', () => {
+    expect(voices([user('do it'), prose('here is the answer')])).toEqual(['user', 'fallback']);
+    expect(voices([user('do it'), reply('here is the answer')])).toEqual(['user', 'reply']);
+  });
+
+  it('never marks anything in agent mode — the pass does not run', () => {
+    // Which is exactly why the mode theory survives casual observation: in an
+    // agent-mode pane there is no dotted rule to see, ever.
+    const agentMode = {
+      mode: 'agent' as const,
+      assistant: 'claude',
+      turnActive: false,
+      closedTurnStartId: null,
+    };
+    const events = [user('do it'), prose('here is the answer')];
+    expect(applyChatVoice(events, agentMode)).toBe(events);
+  });
+
+  it('two messages in ONE chat can disagree, which is what gives it away', () => {
+    // A replying turn and a forgetful one, same pane, same mode — the case the
+    // mode theory cannot explain.
+    expect(
+      voices([user('first'), reply('answered properly'), user('second'), prose('forgot to reply')]),
+    ).toEqual(['user', 'reply', 'user', 'fallback']);
+  });
+});
+
+/**
+ * THE FINDING, NOT THE STATUS LINE.
+ *
+ * A turn's final words are very often a note about what is still running
+ * rather than its result. Measured over one pane's 131 promoted turns, 18 hid
+ * an earlier block of 300+ characters that was LONGER than the one shown —
+ * worst case, the finding stayed private and "Transcription is running…
+ * Waiting on it" was promoted in its place.
+ */
+describe('promotion picks the answer, not merely the last thing said', () => {
+  const long = (n: number) => 'x'.repeat(n);
+
+  it('promotes an earlier block that is materially bigger than the trailing note', () => {
+    expect(voices([user('go'), prose(long(1200)), prose('Waiting on it (~3 min).')])).toEqual([
+      'user',
+      'fallback',
+      'private',
+    ]);
+  });
+
+  it('keeps the LAST block when the turn simply ends with its answer', () => {
+    expect(voices([user('go'), prose('thinking about it'), prose(long(1200))])).toEqual([
+      'user',
+      'private',
+      'fallback',
+    ]);
+  });
+
+  it('does not fire between two ordinary paragraphs', () => {
+    // 3x AND 300+ — two normal blocks must not trip it, or the rule would be
+    // reordering turns that were fine.
+    expect(voices([user('go'), prose(long(400)), prose(long(200))])).toEqual([
+      'user',
+      'private',
+      'fallback',
+    ]);
+  });
+
+  it('needs real size, not just a ratio — a short turn keeps its last word', () => {
+    expect(voices([user('go'), prose(long(120)), prose('ok')])).toEqual([
+      'user',
+      'private',
+      'fallback',
+    ]);
   });
 });

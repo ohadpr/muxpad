@@ -1,6 +1,9 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getPushState } from '../lib/push';
 import { passkeyAPI, passkeyCeremony } from '../lib/slack-passkey';
 import { SettingsMenu } from './SettingsMenu';
@@ -13,9 +16,19 @@ vi.mock('../lib/push', () => ({
   sendTestPush: vi.fn(),
 }));
 vi.mock('../settings', () => ({
+  // The picker asks the same question the painter does — the chat's theme if
+  // it has one, the device default otherwise. Mocked as the identity on the
+  // device default, which is what these tests set up.
+  themeInForce: (s: { theme: string }) => s.theme,
+  getChatTheme: () => null,
+  setChatTheme: vi.fn(),
   useSettings: () => ({ theme: 'system' }),
   updateSettings: vi.fn(),
-  THEME_CHOICES: [{ value: 'system', label: 'System' }],
+  THEME_CHOICES: [
+    { value: 'system', label: 'System' },
+    { value: 'demoscene', label: 'Demoscene' },
+  ],
+  SYSTEM_PAIR: { light: 'alucard', dark: 'dracula' },
 }));
 let root: ReturnType<typeof createRoot>;
 let host: HTMLDivElement;
@@ -258,7 +271,10 @@ it('shows the current Slack state without a completed setup checklist or empty r
   const approvals = integration;
   expect(
     [...document.querySelectorAll('.settings-sidebar button')].map((b) => b.textContent),
-  ).toEqual(['General', 'Integrations']);
+    // Notifications has its own section: as the last row of General, under
+    // the theme grid, its lone Enable button read as an action on the tiles
+    // above it ("they feel like the action button for picking a theme").
+  ).toEqual(['General', 'Notifications', 'Integrations']);
   expect(document.querySelector('[aria-label="Slack approvals"]')).toBeNull();
   expect(approvals.textContent).toContain('Ask each time.');
   expect(
@@ -310,4 +326,167 @@ it('a deliberately renewed or restarted enrollment clears only the obsolete loca
   await click('Settings');
   expect(document.querySelector('pre')).toBeNull();
   expect(document.querySelector('input[type=password]')).not.toBeNull();
+});
+
+/**
+ * GETTING OUT OF SETTINGS ON A PHONE.
+ *
+ * Reported from a foldable: "settings is weird on mobile I can't close it, the
+ * chrome is so tiny". Two compounding causes, both checked here against the
+ * stylesheet because both are CSS facts:
+ *
+ *   1. The touch treatment was keyed on `max-width: 700px`. A foldable open is
+ *      ~890 CSS px and still a phone, so it got the DESKTOP dialog: a 172px
+ *      sidebar and 0.8125rem labels on a 7.6" screen.
+ *   2. The only ways out were Escape (no key), an 8px strip of backdrop (the
+ *      dialog covers the screen to within 8px), and a muted 1.5rem `×`.
+ */
+describe('settings can be dismissed by a thumb', () => {
+  const CSS = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), 'SettingsMenu.css'),
+    'utf8',
+  );
+  const touchArm = (() => {
+    const i = CSS.indexOf('@media (max-width: 700px), (pointer: coarse)');
+    return i === -1 ? '' : CSS.slice(i, CSS.length);
+  })();
+
+  it('asks about the INPUT, not just the width', () => {
+    // The foldable is the case width gets wrong, in both directions.
+    expect(CSS).toMatch(/@media \(max-width: 700px\), \(pointer: coarse\)/);
+  });
+
+  it('gives the close control a word and a real target on touch', () => {
+    expect(touchArm).toMatch(/\.settings-close-word\s*\{[^}]*display:\s*block/);
+    expect(touchArm).toMatch(/\.settings-close-x\s*\{[^}]*display:\s*none/);
+    // 44px is the floor every other touch target in this file already uses.
+    expect(touchArm).toMatch(/height:\s*44px/);
+  });
+
+  it('clears the status bar — the actual reason the close was untappable', () => {
+    // index.html ships viewport-fit=cover + a black-translucent status bar, so
+    // the top ~59px of a full-screen dialog is UNDER the clock and the battery.
+    // Seven other stylesheets inset for this; this one had none, and the close
+    // control rendered beneath the battery icon.
+    expect(touchArm).toMatch(
+      /\.settings-chrome\s*\{[^}]*padding-top:\s*calc\([^)]*safe-area-inset-top/,
+    );
+  });
+
+  it('insets all four edges, because a foldable is landscape', () => {
+    // Unfolded, the cut-out is on a SIDE: left/right are the ones that matter.
+    expect(touchArm).toMatch(/safe-area-inset-left/);
+    expect(touchArm).toMatch(/safe-area-inset-right/);
+    expect(touchArm).toMatch(/safe-area-inset-bottom/);
+  });
+
+  it('keeps the close pinned, so it cannot scroll out of reach', () => {
+    expect(touchArm).toMatch(/\.settings-chrome\s*\{[^}]*position:\s*sticky/);
+  });
+
+  it('the word is hidden for pointer devices, which keep the glyph', () => {
+    const before = CSS.slice(0, CSS.indexOf('@media (max-width: 700px), (pointer: coarse)'));
+    expect(before).toMatch(/\.settings-close-word\s*\{\s*display:\s*none/);
+  });
+
+  it('renders both labels in one control, with one accessible name', () => {
+    const tsx = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), 'SettingsMenu.tsx'),
+      'utf8',
+    );
+    expect(tsx).toMatch(/aria-label="Close settings"/);
+    expect(tsx).toMatch(/settings-close-word[\s\S]{0,80}Done/);
+    // Both spans are decorative: the button already has its name.
+    expect(tsx).toMatch(/className="settings-close-word" aria-hidden="true"/);
+    expect(tsx).toMatch(/className="settings-close-x" aria-hidden="true"/);
+  });
+});
+
+it('keeps notifications in their own section, not under the theme grid', async () => {
+  // THE PROXIMITY WAS THE BUG. A lone "Enable" six pixels under a grid of
+  // theme tiles is a button a reader attaches to the thing above it, whatever
+  // the label beside it says. It is not a General setting either: General is
+  // what the app LOOKS like, and this is a permission a browser grants to a
+  // device.
+  await open();
+  const general = document.querySelector('[aria-label="General settings"]');
+  expect(general?.textContent).toContain('Theme');
+  expect(general?.textContent).not.toContain('Notifications');
+
+  const notifications = document.querySelector('[aria-label="Notification settings"]');
+  expect(notifications).not.toBeNull();
+  expect(notifications?.textContent).toContain('Notifications');
+  // …and the section says what granting it actually gets you, which the row
+  // had no room for.
+  expect(notifications?.querySelector('.settings-blurb')?.textContent ?? '').toMatch(/phone/i);
+});
+
+/**
+ * ONE HEIGHT, FOR EVERY SECTION.
+ *
+ * The dialog used to size to its content — right when it had two sections and
+ * one was a theme grid, wrong at three: the box jumped on every tab change
+ * and the thing you had just clicked moved out from under the pointer. "Keep
+ * settings modal fixed height, don't change height per tab."
+ */
+describe('the settings dialog does not resize under you', () => {
+  const CSS = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), 'SettingsMenu.css'),
+    'utf8',
+  );
+
+  it('is one height whatever section is showing', () => {
+    // It used to size to its content — right when the dialog had two sections
+    // and one was a theme grid, wrong at three: the box jumped on every tab
+    // change and the thing you had just clicked moved out from under the
+    // pointer. "Keep settings modal fixed height, don't change height per tab."
+    //
+    // A dialog that resizes under you is worse than one with space in it: the
+    // empty room costs a glance, the movement costs your place.
+    const flat = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+    const dialog = flat.slice(flat.indexOf('.settings-dialog {'));
+    const rule = dialog.slice(0, dialog.indexOf('}'));
+    expect(rule).not.toMatch(/height:\s*(fit-content|auto)/);
+    expect(rule).toMatch(/height:\s*min\(\d+px,/);
+    // …and the layout fills it rather than shrinking to the section, which is
+    // what made the height follow the content in the first place.
+    const layout = flat.slice(flat.indexOf('.settings-layout {'));
+    expect(layout.slice(0, layout.indexOf('}'))).toMatch(/flex:\s*1 1 auto/);
+    // The body is what scrolls when a section is longer than the box.
+    const body = flat.slice(flat.indexOf('.settings-body {'));
+    expect(body.slice(0, body.indexOf('}'))).toMatch(/overflow-y:\s*auto/);
+  });
+
+  it('fixes the phone sheet too, where a resize moves the row under the thumb', () => {
+    const flat = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+    const arm = flat.slice(flat.indexOf('@media (max-width: 700px)'));
+    const dialog = arm.slice(arm.indexOf('.settings-dialog {'));
+    expect(dialog.slice(0, dialog.indexOf('}'))).toMatch(/height:\s*\d+dvh/);
+  });
+});
+
+/**
+ * A FAILED THEME WRITE UNDOES ITSELF, LOUDLY.
+ *
+ * The first version swallowed the error, so a server that could not store the
+ * value — one running from before the migration that adds the column, which
+ * is every server until it restarts — produced the worst possible shape: the
+ * window repainted, the next poll delivered the unchanged row, and the theme
+ * snapped back with no explanation. "Tried to change the theme on a chat and
+ * it just didn't work, flickered and returned to the theme it was on."
+ */
+it('reverts and says so when the chat’s theme cannot be stored', async () => {
+  const src = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), 'SettingsMenu.tsx'),
+    'utf8',
+  );
+  // The optimistic write captures what it is replacing…
+  expect(src).toMatch(/const before = getChatTheme\(\)/);
+  // …puts it back on failure, in the document AND in the cached row…
+  expect(src).toMatch(/\.catch\(\(err\) => \{[\s\S]{0,320}setChatTheme\(before\)/);
+  expect(src).toMatch(/\.catch\(\(err\) => \{[\s\S]{0,420}patchTabRow\([^)]*theme: before/);
+  // …and never swallows it.
+  expect(src).not.toMatch(/patchTab\([^)]*\)\.catch\(\(\) => \{\}\)/);
+  // The note names the cause a user can act on.
+  expect(src).toMatch(/Restart muxpad and try again/);
 });

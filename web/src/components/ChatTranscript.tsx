@@ -381,6 +381,10 @@ export const ChatRow = memo(function ChatRow({
           // report) without putting an apology in the conversation.
           data-voice={event.voice === 'fallback' ? 'fallback' : undefined}
         >
+          {/* No tooltip, and no dotted rule either — both are gone. A mark
+              that needs a tooltip to justify itself was answering a question
+              ("how was this delivered?") that a reader cannot act on. See
+              ChatPane.css for the measurements that retired it. */}
           <div className="chat-msg">
             <AssistantText text={event.text} onOpenImage={onOpenImage} hl={hl} />
           </div>
@@ -1137,11 +1141,21 @@ const NOTICE_ICON: Record<NoticeEvent['variant'], string> = {
   // inward arrow, because the direction is the whole fact — every other notice
   // is about this chat, and this one is about work that happened elsewhere.
   report: '⇤',
+  // The conversation was summarised to make room. An arrow pointing INTO a
+  // smaller space — not an hourglass (nothing is waiting) and not a warning
+  // (nothing went wrong); it is a thing that happened, and the only reason it
+  // is in the log at all is so a reader who scrolls back does not find a hole
+  // where an hour of talk used to be.
+  compacted: '⇥',
 };
 
 /** Harness control message (background-task update / session reminder), or a
- *  muxpad cron fire — "⏱ pr-sweep · 09:00" ahead of the prompt it delivered. */
-function NoticeCard({
+ *  muxpad cron fire — "⏱ pr-sweep · 09:00" ahead of the prompt it delivered.
+ *
+ *  Exported for its test: whether this chip is pressable is a decision with a
+ *  scar on either side of it (see the comment in the body), and the test
+ *  drives the real coalescer rather than a hand-built event. */
+export function NoticeCard({
   event,
   anchorId,
   hl,
@@ -1152,27 +1166,78 @@ function NoticeCard({
 }) {
   const at = event.variant === 'cron' ? fireTime(event.ts) : '';
   const detail = event.detail ?? (at || undefined);
-  // A NOTICE IS A MARK, NOT A CONTROL. It briefly carried a caret that revealed
-  // a folded cron's prompt, which gave one fire two separate folds — a caret on
-  // the chip and the "N actions" run right under it — and made a label look
-  // pressable for a reason no reader would guess. The prompt folds in with the
-  // tool calls instead (see `expandCronFire`); this went back to saying one
-  // thing.
+  // ── A NOTICE IS A MARK, NOT A CONTROL — WITH ONE EXCEPTION ───────────────
+  // It briefly carried a caret that revealed a folded cron's PROMPT, which
+  // gave one fire two separate folds — a caret on the chip and the "N actions"
+  // run right under it — and made a label look pressable for a reason no
+  // reader would guess. That caret is not coming back: the prompt folds in
+  // with the tool calls (see `expandCronFire`).
+  //
+  // THE EXCEPTION IS A CHIP THAT REPLACED SOMETHING. A run of fires with
+  // nothing visible between them collapses into one chip and the fires it
+  // absorbed are REMOVED from the log, so "6 schedules · 11 fires" is the only
+  // trace left of eleven things that happened — readable, and with nowhere to
+  // go: "I see it but I can't dig to understand what these are."
+  //
+  // The line, which is the thing worth keeping: a chip that LABELS content
+  // sitting right below it must not be pressable, and a chip that STANDS IN
+  // for content you can no longer reach must be.
+  const [open, setOpen] = useState(false);
+  const fired = event.fired ?? null;
+  const body = (
+    <>
+      <span className="chat-sysnote-icon" aria-hidden="true">
+        {NOTICE_ICON[event.variant]}
+      </span>
+      <span className="chat-sysnote-text">
+        <HighlightedText text={event.text} hl={hl} />
+      </span>
+      {detail ? <span className="chat-sysnote-detail">{detail}</span> : null}
+      {fired ? (
+        <span className="chat-sysnote-caret" aria-hidden="true">
+          {open ? '▾' : '▸'}
+        </span>
+      ) : null}
+    </>
+  );
   return (
     <div
       className="chat-turn chat-turn-notice"
       data-eid={anchorId}
       data-search-hit={hl && hl.length > 0 ? 'true' : undefined}
     >
-      <div className={`chat-sysnote chat-sysnote-${event.variant}`} title={event.text}>
-        <span className="chat-sysnote-icon" aria-hidden="true">
-          {NOTICE_ICON[event.variant]}
-        </span>
-        <span className="chat-sysnote-text">
-          <HighlightedText text={event.text} hl={hl} />
-        </span>
-        {detail ? <span className="chat-sysnote-detail">{detail}</span> : null}
-      </div>
+      {fired ? (
+        <button
+          type="button"
+          className={`chat-sysnote chat-sysnote-${event.variant} -openable`}
+          aria-expanded={open}
+          title={`${event.text} — ${detail ?? ''}`.trim()}
+          onClick={() => setOpen((v) => !v)}
+        >
+          {body}
+        </button>
+      ) : (
+        <div className={`chat-sysnote chat-sysnote-${event.variant}`} title={event.text}>
+          {body}
+        </div>
+      )}
+      {fired && open ? (
+        /* One row per schedule: what it is called, how many times it fired in
+           this run, and when it last did. Times rather than durations — a
+           schedule is a clock, and "01:49 PM" is the thing you compare
+           against the one in your head. */
+        <ul className="chat-sysnote-fired">
+          {fired.map((f) => (
+            <li key={f.name}>
+              <span className="chat-sysnote-fired-name">{f.name}</span>
+              <span className="chat-sysnote-fired-count">
+                {f.fires === 1 ? 'once' : `${f.fires}×`}
+              </span>
+              <span className="chat-sysnote-fired-at">{fireTime(f.lastTs) || ''}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
     </div>
   );
 }

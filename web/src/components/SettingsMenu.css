@@ -25,8 +25,26 @@
   --settings-muted: color-mix(in srgb, var(--fg) 74%, var(--bg-elev));
   --settings-line: color-mix(in srgb, var(--fg) 14%, var(--bg-elev));
   --settings-soft: color-mix(in srgb, var(--fg) 3%, var(--bg-elev));
-  width: min(860px, calc(100vw - 40px));
-  height: min(700px, calc(100dvh - 40px));
+  /* ── ONE HEIGHT, FOR EVERY SECTION ───────────────────────────────────
+     It used to size to its content, on the argument that two rows of settings
+     in a 700px box is ~60% empty and reads as a page that failed to load.
+     That was written when the dialog had two sections and one of them was a
+     theme grid; with three it means the box jumps every time you change tabs,
+     and the thing you clicked moves out from under the pointer. "Keep
+     settings modal fixed height, don't change height per tab."
+
+     A dialog that resizes under you is worse than one with space in it: the
+     empty room costs a glance, the movement costs your place. So the height
+     is fixed, the body scrolls when a section is longer than it, and only the
+     VIEWPORT shrinks it. 560px is the tallest section (the theme grid at
+     three rows) plus its padding — chosen so the common case is full rather
+     than so the longest one fits. */
+  width: min(640px, calc(100vw - 40px));
+  /* Not `fit-content` and not `auto`. A <dialog> is absolutely positioned with
+     `inset: 0` by the UA, so `auto` resolves against that containing block and
+     stretches to fill it; `fit-content` is what made the height follow the
+     section. An explicit number does neither. */
+  height: min(560px, calc(100dvh - 40px));
   max-width: none;
   max-height: calc(100dvh - 40px);
   padding: 0;
@@ -69,8 +87,13 @@
 }
 .settings-layout {
   display: grid;
-  grid-template-columns: 172px minmax(0, 1fr);
-  flex: 1;
+  grid-template-columns: 132px minmax(0, 1fr);
+  /* FILLS the dialog now, rather than shrinking to its content. `flex: 0 1
+     auto` was what let the box follow the section — the layout shrank, the
+     dialog shrank with it, and the height changed per tab. With a fixed
+     height the layout takes what is left under the chrome, and the body
+     inside it scrolls. */
+  flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
 }
@@ -115,6 +138,10 @@
   outline: 2px solid var(--accent);
   outline-offset: 3px;
 }
+/* The word only exists for touch — see the touch arm at the bottom. */
+.settings-close-word {
+  display: none;
+}
 .settings-dialog .settings-close {
   display: grid;
   place-items: center;
@@ -145,17 +172,11 @@
 .settings-body {
   min-width: 0;
   min-height: 0;
-  padding: 28px 32px;
+  padding: 18px 26px 22px;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
-.settings-heading h2 {
-  margin: 0 0 24px;
-  font-size: 1.25rem;
-  line-height: 1.3;
-  font-weight: 600;
-  letter-spacing: -.35px;
-}
+
 .settings-row {
   display: flex;
   align-items: center;
@@ -176,6 +197,192 @@
 }
 .settings-row label {
   font-weight: 500;
+}
+/* ─── THE THEME PICKER ──────────────────────────────────────────────────────
+   Was a <select>, which is a control for choosing between things you can
+   already name. These cannot be named — demoscene is a typeface and a grid of
+   box-drawing characters, thermal is a receipt — so the list shows them.
+
+   The whole mechanism is one attribute: a tile carries `data-theme`, every
+   theme block in styles.css is an ATTRIBUTE selector rather than a :root rule,
+   and so the tile resolves the real tokens, --ui-font included. No second copy
+   of any colour lives in this file, and a theme added later needs no change
+   here at all. */
+.settings-themes {
+  display: block;
+  margin: 0;
+  padding: 18px 0;
+  border: 0;
+  border-bottom: 1px solid var(--settings-line);
+}
+.settings-themes legend {
+  padding: 0;
+  font-weight: 500;
+}
+/* The way back to the default. Quiet — it is the exception, not the action
+   you came for — and full width so it reads as belonging to the grid above
+   rather than floating beside it. */
+.settings-theme-default {
+  margin-top: 10px;
+  width: 100%;
+  font-size: 0.8125rem;
+  color: var(--settings-muted);
+}
+.settings-theme-default:hover {
+  color: var(--fg);
+}
+
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+.theme-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  cursor: pointer;
+  border-radius: 10px;
+  /* The ring is drawn INSIDE, as a border on the tile rather than an outline
+     on the input: an outline on a visually-hidden radio is the thing that
+     produced the enormous double halo in the screenshot that started this. */
+  border: 2px solid transparent;
+  padding: 3px;
+}
+.theme-tile input {
+  /* Present for the keyboard and the a11y tree, painted by nothing. Not
+     `display: none` — that takes it out of the radiogroup entirely and with it
+     the arrow-key navigation this control exists to get. */
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.theme-tile:hover {
+  border-color: color-mix(in srgb, var(--fg) 18%, transparent);
+}
+.theme-tile[data-chosen="true"] {
+  border-color: var(--accent);
+}
+.theme-tile:has(input:focus-visible) {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.theme-tile-name {
+  font-size: 0.75rem;
+  color: var(--settings-muted);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.theme-tile[data-chosen="true"] .theme-tile-name {
+  color: var(--fg);
+  font-weight: 600;
+}
+.theme-tile-preview {
+  display: block;
+  position: relative;
+  /* 72px once. A preview is a SAMPLE — it has to show the rail, the page, the
+     ink and the typeface, and 56px shows all four. The extra 16 was buying
+     nothing and costing a scrollbar in the rail's popover, where eleven of
+     these have to fit above a composer. */
+  height: 56px;
+  border-radius: 7px;
+  overflow: hidden;
+  border: 1px solid var(--settings-line);
+}
+/* System is two themes, so it is two previews cut on the diagonal. */
+.theme-tile-split .theme-mock:last-child {
+  position: absolute;
+  inset: 0;
+  clip-path: polygon(100% 0, 100% 100%, 0 100%);
+}
+
+/* ─── THE MINIATURE ─────────────────────────────────────────────────────────
+   A rail with a selected row, and a page with two lines and the typeface. Flat
+   colour only: a tile at 118px that tried to reproduce the scanlines and the
+   dither would read as noise, and the structural rules in styles.css are
+   scoped to real components rather than to these. */
+.theme-mock {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  background: var(--bg);
+  font: 0.625rem / 1 var(--ui-font);
+}
+.theme-mock-rail {
+  flex: 0 0 30%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 5px 4px;
+  background: var(--rail-surface);
+  border-right: 1px solid var(--rail-border);
+}
+.theme-mock-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--rail-accent);
+}
+.theme-mock-row {
+  height: 5px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--rail-ink) 30%, transparent);
+}
+.theme-mock-row--on {
+  background: var(--rail-accent);
+}
+.theme-mock-page {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  padding: 5px 7px;
+  min-width: 0;
+}
+.theme-mock-aa {
+  font: 700 0.75rem / 1 var(--ui-font);
+  color: var(--fg);
+  letter-spacing: 0.02em;
+}
+.theme-mock-line {
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--fg) 34%, transparent);
+}
+.theme-mock-line--short {
+  width: 55%;
+  background: var(--accent);
+}
+
+/* ── A SECTION'S OWN HEADING AND ITS SENTENCE ────────────────────────────
+   Notifications moved out of General, where a lone Enable button six pixels
+   under the theme grid read as an action on the tiles. A section has room for
+   what a row never did: a reader deciding whether to grant a browser
+   permission is the one reader in this dialog who needs a sentence.
+
+   The heading matches the theme fieldset's legend — same weight, same size —
+   so the two sections read as siblings rather than as two different kinds of
+   thing. */
+.settings-heading {
+  margin: 0;
+  font-size: inherit;
+  font-weight: 500;
+}
+.settings-blurb {
+  margin: 8px 0 16px;
+  max-width: 54ch;
+  color: var(--settings-muted);
+  font-size: 0.8125rem;
+  line-height: 1.55;
 }
 .settings-push-actions {
   display: inline-flex;
@@ -333,20 +540,115 @@
   margin-top: 16px;
   font-size: 0.8125rem;
 }
-@media (max-width: 700px) {
+/* ─── TOUCH, WHICH IS NOT THE SAME QUESTION AS NARROW ──────────────────────
+   This arm was `max-width: 700px` alone, and that is wrong on exactly the
+   device it was reported from: a foldable open is ~890 CSS px wide and still a
+   phone held in two hands. It got the DESKTOP dialog — a 172px sidebar and
+   0.8125rem labels on a 7.6" screen — because it is "wide". Width stopped
+   being a proxy for input method; `pointer: coarse` asks the real question, so
+   a phone, a foldable and a tablet all get the touch treatment and a 900px
+   laptop window does not. */
+@media (max-width: 700px), (pointer: coarse) {
+  /* ─── A BOTTOM SHEET, NOT A FULL-SCREEN SLAB ──────────────────────────
+     This was full-bleed — `100dvh - 16px` — on the reasoning that a dialog
+     hugging two rows would float mid-screen like a dropped alert. True, and
+     the cure was worse: an 858px sheet holding 130px of content, four fifths
+     of it empty, which reads as a page that failed to load.
+     Anchored to the BOTTOM instead, which is the phone idiom for exactly this
+     and has the two properties the floating box lacked — it has an edge the
+     screen gives it, and its controls are where the thumb already is.
+
+     It no longer hugs its content: see the height below. */
   .settings-dialog {
-    width: calc(100vw - 16px);
-    height: calc(100dvh - 16px);
-    max-height: calc(100dvh - 16px);
-    border-radius: 12px;
+    width: 100%;
+    max-width: none;
+    /* Same rule as the desktop: ONE height, whichever section is showing. A
+       sheet that grows and shrinks under the thumb moves the row you were
+       reaching for. 72dvh leaves the top of the screen visible so it still
+       reads as a sheet over the app rather than as a new page. */
+    height: 72dvh;
+    max-height: 88dvh;
+    margin: auto auto 0;
+    border-radius: 20px 20px 0 0;
+    border-bottom: 0;
+  }
+  /* The grab handle. Not draggable — it is the one glyph that says "sheet"
+     rather than "window", and without it the rounded top reads as a crop. */
+  .settings-chrome::before {
+    content: "";
+    position: absolute;
+    top: 7px;
+    left: 50%;
+    width: 36px;
+    height: 4px;
+    border-radius: 2px;
+    transform: translateX(-50%);
+    background: color-mix(in srgb, var(--fg) 22%, transparent);
+  }
+  .settings-chrome {
+    position: relative;
   }
   .settings-chrome {
     padding: 6px 8px 6px 18px;
   }
+  /* A WORD, NOT A GLYPH. The only other ways out are a key this device does
+     not have and an 8px strip of backdrop. */
   .settings-dialog .settings-close {
-    flex-basis: 44px;
-    width: 44px;
+    flex: 0 0 auto;
+    width: auto;
+    min-width: 72px;
     height: 44px;
+    padding: 0 14px;
+    font: 600 0.9375rem / 1 var(--ui-font);
+    color: var(--fg);
+    background: color-mix(in srgb, var(--fg) 10%, transparent);
+    border-radius: 10px;
+  }
+  .settings-close-word {
+    display: block;
+  }
+  .settings-close-x {
+    display: none;
+  }
+  /* ─── THE STATUS BAR IS NOT YOURS ───────────────────────────────────────
+     index.html ships `viewport-fit=cover` with a BLACK-TRANSLUCENT status bar,
+     which is what makes an installed muxpad full-bleed — and it means the top
+     ~59px of this dialog is underneath the clock, the wifi icon and the
+     battery. Seven other stylesheets in this app already inset for that; this
+     one, the only surface that covers the whole screen, had none.
+     So the close control was rendered UNDER the battery icon, where the title
+     collided with the clock and the tap did not reach the button. That — not
+     the size of the glyph — is "I can't close it".
+     Insets on all four edges: a foldable unfolded is landscape, where the cut
+     out moves to a SIDE and `left`/`right` are the ones that matter. */
+  .settings-chrome {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: var(--bg-elev);
+    /* 16px clears the grab handle above the title. The safe-area term stays
+       for the landscape/notch case even though the sheet is bottom-anchored —
+       a foldable unfolded puts the cut-out on a side. */
+    padding-top: calc(16px + env(safe-area-inset-top, 0px));
+    padding-left: calc(18px + env(safe-area-inset-left, 0px));
+    padding-right: calc(8px + env(safe-area-inset-right, 0px));
+  }
+  .settings-body {
+    padding-bottom: calc(22px + env(safe-area-inset-bottom, 0px));
+    padding-left: calc(18px + env(safe-area-inset-left, 0px));
+    padding-right: calc(18px + env(safe-area-inset-right, 0px));
+  }
+  .settings-sidebar {
+    padding-left: calc(10px + env(safe-area-inset-left, 0px));
+    padding-right: calc(10px + env(safe-area-inset-right, 0px));
+  }
+  /* Reading size. The desktop dialog is 0.875rem on a screen held at arm's
+     length; the same number on a phone is the "chrome is so tiny" report. */
+  .settings-dialog {
+    font-size: 1rem;
+  }
+  .settings-sidebar nav button {
+    font-size: 0.9375rem;
   }
   .settings-layout {
     display: flex;
@@ -372,10 +674,6 @@
   .settings-body {
     flex: 1;
     padding: 22px 18px;
-  }
-  .settings-heading h2 {
-    font-size: 1.1875rem;
-    margin-bottom: 20px;
   }
   .settings-dialog button,
   .settings-dialog select,
@@ -587,4 +885,54 @@
     display: list-item;
     padding: 11px 0;
   }
+}
+
+/* ─── THE RAIL'S THEME POPOVER ──────────────────────────────────────────────
+   The same `<ThemePicker>` the dialog mounts, in a popover on the sidebar's
+   foot. Only the frame is new: every tile rule above is deliberately written
+   against `.theme-grid` / `.theme-tile` rather than scoped inside
+   `.settings-dialog`, so a second surface costs this block and nothing else.
+
+   It opens UPWARD, because the foot of the rail is the bottom of the screen.
+   The theme tokens here are the APP's, not the rail island's: a popover is not
+   part of the rail, and inheriting --rail-ink would have painted it in the
+   rail's inverted ink on the app's surface. */
+/* NOT a containing block. The popover is 272px and the button is 20px at the
+   far right of the footer, so anchoring to the BUTTON put its left edge at
+   -32px — off the screen, with the tiles half-drawn. It anchors to
+   `.sidenav-footer` instead, which is already positioned and is exactly the
+   rail's width; the same trick the settings popover beside it has always
+   used. */
+.themeswitch {
+  display: inline-flex;
+  height: 100%;
+}
+.themeswitch-pop {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 60;
+  width: max(272px, 100%);
+  max-width: calc(100vw - 24px);
+  padding: 4px 12px 10px;
+  color: var(--fg);
+  background: var(--bg-elev);
+  border: 1px solid color-mix(in srgb, var(--fg) 14%, var(--bg-elev));
+  border-radius: 12px;
+  box-shadow: 0 18px 46px #0005;
+  font: 0.875rem / 1.5 var(--ui-font);
+}
+/* The fieldset inside is the dialog's row; here it is the whole popover, so
+   its row border and padding would draw a rule across the bottom of a box
+   that already has one. */
+.themeswitch-pop .settings-themes {
+  padding: 10px 0 0;
+  border-bottom: 0;
+}
+/* THREE ACROSS, AND NO SCROLL. Eleven themes at two columns was six rows and
+   a scrollbar — in a picker whose whole job is letting you COMPARE, which you
+   cannot do with half of them off the bottom. Three columns of the smaller
+   tile is four rows, and it fits. */
+.themeswitch-pop .theme-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }

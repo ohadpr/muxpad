@@ -29,6 +29,9 @@ export interface SearchableTab {
   unread?: boolean | undefined;
   pinned?: boolean | undefined;
   lastActivityAt?: number | null | undefined;
+  /** The chat is finished — archived, decayed, or a sub-chat that delivered.
+   *  Absent on the sidebar's corpus; the mention picker supplies it. */
+  done?: boolean | undefined;
   /** Layout leaves — how a content hit's `session.pane_id` finds its tab. */
   paneIds: string[];
 }
@@ -45,23 +48,73 @@ export interface TabMatch {
 }
 
 /**
- * The score bands. The gaps are 10 wide and the pin boost is 5, so a pinned
- * tab can only ever win a tie inside its own band — pinning must not promote a
- * headline match above a name match, or the ordering the user reads stops
- * being explainable.
+ * The score bands. A band is 20 wide and every boost below is smaller than
+ * that, so a boost can only ever win a tie INSIDE its own band — nothing may
+ * promote a headline match above a name match, or the ordering the user reads
+ * stops being explainable.
+ *
+ * The bands were 10 apart with one 5-point boost. They doubled when the ties
+ * turned out to be the whole problem: typing `ra` produced FIVE rows all
+ * scoring exactly `namePrefix`, so their order was decided entirely by the
+ * tiebreak — and the tiebreak is recency, which handed the top of the list to
+ * delivered sub-chats that happened to be touched most recently. `radar` and
+ * `radar archive` sat below `rail status …`. Reported as "prioritize a
+ * combination of recently active chats and strongest matches to chat name".
+ *
+ * The answer is to stop having ties, not to re-order them: a band now has room
+ * for the three things that genuinely separate two equally-typed matches.
  */
 const SCORE = {
-  nameExact: 100,
-  namePrefix: 90,
+  nameExact: 200,
+  namePrefix: 180,
   /** A prefix of a WORD inside the name — "inv" in "My Investing notes". Sits
    *  between prefix and plain substring: it is still the start of something
    *  you'd say out loud, which a match landing mid-word is not. */
-  nameWord: 80,
-  nameSubstring: 70,
-  headline: 50,
-  workspace: 30,
+  nameWord: 160,
+  nameSubstring: 140,
+  headline: 100,
+  workspace: 60,
   pinnedBoost: 5,
+  /** How much of the NAME the query covered. `ra` is all of "ra", a third of
+   *  "radio" and a tenth of "Rat a rat card redesign" — and the shorter name
+   *  is the one you meant, every time. Up to 8. */
+  coverage: 8,
+  /** Touched in the last minutes vs last month. Up to 5, decaying over a
+   *  week — enough to separate two equally good matches, never enough to lift
+   *  a worse one over a better one. */
+  recency: 5,
+  /** A finished chat — archived, decayed, or a sub-chat that has delivered.
+   *  Still findable, still in its band, just under its live neighbours: when
+   *  you TYPE a name you are looking for somewhere to go, and a delivered
+   *  worker is somewhere you have already been. */
+  donePenalty: 6,
 } as const;
+
+/** Whole days, for the recency ramp. */
+const DAY_MS = 86_400_000;
+
+/**
+ * The part of a score that is not about the match: how much of the name it
+ * covered, how recently the chat moved, and whether it is finished.
+ *
+ * Bounded by construction — `coverage + recency + pinnedBoost` is 18, under
+ * the 20-point band — so this can reorder rows that matched the same way and
+ * can never reorder rows that did not.
+ */
+function contextBoost(tab: SearchableTab, matched: number, now: number): number {
+  let boost = 0;
+  const len = tab.tabName.length;
+  if (len > 0 && matched > 0) boost += SCORE.coverage * Math.min(1, matched / len);
+  const at = tab.lastActivityAt;
+  if (at) {
+    // Linear over a week: today is worth the full 5, a week old is worth 0,
+    // and older than that is not worth less than nothing.
+    const age = Math.max(0, now - at);
+    boost += SCORE.recency * Math.max(0, 1 - age / (7 * DAY_MS));
+  }
+  if (tab.done) boost -= SCORE.donePenalty;
+  return boost;
+}
 
 /**
  * Neutralise every RegExp metacharacter in `s`.
@@ -144,10 +197,13 @@ function statusRank(s: PaneStatus | undefined): number {
 export function rankTabs(
   tabs: readonly SearchableTab[],
   query: string,
-  opts?: { limit?: number },
+  opts?: { limit?: number; now?: number },
 ): TabMatch[] {
   const q = query.trim();
   if (!q) return [];
+  // One clock for the whole pass: a ranking whose rows are scored against
+  // different `now`s is not a total order, and this runs on every keystroke.
+  const now = opts?.now ?? Date.now();
   const out: TabMatch[] = [];
   for (const tab of tabs) {
     let match: TabMatch | null = null;
@@ -167,6 +223,14 @@ export function rankTabs(
     }
     if (!match) continue;
     if (tab.pinned) match.score += SCORE.pinnedBoost;
+    // The match is WHAT you typed; this is everything else about the row. Only
+    // a NAME match gets coverage — a query covering half a headline says
+    // nothing about which chat you meant.
+    match.score += contextBoost(
+      tab,
+      match.field === 'name' ? match.range[1] - match.range[0] : 0,
+      now,
+    );
     out.push(match);
   }
   out.sort((a, b) => {

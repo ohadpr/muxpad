@@ -176,6 +176,28 @@ export function domScrollSurface(getEl: () => HTMLElement | null): ScrollSurface
   };
 
   return {
+    /**
+     * A selection the reader is actually holding, inside THIS surface.
+     *
+     * Three conditions, each ruling out a false positive that would freeze the
+     * view for no reason:
+     *   · non-collapsed — a caret is not a selection, and a plain tap leaves
+     *     one behind on mobile;
+     *   · anchored inside this scroller — a selection in another pane, the
+     *     composer or the rail is none of our business;
+     *   · the surface exists at all.
+     */
+    selecting(): boolean {
+      const el = getEl();
+      if (!el) return false;
+      const sel = typeof document === 'undefined' ? null : document.getSelection();
+      if (!sel || sel.isCollapsed || sel.rangeCount === 0) return false;
+      const node = sel.anchorNode;
+      if (!node) return false;
+      const host = node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
+      return !!host && el.contains(host);
+    },
+
     inMotion(): boolean {
       const el = getEl();
       if (!el) return false;

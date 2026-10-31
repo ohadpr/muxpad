@@ -77,25 +77,22 @@ describe('the status strip is a line, not a second object', () => {
     expect(decl('.chat-status-bar', 'background')).toBeNull();
   });
 
-  it('costs one line and one gap \u2014 the whole budget, wherever it sits', () => {
-    // Two things could hold the strip off the text below — its own bottom
-    // margin and the composer's row gap — and having both is how a bar drifts
-    // taller one nudge at a time.
+  it("shares the pill's tool row instead of owning a row of its own", () => {
+    // It has cost three different things. A full-width row under the pill:
+    // one line plus a 16px gap, permanently, "which reduces the amount of
+    // content we can show in the window". Then nothing at all, as a chip hung
+    // off the pill's top edge by `position: absolute` — which painted over the
+    // last line of the transcript instead.
     //
-    // Below the pill now, so the one separation is the strip's TOP margin and
-    // the bottom one must be zero. The side is checked rather than assumed
-    // because the margin outlived two moves on the wrong side of the strip —
-    // see the same assertion in ChatPane.statusline.test.tsx, which owns the
-    // reasoning; this file owns the BUDGET the two of them add up to.
-    const own = (decl('.chat-status-bar', 'margin') ?? '').split(/\s+/);
-    const above = Number((own[0] ?? '').replace('px', ''));
-    const below = Number((own[2] ?? '').replace('px', ''));
-    expect(above).toBeGreaterThan(0);
-    expect(below).toBe(0);
-    // And the line is FIXED, not a value its content can grow — which is what
-    // makes this a budget rather than a hope. See ChatPane.statusline.test.tsx.
-    const h = px(decl('.chat-status-bar', 'height'));
-    expect(h + above).toBeLessThanOrEqual(32);
+    // Now it is the right-hand end of a row INSIDE the pill, shared with the
+    // `+`. One row for two things that each used to want their own, no second
+    // surface, and nothing covered.
+    expect(decl('.chat-status-bar', 'position')).toBeNull();
+    expect(decl('.chat-status-bar', 'margin')).toBe('0');
+    // The row is a one-line floor and nothing more — this is the budget.
+    const row = px(decl('.chat-composer-tools', 'min-height'));
+    expect(row).toBeGreaterThan(0);
+    expect(row).toBeLessThanOrEqual(32);
   });
 });
 
@@ -117,5 +114,46 @@ describe('a one-line composer is a known height', () => {
     const linePx = Number.parseFloat(line ?? '') * (line?.endsWith('rem') ? 16 : 1);
     expect(line).toBe('1.375rem');
     expect(linePx + top * 2).toBe(40);
+  });
+});
+
+/**
+ * THE PILL SPENDS ONE INSET, AND EVERYTHING INSIDE LINES UP ON IT.
+ *
+ * "Margin for message being typed is too tight on left and potentially top,
+ * button the same too close to top and potentially too close to the right."
+ * Three symptoms, one cause: the padding was being spent unevenly by what sat
+ * inside it. The text had the pill's 10px and nothing of its own; the send
+ * circle is 36px against a 40px line, so a 4px top gave it 6px of air against
+ * 10px at its right; and the tool row's buttons carry 8px of their own, so
+ * their icons sat 8px right of the text above them.
+ */
+describe('the composer pill is spaced from one number', () => {
+  const sideOf = (sel: string, re: RegExp): number => {
+    const rest = css.slice(css.indexOf(`${sel} {`));
+    const body = rest.slice(0, rest.indexOf('}'));
+    return Number(re.exec(body)?.[1] ?? Number.NaN);
+  };
+
+  it('insets the same amount on both sides', () => {
+    const pad = (decl('.chat-composer', 'padding') ?? '').split(/\s+/);
+    expect(pad).toHaveLength(2);
+    expect(Number.parseFloat(pad[1] ?? '')).toBeGreaterThanOrEqual(12);
+  });
+
+  it('gives the send circle the air its ink needs at the top', () => {
+    // The circle is 36px in a 40px row, so it starts 2px in. With a 4px pill
+    // padding that was 6px of air above against 10px beside — which reads as
+    // "too close to the top" because it is.
+    const pad = (decl('.chat-composer', 'padding') ?? '').split(/\s+/);
+    const top = Number.parseFloat(pad[0] ?? '');
+    const side = Number.parseFloat(pad[1] ?? '');
+    expect(top + 2).toBeGreaterThanOrEqual(side - 2);
+  });
+
+  it('starts the text at the inset, counting both paddings', () => {
+    const side = sideOf('.chat-composer', /padding:\s*\d+px (\d+)px/);
+    const input = sideOf('.chat-input', /padding:\s*[\d.]+rem (\d+)px/);
+    expect(side + input).toBe(16);
   });
 });

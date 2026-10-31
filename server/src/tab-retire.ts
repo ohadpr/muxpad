@@ -320,6 +320,27 @@ export function retireChat(deps: RetireDeps, tabId: string, reason: RetireReason
 export const JOB_SETTLE_MS = 90_000;
 
 /**
+ * THE FLOOR UNDER EVERY HOLD.
+ *
+ * `holdOpen` is three reasons to keep a finished worker's row, and two of them
+ * have now leaked in production — a false "it is asking you something" that
+ * could never clear, and an artifact hold waiting on a column nothing wrote.
+ * Four rows were stuck when this went in, one of them for six days.
+ *
+ * Each leak got its own fix. This is the thing that makes a THIRD one survivable:
+ * no hold outlives it. A hold says "there is something in here you have not
+ * seen yet"; after four hours of a worker that has not spoken, that claim is
+ * false whatever produced it, and the row is just litter in a rail you are
+ * trying to read.
+ *
+ * Four hours, not four minutes: the hold is right far more often than it is
+ * wrong, and a worker genuinely waiting on an answer should survive lunch.
+ * `fatal` is exempt — a crash is a thing you go and read, and it has no
+ * equivalent of "I'll come back to it".
+ */
+export const HOLD_FLOOR_MS = 4 * 60 * 60 * 1000;
+
+/**
  * Watch for sub-chats finishing their work, and retire them.
  *
  * Subscribes to the SAME `agent_turn` event the cron scheduler uses, for the
@@ -377,6 +398,8 @@ export class ChatRetirer {
     private readonly deps: RetireDeps,
     /** Overridden only by tests that want the timer path itself. */
     private readonly settleMs: number = JOB_SETTLE_MS,
+    /** Injectable clock, for the hold floor. Tests cannot wait four hours. */
+    private readonly now: () => number = Date.now,
   ) {}
 
   start(): void {
@@ -762,6 +785,10 @@ export class ChatRetirer {
    */
   private holdOpen(e: { pane_id: string; phase: 'done' | 'fatal' }, awaiting: boolean): boolean {
     if (e.phase === 'fatal') return true; // a crashed run is what you want to look at
+    // ─── NOTHING IS HELD FOR EVER ───────────────────────────────────────────
+    // See HOLD_FLOOR_MS. Checked BEFORE the individual reasons, so a reason
+    // that is wrong — or one added later that is wrong — cannot outlive it.
+    if (this.heldTooLong(e.pane_id)) return false;
     // IT STOPPED TO ASK YOU SOMETHING. The newest member of this list and the
     // one that motivated splitting it: a worker waiting on an answer is the
     // opposite of one that delivered, and archiving it — which also clears the
@@ -786,28 +813,63 @@ export class ChatRetirer {
     // A worker whose artifacts never made it onto the card is still held —
     // that is the case this was written for and it is unchanged.
     if (!this.hasArtifact(e.pane_id)) return false;
-    return !this.artifactsPublished(this.tabOf(e.pane_id));
+    return !this.cardHasOutput(this.tabOf(e.pane_id));
+  }
+
+  /**
+   * Has this worker been held past the floor?
+   *
+   * Measured from the tab's own `last_activity_at` — the worker is finished by
+   * the time this is asked, so that is when it last did anything.
+   */
+  private heldTooLong(paneId: string): boolean {
+    const tabId = this.tabOf(paneId);
+    if (!tabId) return false;
+    try {
+      const row = this.deps.db
+        .prepare('SELECT last_activity_at AS t FROM tabs WHERE id = ?')
+        .get(tabId) as { t: number | null } | undefined;
+      const at = row?.t;
+      if (!at) return false; // never active: nothing to measure, hold stands
+      return this.now() - at > HOLD_FLOOR_MS;
+    } catch {
+      return false; // unreadable is not expired
+    }
   }
 
   /**
    * Has this worker's output reached its card in the parent's log?
    *
-   * Read off the TAB's published column rather than recomputed: the card draws
-   * from exactly this, so "published" here and "visible there" cannot come
-   * apart. An empty array counts as NOT published — a scrape that found
-   * nothing has not put anything anywhere.
+   * Read off the TAB's own columns rather than recomputed: the card draws from
+   * exactly these, so "on the card" here and "visible there" cannot come apart.
+   *
+   * ─── IT USED TO ASK ONLY ABOUT `spawn_artifacts`, AND THAT NEVER ENDED ────
+   * The artifacts are SCRAPED from the worker's answer — a path, a URL — and a
+   * worker that produced a file without citing one in its prose scrapes to the
+   * empty list, which `setSpawnReport` COALESCEs to "leave the column alone".
+   * The column stayed NULL, "published" stayed false, and the hold waited for
+   * a publication that could not happen.
+   *
+   * Measured: two rows stuck exactly here, each with ONE attachment on its pane
+   * and `spawn_artifacts` NULL — `why agents skip reply` (23h) and `feed
+   * defect scan + replace` (8h).
+   *
+   * The REPORT counts too, and always did in principle: the hold's own reason
+   * is "the output is ONLY in there", and a card carrying the worker's answer
+   * is the output not being only in there.
    */
-  private artifactsPublished(tabId: string): boolean {
+  private cardHasOutput(tabId: string): boolean {
     if (!tabId) return false;
     try {
       const row = this.deps.db
-        .prepare('SELECT spawn_artifacts AS a FROM tabs WHERE id = ?')
-        .get(tabId) as { a: string | null } | undefined;
+        .prepare('SELECT spawn_artifacts AS a, spawn_report AS r FROM tabs WHERE id = ?')
+        .get(tabId) as { a: string | null; r: string | null } | undefined;
+      if (row?.r?.trim()) return true;
       if (!row?.a) return false;
       const parsed = JSON.parse(row.a) as unknown;
       return Array.isArray(parsed) && parsed.length > 0;
     } catch {
-      // Unparseable is not published.
+      // Unreadable is not on the card.
       return false;
     }
   }

@@ -157,6 +157,8 @@ const tabActivity = new TabActivity(db, {
     const t = tabStore.getById(tabId);
     if (t) events.emit({ type: 'tab.updated', tab: decorateTab(cache, db, t) });
   },
+  // The strip gained or lost a chat. Carries nothing — see the event's note.
+  onWorkingSet: () => events.emit({ type: 'working_set.changed' }),
 });
 // Both ptyd listeners at once — the raw activity tick AND the `connected`
 // signal that re-arms the "our own restart is not activity" grace. They live

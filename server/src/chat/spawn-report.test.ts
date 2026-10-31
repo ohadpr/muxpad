@@ -277,7 +277,7 @@ describe('buildSpawnReportPrompt', () => {
     // exactly as it appears" — from before `scrapeArtifacts` existed. With both
     // in place a card carried the same link twice, and the prose copy is the
     // expensive one: measured on a real card, "now live at
-    // https://pub.example.org/trayo-plan-card-demo/," filled most of the two
+    // https://pub.example.org/orbit-plan-card-demo/," filled most of the two
     // lines a summary gets and the sentence was cut off at "with three …".
     const p = buildSpawnReportPrompt('assistant: done', { crashed: false });
     expect(p).toMatch(/never write out a url or a file path/i);
@@ -324,7 +324,7 @@ describe('scrapeArtifacts — where the work is, with no model in the path', () 
     // artifact, and they then rendered in FRONT of the host: the link box used
     // `direction: rtl` so its ellipsis would eat the origin, and the bidi
     // algorithm moves trailing neutrals to the paragraph's left edge. The card
-    // read `**/pub.example.org/trayo-plan-card-demo`. Both ends, both the url
+    // read `**/pub.example.org/orbit-plan-card-demo`. Both ends, both the url
     // and the path form.
     expect(scrapeArtifacts('assistant: live at **https://x.test/demo/**')).toEqual([
       'https://x.test/demo/',
@@ -426,7 +426,15 @@ describe('maybeWriteSpawnReport — one attempt, and every failure is one', () =
   });
 
   it('records "nothing to report" as its own state, with no text', async () => {
-    const { tabId, paneId } = makeWorker([{ kind: 'user', text: 'hi' }]);
+    // The worker DID speak — this is about the model judging that what it said
+    // amounts to nothing worth reporting. The fixture used to be user-only,
+    // which is the shape that never reaches the model any more (see the
+    // zero-output tests below): a transcript holding only the instruction is
+    // the fabrication case, not the nothing-to-report case.
+    const { tabId, paneId } = makeWorker([
+      { kind: 'user', text: 'hi' },
+      { kind: 'assistant', text: 'hello' },
+    ]);
     const out = await maybeWriteSpawnReport(db, tabId, paneId, async () => NOTHING, { now: 4_000 });
     expect(out).toEqual({ report: null, state: 'none', artifacts: [] });
     expect(new TabStore(db).getById(tabId)?.spawn_report_state).toBe('none');
@@ -642,5 +650,78 @@ describe('maybeWriteSpawnReport — one attempt, and every failure is one', () =
     const paneId = new PaneStore(db).create({ tab_id: tabId }).id;
     expect(await maybeWriteSpawnReport(db, tabId, paneId, async () => 'x', { now: 1 })).toBeNull();
     expect(new TabStore(db).spawnReportAt(tabId)).toBeNull();
+  });
+  /**
+   * THE FABRICATED SUCCESS.
+   *
+   * A codex worker hung on stdin and produced no output at all. Three times in
+   * one session muxpad delivered a confident completion to its parent — "wrote
+   * the critique to a markdown file and completed the task", naming a file that
+   * never existed — because the summariser was handed a transcript containing
+   * only the prompt the worker had been dispatched with, and restated that
+   * instruction as an accomplishment.
+   *
+   * `turns` could not catch it: it counts user and assistant alike, so a
+   * prompt-only session counts 1 and clears the `turns < 1` gate.
+   *
+   * The user caught it by checking for the file. A parent agent would not have —
+   * it would have acted on the result, which is the entire purpose of the join.
+   */
+  describe('a worker that produced no output', () => {
+    it('reports the silence instead of summarising its own instructions', async () => {
+      const { tabId, paneId } = makeWorker([
+        {
+          kind: 'user',
+          text: 'Read FIX_PLAN.md and write your critique to /tmp/astra_critique.md',
+        },
+      ]);
+      let asked = false;
+      const out = await maybeWriteSpawnReport(
+        db,
+        tabId,
+        paneId,
+        async () => {
+          asked = true;
+          return 'Wrote the critique to /tmp/astra_critique.md and completed the task.';
+        },
+        { now: 4_000 },
+      );
+      expect(asked, 'spent a model call on a transcript with nothing in it but the prompt').toBe(
+        false,
+      );
+      expect(out?.state).toBe('failed');
+      expect(out?.report).toMatch(/no output/i);
+      // The claim that matters: it must not say the work was done.
+      expect(out?.report).not.toMatch(/completed|wrote the critique/i);
+    });
+
+    it('says so on the row, so the card cannot read as an ordinary delivery', async () => {
+      const { tabId, paneId } = makeWorker([{ kind: 'user', text: 'do the thing' }]);
+      await maybeWriteSpawnReport(db, tabId, paneId, async () => 'All done!', { now: 4_000 });
+      const tab = new TabStore(db).getById(tabId);
+      expect(tab?.spawn_report_state).toBe('failed');
+      expect(tab?.spawn_report).toMatch(/no output/i);
+    });
+
+    it('still summarises normally the moment the worker has said ANYTHING', async () => {
+      const { tabId, paneId } = makeWorker([
+        { kind: 'user', text: 'count the todos' },
+        { kind: 'assistant', text: 'Found 41 TODOs across 6 files.' },
+      ]);
+      const out = await maybeWriteSpawnReport(db, tabId, paneId, async () => '41 TODOs, 6 files.', {
+        now: 4_000,
+      });
+      expect(out?.state).toBe('ok');
+      expect(out?.report).toBe('41 TODOs, 6 files.');
+    });
+
+    it('keeps a CRASH as the crash, which is the more certain fact', async () => {
+      const { tabId, paneId } = makeWorker([{ kind: 'user', text: 'do the thing' }]);
+      const out = await maybeWriteSpawnReport(db, tabId, paneId, async () => 'All done!', {
+        now: 4_000,
+        crashed: true,
+      });
+      expect(out?.state).toBe('crashed');
+    });
   });
 });

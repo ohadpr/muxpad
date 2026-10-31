@@ -280,17 +280,20 @@ function vsRail(expr: string, t: Record<string, string>): number {
 }
 
 describe('the themes this file measures against', () => {
-  it('finds all six, each with the tokens the arithmetic needs', () => {
+  it('finds every theme in the stylesheet, each with the tokens the arithmetic needs', () => {
     // Guards the guard: a parser that silently found nothing would make every
     // `for (const theme of …)` below vacuously pass.
-    expect(Object.keys(THEMES).sort()).toEqual([
-      'acme',
-      'acme-dark',
-      'alucard',
-      'dracula',
-      'github-light',
-      'tokyo-night',
-    ]);
+    //
+    // A FLOOR AND A MEMBERSHIP CHECK, NOT A FIXED LIST. This enumerated the six
+    // themes that existed the day it was written, so adding a seventh
+    // (demoscene) failed it for a reason that had nothing to do with what it
+    // guards — the same stale-count trap as StateChip's `>= 3`. What matters is
+    // that the parser found the themes and that each carries the tokens the
+    // arithmetic below reads; the number of themes is the product's business.
+    const found = Object.keys(THEMES);
+    expect(found.length).toBeGreaterThanOrEqual(6);
+    for (const required of ['tokyo-night', 'dracula', 'alucard', 'github-light'])
+      expect(found).toContain(required);
     for (const [name, t] of Object.entries(THEMES))
       for (const token of ['--bg-tabbar', '--bg-hover', '--fg', '--accent'])
         expect({ name, token, has: typeof t[token] }).toEqual({ name, token, has: 'string' });
@@ -962,7 +965,10 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     // PANE's, which is right for everything that belongs to the pane and wrong
     // for a mark that means the same thing on every row: a dark pane accent
     // was invisible on the dark rail, which is exactly how it was reported.
-    expect(decl(edge, 'background')).toBe('var(--rail-accent, var(--accent))');
+    // `--accent`, not the rail token by name: the island rebinds it, so the
+    // rail gets the rail's value and the mobile sheet — which is NOT an island
+    // — gets the app's. See NavSheet.contrast.test.
+    expect(decl(edge, 'background')).toBe('var(--accent)');
 
     // AND IT SITS ON THE ROW — which took three goes.
     //
@@ -998,5 +1004,222 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
         /display:\s*none|visibility:\s*hidden|opacity:\s*0\b/.test(r.body);
       expect({ sel: r.selectors, hides }).toEqual({ sel: r.selectors, hides: false });
     }
+  });
+});
+
+/**
+ * THE NAME INK, MEASURED ON EVERY THEME THAT SHIPS.
+ *
+ * "Improve contrast for chat names in this theme and others." Read names were
+ * `color-mix(--fg-dim 55%, --fg-faint)` — a value BETWEEN the two tokens —
+ * which put them at 4.39–8.38:1 on the rail and 3.82–8.38:1 inside the
+ * recently-active band, where four themes were under AA. Child rows were
+ * --fg-faint outright: 3.26–5.58:1, failing on eight of the ten.
+ */
+describe('a chat name is legible on every rail', () => {
+  const STYLES = readFileSync(join(__dirname, '..', 'styles.css'), 'utf8');
+
+  interface Rail {
+    name: string;
+    surface: string;
+    dim: string;
+    faint: string;
+    fg: string;
+  }
+  const rails: Rail[] = [];
+  for (const m of STYLES.matchAll(/\[data-theme="([^"]+)"\]\s*\{([\s\S]*?)\n\}/g)) {
+    const [, name, body] = m;
+    if (!name || !body) continue;
+    const tok = (k: string) => new RegExp(`--${k}:\\s*(#[0-9a-fA-F]{3,8});`).exec(body)?.[1];
+    const surface = tok('rail-surface');
+    const dim = tok('rail-ink-dim');
+    const faint = tok('rail-ink-faint');
+    const fg = tok('fg');
+    if (surface && dim && faint && fg) rails.push({ name, surface, dim, faint, fg });
+  }
+
+  const rgb = (hex: string) => {
+    const h = hex.replace('#', '');
+    const full = h.length === 3 ? [...h].map((c) => c + c).join('') : h;
+    return [0, 2, 4].map((i) => Number.parseInt(full.slice(i, i + 2), 16));
+  };
+  const lum = (c: number[]) => {
+    const [r, g, b] = c.map((v) => {
+      const s = v / 255;
+      return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+    }) as [number, number, number];
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const ratio = (a: number[], b: number[]) =>
+    (Math.max(lum(a), lum(b)) + 0.05) / (Math.min(lum(a), lum(b)) + 0.05);
+  const mix = (a: string, b: string, pct: number) =>
+    rgb(a).map((v, i) => Math.round((v * pct) / 100 + (rgb(b)[i] as number) * (1 - pct / 100)));
+  /** The recently-active band: a 6% lift of --fg over the rail. */
+  const band = (r: Rail) => mix(r.fg, r.surface, 6);
+
+  it('finds the rails to measure at all', () => {
+    expect(rails.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it('reads the tokens this test assumes out of the stylesheet', () => {
+    // The arithmetic below is only true while these are the values in use.
+    expect(NT_TOKENS['--nt-ink-read']).toBe('var(--fg-dim)');
+    expect(NT_TOKENS['--nt-ink-read-child']).toMatch(/--fg-dim\) 70%/);
+  });
+
+  it.each(rails.map((r) => [r.name, r] as const))(
+    '%s clears AA for a read name, on the rail and in the band',
+    (_n, rail) => {
+      expect(ratio(rgb(rail.dim), rgb(rail.surface))).toBeGreaterThanOrEqual(4.5);
+      expect(ratio(rgb(rail.dim), band(rail))).toBeGreaterThanOrEqual(4.5);
+    },
+  );
+
+  it.each(rails.map((r) => [r.name, r] as const))(
+    '%s clears AA for a sub-chat name on the rail',
+    (_n, rail) => {
+      expect(ratio(mix(rail.dim, rail.faint, 70), rgb(rail.surface))).toBeGreaterThanOrEqual(4.5);
+    },
+  );
+
+  it('spends no child rung inside the band, where there is no hierarchy to say', () => {
+    // The band is a flat list of chats with no parents on it, so a quieter
+    // rung there says nothing — and on top of the band's own lift it measured
+    // 4.11:1 on tokyo-night. (0,6,0) against the child rule's (0,5,0), because
+    // a tie is decided by file order.
+    expect(NAV_CSS).toMatch(
+      /\.navtree\[data-variant\] \.navtree-workingset \.navtree-tab-row\[data-child="true"\] \.navtree-name-text \{\s*color: var\(--nt-ink-read\)/,
+    );
+  });
+});
+
+/**
+ * THE BAND'S SELECTION DOES NOT REACH FOR THE PANE.
+ *
+ * A selected row in the TREE is the pane's own surface continuing into the
+ * rail: pane face, rounded left, square and bleeding right, and a funnel node
+ * drawing the two concave fillets that flare one into the other.
+ *
+ * The band borrowed the fill and the radius and got none of the rest — the
+ * funnel renders only on a tree row — so its selected row reached for a join
+ * it could not make. Reported as "recently active tabs have a selector
+ * indicator which connects with the tab contents, but that doesn't happen
+ * with the nice rounded elements… maybe the selection indicator for the
+ * recently active should not try to connect to the chat."
+ */
+describe('a selected row in the recently-active band', () => {
+  const rule = (() => {
+    const flat = NAV_CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+    const i = flat.indexOf('.navtree-workingset .navtree-tab-row[data-active="true"] {');
+    return i < 0 ? '' : flat.slice(i, flat.indexOf('}', i));
+  })();
+
+  it('is a quiet LIFT, never the tree’s own selected surface', () => {
+    // It wore `--bg-pane-face`, the tree's own selected fill, so the chat you
+    // were in was two identical pills ~450px apart: one here, one in its
+    // workspace below. "It feels a little bit messy."
+    //
+    // And the fix is not another colour. The attempt before this one swapped
+    // in `--nt-sel`, the rail's 20% accent wash — "active in recently active
+    // chat highlight is just trash". ANY ground here is a second claim on one
+    // surface, so the assertion is the absence rather than a particular token.
+    expect(rule, 'the band has no active-row rule').not.toBe('');
+    // Built from the BAND's captured ink — not --fg, which this very selector
+    // re-points at the pane's palette (see --band-ink).
+    expect(rule).toMatch(/background-color:\s*color-mix\(in srgb, var\(--band-ink\)/);
+    // Not the tree's slab, and not the accent wash that read as muddy plum.
+    expect(rule).not.toMatch(/background-color:\s*var\(--(bg-pane-face|nt-sel|accent)/);
+  });
+
+  it('does not leave "you are here" and "unread" on one channel', () => {
+    // With no ground at all the two were separated by font-weight alone — 640
+    // against 700 — and against a read row that ink step measures 1.31:1 on
+    // tokyo-night. Two different facts, one invisible difference.
+    const lift = /color-mix\(in srgb, var\(--band-ink\) (\d+)%/.exec(rule)?.[1];
+    expect(Number(lift)).toBeGreaterThan(0);
+  });
+
+  it('still says "you are here", in the channel the rail already uses', () => {
+    // Taking the ground away must not leave the row indistinguishable. The
+    // shared active-row rule does it in type — full ink at 640, a step under
+    // the unread 700 — and that rule is unscoped, so it reaches the band.
+    const active = /\.navtree-tab-row\[data-active="true"\] \.navtree-name-text \{([^}]*)\}/.exec(
+      NAV_CSS.replace(/\/\*[\s\S]*?\*\//g, ''),
+    )?.[1];
+    expect(active).toMatch(/color:\s*var\(--fg\)/);
+    expect(active).toMatch(/font-weight:\s*640/);
+  });
+
+  it('does not solve it by hiding the row, which would move the rest', () => {
+    // The other way to stop drawing the chat twice is to drop it from the
+    // band — and then every row under it rises as you navigate in and falls
+    // as you leave, which is the churn the stable slots exist to prevent.
+    const tsx = readFileSync(join(__dirname, 'NavTree.tsx'), 'utf8');
+    const strip = tsx.slice(tsx.indexOf('function WorkingSetStrip'));
+    const body = strip.slice(0, strip.indexOf('\nfunction '));
+    expect(body).not.toMatch(/filter\([^)]*activeTabSlug/);
+  });
+
+  it('is rounded at BOTH ends and stays inside the band', () => {
+    // The tree row is square on the right and bleeds past the group's padding
+    // so it touches the pane. This one has nothing to touch.
+    expect(rule).toMatch(/border-radius:\s*var\(--nt-pill\);/);
+    expect(rule).toMatch(/margin-right:\s*0/);
+  });
+
+  it('draws no silhouette hairline, which belonged to the join', () => {
+    expect(rule).toMatch(/box-shadow:\s*none/);
+  });
+
+  it('never gets a funnel, which is what the join is made of', () => {
+    // Belt: the funnel is rendered by the tree row component only, but the
+    // band's rows ARE `.navtree-tab-row`s, so this is one `&&` away from
+    // being wrong.
+    const tsx = readFileSync(join(__dirname, 'NavTree.tsx'), 'utf8');
+    const row = tsx.slice(tsx.indexOf('function WorkingSetRow'));
+    expect(row.slice(0, row.indexOf('\nfunction '))).not.toMatch(/navtree-tab-funnel/);
+  });
+});
+
+/**
+ * ── THE BAND DOES NOT LEAVE THE ISLAND ───────────────────────────────────
+ *
+ * `.navtree-tab-row[data-active="true"]` swaps --fg, --fg-dim and the whole
+ * --nt-ink-* family to the PANE's palette. That is right in the TREE, where
+ * the row is painted in the pane's face. In the BAND there is no pane face,
+ * and the substitution put pane ink on rail ground: 1.19:1 on memphis, 1.58
+ * alucard, 2.07 riso, against 5.6-9.6 for the read rows beside it.
+ *
+ * Two attempts failed before this one, both because they named a token the
+ * active row re-derives: `var(--fg)` and then `var(--nt-ink-read)`.
+ */
+describe('the band captures its own ink', () => {
+  const css = NAV_CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+
+  it('captures it on the BAND, where the rail still owns the tokens', () => {
+    const i = css.indexOf('.navtree-workingset {');
+    const body = css.slice(i, css.indexOf('}', i));
+    expect(body).toMatch(/--band-ink:\s*var\(--fg\)/);
+  });
+
+  it('is declared OUTSIDE the selector that rebinds the palette', () => {
+    // A custom property's var() resolves where it is DECLARED. Declaring it on
+    // the active row itself would capture the pane's ink — which is the bug.
+    const active = css.indexOf('.navtree-tab-row[data-active="true"] {');
+    const band = css.indexOf('--band-ink:');
+    expect(band).toBeGreaterThan(-1);
+    const activeBody = css.slice(active, css.indexOf('}', active));
+    expect(activeBody).not.toContain('--band-ink');
+  });
+
+  it('uses it for BOTH the ink and the ground', () => {
+    // The ground was mixed from --fg too, which is why the dark themes got
+    // worse rather than better on the first attempt (5.60 -> 3.75).
+    const i = css.indexOf('.navtree-workingset .navtree-tab-row[data-active="true"] {');
+    expect(css.slice(i, css.indexOf('}', i))).toContain('var(--band-ink)');
+    const j = css.indexOf(
+      '.navtree-workingset .navtree-tab-row[data-active="true"] .navtree-name-text',
+    );
+    expect(css.slice(j, css.indexOf('}', j))).toContain('var(--band-ink)');
   });
 });

@@ -47,6 +47,7 @@ import { type AgentLaunchOptions, type RecentFolder, api } from '../api';
 import {
   AGENT_BACKENDS,
   type AgentBackendId,
+  HOUSE_CHAT_CREATE,
   backendLabel,
   conversionFailure,
 } from '../lib/agent-backend';
@@ -58,6 +59,7 @@ import {
 } from '../lib/attachments';
 import { browserOpenIntent, injectBrowserMoments } from '../lib/browser-card';
 import { useBrowserFontSize } from '../lib/browser-font';
+import { branchPrefill, draftKeyFor } from '../lib/chat-branch';
 import {
   type DirectedWork,
   directedIsStale,
@@ -112,6 +114,7 @@ import {
   isDeliveryText,
   lastTurnStartId,
   toggleActionRun,
+  voiceSpokenAvailable,
 } from '../lib/chat-voice';
 import { canAutoPageHistory, showLoadEarlier } from '../lib/history-budget';
 import { NO_SENDERS, loadInboundSenders, matchInboundSenders } from '../lib/inbound-senders';
@@ -139,6 +142,7 @@ import { type UploadItem, UploadQueue, formatBytes, summarize } from '../lib/upl
 import type { AgentLink } from '../lib/voice/session';
 import { useVoice } from '../lib/voice/use-voice';
 import { workingVariantFor } from '../lib/working-variant';
+import { insertTabRow } from '../tabs';
 import { AgentBackendLogo, backendFromAssistant } from './AgentLogos';
 import { BrowserCard } from './BrowserCard';
 import { useBrowsers } from './BrowserCards';
@@ -182,7 +186,7 @@ import { CopyablePre } from './CopyablePre';
 import { FromAgentMessage } from './FromAgentMessage';
 import { SvgAgentGlyph, SvgGlobe, SvgTerminalGlyph } from './PaneWebSwitch';
 import { ReviewButton, ReviewPanel, sendableNotes } from './ReviewControl';
-import { VoiceBar, VoiceControl } from './VoiceControl';
+import { VoiceBar, VoiceControl, isLive as voiceIsLive } from './VoiceControl';
 
 /** Open a media item in the lightbox (image or video). */
 import {
@@ -208,7 +212,9 @@ import {
   workingRowLabel,
 } from '../lib/live-status';
 import { isMobileLayout } from '../lib/mobile-layout';
+import { MOBILE_BREAKPOINT } from '../lib/mobile-layout';
 import { useDismissable } from '../lib/use-dismissable';
+import { useMediaQuery } from '../use-media-query';
 import { SlackApprovalAlert } from './SlackApprovalAlert';
 import './ChatPane.css';
 
@@ -237,6 +243,80 @@ function SvgAttach() {
         strokeWidth="1.6"
         strokeLinecap="round"
         strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/** The branch mark — the same one the rail draws for a spawned chat, which is
+ *  the nearest thing muxpad has to a word for "another conversation, from
+ *  here". Menu scale, like the two below it. */
+function SvgBranch() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="6" cy="5.5" r="2.4" />
+      <circle cx="6" cy="18.5" r="2.4" />
+      <circle cx="18" cy="8" r="2.4" />
+      <path d="M6 7.9v8.2M8.4 5.5h4.2a3 3 0 0 1 3 3v.4" />
+    </svg>
+  );
+}
+
+/** Paperclip at menu scale — beside 13px text in the desktop tool row. */
+function SvgScreenlessAttach() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" fill="none">
+      <path
+        d="M17.5 9.5 10.9 16.1a3 3 0 0 1-4.24-4.24l7.07-7.07a2 2 0 0 1 2.83 2.83l-7.08 7.07a1 1 0 0 1-1.41-1.41l6.36-6.37"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/** The `+` that stands for the whole left cluster on a touch layout. */
+function SvgPlus() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true" fill="none">
+      <path d="M12 6v12M6 12h12" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** Screen glyph — the sheet's "Review a screen" row. Smaller than the button
+ *  glyphs above: in a menu it sits beside 14px text, not alone in a circle. */
+function SvgScreen() {
+  return (
+    <svg width="17" height="17" viewBox="0 0 24 24" aria-hidden="true" fill="none">
+      <rect x="2.5" y="4" width="19" height="13" rx="2" stroke="currentColor" strokeWidth="1.7" />
+      <path d="M8.5 20.5h7" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** Mic glyph — the sheet's "Dictate" row. Same size argument as SvgScreen. */
+function SvgMic() {
+  return (
+    <svg width="17" height="17" viewBox="0 0 24 24" aria-hidden="true" fill="none">
+      <rect x="9" y="2.5" width="6" height="11" rx="3" stroke="currentColor" strokeWidth="1.7" />
+      <path
+        d="M5 11a7 7 0 0 0 14 0M12 18v3.5"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
       />
     </svg>
   );
@@ -334,6 +414,11 @@ type ServerMsg =
       // True when a headless turn is already in flight for this pane — a
       // reconnect mid-turn restores the working/Stop state from this.
       turnRunning?: boolean;
+      /** This pane's runner is executing a different build from the one the
+       *  server would start now (server/src/runner-build.ts). Sent only when
+       *  true, and it can arrive LATE — a build landing under an open chat
+       *  makes a current pane stale with no hello to ride. */
+      staleRunner?: boolean;
       // The turn's streamed text so far, so that reconnect shows the partial
       // assistant message instead of a bare typing indicator.
       streamText?: string;
@@ -1225,6 +1310,7 @@ export function ChatPane({
     },
     [navigate],
   );
+
   // What every rendered mention in the log resolves through. Memoized so the
   // transcript re-renders when the corpus lands, not on every frame around it.
 
@@ -1464,6 +1550,11 @@ export function ChatPane({
   // recovers. tone 'danger' = a real failure (turn failed, send rejected)
   // that keeps the loud styling and sticks until the next turn.
   const [notice, setNotice] = useState<{ text: string; tone: 'info' | 'danger' } | null>(null);
+  /** See ServerMsg.staleRunner. Not a `notice`: that banner is cleared by the
+   *  next turn-done and by every reconnect, and a pane being behind the build
+   *  is a standing fact rather than an event — it belongs on the session strip
+   *  with the other things that are true about this chat. */
+  const [staleRunner, setStaleRunner] = useState(false);
   // Older-history pagination: the server opens with just the recent tail; we
   // page earlier messages in on scroll-up. `hasMoreOlder` starts true and is
   // corrected by the server's `older-done`.
@@ -1506,6 +1597,9 @@ export function ChatPane({
   // multi-line input + the mobile safe-area, so a fixed guess isn't enough).
   const composerRef = useRef<HTMLDivElement>(null);
   const [composerH, setComposerH] = useState(0);
+  /** The composer's distance from the top of the screen — the mention picker's
+   *  real ceiling. See the measure effect. */
+  const [composerTop, setComposerTop] = useState(0);
   // Live assistant text streamed from the headless turn (token-level), shown
   // as a preview until the final message lands in the transcript tail.
   const [streamingText, setStreamingText] = useState('');
@@ -1555,6 +1649,62 @@ export function ChatPane({
   // null = no runner status yet (TUI-view chats never get one).
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
   const [folder, setFolder] = useState<{ cwd: string; hasProject: boolean } | null>(null);
+
+  // ── BRANCH ────────────────────────────────────────────────────────────────
+  // A new chat beside this one, in the same folder, pre-filled to go and read
+  // this one. For "a long running, big context task… that contains context you
+  // want to consult with or do something parallel with".
+  //
+  // A PEER, NOT A SUB-CHAT, and that is the whole design decision — see
+  // lib/chat-branch.ts. A child would report its findings back into a
+  // conversation you walked away from and then retire itself underneath you,
+  // which is the opposite of a chat you intend to sit in.
+  const [branching, setBranching] = useState(false);
+  const branch = useCallback(async () => {
+    if (branching) return;
+    setBranching(true);
+    try {
+      const groups = cachedAllTabs() ?? (await loadAllTabs());
+      const group = groups.find((g) => g.tabs.some((t) => t.id === tabId));
+      if (!group) return;
+      const here = group.tabs.find((t) => t.id === tabId);
+      const made = await api.createTab(group.id, {
+        ...HOUSE_CHAT_CREATE,
+        // Same folder, because the point is to work on the same thing. The
+        // MODE is deliberately not copied: a branch is a chat you are going to
+        // talk to, so it gets the house arrangement like every other new chat.
+        ...(folder?.cwd ? { cwd: folder.cwd } : {}),
+      });
+      // The draft is seeded on the NEW pane's key before we navigate, so the
+      // chat mounts with it already in the box — there is no frame where the
+      // composer is empty and then fills in, and nothing is sent for you.
+      try {
+        const full = await api.getTab(made.id);
+        const fresh = full.panes?.[0];
+        if (fresh)
+          localStorage.setItem(
+            draftKeyFor(fresh.id),
+            branchPrefill({ name: here?.name ?? 'the other chat', paneId }),
+          );
+      } catch {
+        // No draft, then. The chat still opens, in the right folder, and the
+        // user can say what they want — strictly better than failing the whole
+        // branch over a prefill.
+      }
+      insertTabRow(group.id, made);
+      void navigate({
+        to: '/w/$wsSlug/t/$tabSlug',
+        params: { wsSlug: group.slug, tabSlug: made.slug },
+      });
+    } catch (e) {
+      setNotice({
+        text: e instanceof Error ? `Could not branch: ${e.message}` : 'Could not branch.',
+        tone: 'danger',
+      });
+    } finally {
+      setBranching(false);
+    }
+  }, [branching, tabId, folder, paneId, navigate]);
   // Authoritative emptiness, from the server (see the session frame). Starts
   // TRUE — "assume there is history until told otherwise" — so a slow first
   // frame can never flash the alternatives over someone's conversation.
@@ -1659,6 +1809,10 @@ export function ChatPane({
           hasMoreOlderRef.current = true;
         }
         if (newSid) renderedSid.current = newSid;
+        // Absent reads as false, which is the point: the server omits the
+        // field in the healthy case, and a pane that gets respawned onto the
+        // current build clears the cell by the same omission.
+        setStaleRunner(msg.staleRunner === true);
         setSession(
           msg.session
             ? {
@@ -2651,13 +2805,42 @@ export function ChatPane({
     // works. So: measure only a element that actually has a box. Same shape
     // as the MobileInputBar fix, for the same reason.
     const measure = () => {
+      // HEIGHT stays `offsetHeight` — the guard above is about a display:none
+      // ancestor collapsing it, and swapping in getBoundingClientRect().height
+      // silently broke the two tests that stub `offsetHeight` to drive it.
       const h = el.offsetHeight;
       if (h > 0) setComposerH(h);
+      // ── HOW MUCH ROOM IS ABOVE THE COMPOSER ───────────────────────────────
+      // The mention picker opens upward from here, and the height it may take
+      // is exactly this number less the notch. It used to be DERIVED —
+      // `100dvh - composerH - keyboardInset - safe-area` — and the derivation
+      // is wrong on the one surface it was written for: with the keyboard up,
+      // iOS leaves `dvh` at the full screen, so the formula believed there was
+      // most of a phone above a composer that had been lifted to the middle of
+      // it. Reported with a screenshot of the picker's header under the clock
+      // and the carrier, with no way to scroll it back down.
+      //
+      // `rect.top` is not a derivation. The wrap is already translated by
+      // `--chat-keyboard-inset`, so this is where the composer IS, on screen,
+      // whatever moved it.
+      setComposerTop(Math.max(0, Math.round(el.getBoundingClientRect().top)));
     };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
-    return () => ro.disconnect();
+    // A ResizeObserver fires on the element's own BOX. The keyboard changes
+    // where it sits without changing its size, so the one event that matters
+    // most for `composerTop` is the one the observer cannot see.
+    const vv = window.visualViewport;
+    vv?.addEventListener('resize', measure);
+    vv?.addEventListener('scroll', measure);
+    window.addEventListener('resize', measure);
+    return () => {
+      ro.disconnect();
+      vv?.removeEventListener('resize', measure);
+      vv?.removeEventListener('scroll', measure);
+      window.removeEventListener('resize', measure);
+    };
   }, [session?.current_sid]);
 
   // ── Lift the composer off the software keyboard ───────────────────────────
@@ -2673,6 +2856,52 @@ export function ChatPane({
     if (!active || !pane || !isMobileLayout()) return;
     return trackKeyboardInset(pane, { viewport: window.visualViewport ?? null });
   }, [active, pendingPick, session?.current_sid]);
+
+  /**
+   * ── ARRIVING AT A CHAT PUTS THE CARET IN IT ────────────────────────────
+   *
+   * Switching to a chat — from the sidebar, the switcher, a deep link — is
+   * almost always the first half of "and now say something". Type-to-focus
+   * below already covers the case where you start typing anyway; this covers
+   * the half second before that, where the caret is nowhere and the first
+   * keystroke has to be caught rather than placed.
+   *
+   * `showEpoch` is in the deps for the same reason the re-entry effect has
+   * it: a pane that was already mounted and merely became visible again never
+   * re-runs on `active` alone.
+   *
+   * NOT ON A PHONE. Focusing a field there raises the keyboard over half the
+   * screen, and arriving at a chat is at least as often about READING it. The
+   * composer is one tap away, and that tap is the signal.
+   *
+   * And it never TAKES focus from somewhere else: the search modal, a rename
+   * field, the picker. Arriving with something already focused means the
+   * arrival was incidental to whatever you are doing.
+   *
+   * THE DEPENDENCIES ARE DELIBERATE, in both directions. `input` is read and
+   * not listed: the caret is placed on ARRIVAL, and re-running on every
+   * keystroke would fight the caret the user is moving themselves. `paneId`
+   * and `showEpoch` are listed and not read: they are re-run TRIGGERS, because
+   * a pane that was already mounted and merely became visible again never
+   * re-runs on `active` alone.
+   */
+  // biome-ignore lint/correctness/useExhaustiveDependencies: input is read once on arrival; paneId/showEpoch are triggers
+  useEffect(() => {
+    if (!active || openTool || openImage || isMobileLayout()) return;
+    const ae = document.activeElement as HTMLElement | null;
+    if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return;
+    // One frame late: the pane is still being placed on this one (see the
+    // re-entry effect), and focusing mid-placement scrolls the log.
+    const h = requestAnimationFrame(() => {
+      const draft = inputRef.current;
+      if (!draft) return;
+      // `setCaret` rather than `focus`, with the caret at the END — a restored
+      // draft is a sentence you were part way through, and landing at its
+      // start is the one place you were not.
+      draft.setCaret(input.length);
+    });
+    return () => cancelAnimationFrame(h);
+  }, [active, paneId, showEpoch, openTool, openImage]);
 
   // Type-to-focus: when this chat is the visible face and you start typing a
   // printable character with nothing else focused, jump focus to the composer so
@@ -2958,6 +3187,24 @@ export function ChatPane({
     [mode, sending, session?.assistant, closedTurnStartId],
   );
   const voiceOn = chatVoiceActive(voiceOpts);
+  /**
+   * THE MIC IS OFFERED IN BOTH MODES; `voiceOn` IS ABOUT THE WRITTEN CHAT.
+   *
+   * They were one predicate, and the comment here used to say so with some
+   * pride: "the mic can never appear in Agent mode… one predicate, no second
+   * door". The door was in the wrong place. `voiceOn` decides whether this
+   * pane's prose is a PRIVATE SCRATCHPAD — a Chat-mode contract that must not
+   * touch an Agent pane, where the prose is the conversation — and that has
+   * nothing to do with whether you can talk to it.
+   *
+   * What stopped Agent mode from being spoken to was having nothing to say
+   * back: a voice session hears only `speak` frames, which come from the
+   * `reply` tool, which Agent mode deliberately does not have. The server now
+   * says it on the turn's behalf (server/src/spoken-answer.ts), so the
+   * remaining reason is gone.
+   */
+  const voiceMic = voiceSpokenAvailable(voiceOpts);
+
   // ONE VARIANT PER TURN. Keyed on the turn's own start event rather than
   // advanced on mount: the indicator unmounts the moment the first token
   // streams and remounts if the stream clears, so a mount-time pick would
@@ -3438,9 +3685,9 @@ export function ChatPane({
 
   // ── SPOKEN voice (GPT-Live) ────────────────────────────────────────────────
   //
-  // Reuses `voiceOn` — the SAME predicate that decides Chat mode's written
-  // voice — so the mic can never appear in Agent mode, and can never appear on
-  // a backend Chat mode doesn't support. One predicate, no second door.
+  // Offered in BOTH modes — see `voiceMic` above for why that is a different
+  // question from `voiceOn`, and what had to exist before Agent mode could be
+  // spoken to at all.
   //
   // The link below is the ONLY path from the voice layer to the agent, and it
   // is the path the composer already uses: `{t:'send'}` and `{t:'stop'}` on
@@ -3467,7 +3714,7 @@ export function ChatPane({
       return () => frameTaps.current.delete(cb);
     },
   };
-  const voice = useVoice({ paneId, enabled: voiceOn, agent: agentLink });
+  const voice = useVoice({ paneId, enabled: voiceMic, agent: agentLink, mode });
 
   // ── SCREEN REVIEW ──────────────────────────────────────────────────────────
   //
@@ -3477,6 +3724,46 @@ export function ChatPane({
   // list is the review-before-send affordance, and it is the only defence
   // against a mishearing or a bad split, both of which read plausibly.
   const review = useReview(paneId);
+
+  // ── THE LEFT CLUSTER IS ONE BUTTON, ON EVERY LAYOUT ───────────────────────
+  // It was three permanent targets (attach, review a screen, dictate) and then,
+  // for one revision, three on desktop and one on touch — on the argument that
+  // a mouse has room and hover where a thumb has neither.
+  //
+  // That argument lost to the report: "idk I see multiple buttons on the left,
+  // doesn't feel like anything changed". It was also the wrong argument. Room
+  // is not the reason to spend it, these are actions taken a few times a day
+  // each, and a composer whose left edge means different things on two screens
+  // is a composer you have to learn twice.
+  //
+  // WHAT IS STILL CONDITIONAL IS STATE, and that part is real: a recording in
+  // progress is not an action waiting to be taken, it is the thing you are
+  // doing. Its elapsed time and its stop cannot live behind a `+`, so a live
+  // control leaves the sheet and sits back in the row until it is finished.
+  const toolsIdle = review.state.phase === 'idle' && !voiceIsLive(voice.state);
+  // …and WHERE the idle controls go is a layout question, because the two
+  // layouts have different amounts of room and different pointers:
+  //   · a phone gets one `+` and a sheet, the shape every composer on that
+  //     screen size uses;
+  //   · a desktop gets the same actions as LABELLED buttons on the tool row —
+  //     a row of bare icons beside the input was the arrangement that read as
+  //     "nothing changed", and labels are what make a tool row a tool row.
+  const touchLayout = useMediaQuery(MOBILE_BREAKPOINT);
+  // Nothing typed, nothing attached, voice available and idle → the send slot
+  // holds the mic instead. See the button for why this beats a disabled Send.
+  const micInsteadOfSend =
+    voiceMic && voice.supported && !voiceIsLive(voice.state) && !input.trim() && chips.length === 0;
+  const collapsedTools = toolsIdle && touchLayout;
+  const labelledTools = toolsIdle && !touchLayout;
+  const [toolsOpen, setToolsOpen] = useState(false);
+  const toolsRef = useRef<HTMLDivElement>(null);
+  useDismissable(toolsOpen, toolsRef, () => setToolsOpen(false));
+  // A control that goes live while the sheet is open (or a rotation into the
+  // desktop layout) takes the `+` away with it — the sheet must not outlive
+  // the button it hangs from.
+  useEffect(() => {
+    if (!collapsedTools) setToolsOpen(false);
+  }, [collapsedTools]);
   const sendReview = () => {
     const outgoing = composeReviewMessage(sendableNotes(review.state.items));
     if (!outgoing) return;
@@ -4599,6 +4886,201 @@ export function ChatPane({
     );
   }
 
+  const sessionStrip = (
+    <SessionBar
+      paneId={paneId}
+      folder={folder}
+      status={agentStatus}
+      {...(session?.assistant ? { assistant: session.assistant } : {})}
+      liveLabel={liveLabel}
+      agents={rosterAgents}
+      background={backgroundLive}
+      onOpenChat={openChat}
+      mode={mode}
+      stale={staleRunner}
+      send={(obj) => {
+        const sock = wsRef.current;
+        if (!sock || sock.readyState !== WebSocket.OPEN) {
+          setNotice({ text: 'Not connected — try again in a moment.', tone: 'info' });
+          return;
+        }
+        sock.send(JSON.stringify(obj));
+      }}
+    />
+  );
+
+  /**
+   * THE COMPOSER'S TOOLS — one element, placed differently by layout.
+   *
+   * DESKTOP puts it on a row of its own under the input, with the labels on
+   * and the keyboard hint at the far end. TOUCH puts the same element back
+   * beside the input, because a phone must not spend a whole row on a single
+   * `+`: the row exists to carry three labels and a hint, and a phone is
+   * carrying none of those. The mock-up's phone has no tool row for exactly
+   * this reason.
+   *
+   * Three states, and only the first two are about layout:
+   *  · collapsed  — one `+` and a sheet (touch, everything idle)
+   *  · labelled   — Attach / Review a screen, named (desktop, everything idle)
+   *  · expanded   — the real controls, whenever one of them is LIVE. A
+   *    recording is not an action waiting to be taken, it is the thing you are
+   *    doing, and its elapsed time and its stop cannot sit behind a `+`.
+   */
+  const composerTools = collapsedTools ? (
+    <div className="chat-tools" ref={toolsRef}>
+      <button
+        type="button"
+        className="chat-attach"
+        onClick={() => setToolsOpen((o) => !o)}
+        aria-haspopup="menu"
+        aria-expanded={toolsOpen}
+        aria-label="Add to this message"
+        title="Add to this message"
+      >
+        <SvgPlus />
+      </button>
+      {toolsOpen ? (
+        <div className="chat-tools-sheet" role="menu">
+          <button
+            type="button"
+            role="menuitem"
+            className="chat-tools-item"
+            onClick={() => {
+              setToolsOpen(false);
+              fileInputRef.current?.click();
+            }}
+          >
+            <SvgScreenlessAttach />
+            Attach a file
+          </button>
+          {review.available ? (
+            <button
+              type="button"
+              role="menuitem"
+              className="chat-tools-item"
+              onClick={() => {
+                setToolsOpen(false);
+                void review.start();
+              }}
+            >
+              <SvgScreen />
+              Review a screen
+            </button>
+          ) : null}
+          {voiceMic && voice.supported ? (
+            <button
+              type="button"
+              role="menuitem"
+              className="chat-tools-item"
+              onClick={() => {
+                setToolsOpen(false);
+                voice.start();
+              }}
+            >
+              <SvgMic />
+              Dictate
+            </button>
+          ) : null}
+          <button
+            type="button"
+            role="menuitem"
+            className="chat-tools-item"
+            disabled={branching}
+            onClick={() => {
+              setToolsOpen(false);
+              void branch();
+            }}
+          >
+            <SvgBranch />
+            btw…
+          </button>
+          {/* ── AND THE SESSION, IN THE SHEET ────────────────────────────
+              A phone does not get a tool row: "I don't want that stuff to
+              take up another line". The `+` already opens a surface for
+              everything you can do to this chat, so the model chip rides it
+              too — one more row in a sheet that is only on screen while you
+              are using it, rather than a permanent line under the input. */}
+          <div className="chat-tools-session">{sessionStrip}</div>
+        </div>
+      ) : null}
+    </div>
+  ) : labelledTools ? (
+    <>
+      <button
+        type="button"
+        className="chat-tool-btn"
+        onClick={() => fileInputRef.current?.click()}
+        title="Attach a file"
+      >
+        <SvgScreenlessAttach />
+        Attach
+      </button>
+      {review.available ? (
+        <button
+          type="button"
+          className="chat-tool-btn"
+          onClick={() => void review.start()}
+          title="Review a screen — talk while you point"
+        >
+          <SvgScreen />
+          Review a screen
+        </button>
+      ) : null}
+      {/* NO DICTATE BUTTON. The mic is the composer's own right-hand button
+          while the field is empty (mic → send → queue, as drawn): dictation
+          REPLACES typing, where everything else here adds something to a
+          message you are writing. */}
+      {/* ── btw ─────────────────────────────────────────────────────────
+          A new chat beside this one, in the same folder, pre-filled to read
+          it. It was an icon on the session strip — the one chip there that
+          was a verb — and it is a COMMAND, so it sits with the commands under
+          the name the report gave it. The tooltip carries what it does;
+          "btw…" is what you reach for when the thing you want to say is not
+          this conversation. */}
+      <button
+        type="button"
+        className="chat-tool-btn"
+        disabled={branching}
+        onClick={() => void branch()}
+        title="btw — a new chat in this folder, pre-filled to read this one. This chat keeps running."
+      >
+        <SvgBranch />
+        btw…
+      </button>
+    </>
+  ) : (
+    <>
+      <button
+        type="button"
+        className="chat-attach"
+        onClick={() => fileInputRef.current?.click()}
+        aria-label="Attach a file"
+        title="Attach a file"
+      >
+        <SvgAttach />
+      </button>
+      <ReviewButton
+        state={review.state}
+        available={review.available}
+        unconfigured={review.unconfigured}
+        onStart={() => void review.start()}
+        onStop={() => void review.stop()}
+      />
+      {voiceMic ? (
+        <VoiceControl
+          state={voice.state}
+          detail={voice.detail}
+          status={voice.status}
+          supported={voice.supported}
+          minutesLeft={voice.minutesLeft}
+          elapsedMs={voice.elapsedMs}
+          onStart={voice.start}
+          onStop={() => voice.stop('user')}
+        />
+      ) : null}
+    </>
+  );
+
   return (
     // Every mention in the log resolves through this: rows are rendered by a
     // memoized component reached from several call sites, and a resolver
@@ -4613,6 +5095,27 @@ export function ChatPane({
         data-slack-active={active}
         data-slack-session={!!session?.current_sid}
       >
+        {/* ── THE CHAT'S OWN HEAD ──────────────────────────────────────────
+          Where the session lives: its name on the left, Branch and the session
+          chip on the right.
+
+          IT TOOK THREE TRIES TO PUT IT HERE. A full-width strip UNDER the
+          composer cost a permanent row at the bottom of a phone ("it pushes
+          the composer disproportionately upwards"). Hung off the composer's
+          top edge it cost no row and painted over the last line of the
+          transcript ("a bunch of fixed new elements on the top right of the
+          composer"). Folded into the composer's own tool row it was neither,
+          and it was still the wrong object: the composer is about the message
+          you are writing, and none of this is.
+
+          A head is the ordinary answer and the one the mock-up drew. It is
+          ABOUT THE PANE, it is at the top where every other app puts that, and
+          the room it costs is taken from the top of a scrolling log rather
+          than from the bottom, where the keyboard already is.
+
+          TOUCH SKIPS IT. The app's own top bar is already a header on a phone
+          — workspace, chat name, pane controls — and a second one under it
+          would be the row this whole exercise is about, moved. */}
         {/* Keep approval reachable while the chat transport is still connecting. */}
         {active && !session?.current_sid && <SlackApprovalAlert paneId={paneId} />}
         {/* Fixed-position, draws nothing until you take the wheel. Mounted here
@@ -4725,28 +5228,64 @@ export function ChatPane({
             ) : null}
             {agentWorking && !question ? (
               <div className="chat-turn chat-turn-assistant">
-                {/* In Chat mode the token stream IS the private scratchpad — the
+                {/* ── A COLUMN, BECAUSE A TURN IS A ROW ─────────────────────
+                    `.chat-turn` is `display: flex`, so Stop — added as a
+                    sibling of the message — became a flex ITEM beside it and
+                    stretched to the turn's full height: a 350px pill floating
+                    to the right of a streaming table. "Stop button goes crazy
+                    when agent streams response."
+
+                    The message and its Stop are one column inside that row.
+                    Wrapped here rather than fixed with `align-self`, because
+                    the intent is "at the FOOT of the turn" — which is a
+                    stacking order, not a stretch to suppress. */}
+                <div className="chat-turn-body">
+                  {/* In Chat mode the token stream IS the private scratchpad — the
                   `reply` tool's argument streams as input_json, which the
                   runner does not forward — so showing it would put reasoning on
                   screen live and then take it back at turn end. The working
                   indicator is what a Chat-mode turn shows instead, and it names
                   the running tool so a silent pane never reads as stuck. */}
-                {streamingText && !voiceOn ? (
-                  <div className="chat-msg">
-                    <Markdown text={streamingText} />
-                    <span className="chat-cursor" aria-hidden="true" />
-                  </div>
-                ) : (
-                  <div
-                    className="chat-msg chat-working"
-                    aria-label={`${assistantLabel(session?.assistant)} is working`}
+                  {streamingText && !voiceOn ? (
+                    <div className="chat-msg">
+                      <Markdown text={streamingText} />
+                      <span className="chat-cursor" aria-hidden="true" />
+                    </div>
+                  ) : (
+                    <div
+                      className="chat-msg chat-working"
+                      aria-label={`${assistantLabel(session?.assistant)} is working`}
+                    >
+                      <ChatWorking variant={workingVariant} />
+                      {workingLabel ? (
+                        <span className="chat-working-label">{workingLabel}</span>
+                      ) : null}
+                    </div>
+                  )}
+                  {/* ── STOP LIVES WITH THE TURN IT STOPS ─────────────────────
+                    It was a second circle in the composer, beside Queue — two
+                    buttons on one edge acting on two different subjects. Here
+                    it is attached to the thing it acts on: the foot of the
+                    running turn, which is also where the eye already is while
+                    waiting.
+
+                    OUTSIDE the streaming/working ternary on purpose. The
+                    indicator block only renders while there is nothing to
+                    stream; a turn that IS streaming prose had no indicator at
+                    all, so hanging Stop off the indicator would have left the
+                    longest turns — the ones you actually want to stop —
+                    without a stop. */}
+                  <button
+                    type="button"
+                    className="chat-turn-stop"
+                    onClick={stop}
+                    aria-label="Stop this turn"
+                    title="Stop this turn"
                   >
-                    <ChatWorking variant={workingVariant} />
-                    {workingLabel ? (
-                      <span className="chat-working-label">{workingLabel}</span>
-                    ) : null}
-                  </div>
-                )}
+                    <span className="chat-turn-stop-glyph" aria-hidden="true" />
+                    Stop
+                  </button>
+                </div>
               </div>
             ) : null}
             {question ? (
@@ -4985,7 +5524,10 @@ export function ChatPane({
             // ChatMentionPicker.css).
             style={
               composerH
-                ? ({ '--chat-composer-h': `${composerH}px` } as React.CSSProperties)
+                ? ({
+                    '--chat-composer-h': `${composerH}px`,
+                    '--chat-composer-top': `${composerTop}px`,
+                  } as React.CSSProperties)
                 : undefined
             }
           >
@@ -5011,7 +5553,7 @@ export function ChatPane({
                 {notice.text}
               </div>
             ) : null}
-            {voiceOn ? (
+            {voiceMic ? (
               <VoiceBar
                 state={voice.state}
                 detail={voice.detail}
@@ -5084,44 +5626,15 @@ export function ChatPane({
                 onChange={onPickFiles}
               />
               <div className="chat-composer-main">
-                <button
-                  type="button"
-                  className="chat-attach"
-                  onClick={() => fileInputRef.current?.click()}
-                  aria-label="Attach a file"
-                  title="Attach a file"
-                >
-                  {/* NOT DISABLED DURING AN UPLOAD ANY MORE. It was, because a
-                      spinner on the paperclip was the only upload indicator
-                      there was, so the button had to BE the status. Progress
-                      now lives on the chips and the strip above them, and
-                      adding a sixth file to a running batch is the thing a
-                      queue exists to allow. */}
-                  <SvgAttach />
-                </button>
-                {/* Both modes, unlike the mic: the thing you review is usually
-                  the app the agent in THIS pane is building. */}
-                <ReviewButton
-                  state={review.state}
-                  available={review.available}
-                  unconfigured={review.unconfigured}
-                  onStart={() => void review.start()}
-                  onStop={() => void review.stop()}
-                />
-                {/* Chat mode only — Agent mode is raw, and `voiceOn` is the same
-                  predicate that governs Chat mode's written voice. */}
-                {voiceOn ? (
-                  <VoiceControl
-                    state={voice.state}
-                    detail={voice.detail}
-                    status={voice.status}
-                    supported={voice.supported}
-                    minutesLeft={voice.minutesLeft}
-                    elapsedMs={voice.elapsedMs}
-                    onStart={voice.start}
-                    onStop={() => voice.stop('user')}
-                  />
-                ) : null}
+                {/* The `+` is here on touch and in the row below on a desktop
+                    — see the tool row for why a phone gets no row. */}
+                {!labelledTools ? composerTools : null}
+                {/* NOTHING ELSE BUT THE FIELD AND ITS BUTTON. The tools used to sit
+                    here on touch, because the row below held only a `+` and a
+                    row for one button is not worth its height. It holds the
+                    session chip and Branch now, so it earns the height on
+                    every layout and the tools go back into it — one row, one
+                    place, same on both. */}
                 <ChatDraft
                   ref={inputRef}
                   className="chat-input"
@@ -5209,31 +5722,60 @@ export function ChatPane({
                   }
                 />
                 {sending && !question ? (
-                  <>
-                    {/* Busy + composed text → Queue it (the server holds it and
-                      feeds it when the agent frees up) alongside Stop, instead
-                      of the old dead-end where a typed message wouldn't send. */}
-                    {input.trim() || chips.length > 0 ? (
-                      <button
-                        type="button"
-                        className="chat-send is-queue"
-                        onClick={sendMessage}
-                        aria-label="Queue message — sends when the agent is free"
-                        title="Queue — sends when the agent is free"
-                      >
-                        <SvgQueue />
-                      </button>
-                    ) : null}
-                    <button
-                      type="button"
-                      className="chat-send is-stop"
-                      onClick={stop}
-                      aria-label="Stop"
-                      title="Stop"
-                    >
-                      <span className="chat-send-glyph" aria-hidden="true" />
-                    </button>
-                  </>
+                  /* ── ONE BUTTON, IN EVERY STATE ────────────────────────────
+                     This used to be TWO circles side by side — Queue and Stop
+                     — whenever a turn was running and you had typed something.
+                     Reported as "you have both a send and a stop button and
+                     they're both horizontally presented".
+
+                     The fix is a category one rather than a layout one. This
+                     button has always acted on YOUR DRAFT: send it, or queue
+                     it. Stopping acts on THE AGENT'S TURN, which is a
+                     different subject that already has its own indicator — so
+                     Stop moved onto the working block in the log (see
+                     `chat-working-stop`), where the turn is being reported,
+                     and the composer's right side is one button again.
+
+                     Busy + composed text → Queue (the server holds it and
+                     feeds it when the agent frees up). Busy + nothing typed →
+                     the same button, disabled, exactly as Send is when there
+                     is nothing to send: the slot does not change shape under
+                     the thumb depending on whether you have started typing. */
+                  <button
+                    type="button"
+                    className="chat-send is-queue"
+                    onClick={sendMessage}
+                    disabled={uploadsInFlight || (!input.trim() && chips.length === 0)}
+                    aria-label="Queue message — sends when the agent is free"
+                    title={
+                      uploadsInFlight
+                        ? 'Waiting for uploads to finish — cancel one to queue now'
+                        : 'Queue — sends when the agent is free'
+                    }
+                  >
+                    <SvgQueue />
+                  </button>
+                ) : micInsteadOfSend ? (
+                  /* ── MIC → SEND → QUEUE, ONE SLOT ──────────────────────────
+                     With nothing typed there is nothing to send, so the slot
+                     holds the thing you would do INSTEAD of typing. This is
+                     the arrangement the mock-up drew, and it is why Dictate is
+                     not a label on the tool row: dictation replaces typing
+                     rather than adding to a draft.
+
+                     A disabled Send was the alternative, and it is strictly
+                     worse — a dead target in the most valuable 36px of the
+                     composer, which is exactly where the one action available
+                     to an empty composer should be. */
+                  <button
+                    type="button"
+                    className="chat-mic"
+                    onClick={() => voice.start()}
+                    aria-label="Dictate"
+                    title="Dictate — speak instead of typing"
+                  >
+                    <SvgMic />
+                  </button>
                 ) : (
                   <button
                     type="button"
@@ -5378,26 +5920,25 @@ export function ChatPane({
                   </div>
                 </>
               ) : null}
+              {/* ── THE TOOL ROW — DESKTOP ONLY ─────────────────────────
+                  Everything that is about this chat rather than about the
+                  words in the box: Attach, Review a screen and btw on the
+                  left, the model chip at the far end.
+
+                  A PHONE GETS NO ROW. "I don't want that stuff to take up
+                  another line." It does not have to: the `+` beside the input
+                  already opens a surface for everything you can do to this
+                  chat, so on touch the tools AND the session chip live in
+                  that sheet — on screen while you are using it, gone the rest
+                  of the time. The row costs a desktop nothing it has a
+                  shortage of; a phone it costs the one thing it is short of. */}
+              {labelledTools ? (
+                <div className="chat-composer-tools">
+                  {composerTools}
+                  {sessionStrip}
+                </div>
+              ) : null}
             </div>
-            <SessionBar
-              paneId={paneId}
-              folder={folder}
-              status={agentStatus}
-              {...(session?.assistant ? { assistant: session.assistant } : {})}
-              liveLabel={liveLabel}
-              agents={rosterAgents}
-              background={backgroundLive}
-              onOpenChat={openChat}
-              mode={mode}
-              send={(obj) => {
-                const sock = wsRef.current;
-                if (!sock || sock.readyState !== WebSocket.OPEN) {
-                  setNotice({ text: 'Not connected — try again in a moment.', tone: 'info' });
-                  return;
-                }
-                sock.send(JSON.stringify(obj));
-              }}
-            />
           </div>
         ) : null}
       </div>

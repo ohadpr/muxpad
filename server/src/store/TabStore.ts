@@ -26,6 +26,7 @@ interface TabRow {
   icon: string | null;
   layout: string;
   view_mode: string;
+  theme: string | null;
   workspace_id: string;
   pinned: number;
   last_activity_at: number | null;
@@ -267,6 +268,10 @@ export class TabStore {
       ...(icon ? { icon } : {}),
       layout: input.layout,
       view_mode,
+      // UNCONDITIONAL null, matching `row()`: a new chat follows the device's
+      // theme, and the key has to be PRESENT for a client that coalesces
+      // `tab.updated` onto this row to be able to see it change.
+      theme: null,
       pinned: false,
       // A brand-new tab has had nothing happen in it yet — but it IS the most
       // recent thing the user did, and sorting it last (null = never) would
@@ -352,6 +357,9 @@ export class TabStore {
       icon?: string | undefined;
       layout?: LayoutNode | undefined;
       view_mode?: 'split' | 'tabbed' | undefined;
+      /** The chat's own theme; `null` clears it back to the device default.
+       *  `undefined` leaves it alone, like every other field here. */
+      theme?: string | null | undefined;
     },
   ): Tab {
     const existing = this.getById(id);
@@ -362,11 +370,16 @@ export class TabStore {
       icon: patch.icon ?? existing.icon,
       layout: patch.layout ?? existing.layout,
       view_mode: patch.view_mode ?? existing.view_mode ?? 'split',
+      // `?? existing` is wrong for this one: NULL is a value here — "follow
+      // the device" — and the nullish coalesce would read it as "unchanged"
+      // and leave the old theme on the row, so the chat could never be given
+      // its default back.
+      theme: patch.theme === undefined ? (existing.theme ?? null) : patch.theme,
     };
     const now = Date.now();
     this.db
       .prepare(
-        'UPDATE tabs SET name = ?, slug = ?, icon = ?, layout = ?, view_mode = ?, updated_at = ? WHERE id = ?',
+        'UPDATE tabs SET name = ?, slug = ?, icon = ?, layout = ?, view_mode = ?, theme = ?, updated_at = ? WHERE id = ?',
       )
       .run(
         next.name,
@@ -374,6 +387,7 @@ export class TabStore {
         next.icon ?? null,
         JSON.stringify(next.layout),
         next.view_mode,
+        next.theme,
         now,
         id,
       );
@@ -900,6 +914,11 @@ export class TabStore {
       ...(x.icon ? { icon: x.icon } : {}),
       layout: JSON.parse(x.layout),
       view_mode: x.view_mode === 'tabbed' ? 'tabbed' : 'split',
+      // UNCONDITIONAL, for the reason the two timestamps below give: clients
+      // coalesce `tab.updated` onto a cached row, so a key omitted when it is
+      // null would leave the previous theme sitting there — and "no theme" is
+      // exactly the state you reach by clearing one.
+      theme: x.theme ?? null,
       pinned: !!x.pinned,
       // Null (never observed) is a real state and stays null — see the
       // migration note; the ordering sinks nulls rather than faking a time.

@@ -9,7 +9,50 @@
 .copyable-block > pre.chat-modal-block {
   padding-right: 48px;
 }
+/* …and room for TWO when the wrap toggle is there. Keyed on the container
+   having one — the button renders only for a block with content past its
+   edge, so an ordinary block keeps the inset it always had, and a wrapped
+   one does not run its first line under the controls. */
+.chat-md .copyable-block:has(.copyable-block-wrap) > pre,
+.doc-chat-assistant .copyable-block:has(.copyable-block-wrap) > pre,
+.copyable-block:has(.copyable-block-wrap) > pre.chat-modal-block {
+  padding-right: 84px;
+}
 
+/* ── WRAP ────────────────────────────────────────────────────────────────
+   The `pre` keeps `white-space: pre` by default — indentation is meaning in
+   code, and a desktop has a scrollbar and a pointer. This is the opt-in for
+   the other thing these blocks hold: an email, a prompt, a paragraph, where
+   the sentence runs off the right edge and reading it means dragging a bar
+   one screen at a time.
+
+   `overflow-wrap: anywhere` as well as `pre-wrap`, because the lines that
+   overflow are frequently ONE long token — a url, a path, a base64 blob —
+   which `pre-wrap` alone will not break and which would go on overflowing
+   with the toggle switched on, i.e. a button that visibly does nothing. */
+/* ── IT HAS TO REACH THE `code`, WHICH IS WHERE THE TEXT ACTUALLY IS ──────
+   This set `white-space` on the `pre` alone and the button did nothing: a
+   fenced block is `<pre><code>…`, and `.chat-md pre code` carries its own
+   `white-space: pre`. `white-space` is inherited, so the pre's value never
+   reached the text — the child's own declaration won for the child's own
+   lines. "word wrap icon clickable but doesn't cause contents to wrap."
+
+   The mobile rule twenty lines away was already right about this: it wraps a
+   code block by targeting `.chat-md pre code`, not the pre. This is the same
+   fact, so it is the same selector, one step more specific — (0,2,2) against
+   that rule's (0,1,2), which also means it holds on a phone where the block
+   is wrapped already and the toggle is a no-op rather than a fight.
+
+   `overflow-x: hidden` stays on the PRE, because that is the box that
+   scrolls. */
+.copyable-block > pre[data-wrap="true"],
+.copyable-block > pre[data-wrap="true"] code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.copyable-block > pre[data-wrap="true"] {
+  overflow-x: hidden;
+}
 .copyable-block-button {
   position: absolute;
   top: 6px;
@@ -28,6 +71,14 @@
   pointer-events: none;
 }
 
+/* ── AND THE PRESSED STATE IS NO LONGER A REASON TO SHOW IT ──────────────
+   `.copyable-block-wrap[aria-pressed="true"]` was in this list when wrapping
+   was the OPT-IN: pressed meant a reader had asked for something unusual and
+   the control had to stay visible to be given back. Wrapped is the default
+   now, so pressed is the ordinary state — and the rule lit a permanent button
+   on every block in the log while the unusual state, unwrapped, went back to
+   hiding until hover. Exactly inverted. Both buttons behave the same way now:
+   on hover, or always on a touch screen (see the media query below). */
 .copyable-block:hover > .copyable-block-button,
 .copyable-block:focus-within > .copyable-block-button,
 .copyable-block-button[data-status="copied"],
@@ -44,6 +95,27 @@
 .copyable-block-button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+/* ── THE TOGGLE SITS TO THE LEFT OF COPY, AND THIS RULE MUST COME AFTER ──
+   Copy is the action this corner has always had and it does not move; the
+   wrap button appears beside it only when the block has something past its
+   edge.
+
+   ORDER IS THE WHOLE RULE HERE. `.copyable-block-wrap` and
+   `.copyable-block-button` are both one class — (0,1,0) each — so a tie is
+   broken by source order, and this block used to sit BEFORE the base rule.
+   The base `right: 6px` therefore won, both buttons were positioned at the
+   same corner, and the wrap button rendered exactly underneath copy: present
+   in the DOM, hit-testable nowhere, invisible. Reported as "text blocks
+   don't have the wordwrap icon we discussed" — they did, in the same 30
+   pixels as the other one. */
+.copyable-block-wrap {
+  right: 42px;
+}
+.copyable-block-wrap[aria-pressed="true"] {
+  color: var(--chat-fg, var(--fg));
+  background: var(--bg-hover);
 }
 
 .copyable-block-status {

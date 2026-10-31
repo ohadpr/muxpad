@@ -107,10 +107,25 @@ describe('the rail search button, on every theme that ships', () => {
     expect([...TREE.matchAll(/--bg-elev:\s*var\(--rail-elev\);/g)]).toHaveLength(islands.length);
   });
 
-  it('paints the button on that surface, which is what the arithmetic is about', () => {
+  it('is a glyph on the rail, and the ink clears a glyph’s bar', () => {
+    // The button has been an inline field, a button in the field's clothes,
+    // and a slimmed row. It is an icon in the brand row now — "you don't
+    // search there, it's just a hotkey reminder" — so the arithmetic that
+    // mattered (a LABEL on a raised surface) has nothing left to measure:
+    // there is no label and no surface until you point at it.
+    //
+    // What is still worth pinning is the ink. --fg-dim, never --fg-faint,
+    // which measures under 3:1 on several of these rails.
     const flat = TREE.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\s+/g, ' ');
-    const body = flat.match(/(?:^|\}) ?\.navtree-search \{([^}]*)\}/)?.[1] ?? '';
-    expect(body).toMatch(/background:\s*var\(--bg-elev\)/);
+    const rest = flat.match(/(?:^|\}) ?\.navtree-search \{([^}]*)\}/)?.[1] ?? '';
+    expect(rest).toMatch(/background:\s*transparent/);
+    expect(rest).toMatch(/color:\s*var\(--fg-dim\)/);
+    const hover =
+      flat.match(/\.navtree-search:hover, \.navtree-search:focus-visible \{([^}]*)\}/)?.[1] ?? '';
+    // The rail's own hover, like every other control in it — not the app's
+    // elevated surface, which is a panel colour and was only ever right while
+    // this thing was pretending to be a field.
+    expect(hover).toMatch(/background:\s*var\(--nt-hover\)/);
   });
 
   it('keeps the field distinguishable from the rail behind it', () => {

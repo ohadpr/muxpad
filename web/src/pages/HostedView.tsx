@@ -6,9 +6,13 @@ import {
   type PublicBaseInfo,
 } from '@muxpad/shared';
 import { Link, useNavigate, useParams } from '@tanstack/react-router';
-import { useState } from 'react';
+import { Suspense, lazy, useState } from 'react';
 import { StatusMark } from '../components/StatusMark';
-import { XtermPane } from '../components/XtermPane';
+/** Lazily, for the reason in ShellPaneBody: the terminal emulator is ~300 KB
+ *  and must not sit on the critical path of a view that may never show one. */
+const XtermPane = lazy(() =>
+  import('../components/XtermPane').then((m) => ({ default: m.XtermPane })),
+);
 import { appDetail, formatBytes, formatDate, hostedApi, useHosted } from '../lib/hosted';
 import { noticeFromError } from '../lib/notice-store';
 import { useArmed } from '../lib/use-armed';
@@ -475,7 +479,9 @@ export function HostedAppView() {
       <div className="hosted-app-body">
         {showLogs ? (
           app?.pane_id ? (
-            <XtermPane paneId={app.pane_id} foregroundCmd={null} />
+            <Suspense fallback={null}>
+              <XtermPane paneId={app.pane_id} foregroundCmd={null} />
+            </Suspense>
           ) : (
             <p className="hosted-empty">This app has no process running, so it has no logs yet.</p>
           )

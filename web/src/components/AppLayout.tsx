@@ -1,5 +1,6 @@
 import { Outlet, useRouterState } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
+import { useChatTheme } from '../lib/chat-theme';
 import { MOBILE_BREAKPOINT } from '../lib/mobile-layout';
 import { SIDENAV_MIN_WIDTH, updateSettings, useSettings } from '../settings';
 import { useMediaQuery } from '../use-media-query';
@@ -9,9 +10,10 @@ import { Brand } from './Brand';
 import { CommandPalette } from './CommandPalette';
 import { MobileNavSwitcher } from './MobileNavSwitcher';
 import { MoveUndoToast } from './MoveUndoToast';
-import { NavTree } from './NavTree';
+import { NavTree, RailSearchButton } from './NavTree';
 import { NoticeToast } from './NoticeToast';
 import { SettingsMenu } from './SettingsMenu';
+import { ThemeSwitch } from './ThemeSwitch';
 import { UpdateBanner } from './UpdateBanner';
 import { WorkspaceShell } from './WorkspaceLayout';
 
@@ -43,6 +45,10 @@ export function AppLayout() {
   // with no surface in which to clear it, since clearing needs a tab the
   // navigator can reach. An alert you cannot dismiss is worse than no alert.
   useWindowAttention(visibleWorkspaces(workspaces));
+  // A chat may carry its own theme (see lib/chat-theme): the whole window
+  // follows the tab you are in, and falls back to the device's default for a
+  // chat that has no opinion.
+  useChatTheme(activeTabSlug);
   const activeWorkspace = wsSlug ? workspaces.find((w) => w.slug === wsSlug) : null;
   const isMobile = useMediaQuery(MOBILE_BREAKPOINT);
   const settings = useSettings();
@@ -111,7 +117,12 @@ export function AppLayout() {
               style={{ flexBasis: `${settings.sidebarWidth}px` }}
             >
               <div className="sidenav-brand">
+                {/* Search rides the brand row rather than owning one of its
+                    own — see RailSearchButton. The spacer on the other side
+                    keeps the wordmark optically centred. */}
+                <RailSearchButton />
                 <Brand asLink={true} responsive={false} />
+                <span className="sidenav-brand-spacer" aria-hidden="true" />
               </div>
               <NavTree
                 variant="sidebar"
@@ -129,6 +140,7 @@ export function AppLayout() {
                 >
                   {__MUXPAD_VERSION__}
                 </a>
+                <ThemeSwitch />
                 <SettingsMenu />
               </div>
             </aside>

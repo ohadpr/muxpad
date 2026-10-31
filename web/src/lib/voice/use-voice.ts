@@ -40,9 +40,22 @@ export type VoiceControlState = VoiceUiState | 'off';
 
 export interface UseVoiceOpts {
   paneId: string;
-  /** Chat mode only. Agent mode is raw — no voice, no mic, no control. */
+  /** Both modes now — Agent panes answer through the server's synthesis (see
+   *  server/src/spoken-answer.ts). */
   enabled: boolean;
   agent: AgentLink;
+  /**
+   * The pane's agent mode, FROM THE CLIENT that already knows it.
+   *
+   * The session can also read a mode off the server's snapshot, and that is
+   * not enough on its own: the snapshot is re-sent only when its fingerprint
+   * changes, the fingerprint does not include whether a turn is running, and
+   * the frame taps do not replay the socket's first frame. So a call started
+   * on a pane that was already open never saw one, fell back to "assume
+   * Chat", and hung up after its first silent turn with advice that is false
+   * in Agent mode. ChatPane has had the mode all along.
+   */
+  mode?: string | null;
 }
 
 export interface UseVoiceResult {
@@ -69,7 +82,7 @@ const hasVoiceApis = () =>
   !!navigator.mediaDevices?.getUserMedia;
 
 export function useVoice(opts: UseVoiceOpts): UseVoiceResult {
-  const { paneId, enabled, agent } = opts;
+  const { paneId, enabled, agent, mode } = opts;
   const [status, setStatus] = useState<VoiceStatus | null>(null);
   const [state, setState] = useState<VoiceControlState>('off');
   const [detail, setDetail] = useState<string | null>(null);
@@ -307,6 +320,7 @@ export function useVoice(opts: UseVoiceOpts): UseVoiceResult {
         const session = new VoiceSession({
           transport,
           agent: stableAgent.current,
+          ...(mode ? { mode } : {}),
           // Loud on purpose. The `text`-instead-of-`content` bug rejected every
           // append for a whole release and produced not one observable symptom
           // except a voice that never answered; a console warning would have
@@ -400,7 +414,11 @@ export function useVoice(opts: UseVoiceOpts): UseVoiceResult {
         void fetchVoiceStatus().then(setStatus);
       }
     })();
-  }, [enabled, supported, paneId, stop, clearSoundCheck]);
+    // `mode` is in the deps because the callback CAPTURES it: a pane that
+    // re-rendered Chat→Agent before the call started still built a session
+    // saying `chat`, and an Agent turn with no prose then tripped the
+    // mute-runner hang-up with advice that is false there.
+  }, [enabled, supported, paneId, stop, clearSoundCheck, mode]);
 
   // The meter. Ticks locally rather than polling the server — this number is
   // shown next to a running cost, so it should never freeze because a fetch

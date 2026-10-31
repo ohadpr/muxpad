@@ -734,7 +734,7 @@ describe('browser moments outside the loaded window', () => {
   const shape = (out: { node: unknown }[]) => out.map((e) => e.node);
 
   it('does not pile moments older than the window at the head', () => {
-    // Measured on the Trayo chat: three browser cards at indices 0, 1 and 2,
+    // Measured on the Orbit chat: three browser cards at indices 0, 1 and 2,
     // above every message in the window. "It acts real weird once I try to
     // scroll past the cards representing browser automation."
     const out = injectBrowserMoments(

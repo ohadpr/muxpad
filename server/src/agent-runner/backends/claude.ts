@@ -41,7 +41,9 @@ import {
 } from '../../claude-accounts/pool.js';
 import { bold, dim } from '../ansi.js';
 import { AuthHealPolicy, authGiveUpNotice, isAuthFailureText } from '../auth-heal.js';
+import { AutoCompactor } from '../auto-compact.js';
 import { BackgroundCommands } from '../background-commands.js';
+import { compactionOverrideOnDisk } from '../compaction-settings.js';
 import { RECOVERY_COMPACT_INSTRUCTIONS, contextHeal } from '../context-heal.js';
 import type { AgentMode, AgentQuestion, NotifyStatus, RunnerFrame } from '../protocol.js';
 import { ReplyBlockTracker, replyToolUseId } from '../reply-stream.js';
@@ -53,7 +55,7 @@ import {
   isApproval,
 } from '../reversibility.js';
 import { markSessionCleared, markSessionTurned, sessionHadTurn } from '../session-marks.js';
-import { isSilentTurn } from '../silent-turn.js';
+import { isSilentTurn, proseSpeaks } from '../silent-turn.js';
 import { SubagentRoster } from '../subagent-roster.js';
 import type { AgentBackend, BackendOptions, RunnerHost } from './types.js';
 
@@ -1257,6 +1259,8 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
    * reply guard; see needsReplyFallback.
    */
   let turnHuman = false;
+  /** This turn was fired by a cron — see proseSpeaks. */
+  let turnCron = false;
   /**
    * The message whose send has already triggered ONE compaction.
    *
@@ -1407,7 +1411,8 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
         // `isHumanMessage` does — a flag would be lost across the durable queue
         // and a server restart. A slash command is the user talking to the
         // SESSION (`/compact`, `/clear`), not asking the agent anything.
-        turnHuman = parseCronMarker(text) === null && !text.startsWith('/');
+        turnCron = parseCronMarker(text) !== null;
+        turnHuman = !turnCron && !text.startsWith('/');
         // `/clear` is the one message whose SIDE EFFECT is a new session id.
         // Remembered from here (not from slash(), which only queues it) so the
         // id rotation it causes can be told apart from a drift nobody asked
@@ -1493,6 +1498,13 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
   //    answer on the user's behalf; the contract is "no expiry".)
   const gateOn = gateEnabled(opts.mode, process.env);
   if (gateOn) log(dim('reversibility gate on — irreversible actions will ask first'));
+
+  // An override in ~/.claude/settings.json beats everything below, silently,
+  // for every claude process on the machine. The one muxpad wrote on Oct 21
+  // outlived its own revert by six days and turned this session's automatic
+  // compaction off for all of them. Say it out loud. See compaction-settings.ts.
+  const compactionWarning = compactionOverrideOnDisk();
+  if (compactionWarning) log(bold(`⚠ ${compactionWarning}`));
 
   const options: Options = {
     cwd: process.cwd(),
@@ -1727,6 +1739,10 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
   // Bumped when the session id rotates (/clear); an in-flight refresh started
   // against the OLD session must not land its numbers on the new one.
   let statusEpoch = 0;
+  // COMPACTION IS NOT A QUESTION ANY MORE. Every status reading goes through
+  // this; it fires at a percentage, between turns, at most once per climb.
+  // See auto-compact.ts for the threshold argument and the hysteresis.
+  const autoCompactor = new AutoCompactor();
 
   function refreshStatus(refetchModels: boolean): Promise<void> {
     if (statusInFlight) return statusInFlight;
@@ -1785,6 +1801,19 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
           ...(modelList && modelList.length > 0 ? { models: modelList } : {}),
         };
         if (changed) emit(frame);
+        // ── AND THE ONE PLACE THE FILL IS ACTED ON ──────────────────────
+        // Deliberately here rather than at turn-done: this is the only point
+        // in the runner that holds a fresh reading, and turn-done calls it. A
+        // second trigger site would be a second threshold to keep in step.
+        //
+        // No chat notice. The compaction announces itself — `/compact` runs
+        // as a visible turn — and a sentence about a thing that needs no
+        // decision is the stress this replaced. The runner log keeps the
+        // record for anybody asking "why did it compact".
+        if (autoCompactor.consider(frame.context?.pct, inTurn)) {
+          log(`${bold('context')} ${frame.context?.pct}% — compacting automatically`);
+          slash('compact', RECOVERY_COMPACT_INSTRUCTIONS);
+        }
       } catch (e) {
         // Status is decoration — never let it break the session loop.
         log(dim(`status refresh failed: ${e instanceof Error ? e.message : String(e)}`));
@@ -2195,6 +2224,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
       // harness never drew: they applied "you must always reply" everywhere,
       // which is unenforceable, instead of enforcing it where it is true.)
       turnHuman = false;
+      turnCron = false;
       emit({ t: 'turn-start' });
       log(dim('▸ autonomous turn (wakeup/cron/background)'));
     };
@@ -2432,13 +2462,14 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
           }
           // Keep the LATEST prose-bearing assistant message as the turn's summary.
           if (msgText) {
-            // Prose is the commonest way a turn says something — in AGENT
-            // mode. In Chat mode it is the scratchpad: the chat renders the
-            // `reply` tool and nothing else, so counting prose there would
-            // call every thinking-out-loud fire "spoken" and bold a row whose
-            // log gained nothing. `.trim()` because a lone newline is not
-            // speech in either mode.
-            if (currentMode !== 'chat' && msgText.trim()) saidSomethingThisTurn = true;
+            // Prose is the commonest way a turn says something, except in the
+            // two places where it is machinery — Chat mode's scratchpad, and a
+            // cron fire, whose prose the chat already refuses to promote. See
+            // proseSpeaks for the push that disagreed with the log for a
+            // weekday hour at a time. `.trim()` because a lone newline is not
+            // speech anywhere.
+            if (msgText.trim() && proseSpeaks({ mode: currentMode, cron: turnCron }))
+              saidSomethingThisTurn = true;
             lastAssistantText = msgText;
             lastAssistantTextId = msgTextId;
             // DID THIS TURN ALREADY ANSWER? A real model wrote it, and it is
@@ -2622,7 +2653,12 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
           // about that mark expires on its own. Only on a TRANSITION: this
           // runs after every turn, and the common case must not be a write.
           authHeal.ok();
-          if (accountPool && account && accountPool.credential(account.id).state === 'dead') {
+          // `state` reads 'ok' once the mark has EXPIRED (see credential()), so
+          // testing it alone skipped the clear on exactly the turn that proves
+          // the account recovered — the row stayed `dead`, and status went on
+          // saying another retry was pending after real work had succeeded.
+          // `expiresAt` is non-zero for both halves of that state.
+          if (accountPool && account && accountPool.credential(account.id).expiresAt > 0) {
             accountPool.markCredential(account.id, 'ok');
             log(dim(`Claude account ${account.id}: credential works again`));
           }

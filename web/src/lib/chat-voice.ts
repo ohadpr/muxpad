@@ -39,6 +39,7 @@ import {
   isAgentLaunchTool,
   needsReplyFallback,
   parseSpawnDelivery,
+  pickSpokenBlock,
 } from '@muxpad/shared';
 
 export interface ChatVoiceOpts {
@@ -105,6 +106,29 @@ export function chatVoiceActive(opts: ChatVoiceOpts): boolean {
 }
 
 /**
+ * Can this pane be TALKED to — the mic, GPT-Live, the spoken session?
+ *
+ * A DIFFERENT QUESTION FROM `chatVoiceActive`, and they were one predicate
+ * until Agent mode got a voice. That one decides how the WRITTEN transcript is
+ * treated: Chat mode demotes the model's prose to a private scratchpad and
+ * promotes its `reply` calls, which is a Chat-mode contract and must never be
+ * applied to an Agent pane — there, the prose IS the conversation and hiding
+ * it would blank the chat.
+ *
+ * Spoken voice does not need any of that. It needs something to say, and the
+ * server now produces it for a mode with no `reply` tool (see
+ * server/src/spoken-answer.ts), from the stream buffer every backend fills.
+ * So the mic is offered wherever there is an agent to talk to.
+ *
+ * A pane with no mode yet — the instant before its runner hellos — gets no
+ * mic, because "no agent here" and "an agent in some mode" are not the same
+ * state and only the second one can answer.
+ */
+export function voiceSpokenAvailable(opts: Pick<ChatVoiceOpts, 'mode'>): boolean {
+  return opts.mode === 'chat' || opts.mode === 'agent';
+}
+
+/**
  * A `user` event that a PERSON (or another agent's `muxpad agent send`) caused
  * — as opposed to the messages MUXPAD injects, which are also user-role but
  * which nobody is sitting there waiting on.
@@ -120,7 +144,29 @@ export function chatVoiceActive(opts: ChatVoiceOpts): boolean {
  * a person starting a turn. In Chat mode that promotes the reply to a bubble
  * addressed to a reader who never asked anything.
  */
-const MACHINE_TURN_VARIANTS = new Set(['cron', 'report']);
+/**
+ * A CRON IS UNSOLICITED. A REPORT IS THE ANSWER TO SOMETHING YOU ASKED FOR.
+ *
+ * Both arrive as muxpad-injected user messages, which is why they were one
+ * set — and treating them the same cost a user a day of work.
+ *
+ * Measured, in the "signal archive" chat: the user asked it to cross-check 20
+ * transcripts with sub-agents. Three workers ran, reported at 04:37:14, and
+ * the chat wrote a 1,998-character consolidated verdict at 04:38:45 — which
+ * nobody ever saw. The turn was started by the DELIVERY, so it was not a
+ * "human turn start", so the reply fallback below was skipped, so the verdict
+ * stayed `private`: muted scratchpad treatment, folded inside an action run.
+ * Reported as "a day ago it said it's going to check stuff with sub agents,
+ * hasn't returned yet".
+ *
+ * A delivery exists ONLY because this conversation dispatched the work. Its
+ * arrival is the continuation of a request a person made, and bringing the
+ * result back to them is the entire point of the join. A cron is the opposite
+ * — nobody asked, today — and that one stays excluded, which is what the
+ * original note about "a bubble addressed to a reader who never asked
+ * anything" was actually protecting.
+ */
+const MACHINE_TURN_VARIANTS = new Set(['cron']);
 
 function isHumanTurnStart(events: readonly ChatEvent[], i: number): boolean {
   if (events[i]?.kind !== 'user') return false;
@@ -186,6 +232,8 @@ export function applyChatVoice(events: readonly ChatEvent[], opts: ChatVoiceOpts
 
     let replies = 0;
     let lastProse = -1;
+    /** Every prose block in the turn, so the promotion can pick. */
+    const prose: { i: number; text: string }[] = [];
     // Did the user press Stop inside this turn? The harness writes
     // "[Request interrupted by user]" into the transcript and the normalizer
     // turns it into an `interrupted` notice — the only durable signal a
@@ -198,15 +246,47 @@ export function applyChatVoice(events: readonly ChatEvent[], opts: ChatVoiceOpts
       if (e?.kind === 'notice' && e.variant === 'interrupted') interrupted = true;
       if (e?.kind !== 'assistant') continue;
       if (e.voice === 'reply') replies++;
-      else lastProse = i;
+      else {
+        lastProse = i;
+        prose.push({ i, text: e.text });
+      }
     }
     if (!needsReplyFallback({ mode: 'chat', humanInitiated: true, replies, interrupted })) continue;
     // Nothing the agent actually wrote → nothing to promote. The harness logs
     // the miss; inventing a sentence here would be the one thing this whole
     // mechanism exists to avoid.
     if (lastProse < 0) continue;
-    const e = out[lastProse] as Extract<ChatEvent, { kind: 'assistant' }>;
-    out[lastProse] = { ...e, voice: 'fallback' };
+    /**
+     * WHICH BLOCK IS THE ANSWER — not always the last one.
+     *
+     * This promoted `lastProse` unconditionally, and a turn's final words are
+     * very often a status note rather than its result: "Transcription of the 9
+     * chunks is running (~3 min)… Waiting on it". Measured over one pane's 131
+     * promoted turns, 18 of them hid an earlier block of more than 300
+     * characters that was LONGER than the one shown — in the worst case the
+     * finding ("the 08:00 bulletin ran ~8 minutes… it was being cut ~3 min
+     * short") stayed private while the status line was promoted.
+     *
+     * So: the last block, unless an earlier one is materially bigger. The
+     * thresholds come from that measurement rather than from taste — interim
+     * notes in healthy sessions have a median length of 133 characters, real
+     * deliverables run to four figures, so "three times longer AND past 300"
+     * separates them without being able to fire on two ordinary paragraphs.
+     */
+    // The rule and its measurement moved to shared/chat-events (see
+    // `pickSpokenBlock`): the server now asks the same question of an
+    // Agent-mode turn, for voice, and two copies would drift into promoting
+    // different sentences out of the same turn.
+    const picked = pickSpokenBlock(prose.map((b) => b.text));
+    // -1 when every block is whitespace. The Claude normalizer drops blank
+    // text today so this cannot happen through that door, but the old code
+    // indexed `prose` directly and could not return -1 at all — an invariant
+    // that moved into another file is one nobody will check again.
+    const block = picked >= 0 ? prose[picked] : undefined;
+    if (!block) continue;
+    const chosen = block.i;
+    const e = out[chosen] as Extract<ChatEvent, { kind: 'assistant' }>;
+    out[chosen] = { ...e, voice: 'fallback' };
   }
 
   // Pass 3 — drop the sign-off. A model that has already replied very often
@@ -603,12 +683,31 @@ export function coalesceCronFires(events: readonly ChatEvent[]): ChatEvent[] {
   };
 
   const absorbed = new Set<number>();
-  const counts = new Map<number, { fires: number; names: string[]; lastTs: number | null }>();
+  const counts = new Map<
+    number,
+    {
+      fires: number;
+      names: string[];
+      lastTs: number | null;
+      /** One row per schedule — the chip's evidence. See NoticeEvent.fired. */
+      byName: Map<string, { name: string; fires: number; lastTs: number | null }>;
+    }
+  >();
   let n = 0;
   while (n < fires.length) {
     const head = fires[n] as number;
     const headEv = events[head] as Extract<ChatEvent, { kind: 'notice' }>;
-    const group = { fires: 1, names: [headEv.text], lastTs: headEv.ts };
+    // `byName` is the chip's evidence: the fires it absorbs are removed from
+    // the log, so the only place their detail can live is on the chip that
+    // replaced them. One row per schedule, in the order they first fired.
+    const group = {
+      fires: 1,
+      names: [headEv.text],
+      lastTs: headEv.ts,
+      byName: new Map<string, { name: string; fires: number; lastTs: number | null }>([
+        [headEv.text, { name: headEv.text, fires: 1, lastTs: headEv.ts }],
+      ]),
+    };
     let m = n;
     // `sep(m)`: nothing visible separates this fire from the next.
     // `mute(m + 1)`: the next one has no message of its own to be left chipless.
@@ -620,6 +719,11 @@ export function coalesceCronFires(events: readonly ChatEvent[]): ChatEvent[] {
       group.fires++;
       group.lastTs = ev.ts;
       if (!group.names.includes(ev.text)) group.names.push(ev.text);
+      const seen = group.byName.get(ev.text);
+      if (seen) {
+        seen.fires++;
+        seen.lastTs = ev.ts;
+      } else group.byName.set(ev.text, { name: ev.text, fires: 1, lastTs: ev.ts });
     }
     if (group.fires > 1) counts.set(head, group);
     n = m + 1;
@@ -643,7 +747,8 @@ export function coalesceCronFires(events: readonly ChatEvent[]): ChatEvent[] {
     // which.
     const text = c.names.length <= 2 ? c.names.join(' · ') : `${c.names.length} schedules`;
     const detail = last ? `${c.fires} fires · last ${last}` : `${c.fires} fires`;
-    out.push({ ...e, text, detail });
+    // …and the evidence, so the chip can be opened. See NoticeEvent.fired.
+    out.push({ ...e, text, detail, fired: [...c.byName.values()] });
   }
   return out;
 }

@@ -103,6 +103,29 @@ export interface ScrollSurface {
   inMotion(): boolean;
 
   /**
+   * Is the reader SELECTING text inside this surface right now?
+   *
+   * The same family of question as {@link inMotion}: the reader owns the view,
+   * so nothing may move it. Separate from motion because a selection is
+   * perfectly still — a finger resting on a word with the callout up produces
+   * no scroll, no touchmove and no key, so `inMotion()` reads false throughout.
+   *
+   * ── WHAT THIS COSTS WHEN IT IS MISSING ────────────────────────────────────
+   * Reported as "text selection on mobile at the bottom of chat scrolls the
+   * chat up". Selecting at the bottom is the case that shows it, because that
+   * is where the composer's clearance row lives and where the keyboard inset
+   * changes as the selection UI comes up. That resize reaches the
+   * ResizeObserver, `place()` runs, and it re-seats the view on the anchor row
+   * — which moves the content out from under the finger and, on iOS, drops the
+   * selection with it.
+   *
+   * A write during a selection is never right: whatever `place()` believes
+   * about where the reader should be, the reader is demonstrably busy
+   * somewhere else.
+   */
+  selecting(): boolean;
+
+  /**
    * How far the READER has asked to move since this was last called, in
    * pixels, and zero if they have not touched anything.
    *
@@ -317,6 +340,13 @@ export class ChatScrollController {
     // Nothing to read — a hidden or mid-relayout pane. We have NOT looked, so
     // the gate stays shut.
     if (this.hidden || !this.surface.measurable()) return;
+    // The reader is holding a selection. Moving the view now takes the words
+    // out from under their finger and, on iOS, collapses the selection — see
+    // `selecting()` for the report this comes from. Deliberately BEFORE
+    // `observe()`: nothing about this frame should be recorded as the reader's
+    // position either, or the next place() would re-seat to a spot chosen
+    // while they were busy.
+    if (this.surface.selecting()) return;
     this.observe();
     const before = this.surface.geometry();
     const oldBox = this.was ? this.surface.rowBox(this.was.id) : null;

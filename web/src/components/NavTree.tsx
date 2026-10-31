@@ -20,6 +20,8 @@ import { isExpanded, toggleExpanded, useNavExpansion } from '../lib/nav-expansio
 import { tabRowAffordances } from '../lib/nav-row-affordances';
 import { nextCronLabel, railCronLabel } from '../lib/next-cron-label';
 import { noticeFromError } from '../lib/notice-store';
+import { activeAge } from '../lib/short-age';
+import { dropFromWorkingSet, useWorkingSet } from '../working-set';
 
 import { recallOpenSubChats, rememberOpenSubChats } from '../lib/rail-folds';
 import { reorderByDrop } from '../lib/reorder';
@@ -302,6 +304,223 @@ export function NavTree({ activeWorkspaceSlug, activeTabSlug, variant, onNavigat
  * default to "expanded iff active", so the dominant flow — switching tabs
  * inside the current workspace — is always one click.
  */
+/**
+ * THE WORKING-SET STRIP.
+ *
+ * The chats you are moving between, in slots that do not move. All of the
+ * reasoning — why not MRU, why six, why sixteen hours — is in
+ * shared/src/working-set.ts, because that is where the algorithm is and a
+ * decision explained beside its implementation is one that survives.
+ *
+ * Renders NOTHING when empty, including the heading. A section that says
+ * "WORKING ON" above no rows is a promise the rail is not keeping, and on a
+ * fresh install or after a long break that is the normal state.
+ *
+ * The rows are the ORDINARY rows — same component, same icon, same status
+ * column, same family tint. A second visual language for the same object is
+ * how a sidebar stops being scannable, and the chat appearing twice is correct:
+ * the strip is a shortcut, not a move. Its own workspace must not start lying
+ * about what it contains.
+ */
+function WorkingSetStrip({
+  activeTabSlug,
+  onNavigate,
+  touch,
+}: {
+  activeTabSlug: string | null;
+  onNavigate?: (() => void) | undefined;
+  /** The sheet. No hover to reveal a control and no Control key to press. */
+  touch?: boolean | undefined;
+}) {
+  const rows = useWorkingSet();
+  const navigate = useNavigate();
+  /**
+   * The clock the ages are read against.
+   *
+   * 30s, which is finer than anything this column can SAY — the band's window
+   * is sixteen hours, so its ages are minutes and hours — and that is the
+   * point: the tick exists so a row that has just turned over does so within
+   * half a minute rather than whenever something else happens to re-render
+   * the rail. The strip holds it once; six rows reading one number cannot
+   * disagree about what time it is.
+   */
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, []);
+
+  // ⌃1…⌃6, and NOT ⌘ — Chrome binds ⌘1-9 to its own tab switcher, and a
+  // shortcut that fights the browser is a shortcut nobody can use. Control is
+  // free on both platforms here.
+  //
+  // The slots' stability is the whole reason a numbered shortcut is worth
+  // having: a number pointing at a list that renumbers itself is worse than no
+  // number at all, because you learn it and it lies.
+  useEffect(() => {
+    if (touch) return; // no keyboard to bind, and two listeners would double-fire
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      const n = Number(e.key);
+      if (!Number.isInteger(n) || n < 1 || n > rows.length) return;
+      const hit = rows[n - 1];
+      if (!hit) return;
+      e.preventDefault();
+      void navigate({
+        to: '/w/$wsSlug/t/$tabSlug',
+        params: { wsSlug: hit.workspace.slug, tabSlug: hit.tab.slug },
+      });
+      onNavigate?.();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [rows, navigate, onNavigate, touch]);
+
+  if (rows.length === 0) return null;
+  return (
+    /* ── THE NAME, THIRD TRY AND THEIRS ───────────────────────────────────
+       "Working on" read as a status the app was reporting about you. "At
+       hand" was a shelf nobody asked for. "Recently active" is the name the
+       report used — and it is also the only one of the three that states the
+       RULE the band actually runs on: these are the chats with the newest
+       activity, decayed out after sixteen hours. A label that names the
+       mechanism cannot drift from it. */
+    <div className="navtree-workingset" aria-label="Recently active">
+      <div className="navtree-workingset-head" aria-hidden="true">
+        recently active
+      </div>
+      {rows.map(({ tab, workspace, at }) => (
+        <WorkingSetRow
+          key={tab.id}
+          tab={tab}
+          workspace={workspace}
+          age={now - at}
+          active={tab.slug === activeTabSlug}
+          {...(touch ? { touch: true } : {})}
+          {...(onNavigate ? { onNavigate } : {})}
+        />
+      ))}
+    </div>
+  );
+}
+
+/** One slot. The `×` means "not now" — it frees the slot and nothing else. */
+function WorkingSetRow({
+  tab,
+  workspace,
+  age,
+  active,
+  onNavigate,
+  touch,
+}: {
+  tab: Tab;
+  workspace: { slug: string; name: string };
+  /** Milliseconds since you last sent this chat a message — the same stamp
+   *  the slot decays on, so the number on screen and the rule that evicts the
+   *  row are reading the one clock. */
+  age: number;
+  active: boolean;
+  onNavigate?: (() => void) | undefined;
+  touch?: boolean | undefined;
+}) {
+  return (
+    <div
+      className="navtree-tab-row navtree-ws-slot"
+      data-active={active ? 'true' : undefined}
+      data-touch={touch ? 'true' : undefined}
+    >
+      <span className="chatchip navtree-tab-chip" data-density="row" data-shape="tile">
+        <b className="chatchip-glyph">{tab.icon ?? fallbackTabIcon(tab.id)}</b>
+      </span>
+      <Link
+        to="/w/$wsSlug/t/$tabSlug"
+        params={{ wsSlug: workspace.slug, tabSlug: tab.slug }}
+        className="navtree-tab-link"
+        draggable={false}
+        title={`${tab.name} · ${workspace.name}`}
+        onClick={() => onNavigate?.()}
+      >
+        <span className="navtree-tab-titleline">
+          {/* ── THE WORKSPACE, ON EVERY ROW, AFTER THE NAME ─────────────────
+              This band is the one place in the rail where rows from different
+              workspaces sit together — everywhere else a chat sits under the
+              header that names its workspace — so it is the one place a row
+              has to say where it is from.
+
+              IT SAYS SO ON EVERY ROW. It used to render only when the chat
+              was from ANOTHER workspace, on the argument that five identical
+              "Personal" tags down a six-row band is repetition rather than
+              information. That is true of the TAG and false of the BAND: a
+              column that is present on some rows and absent on others is one
+              you cannot scan, and a reader who has learned that a bare row
+              means "here" has learned a rule instead of reading a label.
+              Repetition in a column is what a column IS.
+
+              AFTER THE NAME, AND QUIETER. It was a prefix, and a rail is
+              scanned down its left edge — the same argument that keeps every
+              status mark on one x. A leading "Orbit /" pushed that row's NAME
+              right of every other name in the band: the thing you are looking
+              for stopped starting where its neighbours start, to make room
+              for the thing you are not. It also gives way first on a narrow
+              rail (see the css). */}
+          <span className="navtree-name-text" dir="auto">
+            {tab.name}
+          </span>
+          <span className="navtree-ws-tag" aria-hidden="true">
+            {workspace.name}
+          </span>
+          {/* ── HOW LONG AGO ────────────────────────────────────────────
+              The band is ordered by SLOT, never by recency — that is the
+              whole design, so rows do not move under you — and the cost is
+              that nothing said whether you left this chat ten minutes ago or
+              this morning. This is what the ordering gives up, handed back.
+
+              ON THE TITLE LINE, not in the trailing gutter. It was a fifth
+              child of a four-track grid, so it wrapped: every row grew a
+              second line and the status mark — the tick, the chevron — went
+              with it. Here it is one more item on the line that already
+              knows how to give way, and the row keeps its four tracks.
+
+              It never shrinks, and the workspace tag still yields first: the
+              tag answers "which chat", the age answers "how stale", and a
+              clipped "Orb…" still reads while a clipped "3…" does not. */}
+          <span className="navtree-slot-age" aria-hidden="true">
+            {activeAge(age)}
+          </span>
+        </span>
+      </Link>
+      {/* NO CONTROLS ON TOUCH, which is the rule every other row here already
+          follows (tabRowAffordances): a phone has no hover to reveal one and
+          no Control key to label. The slot still decays on its own and is
+          still evictable from the desktop, so nothing is unreachable — the
+          strip's job on a phone is one tap to the chat.
+
+          AND NO SLOT NUMBER ANYWHERE, touch or not. Each row used to carry a
+          `⌃{slot}` cap in its gutter; six of them down a six-row band is six
+          pieces of chrome in the one column the eye scans. The shortcut still
+          works (see the ⌃1–⌃6 handler above) — it is simply not announced on
+          every row — the strip's own handler binds by position, so the row no
+          longer needs to know its number at all. */}
+      <span className="navtree-tab-rail">
+        <button
+          type="button"
+          className="navtree-close navtree-slot-drop"
+          title="Not now — free this slot"
+          aria-label={`Remove ${tab.name} from Recently active`}
+          onClick={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            void dropFromWorkingSet(tab.id);
+          }}
+        >
+          ×
+        </button>
+      </span>
+      <RowMark status={tab.status} />
+    </div>
+  );
+}
+
 function SidebarTree({
   activeWorkspaceSlug,
   activeTabSlug,
@@ -366,17 +585,21 @@ function SidebarTree({
 
   return (
     <nav className="navtree" data-variant={variant} aria-label="Workspaces and tabs">
-      {/* SEARCH IS THE PALETTE. This was an inline field that swapped the
-          tree for its own result list — the same engine as ⌘K, in a second
-          surface with its own query state, keyboard contract and focus rules.
-          One search is enough; this is the door to it, and it says which key
-          opens it so the button teaches the chord. */}
-      <button type="button" className="navtree-search" onClick={openCommandPalette}>
-        <SvgSearchGlyph size={14} />
-        <span className="navtree-search-label">Search chats</span>
-        <kbd className="navtree-search-kbd">{paletteChordLabel()}</kbd>
-      </button>
       <div className="navtree-scroll">
+        {/* ─── THE RECENTLY-ACTIVE BAND ─────────────────────────────────────
+          INSIDE the scroller, as the first thing in it. It was pinned above —
+          "a strip you have to scroll to is a strip you will search for" — and
+          that reasoning assumed a rail that is mostly below the fold. It is
+          not: the band is six rows at most (see shared/working-set.ts for the
+          simulation behind the number) and it is already at the top, so on
+          any rail taller than about ten rows it is on screen whether it is
+          pinned or not. What pinning actually bought was a fixed object the
+          list slid under: "I'm not entirely sold on having the recent chats
+          be fixed. I think you should be able to scroll through the whole
+          thing."
+
+          So it scrolls with everything else, and the rail is one list again. */}
+        <WorkingSetStrip activeTabSlug={activeTabSlug} {...(onNavigate ? { onNavigate } : {})} />
         {/* NO CREATE CONTROL HERE, and none in the list either. It is on each
             WORKSPACE HEADER — see WorkspaceNode. That is the row the action is
             about, so the button needs no label saying where it creates and
@@ -455,6 +678,37 @@ function SvgHosted() {
       <path d="M2 16l10 5 10-5" />
       <path d="M2 12l10 5 10-5" />
     </svg>
+  );
+}
+
+/**
+ * THE DOOR TO THE PALETTE, AND IT DOES NOT GET A ROW.
+ *
+ * This was an inline field that swapped the tree for its own result list —
+ * the same engine as ⌘K in a second surface with its own query state,
+ * keyboard contract and focus rules. One search is enough, so it became a
+ * button that opens the palette.
+ *
+ * Then it kept the field's clothes for a while, and then a field-sized row of
+ * its own: "search chats feels weird because you don't search there, it's
+ * just a hotkey reminder — maybe it doesn't need to take up so much space."
+ * It does not. A reminder belongs beside the thing it is a reminder about, so
+ * it rides the BRAND ROW, which already exists and has nothing in its left
+ * third. Zero rows, and the chord is still printed where a pointer can find
+ * it — in the tooltip, which is where a reminder you have already learned
+ * should live.
+ */
+export function RailSearchButton() {
+  return (
+    <button
+      type="button"
+      className="navtree-search"
+      onClick={openCommandPalette}
+      aria-label={`Search chats (${paletteChordLabel()})`}
+      title={`Search chats — ${paletteChordLabel()}`}
+    >
+      <SvgSearchGlyph size={15} />
+    </button>
   );
 }
 
@@ -619,6 +873,17 @@ function SheetRail({
               avoid. */}
       </div>
       <div className="navtree-scroll">
+        {/* ─── THE SAME BAND, AND THE SAME PLACE ──────────────────────────
+            Inside the scroller here too — see the rail above for why it
+            stopped being pinned. The cost of hunting for a chat is HIGHER on
+            a phone (the list is the whole screen and there is no ⌘K chord on
+            a thumb), which is an argument for the band EXISTING, not for it
+            holding a fixed slice of a screen this small. */}
+        <WorkingSetStrip
+          activeTabSlug={activeTabSlug}
+          touch={true}
+          {...(onNavigate ? { onNavigate } : {})}
+        />
         {/* EVERY WORKSPACE, like the desktop rail. The sheet used to render one
             workspace's TabList and reach the others through a picker that
             replaced the whole list — so moving between them was a mode change,
@@ -1445,7 +1710,13 @@ export function TabList({
    *  switches the row's mark from a tile to a dot in its parent's chip column,
    *  and what puts the one indent step on the row. Nothing about a clock — a
    *  sub-chat has none, and the row reads its own. */
-  const renderRow = (t: Tab, parent?: Tab, group?: SubsGroup, childLast?: boolean) => (
+  const renderRow = (
+    t: Tab,
+    parent?: Tab,
+    group?: SubsGroup,
+    childLast?: boolean,
+    family?: boolean,
+  ) => (
     <TabRow
       key={t.id}
       tab={t}
@@ -1469,6 +1740,12 @@ export function TabList({
       // all dead in the product while their CSS and their grouping rule were
       // both correct. Pinned by NavTree.rows.test.tsx.
       {...(parent ? { parent } : {})}
+      // THE FAMILY READS AS ONE BLOCK. Reported: "you stand on a chat that has
+      // sub-chats, then the sub-chats don't get a semi-selected background".
+      // They are the same piece of work and looked like strangers who happen
+      // to be adjacent. Set in both directions — stand on a child and the
+      // parent takes it too, so you can always see what a worker belongs to.
+      {...(family ? { family: true } : {})}
       workspace={workspace}
       isActiveTab={isActiveWorkspace && t.slug === activeTabSlug}
       variant={variant}
@@ -1519,6 +1796,14 @@ export function TabList({
     // where you are, not a disclosure you opened, so leaving the chat
     // re-shuts the group.
     const holdsActive = isActiveWorkspace && g.children.some((k) => k.slug === activeTabSlug);
+    // ── THE WHOLE FAMILY, IN BOTH DIRECTIONS ────────────────────────────────
+    // `holdsActive` is only half of it: it asks whether a CHILD is the row you
+    // are on. Standing on the PARENT puts you in the same family, and the
+    // first pass of this missed it by asking each row about its own parent
+    // instead of asking the group once — so a sibling of the active child
+    // compared `signal archive` against the active slug, which is the child's,
+    // and every row came back false. One question, asked of the group.
+    const familyHoldsActive = holdsActive || (isActiveWorkspace && g.chat.slug === activeTabSlug);
     const open = openSubs.has(g.chat.id) || holdsActive;
     const foldable = !g.contextOnly && g.children.length > 0;
     return (
@@ -1556,6 +1841,13 @@ export function TabList({
                   onToggle: () => toggleSubs(g.chat.id),
                 }
               : undefined,
+            undefined,
+            // The family holds the row you are standing on, and THIS IS NOT
+            // THAT ROW. Without the second half the parent tinted itself while
+            // you were standing on it, and the tint won against the selection
+            // — the row you were in came out fainter than the ones beside it.
+            // See the data-family note in NavTree.css.
+            familyHoldsActive && g.chat.slug !== activeTabSlug,
           )
         )}
         {/* NO ROW OF ITS OWN ANY MORE. The disclosure, the count, the agent
@@ -1567,7 +1859,15 @@ export function TabList({
             which also lets the rollup state and the count stop being two
             drawings of one fact. */}
         {!foldable || open
-          ? g.children.map((k, i) => renderRow(k, g.chat, undefined, i === g.children.length - 1))
+          ? g.children.map((k, i) =>
+              renderRow(
+                k,
+                g.chat,
+                undefined,
+                i === g.children.length - 1,
+                familyHoldsActive && k.slug !== activeTabSlug,
+              ),
+            )
           : null}
       </Fragment>
     );
@@ -1826,6 +2126,8 @@ interface TabRowProps {
   /** The chat that spawned this one, when it is a child. Supplies the clock
    *  they share, and switches the row's leading mark from tile to dot. */
   parent?: Tab | undefined;
+  /** This row belongs to the same parent/child family as the active row. */
+  family?: boolean | undefined;
   /**
    * This is the LAST child in its parent's run, so its trunk segment stops at
    * the elbow instead of carrying on into whatever follows.
@@ -2378,23 +2680,26 @@ export interface SubsGroup {
 function SubsPill({ group }: { group: SubsGroup }) {
   const { total, parts, open, status, title, parentName, onToggle } = group;
   const hue = status ?? 'idle';
-  const noun = `${total} ${total === 1 ? 'sub-agent' : 'sub-agents'}`;
   const wording = (text: string) =>
     text.replace(/\bready\b/g, 'unread').replace(/\bdead\b/g, 'stopped');
-  // A homogeneous group can say "2 running". For mixed states, retain the
-  // total and name the most urgent subset; the title keeps the full breakdown.
+  // ── THE LABEL IS THE COUNT, AND THE COUNT IS ALL ──────────────────────────
   //
-  // SAID WHETHER OR NOT THE GROUP IS OPEN. It used to fall back to the bare
-  // noun once expanded, on the reasoning that the children's own rows say it
-  // better — but the row the pill sits on is the family's header, and with it
-  // mute the only state left there is the parent's. A chat with two running
-  // workers under it then reads as finished.
-  const label =
-    parts.length === 0
-      ? noun
-      : parts.length === 1
-        ? wording(parts[0]!)
-        : `${total} · ${wording(parts[0]!)}`;
+  // It used to be a sentence: "1 running", "2 · 1 unread". Measured on a 272px
+  // row that pill was 91px — a THIRD of the row — and the name it was crowding
+  // got 55. Reported as "all these '1 running', '2 · 1 unread' statuses are
+  // odd" and "chat names can get tiny".
+  //
+  // The sentence was answering a question nobody asks a sidebar. What you want
+  // from a rail is "is there anything under here, and is any of it still
+  // going" — which is a number and a colour, both of which this object already
+  // had. The words were a third encoding of the same two facts.
+  //
+  // They are not lost: `title` and the accessible name still carry the whole
+  // breakdown, which is where a sentence belongs. (Reviewed against Slack,
+  // Linear, VS Code, Mail, GitHub, Discord and Notion — none of them spells a
+  // state out on a list row; every one of them uses a count badge plus a
+  // disclosure, with the words on hover.)
+  const label = String(total);
   const description = wording(title);
   return (
     <button
@@ -2419,9 +2724,21 @@ function SubsPill({ group }: { group: SubsGroup }) {
   );
 }
 
+/** The row's one control: three dots, the universal "more actions". */
+function SvgRowMenu() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true" fill="currentColor">
+      <circle cx="3.2" cy="8" r="1.35" />
+      <circle cx="8" cy="8" r="1.35" />
+      <circle cx="12.8" cy="8" r="1.35" />
+    </svg>
+  );
+}
+
 function TabRow({
   tab,
   parent,
+  family,
   childLast,
   group,
   workspace,
@@ -2762,6 +3079,7 @@ function TabRow({
       // would have rendered as an ordinary line — indistinguishable from the
       // chat that spawned it, sitting directly beneath it.
       data-child={parent ? 'true' : undefined}
+      data-family={family ? 'true' : undefined}
       // THE LAST ONE STOPS THE TRUNK. See renderRow for why this is an
       // attribute and not a CSS sibling test — on THIS surface the sibling
       // test could never have worked.
@@ -2944,6 +3262,7 @@ function TabRow({
       // went deliberately — see RowMark. The row's state is now told exactly
       // once, by the 10px mark at its right edge.
       data-child={parent ? 'true' : undefined}
+      data-family={family ? 'true' : undefined}
       data-child-last={childLast ? 'true' : undefined}
       // Pinned is a 2px accent EDGE on the row's leading rim — see NavTree.css.
       // Off the ink entirely, because the name's colour already says
@@ -3083,35 +3402,30 @@ function TabRow({
           {/* THE SCHEDULE YIELDS. A chat with live workers has something more
               urgent to say than when its cron next fires, and both will not
               fit beside a name on a 240px row — measured, the name drops to
-              55px and `Trayo Builder` truncates. The time is still on the
+              55px and `Orbit Builder` truncates. The time is still on the
               row's own title. Only on a row that HAS sub-chats: a chat
               without them keeps its `◷ 09:00` exactly as before. */}
           {tab.crons && !group ? <CronMark tab={tab} /> : null}
-          {affords.pinButton ? (
+          {/* ONE control, and it opens the menu that already had everything.
+              See TabRowAffordances.menuButton for the measurement that
+              collapsed the pin and the archive into it. Keyboard reaches it by
+              tab — the rail reveals on :has(:focus-visible) — and touch never
+              renders it, using long-press instead. */}
+          {affords.menuButton ? (
             <button
               type="button"
-              className={`navtree-close navtree-pin${tab.pinned ? ' is-pinned' : ''}`}
+              className="navtree-close navtree-rowmenu"
               onClick={(e) => {
                 e.stopPropagation();
                 e.preventDefault();
-                onSetPinned(!tab.pinned);
+                const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                setMenu({ x: r.right, y: r.bottom });
               }}
-              title={tab.pinned ? 'Unpin tab' : 'Pin tab to the top'}
-              aria-label={tab.pinned ? `Unpin tab ${tab.name}` : `Pin tab ${tab.name}`}
-              aria-pressed={tab.pinned === true}
+              title="Chat actions"
+              aria-label={`Actions for ${tab.name}`}
+              aria-haspopup="menu"
             >
-              <SvgPin size={14} filled={tab.pinned === true} />
-            </button>
-          ) : null}
-          {affords.closeButton ? (
-            <button
-              type="button"
-              className="navtree-close navtree-archive"
-              onClick={onArchive}
-              title="Archive — moves to done, a message brings it back"
-              aria-label={`Archive chat ${tab.name}`}
-            >
-              <SvgArchive size={15} />
+              <SvgRowMenu />
             </button>
           ) : null}
           {group ? <SubsPill group={group} /> : null}

@@ -3,8 +3,8 @@ import { artifactLabel } from './artifact-label';
 
 describe('a link on a card reads as words', () => {
   it('turns a published slug into the words it is made of', () => {
-    expect(artifactLabel('https://pub.example.org/trayo-plan-card-demo/')).toBe(
-      'trayo plan card demo',
+    expect(artifactLabel('https://pub.example.org/orbit-plan-card-demo/')).toBe(
+      'orbit plan card demo',
     );
   });
 

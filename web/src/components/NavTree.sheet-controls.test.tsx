@@ -106,7 +106,7 @@ vi.mock('../lib/all-tabs', () => ({
   subscribeAllTabs: () => () => {},
 }));
 
-const { NavTree } = await import('./NavTree');
+const { NavTree, RailSearchButton } = await import('./NavTree');
 const { PALETTE_OPEN_EVENT } = await import('../lib/command-palette');
 
 type Variant = 'sidebar' | 'sheet';
@@ -169,24 +169,37 @@ const rowFor = (box: HTMLElement, name: string) =>
 const menuItems = () => [...document.querySelectorAll('[role="menu"] [role="menuitem"]')];
 
 describe('the rail’s search is a button that opens the palette', () => {
-  it('renders “Search chats” with the chord, and no field', () => {
+  /**
+   * It is no longer rendered BY the tree: it rides the brand row above it
+   * (see RailSearchButton), because "you don't search there, it's just a
+   * hotkey reminder" and a reminder does not need a row of its own. What the
+   * tree still has to guarantee is that nothing swaps the list out for a
+   * result view — the thing the inline field used to do.
+   */
+  it('is not in the tree at all, and the tree is still the tree', () => {
     const box = mount('sidebar');
-    const btn = box.querySelector('button.navtree-search');
-    expect(btn?.textContent).toContain('Search chats');
-    expect(btn?.querySelector('kbd')?.textContent).toMatch(/K$/);
+    expect(box.querySelector('button.navtree-search')).toBeNull();
     expect(box.querySelector('input')).toBeNull();
     expect(box.querySelector('.navsearch, [role="combobox"]')).toBeNull();
-  });
-
-  it('opens the palette on click', async () => {
-    const box = mount('sidebar');
-    await click(box.querySelector('button.navtree-search'));
-    expect(PALETTE_OPENS).toBe(1);
-  });
-
-  it('keeps the tree in the scroller — nothing swaps it out any more', () => {
-    const box = mount('sidebar');
     expect(box.querySelectorAll('.navtree-scroll .navtree-ws-row').length).toBe(3);
+  });
+
+  it('opens the palette on click, and says the chord where a pointer finds it', async () => {
+    const box = document.createElement('div');
+    document.body.appendChild(box);
+    const root = createRoot(box);
+    await act(async () => {
+      root.render(<RailSearchButton />);
+    });
+    const btn = box.querySelector('button.navtree-search');
+    // No label and no cap — the chord is in the tooltip, which is where a
+    // reminder you have already learned belongs.
+    expect(btn?.textContent?.trim()).toBe('');
+    expect(btn?.getAttribute('title')).toMatch(/K$/);
+    await click(btn);
+    expect(PALETTE_OPENS).toBe(1);
+    root.unmount();
+    box.remove();
   });
 });
 

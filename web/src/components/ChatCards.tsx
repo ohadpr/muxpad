@@ -23,6 +23,11 @@ import { Markdown } from './ChatMarkdown';
  * "4s", not "4 seconds ago": the only question it answers is how stale the
  * value above it is, and two characters answer it.
  */
+/** How tall a pinned card may be before its body starts scrolling. It is
+ *  pinned above the conversation, so a card that grows without limit pushes
+ *  the thing you are reading off the screen. */
+const CARD_MAX_H = 600;
+
 function shortAge(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000));
   if (s < 45) return `${s}s`;
@@ -95,6 +100,11 @@ function themeBlock(surface: string): string {
   // The scheme follows that colour rather than the browser, so form controls
   // and scrollbars inside a card match the card they are in.
   return `:root{${vars};color-scheme:${cardColorScheme(surface)}}
+/* NEVER SCROLLS. The frame is sized to its content by the parent, so a
+   scrollbar can only mean the parent is showing less than everything — which
+   is exactly what a FOLDED card does, and a native scrollbar sitting in a
+   collapsed card is not a card any more. */
+html,body{overflow:hidden}
 html,body{margin:0;background:${surface};color:var(--fg);
   font:0.875rem/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
 /* The same inset the text and markdown cards have, so a card that styles
@@ -119,7 +129,44 @@ const SELF_MEASURE = `
   var send = function () {
     var b = document.body;
     var h = Math.max(b.scrollHeight, b.getBoundingClientRect().height);
-    parent.postMessage({ muxpadCard: 1, h: Math.ceil(h) }, '*');
+    // AND THE HEIGHT OF THE FIRST ELEMENT, which is what the card collapses to.
+    // An html card has no "first line" the parent can find — the markup is
+    // opaque to it — so the frame, which can see its own layout, measures the
+    // first child and reports it. An author who wants a card to fold puts the
+    // summary row first; one who does not simply never gets peeked, because a
+    // single-element card measures the same either way.
+    // ── HOW TALL IS THIS CARD WHEN FOLDED ───────────────────────────────
+    // The author says, with [data-peek] on the last element that should still
+    // be visible: everything down to its bottom edge survives the fold. That is
+    // the whole contract, and it is explicit — inferring "the first element"
+    // guesses wrong the moment a card opens with a <style> tag, a wrapper div,
+    // or a two-element header, and there is nothing on screen to explain why.
+    // Unmarked cards fall back to the first element that has a box, which keeps
+    // a simple card folding without ceremony.
+    var h1 = 0;
+    var mark = b.querySelector('[data-peek]');
+    if (mark) {
+      // ── SYMMETRIC INSET, OR THE FOLD LOOKS BOTTOM-HEAVY ────────────────
+      // The cut is the marked row's bottom edge, so the folded frame contains
+      // the body's TOP padding and nothing below it. The content then sits low
+      // by exactly that padding and reads as a centring bug. Mirror the top
+      // inset underneath: a folded card gets the same air above and below.
+      var pt = parseFloat(getComputedStyle(b).paddingTop) || 0;
+      h1 = Math.ceil(mark.getBoundingClientRect().bottom - b.getBoundingClientRect().top + pt);
+    } else {
+      for (var c = b.firstElementChild; c; c = c.nextElementSibling) {
+        var r = c.getBoundingClientRect().height;
+        if (r > 0) { h1 = Math.ceil(r); break; }
+      }
+    }
+    // ── IS THERE ANYTHING IN HERE TO CLICK ────────────────────────────
+    // Decides whether the frame may take the pointer at all. Most cards are
+    // a value — a bar, a number, a row of figures — and for those the whole
+    // card is a button in both states, which is the behaviour people expect
+    // and the one the first version only gave them while FOLDED. A card with
+    // a link is the exception and gets the pointer back when it is open.
+    var live = !!b.querySelector('a[href],button,input,select,textarea,summary,[onclick]');
+    parent.postMessage({ muxpadCard: 1, h: Math.ceil(h), h1: h1, live: live }, '*');
   };
   addEventListener('load', send);
   if (window.ResizeObserver) new ResizeObserver(send).observe(document.body);
@@ -136,10 +183,19 @@ const SELF_MEASURE = `
   setTimeout(send, 500);
 </script>`;
 
-function HtmlCard({ card }: { card: ChatCard }) {
+function HtmlCard({
+  card,
+  peek,
+  onFoldable,
+}: { card: ChatCard; peek: boolean; onFoldable: (v: boolean) => void }) {
   const ref = useRef<HTMLIFrameElement>(null);
   const slot = useRef<HTMLDivElement>(null);
   const [h, setH] = useState(120);
+  // the first element's height; 0 until the frame reports one
+  const [h1, setH1] = useState(0);
+  /** Does the card contain anything a pointer is FOR? See the frame's own
+   *  note: a card that is just a value should be one button in both states. */
+  const [live, setLive] = useState(false);
   // Rebuilt when the content or the THEME changes — a card keeps its injected
   // palette until it is re-rendered, so a theme switch has to produce new
   // srcdoc rather than hoping the frame notices.
@@ -177,9 +233,18 @@ function HtmlCard({ card }: { card: ChatCard }) {
         : null,
     [card.content, paint],
   );
+  // `onFoldable` is the parent's setter and is stable for the life of the
+  // card; listing it would re-subscribe the message listener on every render
+  // of the stack, which is once a second while anything is streaming.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: onFoldable is a stable setter; re-subscribing per render would be worse
   useEffect(() => {
     const onMsg = (e: MessageEvent) => {
-      const d = e.data as { muxpadCard?: number; h?: number } | null;
+      const d = e.data as {
+        muxpadCard?: number;
+        h?: number;
+        h1?: number;
+        live?: boolean;
+      } | null;
       if (!d || d.muxpadCard !== 1 || typeof d.h !== 'number') return;
       if (ref.current && ref.current.contentWindow === e.source) {
         // A ZERO IS NOT A HEIGHT, it is "ask me later" — the body has not been
@@ -187,10 +252,37 @@ function HtmlCard({ card }: { card: ChatCard }) {
         // indistinguishable from a genuinely tiny card, and left a frame
         // parked at 24px with 90px of content in it.
         if (d.h <= 0) return;
-        // Clamped at the top: a card that reports a runaway height would push
-        // the whole transcript off screen, and it is pinned — you could not
-        // scroll past it.
-        setH(Math.min(Math.max(d.h, 24), 600));
+        // ── THE CLAMP IS THE CARD'S, NOT THE FRAME'S ──────────────────
+        // A card that reports a runaway height would push the whole
+        // transcript off screen, and it is pinned — you could not scroll past
+        // it. So there is a ceiling.
+        //
+        // It used to be applied to the FRAME, and the frame's own document is
+        // `overflow: hidden` (so a folded card shows no scrollbar) — which
+        // meant anything past 600px was unreachable by any means. Measured: a
+        // 975px card, wheel and End both doing nothing, 375px of content that
+        // existed and could not be seen.
+        //
+        // The frame is given its full height now and the ceiling moves to the
+        // card BODY, which scrolls. The scroll works through the frame
+        // because the frame does not take the pointer (see pointerEvents): a
+        // wheel over it lands on the body underneath.
+        const full = Math.max(d.h, 24);
+        setH(full);
+        if (typeof d.live === 'boolean') setLive(d.live);
+        if (typeof d.h1 === 'number' && d.h1 > 0) {
+          const first = Math.min(d.h1, CARD_MAX_H);
+          setH1(first);
+          // ── FOLDABLE ONLY IF FOLDING DOES SOMETHING ────────────────────
+          // `togglable = !isHtml` existed to kill one specific complaint:
+          // "clicking the line changes it a bit but doesn't expand". A card
+          // that is a single element has firstElementChild === the whole body,
+          // so its peek height IS its full height — make that clickable and
+          // the gesture is back to changing nothing. The parent cannot know
+          // which kind it has until the frame measures, so the frame says.
+          // 24px of slack: a trailing margin is not a second row.
+          onFoldable(first < full - 24);
+        }
       }
     };
     window.addEventListener('message', onMsg);
@@ -224,15 +316,44 @@ function HtmlCard({ card }: { card: ChatCard }) {
           // you already run.
           sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
           srcDoc={srcdoc}
-          style={{ height: `${h}px` }}
+          // Collapsed, the frame is cut to its first element — the card's own
+          // summary row. The document inside is unchanged and still fully laid
+          // out, so expanding is instant and costs no re-measure.
+          style={{
+            height: `${peek && h1 > 0 ? h1 : h}px`,
+            // ── A FOLDED FRAME MUST NOT EAT THE CLICK ────────────────────
+            // An iframe is a separate document: a click on it goes there and
+            // never reaches the card, so a folded card was only clickable on
+            // the 46px tail strip the frame does not cover. Reported as "only
+            // right edge clickable". Folded, the frame is a picture and the
+            // whole card is the control; open, it is interactive again so
+            // links and selection work.
+            // ── THE WHOLE CARD IS THE CONTROL, IN BOTH STATES ──────────
+            // This read `peek ? 'none' : 'auto'`, so a FOLDED card was fully
+            // clickable and an OPEN one was not: the frame swallowed the
+            // click and only the ~46px age strip could close it. Reported as
+            // "collapse/reopen sometimes only responds to a click on the
+            // narrow strip in the right of the card", and the asymmetry is
+            // the whole of it — fold works, unfold does not.
+            //
+            // So the frame takes the pointer only when it is OPEN and has
+            // something a pointer is for. A card that is a value stays one
+            // button throughout; a card with a link gets its link back the
+            // moment it is open, which is the only time you could reach it.
+            pointerEvents: !peek && live ? 'auto' : 'none',
+          }}
         />
       )}
     </div>
   );
 }
 
-function CardBody({ card }: { card: ChatCard }) {
-  if (card.format === 'html') return <HtmlCard card={card} />;
+function CardBody({
+  card,
+  peek,
+  onFoldable,
+}: { card: ChatCard; peek: boolean; onFoldable: (v: boolean) => void }) {
+  if (card.format === 'html') return <HtmlCard card={card} peek={peek} onFoldable={onFoldable} />;
   if (card.format === 'markdown')
     return (
       <div className="chat-card-md">
@@ -248,6 +369,11 @@ export function ChatCards({ tabId }: { tabId: string | null | undefined }) {
   // ago" forever is worse than no timestamp, and staleness is the signal the
   // cadence exists for.
   const [now, setNow] = useState(() => Date.now());
+  // Which html cards have a first row worth folding to, by card id. Only the
+  // frame can know — it is the only thing that can see the document's layout —
+  // so this fills in from the frame's first measurement, and until it does an
+  // html card behaves exactly as it always did: whole, and not a control.
+  const [foldable, setFoldable] = useState<Record<string, boolean>>({});
   const opened = useCardOpen();
 
   const load = useCallback(() => {
@@ -334,8 +460,22 @@ export function ChatCards({ tabId }: { tabId: string | null | undefined }) {
         // AN HTML CARD HAS NOTHING TO EXPAND. It renders whole and measures
         // itself, so making it a control was offering a gesture that could not
         // do anything. It is a plain section; everything else toggles.
-        const togglable = !isHtml;
+        // ── AN HTML CARD FOLDS TOO, TO ITS FIRST ELEMENT ──────────────────
+        // This used to read `togglable = !isHtml`, on the reasoning that "an
+        // html card has nothing to expand — it renders whole and measures
+        // itself". That was true while every html card was one indivisible
+        // block. It stopped being true the moment a card had a summary row and
+        // a detail table under it: there IS something to fold to, the parent
+        // just could not see it, because the markup is opaque from out here.
+        // So the FRAME measures its own first child and reports that height,
+        // and collapsing means rendering at it. No new API, no second copy of
+        // the content to keep in sync, and a card that is a single element is
+        // unaffected — it measures the same either way.
+        // An html card is a control only once its frame has reported that it
+        // has a foldable first row; everything else always was one.
+        const togglable = !isHtml || foldable[card.id] === true;
         const showBody = open || isHtml;
+        const peek = isHtml && !open && foldable[card.id] === true;
         return (
           <section
             // `-line` marks the COLLAPSED one-liner, which lays out differently
@@ -345,7 +485,7 @@ export function ChatCards({ tabId }: { tabId: string | null | undefined }) {
             // value that decides which of the two is actually drawn.
             className={`chat-card${stale ? ' -stale' : ''}${open ? ' -open' : ''}${
               togglable ? ' -togglable' : ''
-            }${showBody ? '' : ' -line'}`}
+            }${showBody ? '' : ' -line'}${peek ? ' -peek' : ''}${isHtml ? ' -html' : ''}`}
             key={card.id}
             title={card.name}
             {...(togglable
@@ -387,7 +527,13 @@ export function ChatCards({ tabId }: { tabId: string | null | undefined }) {
               // `display:none` it would keep a frame alive and keep reporting a
               // height for something nobody can see.
               <div className={`chat-card-body${isHtml ? ' -flush' : ''}`}>
-                <CardBody card={card} />
+                <CardBody
+                  card={card}
+                  peek={peek}
+                  onFoldable={(v) =>
+                    setFoldable((m) => (m[card.id] === v ? m : { ...m, [card.id]: v }))
+                  }
+                />
               </div>
             ) : (
               // Preview the first content line; the expanded body keeps the

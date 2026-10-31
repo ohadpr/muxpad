@@ -521,6 +521,15 @@ export function tabsRoutes(deps: {
         // is a flag, not one of the row's structural fields (and must not
         // bump updated_at semantics for the others).
         pinned: z.boolean().optional(),
+        // The chat's own theme. `null` clears it, which is how a chat goes
+        // back to following the device's default — see TabStore.update for
+        // why that distinction cannot be a nullish coalesce.
+        //
+        // A bare string, not an enum of the themes this build knows: a client
+        // may be newer than the server, and a server that refuses a name it
+        // has not heard of would make a new theme unselectable until both
+        // sides ship. The client resolves an unknown value to its default.
+        theme: z.string().max(64).nullable().optional(),
       })
       // safeParse, not parse: a malformed body is the caller's fault (400),
       // not a 500 from an uncaught ZodError escaping the handler.

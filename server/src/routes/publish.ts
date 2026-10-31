@@ -123,7 +123,7 @@ const SLUG_RE = /^[a-z0-9-]{1,64}$/;
  *
  * This domain is the open internet and has no index, no listing and no auth —
  * so the ONLY thing standing between a published artifact and anybody who
- * thinks to try `/trayo-pitch/` is whether the slug can be guessed. Named
+ * thinks to try `/orbit-pitch/` is whether the slug can be guessed. Named
  * slugs were plain words: `roof-office`, `lior-susan-background`,
  * `muxpad-slack-setup`. A scraper with a wordlist walks that domain in an
  * afternoon, and what it finds is personal — pitches, apartment hunts, named
@@ -574,7 +574,7 @@ export function publishRoutes(deps: {
         // perfectly one path segment away, so the artifact looked lost when it
         // was fine. Measured on the live tree before the fix: 21 of 208 slugs,
         // 15 markdown and 6 STL, every one of them a link that had been handed
-        // over and did not open. Reported twice ("…/reshet-opener-sample/ not
+        // over and did not open. Reported twice ("…/feed-opener-sample/ not
         // found") and worked around by republishing by hand, never diagnosed.
         if (!html) writeFileSync(join(staging, 'index.html'), indexForFiles([fname]));
       }
