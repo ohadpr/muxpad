@@ -57,8 +57,8 @@ export interface TabMatch {
  * turned out to be the whole problem: typing `ra` produced FIVE rows all
  * scoring exactly `namePrefix`, so their order was decided entirely by the
  * tiebreak — and the tiebreak is recency, which handed the top of the list to
- * delivered sub-chats that happened to be touched most recently. `radio` and
- * `signal archive` sat below `rail status …`. Reported as "prioritize a
+ * delivered sub-chats that happened to be touched most recently. `radar` and
+ * `radar archive` sat below `rail status …`. Reported as "prioritize a
  * combination of recently active chats and strongest matches to chat name".
  *
  * The answer is to stop having ties, not to re-order them: a band now has room

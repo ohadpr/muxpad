@@ -289,35 +289,35 @@ describe('the “ra” problem — ties decided by the wrong thing', () => {
 
   /** The screenshot, as data: five prefix matches on `ra`, the sub-chats the
    *  most recently touched. Before this, all five scored exactly namePrefix
-   *  and recency alone put `rail status …` on top of `signal archive`. */
+   *  and recency alone put `rail status …` on top of `radar archive`. */
   const corpus = [
     t({ tabName: 'rail status design critique', lastActivityAt: hour(0.2), done: true }),
     t({ tabName: 'rail search button deep read', lastActivityAt: hour(0.5), done: true }),
-    t({ tabName: 'signal archive', lastActivityAt: hour(6) }),
-    t({ tabName: 'radio', lastActivityAt: hour(30) }),
+    t({ tabName: 'radar archive', lastActivityAt: hour(6) }),
+    t({ tabName: 'radar', lastActivityAt: hour(30) }),
     t({ tabName: 'Rat a rat card redesign', lastActivityAt: hour(50) }),
   ];
   const names = (q: string) => rankTabs(corpus, q, { now: NOW }).map((m) => m.tab.tabName);
 
   it('puts the chats you meant above the workers that just finished', () => {
     const out = names('ra');
-    expect(out.slice(0, 2)).toEqual(['radio', 'signal archive']);
-    expect(out.indexOf('signal archive')).toBeLessThan(out.indexOf('rail status design critique'));
+    expect(out.slice(0, 2)).toEqual(['radar', 'radar archive']);
+    expect(out.indexOf('radar archive')).toBeLessThan(out.indexOf('rail status design critique'));
   });
 
   it('prefers the SHORTER name — the query covers more of it', () => {
-    // `ra` is 40% of "radio" and 9% of "Rat a rat card redesign", and the
+    // `ra` is 40% of "radar" and 9% of "Rat a rat card redesign", and the
     // short one is the one a person typing two letters meant.
-    expect(names('ra').indexOf('radio')).toBeLessThan(
+    expect(names('ra').indexOf('radar')).toBeLessThan(
       names('ra').indexOf('Rat a rat card redesign'),
     );
   });
 
   it('…but coverage never beats a better MATCH', () => {
-    // "radio" is an exact match; "signal archive" is a longer prefix match with
+    // "radar" is an exact match; "radar archive" is a longer prefix match with
     // every other advantage. The band must hold.
-    const out = names('radio');
-    expect(out[0]).toBe('radio');
+    const out = names('radar');
+    expect(out[0]).toBe('radar');
   });
 
   it('recency separates two equal matches and nothing more', () => {

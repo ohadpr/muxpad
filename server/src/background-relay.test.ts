@@ -281,7 +281,7 @@ describe('push notifications and the silent turn', () => {
     // different ways. The runner-side fix (proseSpeaks) stops it setting
     // `silent: false` — but a runner is a long-lived process, and that one had
     // been up for seven days when the fix shipped, so it kept buzzing a phone.
-    // The screenshot read "Investing from muxpad — Quiet.", which is the
+    // The screenshot read "Portfolio from muxpad — Quiet.", which is the
     // agent's own prose arriving as a notification.
     //
     // The server restarts on every deploy and a runner must not be respawned
