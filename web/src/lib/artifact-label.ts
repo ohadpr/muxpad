@@ -2,13 +2,13 @@
  * WHAT A LINK ON A COMPLETION CARD SAYS.
  *
  * A worker's artifacts used to render as the raw string — `pub.example.org/
- * trayo-plan-card-demo/` in a monospace line under the summary — and the
+ * orbit-plan-card-demo/` in a monospace line under the summary — and the
  * summary ALSO spelled the url out, because the report prompt asks for it. So
  * one card carried the same url twice, once in prose where it ate most of a
  * two-line budget and clipped the sentence:
  *
- *   "Refined Variant A of the Trayo plan card, now live at
- *    https://pub.example.org/trayo-plan-card-demo/, with three …"
+ *   "Refined Variant A of the Orbit plan card, now live at
+ *    https://pub.example.org/orbit-plan-card-demo/, with three …"
  *
  * The ask: "if there's a link include it… with just words that are <a> linked
  * and not spelling out the actual link." So the prose stops naming urls (see
@@ -34,7 +34,7 @@ function thin(seg: string): boolean {
   return seg.length < 3 || /^\d+$/.test(seg);
 }
 
-/** `trayo-plan-card-demo` → `trayo plan card demo`, but `todos.md` is a
+/** `orbit-plan-card-demo` → `orbit plan card demo`, but `todos.md` is a
  *  FILENAME and stays one. A dot means the segment names a file, and a file's
  *  name is the thing you would search for. */
 function words(seg: string): string {
