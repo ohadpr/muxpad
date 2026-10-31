@@ -1494,6 +1494,35 @@ const MIGRATIONS: Migration[] = [
     sql: `CREATE INDEX IF NOT EXISTS tabs_workspace_position ON tabs(workspace_id, position);
           CREATE INDEX IF NOT EXISTS tabs_spawned_by ON tabs(spawned_by) WHERE spawned_by IS NOT NULL;`,
   },
+  {
+    /**
+     * WHICH PARENT TURN A SPAWN ROUND BELONGS TO.
+     *
+     * The delivery barrier decides whether two finished children are one
+     * fan-out, and it decided by TIME: rounds starting within five minutes of
+     * each other were treated as one. That is a proxy, and a measured case
+     * defeated it — two dispatches from two different user requests 4.5
+     * minutes apart were joined, so a report that landed at 21:59 was held
+     * behind an unrelated sibling until the ten-minute ceiling let it out at
+     * 22:12.
+     *
+     * The real question is "were these spawned by the same request", and the
+     * parent's own `last_activity_at` answers it exactly: it moves when the
+     * parent receives a message and not otherwise, so every child dispatched
+     * in one turn carries the same value and a later dispatch carries a
+     * different one. Nullable, because rounds that predate this have no
+     * answer and fall back to the window.
+     */
+    version: 48,
+    // PRAGMA-GUARDED, like 38 and 45 before it: the suite re-runs the list
+    // against a database that already has the column, and a bare ALTER throws
+    // `duplicate column name` there.
+    apply: (db) => {
+      const cols = db.prepare('PRAGMA table_info(spawn_rounds)').all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === 'parent_turn'))
+        db.exec('ALTER TABLE spawn_rounds ADD COLUMN parent_turn INTEGER');
+    },
+  },
 ];
 
 /** Highest version in the migration list. Exported so a test can assert the

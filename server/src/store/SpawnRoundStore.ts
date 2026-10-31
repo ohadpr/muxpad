@@ -23,6 +23,21 @@ export interface SpawnRound {
   id: string;
   tab_id: string;
   started_at: number;
+  /**
+   * WHICH PARENT TURN DISPATCHED THIS ROUND — the parent's own
+   * `last_activity_at` at the moment it opened.
+   *
+   * It is the delivery barrier's real question. "Were these two spawned by
+   * the same request" was answered by TIME, and a measured case defeated the
+   * proxy: two dispatches 4.5 minutes apart, from two different user
+   * messages, were treated as one fan-out and a finished report was held ten
+   * minutes behind an unrelated sibling.
+   *
+   * `last_activity_at` moves when the parent receives a message and not
+   * otherwise, so every child of one turn carries the same value. Null for
+   * rounds that predate the column; those fall back to the window.
+   */
+  parent_turn: number | null;
   /** Null while this round is running. */
   ended_at: number | null;
   report: string | null;
@@ -58,6 +73,7 @@ interface RawRound {
   artifacts: string | null;
   delivered_at: number | null;
   reopened_at: number | null;
+  parent_turn: number | null;
 }
 
 function toRound(r: RawRound): SpawnRound {
@@ -73,6 +89,7 @@ function toRound(r: RawRound): SpawnRound {
     id: r.id,
     tab_id: r.tab_id,
     started_at: r.started_at,
+    parent_turn: r.parent_turn ?? null,
     ended_at: r.ended_at,
     report: r.report,
     report_state: r.report_state,
@@ -83,7 +100,7 @@ function toRound(r: RawRound): SpawnRound {
 }
 
 const COLUMNS =
-  'id, tab_id, started_at, ended_at, report, report_state, artifacts, delivered_at, reopened_at';
+  'id, tab_id, started_at, ended_at, report, report_state, artifacts, delivered_at, reopened_at, parent_turn';
 /**
  * The same list, qualified for the joined queries below.
  *
@@ -124,12 +141,12 @@ export class SpawnRoundStore {
    *
    * Returns the round id when it opened one, null when it did not.
    */
-  open(tabId: string, at: number = Date.now()): string | null {
+  open(tabId: string, at: number = Date.now(), parentTurn: number | null = null): string | null {
     if (this.openRound(tabId)) return null;
     const id = ulid();
     this.db
-      .prepare('INSERT INTO spawn_rounds (id, tab_id, started_at) VALUES (?, ?, ?)')
-      .run(id, tabId, at);
+      .prepare('INSERT INTO spawn_rounds (id, tab_id, started_at, parent_turn) VALUES (?, ?, ?, ?)')
+      .run(id, tabId, at, parentTurn);
     return id;
   }
 
@@ -355,16 +372,20 @@ export class SpawnRoundStore {
    * built on this alone would hold its siblings' reports for good. The hold is
    * bounded in time for exactly that case — see `BATCH_MAX_HOLD_MS`.
    */
-  openRoundStartsByParent(parentTabId: string): number[] {
-    return (
-      this.db
-        .prepare(
-          `SELECT r.started_at AS started_at
+  /**
+   * Every still-running child of this parent, with the two facts the delivery
+   * barrier needs: when its round started, and which parent TURN dispatched
+   * it. The turn is the real answer to "same fan-out?"; the start is the
+   * fallback for rounds that predate the column.
+   */
+  openRoundsByParent(parentTabId: string): Array<{ startedAt: number; parentTurn: number | null }> {
+    return this.db
+      .prepare(
+        `SELECT r.started_at AS startedAt, r.parent_turn AS parentTurn
              FROM spawn_rounds r JOIN tabs t ON t.id = r.tab_id
             WHERE t.spawned_by = ? AND t.id <> t.spawned_by AND r.ended_at IS NULL`,
-        )
-        .all(parentTabId) as Array<{ started_at: number }>
-    ).map((r) => r.started_at);
+      )
+      .all(parentTabId) as Array<{ startedAt: number; parentTurn: number | null }>;
   }
 
   /**

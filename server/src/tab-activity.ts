@@ -220,7 +220,18 @@ export class TabActivity {
     // lines typed while the worker is mid-turn are one round, because the queue
     // delivers them to the same turn.
     const sub = isSubChat(clockIndex(this.db), tabId);
-    if (sub) new SpawnRoundStore(this.db).open(tabId, at);
+    if (sub) {
+      // ── STAMPED WITH THE PARENT'S TURN ────────────────────────────────
+      // The delivery barrier needs to know whether two finished children
+      // belong to the same fan-out, and it used to answer by TIME. The
+      // parent's own `last_activity_at` answers it exactly: it moves when the
+      // parent receives a message and not otherwise, so every child
+      // dispatched in one turn carries the same value and a later dispatch
+      // carries a different one. See SpawnRound.parent_turn.
+      const parent = this.tabs.getById(tabId)?.spawned_by ?? null;
+      const turn = parent ? (this.tabs.getById(parent)?.last_activity_at ?? null) : null;
+      new SpawnRoundStore(this.db).open(tabId, at, turn);
+    }
     // ── THE WORKING SET ──────────────────────────────────────────────────
     // This method is the single funnel for every message into every agent
     // pane, which makes it the one place that sees you COMMIT to a chat —

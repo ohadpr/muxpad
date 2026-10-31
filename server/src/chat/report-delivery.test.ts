@@ -69,6 +69,9 @@ describe('report delivery — the join', () => {
       ended?: number | null;
       report?: string | null;
       state?: string | null;
+      /** Which parent TURN dispatched this round — see SpawnRound.parent_turn.
+       *  Undefined leaves it NULL, which is a pre-v48 row. */
+      turn?: number | null;
     } = {},
   ): string {
     db.prepare(
@@ -80,8 +83,8 @@ describe('report delivery — the join', () => {
     ).run(`p-${id}`, id, '/bin/zsh', 'muxpad agent', NOW);
     const ended = round.ended === undefined ? NOW + 1000 : round.ended;
     db.prepare(
-      `INSERT INTO spawn_rounds (id, tab_id, started_at, ended_at, report, report_state)
-       VALUES (?,?,?,?,?,?)`,
+      `INSERT INTO spawn_rounds (id, tab_id, started_at, ended_at, report, report_state, parent_turn)
+       VALUES (?,?,?,?,?,?,?)`,
     ).run(
       `r-${id}`,
       id,
@@ -89,6 +92,7 @@ describe('report delivery — the join', () => {
       ended,
       round.report === undefined ? `report from ${id}` : round.report,
       round.state === undefined ? 'ok' : round.state,
+      round.turn ?? null,
     );
     return id;
   }
@@ -447,6 +451,63 @@ describe('report delivery — the join', () => {
 
     rounds().reopen('c1');
     expect(delivered('c1')).toBeNull();
+  });
+  /**
+   * ── THE BARRIER JOINED TWO JOBS NOBODY ASKED TO JOIN ─────────────────────
+   *
+   * Reported from the home-automation chat. Turn A spawned a PCB worker; turn
+   * B — a DIFFERENT user message, 4.5 minutes later — spawned a long UX job.
+   * The PCB worker reported at 21:59 and nothing reached the parent until
+   * 22:12, when the ten-minute ceiling let it out: the open UX round held it,
+   * because the two rounds started inside the five-minute window the barrier
+   * used as a proxy for "same fan-out".
+   *
+   * "Two dispatches from two different user requests a few minutes apart are
+   * separate jobs, and the earlier one's result should go out as soon as it
+   * lands." The rounds carry the dispatching turn now, so the barrier asks the
+   * question instead of estimating it.
+   */
+  describe('the batch is a parent TURN, not a time window', () => {
+    it('delivers a finished round while an unrelated job is still running', () => {
+      const p = parent('P');
+      // 4.5 minutes apart — inside the old window, and two different requests.
+      child('pcb', p, { started: NOW, turn: 1_000 });
+      child('ux', p, {
+        started: NOW + 4.5 * 60_000,
+        turn: 1_000 + 4.5 * 60_000,
+        ended: null,
+        report: null,
+        state: null,
+      });
+      const r = make().sweep();
+      expect(r.delivered).toBe(1);
+      expect(parseSpawnDelivery(sent[0]?.text ?? '')?.marker.from).toEqual(['pcb']);
+    });
+
+    it('still holds a true fan-out — several workers, one turn', () => {
+      // The barrier exists so one request's results arrive together rather than
+      // as a dribble the parent has to reconcile. Spawned far enough apart that
+      // the old window would have let them go.
+      const p = parent('P');
+      child('one', p, { started: NOW, turn: 7_000 });
+      child('two', p, {
+        started: NOW + 9 * 60_000,
+        turn: 7_000,
+        ended: null,
+        report: null,
+        state: null,
+      });
+      expect(make().sweep().held).toBe(1);
+    });
+
+    it('falls back to the window when a round predates the column', () => {
+      // An unknown turn is not evidence that two rounds are unrelated, and the
+      // old behaviour is the safer default for rows written before v48.
+      const p = parent('P');
+      child('old-done', p, { started: NOW });
+      child('old-open', p, { started: NOW + 60_000, ended: null, report: null, state: null });
+      expect(make().sweep().held).toBe(1);
+    });
   });
 });
 
