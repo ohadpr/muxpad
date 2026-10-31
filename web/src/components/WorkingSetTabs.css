@@ -69,11 +69,21 @@
   position: relative;
   display: flex;
   align-items: center;
-  flex: 0 1 auto;
-  /* THE FLOOR IS THE POINT. A tab narrower than this is an icon and an
-     ellipsis, which is the rail's problem moved sideways; past it the strip
-     scrolls. The ceiling stops two tabs looking like a toolbar on a wide
-     window. */
+  /* ── EVERY TAB IS THE SAME WIDTH, AND NOT ITS CONTENT'S ───────────────
+     It was `flex: 0 1 auto` — content-sized — and that is what made the strip
+     shift as you clicked through it ("they shifted as i clicked into
+     different ones"). The active tab's name is 600 and an unread one is 700,
+     so clicking a tab BOLDED it (wider) and un-bolded the one you left plus
+     cleared its unread (narrower), and every tab to the right of either slid.
+     Nothing in the model had moved; the layout had.
+     A tab bar cannot be content-sized for exactly this reason — Chrome's
+     isn't either. `1 1 128px` makes them share the row equally, so the only
+     thing that changes a tab's width is a tab arriving or leaving.
+     THE FLOOR IS STILL THE POINT: a tab narrower than 128px is an icon and an
+     ellipsis, which is the rail's problem moved sideways, so past it the strip
+     scrolls instead. The ceiling stops two tabs looking like a toolbar on a
+     wide window. */
+  flex: 1 1 128px;
   min-width: 128px;
   max-width: 224px;
   /* ── A STEP THE STRIP CAN BE SEEN THROUGH ──────────────────────────────

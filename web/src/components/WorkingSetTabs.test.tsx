@@ -127,6 +127,19 @@ describe('the strip is drawn as navigation', () => {
     expect(tab).toMatch(/border:\s*1px solid/);
   });
 
+  it('does not change width when you CLICK one either', () => {
+    // The hover fix was the easy half. The active name is 600 and an unread
+    // one is 700, so a content-sized tab grew when you entered it and shrank
+    // when you left — "they shifted as i clicked into different ones".
+    // Tabs share the row equally instead, so weight cannot reach the layout.
+    const tab = /\.wstab \{([^}]*)\}/.exec(CSS)?.[1] ?? '';
+    expect(tab, 'a content-sized tab is a tab whose width its own text decides').toMatch(
+      /flex:\s*1 1 128px/,
+    );
+    // …and the floor stays, so the equal share never shrinks to a stub.
+    expect(tab).toMatch(/min-width:\s*128px/);
+  });
+
   it('does not change width on hover', () => {
     // The × used to appear on hover while the name grew padding to clear it,
     // so the tab resized under the pointer. One fixed slot, always present.
