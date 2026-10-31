@@ -1,0 +1,147 @@
+/* ── THE WORKING SET, AS TABS ─────────────────────────────────────────────
+   One row above the pane, right of the rail. See WorkingSetTabs.tsx for why
+   it is not in the sidebar any more.
+
+   IT IS CHROME, NOT CONTENT. The rail and the composer are both louder than
+   this on purpose: a tab bar is read by SHAPE — which slot, how many, which
+   one is lit — and the moment it competes with the conversation for attention
+   it has stopped doing that job. So: the chrome surface, the chrome font, one
+   hairline underneath, and no fill on anything except the tab you are in. */
+.wstabs {
+  display: flex;
+  align-items: stretch;
+  flex: 0 0 auto;
+  min-width: 0;
+  gap: 2px;
+  padding: 0 6px;
+  background: var(--bg-tabbar);
+  border-bottom: 1px solid var(--border);
+  font-family: var(--chrome-font);
+  /* Scrolls rather than squeezing past legibility. Six slots fit a laptop;
+     a narrow pane gets a scrollbar instead of six unreadable stubs, which is
+     the failure the rail version kept producing. */
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+.wstabs::-webkit-scrollbar {
+  display: none;
+}
+
+.wstab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 0 1 auto;
+  /* THE FLOOR IS THE POINT. A tab narrower than this is an icon with an
+     ellipsis, which is the rail's problem moved sideways; past it the strip
+     scrolls instead. The ceiling stops two tabs looking like a toolbar on a
+     wide window. */
+  min-width: 112px;
+  max-width: 220px;
+  min-width: 0;
+}
+.wstab-link {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  flex: 1 1 auto;
+  padding: 0 9px;
+  height: var(--chrome-h, 32px);
+  color: var(--fg-dim);
+  text-decoration: none;
+  border-radius: 7px 7px 0 0;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.wstab-link:hover {
+  color: var(--fg);
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  text-decoration: none;
+}
+/* ── THE TAB YOU ARE IN ────────────────────────────────────────────────
+   The pane's own surface, continuing up into the strip — the tab IS the thing
+   below it reaching through the bar, which is what a tab has always meant and
+   what the rail's band could never say (it had no pane beside it to join).
+   No bottom radius and no bottom border, so the two are one shape. */
+.wstab[data-active="true"] .wstab-link {
+  color: var(--fg);
+  background: var(--bg-pane-face, var(--bg));
+  box-shadow: 0 1px 0 0 var(--bg-pane-face, var(--bg));
+}
+.wstab-icon {
+  flex: 0 0 auto;
+  font-size: 0.875rem;
+  line-height: 1;
+  /* Desaturated like every other chat icon in the app: 62 emoji are in use
+     and colour is the loudest channel there is — it belongs to status, which
+     changes, not to identity, which does not. */
+  filter: saturate(0.55);
+}
+.wstab[data-active="true"] .wstab-icon {
+  /* …except the one you are in, which is the single row allowed full colour. */
+  filter: none;
+}
+.wstab-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--chrome-size, 0.8125rem);
+}
+.wstab[data-active="true"] .wstab-name {
+  font-weight: 600;
+}
+/* A dot, not the rail's three shapes. A tick and a ring do not survive being
+   this small; "something is happening here" does, and that is the part worth
+   carrying across the window. */
+.wstab-mark {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--status-working);
+}
+.wstab-mark[data-state="blocked"] {
+  background: var(--status-blocked);
+}
+.wstab-mark[data-state="ready"] {
+  background: var(--status-ready);
+}
+.wstab-mark[data-state="dead"] {
+  background: var(--status-dead);
+}
+/* The × appears on reach, like every other hover control in this app, and
+   takes no width at rest — otherwise every tab pays for a control that most
+   of them never see. */
+.wstab-drop {
+  position: absolute;
+  right: 3px;
+  display: none;
+  place-items: center;
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg-faint);
+  font-size: 0.875rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.wstab:hover .wstab-drop,
+.wstab:has(:focus-visible) .wstab-drop {
+  display: grid;
+}
+.wstab:hover .wstab-name {
+  /* Room for the × to land without it sitting on the last letter. */
+  padding-right: 14px;
+}
+.wstab-drop:hover {
+  color: var(--fg);
+  background: color-mix(in srgb, var(--fg) 14%, transparent);
+}
