@@ -233,6 +233,10 @@ function HtmlCard({
         : null,
     [card.content, paint],
   );
+  // `onFoldable` is the parent's setter and is stable for the life of the
+  // card; listing it would re-subscribe the message listener on every render
+  // of the stack, which is once a second while anything is streaming.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: onFoldable is a stable setter; re-subscribing per render would be worse
   useEffect(() => {
     const onMsg = (e: MessageEvent) => {
       const d = e.data as {

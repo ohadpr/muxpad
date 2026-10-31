@@ -2877,7 +2877,15 @@ export function ChatPane({
    * And it never TAKES focus from somewhere else: the search modal, a rename
    * field, the picker. Arriving with something already focused means the
    * arrival was incidental to whatever you are doing.
+   *
+   * THE DEPENDENCIES ARE DELIBERATE, in both directions. `input` is read and
+   * not listed: the caret is placed on ARRIVAL, and re-running on every
+   * keystroke would fight the caret the user is moving themselves. `paneId`
+   * and `showEpoch` are listed and not read: they are re-run TRIGGERS, because
+   * a pane that was already mounted and merely became visible again never
+   * re-runs on `active` alone.
    */
+  // biome-ignore lint/correctness/useExhaustiveDependencies: input is read once on arrival; paneId/showEpoch are triggers
   useEffect(() => {
     if (!active || openTool || openImage || isMobileLayout()) return;
     const ae = document.activeElement as HTMLElement | null;
@@ -2893,10 +2901,6 @@ export function ChatPane({
       draft.setCaret(input.length);
     });
     return () => cancelAnimationFrame(h);
-    // biome-ignore lint/correctness/useExhaustiveDependencies: showEpoch is a re-run trigger — becoming visible again must re-place the caret.
-    // `input` is deliberately NOT a dependency: this places the caret on
-    // ARRIVAL, and re-running it on every keystroke would fight the caret the
-    // user is moving themselves.
   }, [active, paneId, showEpoch, openTool, openImage]);
 
   // Type-to-focus: when this chat is the visible face and you start typing a
