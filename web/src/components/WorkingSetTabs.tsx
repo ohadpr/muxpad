@@ -82,7 +82,15 @@ export function WorkingSetTabs({ activeTabSlug }: { activeTabSlug: string | null
       {rows.map(({ tab, workspace }) => {
         const active = tab.slug === activeTabSlug;
         return (
-          <div className="wstab" key={tab.id} data-active={active ? 'true' : undefined}>
+          <div
+            className="wstab"
+            key={tab.id}
+            data-active={active ? 'true' : undefined}
+            // Unread is the one state a nav element must carry — it is the
+            // reason you would look at the strip at all — and the rail says
+            // it in weight and ink, so this does too.
+            data-unread={tab.unread ? 'true' : undefined}
+          >
             <Link
               to="/w/$wsSlug/t/$tabSlug"
               params={{ wsSlug: workspace.slug, tabSlug: tab.slug }}
@@ -96,32 +104,41 @@ export function WorkingSetTabs({ activeTabSlug }: { activeTabSlug: string | null
                 {tab.icon ?? '◆'}
               </span>
               <span className="wstab-name">{tab.name}</span>
-              {/* The status mark, as a dot. A tab is small and the rail's
-                  three-shape vocabulary (tick, ring, dot) does not survive
-                  being shrunk — but "something is happening here" does, and
-                  that is the part you need from across the window. */}
+            </Link>
+            {/* ── ONE TRAILING SLOT ─────────────────────────────────────
+                The mark and the × are the same 20px, because two objects in
+                one corner read as one confused control and a × that appears
+                on hover made the tab resize under the pointer. The slot is
+                always there; the × takes the mark's place when you reach for
+                it. See the css.
+
+                The mark is a DOT, not the rail's three shapes: a tick and a
+                ring do not survive being this small, and "something is
+                happening here" does — which is the part worth carrying
+                across a window. */}
+            <span className="wstab-slot">
               {tab.status && tab.status !== 'idle' ? (
                 <span className="wstab-mark" data-state={tab.status} aria-hidden="true" />
               ) : null}
-            </Link>
-            {/* "Not now" — it frees the slot and nothing else: the chat stays
+              {/* "Not now" — it frees the slot and nothing else: the chat stays
                 exactly where it lives, un-archived, untouched. A destructive
                 action on a convenience strip would make the strip
                 frightening, and the strip's whole value is that reaching for
                 it costs nothing. */}
-            <button
-              type="button"
-              className="wstab-drop"
-              title="Not now — free this slot"
-              aria-label={`Remove ${tab.name} from Recently active`}
-              onClick={(e) => {
-                e.stopPropagation();
-                e.preventDefault();
-                void dropFromWorkingSet(tab.id);
-              }}
-            >
-              ×
-            </button>
+              <button
+                type="button"
+                className="wstab-drop"
+                title="Not now — free this slot"
+                aria-label={`Remove ${tab.name} from Recently active`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  e.preventDefault();
+                  void dropFromWorkingSet(tab.id);
+                }}
+              >
+                ×
+              </button>
+            </span>
           </div>
         );
       })}
