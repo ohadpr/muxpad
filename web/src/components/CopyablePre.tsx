@@ -57,6 +57,11 @@ export function CopyablePre({ children, ...props }: ComponentPropsWithoutRef<'pr
   // changes with it: a block that fits a wide pane overflows a narrow one.
   // `ResizeObserver` on the element itself rather than a window listener —
   // the rail drag changes this width without the window changing at all.
+  // `children` is a re-run TRIGGER rather than a value this reads: a streaming
+  // block grows line by line, and the first token does not wrap where the
+  // fortieth does. `wrap` is in the list because the two states ask different
+  // questions of the same box.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: children is a re-measure trigger, not a read
   useEffect(() => {
     const el = content.current;
     if (!el) return;
@@ -108,9 +113,6 @@ export function CopyablePre({ children, ...props }: ComponentPropsWithoutRef<'pr
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-    // `children` is in the deps because a streaming block grows line by line:
-    // the first token does not wrap and the fortieth does. `wrap` is in them
-    // because the two states ask different questions.
   }, [children, wrap]);
 
   async function copy() {
