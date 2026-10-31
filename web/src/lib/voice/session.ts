@@ -87,6 +87,7 @@
 // addressable so that such a module stays possible; do not sprinkle heuristics
 // for it through this file.
 
+import { parseSpawnDelivery } from '@muxpad/shared';
 import { type ArrivalPolicy, arrivalPolicyFor } from './cancel';
 import { chunkForAppend } from './chunk';
 import { DelegationRegistry, type VoiceTask } from './delegation';
@@ -259,6 +260,17 @@ export const SPEAKING_DECAY_MS = 900;
  */
 export const MUTE_RUNNER_GRACE_MS = 10_000;
 
+/**
+ * How long after a voice request finishes we keep listening for the SUB-AGENTS
+ * it dispatched to report back.
+ *
+ * A delegating turn ends in a minute with "three agents are on it"; the agents
+ * themselves take as long as they take. 20 minutes is long enough for the
+ * common batch and short enough that it cannot outlive a call — a voice
+ * session that has been idle for 20 minutes is over in every other sense too.
+ */
+export const DELIVERY_WATCH_MS = 20 * 60_000;
+
 /** What the user hears. It names the defect, points at where the answer IS,
  *  and says why the call is ending — a hang-up with no reason reads as a
  *  crash. */
@@ -302,6 +314,9 @@ export interface VoiceSessionOpts {
   settleQuietMs?: number;
   settleMaxMs?: number;
   cancelProbeQuietMs?: number;
+  /** The pane's agent mode, from the client that already knows it. See
+   *  UseVoiceOpts.mode for why the server's snapshot cannot be relied on. */
+  mode?: string;
   heartbeatMs?: number;
   dispatchFillerMs?: number;
   /** Quiet on the input transcript before a held append is released. */
@@ -472,6 +487,78 @@ export class VoiceSession {
   private bound: VoiceTask | null = null;
   /** Last tool the bound turn started, for the progress update. Name only. */
   private lastTool: string | null = null;
+  /**
+   * ── THE ANSWER THAT ARRIVES IN A LATER TURN ────────────────────────────
+   *
+   * A voice request that the agent DELEGATES ends its turn in about a minute,
+   * saying "three agents are on it". The real answer lands much later, in a
+   * different turn — the one muxpad starts when the sub-chats report back,
+   * stamped `<muxpad-delivery …>`.
+   *
+   * Voice dropped that turn on the floor. It binds a turn by matching its
+   * stamp against a request voice sent, the delivery's stamp matches nothing,
+   * so the turn read as "somebody else's" and every frame of it — the answer
+   * included — was discarded in silence. Measured in the signal-archive chat:
+   * three workers reported, the chat wrote a 1,998-character verdict, and
+   * nobody ever heard it.
+   *
+   * The rendered transcript already draws exactly this distinction and for
+   * exactly this reason (see MACHINE_TURN_VARIANTS in lib/chat-voice.ts): a
+   * CRON is unsolicited and stays excluded, a DELIVERY exists only because
+   * this conversation dispatched the work, so its arrival is the continuation
+   * of something a person asked for. This is that same rule, applied to the
+   * thing a person asked for ALOUD.
+   *
+   * Held as a window rather than a flag so it cannot leak into the next call:
+   * see {@link DELIVERY_WATCH_MS}.
+   */
+  private deliveryWatches: Array<{ task: VoiceTask; until: number; announced?: boolean }> = [];
+  /**
+   * Has a turn WE DID NOT START run since the watches were armed?
+   *
+   * This is the guard that keeps voice from reading out somebody else's
+   * report, and it is the SECOND thing to hold that job. The first was "did
+   * this turn launch sub-agents", read off `{t:'subagent'}` frames — which is
+   * correct in principle and never fires in practice: those frames come from
+   * the runner's Task/Agent roster, Chat mode blocks those tools outright, and
+   * real delegation is `muxpad agent new` run through Bash, which puts nothing
+   * on this socket at all. The guard silently made the whole feature dead and
+   * the tests passed because they injected the frame by hand.
+   *
+   * What voice CAN see is every turn-start on its pane. A fan-out the user
+   * started by TYPING announces itself as a turn whose stamp matches nothing
+   * we sent — so if one of those has happened, a delivery arriving afterwards
+   * might be its, and we stop claiming it. The watch fails toward silence,
+   * which is the right way for this one to be wrong.
+   *
+   * ── AND IT IS STICKY FOR THE WHOLE CALL ───────────────────────────────
+   * It used to reset each time a request of ours completed, which erased any
+   * foreign turn that came BEFORE it — so typing a fan-out and then asking
+   * "what time is it in Tokyo" aloud made voice read the billing report out
+   * as "reported back on: what time is it". The agents that delivery belongs
+   * to were dispatched before we ever spoke; a flag scoped to "since the last
+   * watch" cannot see that, and no ordering of it can.
+   *
+   * So once anything else has started a turn on this pane, voice stops
+   * claiming deliveries for the rest of the call. That is a real cost — see
+   * `markForeignTurn` for what is deliberately NOT counted — and it is the
+   * cheaper of the two: the alternative is reading somebody else's report
+   * aloud and naming it as the answer to your question.
+   */
+  private snapshotRecheck: number | null = null;
+  /** The most recent `session` frame. See the note at the call site: the
+   *  re-check must act on the newest facts, not the ones that armed it. */
+  private lastSnapshot: Extract<VoiceChatFrame, { t: 'session' }> | null = null;
+  private foreignTurnSinceWatch = false;
+  /** The pane's agent mode, as the server last reported it. Null until the
+   *  first session frame, which is why the one reader of it treats null as
+   *  "assume Chat" — the conservative end, because that is the mode whose
+   *  hang-up is real. */
+  private paneMode: string | null = null;
+  /** Ids of tasks that were ADOPTED from a delivery turn rather than sent.
+   *  They must not arm a watch of their own when they finish, or one
+   *  request's sub-agents could announce themselves forever. */
+  private readonly adopted = new Set<string>();
   private lastCancelAt = Number.NEGATIVE_INFINITY;
   /**
    * The agent question currently waiting on the user, if any.
@@ -512,6 +599,7 @@ export class VoiceSession {
     this.settleMaxMs = opts.settleMaxMs ?? SETTLE_MAX_MS;
     this.cancelProbeQuietMs = opts.cancelProbeQuietMs ?? CANCEL_PROBE_QUIET_MS;
     this.heartbeatMs = opts.heartbeatMs ?? HEARTBEAT_MS;
+    this.paneMode = opts.mode ?? null;
     this.dispatchFillerMs = opts.dispatchFillerMs ?? DISPATCH_FILLER_MS;
     this.idleQuietMs = opts.idleQuietMs ?? IDLE_QUIET_MS;
     this.withContext = opts.withContext ?? true;
@@ -953,6 +1041,17 @@ export class VoiceSession {
     if (frame.t === 'turn-start') this.bindTurn(frame.text);
     if (frame.t === 'queued') this.noteQueued(frame.id, frame.text);
     if (frame.t === 'queue') this.reconcileQueue(frame.items ?? []);
+    if (frame.t === 'session') {
+      if (typeof frame.mode === 'string') this.paneMode = frame.mode;
+      // THE LATEST ONE WINS. The re-check timer used to hold the frame it was
+      // armed with, so a newer snapshot saying the request was still queued —
+      // or that a turn was running — could not call it off: the timer fired
+      // on the stale idle frame, announced the turn finished, retired the
+      // task and dropped the answer. Keeping the newest here means the timer
+      // asks the question again against what is true when it fires.
+      this.lastSnapshot = frame;
+      this.settleAgainstSnapshot(frame);
+    }
     // The question is remembered whether or not it belongs to a task of OURS: a
     // turn the user TYPED can block the pane just as hard, and once it has, the
     // only thing that moves is an answer. Speaking one should work either way.
@@ -968,6 +1067,64 @@ export class VoiceSession {
 
     const intents = this.bridge.onFrame(frame);
     this.turnRunning = this.bridge.isTurnRunning();
+
+    // ── A TURN THAT ENDED WHILE WE WERE NOT LISTENING ──────────────────────
+    //
+    // `turn-done` is a live broadcast and nothing re-sends it. The runner
+    // drops frames while its socket is down; the server sends only to sockets
+    // open at that instant. So one blip — a phone locking its screen, the
+    // no-pong check, a server restart — can swallow the end of a turn, and the
+    // bound task then never retires: the heartbeat keeps saying "Still working
+    // on it — 176 seconds in" while the chat two inches away shows the
+    // finished answer. "the voice waited for 3 minutes while the agent already
+    // replied/wrapped up."
+    //
+    // The reconnect snapshot is the repair, and it is the ONLY frame that can
+    // be: it carries the server's own `turnRunning`, computed from the runner
+    // registry rather than from what this socket caught, and a fresh socket
+    // always gets one. False while something of ours is bound means the turn
+    // we are waiting on is already over.
+    //
+    // Treated as `turn-done` with ok, via the same path, so the retire, the
+    // mute-runner check and the pipeline all behave exactly as they would
+    // have. The one thing that cannot be recovered is the ANSWER — those
+    // frames are gone — so it says where to find it rather than pretending.
+    //
+    // ── AND IT WAITS FOR A RUNNER TO BE THERE TO ASK ──────────────────────
+    // `turnRunning: false` alone is not enough, because it is two facts in one
+    // value: "the turn finished" and "nobody is attached to this pane". An
+    // ordinary `muxpad restart` produces the second — the browser's socket is
+    // back in about a second, the runner retries on a fixed two — and acting
+    // on it retired a task that was still running and announced an answer that
+    // had not arrived, which is strictly worse than the hang it replaced.
+    // `runnerAttached` separates them, and it is in the snapshot's fingerprint
+    // so the frame is RE-SENT when the runner comes back with the real answer.
+    if (
+      frame.t === 'session' &&
+      frame.turnRunning === false &&
+      frame.runnerAttached === true &&
+      this.bound
+    ) {
+      const task = this.bound;
+      for (const intent of intents) this.deliver(task, intent, 'when_idle', true);
+      this.deliver(
+        task,
+        {
+          kind: 'commentary',
+          text: 'The agent finished that one while we were disconnected — the answer is on screen.',
+        },
+        'when_idle',
+        true,
+      );
+      // NOT `checkRunnerCanSpeak`. That hangs the session up on the grounds
+      // that a turn succeeded with no reply frame, so this pane cannot answer
+      // aloud — a correct read of a muted runner and exactly the wrong read
+      // here, where the reply frames EXISTED and were lost with the socket.
+      // Ending the call because of our own gap is worse than the hang.
+      this.retire(task, 'completed');
+      this.recomputeState();
+      return;
+    }
 
     const task = this.targetFor(frame);
     if (task) {
@@ -1068,7 +1225,16 @@ export class VoiceSession {
     if (stamped) this.serverStampsTurns = true;
     if (this.bound) return;
     const waiting = this.pipeline.filter((d) => d.status === 'queued');
-    if (waiting.length === 0) return;
+    if (waiting.length === 0) {
+      // NOTHING OF OURS IS WAITING — which is the normal state when our
+      // sub-agents report, because the turn that dispatched them finished
+      // minutes ago and retired its task. So this check has to come BEFORE
+      // the early return, not after the match below: the delivery case is
+      // precisely the case with an empty pipeline.
+      if (stamped && this.adoptDelivery(text as string)) return;
+      if (stamped) this.markForeignTurn(text as string);
+      return;
+    }
     let owner: VoiceTask | undefined;
     if (stamped) {
       // Exact text match, oldest first — the server stamped the turn, so a
@@ -1076,6 +1242,12 @@ export class VoiceSession {
       const t = (text as string).trim();
       owner = waiting.find((d) => d.request.trim() === t);
       if (!owner) {
+        // …unless it is the SUB-AGENTS of a request of ours reporting back.
+        // That turn's stamp is the delivery block, not anything voice sent, so
+        // no match is possible — and it is still our answer. See
+        // `deliveryWatch`.
+        if (this.adoptDelivery(text as string)) return;
+        this.markForeignTurn(text as string);
         this.trace('turn-start belongs to another sender — not binding');
         return;
       }
@@ -1088,9 +1260,21 @@ export class VoiceSession {
       this.trace('unstamped turn-start from a stamping server — not binding');
       return;
     } else {
-      // Unstamped (older server): fall back to submit order, which is the order
-      // the server runs them in.
-      owner = waiting[0];
+      // ── AN UNSTAMPED START CLAIMS NOTHING ───────────────────────────────
+      // This fell back to submit order "for an older server", on the grounds
+      // that the server runs sends in that order. The latch above means the
+      // fallback only ran before the FIRST stamped start had been seen — and
+      // that window is exactly when a cron, a wakeup or any other autonomous
+      // turn can arrive unstamped and be handed the voice request that is
+      // waiting. Reproduced: an autonomous turn's output spoken as the answer
+      // to the user's first question.
+      //
+      // The stamp comes from the SERVER, and a muxpad server is one process
+      // that is always current — there is no "older server" on the other end
+      // of this socket. So the fallback protected nothing and cost the one
+      // mis-attribution a voice session must never make.
+      this.trace('unstamped turn-start — claiming nothing');
+      return;
     }
     if (!owner) return;
     this.registry.setStatus(owner.id, 'working');
@@ -1199,7 +1383,203 @@ export class VoiceSession {
 
   /** This task's work is over. Status first so diagnostics can tell "answered"
    *  from "cancelled", then release its slot in the pipeline. */
+  /**
+   * Is this turn our own sub-agents reporting back? If so, claim it.
+   *
+   * Three guards, and each one is the difference between this and narrating
+   * somebody else's conversation out loud:
+   *
+   *  · The stamp must PARSE as a delivery. `parseSpawnDelivery` is the same
+   *    function the server and the transcript renderer use, so "is this a
+   *    delivery" has one answer everywhere rather than a regex per reader.
+   *  · The watch must be open — a request of OURS completed recently (see
+   *    {@link DELIVERY_WATCH_MS}). Without it, a delivery for work the user
+   *    dispatched by TYPING, before the call started, would be read aloud.
+   *  · Nothing of ours may already be bound, which the caller has checked.
+   *
+   * A CRON fire is deliberately not adopted even though it arrives the same
+   * way: nobody asked for it, today. That is the same line lib/chat-voice.ts
+   * draws for the written transcript, and it is drawn here by asking only
+   * about deliveries.
+   *
+   * The adopted task is SYNTHETIC — the model never delegated it, so it has
+   * no delegation id of its own and takes one derived from the request it
+   * continues. It exists so the answer has somewhere to be delivered to, and
+   * so the heartbeat describes it while the agent consolidates.
+   */
+  /**
+   * Settle OUR tasks against the server's snapshot of the pane.
+   *
+   * A socket that was away missed every live frame in between — `turn-start`,
+   * `turn-done`, and every `queue` broadcast — so a task of ours can be
+   * sitting as `queued` against work that has already run and finished. It
+   * never retires, nothing says so, and asking again is refused as a
+   * duplicate: the original hang, by a second road.
+   *
+   * ── WHY NOT JUST REUSE `reconcileQueue` ───────────────────────────────
+   *
+   * Because a row leaves the server's queue for two opposite reasons: it was
+   * CANCELLED, or it RAN. The live path can tell them apart — a row that ran
+   * produces a `turn-start`, which moves the task off `queued` — and across a
+   * disconnect that signal is exactly what is missing. Routing the snapshot
+   * through it announced "That request was cancelled before it ran" about a
+   * deploy that had deployed, and then threw the answer away.
+   *
+   * The snapshot answers it directly instead: the runner is attached, no turn
+   * is running, and this task is not in the queue — so its turn ran and
+   * ended while we were not listening. Which is a completion, not a cancel.
+   */
+  private settleAgainstSnapshot(frame: Extract<VoiceChatFrame, { t: 'session' }>): void {
+    // `turnRunning: false` only means something when there is a runner there
+    // to be idle — see the long note at the call site in `onChatFrame`.
+    if (frame.runnerAttached !== true || frame.turnRunning !== false) return;
+    const parked = new Set((frame.queue ?? []).map((i) => i.id));
+    const now = this.sched.now();
+    for (const task of [...this.pipeline]) {
+      if (task.status !== 'queued') continue;
+      // Still parked server-side: it has not run, and it will.
+      if (task.queueId && parked.has(task.queueId)) continue;
+      // ── A REQUEST THAT HAS ONLY JUST GONE OUT HAS NOT "ALREADY RUN" ────
+      // Every dispatched task is `queued` with no queue id until `turn-start`
+      // comes back, so for a moment it looks exactly like one whose turn ran
+      // and ended unseen. A snapshot already in flight when the send left —
+      // and today's fingerprint makes those more common, since it re-sends
+      // whenever a build lands or a runner reattaches — would retire the
+      // request, announce "the agent finished that one", and then fail to
+      // bind the real turn, so the answer was never spoken. Reproduced.
+      //
+      // The window is network-latency-sized (the server marks the turn active
+      // the moment it relays, so any snapshot computed after that says so), and
+      // this is the same grace the queue-drop path uses for the same reason.
+      if (now - task.dispatchedAt < QUEUE_DROP_GRACE_MS) {
+        // …and COME BACK TO IT. Skipping alone strands the other case: a quick
+        // turn that runs and finishes inside a blip of under four seconds is
+        // never settled by anything later, so the request sits `queued` for
+        // ever and asking again is refused as a duplicate. One timer re-asks
+        // the same question with the state as it is then.
+        this.recheckSnapshot();
+        continue;
+      }
+      this.deliver(
+        task,
+        {
+          kind: 'commentary',
+          text: 'The agent finished that one while we were disconnected — the answer is on screen.',
+        },
+        'when_idle',
+        true,
+      );
+      this.retire(task, 'completed');
+    }
+  }
+
+  /**
+   * Somebody else started a turn here. Should that stop us claiming the next
+   * delivery?
+   *
+   * ONLY FOR A TURN THAT COULD HAVE DISPATCHED WORK — a message somebody
+   * typed, or a schedule firing, both of which can fan out to sub-chats whose
+   * report would then arrive looking exactly like ours.
+   *
+   * NOT for a DELIVERY. One batch reporting is not a reason to disown the
+   * next: a single voice request routinely produces two, and counting the
+   * first as "somebody else" silenced the second. (`adoptDelivery` has
+   * already had its chance at this stamp by the time we get here; if it
+   * declined, the watch list was empty or expired, which is not evidence
+   * about anything.)
+   *
+   * NOT for an UNSTAMPED start either — those are a mid-turn runner
+   * reconnect re-announcing a turn that was already running, and the callers
+   * return before reaching this. Named here so the omission is a decision
+   * rather than a gap.
+   */
+  private markForeignTurn(stamp: string): void {
+    if (parseSpawnDelivery(stamp) !== null) return;
+    this.foreignTurnSinceWatch = true;
+    this.trace('a turn we did not start ran here — no longer claiming deliveries');
+  }
+
+  /** Re-run {@link settleAgainstSnapshot} once the youngest task has aged past
+   *  the grace. One timer at a time: the snapshot is re-sent often enough that
+   *  arming one per frame would stack them. */
+  private recheckSnapshot(): void {
+    if (this.snapshotRecheck != null) return;
+    this.snapshotRecheck = this.sched.setTimeout(() => {
+      this.snapshotRecheck = null;
+      if (this.disposed) return;
+      // THE NEWEST SNAPSHOT, not the one that armed this. A frame arriving in
+      // between can say the request is still parked, or that a turn is
+      // running — both of which mean "do not settle" — and acting on the
+      // captured one announced a completion that had not happened.
+      //
+      // The turn may also have started, which moves the task off `queued` and
+      // makes this a no-op. That is the common case and the point.
+      const latest = this.lastSnapshot;
+      if (latest) this.settleAgainstSnapshot(latest);
+    }, QUEUE_DROP_GRACE_MS);
+  }
+
+  /**
+   * ── ADOPTION IS OFF, AND THIS IS THE ARGUMENT FOR LEAVING IT OFF ───────
+   *
+   * A request the agent DELEGATES answers in a later turn — the one muxpad
+   * starts when the sub-chats report, stamped `<muxpad-delivery …>`. Voice
+   * cannot bind that turn by its stamp, because the stamp is not anything
+   * voice sent, so the answer was dropped in silence. Measured: three workers
+   * reported, the chat wrote a 1,998-character verdict, nobody heard it.
+   *
+   * Claiming it needs one fact voice does not have: WHOSE workers those are.
+   * The delivery names its sub-chats by tab id and voice has no map from a tab
+   * id to the request that spawned it — the frames it reads carry labels, not
+   * ids. Three guards were built out of proxies for that fact and all three
+   * were wrong, each in a new way:
+   *
+   *   · "this turn launched sub-agents", read off `{t:'subagent'}` frames —
+   *     which real delegation never sends, so the feature was simply dead.
+   *   · "no foreign turn since the watch was armed" — which erased a foreign
+   *     turn that came BEFORE it, so typing a fan-out and then asking a
+   *     question aloud read the typed work's report out as the answer.
+   *   · the same flag made sticky — which still adopts work dispatched before
+   *     the call, because nothing it can see happened in between.
+   *
+   * Reproduced for the third time: after answering "what time is it?", voice
+   * announced an earlier typed task's billing report as the answer to that
+   * question. Reading somebody else's report aloud, labelled as yours, is a
+   * worse failure than silence — and silence is recoverable, because the
+   * answer is on screen.
+   *
+   * WHAT WOULD MAKE IT WORK is correlation, not another proxy: the server
+   * knows which sub-chats a pane spawned (`spawned_by`) and could say so on
+   * the frame. That is a protocol change, and it is the only honest version.
+   */
+  private adoptDelivery(_stamp: string): boolean {
+    return false;
+  }
+
   private retire(task: VoiceTask, status: 'completed' | 'failed' | 'cancelled'): void {
+    // A request that HANDED WORK OFF arms a delivery watch: the sub-chats'
+    // answer arrives in a later turn and would otherwise be dropped (see
+    // `deliveryWatches`). Three conditions, each one a defect that was found
+    // in the version without it:
+    //
+    //  · `completed` — a failed request dispatched nothing, and a cancelled
+    //    one was silenced on purpose. Cancelling also drops any watch it had
+    //    already armed (see `cancelAll`).
+    //  · not itself adopted — or one request's agents announce themselves
+    //    forever, each adopted turn arming the next.
+    //
+    // WHAT IS NOT A CONDITION, any more: "this turn launched sub-agents". It
+    // is the right question and it was read off `{t:'subagent'}` frames, which
+    // real delegation never sends — see `foreignTurnSinceWatch`, which answers
+    // the same worry with something voice can actually observe.
+    if (status === 'completed' && task.request.trim() && !this.adopted.has(task.id)) {
+      // A LIST, not a slot. Two delegating requests in one call is ordinary,
+      // and with one slot the second overwrote the first: the first batch's
+      // results were announced under the second question's words, and the
+      // second batch was dropped without a sound.
+      this.deliveryWatches.push({ task, until: this.sched.now() + DELIVERY_WATCH_MS });
+      if (this.deliveryWatches.length > 4) this.deliveryWatches.shift();
+    }
     this.registry.setStatus(task.id, status);
     this.pipeline = this.pipeline.filter((d) => d.id !== task.id);
     this.clearOrphanTimer(task.id);
@@ -1233,6 +1613,15 @@ export class VoiceSession {
    * silent because the user silenced it.
    */
   private checkRunnerCanSpeak(task: VoiceTask): void {
+    // ── NOT IN AGENT MODE ─────────────────────────────────────────────────
+    // Every word of the line this is about to say — "too old to have the reply
+    // tool… restart the agent pane" — is false there. Agent mode has no reply
+    // tool BY DESIGN and never will; its answers are synthesised from the
+    // turn's prose (server/src/spoken-answer.ts). A turn of pure tool work
+    // legitimately writes nothing, produces no synthesised speak, and would
+    // have hung the call up on the user's FIRST request with advice that
+    // cannot help them.
+    if (this.paneMode && this.paneMode !== 'chat') return;
     if (this.muteRunnerDeclared || this.bridge.canSpeak) return;
     if (task.status === 'cancelled') return;
     this.muteRunnerDeclared = true;
@@ -1379,6 +1768,13 @@ export class VoiceSession {
     this.pipeline = [];
     this.bound = null;
     this.lastTool = null;
+    // AND THE DELIVERY WATCHES. A cancel says "I don't want this any more",
+    // and that has to cover the sub-agents the cancelled work dispatched —
+    // otherwise their report arrives minutes later and is announced under the
+    // question the user just abandoned. (The fence below would catch a watch
+    // armed BEFORE the cancel; this covers the rest, and says so out loud
+    // rather than relying on a second mechanism to be right.)
+    this.deliveryWatches = [];
     // Anything still held for delivery belonged to work that no longer exists.
     this.pending.clear();
     // Everything claimed before now is abandoned; a late reply from the dying
@@ -1389,6 +1785,10 @@ export class VoiceSession {
     this.clearHeartbeat();
     this.clearFiller();
     this.clearOrphanTimers();
+    if (this.snapshotRecheck != null) {
+      this.sched.clearTimeout(this.snapshotRecheck);
+      this.snapshotRecheck = null;
+    }
     this.turnRunning = false;
     this.stats.cancels += 1;
     this.trace(`cancelled (${source})`);
@@ -1574,6 +1974,10 @@ export class VoiceSession {
     this.clearHeartbeat();
     this.clearFiller();
     this.clearOrphanTimers();
+    if (this.snapshotRecheck != null) {
+      this.sched.clearTimeout(this.snapshotRecheck);
+      this.snapshotRecheck = null;
+    }
     if (this.cancelProbeTimer != null) this.sched.clearTimeout(this.cancelProbeTimer);
     this.cancelProbeTimer = null;
     if (this.floorTimer != null) this.sched.clearTimeout(this.floorTimer);

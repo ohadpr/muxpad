@@ -34,7 +34,10 @@ afterEach(() => {
   for (const h of servers.splice(0)) h.close();
 });
 
+const pushes: Array<[string, string]> = [];
+
 async function boot() {
+  pushes.length = 0;
   const db = openDb(':memory:');
   const workspace = new WorkspaceStore(db).create({ name: 'W' });
   const tab = new TabStore(db).create({ name: 'T', layout: '', workspace_id: workspace.id });
@@ -47,6 +50,10 @@ async function boot() {
     events: new EventBus(),
     cache: new PtydCache(),
     ptyd: { on: () => {} } as unknown as PtydClient,
+    notifyPane: (paneId: string, body: string) => {
+      pushes.push([paneId, body]);
+      return 'sent';
+    },
   });
   await new Promise<void>((resolve) => http.listen(0, '127.0.0.1', resolve));
   const port = (http.address() as AddressInfo).port;
@@ -196,5 +203,119 @@ describe('unread after a turn', () => {
     runner.send(JSON.stringify({ t: 'turn-done', ok: false, error: 'boom' }));
     await settle();
     expect(unread(db, pane.id)).toBe(1);
+  });
+});
+
+/**
+ * THE QUIET CHANNEL AND THE LOUD ONE HAVE TO AGREE.
+ *
+ * The bold mark asks `silent`; the PUSH did not. So a scheduled job told to
+ * say nothing left the sidebar correctly unbolded and still vibrated a phone
+ * on every fire — found on a half-hourly cron whose only job is to rewrite a
+ * card:
+ * "every hour or so it sends me a push notification about a card being
+ * updated". The channel nobody can ignore was the one being noisy.
+ */
+/**
+ * Relay a cron fire and then LEAVE — the socket is closed before the turn
+ * ends, because an open chat suppresses the push on its own
+ * (`chatClients.has`). A cron test that kept it open would pass for the wrong
+ * reason and keep passing if the cron gate were deleted.
+ */
+async function fireCron(
+  open: (path: string) => Promise<{ sock: WebSocket }>,
+  paneId: string,
+): Promise<void> {
+  const { sock } = await open(`/ws/chat/${paneId}`);
+  sock.send(
+    JSON.stringify({
+      t: 'send',
+      text: '<muxpad-cron id="c1" name="nw-hourly" at="1">refresh the card</muxpad-cron>do it',
+    }),
+  );
+  await settle();
+  await new Promise<void>((resolve) => {
+    sock.once('close', () => resolve());
+    sock.close();
+  });
+  await settle();
+}
+
+describe('push notifications and the silent turn', () => {
+  it('does NOT push for a silent machine turn', async () => {
+    const { runner } = await boot();
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    await settle();
+    runner.send(JSON.stringify({ t: 'turn-done', ok: true, silent: true }));
+    await settle();
+    expect(pushes).toEqual([]);
+  });
+
+  it('does NOT push while somebody has the chat OPEN', async () => {
+    // The dominant source of "a ton of push notifications": the gate asked
+    // when the user last TYPED, so any turn over two minutes buzzed a phone —
+    // including one they were watching. 938 of 4,094 turns in this install
+    // qualified, 463 of them in one foreground chat.
+    const { pane, open, runner } = await boot();
+    await open(`/ws/chat/${pane.id}`);
+    await settle();
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    await settle();
+    runner.send(JSON.stringify({ t: 'turn-done', ok: true, summary: 'done' }));
+    await settle();
+    expect(pushes).toEqual([]);
+  });
+
+  it('pushes when the turn actually said something', async () => {
+    const { pane, runner } = await boot();
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    await settle();
+    runner.send(JSON.stringify({ t: 'turn-done', ok: true, summary: 'card refreshed' }));
+    await settle();
+    expect(pushes.map(([id]) => id)).toEqual([pane.id]);
+  });
+
+  it('does NOT push a CRON fire, whatever its prose said', async () => {
+    // THE SAME LEAK, A SECOND TIME, AND THE REASON IT IS ASKED TWICE.
+    // `nw-hourly` is a card refresher whose prompt says "Say nothing" three
+    // different ways. The runner-side fix (proseSpeaks) stops it setting
+    // `silent: false` — but a runner is a long-lived process, and that one had
+    // been up for seven days when the fix shipped, so it kept buzzing a phone.
+    // The screenshot read "Portfolio from muxpad — Quiet.", which is the
+    // agent's own prose arriving as a notification.
+    //
+    // The server restarts on every deploy and a runner must not be respawned
+    // to deliver a fix (it kills background subagents and wakeups). So the
+    // gate asks here too — and this test deliberately sends `silent: false`,
+    // i.e. an OLD runner's answer.
+    const { pane, open, runner } = await boot();
+    await fireCron(open, pane.id);
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    await settle();
+    runner.send(JSON.stringify({ t: 'turn-done', ok: true, silent: false, summary: 'Quiet.' }));
+    await settle();
+    expect(pushes).toEqual([]);
+  });
+
+  it('…and a FAILED cron fire still does, because an error is news', async () => {
+    const { pane, open, runner } = await boot();
+    await fireCron(open, pane.id);
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    await settle();
+    runner.send(JSON.stringify({ t: 'turn-done', ok: false, error: 'boom' }));
+    await settle();
+    expect(pushes.map(([id]) => id)).toEqual([pane.id]);
+  });
+
+  it('STILL pushes a silent turn that FAILED — an error is news', async () => {
+    // `silent` is already false for a failed turn (isSilentTurn), so this is
+    // the belt: a future change that starts sending `silent: true` alongside a
+    // failure must not take the error notification with it.
+    const { pane, runner } = await boot();
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    await settle();
+    runner.send(JSON.stringify({ t: 'turn-done', ok: false, error: 'boom' }));
+    await settle();
+    expect(pushes.map(([id]) => id)).toEqual([pane.id]);
   });
 });

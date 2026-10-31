@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 /**
@@ -108,5 +109,56 @@ describe('an html card renders whole', () => {
   it('keeps no padding of its own otherwise — the frame styles itself', () => {
     const flush = rule('.chat-card-body.-flush') ?? '';
     expect(flush).toMatch(/padding:\s*0 \d+px 0 0/);
+  });
+});
+
+/**
+ * A CARD RANKS BELOW A MESSAGE, IN EVERY THEME.
+ *
+ * The base rule says it in the app's own terms — a 1px edge, a 9% lift,
+ * "present rather than loud". A theme can undo that by naming the card in the
+ * same rule as a bubble and the composer, and memphis did: the same 3px frame
+ * and the same 6px offset shadow on all three, so a pinned card read exactly
+ * as loud as the message you had just written. Reported as "they are grabbing
+ * too much attention… they should be one step down in terms of visible
+ * hierarchy and importance".
+ *
+ * GEOMETRY MAY BE SHARED — square corners, a radius, a dither — because that
+ * is the theme's vocabulary and applies to everything it draws. WEIGHT may
+ * not: the border, the fill and the shadow are the channels that say how
+ * important a thing is.
+ */
+describe('no theme promotes a card to a message', () => {
+  const STYLES = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), '..', 'styles.css'),
+    'utf8',
+  );
+  const WEIGHT = /(^|;)\s*(border|border-width|box-shadow|background-color|background)\s*:/;
+
+  const shared: string[] = [];
+  for (const m of STYLES.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const sel = (m[1] ?? '').replace(/\s+/g, ' ').trim();
+    const body = m[2] ?? '';
+    if (!sel.includes('[data-theme=') || !sel.includes('.chat-card')) continue;
+    const withPeer = sel.includes('.chat-bubble') || sel.includes('.chat-composer');
+    if (withPeer && WEIGHT.test(body)) shared.push(sel.slice(0, 90));
+  }
+
+  it('finds theme rules about cards at all, so this cannot pass vacuously', () => {
+    const touching = [...STYLES.matchAll(/\[data-theme="[^"]+"\][^{]*\.chat-card[^{]*\{/g)];
+    expect(touching.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('never gives a card a message’s border, fill or shadow in one rule', () => {
+    expect(shared, 'these rank a card as loudly as a message').toEqual([]);
+  });
+
+  it('keeps memphis cards flat — the sticker shadow is for things you wrote', () => {
+    const i = STYLES.indexOf('[data-theme="memphis"] .chat-card {');
+    expect(i).toBeGreaterThan(-1);
+    const rule = STYLES.slice(i, STYLES.indexOf('}', i));
+    expect(rule).toMatch(/box-shadow:\s*none/);
+    // …and still square, because that part IS the theme.
+    expect(rule).toMatch(/border-radius:\s*0/);
   });
 });

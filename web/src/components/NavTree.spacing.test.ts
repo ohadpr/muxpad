@@ -1212,23 +1212,38 @@ describe('the row’s right-hand side holds one thing at a time', () => {
  * Asserted as ARITHMETIC against the same tokens, not as a literal pair, so the
  * two cannot drift apart again when the gutter changes.
  */
-describe('the search button sits on the rows’ own edges', () => {
-  // It was the inline `.navsearch` field; it is now the button that opens the
-  // ⌘K palette, and it inherited the field's place and this rule with it.
-  const scroll = ruleBody(NAV_CSS, '.navtree-scroll');
-  const group = ruleBody(NAV_CSS, '.navtree-group');
+/**
+ * THE SEARCH BUTTON IS NOT ON THE ROWS' EDGES, BECAUSE IT IS NOT A ROW.
+ *
+ * It was an inline field, then a button wearing that field's clothes, then a
+ * slimmed-down row — all three aligned to the rows below them, because all
+ * three owned a row at the top of the rail. "You don't search there, it's
+ * just a hotkey reminder, maybe it doesn't need to take up so much space."
+ * It rides the brand row now: an icon in the left third of a row that already
+ * exists, which is zero rows and no alignment to inherit.
+ */
+describe('the search button costs the rail no row', () => {
   const search = ruleBody(NAV_CSS, '.navtree-search');
 
-  const rowInset = (which: 'left' | 'right') =>
-    resolve(side(decl(scroll, 'padding'), which), BASE) +
-    resolve(side(decl(group, 'padding'), which), BASE);
-
-  it.each(['left', 'right'] as const)('matches the rows on the %s', (which) => {
-    expect(resolve(side(decl(search, 'margin'), which), BASE)).toBe(rowInset(which));
+  it('is a square icon button, not a labelled bar', () => {
+    expect(decl(search, 'width')).toBe('28px');
+    expect(decl(search, 'height')).toBe('28px');
   });
 
-  it('and the rows are where they were — this moved the box, not the list', () => {
-    expect([rowInset('left'), rowInset('right')]).toEqual([8, 4]);
+  it('renders no label and no key cap', () => {
+    // The chord moved into the tooltip, which is where a reminder you have
+    // already learned belongs.
+    expect(NAV_CSS).not.toMatch(/\.navtree-search-label/);
+    expect(NAV_CSS).not.toMatch(/\.navtree-search-kbd/);
+  });
+
+  it('leaves the rows where they were — this removed a box, not a list', () => {
+    const scroll = ruleBody(NAV_CSS, '.navtree-scroll');
+    const group = ruleBody(NAV_CSS, '.navtree-group');
+    const inset = (which: 'left' | 'right') =>
+      resolve(side(decl(scroll, 'padding'), which), BASE) +
+      resolve(side(decl(group, 'padding'), which), BASE);
+    expect([inset('left'), inset('right')]).toEqual([8, 4]);
   });
 });
 
@@ -1368,5 +1383,200 @@ describe('the sheet’s workspace controls clear the touch floor', () => {
   it('gives the “⋯” menu rows the same 44px floor', () => {
     const item = ruleBody(NAV_CSS, '.navtree-menu.-touch .navtree-menu-item');
     expect(px(decl(item, 'min-height'))).toBeGreaterThanOrEqual(44);
+  });
+});
+
+/**
+ * THE STATUS COLUMN IS A COLUMN, AND THE STRIP MUST NOT BREAK IT.
+ *
+ * Every mark in the rail lands on one vertical line because nothing in front
+ * of it is free to size itself — the hover controls are zero-width at rest
+ * for exactly that reason. The working-set strip added a permanent `⌃3` cap
+ * in the track BEFORE the mark, so its rows' marks sat ~26px left of the
+ * tree's. Reported as "sidebar status icons on right not aligned".
+ */
+describe('the working-set strip keeps the status column', () => {
+  const rule = (selector: string): string => {
+    const flat = NAV_CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+    const re = new RegExp(
+      `(?:^|})\\s*${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{([^}]*)\\}`,
+      'm',
+    );
+    return re.exec(flat)?.[1] ?? '';
+  };
+
+  it('carries no slot cap at all, in or out of flow', () => {
+    // The cap was first put OUT of flow to stop it taking a track; it is now
+    // gone outright, which is the same guarantee by a shorter route. Pinned
+    // negatively so a future pass cannot reintroduce it in flow.
+    expect(NAV_CSS).not.toMatch(/navtree-slot-key/);
+  });
+
+  it('the × is absent at rest, like every other hover control here', () => {
+    const drop = rule('.navtree-ws-slot .navtree-slot-drop');
+    expect(drop, 'slot drop not found').not.toBe('');
+    expect(drop).toMatch(/display:\s*none/);
+  });
+});
+
+/**
+ * THE BAND'S ROWS ARE ON THE SAME TWO COLUMNS AS EVERY OTHER ROW.
+ *
+ * A chat inside a workspace carries two insets the band had neither of: the
+ * scroller's and the group's. So its chips sat 8px left of every chip below
+ * them — "the chats there are not horizontally aligned with the rest of the
+ * chats below that are in the other sections" — and its status marks sat 4px
+ * right of a column this rail keeps to 0.00px.
+ */
+describe('the at-hand band lines up with the groups', () => {
+  const rule = (selector: string): string => {
+    const flat = NAV_CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+    const re = new RegExp(
+      `(?:^|})\\s*${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{([^}]*)\\}`,
+      'm',
+    );
+    return re.exec(flat)?.[1] ?? '';
+  };
+
+  it('pays the GROUP’s inset, and the scroller’s only once', () => {
+    // The band is inside the scroller, so the scroller's own padding applies
+    // to it exactly as it applies to a group. What it owes on top of that is
+    // the group's share — `--nt-pad`, once, on each side.
+    //
+    // It used to double the left, from when it was pinned ABOVE the scroller
+    // and had to pay that inset itself. On the rail that was a near-miss; on
+    // the sheet, whose scroller has no side padding, it was the whole error:
+    // "on mobile they're placed in a different horizontal position for recent
+    // chats and for the other chats in the sidebar".
+    const band = rule('.navtree-workingset');
+    expect(band).toMatch(/padding:\s*\S+\s+var\(--nt-pad\)\s+\S+\s*;/);
+    expect(band).not.toMatch(/calc\(var\(--nt-pad\) \* 2\)/);
+  });
+
+  it('is INSIDE the scroller on both surfaces, which is what makes that true', () => {
+    const tsx = readFileSync(join(__dirname, 'NavTree.tsx'), 'utf8');
+    for (const host of ['function SidebarTree', 'function SheetRail']) {
+      const surface = tsx.slice(tsx.indexOf(host));
+      expect(surface.indexOf('className="navtree-scroll"'), host).toBeLessThan(
+        surface.indexOf('<WorkingSetStrip'),
+      );
+    }
+  });
+
+  it('pays it as PADDING, so the shelf still runs the full width', () => {
+    // Margin would inset the ground too, and a band with side gaps is a card.
+    expect(rule('.navtree-workingset')).not.toMatch(/margin:/);
+  });
+
+  it('carries no status-coloured mark on its heading', () => {
+    // The only coloured marks in this rail are status — a dot for wants-you, a
+    // tick for ready, an amber ring for working. A 5px accent square beside a
+    // heading reads as one of them: "the red dot looks like an error
+    // indicator".
+    expect(NAV_CSS).not.toMatch(/\.navtree-workingset-head::before/);
+  });
+});
+
+/**
+ * THE TOP OF THE RAIL IS NOT A STACK OF HAIRLINES.
+ *
+ * It had five horizontal strokes in about 160px: the brand's, the band's top
+ * border, its bottom border, an inset highlight inside its top edge, and a
+ * rule trailing the heading. Reported as "top area still messy".
+ */
+describe('the recently-active band draws one line', () => {
+  const body = (selector: string): string => {
+    const flat = NAV_CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+    const re = new RegExp(
+      `(?:^|})\\s*${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{([^}]*)\\}`,
+      'm',
+    );
+    return re.exec(flat)?.[1] ?? '';
+  };
+
+  it('keeps the seam where the band STOPS, and nothing on the side above it', () => {
+    // The brand's hairline is already there, and it is load-bearing: it lines
+    // up with the pane's tab strip.
+    const band = body('.navtree-workingset');
+    expect(band).toMatch(/border-bottom:/);
+    expect(band).not.toMatch(/border-top:/);
+    expect(band).not.toMatch(/box-shadow:/);
+  });
+
+  it('has a ground instead of a rule after the heading', () => {
+    // The rule existed because a short heading over a list read as a stray
+    // word. With a ground of its own the label is clearly ON something.
+    expect(NAV_CSS).not.toMatch(/\.navtree-workingset-head::after/);
+    expect(body('.navtree-workingset')).toMatch(/background:\s*color-mix/);
+  });
+});
+
+/**
+ * THE BAND'S LABEL IS NOT SITTING ON ITS FIRST ROW.
+ *
+ * "Recently active too close to actual chats." It had 4px under it. The
+ * comparison that settles the number is the workspace header two sections
+ * down: a 32px row with a 10px label centred in it, which gives that label
+ * ~11px of air on each side by construction. This heading is not a row, so it
+ * has to say the same thing in padding.
+ */
+describe('the recently-active heading has room', () => {
+  const body = (() => {
+    const flat = NAV_CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+    const i = flat.indexOf('.navtree-workingset-head {');
+    return flat.slice(i, flat.indexOf('}', i));
+  })();
+  // The side value is a `calc()`, so a naive split on whitespace tears it
+  // into pieces and both numbers come out NaN — which is a test that passes
+  // nothing rather than one that fails.
+  // The side value is a nested `calc()`, so neither a whitespace split nor a
+  // `[^)]*` ever gets past it — both produce NaN, which is a test that
+  // asserts nothing rather than one that fails. Take the first px and the
+  // last px in the declaration: top and bottom, whatever sits between them.
+  const shorthand = /padding:\s*([\d.]+)px[\s\S]*?([\d.]+)px;/.exec(body);
+  const px = (v: string | undefined) => Number.parseFloat(v ?? '');
+  const padding = { top: px(shorthand?.[1]), bottom: px(shorthand?.[2]) };
+
+  it('gives the label a full line of air before the first row', () => {
+    // The label is 0.625rem = 10px. Less than its own height reads as the
+    // heading being stuck to the row rather than labelling the band.
+    expect(shorthand, 'padding shorthand not found').not.toBeNull();
+    expect(padding.bottom).toBeGreaterThanOrEqual(10);
+  });
+
+  it('is not tighter below than above — a label belongs to what is under it', () => {
+    expect(padding.bottom).toBeGreaterThanOrEqual(padding.top);
+  });
+});
+
+/**
+ * THE RAIL'S TWO UPPERCASE LABELS ARE TRACKED THE SAME.
+ *
+ * Bold caps at 11px need air between the letters or they read as one dark
+ * block: the counters close up, the word loses its shape, and what is left is
+ * a smudge the right length. "Label looks squished."
+ *
+ * The workspace name had 0.07em and the recently-active heading 0.12em — two
+ * caps labels in one list, tracked differently, reading as two kinds of thing
+ * when there is only one kind of thing here: a section name.
+ */
+describe('section labels share their tracking', () => {
+  const tracking = (selector: string): number => {
+    const flat = NAV_CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+    const i = flat.indexOf(`${selector} {`);
+    expect(i, `${selector} not found`).toBeGreaterThan(-1);
+    const body = flat.slice(i, flat.indexOf('}', i));
+    return Number.parseFloat(/letter-spacing:\s*([\d.]+)em/.exec(body)?.[1] ?? 'NaN');
+  };
+
+  it('tracks the workspace name like the band’s heading', () => {
+    expect(tracking('.navtree-ws-row .navtree-name-text')).toBe(
+      tracking('.navtree-workingset-head'),
+    );
+  });
+
+  it('tracks them enough for bold caps at 11px to hold their shape', () => {
+    // Below about 0.1em the counters close at this size and weight.
+    expect(tracking('.navtree-workingset-head')).toBeGreaterThanOrEqual(0.1);
   });
 });

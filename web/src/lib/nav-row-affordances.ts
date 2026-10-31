@@ -42,10 +42,24 @@
 export type NavTreeVariantName = 'sidebar' | 'sheet';
 
 export interface TabRowAffordances {
-  /** Hover-revealed pin/unpin button (desktop only). */
-  pinButton: boolean;
-  /** Hover-revealed close × (desktop only — touch swipes instead). */
-  closeButton: boolean;
+  /**
+   * ONE hover-revealed control, which opens the row menu (desktop only).
+   *
+   * It was TWO — a pin and an archive — and they were measured costing 44px of
+   * the hovered row, taken from the name: `muxpad`'s title went 55px → 35px
+   * the moment the pointer arrived, so the row you are reading is the row
+   * whose title is smallest. Reported as "chat names can get tiny due to all
+   * these icons".
+   *
+   * Nothing is lost by collapsing them. The context menu (right-click on
+   * desktop, long-press on touch) has carried Pin, Archive, Mark as read,
+   * Rename, Change icon, New pane and Move to workspace all along — the two
+   * buttons were a shortcut to two of its seven entries, charged to every
+   * hovered row's title. One button costs ~18px instead of 44 and is the
+   * affordance that says a menu exists at all, which the hidden right-click
+   * never did.
+   */
+  menuButton: boolean;
   /** Trailing chevron that expands the row into its pane list (touch only). */
   paneExpander: boolean;
 }
@@ -61,11 +75,10 @@ export function tabRowAffordances(opts: {
   // just opens, which is the behavior that felt right all along.
   const picksPane = variant === 'sheet' && paneCount > 1;
   return {
-    pinButton: variant === 'sidebar' && !isEditing,
-    // Touch rows carry NO permanent controls at all now — see the swipe note
-    // above. Both the × and the ⋯ that preceded it are gone; pin, mark-unread
-    // and close live under the row, revealed by a left swipe.
-    closeButton: variant === 'sidebar' && !isEditing,
+    // Touch rows carry NO permanent controls at all — see the swipe note
+    // above: pin, mark-unread and close live under the row, revealed by a left
+    // swipe, and the long-press menu holds the rest.
+    menuButton: variant === 'sidebar' && !isEditing,
     paneExpander: picksPane && !isEditing,
   };
 }

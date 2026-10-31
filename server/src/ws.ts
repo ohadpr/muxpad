@@ -6,6 +6,7 @@ import {
   isBootstrapTabName,
   isMachineMessage,
   modeForBackend,
+  parseCronMarker,
   sanitizeAgentStatus,
 } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
@@ -52,8 +53,10 @@ import {
   RESPAWN_STARTUP_GRACE_MS,
   RESPAWN_SWEEP_MS,
 } from './respawn-policy.js';
+import { runnerIsStale } from './runner-build.js';
 import { safeCwd } from './safe-cwd.js';
 import { checkOrigin, parseAllowedOrigins } from './same-origin.js';
+import { spokenAnswerFrom } from './spoken-answer.js';
 import { AgentQueueStore } from './store/AgentQueueStore.js';
 import { AgentSessionStore } from './store/AgentSessionStore.js';
 import { PaneStore } from './store/PaneStore.js';
@@ -602,6 +605,15 @@ export function attachWsServer(deps: {
     sid: string | null;
     /** Which harness drives this pane (claude|codex|cursor); set at hello. */
     backend: string;
+    /**
+     * The build the runner reported at hello — the code it is ACTUALLY
+     * executing, not the code this server runs. Compared against
+     * {@link currentBuildId} to decide whether the pane is behind; see
+     * runner-build.ts for why that is the question rather than "how old is
+     * it". `null` until a hello arrives, and a hello without the field means
+     * a runner predating it (stale by definition).
+     */
+    build: string | null;
     turnActive: boolean;
     /**
      * Questions awaiting the user, oldest first (Map preserves insertion
@@ -628,6 +640,27 @@ export function attachWsServer(deps: {
      * this side of the wire — no new frame, no client change.
      */
     pendingQuestions: Map<string, AgentQuestion[]>;
+    /**
+     * Did the running turn produce a SPOKEN reply (a `speak` frame)?
+     *
+     * Only Chat mode can: `reply` is the one tool that emits those, and it is
+     * registered in Chat mode alone. This is the flag that lets an Agent-mode
+     * turn be given a voice at all — see the synthesis at `turn-done`.
+     */
+    spokeThisTurn: boolean;
+    /**
+     * The user pressed Stop on the running turn.
+     *
+     * Claude reports an interrupted turn as `turn-done ok:true` — it did stop
+     * cleanly — so "ok" cannot tell the two apart, and the Agent-mode voice
+     * synthesis would otherwise speak the scratchpad of a turn somebody
+     * deliberately cut short. The written chat has guarded this for ages
+     * (`needsReplyFallback`'s `interrupted` rule); this is the same guard on
+     * the live path.
+     */
+    stoppedThisTurn: boolean;
+    /** When that Stop was issued — see {@link markStopped}. */
+    stoppedAt: number;
     /** Latest per-task subagent progress for mid-turn (re)connects. */
     subagents: Map<string, SubagentProgress>;
     /**
@@ -686,6 +719,11 @@ export function attachWsServer(deps: {
      * the cron `quiet_mins` policy (don't barge into a live conversation).
      */
     lastHumanSendAt: number;
+    /** The message that started the turn in flight was a CRON FIRE. See the
+     *  push gate's note: a fire's prose is machinery, and this is the half of
+     *  that rule the SERVER can enforce without waiting for a runner to
+     *  respawn. */
+    turnFromCron: boolean;
     /**
      * When this pane's last EXPLICIT `notify` push actually went out (held and
      * dropped calls don't count — they spent none of the user's attention).
@@ -757,6 +795,33 @@ export function attachWsServer(deps: {
   // `isMachineMessage` owns the list so the next injected type cannot miss it.
   const isHumanMessage = (text: string) => !isMachineMessage(text);
   const agentRunners = new Map<string, AgentRunnerConn>();
+  /**
+   * Is this pane's runner executing a different build from the one the server
+   * would start for it now? (runner-build.ts has the definition and the
+   * reasoning about what it deliberately is NOT.)
+   *
+   * False for a pane with NO runner — nothing is running the wrong code, and
+   * "this chat has no agent" is a sentence the empty state already says
+   * better. Only an attached runner can be behind.
+   */
+  /**
+   * A Stop was issued. Both doors go through here — the chat socket's and
+   * `agentBridge.stop` (the CLI, a cron, a supervisor) — because the thing it
+   * guards, the Agent-mode voice synthesis, cannot tell them apart and must
+   * not read out the working-out of a turn somebody cut short.
+   *
+   * `stoppedAt` exists for the race: a Stop can be sent BEFORE the runner's
+   * `turn-start` arrives (a send relayed, stopped a beat later), and turn-start
+   * clearing the flag unconditionally erased it. See the clear site.
+   */
+  const markStopped = (conn: AgentRunnerConn): void => {
+    conn.stoppedThisTurn = true;
+    conn.stoppedAt = Date.now();
+  };
+  const staleRunner = (paneId: string): boolean => {
+    const conn = agentRunners.get(paneId);
+    return conn ? runnerIsStale(conn.build ?? undefined) : false;
+  };
   /**
    * Publish the pane's subagent count to the cache — the number `GET /api/panes`
    * renders as `agents:` and `getStatus` reads as "working".
@@ -875,6 +940,11 @@ export function attachWsServer(deps: {
       // A Stop ABANDONS the relayed send, exactly as the socket path does —
       // leaving the stamp on would let the next autonomous turn wear it.
       conn.pendingSendText = null;
+      // …and it is a Stop like any other. This path (`muxpad agent stop`, a
+      // cron, a supervisor) did not set the flag, so the Agent-mode voice
+      // synthesis still read out the scratchpad of a turn somebody stopped
+      // from the CLI. One rule, both doors.
+      markStopped(conn);
       return sendToRunner(paneId, { t: 'stop' });
     };
     deps.agentBridge.blocked = (paneId) =>
@@ -1357,6 +1427,7 @@ export function attachWsServer(deps: {
       conn.lastSendAt = Date.now();
       conn.pendingSendText = next.text;
       if (isHumanMessage(next.text)) conn.lastHumanSendAt = conn.lastSendAt;
+      conn.turnFromCron = parseCronMarker(next.text) !== null;
       deps.cache.setAgentBusy(paneId, true);
       emitOptimisticTurnStart(paneId, next.id);
       queue.remove(next.id, paneId);
@@ -1413,6 +1484,7 @@ export function attachWsServer(deps: {
         conn.lastSendAt = Date.now();
         conn.pendingSendText = t;
         if (isHumanMessage(t)) conn.lastHumanSendAt = conn.lastSendAt;
+        conn.turnFromCron = parseCronMarker(t) !== null;
         // Same D14 mirroring as drainQueue: turn state, pane status and the
         // bus must not disagree for the duration of the round trip.
         deps.cache.setAgentBusy(paneId, true);
@@ -1659,7 +1731,11 @@ export function attachWsServer(deps: {
           ws,
           sid: null,
           backend: 'claude',
+          build: null,
           turnActive: false,
+          spokeThisTurn: false,
+          stoppedThisTurn: false,
+          stoppedAt: 0,
           pendingQuestions: new Map(),
           subagents: new Map(),
           subagentChangedAt: new Map(),
@@ -1669,6 +1745,7 @@ export function attachWsServer(deps: {
           status: null,
           lastSendAt: 0,
           lastHumanSendAt: 0,
+          turnFromCron: false,
           lastExplicitNotifyAt: 0,
           pendingSendText: null,
         };
@@ -1754,6 +1831,12 @@ export function attachWsServer(deps: {
             // safe both as a DB label AND baked into the self-heal shell cmd.
             const backendId = isBackendId(frame.backend) ? frame.backend : 'claude';
             conn.backend = backendId;
+            // The build the runner is executing. Taken as an opaque label and
+            // never interpreted beyond equality, so an untrusted value cannot
+            // do anything but make the pane read stale (which is the safe way
+            // to be wrong). Length-capped because it rides the session frame.
+            conn.build =
+              typeof frame.build === 'string' && frame.build.length <= 64 ? frame.build : null;
             // Registering is a claim of recovery, not proof of it: a runner
             // that can't resume its session says hello and dies seconds later.
             // Clear the respawn record only after it has held the pane for the
@@ -1861,6 +1944,22 @@ export function attachWsServer(deps: {
             drainQueue(paneId);
           } else if (frame.t === 'turn-start') {
             conn.turnActive = true;
+            conn.spokeThisTurn = false;
+            // NOT UNCONDITIONALLY, and not on a timer either.
+            //
+            // A Stop can be issued BEFORE the runner's turn-start reaches us —
+            // the send is relayed, the user stops it a beat later, and the
+            // runner announces the turn it is already cancelling. Clearing
+            // here erased the Stop and the turn spoke. A five-second grace
+            // fixed that and bought a worse one: stop A, send B, and B's
+            // perfectly good answer was suppressed too, because B started
+            // inside A's window.
+            //
+            // A NEW SEND IS THE SIGNAL, not the clock. The user asking for
+            // something is unambiguous evidence they want to hear the answer,
+            // and it is already recorded — `lastSendAt` moves on every relay.
+            // So the mark survives only while no send has happened since.
+            if (conn.lastSendAt > conn.stoppedAt) conn.stoppedThisTurn = false;
             streamBufs.set(paneId, '');
             agents.setStatus(paneId, 'running');
             // Busy propagates via the cache's own paneChange → pane.updated
@@ -1873,6 +1972,18 @@ export function attachWsServer(deps: {
             // is what tells a listening client "this one isn't yours".
             const startedBy = conn.pendingSendText;
             conn.pendingSendText = null;
+            // ── AND THE CRON FLAG BELONGS TO THIS TURN, NOT THE LAST ──────
+            // It was set when a send was relayed and cleared by nothing else,
+            // so after a cron finished, the next AUTONOMOUS turn — a wakeup, a
+            // background completion — inherited its notification suppression
+            // and went unannounced until some unrelated send overwrote the
+            // flag. Reproduced over real sockets, and it affects panes with no
+            // voice session at all.
+            //
+            // A turn nobody sent carries no marker, which is exactly the
+            // question `parseCronMarker` answers, so the stamp decides it: a
+            // stamped cron turn is from a cron, anything else is not.
+            conn.turnFromCron = startedBy ? parseCronMarker(startedBy) !== null : false;
             bcast({ t: 'turn-start', ...(startedBy ? { text: startedBy } : {}) });
             emitTurn('start');
           } else if (frame.t === 'stream') {
@@ -1899,6 +2010,7 @@ export function attachWsServer(deps: {
             if (typeof frame.id !== 'string' || !frame.id) return;
             if (frame.t === 'speak') {
               if (typeof frame.text !== 'string' || !frame.text) return;
+              conn.spokeThisTurn = true;
               bcast({ t: 'speak', id: frame.id, text: frame.text, n: frame.n });
             } else {
               if (typeof frame.delta !== 'string' || !frame.delta) return;
@@ -1924,6 +2036,50 @@ export function attachWsServer(deps: {
             // the turn ended — with no way to rebuild, since the roster rode
             // only the (now-empty) session snapshot. Entries leave on their
             // runner's `done` frame or on teardown, and nowhere else.
+            // ── AN AGENT-MODE TURN GETS A VOICE ────────────────────────
+            //
+            // A voice session hears exactly one thing: `speak` frames. Those
+            // come from the `reply` tool, and `reply` is registered in Chat
+            // mode ONLY — deliberately, because when it was offered in both,
+            // 3 of 5 live Agent turns called it AND wrote a closing recap, so
+            // the user got the same answer twice, the second time in the
+            // third person. Not offering it is the mechanism.
+            //
+            // The consequence was that voice could not exist in Agent mode at
+            // all. It can: an Agent-mode turn's plain text IS its answer (the
+            // contract says so in those words — "write your answer as ordinary
+            // text and make it the LAST thing in your turn; muxpad delivers
+            // it"), and the whole turn's prose is already here in the stream
+            // buffer. So the server says it on the turn's behalf.
+            //
+            // WHY THE SERVER AND NOT THE RUNNER: every backend emits `stream`,
+            // so one site here covers claude, codex and cursor, and none of
+            // them needs to learn what a voice session is. It also cannot
+            // double-speak — `spokeThisTurn` is set by the only other source
+            // of `speak` frames there is.
+            //
+            // It is NOT a second written reply. This frame is relayed to
+            // voice and to nothing else: the chat UI has no branch for
+            // `speak` (see the note on the relay above), and in Agent mode
+            // the prose is already on screen as prose.
+            if (
+              frame.ok !== false &&
+              // A turn the user STOPPED reports ok — it stopped cleanly — so
+              // `ok` cannot tell the two apart, and speaking the scratchpad of
+              // a turn somebody cut short is the one thing this whole
+              // mechanism exists to avoid.
+              !conn.stoppedThisTurn &&
+              !conn.spokeThisTurn &&
+              panes.getById(paneId)?.mode !== 'chat'
+            ) {
+              const spoken = spokenAnswerFrom(streamBufs.get(paneId));
+              // A turn that wrote nothing at all (pure tool work) has nothing
+              // to say, and inventing a sentence is the one thing this whole
+              // mechanism exists to avoid.
+              if (spoken) {
+                bcast({ t: 'speak', id: `agent:${paneId}:${Date.now()}`, text: spoken, n: 1 });
+              }
+            }
             streamBufs.delete(paneId);
             agents.setStatus(paneId, 'idle');
             deps.cache.setAgentBusy(paneId, false);
@@ -1945,7 +2101,75 @@ export function attachWsServer(deps: {
             // driving (every reply would buzz their phone mid-chat).
             // Long-running turns (the user walked away) and autonomous
             // wakeup/cron turns (no recent send) do push.
-            if (Date.now() - conn.lastHumanSendAt > INTERACTIVE_PUSH_SUPPRESS_MS) {
+            // ─── A SILENT TURN HAS NOTHING TO PUSH ABOUT ──────────────────
+            // The bold mark below already asks this (`frame.silent !== true`)
+            // and the push did not, so the two channels disagreed about the
+            // same turn: a scheduled job that is TOLD to say nothing left the
+            // row unbolded — correctly — and still vibrated a phone, every
+            // fire, for ever.
+            //
+            // Found on `feed-card`, a */30 cron whose whole job is to
+            // rewrite a card: "every hour or so it sends me a push
+            // notification about a card being updated". The quiet channel was
+            // quiet and the loud one was not, which is exactly backwards.
+            //
+            // A FAILED silent turn still pushes: `silent` is already false for
+            // those (see isSilentTurn), because an error is news whatever was
+            // or wasn't said.
+            // ─── AND NOBODY IS LOOKING AT IT ──────────────────────────────
+            //
+            // `lastHumanSendAt` answers "when did you last TYPE", and the
+            // question is "are you LOOKING" — the same mismatch this file
+            // already records for the bold mark, which was moved OUT of this
+            // gate for it. For the push it fails the other way: ANY turn over
+            // two minutes buzzes a phone, including the one you are sitting
+            // there watching.
+            //
+            // Measured across this install's agent logs: 938 of 4,094 turns
+            // (23%) ran past the threshold, 463 of them in a single
+            // foreground chat. Reported as "I keep getting a ton of push
+            // notifications".
+            //
+            // `chatClients` is the live answer and is already trusted for the
+            // decision this file calls the one unforgivable version of its
+            // feature — parking a chat somebody is reading. A chat nobody has
+            // open still pushes, which is the case the feature is for.
+            //
+            // An EXPLICIT `notify` is untouched: the agent was told to
+            // interrupt somebody, and that judgement outranks this one.
+            // ─── AND A CRON FIRE DOES NOT PUSH ON ITS PROSE ───────────────
+            //
+            // The runner already answers this (`proseSpeaks`, silent-turn.ts):
+            // muxpad's instructions say a scheduled turn is machinery end to
+            // end, the chat refuses to promote a fire's prose
+            // (MACHINE_TURN_VARIANTS), and `muxpad say` is the one channel
+            // that speaks. So `frame.silent` should already be true here.
+            //
+            // It is asked AGAIN, here, because that answer lives in a
+            // long-lived process. `nw-hourly` kept buzzing a phone after the
+            // runner fix shipped — its runner had been up for seven days, so
+            // the fix was simply not in it, and the second screenshot said
+            // "Quiet.", which is the agent's own prose being read as news.
+            //
+            // The server restarts on every deploy; a runner does not, and must
+            // not be respawned to deliver a fix (it would kill background
+            // subagents and wakeups). A push channel that has now leaked twice
+            // gets the half that ships immediately.
+            //
+            // An explicit `notify` is untouched: it does not come through
+            // here, and the agent judging that it must interrupt somebody
+            // outranks every heuristic in this file.
+            if (
+              frame.silent !== true &&
+              // …EXCEPT A FAILURE, which is news whatever started the turn and
+              // whatever it said. Caught by the test on the first run: the
+              // gate was unconditional and took the error notification with
+              // it, which is the one thing a scheduled job most needs to be
+              // able to send — nobody is watching it.
+              (!conn.turnFromCron || frame.ok === false) &&
+              !chatClients.has(paneId) &&
+              Date.now() - conn.lastHumanSendAt > INTERACTIVE_PUSH_SUPPRESS_MS
+            ) {
               // …unless the agent just notified DELIBERATELY. It already said
               // the specific thing; "finished its turn" landing on top of it a
               // few seconds later is a second buzz carrying less information
@@ -2426,6 +2650,15 @@ export function attachWsServer(deps: {
             // runner's keepalive must NOT re-push the whole session frame.
             subagents: [...(agentRunners.get(chatPaneId)?.subagents.keys() ?? [])].sort().join(','),
             background: agentRunners.get(chatPaneId)?.backgroundLive ?? 0,
+            // In the fingerprint so the flag can arrive LATE: a pane that was
+            // current when this socket connected becomes stale the moment a
+            // build lands under it, with no hello and no other frame to ride.
+            stale: staleRunner(chatPaneId),
+            // In the fingerprint so the snapshot is RE-SENT the moment a
+            // runner attaches. That re-send is what carries the truth after a
+            // restart: the first frame says "no runner, cannot tell", and the
+            // second says whether the turn is still running.
+            runner: !!agentRunners.get(chatPaneId),
           });
           if (first || hello !== lastHello) {
             lastHello = hello;
@@ -2433,6 +2666,20 @@ export function attachWsServer(deps: {
             lastSentProvision = provision;
             const runner = agentRunners.get(chatPaneId);
             const turnRunning = runner?.turnActive === true;
+            // ── IS THERE A RUNNER AT ALL ──────────────────────────────────
+            // `turnRunning: false` is two different facts wearing one value:
+            // "the turn finished" and "nobody is attached to this pane yet".
+            // A voice session reads this to decide whether a turn it is
+            // waiting on has ended, and the two are opposite answers.
+            //
+            // THE CASE THAT MADE THIS NECESSARY is an ordinary `muxpad
+            // restart`. The browser's chat socket comes back in about a
+            // second; the runner retries on a fixed two. So for that second
+            // the pane HAS a live chat socket and NO runner, the snapshot
+            // says `turnRunning: false` about a turn that is still running,
+            // and voice retired it and announced an answer that had not
+            // arrived yet.
+            const runnerAttached = !!runner;
             const streamText = streamBufs.get(chatPaneId);
             const question = frontQuestion(runner);
             const cwd = deps.cache.getCwd(chatPaneId) ?? session?.cwd ?? null;
@@ -2445,6 +2692,7 @@ export function attachWsServer(deps: {
               // client, and the healthy frame stays exactly the bytes it was.
               ...(provision ? { provisionError: provision } : {}),
               turnRunning,
+              runnerAttached,
               // Server-owned pending queue so a (re)connecting or reloaded
               // client renders the same bubbles — the queue is authoritative
               // state, not this socket's local memory.
@@ -2465,6 +2713,14 @@ export function attachWsServer(deps: {
               // Only when there is something to say — absent reads as zero
               // everywhere, and every other backend sends no such field.
               ...(runner?.backgroundLive ? { background: runner.backgroundLive } : {}),
+              // ── THIS PANE IS RUNNING CODE THE SERVER NO LONGER RUNS ─────
+              // Only when true, so a healthy frame is the same bytes it has
+              // always been. See runner-build.ts: this is NOT "the runner is
+              // old" and NOT "it predates this server process" — it is "it is
+              // executing a different build", which is the only version of
+              // the question that neither cries wolf after an ordinary
+              // restart nor stays quiet for a pane that really is behind.
+              ...(staleRunner(chatPaneId) ? { staleRunner: true } : {}),
             });
           }
           // ── THE RESUME TARGET MUST ACTUALLY HAVE A TRANSCRIPT ──────────
@@ -2605,6 +2861,8 @@ export function attachWsServer(deps: {
               // which is silence; a wrongly stamped one speaks a cron's output
               // as the answer to the user's question.
               conn.pendingSendText = null;
+              // Silence is what Stop asks for — see `stoppedThisTurn`.
+              markStopped(conn);
               sendToRunner(chatPaneId, { t: 'stop' });
             } else {
               send({ t: 'turn-done', ok: true });

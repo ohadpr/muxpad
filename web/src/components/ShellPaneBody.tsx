@@ -1,12 +1,25 @@
 import type { PaneSpec } from '@muxpad/shared';
-import { useEffect, useRef, useState } from 'react';
+import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { isPendingHarnessPick } from '../lib/agent-backend';
 import { type LivenessReason, isMixedContentUrl, probeUrlLive } from '../lib/face-switch';
 import { isSelfOriginUrl, setPaneFace, usePaneFace } from '../lib/pane-face';
 import { initialWebFaceHealth, stepWebFaceHealth, webDeadMessage } from '../lib/web-face-health';
 import { ChatPane } from './ChatPane';
 import { SlackApprovalAlert } from './SlackApprovalAlert';
-import { XtermPane } from './XtermPane';
+/**
+ * THE TERMINAL EMULATOR IS NOT ON THE CHAT'S CRITICAL PATH.
+ *
+ * `@xterm/*` is ~300 KB of the main bundle, and it is the ONLY runtime import
+ * of it in the app (`lib/xterm-internals` takes types only, which erase). On a
+ * phone — where muxpad is mostly chat, and where this was reported slow — that
+ * was parse-and-compile work standing between the tap and the first message.
+ *
+ * Split out, the chat paints from a smaller bundle and the terminal streams in
+ * behind it. Both faces still MOUNT together (see the note below: that is what
+ * keeps the socket and the scrollback alive while you look at the web or chat
+ * face), so nothing about the flip changes after the chunk has landed once.
+ */
+const XtermPane = lazy(() => import('./XtermPane').then((m) => ({ default: m.XtermPane })));
 import './ShellPaneBody.css';
 
 /**
@@ -155,13 +168,15 @@ export function ShellPaneBody({
     >
       {paneActive && !showChat && !showWeb && <SlackApprovalAlert key={pane.id} paneId={pane.id} />}
       <div className="shell-pane-face" hidden={showWeb || showChat}>
-        <XtermPane
-          paneId={pane.id}
-          onExit={onExit}
-          autoFocus={autoFocus}
-          foregroundCmd={pane.foreground_cmd ?? null}
-          paneActive={paneActive && !showWeb && !showChat}
-        />
+        <Suspense fallback={null}>
+          <XtermPane
+            paneId={pane.id}
+            onExit={onExit}
+            autoFocus={autoFocus}
+            foregroundCmd={pane.foreground_cmd ?? null}
+            paneActive={paneActive && !showWeb && !showChat}
+          />
+        </Suspense>
       </div>
       {url && !isSelfOriginUrl(url) ? (
         <div className="shell-pane-face" hidden={!showWeb}>

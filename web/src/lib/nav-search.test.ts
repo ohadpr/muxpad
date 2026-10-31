@@ -171,8 +171,23 @@ describe('rankTabs — scale', () => {
     expect(all).toHaveLength(500);
     const top = rankTabs(tabs, 'invest', { limit: 8 });
     expect(top).toHaveLength(8);
-    // The limit slices the SORTED list, so the most recent are what survive.
-    expect(top[0]?.tab.tabId).toBe('t499');
+    // The limit slices the SORTED list. What survives is now decided by
+    // COVERAGE first — `invest` is 6 of the 8 characters in "invest 0" and 6
+    // of the 10 in "invest 499" — and only then by recency. So the winners are
+    // the short names, most recent first: t9, not t499. (This assertion used
+    // to read t499, from when every one of these 500 rows scored identically
+    // and recency was the only thing left to sort on. The corpus is dated
+    // 1970, so the recency term is zero for all of them.)
+    expect(top[0]?.tab.tabId).toBe('t9');
+  });
+
+  it('…and among names of EQUAL length, recency is what decides', () => {
+    const now = 1_700_000_000_000;
+    const tabs = Array.from({ length: 20 }, (_, i) =>
+      tab({ tabName: `invest ${10 + i}`, tabId: `t${i}`, lastActivityAt: now - i * 60_000 }),
+    );
+    const top = rankTabs(tabs, 'invest', { limit: 3, now });
+    expect(top.map((m) => m.tab.tabId)).toEqual(['t0', 't1', 't2']);
   });
 
   it('limit 0 returns nothing rather than everything', () => {
@@ -256,5 +271,87 @@ describe('toSearchableTabs / paneIndex', () => {
     expect(idx.get('p1')?.tabName).toBe('Investing');
     expect(idx.get('p3')?.tabName).toBe('Roadmap');
     expect(idx.get('gone')).toBeUndefined();
+  });
+});
+
+describe('the “ra” problem — ties decided by the wrong thing', () => {
+  const NOW = 1_700_000_000_000;
+  const hour = (h: number) => NOW - h * 3_600_000;
+  const t = (over: Partial<SearchableTab> & { tabName: string }): SearchableTab => ({
+    tabId: over.tabName,
+    tabSlug: over.tabName,
+    workspaceId: 'w',
+    workspaceSlug: 'w',
+    workspaceName: 'Personal',
+    paneIds: [],
+    ...over,
+  });
+
+  /** The screenshot, as data: five prefix matches on `ra`, the sub-chats the
+   *  most recently touched. Before this, all five scored exactly namePrefix
+   *  and recency alone put `rail status …` on top of `radar archive`. */
+  const corpus = [
+    t({ tabName: 'rail status design critique', lastActivityAt: hour(0.2), done: true }),
+    t({ tabName: 'rail search button deep read', lastActivityAt: hour(0.5), done: true }),
+    t({ tabName: 'radar archive', lastActivityAt: hour(6) }),
+    t({ tabName: 'radar', lastActivityAt: hour(30) }),
+    t({ tabName: 'Rat a rat card redesign', lastActivityAt: hour(50) }),
+  ];
+  const names = (q: string) => rankTabs(corpus, q, { now: NOW }).map((m) => m.tab.tabName);
+
+  it('puts the chats you meant above the workers that just finished', () => {
+    const out = names('ra');
+    expect(out.slice(0, 2)).toEqual(['radar', 'radar archive']);
+    expect(out.indexOf('radar archive')).toBeLessThan(out.indexOf('rail status design critique'));
+  });
+
+  it('prefers the SHORTER name — the query covers more of it', () => {
+    // `ra` is 40% of "radar" and 9% of "Rat a rat card redesign", and the
+    // short one is the one a person typing two letters meant.
+    expect(names('ra').indexOf('radar')).toBeLessThan(
+      names('ra').indexOf('Rat a rat card redesign'),
+    );
+  });
+
+  it('…but coverage never beats a better MATCH', () => {
+    // "radar" is an exact match; "radar archive" is a longer prefix match with
+    // every other advantage. The band must hold.
+    const out = names('radar');
+    expect(out[0]).toBe('radar');
+  });
+
+  it('recency separates two equal matches and nothing more', () => {
+    const a = t({ tabName: 'alpha notes', lastActivityAt: hour(0.1) });
+    const b = t({ tabName: 'alpha notes two', lastActivityAt: hour(24 * 30) });
+    // Same kind of match on both; the fresh one wins.
+    expect(rankTabs([b, a], 'alpha', { now: NOW })[0]?.tab.tabName).toBe('alpha notes');
+    // A HEADLINE match on a chat touched one second ago still loses to a name
+    // match on one touched a month ago.
+    const stale = t({ tabName: 'zebra', lastActivityAt: hour(24 * 30) });
+    const fresh = t({ tabName: 'nothing like it', headline: 'zebra', lastActivityAt: hour(0.01) });
+    expect(rankTabs([fresh, stale], 'zebra', { now: NOW })[0]?.tab.tabName).toBe('zebra');
+  });
+
+  it('keeps every boost inside one band, which is the whole invariant', () => {
+    // pinned + full coverage + just-touched, on the WEAKEST name match, must
+    // still lose to the strongest headline match it could meet. (It cannot:
+    // the bands are 20 apart and the boosts total 18.)
+    const loud = t({
+      tabName: 'xq',
+      lastActivityAt: NOW,
+      pinned: true,
+    });
+    // A substring match on 'q' inside 'xq' …
+    const sub = rankTabs([loud], 'q', { now: NOW })[0];
+    const head = rankTabs([t({ tabName: 'nothing', headline: 'q', lastActivityAt: NOW })], 'q', {
+      now: NOW,
+    })[0];
+    expect(sub?.score).toBeGreaterThan(head?.score ?? 0);
+  });
+
+  it('is still a TOTAL order — two renders of one corpus agree', () => {
+    const once = names('ra');
+    const twice = names('ra');
+    expect(once).toEqual(twice);
   });
 });

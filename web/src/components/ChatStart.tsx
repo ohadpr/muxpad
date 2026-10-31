@@ -15,7 +15,7 @@ import { AGENT_MODE_LABELS, type AgentMode, type AgentSessionStatus } from '@mux
 import { useEffect, useRef, useState } from 'react';
 import { type RecentFolder, api } from '../api';
 import { AGENT_BACKENDS, type AgentBackendId, backendLabel } from '../lib/agent-backend';
-import { COMPACT_INSTRUCTIONS, compactionBlurb, contextLevel } from '../lib/context-pressure';
+import { COMPACT_INSTRUCTIONS } from '../lib/context-pressure';
 import { sessionModelLabel } from '../lib/live-status';
 import { showFolderChip } from '../lib/nav-row-affordances';
 import { useDismissable } from '../lib/use-dismissable';
@@ -69,6 +69,37 @@ export function SvgShellGlyph({ size = 12 }: { size?: number } = {}) {
   );
 }
 
+/**
+ * A CLOCK RUN BACKWARDS — the mark for "this process is on an older build".
+ *
+ * Not a warning triangle and not an exclamation: nothing is broken here, and
+ * the red `!` on the old folder cell is precisely the mistake this avoids
+ * ("it told the user their chat was BROKEN, when nothing was wrong"). A clock
+ * with its hand swept anticlockwise says *behind*, which is the fact.
+ */
+export function SvgStaleGlyph({ size = 12 }: { size?: number } = {}) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" aria-hidden="true" fill="none">
+      <circle cx="8" cy="8.4" r="5.6" stroke="currentColor" strokeWidth="1.3" />
+      <path
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M8 5.6v2.8l-2 1.4"
+      />
+      {/* The anticlockwise arrowhead, outside the dial so it reads at 12px. */}
+      <path
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M2.4 4.2v2.6H5"
+      />
+    </svg>
+  );
+}
+
 export function SvgModeGlyph({ mode, size = 12 }: { mode: AgentMode; size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" aria-hidden="true" fill="none">
@@ -114,7 +145,7 @@ export function assistantLabel(a: string | null | undefined): string {
 /** Session status pushed by the agent runner — shape shared with the server
  * pipeline via @muxpad/shared so the two ends can't drift apart. */
 export type AgentStatus = AgentSessionStatus;
-export type StatusPanel = 'folder' | 'model' | 'live' | 'ctx' | null;
+export type StatusPanel = 'folder' | 'model' | 'live' | 'ctx' | 'mode' | 'stale' | null;
 
 export interface RosterAgent {
   id: string;
@@ -678,6 +709,7 @@ export function SessionBar({
   background = 0,
   onOpenChat,
   mode,
+  stale = false,
 }: {
   paneId: string;
   folder: { cwd: string; hasProject: boolean } | null;
@@ -692,6 +724,11 @@ export function SessionBar({
   onOpenChat?: ((chat: { workspaceSlug: string; tabSlug: string }) => void) | undefined;
   /** The pane's mode, or null when the server hasn't told us — no chip. */
   mode: AgentMode | null;
+  /** This pane's runner is executing a different build from the one the
+   *  server would start now (server/src/runner-build.ts). Rare; no cell at
+   *  all when false. */
+  stale?: boolean;
+
   /** Optimistic local echo + the "here is what actually just happened" notice.
    *  The authoritative value still arrives on the next session frame. */
 }) {
@@ -706,7 +743,9 @@ export function SessionBar({
     if (panel === 'live' && !liveLabel) setPanel(null);
     else if (panel === 'model' && (!status || mode === 'chat')) setPanel(null);
     else if (panel === 'folder' && !folder) setPanel(null);
-  }, [panel, liveLabel, status, folder, mode]);
+    else if (panel === 'mode' && !mode) setPanel(null);
+    else if (panel === 'stale' && !stale) setPanel(null);
+  }, [panel, liveLabel, status, folder, mode, stale]);
 
   // ── Folder switcher state ────────────────────────────────────────────
   const [draft, setDraft] = useState(folder?.cwd ?? '');
@@ -767,7 +806,6 @@ export function SessionBar({
     : undefined;
   const modelLabel = current?.displayName ?? status?.model ?? '';
   const ctx = status?.context;
-  const ctxLevel = contextLevel(ctx?.pct);
   const kTokens = (n: number) => `${Math.round(n / 1000)}k`;
 
   // Does the folder deserve a cell in the header at all?
@@ -784,7 +822,16 @@ export function SessionBar({
   // Chat mode surfaces no folder control at all — see ChatReadyGreeting. The
   // path is still reachable (the session menu behind the model chip lists it),
   // it just isn't presented as a dial in the mode that doesn't have one.
-  const folderChipVisible = mode !== 'chat' && showFolderChip(folder);
+  // ── THE FOLDER IS NEVER ITS OWN CELL ANY MORE ──────────────────────────
+  // It was a cell whenever the pane sat in a project, which is most of them.
+  // The strip is now a single chip docked on the composer's rim rather than a
+  // row under it, and identity that changes about never does not get to be one
+  // of the two things on that rim. It is the FIRST row of the session menu,
+  // one tap away, with the full path and the same switcher.
+  //
+  // `showFolderChip` is still imported and still right about WHEN a folder is
+  // worth mentioning at all — it just no longer decides a cell.
+  const folderChipVisible = false;
   const folderPanel =
     folder && panel === 'folder' ? (
       // biome-ignore lint/a11y/useSemanticElements: a <dialog> would take the top layer and trap focus; this is a popover anchored to its button and dismissed by clicking out.
@@ -842,14 +889,54 @@ export function SessionBar({
           same spot. Chat mode has no model cell and no folder cell, so here the
           word is the only thing identifying the pane and it stays. */}
       {mode === 'chat' ? (
-        <div
-          className="chat-status-seg -mode -static"
-          title={`${AGENT_MODE_LABELS[mode]} mode — ${
-            MODE_CHOICES.find((m) => m.id === mode)?.desc ?? ''
-          }`}
-        >
-          <SvgModeGlyph mode={mode} />
-          <span className="chat-status-seg-label">{AGENT_MODE_LABELS[mode]}</span>
+        /* ── IT EXPLAINS ITSELF, AND IT IS STILL NOT A SWITCH ──────────────
+           This carried a native `title` and nothing else, which failed the
+           only reader who needs it: "add some on-hover info, a sentence or
+           something saying what this is." A `title` takes about a second to
+           appear, is unstyled, and does not exist AT ALL on a phone — where
+           this chip now lives inside the composer's `+` sheet.
+
+           So it opens a panel, like every other cell on this strip. What it
+           must NOT become is a mode PICKER: no harness can rewrite a live
+           session's system prompt (agent-modes.ts has the evidence backend by
+           backend), so a switch here could only deliver the new contract as a
+           message the conversation drifts from. The panel says what the mode
+           is and how to actually change it — open a new pane in the one you
+           want — which is the honest version of the control. */
+        <div className="chat-status-seg-wrap">
+          <button
+            type="button"
+            className={`chat-status-seg -mode${panel === 'mode' ? ' is-open' : ''}`}
+            onClick={() => toggle('mode')}
+            aria-haspopup="dialog"
+            aria-expanded={panel === 'mode'}
+            title={`${AGENT_MODE_LABELS[mode]} mode — ${
+              MODE_CHOICES.find((m) => m.id === mode)?.desc ?? ''
+            }`}
+          >
+            <SvgModeGlyph mode={mode} />
+            <span className="chat-status-seg-label">{AGENT_MODE_LABELS[mode]}</span>
+          </button>
+          {panel === 'mode' ? (
+            // biome-ignore lint/a11y/useSemanticElements: an anchored popover, not a modal that owns the screen.
+            <div className="chat-status-menu chat-session-menu" role="dialog">
+              <div className="chat-session-head">{AGENT_MODE_LABELS[mode]} mode</div>
+              <div className="chat-session-item -static">
+                <span className="chat-session-item-desc">
+                  {MODE_CHOICES.find((m) => m.id === mode)?.desc ?? ''}
+                </span>
+              </div>
+              <div className="chat-session-item -static">
+                <span className="chat-session-item-desc">
+                  {/* The one thing a reader asks next, answered before they
+                      have to find out the hard way. */}
+                  A pane keeps the mode it was created in — no harness can rewrite a running
+                  session’s instructions. To work the other way, open a new chat in{' '}
+                  {AGENT_MODE_LABELS[mode === 'chat' ? 'agent' : 'chat']} mode.
+                </span>
+              </div>
+            </div>
+          ) : null}
         </div>
       ) : null}
 
@@ -889,6 +976,70 @@ export function SessionBar({
         </div>
       ) : null}
 
+      {/* ── THIS PANE IS BEHIND THE BUILD ──────────────────────────────────
+          A cell that exists only when something is actually wrong, which is
+          why it can afford to look like a warning.
+
+          WHAT IT IS SAYING, precisely: the process driving this chat is
+          executing a different build of muxpad from the one the server would
+          start for it now. Not "it is old" — a runner from three weeks ago on
+          a build nothing has changed since is current, and a runner from ten
+          minutes ago can be behind. Not "it started before this server
+          process" either, which would light up every open pane after an
+          ordinary restart and teach everybody to ignore it. The definition and
+          the rejected alternatives are in server/src/runner-build.ts.
+
+          IT MATTERS BECAUSE THE SYMPTOM IS INVISIBLE OTHERWISE. A runner here
+          predating the standing-rules change was asked to send a Slack message
+          and said it did not know how — correct for the context it had, and
+          indistinguishable from the agent simply being wrong. Measured on this
+          install at the time: 21 of 28 runners were behind.
+
+          Clickable rather than a `title`: a tooltip takes a second, is
+          unstyled, and does not exist at all on the phone, where this chip
+          lives inside the composer's `+` sheet. */}
+      {stale ? (
+        <div className="chat-status-seg-wrap">
+          <button
+            type="button"
+            className={`chat-status-seg -stale${panel === 'stale' ? ' is-open' : ''}`}
+            data-testid="chat-status-stale"
+            onClick={() => toggle('stale')}
+            aria-haspopup="dialog"
+            aria-expanded={panel === 'stale'}
+            title="This agent is running an older build of muxpad than the server"
+          >
+            <SvgStaleGlyph />
+            <span className="chat-status-seg-label">older build</span>
+          </button>
+          {panel === 'stale' ? (
+            // biome-ignore lint/a11y/useSemanticElements: an anchored popover, not a modal that owns the screen.
+            <div className="chat-status-menu chat-session-menu" role="dialog">
+              <div className="chat-session-head">Running an older build</div>
+              <div className="chat-session-item -static">
+                <span className="chat-session-item-desc">
+                  This agent’s process started on a different build of muxpad from the one running
+                  now. It keeps the code — and the instructions — it was born with, so anything
+                  added since is missing from it: it may not know about tools or rules that exist
+                  today, and will say so honestly rather than guess.
+                </span>
+              </div>
+              <div className="chat-session-item -static">
+                <span className="chat-session-item-desc">
+                  {/* No button. Respawning kills whatever the pane has in
+                      flight — background subagents, wakeups, a running turn —
+                      so the moment is the user's to pick, not a control's to
+                      offer in passing. */}
+                  Restarting this agent picks up the current build. It also ends any background work
+                  and scheduled wake-ups this pane is holding, so do it when the pane is quiet — or
+                  just open a new chat, which starts current.
+                </span>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
       {folderChipVisible && folder ? (
         // `-folder` buys it a FASTER shrink than its neighbours. Flex shrinks in
         // proportion to base size, so the longest cell keeps the most absolute
@@ -910,94 +1061,18 @@ export function SessionBar({
         </div>
       ) : null}
 
-      {/* CHAT SHOWS NO MODEL AND NO CONTEXT METER. Both are dials, and Chat
-          has none: it runs the default model and compacts itself. A percentage
-          is worse than merely redundant — it is a number that asks to be
-          watched, in the one mode whose whole promise is that you do not have
-          to. `/compact` and `/clear` are slash commands typed in the composer,
-          so nothing here is the only way to reach them. Agent mode keeps the
-          chip: there the model IS your choice and the meter is the budget you
-          are spending. */}
-      {/* ── CONTEXT PRESSURE ──────────────────────────────────────────────
-          A cell that is not there until it is needed, in every mode — Chat
-          mode deliberately hides the model chip and its meter, which is right
-          for a number nobody should have to watch and wrong for the one
-          moment it stops being routine.
+      {/* ── THERE IS NO CONTEXT CELL, IN ANY MODE ────────────────────────
+          A cell appeared here past 70% and turned the danger colour past 88%,
+          because muxpad used to compact nothing by itself and the decision was
+          the reader's. Compaction is automatic again (see auto-compact in the
+          runner), so the cell was asking a person to carry a number that
+          nothing needs them to act on: "I don't want the user to be thinking
+          about compaction. Compaction should just happen."
 
-          It exists because muxpad no longer compacts anything by itself. The
-          window cap that used to do it silently rewrote long threads (two
-          compactions in three hours on a deal thread, 372k tokens of detail
-          gone), so the decision moved here: the bar says the chat is filling
-          up, and the button under it is the only thing that compacts. */}
-      {ctxLevel !== 'ok' && ctx ? (
-        <div className="chat-status-seg-wrap -ctx">
-          <button
-            type="button"
-            className={`chat-status-seg -ctx${panel === 'ctx' ? ' is-open' : ''}`}
-            data-level={ctxLevel}
-            onClick={() => toggle('ctx')}
-            aria-haspopup="menu"
-            aria-expanded={panel === 'ctx'}
-            title={`Context ${ctx.pct}% full (${kTokens(ctx.tokens)} of ${kTokens(
-              ctx.max,
-            )} tokens) — nothing is compacted automatically`}
-          >
-            <span className="chat-ctx-glyph" aria-hidden="true">
-              <svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true">
-                <path
-                  d="M6 1.4 11 10.6H1z"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.3"
-                  strokeLinejoin="round"
-                />
-                <path d="M6 5v2.4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-                <circle cx="6" cy="9.2" r="0.7" fill="currentColor" />
-              </svg>
-            </span>
-            <span className="chat-status-seg-label">{ctx.pct}% full</span>
-          </button>
-          {panel === 'ctx' ? (
-            // biome-ignore lint/a11y/useSemanticElements: an anchored popover, not a modal.
-            <div className="chat-status-menu chat-session-menu" role="dialog">
-              <div className="chat-session-head">Context</div>
-              <div className="chat-session-context">
-                <div className="chat-session-bar">
-                  <div
-                    className="chat-session-bar-fill"
-                    data-level={ctxLevel}
-                    style={{ width: `${Math.min(100, ctx.pct)}%` }}
-                  />
-                </div>
-                <span className="chat-session-context-label">
-                  {ctx.pct}% · {kTokens(ctx.tokens)} / {kTokens(ctx.max)} tokens
-                </span>
-              </div>
-              <button
-                type="button"
-                className="chat-session-item"
-                onClick={() => {
-                  send({ t: 'slash', cmd: 'compact', args: COMPACT_INSTRUCTIONS });
-                  setPanel(null);
-                }}
-              >
-                <span className="chat-session-item-label">Compact now</span>
-                <span className="chat-session-item-desc">
-                  {compactionBlurb(ctx.tokens, ctx.max)}
-                </span>
-              </button>
-              {/* The honest alternative, and often the better one: a long
-                  thread that has done its work is finished, not compressible. */}
-              <div className="chat-session-item -static">
-                <span className="chat-session-item-desc">
-                  Or keep it whole and start a new chat — nothing here is compacted unless you press
-                  the button.
-                </span>
-              </div>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
+          The meter did not disappear with it — it is in the session menu
+          below, with the token counts and Compact now, for the moments you
+          actually want to know. What is gone is the part that volunteered
+          itself. */}
       {mode !== 'chat' && (status || assistant) ? (
         <div className="chat-status-seg-wrap">
           <button
@@ -1158,38 +1233,47 @@ export function SessionBar({
         </div>
       ) : null}
 
-      {liveLabel ? (
+      {/* ── BRANCH IS NOT A CHIP HERE ANY MORE ───────────────────────────
+          It was an icon-only button on this strip — the one cell that was a
+          verb rather than a fact. It is a COMMAND, and the composer already
+          has a place for commands: the tool row on a desktop, the `+` sheet on
+          a phone, where it sits beside Attach and Review a screen under the
+          name the report gave it, "btw". See composerTools in ChatPane.
+
+          This strip is back to being only facts about the session. */}
+      {/* ── "WORKING…" IS NOT A CELL ──────────────────────────────────────
+          The live cell used to render whenever a turn was running, and with no
+          subagents its whole content was the word "Working…" — the third place
+          the same fact was being told, after the working block in the log and
+          the Stop button attached to it. "I don't think that the working
+          indicator is very valuable because we have a working indicator inside
+          the chat itself."
+
+          What survives is the part that is NOT a restatement: the ROSTER. When
+          there are subagents this is the only way to see who they are and open
+          them, so the cell renders then and only then. */}
+      {liveLabel && agents.length > 0 ? (
         // `-live` on the WRAPPER, not just the button: the wrapper is the bar's
         // flex item, so this is where "never shrink" has to be declared for
         // "12 agents" to survive 320px whole.
         <div className="chat-status-seg-wrap -live">
-          {/* A BUTTON only when there is a roster to open. With no subagents the
-              label is "Working…", and the panel below renders nothing for an
-              empty roster — so a button there would be a control that visibly
-              does nothing. Same static chip the mode indicator uses. */}
-          {agents.length > 0 ? (
-            <button
-              type="button"
-              className={`chat-status-seg -live${panel === 'live' ? ' is-open' : ''}`}
-              onClick={() => toggle('live')}
-              aria-expanded={panel === 'live'}
-              aria-label={liveLabel}
-              title={liveLabel}
-            >
-              <span className="chat-roster-spin -head" aria-hidden="true">
-                <RosterSpinner />
-              </span>
-              <span className="chat-status-seg-label">{liveLabel}</span>
-            </button>
-          ) : (
-            <div className="chat-status-seg -live -static" aria-label={liveLabel} title={liveLabel}>
-              <span className="chat-roster-spin -head" aria-hidden="true">
-                <RosterSpinner />
-              </span>
-              <span className="chat-status-seg-label">{liveLabel}</span>
-            </div>
-          )}
-          {panel === 'live' && agents.length > 0 ? (
+          {/* Always a BUTTON here now: the cell only exists when there is a
+              roster behind it, so there is no longer an "it would do nothing"
+              case to render a static chip for. */}
+          <button
+            type="button"
+            className={`chat-status-seg -live${panel === 'live' ? ' is-open' : ''}`}
+            onClick={() => toggle('live')}
+            aria-expanded={panel === 'live'}
+            aria-label={liveLabel}
+            title={liveLabel}
+          >
+            <span className="chat-roster-spin -head" aria-hidden="true">
+              <RosterSpinner />
+            </span>
+            <span className="chat-status-seg-label">{liveLabel}</span>
+          </button>
+          {panel === 'live' ? (
             // biome-ignore lint/a11y/useSemanticElements: same — an anchored popover, not a modal that owns the screen.
             <div className="chat-status-menu chat-live-menu" role="dialog">
               {/* "Subagents" only while that is all there is. A child chat in

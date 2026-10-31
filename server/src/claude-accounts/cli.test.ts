@@ -106,7 +106,12 @@ describe('add', () => {
     // The EXISTING login stays preferred. Adding a spare is not a request to
     // start using it.
     expect(c.preferred).toBe('primary');
-    expect(out).toContain('claude auth login');
+    // Both variables, always — see `loginLine`. CLAUDE_CONFIG_DIR moves the
+    // profile; the TOKEN lives in the Keychain under an item named from
+    // CLAUDE_SECURESTORAGE_CONFIG_DIR, and a login done with one can land on
+    // a different item from a read done with the other.
+    expect(out).toContain('claude /login');
+    expect(out).toContain('CLAUDE_SECURESTORAGE_CONFIG_DIR=');
   });
 
   it('shares the transcript root, because a failover mid-session must resume', () => {
@@ -216,7 +221,9 @@ describe('the ways add used to go wrong', () => {
   it('prints a login line that survives a space in the path', () => {
     const dest = join(home, 'Claude Backup');
     const { out } = run('add', 'backup', `--dir=${dest}`);
-    expect(out).toContain(`CLAUDE_CONFIG_DIR='${dest}' claude auth login`);
+    expect(out).toContain(
+      `CLAUDE_CONFIG_DIR='${dest}' CLAUDE_SECURESTORAGE_CONFIG_DIR='${dest}' claude /login`,
+    );
   });
 
   it('loses no account when adds race', async () => {
@@ -279,5 +286,31 @@ describe('the ways add used to go wrong', () => {
     expect(code).toBe(0);
     const added = config().accounts[1];
     expect(added.configDir).toBe(realpathSync(added.configDir));
+  });
+});
+
+/**
+ * ── A FIXED LOGIN HAS TO BE SAYABLE ──────────────────────────────────────
+ *
+ * "signed out" is a STICKY row, written the first time a runner saw an
+ * account fail to authenticate, and nothing re-probes it. So an account whose
+ * login was later fixed stayed skipped for ever: `reset` cleared cooldowns
+ * only, and there was no other command. Its own help has always promised
+ * "after you have fixed the account", which is precisely this case.
+ */
+describe('reset revives a signed-out account', () => {
+  it('clears the credential row as well as the cooldown', () => {
+    const src = readFileSync(join(import.meta.dirname, 'cli.ts'), 'utf8');
+    const i = src.indexOf("verb === 'reset'");
+    const body = src.slice(i, i + 1600);
+    expect(body).toContain('DELETE FROM cooldowns WHERE account = ?');
+    expect(body).toContain('DELETE FROM credentials WHERE account = ?');
+  });
+
+  it('says which of the two it actually cleared', () => {
+    // "Cleared cooldown" about an account that had no cooldown and a dead
+    // credential is a sentence that describes nothing the user did.
+    const src = readFileSync(join(import.meta.dirname, 'cli.ts'), 'utf8');
+    expect(src).toContain('signed-out mark for');
   });
 });

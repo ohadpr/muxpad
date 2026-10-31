@@ -84,7 +84,50 @@ export type VoiceChatFrame =
   | { t: 'subagent'; progress: { label?: string; lastTool?: string; done?: boolean } }
   | { t: 'error'; message: string }
   | { t: 'notice'; message: string }
-  | { t: 'stream'; delta: string };
+  | { t: 'stream'; delta: string }
+  /**
+   * THE SERVER'S SNAPSHOT OF THE PANE, sent to every socket that connects.
+   *
+   * Says nothing aloud by itself. It is here because it is the ONLY frame
+   * that can tell voice a turn ended that it did not see end.
+   *
+   * Voice learns a turn is over from a live `turn-done`, and nothing re-sends
+   * one: the runner drops frames while its socket is down, and the server
+   * broadcasts only to sockets open at that instant. One blip during a voice
+   * turn — a phone locking its screen, the no-pong check, a server restart —
+   * and the task stays bound forever, repeating "Still working on it — 176
+   * seconds in" while the chat shows a finished answer. Reported exactly
+   * that way: "the voice waited for 3 minutes while the agent already
+   * replied/wrapped up".
+   *
+   * `turnRunning` is the server's authoritative answer, computed from the
+   * runner registry rather than from whatever this socket happened to catch.
+   *
+   * `runnerAttached` is what makes it SAFE to act on. `turnRunning: false` is
+   * two facts in one value — "the turn finished" and "nobody is attached to
+   * this pane yet" — and those are opposite answers to the question voice is
+   * asking. After an ordinary `muxpad restart` the browser's socket is back in
+   * about a second and the runner retries on a fixed two, so there is a window
+   * where the pane has a chat socket, no runner, and a turn that is still
+   * running. Without this field voice retired that task and announced an
+   * answer that had not arrived.
+   */
+  | {
+      t: 'session';
+      turnRunning?: boolean;
+      runnerAttached?: boolean;
+      /** The pane's agent mode. Read for ONE decision — see
+       *  `VoiceSession.checkRunnerCanSpeak`, which hangs the call up on a pane
+       *  that cannot answer aloud, and whose entire reasoning is about the
+       *  `reply` tool that only Chat mode has. */
+      mode?: string;
+      /** The pane's pending queue, same shape as the `queue` frame. Carried
+       *  for the same reason the rest of this frame is: a socket that was away
+       *  missed the live `queue` broadcasts, and a voice task left sitting as
+       *  `queued` against a server queue that has since drained is a request
+       *  that will never run and can never be retired. */
+      queue?: Array<{ id: string; text: string }>;
+    };
 
 export interface VoiceQuestion {
   question: string;
@@ -106,6 +149,7 @@ const FRAME_KINDS = new Set([
   'error',
   'notice',
   'stream',
+  'session',
 ]);
 
 /** Narrow an arbitrary chat frame to one this module handles. Anything
@@ -289,6 +333,34 @@ export class SpeakBridge {
         ];
       }
 
+      /**
+       * The snapshot says nothing BY ITSELF — session.ts decides what it
+       * means. What it has to decide HERE is what to do with a reply buffer
+       * stranded by the gap, and the answer is "it depends, and you can tell".
+       *
+       * The buffer holds deltas whose final `speak` never arrived. Usually
+       * that is a sentence cut off mid-word, and reading half a thought aloud
+       * AS THE ANSWER is worse than saying nothing — the whole thing is in the
+       * chat. But the final `speak` is also partly redundant: a reply can have
+       * arrived complete, in deltas, and lost only the frame that confirmed
+       * it. Clearing unconditionally threw away "Done, all 212 tests pass" and
+       * said "the answer is on screen" instead.
+       *
+       * So: speak it if it ENDS LIKE A FINISHED SENTENCE, drop it otherwise.
+       * That is a guess, and it is the right way round — the failure it can
+       * still make is staying quiet about a complete answer that happened not
+       * to end in punctuation, which costs a glance at the screen.
+       */
+      case 'session': {
+        if (frame.turnRunning === false && frame.runnerAttached === true) {
+          this.turnRunning = false;
+          const out = this.flushComplete();
+          this.replies.clear();
+          return out;
+        }
+        return [];
+      }
+
       case 'subagent': {
         const p = frame.progress;
         if (p.done)
@@ -378,6 +450,21 @@ export class SpeakBridge {
     s.finalized = true;
     const tail = full.slice(keep).trim();
     return tail ? [{ kind: 'commentary', text: tail }] : [];
+  }
+
+  /** Pending text that reads as a finished sentence — see the `session` case.
+   *  Deliberately strict: a trailing word, a half-written path or a cut-off
+   *  clause all fail it, which is the case this exists to stay quiet about. */
+  private flushComplete(): AppendIntent[] {
+    const out: AppendIntent[] = [];
+    for (const s of this.replies.values()) {
+      const text = s.pending.trim();
+      if (!text || !/[.!?:)\]"'’”]$/.test(text)) continue;
+      s.emitted += s.pending;
+      s.pending = '';
+      out.push({ kind: 'commentary', text });
+    }
+    return out;
   }
 
   private flushAll(): AppendIntent[] {

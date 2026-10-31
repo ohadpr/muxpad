@@ -14,9 +14,12 @@ import {
   type AgentLink,
   CANCEL_DEBOUNCE_MS,
   CANCEL_PROBE_QUIET_MS,
+  DELIVERY_WATCH_MS,
   DISPATCH_FILLER_MS,
   MUTE_RUNNER_DETAIL,
   MUTE_RUNNER_GRACE_MS,
+  MUTE_RUNNER_LINE,
+  QUEUE_DROP_GRACE_MS,
   SETTLE_MAX_MS,
   SETTLE_QUIET_MS,
   type Scheduler,
@@ -153,6 +156,7 @@ function harness(
     withContext?: boolean;
     micGate?: MicGate;
     heartbeatMs?: number;
+    mode?: string;
     onProtocolError?: (line: string) => void;
   } = {},
 ) {
@@ -174,6 +178,7 @@ function harness(
     },
     withContext: opts.withContext ?? false,
     ...(opts.heartbeatMs ? { heartbeatMs: opts.heartbeatMs } : {}),
+    ...(opts.mode ? { mode: opts.mode } : {}),
     ...(opts.micGate ? { micGate: opts.micGate } : {}),
     ...(opts.onProtocolError ? { onProtocolError: opts.onProtocolError } : {}),
   });
@@ -256,7 +261,7 @@ describe('the happy path', () => {
     h.hear('run the tests.', 1000, 2000);
     h.delegate('d1', 2100);
     h.settle();
-    h.agent.frame({ t: 'turn-start' });
+    h.agent.frame({ t: 'turn-start', text: 'run the tests.' });
     h.agent.frame({ t: 'speak', id: 'r1', text: 'They pass.', n: 1 });
     expect(h.transport.sent.length).toBeGreaterThan(0);
     for (const e of h.transport.sent) expect(e.delegation_id).toBe('d1');
@@ -294,7 +299,7 @@ describe('duplicate delivery must not start the same work twice', () => {
     h.delegate('d1', 2100);
     h.delegate('d1', 2100); // redelivery mid-settle
     h.settle();
-    h.agent.frame({ t: 'turn-start' });
+    h.agent.frame({ t: 'turn-start', text: 'run the tests.' });
     h.agent.frame({ t: 'speak', id: 'r1', text: 'They pass.', n: 1 });
     expect(h.agent.sends).toHaveLength(1);
     expect(h.commentary()).toContain('They pass.');
@@ -306,7 +311,7 @@ describe('duplicate delivery must not start the same work twice', () => {
     h.hear('run the tests.', 1000, 2000);
     h.delegate('d1', 2100);
     h.settle();
-    h.agent.frame({ t: 'turn-start' });
+    h.agent.frame({ t: 'turn-start', text: 'run the tests.' });
     h.agent.frame({ t: 'turn-done', ok: true });
     h.delegate('d1', 2100);
     h.settle();
@@ -459,7 +464,14 @@ describe('ATTRIBUTION with two tasks in flight', () => {
     expect(blue?.delegation_id).toBe('dB');
   });
 
-  it('binds in submit order when the server does not stamp the turn', () => {
+  it('claims NOTHING when the turn arrives unstamped', () => {
+    // This used to bind in submit order "for an older server". The stamp
+    // comes from the SERVER, which is one process and always current — a turn
+    // started by our own send is always stamped — so an unstamped start is
+    // never ours. The fallback protected nothing and cost the one
+    // mis-attribution a voice session must never make: an autonomous turn (a
+    // cron, a wakeup) arriving while a request waits was handed that
+    // request, and its output was spoken as the answer.
     const h = harness();
     h.started();
     h.hear('first thing.', 1000, 2000);
@@ -468,8 +480,12 @@ describe('ATTRIBUTION with two tasks in flight', () => {
     h.hear('second thing.', 4000, 6000);
     h.delegate('dB', 6100);
     h.settle();
-    h.turnStart(); // old server: no text
-    h.agent.frame({ t: 'speak', id: 'rA', text: 'Did the first.', n: 1 });
+    h.turnStart(); // a cron, a wakeup — nobody's send
+    h.agent.frame({ t: 'speak', id: 'rA', text: 'Output of a turn nobody asked for.', n: 1 });
+    expect(h.everything()).not.toContain('Output of a turn nobody asked for.');
+    // …and the real turn still binds and is still spoken.
+    h.turnStart('first thing.');
+    h.agent.frame({ t: 'speak', id: 'rB', text: 'Did the first.', n: 1 });
     expect(h.transport.sent.find((e) => e.content.includes('Did the first.'))?.delegation_id).toBe(
       'dA',
     );
@@ -572,19 +588,17 @@ describe('an unstamped turn-start is not evidence of an old server', () => {
     expect(h.commentary().join(' ')).toContain('Did the second.');
   });
 
-  it('still falls back to submit order against a server that has never stamped', () => {
-    // The legacy path is not removed, only narrowed: with no stamped turn ever
-    // seen, order is still the best available answer.
+  it('does not claim one even before any stamped turn has been seen', () => {
+    // This was the window the fallback left open, and it is exactly when an
+    // autonomous turn is most likely to be the first thing that happens.
     const h = harness();
     h.started();
     h.hear('first thing.', 1000, 2000);
     h.delegate('dA', 2100);
     h.settle();
     h.turnStart();
-    h.agent.frame({ t: 'speak', id: 'rA', text: 'Did the first.', n: 1 });
-    expect(h.transport.sent.find((e) => e.content.includes('Did the first.'))?.delegation_id).toBe(
-      'dA',
-    );
+    h.agent.frame({ t: 'speak', id: 'rA', text: 'Not an answer to anything.', n: 1 });
+    expect(h.everything()).not.toContain('Not an answer to anything.');
   });
 });
 
@@ -813,7 +827,7 @@ describe('narrating an agent that takes minutes', () => {
     h.hear('do a big thing.', 1000, 2000);
     h.delegate('d1', 2100);
     h.settle();
-    h.agent.frame({ t: 'turn-start' });
+    h.agent.frame({ t: 'turn-start', text: 'do a big thing.' });
     expect(h.session.state).toBe('thinking');
     // Two minutes of work, and the session is still alive and still narrating —
     // ALOUD. A silent `thinking` heartbeat is two minutes of dead air.
@@ -829,7 +843,7 @@ describe('narrating an agent that takes minutes', () => {
     h.hear('do a big thing.', 1000, 2000);
     h.delegate('d1', 2100);
     h.settle();
-    h.agent.frame({ t: 'turn-start' });
+    h.agent.frame({ t: 'turn-start', text: 'do a big thing.' });
     h.agent.frame({ t: 'speak-delta', id: 'r1', delta: 'Found the bug. ' });
     h.agent.frame({ t: 'speak-delta', id: 'r1', delta: 'Fixing it now. ' });
     h.agent.frame({ t: 'speak', id: 'r1', text: 'Found the bug. Fixing it now. Done.' });
@@ -844,7 +858,7 @@ describe('narrating an agent that takes minutes', () => {
     h.hear('ship it.', 1000, 2000);
     h.delegate('d1', 2100);
     h.settle();
-    h.agent.frame({ t: 'turn-start' });
+    h.agent.frame({ t: 'turn-start', text: 'ship it.' });
     h.agent.frame({
       t: 'question',
       qid: 'q1',
@@ -866,7 +880,7 @@ describe('narrating an agent that takes minutes', () => {
     h.hear('do a thing.', 1000, 2000);
     h.delegate('d1', 2100);
     h.settle();
-    h.agent.frame({ t: 'turn-start' });
+    h.agent.frame({ t: 'turn-start', text: 'do a thing.' });
     h.agent.frame({ t: 'stream', delta: 'The user is probably wrong about this.' });
     h.agent.frame({ t: 'stream', delta: ' I will not say that out loud.' });
     const everything = h.transport.sent.map((e) => e.content).join(' ');
@@ -877,7 +891,7 @@ describe('narrating an agent that takes minutes', () => {
   it('drops frames from a turn the user started by TYPING — there is no delegation to speak under', () => {
     const h = harness();
     h.started();
-    h.agent.frame({ t: 'turn-start' });
+    h.agent.frame({ t: 'turn-start', text: 'do a thing.' });
     h.agent.frame({ t: 'speak', id: 'r1', text: 'Answer to a typed question.', n: 1 });
     expect(h.transport.sent).toEqual([]);
     expect(h.session.stats.staleDrops).toBeGreaterThan(0);
@@ -889,7 +903,7 @@ describe('narrating an agent that takes minutes', () => {
     h.hear('do a thing.', 1000, 2000);
     h.delegate('d1', 2100);
     h.settle();
-    h.agent.frame({ t: 'turn-start' });
+    h.agent.frame({ t: 'turn-start', text: 'do a thing.' });
     h.agent.frame({ t: 'speak-delta', id: 'r1', delta: 'the tail with no full stop' });
     h.agent.frame({ t: 'turn-done', ok: true });
     expect(h.commentary().join(' ')).toContain('the tail with no full stop');
@@ -903,7 +917,7 @@ describe('the 500-token cap', () => {
     h.hear('explain everything.', 1000, 2000);
     h.delegate('d1', 2100);
     h.settle();
-    h.agent.frame({ t: 'turn-start' });
+    h.agent.frame({ t: 'turn-start', text: 'explain everything.' });
     const huge = 'The router now resolves nested tabs correctly. '.repeat(300);
     h.agent.frame({ t: 'speak', id: 'r1', text: huge, n: 1 });
     const parts = h.commentary();
@@ -1151,7 +1165,7 @@ describe('UI state', () => {
     h.hear('do a thing.', 1000, 2000);
     h.delegate('d1', 2100);
     h.settle();
-    h.agent.frame({ t: 'turn-start' });
+    h.agent.frame({ t: 'turn-start', text: 'do a thing.' });
     expect(h.session.state).toBe('thinking');
     h.agent.frame({ t: 'turn-done', ok: true });
     expect(h.session.state).toBe('listening');
@@ -1184,7 +1198,7 @@ describe('dispose', () => {
     h.hear('do a thing.', 1000, 2000);
     h.delegate('d1', 2100);
     h.settle();
-    h.agent.frame({ t: 'turn-start' });
+    h.agent.frame({ t: 'turn-start', text: 'do a thing.' });
     h.session.dispose('user');
     expect(h.clock.pending).toBe(0);
   });
@@ -1253,7 +1267,7 @@ describe('the append wire format', () => {
     h.hear('run the tests.', 1000, 2000);
     h.delegate('d1', 2100);
     h.settle();
-    h.agent.frame({ t: 'turn-start' });
+    h.agent.frame({ t: 'turn-start', text: 'run the tests.' });
     h.agent.frame({ t: 'speak', id: 'r1', text: 'They pass.', n: 1 });
 
     expect(h.transport.sent.length).toBeGreaterThan(0);
@@ -1963,5 +1977,408 @@ describe('the cancel debounce measures from the cancel that actually fired', () 
     h.settle();
     expect(h.agent.stops).toBe(1);
     expect(h.commentary().filter((t) => /stopped\./i.test(t))).toHaveLength(1);
+  });
+});
+
+/**
+ * ── THE TURN THAT ENDED WHILE WE WERE NOT LISTENING ──────────────────────
+ *
+ * `turn-done` is a live broadcast and nothing re-sends it. The runner drops
+ * frames while its socket is down; the server sends only to sockets open at
+ * that instant. So one blip — a phone locking its screen, the no-pong check,
+ * a server restart — swallows the end of a turn, and the bound task never
+ * retires: the heartbeat repeats "Still working on it — 176 seconds in"
+ * while the chat shows a finished answer.
+ *
+ * Reported as: "the voice waited for 3 minutes (and then i killed it) while
+ * the agent already replied/wrapped up."
+ */
+describe('a turn that ended during a socket gap', () => {
+  /** Bind a task, then lose the reply and the turn-done with the socket. */
+  function stranded() {
+    const h = harness();
+    h.started();
+    h.hear('how many tests are failing?', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.turnStart('how many tests are failing?');
+    return h;
+  }
+
+  it('used to hang forever — the filler is the symptom', () => {
+    const h = stranded();
+    const before = h.commentary().length;
+    h.clock.advance(3 * 60_000);
+    // This is the bug as the user met it, and it is still what happens with
+    // no snapshot to repair it.
+    expect(h.commentary().slice(before).join(' ')).toMatch(/Still working on it/);
+  });
+
+  it('retires on the reconnect snapshot that says the turn is over', () => {
+    const h = stranded();
+    h.clock.advance(60_000);
+    h.agent.frame({ t: 'session', turnRunning: false, runnerAttached: true });
+    h.clock.advance(5_000);
+    // The heartbeat stops, because nothing is bound any more.
+    const after = h.commentary().length;
+    h.clock.advance(3 * 60_000);
+    expect(h.commentary().slice(after)).toEqual([]);
+  });
+
+  it('says where the answer is rather than pretending to have it', () => {
+    // The reply frames are gone — they were lost with the socket. Inventing
+    // an answer is the one thing worse than the hang.
+    const h = stranded();
+    h.agent.frame({ t: 'session', turnRunning: false, runnerAttached: true });
+    h.clock.advance(1000);
+    expect(h.everything()).toMatch(/finished that one while we were disconnected/);
+  });
+
+  it('does NOT hang up the call — that is the muted-runner path, not this one', () => {
+    // `checkRunnerCanSpeak` ends the session when a turn succeeds with no
+    // reply frame. True of a pane that cannot speak; false here, where the
+    // reply existed and OUR socket dropped it.
+    const h = stranded();
+    h.agent.frame({ t: 'session', turnRunning: false, runnerAttached: true });
+    h.clock.advance(MUTE_RUNNER_GRACE_MS + 1000);
+    expect(h.everything()).not.toContain(MUTE_RUNNER_LINE);
+    expect(h.states).not.toContain('ended');
+  });
+
+  it('ignores a snapshot that says the turn is still running', () => {
+    const h = stranded();
+    const before = h.commentary().length;
+    h.agent.frame({ t: 'session', turnRunning: true, runnerAttached: true });
+    h.clock.advance(30_000);
+    expect(h.commentary().slice(before).join(' ')).toMatch(/Still working on it/);
+  });
+
+  it('retires nothing when no task is bound', () => {
+    // Every socket gets this frame on connect, including one that has never
+    // sent anything.
+    const h = harness();
+    h.started();
+    h.agent.frame({ t: 'session', turnRunning: false, runnerAttached: true });
+    expect(h.everything()).not.toMatch(/disconnected/);
+  });
+});
+
+/**
+ * ── THE SNAPSHOT THAT ARRIVES BEFORE THE RUNNER DOES ─────────────────────
+ *
+ * `turnRunning: false` is two facts in one value — "the turn finished" and
+ * "nobody is attached to this pane" — and they are opposite answers to the
+ * question voice is asking.
+ *
+ * An ordinary `muxpad restart` produces the second: the browser's chat socket
+ * is back in about a second, the runner retries on a fixed two. For that
+ * second the pane has a live socket, no runner, and a turn that is STILL
+ * RUNNING. Acting on it retired the task and announced an answer that had not
+ * arrived — strictly worse than the hang it was meant to replace. Found by
+ * three independent reviews of the first version of this fix.
+ */
+describe('a snapshot from a pane with no runner attached', () => {
+  function working() {
+    const h = harness();
+    h.started();
+    h.hear('how many tests are failing?', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.turnStart('how many tests are failing?');
+    return h;
+  }
+
+  it('does NOT retire the task — the turn is still running', () => {
+    const h = working();
+    h.agent.frame({ t: 'session', turnRunning: false });
+    h.clock.advance(1000);
+    expect(h.everything()).not.toMatch(/disconnected/);
+    // Still ours, so the answer still lands when it comes.
+    h.agent.frame({ t: 'speak', id: 'r1', text: 'Two are failing.', n: 1 });
+    h.agent.frame({ t: 'turn-done', ok: true });
+    h.clock.advance(1000);
+    expect(h.everything()).toContain('Two are failing.');
+  });
+
+  it('acts on the RE-SENT snapshot once the runner is back and idle', () => {
+    // `runnerAttached` is in the snapshot's fingerprint, so reattaching
+    // re-sends the frame — which is what carries the truth after a restart.
+    const h = working();
+    h.agent.frame({ t: 'session', turnRunning: false });
+    h.clock.advance(2000);
+    h.agent.frame({ t: 'session', turnRunning: false, runnerAttached: true });
+    h.clock.advance(1000);
+    expect(h.everything()).toMatch(/finished that one while we were disconnected/);
+  });
+
+  it('never speaks a sentence that was cut off by the gap', () => {
+    // The pending buffer holds deltas whose final `speak` never arrived — by
+    // definition half a thought. Reading it aloud AS THE ANSWER is worse than
+    // saying nothing; the whole thing is in the chat.
+    const h = working();
+    h.agent.frame({ t: 'speak-delta', id: 'r1', delta: 'The answer is fo' });
+    h.agent.frame({ t: 'session', turnRunning: false, runnerAttached: true });
+    h.clock.advance(2000);
+    expect(h.everything()).not.toContain('The answer is fo');
+  });
+
+  it('frees a queued task the server has since dropped', () => {
+    // A socket that was away missed every live `queue` broadcast. Without the
+    // snapshot's own queue, a voice task sits as `queued` against a server
+    // queue that has drained: never run, never retired.
+    //
+    // This asserted `staleDrops >= 0`, which is true of every number this
+    // field can hold — a test that could not fail. It asserts the OUTCOME now.
+    const h = harness();
+    h.started();
+    h.hear('first question.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.agent.frame({ t: 'queued', id: 'q1', text: 'first question.' });
+    h.clock.advance(QUEUE_DROP_GRACE_MS + 1000);
+    h.agent.frame({ t: 'session', turnRunning: false, runnerAttached: true, queue: [] });
+    h.clock.advance(1000);
+    expect(h.everything()).toMatch(/finished that one while we were disconnected/);
+    // …and the slot is free, so asking again is not refused as a duplicate.
+    h.hear('second question.', 300_000, 301_000);
+    h.delegate('d2', 301_100);
+    h.settle();
+    expect(h.agent.sends).toContain('second question.');
+  });
+
+  it('does NOT retire a request that has only just gone out', () => {
+    // Every dispatched task is `queued` with no queue id until `turn-start`
+    // comes back, so for a moment it looks exactly like one whose turn ran
+    // and ended unseen. A snapshot already in flight when the send left used
+    // to retire it, announce "the agent finished that one", and then fail to
+    // bind the real turn — so the answer was never spoken.
+    const h = harness();
+    h.started();
+    h.hear('run the tests.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.agent.frame({ t: 'session', turnRunning: false, runnerAttached: true, queue: [] });
+    h.clock.advance(200);
+    expect(h.everything()).not.toMatch(/disconnected/);
+    // The real turn still binds, and its answer is still spoken.
+    h.turnStart('run the tests.');
+    h.agent.frame({ t: 'speak', id: 'r1', text: 'All 212 pass.', n: 1 });
+    h.agent.frame({ t: 'turn-done', ok: true });
+    h.clock.advance(2000);
+    expect(h.everything()).toContain('All 212 pass.');
+  });
+});
+
+/**
+ * A row leaves the server's queue for two opposite reasons — it was CANCELLED,
+ * or it RAN — and across a disconnect the signal that tells them apart
+ * (`turn-start`) is exactly what is missing.
+ */
+describe('settling our tasks against the snapshot', () => {
+  it('does not call a request "cancelled" when it actually ran', () => {
+    const h = harness();
+    h.started();
+    h.hear('deploy to prod.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.agent.frame({ t: 'queued', id: 'q1', text: 'deploy to prod.' });
+    // The gap: turn-start and turn-done both lost, and the row drained. A
+    // real one lasts longer than the grace that protects a just-sent request
+    // (see "does NOT retire a request that has only just gone out").
+    h.clock.advance(QUEUE_DROP_GRACE_MS + 1000);
+    h.agent.frame({ t: 'session', turnRunning: false, runnerAttached: true, queue: [] });
+    h.clock.advance(QUEUE_DROP_GRACE_MS + 5000);
+    expect(h.everything()).not.toMatch(/cancelled before it ran/i);
+    expect(h.everything()).toMatch(/finished that one while we were disconnected/);
+  });
+
+  it('retires a task whose turn-start was ALSO lost — the hang by a second road', () => {
+    // Sent while the agent was idle, so there is no queue row and nothing
+    // ever bound. It used to sit `queued` forever with no heartbeat, and
+    // asking again was refused as a duplicate. That is a phone locking right
+    // after you speak.
+    const h = harness();
+    h.started();
+    h.hear('run the tests.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.clock.advance(QUEUE_DROP_GRACE_MS + 1000);
+    h.agent.frame({ t: 'session', turnRunning: false, runnerAttached: true, queue: [] });
+    h.clock.advance(1000);
+    expect(h.everything()).toMatch(/finished that one while we were disconnected/);
+    h.clock.advance(3 * 60_000);
+    expect(h.commentary().join(' ')).not.toMatch(/Still working on it/);
+  });
+
+  it('leaves a task that is genuinely still parked', () => {
+    const h = harness();
+    h.started();
+    h.hear('deploy to prod.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.agent.frame({ t: 'queued', id: 'q1', text: 'deploy to prod.' });
+    h.agent.frame({
+      t: 'session',
+      turnRunning: false,
+      runnerAttached: true,
+      queue: [{ id: 'q1', text: 'deploy to prod.' }],
+    });
+    h.clock.advance(1000);
+    expect(h.everything()).not.toMatch(/disconnected/);
+  });
+});
+
+/**
+ * Agent mode has no `reply` tool BY DESIGN and never will — its answers are
+ * synthesised from the turn's prose (server/src/spoken-answer.ts). So the
+ * hang-up that fires when a turn succeeds with no reply ("too old to have the
+ * reply tool… restart the agent pane") is false there in every word, and it
+ * fired on the user's FIRST request if that turn happened to be pure tool work.
+ */
+describe('the muted-runner hang-up in Agent mode', () => {
+  function silentTurn(mode: string) {
+    const h = harness();
+    h.started();
+    h.agent.frame({ t: 'session', turnRunning: false, runnerAttached: true, mode });
+    h.hear('rename the files.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.turnStart('rename the files.');
+    // Pure tool work: no reply, no prose, nothing to synthesise.
+    h.agent.frame({ t: 'turn-done', ok: true });
+    h.clock.advance(MUTE_RUNNER_GRACE_MS + 2000);
+    return h;
+  }
+
+  it('does not hang up an Agent pane for a silent turn', () => {
+    const h = silentTurn('agent');
+    expect(h.everything()).not.toContain(MUTE_RUNNER_LINE);
+    expect(h.states).not.toContain('ended');
+  });
+
+  it('still hangs up a Chat pane, where the advice is true', () => {
+    // There the silence really does mean no reply tool, every future request
+    // ends the same way, and saying so beats a meter running on nothing.
+    const h = silentTurn('chat');
+    expect(h.everything()).toContain(MUTE_RUNNER_LINE);
+  });
+
+  it('takes the mode from the CLIENT, which does not have to wait for a frame', () => {
+    // The snapshot is re-sent only when its fingerprint changes, the
+    // fingerprint does not include whether a turn is running, and the frame
+    // taps do not replay the socket's first frame — so a call started on a
+    // pane that was already open never saw one, and the guard never engaged.
+    // ChatPane has had the mode all along.
+    const h = harness({ mode: 'agent' });
+    h.started();
+    h.hear('rename the files.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.turnStart('rename the files.');
+    h.agent.frame({ t: 'turn-done', ok: true });
+    h.clock.advance(MUTE_RUNNER_GRACE_MS + 2000);
+    expect(h.everything()).not.toContain(MUTE_RUNNER_LINE);
+  });
+
+  it('still assumes Chat when nobody has said — the mode whose hang-up is real', () => {
+    const h = harness();
+    h.started();
+    h.hear('rename the files.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.turnStart('rename the files.');
+    h.agent.frame({ t: 'turn-done', ok: true });
+    h.clock.advance(1000);
+    expect(h.everything()).toContain(MUTE_RUNNER_LINE);
+  });
+});
+
+/**
+ * A quick turn that runs and finishes inside a blip SHORTER than the grace was
+ * never settled by anything afterwards: the request sat `queued` for ever and
+ * asking again was refused as a duplicate.
+ */
+describe('a request stranded by a SHORT disconnect', () => {
+  it('is settled by the re-check, not left queued for ever', () => {
+    const h = harness();
+    h.started();
+    h.hear('run the tests.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    // Inside the grace: skipped, and re-armed.
+    h.agent.frame({ t: 'session', turnRunning: false, runnerAttached: true, queue: [] });
+    h.clock.advance(500);
+    expect(h.everything()).not.toMatch(/disconnected/);
+    // The re-check fires once the request has aged past it.
+    h.clock.advance(QUEUE_DROP_GRACE_MS + 1000);
+    expect(h.everything()).toMatch(/finished that one while we were disconnected/);
+  });
+
+  it('the re-check is a no-op once the turn has actually started', () => {
+    const h = harness();
+    h.started();
+    h.hear('run the tests.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.agent.frame({ t: 'session', turnRunning: false, runnerAttached: true, queue: [] });
+    h.turnStart('run the tests.');
+    h.clock.advance(QUEUE_DROP_GRACE_MS + 2000);
+    expect(h.everything()).not.toMatch(/disconnected/);
+    h.agent.frame({ t: 'speak', id: 'r1', text: 'All 212 pass.', n: 1 });
+    h.agent.frame({ t: 'turn-done', ok: true });
+    h.clock.advance(1000);
+    expect(h.everything()).toContain('All 212 pass.');
+  });
+});
+
+/**
+ * ── VOICE DOES NOT CLAIM A SUB-AGENT DELIVERY ────────────────────────────
+ *
+ * It did, three times, behind three different guards, and all three were
+ * proxies for a fact voice does not have: WHOSE workers are reporting. The
+ * delivery names its sub-chats by tab id; voice has no map from a tab id to
+ * the request that spawned it.
+ *
+ * The third version still announced an earlier TYPED task's report as the
+ * answer to a spoken question, because nothing it could observe happened in
+ * between. Reading somebody else's report aloud, labelled as yours, is worse
+ * than silence — and silence is recoverable, because the answer is on screen.
+ *
+ * These tests exist so the next person reaching for a fourth proxy sees the
+ * three that failed. The honest fix is correlation from the server, which
+ * knows `spawned_by`; that is a protocol change.
+ */
+describe('a sub-agent delivery is not spoken', () => {
+  const DELIVERY = '<muxpad-delivery count="3" from="t1,t2,t3">\nreports\n</muxpad-delivery>';
+
+  it('is not claimed, even right after one of our own requests', () => {
+    const h = harness();
+    h.started();
+    h.hear('what time is it in tokyo?', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.turnStart('what time is it in tokyo?');
+    h.agent.frame({ t: 'speak', id: 'r1', text: 'Just after midnight.', n: 1 });
+    h.agent.frame({ t: 'turn-done', ok: true });
+    h.clock.advance(2000);
+
+    h.turnStart(DELIVERY);
+    h.agent.frame({ t: 'speak', id: 'r2', text: 'The billing audit found three issues.', n: 1 });
+    h.clock.advance(2000);
+    expect(h.everything()).not.toContain('The billing audit found three issues.');
+    expect(h.everything()).not.toMatch(/reported back on/i);
+  });
+
+  it('leaves the ordinary path alone — our own turns still bind and speak', () => {
+    const h = harness();
+    h.started();
+    h.hear('run the tests.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.turnStart('run the tests.');
+    h.agent.frame({ t: 'speak', id: 'r1', text: 'All 212 pass.', n: 1 });
+    h.agent.frame({ t: 'turn-done', ok: true });
+    h.clock.advance(2000);
+    expect(h.everything()).toContain('All 212 pass.');
   });
 });

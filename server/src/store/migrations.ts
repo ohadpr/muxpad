@@ -1454,6 +1454,46 @@ const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    /**
+     * A CHAT MAY CARRY ITS OWN THEME.
+     *
+     * The theme has been a device setting since there was one — a thing about
+     * the browser you are sitting at. This makes it a thing about the CHAT as
+     * well: open the same conversation from a phone and it looks the same,
+     * because the value is on the row rather than in that browser's storage.
+     *
+     * NULL means "follow the device's default", which is what every existing
+     * row gets and what a new chat is born with. It is not a backfill of the
+     * current setting: that setting is per-device, so copying it onto shared
+     * rows would be one machine deciding for all of them.
+     */
+    version: 46,
+    apply: (db) => {
+      const cols = db.prepare('PRAGMA table_info(tabs)').all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === 'theme')) db.exec('ALTER TABLE tabs ADD COLUMN theme TEXT');
+    },
+  },
+  {
+    /**
+     * THE TWO LOOKUPS THE SIDEBAR DOES ON EVERY POLL, INDEXED.
+     *
+     * `tabs` had no index on `workspace_id` — every list, every five seconds,
+     * per device, was a full scan of the table. At 690 rows that is cheap and
+     * invisible; the number of chats only goes up, and this is the one query
+     * on that path whose cost grows with it.
+     *
+     * `(workspace_id, position)` rather than `(workspace_id)` so the scan AND
+     * the order come out of the same index — the list is read in position
+     * order, so a bare workspace index would still sort afterwards.
+     *
+     * And `tabs(spawned_by)`, which resolves every child chat: the clock
+     * snapshot and the live-child rollup both walk it, and it was a scan too.
+     */
+    version: 47,
+    sql: `CREATE INDEX IF NOT EXISTS tabs_workspace_position ON tabs(workspace_id, position);
+          CREATE INDEX IF NOT EXISTS tabs_spawned_by ON tabs(spawned_by) WHERE spawned_by IS NOT NULL;`,
+  },
 ];
 
 /** Highest version in the migration list. Exported so a test can assert the

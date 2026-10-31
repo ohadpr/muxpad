@@ -421,6 +421,17 @@ export const TabSchema = z.object({
   // way, so flipping back restores the tiling. Optional for rows/servers
   // that predate the column.
   view_mode: z.enum(['split', 'tabbed']).optional(),
+  // ── THE CHAT'S OWN THEME, OR NULL TO FOLLOW THE DEVICE'S ────────────────
+  // The theme has been a device setting since there was one — a fact about
+  // the browser you are sitting at. This makes it a fact about the CHAT too:
+  // open the same conversation from a phone and it looks the same, because
+  // the value is on the row rather than in that browser's storage.
+  //
+  // NOT validated against the theme list on purpose. A server that is older
+  // or newer than the client it is talking to must not drop a name it has not
+  // heard of; the client resolves an unknown value to its default, which is
+  // the same thing it does for a theme that was removed.
+  theme: z.string().nullable().optional(),
   created_at: z.number(),
   updated_at: z.number(),
   // Runtime-only flag. True iff at least one pane in this tab has
@@ -711,6 +722,21 @@ export const TabsReorderedEventSchema = z.object({
   type: z.literal('tabs.reordered'),
   workspace_id: z.string(),
 });
+/**
+ * The working-set strip changed SHAPE — a chat entered, left, or was evicted.
+ *
+ * Coarse and carrying nothing, the same shape as `tabs.reordered` and for the
+ * same reason: the handler's job is to re-fetch, which makes the event
+ * idempotent and impossible to drift from the store. The strip is at most six
+ * ids; a row-shaped event would cost more to describe than to fetch.
+ *
+ * NOT emitted when only a timestamp moved. You send messages to the chat you
+ * are already in constantly; a strip that re-rendered on each of them would be
+ * the churn this whole design exists to remove.
+ */
+export const WorkingSetChangedEventSchema = z.object({
+  type: z.literal('working_set.changed'),
+});
 export const WorkspaceAddedEventSchema = z.object({
   type: z.literal('workspace.added'),
   workspace: WorkspaceSchema,
@@ -802,6 +828,7 @@ export const MuxpadEventSchema = z.discriminatedUnion('type', [
   TabUpdatedEventSchema,
   TabRemovedEventSchema,
   TabsReorderedEventSchema,
+  WorkingSetChangedEventSchema,
   WorkspaceAddedEventSchema,
   WorkspaceUpdatedEventSchema,
   WorkspaceRemovedEventSchema,

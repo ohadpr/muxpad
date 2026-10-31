@@ -2,40 +2,21 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import {
-  COMPACT_INSTRUCTIONS,
-  CONTEXT_HIGH_PCT,
-  CONTEXT_WARN_PCT,
-  compactionBlurb,
-  contextLevel,
-} from './context-pressure';
+import { COMPACT_INSTRUCTIONS, compactionBlurb } from './context-pressure';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 describe('context pressure', () => {
-  it('says nothing until the number starts to matter', () => {
-    // The meter has always lived in the session menu. A cell on the strip at
-    // 12% would be one more thing on a line that cannot afford five.
-    expect(contextLevel(0)).toBe('ok');
-    expect(contextLevel(69)).toBe('ok');
-    expect(contextLevel(CONTEXT_WARN_PCT)).toBe('warn');
-    expect(contextLevel(CONTEXT_HIGH_PCT)).toBe('high');
-    expect(contextLevel(100)).toBe('high');
-  });
-
-  it('is silent when there is no reading at all', () => {
-    // A pane whose runner has not reported yet must not render a warning
-    // about a number it does not have.
-    expect(contextLevel(undefined)).toBe('ok');
-    expect(contextLevel(Number.NaN)).toBe('ok');
-  });
-
-  it('warns with room left to decide', () => {
-    // The whole design rests on this: nothing compacts by itself, so the
-    // warning has to arrive while there is still space to act in. 70% of a
-    // 1M window is ~300k tokens of headroom.
-    expect(CONTEXT_WARN_PCT).toBeLessThanOrEqual(75);
-    expect(CONTEXT_HIGH_PCT).toBeLessThan(95);
+  it('exports no levels for the chat to colour itself with', () => {
+    // `contextLevel`, CONTEXT_WARN_PCT and CONTEXT_HIGH_PCT lived here, and
+    // the strip turned warn-coloured at 70% and danger at 88%. They earned
+    // that only while nothing compacted by itself; compaction is automatic
+    // again (server/src/agent-runner/auto-compact.ts), so a reader colour-coded
+    // about a number they cannot act on is pure stress: "I don't want the user
+    // to be thinking about compaction."
+    const src = readFileSync(join(HERE, 'context-pressure.ts'), 'utf8');
+    for (const gone of ['contextLevel', 'CONTEXT_WARN_PCT', 'CONTEXT_HIGH_PCT'])
+      expect(src.replace(/\/\*[\s\S]*?\*\//g, ''), gone).not.toContain(gone);
   });
 
   it('names what a compaction must keep, not how long it may be', () => {
@@ -55,22 +36,34 @@ describe('context pressure', () => {
   });
 });
 
-describe('nothing compacts on its own', () => {
+describe('compaction is automatic, and it is MUXPAD doing it', () => {
   /**
-   * The runner setting is the whole guarantee behind the UI in this module.
-   * If it is ever re-pointed at a window, the chat silently goes back to
-   * rewriting itself and every test above still passes — so this reads it.
+   * The runner is the whole guarantee behind the absence of UI in this module.
+   * If the trigger is ever removed, the chat silently goes back to filling up
+   * with nothing on screen to say so — and every test above still passes, so
+   * this reads the runner.
    */
   const runner = readFileSync(
     join(HERE, '..', '..', '..', 'server', 'src', 'agent-runner', 'backends', 'claude.ts'),
     'utf8',
   );
 
-  it("the runner overrides NOTHING — compaction is the harness's to run", () => {
+  it('fires a compaction on the fill, with the instructions from here', () => {
+    const code = runner.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+    expect(code).toContain('AutoCompactor');
+    expect(code).toMatch(/autoCompactor\.consider\([^)]*\)/);
+    // The same words the button sends. An unguided compaction is where a 216k
+    // thread becomes 4.7k.
+    expect(code).toMatch(/slash\('compact', RECOVERY_COMPACT_INSTRUCTIONS\)/);
+  });
+
+  it("still overrides nothing in the harness's own settings", () => {
     // Both overrides are failures, in opposite directions: a window compacts
     // threads nobody asked about (measured: 216k → 4.7k on a live deal
     // thread), and a disable wedges them at the ceiling, where every send —
-    // including `/compact` itself — answers "Prompt is too long".
+    // including `/compact` itself — answers "Prompt is too long". muxpad's own
+    // trigger is a percentage of the model's REAL window, which is the thing
+    // the imposed cap got wrong.
     //
     // Comments stripped: the runner's own note NAMES both, to explain why
     // neither is used.
@@ -80,14 +73,13 @@ describe('nothing compacts on its own', () => {
   });
 
   it('keeps the MANUAL compaction the button depends on', () => {
-    // DISABLE_COMPACT would turn off /compact as well, which is the one path
-    // left for a user who decides to compact.
+    // DISABLE_COMPACT would turn off /compact as well — which is both the
+    // button's path and the automatic trigger's, since they send the same
+    // command.
     //
     // COMMENTS STRIPPED FIRST. The runner's own comment NAMES that variable,
     // to say why it is not the one being used — a test that searched the raw
-    // file would fail on the sentence explaining the correct choice. (Same
-    // mistake this repo already made once, reading a token name out of a CSS
-    // comment.)
+    // file would fail on the sentence explaining the correct choice.
     const code = runner.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
     expect(code).not.toContain('DISABLE_COMPACT');
     expect(code).not.toContain('DISABLE_AUTO_COMPACT');

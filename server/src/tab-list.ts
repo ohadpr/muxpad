@@ -1,6 +1,7 @@
 import type { Tab } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { type PtydCache, cronsByTab, decorateTab } from './ptyd-cache.js';
+import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
 import { compareUnpinnedTabs } from './tab-activity.js';
 import { type ClockSnapshot, clockSnapshot } from './tab-clock.js';
@@ -47,7 +48,16 @@ export function orderedTabsForWorkspace(
   // (`/all` builds it once and passes it down — the index is global, so
   //  rebuilding it per workspace there would be the same scan N times.)
   const clocks = shared ?? clockSnapshot(db);
-  const decorated = raw.map((t) => decorateTab(cache, db, t, manualUnreadIds, cronIds, clocks));
+  // …and one panes read for the whole workspace, which was the last per-row
+  // query here: `decorateTab` needs a tab's panes for its status, attention
+  // and subagent rollups, and it was fetching them one tab at a time — 657
+  // round trips per `GET /api/tabs/all`, on a route polled every five seconds
+  // per device. It is the only cost on this path that grows with the number
+  // of CHATS, which is the number that grows forever.
+  const panesByTab = new PaneStore(db).byTabForWorkspace(workspaceId);
+  const decorated = raw.map((t) =>
+    decorateTab(cache, db, t, manualUnreadIds, cronIds, clocks, panesByTab),
+  );
   const positions = new Map(raw.map((t, i) => [t.id, i]));
   const pinned = decorated.filter((t) => t.pinned);
   const rest = decorated

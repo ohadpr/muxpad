@@ -21,6 +21,7 @@ import { router } from './router';
 import { refreshTabs } from './tabs';
 import { refreshWorkspaces, refreshWorkspacesSoon } from './workspaces';
 import './styles.css';
+import { installDemosceneFx } from './lib/demoscene-fx';
 
 /**
  * Self-embed breaker. A pane's web face pointed at muxpad's own origin
@@ -295,6 +296,14 @@ function PushSinkGate() {
   }, []);
   return null;
 }
+
+// The demoscene theme's pointer interference. Installed once, outside React:
+// it is a fact about the DOCUMENT (the theme attribute lives on <html>, and
+// the OS-flip path never goes through a render), and it tears itself down
+// whenever the theme is not demoscene — so every other theme pays one
+// MutationObserver and nothing else. See lib/demoscene-fx.ts for what it draws
+// and why it is painted OVER the text rather than applied to it.
+installDemosceneFx();
 
 const root = createRoot(document.getElementById('root') as HTMLElement);
 if (selfEmbedded) {

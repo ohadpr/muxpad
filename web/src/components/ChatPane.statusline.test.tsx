@@ -78,17 +78,15 @@ const px = (v: string | null) => {
 };
 
 describe('the session line cannot become two lines', () => {
-  it('fixes the bar at exactly one line of text, so content cannot grow it', () => {
-    // `height`, not `min-height` and not `max-height` alone: a fixed height is
-    // the only one of the three that both reserves the line AND refuses a
-    // second one. With `max-height` the children would still lay out two rows
-    // and merely be clipped, which is how you get a half-visible second line.
-    expect(decl('.chat-status-bar', 'height')).toBe('1rem');
-    const h = px(decl('.chat-status-bar', 'height'));
-    expect(h).toBeGreaterThan(0);
-    // …and the number is the line, not a guess: the cell's line-height with no
-    // block padding of its own. Same arithmetic tie the composer's 40px has.
-    expect(px(decl('.chat-status-seg', 'line-height'))).toBe(h);
+  it('is one line, sized by the tool row it sits in', () => {
+    // The bar has owned its own height twice — a fixed 1rem under the pill,
+    // then 1.375rem as a floating chip. Inside the pill's tool row it is one
+    // of two items on a line the ROW sizes, so the invariant moves: the row
+    // has a one-line floor, and the bar fills it.
+    expect(decl('.chat-status-bar', 'height')).toBe('100%');
+    const row = px(decl('.chat-composer-tools', 'min-height'));
+    expect(row).toBeGreaterThan(0);
+    expect(row).toBeLessThanOrEqual(32);
     const pad = (decl('.chat-status-seg', 'padding') ?? '').split(/\s+/);
     expect(pad[0]).toBe('0');
   });
@@ -130,25 +128,25 @@ describe('the session line cannot become two lines', () => {
     expect(decl('.chat-status-seg', 'flex-shrink')).not.toBe('0');
   });
 
-  it('aligns to the PILL, not to the pane, so the desktop inherits the phone', () => {
-    // Designed at 390px, where the pill is the full width. On a wide desktop the
-    // pill is 768px centered, so a strip laid out against the PANE would sit a
-    // long way out from the thing it describes. Same box as the pill and the
-    // notice, so the line centres on the pill at every width.
-    expect(decl('.chat-status-bar', 'max-width')).toBe(decl('.chat-composer', 'max-width'));
+  it('aligns to the PILL, because it is now INSIDE the pill', () => {
+    // It used to carry the pill's own 768px box, so a strip laid out against
+    // the pane would not sit a long way out from the thing it describes. It no
+    // longer needs one: it is a child of the composer, so the pill's box is
+    // its box by construction.
+    expect(decl('.chat-status-bar', 'max-width')).toBeNull();
   });
 
-  it("centres, so neither end of it sits in a phone's bottom corner radius", () => {
-    // It was right-aligned, which put the live cell — the one cell that is
-    // always populated — into the bottom-RIGHT corner of the screen, exactly
-    // where an iPhone's display curve cuts in: the last word of "Working…" sat
-    // under it. Centred is the only alignment whose content is far from BOTH
-    // bottom corners, so this is the assertion, not "not flex-end".
-    expect(decl('.chat-status-bar', 'justify-content')).toBe('center');
-    // …and the strip's own side padding stays symmetric, or centred content is
-    // centred on an off-centre box.
-    const pad = (decl('.chat-status-bar', 'padding') ?? '').split(/\s+/);
-    expect(pad).toHaveLength(2);
+  it('is right-aligned, at the far end of the composer tool row', () => {
+    // It was CENTRED while it was a full-width row under the pill, to keep
+    // the always-populated live cell out of a phone's bottom corner radius.
+    // Sharing a row with the tools, right is the only end left — and the gap
+    // between what you can ADD to a message and what the chat is RUNNING is
+    // the row's whole structure.
+    expect(decl('.chat-status-bar', 'justify-content')).toBe('flex-end');
+    expect(decl('.chat-composer-tools > .chat-status-bar', 'margin-left')).toBe('auto');
+    // AND IT IS IN FLOW. One revision hung it off the composer's top edge —
+    // which cost no row, and painted over the last line of the transcript.
+    expect(decl('.chat-status-bar', 'position')).toBeNull();
   });
 
   it('clears the home indicator by max(), never by adding to it', () => {
@@ -158,7 +156,14 @@ describe('the session line cannot become two lines', () => {
     // the indicator where there is one and keeps the 10px where there isn't.
     const pad = decl('.chat-composer-wrap', 'padding') ?? '';
     expect(pad).not.toMatch(/\+\s*env\(safe-area-inset-bottom/);
-    expect(pad).toMatch(/max\(10px,\s*env\(safe-area-inset-bottom/);
+    // A floor well clear of the shadow — 10 then 16 then 22, each time for
+    // the same reason: the pill carries a drop shadow, and on a theme that
+    // draws a hard offset one (memphis puts it 6px down) the floor is spent
+    // before any gap begins. The ARITHMETIC is what this test is about — a
+    // floor, never a sum — so it pins the shape and a minimum rather than one
+    // number somebody will have to come back and edit again.
+    const floor = /max\((\d+)px,\s*env\(safe-area-inset-bottom/.exec(pad)?.[1];
+    expect(Number(floor)).toBeGreaterThanOrEqual(16);
     // The sides are the rounded corners in landscape, same idiom.
     expect(pad).toMatch(/max\(12px,\s*env\(safe-area-inset-left/);
     expect(pad).toMatch(/max\(12px,\s*env\(safe-area-inset-right/);
@@ -219,45 +224,23 @@ describe('the session line sits outside the composer pill', () => {
     SRC.indexOf('// Everything that draws an ALREADY-ARRIVED message'),
   );
 
-  it('renders the bar as a SIBLING of the pill, UNDER it', () => {
-    // A slice that missed its anchor makes every assertion below vacuously
-    // true, which is how this test passed while saying nothing.
+  it('is in the composer tool row, on every layout', () => {
+    // It has been under the pill, above the pill, inside the pill's tool row,
+    // in the app's top bar, and in a head of its own — twice. The question
+    // came back every time it went to the top of the pane: "why is this at
+    // the top right of the chat window?" Because a mock-up drew a header
+    // there, and that mock-up's phone had no sidebar naming the chat.
+    //
+    // The tool row is the chat's own control surface and is already where you
+    // attach a file. One place, both layouts.
     expect(WRAP.length).toBeGreaterThan(100);
-    expect(WRAP).toContain('<SessionBar');
-    // Order is the assertion, and it reversed deliberately: the line is
-    // reference, not conversation, so it sits BELOW the pill rather than
-    // between the pill and the last message. Still a sibling — never a child —
-    // which is what keeps it out of the pill's own layout.
-    expect(WRAP.indexOf('<SessionBar')).toBeGreaterThan(
-      WRAP.indexOf('<div className="chat-composer">'),
+    expect(SRC).not.toMatch(/chat-head/);
+    expect(SRC).toMatch(
+      /<div className="chat-composer-tools">\s*\{composerTools\}\s*\{sessionStrip\}/,
     );
-  });
-
-  it('is not a second box — no border and no background of its own', () => {
-    // Kept from the height work that put it in the pill in the first place.
-    // Out of the pill does NOT mean back to a bordered, filled strip floating
-    // above it: that arrangement cost 37px of a 119px bar. A quiet line on the
-    // transparent gap costs its own text and nothing else.
-    expect(decl('.chat-status-bar', 'border')).toBeNull();
-    expect(decl('.chat-status-bar', 'background')).toBeNull();
-  });
-
-  it('owns the gap to the pill, on the side the pill is actually on', () => {
-    // THE SIDE IS THE ASSERTION. Inside the pill, the pill's row gap held the
-    // strip off the input; outside and ABOVE it, the strip's own bottom margin
-    // did. The strip then moved BELOW the composer and the margin stayed where
-    // it was, which is a gap facing nothing — 6px of dead space under the line
-    // and the line pressed against the pill. Pinning "non-zero" could not catch
-    // that, because the wrong side is also non-zero.
-    const margin = (decl('.chat-status-bar', 'margin') ?? '').split(/\s+/);
-    const above = Number((margin[0] ?? '').replace('px', ''));
-    const below = Number((margin[2] ?? '').replace('px', ''));
-    expect(above).toBeGreaterThan(0);
-    expect(below).toBe(0);
-    // And it stays a GAP, never a box again: the arrangement this replaced cost
-    // 37px of a 119px bar in border, background and padding. The strip's whole
-    // cost is its one line plus this.
-    expect(above).toBeLessThanOrEqual(16);
+    // …and never portalled out of the pane, which read as window chrome and
+    // opened its menus over the carrier and the clock.
+    expect(SRC).not.toMatch(/MobilePaneChrome/);
   });
 
   it('cannot move the composer, because its height is not a variable', () => {
@@ -266,7 +249,7 @@ describe('the session line sits outside the composer pill', () => {
     // strip pushed the input down. Its height is now a constant in the
     // stylesheet and the only inline style the composer measures is the
     // reserve's — nothing in this component sizes the strip at runtime.
-    expect(decl('.chat-status-bar', 'height')).toBe('1rem');
+    expect(decl('.chat-composer-tools', 'min-height')).toBeTruthy();
     expect(SRC).not.toMatch(/className="chat-status-bar"[\s\S]{0,200}style=/);
   });
 });
@@ -327,69 +310,53 @@ describe('the session line spends its width on what changes', () => {
   });
 
   /**
-   * ── THE ONE CELL THAT MAY APPEAR IN CHAT MODE ────────────────────────────
+   * ── THERE IS NO CONTEXT CELL ANY MORE, IN EITHER MODE ────────────────────
    *
-   * The count above is the rule: Chat mode has no dials. This is the single
-   * exception, and it earns it by not being a dial — it is absent until the
-   * conversation is nearly full, and it is the only route to the one action
-   * that can do something about that.
+   * There was one, and it was the single exception to "Chat mode has no
+   * dials": absent until the conversation was nearly full, then present in
+   * warn and then danger ink, as the only route to Compact.
    *
-   * It exists because muxpad stopped compacting on its own. The 200k window
-   * that used to do it silently rewrote long threads (measured: two
-   * compactions in three hours on one, 372k tokens of detail dropped). With
-   * that gone, the chat has to say the pressure is coming, or the first news
-   * of the ceiling is a failed turn.
+   * It earned that exception only while muxpad compacted nothing by itself —
+   * with no automatic compaction, the chat had to say the ceiling was coming
+   * or the first news of it would be a failed turn. Compaction is automatic
+   * again (see the runner's auto-compact), so the cell went back to being a
+   * number asking to be watched for no action: "I don't want the user to be
+   * thinking about compaction. Compaction should just happen."
+   *
+   * The METER did not go with it. It is in the session menu, with the token
+   * counts and Compact now — strictly more information, one tap away, for the
+   * moments somebody actually wants to know.
    */
-  it('stays out of the way below the warning threshold', () => {
-    const box = mount({ mode: 'chat', status: STATUS }); // 25%
-    expect(box.querySelector('.chat-status-seg.-ctx')).toBeNull();
-    expect(cells(box)).toHaveLength(2);
+  it('shows no context cell, at any fullness, in either mode', () => {
+    for (const mode of ['chat', 'agent'] as const) {
+      for (const pct of [25, 72, 93, 99]) {
+        const box = mount({
+          mode,
+          status: { ...STATUS, context: { pct, tokens: pct * 10_000, max: 1_000_000 } },
+        });
+        expect(box.querySelector('.chat-status-seg.-ctx'), `${mode} @ ${pct}%`).toBeNull();
+      }
+    }
   });
 
-  it('appears in CHAT mode once the chat is filling up', () => {
-    const box = mount({
-      mode: 'chat',
-      status: { ...STATUS, context: { pct: 72, tokens: 720_000, max: 1_000_000 } },
-    });
-    const cell = box.querySelector('.chat-status-seg.-ctx');
-    expect(cell).not.toBeNull();
-    expect(cell?.getAttribute('data-level')).toBe('warn');
-    expect(cell?.textContent).toContain('72%');
-    // It names the numbers and the policy in the tooltip, because the cell
-    // itself is two words wide.
-    expect(cell?.getAttribute('title')).toContain('nothing is compacted automatically');
-  });
-
-  it('turns danger-coloured when the next long turn could hit the ceiling', () => {
-    const box = mount({
-      mode: 'agent',
-      status: { ...STATUS, context: { pct: 93, tokens: 930_000, max: 1_000_000 } },
-    });
-    expect(box.querySelector('.chat-status-seg.-ctx')?.getAttribute('data-level')).toBe('high');
-  });
-
-  it('compacts only when pressed, and says what to keep when it does', async () => {
+  it('keeps the meter and Compact one tap away, in the session menu', async () => {
     const sent: unknown[] = [];
     const box = mount({
-      mode: 'chat',
+      mode: 'agent',
       status: { ...STATUS, context: { pct: 80, tokens: 800_000, max: 1_000_000 } },
       send: (m: unknown) => sent.push(m),
     });
-    // Opening the panel is not compacting.
     await act(async () => {
-      box.querySelector<HTMLButtonElement>('.chat-status-seg.-ctx')?.click();
+      box.querySelector<HTMLButtonElement>('.chat-status-seg')?.click();
     });
-    expect(sent).toHaveLength(0);
+    expect(box.querySelector('.chat-session-bar-fill')).not.toBeNull();
     const compact = [...box.querySelectorAll<HTMLButtonElement>('.chat-session-item')].find((b) =>
-      b.textContent?.includes('Compact now'),
+      b.textContent?.includes('Compact'),
     );
     expect(compact).toBeTruthy();
-    // The cost is stated where the decision is taken.
-    expect(compact?.textContent).toContain('cannot be undone');
     await act(async () => {
       compact?.click();
     });
-    expect(sent).toHaveLength(1);
     const msg = sent[0] as { t: string; cmd: string; args?: string };
     expect(msg.t).toBe('slash');
     expect(msg.cmd).toBe('compact');
@@ -595,5 +562,309 @@ describe('the background-command cell', () => {
     const box = bar({ background: 1, mode: 'chat', liveLabel: liveStatusLabel({ chats: 2 }) });
     expect(cell(box)).not.toBeNull();
     expect(box.querySelector('.chat-status-seg.-mode')).not.toBeNull();
+  });
+});
+
+/**
+ * BRANCH IS NOT ON THIS STRIP. It was the one chip here that was a verb
+ * rather than a fact, and it is a COMMAND — so it moved to where the composer
+ * keeps commands (the tool row on a desktop, the `+` sheet on a phone) under
+ * the name the report gave it: "btw…". ChatPane.tools.test owns it now.
+ */
+describe('the session strip carries facts, not commands', () => {
+  it('renders no branch control of its own', () => {
+    expect(readFileSync(join(__dirname, 'ChatStart.tsx'), 'utf8')).not.toMatch(
+      /chat-status-seg -branch/,
+    );
+    expect(css).not.toMatch(/\.chat-status-seg\.-branch\s*\{/);
+  });
+});
+
+/**
+ * AND ITS MENUS RISE, which is the default and now the only case: the strip
+ * is at the bottom of the pane, where up is the one direction with room. The
+ * downward anchor existed for the head, which is gone.
+ */
+describe('a menu opened from the strip', () => {
+  it('rises from the chip', () => {
+    expect(decl('.chat-status-menu', 'bottom')).toBe('calc(100% + 6px)');
+  });
+
+  it('has no downward variant left over from the head', () => {
+    expect(bare(css).includes('.chat-head')).toBe(false);
+  });
+});
+
+/**
+ * THE MODE CHIP EXPLAINS ITSELF — AND IS STILL NOT A SWITCH.
+ *
+ * It carried a native `title` and nothing else, which failed the only reader
+ * who needs it: "add some on-hover info, a sentence or something saying what
+ * this is." A `title` takes about a second to appear, is unstyled, and does
+ * not exist at all on a phone — where this chip lives inside the composer's
+ * `+` sheet.
+ */
+describe('the mode chip', () => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+  function chat(): HTMLElement {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    act(() => {
+      root.render(
+        <SessionBar
+          paneId="p1"
+          folder={null}
+          status={null}
+          send={() => {}}
+          liveLabel={null}
+          agents={[]}
+          mode="chat"
+        />,
+      );
+    });
+    return host;
+  }
+
+  it('is pressable, and opens a panel rather than a menu of modes', () => {
+    const box = chat();
+    const chip = box.querySelector<HTMLButtonElement>('.chat-status-seg.-mode');
+    expect(chip?.tagName).toBe('BUTTON');
+    act(() => chip?.click());
+    const panel = box.querySelector('.chat-status-menu');
+    expect(panel).not.toBeNull();
+    expect(panel?.getAttribute('role')).toBe('dialog');
+  });
+
+  it('says what the mode IS, in the words that define it', () => {
+    const box = chat();
+    act(() => box.querySelector<HTMLButtonElement>('.chat-status-seg.-mode')?.click());
+    expect(box.querySelector('.chat-status-menu')?.textContent).toMatch(/muxpad’s assistant/);
+  });
+
+  it('answers the next question: how to actually change it', () => {
+    // No harness can rewrite a running session's instructions, so a switch
+    // here could only deliver the new contract as a message the conversation
+    // drifts from. Saying so beats offering a control that under-delivers.
+    const box = chat();
+    act(() => box.querySelector<HTMLButtonElement>('.chat-status-seg.-mode')?.click());
+    const text = box.querySelector('.chat-status-menu')?.textContent ?? '';
+    expect(text).toMatch(/keeps the mode it was created in/);
+    expect(text).toMatch(/open a new chat in Agent mode/i);
+  });
+
+  it('offers no way to switch the running pane', () => {
+    const box = chat();
+    act(() => box.querySelector<HTMLButtonElement>('.chat-status-seg.-mode')?.click());
+    const panel = box.querySelector('.chat-status-menu');
+    // Nothing in there is actionable: it is an explanation, not a picker.
+    expect(panel?.querySelectorAll('button')).toHaveLength(0);
+  });
+});
+
+/**
+ * ── THE "older build" CELL ───────────────────────────────────────────────
+ *
+ * A runner outlives every server restart (restarting one kills its in-flight
+ * work), so a pane can sit for days on code the server no longer runs — and
+ * the only symptom is an agent that does not know about something that
+ * shipped since, which reads as the agent being wrong. server/src/
+ * runner-build.ts defines what "stale" means; this is the part that says so.
+ */
+describe('the older-build cell', () => {
+  let host: HTMLElement | null = null;
+  let root: ReturnType<typeof createRoot> | null = null;
+  afterEach(() => {
+    act(() => root?.unmount());
+    host?.remove();
+    host = null;
+    root = null;
+  });
+
+  function bar(props: Partial<Parameters<typeof SessionBar>[0]>) {
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+    act(() => {
+      root?.render(
+        <SessionBar
+          paneId="p1"
+          folder={null}
+          status={null}
+          send={() => {}}
+          liveLabel={null}
+          agents={[]}
+          mode="agent"
+          {...props}
+        />,
+      );
+    });
+    return host;
+  }
+  const cell = (box: HTMLElement) =>
+    box.querySelector<HTMLElement>('[data-testid="chat-status-stale"]');
+
+  it('is absent in the healthy case — which is almost every pane', () => {
+    expect(cell(bar({}))).toBeNull();
+    expect(cell(bar({ stale: false }))).toBeNull();
+  });
+
+  it('appears when the runner is on another build, in either mode', () => {
+    expect(cell(bar({ stale: true }))?.textContent).toBe('older build');
+    expect(cell(bar({ stale: true, mode: 'chat' }))).not.toBeNull();
+  });
+
+  it('opens a panel that says what is missing and what restarting costs', () => {
+    const box = bar({ stale: true });
+    act(() => {
+      cell(box)?.click();
+    });
+    const text = box.querySelector('.chat-status-menu')?.textContent ?? '';
+    // The consequence, not the mechanism: the agent is missing what shipped
+    // since it started.
+    expect(text).toMatch(/instructions/i);
+    // …and the cost of the fix, because respawning kills background work.
+    expect(text).toMatch(/background work/i);
+    expect(text).toMatch(/wake-ups/i);
+  });
+
+  it('offers no restart button — the moment is the user’s to pick', () => {
+    // A control here would respawn the pane in passing, ending background
+    // subagents and scheduled wake-ups it may be holding.
+    const box = bar({ stale: true });
+    act(() => {
+      cell(box)?.click();
+    });
+    expect(box.querySelector('.chat-status-menu')?.querySelectorAll('button')).toHaveLength(0);
+  });
+
+  it('is a warning tone, never the danger colour — nothing is broken', () => {
+    // The old folder cell's red `!` told people their chat was broken when it
+    // was merely not a project. Same mistake, same cell, do not repeat it.
+    const rule = /\.chat-status-seg\.-stale\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(rule).not.toContain('--chat-danger');
+    // `--chat-warn`, which resolves to the amber every theme tunes. The
+    // assertion used to be `toContain('--warn')` — which `--chat-warn` also
+    // satisfies, so it would have gone on passing while the cell was
+    // unreadable. See the suite below for what it is actually pinned to now.
+    expect(rule).toContain('--chat-warn');
+    // Two words that ellipsize to "older…" say nothing.
+    expect(rule).toContain('min-width: max-content');
+  });
+});
+
+/**
+ * ── THE LIVE CELL'S COLOUR IS DECLARED ONCE ──────────────────────────────
+ *
+ * It was measured at 4.06:1 on riso at 11px/600 — below AA, and the dimmest
+ * text on a strip where every other cell sat at 8.08. A saturated accent is
+ * frequently the dimmest colour a theme owns.
+ *
+ * The first fix changed nothing, because the rule already ended with
+ * `color: var(--chat-accent)` five lines further down and the later
+ * declaration won. That is the failure this test exists for: not the value,
+ * the DUPLICATE.
+ */
+describe('the live cell’s ink', () => {
+  const rule = (() => {
+    const flat = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    const i = flat.indexOf('.chat-status-seg.-live {');
+    return i < 0 ? '' : flat.slice(i, flat.indexOf('}', i));
+  })();
+
+  it('declares `color` exactly once', () => {
+    expect(rule, 'the live rule is missing').not.toBe('');
+    expect(rule.match(/(^|[\s;])color:/g) ?? []).toHaveLength(1);
+  });
+
+  it('is mixed toward the body ink, not the bare accent', () => {
+    expect(rule).toMatch(/color:\s*color-mix\(in srgb, var\(--chat-accent\)/);
+    expect(rule).not.toMatch(/color:\s*var\(--chat-accent\)\s*;/);
+  });
+
+  it('leaves the spinning MARK on the pure accent', () => {
+    // A ring has no reading threshold to clear, and it is what carries the hue.
+    const flat = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    const i = flat.indexOf('.chat-status-seg.-live svg {');
+    expect(flat.slice(i, flat.indexOf('}', i))).toMatch(/color:\s*var\(--chat-accent\)/);
+  });
+});
+
+/**
+ * ── THE LIVE CELL YIELDS WHEN NOTHING ELSE CAN ───────────────────────────
+ *
+ * The first attempt at this measured as doing nothing, twice over: it targeted
+ * `.chat-status-seg.-live` when the flex item is the WRAPPER (that rule says
+ * so in its own comment), and it sat EARLIER in the file than the label rule
+ * it had to beat. Both are pinned here, because "I wrote a rule" and "the rule
+ * wins" are different claims and only the second one matters.
+ */
+describe('the live cell under a narrow composer', () => {
+  const flat = css.replace(/\/\*[\s\S]*?\*\//g, '');
+
+  it('makes the composer tool row a query container', () => {
+    // A pane's width has nothing to do with the viewport's: two panes side by
+    // side on a 1500px screen each get a ~400px row.
+    const i = flat.indexOf('.chat-composer-tools {');
+    const body = flat.slice(i, flat.indexOf('}', i));
+    expect(body).toMatch(/container-type:\s*inline-size/);
+    expect(body).toMatch(/container-name:\s*composer-tools/);
+  });
+
+  it('targets the WRAPPER, which is the flex item', () => {
+    const q = flat.slice(flat.indexOf('@container composer-tools'));
+    expect(q.slice(0, q.indexOf('\n}\n'))).toContain('.chat-status-seg-wrap.-live');
+  });
+
+  it('undoes every "never give way" the base rule sets', () => {
+    // The base rule pins flex-shrink, width, max-width and min-width. Naming
+    // only min-width and overflow left the button at full width inside a
+    // wrapper that had shrunk, so the label was hard-clipped mid-word instead
+    // of ellipsized — measured, twice.
+    const q = flat.slice(flat.indexOf('@container composer-tools'));
+    const block = q.slice(0, q.indexOf('\n}\n'));
+    expect(block).toMatch(/flex-shrink:\s*1/);
+    expect(block).toMatch(/text-overflow:\s*ellipsis/);
+  });
+
+  it('is declared AFTER the rules it has to beat', () => {
+    const q = flat.indexOf('@container composer-tools');
+    expect(q).toBeGreaterThan(flat.indexOf('.chat-status-seg-wrap.-live {'));
+    expect(q).toBeGreaterThan(flat.indexOf('.chat-status-seg.-live .chat-status-seg-label {'));
+  });
+});
+
+/**
+ * ── THE WARNING HUE COMES FROM A TOKEN THEMES DEFINE ─────────────────────
+ *
+ * It named `--warn`, which NO theme defines, so every one of them fell
+ * through to `--hit-bg` — the search-highlight BACKGROUND, a colour chosen to
+ * sit behind black text. As text on a light composer that measured about
+ * 1.8:1: the one cell whose job is to be noticed, in the one colour nobody
+ * could read.
+ */
+describe('the older-build cell’s colour', () => {
+  const flat = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const appCss = readFileSync(join(import.meta.dirname, '..', 'styles.css'), 'utf8');
+
+  it('does not reach for a token no theme sets', () => {
+    expect(flat).not.toMatch(/var\(--warn[,)]/);
+    expect(appCss, 'if a theme ever defines --warn this test should be revisited').not.toMatch(
+      /--warn:/,
+    );
+  });
+
+  it('never uses a search-highlight BACKGROUND as text', () => {
+    const rule = flat.slice(flat.indexOf('.chat-status-seg.-stale {'));
+    expect(rule.slice(0, rule.indexOf('}'))).not.toContain('--hit-bg');
+  });
+
+  it('uses the amber the themes actually tune', () => {
+    // --status-working is per-theme: #e8b34b on the dark rails, #8a6410 and
+    // #96650b on the light ones, which is the whole point.
+    expect(flat).toMatch(/--chat-warn:\s*var\(--status-working/);
+    const themed = (appCss.match(/--status-working:/g) ?? []).length;
+    expect(themed, 'every theme tunes it').toBeGreaterThan(5);
   });
 });

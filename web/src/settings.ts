@@ -1,6 +1,16 @@
 import { useEffect, useState } from 'react';
 
-export type Theme = 'tokyo-night' | 'dracula' | 'alucard' | 'github-light' | 'acme' | 'acme-dark';
+export type Theme =
+  | 'tokyo-night'
+  | 'dracula'
+  | 'alucard'
+  | 'github-light'
+  | 'acme'
+  | 'acme-dark'
+  | 'demoscene'
+  | 'blueprint'
+  | 'riso'
+  | 'memphis';
 
 /** What the picker offers: a theme, or "whatever the OS is doing". */
 export type ThemeChoice = Theme | 'system';
@@ -16,17 +26,30 @@ export const SYSTEM_PAIR = { light: 'alucard', dark: 'dracula' } as const;
 export const THEMES: { value: Theme; label: string }[] = [
   { value: 'tokyo-night', label: 'Tokyo Night' },
   { value: 'dracula', label: 'Dracula' },
-  { value: 'alucard', label: 'Alucard (Dracula Light)' },
+  { value: 'alucard', label: 'Alucard' },
   { value: 'github-light', label: 'GitHub Light' },
   { value: 'acme', label: 'Acme' },
   { value: 'acme-dark', label: 'Acme Dark' },
+  { value: 'demoscene', label: 'Demoscene' },
+  { value: 'blueprint', label: 'Blueprint' },
+  { value: 'riso', label: 'Riso' },
+  { value: 'memphis', label: 'Memphis' },
 ];
 
 const VALID_THEMES = new Set<Theme>(THEMES.map((t) => t.value));
 
-/** The picker's options: System first, because it is the recommended default. */
+/**
+ * The picker's options: System first, because it is the recommended default.
+ *
+ * The labels are SHORT — "Alucard", not "Alucard (Dracula Light)"; "System",
+ * not "System (Dracula / Alucard)". They were long because a <select> had to
+ * say in words what a theme looks like. The picker now paints each one, and
+ * System's tile is literally the two halves cut on the diagonal, so the
+ * parenthetical was describing the thing directly above it — and was the only
+ * reason two of the tiles ellipsised their own names.
+ */
 export const THEME_CHOICES: { value: ThemeChoice; label: string }[] = [
-  { value: 'system', label: 'System (Dracula / Alucard)' },
+  { value: 'system', label: 'System' },
   ...THEMES,
 ];
 
@@ -55,6 +78,11 @@ const THEME_ALIASES: Record<string, Theme> = {
   'soft-dark': 'tokyo-night',
   nord: 'tokyo-night',
   light: 'github-light',
+  // Thrown out, not renamed — but anyone sitting on it gets the loud light
+  // theme that replaced it rather than a silent reset to the default.
+  thermal: 'riso',
+  hazard: 'memphis',
+  abyss: 'dracula',
   'solarized-light': 'github-light',
   'solarized-dark': 'tokyo-night',
   latte: 'github-light',
@@ -144,9 +172,62 @@ const listeners = new Set<(s: Settings) => void>();
 
 let current: Settings = typeof window === 'undefined' ? DEFAULTS : read();
 
+/**
+ * ── THE CHAT YOU ARE IN MAY OVERRIDE THE DEVICE'S THEME ────────────────────
+ *
+ * A theme used to be one fact: what this browser looks like. It is two now —
+ * the device's default (here, in localStorage) and the chat's own (on the tab
+ * row, so it follows you to every device). The chat wins while you are in it;
+ * `null` means it has no opinion and the default shows through.
+ *
+ * It lives in this module rather than in a React store because the theme is a
+ * DOCUMENT-level fact: the `data-theme` attribute is on `<html>`, the OS
+ * dark-mode listener below already writes it, and the terminal reads its
+ * palette out of the cascade. A second owner would be a second answer to
+ * "what theme is it right now".
+ */
+let chatTheme: ThemeChoice | null = null;
+
+/** What the document is actually wearing: the chat's theme, else the device's. */
+/**
+ * The theme ACTUALLY IN FORCE — the chat's own if it has one, otherwise the
+ * device default.
+ *
+ * Exported because the PICKER has to ask the same question the painter does.
+ * It was reading `settings.theme` — the device default — while a pick made
+ * inside a chat writes the chat's theme, so the two disagreed by
+ * construction: the window repainted and the selection ring stayed where it
+ * was. Every theme looked unselectable, which is how this surfaced ("memphis
+ * is not selectable"), and "Use for every chat" then saved the ring's value
+ * rather than the one on screen and cleared the pick.
+ */
+export function themeInForce(s: Settings): ThemeChoice {
+  return chatTheme ?? s.theme;
+}
+
 function applyToDocument(s: Settings) {
   if (typeof document === 'undefined') return;
-  document.documentElement.dataset.theme = resolveTheme(s.theme, systemPrefersDark());
+  document.documentElement.dataset.theme = resolveTheme(themeInForce(s), systemPrefersDark());
+}
+
+/**
+ * Point the document at the active chat's theme, or `null` to go back to the
+ * device default. Called when the active tab changes and when its row does.
+ *
+ * A no-op when nothing changes, because this runs on every tab switch and a
+ * repaint of every themed surface (the terminal rebuilds its palette) is not
+ * free.
+ */
+export function setChatTheme(choice: ThemeChoice | null): void {
+  if (chatTheme === choice) return;
+  chatTheme = choice;
+  applyToDocument(current);
+  for (const fn of listeners) fn({ ...current });
+}
+
+/** The chat's own theme, or null when it follows the device. */
+export function getChatTheme(): ThemeChoice | null {
+  return chatTheme;
 }
 
 /**
@@ -161,7 +242,10 @@ function applyToDocument(s: Settings) {
 if (typeof window !== 'undefined' && window.matchMedia) {
   const mq = window.matchMedia(DARK_QUERY);
   const onFlip = () => {
-    if (current.theme !== 'system') return;
+    // `themeInForce`, not `current.theme`: when the chat you are in has
+    // chosen 'system' the device default is irrelevant, and when the chat has
+    // chosen a named theme an OS flip must not repaint anything.
+    if (themeInForce(current) !== 'system') return;
     applyToDocument(current);
     for (const fn of listeners) fn({ ...current });
   };
@@ -197,6 +281,26 @@ export function updateSettings(patch: Partial<Settings>): void {
  */
 export const TERMINAL_FONT = 'Menlo, Monaco, monospace';
 
+/**
+ * …unless the THEME says otherwise.
+ *
+ * Fonts became a theme's business with the demoscene theme (styles.css): a
+ * look built out of a typeface and hard edges cannot be expressed as a
+ * palette. `--term-font` is the terminal's share of that, and it is read from
+ * the cascade rather than passed down, for the same reason the palette is —
+ * the theme is a document-level fact, and the terminal is rebuilt whenever it
+ * changes.
+ *
+ * Falls back to {@link TERMINAL_FONT} whenever the variable is missing or
+ * empty, which keeps the no-webfont, no-re-measure contract intact for every
+ * theme that does not care.
+ */
+export function resolvedTerminalFont(): string {
+  if (typeof window === 'undefined' || !document?.documentElement) return TERMINAL_FONT;
+  const v = getComputedStyle(document.documentElement).getPropertyValue('--term-font').trim();
+  return v || TERMINAL_FONT;
+}
+
 export function useResolvedTheme(): Theme {
   const s = useSettings();
   const [prefersDark, setPrefersDark] = useState(systemPrefersDark);
@@ -212,7 +316,7 @@ export function useResolvedTheme(): Theme {
     mq.addListener?.(onFlip);
     return () => mq.removeListener?.(onFlip);
   }, []);
-  return resolveTheme(s.theme, prefersDark);
+  return resolveTheme(themeInForce(s), prefersDark);
 }
 
 export function useSettings(): Settings {

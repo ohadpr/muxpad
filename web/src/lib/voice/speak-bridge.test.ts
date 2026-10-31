@@ -251,8 +251,17 @@ describe('parseChatFrame — an allow-list, so a new chat frame is never spoken 
 
   it('rejects frames it has no opinion about', () => {
     expect(parseChatFrame({ t: 'events', phase: 'live', events: [] })).toBeNull();
-    expect(parseChatFrame({ t: 'session', session: null })).toBeNull();
     expect(parseChatFrame({ t: 'some-future-frame' })).toBeNull();
+  });
+
+  it('DOES read the session snapshot — it is the only repair for a lost turn-done', () => {
+    // This frame used to be on the reject list above, on the reasonable
+    // grounds that it says nothing aloud. It is the one frame that can tell
+    // voice a turn ended that it did not see end: `turn-done` is a live
+    // broadcast, nothing re-sends it, and one socket blip during a voice turn
+    // left the task bound forever repeating "Still working on it — 176
+    // seconds in" while the chat showed a finished answer.
+    expect(parseChatFrame({ t: 'session', session: null, turnRunning: false })).not.toBeNull();
   });
 
   it('rejects junk', () => {

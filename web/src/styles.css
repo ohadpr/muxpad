@@ -24,6 +24,15 @@
      stays on --chrome-font. */
   --ui-font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 
+  /* The TERMINAL's font, as a token so a theme can own it like any other.
+     Default is settings.ts TERMINAL_FONT — Menlo, a system font on every
+     platform muxpad runs on, chosen so terminal startup never waits on a
+     webfont and never re-measures its cell. A theme overriding this inherits
+     that contract: name SYSTEM families, or one already declared in
+     fonts.css. A theme that points this at an unloaded webfont pays for it in
+     exactly the place a terminal cannot afford it. */
+  --term-font: Menlo, Monaco, monospace;
+
   /* The header-bar height — referenced from multiple places so it's one
      knob. 36px desktop / 40px mobile (set via media query at the bottom). */
   /* ─── THE ACTIVE PANE'S FACE ────────────────────────────────────────────
@@ -623,6 +632,1027 @@
   --hit-rule: #8a5e00;
 }
 
+/* ─── DEMOSCENE ───────────────────────────────────────────────────────────────
+   A black-ground phosphor theme, and the first one that owns more than colour.
+
+   WHY IT IS ALSO FONTS. Every theme before this repainted a UI whose shapes
+   never moved: same proportional sans in the rail, same corner radii, same
+   sentence case. That is a palette, not a theme — and the look being asked for
+   here (a cracktro, an Amiga boot screen, a 90s terminal) is carried by the
+   TYPEFACE and the hard edges at least as much as by the colours. So the font
+   tokens moved into the theme layer: `--ui-font`, `--chrome-font` and
+   `--term-font` are overridable here exactly like `--accent`, and the shape
+   tokens below with them.
+
+   WHY NO WEBFONT. The obvious move is to ship a pixel face (Topaz, PxPlus IBM
+   VGA). Each MesloLGS NF face in fonts.css is ~1 MB, the terminal is Menlo
+   precisely so startup never waits on a download, and the phone is where this
+   app was just measured slow. So this names system and already-declared
+   families and degrades honestly: if you have a pixel font installed it is
+   used, otherwise you get the platform's monospace, which still reads as
+   "machine". Dropping a woff2 into web/src/fonts/ and naming it first in the
+   stack is the upgrade path, and it is a one-line change to this block.
+
+   CONTRAST. The ink pairs are checked by the same stylesheet tests every other
+   theme answers to (armed control, nav search, rename, chat chip), so these
+   are not vibes — a value that fails lands as a red test, not as a screenshot
+   somebody squints at. */
+[data-theme="demoscene"] {
+  /* THE WHOLE UI GOES MONOSPACE — the single biggest part of the look. The
+     rail's proportional sans is what makes muxpad read as an app rather than
+     as a machine, and taking it away does most of the work. */
+  --ui-font: "Px437 IBM VGA 8x16", "PxPlus IBM VGA8", "Topaz-8", Terminus, "MesloLGS NF",
+    ui-monospace, SFMono-Regular, Menlo, monospace;
+  --chrome-font: "Px437 IBM VGA 8x16", "PxPlus IBM VGA8", "Topaz-8", Terminus, "MesloLGS NF",
+    ui-monospace, SFMono-Regular, Menlo, monospace;
+  --term-font: "Px437 IBM VGA 8x16", "PxPlus IBM VGA8", Menlo, Monaco, monospace;
+
+  /* ─── A TERMINAL GROUND, NOT A PURPLE ONE ──────────────────────────────
+     Two passes got this wrong in opposite directions: green-on-black was an
+     ops console, and the violet ground that replaced it washed the whole app
+     in purple — the colour ended up IN the surfaces instead of in the things
+     drawn on them. A cracktro ran on a black screen; the colour was the
+     effects. So the surfaces are near-black slate and the saturation lives in
+     the accents, the copper bar and the marks. */
+  --bg: #101619;
+  --bg-elev: #161e22;
+  --bg-hover: #1e282d;
+  --bg-chrome: #080d10;
+  --bg-tabbar: #03070a;
+
+  --fg: #d8f6ff;
+  --fg-dim: #9fc4cf;
+  --fg-faint: #5f7d87;
+  --border: #1d2b3180;
+  --border-strong: #2f4850;
+
+  /* Cyan-teal leads — it is the terminal hue AND a scene hue, which is the
+     whole brief. Magenta answers on the rail. */
+  --accent: #19ffd0;
+  --accent-fg: #02120e;
+  --danger: #ff3b5c;
+
+  /* ── THE RAIL IS A SURFACE, NOT THE SAME DARK AGAIN ──────────────────
+     At #161f23 the rail measured 1.09:1 against the pane — the two were
+     one unbroken field, which is what "not good connection of content bg
+     to active chat bg" and "we could use some bg colour" are both about.
+     A selection that IS the pane's surface has nothing to read as
+     continuing FROM when the thing it continues into looks identical.
+
+     Lifted to 1.50:1 — a slate the ground is clearly not, and still far
+     darker than any lit panel: a cracktro ran on black and the colour
+     was in the effects, which is unchanged. The ladder above it (hover,
+     border, seam) re-steps with it, and the dim ink lands at 6.2:1 on
+     its own field against the 4.5 floor. */
+  --rail-surface: #1c3a3d;
+  --rail-ink: #d8f6ff;
+  --rail-ink-dim: #a7cad4;
+  --rail-ink-faint: #7ba39f;
+  --rail-hover: #254b4e;
+  --rail-border: #376a6c;
+  --rail-seam: #2a5457;
+  --rail-accent: #ff2fd0;
+  --rail-status-ready: #2bff9a;
+  --rail-status-working: #ffb224;
+
+  --xterm-bg: #101619;
+  --xterm-fg: #d8f6ff;
+
+  --fade-1: 0.61;
+  --fade-2: 0.39;
+  --clock-base: #2d4349;
+  --hit-bg: #ffb224;
+  --hit-ink: #1a0f02;
+  --hit-rule: #7a5200;
+}
+
+/* ─── and the shapes ────────────────────────────────────────────────────────
+   Scoped to the theme rather than tokenised app-wide, deliberately: these are
+   the demoscene look, not a knob every future theme has to answer. Keeping
+   them here means the other six are untouched and this block is the whole
+   diff for the aesthetic. */
+[data-theme="demoscene"] .navtree,
+[data-theme="demoscene"] .chat-list,
+[data-theme="demoscene"] .chat-pane {
+  letter-spacing: 0.01em;
+}
+/* ─── NO THEME PUTS A WALL ON THE RAIL'S RIGHT EDGE ─────────────────────────
+   Two of them did — demoscene's box-drawing double line and blueprint's heavy
+   drafting rule — and both were drawn in exactly the place the SELECTED ROW
+   crosses. muxpad's selection is the chat pane's surface continuing into the
+   rail, with `.navtree-tab-funnel` flaring one into the other; a border sits
+   outside the padding box of everything, so it rules a line straight through
+   that join. Reported against blueprint: "remove vertical border line it
+   blocks nice flow of selected tab bg".
+
+   It is not a tuning question, it is structural: the rail's right edge is
+   WHERE THE PANE JOINS IT, so anything painted there is in the way by
+   construction, in every theme, for ever. themes.test.ts fails it now.
+
+   The idea both themes wanted is not lost — a panel still reads as a panel
+   from its own surface, its brand plate and its section rules, all of which
+   they already have. */
+
+/* ─── THE SELECTORS THAT MATCHED NOTHING ────────────────────────────────────
+   `.navtree-ws-label`, `.navtree-head` and `.chat-pane-head` did not exist
+   and never had. The rail's header is `.sidenav-brand` and the workspace name
+   is `.navtree-ws-name > .navtree-name-text`. demoscene shipped three of
+   these from the day it landed and two later themes copied them, because a
+   rule that matches nothing renders exactly like a rule that works.
+   themes.test.ts now fails on any class the app never renders.
+
+   NOTE, since this is the comment a future theme will read: the chat pane DOES
+   have a head now — `.chat-head`, carrying the chat's name and the session
+   chip. It is a real element a theme may style. `.chat-pane-head` is still
+   not its name. */
+[data-theme="demoscene"] .navtree-ws-name {
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+/* ─── IT WAS FLAT BECAUSE IT HAD NO STRUCTURE ───────────────────────────────
+   First pass at the texture was all surface and no frame: 3% dither and
+   scanlines at 18% black over an already-black ground — invisible, which is
+   another word for flat. And the rail paints no background and no right
+   border of its own, so the whole window was ONE unbroken dark field with
+   text floating in it.
+   A text-mode screen is made of EDGES: panels have walls, the selection has a
+   cursor, section headers are drawn in rule characters. That is structure, and
+   it is what the rest of this block adds. */
+
+/* THE SELECTION HAS A CURSOR. `▶` in the gutter of the active row — the
+   single most recognisable thing about a TUI, and the one element here that a
+   reader identifies instantly without being told what it is. */
+[data-theme="demoscene"] .navtree-tab-row[data-active="true"] .navtree-tab-titleline::before {
+  content: "▶";
+  flex: 0 0 auto;
+  margin-right: 6px;
+  color: var(--accent);
+  font-weight: 700;
+  text-shadow: 0 0 6px color-mix(in srgb, var(--accent) 70%, transparent);
+}
+
+/* SECTION HEADERS ARE RULES. `══` either side of the workspace name, drawn
+   with real box-drawing characters — the ASCII, not an impression of it. The
+   trailing rule runs to the end of the row as a gradient, because a repeated
+   glyph cannot know how wide the rail is. */
+[data-theme="demoscene"] .navtree-ws-row .navtree-name-text::before {
+  content: "══ ";
+  color: color-mix(in srgb, var(--accent) 70%, transparent);
+}
+/* The trailing rule is DRAWN, not typed. A run of `═` was the obvious move and
+   the wrong one: the name is a truncating flex child, so the glyphs went into
+   its ellipsis and the header read "PERSONAL ───… " — a mistake, not a rule.
+   A gradient fills whatever width is left, at any rail size, and cannot be
+   truncated because it is not text. */
+[data-theme="demoscene"] .navtree-ws-name::after {
+  content: "";
+  flex: 1 1 auto;
+  min-width: 12px;
+  height: 3px;
+  margin-left: 8px;
+  background: repeating-linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--accent) 34%, transparent) 0 1px,
+    transparent 1px 2px,
+    color-mix(in srgb, var(--accent) 34%, transparent) 2px 3px
+  );
+}
+[data-theme="demoscene"] .navtree-ws-name {
+  display: flex;
+  align-items: center;
+}
+
+/* THE CHAT HAS A FRAME TOO, or the rail's wall is the only edge on screen and
+   the content half still reads as a void. */
+[data-theme="demoscene"] .chat-composer {
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, transparent);
+  border-radius: 0;
+}
+
+/* AND THE TEXTURE, AT A STRENGTH YOU CAN SEE. The first pass hedged at 3% ink
+   and 18% black; both are now where a 1990s tube actually sat. The scanline
+   period is 3px so it reads as lines rather than as a grey wash. */
+[data-theme="demoscene"] .chat-card,
+[data-theme="demoscene"] .settings-dialog,
+[data-theme="demoscene"] .chat-composer {
+  background-image: repeating-conic-gradient(
+    color-mix(in srgb, var(--fg) 8%, transparent) 0% 25%,
+    transparent 0% 50%
+  );
+  background-size: 4px 4px;
+}
+
+/* ─── EVERY MARK IS A BLOCK ─────────────────────────────────────────────────
+   The single highest-yield line in this theme. A circle is a dot on a design
+   system; a SQUARE on a monospace grid is a character cell, and the moment the
+   status marks stop being round the rail reads as a text-mode screen rather
+   than as an app wearing dark colours. Costs one declaration. */
+[data-theme="demoscene"] .navtree-mark,
+[data-theme="demoscene"] .navtree-state-dot {
+  border-radius: 0;
+}
+
+/* ─── DITHER ────────────────────────────────────────────────────────────────
+   A 2px checkerboard at 3% ink on raised surfaces. This is how a 16-colour
+   machine faked a gradient, and it is the texture — not the hue — that dates a
+   screen to the era. Invisible as pattern at arm's length; what you notice is
+   that the surface is not flat. One background-image, no element, no paint
+   beyond what the surface already does. */
+[data-theme="demoscene"] .chat-card,
+[data-theme="demoscene"] .settings-dialog,
+[data-theme="demoscene"] .chat-composer {
+  background-image: repeating-conic-gradient(
+    color-mix(in srgb, var(--fg) 3%, transparent) 0% 25%,
+    transparent 0% 50%
+  );
+  background-size: 4px 4px;
+}
+
+/* ─── DOUBLE RULE ═══════════════════════════════════════════════════════════
+   The rail's seam becomes a box-drawing double line — two hairlines with a gap,
+   which is literally what ═ is. Drawn with a gradient rather than a glyph so it
+   survives at any width and costs no font. */
+[data-theme="demoscene"] .sidenav-brand {
+  border-bottom: 3px solid transparent;
+  border-image: repeating-linear-gradient(
+      to bottom,
+      var(--rail-border) 0 1px,
+      transparent 1px 2px,
+      var(--rail-border) 2px 3px
+    )
+    3;
+}
+
+/* ─── THE COPPER BAR IS A BAR, NOT A WASH ───────────────────────────────────
+   The Amiga's copper changed the background colour every scanline, and in an
+   intro those bands SLID. Reproducing that as a translucent gradient across
+   the whole selected row was wrong twice over, and the second report says it
+   plainly: "demoscene active chat bg in sidebar not good, it should use the
+   same color as the chat itself."
+
+   It should, and it is supposed to — muxpad's selected row IS the chat pane's
+   surface (`--bg-pane-face`), continued into the rail by the funnel. Any wash
+   laid over that lifts the row off the colour it is meant to be matching. The
+   first attempt went muddy (magenta and amber averaging to brown over dark
+   teal); the second, cyan-only, was clean and STILL a different colour from
+   the pane, because a wash that is visible is by definition a wash that
+   changed the surface.
+
+   So the fill goes untouched and the copper moves to a 3px strip on the row's
+   leading edge — which is what a copper bar actually was: vivid OPAQUE bands,
+   not a tint. Vertical, scrolling, all four hues, and none of it on the
+   surface the funnel is matching.
+
+   Done with a background LAYER rather than a pseudo-element: on this row
+   `::before` is the state track and `::after` is the funnel's elbow, and the
+   last two times a third claimant took one of those it painted a blob in the
+   wrong place (NavTree.selection.test.ts). */
+[data-theme="demoscene"] .navtree-tab-row[data-active="true"] {
+  background-image: linear-gradient(
+    180deg,
+    #19ffd0 0%,
+    #22e8ff 22%,
+    #ff2fd0 48%,
+    #ffb224 72%,
+    #19ffd0 100%
+  );
+  background-size: 3px 220%;
+  background-repeat: no-repeat;
+  background-position: left top;
+  animation: demoscene-copper 9s linear infinite;
+}
+@keyframes demoscene-copper {
+  to {
+    background-position: left -220%;
+  }
+}
+
+/* ─── CHROMATIC ABERRATION ──────────────────────────────────────────────────
+   A shadow mask never converged perfectly: the red and blue guns landed a
+   fraction either side of the green. One cyan and one magenta shadow, half a
+   pixel out, on the wordmark only — enough to read as a tube, nowhere near
+   enough to blur anything you have to read. */
+[data-theme="demoscene"] .brand-text {
+  text-shadow: -0.5px 0 color-mix(in srgb, #ff2fd0 65%, transparent), 0.5px 0
+    color-mix(in srgb, #22e8ff 65%, transparent);
+}
+
+/* ─── A BLOCK SCROLLBAR ─────────────────────────────────────────────────────
+   Square, hard-edged, and sized to the glyph grid. The rounded translucent
+   pill is the single most modern-looking object in the chrome. */
+[data-theme="demoscene"] .navtree-scroll::-webkit-scrollbar-thumb,
+[data-theme="demoscene"] .chat-list::-webkit-scrollbar-thumb {
+  border-radius: 0;
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+[data-theme="demoscene"] .navtree-scroll::-webkit-scrollbar,
+[data-theme="demoscene"] .chat-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+/* ─── THE DISTORTION IS IN THE CHARACTERS ──────────────────────────────────
+   Nothing to style: lib/demoscene-fx.ts rewrites the text nodes themselves,
+   swapping characters for box-drawing glyphs near the pointer. There is no
+   overlay, no transform and no element — which is the point. Two earlier
+   builds had both, and both were reported as not touching the text, because
+   they did not.
+
+   The reason it can do that safely is THIS THEME's monospace family: a
+   same-width substitution changes no metric, so nothing reflows, nothing
+   rewraps, and the scroll cannot jump. Under a proportional font the same
+   effect would shove text sideways on every frame, which is why it is bound to
+   demoscene rather than offered to every theme. */
+
+/* ─── THE TUBE ──────────────────────────────────────────────────────────────
+   Scanlines plus a corner vignette on one fixed pseudo-element: a CRT was
+   never evenly lit, and the vignette is what stops the lines reading as a
+   filter laid over a flat screen. `pointer-events: none`, so the pair costs
+   one composited layer and never intercepts a tap. */
+[data-theme="demoscene"] body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+      to bottom,
+      #0000 0px,
+      #0000 2px,
+      #0000002e 3px,
+      #0000002e 3px
+    ), radial-gradient(120% 120% at 50% 50%, #0000 58%, #00000059 100%);
+}
+@media (prefers-reduced-motion: reduce), (prefers-contrast: more) {
+  [data-theme="demoscene"] body::after {
+    display: none;
+  }
+  /* The strip stays — it is a 3px edge, not motion. Only the scroll stops,
+     and `background-size` must keep its 3px width or "stopped" would mean
+     "the bar fills the row", which is the thing the strip exists to avoid. */
+  [data-theme="demoscene"] .navtree-tab-row[data-active="true"] {
+    animation: none;
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   THE THEMES THAT CHANGE THE SHAPE, NOT JUST THE HUE.
+
+   demoscene established that a theme may own the typeface and draw its own
+   structure. The six before it were palettes: same proportional sans, same
+   rounded cards, same dots, different colours — which is why the picker read
+   as six shades of one app. These each commit to a different PHYSICAL OBJECT,
+   and the palette is the smallest part of that:
+
+     blueprint   a cyanotype drafting sheet — grid paper, dashed rules,
+                 condensed lettering, corner ticks, hairlines.
+     riso        a risograph zine — fluorescent spot inks, a drum that
+                 cannot hold register, halftone instead of flats.
+     memphis     1981 postmodern — hard offset shadows, 3px rules,
+                 confetti, primaries, and nothing square to anything.
+
+   Three others passed through and were thrown out — thermal (a till
+   receipt), hazard (industrial safety), abyss (bioluminescence at 4,000m).
+   Each failed the same way and it is worth writing down: they were
+   ATMOSPHERES rather than objects, so every idea in them landed on the
+   surfaces instead of in the structure, and a theme whose whole proposition
+   is a mood reads as "another dark one" the second time you look at it.
+   Their ids are aliased (settings.ts), never reused.
+
+   Each follows the demoscene pattern: one token block (which every theme-wide
+   test sweeps and holds to the same contrast arithmetic), then a scoped
+   structural section that no other theme pays for.
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* ─── BLUEPRINT ─────────────────────────────────────────────────────────────
+   A cyanotype is white lines on Prussian blue because that is what the process
+   produced — the ground is the chemistry, not a choice, and the drawing is
+   nothing but line weight. So: no fills, no soft shadows, one amber pencil for
+   the thing you are pointing at, and a grid under all of it. */
+[data-theme="blueprint"] {
+  /* ── NO CONDENSED FACE ANYWHERE, IN THE END ────────────────────────────
+     This began as a condensed drafting hand on BOTH tokens, which made the
+     body text hard to read; then on --chrome-font alone, which made the rail
+     hard to read; and the third report was simply "I still see some usage of
+     narrow fonts in this blue theme" — which was right, because
+     --chrome-font is not two labels, it is every chip, action row, tool row,
+     agent block and settings control in the app.
+
+     The honest reading of three rounds: a condensed face is a DISPLAY face.
+     It is for a title block set once at size, not for a token spent on
+     several dozen small UI strings. What actually reads as a drafting hand
+     here is the CAPS and the TRACKING, and those are applied where the
+     lettering is (below) and cost nothing anywhere else. */
+  --ui-font: "Avenir Next", Avenir, "Segoe UI", system-ui, sans-serif;
+  --chrome-font: "Avenir Next", Avenir, "Segoe UI", system-ui, sans-serif;
+  --term-font: "SF Mono", Menlo, Monaco, monospace;
+
+  --bg: #0a2342;
+  --bg-elev: #0e2d52;
+  --bg-hover: #16406e;
+  --bg-chrome: #071b33;
+  --bg-tabbar: #04121f;
+
+  --fg: #e8f1ff;
+  --fg-dim: #a9c6e8;
+  --fg-faint: #6b8fb8;
+  --border: #16406e;
+  --border-strong: #2a5f9b;
+
+  /* Chalk-cyan leads: on a cyanotype the brightest thing on the sheet is the
+     unexposed paper, which is the line itself. Amber is the correction pencil
+     — the one warm mark a drafter ever makes. */
+  --accent: #9fe3ff;
+  --accent-fg: #06243f;
+  --danger: #ff7a6b;
+
+  /* ── THE RAIL IS THE TITLE BLOCK, AND IT IS LIT ──────────────────────
+     At #0e2f57 the rail measured 1.17:1 against the page — a boundary you
+     cannot see, which is "sidebar needs more contrast from right side
+     content" exactly.
+
+     The instinct is to push a rail DOWN, the way every other theme here
+     does. It cannot work on this one: the page is already #0a2342, so the
+     whole range left below it is black, and the darkest rail that exists
+     still only reaches 1.27:1. Upward there is room — this is 2.11:1 —
+     and it is also the truer object. On a drawing the title block is not
+     a shadow at the edge of the sheet; it is the one panel that is filled
+     in. */
+  --rail-surface: #1d5693;
+  --rail-ink: #eaf3ff;
+  --rail-ink-dim: #d2e3f8;
+  --rail-ink-faint: #9fbddb;
+  --rail-hover: #27689f;
+  --rail-border: #5491ca;
+  --rail-seam: #2a6099;
+  --rail-accent: #ffcf6b;
+  --rail-status-ready: #5ddba0;
+  --rail-status-working: #ffcf6b;
+
+  --xterm-bg: #0a2342;
+  --xterm-fg: #e8f1ff;
+
+  --fade-1: 0.61;
+  --fade-2: 0.39;
+  --clock-base: #2b4e75;
+  --hit-bg: #ffd166;
+  --hit-ink: #1a1200;
+  --hit-rule: #8a6200;
+}
+
+/* THE SHEET IS RULED, AND THE RULES ARE UNDER THE DRAWING.
+   Two grids, which is what drafting paper is: a fine 8px field for setting out
+   and a heavy 96px division over it.
+
+   On the PANELS' own backgrounds, not on a fixed overlay. The overlay version
+   drew both grids OVER the glyphs — a 1px line every 8px crossing the x-height of
+   every character in the app — which is the other half of "hard to read", and
+   is not what paper does either: you draw on top of the grid, you do not rule
+   over the drawing. `background-attachment: fixed` keeps it still while the
+   chat scrolls, so it still reads as the sheet rather than as wallpaper. */
+[data-theme="blueprint"] body,
+[data-theme="blueprint"] .chat-pane,
+[data-theme="blueprint"] .pane-web,
+[data-theme="blueprint"] .workspace-body {
+  background-image: linear-gradient(to right, #9fe3ff1f 0 1px, transparent 1px 100%),
+    linear-gradient(to bottom, #9fe3ff1f 0 1px, transparent 1px 100%);
+  background-size: 96px 96px, 96px 96px;
+  /* FIXED, so every panel's grid is one continuous sheet rather than four
+     that restart at their own top-left — which is what a sheet IS, and what
+     an overlay got right for free and a per-element background does not. */
+  background-attachment: fixed;
+}
+
+/* ─── AND THE READING COLUMN IS A PANEL ON THE SHEET ────────────────────────
+   "extremely hard to read", a second time, with the grid already behind the
+   glyphs rather than over them. Behind was not enough and the arithmetic says
+   why: ink measures 13.9:1 on this ground, so CONTRAST was never the problem.
+   DENSITY was. A 1px rule every 8px puts ~2.5 edges inside the x-height of
+   every character in a paragraph, and the eye re-acquires the baseline on
+   every one of them — a cost that does not appear in any ratio.
+
+   Two changes, and the second is the one that matters. The fine field is gone
+   entirely: a 96px division is still unmistakably drafting paper and is 12×
+   sparser. And the column you actually READ in gets a panel — which is how a
+   drawing has always carried its notes. You do not letter over the setting-out
+   grid; you draw a box and letter inside it. The grid stays crisp in the
+   margins, at the heads, behind the rail and in every empty part of the pane,
+   where it is scenery rather than interference. */
+[data-theme="blueprint"] .chat-msg {
+  background-color: var(--bg);
+  box-shadow: 0 0 0 7px var(--bg);
+}
+
+/* ─── AND YOUR OWN MESSAGES ARE A DRAWN BOX ON IT ───────────────────────────
+   The rule above gave the bubble the SAME ground as the page — which is what
+   "user messages blend with bg" is: I painted the panel over the one element
+   that had its own elevation and took it away. (--bg-elev would not have
+   saved it either: #0e2d52 measures 1.14:1 against this page, and a surface
+   that close is a surface nobody can see.)
+
+   So the bubble gets a step that is actually a step — 1.83:1, past where a
+   distinct panel reads, with ink still at 7.6:1 on it — and a drawn edge,
+   because on a drawing an annotation is a BOX somebody ruled, not a tint. */
+[data-theme="blueprint"] .chat-bubble {
+  background-color: #1b4d82;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  box-shadow: none;
+}
+
+/* The rail and the composer paint their own ground and so stay off the grid,
+   which is correct: a title block is drawn ON the sheet, it is not a hole in
+   it. The chat pane, on the other hand, paints --bg — so putting the grid on
+   the body alone made it invisible everywhere it mattered, which is how the
+   first fix for "hard to read" also deleted the theme. It is listed above. */
+
+/* LETTERING IS CAPS AND TRACKING, not a narrower face. The two things a
+   drawing genuinely LETTERS — the title plate and the section names — are
+   short, set in caps, and not something you read a column of. That is the
+   whole of the drafting hand now; see the token note above for the three
+   rounds it took to get here. */
+[data-theme="blueprint"] .sidenav-brand,
+[data-theme="blueprint"] .navtree-ws-name {
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* EVERY EDGE IS A DRAWN LINE, SO NOTHING IS ROUNDED. A radius is a moulded
+   object; a drawing has corners. */
+[data-theme="blueprint"] .chat-card,
+[data-theme="blueprint"] .chat-bubble,
+[data-theme="blueprint"] .chat-composer,
+[data-theme="blueprint"] .navtree-mark,
+[data-theme="blueprint"] .navtree-state-dot {
+  border-radius: 2px;
+}
+
+/* ANNOTATION IS SET IN CAPS WITH WIDE TRACKING, because a drafter letters by
+   hand against a guide and lowercase does not survive it. */
+[data-theme="blueprint"] .navtree-ws-name {
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+}
+
+/* SECTION RULES ARE DASHED, at the weight a pencil leaves. */
+[data-theme="blueprint"] .sidenav-brand {
+  border-bottom: 1px dashed color-mix(in srgb, var(--accent) 34%, transparent);
+}
+
+/* THE COMPOSER IS A TITLE BLOCK — the boxed panel in the corner of every
+   drawing, with its corner ticks. Four tiny gradients, one element. */
+[data-theme="blueprint"] .chat-composer {
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  background-image: linear-gradient(var(--accent), var(--accent)),
+    linear-gradient(var(--accent), var(--accent)), linear-gradient(var(--accent), var(--accent)),
+    linear-gradient(var(--accent), var(--accent));
+  background-size: 7px 1px, 1px 7px, 7px 1px, 1px 7px;
+  background-position: left top, left top, right bottom, right bottom;
+  background-repeat: no-repeat;
+}
+
+/* A SQUARE BLOCK SCROLLBAR, sized to the fine grid. */
+[data-theme="blueprint"] .navtree-scroll::-webkit-scrollbar-thumb,
+[data-theme="blueprint"] .chat-list::-webkit-scrollbar-thumb {
+  border-radius: 0;
+  background: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+/* ─── RISO ──────────────────────────────────────────────────────────────────
+   A risograph zine. The machine prints ONE SPOT INK PER PASS from a soy-ink
+   drum onto cheap uncoated stock, and everything people love about the result
+   is a defect: the drum never registers twice the same way, so the second
+   colour lands a hair off the first; the ink sits ON the paper instead of in
+   it, so flats are halftone dots rather than solids; and there is no black, so
+   the loudest thing available is fluorescent pink.
+
+   It is here because the set had four dark themes and nothing LOUD. */
+[data-theme="riso"] {
+  /* Poster grotesque for the lettering, a plain one for reading. Futura is
+     the zine face and ships on macOS; Century Gothic is its Windows cousin. */
+  --ui-font: "Helvetica Neue", Helvetica, Arial, system-ui, sans-serif;
+  --chrome-font: Futura, "Century Gothic", "Avenir Next", "Trebuchet MS", system-ui, sans-serif;
+  --term-font: "SF Mono", Menlo, Monaco, monospace;
+
+  --bg: #f7f4ec;
+  --bg-elev: #fffdf7;
+  --bg-hover: #ffe1ef;
+  --bg-chrome: #efe9dc;
+  --bg-tabbar: #e4dccb;
+
+  --fg: #17161c;
+  --fg-dim: #46434f;
+  /* Decorative only — see the --hit-* note in :root; never text. */
+  --fg-faint: #8c8794;
+  --border: #ded7c8;
+  --border-strong: #b8b0a0;
+
+  /* The two drums. Fluorescent pink leads because on a riso it is the ink
+     that cannot be reproduced any other way; the blue is the second pass. */
+  --accent: #e0005f;
+  --accent-fg: #fffaf6;
+  --danger: #d4002b;
+
+  --rail-surface: #1333c4;
+  --rail-ink: #ffffff;
+  --rail-ink-dim: #cdd6fa;
+  --rail-ink-faint: #94a4e8;
+  --rail-hover: #2545d6;
+  --rail-border: #3f5de0;
+  --rail-seam: #2a49cf;
+  --rail-accent: #ff4d9d;
+  --rail-status-ready: #5fe3a1;
+  --rail-status-working: #ffd84d;
+
+  --xterm-bg: #f7f4ec;
+  --xterm-fg: #17161c;
+
+  --fade-1: 0.7;
+  --fade-2: 0.46;
+  --clock-base: #e6dfcf;
+
+  /* Light re-step (see :root), on a WARM stock. */
+  --status-blocked: #d4002b;
+  --status-working: #8a6400;
+  --status-ready: #1f6b45;
+  --status-quiet: #b8b0a0;
+  --status-dead: #6e6a60;
+  --status-wash: 10%;
+  --status-chip-wash: 18%;
+  --status-ink-mix: 50%;
+
+  --hit-bg: #ffe14d;
+  --hit-ink: #17161c;
+  --hit-rule: #8a6a00;
+}
+
+/* NOTHING IS ROUNDED AND NOTHING IS SOFT. A riso has no gradients, no
+   shadows and no antialiased edges to speak of — two inks and the paper. */
+[data-theme="riso"] .chat-card,
+[data-theme="riso"] .chat-bubble,
+[data-theme="riso"] .chat-composer,
+[data-theme="riso"] .settings-dialog,
+[data-theme="riso"] .navtree-mark,
+[data-theme="riso"] .navtree-state-dot,
+[data-theme="riso"] .navtree-scroll::-webkit-scrollbar-thumb,
+[data-theme="riso"] .chat-list::-webkit-scrollbar-thumb {
+  border-radius: 0;
+}
+
+/* THE DRUM IS OFF, AND IT DRIFTS. Misregistration is the signature of the
+   process: the second pass lands a hair from the first, and never the same
+   hair twice, because the paper is fed by rubber. A pink ghost and a blue
+   ghost, wandering ±1px over 11s — slow enough to read as a machine that
+   cannot hold register rather than as an animation.
+
+   ON THE LETTERING ONLY. The first version put it on every heading and every
+   bold run in the chat, which is a coloured double image on the words a
+   paragraph leans hardest on — "tweak it to be more legible" is largely this.
+   A zine's cover is out of register; its body copy is the one thing the
+   printer tries hardest to land, because nobody can read a ghosted 14px. */
+[data-theme="riso"] .brand,
+[data-theme="riso"] .navtree-ws-name {
+  animation: riso-register 11s steps(1, end) infinite;
+}
+@keyframes riso-register {
+  0% {
+    text-shadow: 1px -1px 0 #e0005f59, -1px 1px 0 #1333c452;
+  }
+  33% {
+    text-shadow: -1px -1px 0 #e0005f59, 1px 1px 0 #1333c452;
+  }
+  66% {
+    text-shadow: 1px 1px 0 #e0005f59, -1px -1px 0 #1333c452;
+  }
+}
+
+/* THE INK IS DOTS, NOT A FLAT. A halftone over the paper — coarse enough to
+   see at arm's length, which is the whole point of the process.
+
+   Half the strength it was, and KNOCKED OUT behind running text. A 4px dot
+   field under a 14px line is the same defect as blueprint's 8px grid: it adds
+   an edge inside the x-height of every character, and no contrast ratio
+   reports it. Same fix, for the same reason — the paper is dotted, the column
+   you read in is a flat, and a zine has always worked exactly that way. */
+[data-theme="riso"] .chat-pane,
+[data-theme="riso"] .settings-dialog {
+  background-image: radial-gradient(#e0005f12 34%, transparent 35%);
+  background-size: 5px 5px;
+}
+[data-theme="riso"] .chat-msg {
+  background-color: var(--bg);
+  box-shadow: 0 0 0 7px var(--bg);
+}
+
+/* AND A HEAVIER ONE WHERE A FLAT WOULD HAVE BEEN. The user's own messages are
+   a solid in the second ink — except a riso cannot print a solid, so it is a
+   50% dot field with the paper showing through. */
+[data-theme="riso"] .chat-bubble {
+  /* A FLAT, and no dots under the words. The screened version put the second
+     ink's halftone behind the one block of text in the chat that is yours,
+     which is the same mistake as the page field and was kept one round too
+     long because it was the clever one. The tint and a 2px rule carry it; ink
+     reads 15:1 on this. */
+  background-color: #e4eaff;
+  background-image: none;
+  border: 2px solid var(--fg);
+}
+
+/* THE LETTERING IS SET LIKE A COVER. */
+[data-theme="riso"] .navtree-ws-name,
+[data-theme="riso"] .brand {
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  font-weight: 700;
+}
+
+/* ─── THE SELECTED ROW IS THE PAGE, REACHING INTO THE RAIL ──────────────────
+   This was a second pass of pink with a white halftone knocked out of it, and
+   it was wrong twice over.
+
+   Noisy, first — a 4px dot field under a 13px name is contrast spent on
+   texture, and it was the loudest object in the whole app.
+
+   But the deeper mistake was that it OPTED OUT. muxpad's selected row is not
+   a highlight; it is the chat pane's own surface (--bg-pane-face) continuing
+   into the rail, with .navtree-tab-funnel drawing the two fillets that flare
+   one into the other. That is why the row and the pane read as one shape
+   instead of as a list item that happens to be lit. Painting the row a flat
+   accent threw the mechanism away and left the funnel flaring into a colour
+   the pane does not have.
+
+   So riso renders it the way every other theme does — the pane's pale second
+   ink arriving in an ultramarine rail, which is a more striking object than
+   the pink ever was BECAUSE it is the page and not a marker. The ink steps to
+   the paper's, because the surface under it is now paper. */
+/* …IN THE TREE. The band has no pane under it, so there is no paper for the
+   ink to step to — this rule put the pane's pale second ink on the rail's own
+   ground there and measured 3.07:1. See --band-ink in NavTree.css, which the
+   band's own rule uses; this one stops reaching into it. */
+[data-theme="riso"] .navtree-tab-row[data-active="true"]:not(.navtree-ws-slot) .navtree-name-text {
+  color: var(--fg);
+  font-weight: 700;
+}
+
+@media (prefers-reduced-motion: reduce), (prefers-contrast: more) {
+  [data-theme="riso"] .brand,
+  [data-theme="riso"] .navtree-ws-name {
+    animation: none;
+  }
+}
+
+/* ─── MEMPHIS ───────────────────────────────────────────────────────────────
+   "super legible super crazy" sounds like a contradiction and is not one,
+   because the two live in different places. Legibility is a property of the
+   TEXT COLUMN: ink, size, and nothing behind it. Everything else on the screen
+   — the rail, the margins, the frames, the marks, the empty half of the pane —
+   is free, and every theme before this one spent its ideas IN the column and
+   then had to walk them back (blueprint's grid, riso's dot field, both of them
+   knocked out behind the words in the end).
+
+   So this one never puts anything there to begin with. 17.8:1 near-black on
+   warm white, set in the typeface literally designed for screen legibility,
+   with the entire Memphis Group vocabulary — primaries, confetti, hard offset
+   shadows, 3px rules, nothing aligned to anything — happening around it. */
+[data-theme="memphis"] {
+  /* Verdana is here for one reason and it is not period accuracy: it was drawn
+     for screen reading at small sizes, with open counters and wide spacing,
+     and it is on every machine. The display face carries the era. */
+  --ui-font: Verdana, "DejaVu Sans", Geneva, Tahoma, sans-serif;
+  --chrome-font: "Gill Sans", "Gill Sans MT", "Trebuchet MS", "Century Gothic", system-ui,
+    sans-serif;
+  --term-font: "SF Mono", Menlo, Monaco, monospace;
+
+  --bg: #fbf8f1;
+  --bg-elev: #ffffff;
+  --bg-hover: #ffe8f3;
+  --bg-chrome: #f2eee4;
+  --bg-tabbar: #e6e1d4;
+
+  --fg: #121016;
+  --fg-dim: #45414d;
+  /* Decorative only — see the --hit-* note in :root; never text. */
+  --fg-faint: #8b8694;
+  --border: #121016;
+  --border-strong: #121016;
+
+  --accent: #d6006e;
+  --accent-fg: #fffdfa;
+  --danger: #e01b2e;
+
+  --rail-surface: #17151d;
+  --rail-ink: #fbf8f1;
+  --rail-ink-dim: #cfc9d6;
+  --rail-ink-faint: #928ca0;
+  --rail-hover: #272333;
+  --rail-border: #46405c;
+  --rail-seam: #2e2a3d;
+  --rail-accent: #ffd400;
+  --rail-status-ready: #00d49a;
+  --rail-status-working: #ffd400;
+
+  --xterm-bg: #fbf8f1;
+  --xterm-fg: #121016;
+
+  --fade-1: 0.7;
+  --fade-2: 0.46;
+  --clock-base: #e6e1d4;
+
+  /* Light re-step (see :root), on a WARM stock. */
+  --status-blocked: #c4001b;
+  --status-working: #8a6400;
+  --status-ready: #10724f;
+  --status-quiet: #b5afa2;
+  --status-dead: #6b6760;
+  --status-wash: 10%;
+  --status-chip-wash: 18%;
+  --status-ink-mix: 50%;
+
+  --hit-bg: #ffd400;
+  --hit-ink: #121016;
+  --hit-rule: #8a6a00;
+}
+
+/* EVERYTHING IS A STICKER. A 3px black rule and a hard offset shadow with no
+   blur — the one move that defines the whole look, and the reason nothing here
+   needs a gradient. Memphis objects sit ON the surface; they are not part of
+   it. */
+[data-theme="memphis"] .chat-bubble,
+[data-theme="memphis"] .chat-composer,
+[data-theme="memphis"] .settings-dialog {
+  background-color: var(--bg-elev);
+  border: 3px solid var(--fg);
+  border-radius: 0;
+  box-shadow: 6px 6px 0 var(--accent);
+}
+
+/* ── A CARD IS ONE STEP DOWN FROM A MESSAGE ──────────────────────────────
+   It used to be in the rule above, wearing the same 3px frame and the same
+   6px offset shadow as a bubble and the composer — three objects of equal
+   weight stacked on one screen, two of which you wrote and one of which is
+   furniture. Reported as "they are grabbing too much attention… they should
+   be one step down in terms of visible hierarchy and importance".
+
+   The card keeps the GEOMETRY, because that is the theme talking: square
+   corners, a hard edge, no blur. It gives up the two things that were
+   claiming equal rank — the shadow, which is what makes a Memphis object
+   look stuck ON the page, and half the border's weight.
+
+   The base rule in ChatCards.css already says this in the app's own terms
+   ("present rather than loud"); this is the same sentence in Memphis. */
+[data-theme="memphis"] .chat-card {
+  border-radius: 0;
+  border: 2px solid color-mix(in srgb, var(--fg) 45%, transparent);
+  box-shadow: none;
+}
+[data-theme="memphis"] .chat-composer:focus-within {
+  box-shadow: 6px 6px 0 #00c2e0;
+}
+
+/* CONFETTI IN THE MARGINS, AND ONLY THE MARGINS. Dots, bars and a zigzag in
+   the four primaries, scattered on the pane's own ground — where the reading
+   column then knocks a flat out of it, exactly as in riso and blueprint. The
+   difference is that here it was never a texture pretending to be subtle: it
+   is loud, and it stays off the words.
+
+   The hatch is at 11% and a 17px period. At full ink and 11px — where it
+   started — it was not confetti, it was a fill: the pane read as a hatched
+   block with a white hole punched in it, and the hole was the only part you
+   could look at. Confetti is what you see when you are NOT looking at the
+   words.
+
+   ── AND IT CAME DOWN AGAIN ─────────────────────────────────────────────
+   "Tone down the background graphics even a bit more." Two levers, both
+   turned, because they do different things: the dots lost ~40% of their alpha
+   (0x54–0x61 → 0x32–0x3a, i.e. about 33–38% down to 20–23%) so each one is
+   quieter, and their tiles grew ~20% (190–230px → 225–270px) so there are
+   fewer of them on a screen. Fainter alone keeps the same busy rhythm at
+   lower contrast; sparser alone keeps the same shout at wider intervals. The
+   hatch went 4% → 3%, which at a 3px stripe is the difference between a
+   texture you notice and one you feel. */
+[data-theme="memphis"] .chat-pane,
+[data-theme="memphis"] .workspace-body {
+  background-image: radial-gradient(5px 5px at 12% 18%, #ffd40037 98%, #0000),
+    radial-gradient(4px 4px at 78% 9%, #00c2e03a 98%, #0000),
+    radial-gradient(6px 6px at 43% 62%, #d6006e32 98%, #0000),
+    radial-gradient(4px 4px at 91% 71%, #7b4dff35 98%, #0000),
+    radial-gradient(5px 5px at 27% 88%, #00d49a3a 98%, #0000),
+    repeating-linear-gradient(45deg, #12101607 0 3px, #0000 3px 17px);
+  background-size: 225px 225px, 180px 180px, 270px 270px, 205px 205px, 250px 250px, 58px 58px;
+  background-attachment: fixed;
+}
+[data-theme="memphis"] .chat-msg {
+  background-color: var(--bg);
+  box-shadow: 0 0 0 8px var(--bg);
+}
+
+/* ─── THE MARK IS A SQUARE, AND THAT IS ALL IT IS ───────────────────────────
+   This used to vary by position — circle, square, diamond by nth-child — on
+   the theory that a rail of shapes reads as a pattern. It does. It also
+   ROTATED A GLYPH: `.navtree-mark` is not only the working dot, it is the box
+   that holds `✓` for unread, `!` for blocked and `×` for stopped, and a ✓ at
+   45° is a tilted V nobody can name. Reported as exactly that — "what is this
+   weird tilted V indicator?"
+
+   A decoration that lands on a channel carrying meaning is not a decoration.
+   Square corners are the whole of it now, which was the part that was doing
+   the work anyway: on a grid of hard-edged stickers a round dot was the one
+   moulded object left. */
+[data-theme="memphis"] .navtree-mark,
+[data-theme="memphis"] .navtree-state-dot {
+  border-radius: 0;
+}
+
+/* ─── THE SELECTED ROW IS THE PAGE, NOT A HIGHLIGHT ─────────────────────────
+   It was a solid block of `--rail-accent`, and the report was "the yellow
+   looks good but the CUT is abrupt" — with the right diagnosis attached:
+   "theoretically the active colour should be the bg colour of the main view".
+
+   That is exactly what it is, everywhere else. muxpad's selected row takes
+   `--bg-pane-face` — the chat pane's own surface — and `.navtree-tab-funnel`
+   draws two concave fillets that flare one into the other, so the row and the
+   pane read as one shape. Painting the row a flat accent did not just change
+   its colour: it left the funnel flaring the PANE's surface into a row that
+   was no longer that surface, which is the abrupt edge. The bridge was still
+   being drawn; there was just nothing on the far side of it.
+
+   So memphis stops overriding the fill, like riso before it, and keeps its
+   loudness where it costs nothing: the black rule and the hard offset shadow
+   that every other surface in this theme already wears. See the
+   `active-row-fill` test in themes.test.ts — a theme may paint an IMAGE over
+   the selected row (demoscene's copper bar does) but may not replace the
+   colour underneath, because that colour is the join. */
+/* ── THE STICKER SHADOW STAYS IN THE CHAT ───────────────────────────────
+   The offset hard shadow is this theme's signature and it is right on a
+   bubble, a composer, a card — objects you look AT, one or two at a time.
+
+   In the rail it was a third device on the same row: the funnel already
+   continues the pane's surface into the selected row (that IS the selection),
+   the name already goes bold, and the shadow then drew a 3px bar under the
+   row as well. Stacked with the band's seam and the section rules a screen
+   away, the rail read as "a bit gaudy" — which it was. The chat side keeps
+   every sticker it had. */
+[data-theme="memphis"] .navtree-tab-row[data-active="true"] .navtree-name-text {
+  font-weight: 700;
+}
+
+/* ─── THE SECTION NAME IS SET LIKE A POSTER, AND THAT IS ALL ───────────────
+   Three goes at this. A solid cyan block at -2° was "cool but a bit much" —
+   a crooked filled label repeated down a list stops reading as a flourish and
+   starts reading as a mistake. Then the block became a 3px cyan rule under
+   the name, which was quieter and still a THIRD hue in a rail that already
+   spends yellow on the band's seam, its label and its status marks, and the
+   pane's own cream on the selected row. Counted on one screen: five accent
+   devices in the top 200px.
+
+   What is left is the lettering itself — the chrome face, bold, caps, wide
+   tracking. That is Memphis grammar too, it is the one device that costs no
+   colour, and it is already how this theme sets a title. The hue stays where
+   it means something. */
+[data-theme="memphis"] .navtree-ws-name .navtree-name-text {
+  /* --fg, NOT --rail-ink. The rail island rebinds --fg to the rail's ink, so
+     inside the rail they are the same value — and the MOBILE SHEET is not an
+     island: it sits on the app's own light ground, where this theme's
+     --rail-ink (near-white, for a black rail) measured 1.3:1. A section
+     header nobody can read. */
+  color: var(--fg);
+  font-family: var(--chrome-font);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+/* THE SEND KEY IS A STICKER TOO. */
+[data-theme="memphis"] .chat-send {
+  border-radius: 0;
+  border: 3px solid var(--fg);
+  background: var(--rail-accent);
+  color: #121016;
+  box-shadow: 3px 3px 0 var(--fg);
+}
+
+/* AND THE WORDMARK WEARS THE WHOLE PALETTE, which is the one place a theme
+   gets to simply show off. */
+/* ─── THE WORDMARK IS ONE COLOUR ────────────────────────────────────────────
+   It wore all four primaries at once, clipped through the text, and the
+   report was "too weird, missing out" — which is the right reading: a
+   gradient across six 13px letters gives each one a different hue and no two
+   the same weight on the ground, so the word stops being a word and becomes
+   six marks. The yellow M went nearly invisible beside the violet D.
+
+   A gradient needs AREA. Memphis puts colour in blocks and shapes, which is
+   exactly what the mark beside the wordmark already is — so the colour lives
+   there and the name is set in ink. Caps and the tracking stay; they were
+   never the problem. */
+[data-theme="memphis"] .brand-text {
+  font-family: var(--chrome-font);
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  /* --fg for the same reason as the section name above: the brand is drawn in
+     the rail AND in the app's top bar, and only one of those is an island. */
+  color: var(--fg);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -633,6 +1663,63 @@ html {
 }
 body {
   font-size: 0.875rem;
+  /* ── EVERY THEME READS AT THE SAME SIZE, WHATEVER FACE IT PICKS ────────
+     A theme may own the TYPEFACE (demoscene made that a feature, and three
+     more themes followed), and no theme sets a font-size — yet memphis read
+     visibly larger than riso at identical numbers. The cause is x-height:
+     what you perceive as "size" is the height of a lower-case letter, not the
+     em box, and the faces in use are far apart on it —
+
+       Verdana        0.545   memphis
+       SF Pro / system 0.52   the themes that pick nothing
+       Helvetica Neue 0.517   riso
+       Avenir Next    0.473   blueprint
+
+     — so memphis ran ~5% large and blueprint ~9% small against the same
+     declarations. Reported as "some of the themes changed the font sizes
+     meaningfully… memphis feels bigger than riso, and I prefer riso, which I
+     believe uses the size most of the other themes use".
+
+     `font-size-adjust` is the property for exactly this: it scales the
+     computed size so the first available font's x-height hits the ratio
+     given. 0.517 is riso's Helvetica Neue — the value the report named, and
+     within 0.6% of the system face every other theme already uses. Faces that
+     are already there barely move; the outliers come back to the pack.
+
+     Unsupported engines ignore it and get today's behaviour, which is why
+     this is safe to apply globally rather than per-theme. */
+  font-size-adjust: 0.517;
+}
+/* ── TWO OPT-OUTS, BOTH FOR THINGS THAT ARE NOT PROSE ────────────────────
+   A BITMAP FACE HAS NO SPARE SIZES. demoscene's Px437 IBM VGA is an 8x16
+   pixel font: it is correct at its integer sizes and blurs at everything
+   else, and scaling it by an x-height ratio lands between them by
+   definition. Its size being "wrong" is the point of it.
+
+   A TERMINAL MEASURES ITS OWN CELL. xterm.js computes a character box from
+   the computed style and lays the grid out on it; shifting the glyphs under
+   that measurement is how a TUI starts drawing boxes that do not meet. */
+/* Written as a DESCENDANT rule on purpose: `[data-theme="x"] {` with the
+   brace straight after the bracket is how this stylesheet's tests find a
+   theme's TOKEN block, and a second block wearing that shape makes the parser
+   read this one as demoscene's palette. */
+[data-theme="demoscene"] body {
+  font-size-adjust: none;
+}
+.xterm,
+.xterm * {
+  font-size-adjust: none;
+}
+/* A WORDMARK IS A LOGO, NOT PROSE. Normalising its x-height is the same
+   mistake as doing it to the bitmap face: a lockup is drawn at a size and a
+   weight somebody chose, and a theme that sets the brand in a small-x-height
+   display face (Gill Sans at 0.46 — memphis, riso) had it scaled up ~12%
+   inside a row whose height is fixed to the pane's tab strip. The result was
+   a wordmark pressed against its own row: "just doesn't look good, a bit
+   squished". */
+.brand-text,
+.brand-mark {
+  font-size-adjust: none;
 }
 html,
 body,
@@ -654,7 +1741,9 @@ body,
   height: 100svh;
   background: var(--bg);
   color: var(--fg);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", sans-serif;
+  /* Through the token, not around it: a theme that sets --ui-font has to reach
+     here too, or it changes the app everywhere except this. */
+  font-family: var(--ui-font);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow: hidden;

@@ -6,7 +6,7 @@ export function SlackPasskeySettings({
   section = 'integrations',
   active: visible = true,
 }: {
-  section?: 'general' | 'integrations';
+  section?: 'general' | 'notifications' | 'integrations';
   active?: boolean;
 }) {
   const setupEpoch = useRef(0);

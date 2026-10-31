@@ -105,6 +105,41 @@ export class PaneStore {
     return rows.map((r) => this.row(r) as PaneSpec);
   }
 
+  /**
+   * EVERY pane of every tab in a workspace, grouped by tab — one query instead
+   * of one per tab.
+   *
+   * This exists for the sidebar. `decorateTab` needs a tab's panes to roll up
+   * its status, its attention and its live subagent count, and it was calling
+   * `listByTab` per row: 657 prepared-statement round trips per
+   * `GET /api/tabs/all`, on a route the client polls every five seconds, per
+   * device. It is the only part of that response that scales with the number
+   * of CHATS rather than with the number of workspaces, which is the number
+   * that grows forever.
+   *
+   * Same shape as the other pre-reads the list path already does
+   * (`unreadIdsByWorkspace`, `cronsByTab`, `clockSnapshot`) and for the same
+   * reason: a list is one snapshot, not N lookups.
+   */
+  byTabForWorkspace(workspaceId: string): Map<string, PaneSpec[]> {
+    const rows = this.db
+      .prepare(
+        `SELECT p.* FROM panes p
+           JOIN tabs t ON t.id = p.tab_id
+          WHERE t.workspace_id = ?
+          ORDER BY p.tab_id, p.created_at`,
+      )
+      .all(workspaceId) as PaneRow[];
+    const out = new Map<string, PaneSpec[]>();
+    for (const r of rows) {
+      const spec = this.row(r) as PaneSpec;
+      const list = out.get(r.tab_id);
+      if (list) list.push(spec);
+      else out.set(r.tab_id, [spec]);
+    }
+    return out;
+  }
+
   delete(id: string): void {
     this.db.prepare('DELETE FROM panes WHERE id = ?').run(id);
   }

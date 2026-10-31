@@ -14,6 +14,16 @@
   --chat-accent: var(--accent, #4a9eff);
   --chat-accent-fg: var(--accent-fg, #0b0c12);
   --chat-danger: var(--danger, #f7768e);
+  /* ── THE WARNING HUE, FROM A TOKEN THEMES ACTUALLY DEFINE ───────────────
+     This was `var(--warn, var(--hit-bg, #f2c55c))`, and `--warn` is defined
+     by NO theme — so every one of them fell through to `--hit-bg`, which is
+     the SEARCH-HIGHLIGHT BACKGROUND. A colour chosen to sit behind black text
+     measured about 1.8:1 as text on a light composer: the one cell on the
+     strip whose job is to be noticed was the one nobody could read.
+     `--status-working` is the amber this app already owns and the only one
+     tuned per theme — #e8b34b on the dark rails, #8a6410 and #96650b on the
+     light ones, which is the whole point. */
+  --chat-warn: var(--status-working, #b8860b);
   --chat-user-bubble: color-mix(in srgb, var(--fg, #d7dae0) 9%, var(--bg, #12131a));
   /* Search-hit highlight — derived like every other chat token, with dark
      fallbacks for a pane rendered before a theme is applied. See the
@@ -46,6 +56,23 @@
   overflow: hidden;
   position: relative; /* anchors the scroll-down arrow + tool modal */
 }
+
+/* ── THERE IS NO CHAT HEAD, AND THE RULES ARE GONE WITH IT ───────────────
+   `.chat-head`, `.chat-head-name`, `.chat-head-ws` and the downward menu
+   anchor that went with them styled a title bar at the top of the pane: the
+   chat's name on the left, the model chip and Branch on the right, as the
+   mock-up drew it.
+
+   It was asked about every time it shipped — in a head of its own, and before
+   that portalled into the app's top bar — and the question was always the
+   same: why is this at the top right of the chat window. Because a mock-up
+   drew a header there, and that mock-up's phone had no sidebar naming the
+   chat. This app does. So the head was carrying a name you can already read
+   two inches to its left, plus two controls that had nowhere else to go.
+
+   They have somewhere: the composer's tool row, which is the chat's own
+   control surface and is already where you attach a file. See
+   `.chat-composer-tools`. */
 
 .chat-scroll {
   flex: 1 1 auto;
@@ -159,7 +186,7 @@
   border: 1px solid var(--chat-border);
   border-radius: 6px;
   padding: 1px 6px;
-  font-family: var(--chrome-font, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-family: var(--term-font, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-size: 0.78125rem;
   color: var(--chat-dim);
 }
@@ -286,15 +313,53 @@
   font-size: 1em;
 }
 
+/* ─── A CHARACTER GRID NEEDS --term-font, NEVER --chrome-font ───────────────
+   `--chrome-font` is the face a THEME owns for its small chrome, and since
+   the themes started owning typefaces it is routinely PROPORTIONAL:
+   blueprint's condensed drafting hand, riso's Futura, memphis's Gill Sans.
+   The base value happens to be monospace, which is why this survived — every
+   code block in the app has been rendering in whatever the theme picked, and
+   on blueprint that is a condensed sans. Reported as "font of text code
+   blocks too narrow, maybe it's not even monospaced". It was not.
+
+   The `ui-monospace` fallback in those declarations never fired: a fallback
+   only applies when the variable is UNDEFINED, and `:root` always defines it.
+
+   `--term-font` is the token that means "this theme's monospace" — every
+   theme sets it, the terminal reads it, and its default is required to stay
+   a system mono (theme-fonts.test.ts). So anything whose meaning depends on
+   columns lining up points here: fenced blocks, inline code, tool output and
+   diffs. Labels and chips keep --chrome-font; they have no grid to keep. */
+
 /* Inline code — subtle chip, monospace. */
+/* ── INLINE CODE, INCLUDING THE BIT THAT WRAPS ───────────────────────────
+   A span of code inside a sentence is a BOX, and a box in running text has
+   to survive being broken across two lines. By default it does not: the
+   browser splits the padding, the border and the radius between the two
+   fragments, so the first ends with an open right edge and the second starts
+   with an open left one — two halves of a rounded rectangle, neither of them
+   closed, sitting on different lines. `kill: operation not permitted` in a
+   sentence showed it exactly.
+
+   `box-decoration-break: clone` is the fix and the whole fix: each fragment
+   is drawn as its own complete box, padding and radius and all. Prefixed as
+   well as standard — WebKit still ships this one behind `-webkit-`.
+
+   AND THE BOX MUST NOT BE TALLER THAN ITS LINE. Vertical padding plus a 1px
+   border on a 0.86em face pushed the box past the line box, so a wrapped
+   fragment overlapped the line above it. Padding is down to the amount that
+   fits inside a 1.62 line-height at this size, and the box leans on its fill
+   and its border for presence rather than on height it does not have. */
 .chat-md :not(pre) > code {
-  font-family: var(--chrome-font, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-family: var(--term-font, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-size: 0.86em;
-  padding: 0.12em 0.4em;
+  padding: 0.05em 0.4em;
   border-radius: 5px;
   background: color-mix(in srgb, var(--chat-fg) 8%, var(--chat-panel));
   border: 1px solid var(--chat-border);
   overflow-wrap: anywhere;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
 }
 
 /* Fenced code block — quiet panel, rounded, scrolls horizontally on overflow.
@@ -311,8 +376,17 @@
 }
 .chat-md pre code {
   display: block;
-  font-family: var(--chrome-font, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 0.796875rem;
+  font-family: var(--term-font, ui-monospace, SFMono-Regular, Menlo, monospace);
+  /* ── em, NOT rem, AND THAT IS THE WHOLE BUG ──────────────────────────────
+     The pane steps its prose up on a phone (see the max-width: 720px block:
+     0.96875rem → 1.1125rem, +15%). Everything in the conversation that was
+     sized in REM did not come with it, so the ratio of code to prose went
+     from 1.22 on a desktop to 1.40 on a phone — the code block quietly
+     shrank, relatively, in the place it had the least room. Reported as
+     "font sizes don't seem to be calibrated on mobile".
+     The headings, inline code and tables here were already `em` and were
+     always right. These four are the ones that were not. */
+  font-size: 0.8225em;
   line-height: 1.55;
   color: var(--chat-dim);
   white-space: pre;
@@ -503,7 +577,8 @@
 /* Context next to the dots — names the tool during long silent calls. */
 .chat-working-label {
   margin-left: 10px;
-  font-size: 0.75rem;
+  /* em — see .chat-md pre code */
+  font-size: 0.775em;
   color: var(--chat-faint);
 }
 
@@ -568,15 +643,24 @@
 }
 
 /* Reasoning aside: dimmed, italic, smaller, quiet left rail. */
-/* A message the HARNESS spoke because the turn ended without a `reply` call
-   (chat-voice.ts). It is the agent's own final words, promoted — so it reads as
-   a normal message — but the dotted rule says "nobody chose to send this",
-   which is the difference between a reply and a fallback. Muted enough to be a
-   footnote, present enough that a screenshot shows it. */
-.chat-turn-assistant[data-voice="fallback"] .chat-msg {
-  border-left: 2px dotted var(--chat-border-strong);
-  padding-left: 10px;
-}
+/* THE DOTTED RULE IS GONE, and this is the record of why.
+   It marked a message the harness promoted because the turn ended without a
+   `reply` call — "nobody chose to send this". Reported as "sometimes messages
+   have a vertical dotted line, sometimes they don't… what is this line helping
+   me with?", and investigated rather than defended. It marked nothing a reader
+   could act on:
+     · In the sessions where it fired most it fired on ~100% of messages
+       (one pane: 131 of 134 turns), so it distinguished nothing — and there
+       the promoted text IS the answer, median 995 characters, a third of them
+       ending in a question to the user.
+     · In healthy sessions it looked identical on a 2,000-character deliverable
+       and on a 133-character "waiting on CI" note, which is the one
+       distinction a reader would actually use.
+     · And it was silent about the real loss — the turns where a longer finding
+       stayed private while a status line was promoted. That is now fixed in
+       chat-voice.ts rather than labelled here.
+   `data-voice` stays on the element: it costs nothing, it is what the tests
+   assert against, and it is what makes this greppable from a screenshot. */
 
 .chat-thinking {
   flex: 1 1 auto;
@@ -585,7 +669,8 @@
   overflow-wrap: anywhere;
   color: var(--chat-faint);
   font-style: italic;
-  font-size: 0.84375rem;
+  /* em — see .chat-md pre code */
+  font-size: 0.87em;
   line-height: 1.55;
   padding: 2px 0 2px 12px;
   border-left: 2px solid var(--chat-border-strong);
@@ -795,10 +880,23 @@
   border: 1px solid var(--chat-border);
   border-radius: 10px;
   background: var(--chat-panel);
-  white-space: pre-wrap;
+  /* NO `white-space` HERE. It hard-coded `pre-wrap`, which is the right
+     DEFAULT and the wrong way to get it: CopyablePre wraps every block by
+     default now, and an unconditional rule on the element itself simply beat
+     the unwrap toggle — so in the tool modal the button appeared on every
+     block, including one-liners, and pressing it did nothing. The default is
+     unchanged; it now comes from the one place that can also undo it. */
   overflow-wrap: anywhere;
-  font-family: var(--chrome-font, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 0.78125rem;
+  /* …AND IT HAS TO SCROLL WHEN IT IS UNWRAPPED. `overflow-x` was `visible`,
+     which nothing noticed while the block could not be unwrapped: now that it
+     can, a long line ran straight through the block's own border and gave the
+     whole modal body a horizontal scrollbar. A chat block has carried
+     `overflow-x: auto` for exactly this reason since before the toggle
+     existed. */
+  overflow-x: auto;
+  font-family: var(--term-font, ui-monospace, SFMono-Regular, Menlo, monospace);
+  /* em — see .chat-md pre code. */
+  font-size: 0.806em;
   line-height: 1.5;
   color: var(--chat-dim);
 }
@@ -850,11 +948,17 @@
   flex-direction: column;
   align-items: center;
 }
-/* …and the disclosure is readable width, not pill width. */
-.chat-turn-notice.-folded .chat-sysnote-body {
-  width: 100%;
-  max-width: 680px;
-}
+/* ── THREE RULES DELETED HERE, AND ONE BELOW ──────────────────────────────
+   `.chat-sysnote-chevron`, `.chat-sysnote-body` and the `-folded` width that
+   went with them styled a caret that revealed a folded cron's prompt. The
+   caret was removed — it gave one fire two separate folds and made a label
+   look pressable for a reason no reader would guess — and the rules outlived
+   it. `.chat-attach-spin` is the same story: the paperclip stopped being the
+   upload indicator when progress moved onto the chips.
+
+   A rule that matches nothing renders exactly like a rule that works, which
+   is why themes.test.ts already fails on dead THEME selectors. These were the
+   component's own. */
 .chat-sysnote {
   display: inline-flex;
   gap: 8px;
@@ -958,26 +1062,64 @@
 .chat-sysnote.-foldable:hover {
   background: color-mix(in srgb, var(--chat-border-strong) 70%, transparent);
 }
-.chat-sysnote-chevron {
+/* ── A COLLAPSED CHIP OPENS ──────────────────────────────────────────────
+   Only the one that stands in for fires it removed from the log — see the
+   notice renderer for the line between a chip that labels something and a
+   chip that replaced it. It wears the same pill; what marks it as pressable
+   is the caret and the hover, not a second shape. */
+.chat-sysnote.-openable {
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+.chat-sysnote.-openable:hover,
+.chat-sysnote.-openable:focus-visible {
+  color: var(--chat-fg);
+  border-color: color-mix(in srgb, var(--chat-fg) 28%, transparent);
+}
+.chat-sysnote-caret {
   margin-left: 2px;
-  color: var(--chat-faint);
-  font-size: 0.6875rem;
+  font-size: 0.625rem;
+  opacity: 0.8;
 }
-/* The unfolded plumbing: quiet, monospace, and scrollable rather than wrapping
-   a 400-character prompt across the whole log. */
-.chat-sysnote-body {
+/* The evidence. A list, not prose: three columns the eye can scan down —
+   which schedule, how many times, when last — because the question it answers
+   is "what are these", and a sentence per row would bury the names. */
+.chat-sysnote-fired {
   margin: 5px 0 0;
-  padding: 8px 10px;
-  max-height: 220px;
-  overflow: auto;
-  border-radius: 7px;
-  background: color-mix(in srgb, var(--chat-fg) 5%, var(--chat-bg));
-  color: var(--chat-dim);
-  font-family: var(--chrome-font, ui-monospace, SFMono-Regular, Menlo, monospace);
+  padding: 6px 2px 2px;
+  list-style: none;
+  display: grid;
+  gap: 3px;
+  font-family: var(--chrome-font, inherit);
   font-size: 0.75rem;
-  line-height: 1.5;
-  white-space: pre-wrap;
+  color: var(--chat-dim);
 }
+.chat-sysnote-fired li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.chat-sysnote-fired-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The count and the time are pushed to the right together, so the names form
+   a column you can read down and the numbers form one you can compare. */
+.chat-sysnote-fired-count {
+  margin-left: auto;
+  color: var(--chat-faint);
+  font-variant-numeric: tabular-nums;
+}
+.chat-sysnote-fired-at {
+  min-width: 5.5em;
+  text-align: right;
+  color: var(--chat-faint);
+  font-variant-numeric: tabular-nums;
+}
+
 /* A batch of sub-chat reports landing. The same quiet pill as a cron fire, and
    for the same reason: it states who started this turn — workers you spawned,
    not you — which is a fact about the message rather than an alert. */
@@ -985,10 +1127,22 @@
   color: var(--chat-accent);
 }
 
+/* A compaction. QUIETER THAN THE OTHERS — the dimmest mark in the log, on
+   purpose. A cron fire and a sub-chat report both say something happened that
+   a reader may want to act on; this says the machine made room for itself,
+   which is the kind of fact you want findable and never want announced: "not
+   a big fan of showing the user the compaction mechanics". The icon takes the
+   faint ink rather than the accent for exactly that reason. */
+.chat-sysnote-compacted .chat-sysnote-icon,
+.chat-sysnote-compacted .chat-sysnote-text {
+  color: var(--chat-faint);
+}
+
 /* ── Diffs ─────────────────────────────────────────────────────────────── */
 .chat-diff {
-  font-family: var(--chrome-font, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 0.75rem;
+  font-family: var(--term-font, ui-monospace, SFMono-Regular, Menlo, monospace);
+  /* em — see .chat-md pre code */
+  font-size: 0.775em;
   line-height: 1.5;
 }
 .chat-diff-file {
@@ -1042,8 +1196,21 @@
      max() means: clear the home indicator where there is one, keep the 10px
      where there isn't. The sides are the same idea for the rounded corners —
      the strip below the pill used to run into the bottom-right curve. */
+  /* ── THE FLOOR IS 16, NOT 10 ────────────────────────────────────────────
+     The pill floats over the conversation and carries a real drop shadow, and
+     on a theme that draws a hard offset one (memphis puts it 6px down and to
+     the right) ten pixels of padding left about four of visible gap: "composer
+     needs a bit of margin from bottom". A gap under a shadow has to clear the
+     shadow before it starts reading as a gap at all — the same lesson the
+     status strip above the pill learned in its own 16px.
+     Still a `max()`, never a sum: see below. */
+  /* 16 → 22 ON A SECOND LOOK, for the same reason again: the themes that draw
+     an offset shadow spend six of it before any gap begins, so sixteen read as
+     ten — and ten was already the number that was too tight. Twenty-two leaves
+     a visible gap under the loudest shadow and is a comfortable margin on the
+     themes with none. */
   padding: 6px max(12px, env(safe-area-inset-right, 0px))
-    max(10px, env(safe-area-inset-bottom, 0px)) max(12px, env(safe-area-inset-left, 0px));
+    max(22px, env(safe-area-inset-bottom, 0px)) max(12px, env(safe-area-inset-left, 0px));
   background: transparent;
   pointer-events: none; /* the transparent gaps don't eat scroll/clicks… */
 }
@@ -1074,19 +1241,36 @@
 .chat-composer {
   display: flex;
   flex-direction: column;
-  /* The strip sits on the pill's surface, so the only thing holding it off the
-     text below is this. 2px read as crammed — enough space to be a separate
-     line, not enough to be a separate thought. */
-  gap: 6px;
+  /* Between the input and the tool row. 2px read as crammed — enough space to
+     be a separate line, not enough to be a separate thought. */
+  gap: 4px;
   max-width: 768px;
   margin: 0 auto;
-  /* Symmetric side insets: the filled send circle carries more visual weight
-     than the small camera glyph, so equal padding reads balanced rather than
-     edge-hugging. */
-  padding: 4px 8px;
+  /* ── ONE INSET, AND EVERYTHING INSIDE LINES UP ON IT ──────────────────
+     Reported: "margin for message being typed is too tight on left and
+     potentially top, button the same too close to top and potentially too
+     close to the right."
+
+     All three were the same miss — the pill's padding was being spent
+     unevenly by what sits inside it. The text had 10px of pill and nothing of
+     its own; the send circle is 36px against a 40px line, so a 4px top gave
+     it 6px of air against 10px at its right; and the tool row's buttons carry
+     8px of their own, so their icons sat 8px right of the text above them.
+
+     The number is 12px, and it is the only one: the input pays 4 of it back
+     as its own padding (text at 16), the tool row pulls 4 out as a negative
+     margin so an 8px-padded button's icon lands on that same 16, and the hint
+     does the mirror image on the right. Everything on both rows is then on
+     one of two vertical lines. */
+  padding: 8px 12px;
   background: color-mix(in srgb, var(--chat-elev) 92%, var(--chat-fg));
   border: 1px solid color-mix(in srgb, var(--chat-fg) 12%, var(--chat-border));
-  border-radius: 26px;
+  /* 26px was the radius of a ONE-ROW pill, where a deep curve is the shape of
+     the object. With a tool row under the input the pill is twice as tall and
+     a near-capsule corner starts eating the ends of that row — the first icon
+     and the last word of the hint sit inside the curve. 20px keeps the pill
+     soft and leaves both rows their full width. */
+  border-radius: 20px;
   /* Floats over the conversation (the wrap behind it is transparent) — a real
      drop shadow so the pill reads as lifted above the content directly behind it. */
   box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.45), 0 2px 8px -4px rgba(0, 0, 0, 0.35);
@@ -1108,6 +1292,183 @@
 
 /* Photo/attach button on the left (opens the OS photo picker → uploads via the
    same attachments endpoint the TUI composer uses). Quiet ghost button. */
+/* ── THE PILL'S TOOL ROW ──────────────────────────────────────────────────
+   One quiet line under the input: what you can add to this message, and what
+   Enter will do with it.
+
+   IT IS NOT A SECOND BAR. The input above it already carries the pill's
+   padding, so this row adds none of its own on the sides — the icons line up
+   with the first letter of what you type, which is what keeps the two rows
+   reading as one object rather than as a field with a toolbar bolted under
+   it. */
+.chat-composer-tools {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 26px;
+  padding: 0;
+  /* A QUERY CONTAINER, because the thing that runs out of room is this ROW and
+     a pane's width has nothing to do with the viewport's. Two panes side by
+     side on a 1500px screen each get a ~400px row, and a media query would
+     have called both of them wide. */
+  container-type: inline-size;
+  container-name: composer-tools;
+  /* THE NEGATIVE MARGIN IS THE ALIGNMENT. A tool button carries 8px of its
+     own padding, so without this its icon starts 8px right of the first
+     letter of the text above it — close enough to read as a mistake rather
+     than as a second row. -4 against the input's +4 puts both on 16px from
+     the pill's edge, and the mirror image on the right lines the hint up with
+     the send button. */
+  margin: 0 -4px;
+}
+/* THE STRIP SITS AT THE FAR END OF THE ROW. The tools are what you can add
+   to the message, the chip is what the chat is running, and the gap between
+   them is the row's whole structure. Its menus open UPWARD, which is the
+   default: the strip is at the bottom of the pane, where up is the only
+   direction with room. */
+.chat-composer-tools > .chat-status-bar {
+  flex: 0 1 auto;
+  margin-left: auto;
+}
+
+/* NOTHING ABOUT THE SESSION LIVES HERE. The session chip spent one revision
+   at the right-hand end of this row, which was better than floating over the
+   transcript and still the wrong object: this row is about the MESSAGE — what
+   you can add to it — and the chip is about the PANE. It is in the head now
+   (.chat-head). */
+
+/* THE DESKTOP TOOL ROW'S BUTTONS — icon AND name. A row of bare icons is
+   indistinguishable from the cluster it replaced ("doesn't feel like anything
+   changed"); the label is the difference, and a desktop pointer has the width
+   for it. Quiet by default: these are available, not urgent.
+
+   THE FACE IS `--ui-font`, NOT `--chrome-font`. On a theme whose chrome face
+   is a mono (blueprint, riso, demoscene) these three labels came out as
+   letter-spaced typewriter text inside the one surface that is otherwise all
+   prose — the tool row read as terminal output sitting in the composer. The
+   rest of the composer sets its text in the UI face; so does this. */
+.chat-tool-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  /* --chat-dim, NOT --chat-faint. Measured across the ten themes that ship,
+     the faint token sits at 2.1–3.3:1 on the composer's own surface — under
+     AA everywhere, on a 12px label. The quiet here is carried by the SHAPE
+     (no fill, no border) and the size; it must not be carried by an ink
+     nobody can read. Same call .navtree-ws-count and the rail search made. */
+  color: var(--chat-dim);
+  font-family: var(--ui-font, inherit);
+  font-size: 0.75rem;
+  line-height: 1.35;
+  letter-spacing: 0;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 120ms ease, color 120ms ease;
+}
+.chat-tool-btn:hover:not(:disabled),
+.chat-tool-btn:focus-visible {
+  background: color-mix(in srgb, var(--chat-fg) 9%, transparent);
+  color: var(--chat-fg);
+}
+.chat-tool-btn svg {
+  flex: 0 0 auto;
+  color: inherit;
+  opacity: 0.85;
+}
+/* NO KEYBOARD HINT. The row ended with "⏎ send · ⇧⏎ newline" while it had
+   nothing else to put at that end. It carries the session chip and Branch
+   now, and a third thing on the right would be the crowding that moved them
+   off the top of the pane in the first place. */
+
+/* ── THE COLLAPSED LEFT CLUSTER ───────────────────────────────────────────
+   One `+` standing for attach / review a screen / dictate, on touch layouts
+   only, and only while all three are idle. The wrapper is the anchor the sheet
+   hangs from; it takes no width of its own beyond the button inside it. */
+.chat-tools {
+  position: relative;
+  flex: 0 0 auto;
+  align-self: center;
+  display: flex;
+}
+/* The sheet OPENS UPWARD and is anchored to the button's left edge, because
+   the button is at the pill's left edge and the pill is at the bottom of the
+   screen — the two directions with room. It is deliberately narrow: three rows
+   of one short phrase, not a menu with sections. */
+.chat-tools-sheet {
+  position: absolute;
+  z-index: 30;
+  bottom: calc(100% + 8px);
+  left: 0;
+  min-width: 190px;
+  padding: 5px;
+  border: 1px solid var(--chat-border-strong);
+  border-radius: 14px;
+  background: var(--chat-elev);
+  box-shadow: 0 18px 44px -12px rgb(0 0 0 / 55%);
+}
+/* THE SESSION CHIP, AS THE SHEET'S LAST ROW. A phone gets no tool row — see
+   ChatPane.tsx — so the chip rides the sheet the `+` already opens. A seam
+   above it because it is a different KIND of row: everything else in the
+   sheet adds something to your message, and this is what the chat is running. */
+.chat-tools-session {
+  display: flex;
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px solid color-mix(in srgb, var(--chat-fg) 12%, transparent);
+}
+.chat-tools-session .chat-status-bar {
+  flex: 1 1 auto;
+  justify-content: flex-start;
+  height: auto;
+}
+.chat-tools-session .chat-status-seg {
+  padding: 6px 10px;
+  font-size: 0.8125rem;
+}
+
+.chat-tools-item {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--chat-dim);
+  font: inherit;
+  font-size: 0.875rem;
+  text-align: left;
+  cursor: pointer;
+}
+.chat-tools-item:hover,
+.chat-tools-item:focus-visible {
+  background: color-mix(in srgb, var(--chat-fg) 10%, transparent);
+  color: var(--chat-fg);
+}
+.chat-tools-item svg {
+  flex: 0 0 auto;
+  color: var(--chat-faint);
+}
+.chat-tools-item:hover svg {
+  color: inherit;
+}
+
+/* The `+` lives in the tool row now, not beside the input, so it is sized to
+   that row rather than to the 40px input line. */
+.chat-composer-tools .chat-attach {
+  width: 28px;
+  height: 28px;
+}
+.chat-composer-tools .chat-attach svg {
+  width: 18px;
+  height: 18px;
+}
+
 .chat-attach {
   flex: 0 0 auto;
   align-self: center;
@@ -1137,14 +1498,6 @@
   opacity: 0.4;
   cursor: default;
 }
-.chat-attach-spin {
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  border: 2px solid var(--chat-border-strong);
-  border-top-color: var(--chat-accent);
-  animation: chat-spin 720ms linear infinite;
-}
 
 .chat-input {
   flex: 1 1 auto;
@@ -1160,7 +1513,11 @@
   height: 2.5rem;
   min-height: 2.5rem;
   max-height: 12.5rem;
-  padding: 0.5625rem 0;
+  /* 4px of side padding on top of the pill's 12 — see the pill for why the
+     two are split rather than spent in one place. The vertical 9px is load
+     bearing: 22px line + 2×9 = the 40px above, and ChatPane.composer.css.test
+     checks that arithmetic. */
+  padding: 0.5625rem 4px;
   border: 0;
   background: transparent;
   color: var(--chat-fg);
@@ -1224,26 +1581,128 @@
   font-weight: 700;
   line-height: 1;
 }
-.chat-send.is-stop {
-  background: var(--chat-fg);
-  color: var(--chat-bg);
+/* ── THERE IS NO STOP BUTTON IN THE COMPOSER ──────────────────────────────
+   `.chat-send.is-stop` lived here, and it was the second circle on an edge
+   that should only ever hold one. The composer's button acts on YOUR DRAFT;
+   stopping acts on THE AGENT'S TURN. Stop is now `.chat-turn-stop`, at the
+   foot of the running turn itself. Do not bring it back here — the pair of
+   circles is the reported defect, not the styling of either one. */
+
+/* The running turn's column: the message, and Stop under it.
+   `.chat-turn` is a flex ROW (it has a gutter for turns that use one), so
+   anything added beside the message becomes a full-height flex item — which
+   is what turned Stop into a 350px pill down the side of a streaming answer.
+   One column inside the row, and the order on screen is the order in the
+   markup. */
+.chat-turn-body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+  /* It is the turn's content, so it takes the width the row has — otherwise a
+     long answer would be as narrow as the Stop button under it. */
+  flex: 1 1 auto;
 }
-.chat-send.is-stop .chat-send-glyph {
-  width: 12px;
-  height: 12px;
-  border-radius: 3px;
+
+/* ── …EXCEPT WHEN THE TURN IS ONE LINE TALL ──────────────────────────────
+   The column above is right for a streaming ANSWER: paragraphs, tables, code
+   — Stop belongs under them. It is wrong for the working indicator, which is
+   a single line: stacking a button under it spends a whole row on a control
+   that fits beside the thing it acts on, and leaves it floating in the margin
+   under a prompt glyph. "Stop is now on its own line to the right below the
+   progress indicator."
+
+   So the body is a ROW while the indicator is what it holds, and a column the
+   moment there is prose. One render site, one element, and the shape follows
+   the content rather than a second branch in the JSX. */
+.chat-turn-body:has(> .chat-working) {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+.chat-turn-body:has(> .chat-working) .chat-turn-stop {
+  margin-top: 0;
+}
+
+/* STOP, AT THE FOOT OF THE RUNNING TURN.
+   Quiet at rest: the turn block's job is to say "still going", and a loud
+   button beside it would read as the thing to do rather than the exception.
+   It warms to the danger ink only on hover, which is also the only moment the
+   reader is considering it. */
+.chat-turn-stop {
+  display: inline-flex;
+  align-items: center;
+  /* Belt for the braces above: never a stretched flex item, whatever it is
+     dropped into. */
+  flex: 0 0 auto;
+  align-self: flex-start;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 3px 10px 3px 8px;
+  border: 1px solid color-mix(in srgb, var(--chat-fg) 18%, transparent);
+  border-radius: 999px;
+  background: transparent;
+  /* Quiet, but legible: this is the only way to stop a running turn and it
+     sits on the conversation's own ground. --chat-faint measures under AA on
+     every theme that ships. */
+  color: var(--chat-dim);
+  font: inherit;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+.chat-turn-stop:hover,
+.chat-turn-stop:focus-visible {
+  color: var(--chat-danger);
+  border-color: color-mix(in srgb, var(--chat-danger) 55%, transparent);
+  background: color-mix(in srgb, var(--chat-danger) 8%, transparent);
+}
+.chat-turn-stop-glyph {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
   background: currentColor;
 }
-/* Queue button: an OUTLINE accent circle — distinct from the filled Send and
-   the dark Stop, so "this queues, it doesn't send now" reads at a glance. */
-.chat-send.is-queue {
+/* ── QUEUE WEARS THE SEND BUTTON; ONLY THE GLYPH CHANGES ─────────────────
+   Queue was an OUTLINE accent circle — "this queues, it doesn't send now" at
+   a glance — and on memphis, riso and blueprint it was not, because those
+   themes style `.chat-send` at (0,2,0), this rule tied, and the theme won on
+   file order. A distinction that holds on some themes and silently vanishes
+   on others is worse than none.
+
+   The specificity race is the wrong way out. Queue IS the primary action of
+   the composer in that state — you typed something, and pressing it is what
+   happens to it — so the theme is right to own the button. What actually
+   separates the two is the GLYPH: an arrow settling onto a baseline rather
+   than an arrow leaving, which reads on every theme because no theme draws
+   it. The words are in the title and the aria-label.
+
+   ── AND THE MIC IS NOT A `.chat-send` AT ALL ───────────────────────────
+   Same fight, opposite resolution. `.chat-send` means "the primary action of
+   this composer"; the mic is what is available when there is nothing to send,
+   so it has no business claiming the class — it rendered as memphis's filled
+   yellow send button on an empty composer, a primary action with no target.
+   Dropping the class ends the cascade fight by construction: no theme has to
+   know about it, and the two cannot drift. */
+.chat-mic {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
   background: transparent;
-  color: var(--chat-accent);
-  border: 1.5px solid color-mix(in srgb, var(--chat-accent) 55%, transparent);
-  box-shadow: none;
+  color: var(--chat-dim);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
 }
-.chat-send.is-queue:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--chat-accent) 12%, transparent);
+.chat-mic:hover,
+.chat-mic:focus-visible {
+  background: color-mix(in srgb, var(--chat-fg) 10%, transparent);
+  color: var(--chat-fg);
 }
 
 /* ── Queued messages ───────────────────────────────────────────────────
@@ -1255,7 +1714,32 @@
   align-items: center;
   gap: 8px;
 }
+/* ── PENDING HAS TO SURVIVE A THEME ──────────────────────────────────────
+   This was written as a dashed border and an accent wash — a restyle of the
+   sent bubble — and three themes erase both of them. `[data-theme="memphis"]
+   .chat-bubble` is specificity (0,2,0) against this rule's (0,1,0), so on
+   memphis, riso and blueprint a queued message rendered as an ordinary sent
+   one: same solid border, same offset shadow, nothing to say it had not gone
+   anywhere. Reported as "in some themes, pending messages are not styled
+   differently from regular messages".
+
+   THE FIX IS NOT A SPECIFICITY RACE. `.chat-bubble.chat-bubble-queued` would
+   tie with the theme and win on file order — which holds exactly until
+   somebody writes `[data-theme="x"] .chat-bubble.something`, and a theme is
+   SUPPOSED to own the bubble's shape. What a theme must not own is whether
+   the message has been sent.
+
+   So the pending signal moves to properties no theme sets, and it is
+   additive rather than a restyle:
+     · `opacity` — orthogonal to every border, fill and shadow a theme draws,
+       and it reads as "not yet" on a light ground and a dark one alike;
+     · an `outline`, which is a separate box from `border` and survives one
+       being replaced;
+     · and a word, because colour and dash are conventions a reader has to
+       know and "Queued" is not.
+   The old declarations stay for the themes that leave the bubble alone. */
 .chat-bubble-queued {
+  position: relative;
   /* Same shape as a sent user bubble, restyled as pending. */
   max-width: 82%;
   white-space: pre-wrap;
@@ -1265,6 +1749,24 @@
   border: 1px dashed color-mix(in srgb, var(--chat-accent) 55%, transparent);
   background: color-mix(in srgb, var(--chat-accent) 8%, transparent);
   color: color-mix(in srgb, var(--chat-fg) 80%, transparent);
+  /* The three a theme cannot take away. */
+  opacity: 0.74;
+  outline: 1px dashed color-mix(in srgb, var(--chat-accent) 60%, transparent);
+  outline-offset: 3px;
+}
+/* The word. Set on the bubble rather than rendered in the transcript because
+   it belongs to the bubble's own chrome — it must not become a line of the
+   message that a copy or a screen reader treats as content. */
+.chat-bubble-queued::before {
+  content: "Queued";
+  display: block;
+  margin-bottom: 4px;
+  font-family: var(--chrome-font, inherit);
+  font-size: 0.6875em;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--chat-accent);
 }
 /* Edit + cancel — a quiet column of round buttons to the LEFT of the pending
    bubble. Both act on the SERVER-owned queue (they follow the user across
@@ -1301,8 +1803,8 @@
   color: var(--chat-fg);
 }
 .chat-queued-cancel:hover {
-  background: color-mix(in srgb, var(--chat-danger, #e5484d) 14%, transparent);
-  color: var(--chat-danger, #e5484d);
+  background: color-mix(in srgb, var(--chat-danger) 14%, transparent);
+  color: var(--chat-danger);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1322,6 +1824,35 @@
 @media (max-width: 720px) {
   .chat-pane {
     font-size: 1.1125rem;
+  }
+  /* ── A CODE BLOCK WRAPS ON A PHONE ──────────────────────────────────────
+     `white-space: pre` plus `overflow-x: auto` is the right call on a
+     desktop: code is indentation-sensitive and there is a mouse, a trackpad
+     and a visible scrollbar to move it with.
+     On a phone it is the worst of both. The block sits inside a vertically
+     scrolling log, so a horizontal drag inside it fights the scroll it is
+     nested in, and nothing on screen says there is anything to the right —
+     the measured case was an email in a fence: 75-character lines in a
+     393px viewport, every one of them cut mid-sentence at the pane's edge
+     with no affordance at all.
+     So it wraps. The cost is real and it is the smaller one: wrapped code
+     loses the shape of its indentation, where clipped code loses the words.
+     The copy button's 48px of padding finally does its job here too — with
+     `pre` a long line simply scrolled underneath it. */
+  /* …AND IT IS NO LONGER THIS RULE THAT DOES IT. A block is wrapped by
+     default on every surface now (CopyablePre), so the phone gets wrapping
+     without a media query — and the unconditional override here had become
+     the thing that BROKE the control: every `pre` in the chat is a
+     CopyablePre, the toggle sets `data-wrap`, and this rule won on a phone
+     regardless, so pressing "show the original line breaks" did nothing.
+     A control that does nothing is the defect this whole corner exists to
+     avoid, so the forcing is gone and the toggle is honoured here too. */
+  /* Stop stays 12px — it is chrome, not conversation, so it does not grow
+     with the prose — but it gets a thumb to press. 22px tall is a desktop
+     target; this is the one control on screen that cancels work in flight. */
+  .chat-turn-stop {
+    min-height: 32px;
+    padding: 6px 13px 6px 11px;
   }
   /* Composer ≥16px: matches the bigger prose AND stops iOS from auto-zooming
      the viewport when the field takes focus (it zooms any input under 16px). */
@@ -2047,70 +2578,92 @@
 }
 
 /* ── The session line ─────────────────────────────────────────────────────
- * A quiet line ABOUT the session (folder | model | live), sitting on the
- * transparent gap above the composer pill. Each cell opens its own upward
- * panel; only one at a time.
+ * ONE CHIP ON THE COMPOSER'S RIM, NOT A ROW UNDER IT.
  *
- * IT IS NOT IN THE BOX, AND IT IS NOT A BOX. Both halves matter, because this
- * strip has now been wrong in both directions. As a floating object above the
- * pill it carried a border, a background and a 10px gap — 37px of a 119px bar
- * for a line you read and almost never press. Moved ONTO the pill's surface to
- * pay that back, it became chrome inside the thing you type in, crammed against
- * the input: "it's all too tight there." So it is out of the pill again but
- * keeps the diet — no border, no background, no second surface. It costs its
- * own line of text plus the 6px that separates it from the pill, which is
- * exactly what the pill's row gap used to spend on it. Out of the box for free.
+ * This was a full-width centred row of four cells — folder | context | model |
+ * live — sitting under the pill. Reported, accurately: "it is taking a full
+ * row… it is a bit noisy, and it pushes the composer disproportionately
+ * upwards, meaning that it reduces the amount of content we can show."
+ *
+ * It cost a line of text plus a 16px gap, permanently, at the bottom of a
+ * phone whose keyboard already owns half the screen. And three of its four
+ * cells were already one tap away inside the session menu.
+ *
+ * TWO CHANGES, AND THE SECOND IS THE ONE THAT BUYS THE PIXELS:
+ *
+ *  1. The cells are down to what is not a restatement. The folder moved into
+ *     the session menu (identity that changes about never), the context cell
+ *     is gone outright now that compaction is automatic, and "Working…" is
+ *     gone because the log already says it and Stop is attached to the turn.
+ *     What is left is the session chip, the subagent roster when there IS one,
+ *     and background shell commands when there are any.
+ *
+ *  2. It is OUT OF FLOW. `position: absolute; bottom: 100%` hangs it off the
+ *     top edge of the composer wrap, so the wrap — whose height is what
+ *     `--chat-composer-h` publishes and therefore what the transcript gives up
+ *     — no longer contains it at all. The row's entire 32px goes back to the
+ *     conversation.
+ *
+ * WHICH IS WHY IT NOW HAS A SURFACE, reversing the "no border, no background,
+ * no second surface" rule that held while it was in flow. In flow it sat on a
+ * transparent gap that belonged to it; out of flow it floats OVER the last
+ * line of the transcript, and a bare 11px label over arbitrary prose is
+ * unreadable. The surface is the smallest one that fixes that: the chat's own
+ * elevated ground, a hairline, a pill radius.
+ *
+ * RIGHT-ALIGNED, not centred. Centring was a deliberate choice when the strip
+ * was the full width of the pill and its live cell would otherwise have landed
+ * in the phone's bottom-right corner radius. Neither applies to a chip above
+ * the pill, and the right edge is where every other "about this pane" control
+ * in the app lives.
  *
  * ── ONE LINE, BY CONSTRUCTION ──
- * `height` is the load-bearing declaration: a FIXED one-line height, not a
- * min-height and not a max-height. A min-height lets content add a second row;
- * a max-height lets it lay one out and merely clips it, which shows as a
+ * `height` is still the load-bearing declaration: a FIXED one-line height, not
+ * a min-height and not a max-height. A min-height lets content add a second
+ * row; a max-height lets it lay one out and merely clips it, which shows as a
  * half-visible line. With a fixed height there is no second row to clip.
  *
  * Everything else serves that: `flex-wrap: nowrap` said out loud (it is the
  * initial value, so an explicit declaration is what a future edit has to
- * consciously delete rather than silently override); `min-width: 0` on the cells
- * so a long label ellipsizes instead of winning the argument and overflowing the
- * pane; and `flex-shrink: 0` on the live cell alone, so when the width runs out
- * it is the folder and the model that give way and never "2 agents".
+ * consciously delete rather than silently override); `min-width: 0` on the
+ * cells so a long label ellipsizes instead of winning the argument and
+ * overflowing the pane; and `flex-shrink: 0` on the live cell alone, so when
+ * the width runs out it is the model that gives way and never "2 agents".
  *
  * ChatPane.statusline.test.tsx pins this set and fails if any rule in the strip
  * ever acquires a declaration that would permit a second line. */
 .chat-status-bar {
+  /* IN FLOW AGAIN, and inside the composer pill. The previous revision hung it
+     off the pill's top edge with `position: absolute` — which did buy the row
+     back, and did paint over the last line of the transcript: "a bunch of
+     fixed new elements on the top right of the composer".
+     It is the right-hand end of the pill's own tool row now: no row of its own,
+     nothing covered, and in the one surface that is already about composing. */
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
-  /* CENTRED, not right-aligned. Right-alignment put the live cell — the one
-     cell that is always populated — into the bottom-RIGHT corner of the screen,
-     which on a phone is exactly where the display's corner radius cuts in; the
-     last word of "Working…" sat under the curve. Centred, the strip's content
-     is as far from both bottom corners as the line can get, and it still reads
-     as belonging to the pill because it shares the pill's 768px box. */
-  justify-content: center;
-  /* ONE LINE. Equal to the cells' line-height, which carry no block padding —
-     see the arithmetic tie in ChatPane.statusline.test.tsx. */
-  height: 1rem;
-  /* The pill's own centering, repeated — that is the idiom every child of
-     `.chat-composer-wrap` uses (see .chat-notice), and it is what makes this
-     line centre on the PILL on a wide desktop instead of on the whole pane. */
-  width: 100%;
-  max-width: 768px;
-  /* THE GAP IS ON TOP, because the strip is UNDER the pill now. It was written
-     bottom-first when the strip floated ABOVE the input, and the move left the
-     number on the side facing nothing: 6px of dead space below the line and the
-     line itself jammed against the pill it had just been moved out of.
-     Reported as "the folder model working bar needs to be pushed down more from
-     the input box."
-     16px, after two passes at it: the pill carries a real drop shadow, and a
-     gap under a shadow has to clear the shadow before it starts reading as a
-     gap at all. This is the strip's ENTIRE cost besides its one line of text;
-     it is not allowed to grow into a box again (both css tests cap it). */
-  margin: 16px auto 0;
-  padding: 0 2px;
+  justify-content: flex-end;
+  /* The tool row sets the height; the strip is one of its two items. */
+  height: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
   /* Menus escape via position:absolute on .chat-status-menu; segment buttons
      clip their own labels so long model names can't paint over the live cell. */
   overflow: visible;
 }
+/* NO SURFACE ON THE SEGMENTS. They had a border, a pill radius and a raised
+   ground for exactly one revision — the one where the strip floated over the
+   transcript and an 11px label on arbitrary prose could not be read. Back
+   inside the pill there is nothing to lift off, and three bordered chips in a
+   row were the thing that made this read as bolted on. */
+.chat-status-bar .chat-status-seg-wrap + .chat-status-seg-wrap,
+.chat-status-bar .chat-status-seg + .chat-status-seg,
+.chat-status-bar .chat-status-seg-wrap + .chat-status-seg,
+.chat-status-bar .chat-status-seg + .chat-status-seg-wrap {
+  margin-left: 2px;
+}
+
 /* `flex: 0 1 auto` — sized by content, never STRETCHED to fill the 768px above
    (which would spread three cells across the whole pill), and shrinkable, which
    is what hands the width to the live cell when it runs short. */
@@ -2153,7 +2706,10 @@
   padding: 0 7px;
   border: none;
   background: transparent;
-  color: var(--chat-faint);
+  /* It was --chat-faint while it was a 11px line under the composer that
+     nobody was meant to read. It is a control in the pane's head now, and
+     faint measures 2.1–3.3:1 against the surfaces it sits on. */
+  color: var(--chat-dim);
   font-family: var(--chrome-font, inherit);
   font-size: 0.6875rem;
   line-height: 1rem;
@@ -2175,11 +2731,25 @@
   width: auto;
   max-width: none;
   min-width: max-content;
+  /* ── LOUD BY HUE AND WEIGHT, NOT BY BEING HARD TO READ ─────────────────
+     Measured across themes at 11px/600: riso 4.06:1 against the composer,
+     below AA, and the LOWEST-contrast text on a strip where every other cell
+     sits at 8.08. Saturated accents are frequently the dimmest colour a theme
+     owns; this cell wants to catch the eye, which it does with hue and
+     weight, and it must not pay for that in legibility.
+
+     Mixed toward the body ink rather than away from the accent, so the cell
+     stays recognisably the accent on themes where the accent is already
+     fine. */
   /* Safe here and nowhere else: this cell's content always fits, so nothing can
      paint out of it. The truncating cells keep their clip. What visibility buys
      is the hit area below. */
   overflow: visible;
-  color: var(--chat-accent);
+  /* 55%, measured rather than chosen. At 72% it still failed on four themes —
+     riso 4.06, acme 3.95, acme-dark 4.06, github-light 4.44 — because a mix
+     that far toward a dim accent barely moves. This clears 4.5:1 on all ten
+     while staying unmistakably the accent hue. */
+  color: color-mix(in srgb, var(--chat-accent) 55%, var(--chat-fg));
   font-weight: 600;
 }
 /* A 16px line is a fine thing to READ and a poor thing to hit with a thumb. This
@@ -2191,6 +2761,38 @@
   content: "";
   position: absolute;
   inset: -6px 0 -4px;
+}
+/* ── "older build" ───────────────────────────────────────────────────────
+   Present only when the pane's runner is on a different build from the
+   server's (SvgStaleGlyph's comment has the why). So it is allowed to be
+   louder than the identity cells beside it — but NOT danger-coloured: nothing
+   is broken, the agent simply has an older context, and painting that red is
+   the same mistake as the old folder cell's `!` ("told the user their chat was
+   BROKEN, when nothing was wrong").
+
+   `--chat-warn` — see the token's own note. The first version named `--warn`,
+   which no theme defines, so every one of them fell through to the
+   SEARCH-HIGHLIGHT BACKGROUND and the cell measured about 1.8:1 as text on a
+   light composer. A cell whose whole job is to be noticed, in the one colour
+   nobody could read.
+
+   Never shrinks: two words that ellipsize to "older…" say nothing. */
+.chat-status-seg.-stale {
+  flex-shrink: 0;
+  width: auto;
+  max-width: none;
+  min-width: max-content;
+  color: var(--chat-warn);
+}
+.chat-status-seg.-stale svg,
+.chat-status-seg.-stale:hover svg,
+.chat-status-seg.-stale.is-open svg {
+  color: inherit;
+}
+.chat-status-seg.-stale:hover,
+.chat-status-seg.-stale.is-open {
+  color: var(--chat-warn);
+  background: color-mix(in srgb, var(--chat-warn) 12%, transparent);
 }
 .chat-status-seg.-live .chat-roster-spin {
   flex: 0 0 auto;
@@ -2206,8 +2808,34 @@
   color: var(--chat-fg);
 }
 .chat-status-seg.-live svg {
+  /* The MARK keeps the pure accent — it is a 11px spinning ring, not text, so
+     it has no reading threshold to clear and it is what carries the hue. */
   color: var(--chat-accent);
 }
+/* ── A CELL YIELDS ITS LABEL, NOT ITS EXISTENCE ──────────────────────────
+   The live cell refuses to shrink, by design: it is the one thing on the strip
+   that changes. Everything else therefore gives way to it — and with nothing
+   stopping it, the model chip kept shrinking past its own icon. Measured at a
+   380px tool row: the wrapper was 14px wide while the 12px logo kept its
+   floor, so the icon spilled across the separator and sat ON the live cell's
+   spinner. Read, reasonably, as a second spinner that nobody could find in the
+   source ("two marks before 1 agent").
+
+   So a cell that can no longer show anything useful stops taking part. The
+   floor is the icon plus its gap plus a couple of characters: below that the
+   label is "O…" and the chip has stopped being identity and started being
+   decoration. The model is still one tap away in the session menu, which is
+   where its full id has always lived. */
+.chat-status-seg-wrap:not(.-live) {
+  /* The cell clips its OWN contents. The icon is `flex: 0 0 auto` with a 12px
+     floor, so once the wrapper is narrower than that it simply painted
+     outside itself — this is the one line that keeps a shrinking cell inside
+     its own box instead of on its neighbour. A clipped logo reads as a logo
+     running out of room, which is what is happening; a logo sitting on the
+     spinner reads as a second spinner. */
+  overflow: hidden;
+}
+
 /* Where the truncation actually happens. `min-width: 0` is what lets a flex item
    go below its min-content width at all — without it the label refuses to
    shrink and the strip overflows the pane instead of ellipsizing. */
@@ -2222,6 +2850,48 @@
   min-width: max-content;
   overflow: visible;
   text-overflow: clip;
+}
+
+/* ── …UNTIL THERE IS NOWHERE LEFT TO YIELD ──────────────────────────────
+   "Never shrink" is right while something else can give way, and the model
+   chip is the only thing that can. Once it is down to its own icon the live
+   cell goes on refusing and paints over its neighbour: measured overlapping
+   "btw…" from a 430px row with a long label, and from 340px with "1 agent".
+
+   Below that it ellipsizes like every other cell. A clipped "2 agents · 1 sub…"
+   still says what the cell is for — work is running, and how much — and the
+   roster behind it has the whole list. Two words on top of another control
+   say nothing and break both.
+
+   IT HAS TO BEAT TWO RULES ABOVE, which is why it is HERE and written like
+   this. The flex item is the WRAPPER, not the button (`.chat-status-seg-wrap
+   .-live { flex: 0 0 auto }` says so in its own comment), and the label's
+   `min-width: max-content` is declared later than the first attempt at this
+   was. Targeting the button and sitting earlier in the file is exactly why
+   that attempt measured as doing nothing. */
+@container composer-tools (max-width: 440px) {
+  .chat-status-seg-wrap.-live {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+  }
+  .chat-status-seg.-live {
+    /* AND flex-shrink, which the base rule sets to 0 four hundred lines up.
+       Without it the button keeps its full width inside a wrapper that has
+       already shrunk, so the label is HARD-CLIPPED mid-word rather than
+       ellipsized — the text just stops. Every property the base rule sets to
+       "never give way" has to be named here; `min-width` and `overflow` alone
+       were two thirds of it. */
+    flex-shrink: 1;
+    min-width: 0;
+    overflow: hidden;
+  }
+  .chat-status-seg.-live .chat-status-seg-label {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 }
 .chat-status-menu {
   position: absolute;
@@ -2385,32 +3055,21 @@
   opacity: 0.9;
 }
 
-.chat-status-seg.-ctx {
-  flex-shrink: 0;
-  min-width: max-content;
-  gap: 5px;
-  font-weight: 600;
-  color: var(--status-working, #b7791f);
-}
-.chat-status-seg.-ctx[data-level="high"] {
-  color: var(--danger);
-}
-.chat-status-seg.-ctx .chat-ctx-glyph {
-  display: inline-flex;
-  flex: 0 0 auto;
-}
-/* The one place the strip's own svg rule must not win: that rule paints every
-   icon --chat-dim so icons read as identity marks, and this icon is the
-   warning itself. */
-.chat-status-seg.-ctx svg {
-  color: inherit;
-}
-.chat-session-bar-fill[data-level="warn"] {
-  background: var(--status-working, #b7791f);
-}
-.chat-session-bar-fill[data-level="high"] {
-  background: var(--danger);
-}
+/* NO BRANCH CELL. It was the one chip on this strip that was a verb rather
+   than a fact, styled as an icon-only square. It is a command now and lives
+   with the commands — see `.chat-tool-btn` and the `+` sheet. */
+
+/* ── THE CONTEXT CELL IS GONE, AND SO IS ITS COLOUR ──────────────────────
+   `.chat-status-seg.-ctx` warmed at 70% and went danger-red at 88%, and the
+   meter's fill was levelled the same way. That was the right UI for a chat
+   that compacted nothing by itself: the colour was the only warning before a
+   failed send.
+
+   muxpad compacts automatically again (server auto-compact.ts), so a red cell
+   would be an alarm about something already handled — "I don't want the user
+   to be thinking about compaction". The meter survives in the session menu,
+   in ONE colour, because there it answers a question somebody went looking
+   for rather than raising one they did not ask. */
 
 .chat-session-context-label {
   display: block;
@@ -2462,7 +3121,10 @@
    beside the model already says which arrangement you are in, and the word was
    the longest redundant thing on the line). Never ellipsized: the label is one
    short word, and a truncated "Ch…" would be worse than no chip at all. */
-.chat-status-seg.-mode.-static {
+/* `-static` is gone from the mode chip: it opens a panel that EXPLAINS the
+   mode (never one that switches it — see the component). The rule stays for
+   anything else that wears the class without being pressable. */
+.chat-status-seg.-static {
   cursor: default;
 }
 
@@ -2605,12 +3267,10 @@
   font-size: 0.8125rem;
 }
 
-/* Working-directory switcher popover (opened from the status bar's folder
-   segment). */
-.chat-folder {
-  position: relative;
-  display: inline-flex;
-}
+/* Working-directory switcher popover. Opened from the session menu now — the
+   folder stopped being a cell of its own when the strip became a chip in the
+   pane's head, so `.chat-folder` (the wrapper that cell used) went with it;
+   the popover anchors to `.chat-status-seg-wrap` like the others. */
 .chat-folder-menu {
   position: absolute;
   bottom: calc(100% + 6px);

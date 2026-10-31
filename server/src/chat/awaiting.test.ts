@@ -157,6 +157,48 @@ describe('paneAwaitsUser — the same question, against a real transcript', () =
     expect(paneAwaitsUser(db, paneId)).toBe(true);
   });
 
+  it('reads the WHOLE last message, not its first line', () => {
+    // THE BUG THAT HELD FOUR ROWS IN THE RAIL. The transcript joins whole
+    // messages with newlines, so only a message's FIRST line carries the
+    // `assistant: ` prefix — and the walk-back used to find that line and
+    // judge it. Taken from the row it actually happened to, `feed variant ·
+    // 24h dial`, held for nine hours:
+    const paneId = worker([
+      { kind: 'user', text: 'build a 24h dial' },
+      {
+        kind: 'assistant',
+        text: [
+          'I built clock.html. The centre is a ring you drag to scrub, and a gold hand sweeps to whichever hour you pick.',
+          'I loaded it at phone and desktop sizes against the live API and playback started at the news start.',
+        ].join('\n'),
+      },
+    ]);
+    // "whichever hour you pick" matches INVITATION — on line one, describing a
+    // clock face. The message ENDS on a statement, which is what decides.
+    expect(paneAwaitsUser(db, paneId)).toBe(false);
+  });
+
+  it('…and still catches a question that arrives at the end of a long message', () => {
+    // The other direction, which the first-line read ALSO got wrong: a report
+    // that ends on the ask looked like a report.
+    const paneId = worker([
+      { kind: 'user', text: 'investigate' },
+      {
+        kind: 'assistant',
+        text: ['I read all four candidates and wrote them up.', 'Which should I build?'].join('\n'),
+      },
+    ]);
+    expect(paneAwaitsUser(db, paneId)).toBe(true);
+  });
+
+  it('a user message after the worker still ends it, however long the worker was', () => {
+    const paneId = worker([
+      { kind: 'assistant', text: ['Here is the plan.', 'Which should I build?'].join('\n') },
+      { kind: 'user', text: 'the second one' },
+    ]);
+    expect(paneAwaitsUser(db, paneId)).toBe(false);
+  });
+
   it('says NO for a pane with no transcript at all', () => {
     // Unreadable is not "awaiting". Stated as its own case because the default
     // here is the whole decision: `delivered` is what produced the bug, but

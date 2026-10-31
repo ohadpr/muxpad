@@ -40,10 +40,10 @@ import {
   withViewportAnchor,
 } from '../lib/xterm-internals';
 import {
-  TERMINAL_FONT,
   type Theme,
   getSettings,
   resolveTheme,
+  resolvedTerminalFont,
   systemPrefersDark,
   useResolvedTheme,
 } from '../settings';
@@ -86,6 +86,35 @@ const XTERM_THEMES: Record<
     selectionBackground: string;
   }
 > = {
+  // Matches the stylesheet's `[data-theme="demoscene"]` --xterm-* pair; the
+  // cursor is the accent, so the caret glows like the rest of the theme.
+  demoscene: {
+    background: '#101619',
+    foreground: '#d8f6ff',
+    cursor: '#19ffd0',
+    selectionBackground: '#1d3a40',
+  },
+  // The three objects, not three palettes — see the stylesheet's block for
+  // each. The cursor is the theme's accent in all of them, so the caret is
+  // the drafting pencil / the stamp / the glow respectively.
+  blueprint: {
+    background: '#0a2342',
+    foreground: '#e8f1ff',
+    cursor: '#9fe3ff',
+    selectionBackground: '#1a4a7a',
+  },
+  riso: {
+    background: '#f7f4ec',
+    foreground: '#17161c',
+    cursor: '#e0005f',
+    selectionBackground: '#ffe1ef',
+  },
+  memphis: {
+    background: '#fbf8f1',
+    foreground: '#121016',
+    cursor: '#d6006e',
+    selectionBackground: '#ffe8f3',
+  },
   'tokyo-night': {
     background: '#1a1b26',
     foreground: '#c0caf5',
@@ -186,7 +215,11 @@ export function XtermPane({
 
     const { theme } = getSettings();
     const fontSize = browserTerminalFontSize();
-    const fontFamily = TERMINAL_FONT;
+    // The THEME may own this (see settings.resolvedTerminalFont) — read it at
+    // open time, not from a module constant, or a terminal born under the
+    // demoscene theme would come up in Menlo and only correct itself on the
+    // next theme change.
+    const fontFamily = resolvedTerminalFont();
     // `theme` may be 'system'; the palette map is keyed by real themes only.
     const initialTheme = resolveTheme(theme, systemPrefersDark());
     // Open a clicked link directly, no confirm. A terminal surfaces URLs two
@@ -1752,13 +1785,18 @@ export function XtermPane({
     const term = termRef.current;
     const fit = fitRef.current;
     if (!term || !fit) return;
-    term.options.fontFamily = TERMINAL_FONT;
+    // Re-read per theme change: this effect already owns the multi-step refit
+    // that xterm needs after a font swap, which is exactly the machinery a
+    // theme-owned font needs and the reason it belongs here rather than in a
+    // separate effect racing this one.
+    const themeFont = resolvedTerminalFont();
+    term.options.fontFamily = themeFont;
     term.options.fontSize = fontSize;
     term.options.theme = themeFor(resolvedTheme);
     const timerIds: number[] = [];
     let disposed = false;
     void document.fonts
-      .load(`${fontSize}px ${TERMINAL_FONT}`)
+      .load(`${fontSize}px ${themeFont}`)
       .catch(() => {
         // a system font that will not load is not recoverable here; refit anyway
       })

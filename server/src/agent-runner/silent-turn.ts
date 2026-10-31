@@ -66,3 +66,41 @@ export function isSilentTurn(turn: TurnSpeech): boolean {
   if (turn.said) return false;
   return turn.replies === 0;
 }
+
+/**
+ * DOES THIS TURN'S PROSE COUNT AS SPEAKING?
+ *
+ * Prose is the commonest way a turn says something, and there are exactly two
+ * situations where it is machinery instead — and both were already settled
+ * elsewhere in the product before this function existed to say so:
+ *
+ *   · CHAT MODE, where the chat renders the `reply` tool and nothing else, so
+ *     prose is the scratchpad. Counting it would call every thinking-out-loud
+ *     fire "spoken".
+ *
+ *   · A CRON FIRE, for the same reason one step along. muxpad's instructions
+ *     say a scheduled turn is machinery end to end — "everything you do inside
+ *     a scheduled fire folds into one collapsed run … none of it reaches the
+ *     conversation" — and the chat already implements that: `cron` is in
+ *     MACHINE_TURN_VARIANTS (web/src/lib/chat-voice.ts), so a fire's prose is
+ *     never promoted into the log. `muxpad say` is the one channel that
+ *     speaks, which is exactly what the instructions tell a cron to use.
+ *
+ * The bug this fixes is the two channels disagreeing about one turn, which is
+ * the SECOND time that has happened here. `nw-hourly` is a card refresher
+ * whose prompt says "Say nothing", three different ways, and ends its turn
+ * with "Card updated." anyway. The chat did the right thing and showed
+ * nothing; the push read that same prose as news and buzzed a phone at 09:04,
+ * every weekday hour. Reported with a screenshot of the notification.
+ *
+ * Asking a model to be silent is not a mechanism. If the conversation will not
+ * show a fire's prose, nothing downstream may treat it as something said.
+ *
+ * `muxpad say`, a `reply`, an explicit `notify` and a FAILURE are all
+ * untouched: each is a deliberate statement, and a cron that genuinely has
+ * news still gets through.
+ */
+export function proseSpeaks(opts: { mode: string; cron: boolean }): boolean {
+  if (opts.cron) return false;
+  return opts.mode !== 'chat';
+}

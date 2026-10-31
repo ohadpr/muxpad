@@ -228,6 +228,28 @@ describe('SpawnReportWriter — a finished worker becomes a card', () => {
     // own sentence and ends the question.
     const STATED = 'Two dead rules in billing.ts:220; removed, suite green.';
 
+    it('DROPS a report from a chat with no parent — there is nobody to tell', async () => {
+      // `report` is offered to every chat and its description says it speaks
+      // to "the chat that spawned you". A TOP-LEVEL chat has no such chat, so
+      // the sentence landed in the stated map — which only a round close
+      // reads, and a top-level chat has no rounds either. It sat there, unread,
+      // for the life of the process.
+      //
+      // Seen in the "signal archive" chat (spawned_by NULL, zero rounds): a long
+      // answer, a `report` call doing nothing, then more prose. Reported as
+      // "I don't know if the whole reporting mechanism is working".
+      const { writer } = wire(async () => GOOD);
+      const orphanTab = new TabStore(db).create({
+        name: 'top level chat',
+        workspace_id: workspaceId,
+        layout: '',
+      }).id;
+      writer.state(orphanTab, STATED);
+      // Nothing stored, so nothing can be delivered later under a round this
+      // tab will never have.
+      expect(new TabStore(db).getById(orphanTab)?.spawn_report ?? null).toBeNull();
+    });
+
     it('delivers what the worker said, with no model call at all', async () => {
       let calls = 0;
       const { retirer, writer } = wire(async () => {

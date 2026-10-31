@@ -151,6 +151,13 @@ export class AccountPool {
       CREATE TABLE IF NOT EXISTS credentials (
         account TEXT PRIMARY KEY, state TEXT NOT NULL, detail TEXT NOT NULL,
         updated_at INTEGER NOT NULL);
+      -- WHO IS CURRENTLY SPENDING AN ACCOUNT'S ONE RETRY. See choose(): an
+      -- expired dead mark makes the account a candidate again, and the first
+      -- pane to take it owns the attempt until the window passes. The pane is
+      -- the whole point -- a selector re-asking for the account it is already
+      -- using must not be turned away by its own reservation.
+      CREATE TABLE IF NOT EXISTS reservations (
+        account TEXT PRIMARY KEY, pane TEXT NOT NULL, at INTEGER NOT NULL);
     `);
     // TWO RUNNERS OPEN THIS DATABASE AT ONCE. `CREATE TABLE IF NOT EXISTS` is
     // safe for that; a check-then-ALTER is not — both see the column missing,
@@ -172,8 +179,16 @@ export class AccountPool {
   accounts(): Account[] {
     return readAccountConfigOrNull(this.dir)?.accounts ?? [];
   }
-  private eligible(account: Account, model: string): boolean {
+  private eligible(account: Account, model: string, pane?: string): boolean {
     if (!account.enabled) return false;
+    // ── SOMEBODY ELSE IS SPENDING THIS ACCOUNT'S ONE RETRY ────────────────
+    // An expired dead mark makes the account a candidate again (see
+    // `credential`), and exactly one pane gets that attempt. The holder may
+    // re-select it as often as it likes — the Claude backend asks once at
+    // startup and again before dispatch — and everybody else waits for the
+    // next window.
+    const held = this.reservation(account.id);
+    if (held && held.pane !== pane && this.now() - held.at < CREDENTIAL_RETRY_MS) return false;
     // A DEAD CREDENTIAL IS NOT A CANDIDATE. Cheaper than any quota question and
     // asked first, because an account that cannot authenticate cannot do work
     // of any size on any model.
@@ -198,7 +213,7 @@ export class AccountPool {
         const config = readAccountConfigOrNull(this.dir);
         if (!config) return null;
         const candidates = config.accounts.filter(
-          (a) => !excluded.has(a.id) && this.eligible(a, model),
+          (a) => !excluded.has(a.id) && this.eligible(a, model, pane),
         );
         candidates.sort(
           (a, b) =>
@@ -208,6 +223,33 @@ export class AccountPool {
         );
         const chosen = candidates[0];
         if (!chosen) return null;
+        // ── A RETRY IS RESERVED, NOT JUST ALLOWED ─────────────────────────
+        // The expiry above makes a dead account a candidate again, and the
+        // transaction serialises SELECTIONS without limiting ATTEMPTS: eight
+        // selections across two connections all chose the same expired
+        // account before any of them had a result to report. The window only
+        // moved when something finally failed, which is far too late — that
+        // is the original incident, a dead account chosen on every send.
+        //
+        // So taking the retry RESERVES it, here, inside the same transaction
+        // that hands the account out — and the reservation belongs to the PANE
+        // that took it.
+        //
+        // IT USED TO BE A DEAD MARK, which was worse than the bug it fixed.
+        // The Claude backend selects at startup and selects AGAIN before
+        // dispatch, so its own reservation made the account ineligible on the
+        // second call: "All Claude accounts are unavailable", request saved,
+        // zero prompts delivered to the SDK. A reservation nobody owns cannot
+        // tell the holder from a stranger.
+        // ONLY for the expired-dead case. A healthy account has no retry to
+        // spend, and reserving one would turn every ordinary selection into an
+        // exclusive lock — which is what the first version of this did.
+        const cred = this.credential(chosen.id);
+        if (cred.expiresAt > 0 && cred.state === 'ok')
+          this.db
+            .prepare(`INSERT INTO reservations VALUES (?, ?, ?)
+              ON CONFLICT(account) DO UPDATE SET pane = excluded.pane, at = excluded.at`)
+            .run(chosen.id, pane, this.now());
         this.db
           .prepare('INSERT OR REPLACE INTO assignments VALUES (?, ?, ?)')
           .run(pane, chosen.id, this.now());
@@ -310,6 +352,10 @@ export class AccountPool {
    * table.
    */
   markCredential(id: string, state: 'ok' | 'dead', detail = ''): void {
+    // The attempt is over either way, so the reservation it held is spent. A
+    // failure re-arms the window through the fresh dead mark; a success
+    // clears the row outright and the account is simply back.
+    this.db.prepare('DELETE FROM reservations WHERE account = ?').run(id);
     this.db
       .prepare(
         `INSERT INTO credentials VALUES (?, ?, ?, ?) ON CONFLICT(account)
@@ -318,15 +364,58 @@ export class AccountPool {
       )
       .run(id, state, detail, this.now());
   }
-  /** What we last learned about this account's login. Unknown reads as `ok`:
-   *  an account nobody has tried yet is a candidate, not a suspect. */
-  credential(id: string): { state: 'ok' | 'dead'; detail: string; updatedAt: number } {
+  /**
+   * What we last learned about this account's login. Unknown reads as `ok`:
+   * an account nobody has tried yet is a candidate, not a suspect.
+   *
+   * ── AND A DEAD MARK EXPIRES ───────────────────────────────────────────
+   *
+   * It used to be permanent. One auth failure benched an account until a
+   * human typed `reset`, and nothing ever asked again — so a five-second
+   * network blip during a token refresh looked exactly like a revoked login:
+   * failover silently gone, and nobody the wiser until the other account hit
+   * its weekly cap.
+   *
+   * After {@link CREDENTIAL_RETRY_MS} the account becomes a candidate again.
+   * If it is still broken the next attempt re-marks it with a fresh stamp and
+   * it is benched for another window, so the cost of being wrong is ONE
+   * failed call per account per window — and that call is one muxpad was
+   * about to make anyway, against an account it would otherwise have had to
+   * refuse. If it has recovered, it is simply back.
+   *
+   * `expiresAt` is returned rather than hidden so the CLI can say which of
+   * the two states a reader is looking at. "Signed out" and "signed out, and
+   * we will try again shortly" are different sentences.
+   */
+  /** Who holds this account's one retry, if anybody. See `choose`. */
+  private reservation(id: string): { pane: string; at: number } | null {
+    return (
+      (this.db.prepare('SELECT pane, at FROM reservations WHERE account = ?').get(id) as
+        | { pane: string; at: number }
+        | undefined) ?? null
+    );
+  }
+  credential(id: string): {
+    state: 'ok' | 'dead';
+    detail: string;
+    updatedAt: number;
+    /** When the dead mark stops suppressing this account. 0 when not dead. */
+    expiresAt: number;
+  } {
     const row = this.db
       .prepare('SELECT state, detail, updated_at AS updatedAt FROM credentials WHERE account = ?')
       .get(id) as { state: string; detail: string; updatedAt: number } | undefined;
-    return row?.state === 'dead'
-      ? { state: 'dead', detail: row.detail, updatedAt: row.updatedAt }
-      : { state: 'ok', detail: row?.detail ?? '', updatedAt: row?.updatedAt ?? 0 };
+    if (row?.state !== 'dead')
+      return {
+        state: 'ok',
+        detail: row?.detail ?? '',
+        updatedAt: row?.updatedAt ?? 0,
+        expiresAt: 0,
+      };
+    const expiresAt = row.updatedAt + CREDENTIAL_RETRY_MS;
+    return this.now() >= expiresAt
+      ? { state: 'ok', detail: row.detail, updatedAt: row.updatedAt, expiresAt }
+      : { state: 'dead', detail: row.detail, updatedAt: row.updatedAt, expiresAt };
   }
   block(id: string, block: QuotaBlock): void {
     this.db
@@ -391,11 +480,50 @@ export function assertSharedHistory(accounts: Account[]): void {
     );
 }
 
+/**
+ * How long one auth failure benches an account before muxpad tries it again.
+ *
+ * Long enough that a genuinely broken login is not retried on every send —
+ * the whole point of recording the failure — and short enough that a blip
+ * costs one window rather than the rest of the day. The retry is not free and
+ * not expensive: one call that fails fast, per account, per window.
+ */
+export const CREDENTIAL_RETRY_MS = 20 * 60_000;
+
 export function accountEnv(
   account: Account,
   parent: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...parent, CLAUDE_CONFIG_DIR: account.configDir };
+  const env: NodeJS.ProcessEnv = {
+    ...parent,
+    CLAUDE_CONFIG_DIR: account.configDir,
+    // ── AND THE CREDENTIAL NAMESPACE, EXPLICITLY ─────────────────────────
+    //
+    // A profile directory is not where the token lives. On macOS the CLI keeps
+    // the subscription token in the KEYCHAIN, under an item whose name it
+    // derives like this (verbatim from the bundle):
+    //
+    //   n        = env.CLAUDE_SECURESTORAGE_CONFIG_DIR
+    //   isDefault = n !== undefined ? !n : !env.CLAUDE_CONFIG_DIR
+    //   dir       = n !== undefined ? n : configDir()
+    //   suffix    = isDefault ? '' : `-${sha256(dir).slice(0, 8)}`
+    //
+    // So the namespace is chosen by WHICH VARIABLE HAPPENS TO BE SET, and a
+    // login performed with one of them set can land on a different Keychain
+    // item from the read performed with the other. Measured on this machine:
+    // a second account logged in under CLAUDE_CONFIG_DIR alone wrote its
+    // identity into .claude.json (the right email, the right account uuid)
+    // and still answered `Failed to authenticate: OAuth session expired and
+    // could not be refreshed` on the first real call — an account that looks
+    // signed in everywhere a human would check, and is not.
+    //
+    // Setting BOTH pins the namespace to one value that cannot drift: the
+    // hash is then of the same string whoever computes it. Nothing here needs
+    // the Keychain to be readable, and it deliberately never reads it —
+    // `security find-generic-password` raises a system dialog on the user's
+    // physical screen, which is not a thing a background pane may do.
+    CLAUDE_SECURESTORAGE_CONFIG_DIR: account.configDir,
+  };
   // These override subscription login. Never accidentally charge an API key.
   for (const name of [
     'ANTHROPIC_API_KEY',

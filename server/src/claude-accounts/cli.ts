@@ -54,7 +54,7 @@ const USAGE = `muxpad claude-account — run Claude Code panes across more than 
                            create a second profile, share history with the first, enable failover
   remove <id>              drop an account from the pool (its profile directory is left alone)
   use <id|auto>            prefer one account for new sessions; auto restores priority order
-  reset <id>               clear a recorded cooldown after you have fixed the account
+  reset <id>               clear a cooldown or a signed-out mark after you fix an account
 
 With no accounts file muxpad uses your ordinary Claude Code login and nothing
 else — one account, no failover, nothing to configure. 'add' is the step up.`;
@@ -236,7 +236,7 @@ function add(): void {
     console.log('');
     console.log('IT HAS NO LOGIN YET. Sign it in — a DIFFERENT Anthropic account:');
     console.log('');
-    console.log(`  CLAUDE_CONFIG_DIR=${shellQuote(configDir)} claude auth login`);
+    console.log(`  ${loginLine(configDir)}`);
     console.log('');
     console.log(
       `Then: muxpad claude-account status. New Claude panes prefer "${existing?.preferred ?? first.id}"`,
@@ -278,6 +278,31 @@ function removeLocked(pool: AccountPool | null): void {
  * It is an existence check, not an authentication: a stale or expired login
  * leaves the file in place. It answers "has this profile ever been signed in",
  * which is the question a half-finished `add` leaves open. */
+/**
+ * THE LOGIN LINE, AND WHY IT SETS TWO VARIABLES.
+ *
+ * `CLAUDE_CONFIG_DIR` moves the PROFILE — history, settings, the identity in
+ * `.claude.json`. It does not move the TOKEN: on macOS that lives in the
+ * Keychain, under an item the CLI names from
+ * `CLAUDE_SECURESTORAGE_CONFIG_DIR`, falling back to a hash of
+ * `CLAUDE_CONFIG_DIR` only when the first is undefined.
+ *
+ * So the namespace depends on which variable happens to be set, and a login
+ * done with one can land on a different item from a read done with the other.
+ * Measured here: an account logged in with `CLAUDE_CONFIG_DIR` alone wrote the
+ * right email and the right account uuid into its profile and still answered
+ * `Failed to authenticate: OAuth session expired and could not be refreshed`
+ * on its first real call. Signed in everywhere a human would look, and not
+ * signed in at all.
+ *
+ * Both, every time, so the hash is of one string whoever computes it — and the
+ * same pair the runner uses (see accountEnv).
+ */
+function loginLine(configDir: string): string {
+  const d = shellQuote(configDir);
+  return `CLAUDE_CONFIG_DIR=${d} CLAUDE_SECURESTORAGE_CONFIG_DIR=${d} claude /login`;
+}
+
 function hasLogin(a: Account): boolean {
   if (existsSync(join(a.configDir, '.claude.json'))) return true;
   return a.configDir === join(homedir(), '.claude') && existsSync(join(homedir(), '.claude.json'));
@@ -327,15 +352,25 @@ function report(pool: AccountPool | null): void {
     // SIGNED OUT OUTRANKS EVERYTHING ELSE on this line, including a quota
     // block: an account that cannot authenticate is not waiting for a reset,
     // and the sentence has to name the one action that fixes it.
-    const dead = pool?.credential(a.id).state === 'dead';
+    const cred = pool?.credential(a.id);
+    const dead = cred?.state === 'dead';
+    // A mark that has EXPIRED is not the same sentence. The account is back in
+    // the rotation and muxpad will try it on the next send; saying "signed
+    // out" about one it is about to use would be a lie, and saying nothing at
+    // all would hide a login that may still be broken.
+    const retrying = cred?.state === 'ok' && cred.expiresAt > 0;
     const state = dead
-      ? `signed out — run: CLAUDE_CONFIG_DIR=${a.configDir} claude /login`
+      ? `signed out — run: ${loginLine(a.configDir)}`
       : cool
         ? `blocked until ${new Date(cool.until_ms).toLocaleString()} (${cool.reason})`
         : use
           ? `${Math.ceil(use.utilization)}% of ${use.scope}`
           : 'no reading yet';
-    const signedIn = hasLogin(a) ? '' : '  — NO LOGIN FOUND';
+    const signedIn = hasLogin(a)
+      ? retrying
+        ? '  — last attempt failed to authenticate; muxpad will try again on the next send'
+        : ''
+      : '  — NO LOGIN FOUND';
     console.log(`${mark} ${a.id.padEnd(10)} ${state}${signedIn}`);
     console.log(`  ${' '.repeat(10)} ${a.configDir}`);
   }
@@ -389,7 +424,19 @@ try {
         if (!pool.accounts().some((a) => a.id === id))
           throw new Error('Usage: muxpad claude-account reset <account-id>');
         pool.db.prepare('DELETE FROM cooldowns WHERE account = ?').run(id);
-        console.log(`Cleared cooldown for ${id}. Blocked panes can use /retry.`);
+        // ── AND THE SIGNED-OUT MARK ───────────────────────────────────────
+        // It is a STICKY row, written the first time a runner saw this
+        // account fail to authenticate, and nothing re-probes it. So an
+        // account whose login has since been fixed stayed skipped for ever
+        // with no command that could say otherwise — `reset` cleared
+        // cooldowns only, and its own help already promises "after you have
+        // fixed the account", which is exactly this case.
+        const revived = pool.db.prepare('DELETE FROM credentials WHERE account = ?').run(id);
+        console.log(
+          revived.changes > 0
+            ? `Cleared cooldown and the signed-out mark for ${id}. Blocked panes can use /retry.`
+            : `Cleared cooldown for ${id}. Blocked panes can use /retry.`,
+        );
       } else throw new Error(USAGE);
     } finally {
       pool?.close();
