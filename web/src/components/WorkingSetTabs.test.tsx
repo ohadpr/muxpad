@@ -84,9 +84,11 @@ describe('what a tab looks like', () => {
     expect(i, 'no active-tab rule').toBeGreaterThan(-1);
     const active = CSS.slice(i, CSS.indexOf('}', i));
     expect(active).toMatch(/background:\s*var\(--bg-pane-face/);
-    // …and it paints over the strip's own hairline, or the two read as two
-    // stacked shapes rather than one.
-    expect(active).toMatch(/box-shadow:\s*0 1px 0 0 var\(--bg-pane-face/);
+    // …and nothing is drawn between it and the pane. The strip used to carry
+    // a bottom hairline and the tab tried to paint over it with a 1px shadow,
+    // which could never work: the strip is `overflow-x: auto`, and overflow
+    // clips a child's shadow at the padding box. The line is gone instead.
+    expect(CSS).not.toMatch(/\.wstabs \{[^}]*border-bottom/);
   });
 
   it('spends colour on status, not identity', () => {
@@ -217,5 +219,30 @@ describe('the active tab leaves the island', () => {
     // If an inactive tab took it too, "which one am I in" would be a
     // question about a border rather than an answer about a surface.
     expect((CSS.match(/background:\s*var\(--bg-pane-face/g) ?? []).length).toBe(1);
+  });
+});
+
+/**
+ * "Tabs too close to each other" and "lower border cuts the connection
+ * between the content and the tab header" — the second being a clipping bug
+ * rather than a styling choice.
+ */
+describe('the strip joins the pane rather than fencing it off', () => {
+  it('draws no line across its own bottom', () => {
+    // The edge is already drawn by the thing that matters: the rail's surface
+    // stopping and the pane's starting.
+    expect(/\.wstabs \{([^}]*)\}/.exec(CSS)?.[1] ?? '').not.toMatch(/border-bottom/);
+  });
+
+  it('does not try to cover a line with a shadow it would clip', () => {
+    // `overflow-x: auto` clips a child's box-shadow at the padding box, so
+    // the cover-up could never have worked.
+    expect(/\.wstabs \{([^}]*)\}/.exec(CSS)?.[1] ?? '').toMatch(/overflow-x:\s*auto/);
+    expect(CSS).not.toMatch(/box-shadow[^;]*bg-pane-face/);
+  });
+
+  it('gives the tabs room to be separate things', () => {
+    const gap = Number(/\.wstabs \{[\s\S]*?gap:\s*(\d+)px/.exec(CSS)?.[1]);
+    expect(gap).toBeGreaterThanOrEqual(5);
   });
 });

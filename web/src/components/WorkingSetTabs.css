@@ -28,10 +28,22 @@
   align-items: flex-end;
   flex: 0 0 auto;
   min-width: 0;
-  gap: 0;
-  padding: 5px 8px 0;
+  /* Room between tabs. At 3px they were a packed row that read as one
+     object with notches in it; this is the gap that lets each one be a
+     thing. */
+  gap: 6px;
+  padding: 6px 10px 0;
   background: var(--rail-surface);
-  border-bottom: 1px solid var(--rail-seam, var(--rail-border));
+  /* ── NO LINE ACROSS THE BOTTOM ──────────────────────────────────────────
+     There was one, and it cut the active tab off from the pane it belongs to
+     — "lower border cuts the connection between the content and the tab
+     header". The active tab tried to paint over it with a 1px shadow, which
+     could never work: this box is `overflow-x: auto`, and overflow clips a
+     child's shadow at the padding box.
+     So the line goes. The edge is already drawn by the thing that matters —
+     the rail's surface stopping and the pane's starting — and the active tab
+     wears the pane's colour, so it simply continues into the content with
+     nothing in between. That IS the connection a tab bar is for. */
   font-family: var(--chrome-font);
   /* Scrolls rather than squeezing past legibility — six slots fit a laptop,
      and a narrow pane gets a scrollbar instead of six unreadable stubs. */
@@ -64,7 +76,6 @@
      window. */
   min-width: 128px;
   max-width: 224px;
-  margin-right: 3px;
   /* ── A STEP THE STRIP CAN BE SEEN THROUGH ──────────────────────────────
      The body was `--rail-elev`, a 6% lift tuned for a CONTROL sitting on the
      rail with space around it. Six tabs edge to edge on the same surface do
@@ -87,8 +98,8 @@
    The pane's own surface, continuing up into the strip — the tab IS the thing
    below it reaching through the bar, which is what a tab has always meant and
    the one thing the band could never say, having no pane beside it to join.
-   The `box-shadow` paints over the strip's bottom hairline so the two are one
-   shape rather than two stacked ones. */
+   There is no hairline left to paint over — see the strip — so the tab simply
+   continues into the pane with nothing between them. */
 .wstab[data-active="true"],
 .wstab[data-active="true"]:hover {
   /* ── AND IT LEAVES THE ISLAND ────────────────────────────────────────
@@ -109,7 +120,6 @@
   --status-dead: var(--pane-status-dead);
   background: var(--bg-pane-face, var(--bg));
   border-color: color-mix(in srgb, var(--pane-ink) 18%, transparent);
-  box-shadow: 0 1px 0 0 var(--bg-pane-face, var(--bg));
 }
 
 .wstab-link {
