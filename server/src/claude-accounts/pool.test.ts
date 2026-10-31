@@ -669,3 +669,49 @@ describe('the retry after expiry is reserved, not merely allowed', () => {
     expect(pool.choose('pane-a', 'opus')?.id).toBe('primary');
   });
 });
+
+/**
+ * ── THE HOLDER MAY RE-SELECT ITS OWN RETRY ───────────────────────────────
+ *
+ * The first version of the reservation was a fresh dead mark, which is worse
+ * than the bug it fixed: the Claude backend selects at startup and AGAIN
+ * before dispatch, so its own reservation made the account ineligible on the
+ * second call — "All Claude accounts are unavailable", request saved, zero
+ * prompts delivered to the SDK. A reservation nobody owns cannot tell the
+ * holder from a stranger.
+ */
+describe('a reserved retry belongs to a pane', () => {
+  it('lets the holder select it again, which every backend does', () => {
+    const { pool, advance } = fixture();
+    pool.markCredential('primary', 'dead', 'Not logged in');
+    advance(CREDENTIAL_RETRY_MS + 1000);
+    expect(pool.choose('pane-a', 'opus')?.id).toBe('primary');
+    // startup, then again before dispatch — same pane, same attempt.
+    expect(pool.choose('pane-a', 'opus')?.id).toBe('primary');
+    expect(pool.choose('pane-a', 'opus', new Set(), 'primary')?.id).toBe('primary');
+  });
+
+  it('still sends everybody else elsewhere', () => {
+    const { pool, advance } = fixture();
+    pool.markCredential('primary', 'dead', 'Not logged in');
+    advance(CREDENTIAL_RETRY_MS + 1000);
+    expect(pool.choose('pane-a', 'opus')?.id).toBe('primary');
+    expect(pool.choose('pane-b', 'opus')?.id).toBe('backup');
+  });
+
+  it('does not reserve a HEALTHY account, which would be an exclusive lock', () => {
+    // Reserving on every selection turns the pool into one-pane-at-a-time.
+    const { pool } = fixture();
+    expect(pool.choose('pane-a', 'opus')?.id).toBe('primary');
+    expect(pool.choose('pane-b', 'opus')?.id).toBe('primary');
+  });
+
+  it('releases the reservation when the attempt settles, either way', () => {
+    const { pool, advance } = fixture();
+    pool.markCredential('primary', 'dead', 'x');
+    advance(CREDENTIAL_RETRY_MS + 1000);
+    expect(pool.choose('pane-a', 'opus')?.id).toBe('primary');
+    pool.markCredential('primary', 'ok'); // it worked
+    expect(pool.choose('pane-b', 'opus')?.id).toBe('primary');
+  });
+});

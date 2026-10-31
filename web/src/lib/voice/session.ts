@@ -1519,67 +1519,41 @@ export class VoiceSession {
     }, QUEUE_DROP_GRACE_MS);
   }
 
-  private adoptDelivery(stamp: string): boolean {
-    if (parseSpawnDelivery(stamp) === null) return false;
-    // Somebody started a turn on this pane that was not us, so the agents now
-    // reporting may be THEIRS. See `foreignTurnSinceWatch`.
-    if (this.foreignTurnSinceWatch) return false;
-    const now = this.sched.now();
-    this.deliveryWatches = this.deliveryWatches.filter((w) => now <= w.until);
-    // NOT `shift()`. A single request routinely produces more than one batch —
-    // three workers reporting as two deliveries is ordinary — and consuming
-    // the watch on the first meant the second was dropped without a sound.
-    // The watch lives until it expires; what happens once is the ANNOUNCEMENT.
-    const watch = this.deliveryWatches[0];
-    if (!watch) return false;
-    const task = watch.task;
-    if (this.registry.isFenced(task)) return false;
-    // UNDER THE ORIGINAL DELEGATION ID. The protocol says multiple appends per
-    // delegation are supported; a minted `delivery:<ms>` id is one the model
-    // never issued, and if the API checks ids every append under it is
-    // refused — which would make this whole path silently inert, visible only
-    // as a protocolErrors count nobody reads.
-    this.registry.readmit(task);
-    this.registry.setStatus(task.id, 'working');
-    this.adopted.add(task.id);
-    task.dispatchedAt = now;
-    this.pipeline.push(task);
-    this.bound = task;
-    this.lastTool = null;
-    // ── NAME IT ONLY WHEN WE KNOW WHICH ONE IT IS ─────────────────────────
-    // The delivery's `from=` ids identify the sub-chats, and voice has no map
-    // from those to the request that spawned them — the frames it reads carry
-    // labels, not tab ids. So with ONE watch open the attribution is certain
-    // and the question is worth repeating (the user asked it minutes ago and
-    // has had a whole conversation since). With more than one it is a guess,
-    // and a confident wrong label is worse than a vague right one.
-    // ONCE PER REQUEST, not once per batch. The watch survives the first
-    // delivery (see above) so a second batch is still spoken — but
-    // re-announcing "the agents you sent off have reported back on X" for
-    // every batch of one request is the same sentence twice.
-    if (!watch.announced) {
-      watch.announced = true;
-      // NAME IT ONLY WHEN WE KNOW WHICH ONE IT IS. The delivery's `from=` ids
-      // identify the sub-chats, and voice has no map from those to the
-      // request that spawned them — the frames it reads carry labels, not tab
-      // ids. With ONE watch open the attribution is certain and the question
-      // is worth repeating (the user asked it minutes ago and has had a whole
-      // conversation since). With more than one it is a guess, and a
-      // confident wrong label is worse than a vague right one.
-      const certain = this.deliveryWatches.length === 1;
-      this.deliver(task, {
-        kind: 'commentary',
-        text: certain
-          ? `The agents you sent off have reported back on: ${task.request.slice(0, 120)}`
-          : 'Some of the agents you sent off have reported back.',
-      });
-    }
-    // It is a live turn like any other, so it gets the same progress updates
-    // — a consolidation turn can run for minutes and used to pass in total
-    // silence.
-    this.armHeartbeat();
-    this.trace(`adopted a delivery turn for ${task.id}`);
-    return true;
+  /**
+   * ── ADOPTION IS OFF, AND THIS IS THE ARGUMENT FOR LEAVING IT OFF ───────
+   *
+   * A request the agent DELEGATES answers in a later turn — the one muxpad
+   * starts when the sub-chats report, stamped `<muxpad-delivery …>`. Voice
+   * cannot bind that turn by its stamp, because the stamp is not anything
+   * voice sent, so the answer was dropped in silence. Measured: three workers
+   * reported, the chat wrote a 1,998-character verdict, nobody heard it.
+   *
+   * Claiming it needs one fact voice does not have: WHOSE workers those are.
+   * The delivery names its sub-chats by tab id and voice has no map from a tab
+   * id to the request that spawned it — the frames it reads carry labels, not
+   * ids. Three guards were built out of proxies for that fact and all three
+   * were wrong, each in a new way:
+   *
+   *   · "this turn launched sub-agents", read off `{t:'subagent'}` frames —
+   *     which real delegation never sends, so the feature was simply dead.
+   *   · "no foreign turn since the watch was armed" — which erased a foreign
+   *     turn that came BEFORE it, so typing a fan-out and then asking a
+   *     question aloud read the typed work's report out as the answer.
+   *   · the same flag made sticky — which still adopts work dispatched before
+   *     the call, because nothing it can see happened in between.
+   *
+   * Reproduced for the third time: after answering "what time is it?", voice
+   * announced an earlier typed task's billing report as the answer to that
+   * question. Reading somebody else's report aloud, labelled as yours, is a
+   * worse failure than silence — and silence is recoverable, because the
+   * answer is on screen.
+   *
+   * WHAT WOULD MAKE IT WORK is correlation, not another proxy: the server
+   * knows which sub-chats a pane spawned (`spawned_by`) and could say so on
+   * the frame. That is a protocol change, and it is the only honest version.
+   */
+  private adoptDelivery(_stamp: string): boolean {
+    return false;
   }
 
   private retire(task: VoiceTask, status: 'completed' | 'failed' | 'cancelled'): void {

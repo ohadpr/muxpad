@@ -2170,268 +2170,6 @@ describe('a snapshot from a pane with no runner attached', () => {
 });
 
 /**
- * ── THE ANSWER THAT ARRIVES IN A LATER TURN ──────────────────────────────
- *
- * A delegated request ends its turn in about a minute with "three agents are
- * on it". The real answer lands later, in the turn muxpad starts when the
- * sub-chats report, stamped `<muxpad-delivery …>` — which matches nothing
- * voice sent, so voice read the whole turn as somebody else's and discarded
- * the answer in silence. Measured in the signal-archive chat: three workers
- * reported, the chat wrote a 1,998-character verdict, nobody heard it.
- */
-describe('sub-agents reporting back', () => {
-  const DELIVERY = '<muxpad-delivery count="3" from="t1,t2,t3">\nreports\n</muxpad-delivery>';
-
-  /** Ask, get "agents are on it", let the turn end. */
-  function delegated() {
-    const h = harness();
-    h.started();
-    h.hear('research the competitors.', 1000, 2000);
-    h.delegate('d1', 2100);
-    h.settle();
-    h.turnStart('research the competitors.');
-    // The hand-off itself — the ONLY thing that arms the watch. A request
-    // that dispatched nothing has nothing to hear back from.
-    h.agent.frame({ t: 'subagent', progress: { label: 'competitor scan' } });
-    h.agent.frame({ t: 'speak', id: 'r1', text: 'Three agents are on it.', n: 1 });
-    h.agent.frame({ t: 'turn-done', ok: true });
-    h.clock.advance(2000);
-    return h;
-  }
-
-  it('speaks the answer that arrives in the delivery turn', () => {
-    const h = delegated();
-    h.clock.advance(120_000);
-    h.turnStart(DELIVERY);
-    h.agent.frame({ t: 'speak', id: 'r2', text: 'Acme is the biggest competitor.', n: 1 });
-    h.agent.frame({ t: 'turn-done', ok: true });
-    h.clock.advance(2000);
-    expect(h.everything()).toContain('Acme is the biggest competitor.');
-  });
-
-  it('re-anchors it, because the conversation moved on minutes ago', () => {
-    const h = delegated();
-    h.clock.advance(120_000);
-    h.turnStart(DELIVERY);
-    h.clock.advance(100);
-    expect(h.everything()).toMatch(/agents you sent off have reported back on: research/i);
-  });
-
-  it('adopts it ONCE — a second batch is the agent’s business', () => {
-    const h = delegated();
-    h.turnStart(DELIVERY);
-    h.agent.frame({ t: 'turn-done', ok: true });
-    h.clock.advance(1000);
-    const n = h.commentary().length;
-    h.turnStart(DELIVERY);
-    h.clock.advance(1000);
-    expect(h.commentary().slice(n).join(' ')).not.toMatch(/reported back on/);
-  });
-
-  it('ignores a delivery for work nobody asked for ALOUD', () => {
-    // No completed voice request, so nothing of ours dispatched those agents
-    // — the user typed it before the call. Narrating it would be reading
-    // somebody else's conversation out loud.
-    const h = harness();
-    h.started();
-    h.turnStart(DELIVERY);
-    h.agent.frame({ t: 'speak', id: 'r9', text: 'Something the user typed.', n: 1 });
-    h.clock.advance(2000);
-    expect(h.everything()).not.toContain('Something the user typed.');
-  });
-
-  it('ignores a CRON turn, which nobody asked for today', () => {
-    // Arrives by the same door and is the opposite case. Same line the written
-    // transcript draws (MACHINE_TURN_VARIANTS in lib/chat-voice.ts).
-    const h = delegated();
-    h.turnStart('<muxpad-cron name="nw-close" missed="0">run the close snapshot</muxpad-cron>');
-    h.agent.frame({ t: 'speak', id: 'r3', text: 'NW closed at 3.91M.', n: 1 });
-    h.clock.advance(2000);
-    expect(h.everything()).not.toContain('NW closed at 3.91M.');
-  });
-
-  it('lets the watch expire rather than carrying into the next call', () => {
-    const h = delegated();
-    h.clock.advance(DELIVERY_WATCH_MS + 60_000);
-    h.turnStart(DELIVERY);
-    h.agent.frame({ t: 'speak', id: 'r4', text: 'Far too late.', n: 1 });
-    h.clock.advance(2000);
-    expect(h.everything()).not.toContain('Far too late.');
-  });
-
-  it('does not steal a turn that a live request of ours is waiting for', () => {
-    // A normal request in flight still binds by stamp; the delivery path is
-    // only reached when nothing matched.
-    const h = delegated();
-    h.hear('and what about pricing?', 200_000, 201_000);
-    h.delegate('d2', 201_100);
-    h.settle();
-    h.turnStart('and what about pricing?');
-    h.agent.frame({ t: 'speak', id: 'r5', text: 'Pricing is here.', n: 1 });
-    h.agent.frame({ t: 'turn-done', ok: true });
-    h.clock.advance(2000);
-    expect(h.everything()).toContain('Pricing is here.');
-  });
-});
-
-/**
- * ── AND IT MUST NOT READ OUT SOMEBODY ELSE'S REPORT ──────────────────────
- *
- * Every one of these is a defect found in the first version of the delivery
- * adoption, by a review that drove the real session code.
- */
-describe('whose agents reported, exactly', () => {
-  const DELIVERY = '<muxpad-delivery count="3" from="t1,t2,t3">\nreports\n</muxpad-delivery>';
-
-  /** A voice request that dispatched NOTHING — just an answer. */
-  function askedSomethingSimple() {
-    const h = harness();
-    h.started();
-    h.hear('what time is it in tokyo?', 1000, 2000);
-    h.delegate('d1', 2100);
-    h.settle();
-    h.turnStart('what time is it in tokyo?');
-    h.agent.frame({ t: 'speak', id: 'r1', text: 'Just after midnight.', n: 1 });
-    h.agent.frame({ t: 'turn-done', ok: true });
-    h.clock.advance(2000);
-    return h;
-  }
-
-  it('does not credit a TYPED fan-out to a voice question', () => {
-    // The found bug, verbatim: ask the time aloud, then type something that
-    // fans out, and voice announced "the agents you sent off have reported
-    // back on: what time is it in tokyo" and read out a billing audit.
-    //
-    // THE TYPED TURN IS THE POINT, and the first version of this test left it
-    // out — it jumped straight to the delivery, which is not what happens and
-    // is not what the guard reads. A message somebody types announces itself
-    // as a turn whose stamp matches nothing we sent; that is the observable
-    // thing, and the one the guard is built on.
-    const h = askedSomethingSimple();
-    h.turnStart('audit the billing code with three agents');
-    h.agent.frame({ t: 'turn-done', ok: true });
-    h.clock.advance(1000);
-    h.turnStart(DELIVERY);
-    h.agent.frame({ t: 'speak', id: 'r2', text: 'The billing audit found three issues.', n: 1 });
-    h.clock.advance(2000);
-    expect(h.everything()).not.toContain('The billing audit found three issues.');
-    expect(h.everything()).not.toMatch(/reported back on: what time/i);
-  });
-
-  it('DOES speak a delivery that follows our own request with nothing in between', () => {
-    // The case the old guard killed outright: real delegation is `muxpad agent
-    // new` run through Bash, which puts no `subagent` frame on this socket, so
-    // requiring one made the whole feature dead in production while the tests
-    // passed by injecting the frame by hand.
-    const h = askedSomethingSimple();
-    h.turnStart(DELIVERY);
-    h.agent.frame({ t: 'speak', id: 'r2', text: 'Acme is the biggest.', n: 1 });
-    h.agent.frame({ t: 'turn-done', ok: true });
-    h.clock.advance(2000);
-    expect(h.everything()).toContain('Acme is the biggest.');
-  });
-
-  it('keeps a watch per delegating request, not one slot for all of them', () => {
-    // With one slot, a quick question completing after a delegating one
-    // overwrote it: the first batch was announced under the second
-    // question's words, and the second batch was dropped in silence.
-    const h = harness();
-    h.started();
-    const delegating = (text: string, id: string, at: number) => {
-      h.hear(text, at, at + 1000);
-      h.delegate(id, at + 1100);
-      h.settle();
-      h.turnStart(text);
-      h.agent.frame({ t: 'subagent', progress: { label: 'worker' } });
-      h.agent.frame({ t: 'turn-done', ok: true });
-      h.clock.advance(2000);
-    };
-    delegating('research the competitors.', 'd1', 1000);
-    delegating('audit the billing code.', 'd2', 50_000);
-
-    h.turnStart(DELIVERY);
-    h.agent.frame({ t: 'speak', id: 'r1', text: 'First batch.', n: 1 });
-    h.agent.frame({ t: 'turn-done', ok: true });
-    h.clock.advance(2000);
-    h.turnStart(DELIVERY);
-    h.agent.frame({ t: 'speak', id: 'r2', text: 'Second batch.', n: 1 });
-    h.agent.frame({ t: 'turn-done', ok: true });
-    h.clock.advance(2000);
-    // BOTH are heard. That is the whole point of the list.
-    expect(h.everything()).toContain('First batch.');
-    expect(h.everything()).toContain('Second batch.');
-  });
-
-  it('does not name the question when two are outstanding — a confident wrong label is worse', () => {
-    const h = harness();
-    h.started();
-    for (const [text, id, at] of [
-      ['research the competitors.', 'd1', 1000],
-      ['audit the billing code.', 'd2', 50_000],
-    ] as const) {
-      h.hear(text, at, at + 1000);
-      h.delegate(id, at + 1100);
-      h.settle();
-      h.turnStart(text);
-      h.agent.frame({ t: 'subagent', progress: { label: 'worker' } });
-      h.agent.frame({ t: 'turn-done', ok: true });
-      h.clock.advance(2000);
-    }
-    const n = h.commentary().length;
-    h.turnStart(DELIVERY);
-    h.clock.advance(1000);
-    const said = h.commentary().slice(n).join(' ');
-    expect(said).toMatch(/some of the agents you sent off/i);
-    expect(said).not.toMatch(/reported back on:/);
-  });
-
-  it('drops the watch when the user cancels the work that armed it', () => {
-    // "I don't want this any more" has to cover the agents it dispatched, or
-    // their report arrives minutes later under the abandoned question.
-    const h = harness();
-    h.started();
-    h.hear('research the competitors.', 1000, 2000);
-    h.delegate('d1', 2100);
-    h.settle();
-    h.turnStart('research the competitors.');
-    h.agent.frame({ t: 'subagent', progress: { label: 'worker' } });
-    // Cancelled WHILE the agents are running, which is when a cancel can
-    // happen at all — the agents keep going and report minutes later.
-    h.hear('stop.', 10_000, 10_600);
-    h.probe();
-    expect(h.session.stats.cancels).toBe(1);
-    h.agent.frame({ t: 'turn-done', ok: false });
-    h.clock.advance(2000);
-    const n = h.commentary().length;
-    h.turnStart(DELIVERY);
-    h.agent.frame({ t: 'speak', id: 'r2', text: 'Abandoned work.', n: 1 });
-    h.clock.advance(2000);
-    expect(h.commentary().slice(n).join(' ')).not.toContain('Abandoned work.');
-  });
-
-  it('speaks under the delegation the model actually created', () => {
-    // A minted id is one the realtime API never issued; if it validates ids,
-    // every append under it is refused and this whole path is silently inert.
-    const h = harness();
-    h.started();
-    h.hear('research the competitors.', 1000, 2000);
-    h.delegate('d1', 2100);
-    h.settle();
-    h.turnStart('research the competitors.');
-    h.agent.frame({ t: 'subagent', progress: { label: 'worker' } });
-    h.agent.frame({ t: 'turn-done', ok: true });
-    h.clock.advance(2000);
-    const n = h.transport.sent.length;
-    h.turnStart(DELIVERY);
-    h.agent.frame({ t: 'speak', id: 'r2', text: 'Acme is the biggest.', n: 1 });
-    h.clock.advance(2000);
-    const after = h.transport.sent.slice(n);
-    expect(after.length).toBeGreaterThan(0);
-    for (const e of after) expect(e.delegation_id).toBe('d1');
-  });
-});
-
-/**
  * A row leaves the server's queue for two opposite reasons — it was CANCELLED,
  * or it RAN — and across a disconnect the signal that tells them apart
  * (`turn-start`) is exactly what is missing.
@@ -2556,59 +2294,6 @@ describe('the muted-runner hang-up in Agent mode', () => {
 });
 
 /**
- * ── WHOSE AGENTS, IN EITHER ORDER ────────────────────────────────────────
- *
- * The first guard was scoped to "since the last watch was armed", which
- * erases a foreign turn that came BEFORE it — so typing a fan-out and then
- * asking a question aloud made voice read the typed work's report out as the
- * answer to the spoken one. No ordering of a resettable flag can see that.
- */
-describe('a foreign turn is remembered for the whole call', () => {
-  const DELIVERY = '<muxpad-delivery count="3" from="t1,t2,t3">\nreports\n</muxpad-delivery>';
-
-  it('does not claim a delivery for work typed BEFORE the question', () => {
-    const h = harness();
-    h.started();
-    // Typed first: a fan-out nobody asked for aloud.
-    h.turnStart('audit the billing code with three agents');
-    h.agent.frame({ t: 'turn-done', ok: true });
-    h.clock.advance(1000);
-    // Then a spoken question, which completes.
-    h.hear('what time is it in tokyo?', 10_000, 11_000);
-    h.delegate('d1', 11_100);
-    h.settle();
-    h.turnStart('what time is it in tokyo?');
-    h.agent.frame({ t: 'speak', id: 'r1', text: 'Just after midnight.', n: 1 });
-    h.agent.frame({ t: 'turn-done', ok: true });
-    h.clock.advance(2000);
-    // The typed work's agents now report.
-    h.turnStart(DELIVERY);
-    h.agent.frame({ t: 'speak', id: 'r2', text: 'The billing audit found three issues.', n: 1 });
-    h.clock.advance(2000);
-    expect(h.everything()).not.toContain('The billing audit found three issues.');
-    expect(h.everything()).not.toMatch(/reported back on: what time/i);
-  });
-
-  it('does not treat one delivery as a reason to disown the next', () => {
-    // A single request routinely produces two batches; counting the first as
-    // "somebody else" silenced the second.
-    const h = harness();
-    h.started();
-    h.hear('research the competitors.', 1000, 2000);
-    h.delegate('d1', 2100);
-    h.settle();
-    h.turnStart('research the competitors.');
-    h.agent.frame({ t: 'turn-done', ok: true });
-    h.clock.advance(2000);
-    h.turnStart(DELIVERY);
-    h.agent.frame({ t: 'speak', id: 'r1', text: 'First batch.', n: 1 });
-    h.agent.frame({ t: 'turn-done', ok: true });
-    h.clock.advance(2000);
-    expect(h.everything()).toContain('First batch.');
-  });
-});
-
-/**
  * A quick turn that runs and finishes inside a blip SHORTER than the grace was
  * never settled by anything afterwards: the request sat `queued` for ever and
  * asking again was refused as a duplicate.
@@ -2642,6 +2327,58 @@ describe('a request stranded by a SHORT disconnect', () => {
     h.agent.frame({ t: 'speak', id: 'r1', text: 'All 212 pass.', n: 1 });
     h.agent.frame({ t: 'turn-done', ok: true });
     h.clock.advance(1000);
+    expect(h.everything()).toContain('All 212 pass.');
+  });
+});
+
+/**
+ * ── VOICE DOES NOT CLAIM A SUB-AGENT DELIVERY ────────────────────────────
+ *
+ * It did, three times, behind three different guards, and all three were
+ * proxies for a fact voice does not have: WHOSE workers are reporting. The
+ * delivery names its sub-chats by tab id; voice has no map from a tab id to
+ * the request that spawned it.
+ *
+ * The third version still announced an earlier TYPED task's report as the
+ * answer to a spoken question, because nothing it could observe happened in
+ * between. Reading somebody else's report aloud, labelled as yours, is worse
+ * than silence — and silence is recoverable, because the answer is on screen.
+ *
+ * These tests exist so the next person reaching for a fourth proxy sees the
+ * three that failed. The honest fix is correlation from the server, which
+ * knows `spawned_by`; that is a protocol change.
+ */
+describe('a sub-agent delivery is not spoken', () => {
+  const DELIVERY = '<muxpad-delivery count="3" from="t1,t2,t3">\nreports\n</muxpad-delivery>';
+
+  it('is not claimed, even right after one of our own requests', () => {
+    const h = harness();
+    h.started();
+    h.hear('what time is it in tokyo?', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.turnStart('what time is it in tokyo?');
+    h.agent.frame({ t: 'speak', id: 'r1', text: 'Just after midnight.', n: 1 });
+    h.agent.frame({ t: 'turn-done', ok: true });
+    h.clock.advance(2000);
+
+    h.turnStart(DELIVERY);
+    h.agent.frame({ t: 'speak', id: 'r2', text: 'The billing audit found three issues.', n: 1 });
+    h.clock.advance(2000);
+    expect(h.everything()).not.toContain('The billing audit found three issues.');
+    expect(h.everything()).not.toMatch(/reported back on/i);
+  });
+
+  it('leaves the ordinary path alone — our own turns still bind and speak', () => {
+    const h = harness();
+    h.started();
+    h.hear('run the tests.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.turnStart('run the tests.');
+    h.agent.frame({ t: 'speak', id: 'r1', text: 'All 212 pass.', n: 1 });
+    h.agent.frame({ t: 'turn-done', ok: true });
+    h.clock.advance(2000);
     expect(h.everything()).toContain('All 212 pass.');
   });
 });

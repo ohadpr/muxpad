@@ -732,8 +732,17 @@ export function expandCronFire(text: string, id: string, ts: number | null): Cha
  * makes this stop firing, which degrades to today's behaviour rather than to
  * a wrong one.
  */
+/**
+ * The harness's own opening sentence, and nothing looser.
+ *
+ * It used to allow a bare `ran out of`, which folds a human continuation
+ * beginning "…a previous conversation that ran out of time" into a false
+ * "Compacted" notice. There is no provenance on these messages — a compaction
+ * arrives as a user-role message exactly like a typed one — so the match is
+ * the only guard there is, and it has to be the whole sentence.
+ */
 const COMPACTION_OPENER =
-  /^this session is being continued from a previous conversation that (?:ran out of context|ran out of|is being summarized)/i;
+  /^this session is being continued from a previous conversation that (?:ran out of context|is being summarized)\b/i;
 
 export function expandCompaction(text: string, id: string, ts: number | null): ChatEvent[] | null {
   const t = text.trimStart();

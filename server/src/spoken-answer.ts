@@ -1,5 +1,3 @@
-import { pickSpokenBlock } from '@muxpad/shared';
-
 /**
  * WHAT AN AGENT-MODE TURN SAYS OUT LOUD.
  *
@@ -28,12 +26,6 @@ import { pickSpokenBlock } from '@muxpad/shared';
  * on screen twice.
  */
 
-/** Blocks are separated in the buffer by the blank line the runner emits
- *  between content blocks — and by the model's own paragraph breaks, which is
- *  the same unit for this purpose: a paragraph of status and a paragraph of
- *  answer are exactly what has to be told apart. */
-const BLOCK_SPLIT = /\n{2,}/;
-
 /**
  * How much of a turn's prose is worth speaking.
  *
@@ -44,24 +36,17 @@ const BLOCK_SPLIT = /\n{2,}/;
  */
 const SPOKEN_CAP = 1200;
 
-/**
- * How many trailing paragraphs count as "the answer" when the block rule
- * picks a point near the end.
- *
- * Four, because the cap above is what actually bounds this — the paragraphs
- * are a floor so a short multi-paragraph answer is not cut to its last line,
- * and the cap is the ceiling so a long one does not become a recital.
- */
-const ANSWER_PARAGRAPHS = 4;
-
 /** Cut at the last sentence end before the cap, so the model is handed a
  *  whole thought rather than a severed clause. Falls back to the cap itself
  *  for prose with no punctuation in range. */
 function trimToSentence(text: string, cap: number): string {
   if (text.length <= cap) return text;
-  const head = text.slice(0, cap);
-  const stop = Math.max(head.lastIndexOf('. '), head.lastIndexOf('! '), head.lastIndexOf('? '));
-  return (stop > cap * 0.4 ? head.slice(0, stop + 1) : head).trimEnd();
+  // FROM THE END. The answer is at the end of a turn, so an over-long buffer
+  // loses its beginning — and it starts at a sentence boundary so the model
+  // is handed a whole thought rather than a severed clause.
+  const tail = text.slice(-cap);
+  const start = Math.max(tail.indexOf('. '), tail.indexOf('! '), tail.indexOf('? '));
+  return (start >= 0 && start < cap * 0.6 ? tail.slice(start + 2) : tail).trimStart();
 }
 
 /**
@@ -74,30 +59,19 @@ function trimToSentence(text: string, cap: number): string {
 export function spokenAnswerFrom(buffer: string | undefined): string | null {
   const text = (buffer ?? '').trim();
   if (!text) return null;
-  const blocks = text.split(BLOCK_SPLIT);
-  // ── THE TAIL, NOT ONE PARAGRAPH OF IT ──────────────────────────────────
+  // ── THE TAIL OF WHAT THE TURN SAID, AND NOTHING CLEVERER ───────────────
   //
-  // `pickSpokenBlock` is the chat client's rule and it is measured on whole
-  // assistant MESSAGES: the last one, unless an earlier one is three times
-  // longer and past 300 characters, because a turn's final words are so often
-  // a status note over the finding they hid.
+  // Two attempts tried to SELECT the answer out of the prose with
+  // `pickSpokenBlock`, the rule the chat client uses to promote a Chat-mode
+  // turn. It is measured on whole assistant MESSAGES and it does not survive
+  // paragraph granularity: it returns the last paragraph in the ordinary
+  // case, so a three-paragraph explanation ending "Then retry the build." was
+  // spoken as "Then retry the build." Slicing from its answer to the end did
+  // not help, because its answer WAS the end.
   //
-  // Those thresholds do not survive being applied to PARAGRAPHS. Measured: a
-  // 372-character preliminary status paragraph followed by a short
-  // three-paragraph answer selects the status and discards the answer
-  // entirely — at message granularity those would have been one block each,
-  // and at paragraph granularity the "earlier and much bigger" test fires on
-  // the wrong thing.
-  //
-  // So the server asks the question it can actually answer here: what did the
-  // turn say LAST. Everything from the chosen point to the end, not a single
-  // paragraph out of the middle — an answer that runs to three paragraphs is
-  // three paragraphs of answer.
-  const i = pickSpokenBlock(blocks);
-  if (i < 0) return null;
-  const tail = blocks
-    .slice(Math.max(i, blocks.length - ANSWER_PARAGRAPHS))
-    .join('\n\n')
-    .trim();
-  return tail ? trimToSentence(tail, SPOKEN_CAP) : null;
+  // THE RULE DOES NOT NEED TO BE CLEVER, because the voice model paraphrases
+  // whatever it is handed — it is given this as material, not read out
+  // verbatim. So the asymmetry is lopsided: a little narration riding along
+  // costs a clause, and a missing paragraph costs the answer. Take the tail.
+  return trimToSentence(text, SPOKEN_CAP);
 }
