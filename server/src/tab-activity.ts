@@ -219,17 +219,39 @@ export class TabActivity {
     // Idempotent while a round is open, which is what makes it safe here: three
     // lines typed while the worker is mid-turn are one round, because the queue
     // delivers them to the same turn.
-    const sub = isSubChat(clockIndex(this.db), tabId);
+    const clocks = clockIndex(this.db);
+    const sub = isSubChat(clocks, tabId);
     if (sub) {
       // ── STAMPED WITH THE PARENT'S TURN ────────────────────────────────
       // The delivery barrier needs to know whether two finished children
-      // belong to the same fan-out, and it used to answer by TIME. The
-      // parent's own `last_activity_at` answers it exactly: it moves when the
-      // parent receives a message and not otherwise, so every child
-      // dispatched in one turn carries the same value and a later dispatch
-      // carries a different one. See SpawnRound.parent_turn.
-      const parent = this.tabs.getById(tabId)?.spawned_by ?? null;
-      const turn = parent ? (this.tabs.getById(parent)?.last_activity_at ?? null) : null;
+      // belong to the same fan-out, and it used to answer by TIME.
+      //
+      // `clock_started_at` IS THE TURN, and the column matters. The first
+      // draft of this read `last_activity_at`, on the stated reasoning that it
+      // "moves when the parent receives a message and not otherwise" — which
+      // is false. `touchTab({source:'output'})` moves it too, throttled to one
+      // write per five seconds, so a parent that PRINTS while it dispatches
+      // hands its children different stamps and the barrier reads one fan-out
+      // as several. That is not a near-miss: a six-way spawn takes well over
+      // five seconds, so it silently turned batching OFF and shipped six
+      // separate messages where the whole point was one.
+      //
+      // `clock_started_at` is written by exactly one live path —
+      // `resetClock`, reached from `noteUserMessage` just below — so it is the
+      // last MESSAGE to the parent and nothing else. Output cannot move it,
+      // and neither can a glance (which is what rules out `last_user_at`, the
+      // other candidate: `noteUserTouch` stamps that when you merely open the
+      // chat). See SpawnRound.parent_turn.
+      //
+      // READ OFF THE CLOCK INDEX, not `tabs.getById`. The wire `Tab` shape
+      // does not carry `clock_started_at` — it is a server-internal column —
+      // so `getById(parent)?.clock_started_at` type-checks, compiles, and is
+      // `undefined` at runtime, which lands as a null stamp for every child
+      // and quietly reinstates the time window this column replaced. The
+      // index is a `TabClockRow`, which has the column, and it is already
+      // loaded here for `isSubChat`.
+      const parent = clocks.get(tabId)?.spawned_by ?? null;
+      const turn = parent ? (clocks.get(parent)?.clock_started_at ?? null) : null;
       new SpawnRoundStore(this.db).open(tabId, at, turn);
     }
     // ── THE WORKING SET ──────────────────────────────────────────────────

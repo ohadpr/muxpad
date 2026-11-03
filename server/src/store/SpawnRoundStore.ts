@@ -25,7 +25,7 @@ export interface SpawnRound {
   started_at: number;
   /**
    * WHICH PARENT TURN DISPATCHED THIS ROUND — the parent's own
-   * `last_activity_at` at the moment it opened.
+   * `clock_started_at` at the moment it opened.
    *
    * It is the delivery barrier's real question. "Were these two spawned by
    * the same request" was answered by TIME, and a measured case defeated the
@@ -33,9 +33,11 @@ export interface SpawnRound {
    * messages, were treated as one fan-out and a finished report was held ten
    * minutes behind an unrelated sibling.
    *
-   * `last_activity_at` moves when the parent receives a message and not
-   * otherwise, so every child of one turn carries the same value. Null for
-   * rounds that predate the column; those fall back to the window.
+   * The parent's `clock_started_at`, which is written only by the
+   * user-message path — never by output, never by a glance — so every child
+   * of one turn carries the same value and a later dispatch carries a
+   * different one. Null for rounds that predate the column; those fall back
+   * to the window.
    */
   parent_turn: number | null;
   /** Null while this round is running. */

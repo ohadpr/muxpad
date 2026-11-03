@@ -1507,11 +1507,13 @@ const MIGRATIONS: Migration[] = [
      * 22:12.
      *
      * The real question is "were these spawned by the same request", and the
-     * parent's own `last_activity_at` answers it exactly: it moves when the
-     * parent receives a message and not otherwise, so every child dispatched
-     * in one turn carries the same value and a later dispatch carries a
-     * different one. Nullable, because rounds that predate this have no
-     * answer and fall back to the window.
+     * parent's own `clock_started_at` answers it: that column is written by
+     * the user-message path alone, so every child dispatched in one turn
+     * carries the same value and a later dispatch carries a different one.
+     * (NOT `last_activity_at`, which the first draft used — pty output moves
+     * that one, which splits a fan-out into singletons. See tab-activity.)
+     * Nullable, because rounds that predate this have no answer and fall back
+     * to the window.
      */
     version: 48,
     // PRAGMA-GUARDED, like 38 and 45 before it: the suite re-runs the list
