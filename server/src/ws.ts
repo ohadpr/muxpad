@@ -36,7 +36,13 @@ import {
   isBackendId,
   parseFrame,
 } from './agent-runner/protocol.js';
-import { authMode, isExempt, presentedCredential, verifyCredential } from './api-auth.js';
+import {
+  authMode,
+  isExempt,
+  presentedCredential,
+  throttleRefusal,
+  verifyCredential,
+} from './api-auth.js';
 import { TranscriptTail, identityNormalize, muxpadLocate } from './chat/TranscriptReader.js';
 import { agentPaneHasMessages } from './chat/has-messages.js';
 import type { EventBus } from './events.js';
@@ -1625,7 +1631,18 @@ export function attachWsServer(deps: {
         },
       };
       if (!verifyCredential(presentedCredential(headerBag))) {
-        console.log(`[api-auth] no credential: UPGRADE ${url.pathname}`);
+        // Through the SAME throttle as the HTTP side. The first draft called
+        // console.log straight, so every socket reconnect printed a line with
+        // a raw pane id in it — the exact flooding the throttle exists to
+        // stop, reintroduced two files away from where it was fixed. Visible
+        // within a minute of switching `observe` on.
+        const ua = req.headers['user-agent'];
+        const line = throttleRefusal(
+          'UPGRADE',
+          url.pathname,
+          (Array.isArray(ua) ? ua[0] : ua) ?? '-',
+        );
+        if (line) console.log(line);
         if (wsAuth === 'enforce') {
           refuseUpgrade(socket, 'unauthorized');
           return;

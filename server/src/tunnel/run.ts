@@ -1,4 +1,7 @@
 import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { TUNNEL_HEALTHY_RUN_MS, parseQuickTunnelUrl, tunnelBackoffMs } from './cloudflared.js';
 import { type NamedTunnel, namedTunnelArgs, namedTunnelBaseUrl, quickTunnelArgs } from './named.js';
 
@@ -181,7 +184,7 @@ export function createTunnelRunner(deps: TunnelRunnerDeps): TunnelRunner {
     try {
       const res = await doFetch(endpoint, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: apiAuthHeaders({ 'content-type': 'application/json' }),
         body: JSON.stringify({ url, pane_id: deps.paneId ?? null }),
       });
       if (!res.ok) log(`muxpad tunnel: server refused the url (${res.status})`);
@@ -196,7 +199,7 @@ export function createTunnelRunner(deps: TunnelRunnerDeps): TunnelRunner {
     try {
       await doFetch(endpoint, {
         method: 'DELETE',
-        headers: { 'content-type': 'application/json' },
+        headers: apiAuthHeaders({ 'content-type': 'application/json' }),
         body: JSON.stringify({
           ...(error ? { error } : {}),
           ...(attempts !== undefined ? { attempts } : {}),
@@ -332,4 +335,25 @@ export function createTunnelRunner(deps: TunnelRunnerDeps): TunnelRunner {
       child?.kill();
     },
   };
+}
+
+/**
+ * The install credential, read per call.
+ *
+ * The tunnel process is long-lived — it is the thing publishing muxpad to the
+ * internet — so a credential captured at startup would be from whenever the
+ * tunnel last restarted. Found by switching `observe` on and reading the log:
+ * this was the ONLY non-browser caller that could not authenticate, and it is
+ * the one announcing the PUBLIC url, which makes it the last one that should
+ * be anonymous.
+ */
+function apiAuthHeaders(base: Record<string, string>): Record<string, string> {
+  try {
+    const dir = process.env.MUXPAD_DATA_DIR ?? join(homedir(), '.muxpad');
+    const key = readFileSync(join(dir, 'api-secret'), 'utf8').trim();
+    if (key.length >= 32) return { ...base, 'x-muxpad-key': key };
+  } catch {
+    // Absent is normal in `off` mode.
+  }
+  return base;
 }

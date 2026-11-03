@@ -249,3 +249,91 @@ export function apiAuth(opts: {
     return c.json({ error: { message: 'unauthorized' } }, 401);
   };
 }
+
+/**
+ * ── A LOG YOU CAN ACTUALLY READ ──────────────────────────────────────────
+ *
+ * `observe` exists to answer "what breaks if I enforce this", and it answers
+ * it with a log line per refused request. The web UI polls
+ * `/api/workspaces?all=1` every five seconds PER CLIENT, and every old agent
+ * runner and browser host reconnects on its own schedule — so the unthrottled
+ * version writes a line or two a second forever and buries the one caller you
+ * needed to see under a hundred thousand copies of the one you already knew
+ * about.
+ *
+ * So: collapse to the CALLER SHAPE and report each one once, then every five
+ * minutes with a count. Ids are stripped from the path, because
+ * `/api/tabs/<ulid>/transcript` repeated four hundred times is one fact, not
+ * four hundred.
+ *
+ * The count matters as much as the shape. "This caller never authenticated"
+ * and "this caller authenticated 9,998 times out of 10,000" are completely
+ * different situations and the raw log cannot tell them apart.
+ */
+const seen = new Map<string, { first: number; last: number; n: number }>();
+const REPORT_EVERY_MS = 5 * 60_000;
+
+/** Collapse ids so one endpoint is one line. ULIDs, uuids, and long slugs. */
+export function refusalKey(method: string, path: string, agent: string): string {
+  const shape = path
+    .split('/')
+    .map((seg) =>
+      /^[0-9A-Za-z]{26}$/.test(seg) ||
+      /^[0-9a-f-]{36}$/.test(seg) ||
+      /^s-[0-9A-Za-z]{20,}$/.test(seg)
+        ? ':id'
+        : seg,
+    )
+    .join('/');
+  // The agent string is long and mostly irrelevant; the product is the signal.
+  const who = /muxpad/i.test(agent)
+    ? 'muxpad-cli'
+    : /node|undici/i.test(agent)
+      ? 'node'
+      : /Mobile|iPhone|Android/i.test(agent)
+        ? 'browser-mobile'
+        : /Mozilla/i.test(agent)
+          ? 'browser'
+          : agent === '-'
+            ? 'no-agent'
+            : 'other';
+  return `${method} ${shape} ${who}`;
+}
+
+/**
+ * Should this refusal be printed right now? Call per refusal.
+ *
+ * Returns the line to log, or null to stay quiet. Exported for the test —
+ * a throttle nobody can assert is a throttle that silently becomes a no-op.
+ */
+export function throttleRefusal(
+  method: string,
+  path: string,
+  agent: string,
+  now: number = Date.now(),
+): string | null {
+  const key = refusalKey(method, path, agent);
+  const hit = seen.get(key);
+  if (!hit) {
+    seen.set(key, { first: now, last: now, n: 1 });
+    return `[api-auth] no credential: ${key}`;
+  }
+  hit.n += 1;
+  if (now - hit.last < REPORT_EVERY_MS) return null;
+  const since = Math.round((now - hit.first) / 60_000);
+  const line = `[api-auth] no credential: ${key} — ${hit.n}× in ${since}m`;
+  hit.last = now;
+  return line;
+}
+
+/** Test seam: forget what has been reported. */
+export function resetRefusalLogForTest(): void {
+  seen.clear();
+}
+
+/** Everything seen so far, worst first — for a one-shot "what would break". */
+export function refusalSummary(): Array<{ caller: string; count: number }> {
+  return [...seen.entries()]
+    .map(([caller, v]) => ({ caller, count: v.n }))
+    .sort((a, b) => b.count - a.count);
+}
