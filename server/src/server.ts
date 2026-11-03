@@ -2,7 +2,7 @@ import { setSayKey } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import type { AgentBridge } from './agent-bridge.js';
-import { apiAuth, authMode, initApiAuth } from './api-auth.js';
+import { apiAuth, authMode, initApiAuth, throttleRefusal } from './api-auth.js';
 import type { AppRegistry } from './apps/AppRegistry.js';
 import type { AppStatusProbe } from './apps/AppStatus.js';
 import type { ArchiveDb } from './archive/ArchiveDb.js';
@@ -229,8 +229,13 @@ export function createApp(deps: AppDeps): Hono {
       '*',
       apiAuth({
         mode: () => authMode(),
-        onRefusal: ({ method, path, agent }) =>
-          console.log(`[api-auth] no credential: ${method} ${path} — ${agent}`),
+        // Throttled and collapsed to the caller SHAPE — see api-auth.ts.
+        // Unthrottled, the UI's five-second poll alone writes this log into
+        // uselessness and buries the caller you needed to find.
+        onRefusal: ({ method, path, agent }) => {
+          const line = throttleRefusal(method, path, agent);
+          if (line) console.log(line);
+        },
       }),
     );
   // A VALIDATOR AND A COMPRESSOR ON EVERY JSON GET.

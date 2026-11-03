@@ -11,7 +11,11 @@ import {
   initApiAuth,
   isExempt,
   presentedCredential,
+  refusalKey,
+  refusalSummary,
   resetApiAuthForTest,
+  resetRefusalLogForTest,
+  throttleRefusal,
   verifyCredential,
 } from './api-auth.js';
 
@@ -206,5 +210,64 @@ describe('the middleware', () => {
       headers: { authorization: `Bearer ${apiCredential()}` },
     });
     expect(refusals).toEqual([]);
+  });
+});
+
+describe('the observe log, collapsed and throttled', () => {
+  beforeEach(() => resetRefusalLogForTest());
+
+  it('collapses ids so one endpoint is ONE caller, not four hundred', () => {
+    const a = refusalKey('GET', '/api/tabs/01M6G7BXP2Q20W3HPEX2TVW0FP/transcript', 'Mozilla/5.0');
+    const b = refusalKey('GET', '/api/tabs/01KX6GKFGSCNWB9S1R87N74WKG/transcript', 'Mozilla/5.0');
+    expect(a).toBe(b);
+    expect(a).toContain('/api/tabs/:id/transcript');
+    // uuid session ids and browser profile slugs too
+    expect(refusalKey('GET', '/browser/s-01m687ce6wgy36yp9mgpz1vzew/ws', '-')).toContain(':id');
+    expect(refusalKey('GET', '/api/x/0cdf8641-453a-4b22-84a2-69a2bb2ae4cf', '-')).toContain(':id');
+  });
+
+  it('names the caller by product, not by its whole UA string', () => {
+    expect(refusalKey('GET', '/api/x', 'muxpad-cli/1')).toContain('muxpad-cli');
+    expect(refusalKey('GET', '/api/x', 'Mozilla/5.0 (iPhone)')).toContain('browser-mobile');
+    expect(refusalKey('GET', '/api/x', 'Mozilla/5.0 (Macintosh)')).toContain('browser');
+    expect(refusalKey('GET', '/api/x', 'undici')).toContain('node');
+    expect(refusalKey('GET', '/api/x', '-')).toContain('no-agent');
+  });
+
+  it('reports a caller ONCE, then not again until the window', () => {
+    // The UI polls every 5s per client. Unthrottled this log writes a line a
+    // second forever and buries the one caller you needed to see.
+    const t = 1_000_000;
+    expect(throttleRefusal('GET', '/api/workspaces', 'Mozilla/5.0', t)).toContain(
+      '/api/workspaces',
+    );
+    expect(throttleRefusal('GET', '/api/workspaces', 'Mozilla/5.0', t + 1_000)).toBe(null);
+    expect(throttleRefusal('GET', '/api/workspaces', 'Mozilla/5.0', t + 60_000)).toBe(null);
+  });
+
+  it('…and then reports WITH A COUNT, which is the whole signal', () => {
+    // "never authenticated" and "authenticated 9,998 times out of 10,000" are
+    // different situations and the raw log cannot tell them apart.
+    const t = 1_000_000;
+    throttleRefusal('GET', '/api/workspaces', 'Mozilla/5.0', t);
+    for (let i = 1; i < 50; i++) throttleRefusal('GET', '/api/workspaces', 'Mozilla/5.0', t + i);
+    const line = throttleRefusal('GET', '/api/workspaces', 'Mozilla/5.0', t + 6 * 60_000);
+    expect(line).toMatch(/51× in 6m/);
+  });
+
+  it('keeps different callers apart', () => {
+    const t = 1_000_000;
+    expect(throttleRefusal('GET', '/api/workspaces', 'Mozilla/5.0', t)).toBeTruthy();
+    expect(throttleRefusal('POST', '/api/workspaces', 'Mozilla/5.0', t)).toBeTruthy();
+    expect(throttleRefusal('GET', '/api/workspaces', 'muxpad-cli/1', t)).toBeTruthy();
+    expect(refusalSummary()).toHaveLength(3);
+  });
+
+  it('summarises worst first, for a one-shot "what would break"', () => {
+    const t = 1_000_000;
+    throttleRefusal('GET', '/api/a', '-', t);
+    for (let i = 0; i < 5; i++) throttleRefusal('GET', '/api/b', '-', t);
+    expect(refusalSummary()[0]?.caller).toContain('/api/b');
+    expect(refusalSummary()[0]?.count).toBe(5);
   });
 });
