@@ -47,6 +47,76 @@ export interface BackendOptions {
 }
 
 /**
+ * ── WHAT EACH BACKEND ACTUALLY SUPPORTS ──────────────────────────────────
+ *
+ * The interface below says what a backend must OFFER. It cannot say what a
+ * backend can DO, because the unsupported answer is a legal implementation: a
+ * `slash` that logs "not supported" and a `setMode` that logs "Claude-only"
+ * both satisfy the type. So the differences that matter are invisible here,
+ * and they have been re-derived by reading three files every time somebody
+ * asked. This is that reading, written down once.
+ *
+ *                        claude            codex             cursor
+ *  how it runs           persistent SDK    `codex exec       `cursor-agent`,
+ *                        in-process        --json`, one      one spawn per
+ *                                          spawn per turn    turn
+ *  resumed by            session id, and   thread_id         session_id — and
+ *                        only if the                         a vanished cloud
+ *                        transcript is                       session silently
+ *                        still on disk                       starts fresh
+ *  rules arrive          ONCE, at launch   EVERY TURN, via   every turn, same
+ *                        (`systemPrompt`,  `turnPreamble`    as codex
+ *                        fixed at
+ *                        `query()`)
+ *  Chat mode             yes               no                no
+ *  mode switch live      a one-time note   —                 —
+ *                        on the next
+ *                        message
+ *  sub-agents            yes               no                no
+ *  ask_user questions    yes               no                no
+ *  notify tool           yes               no                no
+ *  names its own chat    yes (`title`)     no                no
+ *  /compact, /clear      yes, plus the     no                no
+ *                        auto-compactor
+ *  stop mid-turn         yes               yes               yes
+ *  streams deltas        yes               yes               yes
+ *  model switching       yes               yes               yes
+ *
+ * ── THE ROW THAT CATCHES PEOPLE OUT ──────────────────────────────────────
+ *
+ * "rules arrive". Claude takes them once, as real system-prompt material, and
+ * NOTHING can change them afterwards — so a Claude session keeps following the
+ * rules its process was born with. Codex and cursor are handed them again on
+ * every turn, so they pick up a change as soon as their runner has the new
+ * code.
+ *
+ * The trap is the last clause. `STANDING_RULES` is compiled into the runner
+ * bundle, so editing the rules needs a fresh runner for EVERY backend — the
+ * per-turn ones are not exempt, they just need the restart for a different
+ * reason. That is the stale-runner notice, and it is correctly
+ * backend-blind.
+ *
+ * Nobody has solved this. No vendor harness lets you rewrite a running
+ * session's system prompt; the omnigent meta-harness, which wraps fourteen of
+ * them, lands instructions at startup or per-turn composition exactly like
+ * this and names the five possible answers rather than fixing any of them.
+ *
+ * ── TWO THINGS THE TABLE DOES NOT SAY ────────────────────────────────────
+ *
+ *  · "names its own chat" is the chat's NAME, which only Claude emits (a
+ *    `title` frame). The rail's second-line headline is a different thing
+ *    entirely — written server-side by chat/HeadlineWriter.ts off the turn-end
+ *    bus, so every backend gets one.
+ *  · A "no" here is a product decision as often as a limitation. Chat mode is
+ *    Claude-only because the mode's whole contract is a system prompt, and a
+ *    backend that cannot take one mid-session would wear the label without
+ *    the behaviour.
+ *
+ * KEEP IT HONEST OR DELETE IT. A table that has quietly gone stale is worse
+ * than reading the three files, because it is believed. Anything here that a
+ * test could assert should become one.
+ */
+/**
  * A concrete agent backend. The harness constructs one, then drives it:
  *  - control frames from chat → {@link send}/{@link slash}/{@link stop}/
  *    {@link setModel}/{@link answer}

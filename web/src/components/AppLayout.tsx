@@ -15,6 +15,7 @@ import { NoticeToast } from './NoticeToast';
 import { SettingsMenu } from './SettingsMenu';
 import { ThemeSwitch } from './ThemeSwitch';
 import { UpdateBanner } from './UpdateBanner';
+import { WorkingSetTabs } from './WorkingSetTabs';
 import { WorkspaceShell } from './WorkspaceLayout';
 
 const REPO_URL = 'https://github.com/ohadpr/muxpad';
@@ -145,17 +146,29 @@ export function AppLayout() {
               </div>
             </aside>
           )}
-          <div className="workspace-hosts">
-            {[...visitedWsSlugs].map((slug) => (
-              <div
-                key={slug}
-                className="workspace-host-slot"
-                hidden={slug !== wsSlug}
-                aria-hidden={slug !== wsSlug}
-              >
-                <WorkspaceShell wsSlug={slug} isActive={slug === wsSlug} />
-              </div>
-            ))}
+          {/* ── THE WORKING SET, ABOVE THE PANE ───────────────────────────
+              Right of the rail and above the content, which is where a tab
+              bar belongs relative to a sidebar and is the one place it does
+              not look like the tree. It was a band at the top of the sidebar;
+              see WorkingSetTabs for why that could not be tuned into working.
+
+              Sidebar mode only — the mobile sheet keeps the band, because a
+              tab strip on a phone is six things fighting for 390px, which is
+              the problem this is solving reproduced where it hurts most. */}
+          <div className="workspace-column">
+            {sidebarMode && <WorkingSetTabs activeTabSlug={activeTabSlug ?? null} />}
+            <div className="workspace-hosts">
+              {[...visitedWsSlugs].map((slug) => (
+                <div
+                  key={slug}
+                  className="workspace-host-slot"
+                  hidden={slug !== wsSlug}
+                  aria-hidden={slug !== wsSlug}
+                >
+                  <WorkspaceShell wsSlug={slug} isActive={slug === wsSlug} />
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       ) : (

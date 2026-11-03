@@ -780,20 +780,29 @@ describe('sub-chat status wording', () => {
 });
 
 /**
- * THE WORKING SET IS ON BOTH SURFACES.
+ * THE WORKING SET IS ON THE SHEET, AND ONLY THE SHEET.
  *
- * It shipped on the desktop rail only — reported as "I don't see the recent
- * section in sidebar on mobile". The cost of hunting for a chat is HIGHER on
- * a phone: the list is the whole screen and there is no ⌘K chord on a thumb.
+ * It was on both. On a desktop it is TABS now, above the pane (see
+ * WorkingSetTabs) — a list that looks like the list under it and means
+ * something different from it reads as noise however carefully it is
+ * coloured, and four rounds of tuning each traded one casualty for another.
+ *
+ * The sheet keeps the band. A tab strip on a phone is six things fighting
+ * for 390px, which is the crowding this move exists to undo, reproduced on
+ * the surface that can least afford it — and the cost of hunting for a chat
+ * is HIGHER there: the list is the whole screen and there is no ⌘K chord on
+ * a thumb.
  */
-describe('the working-set strip reaches the sheet', () => {
+describe('the working-set strip is the sheet’s, now', () => {
   const tsx = readFileSync(join(__dirname, 'NavTree.tsx'), 'utf8');
 
-  it('is rendered by BOTH the rail and the sheet', () => {
-    expect(tsx.match(/<WorkingSetStrip/g) ?? []).toHaveLength(2);
+  it('is rendered by the sheet and NOT by the rail', () => {
+    expect(tsx.match(/<WorkingSetStrip/g) ?? []).toHaveLength(1);
+    const rail = tsx.slice(tsx.indexOf('function SidebarTree'), tsx.indexOf('function SheetRail'));
+    expect(rail).not.toContain('<WorkingSetStrip');
   });
 
-  it('renders INSIDE the scroller on both surfaces, as the first thing in it', () => {
+  it('renders INSIDE the sheet’s scroller, as the first thing in it', () => {
     // It was pinned above the scroller — "a strip you have to scroll to is a
     // strip you will search for" — and that assumed a rail mostly below the
     // fold. It is not: the band is six rows at most and sits at the top, so
@@ -801,7 +810,7 @@ describe('the working-set strip reaches the sheet', () => {
     // pinning actually bought was a fixed object the list slid under: "I'm
     // not entirely sold on having the recent chats be fixed. I think you
     // should be able to scroll through the whole thing."
-    for (const host of ['function SidebarTree', 'function SheetRail']) {
+    for (const host of ['function SheetRail']) {
       const surface = tsx.slice(tsx.indexOf(host));
       const strip = surface.indexOf('<WorkingSetStrip');
       const scroll = surface.indexOf('className="navtree-scroll"');

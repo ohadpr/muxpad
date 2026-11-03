@@ -240,11 +240,27 @@ export class ReportDelivery {
     if (!pane) return this.abandon(rounds, pending, 'parent has no agent pane');
 
     // ─── HAS THE BATCH LANDED? ──────────────────────────────────────────────
-    // Only siblings from the same fan-out hold it — see BATCH_SPAWN_WINDOW_MS.
+    //
+    // Only siblings from the same fan-out hold it, and "the same fan-out" is
+    // now asked directly: were these dispatched by the SAME PARENT TURN. The
+    // time window was a proxy for that and a measured case defeated it — two
+    // dispatches from two different user requests 4.5 minutes apart were
+    // joined, so a report that landed at 21:59 sat behind an unrelated
+    // sibling until the ten-minute ceiling released it at 22:12. "Two
+    // dispatches from two different user messages are separate jobs, and the
+    // earlier one's result should go out as soon as it lands."
+    //
+    // The window survives as the FALLBACK, for rounds opened before the
+    // column existed: an unknown turn on either side is not evidence that
+    // they are unrelated, and the old behaviour is the safer default there.
     const stillWorking = rounds
-      .openRoundStartsByParent(parentTabId)
-      .filter((s) =>
-        pending.some((r) => Math.abs(s - r.started_at) <= BATCH_SPAWN_WINDOW_MS),
+      .openRoundsByParent(parentTabId)
+      .filter((open) =>
+        pending.some((r) =>
+          open.parentTurn !== null && r.parent_turn !== null
+            ? open.parentTurn === r.parent_turn
+            : Math.abs(open.startedAt - r.started_at) <= BATCH_SPAWN_WINDOW_MS,
+        ),
       ).length;
     if (stillWorking > 0) {
       const oldest = pending[0]?.ended_at ?? this.now();

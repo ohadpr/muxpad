@@ -598,8 +598,19 @@ function SidebarTree({
           be fixed. I think you should be able to scroll through the whole
           thing."
 
-          So it scrolls with everything else, and the rail is one list again. */}
-        <WorkingSetStrip activeTabSlug={activeTabSlug} {...(onNavigate ? { onNavigate } : {})} />
+          So it scrolls with everything else, and the rail is one list again.
+
+          ── AND THEN IT LEFT ALTOGETHER ─────────────────────────────────
+          The band is TABS now, above the pane (see WorkingSetTabs). Every
+          complaint it ever collected was the same one: a list that looks
+          like the list under it and means something different from the list
+          under it reads as noise however carefully it is coloured. Four
+          rounds of tuning each traded one casualty for another.
+
+          The rail has one job again, which is also what makes it something
+          you could collapse without losing your place. The SHEET keeps the
+          band — see the other mount — because a tab strip on a phone is the
+          same crowding on the surface that can least afford it. */}
         {/* NO CREATE CONTROL HERE, and none in the list either. It is on each
             WORKSPACE HEADER — see WorkspaceNode. That is the row the action is
             about, so the button needs no label saying where it creates and

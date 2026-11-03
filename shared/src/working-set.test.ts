@@ -3,8 +3,8 @@ import {
   WORKING_SET_DECAY_MS,
   WORKING_SET_SIZE,
   type WorkingSlot,
+  isStale,
   parseWorkingSet,
-  pruneWorkingSet,
   removeFromWorkingSet,
   touchWorkingSet,
 } from './working-set.js';
@@ -71,22 +71,23 @@ describe('eviction', () => {
 });
 
 describe('decay', () => {
-  it('drops a slot nobody has touched inside the window', () => {
-    const s = [
-      { tabId: 'cold', at: T0 },
-      { tabId: 'warm', at: T0 + min(1) },
-    ];
+  it('marks a slot nobody has touched inside the window as STALE', () => {
+    // Stale, not gone: it keeps its place and its number, and it is simply
+    // the first slot a new chat is allowed to take.
+    const cold = { tabId: 'cold', at: T0 };
+    const warm = { tabId: 'warm', at: T0 + min(1) };
     const later = T0 + WORKING_SET_DECAY_MS + min(0.5);
-    expect(ids(pruneWorkingSet(s, later))).toEqual(['warm']);
+    expect(isStale(cold, later)).toBe(true);
+    expect(isStale(warm, later)).toBe(false);
   });
 
-  it('is applied on READ, not by a sweep', () => {
-    // There must be no timer: a prune that fires while you are looking at the
-    // strip makes rows vanish under the pointer. Pruning on read means a strip
-    // rendered after a long silence is correct with nothing having run.
-    const s = [{ tabId: 'cold', at: T0 }];
-    expect(pruneWorkingSet(s, T0 + WORKING_SET_DECAY_MS - 1)).toHaveLength(1);
-    expect(pruneWorkingSet(s, T0 + WORKING_SET_DECAY_MS + 1)).toHaveLength(0);
+  it('is evaluated on READ, not by a sweep', () => {
+    // There must be no timer. A sweep that fires while you are looking at the
+    // strip changes it under the pointer — and now that staleness only picks
+    // a victim, there is nothing for a sweep to do in the first place.
+    const cold = { tabId: 'cold', at: T0 };
+    expect(isStale(cold, T0 + WORKING_SET_DECAY_MS - 1)).toBe(false);
+    expect(isStale(cold, T0 + WORKING_SET_DECAY_MS + 1)).toBe(true);
   });
 
   /**
@@ -106,19 +107,56 @@ describe('decay', () => {
     const hours = (n: number) => n * 60 * 60 * 1000;
     const lastMessage = Date.UTC(2026, 0, 5, 16, 0); // a 16:00 finish, early
     const nextMorning = Date.UTC(2026, 0, 6, 8, 0); // …and an 08:00 return
-    const s = [{ tabId: 'yesterday', at: lastMessage }];
-    expect(ids(pruneWorkingSet(s, nextMorning))).toEqual(['yesterday']);
+    const slot = { tabId: 'yesterday', at: lastMessage };
+    expect(isStale(slot, nextMorning)).toBe(false);
     // …and it still lets go of the day before that, which is the half of
     // decay that keeps the strip from becoming the 85-row list again.
-    expect(pruneWorkingSet(s, lastMessage + hours(25))).toHaveLength(0);
+    expect(isStale(slot, lastMessage + hours(25))).toBe(true);
   });
 
-  it('a decayed slot frees room rather than evicting a live one', () => {
+  it('a decayed slot is SPENT FIRST, and in place', () => {
+    // It used to be removed, and the array closed up — so every slot after it
+    // moved. As tabs that is the one unforgivable move, and it was reported
+    // as exactly that. Decay now decides who gets REPLACED, not who is shown.
     let s: WorkingSlot[] = [];
-    for (let i = 0; i < WORKING_SET_SIZE; i++) s = touchWorkingSet(s, `t${i}`, T0);
-    // Everything is stale; one new message should leave a strip of ONE.
+    for (let i = 0; i < WORKING_SET_SIZE; i++) s = touchWorkingSet(s, `t${i}`, T0 + i);
+    // t0 is the oldest, so it is the stale one spent — and nothing else moves.
     s = touchWorkingSet(s, 'fresh', T0 + WORKING_SET_DECAY_MS + min(1));
-    expect(ids(s)).toEqual(['fresh']);
+    expect(s).toHaveLength(WORKING_SET_SIZE);
+    expect(ids(s)[0]).toBe('fresh');
+    expect(ids(s).slice(1)).toEqual(['t1', 't2', 't3', 't4', 't5']);
+  });
+
+  it('prefers a stale slot over evicting a live one', () => {
+    // What decay is FOR, kept: the strip you come back to still loses its
+    // stale slots, it just loses them to something rather than to a clock.
+    let s: WorkingSlot[] = [];
+    s = touchWorkingSet(s, 'old', T0);
+    for (let i = 1; i < WORKING_SET_SIZE; i++) {
+      s = touchWorkingSet(s, `t${i}`, T0 + WORKING_SET_DECAY_MS + min(i));
+    }
+    const later = T0 + WORKING_SET_DECAY_MS + min(30);
+    s = touchWorkingSet(s, 'fresh', later);
+    // 'old' is the only stale one, so it goes — not t1, which is the LRU of
+    // the live ones.
+    expect(ids(s)).not.toContain('old');
+    expect(ids(s)).toContain('t1');
+    expect(ids(s)[0]).toBe('fresh');
+  });
+
+  it('never moves a slot that is not the one being replaced', () => {
+    // The whole promise, stated as a property rather than an example.
+    let s: WorkingSlot[] = [];
+    for (let i = 0; i < WORKING_SET_SIZE; i++) s = touchWorkingSet(s, `t${i}`, T0 + i);
+    const before = ids(s);
+    for (const [tab, when] of [
+      ['t3', T0 + min(1)],
+      ['t0', T0 + min(2)],
+      ['t5', T0 + WORKING_SET_DECAY_MS + min(5)],
+    ] as const) {
+      s = touchWorkingSet(s, tab, when);
+      expect(ids(s), `touching ${tab} moved something`).toEqual(before);
+    }
   });
 });
 

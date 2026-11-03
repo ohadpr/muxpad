@@ -868,3 +868,84 @@ describe('last_user_at — a key the machine cannot move', () => {
     expect(userAt(f.db, child.id)).toBe(born);
   });
 });
+
+/**
+ * ── THE STAMP THAT SAYS "ONE FAN-OUT" ────────────────────────────────────
+ *
+ * `spawn_rounds.parent_turn` is what the delivery barrier reads to decide
+ * whether two finished children were dispatched by the same request. Its
+ * whole value is that siblings SHARE it, so this is the test that earns it.
+ *
+ * It did not exist, and that is why the first draft shipped broken: the
+ * barrier's own tests insert `parent_turn` by hand, so they proved the
+ * batching logic and said nothing about the stamping. The draft read
+ * `last_activity_at` — which pty OUTPUT moves — so a parent that printed
+ * between two spawns gave them different stamps and the barrier read one
+ * fan-out as several, which is batching silently switched off.
+ */
+describe('parent_turn — the stamp a fan-out shares', () => {
+  const tree = () => {
+    const db = openDb(':memory:');
+    const ws = new WorkspaceStore(db).create({ name: 'W' });
+    const tabs = new TabStore(db);
+    const parent = tabs.create({ name: 'parent', layout: '', workspace_id: ws.id }).id;
+    const kid = (name: string) =>
+      tabs.create({ name, layout: '', workspace_id: ws.id, spawned_by: parent }).id;
+    const stamp = (tabId: string) =>
+      (
+        db.prepare('SELECT parent_turn AS p FROM spawn_rounds WHERE tab_id = ?').get(tabId) as
+          | { p: number | null }
+          | undefined
+      )?.p ?? null;
+    // No boot grace: an output write inside it is discarded, which would hide
+    // the very thing this suite is about.
+    return { db, parent, kid, stamp, act: new TabActivity(db, { bootGraceMs: 0 }) };
+  };
+
+  it('siblings dispatched in ONE turn share it, even while the parent prints', () => {
+    const t = tree();
+    const T0 = 1_000_000;
+    t.act.noteUserMessage(t.parent, T0); // the request arrives
+    const a = t.kid('a');
+    t.act.noteUserMessage(a, T0 + 1_000);
+    // The parent keeps printing as it dispatches — PAST the 5s output
+    // throttle, so `last_activity_at` really does move. This is the step that
+    // broke the first draft.
+    t.act.touchTab(t.parent, { source: 'output', at: T0 + 7_000 });
+    const b = t.kid('b');
+    t.act.noteUserMessage(b, T0 + 8_000);
+
+    expect(t.stamp(a)).toBe(T0);
+    expect(t.stamp(b)).toBe(T0);
+  });
+
+  it('…and a LATER request gets a different one, or nothing would ever split', () => {
+    const t = tree();
+    const T0 = 1_000_000;
+    t.act.noteUserMessage(t.parent, T0);
+    const a = t.kid('a');
+    t.act.noteUserMessage(a, T0 + 1_000);
+    // A second user message four and a half minutes later — the measured case
+    // that started all of this, where the window joined two unrelated jobs.
+    const T1 = T0 + 270_000;
+    t.act.noteUserMessage(t.parent, T1);
+    const b = t.kid('b');
+    t.act.noteUserMessage(b, T1 + 1_000);
+
+    expect(t.stamp(a)).toBe(T0);
+    expect(t.stamp(b)).toBe(T1);
+    expect(t.stamp(a)).not.toBe(t.stamp(b));
+  });
+
+  it('is null when the parent is gone, rather than guessing', () => {
+    // A slot with no answer falls back to the time window, which is the old
+    // behaviour and the safer default.
+    const t = tree();
+    const db = t.db;
+    const ws = (db.prepare('SELECT id FROM workspaces LIMIT 1').get() as { id: string }).id;
+    const orphan = new TabStore(db).create({ name: 'o', layout: '', workspace_id: ws }).id;
+    // Not a sub-chat at all → no round, so nothing to stamp.
+    t.act.noteUserMessage(orphan, 1_000_000);
+    expect(t.stamp(orphan)).toBe(null);
+  });
+});

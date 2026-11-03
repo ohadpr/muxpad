@@ -1,7 +1,6 @@
 import {
   type WorkingSlot,
   parseWorkingSet,
-  pruneWorkingSet,
   removeFromWorkingSet,
   touchWorkingSet,
 } from '@muxpad/shared';
@@ -41,7 +40,13 @@ export class WorkingSet {
    * Both prunes happen on read, never on a timer; see the shared note.
    */
   list(): WorkingSlot[] {
-    const live = pruneWorkingSet(parseWorkingSet(this.globals.get(KEY)), this.now());
+    // NOT PRUNED. A stale slot keeps its place until a new chat takes it —
+    // see `isStale` in shared/working-set. Dropping it here would close the
+    // array up and move every slot after it, which as tabs is the one move
+    // that is never allowed. Rows for tabs that no longer EXIST are still
+    // dropped below, because that is a slot pointing at nothing rather than
+    // a slot going stale.
+    const live = parseWorkingSet(this.globals.get(KEY));
     if (live.length === 0) return live;
     const tabs = new TabStore(this.db);
     const real = live.filter((s) => tabs.getById(s.tabId));

@@ -1,4 +1,4 @@
-import { type Tab, WORKING_SET_DECAY_MS, type Workspace } from '@muxpad/shared';
+import type { Tab, Workspace } from '@muxpad/shared';
 import { useEffect, useState } from 'react';
 import { req } from './api';
 import { subscribe, subscribeResync } from './events';
@@ -84,9 +84,16 @@ export function useWorkingSet(): WorkingRow[] {
       offResync();
     };
   }, []);
-  // Pruned again HERE, on every render, because decay is a function of the
-  // clock and nothing pushes when a slot goes stale. Without this, a tab left
-  // open overnight shows yesterday's strip until something else happens.
-  const now = Date.now();
-  return slots.filter((s) => now - s.at <= WORKING_SET_DECAY_MS);
+  // ── NOT PRUNED HERE ANY MORE ──────────────────────────────────────────
+  // This filtered stale slots out on every render, "because decay is a
+  // function of the clock and nothing pushes when a slot goes stale". True,
+  // and the consequence was that a slot aging out REMOVED a tab and every tab
+  // after it slid along — which as a tab bar is the one move that is never
+  // allowed, and was reported as exactly that.
+  //
+  // Decay decides who gets REPLACED now, not who is shown (see `isStale` in
+  // shared/working-set). A stale slot keeps its place until a new chat takes
+  // it, so nothing moves on a clock and the strip you come back to still
+  // loses its stale slots — to something, rather than to time passing.
+  return slots;
 }

@@ -1980,7 +1980,17 @@ select:focus {
   align-items: stretch;
   min-width: 0;
 }
-.app-body > .workspace-hosts {
+/* The content side of the body: the working-set tabs, then the panes. It is
+   a column so the strip takes its own height off the top and the hosts take
+   the rest — the same shape the hosts used to have on their own. */
+.app-body > .workspace-column {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.workspace-column > .workspace-hosts {
   flex: 1;
   min-width: 0;
   min-height: 0;
