@@ -14,7 +14,7 @@
 // AgentBackend (backends/*.ts) — Claude today, dispatched on `--backend`. The
 // harness never learns which backend runs; it only relays frames.
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import WebSocket from 'ws';
@@ -238,7 +238,19 @@ const backend: AgentBackend | null = pickMode
 function connect(): void {
   if (closed || !backend) return;
   const b = backend;
-  const sock = new WebSocket(wsUrl);
+  // ── THE CREDENTIAL, RE-READ ON EVERY DIAL ───────────────────────────────
+  //
+  // From disk at connect time, not captured at startup, and that is the point:
+  // a runner outlives every `muxpad restart` and can be days older than the
+  // server. Reading per dial means a reconnect picks up a secret that was
+  // rotated — or created for the first time — while this process was already
+  // running, so turning auth on does not require respawning panes and killing
+  // their background subagents.
+  //
+  // Absent is silent. In the default `off` mode the server asks for nothing,
+  // and a header we cannot supply must not stop a runner connecting.
+  const key = readApiSecret();
+  const sock = new WebSocket(wsUrl, key ? { headers: { 'x-muxpad-key': key } } : {});
   ws = sock;
   sock.on('open', () => {
     log(dim('connected to muxpad'));
@@ -351,3 +363,21 @@ main().catch((e: unknown) => {
   // Give the frame a beat to flush, then exit nonzero so the shell shows it.
   setTimeout(() => shutdown(1), 300);
 });
+
+/**
+ * The install secret, straight off disk.
+ *
+ * Deliberately NOT imported from server/src/api-auth.ts: that module holds
+ * process-wide state for the SERVER's copy, and a runner is a different
+ * process with no business initialising it. Eight lines of duplication buys
+ * the runner having no opinion about the server's lifecycle.
+ */
+function readApiSecret(): string | null {
+  try {
+    const dir = process.env.MUXPAD_DATA_DIR ?? join(homedir(), '.muxpad');
+    const v = readFileSync(join(dir, 'api-secret'), 'utf8').trim();
+    return v.length >= 32 ? v : null;
+  } catch {
+    return null;
+  }
+}

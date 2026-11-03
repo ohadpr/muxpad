@@ -1,7 +1,7 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { type IncomingMessage, type ServerResponse, createServer } from 'node:http';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WebSocketServer, type WebSocket as WsSocket } from 'ws';
 import { AgentCdpGate, bridgeAgentCdp } from '../AgentCdp.js';
@@ -191,7 +191,7 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
     announcedFirstPage = true;
     void fetch(`${opts.apiUrl}/api/browsers/${encodeURIComponent(opts.profile)}/opened`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: apiHeaders({ 'content-type': 'application/json' }),
       body: '{}',
       // A card is decoration on a conversation. It must never be able to take
       // the browser down with it, so a failure here is silence and nothing else.
@@ -307,7 +307,7 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
       `${opts.apiUrl}/api/browsers/${encodeURIComponent(opts.profile)}/cookies`,
       {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: apiHeaders({ 'content-type': 'application/json' }),
         body: JSON.stringify({ seed: cookieSeed, current }),
       },
     );
@@ -325,6 +325,7 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
     const response = await fetch(
       `${opts.apiUrl}/api/browsers/${encodeURIComponent(opts.profile)}`,
       {
+        headers: apiHeaders(),
         signal: AbortSignal.timeout(2500),
       },
     );
@@ -1033,7 +1034,7 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
           if (bytes.length) {
             await fetch(`${opts.apiUrl}/api/browsers/${encodeURIComponent(opts.profile)}/closing`, {
               method: 'POST',
-              headers: { 'content-type': 'image/jpeg' },
+              headers: apiHeaders({ 'content-type': 'image/jpeg' }),
               body: bytes,
               signal: AbortSignal.timeout(2500),
             });
@@ -1106,4 +1107,27 @@ async function waitForCdp(
     await new Promise((r) => setTimeout(r, 150));
   }
   throw new Error(`CDP did not come up at ${endpoint} within ${CDP_READY_TIMEOUT_MS}ms`);
+}
+
+/**
+ * The install credential, for the host's own calls back to the muxpad API.
+ *
+ * READ PER CALL, like the CLI and the agent runner, and for the same reason: a
+ * browser host runs for days (one on this machine was up eleven), so anything
+ * captured at startup would be a credential from a different era. Per call
+ * means auth can be switched on without restarting the hosts and killing the
+ * pages they hold.
+ *
+ * The VIEWER's own fetches need none of this — that page is served from the
+ * muxpad origin and the browser attaches the cookie itself.
+ */
+function apiHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  try {
+    const dir = process.env.MUXPAD_DATA_DIR ?? join(homedir(), '.muxpad');
+    const key = readFileSync(join(dir, 'api-secret'), 'utf8').trim();
+    if (key.length >= 32) return { ...extra, 'x-muxpad-key': key };
+  } catch {
+    // Absent is normal: in the default `off` mode nothing asks for one.
+  }
+  return extra;
 }

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { brotliCompressSync, gzipSync } from 'node:zlib';
 import { Hono } from 'hono';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { COOKIE_NAME, apiCredential, initApiAuth, resetApiAuthForTest } from './api-auth.js';
 import { cachePolicy, ifNoneMatchSatisfied, mountStaticWeb } from './static-assets.js';
 
 /**
@@ -227,5 +228,71 @@ describe('build identifier', () => {
     const res = await empty.request('/api/build');
     expect(res.status).toBe(200);
     expect((await res.json()) as { build: string | null }).toEqual({ build: null });
+  });
+});
+
+/**
+ * ── THE BROWSER'S CREDENTIAL ─────────────────────────────────────────────
+ *
+ * The web UI can only ever hold one by being handed it with the shell. The
+ * alternative — the secret interpolated into the HTML, or an endpoint that
+ * hands it out — puts it where page JavaScript can read it, and the whole
+ * point of authenticating callers is that a page is not automatically
+ * trusted.
+ */
+describe('the credential handed out with the shell', () => {
+  let dir: string;
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), 'muxpad-shellkey-'));
+    resetApiAuthForTest();
+    initApiAuth(dir);
+  });
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true });
+    resetApiAuthForTest();
+  });
+
+  const cookieOf = (res: Response) =>
+    (res.headers.get('set-cookie') ?? '')
+      .split(/,\s*(?=[A-Za-z_]+=)/)
+      .find((c) => c.startsWith(`${COOKIE_NAME}=`)) ?? '';
+
+  it('rides the shell, HttpOnly and SameSite=Strict', async () => {
+    const c = cookieOf(await get('/'));
+    expect(c).toContain(`${COOKIE_NAME}=${apiCredential()}`);
+    // HttpOnly so page JS cannot read it; Strict because the app only ever
+    // talks to its own origin, which makes it a second lock on the CSRF hole.
+    expect(c).toContain('HttpOnly');
+    expect(c).toContain('SameSite=Strict');
+    expect(c).toContain('Path=/');
+  });
+
+  it('is set on a 304 TOO, which is the whole trap', async () => {
+    // The shell short-circuits on a validator match, so a client that already
+    // holds the HTML would otherwise never receive a credential: an app that
+    // works on a cold load and 401s on a warm one.
+    const first = await get('/');
+    const etag = first.headers.get('etag') as string;
+    const again = await get('/', { 'if-none-match': etag });
+    expect(again.status).toBe(304);
+    expect(cookieOf(again)).toContain(`${COOKIE_NAME}=${apiCredential()}`);
+  });
+
+  it('is served on /index.html as well as /', async () => {
+    expect(cookieOf(await get('/index.html'))).toContain(COOKIE_NAME);
+  });
+
+  it('is NOT Secure over plain http, or the browser would drop it', async () => {
+    // A `Secure` cookie on a plain-http tailnet origin is silently discarded,
+    // which looks exactly like auth being broken with nothing in any log.
+    expect(cookieOf(await get('/'))).not.toContain('Secure');
+  });
+
+  it('sends NOTHING when no secret is loaded, rather than an empty key', async () => {
+    // A source checkout that has never booted. `muxpad_key=` would present an
+    // empty credential and get itself refused.
+    resetApiAuthForTest();
+    expect(cookieOf(await get('/'))).toBe('');
+    initApiAuth(dir);
   });
 });

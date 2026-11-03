@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { buildIdFromHtml } from '@muxpad/shared';
 import type { Context, Hono } from 'hono';
+import { COOKIE_NAME, apiCredential } from './api-auth.js';
 
 /**
  * Serving the built web bundle.
@@ -155,6 +156,22 @@ export function mountStaticWeb(app: Hono, webRoot: string): void {
     const file = join(webRoot, 'index.html');
     const v = validators(file);
     c.header('Cache-Control', 'no-cache');
+    // ── THE BROWSER'S CREDENTIAL RIDES THE SHELL ────────────────────────
+    //
+    // This is the only way the web UI can ever hold one. The alternative —
+    // interpolating the secret into the HTML or an endpoint that hands it out
+    // — puts it where page JavaScript can read it, and the whole point is
+    // that a page is not automatically trusted. A cookie is sent by the
+    // browser and readable by nobody: `HttpOnly` keeps it out of JS, and it
+    // rides the WebSocket handshake too, which is what covers `/ws/*`.
+    //
+    // SET BEFORE THE 304. A shell served from cache still needs the cookie,
+    // and the early return below means a client that has the HTML already
+    // would otherwise never receive one — an app that works on a cold load
+    // and 401s on a warm one, which is the worst shape a bug like this can
+    // take. (It also means an already-open tab gets its credential on the
+    // next reload rather than needing anything cleared.)
+    setBrowserCredential(c);
     if (v) {
       c.header('ETag', v.etag);
       c.header('Last-Modified', v.lastModified);
@@ -220,4 +237,32 @@ export function mountStaticWeb(app: Hono, webRoot: string): void {
     // SPA client route (e.g. /w/:ws/t/:tab) → the no-cache HTML shell.
     return serveIndexHtml(c);
   });
+}
+
+/**
+ * Hand the browser the install credential as an HttpOnly cookie.
+ *
+ * `Secure` only over https, because a `Secure` cookie on a plain-http tailnet
+ * origin is silently DROPPED by the browser — which would look exactly like
+ * auth being broken, with nothing in any log to say why.
+ *
+ * `SameSite=Strict`: the app only ever talks to its own origin, so nothing
+ * legitimate needs the cookie on a cross-site request, and withholding it
+ * there is a second lock on the CSRF hole same-origin.ts exists for. A
+ * cross-site LINK into muxpad still works — that first navigation is the
+ * shell, which is exempt, and it arrives here and gets the cookie set.
+ *
+ * No-ops when there is no secret loaded (a source checkout that has never
+ * booted) rather than sending `muxpad_key=`, which would present an empty
+ * credential and get itself refused.
+ */
+function setBrowserCredential(c: Context): void {
+  const key = apiCredential();
+  if (!key) return;
+  const secure = new URL(c.req.url).protocol === 'https:' ? '; Secure' : '';
+  c.header(
+    'Set-Cookie',
+    `${COOKIE_NAME}=${key}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000${secure}`,
+    { append: true },
+  );
 }
