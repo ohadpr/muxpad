@@ -2,6 +2,7 @@ import { setSayKey } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import type { AgentBridge } from './agent-bridge.js';
+import { apiAuth, authMode, initApiAuth } from './api-auth.js';
 import type { AppRegistry } from './apps/AppRegistry.js';
 import type { AppStatusProbe } from './apps/AppStatus.js';
 import type { ArchiveDb } from './archive/ArchiveDb.js';
@@ -203,6 +204,35 @@ export function createApp(deps: AppDeps): Hono {
   // route below, including ones not yet written. See same-origin.ts for what
   // is allowed and why the CLI (which sends no Origin) still works.
   app.use('*', sameOriginGuard(deps.allowedOrigins ? { allowedOrigins: deps.allowedOrigins } : {}));
+  // ── WHO IS CALLING ────────────────────────────────────────────────────
+  //
+  // The guard above answers "did a foreign PAGE make this request". This one
+  // answers "does the caller hold this install's credential at all", which is
+  // the question that has never been asked — see api-auth.ts for the list of
+  // what an unauthenticated caller gets today (a shell, an autostarting
+  // command, any readable file published, and the runner behind a live chat).
+  //
+  // It has to exist before the multi-node link does: a remote node is by
+  // definition a caller that has the URL and not the filesystem, and the
+  // whole point of that plan's secret boundary is that reaching muxpad is not
+  // the same as being allowed to use it.
+  //
+  // DEFAULT IS `off` AND INSTALLS NOTHING. This machine runs ~120 panes, ~46
+  // browser hosts and a published tunnel; flipping verification on in one
+  // step would 401 all of them, and the repair for an agent pane is a respawn,
+  // which kills its background subagents. `MUXPAD_API_AUTH=observe` logs what
+  // WOULD be refused so the flip can be decided from evidence instead of from
+  // this comment.
+  initApiAuth(resolved.dataDir);
+  if (authMode() !== 'off')
+    app.use(
+      '*',
+      apiAuth({
+        mode: () => authMode(),
+        onRefusal: ({ method, path, agent }) =>
+          console.log(`[api-auth] no credential: ${method} ${path} — ${agent}`),
+      }),
+    );
   // A VALIDATOR AND A COMPRESSOR ON EVERY JSON GET.
   //
   // Measured on an idle page with 537 tabs: ~2.2 MB of JSON every twenty

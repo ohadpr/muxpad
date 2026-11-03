@@ -602,6 +602,20 @@ require_api_url() {
 #   $3 optional JSON body (only for POST)
 # Captures the response body and HTTP status. On non-2xx, prints the
 # server's error JSON (or raw body) to stderr and exits non-zero.
+# The install credential, read FROM DISK at call time.
+#
+# From disk and not from the environment, and that is the whole reason the CLI
+# needs no respawn when API auth is switched on: an env var can only be given
+# to a process at spawn, which for an agent pane costs a respawn and kills its
+# background subagents. A file is read by the invocation that needs it.
+#
+# Absent is normal and silent: a fresh checkout before the first boot has no
+# secret yet, and in the default `off` mode nothing asks for one.
+api_key() {
+  local f="${MUXPAD_DATA_DIR:-$HOME/.muxpad}/api-secret"
+  [ -r "$f" ] && tr -d '\n' < "$f" || true
+}
+
 http_request() {
   require_api_url
   local method="$1"
@@ -611,15 +625,31 @@ http_request() {
   local tmp
   tmp="$(mktemp)"
   local status
+  local key
+  key="$(api_key)"
+  # ONE funnel for every CLI verb, which is why the credential goes in here
+  # and nowhere else. `x-muxpad-key` rather than Authorization so a future
+  # proxy in front of the daemon keeps its own auth header.
+  #
+  # An EMPTY array, expanded under `set -u` on the bash 3.2 that macOS ships,
+  # is an "unbound variable" fatal — not an empty list. So every expansion
+  # below uses the `${a[@]+"${a[@]}"}` form, which substitutes nothing at all
+  # when the array is unset and the quoted elements when it is not. Found by
+  # running the CLI immediately after writing it, which is the only reason
+  # `muxpad` was broken for one command instead of for the next person.
+  local -a auth=()
+  [ -n "$key" ] && auth=(-H "x-muxpad-key: $key")
   if [ -n "$body" ]; then
     status="$(curl -sS -o "$tmp" -w '%{http_code}' \
       -X "$method" \
+      ${auth[@]+"${auth[@]}"} \
       -H 'content-type: application/json' \
       --data "$body" \
       "$url")"
   else
     status="$(curl -sS -o "$tmp" -w '%{http_code}' \
       -X "$method" \
+      ${auth[@]+"${auth[@]}"} \
       "$url")"
   fi
   if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then

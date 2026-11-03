@@ -36,6 +36,7 @@ import {
   isBackendId,
   parseFrame,
 } from './agent-runner/protocol.js';
+import { authMode, isExempt, presentedCredential, verifyCredential } from './api-auth.js';
 import { TranscriptTail, identityNormalize, muxpadLocate } from './chat/TranscriptReader.js';
 import { agentPaneHasMessages } from './chat/has-messages.js';
 import type { EventBus } from './events.js';
@@ -1596,6 +1597,40 @@ export function attachWsServer(deps: {
       logRefusal(req.headers.origin ?? '(no origin)', `${verdict.why} on ${url.pathname}`);
       refuseUpgrade(socket, verdict.why);
       return;
+    }
+    // ── AND WHO IS CALLING ────────────────────────────────────────────────
+    //
+    // The same two-caller shape as `checkOrigin` above: one policy, applied
+    // here for the upgrade and by the Hono middleware for HTTP. Gating only
+    // HTTP would make the whole credential decorative, because every
+    // interesting capability on this server is behind a socket — the chat
+    // itself, a pane's pty, and `/ws/agent-runner/:paneId`, where the newest
+    // connection WINS, so an unauthenticated caller can displace the runner
+    // behind a live chat and answer in its place.
+    //
+    // `isExempt` keeps the app shell open (the cookie is handed out by
+    // loading it) and gates `/browser/<slug>/ws` too, which is not under
+    // `/ws/` and is live control of a Chrome session holding the user's
+    // logged-in cookie jar.
+    //
+    // Default `off` installs nothing; see api-auth.ts on the rollout.
+    const wsAuth = authMode();
+    if (wsAuth !== 'off' && !isExempt(url.pathname)) {
+      const rawKey = req.headers['x-muxpad-key'];
+      const headerBag = {
+        get: (name: string): string | null => {
+          if (name === 'x-muxpad-key') return (Array.isArray(rawKey) ? rawKey[0] : rawKey) ?? null;
+          const v = req.headers[name];
+          return (Array.isArray(v) ? v[0] : v) ?? null;
+        },
+      };
+      if (!verifyCredential(presentedCredential(headerBag))) {
+        console.log(`[api-auth] no credential: UPGRADE ${url.pathname}`);
+        if (wsAuth === 'enforce') {
+          refuseUpgrade(socket, 'unauthorized');
+          return;
+        }
+      }
     }
     // App-level event stream. One socket per browser; receives JSON-encoded
     // MuxpadEvent frames for structural state changes (panes/tabs/workspaces).
