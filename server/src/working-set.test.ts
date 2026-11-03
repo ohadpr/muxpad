@@ -65,13 +65,33 @@ describe('the strip, persisted', () => {
     ).toEqual([b]);
   });
 
-  it('decays on READ, with no sweep anywhere', () => {
-    const a = chat('a');
-    set().touch(a);
-    now += WORKING_SET_DECAY_MS - 1;
-    expect(set().list()).toHaveLength(1);
-    now += 2;
-    expect(set().list()).toHaveLength(0);
+  it('a stale slot KEEPS ITS PLACE — decay chooses who is replaced', () => {
+    // It used to be dropped on read, and the array closed up, so every slot
+    // after it moved. As tabs that is the one unforgivable move. A stale slot
+    // now waits to be TAKEN: it holds its position, and it is the first one a
+    // new chat spends once the strip is full.
+    const ids: string[] = [];
+    for (let i = 0; i < WORKING_SET_SIZE; i++) {
+      const id = chat(`t${i}`);
+      ids.push(id);
+      now += 60_000;
+      set().touch(id);
+    }
+    // Everything but t2 gets a fresh message, so t2 is the only stale slot —
+    // and it is NOT the least recently used, so this can only pass if
+    // staleness is what picked the victim.
+    now += WORKING_SET_DECAY_MS + 60_000;
+    for (const [i, id] of ids.entries()) if (i !== 2) set().touch(id);
+    expect(set().list()).toHaveLength(WORKING_SET_SIZE);
+
+    const fresh = chat('fresh');
+    set().touch(fresh);
+    const after = set()
+      .list()
+      .map((s) => s.tabId);
+    expect(after).toHaveLength(WORKING_SET_SIZE);
+    expect(after[2]).toBe(fresh); // took the stale slot, in place
+    expect(after.filter((_, i) => i !== 2)).toEqual(ids.filter((_, i) => i !== 2));
   });
 
   it('“not now” frees the slot and leaves the chat alone', () => {

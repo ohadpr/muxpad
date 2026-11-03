@@ -80,19 +80,26 @@ export const WORKING_SET_SIZE = 6;
 export const WORKING_SET_DECAY_MS = 16 * 60 * 60 * 1000;
 
 /**
- * Drop slots nobody has touched inside the decay window.
+ * ── DECAY DECIDES WHO GETS REPLACED, NOT WHO IS SHOWN ────────────────────
  *
- * Applied on READ as well as on write, so a strip rendered after a long
- * silence is correct without anything having run in the meantime — there is
- * no sweep, and there must not be one: a timer that prunes a list the user is
- * looking at would make rows vanish under the pointer.
+ * It used to be REMOVED on read, and the array then closed up — so everything
+ * after it moved. In a vertical band that was a row sliding by one position;
+ * as TABS it is the one thing a tab bar may never do, and it was reported as
+ * exactly that.
+ *
+ * There is no arrangement in which a slot both disappears on a timer and
+ * leaves its neighbours alone. So the timer stops deciding what is VISIBLE
+ * and decides what is REPLACEABLE instead: a stale slot keeps its position
+ * until a new chat takes it, which is the first thing that would have taken
+ * a free one anyway.
+ *
+ * What decay was for survives intact — "the strip you come back to", fewer
+ * and better slots after a break — because a stale slot is still the first
+ * one spent. What goes is a tab vanishing while you are looking at the row,
+ * and the renumbering underneath it.
  */
-export function pruneWorkingSet(
-  slots: readonly WorkingSlot[],
-  now: number,
-  decayMs: number = WORKING_SET_DECAY_MS,
-): WorkingSlot[] {
-  return slots.filter((s) => now - s.at <= decayMs);
+export function isStale(slot: WorkingSlot, now: number, decayMs = WORKING_SET_DECAY_MS): boolean {
+  return now - slot.at > decayMs;
 }
 
 /**
@@ -116,20 +123,32 @@ export function touchWorkingSet(
   opts: { size?: number; decayMs?: number } = {},
 ): WorkingSlot[] {
   const size = opts.size ?? WORKING_SET_SIZE;
-  const live = pruneWorkingSet(slots, now, opts.decayMs);
+  const decay = opts.decayMs ?? WORKING_SET_DECAY_MS;
+  // NOT pruned. A stale slot keeps its place until something takes it — see
+  // `isStale`. Pruning here is what made the strip renumber itself whenever a
+  // slot aged out, which as tabs is the one unforgivable move.
+  const live = slots.slice();
   const at = live.findIndex((s) => s.tabId === tabId);
   if (at >= 0) {
-    const next = live.slice();
-    next[at] = { tabId, at: now };
-    return next;
+    live[at] = { tabId, at: now };
+    return live;
   }
   if (live.length < size) return [...live, { tabId, at: now }];
-  // Evict the least recently used. `reduce` rather than a sort: the array is
-  // six long and must keep its order for everything that is not evicted.
-  const lru = live.reduce((worst, s, i) => (s.at < (live[worst] as WorkingSlot).at ? i : worst), 0);
-  const next = live.slice();
-  next[lru] = { tabId, at: now };
-  return next;
+  // ── WHOSE SLOT DOES A NEW CHAT TAKE ──────────────────────────────────
+  // A STALE one first, oldest first, which is what decay now buys: the
+  // strip you come back to still loses its stale slots, it just loses them
+  // to something rather than to a clock. Failing that, the least recently
+  // used — the one you are not looking at, which is the difference that
+  // matters. Either way it is replaced IN PLACE and nothing else moves.
+  const stale = live
+    .map((s, i) => ({ s, i }))
+    .filter(({ s }) => isStale(s, now, decay))
+    .sort((a, b) => a.s.at - b.s.at)[0];
+  const victim =
+    stale?.i ??
+    live.reduce((worst, s, i) => (s.at < (live[worst] as WorkingSlot).at ? i : worst), 0);
+  live[victim] = { tabId, at: now };
+  return live;
 }
 
 /**

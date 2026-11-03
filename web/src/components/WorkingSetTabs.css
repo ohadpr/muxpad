@@ -1,0 +1,250 @@
+/* ── THE WORKING SET, AS TABS ─────────────────────────────────────────────
+   One row above the pane, right of the rail. See WorkingSetTabs.tsx for why
+   it is not in the sidebar any more.
+
+   ── IT IS A NAV ELEMENT, SO IT WEARS THE RAIL'S COLOURS ────────────────
+   The first version sat on the chat's own surface and read as part of the
+   conversation: "colour is closer to that of chat than to that of sidebar; I
+   think it should be closer to sidebar because it's a nav element". It is —
+   it is the rail's working set, moved sideways — so it takes `--rail-surface`
+   and becomes an ISLAND like `.sidenav` and `.navtree`, rebinding the ink and
+   status tokens to their rail values. Without that rebinding, text inside a
+   deep strip on a light theme is the app's dark ink on a dark ground, which
+   is the 1.02:1 the rail's own comment records. */
+.wstabs {
+  --fg: var(--rail-ink);
+  --bg-elev: var(--rail-elev);
+  --fg-dim: var(--rail-ink-dim);
+  --fg-faint: var(--rail-ink-faint);
+  --bg-hover: var(--rail-hover);
+  --border: var(--rail-border);
+  --accent: var(--rail-accent);
+  --status-ready: var(--rail-status-ready);
+  --status-working: var(--rail-status-working);
+  --status-blocked: var(--rail-status-blocked);
+  --status-dead: var(--rail-status-dead);
+
+  display: flex;
+  align-items: flex-end;
+  flex: 0 0 auto;
+  min-width: 0;
+  /* Room between tabs. At 3px they were a packed row that read as one
+     object with notches in it; this is the gap that lets each one be a
+     thing. */
+  gap: 6px;
+  padding: 6px 10px 0;
+  background: var(--rail-surface);
+  /* ── NO LINE ACROSS THE BOTTOM ──────────────────────────────────────────
+     There was one, and it cut the active tab off from the pane it belongs to
+     — "lower border cuts the connection between the content and the tab
+     header". The active tab tried to paint over it with a 1px shadow, which
+     could never work: this box is `overflow-x: auto`, and overflow clips a
+     child's shadow at the padding box.
+     So the line goes. The edge is already drawn by the thing that matters —
+     the rail's surface stopping and the pane's starting — and the active tab
+     wears the pane's colour, so it simply continues into the content with
+     nothing in between. That IS the connection a tab bar is for. */
+  font-family: var(--chrome-font);
+  /* Scrolls rather than squeezing past legibility — six slots fit a laptop,
+     and a narrow pane gets a scrollbar instead of six unreadable stubs. */
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+.wstabs::-webkit-scrollbar {
+  display: none;
+}
+
+/* ── A TAB HAS TO LOOK LIKE A TAB AT REST ────────────────────────────────
+   The first version drew nothing until you were in one — bare text in a row,
+   which is a toolbar, not a tab bar ("tabs don't look like tabs"). A tab bar
+   is read by SHAPE before it is read by word: each one is a box, they sit on
+   a line, and the one you are in breaks through it.
+
+   So every tab has a body — the rail's own raised surface, the top corners
+   rounded, a hairline around it — and the active one swaps that body for the
+   pane's face and loses its bottom edge. */
+.wstab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  /* ── EVERY TAB IS THE SAME WIDTH, AND NOT ITS CONTENT'S ───────────────
+     It was `flex: 0 1 auto` — content-sized — and that is what made the strip
+     shift as you clicked through it ("they shifted as i clicked into
+     different ones"). The active tab's name is 600 and an unread one is 700,
+     so clicking a tab BOLDED it (wider) and un-bolded the one you left plus
+     cleared its unread (narrower), and every tab to the right of either slid.
+     Nothing in the model had moved; the layout had.
+     A tab bar cannot be content-sized for exactly this reason — Chrome's
+     isn't either. `1 1 128px` makes them share the row equally, so the only
+     thing that changes a tab's width is a tab arriving or leaving.
+     THE FLOOR IS STILL THE POINT: a tab narrower than 128px is an icon and an
+     ellipsis, which is the rail's problem moved sideways, so past it the strip
+     scrolls instead. The ceiling stops two tabs looking like a toolbar on a
+     wide window. */
+  flex: 1 1 128px;
+  min-width: 128px;
+  max-width: 224px;
+  /* ── A STEP THE STRIP CAN BE SEEN THROUGH ──────────────────────────────
+     The body was `--rail-elev`, a 6% lift tuned for a CONTROL sitting on the
+     rail with space around it. Six tabs edge to edge on the same surface do
+     not have that space: on blueprint the strip and the tabs became one blue
+     block and only the hairlines told them apart ("tab bar background is same
+     color as tab background so it all mixes").
+     13% is the smallest step that reads as a separate object across the ten
+     themes while leaving the ACTIVE tab — which is the pane's face, a much
+     bigger jump — still obviously the loud one. Derived from the rail's ink
+     rather than listed per theme, so a theme added later cannot forget it. */
+  border: 1px solid color-mix(in srgb, var(--rail-ink) 20%, transparent);
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+  background: color-mix(in srgb, var(--rail-ink) 13%, var(--rail-surface));
+}
+.wstab:hover {
+  background: color-mix(in srgb, var(--rail-ink) 20%, var(--rail-surface));
+}
+/* ── THE TAB YOU ARE IN ────────────────────────────────────────────────
+   The pane's own surface, continuing up into the strip — the tab IS the thing
+   below it reaching through the bar, which is what a tab has always meant and
+   the one thing the band could never say, having no pane beside it to join.
+   There is no hairline left to paint over — see the strip — so the tab simply
+   continues into the pane with nothing between them. */
+.wstab[data-active="true"],
+.wstab[data-active="true"]:hover {
+  /* ── AND IT LEAVES THE ISLAND ────────────────────────────────────────
+     It is painted in the PANE's face, so its ink has to be the pane's ink —
+     the same rule, for the same reason, as the rail's selected row. Without
+     it the one tab that is not rail-coloured is still drawn in rail ink:
+     white on near-white in every light theme, which is exactly what the
+     screenshot showed ("active tab highlight borks the readability of tab
+     because tab name doesn't change color"). */
+  --fg: var(--pane-ink);
+  --fg-dim: var(--pane-ink-dim);
+  --fg-faint: var(--pane-ink-faint);
+  --bg-hover: var(--pane-hover);
+  --accent: var(--pane-accent);
+  --status-ready: var(--pane-status-ready);
+  --status-working: var(--pane-status-working);
+  --status-blocked: var(--pane-status-blocked);
+  --status-dead: var(--pane-status-dead);
+  background: var(--bg-pane-face, var(--bg));
+  border-color: color-mix(in srgb, var(--pane-ink) 18%, transparent);
+}
+
+.wstab-link {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  flex: 1 1 auto;
+  padding: 0 4px 0 9px;
+  height: 29px;
+  color: var(--fg-dim);
+  text-decoration: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.wstab-link:hover {
+  text-decoration: none;
+}
+.wstab[data-active="true"] .wstab-link {
+  color: var(--fg);
+}
+.wstab-icon {
+  flex: 0 0 auto;
+  font-size: 0.875rem;
+  line-height: 1;
+  /* Desaturated like every other chat icon in the app: 62 emoji are in use
+     and colour is the loudest channel there is — it belongs to status, which
+     changes, not to identity, which does not. */
+  filter: saturate(0.55);
+}
+.wstab[data-active="true"] .wstab-icon {
+  /* …except the one you are in, the single row allowed full colour. */
+  filter: none;
+}
+.wstab-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--chrome-size, 0.8125rem);
+}
+.wstab[data-active="true"] .wstab-name {
+  font-weight: 600;
+}
+/* ── UNREAD, THE SAME WAY THE RAIL SAYS IT ──────────────────────────────
+   Bold and the full ink, exactly as a rail row does it — "read/unread status
+   isn't represented in tabs" was true and it is the one state a nav element
+   must carry, because it is the reason you would look at the strip at all.
+   640 for the row you are IN and 700 for unread, so a tab that is both still
+   says the louder thing: you can see where you are without being told twice. */
+.wstab[data-unread="true"] .wstab-name {
+  color: var(--fg);
+  font-weight: 700;
+}
+
+/* ── ONE TRAILING SLOT, FOR BOTH THINGS ──────────────────────────────────
+   The status mark and the × used to be two objects near the same corner, so
+   they read as one confused control ("status indicators mix with x") — and
+   the × appeared on hover while the name grew padding to make room for it,
+   so the tab RESIZED under the pointer ("hovering over them changes their
+   width").
+   One fixed slot fixes both. It is always there and always the same width, so
+   nothing reflows; the mark lives in it, and on hover the × takes its place.
+   You can only press the × when you are pointing at the tab anyway, and the
+   status of the tab you are pointing at is the one you can read from its
+   content. */
+.wstab-slot {
+  position: relative;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  margin-right: 4px;
+}
+.wstab-mark {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--status-working);
+}
+.wstab-mark[data-state="blocked"] {
+  background: var(--status-blocked);
+}
+.wstab-mark[data-state="ready"] {
+  background: var(--status-ready);
+}
+.wstab-mark[data-state="dead"] {
+  background: var(--status-dead);
+}
+.wstab-drop {
+  position: absolute;
+  inset: 0;
+  display: none;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg-faint);
+  font-size: 0.875rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.wstab:hover .wstab-drop,
+.wstab:has(:focus-visible) .wstab-drop {
+  display: grid;
+}
+/* …and the mark steps aside for it, in the same 20px. */
+.wstab:hover .wstab-mark,
+.wstab:has(:focus-visible) .wstab-mark {
+  visibility: hidden;
+}
+.wstab-drop:hover {
+  color: var(--fg);
+  background: color-mix(in srgb, var(--fg) 14%, transparent);
+}
