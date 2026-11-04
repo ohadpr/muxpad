@@ -373,6 +373,12 @@ export const PaneSpecSchema = z.object({
   // second sentence for the first situation. A chat that could not start now
   // says why and offers to try again.
   provision_error: z.string().nullable().optional(),
+  // WHICH MACHINE owns this pane's pty. `local` is a real node row, not a
+  // null, so every caller has one spelling of "here" and no branch to forget
+  // — in a multi-machine cockpit, two spellings is how two call sites end up
+  // acting on different machines. Optional on the wire for rows and servers
+  // that predate the column; absent reads as 'local'.
+  node_id: z.string().optional(),
 });
 export type PaneSpec = z.infer<typeof PaneSpecSchema>;
 
