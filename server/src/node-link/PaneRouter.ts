@@ -150,16 +150,33 @@ export class PaneRouter {
   }
 
   /**
-   * Every live pane, across every node.
+   * Every live pane, across every node — ALL OR NOTHING.
    *
-   * Returns the unreachable nodes ALONGSIDE the ids, because the caller is a
-   * reconciler: "these ids are alive" plus a silently short list means
-   * "everything on the unreachable node is dead", which is the same fatal
-   * confusion as `hasPane` returning false. A caller that ignores
-   * `unreachable` is a caller with a bug, and it has to opt into that by
-   * destructuring past it.
+   * Throws if any node could not be reached, and that is the point: both
+   * production callers are RECONCILERS, and a reconciler handed a silently
+   * short list concludes that everything it cannot see is gone. The reaper
+   * already bails on a throw ("ptyd unreachable — keep the row; next sweep
+   * retries"), so throwing lands it in behaviour it was already written for.
+   *
+   * Signature-compatible with PtydClient on purpose, so the ~50 existing call
+   * sites move over without edits.
    */
-  async listPanes(): Promise<GlobalResult<string[]>> {
+  async listPanes(): Promise<string[]> {
+    const { value, unreachable } = await this.listPanesBestEffort();
+    if (unreachable.length)
+      throw new NodeUnavailableError(unreachable[0] as string, 'enumerate panes');
+    return value;
+  }
+
+  /**
+   * The same, but partial is acceptable.
+   *
+   * For DISPLAY only — the panes list renders `isRunning` off this, and one
+   * sleeping node must not make every local pane read as stopped. A caller
+   * choosing this is asserting that a partial answer is honest for its
+   * purpose; the name is long so that assertion is visible at the call site.
+   */
+  async listPanesBestEffort(): Promise<GlobalResult<string[]>> {
     const ids: string[] = [];
     const unreachable: string[] = [];
     for (const node of this.deps.nodes.list()) {
