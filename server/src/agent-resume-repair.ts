@@ -31,6 +31,7 @@
 import type Database from 'better-sqlite3';
 import { sessionWasCleared } from './agent-runner/session-marks.js';
 import { findTranscript, muxpadLocate } from './chat/TranscriptReader.js';
+import { LOCAL_NODE_ID } from './store/NodeStore.js';
 
 /**
  * The same charset gate the hello handler applies, and for the same reason:
@@ -151,6 +152,24 @@ export function planResumeRepair(
 ): ResumeRepair | null {
   const locate = deps.locate ?? locateAnyTranscript;
   const wasCleared = deps.wasCleared ?? sessionWasCleared;
+  // ── A PANE ON ANOTHER MACHINE IS NOT OURS TO JUDGE ───────────────────────
+  //
+  // Every check below rests on `locate`, which STATS LOCAL PATHS. For a pane
+  // whose pty lives on another machine the transcript is on that machine, so
+  // `locate` returns null every single time — and this function would then
+  // "repair" a perfectly healthy remote chat by repointing `current_sid` at
+  // some unrelated local session and rewriting the pane's `startup_cmd` to
+  // resume it. Not a cosmetic bug: it corrupts the pane on every chat bind and
+  // again on every boot sweep, and the damage outlives the server.
+  //
+  // The guard lives HERE rather than at the two call sites (chat bind and the
+  // boot pass) because a third caller is exactly the kind of thing that gets
+  // added later without reading this comment. Absence of the column, or an
+  // unknown pane, reads as local — the pre-migration meaning.
+  const nodeRow = db.prepare('SELECT node_id FROM panes WHERE id = ?').get(pane_id) as
+    | { node_id: string | null }
+    | undefined;
+  if ((nodeRow?.node_id ?? LOCAL_NODE_ID) !== LOCAL_NODE_ID) return null;
   const row = db.prepare('SELECT current_sid FROM agent_sessions WHERE pane_id = ?').get(pane_id) as
     | { current_sid: string | null }
     | undefined;
