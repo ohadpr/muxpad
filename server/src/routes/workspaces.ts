@@ -3,6 +3,7 @@ import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { EventBus } from '../events.js';
+import type { PaneOps } from '../node-link/PaneRouter.js';
 import { type PtydCache, decorateWorkspace } from '../ptyd-cache.js';
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
 import { PaneStore } from '../store/PaneStore.js';
@@ -16,7 +17,7 @@ import { clockSnapshot } from '../tab-clock.js';
  */
 export function workspacesRoutes(deps: {
   db: Database.Database;
-  ptyd: PtydClient;
+  ptyd: PaneOps;
   cache: PtydCache;
   events: EventBus;
 }): Hono {

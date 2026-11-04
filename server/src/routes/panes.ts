@@ -18,6 +18,7 @@ import { applyModeToStartupCmd, modeFromStartupCmd } from '../agent-modes.js';
 import { agentStartupCmd } from '../agent-tab.js';
 import { agentPaneHasMessages } from '../chat/has-messages.js';
 import type { EventBus } from '../events.js';
+import type { PaneOps } from '../node-link/PaneRouter.js';
 import { withPaneKey } from '../pane-key.js';
 import { announceProvision, provisionPane, setProvisionError } from '../pane-provision.js';
 import { queuePaneKill } from '../pane-reaper.js';
@@ -187,7 +188,7 @@ function appendPaneToLayout(
  */
 export function panesTabScopedRoutes(deps: {
   db: Database.Database;
-  ptyd: PtydClient;
+  ptyd: PaneOps;
   cache: PtydCache;
   events: EventBus;
 }): Hono {
@@ -393,7 +394,7 @@ export function panesTabScopedRoutes(deps: {
 
 export function panesScopedRoutes(deps: {
   db: Database.Database;
-  ptyd: PtydClient;
+  ptyd: PaneOps;
   cache: PtydCache;
   events: EventBus;
   /** Late-bound relay into the live runner registry — used to tell a running

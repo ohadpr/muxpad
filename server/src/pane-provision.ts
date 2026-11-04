@@ -74,6 +74,7 @@
 // retries happen entirely after the user is already looking at their new chat.
 import type Database from 'better-sqlite3';
 import type { EventBus } from './events.js';
+import type { PaneOps } from './node-link/PaneRouter.js';
 import { withPaneKey } from './pane-key.js';
 import { clearProvisionError, setProvisionError } from './pane-provision-state.js';
 import { type PtydCache, decoratePane } from './ptyd-cache.js';
@@ -132,7 +133,7 @@ const VERIFY_ALIVE_AFTER_MS = 750;
  */
 export interface ProvisionDeps {
   db: Database.Database;
-  ptyd: PtydClient;
+  ptyd: PaneOps;
   cache: PtydCache;
   events: EventBus;
 }

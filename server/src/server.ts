@@ -57,6 +57,14 @@ export interface AppDeps {
    * (ensurePane, killPane, markSeen, closePtyClients) against this — no
    * PaneRuntime lives on the main server anymore.
    */
+  /**
+   * THE CONCRETE CLIENT — this is the root that owns it, and it hands it to
+   * the pty-proxy routes that need `socketPath`.
+   *
+   * Modules doing only pane LIFECYCLE declare {@link PaneOps} instead, which
+   * PtydClient satisfies. That is the seam a PaneRouter is injected at, once
+   * every lifecycle path is node-aware.
+   */
   ptyd: PtydClient;
   /**
    * Per-pane decoration cache populated from ptyd push events. The HTTP

@@ -15,6 +15,7 @@ import {
 } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import type { EventBus } from './events.js';
+import type { PaneOps } from './node-link/PaneRouter.js';
 import { clearProvisionError, provisionPane } from './pane-provision.js';
 import { queuePaneKill } from './pane-reaper.js';
 import { agentCwd } from './project-root.js';
@@ -27,7 +28,7 @@ import type { TabActivity } from './tab-activity.js';
 
 export interface BootstrapTabDeps {
   db: Database.Database;
-  ptyd: PtydClient;
+  ptyd: PaneOps;
   cache: PtydCache;
   events: EventBus;
 }
