@@ -10,6 +10,7 @@ import type { PaneOps } from '../node-link/PaneRouter.js';
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
 import { AgentSessionStore } from '../store/AgentSessionStore.js';
 import { InboundMessageStore } from '../store/InboundMessageStore.js';
+import { LOCAL_NODE_ID, NodeStore } from '../store/NodeStore.js';
 import { PaneStore } from '../store/PaneStore.js';
 
 // How much of a transcript's tail to read when serving /transcript. Bounds
@@ -206,6 +207,24 @@ export function agentSessionsRoutes(deps: {
     if (!sess) return c.json({ error: 'no agent session for pane' }, 404);
     const sid = sess.current_sid;
     if (!sid) return c.json({ error: 'session has no transcript yet' }, 404);
+    // ── A REMOTE PANE'S HISTORY IS NOT ON THIS DISK ────────────────────
+    //
+    // The locators below search by SESSION ID on this machine, with no idea
+    // which machine the pane belongs to. A trust review showed what that
+    // allows: a host reports its own pane's sid as some PERSONAL chat's sid
+    // (the runner hello checks the sid's shape and nothing more) and then
+    // reads that conversation back through this very route, which is
+    // correctly scoped to its own pane and still hands over the wrong
+    // history. Session ids are not secret — they sit in `startup_cmd` as
+    // `--resume <sid>`.
+    //
+    // Gated on the pane living here. Remote history must come from its own
+    // host over the link; until that exists, 404 is the honest answer.
+    if (new NodeStore(deps.db).nodeForPane(paneId) !== LOCAL_NODE_ID)
+      return c.json(
+        { error: 'this pane runs on another machine; its history is not available here' },
+        409,
+      );
     // Claude writes ~/.claude/projects/**/<sid>.jsonl; codex/cursor write the
     // muxpad-normalized log. Same locator cascade as the summarize route.
     const path = (sess.assistant === 'claude' ? findTranscript(sid) : null) ?? muxpadLocate(sid);
