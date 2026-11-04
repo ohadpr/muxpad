@@ -261,3 +261,43 @@ describe('PtydClient — reconnect on disconnect', () => {
     expect(client.connected).toBe(false);
   });
 });
+
+/**
+ * ── THE SAME CLIENT, POINTED AT ANOTHER MACHINE ──────────────────────────
+ *
+ * ptyd's control protocol is already HTTP/WS, so the only thing separating
+ * "the ptyd beside me" from "the ptyd on another machine" is a URL and an
+ * auth header. Reusing this client means reconnect, backoff, the RPC envelope
+ * and the event stream are the code already load-bearing locally, rather than
+ * a second client written to resemble it.
+ *
+ * Verified end to end against the real Trayo node (ensurePane / hasPane /
+ * listPanes / getCurrentCwd / killPane over its authenticated agent); these
+ * assert the construction rules that make that possible.
+ */
+describe('remote construction', () => {
+  it('needs a socket or a url, and says so rather than silently idling', () => {
+    // Without this, a misconfigured remote client sits reconnecting to
+    // `ws+unix://:/control` forever and the node just looks down.
+    expect(() => new PtydClient({} as never)).toThrow(/socketPath or a controlUrl/);
+  });
+
+  it('a remote client reports its url and an EMPTY socketPath', () => {
+    // Empty is honest: there is no local socket. The pty-proxy paths that
+    // read socketPath are typed against the local client specifically.
+    const c = new PtydClient({
+      controlUrl: 'ws://127.0.0.1:59999/control',
+      headers: { 'x-muxpad-node-token': 'x'.repeat(64) },
+    });
+    expect(c.controlUrl).toBe('ws://127.0.0.1:59999/control');
+    expect(c.socketPath).toBe('');
+    void c.close();
+  });
+
+  it('a local client reports no url, so the two are never confused', () => {
+    const c = new PtydClient({ socketPath: '/tmp/nope-muxpad-test.sock' });
+    expect(c.controlUrl).toBe(null);
+    expect(c.socketPath).toBe('/tmp/nope-muxpad-test.sock');
+    void c.close();
+  });
+});
