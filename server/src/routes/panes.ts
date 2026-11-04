@@ -318,7 +318,31 @@ export function panesTabScopedRoutes(deps: {
     // cascade-delete itself (see safeCwd). For an AGENT pane, snap up to the git
     // root so it starts with project context (rules/MCP), not a random subdir.
     const isAgent = body.face === 'chat' || (body.startup_cmd?.startsWith('muxpad agent') ?? false);
-    const resolvedCwd = isAgent ? agentCwd(safeCwd(cwd)) : safeCwd(cwd);
+    // ── WHICH MACHINE, RESOLVED BEFORE THE CWD ──────────────────────────
+    //
+    // An explicit `node_id` wins; else the workspace's default host; else
+    // this machine. `defaultNodeFor` falls back to local for a workspace
+    // naming a node since removed, so deleting a machine cannot make "new
+    // pane" fail — it just makes new panes land here.
+    //
+    // Resolved HERE, above the cwd, because `safeCwd` and `agentCwd` are
+    // LOCAL FILESYSTEM operations: they stat the path and fall back to THIS
+    // machine's home, and `agentCwd` snaps to THIS machine's git root. Run
+    // them for a remote pane and a perfectly good /home/ohad/work silently
+    // becomes /Users/ohadpr — which is exactly what happened the first time
+    // a pane was created on the VM.
+    //
+    // A remote pane's path is passed through untouched. We cannot stat
+    // another machine's filesystem from here, and guessing is worse than
+    // letting that node's ptyd fail loudly about a path it can see.
+    //
+    // The node is also stamped onto the row BEFORE anything spawns, which is
+    // what makes the spawn land correctly: PaneRouter reads the column.
+    const nodes = new NodeStore(deps.db);
+    const wsId = tabs.getWorkspaceId(tabId);
+    const nodeId = body.node_id ?? (wsId ? nodes.defaultNodeFor(wsId) : LOCAL_NODE_ID);
+    const resolvedCwd =
+      nodeId === LOCAL_NODE_ID ? (isAgent ? agentCwd(safeCwd(cwd)) : safeCwd(cwd)) : (cwd ?? null);
     // THE ROW AND THE COMMAND MUST AGREE. The row is what the UI and
     // `muxpad claude` read; the command is what a respawn actually boots. An
     // API caller can supply either, both, or neither, so resolve once and
@@ -341,20 +365,6 @@ export function panesTabScopedRoutes(deps: {
     const startupCmd = agentMode
       ? applyModeToStartupCmd(body.startup_cmd ?? null, agentMode)
       : (body.startup_cmd ?? null);
-    // ── WHICH MACHINE ───────────────────────────────────────────────────
-    //
-    // An explicit `node_id` in the request wins; otherwise the workspace's
-    // default host; otherwise this machine. `defaultNodeFor` also falls back
-    // to local for a workspace naming a node that has since been removed, so
-    // deleting a node cannot make "new pane" fail.
-    //
-    // Stamped BEFORE the spawn below, which is the whole trick: PaneRouter
-    // resolves `ensurePane` by reading this column, so the pane spawns on the
-    // machine its row names with no change to the spawn path. Spawn first and
-    // stamp after, and every pane is born on the mac.
-    const nodes = new NodeStore(deps.db);
-    const wsId = tabs.getWorkspaceId(tabId);
-    const nodeId = body.node_id ?? (wsId ? nodes.defaultNodeFor(wsId) : LOCAL_NODE_ID);
     const pane = panes.create({
       tab_id: tabId,
       shell: body.shell ?? defaultShell,
