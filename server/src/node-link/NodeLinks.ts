@@ -1,3 +1,4 @@
+import type { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -56,17 +57,24 @@ export interface NodeLinksDeps {
   nodes: NodeStore;
   dataDir?: string;
   /** Injected for tests; production builds a real PtydClient. */
-  makeClient?: (opts: { controlUrl: string; token: string }) => PaneTransport & {
-    on(e: string, f: (...a: never[]) => void): unknown;
-    close(): Promise<void>;
-  };
+  makeClient?: (opts: { controlUrl: string; token: string }) => LinkClient;
   log?: (line: string) => void;
 }
 
-type Link = {
-  client: NonNullable<ReturnType<NonNullable<NodeLinksDeps['makeClient']>>>;
-  connected: boolean;
-};
+/**
+ * What a link's client must be.
+ *
+ * The listener signature is borrowed from node's own EventEmitter rather than
+ * hand-written: a hand-rolled `(...a: never[]) => void` is too strict under
+ * strictFunctionTypes and PtydClient stops satisfying it — the same trap that
+ * cost 73 type errors when PaneOps was first written.
+ */
+export interface LinkClient extends PaneTransport {
+  on(...a: Parameters<EventEmitter['on']>): unknown;
+  close(): Promise<void>;
+}
+
+type Link = { client: LinkClient; connected: boolean };
 
 export class NodeLinks {
   private readonly links = new Map<string, Link>();
@@ -112,16 +120,16 @@ export class NodeLinks {
     const link: Link = { client, connected: false };
     this.links.set(nodeId, link);
 
-    client.on('connected', (() => {
+    client.on('connected', () => {
       link.connected = true;
       this.deps.nodes.setState(nodeId, 'up');
       this.log(`[node] ${nodeId}: up (${controlUrl})`);
-    }) as (...a: never[]) => void);
-    client.on('disconnected', (() => {
+    });
+    client.on('disconnected', () => {
       link.connected = false;
       this.deps.nodes.setState(nodeId, 'down');
       this.log(`[node] ${nodeId}: down`);
-    }) as (...a: never[]) => void);
+    });
   }
 
   /**
