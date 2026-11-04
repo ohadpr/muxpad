@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import type { PaneOps } from './node-link/PaneRouter.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
 
 /**
@@ -30,7 +31,7 @@ export function queuePaneKill(db: Database.Database, paneId: string): void {
 
 export function startPaneReaper(deps: {
   db: Database.Database;
-  ptyd: PtydClient;
+  ptyd: PaneOps;
   /** Returns true when the pane id has a DB row (reconcile keeps those). */
   paneExists: (id: string) => boolean;
   sweepMs?: number;

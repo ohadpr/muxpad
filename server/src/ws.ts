@@ -369,6 +369,13 @@ export function attachWsServer(deps: {
    */
   browserViewerSocket?: (pathname: string) => string | null;
   db: Database.Database;
+  /**
+   * THE CONCRETE CLIENT. This module proxies the pty byte stream at ptyd's
+   * unix socket (`socketPath`), which is a LOCAL-only capability: a remote
+   * node's pty arrives over its own authenticated link. Typed concretely so
+   * attaching a remote pane here is a compile error rather than a silent
+   * attach to the wrong machine.
+   */
   ptyd: PtydClient;
   cache: PtydCache;
   events: EventBus;

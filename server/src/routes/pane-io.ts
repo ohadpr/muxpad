@@ -209,6 +209,16 @@ function writeInput(opts: { socketPath: string; paneId: string; data: string }):
 
 export function paneIoRoutes(deps: {
   db: Database.Database;
+  /**
+   * THE CONCRETE CLIENT, not PaneOps — this route reads `socketPath` to proxy
+   * the pty byte stream straight at ptyd's unix socket.
+   *
+   * Which is exactly why a REMOTE pane cannot be attached through here yet: a
+   * node's pty stream arrives over its own authenticated link, not a local
+   * socket path. Left pointed at the local client on purpose, so the
+   * difference is a type error the day somebody tries rather than a silent
+   * attach to the wrong machine.
+   */
   ptyd: PtydClient;
   cache: PtydCache;
 }): Hono {

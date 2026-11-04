@@ -6,6 +6,7 @@ import type { AgentBridge } from '../agent-bridge.js';
 import { findTranscript, identityNormalize, muxpadLocate } from '../chat/TranscriptReader.js';
 import { readTailLines } from '../chat/has-messages.js';
 import type { EventBus } from '../events.js';
+import type { PaneOps } from '../node-link/PaneRouter.js';
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
 import { AgentSessionStore } from '../store/AgentSessionStore.js';
 import { InboundMessageStore } from '../store/InboundMessageStore.js';
@@ -45,7 +46,7 @@ const HookSchema = z.object({
  */
 export function agentSessionsRoutes(deps: {
   db: Database.Database;
-  ptyd: PtydClient;
+  ptyd: PaneOps;
   events?: EventBus;
   agentBridge?: AgentBridge;
 }): Hono {

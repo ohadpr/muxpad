@@ -1,3 +1,4 @@
+import type { EventEmitter } from 'node:events';
 import type { PaneRuntimeSpec } from '../runtime/PaneRuntime.js';
 import { LOCAL_NODE_ID, type NodeStore } from '../store/NodeStore.js';
 
@@ -79,9 +80,7 @@ export interface PaneTransport {
  * decoration event stream and the `flushCwds`/`flushDecorations` snapshots,
  * which are per-machine concerns and get their own per-node instance later.
  */
-export interface PaneOps extends PaneTransport {
-  on(event: string, listener: (...args: never[]) => void): unknown;
-  off(event: string, listener: (...args: never[]) => void): unknown;
+export interface PaneOps extends PaneTransport, Pick<EventEmitter, 'on' | 'off'> {
   close(): Promise<void>;
 }
 
@@ -222,12 +221,19 @@ export class PaneRouter implements PaneOps {
   // is later work. Forwarding rather than reimplementing keeps today's
   // behaviour byte-identical while only `local` exists — which is precisely
   // what makes introducing this router safe to land unattended.
-  on(event: string, listener: (...args: never[]) => void): unknown {
-    return this.deps.local.on(event, listener);
+  //
+  // Signatures borrowed from node's own EventEmitter via `Parameters<>` rather
+  // than hand-written: a hand-written `(...args: never[]) => void` is TOO
+  // STRICT under strictFunctionTypes — EventEmitter's listener takes `any[]`,
+  // and `any` is not assignable to `never`, so PtydClient failed to satisfy
+  // the very interface extracted from it. Reusing the declaration cannot
+  // drift from it.
+  on(...a: Parameters<EventEmitter['on']>): ReturnType<EventEmitter['on']> {
+    return this.deps.local.on(...a);
   }
 
-  off(event: string, listener: (...args: never[]) => void): unknown {
-    return this.deps.local.off(event, listener);
+  off(...a: Parameters<EventEmitter['off']>): ReturnType<EventEmitter['off']> {
+    return this.deps.local.off(...a);
   }
 
   /** Closes the LOCAL transport. Remote links are owned by whatever opened

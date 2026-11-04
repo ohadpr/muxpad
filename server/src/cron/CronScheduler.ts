@@ -26,6 +26,7 @@ import type Database from 'better-sqlite3';
 import { bootstrapTab, deleteTabCascade } from '../agent-tab.js';
 import { wrapCarryover } from '../chat/summarize.js';
 import type { EventBus } from '../events.js';
+import type { PaneOps } from '../node-link/PaneRouter.js';
 import { type PtydCache, decorateTab } from '../ptyd-cache.js';
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
 import { AgentQueueStore } from '../store/AgentQueueStore.js';
@@ -74,7 +75,7 @@ export const MAX_ENABLED_CRONS = 100;
 
 export interface CronSchedulerDeps {
   db: Database.Database;
-  ptyd: PtydClient;
+  ptyd: PaneOps;
   cache: PtydCache;
   events: EventBus;
   tabActivity?: TabActivity | undefined;

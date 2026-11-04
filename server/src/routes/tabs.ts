@@ -12,6 +12,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { bootstrapTab, deleteTabCascade } from '../agent-tab.js';
 import type { EventBus } from '../events.js';
+import type { PaneOps } from '../node-link/PaneRouter.js';
 import { hasProjectContext } from '../project-root.js';
 import { type PtydCache, cronsByTab, decoratePane, decorateTab } from '../ptyd-cache.js';
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
@@ -34,7 +35,7 @@ import { retireChat } from '../tab-retire.js';
  */
 export function tabsRoutes(deps: {
   db: Database.Database;
-  ptyd: PtydClient;
+  ptyd: PaneOps;
   cache: PtydCache;
   events: EventBus;
   /** Only used to drop a deleted tab's throttle memo — see TabActivity.forget. */
