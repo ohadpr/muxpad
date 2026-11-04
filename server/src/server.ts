@@ -13,6 +13,7 @@ import type { CronScheduler } from './cron/CronScheduler.js';
 import { EventBus } from './events.js';
 import { type Funnel, localFunnel } from './funnel.js';
 import { jsonCache } from './json-cache.js';
+import type { PaneOps } from './node-link/PaneRouter.js';
 import { initPaneKeys } from './pane-key.js';
 import { decorateWorkspace } from './ptyd-cache.js';
 import type { PtydCache } from './ptyd-cache.js';
@@ -66,6 +67,19 @@ export interface AppDeps {
    * every lifecycle path is node-aware.
    */
   ptyd: PtydClient;
+  /**
+   * The NODE-AWARE transport for pane LIFECYCLE, when one has been built.
+   *
+   * Two handles rather than one because they answer different questions.
+   * `ptyd` above is this machine's socket client and is what the pty-PROXY
+   * paths need (they read `socketPath`); `paneOps` is where a pane
+   * operation should be SENT, which may be another machine.
+   *
+   * Optional, and absent means "use the local client" — so a caller that has
+   * not been taught about nodes behaves exactly as before rather than failing
+   * to start.
+   */
+  paneOps?: PaneOps;
   /**
    * Per-pane decoration cache populated from ptyd push events. The HTTP
    * handlers read this synchronously (workspace lists, tab GET, cwd-
@@ -203,7 +217,14 @@ export function createApp(deps: AppDeps): Hono {
   // Default to a bus that has zero subscribers; emissions become no-ops.
   // Keeps the route-level emit() calls type-clean without forcing every
   // test harness (or the WS-less HTTP smoke tests) to construct one.
-  const resolved = { ...deps, events: deps.events ?? new EventBus() };
+  // Lifecycle calls go through the router when there is one. Built here, once,
+  // so no route module has to decide — a per-route choice is how two of them
+  // end up disagreeing about which machine a pane is on.
+  const resolved = {
+    ...deps,
+    events: deps.events ?? new EventBus(),
+    paneOps: deps.paneOps ?? deps.ptyd,
+  };
   // CSRF: refuse a state-changing request that a foreign page made on the
   // user's behalf. muxpad has no auth — reachability is authorization — so
   // without this, any web page open on a tailnet browser could POST
@@ -269,7 +290,18 @@ export function createApp(deps: AppDeps): Hono {
     resolved.presence?.mark();
     return c.body(null, 204);
   });
-  app.route('/api/workspaces', workspacesRoutes(resolved));
+  // ── LIFECYCLE ROUTES GET THE ROUTER ──────────────────────────────────
+  //
+  // Same deps, with `ptyd` swapped for the node-aware transport. Only the
+  // routes that CREATE, KILL or INSPECT panes are given it; `paneIoRoutes`
+  // below deliberately keeps the concrete client because it proxies the pty
+  // byte stream at a unix socket, which is a local-only capability.
+  //
+  // With no remote node configured, `paneOps` IS the local client, so this
+  // substitution changes nothing at all — which is what makes it safe to
+  // introduce ahead of the first remote pane.
+  const lifecycle = { ...resolved, ptyd: resolved.paneOps };
+  app.route('/api/workspaces', workspacesRoutes(lifecycle));
   // Which machines muxpad knows about. Read-only on purpose — see routes/nodes.ts.
   app.route('/api/nodes', nodesRoutes(resolved));
   // Slack lives on the SERVER now, not in the CLI: this process holds the
@@ -303,13 +335,13 @@ export function createApp(deps: AppDeps): Hono {
       listTabs: (workspaceId) => orderedTabsForWorkspace(resolved.db, resolved.cache, workspaceId),
     }),
   );
-  app.route('/api/tabs', tabsRoutes(resolved));
-  app.route('/api/tabs', panesTabScopedRoutes(resolved));
+  app.route('/api/tabs', tabsRoutes(lifecycle));
+  app.route('/api/tabs', panesTabScopedRoutes(lifecycle));
   // Chat cards — named persistent blocks pinned in a conversation. Tab-scoped
   // because a card belongs to a chat; see routes/cards.ts.
   app.route('/api/tabs', cardsRoutes(resolved));
   app.route('/api/working-set', workingSetRoutes(resolved));
-  app.route('/api/panes', panesScopedRoutes(resolved));
+  app.route('/api/panes', panesScopedRoutes(lifecycle));
   app.route('/api/panes', paneIoRoutes(resolved));
   app.route('/api/panes', attachmentsRoutes(resolved));
   app.route('/api/panes', summaryRoutes(resolved));
@@ -328,7 +360,7 @@ export function createApp(deps: AppDeps): Hono {
   );
   // SSE mirror of /ws/events — curl-able subscription for scripts/agents.
   app.route('/api/events', eventsRoutes(resolved));
-  app.route('/api/agent-sessions', agentSessionsRoutes(resolved));
+  app.route('/api/agent-sessions', agentSessionsRoutes(lifecycle));
   // What the empty chat's harness picker needs to offer folder + model at the
   // moment of choosing, in one read (see routes/agent-launch.ts).
   app.route('/api/agent-launch', agentLaunchRoutes(resolved));
