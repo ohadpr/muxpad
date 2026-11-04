@@ -19,6 +19,7 @@ import type { PtydClient } from '../ptyd-client/PtydClient.js';
 import { randomWorkspaceName } from '../random-name.js';
 import { safeCwd } from '../safe-cwd.js';
 import { InboundMessageStore } from '../store/InboundMessageStore.js';
+import { NodeStore } from '../store/NodeStore.js';
 import { PaneStore } from '../store/PaneStore.js';
 import { SpawnRoundStore } from '../store/SpawnRoundStore.js';
 import { TabStore } from '../store/TabStore.js';
@@ -99,6 +100,14 @@ export function tabsRoutes(deps: {
         // not.
         spawned_by: z.string().nullable().optional(),
         spawned_by_pane: z.string().optional(),
+        /**
+         * WHICH MACHINE the bootstrapped pane runs on. Omitted = worked out:
+         * the parent chat's machine, else the workspace's default, else this
+         * one (see nodeForBootstrap). Passed explicitly by a caller that knows
+         * better — the host API does, for a sub-chat that must land on the
+         * machine that asked for it.
+         */
+        node_id: z.string().optional(),
       })
       .parse(await c.req.json().catch(() => ({})));
     // Resolve the parent, and DROP it if it doesn't exist rather than
@@ -166,11 +175,17 @@ export function tabsRoutes(deps: {
     const name =
       body.name?.trim() ||
       (body.bootstrap === 'agent' ? BOOTSTRAP_TAB_NAME : randomWorkspaceName());
+    // An unknown machine is a typo, and honouring it would create a pane
+    // nothing can ever spawn — `PaneRouter` raises UnknownNodeError and the
+    // chat sits provisionless with no explanation.
+    if (body.node_id && !new NodeStore(deps.db).get(body.node_id))
+      return c.json({ error: { code: 'invalid_request', message: 'no such host' } }, 400);
     const created = await bootstrapTab(deps, {
       workspace_id,
       name,
       ...(body.layout !== undefined ? { layout: body.layout as string } : {}),
       ...(body.bootstrap ? { bootstrap: body.bootstrap } : {}),
+      ...(body.node_id ? { node_id: body.node_id } : {}),
       ...(body.cwd !== undefined ? { cwd: body.cwd } : {}),
       ...(body.model !== undefined ? { model: body.model } : {}),
       ...(body.backend !== undefined ? { backend: body.backend } : {}),

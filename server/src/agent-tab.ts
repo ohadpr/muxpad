@@ -22,6 +22,7 @@ import { agentCwd } from './project-root.js';
 import { type PtydCache, decoratePane, decorateTab } from './ptyd-cache.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
 import { safeCwd } from './safe-cwd.js';
+import { LOCAL_NODE_ID, NodeStore } from './store/NodeStore.js';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
 import type { TabActivity } from './tab-activity.js';
@@ -50,6 +51,50 @@ export interface BootstrapTabInput {
    *  and nests under it in the sidebar. Resolved (and dropped if the parent is
    *  gone) by the caller — see routes/tabs.ts. */
   spawned_by?: string | undefined;
+  /**
+   * WHICH MACHINE THE BOOTSTRAPPED PANE RUNS ON. Omitted = work it out:
+   * inherit the parent chat's machine, else the workspace's default, else
+   * this one. See {@link nodeForBootstrap}.
+   *
+   * Only a caller that KNOWS better should pass it — the host API does, for a
+   * sub-chat that must land on the machine that asked.
+   */
+  node_id?: string | undefined;
+}
+
+/**
+ * Which machine a bootstrapped pane belongs to.
+ *
+ * ── INHERITANCE BEATS THE WORKSPACE DEFAULT ──────────────────────────────
+ * A sub-chat spawned from a chat on the Trayo VM runs on the VM, even if its
+ * workspace defaults to this machine. That is the host-scoping rule — a chat's
+ * workers live where the chat does — and it is also the only safe answer for
+ * the host API: a machine asking for a worker must not be able to get one on
+ * the mac by picking a workspace.
+ *
+ * ── AND THE DEFAULT MUST BE CONSULTED AT ALL ─────────────────────────────
+ * It was not. `bootstrapTab` created its pane with no `node_id`, which the
+ * column defaults to `local` — so the default-host picker worked for
+ * `POST /api/tabs/:id/panes` and did nothing whatsoever for the web app's
+ * "new chat", which comes through here. The picker's whole promise is that
+ * Trayo work opens on the VM without being asked, and this is the door it
+ * actually opens through.
+ */
+export function nodeForBootstrap(
+  db: Database.Database,
+  input: { workspace_id: string; spawned_by?: string | undefined; node_id?: string | undefined },
+): string {
+  if (input.node_id) return input.node_id;
+  const nodes = new NodeStore(db);
+  if (input.spawned_by) {
+    const parentPane = db
+      .prepare(
+        'SELECT node_id AS n FROM panes WHERE tab_id = ? ORDER BY created_at ASC, id ASC LIMIT 1',
+      )
+      .get(input.spawned_by) as { n: string | null } | undefined;
+    if (parentPane?.n) return parentPane.n;
+  }
+  return nodes.defaultNodeFor(input.workspace_id);
 }
 
 /**
@@ -165,6 +210,9 @@ export async function bootstrapTab(
   // bootstrap lands in Agent mode whatever the caller asked for, because
   // neither harness can host the `reply` tool Chat mode is built on.
   const mode: AgentMode | undefined = agent ? modeForBackend(input.mode, input.backend) : undefined;
+  const nodeId = nodeForBootstrap(deps.db, input);
+  const remote = nodeId !== LOCAL_NODE_ID;
+  const nodes = new NodeStore(deps.db);
   const created = deps.db.transaction(() => {
     let tab = tabs.create({
       name: input.name as string,
@@ -176,9 +224,17 @@ export async function bootstrapTab(
     if (!input.bootstrap) return { tab, pane: null as PaneSpec | null };
     const pane = panes.create({
       tab_id: tab.id,
-      shell: process.env.SHELL ?? '/bin/zsh',
-      // Agent panes snap up to the git root so they start with project context.
-      cwd: agent ? agentCwd(safeCwd(input.cwd)) : safeCwd(input.cwd),
+      // The shell belongs to the machine the pane is on: there is no
+      // `/bin/zsh` on a stock Linux host, and a pty spawned with one dies
+      // instantly with nothing to show but "the pty exited immediately after
+      // starting".
+      shell: (remote ? nodes.shellFor(nodeId) : null) ?? process.env.SHELL ?? '/bin/zsh',
+      // Agent panes snap up to the git root so they start with project
+      // context — LOCALLY. `safeCwd`/`agentCwd` both stat THIS filesystem, so
+      // for another machine they answer about the wrong disk and fall back to
+      // this one's home; the path is recorded as asked and resolved there.
+      cwd: remote ? (input.cwd ?? null) : agent ? agentCwd(safeCwd(input.cwd)) : safeCwd(input.cwd),
+      node_id: nodeId,
       startup_cmd: agent
         ? agentStartupCmd({ backend: input.backend, mode, model: input.model })
         : null,
