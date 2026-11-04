@@ -6,6 +6,7 @@ import type { EventBus } from '../events.js';
 import type { PaneOps } from '../node-link/PaneRouter.js';
 import { type PtydCache, decorateWorkspace } from '../ptyd-cache.js';
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
+import { NodeStore } from '../store/NodeStore.js';
 import { PaneStore } from '../store/PaneStore.js';
 import { TabStore } from '../store/TabStore.js';
 import { WorkspaceStore } from '../store/WorkspaceStore.js';
@@ -84,6 +85,14 @@ export function workspacesRoutes(deps: {
       .object({
         name: z.string().optional(),
         slug: z.string().optional(),
+        /**
+         * WHERE A NEW CHAT HERE LANDS. `null` means this machine.
+         *
+         * Nullable rather than just optional because clearing it has to be
+         * expressible — a default host you can set and not unset is the shape
+         * of a setting people stop trusting.
+         */
+        default_node_id: z.string().nullable().optional(),
       })
       .strict()
       .safeParse(await c.req.json());
@@ -92,13 +101,21 @@ export function workspacesRoutes(deps: {
         {
           error: {
             code: 'invalid_request',
-            message: 'Only workspace name and slug can be changed.',
+            message: 'Only workspace name, slug and default host can be changed.',
           },
         },
         400,
       );
     const body = parsed.data;
     const id = c.req.param('id');
+
+    // A host that does not exist is a typo, and storing it would read as "new
+    // chats go to the VM" while silently creating them here. `defaultNodeFor`
+    // already falls back to local for a node REMOVED later — which is the
+    // right answer for a machine that went away, and the wrong one for a name
+    // that was never a machine.
+    if (body.default_node_id != null && !new NodeStore(deps.db).get(body.default_node_id))
+      return c.json({ error: { code: 'invalid_request', message: 'no such host' } }, 400);
 
     try {
       workspaces.update(id, body);

@@ -175,7 +175,10 @@ export const api = {
 
   getWorkspace: (id: string) => req<Workspace>(`/api/workspaces/${id}`),
 
-  patchWorkspace: (id: string, patch: { name?: string; slug?: string }) =>
+  patchWorkspace: (
+    id: string,
+    patch: { name?: string; slug?: string; default_node_id?: string | null },
+  ) =>
     req<Workspace>(`/api/workspaces/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(patch),

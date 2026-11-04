@@ -1,17 +1,22 @@
-import { useEffect, useState } from 'react';
-import { req } from '../api';
+import type { Workspace } from '@muxpad/shared';
+import { useCallback, useEffect, useState } from 'react';
+import { api, req } from '../api';
 
 /**
  * SETTINGS → MACHINES.
  *
- * ── READ-ONLY, AND THAT IS NOT LAZINESS ──────────────────────────────────
- * There is no "add a machine" button and no default-host picker here yet,
- * deliberately. Adding a machine is a PAIRING flow — the mac mints a
- * credential, you run one line on the other box, and the token has to land on
- * disk at 0600 on both sides — which a settings dialog cannot honestly do.
- * And a default-host picker is worth having only once every lifecycle path is
- * node-aware; offering a control that silently keeps creating panes on the mac
- * would be worse than offering nothing.
+ * ── NO PAIRING HERE, AND THAT IS NOT LAZINESS ────────────────────────────
+ * There is no "add a machine" button. Adding one is a PAIRING flow — this
+ * machine mints a credential, you run one line on the other box, and the token
+ * has to land on disk at 0600 on both sides — which a settings dialog cannot
+ * honestly do.
+ *
+ * There IS a default-host picker now, which there deliberately was not: it was
+ * held back until a chat on another machine actually worked end to end, on the
+ * grounds that a control which silently kept creating panes here would be
+ * worse than no control. It works, so the picker is the thing that makes more
+ * than one machine usable rather than a toggle you forget — Trayo work opens
+ * on the Trayo VM because its workspace says so.
  *
  * So this exists to answer the question you actually have at 2am: WHICH
  * MACHINES DOES MUXPAD THINK IT HAS, AND CAN IT REACH THEM.
@@ -37,6 +42,9 @@ interface NodeRow {
   panes: number;
 }
 
+/** The id of the machine the server runs on. Mirrors LOCAL_NODE_ID. */
+const LOCAL = 'local';
+
 const LABEL: Record<NodeRow['state'], string> = {
   up: 'reachable',
   down: 'not reachable',
@@ -56,6 +64,18 @@ function ago(at: number | null): string {
 export function MachinesSettings() {
   const [nodes, setNodes] = useState<NodeRow[] | null>(null);
   const [failed, setFailed] = useState(false);
+  const [workspaces, setWorkspaces] = useState<Workspace[] | null>(null);
+  const [saving, setSaving] = useState<string | null>(null);
+
+  const loadWorkspaces = useCallback(async () => {
+    try {
+      setWorkspaces(await api.listWorkspaces());
+    } catch {
+      // The machine list is the point of this panel; losing the workspace
+      // list hides the picker rather than breaking the view.
+      setWorkspaces([]);
+    }
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -72,6 +92,7 @@ export function MachinesSettings() {
       }
     };
     void load();
+    void loadWorkspaces();
     // Link state changes on its own (a VM sleeps, a link drops), so this is
     // the one settings panel that is worth polling — slowly.
     const t = setInterval(load, 10_000);
@@ -79,7 +100,34 @@ export function MachinesSettings() {
       alive = false;
       clearInterval(t);
     };
-  }, []);
+  }, [loadWorkspaces]);
+
+  /**
+   * Point a workspace at a machine.
+   *
+   * Optimistic, and it has to be: the select is the only feedback, so waiting
+   * for the round trip leaves the old value under the cursor and reads as a
+   * control that did not take. A failure puts it back and says so.
+   */
+  const setDefaultHost = async (w: Workspace, nodeId: string) => {
+    const next = nodeId === LOCAL ? null : nodeId;
+    const before = w.default_node_id ?? null;
+    if (next === before) return;
+    setWorkspaces((ws) =>
+      (ws ?? []).map((x) => (x.id === w.id ? { ...x, default_node_id: next } : x)),
+    );
+    setSaving(w.id);
+    try {
+      await api.patchWorkspace(w.id, { default_node_id: next });
+    } catch {
+      setWorkspaces((ws) =>
+        (ws ?? []).map((x) => (x.id === w.id ? { ...x, default_node_id: before } : x)),
+      );
+      setFailed(true);
+    } finally {
+      setSaving(null);
+    }
+  };
 
   if (failed) return <p className="machines-note">Could not read the machine list.</p>;
   if (!nodes) return <p className="machines-note">Loading…</p>;
@@ -117,6 +165,36 @@ export function MachinesSettings() {
           ) : null}
         </div>
       ))}
+      {/* ── WHERE NEW CHATS GO ──────────────────────────────────────────────
+          Hidden entirely on a one-machine install: a picker with a single
+          option is a question with one answer, and this panel's job on that
+          machine is to say "there is one of me". */}
+      {nodes.length > 1 && workspaces && workspaces.length > 0 ? (
+        <div className="machines-default-hosts">
+          <h4 className="machines-subhead">Where new chats go</h4>
+          {workspaces.map((w) => (
+            <label className="machine-default-host" key={w.id}>
+              <span className="machine-default-host-name">{w.name}</span>
+              <select
+                value={w.default_node_id ?? LOCAL}
+                disabled={saving === w.id}
+                onChange={(e) => void setDefaultHost(w, e.currentTarget.value)}
+              >
+                {nodes.map((n) => (
+                  <option value={n.id} key={n.id}>
+                    {n.name}
+                    {n.state === 'up' || !n.endpoint ? '' : ` (${LABEL[n.state]})`}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ))}
+          <p className="machines-note">
+            A chat opens on its workspace's machine. A machine that has gone away falls back to this
+            one rather than failing to open a chat.
+          </p>
+        </div>
+      ) : null}
       <p className="machines-note">
         Machines are paired from the command line — the credential has to be written to disk on both
         sides, which a dialog cannot do honestly. This view is for seeing what muxpad has and

@@ -13,6 +13,8 @@ interface WorkspaceRow {
   hidden: number;
   created_at: number;
   updated_at: number;
+  /** Nullable, and absent entirely on a DB that predates migration 49. */
+  default_node_id?: string | null;
 }
 
 /**
@@ -116,16 +118,35 @@ export class WorkspaceStore {
     return r ? this.decorate(r) : null;
   }
 
-  update(id: string, patch: { name?: string | undefined; slug?: string | undefined }): Workspace {
+  /**
+   * `default_node_id` is deliberately a THREE-state patch: absent leaves it
+   * alone, a string sets it, and `null` clears it back to this machine. Folded
+   * into the same `??` chain as name/slug it would have been impossible to
+   * clear — the classic shape of a setting you can turn on and never off.
+   */
+  update(
+    id: string,
+    patch: {
+      name?: string | undefined;
+      slug?: string | undefined;
+      default_node_id?: string | null | undefined;
+    },
+  ): Workspace {
     const existing = this.getById(id);
     if (!existing) throw new Error(`workspace ${id} not found`);
     const name = patch.name ?? existing.name;
     const slug = patch.slug ?? existing.slug;
+    const node =
+      patch.default_node_id === undefined
+        ? (existing.default_node_id ?? null)
+        : patch.default_node_id;
     const now = Date.now();
     this.db
-      .prepare('UPDATE workspaces SET name = ?, slug = ?, updated_at = ? WHERE id = ?')
-      .run(name, slug, now, id);
-    return { ...existing, name, slug, updated_at: now };
+      .prepare(
+        'UPDATE workspaces SET name = ?, slug = ?, default_node_id = ?, updated_at = ? WHERE id = ?',
+      )
+      .run(name, slug, node, now, id);
+    return { ...existing, name, slug, default_node_id: node, updated_at: now };
   }
 
   delete(id: string): void {
@@ -157,6 +178,7 @@ export class WorkspaceStore {
       created_at: r.created_at,
       updated_at: r.updated_at,
       tab_count: this.tabCount(r.id),
+      default_node_id: r.default_node_id ?? null,
     };
   }
 
