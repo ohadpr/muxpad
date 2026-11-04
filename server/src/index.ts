@@ -48,6 +48,8 @@ import { loadConfig, voiceApiKey } from './config.js';
 import { CronScheduler } from './cron/CronScheduler.js';
 import { EventBus } from './events.js';
 import { createTailscaleFunnel, localFunnel } from './funnel.js';
+import { NodeLinks } from './node-link/NodeLinks.js';
+import { PaneRouter } from './node-link/PaneRouter.js';
 import { startPaneReaper } from './pane-reaper.js';
 import { PtydCache, decoratePane, decorateTab } from './ptyd-cache.js';
 import { PtydClient } from './ptyd-client/PtydClient.js';
@@ -61,6 +63,7 @@ import { createApp } from './server.js';
 import { mountStaticWeb } from './static-assets.js';
 import { AppStore } from './store/AppStore.js';
 import { GlobalsStore } from './store/GlobalsStore.js';
+import { NodeStore } from './store/NodeStore.js';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
 import { openDb } from './store/db.js';
@@ -123,6 +126,28 @@ const events = new EventBus();
 // longer owns PTYs — it issues control RPCs and bridges WSes through
 // proxyAttach. ptyd lifecycle (start/restart/launchd) is independent.
 const ptyd = new PtydClient({ socketPath: config.ptydSocketPath });
+// ── OTHER MACHINES ─────────────────────────────────────────────────────────
+//
+// `resetLinkStates()` FIRST and always: a row that was `up` when the previous
+// process died describes a socket that cannot have survived it, and a rail
+// showing a machine as reachable until something fails is the one thing a node
+// badge must not do. Everything but `local` drops to `unknown` until a link
+// proves otherwise.
+//
+// Then the links dial out — the mac initiates, nothing dials in. With no
+// remote node configured this loop does nothing and `paneRouter` resolves
+// every pane to the local client, so the whole seam is inert on a
+// single-machine install.
+const nodeStore = new NodeStore(db);
+nodeStore.resetLinkStates();
+const nodeLinks = new NodeLinks({ nodes: nodeStore, dataDir: config.dataDir });
+nodeLinks.start();
+const paneRouter = new PaneRouter({
+  local: ptyd,
+  nodes: nodeStore,
+  remote: (id) => nodeLinks.get(id),
+});
+
 const cache = new PtydCache();
 cache.attach(ptyd);
 // Prime the cache with last-known cwds from SQLite so handlers that read
@@ -491,6 +516,9 @@ void tailnetHostname()
   .catch(() => {});
 
 const app = createApp({
+  // The node-aware transport for pane lifecycle; `ptyd` below stays the
+  // local socket client for the pty-proxy paths. See server.ts on why both.
+  paneOps: paneRouter,
   db,
   ptyd,
   cache,
@@ -607,7 +635,7 @@ const wsServer = attachWsServer({
 
 // Straggler prevention: retry pane kills that failed in transit, and (once
 // ptyd supports listPanes) kill any live pty whose DB row is gone.
-startPaneReaper({ db, ptyd, paneExists: (id) => paneStore.getById(id) !== null });
+startPaneReaper({ db, ptyd: paneRouter, paneExists: (id) => paneStore.getById(id) !== null });
 // …and the same job for attachment FILES, whose rows are removed by a cascade
 // the application never sees. See attachment-reaper.ts.
 startAttachmentReaper({ db, dataDir: config.dataDir });
