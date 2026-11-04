@@ -119,7 +119,11 @@ describe('the front door', () => {
     const a = await startNodeAgent({ port: p, host: '127.0.0.1', token: TOKEN, log: () => {} });
     stop = a.close;
     expect((await upgrade(p, '/api/panes', TOKEN)).ok).toBe(false);
-    expect((await upgrade(p, '/ws/agent-runner/x', TOKEN)).ok).toBe(false);
+    // NOT /ws/agent-runner any more: that is now a LINK route, where a runner
+    // on this machine attaches so its frames can ride up to the server. It
+    // still requires the node token — which is why the runner now presents one
+    // when this machine has a node-token file.
+    expect((await upgrade(p, '/ws/other', TOKEN)).ok).toBe(false);
     // NOT `/pty/../control` here: the ws client NORMALISES that to `/control`
     // before it leaves, so the agent legitimately allows what it receives and
     // the test would be asserting the client's behaviour. The traversal guard

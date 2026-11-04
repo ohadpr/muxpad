@@ -47,8 +47,9 @@ describe('a host tails its own chats', () => {
     expect(h.subs.subscribe('not-mine')).toBe(null);
     expect(h.pushed).toEqual([
       {
-        event: 'transcriptUnavailable',
-        id: 'not-mine',
+        ch: 'transcript',
+        op: 'unavailable',
+        paneId: 'not-mine',
         reason: 'this machine is not running that chat',
       },
     ]);
@@ -74,7 +75,13 @@ describe('a host tails its own chats', () => {
     ).sink;
     sink.onEvents([{ id: 'e1' }], 'history');
     expect(h.pushed).toEqual([
-      { event: 'transcriptEvents', id: 'pane-1', phase: 'history', events: [{ id: 'e1' }] },
+      {
+        ch: 'transcript',
+        op: 'events',
+        paneId: 'pane-1',
+        phase: 'history',
+        events: [{ id: 'e1' }],
+      },
     ]);
   });
 
@@ -85,7 +92,9 @@ describe('a host tails its own chats', () => {
     h.subs.subscribe('pane-1');
     const sink = (h.tails[0] as unknown as { sink: { onTitle: (t: string) => void } }).sink;
     sink.onTitle('A title');
-    expect(h.pushed).toEqual([{ event: 'transcriptTitle', id: 'pane-1', title: 'A title' }]);
+    expect(h.pushed).toEqual([
+      { ch: 'transcript', op: 'title', paneId: 'pane-1', title: 'A title' },
+    ]);
   });
 
   it('stops tailing on unsubscribe, so a closed tab does not poll forever', () => {
