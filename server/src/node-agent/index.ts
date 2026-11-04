@@ -4,6 +4,8 @@ import { createServer } from 'node:http';
 import { arch, cpus, homedir, platform, totalmem } from 'node:os';
 import { join } from 'node:path';
 import { WebSocket, WebSocketServer } from 'ws';
+import { TranscriptTail, identityNormalize, muxpadLocate } from '../chat/TranscriptReader.js';
+import { LinkServer, linkUpgradeKind } from './link-server.js';
 
 /**
  * MUXPAD-NODE — the front door of a machine that is not the one with the UI.
@@ -120,6 +122,27 @@ export async function startNodeAgent(opts: NodeAgentOptions): Promise<{ close: (
   const http = createServer();
   const wss = new WebSocketServer({ noServer: true });
 
+  // ── THE LINK ────────────────────────────────────────────────────────────
+  //
+  // `/control` and `/pty/:id` stay exactly as they are: the server still dials
+  // them per use, which works because server→host was never the blocked
+  // direction. `/link` is additive, and it is the only path that can carry
+  // host→server traffic — a runner's frames and a chat's history — because it
+  // is a socket the server already holds open.
+  const link = new LinkServer({
+    connectPtyd: () => new WebSocket(`ws+unix://${ptydSocket}:/control`),
+    makeTail: (sid, assistant, sink, tailBytes) =>
+      new TranscriptTail(sid, {
+        ...(tailBytes === undefined ? {} : { tailBytes }),
+        onEvents: sink.onEvents as (e: unknown[], phase: string) => void,
+        onTitle: sink.onTitle,
+        // Non-Claude backends write muxpad's own normalised log rather than a
+        // Claude-format transcript, exactly as the server's local tail does.
+        ...(assistant !== 'claude' ? { locate: muxpadLocate, normalize: identityNormalize } : {}),
+      }) as never,
+    log,
+  });
+
   // A refusal says WHY in the log but never echoes the presented token — a
   // credential in a log file is a credential in a backup.
   const refuse = (socket: import('node:stream').Duplex, why: string, peer: string): void => {
@@ -165,6 +188,14 @@ export async function startNodeAgent(opts: NodeAgentOptions): Promise<{ close: (
       return;
     }
     const url = new URL(req.url ?? '/', 'http://x');
+    const linkRoute = linkUpgradeKind(url.pathname);
+    if (linkRoute) {
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        if (linkRoute.kind === 'link') link.attachLink(ws);
+        else link.attachRunner(linkRoute.paneId, ws);
+      });
+      return;
+    }
     if (!isForwardablePath(url.pathname)) {
       refuse(socket, `path not forwardable: ${url.pathname}`, peer);
       return;
@@ -215,6 +246,7 @@ export async function startNodeAgent(opts: NodeAgentOptions): Promise<{ close: (
   log(`[muxpad-node] listening on ${host}:${port} → ptyd ${ptydSocket}`);
   return {
     close: () => {
+      link.close();
       try {
         wss.close();
       } catch {}

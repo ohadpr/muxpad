@@ -69,8 +69,9 @@ export class TranscriptSubscriptions {
       // Said explicitly rather than pushed as "no events": the server renders
       // a reason instead of an empty chat that looks broken.
       this.deps.push({
-        event: 'transcriptUnavailable',
-        id: paneId,
+        ch: 'transcript',
+        op: 'unavailable',
+        paneId,
         reason: 'this machine is not running that chat',
       });
       return null;
@@ -80,9 +81,13 @@ export class TranscriptSubscriptions {
       found.sid,
       found.assistant,
       {
+        // The LINK envelope (see node-agent/link-protocol.ts). These were the
+        // old ptyd-protocol shape, left behind when the protocol moved to the
+        // agent — `hostMaySend` then rejected every one and the chat stayed
+        // empty with only a log line to show for it.
         onEvents: (events, phase) =>
-          this.deps.push({ event: 'transcriptEvents', id: paneId, phase, events }),
-        onTitle: (title) => this.deps.push({ event: 'transcriptTitle', id: paneId, title }),
+          this.deps.push({ ch: 'transcript', op: 'events', paneId, phase, events }),
+        onTitle: (title) => this.deps.push({ ch: 'transcript', op: 'title', paneId, title }),
       },
       tailBytes,
     );

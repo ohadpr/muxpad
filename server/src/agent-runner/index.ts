@@ -250,7 +250,24 @@ function connect(): void {
   // Absent is silent. In the default `off` mode the server asks for nothing,
   // and a header we cannot supply must not stop a runner connecting.
   const key = readApiSecret();
-  const sock = new WebSocket(wsUrl, key ? { headers: { 'x-muxpad-key': key } } : {});
+  // ── ON A HOST, THE LINK IS WHAT WE ARE DIALLING ───────────────────────
+  //
+  // A runner on a remote host cannot reach the server, so its MUXPAD_API_URL
+  // points at that machine's muxpad-node, which relays frames up the link the
+  // server opened. The agent authenticates every upgrade with the node token,
+  // so present it when this machine has one.
+  //
+  // Read from disk, like every other credential here: a file that exists only
+  // on a host is also how a runner knows which it is — on the server's own
+  // machine there is no node token, no header is sent, and it dials the real
+  // server exactly as before.
+  const nodeToken = readNodeTokenIfHost();
+  const sock = new WebSocket(wsUrl, {
+    headers: {
+      ...(key ? { 'x-muxpad-key': key } : {}),
+      ...(nodeToken ? { 'x-muxpad-node-token': nodeToken } : {}),
+    },
+  });
   ws = sock;
   sock.on('open', () => {
     log(dim('connected to muxpad'));
@@ -376,6 +393,22 @@ function readApiSecret(): string | null {
   try {
     const dir = process.env.MUXPAD_DATA_DIR ?? join(homedir(), '.muxpad');
     const v = readFileSync(join(dir, 'api-secret'), 'utf8').trim();
+    return v.length >= 32 ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * This machine's muxpad-node token, when it is a host.
+ *
+ * Absent on the server's own machine, which is exactly how a runner tells the
+ * two apart without being told.
+ */
+function readNodeTokenIfHost(): string | null {
+  try {
+    const dir = process.env.MUXPAD_DATA_DIR ?? join(homedir(), '.muxpad');
+    const v = readFileSync(join(dir, 'node-token'), 'utf8').trim();
     return v.length >= 32 ? v : null;
   } catch {
     return null;
