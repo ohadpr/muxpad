@@ -48,6 +48,23 @@ interface Allowed {
   parts: Array<'tab' | 'pane' | 'name'>;
   /** Rebuild the path from validated captures. */
   rebuild: (c: string[]) => string;
+  /**
+   * Rebuild the BODY, for a shape where the body is not free text.
+   *
+   * Absent means the body rides through as sent, which is right for the two
+   * places where arbitrary content IS the feature — a card's markup and a
+   * message's text. Present means the host's JSON never reaches the router:
+   * named fields are validated and a new object is built from them, same
+   * discipline as the path. `null` is a refusal.
+   */
+  rebuildBody?: (raw: string | undefined, ctx: BodyContext) => string | null;
+}
+
+/** What a body rebuilder may consult. The principal is not negotiable. */
+interface BodyContext {
+  nodeId: string;
+  /** Does this pane live on the calling host? */
+  paneIsOurs: (paneId: string) => boolean;
 }
 
 /** Ids are ULIDs/ULID-ish; a card name is the CLI's own charset. */
@@ -101,6 +118,75 @@ const ALLOWED: Allowed[] = [
     pattern: /^\/api\/agent-sessions\/([^/]+)\/send$/,
     parts: ['pane'],
     rebuild: ([p]) => `/api/agent-sessions/${p}/send`,
+  },
+  // ── muxpad agent new ────────────────────────────────────────────────────
+  //
+  // A chat that cannot delegate is half a chat, and a sub-chat of a VM chat
+  // belongs on the VM — which is now what happens without being asked, because
+  // `nodeForBootstrap` inherits the parent's machine.
+  //
+  // THE BODY IS REBUILT, and this is the shape that most needs it. The route
+  // itself is already the careful one — it takes no `startup_cmd` and no
+  // command of any kind, and gates `model` against a charset precisely because
+  // it is baked into a shell string. What a rebuild adds is that a field
+  // nobody audited cannot arrive at all, today or after someone extends the
+  // route: only the six below survive.
+  {
+    method: 'POST',
+    pattern: /^\/api\/tabs$/,
+    parts: [],
+    rebuild: () => '/api/tabs',
+    rebuildBody: (raw, ctx) => {
+      let v: Record<string, unknown>;
+      try {
+        v = JSON.parse(raw ?? '{}') as Record<string, unknown>;
+      } catch {
+        return null;
+      }
+      // THE PARENT IS THE AUTHORISATION. A host may spawn a worker FROM one of
+      // its own chats, which is also what pins the new pane to that machine —
+      // without it the workspace default decides, and a host could get a pane
+      // on the mac by naming a workspace.
+      const parent = v.spawned_by_pane;
+      if (typeof parent !== 'string' || !ID.test(parent) || !ctx.paneIsOurs(parent)) return null;
+      const str = (x: unknown, re: RegExp): string | undefined =>
+        typeof x === 'string' && re.test(x) ? x : undefined;
+      const out: Record<string, unknown> = {
+        bootstrap: 'agent',
+        spawned_by_pane: parent,
+        // Belt and braces with nodeForBootstrap's inheritance: say it outright,
+        // so this cannot start landing elsewhere if that rule is ever relaxed.
+        node_id: ctx.nodeId,
+      };
+      // Enum-valued, so an exact membership test rather than a charset.
+      if (v.backend === 'claude' || v.backend === 'codex' || v.backend === 'cursor')
+        out.backend = v.backend;
+      if (v.mode === 'chat' || v.mode === 'agent') out.mode = v.mode;
+      const model = str(v.model, /^[A-Za-z0-9._[\]-]{1,64}$/);
+      if (model) out.model = model;
+      // A tab label. Length-capped and stripped of control characters — it is
+      // rendered in the rail and nothing else.
+      if (typeof v.name === 'string' && v.name.trim())
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: that is the point
+        out.name = v.name.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 120);
+      // The worker's directory ON ITS OWN MACHINE. Absolute only; it is the
+      // host choosing a path on its own disk, which is not an escalation, and
+      // a relative one would be resolved against whatever cwd ptyd has.
+      // Absolute, printable, bounded. The NUL and the control range are
+      // excluded by the positive class rather than by a negated one, so the
+      // rule reads as "what a path may contain".
+      const cwd = str(v.cwd, /^\/[\x20-\x7e\u00a0-\uffff]{0,512}$/);
+      if (cwd) out.cwd = cwd;
+      return JSON.stringify(out);
+    },
+  },
+  // The CLI reads `panes[0].id` back off the new tab, to address the worker it
+  // just made. Scoped like everything else: a tab with a pane on this host.
+  {
+    method: 'GET',
+    pattern: /^\/api\/tabs\/([^/]+)$/,
+    parts: ['tab'],
+    rebuild: ([t]) => `/api/tabs/${t}`,
   },
 ];
 
@@ -159,7 +245,16 @@ export class HostApi {
       if (!m) continue;
       const captures = m.slice(1).map((s) => decodeURIComponent(s));
       if (!this.capturesOk(nodeId, a.parts, captures)) return NOT_FOUND;
-      return this.dispatch(a.method, a.rebuild(captures), body);
+      let out = body;
+      if (a.rebuildBody) {
+        const rebuilt = a.rebuildBody(body, {
+          nodeId,
+          paneIsOurs: (paneId) => this.paneIsOn(nodeId, paneId),
+        });
+        if (rebuilt === null) return NOT_FOUND;
+        out = rebuilt;
+      }
+      return this.dispatch(a.method, a.rebuild(captures), out);
     }
     return NOT_FOUND;
   }

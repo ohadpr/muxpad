@@ -16,10 +16,11 @@
 import type { PaneSpec } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
-import { bootstrapTab, deleteTabCascade } from './agent-tab.js';
+import { bootstrapTab, deleteTabCascade, nodeForBootstrap } from './agent-tab.js';
 import { EventBus } from './events.js';
 import { PtydCache } from './ptyd-cache.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
+import { NodeStore } from './store/NodeStore.js';
 import { WorkspaceStore } from './store/WorkspaceStore.js';
 import { openDb } from './store/db.js';
 
@@ -194,5 +195,71 @@ describe('bootstrapTab does not hold the response open for the pty spawn', () =>
     const started = Date.now();
     await agentTab(h);
     expect(Date.now() - started).toBeLessThan(200);
+  });
+});
+
+/**
+ * ── WHICH MACHINE A NEW CHAT OPENS ON ────────────────────────────────────
+ *
+ * `bootstrapTab` created its pane with no `node_id`, which the column defaults
+ * to `local`. So the default-host picker worked for `POST /api/tabs/:id/panes`
+ * and did nothing at all for the web app's "new chat" — which comes through
+ * here, and is the only door most chats are ever created by.
+ */
+describe('nodeForBootstrap', () => {
+  const nodes = (h: Harness) => new NodeStore(h.db);
+
+  it('honours the workspace default', () => {
+    const h = harness(0);
+    nodes(h).add({ id: 'trayo', name: 'VM', endpoint: 'ws://vm:7797' });
+    nodes(h).setDefaultNodeFor(h.wsId, 'trayo');
+    expect(nodeForBootstrap(h.db, { workspace_id: h.wsId })).toBe('trayo');
+  });
+
+  it('is this machine when the workspace names none', () => {
+    const h = harness(0);
+    expect(nodeForBootstrap(h.db, { workspace_id: h.wsId })).toBe('local');
+  });
+
+  it('INHERITS THE PARENT CHAT’S MACHINE, over the workspace default', async () => {
+    // A worker spawned from a chat on the VM runs on the VM — the host-scoping
+    // rule, and the only safe answer for the host API: otherwise a machine
+    // could get a worker on this one by naming a workspace.
+    const h = harness(0);
+    nodes(h).add({ id: 'trayo', name: 'VM', endpoint: 'ws://vm:7797' });
+    const parent = await bootstrapTab(h, {
+      workspace_id: h.wsId,
+      name: 'VM chat',
+      bootstrap: 'agent',
+      node_id: 'trayo',
+    });
+    expect(parent.pane?.node_id).toBe('trayo');
+    expect(nodeForBootstrap(h.db, { workspace_id: h.wsId, spawned_by: parent.tab.id })).toBe(
+      'trayo',
+    );
+  });
+
+  it('takes an explicit node over everything', () => {
+    const h = harness(0);
+    nodes(h).add({ id: 'trayo', name: 'VM', endpoint: 'ws://vm:7797' });
+    nodes(h).setDefaultNodeFor(h.wsId, 'local');
+    expect(nodeForBootstrap(h.db, { workspace_id: h.wsId, node_id: 'trayo' })).toBe('trayo');
+  });
+
+  it('gives a remote pane that machine’s shell, and leaves its cwd unstatted', async () => {
+    // `/bin/zsh` does not exist on a stock Linux host and `safeCwd` stats THIS
+    // filesystem — between them, a pty that dies the instant it starts.
+    const h = harness(0);
+    nodes(h).add({ id: 'trayo', name: 'VM', endpoint: 'ws://vm:7797' });
+    nodes(h).setCapabilities('trayo', { shell: '/bin/bash', home: '/home/ohad' });
+    const created = await bootstrapTab(h, {
+      workspace_id: h.wsId,
+      name: 'VM chat',
+      bootstrap: 'agent',
+      node_id: 'trayo',
+      cwd: '/home/ohad/work',
+    });
+    expect(created.pane?.shell).toBe('/bin/bash');
+    expect(created.pane?.cwd).toBe('/home/ohad/work');
   });
 });

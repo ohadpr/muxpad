@@ -340,7 +340,18 @@ export function panesTabScopedRoutes(deps: {
     // what makes the spawn land correctly: PaneRouter reads the column.
     const nodes = new NodeStore(deps.db);
     const wsId = tabs.getWorkspaceId(tabId);
-    const nodeId = body.node_id ?? (wsId ? nodes.defaultNodeFor(wsId) : LOCAL_NODE_ID);
+    // A SECOND PANE JOINS THE FIRST ONE'S MACHINE. A tab holding a chat on the
+    // VM and a terminal on the mac is not a split view of anything — and for
+    // the pane the user is about to type in, "which machine am I on" would be
+    // answered by whichever pane they clicked. Explicit `node_id` still wins,
+    // then the tab's own panes, then the workspace default.
+    const sibling = deps.db
+      .prepare(
+        'SELECT node_id AS n FROM panes WHERE tab_id = ? ORDER BY created_at ASC, id ASC LIMIT 1',
+      )
+      .get(tabId) as { n: string | null } | undefined;
+    const nodeId =
+      body.node_id ?? sibling?.n ?? (wsId ? nodes.defaultNodeFor(wsId) : LOCAL_NODE_ID);
     const resolvedCwd =
       nodeId === LOCAL_NODE_ID ? (isAgent ? agentCwd(safeCwd(cwd)) : safeCwd(cwd)) : (cwd ?? null);
     // THE ROW AND THE COMMAND MUST AGREE. The row is what the UI and
