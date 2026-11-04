@@ -1,4 +1,7 @@
 import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { sessionBrowserProfile } from '../SessionBrowser.js';
 
 /**
@@ -22,6 +25,71 @@ import { sessionBrowserProfile } from '../SessionBrowser.js';
  * browser subsystem that can take away browsing entirely when it is unwell is
  * worse than the problem it solves.
  */
+
+/**
+ * ── THE PLAYWRIGHT-MCP VERSION IS PINNED ──────────────────────────────────
+ *
+ * This used to spawn `@playwright/mcp@latest`, which means every pane spawn
+ * executed whatever had most recently been published to npm — no review
+ * window, no pinning, and a compromised or merely broken release reaching
+ * every agent on the machine the moment it went up. An agent's MCP server
+ * drives a browser holding the user's logged-in cookie jar, so that is about
+ * the worst place on this machine to accept an unreviewed update.
+ *
+ * The version now comes from `<dataDir>/playwright-mcp.version`, which a
+ * schedule rewrites to the newest release that has been public for at least
+ * three days. The delay is the point: it is a window in which a bad publish
+ * can be noticed and yanked.
+ *
+ * FALLS BACK TO A COMPILED-IN CONSTANT. A missing or malformed file must not
+ * mean "no browser tools" — this module's own note says a browser subsystem
+ * that can take browsing away entirely is worse than the problem it solves —
+ * and it must certainly not mean a silent return to `@latest`.
+ *
+ * WHAT THIS DOES NOT FIX, stated plainly: the file is writable by anything
+ * running as this user, so it is not a defence against local code. Neither is
+ * anything else here (see pane-key.ts and api-auth.ts, which say the same of
+ * themselves). What it buys is that a REMOTE npm publish is no longer
+ * self-executing, which is the actual exposure.
+ */
+export const PLAYWRIGHT_MCP_FALLBACK_VERSION = '0.0.84';
+
+/** A plain three-part version and nothing else: no ranges, no tags, no
+ *  `latest`, and nothing that could carry a shell metacharacter into argv. */
+const VERSION_RE = /^\d+\.\d+\.\d+$/;
+
+/**
+ * Which `@playwright/mcp` to run.
+ *
+ * `deps` is injected so the test does not need a home directory — a pin
+ * nobody can assert is a pin that quietly rots back to whatever is newest.
+ */
+export function playwrightMcpVersion(
+  deps: { dataDir?: string; read?: (path: string) => string } = {},
+): string {
+  const dataDir = deps.dataDir ?? process.env.MUXPAD_DATA_DIR ?? join(homedir(), '.muxpad');
+  const read = deps.read ?? ((path: string) => readFileSync(path, 'utf8'));
+  try {
+    const raw = read(join(dataDir, 'playwright-mcp.version')).trim();
+    if (VERSION_RE.test(raw)) return raw;
+    console.error(
+      `[muxpad-browser-mcp] ignoring playwright-mcp.version ${JSON.stringify(
+        raw.slice(0, 40),
+      )} — not a plain x.y.z; using ${PLAYWRIGHT_MCP_FALLBACK_VERSION}`,
+    );
+  } catch {
+    // Absent is an ordinary state (a fresh install, or the schedule has never
+    // run), so it is not worth a line of noise on every pane spawn.
+  }
+  return PLAYWRIGHT_MCP_FALLBACK_VERSION;
+}
+
+/** The package spec to hand npx — exported so the test reads the real string. */
+export function playwrightMcpSpec(
+  deps: { dataDir?: string; read?: (path: string) => string } = {},
+): string {
+  return `@playwright/mcp@${playwrightMcpVersion(deps)}`;
+}
 
 export interface SessionMcpPlan {
   /** Arguments to hand playwright-mcp. */
@@ -103,9 +171,11 @@ export async function main(argv: string[] = process.argv.slice(2)) {
   const plan = sessionMcpPlan({ cdpUrl, jarPath });
   console.error(`[muxpad-browser-mcp] ${plan.why}`);
 
+  const spec = playwrightMcpSpec();
+  console.error(`[muxpad-browser-mcp] ${spec}`);
   const child = spawn(
     'npx',
-    ['-y', '@playwright/mcp@latest', ...plan.args, ...argv.filter((a) => !a.startsWith('--jar='))],
+    ['-y', spec, ...plan.args, ...argv.filter((a) => !a.startsWith('--jar='))],
     {
       stdio: 'inherit',
     },
