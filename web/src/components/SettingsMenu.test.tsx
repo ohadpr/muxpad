@@ -274,7 +274,7 @@ it('shows the current Slack state without a completed setup checklist or empty r
     // Notifications has its own section: as the last row of General, under
     // the theme grid, its lone Enable button read as an action on the tiles
     // above it ("they feel like the action button for picking a theme").
-  ).toEqual(['General', 'Notifications', 'Integrations']);
+  ).toEqual(['General', 'Notifications', 'Integrations', 'Machines']);
   expect(document.querySelector('[aria-label="Slack approvals"]')).toBeNull();
   expect(approvals.textContent).toContain('Ask each time.');
   expect(
