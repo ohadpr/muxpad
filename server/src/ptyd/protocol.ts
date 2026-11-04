@@ -61,6 +61,37 @@ export type IdParams = { id: string };
 
 export interface CtrlMethods {
   ensurePane: { params: CreatePaneParams; result: { ok: true } };
+  /**
+   * ── A CHAT'S HISTORY, READ WHERE IT LIVES ──────────────────────────────
+   *
+   * The server renders a chat from a transcript file. For a pane on ANOTHER
+   * machine that file is here, not there, so the server asks this host to
+   * tail it and push the rendered events back as `transcriptEvents`.
+   *
+   * THE SERVER SENDS A PANE ID AND NOTHING ELSE. It cannot send a session id,
+   * and that is not a simplification: `agent_sessions.current_sid` is only
+   * ever written by `register`, `/hook` or runner `hello`, all of which
+   * travel host→server — the direction that cannot initiate. For a chat that
+   * has only ever run here, the server has no sid to give. So the host
+   * resolves its own, which also removes a server-supplied sid as an input
+   * the host would otherwise have to trust.
+   *
+   * A host answers only for panes it is actually running. Idempotent: a
+   * second subscribe for the same pane replaces the first.
+   */
+  subscribeTranscript: {
+    params: { paneId: string; tailBytes?: number };
+    result: { ok: true; sid: string | null };
+  };
+  /** Stop tailing. Sent when the last browser viewing the chat goes away, so
+   *  a closed tab does not leave this host tailing a file forever. */
+  unsubscribeTranscript: { params: { paneId: string }; result: { ok: true } };
+  /** One page of older history, for the client's scroll-up. The host owns the
+   *  byte cursor; the server just asks for "more before what I have". */
+  loadOlderTranscript: {
+    params: { paneId: string };
+    result: { ok: true };
+  };
   killPane: { params: IdParams; result: { ok: true } };
   hasPane: { params: IdParams; result: { has: boolean } };
   getCurrentCwd: { params: IdParams; result: { cwd: string | null } };
@@ -102,4 +133,24 @@ export type CtrlPushEvent =
   // ptyd does NOT validate or probe these — the main server runs the
   // AppUrlTracker (host classification + listening probe) so detection logic
   // can change with a server-only restart, never a ptyd bounce.
-  | { event: 'paneUrlsSeen'; id: string; urls: string[]; markers: AppUrlMarker[] };
+  | { event: 'paneUrlsSeen'; id: string; urls: string[]; markers: AppUrlMarker[] }
+  // ── A REMOTE CHAT'S RENDERED HISTORY ───────────────────────────────────
+  //
+  // Pushed after `subscribeTranscript`, and then on every change, exactly as
+  // the local tail's `onEvents` fires. `events` is already normalised
+  // ChatEvent — the host runs the same TranscriptReader as the server, so
+  // schema translation and every race fix in it happen there, and the server
+  // relays verbatim into the chat socket it already has.
+  //
+  // This is a PUSH on the existing control socket, which has carried
+  // host→server events (paneCwd, paneExit, …) since ptyd was written. No new
+  // connection and no multiplexer: the socket is open and already
+  // bidirectional.
+  | { event: 'transcriptEvents'; id: string; phase: string; events: unknown[] }
+  // The AI title the tail derived. The server owns the DB write; the host
+  // only reports what it read, which keeps `applyAiTitle` the single writer.
+  | { event: 'transcriptTitle'; id: string; title: string }
+  // The host could not tail this pane: no runner here, no session yet, or it
+  // is not ours. Distinct from "no events" so the server can say WHY instead
+  // of rendering an empty chat that looks broken.
+  | { event: 'transcriptUnavailable'; id: string; reason: string };
