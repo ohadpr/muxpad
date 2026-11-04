@@ -124,12 +124,37 @@ export class NodeLinks {
       link.connected = true;
       this.deps.nodes.setState(nodeId, 'up');
       this.log(`[node] ${nodeId}: up (${controlUrl})`);
+      void this.describe(nodeId, endpoint, token);
     });
     client.on('disconnected', () => {
       link.connected = false;
       this.deps.nodes.setState(nodeId, 'down');
       this.log(`[node] ${nodeId}: down`);
     });
+  }
+
+  /**
+   * Ask a node what it is, and record it.
+   *
+   * Cosmetic for most of what comes back (platform, cpus, memory — the
+   * Machines row), and NOT cosmetic for `shell`: the server's default is
+   * `/bin/zsh`, which does not exist on a stock Ubuntu box, and a pane created
+   * with it dies the instant it starts. The host is the only thing that knows.
+   *
+   * Best-effort on purpose. A node whose `/self` fails is still a working node
+   * for every pane operation, so a failure here logs nothing and changes no
+   * state — the capabilities simply stay as they were.
+   */
+  private async describe(nodeId: string, endpoint: string, token: string): Promise<void> {
+    const url = `${endpoint.replace(/\/$/, '').replace(/^ws/, 'http')}/self`;
+    try {
+      const res = await fetch(url, { headers: { 'x-muxpad-node-token': token } });
+      if (!res.ok) return;
+      const body = (await res.json()) as Record<string, unknown>;
+      if (body && typeof body === 'object') this.deps.nodes.setCapabilities(nodeId, body);
+    } catch {
+      /* a node that will not describe itself still runs panes */
+    }
   }
 
   /**

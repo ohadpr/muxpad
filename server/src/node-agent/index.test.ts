@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 import {
   DEFAULT_NODE_PORT,
+  defaultShell,
   describeSelf,
   isApiFunnelPath,
   isForwardablePath,
@@ -172,6 +173,19 @@ describe('the front door', () => {
     await upgrade(p, '/control', guess);
     expect(lines.join('\n')).not.toContain(guess);
     expect(lines.join('\n')).toContain('refused');
+  });
+});
+
+describe('the shell it reports', () => {
+  it('is absolute, so a pane created from it can actually start', () => {
+    // The server's own default is `/bin/zsh` and there is no zsh here; a pane
+    // created with it dies instantly, reported as nothing but "the pty exited
+    // immediately after starting".
+    expect(defaultShell().startsWith('/')).toBe(true);
+  });
+
+  it('rides along in describeSelf, which is how the server learns it', () => {
+    expect(describeSelf().shell).toBe(defaultShell());
   });
 });
 

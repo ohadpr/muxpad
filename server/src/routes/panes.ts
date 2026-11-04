@@ -365,9 +365,18 @@ export function panesTabScopedRoutes(deps: {
     const startupCmd = agentMode
       ? applyModeToStartupCmd(body.startup_cmd ?? null, agentMode)
       : (body.startup_cmd ?? null);
+    // THE SHELL BELONGS TO THE MACHINE THE PANE IS ON. `defaultShell` here is
+    // THIS machine's, and `/bin/zsh` does not exist on a stock Ubuntu host —
+    // the first pane the default-host picker created died instantly with only
+    // "the pty exited immediately after starting" to show for it. PaneRouter
+    // substitutes the host's shell at spawn time as a backstop for rows that
+    // already exist; writing it correctly HERE is what makes the row, the UI
+    // and the respawn command agree. Null when the host has not described
+    // itself yet, in which case the backstop is all there is.
+    const resolvedShell = body.shell ?? nodes.shellFor(nodeId) ?? defaultShell;
     const pane = panes.create({
       tab_id: tabId,
-      shell: body.shell ?? defaultShell,
+      shell: resolvedShell,
       cwd: resolvedCwd,
       startup_cmd: startupCmd,
       env: body.env ?? null,

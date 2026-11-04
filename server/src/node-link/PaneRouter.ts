@@ -7,6 +7,17 @@ import { LOCAL_NODE_ID, type NodeStore } from '../store/NodeStore.js';
 const DEFAULT_HOST_AGENT_PORT = '7797';
 
 /**
+ * The shell the SERVER would pick, which is the only value worth overriding.
+ *
+ * Read per call rather than captured, so a server started under a different
+ * `$SHELL` does not keep substituting against a stale one. Matches every
+ * `process.env.SHELL ?? '/bin/zsh'` spec builder in the tree — that expression
+ * is the "nobody chose this" marker, and this is the one place that reads it
+ * as one.
+ */
+const serverDefaultShell = (): string => process.env.SHELL ?? '/bin/zsh';
+
+/**
  * WHICH MACHINE A PANE OPERATION GOES TO.
  *
  * ── THE BUG THIS EXISTS TO PREVENT ────────────────────────────────────────
@@ -185,9 +196,22 @@ export class PaneRouter implements PaneOps {
     // the cwd from the pane ROW — which holds the path the user actually
     // asked for, untouched by any local stat.
     const row = this.deps.nodes.cwdForPane(spec.id);
+    // ── AND THE SHELL, WHICH IS THE SAME BUG WEARING A DIFFERENT PATH ───
+    //
+    // The server's default is `/bin/zsh`. There is no zsh on a stock Ubuntu
+    // box, so the first pane the default-host picker ever created died the
+    // instant it started and the chat said only "the pty exited immediately
+    // after starting" — the identical symptom, from the identical cause, one
+    // field over. The host reports its own shell (`/self` → capabilities), and
+    // it is substituted ONLY for the server's own default: a shell someone
+    // deliberately chose is theirs, and if the choice is wrong on that machine
+    // the honest outcome is a failure that names it.
+    const hostShell = this.deps.nodes.shellFor(nodeId);
+    const useHostShell = !!hostShell && spec.shell === serverDefaultShell();
     return {
       ...spec,
       ...(row ? { cwd: row } : {}),
+      ...(useHostShell ? { shell: hostShell as string } : {}),
       env: { ...(spec.env ?? {}), MUXPAD_API_URL: `http://127.0.0.1:${port}` },
     };
   }
