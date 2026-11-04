@@ -1525,6 +1525,68 @@ const MIGRATIONS: Migration[] = [
         db.exec('ALTER TABLE spawn_rounds ADD COLUMN parent_turn INTEGER');
     },
   },
+  {
+    /**
+     * MACHINES.
+     *
+     * muxpad has been one process tree on one machine: a server that owns the
+     * UI and this database, a ptyd that owns the ptys, and runners that dial
+     * the server. The goal is one UI on the mac with ptyd ALSO running on other
+     * machines, so one rail shows every chat wherever it actually lives.
+     *
+     * This migration is the whole mac-side model and no network at all. Three
+     * additions, each additive and defaulted, so an install that never gains a
+     * second machine behaves exactly as it does today:
+     *
+     *   nodes                     one row per machine. `local` always exists
+     *                             and is seeded here, because "which machine"
+     *                             must have an answer for every pane before
+     *                             any remote one is configured — a nullable
+     *                             node_id would mean two spellings of "here".
+     *   panes.node_id             which machine owns this pane's pty.
+     *   workspaces.default_node_id where a NEW chat in this workspace is
+     *                             created. Trayo → the VM, Personal → local.
+     *                             Nullable = fall back to `local`, which is
+     *                             also the pre-migration meaning.
+     *
+     * `state` is the LINK's state, not the machine's — a node can be powered
+     * on and still be `down` to us. It is never trusted from storage on boot
+     * (a `up` that survived a restart is a lie about a socket that does not
+     * exist), so every row is read as `unknown` until a link proves otherwise;
+     * it is persisted only so the UI has something to render on first paint.
+     */
+    version: 49,
+    // PRAGMA-guarded, like 38, 45 and 48: the suite re-runs the list against a
+    // database that already has these, and a bare ALTER throws there.
+    apply: (db) => {
+      db.exec(`CREATE TABLE IF NOT EXISTS nodes (
+        id            TEXT PRIMARY KEY,
+        name          TEXT NOT NULL,
+        endpoint      TEXT,
+        pubkey        TEXT,
+        state         TEXT NOT NULL DEFAULT 'unknown',
+        last_seen     INTEGER,
+        capabilities  TEXT,
+        created_at    INTEGER NOT NULL
+      )`);
+      const hasCol = (table: string, col: string): boolean =>
+        (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some(
+          (c) => c.name === col,
+        );
+      if (!hasCol('panes', 'node_id'))
+        db.exec("ALTER TABLE panes ADD COLUMN node_id TEXT NOT NULL DEFAULT 'local'");
+      if (!hasCol('workspaces', 'default_node_id'))
+        db.exec('ALTER TABLE workspaces ADD COLUMN default_node_id TEXT');
+      db.exec('CREATE INDEX IF NOT EXISTS panes_node ON panes(node_id)');
+      // THIS MACHINE, as a row like any other. Seeded rather than special-cased
+      // so the code has one kind of node and not two; `state` is 'up' because
+      // the local ptyd is reached over a unix socket that needs no link.
+      db.prepare(
+        `INSERT OR IGNORE INTO nodes (id, name, endpoint, state, created_at)
+         VALUES ('local', 'this machine', NULL, 'up', ?)`,
+      ).run(Date.now());
+    },
+  },
 ];
 
 /** Highest version in the migration list. Exported so a test can assert the

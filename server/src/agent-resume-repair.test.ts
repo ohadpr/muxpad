@@ -386,3 +386,65 @@ describe('announcing it', () => {
     }
   });
 });
+
+/**
+ * ── A PANE ON ANOTHER MACHINE IS NOT OURS TO JUDGE ───────────────────────
+ *
+ * Every check in this module rests on `locate`, which stats LOCAL paths. For
+ * a pane whose pty lives on another machine the transcript is there, so
+ * `locate` fails every time — and the repair would then repoint a healthy
+ * remote chat at an unrelated local session and rewrite its startup_cmd to
+ * resume it. On every chat bind, and again on every boot sweep.
+ *
+ * The sharpest trap in the whole multi-machine plan, guarded before any
+ * remote pane can exist.
+ */
+describe('remote panes are left alone', () => {
+  /** The shape that WOULD be repaired: a current_sid with no local
+   *  transcript, and a recoverable older sid in history. */
+  const drifted = () => {
+    const f = fixture();
+    f.history('older-sid-with-a-transcript', 'codex', 1_000);
+    f.pointAt('stranded-sid', ['stranded-sid']);
+    return f;
+  };
+  const plan = (paneId: string) =>
+    planResumeRepair(db, paneId, {
+      locate: (sid) => (sid === 'older-sid-with-a-transcript' ? '/tmp/x.jsonl' : null),
+      wasCleared: () => false,
+    });
+  const setNode = (paneId: string, node: string) =>
+    db.prepare('UPDATE panes SET node_id = ? WHERE id = ?').run(node, paneId);
+
+  it('plans NOTHING for a pane on another node, however broken it looks locally', () => {
+    const f = drifted();
+    setNode(f.paneId, 'trayo');
+    expect(plan(f.paneId)).toBe(null);
+  });
+
+  it('…and the SAME pane is repaired once it is local, proving the guard did it', () => {
+    const f = drifted();
+    setNode(f.paneId, 'trayo');
+    expect(plan(f.paneId)).toBe(null);
+    setNode(f.paneId, 'local');
+    expect(plan(f.paneId)?.to).toBe('older-sid-with-a-transcript');
+  });
+
+  it("leaves a remote pane's startup_cmd and current_sid untouched", () => {
+    // The corruption is what is being prevented, so assert the state, not
+    // just the return value.
+    const f = drifted();
+    const cmdBefore = f.startupCmd();
+    setNode(f.paneId, 'trayo');
+    repairPaneResume(db, f.paneId, {
+      locate: () => null,
+      wasCleared: () => false,
+    });
+    expect(f.session().current_sid).toBe('stranded-sid');
+    expect(f.startupCmd()).toBe(cmdBefore);
+  });
+
+  it('treats a pane with no row as local — the pre-migration meaning', () => {
+    expect(plan('01NOSUCHPANE00000000000000')).toBe(null);
+  });
+});
