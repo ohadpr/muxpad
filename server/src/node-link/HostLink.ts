@@ -63,6 +63,20 @@ export class HostLink {
   private timer: NodeJS.Timeout | null = null;
   /** paneId → the loopback socket standing in for that remote runner. */
   private readonly relays = new Map<string, WebSocket>();
+  /**
+   * Frames that arrived before that socket finished connecting.
+   *
+   * THE FIRST FRAME IS THE ONE THAT MATTERS. A runner sends `hello` the
+   * instant it connects, and the loopback this relays through takes a moment
+   * to open — so without a queue the hello is always the frame that gets
+   * dropped. The server then never records the session id, and the chat view,
+   * which keys its "Starting…" spinner on `current_sid`, spins forever over a
+   * runner that is in fact attached and answering.
+   *
+   * The same buffering exists in the host agent's ptyd proxy for the same
+   * reason; I wrote it there and did not write it here.
+   */
+  private readonly pending = new Map<string, string[]>();
   private readonly log: (line: string) => void;
 
   constructor(private readonly deps: HostLinkDeps) {
@@ -138,11 +152,24 @@ export class HostLink {
     if (m.op === 'detached') {
       this.relays.get(m.paneId)?.close();
       this.relays.delete(m.paneId);
+      this.pending.delete(m.paneId);
       return;
     }
     if (m.op === 'frame') {
       const r = this.relays.get(m.paneId);
-      if (r?.readyState === WebSocket.OPEN) r.send(JSON.stringify(m.frame));
+      const payload = JSON.stringify(m.frame);
+      if (r?.readyState === WebSocket.OPEN) {
+        r.send(payload);
+        return;
+      }
+      // Still connecting (or announced a frame before `attached`): hold it.
+      // Capped, because a relay that never opens must not grow without bound
+      // — and a runner that has sent hundreds of frames before its socket
+      // came up is broken in a way more buffer will not fix.
+      const q = this.pending.get(m.paneId) ?? [];
+      if (q.length < 64) q.push(payload);
+      this.pending.set(m.paneId, q);
+      if (!r) this.openRelay(m.paneId);
     }
   }
 

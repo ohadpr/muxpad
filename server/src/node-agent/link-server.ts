@@ -42,6 +42,20 @@ export class LinkServer {
   private readonly runners = new Map<string, WebSocket>();
   /** pane → session, learned from each runner's own `hello`. */
   private readonly sids = new Map<string, { sid: string; assistant: string }>();
+  /**
+   * The last `hello` each runner sent, verbatim.
+   *
+   * REPLAYED WHEN A SERVER (RE)CONNECTS. A runner sends hello once, when it
+   * starts. If the server restarts afterwards, its socket to US never
+   * dropped — so it has no reason to send another, and the server would
+   * register a runner it knows nothing about: no session id, and a chat view
+   * that spins on "Starting…" forever over a runner that is attached and
+   * answering.
+   *
+   * Replaying is the host's job because the host is the only side that still
+   * has it. Cheap: one small object per live runner.
+   */
+  private readonly lastHello = new Map<string, string>();
   private readonly subs: TranscriptSubscriptions;
   private readonly log: (line: string) => void;
 
@@ -97,7 +111,21 @@ export class LinkServer {
     this.log('[link] server connected');
     // Tell it about every runner already here, so a reconnect re-registers
     // them without waiting for the next turn.
-    for (const paneId of this.runners.keys()) this.up({ ch: 'runner', op: 'attached', paneId });
+    for (const paneId of this.runners.keys()) {
+      this.up({ ch: 'runner', op: 'attached', paneId });
+      // …and the hello it sent before this server existed, so the session is
+      // registered rather than merely connected. Ordered after `attached` so
+      // the far side has opened (or is opening) its relay; it buffers frames
+      // that arrive first.
+      const hello = this.lastHello.get(paneId);
+      if (hello) {
+        try {
+          this.up({ ch: 'runner', op: 'frame', paneId, frame: JSON.parse(hello) });
+        } catch {
+          /* cached text is always something we parsed once */
+        }
+      }
+    }
   }
 
   private onDown(raw: string): void {
@@ -153,6 +181,7 @@ export class LinkServer {
     ws.on('close', () => {
       if (this.runners.get(paneId) !== ws) return; // displaced, not gone
       this.runners.delete(paneId);
+      this.lastHello.delete(paneId);
       this.up({ ch: 'runner', op: 'detached', paneId });
     });
     ws.on('error', () => {
@@ -174,6 +203,7 @@ export class LinkServer {
       if (f.t !== 'hello' || typeof f.sid !== 'string' || !f.sid) return;
       const prev = this.sids.get(paneId);
       this.sids.set(paneId, { sid: f.sid, assistant: f.backend ?? 'claude' });
+      this.lastHello.set(paneId, text);
       // A hello with a NEW sid means the session rotated (a /clear, a resume
       // onto a different id). Re-tail, or the chat would keep showing the old
       // conversation. Only when something is actually subscribed.

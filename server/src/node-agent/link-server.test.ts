@@ -219,3 +219,45 @@ describe('the transcript channel', () => {
     expect(h.srv.stats().subscriptions).toBe(0);
   });
 });
+
+/**
+ * ── A RUNNER SAYS HELLO ONCE ─────────────────────────────────────────────
+ * If the server restarts afterwards, the runner's socket to the HOST never
+ * dropped, so it has no reason to send another. Without a replay the server
+ * registers a runner it knows nothing about — no session id — and the chat
+ * view spins on "Starting…" forever over a runner that is attached and
+ * answering. That is precisely what happened.
+ */
+describe('reconnect replays the hello', () => {
+  it('re-announces AND re-sends the hello to a new server', () => {
+    const h = build();
+    const r = new FakeWs();
+    h.srv.attachRunner('p1', r as never);
+    r.emit('message', Buffer.from(JSON.stringify({ t: 'hello', sid: 's-1', backend: 'claude' })));
+    const link2 = new FakeWs();
+    h.srv.attachLink(link2 as never);
+    const msgs = link2.sent.map((s) => decodeLink(s));
+    expect(msgs).toContainEqual({ ch: 'runner', op: 'attached', paneId: 'p1' });
+    expect(msgs).toContainEqual({
+      ch: 'runner',
+      op: 'frame',
+      paneId: 'p1',
+      frame: { t: 'hello', sid: 's-1', backend: 'claude' },
+    });
+    // …and in that order, so the far side has a relay to receive it.
+    const iAttach = msgs.findIndex((m) => m && 'op' in m && m.op === 'attached');
+    const iHello = msgs.findIndex((m) => m && 'op' in m && m.op === 'frame');
+    expect(iAttach).toBeLessThan(iHello);
+  });
+
+  it('forgets the hello when the runner goes, so a stale one is never replayed', () => {
+    const h = build();
+    const r = new FakeWs();
+    h.srv.attachRunner('p1', r as never);
+    r.emit('message', Buffer.from(JSON.stringify({ t: 'hello', sid: 's-1' })));
+    r.close();
+    const link2 = new FakeWs();
+    h.srv.attachLink(link2 as never);
+    expect(link2.sent.map((s) => decodeLink(s))).toEqual([]);
+  });
+});
