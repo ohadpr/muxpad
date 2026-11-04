@@ -199,6 +199,41 @@ const STALL_SWEEP_MS = 60_000;
  * that return conditional on real progress rather than automatic — which is
  * exactly why this must not fire on runners whose quiet rows are legitimate.
  */
+/**
+ * ── WHICH MACHINE IS THIS SOCKET ENTITLED TO SPEAK FOR ───────────────────
+ *
+ * `/ws/agent-runner/:paneId` and `/ws/pane/:id` identify their pane by ID
+ * ALONE, and the runner arm lets the NEWEST connection displace the previous
+ * one. That is fine while every runner is a local process started by this
+ * server. It stops being fine the moment frames can arrive from another
+ * machine: an adversarial review of the multi-node plan found that a
+ * compromised node could name any pane id, terminate a LOCAL runner and
+ * impersonate it — receiving what the user types and answering in its place.
+ *
+ * So a socket may only act for a pane that lives on the machine the socket
+ * speaks for.
+ *
+ * WHY THE HEADER CAN BE TRUSTED. `x-muxpad-node-id` is stamped by the
+ * mac-side half of a node link — OUR code, on this machine, at upgrade time —
+ * not by the remote peer. A remote runner's frames ride a stream whose
+ * handshake already happened; it cannot add or alter headers on it. And a
+ * LOCAL runner sends no such header at all, so it is pinned to `local`.
+ *
+ * Landing this before any remote runner exists is deliberate: today it can
+ * only refuse a mismatch that cannot yet happen, which makes it free to
+ * verify and impossible to regress into later.
+ */
+function socketNodeId(headers: import('node:http').IncomingHttpHeaders): string {
+  const raw = headers['x-muxpad-node-id'];
+  const v = (Array.isArray(raw) ? raw[0] : raw)?.trim();
+  return v && v.length > 0 ? v : LOCAL_NODE_ID;
+}
+
+/** True when a socket claiming `speaksFor` may act on `paneNode`. */
+export function nodeOwnershipOk(paneNode: string | null, speaksFor: string): boolean {
+  return (paneNode ?? LOCAL_NODE_ID) === speaksFor;
+}
+
 export function reapStalledEntries(
   subagents: Map<string, SubagentProgress>,
   changedAt: Map<string, number>,
@@ -1726,8 +1761,20 @@ export function attachWsServer(deps: {
     const runnerMatch = url.pathname.match(/^\/ws\/agent-runner\/([^/]+)$/);
     if (runnerMatch) {
       const paneId = runnerMatch[1] as string;
-      if (!panes.getById(paneId)) {
+      const runnerPane = panes.getById(paneId);
+      if (!runnerPane) {
         socket.destroy();
+        return;
+      }
+      // A runner may only speak for a pane on its OWN machine. See
+      // nodeOwnershipOk: without this, a node could displace a local runner
+      // and answer in its place.
+      const runnerSpeaksFor = socketNodeId(req.headers);
+      if (!nodeOwnershipOk(runnerPane.node_id ?? null, runnerSpeaksFor)) {
+        console.warn(
+          `[ws] refused runner for pane ${paneId}: socket speaks for ${runnerSpeaksFor}, pane lives on ${runnerPane.node_id ?? LOCAL_NODE_ID}`,
+        );
+        refuseUpgrade(socket, 'pane belongs to another machine');
         return;
       }
       wss.handleUpgrade(req, socket, head, (ws) => {
@@ -3050,6 +3097,16 @@ export function attachWsServer(deps: {
     const pane = panes.getById(paneId);
     if (!pane) {
       socket.destroy();
+      return;
+    }
+    // Same rule for the pty stream: bytes for a pane on another machine must
+    // not be served from this one's ptyd.
+    const ptySpeaksFor = socketNodeId(req.headers);
+    if (!nodeOwnershipOk(pane.node_id ?? null, ptySpeaksFor)) {
+      console.warn(
+        `[ws] refused pty attach for pane ${paneId}: socket speaks for ${ptySpeaksFor}, pane lives on ${pane.node_id ?? LOCAL_NODE_ID}`,
+      );
+      refuseUpgrade(socket, 'pane belongs to another machine');
       return;
     }
     // URL panes have no PTY; reject upgrade before reaching ptyd
