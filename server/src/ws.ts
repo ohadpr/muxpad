@@ -47,6 +47,7 @@ import { TranscriptTail, identityNormalize, muxpadLocate } from './chat/Transcri
 import { agentPaneHasMessages } from './chat/has-messages.js';
 import type { EventBus } from './events.js';
 import { readNodeTokenFor } from './node-link/NodeLinks.js';
+import type { PaneOps } from './node-link/PaneRouter.js';
 import { withPaneKey } from './pane-key.js';
 import { clearProvisionError, provisionError } from './pane-provision.js';
 import { hasProjectContext } from './project-root.js';
@@ -441,6 +442,21 @@ export function attachWsServer(deps: {
    * attach to the wrong machine.
    */
   ptyd: PtydClient;
+  /**
+   * The NODE-AWARE transport, for the one thing in this module that is not a
+   * local socket operation: the `ensurePane` that spawns a pane before its
+   * bytes are bridged.
+   *
+   * It has to be separate from `ptyd` above, because this module needs BOTH —
+   * the concrete client for `socketPath`, and a router to decide which machine
+   * the spawn goes to. Using `ptyd` for the spawn is what made a pane created
+   * with node_id=trayo exist as a ROW on the mac with no pty on the VM: the
+   * row was right and the process was simply never created there.
+   *
+   * Absent means "use the local client", so a caller that has not been taught
+   * about nodes behaves exactly as before.
+   */
+  paneOps?: PaneOps;
   cache: PtydCache;
   events: EventBus;
   /** Liveness ping interval in ms. Defaults to 15s; tests pass a small value. */
@@ -515,6 +531,16 @@ export function attachWsServer(deps: {
   // Which machine owns a pane. One resolver, so no two call sites can
   // disagree about where a chat actually lives.
   const nodes = new NodeStore(deps.db);
+  /**
+   * The transport for pane LIFECYCLE — create, kill, probe.
+   *
+   * One accessor rather than `deps.paneOps ?? deps.ptyd` at each site: the
+   * recovery sweep had its own `deps.ptyd.hasPane`, and a sweep asking THIS
+   * machine whether a remote pane is alive gets `false` and then recreates
+   * the conversation here. Every lifecycle call in this module goes through
+   * this; `deps.ptyd` is for `socketPath` and nothing else.
+   */
+  const lifecycle = (): PaneOps => deps.paneOps ?? deps.ptyd;
   const tabs = new TabStore(deps.db);
   // Living sidebar: bumps `tabs.last_activity_at`. Forced for discrete
   // moments (turn done, user send), throttled for raw pty chatter.
@@ -1112,7 +1138,8 @@ export function attachWsServer(deps: {
   const spawnAgentPane = async (paneId: string): Promise<void> => {
     try {
       try {
-        await deps.ptyd.killPane(paneId);
+        // Routed: a respawn must kill the pty on the machine that has it.
+        await lifecycle().killPane(paneId);
       } catch {
         // pane not in ptyd (reboot-orphaned, or parked) — ensurePane spawns it
       }
@@ -1128,7 +1155,7 @@ export function attachWsServer(deps: {
       )
         return;
       const workspaceId = tabs.getWorkspaceId(fresh.tab_id);
-      await deps.ptyd.ensurePane({
+      await lifecycle().ensurePane({
         id: fresh.id,
         shell: fresh.shell ?? process.env.SHELL ?? '/bin/zsh',
         startup_cmd: fresh.startup_cmd,
@@ -1266,7 +1293,7 @@ export function attachWsServer(deps: {
         // bug the comments above were written for.
         let live: boolean;
         try {
-          live = await deps.ptyd.hasPane(pane.id);
+          live = await lifecycle().hasPane(pane.id);
         } catch {
           continue;
         }
@@ -1275,7 +1302,7 @@ export function attachWsServer(deps: {
           // that owns it is mid-reconnect and must not be bounced.
           let fg: string | null = null;
           try {
-            fg = await deps.ptyd.getForegroundCommand(pane.id);
+            fg = await lifecycle().getForegroundCommand(pane.id);
           } catch {
             continue;
           }
@@ -1430,7 +1457,7 @@ export function attachWsServer(deps: {
         // takes its socket with it, and the runner's own exit path is what the
         // registry already handles for any pane that goes away.
         try {
-          await deps.ptyd.killPane(c.pane.id);
+          await lifecycle().killPane(c.pane.id);
         } catch {
           // Already gone, or ptyd is unreachable. Marking it parked anyway is
           // right in both cases: there is no process, which is the state this
@@ -3179,7 +3206,9 @@ export function attachWsServer(deps: {
       // disconnected, ensurePane rejects and we close the browser WS so
       // the client knows to retry. ensurePane is idempotent on ptyd's
       // side — repeated calls for the same id are no-ops.
-      deps.ptyd
+      // Through the ROUTER: this decides which machine spawns the pane, and
+      // it must agree with `remotePtyTarget` below about where the bytes are.
+      lifecycle()
         .ensurePane({
           id: pane.id,
           shell: pane.shell ?? process.env.SHELL ?? '/bin/zsh',

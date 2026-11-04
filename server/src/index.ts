@@ -609,6 +609,9 @@ const wsServer = attachWsServer({
   http: httpServer,
   db,
   ptyd,
+  // The spawn inside the attach path must go to the pane's MACHINE; `ptyd`
+  // above stays the local client for the pty socket. See ws.ts on why both.
+  paneOps: paneRouter,
   cache,
   events,
   agentBridge,
