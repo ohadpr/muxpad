@@ -42,6 +42,16 @@ export class PaneStore {
     env?: Record<string, string> | null;
     face?: 'terminal' | 'web' | 'chat';
     mode?: AgentMode;
+    /**
+     * WHICH MACHINE this pane's pty lives on. Defaults to `local`.
+     *
+     * Written HERE, before anything spawns, and that ordering is the whole
+     * trick: PaneRouter resolves `ensurePane` by reading this column, so a
+     * row created with the right machine spawns on the right machine with no
+     * change to any spawn path. Get the order wrong — spawn first, stamp
+     * after — and every pane is born on the mac.
+     */
+    node_id?: string;
   }): PaneSpec {
     const id = ulid();
     const now = Date.now();
@@ -61,9 +71,10 @@ export class PaneStore {
     // pass DEFAULT_AGENT_MODE explicitly — agent-tab.ts and the pane-create
     // route both do.
     const mode = input.mode ?? BASELINE_AGENT_MODE;
+    const nodeId = input.node_id ?? LOCAL_NODE_ID;
     this.db
       .prepare(
-        'INSERT INTO panes (id, tab_id, kind, url, shell, startup_cmd, cwd, env, face, mode, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO panes (id, tab_id, kind, url, shell, startup_cmd, cwd, env, face, mode, created_at, node_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
       .run(
         id,
@@ -77,6 +88,7 @@ export class PaneStore {
         face,
         mode,
         now,
+        nodeId,
       );
     return {
       id,
@@ -97,7 +109,7 @@ export class PaneStore {
       // it drops a new column independently of `row()` above. A freshly
       // created pane that reports no machine would route its first spawn by a
       // default rather than by the truth.
-      node_id: LOCAL_NODE_ID,
+      node_id: nodeId,
     };
   }
 

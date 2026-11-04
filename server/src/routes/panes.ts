@@ -30,6 +30,7 @@ import { randomWorkspaceName } from '../random-name.js';
 import { safeCwd } from '../safe-cwd.js';
 import { AgentQueueStore } from '../store/AgentQueueStore.js';
 import { AgentSessionStore } from '../store/AgentSessionStore.js';
+import { LOCAL_NODE_ID, NodeStore } from '../store/NodeStore.js';
 import { PaneStore } from '../store/PaneStore.js';
 import { TabStore } from '../store/TabStore.js';
 import { WorkspaceStore } from '../store/WorkspaceStore.js';
@@ -226,6 +227,10 @@ export function panesTabScopedRoutes(deps: {
         // be invisible in the mosaic (row exists, not in layout tree).
         append_to_layout: z.boolean().optional(),
         split_from: z.string().optional(),
+        // WHICH MACHINE to create this pane on. Omitted means "the
+        // workspace's default host", which is itself `local` unless set — so
+        // every existing client keeps creating panes exactly where it did.
+        node_id: z.string().optional(),
         direction: z.enum(['row', 'column']).optional(),
         position: z.enum(['after', 'before']).optional(),
       })
@@ -336,6 +341,20 @@ export function panesTabScopedRoutes(deps: {
     const startupCmd = agentMode
       ? applyModeToStartupCmd(body.startup_cmd ?? null, agentMode)
       : (body.startup_cmd ?? null);
+    // ── WHICH MACHINE ───────────────────────────────────────────────────
+    //
+    // An explicit `node_id` in the request wins; otherwise the workspace's
+    // default host; otherwise this machine. `defaultNodeFor` also falls back
+    // to local for a workspace naming a node that has since been removed, so
+    // deleting a node cannot make "new pane" fail.
+    //
+    // Stamped BEFORE the spawn below, which is the whole trick: PaneRouter
+    // resolves `ensurePane` by reading this column, so the pane spawns on the
+    // machine its row names with no change to the spawn path. Spawn first and
+    // stamp after, and every pane is born on the mac.
+    const nodes = new NodeStore(deps.db);
+    const wsId = tabs.getWorkspaceId(tabId);
+    const nodeId = body.node_id ?? (wsId ? nodes.defaultNodeFor(wsId) : LOCAL_NODE_ID);
     const pane = panes.create({
       tab_id: tabId,
       shell: body.shell ?? defaultShell,
@@ -344,6 +363,7 @@ export function panesTabScopedRoutes(deps: {
       env: body.env ?? null,
       ...(body.face ? { face: body.face } : {}),
       ...(agentMode ? { mode: agentMode } : {}),
+      node_id: nodeId,
     });
     deps.events.emit({
       type: 'pane.added',
