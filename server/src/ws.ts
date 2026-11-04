@@ -2971,6 +2971,31 @@ export function attachWsServer(deps: {
             // transcript — the runner writes a muxpad-owned normalized log
             // instead. Point the tail at that log with the identity normalizer;
             // Claude keeps its ~/.claude file + schema translation unchanged.
+            // ── NEVER TAIL THIS MACHINE'S DISK FOR ANOTHER MACHINE'S PANE ──
+            //
+            // `TranscriptTail` locates a transcript BY SESSION ID on the
+            // server's own filesystem. A trust review found the consequence:
+            // a host can `hello` for its own pane carrying a PERSONAL chat's
+            // sid — the hello validates the sid's shape and nothing else — and
+            // the server would then tail that personal transcript as the
+            // remote pane's history, serve it back to the host through its own
+            // correctly-scoped route, and push it to every browser watching
+            // that chat. Session ids are not secret; they sit in plain sight
+            // as `--resume <sid>` inside `startup_cmd`.
+            //
+            // So the lookup is gated on the pane living HERE. A remote pane's
+            // history has to arrive from its own host over the link, which is
+            // not built yet — until it is, a remote chat renders empty, and
+            // empty is the correct answer. Showing somebody else's
+            // conversation would not be.
+            if (!paneIsLocal) {
+              send({
+                t: 'notice',
+                level: 'info',
+                text: 'This chat runs on another machine. Its history is not available here yet.',
+              });
+              return;
+            }
             const nonClaude = session2?.assistant && session2.assistant !== 'claude';
             tail = new TranscriptTail(sid, {
               tailBytes: CHAT_HISTORY_TAIL_BYTES,
