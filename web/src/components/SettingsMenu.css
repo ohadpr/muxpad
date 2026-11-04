@@ -1006,3 +1006,40 @@
   font-family: var(--mono-font, ui-monospace, monospace);
   font-size: 0.9em;
 }
+
+/* ── WHERE NEW CHATS GO ─────────────────────────────────────────────────────
+   One row per workspace: its name, and the machine a new chat there opens on.
+   Rendered only when there is more than one machine, so a single-machine
+   install never sees a question with one answer. */
+.machines-default-hosts {
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+  padding-top: 12px;
+}
+.machines-subhead {
+  margin: 0 0 8px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--fg-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.machine-default-host {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+}
+/* The name takes the slack and the select keeps its own width, so a column of
+   these lines its controls up however long the workspace names are. */
+.machine-default-host-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.machine-default-host select {
+  flex: 0 0 auto;
+  max-width: 55%;
+}

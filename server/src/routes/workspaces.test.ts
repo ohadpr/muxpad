@@ -4,16 +4,21 @@ import { join } from 'node:path';
 import type { MuxpadEvent } from '@muxpad/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EventBus } from '../events.js';
+import { NodeStore } from '../store/NodeStore.js';
 import { openDb } from '../store/db.js';
 import { type TestApp, createTestApp } from '../test-helpers/createTestApp.js';
 
 describe('workspaces routes', () => {
   let test: TestApp;
   let tmp: string;
+  // Held so the node-aware tests below can seed a machine; the app has no
+  // handle to hand back.
+  let db: ReturnType<typeof openDb>;
 
   beforeEach(async () => {
     tmp = mkdtempSync(join(tmpdir(), 'muxpad-ws-'));
-    test = await createTestApp({ db: openDb(':memory:'), dataDir: tmp });
+    db = openDb(':memory:');
+    test = await createTestApp({ db, dataDir: tmp });
   });
 
   afterEach(async () => {
@@ -254,5 +259,78 @@ describe('workspaces routes', () => {
     } finally {
       await local.cleanup();
     }
+  });
+
+  /**
+   * WHERE A NEW CHAT IN THIS WORKSPACE OPENS. The control that makes more than
+   * one machine usable rather than a toggle you forget.
+   */
+  describe('the default host', () => {
+    const patch = (id: string, body: unknown) =>
+      test.app.request(`/api/workspaces/${id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    const mk = async () =>
+      ((await (await post('/api/workspaces', { name: 'Trayo' })).json()) as { id: string }).id;
+
+    it('is null on a fresh workspace, meaning this machine', async () => {
+      const w = (await (await post('/api/workspaces', { name: 'W' })).json()) as {
+        default_node_id?: string | null;
+      };
+      expect(w.default_node_id ?? null).toBe(null);
+    });
+
+    it('can be set to a known machine, and comes back on the wire', async () => {
+      new NodeStore(db).add({ id: 'trayo', name: 'VM', endpoint: 'ws://vm:7797' });
+      const id = await mk();
+      const res = await patch(id, { default_node_id: 'trayo' });
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as { default_node_id: string }).default_node_id).toBe('trayo');
+      const again = (await (await test.app.request(`/api/workspaces/${id}`)).json()) as {
+        default_node_id: string;
+      };
+      expect(again.default_node_id).toBe('trayo');
+    });
+
+    it('CAN BE CLEARED — a default host you cannot unset is a trap', async () => {
+      new NodeStore(db).add({ id: 'trayo', name: 'VM', endpoint: 'ws://vm:7797' });
+      const id = await mk();
+      await patch(id, { default_node_id: 'trayo' });
+      const res = await patch(id, { default_node_id: null });
+      expect(((await res.json()) as { default_node_id: string | null }).default_node_id).toBe(null);
+    });
+
+    it('is left alone by a patch that does not mention it', async () => {
+      new NodeStore(db).add({ id: 'trayo', name: 'VM', endpoint: 'ws://vm:7797' });
+      const id = await mk();
+      await patch(id, { default_node_id: 'trayo' });
+      const res = await patch(id, { name: 'Renamed' });
+      const body = (await res.json()) as { name: string; default_node_id: string };
+      expect(body.name).toBe('Renamed');
+      expect(body.default_node_id).toBe('trayo');
+    });
+
+    it('refuses a machine that does not exist, rather than storing a typo', async () => {
+      // Storing it would read as "new chats go to the VM" while quietly
+      // creating them here — `defaultNodeFor` falls back to local for an
+      // unknown id, which is right for a machine REMOVED and wrong for a name
+      // that was never one.
+      const id = await mk();
+      const res = await patch(id, { default_node_id: 'tyop' });
+      expect(res.status).toBe(400);
+      const after = (await (await test.app.request(`/api/workspaces/${id}`)).json()) as {
+        default_node_id: string | null;
+      };
+      expect(after.default_node_id).toBe(null);
+    });
+
+    it('decides where a new pane lands', async () => {
+      new NodeStore(db).add({ id: 'trayo', name: 'VM', endpoint: 'ws://vm:7797' });
+      const id = await mk();
+      await patch(id, { default_node_id: 'trayo' });
+      expect(new NodeStore(db).defaultNodeFor(id)).toBe('trayo');
+    });
   });
 });

@@ -672,6 +672,15 @@ export const WorkspaceSchema = z.object({
   status: PaneStatusSchema.optional(),
   // Sum of live background subagents across the whole workspace.
   agents: z.number().int().nonnegative().optional(),
+  /**
+   * WHICH MACHINE A NEW CHAT HERE LANDS ON. `null`/absent = this one.
+   *
+   * The thing that makes more than one host usable rather than a toggle you
+   * forget: Trayo work opens on the Trayo VM because the workspace says so,
+   * not because you remembered to pick it. A node removed out from under a
+   * workspace falls back to local rather than failing to create a chat.
+   */
+  default_node_id: z.string().nullable().optional(),
 });
 export type Workspace = z.infer<typeof WorkspaceSchema>;
 

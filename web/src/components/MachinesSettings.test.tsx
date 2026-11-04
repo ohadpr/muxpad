@@ -13,21 +13,52 @@ describe('Settings → Machines', () => {
   });
 
   /**
-   * READ-ONLY ON PURPOSE. Pairing writes a credential to disk at 0600 on two
-   * machines, which a dialog cannot honestly do; and a default-host picker is
-   * worth having only once every lifecycle path is node-aware — one that
-   * silently kept creating panes on the mac would be worse than none.
+   * NO PAIRING BUTTON. Pairing writes a credential to disk at 0600 on two
+   * machines, which a dialog cannot honestly do.
    */
-  it('offers no add button and no default-host picker yet', () => {
+  it('offers no add button, and says why rather than looking unfinished', () => {
     // Asserted against the JSX ONLY: the phrase appears in the file's own
     // comment explaining why there is no such button, and a negative match
     // over the whole source finds the explanation and fails. (Third time a
     // comment has matched one of my own negative assertions tonight.)
     const jsx = SRC.slice(SRC.indexOf('export function MachinesSettings'));
     expect(jsx).not.toMatch(/<button/i);
-    expect(jsx).not.toMatch(/<select/i);
-    // And it says why, rather than looking unfinished.
     expect(SRC).toMatch(/paired from the command line/i);
+  });
+
+  /**
+   * THE DEFAULT-HOST PICKER. Held back until a chat on another machine worked
+   * end to end; it does, and this is what makes more than one machine usable
+   * rather than a toggle you forget.
+   */
+  describe('where new chats go', () => {
+    const jsx = SRC.slice(SRC.indexOf('export function MachinesSettings'));
+
+    it('is a select per workspace, over the machine list', () => {
+      expect(jsx).toMatch(/<select/);
+      expect(jsx).toMatch(/machines-default-hosts/);
+      expect(jsx).toMatch(/default_node_id/);
+    });
+
+    it('hides itself on a one-machine install — one option is not a question', () => {
+      expect(jsx).toMatch(/nodes\.length > 1/);
+    });
+
+    it('sends `null` for this machine, not the string `local`', () => {
+      // The column means "somewhere else"; storing 'local' in it would make
+      // every fallback path have two values to mean the same thing.
+      expect(jsx).toMatch(/nodeId === LOCAL \? null : nodeId/);
+    });
+
+    it('rolls the select back when the write fails', () => {
+      // The select IS the feedback here, so an optimistic value left behind
+      // after a failure is a lie about where the next chat will open.
+      expect(jsx).toMatch(/default_node_id: before/);
+    });
+
+    it('says what happens when that machine is away', () => {
+      expect(SRC).toMatch(/falls back to this/i);
+    });
   });
 
   it('keeps all FOUR states distinct', () => {
