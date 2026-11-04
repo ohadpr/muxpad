@@ -11,6 +11,7 @@ import { WorkspaceStore } from '../store/WorkspaceStore.js';
 import { openDb } from '../store/db.js';
 import {
   NodeUnavailableError,
+  type PaneOps,
   PaneRouter,
   type PaneTransport,
   UnknownNodeError,
@@ -21,8 +22,13 @@ let db: Database.Database;
 let ws: string;
 let nodes: NodeStore;
 
-const fakeTransport = (name: string): PaneTransport & { name: string } => ({
+const fakeTransport = (name: string): PaneOps & { name: string } => ({
   name,
+  // The local slot needs the event/shutdown surface too; remotes only ever
+  // have their pane methods called, so the extras are harmless noise there.
+  on: vi.fn(),
+  off: vi.fn(),
+  close: vi.fn(async () => {}),
   ensurePane: vi.fn(async () => {}),
   killPane: vi.fn(async () => {}),
   hasPane: vi.fn(async () => true),

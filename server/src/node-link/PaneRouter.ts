@@ -65,9 +65,29 @@ export interface PaneTransport {
   closePtyClients(id: string): Promise<void>;
 }
 
+/**
+ * The surface pane-LIFECYCLE callers actually use, which is narrower than
+ * PtydClient's.
+ *
+ * Extracted so a router can stand where the client stands. Structural
+ * assignment to `PtydClient` itself is impossible — it has private fields, and
+ * TypeScript requires private members to come from the same declaration — so
+ * the dependency has to be named by what it DOES. Which is better anyway: a
+ * caller that only kills panes should not be typed against a socket client.
+ *
+ * `PtydCache` deliberately keeps taking the concrete client: it wires the
+ * decoration event stream and the `flushCwds`/`flushDecorations` snapshots,
+ * which are per-machine concerns and get their own per-node instance later.
+ */
+export interface PaneOps extends PaneTransport {
+  on(event: string, listener: (...args: never[]) => void): unknown;
+  off(event: string, listener: (...args: never[]) => void): unknown;
+  close(): Promise<void>;
+}
+
 export interface PaneRouterDeps {
   /** This machine. Always present; its "link" is a unix socket. */
-  local: PaneTransport;
+  local: PaneOps;
   nodes: NodeStore;
   /** A live transport for a remote node, or null when the link is down. */
   remote: (nodeId: string) => PaneTransport | null;
@@ -81,7 +101,7 @@ export interface GlobalResult<T> {
   unreachable: string[];
 }
 
-export class PaneRouter {
+export class PaneRouter implements PaneOps {
   constructor(private readonly deps: PaneRouterDeps) {}
 
   /**
@@ -193,5 +213,26 @@ export class PaneRouter {
       }
     }
     return { value: ids, unreachable };
+  }
+
+  // ── PASSTHROUGH TO THIS MACHINE, FOR NOW ───────────────────────────────
+  //
+  // Events and shutdown are the LOCAL client's: a remote node's decoration
+  // stream arrives over its own link and gets its own cache instance, which
+  // is later work. Forwarding rather than reimplementing keeps today's
+  // behaviour byte-identical while only `local` exists — which is precisely
+  // what makes introducing this router safe to land unattended.
+  on(event: string, listener: (...args: never[]) => void): unknown {
+    return this.deps.local.on(event, listener);
+  }
+
+  off(event: string, listener: (...args: never[]) => void): unknown {
+    return this.deps.local.off(event, listener);
+  }
+
+  /** Closes the LOCAL transport. Remote links are owned by whatever opened
+   *  them, so this must not reach across and tear down somebody else's. */
+  async close(): Promise<void> {
+    return this.deps.local.close();
   }
 }
