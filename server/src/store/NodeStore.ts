@@ -121,6 +121,29 @@ export class NodeStore {
     this.db.prepare('UPDATE nodes SET state = ? WHERE id = ?').run(state, id);
   }
 
+  /**
+   * The login shell on a node, as that node reported it.
+   *
+   * `null` when the node has not described itself yet (or is this machine,
+   * which has no link to ask). The CALLER decides what to do with that — a
+   * pane created before the first `/self` lands must not get an invented
+   * path, because the whole bug this exists for was a path from the wrong
+   * machine.
+   */
+  shellFor(id: string): string | null {
+    if (id === LOCAL_NODE_ID) return null;
+    const raw = this.get(id)?.capabilities;
+    if (!raw) return null;
+    try {
+      const c = JSON.parse(raw) as { shell?: unknown };
+      // Absolute only. A relative or empty value would be resolved against
+      // whatever cwd ptyd happens to have, which is not a shell choice.
+      return typeof c.shell === 'string' && c.shell.startsWith('/') ? c.shell : null;
+    } catch {
+      return null;
+    }
+  }
+
   setCapabilities(id: string, capabilities: unknown): void {
     this.db
       .prepare('UPDATE nodes SET capabilities = ? WHERE id = ?')

@@ -200,3 +200,86 @@ describe('creating on a named node, before any row exists', () => {
     await expect(r.ensurePaneOn('trayo', spec('p1'))).rejects.toBeInstanceOf(NodeUnavailableError);
   });
 });
+
+/**
+ * ── THE SHELL IS PART OF "WHICH MACHINE" ─────────────────────────────────
+ * The same bug as the cwd, one field over: the server's default is
+ * `/bin/zsh`, there is no zsh on a stock Ubuntu box, and a pane created with
+ * it died the instant it started — reported as nothing but "the pty exited
+ * immediately after starting".
+ */
+describe('a remote pane gets its own machine’s shell', () => {
+  const specWithShell = (id: string, shell: string): PaneRuntimeSpec => ({
+    id,
+    shell,
+    cwd: '/tmp',
+  });
+
+  const routerWith = (capabilities: unknown) => {
+    const local = fakeTransport('local');
+    const trayo = fakeTransport('trayo');
+    nodes.add({ id: 'trayo', name: 'Trayo', endpoint: 'ws://vm:7797' });
+    if (capabilities !== undefined) nodes.setCapabilities('trayo', capabilities);
+    return {
+      trayo,
+      router: new PaneRouter({ local, nodes, remote: () => trayo }),
+    };
+  };
+
+  it('substitutes the host’s shell for the server’s default', async () => {
+    const { trayo, router } = routerWith({ shell: '/bin/bash' });
+    const p = pane('trayo');
+    await router.ensurePane(specWithShell(p, process.env.SHELL ?? '/bin/zsh'));
+    expect(
+      (trayo.ensurePane as unknown as { mock: { calls: PaneRuntimeSpec[][] } }).mock.calls[0]?.[0]
+        ?.shell,
+    ).toBe('/bin/bash');
+  });
+
+  it('leaves a DELIBERATELY chosen shell alone', async () => {
+    // Someone who typed a shell owns the consequence; silently replacing it
+    // would make a wrong choice unfindable.
+    const { trayo, router } = routerWith({ shell: '/bin/bash' });
+    const p = pane('trayo');
+    await router.ensurePane(specWithShell(p, '/usr/bin/fish'));
+    expect(
+      (trayo.ensurePane as unknown as { mock: { calls: PaneRuntimeSpec[][] } }).mock.calls[0]?.[0]
+        ?.shell,
+    ).toBe('/usr/bin/fish');
+  });
+
+  it('changes nothing when the host has not described itself', async () => {
+    const { trayo, router } = routerWith(undefined);
+    const p = pane('trayo');
+    const asked = process.env.SHELL ?? '/bin/zsh';
+    await router.ensurePane(specWithShell(p, asked));
+    expect(
+      (trayo.ensurePane as unknown as { mock: { calls: PaneRuntimeSpec[][] } }).mock.calls[0]?.[0]
+        ?.shell,
+    ).toBe(asked);
+  });
+
+  it('ignores a relative shell — that is not a shell choice', async () => {
+    const { trayo, router } = routerWith({ shell: 'bash' });
+    const p = pane('trayo');
+    const asked = process.env.SHELL ?? '/bin/zsh';
+    await router.ensurePane(specWithShell(p, asked));
+    expect(
+      (trayo.ensurePane as unknown as { mock: { calls: PaneRuntimeSpec[][] } }).mock.calls[0]?.[0]
+        ?.shell,
+    ).toBe(asked);
+  });
+
+  it('never touches a LOCAL pane’s shell', async () => {
+    const local = fakeTransport('local');
+    nodes.add({ id: 'trayo', name: 'Trayo', endpoint: 'ws://vm:7797' });
+    nodes.setCapabilities('trayo', { shell: '/bin/bash' });
+    const r = new PaneRouter({ local, nodes, remote: () => null });
+    const p = pane();
+    await r.ensurePane(specWithShell(p, '/bin/zsh'));
+    expect(
+      (local.ensurePane as unknown as { mock: { calls: PaneRuntimeSpec[][] } }).mock.calls[0]?.[0]
+        ?.shell,
+    ).toBe('/bin/zsh');
+  });
+});

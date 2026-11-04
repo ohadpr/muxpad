@@ -1,7 +1,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { arch, cpus, homedir, platform, totalmem } from 'node:os';
+import { arch, cpus, homedir, platform, totalmem, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { WebSocket, WebSocketServer } from 'ws';
 import { TranscriptTail, identityNormalize, muxpadLocate } from '../chat/TranscriptReader.js';
@@ -57,7 +57,17 @@ export interface NodeAgentOptions {
   log?: (line: string) => void;
 }
 
-/** What this machine is, for the control plane's Settings → Machines row. */
+/**
+ * What this machine is, for the control plane's Settings → Machines row — and
+ * for one decision that is not cosmetic.
+ *
+ * `shell` IS LOAD-BEARING. The server's own default is `/bin/zsh`, which is
+ * right on a mac and does not exist on this Ubuntu VM: a pane created with it
+ * died the instant it started, and the chat said only "the pty exited
+ * immediately after starting". Same family as the cwd bug — a path from the
+ * server's world shipped to a machine that is not it. So the host says what
+ * its shell is and the server uses that for a pane it creates here.
+ */
 export function describeSelf(): Record<string, unknown> {
   return {
     platform: platform(),
@@ -66,7 +76,25 @@ export function describeSelf(): Record<string, unknown> {
     // GiB, rounded — the exact byte count is noise in a UI row.
     memoryGb: Math.round(totalmem() / 1024 ** 3),
     node: process.version,
+    shell: defaultShell(),
   };
+}
+
+/**
+ * This machine's login shell.
+ *
+ * `$SHELL` first because it is what the user actually uses, then the
+ * passwd-file answer, then bash — which every host muxpad runs on has, and
+ * zsh conspicuously does not.
+ */
+export function defaultShell(): string {
+  const fromEnv = process.env.SHELL?.trim();
+  if (fromEnv) return fromEnv;
+  try {
+    return userInfo().shell?.trim() || '/bin/bash';
+  } catch {
+    return '/bin/bash';
+  }
 }
 
 /**
