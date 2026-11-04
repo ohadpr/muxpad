@@ -40,8 +40,16 @@ export interface HostLinkDeps {
   token: string;
   /** This server's own base, for the loopback runner connection. */
   selfUrl: string;
-  /** The install credential, so the loopback upgrade satisfies api-auth. */
-  apiKey: string | null;
+  /**
+   * The install credential, so the loopback upgrade satisfies api-auth.
+   *
+   * A FUNCTION, called at relay time. Read once at construction it was always
+   * null: HostLinks.start() runs before initApiAuth(), so the secret did not
+   * exist yet. Harmless while auth is in `observe` — the upgrade is allowed
+   * and merely logged — and an instant, total failure the moment it is
+   * enforced, which is the worst time to discover it.
+   */
+  apiKey: () => string | null;
   /** A remote chat's events arrived. */
   onTranscript: (m: {
     paneId: string;
@@ -186,16 +194,40 @@ export class HostLink {
     const ws = new WebSocket(url, {
       headers: {
         'x-muxpad-node-id': this.deps.nodeId,
-        ...(this.deps.apiKey ? { 'x-muxpad-key': this.deps.apiKey } : {}),
+        ...(() => {
+          const k = this.deps.apiKey();
+          return k ? { 'x-muxpad-key': k } : {};
+        })(),
         // Our own origin, so the CSRF guard on the upgrade sees a same-origin
         // request rather than `null` and refuses it.
         origin: this.deps.selfUrl,
       },
     });
     this.relays.set(paneId, ws);
-    ws.on('message', (d) =>
-      this.send({ ch: 'runner', op: 'frame', paneId, frame: JSON.parse(d.toString()) }),
-    );
+    // DRAIN THE QUEUE, OR BUFFERING THE HELLO ACHIEVES NOTHING. Holding the
+    // frame was only half the fix: without this the hello is queued instead of
+    // dropped, which looks identical from the chat view — a runner attached and
+    // answering, over a spinner that never clears.
+    ws.on('open', () => {
+      const q = this.pending.get(paneId);
+      this.pending.delete(paneId);
+      if (!q?.length || this.relays.get(paneId) !== ws) return;
+      for (const payload of q) {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        ws.send(payload);
+      }
+    });
+    ws.on('message', (d) => {
+      // Our own server's frames, but a throw here is an uncaught exception on
+      // an event handler — one malformed send would take the process down.
+      let frame: unknown;
+      try {
+        frame = JSON.parse(d.toString());
+      } catch {
+        return;
+      }
+      this.send({ ch: 'runner', op: 'frame', paneId, frame });
+    });
     ws.on('close', () => {
       if (this.relays.get(paneId) === ws) this.relays.delete(paneId);
     });

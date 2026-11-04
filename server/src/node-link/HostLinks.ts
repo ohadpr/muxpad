@@ -55,7 +55,7 @@ export class HostLinks {
           endpoint: node.endpoint,
           token,
           selfUrl: this.deps.selfUrl,
-          apiKey: this.deps.apiKey(),
+          apiKey: this.deps.apiKey,
           onTranscript: (m) => {
             for (const sink of this.sinks.get(m.paneId) ?? []) sink(m);
           },
