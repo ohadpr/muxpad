@@ -4,6 +4,7 @@ import { AgentSessionStore } from '../store/AgentSessionStore.js';
 import type { SpawnRound } from '../store/SpawnRoundStore.js';
 import { findTranscript, identityNormalize, muxpadLocate } from './TranscriptReader.js';
 import { readTailLines } from './has-messages.js';
+import { transcriptForPane } from './transcript-access.js';
 
 /** Recover the last answer from THIS closure, including after a server restart.
  * Never use an earlier job's answer or commentary followed by unanswered work. */
@@ -15,10 +16,19 @@ export function readWorkerAnswer(
   if (!round?.ended_at) return null;
   const session = new AgentSessionStore(db).getByPane(paneId);
   if (!session?.current_sid) return null;
-  const path =
-    (session.assistant === 'claude' ? findTranscript(session.current_sid) : null) ??
-    muxpadLocate(session.current_sid);
-  if (!path) return null;
+  // ── NEVER THIS DISK FOR A WORKER ON ANOTHER MACHINE ───────────────────
+  //
+  // This reads the last thing a sub-agent SAID and delivers it into the parent
+  // chat as a turn. Keyed on session id, that is the worst of the sid-swap
+  // consequences a trust review found: a host naming a personal chat's sid
+  // would have that conversation's last answer spoken into another chat.
+  //
+  // `elsewhere` yields null — no report — which is the safe direction here:
+  // the parent falls back to muxpad summarising the child's transcript, and a
+  // missing report is a visibly empty card rather than a wrong one.
+  const access = transcriptForPane(db, paneId, session.current_sid, session.assistant);
+  if (access.kind !== 'local') return null;
+  const path = access.path;
   const normalize = session.assistant === 'claude' ? normalizeTranscriptLine : identityNormalize;
   const start = Math.max(round.started_at, round.reopened_at ?? 0);
   let answer: string | null = null;

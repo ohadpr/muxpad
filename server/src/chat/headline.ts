@@ -6,6 +6,7 @@ import { GlobalsStore } from '../store/GlobalsStore.js';
 import { TabStore } from '../store/TabStore.js';
 import { findTranscript, identityNormalize, muxpadLocate } from './TranscriptReader.js';
 import { readTailLines } from './has-messages.js';
+import { transcriptForPane } from './transcript-access.js';
 
 /**
  * The nav row's second line: ONE line saying what a chat is currently about —
@@ -1022,8 +1023,19 @@ export function readRecentTurns(
   const sess = sessions.getByPane(paneId);
   const sid = sess?.current_sid;
   if (!sid) return { conversation: '', turns: 0, said: 0 };
-  const path = (sess.assistant === 'claude' ? findTranscript(sid) : null) ?? muxpadLocate(sid);
-  if (!path) return { conversation: '', turns: 0, said: 0 };
+  // ── THROUGH THE CHOKEPOINT ────────────────────────────────────────────
+  //
+  // This text is fed straight into model prompts — spawn-report, awaiting,
+  // spawn-task and the headline writer all consume it. Keyed on session id
+  // alone, a host could have a PERSONAL conversation summarised onto a remote
+  // pane's row, and its content put in front of a local agent. See
+  // transcript-access.ts.
+  //
+  // `elsewhere` yields the empty result, which every caller already handles as
+  // "nothing to summarise yet".
+  const access = transcriptForPane(db, paneId, sid, sess.assistant);
+  if (access.kind !== 'local') return { conversation: '', turns: 0, said: 0 };
+  const path = access.path;
   let lines: string[];
   try {
     lines = readTailLines(path, TAIL_BYTES);

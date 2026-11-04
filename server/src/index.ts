@@ -44,6 +44,7 @@ import { glossaryCache } from './chat/glossary.js';
 import { sweepImplausibleHeadlines } from './chat/headline.js';
 import { ReportDelivery } from './chat/report-delivery.js';
 import { paneCarryover } from './chat/summarize.js';
+import { transcriptIsLocal } from './chat/transcript-access.js';
 import { loadConfig, voiceApiKey } from './config.js';
 import { CronScheduler } from './cron/CronScheduler.js';
 import { EventBus } from './events.js';
@@ -381,6 +382,9 @@ try {
 }
 const archiver = archiveDb
   ? new Archiver({
+      // Only this machine's chats. A remote host archives its own; its archive
+      // and search index stay there, per the host-scoping rule.
+      isLocalPane: (paneId) => transcriptIsLocal(db, paneId),
       archive: archiveDb,
       archiveDir: join(config.dataDir, 'archive'),
       claudeProjectsDir: projectsDir(),

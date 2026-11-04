@@ -17,6 +17,7 @@ import type Database from 'better-sqlite3';
 import { AgentQueueStore } from '../store/AgentQueueStore.js';
 import { AgentSessionStore } from '../store/AgentSessionStore.js';
 import { findTranscript, identityNormalize, muxpadLocate } from './TranscriptReader.js';
+import { transcriptForPane } from './transcript-access.js';
 
 /** Bound on the transcript read. We only need to know whether ONE message
  *  exists, and the first ones are at the head — but a transcript can be
@@ -88,10 +89,23 @@ export function agentPaneHasMessages(db: Database.Database, paneId: string): boo
   const sid = session?.current_sid;
   if (!sid) return false; // no session ever recorded → nothing was said
 
-  // Claude writes ~/.claude/projects/**/<sid>.jsonl; codex/cursor write the
-  // muxpad-normalized log. Same locator cascade as the transcript route.
-  const path = (session.assistant === 'claude' ? findTranscript(sid) : null) ?? muxpadLocate(sid);
-  if (!path || !existsSync(path)) return false; // session started, never spoke
+  // ── A PANE ON ANOTHER MACHINE COUNTS AS HAVING SPOKEN ─────────────────
+  //
+  // Through the chokepoint, which refuses to search this disk for a pane that
+  // lives elsewhere (see transcript-access.ts; the locators key on session id
+  // alone and a host can supply one).
+  //
+  // `elsewhere` must become TRUE here, and this is the caller the chokepoint's
+  // three-way result exists for. A `string | null` locator would have returned
+  // null, which this function reads as "session started, never spoke" — and
+  // the comment above is explicit that a false negative here is a DESTROYED
+  // CONVERSATION. A remote chat full of history would have been silently
+  // eligible for conversion.
+  const access = transcriptForPane(db, paneId, sid, session.assistant);
+  if (access.kind === 'elsewhere') return true;
+  if (access.kind === 'absent') return false; // session started, never spoke
+  const path = access.path;
+  if (!existsSync(path)) return false;
 
   const normalize = session.assistant === 'claude' ? normalizeTranscriptLine : identityNormalize;
   let head: { lines: string[]; complete: boolean };
