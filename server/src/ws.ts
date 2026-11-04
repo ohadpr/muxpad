@@ -215,15 +215,27 @@ const STALL_SWEEP_MS = 60_000;
  * So a socket may only act for a pane that lives on the machine the socket
  * speaks for.
  *
- * WHY THE HEADER CAN BE TRUSTED. `x-muxpad-node-id` is stamped by the
- * mac-side half of a node link — OUR code, on this machine, at upgrade time —
- * not by the remote peer. A remote runner's frames ride a stream whose
- * handshake already happened; it cannot add or alter headers on it. And a
- * LOCAL runner sends no such header at all, so it is pinned to `local`.
+ * ── READ THIS BEFORE TRUSTING THE HEADER ─────────────────────────────────
  *
- * Landing this before any remote runner exists is deliberate: today it can
- * only refuse a mismatch that cannot yet happen, which makes it free to
- * verify and impossible to regress into later.
+ * An earlier version of this comment claimed `x-muxpad-node-id` is "stamped by
+ * the mac-side half of a node link, not by the remote peer". **That was
+ * fiction.** A trust-boundary review grepped it: there are only READERS of
+ * this header in the tree (here and the pty arm). Nothing writes it, because
+ * the node link does not exist yet. A security argument that describes code
+ * which was never written is worse than no argument, because the next reader
+ * believes it.
+ *
+ * WHAT IS ACTUALLY TRUE TODAY. Nothing sets the header, so every caller reads
+ * as `local`: browsers, local runners, the CLI. The check therefore refuses
+ * nothing in practice and is a placeholder — useful only because it makes the
+ * RULE explicit and keeps the pane's machine in the decision.
+ *
+ * WHAT MUST HAPPEN WHEN THE LINK LANDS. Identity must come from the link
+ * OBJECT in process — the node the server dialed — and never from a header on
+ * a request the host could shape. The review's words: refactor the runner arm
+ * into `attachRunner(paneId, transport, speaksFor)` that the local upgrade and
+ * the link both call, rather than re-entering through a loopback WebSocket.
+ * And absence must NOT mean `local` for anything that arrived over a link.
  */
 /**
  * Where a pane's pty bytes live.
