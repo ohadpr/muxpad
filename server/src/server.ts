@@ -28,6 +28,7 @@ import { browserProxyRoutes, browsersRoutes } from './routes/browsers.js';
 import { cardsRoutes } from './routes/cards.js';
 import { cronsRoutes } from './routes/crons.js';
 import { eventsRoutes } from './routes/events.js';
+import { nodesRoutes } from './routes/nodes.js';
 import { openRoutes } from './routes/open.js';
 import { paneIoRoutes } from './routes/pane-io.js';
 import { panesScopedRoutes, panesTabScopedRoutes } from './routes/panes.js';
@@ -261,6 +262,8 @@ export function createApp(deps: AppDeps): Hono {
     return c.body(null, 204);
   });
   app.route('/api/workspaces', workspacesRoutes(resolved));
+  // Which machines muxpad knows about. Read-only on purpose — see routes/nodes.ts.
+  app.route('/api/nodes', nodesRoutes(resolved));
   // Slack lives on the SERVER now, not in the CLI: this process holds the
   // token and decides, and the caller's identity comes from its process
   // ancestry rather than from an environment variable it can set.
