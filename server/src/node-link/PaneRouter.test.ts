@@ -144,9 +144,11 @@ describe('a global sweep says where it could not look', () => {
     const trayo = fakeTransport('trayo');
     nodes.add({ id: 'trayo', name: 'Trayo', endpoint: 'wss://x' });
     const r = new PaneRouter({ local, nodes, remote: () => trayo });
-    const { value, unreachable } = await r.listPanes();
+    const { value, unreachable } = await r.listPanesBestEffort();
     expect(value.sort()).toEqual(['local-pane', 'trayo-pane']);
     expect(unreachable).toEqual([]);
+    // …and the all-or-nothing form agrees when nothing is missing.
+    expect((await r.listPanes()).sort()).toEqual(['local-pane', 'trayo-pane']);
   });
 
   it('a short list from a DOWN node is reported as partial, not as empty', async () => {
@@ -155,9 +157,12 @@ describe('a global sweep says where it could not look', () => {
     // as hasPane returning false.
     nodes.add({ id: 'trayo', name: 'Trayo', endpoint: 'wss://x' });
     const r = new PaneRouter({ local: fakeTransport('local'), nodes, remote: () => null });
-    const { value, unreachable } = await r.listPanes();
+    const { value, unreachable } = await r.listPanesBestEffort();
     expect(value).toEqual(['local-pane']);
     expect(unreachable).toEqual(['trayo']);
+    // A RECONCILER must not get that short list at all — it would read it as
+    // "everything on trayo is dead" and reap or recreate accordingly.
+    await expect(r.listPanes()).rejects.toBeInstanceOf(NodeUnavailableError);
   });
 
   it('a node that ERRORS counts as unreachable, not as empty', async () => {
@@ -169,7 +174,7 @@ describe('a global sweep says where it could not look', () => {
     };
     nodes.add({ id: 'trayo', name: 'Trayo', endpoint: 'wss://x' });
     const r = new PaneRouter({ local: fakeTransport('local'), nodes, remote: () => broken });
-    const { unreachable } = await r.listPanes();
+    const { unreachable } = await r.listPanesBestEffort();
     expect(unreachable).toEqual(['trayo']);
   });
 });
