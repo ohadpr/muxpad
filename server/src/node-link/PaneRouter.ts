@@ -169,8 +169,25 @@ export class PaneRouter implements PaneOps {
       // Malformed endpoint: the default is the right guess, and a link we
       // could not parse would have failed to open long before this.
     }
+    // ── AND THE CWD, RESTORED FROM THE ROW ──────────────────────────────
+    //
+    // `safeCwd()` stats a path on THIS machine and falls back to this
+    // machine's home when it is missing. For a remote pane that is always
+    // wrong: /home/ohad/work does not exist on a mac, so the spec arrived
+    // asking a Linux host to spawn a shell in /Users/ohadpr — which does not
+    // exist THERE, so the pty died instantly. That is what
+    // "the pty exited immediately after starting" was.
+    //
+    // There are SIXTEEN safeCwd/agentCwd call sites building specs. Fixing the
+    // one I happened to be looking at is the mistake I have now made three
+    // times today (two of seven transcript readers, one of three enqueueSid
+    // callers). So it is repaired HERE, where every spawn passes, by taking
+    // the cwd from the pane ROW — which holds the path the user actually
+    // asked for, untouched by any local stat.
+    const row = this.deps.nodes.cwdForPane(spec.id);
     return {
       ...spec,
+      ...(row ? { cwd: row } : {}),
       env: { ...(spec.env ?? {}), MUXPAD_API_URL: `http://127.0.0.1:${port}` },
     };
   }
