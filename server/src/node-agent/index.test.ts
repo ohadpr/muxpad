@@ -6,7 +6,9 @@ import { WebSocket } from 'ws';
 import {
   DEFAULT_NODE_PORT,
   describeSelf,
+  isApiFunnelPath,
   isForwardablePath,
+  isLoopbackPeer,
   readNodeToken,
   startNodeAgent,
   tokenMatches,
@@ -188,5 +190,47 @@ describe('what it reports about itself', () => {
     expect(DEFAULT_NODE_PORT).toBe(7797);
     expect(DEFAULT_NODE_PORT).not.toBe(7777);
     expect(DEFAULT_NODE_PORT < 9400 || DEFAULT_NODE_PORT > 9600).toBe(true);
+  });
+});
+
+/**
+ * ── THE IN-PANE CLI'S FUNNEL ─────────────────────────────────────────────
+ *
+ * A remote pane's `MUXPAD_API_URL` points here, and these calls carry NO
+ * token — a pane cannot hold one, because its environment is readable by
+ * anything running as the user. What protects them is that the funnel only
+ * answers over loopback, and this agent binds 0.0.0.0 because the control
+ * plane has to be able to dial it across the tailnet. That tailnet has other
+ * people's dev VMs on it.
+ */
+describe('who may use the API funnel', () => {
+  it('knows loopback, including the IPv4-mapped form Node reports', () => {
+    expect(isLoopbackPeer('127.0.0.1')).toBe(true);
+    expect(isLoopbackPeer('::1')).toBe(true);
+    // A dual-stack listener reports this, and missing it would refuse every
+    // pane on exactly the machines the funnel exists to serve.
+    expect(isLoopbackPeer('::ffff:127.0.0.1')).toBe(true);
+    expect(isLoopbackPeer('127.0.0.53')).toBe(true);
+    expect(isLoopbackPeer('100.64.0.7')).toBe(false); // a tailnet peer
+    expect(isLoopbackPeer('10.0.0.5')).toBe(false);
+    expect(isLoopbackPeer(undefined)).toBe(false);
+  });
+
+  it('recognises the funnel path and nothing adjacent to it', () => {
+    expect(isApiFunnelPath('/api/say/key')).toBe(true);
+    expect(isApiFunnelPath('/api')).toBe(true);
+    expect(isApiFunnelPath('/apix/say')).toBe(false);
+    expect(isApiFunnelPath('/control')).toBe(false);
+    expect(isApiFunnelPath('/health')).toBe(false);
+  });
+
+  it('answers 503 with no link, rather than hanging the pane', async () => {
+    // A `muxpad card` that never returns reads to the user as the chat
+    // freezing, so "no control plane" must be an ANSWER.
+    const p = port();
+    const a = await startNodeAgent({ port: p, host: '127.0.0.1', token: TOKEN, log: () => {} });
+    stop = a.close;
+    const res = await fetch(`http://127.0.0.1:${p}/api/say/key`);
+    expect(res.status).toBe(503);
   });
 });

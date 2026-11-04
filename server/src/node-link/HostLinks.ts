@@ -1,6 +1,7 @@
 import { LOCAL_NODE_ID, type NodeStore } from '../store/NodeStore.js';
 import { HostLink } from './HostLink.js';
 import { readNodeTokenFor } from './NodeLinks.js';
+import type { HostApi } from './host-api.js';
 
 /**
  * ONE {@link HostLink} PER REMOTE HOST, plus the fan-out the chat socket needs.
@@ -31,6 +32,13 @@ export interface HostLinksDeps {
   nodes: NodeStore;
   selfUrl: string;
   apiKey: () => string | null;
+  /**
+   * The scoped allowlist that answers in-pane CLI calls.
+   *
+   * Optional, and absent means a host's `api` requests are all refused — the
+   * safe default, and the one every test that does not care gets.
+   */
+  hostApi?: HostApi;
   dataDir?: string;
   log?: (line: string) => void;
 }
@@ -59,6 +67,15 @@ export class HostLinks {
           onTranscript: (m) => {
             for (const sink of this.sinks.get(m.paneId) ?? []) sink(m);
           },
+          // The principal is bound HERE, to the node this server dialled, and
+          // the handler cannot be told otherwise — a host names a path, never
+          // whose authority to use.
+          ...(this.deps.hostApi
+            ? {
+                onApiRequest: (m) =>
+                  (this.deps.hostApi as HostApi).handle(node.id, m.method, m.path, m.body),
+              }
+            : {}),
           ...(this.deps.log ? { log: this.deps.log } : {}),
         }),
       );

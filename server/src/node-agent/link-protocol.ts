@@ -36,7 +36,7 @@
  */
 
 /** Which conversation a message belongs to. */
-export type LinkChannel = 'ptyd' | 'transcript' | 'runner';
+export type LinkChannel = 'ptyd' | 'transcript' | 'runner' | 'api';
 
 /** Server → host. */
 export type LinkDown =
@@ -49,7 +49,16 @@ export type LinkDown =
   /** A frame bound for the runner in `paneId` (a send, stop, model switch). */
   | { ch: 'runner'; op: 'frame'; paneId: string; frame: unknown }
   /** The server is ready to adopt this pane's runner; the host may attach it. */
-  | { ch: 'runner'; op: 'adopt'; paneId: string };
+  | { ch: 'runner'; op: 'adopt'; paneId: string }
+  /** The answer to one `api` request. `id` is the host's own correlation id. */
+  | {
+      ch: 'api';
+      op: 'response';
+      id: string;
+      status: number;
+      body: string;
+      contentType?: string;
+    };
 
 /** Host → server. */
 export type LinkUp =
@@ -66,7 +75,25 @@ export type LinkUp =
   /** That pane's runner connected here / went away, so the server can
    *  register and tear down exactly as it does for a local runner. */
   | { ch: 'runner'; op: 'attached'; paneId: string }
-  | { ch: 'runner'; op: 'detached'; paneId: string };
+  | { ch: 'runner'; op: 'detached'; paneId: string }
+  /**
+   * One in-pane CLI call, for the server to answer.
+   *
+   * NOT "the server's API". The server routes these through a small allowlist
+   * (host-api.ts) whose principal is the LINK, not a header — a host names a
+   * path and a body and nothing else, and every id in that path must belong to
+   * a pane on that host. The trust review's finding was that handing a host
+   * `app.fetch` is code execution on this machine in one request, via
+   * `startup_cmd` on `POST /api/tabs/:id/panes` alone.
+   */
+  | {
+      ch: 'api';
+      op: 'request';
+      id: string;
+      method: string;
+      path: string;
+      body?: string;
+    };
 
 export function encodeLink(m: LinkDown | LinkUp): string {
   return JSON.stringify(m);
@@ -88,7 +115,7 @@ export function decodeLink(raw: string): (LinkDown | LinkUp) | null {
   }
   if (!v || typeof v !== 'object') return null;
   const ch = (v as { ch?: unknown }).ch;
-  if (ch !== 'ptyd' && ch !== 'transcript' && ch !== 'runner') return null;
+  if (ch !== 'ptyd' && ch !== 'transcript' && ch !== 'runner' && ch !== 'api') return null;
   return v as LinkDown | LinkUp;
 }
 
@@ -104,5 +131,6 @@ export function decodeLink(raw: string): (LinkDown | LinkUp) | null {
 export function hostMaySend(m: LinkDown | LinkUp): boolean {
   if (m.ch === 'ptyd') return true; // replies and ptyd's own pushes
   if (m.ch === 'transcript') return m.op === 'events' || m.op === 'title' || m.op === 'unavailable';
+  if (m.ch === 'api') return m.op === 'request';
   return m.op === 'frame' || m.op === 'attached' || m.op === 'detached';
 }

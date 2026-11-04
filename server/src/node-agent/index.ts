@@ -110,6 +110,47 @@ export function isForwardablePath(path: string): boolean {
 }
 
 /**
+ * Is this request from a process on THIS machine?
+ *
+ * The in-pane CLI's funnel (`/api/...`) is forwarded to the control plane with
+ * NO token, because a pane cannot hold one — the pane's environment is visible
+ * to anything running as the user, so a credential there protects nothing. What
+ * does the protecting is that the listener only honours it over loopback.
+ *
+ * This agent binds 0.0.0.0, and it has to: the control plane dials it across
+ * the tailnet. That same port is therefore visible to every other machine on
+ * a COMPANY tailnet with other people's VMs and an admin who is not the user.
+ * Forwarding `/api` from there would hand all of them the user's cards and
+ * `agent send`. So the check is on the peer address, per request.
+ *
+ * IPv4-mapped IPv6 (`::ffff:127.0.0.1`) is what Node reports on a dual-stack
+ * listener, and missing it would have made this refuse everything on exactly
+ * the machines it is meant to serve.
+ */
+export function isLoopbackPeer(addr: string | undefined | null): boolean {
+  if (!addr) return false;
+  const a = addr.replace(/^::ffff:/, '');
+  return a === '127.0.0.1' || a === '::1' || a === 'localhost' || /^127\./.test(a);
+}
+
+/**
+ * The in-pane CLI's funnel, and only that.
+ *
+ * A prefix check here, not an allowlist — unusual for this file, and
+ * deliberate. The POLICY lives on the server (node-link/host-api.ts), which is
+ * the only side that knows which machine is asking and can check an id against
+ * the pane table. Two copies of an allowlist is two things to keep in sync and
+ * a host that can be lied to about its own rights; the server refuses what it
+ * does not allow, and this side carries it.
+ */
+export function isApiFunnelPath(path: string): boolean {
+  return path === '/api' || path.startsWith('/api/');
+}
+
+/** A card can be 64KB; nothing the CLI sends is bigger than this. */
+const MAX_API_BODY = 256 * 1024;
+
+/**
  * Start the agent. Resolves once it is listening.
  */
 export async function startNodeAgent(opts: NodeAgentOptions): Promise<{ close: () => void }> {
@@ -172,9 +213,49 @@ export async function startNodeAgent(opts: NodeAgentOptions): Promise<{ close: (
       res.end(JSON.stringify(describeSelf()));
       return;
     }
+    if (isApiFunnelPath(req.url ?? '') && isLoopbackPeer(req.socket.remoteAddress)) {
+      void forwardApi(req, res);
+      return;
+    }
     res.writeHead(404, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ error: 'not found' }));
   });
+
+  /** Read the body (capped), ask the control plane, answer the pane. */
+  async function forwardApi(
+    req: import('node:http').IncomingMessage,
+    res: import('node:http').ServerResponse,
+  ): Promise<void> {
+    const reply = (status: number, body: string, contentType = 'application/json') => {
+      res.writeHead(status, { 'content-type': contentType });
+      res.end(body);
+    };
+    let body: string | undefined;
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      try {
+        body = await new Promise<string>((resolve, reject) => {
+          const chunks: Buffer[] = [];
+          let size = 0;
+          req.on('data', (c: Buffer) => {
+            size += c.length;
+            if (size > MAX_API_BODY) {
+              reject(new Error('too large'));
+              req.destroy();
+              return;
+            }
+            chunks.push(c);
+          });
+          req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+          req.on('error', reject);
+        });
+      } catch {
+        reply(413, JSON.stringify({ error: 'body too large' }));
+        return;
+      }
+    }
+    const out = await link.callApi(req.method ?? 'GET', req.url ?? '/', body);
+    reply(out.status, out.body, out.contentType ?? 'application/json');
+  }
 
   http.on('upgrade', (req, socket, head) => {
     // `upgrade` hands a Duplex, which is a Socket in practice but not in the
