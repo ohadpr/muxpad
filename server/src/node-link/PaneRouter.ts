@@ -137,6 +137,19 @@ export class PaneRouter implements PaneOps {
     return this.transportFor(spec.id, 'create a pane').ensurePane(spec);
   }
 
+  /**
+   * Kill a pane ON A NAMED NODE, for a pane whose ROW IS ALREADY GONE.
+   *
+   * The tombstone sweep needs this: by the time a kill is queued the row is
+   * usually deleted, so `nodeForPane` would answer `local` for a pane that
+   * lives elsewhere and the kill would be sent to the wrong machine — where
+   * ptyd would answer "unknown id" as an idempotent success and the tombstone
+   * would be cleared with the real process still running.
+   */
+  async killPaneOn(nodeId: string, id: string): Promise<void> {
+    return this.transportForNode(nodeId, 'kill a pane').killPane(id);
+  }
+
   async killPane(id: string): Promise<void> {
     return this.transportFor(id, 'kill a pane').killPane(id);
   }

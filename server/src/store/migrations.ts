@@ -1587,6 +1587,36 @@ const MIGRATIONS: Migration[] = [
       ).run(Date.now());
     },
   },
+  {
+    /**
+     * WHICH MACHINE A QUEUED KILL IS FOR.
+     *
+     * `pending_pane_kills` is the tombstone that stops a pty outliving its
+     * row: a DELETE whose ptyd kill fails in transit still proceeds with the
+     * DB cascade, and the sweeper retries the kill until ptyd confirms.
+     *
+     * It stored only `pane_id`, and that becomes actively dangerous the
+     * moment a pane can live on another machine. By the time a kill is
+     * queued the row is usually GONE — that is the situation it exists for —
+     * so there is nothing left to look the node up from. A pane id that
+     * resolves to no row reads as `local` (correctly, as the pre-migration
+     * default), the retry goes to the mac, the local ptyd answers "unknown
+     * id" as an idempotent success, THE QUEUE ENTRY IS DELETED, and the
+     * process on the other machine runs forever with nothing left that knows
+     * about it.
+     *
+     * So the destination is captured at QUEUE time, while the row still
+     * exists. Existing entries default to `local`, which is what they were.
+     */
+    version: 50,
+    apply: (db) => {
+      const cols = db.prepare('PRAGMA table_info(pending_pane_kills)').all() as Array<{
+        name: string;
+      }>;
+      if (!cols.some((c) => c.name === 'node_id'))
+        db.exec("ALTER TABLE pending_pane_kills ADD COLUMN node_id TEXT NOT NULL DEFAULT 'local'");
+    },
+  },
 ];
 
 /** Highest version in the migration list. Exported so a test can assert the
