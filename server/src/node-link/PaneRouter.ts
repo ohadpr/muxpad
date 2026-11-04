@@ -2,6 +2,10 @@ import type { EventEmitter } from 'node:events';
 import type { PaneRuntimeSpec } from '../runtime/PaneRuntime.js';
 import { LOCAL_NODE_ID, type NodeStore } from '../store/NodeStore.js';
 
+/** Matches DEFAULT_NODE_PORT in node-agent; duplicated rather than imported so
+ *  the router does not pull the agent's module into the server's graph. */
+const DEFAULT_HOST_AGENT_PORT = '7797';
+
 /**
  * WHICH MACHINE A PANE OPERATION GOES TO.
  *
@@ -130,11 +134,45 @@ export class PaneRouter implements PaneOps {
   /** Create a pane ON A NAMED NODE. The node is explicit because at creation
    *  there is no row yet to read it from — the caller has just decided it. */
   async ensurePaneOn(nodeId: string, spec: PaneRuntimeSpec): Promise<void> {
-    return this.transportForNode(nodeId, 'create a pane').ensurePane(spec);
+    return this.transportForNode(nodeId, 'create a pane').ensurePane(this.localize(nodeId, spec));
   }
 
   async ensurePane(spec: PaneRuntimeSpec): Promise<void> {
-    return this.transportFor(spec.id, 'create a pane').ensurePane(spec);
+    const nodeId = this.deps.nodes.nodeForPane(spec.id);
+    return this.transportFor(spec.id, 'create a pane').ensurePane(this.localize(nodeId, spec));
+  }
+
+  /**
+   * Point a REMOTE pane's in-pane CLI at its own machine's agent.
+   *
+   * `PaneRuntime` builds `MUXPAD_API_URL` from the ptyd process's own
+   * environment, which on another machine resolves to a loopback address with
+   * nothing listening. A pane there must dial its local muxpad-node, which
+   * relays to this server over the link — and that is what lets a runner
+   * report turns at all, since the host cannot reach us directly.
+   *
+   * Done HERE because every spawn goes through this class. The spec is built
+   * in several places and a per-site fix is how one gets missed; today has
+   * already produced two bugs of exactly that shape.
+   *
+   * The port is taken from the node's own endpoint, so a host on a
+   * non-default port works without a second place to configure it.
+   */
+  private localize(nodeId: string, spec: PaneRuntimeSpec): PaneRuntimeSpec {
+    if (nodeId === LOCAL_NODE_ID) return spec;
+    const endpoint = this.deps.nodes.get(nodeId)?.endpoint ?? '';
+    let port = DEFAULT_HOST_AGENT_PORT;
+    try {
+      const p = new URL(endpoint.replace(/^ws/, 'http')).port;
+      if (p) port = p;
+    } catch {
+      // Malformed endpoint: the default is the right guess, and a link we
+      // could not parse would have failed to open long before this.
+    }
+    return {
+      ...spec,
+      env: { ...(spec.env ?? {}), MUXPAD_API_URL: `http://127.0.0.1:${port}` },
+    };
   }
 
   /**

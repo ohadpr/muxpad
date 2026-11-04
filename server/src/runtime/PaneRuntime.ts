@@ -232,7 +232,18 @@ export class PaneRuntime extends EventEmitter {
       // reads these so `muxpad pane new` (no flags) creates a sibling
       // in the current tab; `muxpad tab new` (no flags) creates a tab
       // in the current workspace; etc.
-      MUXPAD_API_URL: `http://${apiHost}:${apiPort}`,
+      // ── A REMOTE PANE IS TOLD WHERE TO CALL ───────────────────────────
+      //
+      // Default: this machine's own server. But `apiHost`/`apiPort` are read
+      // from the PTYD PROCESS'S environment, and on a remote host that
+      // resolves to 127.0.0.1:7777 where nothing is listening. A pane there
+      // must dial its own muxpad-node instead, which relays to the server
+      // over the link.
+      //
+      // Honoured explicitly rather than by moving `spec.env` below this
+      // block: that would let a caller override MUXPAD_PANE_ID and the rest
+      // of the pane's identity, which the in-pane CLI trusts.
+      MUXPAD_API_URL: this.spec.env?.MUXPAD_API_URL ?? `http://${apiHost}:${apiPort}`,
       MUXPAD_PANE_ID: this.spec.id,
       MUXPAD_TAB_ID: this.spec.tab_id ?? '',
       MUXPAD_WORKSPACE_ID: this.spec.workspace_id ?? '',
