@@ -49,6 +49,13 @@ interface QueueItem {
 
 export interface ArchiverOpts {
   archive: ArchiveDb;
+  /**
+   * "Is this pane on this machine?" Injected so the archiver keeps knowing
+   * nothing about nodes, as it knows nothing about the browser subsystem.
+   * Absent = assume local, which is the pre-multi-host behaviour and leaves
+   * every existing caller and test intact.
+   */
+  isLocalPane?: (paneId: string) => boolean;
   /** Where raw mirrors land: `<dataDir>/archive`. */
   archiveDir: string;
   /** `$CLAUDE_CONFIG_DIR/projects` (or ~/.claude/projects) — pass explicitly. */
@@ -104,6 +111,7 @@ export class Archiver {
     this.sweepIntervalMs = opts.sweepIntervalMs ?? 15 * 60_000;
     this.chunkBytes = opts.chunkBytes ?? DEFAULT_CHUNK;
     this.concurrency = opts.concurrency ?? 3;
+    if (opts.isLocalPane) this.isLocalPane = opts.isLocalPane;
   }
 
   /** Boot: subscribe triggers, kick the backfill sweep, arm the 15-min timer. */
@@ -115,7 +123,7 @@ export class Archiver {
         // produce a 'done' to trigger on. Waiting for the 15-min sweep to pick
         // that up is exactly the wrong latency for the exactly-wrong case.
         if (e.type === 'agent_turn' && (e.phase === 'done' || e.phase === 'fatal') && e.sid) {
-          this.enqueueSid(e.sid, e.backend);
+          this.enqueueSid(e.sid, e.backend, e.pane_id);
         } else if (e.type === 'agent_session.updated') {
           this.onSessionUpdated(e.pane_id);
         }
@@ -170,8 +178,33 @@ export class Archiver {
     void this.drain();
   }
 
+  /**
+   * "Is this pane on this machine?" — injected rather than imported so the
+   * archiver keeps knowing nothing about nodes, the same way it knows nothing
+   * about the browser subsystem. Absent means "assume local", which is the
+   * pre-multi-host behaviour and keeps every existing caller and test intact.
+   */
+  private isLocalPane?: (paneId: string) => boolean;
+
   /** Near-realtime trigger: a turn finished (or a sid changed) for `sid`. */
-  enqueueSid(sid: string, backend: string): void {
+  enqueueSid(sid: string, backend: string, paneId?: string): void {
+    // ── ONLY THIS MACHINE'S CHATS, CHECKED HERE ─────────────────────────
+    //
+    // This resolves a path from the SESSION ID on this disk, and the sid
+    // arrives from a runner. The trust review's sid-swap applies: archiving
+    // the wrong file copies a personal conversation into the archive under a
+    // remote pane's name, where search then surfaces it.
+    //
+    // THE CHECK IS IN HERE, NOT AT THE CALLERS, and that is the second time
+    // this lesson has come up today. I first gated the turn-done subscriber
+    // and declared it done; `enqueueSid` has THREE callers, and the two in
+    // `onSessionUpdated` were still open. A guard at the chokepoint cannot be
+    // forgotten by a fourth caller; a guard at a call site already was.
+    //
+    // A remote host archives its own chats, and its archive stays there per
+    // the host-scoping rule. `paneId` is optional so the sweep — which walks
+    // files already on this disk and has no pane in hand — is unaffected.
+    if (paneId && this.isLocalPane?.(paneId) === false) return;
     if (backend === 'claude') {
       const path = findTranscript(sid, this.claudeProjectsDir);
       if (path) {
@@ -301,8 +334,8 @@ export class Archiver {
     if (prev?.sid === sid) return;
     this.paneSids.set(paneId, { sid, assistant: row?.assistant ?? 'claude' });
     // Best-effort only (see docstring): usually already deleted by migrate.
-    if (prev) this.enqueueSid(prev.sid, prev.assistant);
-    this.enqueueSid(sid, row?.assistant ?? 'claude');
+    if (prev) this.enqueueSid(prev.sid, prev.assistant, paneId);
+    this.enqueueSid(sid, row?.assistant ?? 'claude', paneId);
   }
 
   // ── queue drain ───────────────────────────────────────────────────────────

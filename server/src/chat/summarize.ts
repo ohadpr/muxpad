@@ -3,6 +3,7 @@ import { type ChatEvent, normalizeTranscriptLine } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { AgentSessionStore } from '../store/AgentSessionStore.js';
 import { findTranscript, identityNormalize, muxpadLocate } from './TranscriptReader.js';
+import { transcriptForPane } from './transcript-access.js';
 
 export interface PaneSummary {
   /** 1–2 sentences on the DELIVERABLE, or '' when it couldn't be produced. */
@@ -34,10 +35,13 @@ export async function summarizePane(db: Database.Database, paneId: string): Prom
   const sid = sess?.current_sid;
   if (!sid) return empty;
 
-  // Claude writes ~/.claude/projects/**/<sid>.jsonl; codex/cursor write the
-  // muxpad-normalized log. Try the backend's native locator, fall back to ours.
-  const path = (sess.assistant === 'claude' ? findTranscript(sid) : null) ?? muxpadLocate(sid);
-  if (!path) return empty;
+  // Through the chokepoint: the locators key on session id alone, so a pane on
+  // another machine must not cause a search of this disk (transcript-access.ts).
+  // `elsewhere` returns the empty summary — the same answer as a chat with
+  // nothing in it, which is honest here: we have no summary to give.
+  const access = transcriptForPane(db, paneId, sid, sess.assistant);
+  if (access.kind !== 'local') return empty;
+  const path = access.path;
 
   let raw: string;
   try {
