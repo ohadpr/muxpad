@@ -721,7 +721,27 @@ export function attachWsServer(deps: {
   // and stops relay to it instead of spawning per-turn `claude -p` workers,
   // and its turn lifecycle fans back out through chatClients.
   interface AgentRunnerConn {
-    ws: WebSocket;
+    /**
+     * How to reach this runner.
+     *
+     * A TRANSPORT rather than a WebSocket, because a runner on another machine
+     * has none: its frames ride the host link, and `send` puts one on that
+     * link instead of on a socket. `readyState` keeps the same meaning and the
+     * same numbers, so every liveness check below is unchanged — there are
+     * only six uses and all of them are send-or-readyState.
+     *
+     * A local runner passes its socket straight in; it already satisfies this.
+     */
+    ws: {
+      readyState: number;
+      send(data: string): void;
+      /** Displacement closes the previous runner with 4001 (see below). */
+      close(code?: number, reason?: string): void;
+      /** A dead peer never completes the close handshake, so a displaced
+       *  runner is force-terminated after a grace. For a relayed runner this
+       *  tears down its stream on the host instead of a socket here. */
+      terminate(): void;
+    };
     sid: string | null;
     /** Which harness drives this pane (claude|codex|cursor); set at hello. */
     backend: string;
