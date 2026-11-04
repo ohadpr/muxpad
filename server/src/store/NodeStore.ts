@@ -179,6 +179,21 @@ export class NodeStore {
     return r?.n ?? LOCAL_NODE_ID;
   }
 
+  /**
+   * A pane's cwd as RECORDED, with no local filesystem check.
+   *
+   * For a remote pane this is the only trustworthy copy: every spec-building
+   * site runs the path through `safeCwd`, which stats it HERE and substitutes
+   * this machine's home when it is absent — turning a perfectly good
+   * /home/ohad/work into /Users/ohadpr and killing the pty on arrival.
+   */
+  cwdForPane(paneId: string): string | null {
+    const r = this.db.prepare('SELECT cwd FROM panes WHERE id = ?').get(paneId) as
+      | { cwd: string | null }
+      | undefined;
+    return r?.cwd ?? null;
+  }
+
   /** How many panes live on each node — for Settings → Machines, and for
    *  refusing to remove a node that still owns chats. */
   paneCounts(): Map<string, number> {

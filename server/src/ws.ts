@@ -2808,6 +2808,41 @@ export function attachWsServer(deps: {
           msgProbeResult = agentPaneHasMessages(deps.db, chatPaneId);
           return msgProbeResult;
         };
+        /**
+         * Render a chat whose history lives on another machine.
+         *
+         * Subscribed over that host's link instead of tailed here: the host
+         * runs the same reader against its own disk and pushes rendered
+         * events, which land in the SAME sink a local tail feeds — so the
+         * browser cannot tell the difference.
+         */
+        const watchRemote = (): void => {
+          const relay = (m: {
+            paneId: string;
+            kind: 'events' | 'title' | 'unavailable';
+            phase?: string;
+            events?: unknown[];
+            title?: string;
+            reason?: string;
+          }) => {
+            if (m.kind === 'events')
+              send({ t: 'events', phase: m.phase ?? 'live', events: m.events ?? [] });
+            else if (m.kind === 'title' && m.title) applyAiTitle(chatPaneId, m.title);
+            else if (m.kind === 'unavailable')
+              // `message`, not `text` — that is the field every other notice
+              // on this socket uses, and the wrong one renders as undefined.
+              send({ t: 'notice', message: m.reason ?? 'history unavailable' });
+          };
+          if (!deps.hostLinks?.watch(chatPaneId, relay, CHAT_HISTORY_TAIL_BYTES)) {
+            send({
+              t: 'notice',
+              message: 'This chat runs on another machine, which is not reachable right now.',
+            });
+            return;
+          }
+          remoteRelay = relay;
+        };
+
         const syncSession = (first: boolean) => {
           const session = agents.getByPane(chatPaneId);
           // The pane's agent mode rides the session frame so every open chat
@@ -2988,6 +3023,24 @@ export function attachWsServer(deps: {
             }
           }
           const sid = session2?.current_sid ?? null;
+          // ── A REMOTE CHAT NEEDS NO SID FROM US ──────────────────────────
+          //
+          // Handled ABOVE the sid comparison, because for a chat that has only
+          // ever run on another machine `current_sid` is NULL here — every
+          // path that records one (`register`, `/hook`, runner `hello`)
+          // travels host→server, the direction that cannot initiate. A review
+          // predicted this exact failure and I wrote the branch inside the
+          // `if (sid)` below anyway: the result was a chat that rendered
+          // nothing and did not even say why.
+          //
+          // The HOST resolves its own session. Once watched, nothing here
+          // needs to re-run on a sid change — the host re-tails itself when
+          // its runner hellos with a new one.
+          if (!paneIsLocal) {
+            if (remoteRelay) return; // already watching
+            watchRemote();
+            return;
+          }
           if (sid === tailSid) return;
           tail?.close();
           if (remoteRelay) {
@@ -3022,41 +3075,6 @@ export function attachWsServer(deps: {
             // not built yet — until it is, a remote chat renders empty, and
             // empty is the correct answer. Showing somebody else's
             // conversation would not be.
-            if (!paneIsLocal) {
-              // ── A CHAT WHOSE HISTORY LIVES ON ANOTHER MACHINE ───────────
-              //
-              // Subscribed over that host's link instead of tailed here. The
-              // host runs the same reader against its own disk and pushes
-              // rendered events, which land in the SAME sink a local tail
-              // feeds — so the browser cannot tell the difference.
-              const relay = (m: {
-                paneId: string;
-                kind: 'events' | 'title' | 'unavailable';
-                phase?: string;
-                events?: unknown[];
-                title?: string;
-                reason?: string;
-              }) => {
-                if (m.kind === 'events')
-                  send({ t: 'events', phase: m.phase ?? 'live', events: m.events ?? [] });
-                else if (m.kind === 'title' && m.title) applyAiTitle(chatPaneId, m.title);
-                else if (m.kind === 'unavailable')
-                  send({ t: 'notice', level: 'info', text: m.reason ?? 'history unavailable' });
-              };
-              const watching = deps.hostLinks?.watch(chatPaneId, relay, CHAT_HISTORY_TAIL_BYTES);
-              if (!watching) {
-                send({
-                  t: 'notice',
-                  level: 'info',
-                  text: 'This chat runs on another machine, which is not reachable right now.',
-                });
-                return;
-              }
-              // Unwatch when this socket goes, so the host stops tailing a
-              // chat nobody is looking at.
-              remoteRelay = relay;
-              return;
-            }
             const nonClaude = session2?.assistant && session2.assistant !== 'claude';
             tail = new TranscriptTail(sid, {
               tailBytes: CHAT_HISTORY_TAIL_BYTES,
