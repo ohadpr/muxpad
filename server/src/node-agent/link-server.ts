@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { WebSocket } from 'ws';
 import { TranscriptSubscriptions } from '../ptyd/transcript-subscriptions.js';
 import { type LinkUp, decodeLink, encodeLink, hostMaySend } from './link-protocol.js';
@@ -56,6 +57,18 @@ export class LinkServer {
    * has it. Cheap: one small object per live runner.
    */
   private readonly lastHello = new Map<string, string>();
+  /**
+   * In-flight `api` calls, by correlation id.
+   *
+   * ALWAYS SETTLED. The caller is a shell script blocking on curl inside a
+   * chat, so a dropped answer is not a lost request — it is a conversation
+   * that appears to freeze. Every path here (a response, a link that went
+   * away, a timeout) resolves exactly one of these.
+   */
+  private readonly apiCalls = new Map<
+    string,
+    (r: { status: number; body: string; contentType?: string }) => void
+  >();
   private readonly subs: TranscriptSubscriptions;
   private readonly log: (line: string) => void;
 
@@ -103,6 +116,9 @@ export class LinkServer {
       // pushes would go nowhere. It re-subscribes for whatever is still being
       // viewed, which is why subscribe is idempotent.
       this.subs.closeAll();
+      // Nothing will ever answer these now; a 503 is the truth and silence is
+      // a hung pane.
+      this.failAllApi('the control plane is not connected');
       try {
         ptyd.close();
       } catch {}
@@ -141,10 +157,81 @@ export class LinkServer {
       else if (m.op === 'loadOlder') this.subs.loadOlder(m.paneId);
       return;
     }
+    if (m.ch === 'api') {
+      if (m.op !== 'response') return;
+      const settle = this.apiCalls.get(m.id);
+      if (!settle) return; // already timed out; its caller has an answer
+      this.apiCalls.delete(m.id);
+      settle({
+        status: m.status,
+        body: m.body,
+        ...(m.contentType ? { contentType: m.contentType } : {}),
+      });
+      return;
+    }
     if (m.op === 'frame') {
       const r = this.runners.get(m.paneId);
       if (r?.readyState === WebSocket.OPEN) r.send(JSON.stringify(m.frame));
     }
+  }
+
+  /**
+   * Ask the control plane to answer one in-pane CLI call.
+   *
+   * The host does not decide what is allowed — the server's allowlist does,
+   * because that is where the principal lives (which machine asked) and where
+   * the ids can be checked against the pane table. This side is a pipe with a
+   * timeout, deliberately: duplicating the policy here would mean two places
+   * to keep in sync and a host that could be lied to about its own rights.
+   */
+  callApi(
+    method: string,
+    path: string,
+    body: string | undefined,
+    timeoutMs = 15_000,
+  ): Promise<{ status: number; body: string; contentType?: string }> {
+    if (this.link?.readyState !== WebSocket.OPEN) {
+      return Promise.resolve({
+        status: 503,
+        body: JSON.stringify({ error: 'the control plane is not connected' }),
+        contentType: 'application/json',
+      });
+    }
+    const id = randomUUID();
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        if (!this.apiCalls.delete(id)) return;
+        resolve({
+          status: 504,
+          body: JSON.stringify({ error: 'the control plane did not answer in time' }),
+          contentType: 'application/json',
+        });
+      }, timeoutMs);
+      timer.unref?.();
+      this.apiCalls.set(id, (r) => {
+        clearTimeout(timer);
+        resolve(r);
+      });
+      this.up({
+        ch: 'api',
+        op: 'request',
+        id,
+        method,
+        path,
+        ...(body === undefined ? {} : { body }),
+      });
+    });
+  }
+
+  private failAllApi(why: string): void {
+    for (const [, settle] of this.apiCalls) {
+      settle({
+        status: 503,
+        body: JSON.stringify({ error: why }),
+        contentType: 'application/json',
+      });
+    }
+    this.apiCalls.clear();
   }
 
   /**
@@ -223,6 +310,7 @@ export class LinkServer {
   }
 
   close(): void {
+    this.failAllApi('this host agent is shutting down');
     this.subs.closeAll();
     for (const [, r] of this.runners) r.close();
     this.runners.clear();

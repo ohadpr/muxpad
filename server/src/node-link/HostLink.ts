@@ -50,6 +50,18 @@ export interface HostLinkDeps {
    * enforced, which is the worst time to discover it.
    */
   apiKey: () => string | null;
+  /**
+   * One in-pane CLI call from this host, for the scoped allowlist to answer.
+   *
+   * Optional so a link can be constructed without the API surface at all —
+   * which is what the transcript tests do, and what "the host gets nothing by
+   * default" should look like in code.
+   */
+  onApiRequest?: (m: {
+    method: string;
+    path: string;
+    body?: string;
+  }) => Promise<{ status: number; body: string; contentType?: string }>;
   /** A remote chat's events arrived. */
   onTranscript: (m: {
     paneId: string;
@@ -152,6 +164,10 @@ export class HostLink {
         this.deps.onTranscript({ paneId: m.paneId, kind: 'unavailable', reason: m.reason });
       return;
     }
+    if (m.ch === 'api') {
+      if (m.op === 'request') void this.answerApi(m.id, m.method, m.path, m.body);
+      return;
+    }
     if (m.ch !== 'runner') return;
     if (m.op === 'attached') {
       this.openRelay(m.paneId);
@@ -179,6 +195,31 @@ export class HostLink {
       this.pending.set(m.paneId, q);
       if (!r) this.openRelay(m.paneId);
     }
+  }
+
+  /**
+   * Answer one `api` request, and ALWAYS answer it.
+   *
+   * The host's CLI is a shell script blocking on curl. A request this side
+   * drops is a `muxpad card` that hangs until the agent's own timeout, which
+   * reads to the user as the chat freezing — so a missing handler and a thrown
+   * error both become a refusal, not silence.
+   */
+  private async answerApi(id: string, method: string, path: string, body?: string): Promise<void> {
+    const refuse = { status: 404, body: JSON.stringify({ error: 'not found' }) };
+    let out = refuse;
+    try {
+      out =
+        (await this.deps.onApiRequest?.({
+          method,
+          path,
+          ...(body === undefined ? {} : { body }),
+        })) ?? refuse;
+    } catch (e) {
+      this.log(`[hostlink] ${this.deps.nodeId}: api ${method} ${path}: ${(e as Error).message}`);
+      out = { status: 500, body: JSON.stringify({ error: 'internal error' }) };
+    }
+    this.send({ ch: 'api', op: 'response', id, ...out });
   }
 
   /**

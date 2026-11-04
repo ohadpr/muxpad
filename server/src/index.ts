@@ -53,6 +53,7 @@ import { createTailscaleFunnel, localFunnel } from './funnel.js';
 import { HostLinks } from './node-link/HostLinks.js';
 import { NodeLinks } from './node-link/NodeLinks.js';
 import { PaneRouter } from './node-link/PaneRouter.js';
+import { HostApi } from './node-link/host-api.js';
 import { startPaneReaper } from './pane-reaper.js';
 import { PtydCache, decoratePane, decorateTab } from './ptyd-cache.js';
 import { PtydClient } from './ptyd-client/PtydClient.js';
@@ -148,11 +149,23 @@ nodeLinks.start();
 // Links that carry host->server traffic: a remote runner's frames and a
 // remote chat's history. Separate from `nodeLinks` above, which owns the
 // `/control` dial for pane operations — see HostLink on why two sockets.
+const selfUrl = `http://127.0.0.1:${config.port}`;
 const hostLinks = new HostLinks({
   nodes: nodeStore,
-  selfUrl: `http://127.0.0.1:${config.port}`,
+  selfUrl,
   apiKey: () => apiCredential(),
   dataDir: config.dataDir,
+  // What a remote chat's `muxpad card` / `say` / `agent send` may do — and
+  // nothing else. `app` is declared further down; this closure only RUNS when
+  // a host sends a request, which cannot happen before a link is up and a pane
+  // has called the CLI. Deliberately NOT `app.fetch` as the surface: see
+  // host-api.ts for what one unrestricted request would buy a compromised VM.
+  hostApi: new HostApi({
+    db,
+    selfUrl,
+    apiKey: () => apiCredential(),
+    fetch: (req) => app.fetch(req),
+  }),
 });
 hostLinks.start();
 
