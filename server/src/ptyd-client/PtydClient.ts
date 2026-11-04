@@ -9,7 +9,23 @@ import {
 import type { PaneRuntimeSpec } from '../runtime/PaneRuntime.js';
 
 export interface PtydClientOptions {
-  socketPath: string;
+  /**
+   * The LOCAL ptyd's unix socket. Exactly one of this and {@link controlUrl}.
+   */
+  socketPath?: string;
+  /**
+   * A REMOTE node's control endpoint — `ws://host:7797/control`.
+   *
+   * The whole remote transport for free: ptyd's control protocol is already
+   * HTTP/WS, so the only thing that differs between "the ptyd beside me" and
+   * "the ptyd on another machine" is this URL and an auth header. Reconnect,
+   * backoff, the RPC envelope and the event stream are all the same code,
+   * already load-bearing locally — which is worth far more than a second
+   * client written to look like this one.
+   */
+  controlUrl?: string;
+  /** Sent on the control upgrade. A node agent requires its token here. */
+  headers?: Record<string, string>;
   /**
    * Initial reconnect delay in ms. Doubled after each failed attempt up to
    * `maxBackoffMs`. Exposed for tests; production callers should leave it
@@ -45,7 +61,11 @@ type Pending = {
  *    `{id, code, cause}`; for paneUrlsSeen: `{id, urls, markers}`).
  */
 export class PtydClient extends EventEmitter {
+  /** Empty for a remote client. The pty-proxy paths that read this are typed
+   *  against the LOCAL client specifically, so they always have one. */
   readonly socketPath: string;
+  /** Set for a remote client; null for the local one. */
+  readonly controlUrl: string | null;
   /**
    * `true` once the underlying WS has reached the OPEN state at least once
    * AND is currently open. Cleared on every 'close'. Exposed so callers
@@ -64,10 +84,15 @@ export class PtydClient extends EventEmitter {
   private readonly maxBackoffMs: number;
   private closeWaiters: Array<() => void> = [];
   private lastError: Error | null = null;
+  private readonly headers: Record<string, string>;
 
   constructor(opts: PtydClientOptions) {
     super();
-    this.socketPath = opts.socketPath;
+    this.socketPath = opts.socketPath ?? '';
+    this.controlUrl = opts.controlUrl ?? null;
+    this.headers = opts.headers ?? {};
+    if (!this.socketPath && !this.controlUrl)
+      throw new Error('PtydClient needs a socketPath or a controlUrl');
     this.initialBackoffMs = opts.initialBackoffMs ?? 200;
     this.maxBackoffMs = opts.maxBackoffMs ?? 2000;
     this.backoffMs = this.initialBackoffMs;
@@ -226,7 +251,11 @@ export class PtydClient extends EventEmitter {
       // Already connecting / connected; nothing to do.
       return;
     }
-    const ws = new WebSocket(`ws+unix://${this.socketPath}:/control`);
+    const target = this.controlUrl ?? `ws+unix://${this.socketPath}:/control`;
+    const ws = new WebSocket(
+      target,
+      Object.keys(this.headers).length ? { headers: this.headers } : {},
+    );
     this.ws = ws;
     ws.on('open', () => {
       this.backoffMs = this.initialBackoffMs;
