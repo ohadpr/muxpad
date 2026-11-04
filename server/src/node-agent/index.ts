@@ -61,7 +61,7 @@ export interface NodeAgentOptions {
  * What this machine is, for the control plane's Settings → Machines row — and
  * for one decision that is not cosmetic.
  *
- * `shell` IS LOAD-BEARING. The server's own default is `/bin/zsh`, which is
+ * `shell` and `home` ARE LOAD-BEARING. The server's own default is `/bin/zsh`, which is
  * right on a mac and does not exist on this Ubuntu VM: a pane created with it
  * died the instant it started, and the chat said only "the pty exited
  * immediately after starting". Same family as the cwd bug — a path from the
@@ -77,6 +77,11 @@ export function describeSelf(): Record<string, unknown> {
     memoryGb: Math.round(totalmem() / 1024 ** 3),
     node: process.version,
     shell: defaultShell(),
+    // THE OTHER HALF OF THE SAME BUG. A remote pane whose row has no cwd was
+    // spawned with `safeCwd(null)` — the SERVER's home, `/Users/ohadpr`, which
+    // does not exist here, so the pty died instantly. The row's cwd is used
+    // when it has one; this is what "no cwd" has to mean on this machine.
+    home: homedir(),
   };
 }
 

@@ -131,14 +131,34 @@ export class NodeStore {
    * machine.
    */
   shellFor(id: string): string | null {
+    return this.capability(id, 'shell');
+  }
+
+  /**
+   * A node's home directory, as that node reported it.
+   *
+   * What "this pane has no recorded cwd" has to mean on another machine. The
+   * server's own answer is `/Users/…`, which on a Linux host is a path that
+   * does not exist — and a pty spawned into one dies instantly.
+   */
+  homeFor(id: string): string | null {
+    return this.capability(id, 'home');
+  }
+
+  /**
+   * One absolute-path capability, or null.
+   *
+   * Absolute only: a relative or empty value would be resolved against
+   * whatever cwd ptyd happens to have, which is not a choice anyone made.
+   */
+  private capability(id: string, key: 'shell' | 'home'): string | null {
     if (id === LOCAL_NODE_ID) return null;
     const raw = this.get(id)?.capabilities;
     if (!raw) return null;
     try {
-      const c = JSON.parse(raw) as { shell?: unknown };
-      // Absolute only. A relative or empty value would be resolved against
-      // whatever cwd ptyd happens to have, which is not a shell choice.
-      return typeof c.shell === 'string' && c.shell.startsWith('/') ? c.shell : null;
+      const c = JSON.parse(raw) as Record<string, unknown>;
+      const v = c[key];
+      return typeof v === 'string' && v.startsWith('/') ? v : null;
     } catch {
       return null;
     }

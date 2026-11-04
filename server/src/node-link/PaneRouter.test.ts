@@ -270,6 +270,21 @@ describe('a remote pane gets its own machine’s shell', () => {
     ).toBe(asked);
   });
 
+  it('spawns a cwd-less remote pane in the HOST’s home, not the server’s', async () => {
+    // `safeCwd(null)` answers with this machine's home — a /Users path on a
+    // Linux box — and a pty spawned into a directory that does not exist dies
+    // instantly. The null branch the first cwd fix did not cover.
+    const { trayo, router } = routerWith({ shell: '/bin/bash', home: '/home/ohad' });
+    const tab = new TabStore(db).create({ name: 'T', layout: '', workspace_id: ws }).id;
+    const p = new PaneStore(db).create({ tab_id: tab, shell: '/bin/zsh' }).id;
+    db.prepare('UPDATE panes SET node_id = ?, cwd = NULL WHERE id = ?').run('trayo', p);
+    await router.ensurePane({ id: p, shell: '/bin/zsh', cwd: '/Users/ohadpr' });
+    expect(
+      (trayo.ensurePane as unknown as { mock: { calls: PaneRuntimeSpec[][] } }).mock.calls[0]?.[0]
+        ?.cwd,
+    ).toBe('/home/ohad');
+  });
+
   it('never touches a LOCAL pane’s shell', async () => {
     const local = fakeTransport('local');
     nodes.add({ id: 'trayo', name: 'Trayo', endpoint: 'ws://vm:7797' });

@@ -196,6 +196,12 @@ export class PaneRouter implements PaneOps {
     // the cwd from the pane ROW — which holds the path the user actually
     // asked for, untouched by any local stat.
     const row = this.deps.nodes.cwdForPane(spec.id);
+    // AND WHEN THERE IS NO ROW CWD, the spec still carries one: `safeCwd(null)`
+    // answers with the SERVER's home. That is a mac path on a Linux host, so
+    // the pty died instantly — the same "exited immediately after starting"
+    // again, from the null branch the first fix did not cover. The host's own
+    // home is what "no cwd" means over there.
+    const hostHome = this.deps.nodes.homeFor(nodeId);
     // ── AND THE SHELL, WHICH IS THE SAME BUG WEARING A DIFFERENT PATH ───
     //
     // The server's default is `/bin/zsh`. There is no zsh on a stock Ubuntu
@@ -210,7 +216,7 @@ export class PaneRouter implements PaneOps {
     const useHostShell = !!hostShell && spec.shell === serverDefaultShell();
     return {
       ...spec,
-      ...(row ? { cwd: row } : {}),
+      ...(row ? { cwd: row } : hostHome ? { cwd: hostHome } : {}),
       ...(useHostShell ? { shell: hostShell as string } : {}),
       env: { ...(spec.env ?? {}), MUXPAD_API_URL: `http://127.0.0.1:${port}` },
     };
