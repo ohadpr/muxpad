@@ -1,0 +1,224 @@
+import { timingSafeEqual } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import { arch, cpus, homedir, platform, totalmem } from 'node:os';
+import { join } from 'node:path';
+import { WebSocket, WebSocketServer } from 'ws';
+
+/**
+ * MUXPAD-NODE — the front door of a machine that is not the one with the UI.
+ *
+ * ── WHAT IT IS ────────────────────────────────────────────────────────────
+ * One small process per remote machine. It owns no state, no database and no
+ * UI. It listens for the control plane, authenticates it, and then forwards
+ * bytes to the ptyd running beside it on the same host.
+ *
+ * ── WHY PTYD IS NOT THE THING LISTENING ───────────────────────────────────
+ * ptyd has NO AUTHENTICATION, by design and in writing: its unix socket's file
+ * permissions are the whole of its security, and its own comment says "the only
+ * legitimate consumer is the main muxpad server, which runs as the same user."
+ * Its two endpoints are `/control` — spawn, kill, write — and `/pty/:id`.
+ * Putting that on a TCP port is publishing a remote shell.
+ *
+ * So ptyd is NOT MODIFIED and keeps its unix socket. This process is the only
+ * thing that faces the network, which makes it the only thing that has to be
+ * right about authentication, and it is small enough to read in one sitting.
+ *
+ * ── WHO DIALS WHOM ────────────────────────────────────────────────────────
+ * The CONTROL PLANE dials US. Measured on the real pair: mac→VM works, VM→mac
+ * is blocked (no tailnet view, ping 100% loss, port unreachable), and changing
+ * Tailscale is out of scope. So this listens and never initiates. That is also
+ * the better security posture: the machine holding the user's whole life needs
+ * no inbound exposure at all.
+ *
+ * ── THE TAILNET IS NOT A PASSWORD ─────────────────────────────────────────
+ * This runs on a company tailnet with other people's dev VMs on it and an
+ * admin who is not the user. "Reachable" cannot mean "allowed", so an
+ * unauthenticated peer is refused even though it arrived from a trusted-looking
+ * network. The token is compared in constant time and never logged.
+ */
+
+/** Default port. Chosen above muxpad's 7777 and out of the browser-host range
+ *  (9400-9600) so a node and a host can share a machine without collision. */
+export const DEFAULT_NODE_PORT = 7797;
+
+const TOKEN_FILE = 'node-token';
+
+export interface NodeAgentOptions {
+  port?: number;
+  host?: string;
+  /** Where ptyd's unix socket is. */
+  ptydSocket?: string;
+  /** The shared token the control plane must present. */
+  token: string;
+  /** Injected for tests. */
+  log?: (line: string) => void;
+}
+
+/** What this machine is, for the control plane's Settings → Machines row. */
+export function describeSelf(): Record<string, unknown> {
+  return {
+    platform: platform(),
+    arch: arch(),
+    cpus: cpus().length,
+    // GiB, rounded — the exact byte count is noise in a UI row.
+    memoryGb: Math.round(totalmem() / 1024 ** 3),
+    node: process.version,
+  };
+}
+
+/**
+ * Read the token from disk.
+ *
+ * Per call rather than captured, so rotating it does not need a restart — the
+ * same reasoning as every other credential reader in this codebase, and the
+ * reason the mac's CLI survived auth being switched on.
+ */
+export function readNodeToken(dataDir?: string): string | null {
+  const dir = dataDir ?? process.env.MUXPAD_DATA_DIR ?? join(homedir(), '.muxpad');
+  try {
+    const v = readFileSync(join(dir, TOKEN_FILE), 'utf8').trim();
+    return v.length >= 32 ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Constant-time compare that cannot throw on a length mismatch. */
+export function tokenMatches(presented: string | null | undefined, expected: string): boolean {
+  if (!presented || !expected) return false;
+  const a = Buffer.from(presented);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
+/**
+ * Which ptyd paths this agent will forward, and nothing else.
+ *
+ * AN ALLOW-LIST, not a prefix check. The review of the plan put it plainly:
+ * "reject arbitrary URL forwarding". A proxy that forwards whatever path it is
+ * handed is a proxy that will one day forward something nobody audited —
+ * including a path ptyd grows later. Two shapes are allowed because two are
+ * all ptyd has.
+ */
+export function isForwardablePath(path: string): boolean {
+  if (path === '/control') return true;
+  return /^\/pty\/[A-Za-z0-9_-]{1,64}$/.test(path);
+}
+
+/**
+ * Start the agent. Resolves once it is listening.
+ */
+export async function startNodeAgent(opts: NodeAgentOptions): Promise<{ close: () => void }> {
+  const port = opts.port ?? DEFAULT_NODE_PORT;
+  const host = opts.host ?? '0.0.0.0';
+  const ptydSocket =
+    opts.ptydSocket ?? process.env.MUXPAD_PTYD_SOCKET ?? join(homedir(), '.muxpad', 'ptyd.sock');
+  const log = opts.log ?? ((l: string) => console.log(l));
+
+  const http = createServer();
+  const wss = new WebSocketServer({ noServer: true });
+
+  // A refusal says WHY in the log but never echoes the presented token — a
+  // credential in a log file is a credential in a backup.
+  const refuse = (socket: import('node:stream').Duplex, why: string, peer: string): void => {
+    log(`[muxpad-node] refused ${peer}: ${why}`);
+    try {
+      socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+      socket.destroy();
+    } catch {
+      /* the peer is gone; nothing to tell it */
+    }
+  };
+
+  http.on('request', (req, res) => {
+    // ONE unauthenticated route, deliberately: a liveness probe that needed the
+    // token would report a credential problem as a dead machine, and the
+    // control plane could not tell those apart.
+    if (req.url === '/health') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+    if (
+      req.url === '/self' &&
+      tokenMatches(req.headers['x-muxpad-node-token'] as string, opts.token)
+    ) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(describeSelf()));
+      return;
+    }
+    res.writeHead(404, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: 'not found' }));
+  });
+
+  http.on('upgrade', (req, socket, head) => {
+    // `upgrade` hands a Duplex, which is a Socket in practice but not in the
+    // types. The peer address is only ever for a log line, so read it
+    // defensively rather than widening the signature.
+    const peer = String((socket as { remoteAddress?: string }).remoteAddress ?? '?');
+    const raw = req.headers['x-muxpad-node-token'];
+    const presented = (Array.isArray(raw) ? raw[0] : raw) ?? null;
+    if (!tokenMatches(presented, opts.token)) {
+      refuse(socket, 'bad or missing node token', peer);
+      return;
+    }
+    const url = new URL(req.url ?? '/', 'http://x');
+    if (!isForwardablePath(url.pathname)) {
+      refuse(socket, `path not forwardable: ${url.pathname}`, peer);
+      return;
+    }
+
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      // A plain byte pipe in both directions, which is the same shape the main
+      // server already uses to proxy a browser viewer's socket. Nothing here
+      // inspects frames: ptyd validates its own input, and a second opinion
+      // about the protocol is a second thing to keep in sync.
+      const target = `ws+unix://${ptydSocket}:${url.pathname}${url.search}`;
+      const upstream = new WebSocket(target);
+      upstream.binaryType = 'nodebuffer';
+      const closeBoth = () => {
+        try {
+          ws.close();
+        } catch {}
+        try {
+          upstream.close();
+        } catch {}
+      };
+      // Buffer what the peer says before ptyd is ready. Without this, the
+      // first frame after an upgrade — which for /control is the one that
+      // matters — is dropped on a cold socket.
+      const pending: Array<Buffer | ArrayBuffer | Buffer[]> = [];
+      ws.on('message', (d) => {
+        if (upstream.readyState === WebSocket.OPEN) upstream.send(d as Buffer);
+        else pending.push(d as Buffer);
+      });
+      upstream.on('open', () => {
+        for (const d of pending) upstream.send(d as Buffer);
+        pending.length = 0;
+      });
+      upstream.on('message', (d, isBinary) => {
+        if (ws.readyState === WebSocket.OPEN) ws.send(d, { binary: isBinary });
+      });
+      upstream.on('close', closeBoth);
+      upstream.on('error', (e) => {
+        log(`[muxpad-node] ptyd error on ${url.pathname}: ${(e as Error).message}`);
+        closeBoth();
+      });
+      ws.on('close', closeBoth);
+      ws.on('error', closeBoth);
+    });
+  });
+
+  await new Promise<void>((r) => http.listen(port, host, r));
+  log(`[muxpad-node] listening on ${host}:${port} → ptyd ${ptydSocket}`);
+  return {
+    close: () => {
+      try {
+        wss.close();
+      } catch {}
+      http.close();
+    },
+  };
+}
