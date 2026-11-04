@@ -6,6 +6,7 @@ import {
 } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { monotonicFactory } from 'ulid';
+import { LOCAL_NODE_ID } from './NodeStore.js';
 
 const ulid = monotonicFactory();
 
@@ -25,6 +26,7 @@ interface PaneRow {
   mode: string | null;
   created_at: number;
   parked_at: number | null;
+  node_id: string | null;
 }
 
 export class PaneStore {
@@ -91,6 +93,11 @@ export class PaneStore {
       unread: false,
       mode,
       created_at: now,
+      // `create()` builds its OWN response rather than re-reading the row, so
+      // it drops a new column independently of `row()` above. A freshly
+      // created pane that reports no machine would route its first spawn by a
+      // default rather than by the truth.
+      node_id: LOCAL_NODE_ID,
     };
   }
 
@@ -448,6 +455,12 @@ export class PaneStore {
       // BASELINE — 'agent', nothing injected. A row can therefore never
       // surface a value AgentModeSchema would reject.
       mode: coerceAgentMode(x.mode) ?? BASELINE_AGENT_MODE,
+      // WHICH MACHINE. `row()` rebuilds a fixed object, so `SELECT *` alone
+      // does NOT carry a new column through to callers — it is silently
+      // dropped, which is the quietest possible way for pane routing to send
+      // work to the wrong machine. Null (a row from before the column) reads
+      // as local, the pre-migration meaning.
+      node_id: x.node_id ?? LOCAL_NODE_ID,
       created_at: x.created_at,
     };
   }

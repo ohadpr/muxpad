@@ -66,6 +66,7 @@ import { checkOrigin, parseAllowedOrigins } from './same-origin.js';
 import { spokenAnswerFrom } from './spoken-answer.js';
 import { AgentQueueStore } from './store/AgentQueueStore.js';
 import { AgentSessionStore } from './store/AgentSessionStore.js';
+import { LOCAL_NODE_ID, NodeStore } from './store/NodeStore.js';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
 import { TabActivity } from './tab-activity.js';
@@ -440,6 +441,9 @@ export function attachWsServer(deps: {
     deps.allowedOrigins ?? parseAllowedOrigins(process.env.MUXPAD_ALLOWED_ORIGINS);
   const logRefusal = makeRefusalLogger(deps.logRefusal ?? ((line: string) => console.warn(line)));
   const panes = new PaneStore(deps.db);
+  // Which machine owns a pane. One resolver, so no two call sites can
+  // disagree about where a chat actually lives.
+  const nodes = new NodeStore(deps.db);
   const tabs = new TabStore(deps.db);
   // Living sidebar: bumps `tabs.last_activity_at`. Forced for discrete
   // moments (turn done, user send), throttled for raw pty chatter.
@@ -2797,7 +2801,22 @@ export function attachWsServer(deps: {
           // `startup_cmd` together, so the next respawn cannot re-break it.
           let session2 = session;
           const bound = session?.current_sid ?? null;
-          if (bound && !locateAnyTranscript(bound)) {
+          // ── NOT FOR A PANE ON ANOTHER MACHINE ──────────────────────────
+          //
+          // `locateAnyTranscript` stats LOCAL paths, so for a remote pane it
+          // fails every time. The planner already refuses to act on a remote
+          // pane (see agent-resume-repair.ts), which stops the corruption —
+          // but the *diagnosis* below would still fire, telling the user their
+          // history could not be recovered for a chat whose history is simply
+          // on the other machine and perfectly intact. A false alarm on every
+          // bind is its own bug: it trains people to ignore the one case where
+          // the warning is real.
+          //
+          // Skipped entirely rather than reworded, because this code cannot
+          // tell "absent" from "not mine to see" — and the honest third
+          // answer, "unavailable", must never authorise a repair.
+          const paneIsLocal = nodes.nodeForPane(chatPaneId) === LOCAL_NODE_ID;
+          if (paneIsLocal && bound && !locateAnyTranscript(bound)) {
             const repaired = repairPaneResume(deps.db, chatPaneId);
             if (repaired) {
               announceRepairs([repaired], 'chat-bind');
