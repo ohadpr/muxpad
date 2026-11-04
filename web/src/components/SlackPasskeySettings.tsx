@@ -6,7 +6,12 @@ export function SlackPasskeySettings({
   section = 'integrations',
   active: visible = true,
 }: {
-  section?: 'general' | 'notifications' | 'integrations';
+  /**
+   * Which settings section is showing. Widened when Machines was added:
+   * this component only ever compares it to 'integrations', so a new section
+   * is none of its business — but the union has to admit one.
+   */
+  section?: 'general' | 'notifications' | 'integrations' | 'machines';
   active?: boolean;
 }) {
   const setupEpoch = useRef(0);

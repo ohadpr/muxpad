@@ -936,3 +936,73 @@
 .themeswitch-pop .theme-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
+
+/* ── MACHINES ────────────────────────────────────────────────────────────
+   One card per machine. The dot carries the state, in the SAME colours the
+   rail uses for a pane's status, because "reachable" and "working" are the
+   same kind of fact and learning two palettes for it is a tax. */
+.machines {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.machine {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--bg-elev);
+}
+.machine-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.machine-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  /* `unknown` — "I have not checked" — is deliberately the quietest of the
+     four. It is the honest state right after a restart, and a loud dot for it
+     would read as a fault that is not there. */
+  background: var(--fg-faint);
+}
+.machine[data-state="up"] .machine-dot {
+  background: var(--status-ready);
+}
+.machine[data-state="down"] .machine-dot {
+  background: var(--status-dead);
+}
+/* NOT the same as `down`: this one is a thing you have to go and fix, so it
+   gets the colour the rail uses for "wants you". */
+.machine[data-state="unauthorized"] .machine-dot {
+  background: var(--status-blocked);
+}
+.machine-name {
+  font-weight: 600;
+}
+.machine-state {
+  color: var(--fg-dim);
+  font-size: 0.8125rem;
+}
+.machine-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-top: 6px;
+  color: var(--fg-dim);
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+}
+.machine-note,
+.machines-note {
+  margin: 8px 0 0;
+  color: var(--fg-dim);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+.machine-note code,
+.machines-note code {
+  font-family: var(--mono-font, ui-monospace, monospace);
+  font-size: 0.9em;
+}
