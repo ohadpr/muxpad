@@ -8,6 +8,7 @@ import { createAgentBridge } from './agent-bridge.js';
 import { ensureAgentNotes, migrateAgentFileEdits } from './agent-files.js';
 import { INSTRUCTIONS_MIGRATION, seedAgentInstructions } from './agent-instructions.js';
 import { CHAT_MODE_MIGRATION, retireLegacyChatModeFile, seedChatMode } from './agent-modes.js';
+import { apiCredential } from './api-auth.js';
 import {
   AppHealTracker,
   HEAL_MAX_ATTEMPTS,
@@ -49,6 +50,7 @@ import { loadConfig, voiceApiKey } from './config.js';
 import { CronScheduler } from './cron/CronScheduler.js';
 import { EventBus } from './events.js';
 import { createTailscaleFunnel, localFunnel } from './funnel.js';
+import { HostLinks } from './node-link/HostLinks.js';
 import { NodeLinks } from './node-link/NodeLinks.js';
 import { PaneRouter } from './node-link/PaneRouter.js';
 import { startPaneReaper } from './pane-reaper.js';
@@ -143,6 +145,17 @@ const nodeStore = new NodeStore(db);
 nodeStore.resetLinkStates();
 const nodeLinks = new NodeLinks({ nodes: nodeStore, dataDir: config.dataDir });
 nodeLinks.start();
+// Links that carry host->server traffic: a remote runner's frames and a
+// remote chat's history. Separate from `nodeLinks` above, which owns the
+// `/control` dial for pane operations — see HostLink on why two sockets.
+const hostLinks = new HostLinks({
+  nodes: nodeStore,
+  selfUrl: `http://127.0.0.1:${config.port}`,
+  apiKey: () => apiCredential(),
+  dataDir: config.dataDir,
+});
+hostLinks.start();
+
 const paneRouter = new PaneRouter({
   local: ptyd,
   nodes: nodeStore,
@@ -616,6 +629,7 @@ const wsServer = attachWsServer({
   // The spawn inside the attach path must go to the pane's MACHINE; `ptyd`
   // above stays the local client for the pty socket. See ws.ts on why both.
   paneOps: paneRouter,
+  hostLinks,
   cache,
   events,
   agentBridge,

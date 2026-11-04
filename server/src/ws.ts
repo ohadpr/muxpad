@@ -46,6 +46,7 @@ import {
 import { TranscriptTail, identityNormalize, muxpadLocate } from './chat/TranscriptReader.js';
 import { agentPaneHasMessages } from './chat/has-messages.js';
 import type { EventBus } from './events.js';
+import type { HostLinks } from './node-link/HostLinks.js';
 import { readNodeTokenFor } from './node-link/NodeLinks.js';
 import type { PaneOps } from './node-link/PaneRouter.js';
 import { withPaneKey } from './pane-key.js';
@@ -469,6 +470,8 @@ export function attachWsServer(deps: {
    * about nodes behaves exactly as before.
    */
   paneOps?: PaneOps;
+  /** Links to other machines, for chats whose history lives there. */
+  hostLinks?: HostLinks;
   cache: PtydCache;
   events: EventBus;
   /** Liveness ping interval in ms. Defaults to 15s; tests pass a small value. */
@@ -2767,6 +2770,13 @@ export function attachWsServer(deps: {
         // braces fallback: rebind the tail whenever the sid changes and push a
         // fresh `session` frame whenever the row's shape changes.
         let tail: TranscriptTail | null = null;
+        /**
+         * Set instead of `tail` when this pane's chat lives on another
+         * machine: its history arrives over that host's link rather than from
+         * a local file. Held so the socket closing can unwatch — otherwise the
+         * host keeps tailing a chat nobody is looking at.
+         */
+        let remoteRelay: Parameters<NonNullable<typeof deps.hostLinks>['watch']>[1] | null = null;
         let tailSid: string | null = null;
         let lastHello = '';
         // Mode last delivered to this socket — the gate for the pane.updated
@@ -2980,6 +2990,10 @@ export function attachWsServer(deps: {
           const sid = session2?.current_sid ?? null;
           if (sid === tailSid) return;
           tail?.close();
+          if (remoteRelay) {
+            deps.hostLinks?.unwatch(chatPaneId, remoteRelay);
+            remoteRelay = null;
+          }
           tail = null;
           tailSid = sid;
           if (sid) {
@@ -3009,11 +3023,38 @@ export function attachWsServer(deps: {
             // empty is the correct answer. Showing somebody else's
             // conversation would not be.
             if (!paneIsLocal) {
-              send({
-                t: 'notice',
-                level: 'info',
-                text: 'This chat runs on another machine. Its history is not available here yet.',
-              });
+              // ── A CHAT WHOSE HISTORY LIVES ON ANOTHER MACHINE ───────────
+              //
+              // Subscribed over that host's link instead of tailed here. The
+              // host runs the same reader against its own disk and pushes
+              // rendered events, which land in the SAME sink a local tail
+              // feeds — so the browser cannot tell the difference.
+              const relay = (m: {
+                paneId: string;
+                kind: 'events' | 'title' | 'unavailable';
+                phase?: string;
+                events?: unknown[];
+                title?: string;
+                reason?: string;
+              }) => {
+                if (m.kind === 'events')
+                  send({ t: 'events', phase: m.phase ?? 'live', events: m.events ?? [] });
+                else if (m.kind === 'title' && m.title) applyAiTitle(chatPaneId, m.title);
+                else if (m.kind === 'unavailable')
+                  send({ t: 'notice', level: 'info', text: m.reason ?? 'history unavailable' });
+              };
+              const watching = deps.hostLinks?.watch(chatPaneId, relay, CHAT_HISTORY_TAIL_BYTES);
+              if (!watching) {
+                send({
+                  t: 'notice',
+                  level: 'info',
+                  text: 'This chat runs on another machine, which is not reachable right now.',
+                });
+                return;
+              }
+              // Unwatch when this socket goes, so the host stops tailing a
+              // chat nobody is looking at.
+              remoteRelay = relay;
               return;
             }
             const nonClaude = session2?.assistant && session2.assistant !== 'claude';
@@ -3052,6 +3093,10 @@ export function attachWsServer(deps: {
           clearInterval(sessionPoll);
           unsubEvents();
           tail?.close();
+          if (remoteRelay) {
+            deps.hostLinks?.unwatch(chatPaneId, remoteRelay);
+            remoteRelay = null;
+          }
         };
         ws.on('close', teardown);
         ws.on('error', teardown);
@@ -3156,6 +3201,17 @@ export function attachWsServer(deps: {
           if (msg.t === 'load-older') {
             // Page in the previous chunk of history (emitted as phase 'older'),
             // then tell the client whether any remains so it can stop asking.
+            //
+            // For a remote chat the HOST owns the cursor — it is running the
+            // reader — so the request goes up the link and the page arrives as
+            // ordinary `events`. We cannot know `hasMore` from here, so we say
+            // true and let the client stop when a page comes back empty; the
+            // alternative (false) would silently truncate scroll-back.
+            if (remoteRelay) {
+              deps.hostLinks?.loadOlder(chatPaneId);
+              send({ t: 'older-done', hasMore: true });
+              return;
+            }
             const hasMore = tail?.loadOlder() ?? false;
             send({ t: 'older-done', hasMore });
             return;
