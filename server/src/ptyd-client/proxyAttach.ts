@@ -40,6 +40,17 @@ function isInputFrame(buf: Buffer): boolean {
 }
 
 export interface ProxyAttachOptions {
+  /**
+   * A REMOTE node's pty endpoint — `ws://host:7797/pty/<paneId>`.
+   *
+   * When set, `socketPath` is unused. Present so a user's browser can attach
+   * a pane that lives on another machine: the server proxies the bytes, which
+   * is the whole reason the pty arm's ownership rule is asymmetric (see
+   * ws.ts) — a browser is not a machine claiming to be a node.
+   */
+  ptyUrl?: string;
+  /** Sent on the upgrade. A node agent requires its token here. */
+  headers?: Record<string, string>;
   /** Absolute path to the ptyd unix socket. */
   socketPath: string;
   /** Pane id; becomes the `/pty/<id>` path on ptyd. */
@@ -97,7 +108,19 @@ export interface ProxyAttachHandle {
 export function proxyAttach(opts: ProxyAttachOptions): ProxyAttachHandle {
   const { socketPath, paneId, browser, replay = true, onInput } = opts;
   const replayQ = replay ? '' : '?replay=0';
-  const ptyd = new WebSocket(`ws+unix://${socketPath}:/pty/${paneId}${replayQ}`);
+  // ── LOCAL SOCKET OR A NODE'S URL ──────────────────────────────────────
+  //
+  // Same shape as PtydClient's control channel: ptyd's pty endpoint is
+  // already WS, so attaching to a pane on another machine differs only in the
+  // URL and an auth header. The byte pumping, backpressure handling and
+  // close semantics below are then the code already proving itself locally.
+  const target = opts.ptyUrl
+    ? `${opts.ptyUrl}${replayQ}`
+    : `ws+unix://${socketPath}:/pty/${paneId}${replayQ}`;
+  const ptyd = new WebSocket(
+    target,
+    opts.headers && Object.keys(opts.headers).length ? { headers: opts.headers } : {},
+  );
   // ptyd sends binary frames; match the default behavior of the existing
   // /ws/pane/:id endpoint so .send forwards Buffers verbatim without any
   // text conversion on either side.

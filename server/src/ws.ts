@@ -46,6 +46,7 @@ import {
 import { TranscriptTail, identityNormalize, muxpadLocate } from './chat/TranscriptReader.js';
 import { agentPaneHasMessages } from './chat/has-messages.js';
 import type { EventBus } from './events.js';
+import { readNodeTokenFor } from './node-link/NodeLinks.js';
 import { withPaneKey } from './pane-key.js';
 import { clearProvisionError, provisionError } from './pane-provision.js';
 import { hasProjectContext } from './project-root.js';
@@ -223,6 +224,34 @@ const STALL_SWEEP_MS = 60_000;
  * only refuse a mismatch that cannot yet happen, which makes it free to
  * verify and impossible to regress into later.
  */
+/**
+ * Where a pane's pty bytes live.
+ *
+ * Returns null for a LOCAL pane (use the unix socket), a target for a remote
+ * one, and the string 'unavailable' when the pane names a machine we have no
+ * link to or no token for.
+ *
+ * THE THIRD CASE IS WHY THIS RETURNS A SENTINEL rather than null twice over.
+ * Falling back to the local socket for an unreachable node would attach the
+ * user to *that pane id on this machine* — a different pty, or none, silently.
+ * The caller refuses the upgrade instead and says which machine is missing.
+ */
+function remotePtyTarget(
+  db: import('better-sqlite3').Database,
+  pane: { id: string; node_id?: string | null | undefined },
+): { url: string; headers: Record<string, string> } | null | 'unavailable' {
+  const nodeId = pane.node_id ?? LOCAL_NODE_ID;
+  if (nodeId === LOCAL_NODE_ID) return null;
+  const node = new NodeStore(db).get(nodeId);
+  if (!node?.endpoint) return 'unavailable';
+  const token = readNodeTokenFor(nodeId);
+  if (!token) return 'unavailable';
+  return {
+    url: `${node.endpoint.replace(/\/$/, '')}/pty/${pane.id}`,
+    headers: { 'x-muxpad-node-token': token },
+  };
+}
+
 function socketNodeId(headers: import('node:http').IncomingHttpHeaders): string {
   const raw = headers['x-muxpad-node-id'];
   const v = (Array.isArray(raw) ? raw[0] : raw)?.trim();
@@ -3099,12 +3128,26 @@ export function attachWsServer(deps: {
       socket.destroy();
       return;
     }
-    // Same rule for the pty stream: bytes for a pane on another machine must
-    // not be served from this one's ptyd.
-    const ptySpeaksFor = socketNodeId(req.headers);
-    if (!nodeOwnershipOk(pane.node_id ?? null, ptySpeaksFor)) {
+    // ── THE PTY STREAM'S RULE IS ASYMMETRIC, AND THE FIRST DRAFT WAS NOT ──
+    //
+    // Two different callers reach this arm and they deserve different answers:
+    //
+    //   a MACHINE claiming to speak for a node (header present) may only
+    //     touch that node's panes — this is the impersonation the review
+    //     warned about, and it stays strictly enforced;
+    //   a USER'S BROWSER (no header) may attach to ANY of their panes, and
+    //     the server's job is to proxy the bytes to whichever machine the
+    //     pane lives on.
+    //
+    // The first version enforced the same symmetric match on both, so a
+    // browser — which naturally sends no node header and therefore reads as
+    // `local` — was refused its own remote pane. Correct-looking, and it made
+    // remote chats unopenable.
+    const ptyClaim = req.headers['x-muxpad-node-id'];
+    const ptyClaimed = (Array.isArray(ptyClaim) ? ptyClaim[0] : ptyClaim)?.trim();
+    if (ptyClaimed && !nodeOwnershipOk(pane.node_id ?? null, ptyClaimed)) {
       console.warn(
-        `[ws] refused pty attach for pane ${paneId}: socket speaks for ${ptySpeaksFor}, pane lives on ${pane.node_id ?? LOCAL_NODE_ID}`,
+        `[ws] refused pty attach for pane ${paneId}: socket claims ${ptyClaimed}, pane lives on ${pane.node_id ?? LOCAL_NODE_ID}`,
       );
       refuseUpgrade(socket, 'pane belongs to another machine');
       return;
@@ -3151,8 +3194,21 @@ export function attachWsServer(deps: {
           // while ensurePane was inflight. Skip the bridge in that case.
           if (ws.readyState !== WebSocket.OPEN) return;
           const replay = url.searchParams.get('replay') !== '0';
+          // Where this pane's bytes actually are. For a local pane this is
+          // the unix socket, exactly as before; for a remote one it is that
+          // node's pty endpoint, with its token. `remotePtyTarget` returns
+          // null when the pane is local OR when its node has no link, and a
+          // null for an unreachable node must NOT silently fall through to
+          // the local socket — that would attach the user to a pane id on the
+          // wrong machine. So it refuses the upgrade instead.
+          const remote = remotePtyTarget(deps.db, pane);
+          if (remote === 'unavailable') {
+            refuseUpgrade(socket, 'that machine is not reachable right now');
+            return;
+          }
           proxyAttach({
             socketPath: deps.ptyd.socketPath,
+            ...(remote ? { ptyUrl: remote.url, headers: remote.headers } : {}),
             paneId: pane.id,
             browser: ws,
             replay,
