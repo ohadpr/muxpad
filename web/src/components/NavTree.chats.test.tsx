@@ -1,6 +1,6 @@
 import { CHAT_DECAY_DAYS, type Tab, chatClock } from '@muxpad/shared';
 import { describe, expect, it } from 'vitest';
-import { doneChatCount, groupChats } from './NavTree';
+import { groupChats } from './NavTree';
 
 const DAY = 86_400_000;
 const NOW = 1_700_000_000_000;
@@ -188,40 +188,18 @@ describe('groupChats', () => {
   });
 });
 
-describe('doneChatCount — the number in the done header', () => {
-  it('counts the CHATS you will find when you open it', () => {
-    // One decayed top-level chat, plus a live parent with three delivered
-    // agents. The agents are not in this list at any level — they are in the
-    // parent's work drawer — so the number is 1, and the invariant is the one
-    // it has always been: the header's number is what you find inside.
-    const { done } = groupChats([
-      tab('decayed', { agedDays: 9 }),
-      tab('hunt'),
-      tab('a1', { spawned_by: 'hunt', done: true }),
-      tab('a2', { spawned_by: 'hunt', done: true }),
-      tab('a3', { spawned_by: 'hunt', done: true }),
-    ]);
-    expect(done).toHaveLength(1);
-    expect(doneChatCount(done)).toBe(1);
-  });
+/* ─── THE ARCHIVE'S COUNT, AND ITS TESTS, ARE GONE ────────────────────────
+   `doneChatCount` put a number in the archive's header and these tests pinned
+   the invariant that made it trustworthy: the header's number has to be what
+   you find when you open it. It had been wrong twice by counting rows that
+   were not there — children, and a parent rendered as a label — so the
+   invariant was worth testing while the number existed.
 
-  it('is zero when only sub-chats have delivered', () => {
-    // It said "1" once and opened onto a stranger; then "1" for a section the
-    // reader had to open twice. Now there is nothing to count: the delivered
-    // worker is in its parent's drawer and the parent is live, above.
-    const { done } = groupChats([tab('hunt'), tab('a1', { spawned_by: 'hunt', done: true })]);
-    expect(doneChatCount(done)).toBe(0);
-  });
-
-  it('counts a decayed parent ONCE, not the family it took with it', () => {
-    const { done } = groupChats([tab('old', { agedDays: 9 }), tab('kid', { spawned_by: 'old' })]);
-    expect(doneChatCount(done)).toBe(1);
-  });
-
-  it('is zero for an empty drawer', () => {
-    expect(doneChatCount([])).toBe(0);
-  });
-});
+   The header says "older chats" and nothing else now: the count was a
+   quantity of the thing you are least interested in, at the top of the thing
+   you are most interested in, and it only grew. What the tests below still
+   cover is the thing that mattered underneath it — WHICH chats end up in that
+   list at all. */
 
 /**
  * DEPTH — a chat spawned by a chat that was itself spawned.

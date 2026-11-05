@@ -567,7 +567,16 @@
        reaching for. 72dvh leaves the top of the screen visible so it still
        reads as a sheet over the app rather than as a new page. */
     height: 72dvh;
-    max-height: 88dvh;
+    /* ── IT CANNOT REACH THE STATUS BAR, BY CONSTRUCTION ────────────────
+       The old cap was `88dvh`, which clears a notch on a tall phone purely
+       because 12dvh happens to be more than 59px. That is arithmetic, not an
+       invariant — and it is what made a top safe-area inset on the CHROME
+       look necessary (it was not: the inset is a property of the viewport, so
+       it returned the full status-bar height for a box sitting two thirds of
+       the way down the screen, and the title ended up in a band of nothing).
+       Saying it here instead means the sheet is a sheet at every height, and
+       the chrome needs no inset at all. */
+    max-height: calc(100dvh - env(safe-area-inset-top, 0px) - 24px);
     margin: auto auto 0;
     border-radius: 20px 20px 0 0;
     border-bottom: 0;
@@ -629,7 +638,19 @@
     /* 16px clears the grab handle above the title. The safe-area term stays
        for the landscape/notch case even though the sheet is bottom-anchored —
        a foldable unfolded puts the cut-out on a side. */
-    padding-top: calc(16px + env(safe-area-inset-top, 0px));
+    /* ── NO TOP INSET ON A BOTTOM SHEET ─────────────────────────────────
+       This was `16px + env(safe-area-inset-top)`, kept "for the
+       landscape/notch case even though the sheet is bottom-anchored". That
+       reasoning is wrong in a way the comment almost said out loud:
+       `safe-area-inset-top` is a property of the VIEWPORT, not of the
+       element, so it returns the full status-bar height (~59px in an
+       installed full-bleed PWA) no matter where the box sits. The sheet's top
+       edge is 28dvh down the screen, nowhere near the clock — and it was
+       being given 75px of top padding, so the title sat in the middle of a
+       band of nothing under the grab handle.
+       The left/right terms stay: a foldable unfolded is landscape, where the
+       cut-out moves to a SIDE and those are the ones that matter. */
+    padding-top: 16px;
     padding-left: calc(18px + env(safe-area-inset-left, 0px));
     padding-right: calc(8px + env(safe-area-inset-right, 0px));
   }
@@ -647,9 +668,6 @@
   .settings-dialog {
     font-size: 1rem;
   }
-  .settings-sidebar nav button {
-    font-size: 0.9375rem;
-  }
   .settings-layout {
     display: flex;
     flex-direction: column;
@@ -661,14 +679,35 @@
     border-right: 0;
     border-bottom: 1px solid var(--settings-line);
   }
+  /* ── THE SECTION TABS SCROLL; THEY DO NOT SQUEEZE ────────────────────
+     `flex: 1` split 354px between four tabs, so each got ~88px — and
+     "Notifications" needs ~95px at this size. One label wrapped to two lines
+     while the other three did not, which makes a centred row of tabs ragged
+     and the whole sheet look misaligned at the only place the eye starts.
+     Squeezing cannot be fixed by tuning: the labels are what they are and a
+     fifth section would break whatever number was chosen. So the row scrolls,
+     which is the phone idiom for a segmented control that does not fit, and
+     every tab keeps its own width and one line. */
   .settings-sidebar nav {
     flex-direction: row;
+    flex-wrap: nowrap;
     gap: 4px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+  .settings-sidebar nav::-webkit-scrollbar {
+    display: none;
   }
   .settings-sidebar nav button {
-    flex: 1;
+    flex: 0 0 auto;
+    white-space: nowrap;
     text-align: center;
-    padding: 8px 4px;
+    /* Reading size, folded in from the second copy of this selector that used
+       to sit higher in the same arm: two rules for one selector in one media
+       block is how a declaration ends up being overridden by its own twin. */
+    font-size: 0.9375rem;
+    padding: 8px 14px;
     min-height: 44px;
   }
   .settings-body {

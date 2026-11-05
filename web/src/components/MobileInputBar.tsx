@@ -410,8 +410,8 @@ export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: Mobil
           role="textbox"
           tabIndex={0}
           aria-multiline="true"
-          aria-label="Send to pane"
-          data-placeholder="Send to pane…"
+          aria-label="Send to this terminal"
+          data-placeholder="Send to this terminal…"
           onInput={syncEmpty}
           onPaste={onPaste}
         />

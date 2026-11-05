@@ -246,7 +246,7 @@ describe('the pinned edge', () => {
  * with the behaviour rather than loosened to pass, and the rule that replaces
  * them is asserted once, below.
  */
-describe('the sheet’s rows, and the pane pill that belongs to them', () => {
+describe('the sheet’s rows, and the split control that belongs to them', () => {
   const sheetHtml = (tabs: Tab[]): string => {
     TABS = tabs;
     return renderToStaticMarkup(
@@ -325,11 +325,13 @@ describe('the sheet’s rows, and the pane pill that belongs to them', () => {
     // The drawer was `[]` on this variant, so a chat the server had already
     // marked done stayed in the live list forever. The header is the shared one.
     //
-    // "OLDER", not "done": a chat leaves the live list when its clock runs
-    // out, which is a fact about when it was last used rather than about
-    // whether it finished. "82 done" read as a pile of completed work.
+    // "older chats", with NO number: a chat leaves the live list when its
+    // clock runs out, which is a fact about when it was last used rather than
+    // about whether it finished — and a count of the thing you are least
+    // interested in, at the top of the thing you are most interested in, only
+    // ever grows. The header is a door.
     const out = sheetHtml([tab('root'), tab('old', { done: true })]);
-    expect(out).toContain('1 older');
+    expect(out).toContain('older chats');
     // Collapsed by default here too, so the decayed row is not in the markup.
     expect(out).not.toContain('>old<');
   });

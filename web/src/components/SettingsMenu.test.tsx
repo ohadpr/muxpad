@@ -363,18 +363,57 @@ describe('settings can be dismissed by a thumb', () => {
     expect(touchArm).toMatch(/height:\s*44px/);
   });
 
-  it('clears the status bar — the actual reason the close was untappable', () => {
+  it('clears the status bar by never REACHING it', () => {
     // index.html ships viewport-fit=cover + a black-translucent status bar, so
-    // the top ~59px of a full-screen dialog is UNDER the clock and the battery.
-    // Seven other stylesheets inset for this; this one had none, and the close
-    // control rendered beneath the battery icon.
-    expect(touchArm).toMatch(
-      /\.settings-chrome\s*\{[^}]*padding-top:\s*calc\([^)]*safe-area-inset-top/,
-    );
+    // the top ~59px of a FULL-SCREEN dialog is under the clock and the
+    // battery — which is what this dialog was when the inset was added, and
+    // why the close control rendered beneath the battery icon.
+    //
+    // It is a bottom sheet now, so the rule changed and the inset outlived
+    // it: `safe-area-inset-top` is a property of the VIEWPORT, not of the
+    // element, so a box sitting two thirds of the way down the screen was
+    // still handed the full status-bar height as padding. The title sat in a
+    // band of nothing under the grab handle — reported as the modal looking
+    // broken on mobile.
+    //
+    // So the invariant moved to where it belongs: the sheet's HEIGHT cannot
+    // extend into the inset. Asserted as the cap rather than as the padding,
+    // because the cap is the thing that is actually true.
+    expect(touchArm).toMatch(/max-height:\s*calc\(100dvh - env\(safe-area-inset-top/);
+    // …and the chrome has no top inset to re-introduce it. COMMENTS STRIPPED
+    // FIRST: the note explaining why the inset is gone contains the words
+    // `safe-area-inset-top`, so a negative match over the raw text finds the
+    // explanation and fails. That is the fourth time a comment in this
+    // project has matched one of its own negative assertions.
+    const flat = touchArm.replace(/\/\*[\s\S]*?\*\//g, '');
+    const chrome = /\.settings-chrome\s*\{[^}]*position:\s*sticky[^}]*\}/.exec(flat)?.[0] ?? '';
+    expect(chrome).toMatch(/padding-top:\s*16px/);
+    expect(chrome).not.toMatch(/safe-area-inset-top/);
   });
 
-  it('insets all four edges, because a foldable is landscape', () => {
-    // Unfolded, the cut-out is on a SIDE: left/right are the ones that matter.
+  it('SCROLLS the section tabs rather than squeezing them', () => {
+    // `flex: 1` split ~354px between four tabs, so each got ~88px — and
+    // "Notifications" needs ~95px at the touch font size. One label wrapped
+    // to two lines while the other three did not, which makes a centred row
+    // of tabs ragged at the one place the eye starts, and is most of why the
+    // sheet looked misaligned.
+    //
+    // Not fixable by tuning: the labels are what they are, and a fifth
+    // section would break whatever number was chosen.
+    const flat = touchArm.replace(/\/\*[\s\S]*?\*\//g, '');
+    const nav = /\.settings-sidebar nav\s*\{[^}]*\}/.exec(flat)?.[0] ?? '';
+    expect(nav).toMatch(/overflow-x:\s*auto/);
+    expect(nav).toMatch(/flex-wrap:\s*nowrap/);
+    const btn = /\.settings-sidebar nav button\s*\{[^}]*\}/.exec(flat)?.[0] ?? '';
+    expect(btn).toMatch(/flex:\s*0 0 auto/);
+    expect(btn).toMatch(/white-space:\s*nowrap/);
+  });
+
+  it('insets the edges a bottom sheet can actually touch', () => {
+    // Unfolded, a foldable is landscape and the cut-out moves to a SIDE, so
+    // left/right are the ones that matter; bottom is the home indicator. TOP
+    // is not one of them — see the test above for why keeping it there was
+    // the bug rather than the belt.
     expect(touchArm).toMatch(/safe-area-inset-left/);
     expect(touchArm).toMatch(/safe-area-inset-right/);
     expect(touchArm).toMatch(/safe-area-inset-bottom/);
