@@ -123,7 +123,28 @@ describe('the recently-active band, on every theme', () => {
     expect(rails.length).toBeGreaterThanOrEqual(5);
   });
 
-  it('builds its ground from the ink, not from the accent', () => {
+  /**
+   * ── WHY THE GROUND IS A TINT AND THE SEPARATION IS AN EDGE ─────────────
+   *
+   * Asked twice for more contrast on this band, I answered the first with
+   * tint and the second request was the evidence that tint cannot do it. The
+   * sweep, over all ten themes:
+   *
+   *   memphis       band-vs-rail step 1.001:1 at ANY percentage — its --fg
+   *                 and its rail surface share a luminance, so a wash of one
+   *                 over the other moves nothing at all.
+   *   tokyo-night   row ink 4.59:1 at 8%, under the 4.4 floor by 10%.
+   *
+   * Capped by the darkest theme, useless on the lightest. Which is also the
+   * real reason an accent WASH failed earlier: a 13% mix cannot separate two
+   * colours that share a luminance, whatever colour it mixes.
+   *
+   * An EDGE is not a mix. At full strength the accent measures 2.96–12.6:1
+   * against the rail on every theme — including riso (2.96) and demoscene
+   * (3.04), the two a wash could not touch. So the band is bracketed: a solid
+   * accent bar on the leading edge and a solid accent seam below.
+   */
+  it('builds its ground from the ink, and its EDGES from the accent', () => {
     const flat = TREE.replace(/\/\*[\s\S]*?\*\//g, '');
     const rest = flat.slice(flat.indexOf('.navtree-workingset {'));
     const rule = rest.slice(0, rest.indexOf('}'));
@@ -139,6 +160,44 @@ describe('the recently-active band, on every theme', () => {
     // token by name is what pinned a deep-surface colour onto a light one —
     // see NavSheet.contrast.test.
     expect(rule).toMatch(/border-bottom:[^;]*var\(--accent\)/);
+    // SOLID, not a mix: a mix toward the band is a mix toward a colour the
+    // band may already share, which is most of its strength gone on riso and
+    // demoscene.
+    expect(rule).toMatch(/border-bottom:\s*1px solid var\(--accent\)/);
+    expect(rule).toMatch(/border-inline-start:\s*3px solid var\(--accent\)/);
+    // …and the bracket pays for its own width, or every row in the band sits
+    // 3px right of every row beneath it.
+    expect(rule).toMatch(/padding-inline-start:\s*calc\(var\(--nt-pad\) - 3px\)/);
+  });
+
+  it.each(rails.map((t) => [t.name, t] as const))(
+    '%s shows the bracket against the rail',
+    (_n, theme) => {
+      // The measurement the tint could not pass. A solid line, against the
+      // RAIL (not the band), because the bracket sits in the rail's own
+      // margin — see the padding note in NavTree.css.
+      const accent = theme.tokens['rail-accent'] ?? theme.tokens.accent;
+      if (!accent) return;
+      expect(ratio(rgb(accent), rgb(theme.tokens['rail-surface'] as string))).toBeGreaterThan(2.5);
+    },
+  );
+
+  it('has at least one theme the tint does nothing for, which is why the bracket exists', () => {
+    // Pinned as a FACT rather than left in a comment. Stated per-theme first
+    // and that was too strong: on demoscene the tint does contribute. What
+    // justifies the bracket is not that tint never works — it is that it
+    // fails COMPLETELY on a theme that ships, so tint alone cannot be the
+    // mechanism. memphis measures 1.001:1, because its --fg and its rail
+    // surface share a luminance.
+    const steps = rails.map((t) => ({
+      name: t.name,
+      step: ratio(
+        mix(t.tokens.fg as string, t.tokens['rail-surface'] as string, 8),
+        rgb(t.tokens['rail-surface'] as string),
+      ),
+    }));
+    const worst = steps.reduce((a, b) => (b.step < a.step ? b : a));
+    expect(worst.step, `${worst.name} is the worst and it is not flat`).toBeLessThan(1.05);
   });
 
   it.each(rails.map((t) => [t.name, t] as const))(
