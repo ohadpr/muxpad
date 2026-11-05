@@ -58,6 +58,14 @@ interface Allowed {
    */
   query?: string;
   /**
+   * Trim the ANSWER before it goes back, for a shape whose route knows more
+   * than the caller should.
+   *
+   * Absent means the body rides back as the route wrote it, which is right
+   * for every shape whose answer is already scoped to the thing asked for.
+   */
+  filterResponse?: (body: string, ctx: BodyContext) => string;
+  /**
    * Rebuild the BODY, for a shape where the body is not free text.
    *
    * Absent means the body rides through as sent, which is right for the two
@@ -234,6 +242,38 @@ const ALLOWED: Allowed[] = [
     pattern: /^\/api\/tabs\/([^/]+)$/,
     parts: ['tab'],
     rebuild: ([t]) => `/api/tabs/${t}`,
+    /**
+     * ── ONE PANE OF ITS OWN DOES NOT BUY THE WHOLE TAB ──────────────────
+     *
+     * `tabIsOn` accepts a tab containing ANY pane on the calling host, which
+     * is the right rule for a CARD — a card belongs to the conversation, and
+     * a mixed tab is a conversation both machines are in. It is the wrong
+     * rule for this, because the answer carries every pane's `env`,
+     * `startup_cmd` and `cwd`.
+     *
+     * Tabs can be mixed: `POST /api/tabs/:id/merge` preserves each pane's
+     * node. So a host with one pane in a merged tab could read a LOCAL pane's
+     * environment — `API_TOKEN` and friends — by asking about the tab it
+     * shares. Found in review.
+     *
+     * The route stays as it is (the web app needs the whole tab); the HOST's
+     * copy is trimmed to the panes it owns. It asks this to learn the pane id
+     * of the worker it just spawned, and that pane is always its own.
+     */
+    filterResponse: (body, ctx) => {
+      try {
+        const v = JSON.parse(body) as { panes?: unknown };
+        if (!Array.isArray(v.panes)) return body;
+        const mine = (v.panes as Array<{ id?: unknown }>).filter(
+          (p) => typeof p.id === 'string' && ctx.paneIsOurs(p.id),
+        );
+        return JSON.stringify({ ...v, panes: mine });
+      } catch {
+        // Not the shape we expected — hand back nothing rather than a body
+        // this function did not understand.
+        return JSON.stringify({ error: { code: 'not_found', message: 'not found' } });
+      }
+    },
   },
 ];
 
@@ -332,7 +372,15 @@ export class HostApi {
       // Rebuilt from the SHAPE, not from the request — the host's own string
       // has been compared and discarded.
       const dest = a.rebuild(captures) + (a.query && query !== null ? `?${a.query}` : '');
-      return this.dispatch(a.method, dest, out);
+      const res = await this.dispatch(a.method, dest, out);
+      if (!a.filterResponse || res.status >= 400) return res;
+      return {
+        ...res,
+        body: a.filterResponse(res.body, {
+          nodeId,
+          paneIsOurs: (paneId) => this.paneIsOn(nodeId, paneId),
+        }),
+      };
     }
     return NOT_FOUND;
   }
