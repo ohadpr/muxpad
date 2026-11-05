@@ -180,6 +180,23 @@ const ALLOWED: Allowed[] = [
       return JSON.stringify(out);
     },
   },
+  // ── muxpad publish ──────────────────────────────────────────────────────
+  //
+  // The one in-pane verb whose payload is BYTES. Published artifacts are
+  // served from this machine's disk behind the single public tunnel, and the
+  // file is on the host — so the body's `path` is not dispatched at all: it
+  // names what the SERVER then asks that host to send, and publish is handed
+  // the staged copy. See `handlePublish`.
+  //
+  // Publishing is already public by definition, so there is no secret
+  // boundary being crossed here — which is also why artifacts were always
+  // going to live on the server rather than be proxied per request.
+  {
+    method: 'POST',
+    pattern: /^\/api\/publish$/,
+    parts: [],
+    rebuild: () => '/api/publish',
+  },
   // The CLI reads `panes[0].id` back off the new tab, to address the worker it
   // just made. Scoped like everything else: a tab with a pane on this host.
   {
@@ -192,6 +209,17 @@ const ALLOWED: Allowed[] = [
 
 export interface HostApiDeps {
   db: Database.Database;
+  /**
+   * Pull a path off a host into a staging dir here, for `muxpad publish`.
+   *
+   * Optional: absent means publishing from a host is refused like anything
+   * else not on the list, which is the right default for a link that has no
+   * file channel.
+   */
+  fetchFromHost?: (
+    nodeId: string,
+    path: string,
+  ) => Promise<{ path: string; dispose: () => void } | { error: string }>;
   /** Dispatch a request this module built. Never the host's own. */
   fetch: (req: Request) => Response | Promise<Response>;
   /** This server's own base, for an absolute URL and a same-origin Origin. */
@@ -239,6 +267,11 @@ export class HostApi {
     // text that survives it.
     if (rawPath.includes('?') || rawPath.includes('#')) return NOT_FOUND;
     const path = rawPath;
+    // Publishing is the one shape that is not "validate, then dispatch": the
+    // bytes have to be fetched off the host first, and the path that reaches
+    // publish is OURS, never the host's.
+    if (method.toUpperCase() === 'POST' && path === '/api/publish')
+      return this.handlePublish(nodeId, body);
     for (const a of ALLOWED) {
       if (a.method !== method.toUpperCase()) continue;
       const m = a.pattern.exec(path);
@@ -257,6 +290,65 @@ export class HostApi {
       return this.dispatch(a.method, a.rebuild(captures), out);
     }
     return NOT_FOUND;
+  }
+
+  /**
+   * `muxpad publish` from a chat on another machine.
+   *
+   * Three steps, in this order, because each one guards the next:
+   *
+   *  1. REBUILD the body. `name`, `update`, `days` and `audience` are the only
+   *     fields that survive; `public_base_url` is dropped so the server's own
+   *     default decides the link, which is the durable one.
+   *  2. FETCH the host's path into a staging dir under the data dir. The
+   *     host's `path` string is used for nothing else — it never reaches the
+   *     publish route, so none of that route's filesystem reasoning (is this
+   *     the public dir, is it an ancestor of it) is being asked to defend
+   *     against a remote path it cannot stat.
+   *  3. DISPATCH with the staged path, then delete the staging tree whatever
+   *     happened.
+   */
+  private async handlePublish(nodeId: string, body?: string): Promise<HostApiResult> {
+    const fetchFromHost = this.deps.fetchFromHost;
+    if (!fetchFromHost) return NOT_FOUND;
+    let v: Record<string, unknown>;
+    try {
+      v = JSON.parse(body ?? '{}') as Record<string, unknown>;
+    } catch {
+      return NOT_FOUND;
+    }
+    const src = v.path;
+    // Absolute only, like the route itself requires — and this one is a path
+    // on ANOTHER machine, so there is nothing here that could usefully check
+    // more than its shape.
+    if (typeof src !== 'string' || !src.startsWith('/') || src.includes('\0')) return NOT_FOUND;
+    const out: Record<string, unknown> = {};
+    if (typeof v.name === 'string' && /^[a-z0-9-]{1,64}$/.test(v.name)) out.name = v.name;
+    if (v.update === true) out.update = true;
+    if (typeof v.days === 'number' && Number.isFinite(v.days) && v.days > 0 && v.days <= 3650)
+      out.days = Math.floor(v.days);
+    if (v.audience === 'public' || v.audience === 'private') out.audience = v.audience;
+    // `update` without a name is the route's own 400; let it say so rather
+    // than refusing with a 404 that reads as "no such thing".
+    const staged = await fetchFromHost(nodeId, src);
+    if ('error' in staged)
+      return {
+        status: 502,
+        body: JSON.stringify({ error: { code: 'host_unreachable', message: staged.error } }),
+        contentType: 'application/json',
+      };
+    try {
+      return await this.dispatch(
+        'POST',
+        '/api/publish',
+        JSON.stringify({ ...out, path: staged.path }),
+      );
+    } finally {
+      // Publish COPIES into the public dir, so the staged tree is dead the
+      // moment the route returns — and a staging dir left behind in the data
+      // dir is invisible debris that nothing else sweeps.
+      staged.dispose();
+    }
   }
 
   /** Charset, then ownership, for each capture. Either failure is a 404. */

@@ -1,3 +1,6 @@
+import { randomBytes } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { LOCAL_NODE_ID, type NodeStore } from '../store/NodeStore.js';
 import { HostLink } from './HostLink.js';
 import { readNodeTokenFor } from './NodeLinks.js';
@@ -130,6 +133,28 @@ export class HostLinks {
   /** Is this pane's host reachable right now? For the "not available" notice. */
   isUp(paneId: string): boolean {
     return this.linkForPane(paneId)?.up === true;
+  }
+
+  /**
+   * Pull a path off a host into a fresh staging dir, for `muxpad publish`.
+   *
+   * One directory per transfer, named with randomness and created under the
+   * data dir: a host that somehow escaped the per-file path check would land
+   * somewhere nothing serves, and two publishes at once cannot see each
+   * other's files.
+   */
+  async fetchFromHost(
+    nodeId: string,
+    path: string,
+  ): Promise<{ path: string; dispose: () => void } | { error: string }> {
+    const link = this.links.get(nodeId);
+    if (!link) return { error: 'that machine is not connected' };
+    const root = join(
+      this.deps.dataDir ?? tmpdir(),
+      'host-staging',
+      `${nodeId}-${randomBytes(8).toString('hex')}`,
+    );
+    return link.fetchPath(path, root);
   }
 
   stop(): void {

@@ -1,5 +1,7 @@
+import { randomUUID } from 'node:crypto';
 import { WebSocket } from 'ws';
 import { type LinkDown, decodeLink, encodeLink } from '../node-agent/link-protocol.js';
+import { FileReceiver } from './receive-files.js';
 
 /**
  * THE SERVER'S END OF ONE HOST LINK.
@@ -97,6 +99,11 @@ export class HostLink {
    * reason; I wrote it there and did not write it here.
    */
   private readonly pending = new Map<string, string[]>();
+  /** In-flight `files` pulls, by correlation id. See {@link fetchPath}. */
+  private readonly fetches = new Map<
+    string,
+    { recv: FileReceiver; settle: (r: { path: string } | { error: string }) => void }
+  >();
   private readonly log: (line: string) => void;
 
   constructor(private readonly deps: HostLinkDeps) {
@@ -137,6 +144,13 @@ export class HostLink {
       } catch {}
     }
     this.relays.clear();
+    // A transfer in flight belonged to a socket that is gone; nothing will
+    // ever finish it, and its staging tree would sit in the data dir forever.
+    for (const [, f] of this.fetches) {
+      f.recv.dispose();
+      f.settle({ error: 'the link to that machine dropped mid-transfer' });
+    }
+    this.fetches.clear();
     if (this.closed) return;
     this.timer = setTimeout(() => this.connect(), this.backoff);
     this.timer.unref?.();
@@ -168,6 +182,44 @@ export class HostLink {
       if (m.op === 'request') void this.answerApi(m.id, m.method, m.path, m.body);
       return;
     }
+    if (m.ch === 'files') {
+      const f = this.fetches.get(m.id);
+      if (!f) return; // already settled (timed out, or the link bounced)
+      if (m.op === 'chunk') {
+        f.recv.chunk(m.rel, m.b64, m.last);
+        // A refusal mid-transfer (a path escaping the staging dir, too many
+        // bytes) ends it now rather than at `done` — there is no reason to
+        // keep writing a tree we have already decided not to use.
+        const bad = f.recv.error;
+        if (bad) {
+          this.fetches.delete(m.id);
+          f.recv.dispose();
+          f.settle({ error: bad });
+        }
+        return;
+      }
+      // `fetch` is the one `files` op this side SENDS; seeing it come back up
+      // is a host replaying our own frame, not an answer to it.
+      if (m.op === 'fetch') return;
+      this.fetches.delete(m.id);
+      if (m.op === 'error') {
+        f.recv.dispose();
+        f.settle({ error: m.reason });
+        return;
+      }
+      const path = f.recv.finish(m.kind, m.name);
+      if (!path) {
+        const why = f.recv.error ?? 'the transfer could not be staged';
+        f.recv.dispose();
+        f.settle({ error: why });
+        return;
+      }
+      // The CALLER disposes on success — it is holding the only reference to
+      // the staged path and is the only thing that knows when publish is done
+      // reading it.
+      f.settle({ path });
+      return;
+    }
     if (m.ch !== 'runner') return;
     if (m.op === 'attached') {
       this.openRelay(m.paneId);
@@ -195,6 +247,46 @@ export class HostLink {
       this.pending.set(m.paneId, q);
       if (!r) this.openRelay(m.paneId);
     }
+  }
+
+  /**
+   * Pull a path from this host into a staging directory here.
+   *
+   * For `muxpad publish` in a remote chat: the artifact's bytes are on that
+   * machine and the public server streams from this one's disk. The server
+   * ASKS for exactly the path the publish named — a host cannot start a
+   * transfer (see link-protocol's `hostMaySend`), so this cannot become a way
+   * to deposit files on this machine.
+   *
+   * On success the caller owns `dispose` — it is the only thing that knows
+   * when publish has finished reading the staged tree. On failure the staging
+   * directory is already gone.
+   */
+  fetchPath(
+    path: string,
+    stagingRoot: string,
+    timeoutMs = 120_000,
+  ): Promise<{ path: string; dispose: () => void } | { error: string }> {
+    if (this.ws?.readyState !== WebSocket.OPEN)
+      return Promise.resolve({ error: 'that machine is not connected' });
+    const id = randomUUID();
+    const recv = new FileReceiver(stagingRoot);
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        if (!this.fetches.delete(id)) return;
+        recv.dispose();
+        resolve({ error: 'that machine did not finish sending in time' });
+      }, timeoutMs);
+      timer.unref?.();
+      this.fetches.set(id, {
+        recv,
+        settle: (r) => {
+          clearTimeout(timer);
+          resolve('path' in r ? { path: r.path, dispose: () => recv.dispose() } : r);
+        },
+      });
+      this.send({ ch: 'files', op: 'fetch', id, path });
+    });
   }
 
   /**

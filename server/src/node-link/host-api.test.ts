@@ -247,6 +247,100 @@ describe('spawning a worker', () => {
   });
 });
 
+describe('publishing from a host', () => {
+  const withFetch = (
+    impl: (
+      nodeId: string,
+      path: string,
+    ) => Promise<{ path: string; dispose: () => void } | { error: string }>,
+  ) => {
+    const disposed: string[] = [];
+    const a = new HostApi({
+      db,
+      selfUrl: 'http://127.0.0.1:7777',
+      apiKey: () => 'secret',
+      fetch: (req) => {
+        fetched.push(req);
+        return ok();
+      },
+      fetchFromHost: impl,
+    });
+    return { a, disposed };
+  };
+
+  it('publishes the STAGED path, never the host’s', async () => {
+    let askedFor = '';
+    const { a } = withFetch(async (_n, p) => {
+      askedFor = p;
+      return { path: '/Users/ohadpr/.muxpad/host-staging/x/report.html', dispose: () => {} };
+    });
+    const res = await a.handle(
+      'trayo',
+      'POST',
+      '/api/publish',
+      JSON.stringify({ path: '/home/ohad/work/report.html', name: 'weekly' }),
+    );
+    expect(res.status).toBe(200);
+    // The host's path names what to FETCH and reaches publish not at all —
+    // the route's filesystem reasoning (is this the public dir, is it an
+    // ancestor of it) cannot usefully stat another machine's path.
+    expect(askedFor).toBe('/home/ohad/work/report.html');
+    const sent = JSON.parse(await (fetched[0] as Request).text()) as Record<string, unknown>;
+    expect(sent.path).toBe('/Users/ohadpr/.muxpad/host-staging/x/report.html');
+    expect(sent.name).toBe('weekly');
+  });
+
+  it('deletes the staging tree whatever publish did', async () => {
+    let gone = false;
+    const { a } = withFetch(async () => ({
+      path: '/tmp/staged',
+      dispose: () => {
+        gone = true;
+      },
+    }));
+    await a.handle('trayo', 'POST', '/api/publish', JSON.stringify({ path: '/home/ohad/x' }));
+    expect(gone).toBe(true);
+  });
+
+  it('drops a base url the host suggested, so the link is the durable one', async () => {
+    const { a } = withFetch(async () => ({ path: '/tmp/staged', dispose: () => {} }));
+    await a.handle(
+      'trayo',
+      'POST',
+      '/api/publish',
+      JSON.stringify({ path: '/home/ohad/x', public_base_url: 'https://evil.example' }),
+    );
+    const sent = JSON.parse(await (fetched[0] as Request).text()) as Record<string, unknown>;
+    expect(sent.public_base_url).toBeUndefined();
+  });
+
+  it('refuses a relative path without asking the host for anything', async () => {
+    let asked = false;
+    const { a } = withFetch(async () => {
+      asked = true;
+      return { error: 'x' };
+    });
+    const res = await a.handle('trayo', 'POST', '/api/publish', JSON.stringify({ path: 'rel' }));
+    expect(res.status).toBe(404);
+    expect(asked).toBe(false);
+  });
+
+  it('reports a failed transfer as 502, not as a publish that worked', async () => {
+    const { a } = withFetch(async () => ({ error: 'that machine is not connected' }));
+    const res = await a.handle('trayo', 'POST', '/api/publish', JSON.stringify({ path: '/x' }));
+    expect(res.status).toBe(502);
+    expect(res.body).toContain('not connected');
+    expect(fetched).toHaveLength(0);
+  });
+
+  it('is refused outright when the link has no file channel', async () => {
+    // `fetchFromHost` absent = publishing from a host is simply not on the
+    // list, which is the right default rather than a half-working path.
+    const res = await api.handle('trayo', 'POST', '/api/publish', JSON.stringify({ path: '/x' }));
+    expect(res.status).toBe(404);
+  });
+});
+
 describe('a router that throws', () => {
   // The rejection is deliberate: HostLink.answerApi is the one place that
   // turns it into a 500, because that is also where "no handler at all" has to
