@@ -554,6 +554,13 @@ const app = createApp({
   // The one deliberately cross-host surface — see routes/search.ts. A server
   // capability for the user to look at, NOT something a host can reach.
   searchHosts: (q, opts) => hostLinks.searchHosts(q, opts),
+  // Pairing a machine takes effect at once: both link sets re-read the table
+  // and dial (or drop) accordingly. Without this, `muxpad node add` would end
+  // in "restart muxpad", which drops every runner's socket.
+  onNodesChanged: () => {
+    nodeLinks.sync();
+    hostLinks.sync();
+  },
   // The node-aware transport for pane lifecycle; `ptyd` below stays the
   // local socket client for the pty-proxy paths. See server.ts on why both.
   paneOps: paneRouter,

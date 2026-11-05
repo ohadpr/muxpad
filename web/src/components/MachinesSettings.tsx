@@ -5,11 +5,13 @@ import { api, req } from '../api';
 /**
  * SETTINGS → MACHINES.
  *
- * ── NO PAIRING HERE, AND THAT IS NOT LAZINESS ────────────────────────────
- * There is no "add a machine" button. Adding one is a PAIRING flow — this
- * machine mints a credential, you run one line on the other box, and the token
- * has to land on disk at 0600 on both sides — which a settings dialog cannot
- * honestly do.
+ * ── PAIRING IS HALF A DIALOG, AND IT SAYS SO ─────────────────────────────
+ * It used to say a dialog could not do this honestly, which was right about
+ * the OLD shape: the token had to be written on both machines by hand. This
+ * machine's half is now automatic — `POST /api/nodes` mints the credential and
+ * writes it 0600 here — so what is left for a person is the other half, one
+ * line on the other box. That is what the form hands back, and it does not
+ * pretend to have finished.
  *
  * There IS a default-host picker now, which there deliberately was not: it was
  * held back until a chat on another machine actually worked end to end, on the
@@ -32,6 +34,13 @@ import { api, req } from '../api';
  * the process.
  */
 
+/** What `POST /api/nodes` hands back. The token appears HERE and in no GET. */
+interface Paired {
+  node: NodeRow;
+  token: string;
+  install: string;
+}
+
 interface NodeRow {
   id: string;
   name: string;
@@ -52,6 +61,19 @@ const LABEL: Record<NodeRow['state'], string> = {
   unknown: 'not checked yet',
 };
 
+/**
+ * The sentence to show for a failed write.
+ *
+ * `ApiError` carries the server's own message, and these are the messages
+ * worth reading verbatim — "1 pane still live on that machine" is the whole
+ * answer, and a generic "could not remove" would send someone to the logs for
+ * something the server already said.
+ */
+function messageOf(e: unknown): string {
+  const m = (e as { message?: unknown } | null)?.message;
+  return typeof m === 'string' && m.trim() ? m : 'That did not work.';
+}
+
 function ago(at: number | null): string {
   if (!at) return 'never';
   const s = Math.max(0, Math.round((Date.now() - at) / 1000));
@@ -64,8 +86,20 @@ function ago(at: number | null): string {
 export function MachinesSettings() {
   const [nodes, setNodes] = useState<NodeRow[] | null>(null);
   const [failed, setFailed] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState({ id: '', name: '', endpoint: '' });
+  const [paired, setPaired] = useState<Paired | null>(null);
+  const [pairError, setPairError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const [workspaces, setWorkspaces] = useState<Workspace[] | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
+
+  /** Re-read the machine list. Shared by the poll and by every write. */
+  const refresh = useCallback(async () => {
+    const r = await req<{ nodes?: NodeRow[] }>('/api/nodes');
+    setNodes(r?.nodes ?? []);
+    setFailed(false);
+  }, []);
 
   const loadWorkspaces = useCallback(async () => {
     try {
@@ -129,11 +163,82 @@ export function MachinesSettings() {
     }
   };
 
-  if (failed) return <p className="machines-note">Could not read the machine list.</p>;
+  /**
+   * Pair a machine. The token comes back in THIS response and nowhere else,
+   * so it is held in state until the panel is dismissed — a reload loses it,
+   * which is correct: it is on disk here, and the only thing a person needs it
+   * for is typing it over there.
+   */
+  const pair = async () => {
+    setBusy(true);
+    setPairError(null);
+    try {
+      const res = await req<Paired>('/api/nodes', {
+        method: 'POST',
+        body: JSON.stringify({
+          id: draft.id.trim(),
+          endpoint: draft.endpoint.trim(),
+          ...(draft.name.trim() ? { name: draft.name.trim() } : {}),
+        }),
+      });
+      setPaired(res);
+      setDraft({ id: '', name: '', endpoint: '' });
+      setAdding(false);
+      await refresh();
+    } catch (e) {
+      setPairError(messageOf(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /**
+   * Forget a machine.
+   *
+   * The 409 for "it still holds panes" is SHOWN rather than retried with
+   * force: dropping the row under a live pane is how a chat silently moves to
+   * the wrong computer, and a confirm here would be a button that removes
+   * conversations. Forcing it is a command-line act.
+   */
+  const forget = async (n: NodeRow) => {
+    setBusy(true);
+    setPairError(null);
+    try {
+      await req<void>(`/api/nodes/${encodeURIComponent(n.id)}`, { method: 'DELETE' });
+      await refresh();
+      await loadWorkspaces();
+    } catch (e) {
+      setPairError(messageOf(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (failed && !nodes) return <p className="machines-note">Could not read the machine list.</p>;
   if (!nodes) return <p className="machines-note">Loading…</p>;
 
   return (
     <div className="machines">
+      {pairError ? <p className="machine-note machines-error">{pairError}</p> : null}
+      {/* ── THE OTHER HALF OF PAIRING ──────────────────────────────────────
+          Shown until dismissed, because it is the only place this token ever
+          appears and it has to be typed on another computer. */}
+      {paired ? (
+        <div className="machine machine-paired">
+          <div className="machine-head">
+            <span className="machine-name">Now run this on {paired.node.name}</span>
+          </div>
+          <pre className="machine-install">{paired.install}</pre>
+          <p className="machine-note">
+            That machine needs the muxpad repo and a build first — <code>muxpad-node</code> ships
+            with the server package. This one will dial it as soon as it is listening, and the row
+            above goes green.
+          </p>
+          <button type="button" className="machine-btn" onClick={() => setPaired(null)}>
+            Done
+          </button>
+        </div>
+      ) : null}
       {nodes.map((n) => (
         <div className="machine" key={n.id} data-state={n.state}>
           <div className="machine-head">
@@ -159,9 +264,21 @@ export function MachinesSettings() {
           </div>
           {n.state === 'unauthorized' ? (
             <p className="machine-note">
-              No token for this machine on this one. Run <code>muxpad-node --init</code> there and
-              put the value it prints in <code>~/.muxpad/node-tokens/{n.id}</code> here.
+              No credential for this machine here. Remove it and pair it again — that mints a fresh
+              token and prints the one line to run over there.
             </p>
+          ) : null}
+          {/* `local` has no remove: it is this machine, and a cockpit cannot
+              be configured out of existence. */}
+          {n.endpoint ? (
+            <button
+              type="button"
+              className="machine-btn machine-forget"
+              disabled={busy}
+              onClick={() => void forget(n)}
+            >
+              Forget this machine
+            </button>
           ) : null}
         </div>
       ))}
@@ -195,10 +312,63 @@ export function MachinesSettings() {
           </p>
         </div>
       ) : null}
+      {adding ? (
+        <div className="machine machine-add">
+          <div className="machine-head">
+            <span className="machine-name">Pair a machine</span>
+          </div>
+          <label className="machine-field">
+            <span>Id</span>
+            <input
+              value={draft.id}
+              placeholder="trayo"
+              onChange={(e) => setDraft((d) => ({ ...d, id: e.currentTarget.value }))}
+            />
+          </label>
+          <label className="machine-field">
+            <span>Name</span>
+            <input
+              value={draft.name}
+              placeholder="Trayo dev VM"
+              onChange={(e) => setDraft((d) => ({ ...d, name: e.currentTarget.value }))}
+            />
+          </label>
+          <label className="machine-field">
+            <span>Address</span>
+            <input
+              value={draft.endpoint}
+              placeholder="ws://host.your-tailnet.ts.net:7797"
+              onChange={(e) => setDraft((d) => ({ ...d, endpoint: e.currentTarget.value }))}
+            />
+          </label>
+          <div className="machine-actions">
+            <button
+              type="button"
+              className="machine-btn"
+              disabled={busy || !draft.id.trim() || !draft.endpoint.trim()}
+              onClick={() => void pair()}
+            >
+              {busy ? 'Pairing…' : 'Pair'}
+            </button>
+            <button type="button" className="machine-btn" onClick={() => setAdding(false)}>
+              Cancel
+            </button>
+          </div>
+          <p className="machine-note">
+            This machine mints the credential and dials out; the other one only ever listens. The id
+            is also its token's filename, so lowercase letters, digits, <code>-</code> and{' '}
+            <code>_</code>.
+          </p>
+        </div>
+      ) : (
+        <button type="button" className="machine-btn" onClick={() => setAdding(true)}>
+          + Pair a machine
+        </button>
+      )}
       <p className="machines-note">
-        Machines are paired from the command line — the credential has to be written to disk on both
-        sides, which a dialog cannot do honestly. This view is for seeing what muxpad has and
-        whether it can reach it.
+        This machine issues the credential and the other is installed with it — that order is the
+        point, not a convenience: the opposite one leaves an unauthenticated listener on the network
+        for however long it takes you to finish.
       </p>
     </div>
   );

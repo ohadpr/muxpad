@@ -108,6 +108,24 @@ export class NodeStore {
   }
 
   /**
+   * Rename a machine, or point it at a new address.
+   *
+   * Re-pointing resets `state` to `unknown` and clears `capabilities`: both
+   * described whatever answered at the OLD address, and carrying them over
+   * would show a reachable Linux box at an endpoint nothing has dialled yet.
+   */
+  update(id: string, patch: { name?: string; endpoint?: string }): void {
+    if (patch.name !== undefined)
+      this.db.prepare('UPDATE nodes SET name = ? WHERE id = ?').run(patch.name, id);
+    if (patch.endpoint !== undefined)
+      this.db
+        .prepare(
+          "UPDATE nodes SET endpoint = ?, state = 'unknown', capabilities = NULL WHERE id = ?",
+        )
+        .run(patch.endpoint, id);
+  }
+
+  /**
    * Report what a link now knows. `last_seen` moves only on `up`, because its
    * job is "when did this machine last actually answer" — stamping it on a
    * failed attempt would make a node that has been unreachable for a week

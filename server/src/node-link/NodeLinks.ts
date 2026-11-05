@@ -74,7 +74,13 @@ export interface LinkClient extends PaneTransport {
   close(): Promise<void>;
 }
 
-type Link = { client: LinkClient; connected: boolean };
+type Link = {
+  client: LinkClient;
+  connected: boolean;
+  /** What this client was dialled AT, so {@link NodeLinks.sync} can tell a
+   *  re-pointed node from an unchanged one. */
+  endpoint: string;
+};
 
 export class NodeLinks {
   private readonly links = new Map<string, Link>();
@@ -91,10 +97,32 @@ export class NodeLinks {
    * claims to be `up` on the strength of a socket from a previous process.
    */
   start(): void {
-    for (const node of this.deps.nodes.list()) {
-      if (node.id === LOCAL_NODE_ID || !node.endpoint) continue;
-      this.open(node.id, node.endpoint);
+    this.sync();
+  }
+
+  /**
+   * Make the open links match the nodes table.
+   *
+   * Called at startup and after every add/remove/re-point, so PAIRING A
+   * MACHINE DOES NOT NEED A RESTART. That matters more than it sounds: a
+   * restart is the one thing the user is told not to do casually (it drops
+   * every runner's socket), so "add a machine, then restart muxpad" would
+   * have made pairing a worse operation than doing it by hand.
+   *
+   * Idempotent. A node whose ENDPOINT changed is closed and redialled — the
+   * old client is pointed at a machine that is no longer the answer.
+   */
+  sync(): void {
+    const rows = this.deps.nodes.list().filter((n) => n.id !== LOCAL_NODE_ID && n.endpoint);
+    const wanted = new Map(rows.map((n) => [n.id, n.endpoint as string]));
+    for (const [id, link] of [...this.links]) {
+      const endpoint = wanted.get(id);
+      if (endpoint && endpoint === link.endpoint) continue;
+      // Gone, or pointed somewhere else.
+      void link.client.close().catch(() => {});
+      this.links.delete(id);
     }
+    for (const [id, endpoint] of wanted) this.open(id, endpoint);
   }
 
   private open(nodeId: string, endpoint: string): void {
@@ -117,7 +145,7 @@ export class NodeLinks {
           headers: { 'x-muxpad-node-token': o.token },
         }));
     const client = make({ controlUrl, token });
-    const link: Link = { client, connected: false };
+    const link: Link = { client, connected: false, endpoint };
     this.links.set(nodeId, link);
 
     client.on('connected', () => {

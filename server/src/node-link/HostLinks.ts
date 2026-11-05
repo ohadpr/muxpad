@@ -55,34 +55,62 @@ export class HostLinks {
 
   /** Open a link to every configured remote host. */
   start(): void {
-    for (const node of this.deps.nodes.list()) {
-      if (node.id === LOCAL_NODE_ID || !node.endpoint) continue;
-      const token = readNodeTokenFor(node.id, this.deps.dataDir);
+    this.sync();
+  }
+
+  /**
+   * Make the links match the nodes table — see NodeLinks.sync for why this
+   * exists rather than a restart.
+   *
+   * A node whose endpoint changed, or whose token was re-minted, is closed and
+   * redialled: a link holds its credential from the dial, so a rotated token
+   * only takes effect on a new one.
+   */
+  sync(): void {
+    const rows = this.deps.nodes.list().filter((n) => n.id !== LOCAL_NODE_ID && n.endpoint);
+    const wanted = new Map<string, { endpoint: string; token: string }>();
+    for (const n of rows) {
+      const token = readNodeTokenFor(n.id, this.deps.dataDir);
       if (!token) continue; // NodeLinks already marks this `unauthorized`
-      this.links.set(
-        node.id,
-        new HostLink({
-          nodeId: node.id,
-          endpoint: node.endpoint,
-          token,
-          selfUrl: this.deps.selfUrl,
-          apiKey: this.deps.apiKey,
-          onTranscript: (m) => {
-            for (const sink of this.sinks.get(m.paneId) ?? []) sink(m);
-          },
-          // The principal is bound HERE, to the node this server dialled, and
-          // the handler cannot be told otherwise — a host names a path, never
-          // whose authority to use.
-          ...(this.deps.hostApi
-            ? {
-                onApiRequest: (m) =>
-                  (this.deps.hostApi as HostApi).handle(node.id, m.method, m.path, m.body),
-              }
-            : {}),
-          ...(this.deps.log ? { log: this.deps.log } : {}),
-        }),
-      );
+      wanted.set(n.id, { endpoint: n.endpoint as string, token });
     }
+    for (const [id, link] of [...this.links]) {
+      const want = wanted.get(id);
+      const dialled = link.dialledAt;
+      if (want && want.endpoint === dialled.endpoint && want.token === dialled.token) continue;
+      link.close();
+      this.links.delete(id);
+    }
+    for (const [id, want] of wanted) {
+      if (this.links.has(id)) continue;
+      this.openLink(id, want.endpoint, want.token);
+    }
+  }
+
+  private openLink(nodeId: string, endpoint: string, token: string): void {
+    this.links.set(
+      nodeId,
+      new HostLink({
+        nodeId,
+        endpoint,
+        token,
+        selfUrl: this.deps.selfUrl,
+        apiKey: this.deps.apiKey,
+        onTranscript: (m) => {
+          for (const sink of this.sinks.get(m.paneId) ?? []) sink(m);
+        },
+        // The principal is bound HERE, to the node this server dialled, and
+        // the handler cannot be told otherwise — a host names a path, never
+        // whose authority to use.
+        ...(this.deps.hostApi
+          ? {
+              onApiRequest: (m) =>
+                (this.deps.hostApi as HostApi).handle(nodeId, m.method, m.path, m.body),
+            }
+          : {}),
+        ...(this.deps.log ? { log: this.deps.log } : {}),
+      }),
+    );
   }
 
   /** The link that owns this pane, or null when it is local or unreachable. */

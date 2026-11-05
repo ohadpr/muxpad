@@ -144,6 +144,13 @@ export interface AppDeps {
    * Optional, and absent is the single-machine install: the flag then does
    * nothing rather than erroring, so a client can always send it.
    */
+  /**
+   * The node table changed — re-sync the live links.
+   *
+   * Absent in tests, where there are no links to sync; the routes then simply
+   * write the rows.
+   */
+  onNodesChanged?: () => void;
   searchHosts?: (
     q: string,
     opts: { limit: number; role?: string },
@@ -315,7 +322,16 @@ export function createApp(deps: AppDeps): Hono {
   const lifecycle = { ...resolved, ptyd: resolved.paneOps };
   app.route('/api/workspaces', workspacesRoutes(lifecycle));
   // Which machines muxpad knows about. Read-only on purpose — see routes/nodes.ts.
-  app.route('/api/nodes', nodesRoutes(resolved));
+  app.route(
+    '/api/nodes',
+    nodesRoutes({
+      db: resolved.db,
+      ...(resolved.dataDir ? { dataDir: resolved.dataDir } : {}),
+      // Re-dial on change, so pairing a machine never ends in "now restart
+      // muxpad" — a restart drops every runner's socket.
+      ...(resolved.onNodesChanged ? { onChanged: resolved.onNodesChanged } : {}),
+    }),
+  );
   // Slack lives on the SERVER now, not in the CLI: this process holds the
   // token and decides, and the caller's identity comes from its process
   // ancestry rather than from an environment variable it can set.

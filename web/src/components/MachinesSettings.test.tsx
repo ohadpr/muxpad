@@ -13,17 +13,41 @@ describe('Settings → Machines', () => {
   });
 
   /**
-   * NO PAIRING BUTTON. Pairing writes a credential to disk at 0600 on two
-   * machines, which a dialog cannot honestly do.
+   * PAIRING IS HALF A DIALOG AND SAYS SO. This machine's half is automatic —
+   * the server mints the credential and writes it 0600 — and what is left for
+   * a person is one line on the other box, which is what the form hands back.
    */
-  it('offers no add button, and says why rather than looking unfinished', () => {
-    // Asserted against the JSX ONLY: the phrase appears in the file's own
-    // comment explaining why there is no such button, and a negative match
-    // over the whole source finds the explanation and fails. (Third time a
-    // comment has matched one of my own negative assertions tonight.)
+  describe('pairing', () => {
     const jsx = SRC.slice(SRC.indexOf('export function MachinesSettings'));
-    expect(jsx).not.toMatch(/<button/i);
-    expect(SRC).toMatch(/paired from the command line/i);
+
+    it('mints through POST /api/nodes and shows what to run over there', () => {
+      expect(jsx).toMatch(/'\/api\/nodes',\s*\{\s*\n?\s*method: 'POST'/);
+      expect(jsx).toMatch(/paired\.install/);
+    });
+
+    it('does not pretend to have finished', () => {
+      // The other machine needs the repo and a build; a form that said
+      // "paired" and stopped would be describing half an operation.
+      expect(SRC).toMatch(/needs the muxpad repo and a build/i);
+    });
+
+    it('says why this machine issues the credential', () => {
+      expect(SRC).toMatch(/unauthenticated listener/i);
+    });
+
+    it('forgets a machine, but never offers it for THIS one', () => {
+      // `local` has no endpoint, and that is the condition the button is
+      // behind — a cockpit cannot be configured out of existence.
+      expect(jsx).toMatch(/n\.endpoint \? \(/);
+      expect(jsx).toMatch(/Forget this machine/);
+    });
+
+    it('shows the server’s refusal verbatim rather than retrying with force', () => {
+      // "1 pane still live on that machine" is the whole answer, and a confirm
+      // here would be a button that deletes conversations.
+      expect(jsx).toMatch(/setPairError\(messageOf\(e\)\)/);
+      expect(jsx).not.toMatch(/force=1/);
+    });
   });
 
   /**
@@ -72,9 +96,11 @@ describe('Settings → Machines', () => {
     expect(SRC).toMatch(/not checked yet/);
   });
 
-  it('tells you what to DO about a machine with no token', () => {
-    expect(SRC).toContain('muxpad-node --init');
-    expect(SRC).toContain('node-tokens');
+  it('tells you what to DO about a machine with no credential', () => {
+    // The old advice was to run `muxpad-node --init` there and copy the value
+    // in by hand. There is a button for that now, so the advice is the button:
+    // remove it and pair it again, which mints a fresh token.
+    expect(SRC).toMatch(/Remove it and pair it again/);
   });
 
   it('a failed read degrades to a note, never a broken dialog', () => {
