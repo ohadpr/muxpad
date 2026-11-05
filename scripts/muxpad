@@ -3762,7 +3762,7 @@ cmd_node_list() {
   if [ "$JSON_OUTPUT" = "1" ]; then printf '%s\n' "$res"; return; fi
   printf '%s' "$res" | jq -r '
     .nodes[] |
-    "\(.id)\t\(.state)\t\(.panes) pane(s)\t\(.endpoint // "this machine")\t\(.name)"
+    "\(.id)\t\(.state)\t\(.panes) chat(s)\t\(.endpoint // "this machine")\t\(.name)"
   ' | while IFS=$'\t' read -r id state panes endpoint name; do
     local mark
     case "$state" in
