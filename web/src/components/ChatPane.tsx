@@ -419,6 +419,14 @@ type ServerMsg =
        *  true, and it can arrive LATE — a build landing under an open chat
        *  makes a current pane stale with no hello to ride. */
       staleRunner?: boolean;
+      /**
+       * The MACHINE this chat runs on, when it is not this one. Sent only
+       * then, so its presence IS the fact — see ws.ts. A chat whose host row
+       * is read from the pane table rather than this frame would lag the
+       * socket, and this is a statement about where the words being typed are
+       * going.
+       */
+      host?: string;
       // The turn's streamed text so far, so that reconnect shows the partial
       // assistant message instead of a bare typing indicator.
       streamText?: string;
@@ -1555,6 +1563,8 @@ export function ChatPane({
    *  is a standing fact rather than an event — it belongs on the session strip
    *  with the other things that are true about this chat. */
   const [staleRunner, setStaleRunner] = useState(false);
+  /** See ServerMsg.host. Null = this machine, and no cell at all. */
+  const [remoteHost, setRemoteHost] = useState<string | null>(null);
   // Older-history pagination: the server opens with just the recent tail; we
   // page earlier messages in on scroll-up. `hasMoreOlder` starts true and is
   // corrected by the server's `older-done`.
@@ -1813,6 +1823,8 @@ export function ChatPane({
         // field in the healthy case, and a pane that gets respawned onto the
         // current build clears the cell by the same omission.
         setStaleRunner(msg.staleRunner === true);
+        // Absent = local, by the same omission discipline as staleRunner.
+        setRemoteHost(typeof msg.host === 'string' && msg.host ? msg.host : null);
         setSession(
           msg.session
             ? {
@@ -4898,6 +4910,7 @@ export function ChatPane({
       onOpenChat={openChat}
       mode={mode}
       stale={staleRunner}
+      host={remoteHost}
       send={(obj) => {
         const sock = wsRef.current;
         if (!sock || sock.readyState !== WebSocket.OPEN) {

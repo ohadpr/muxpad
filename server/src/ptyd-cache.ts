@@ -6,6 +6,7 @@ import { provisionError } from './pane-provision-state.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
 import { AppUrlDetector } from './runtime/app-url-detector.js';
 import type { AppUrlMarker } from './runtime/pty-scanner.js';
+import { LOCAL_NODE_ID } from './store/NodeStore.js';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
 import {
@@ -721,6 +722,28 @@ export class PtydCache extends EventEmitter {
  * through this — a hand-built partial payload silently blanks `busy` on the
  * client and poisons the sidebar's change-dedup signature.
  */
+/**
+ * `{ node_name }` for a pane on another machine, `{}` for everything else.
+ *
+ * Returns an object to spread rather than a `string | undefined`, so a local
+ * pane's payload does not grow a key at all — a `node_name: undefined` would
+ * serialise away anyway, but it would also invite a client to test the key's
+ * presence rather than its value.
+ */
+function remoteNodeName(
+  db: Database.Database | undefined,
+  nodeId?: string,
+): { node_name?: string } {
+  if (!db || !nodeId || nodeId === LOCAL_NODE_ID) return {};
+  const row = db.prepare('SELECT name FROM nodes WHERE id = ?').get(nodeId) as
+    | { name: string }
+    | undefined;
+  // A node row deleted from under a live pane: name it by id rather than
+  // silently rendering as local, which is the one thing the chip exists to
+  // prevent.
+  return { node_name: row?.name ?? nodeId };
+}
+
 export function decoratePane(
   cache: PtydCache,
   pane: PaneSpec,
@@ -736,6 +759,10 @@ export function decoratePane(
   const status = cache.getStatus(pane.id, pane.unread === true);
   return {
     ...pane,
+    // WHOSE MACHINE, in words, and only when it is not this one. See
+    // PaneSpecSchema.node_name: absent IS the "it's local" signal, so the UI
+    // needs no second fetch and a one-machine install sees nothing new.
+    ...remoteNodeName(db, pane.node_id),
     title: cache.getTitle(pane.id),
     foreground_cmd: cache.getFg(pane.id),
     // `attention` keeps its ORIGINAL meaning — the raw BEL bit — deliberately.
