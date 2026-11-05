@@ -150,7 +150,7 @@ nodeLinks.start();
 // remote chat's history. Separate from `nodeLinks` above, which owns the
 // `/control` dial for pane operations — see HostLink on why two sockets.
 const selfUrl = `http://127.0.0.1:${config.port}`;
-const hostLinks = new HostLinks({
+const hostLinks: HostLinks = new HostLinks({
   nodes: nodeStore,
   selfUrl,
   apiKey: () => apiCredential(),
@@ -165,6 +165,11 @@ const hostLinks = new HostLinks({
     selfUrl,
     apiKey: () => apiCredential(),
     fetch: (req) => app.fetch(req),
+    // Back into the links themselves: `muxpad publish` on a host needs the
+    // server to PULL the artifact over that host's own link. `hostLinks` is
+    // the const being declared — legal because this body only RUNS when a
+    // host publishes, long after the declaration finishes.
+    fetchFromHost: (nodeId, path) => hostLinks.fetchFromHost(nodeId, path),
   }),
 });
 hostLinks.start();

@@ -36,7 +36,7 @@
  */
 
 /** Which conversation a message belongs to. */
-export type LinkChannel = 'ptyd' | 'transcript' | 'runner' | 'api';
+export type LinkChannel = 'ptyd' | 'transcript' | 'runner' | 'api' | 'files';
 
 /** Server → host. */
 export type LinkDown =
@@ -50,6 +50,8 @@ export type LinkDown =
   | { ch: 'runner'; op: 'frame'; paneId: string; frame: unknown }
   /** The server is ready to adopt this pane's runner; the host may attach it. */
   | { ch: 'runner'; op: 'adopt'; paneId: string }
+  /** Send me this path's contents. See the `files` channel note. */
+  | { ch: 'files'; op: 'fetch'; id: string; path: string }
   /** The answer to one `api` request. `id` is the host's own correlation id. */
   | {
       ch: 'api';
@@ -76,6 +78,25 @@ export type LinkUp =
    *  register and tear down exactly as it does for a local runner. */
   | { ch: 'runner'; op: 'attached'; paneId: string }
   | { ch: 'runner'; op: 'detached'; paneId: string }
+  /**
+   * One file's bytes, base64, in order. `last` closes that file.
+   *
+   * `rel` is relative to the fetched path — empty for a single file, which is
+   * what tells the server it is publishing a file rather than a directory.
+   */
+  | {
+      ch: 'files';
+      op: 'chunk';
+      id: string;
+      rel: string;
+      b64: string;
+      last: boolean;
+    }
+  /** Every file sent. `name` is the basename, so the published artifact keeps
+   *  the filename the user named rather than a staging id. */
+  | { ch: 'files'; op: 'done'; id: string; kind: 'file' | 'dir'; name: string }
+  /** No such path, too big, not readable — said rather than left to time out. */
+  | { ch: 'files'; op: 'error'; id: string; reason: string }
   /**
    * One in-pane CLI call, for the server to answer.
    *
@@ -115,7 +136,8 @@ export function decodeLink(raw: string): (LinkDown | LinkUp) | null {
   }
   if (!v || typeof v !== 'object') return null;
   const ch = (v as { ch?: unknown }).ch;
-  if (ch !== 'ptyd' && ch !== 'transcript' && ch !== 'runner' && ch !== 'api') return null;
+  if (ch !== 'ptyd' && ch !== 'transcript' && ch !== 'runner' && ch !== 'api' && ch !== 'files')
+    return null;
   return v as LinkDown | LinkUp;
 }
 
@@ -132,5 +154,9 @@ export function hostMaySend(m: LinkDown | LinkUp): boolean {
   if (m.ch === 'ptyd') return true; // replies and ptyd's own pushes
   if (m.ch === 'transcript') return m.op === 'events' || m.op === 'title' || m.op === 'unavailable';
   if (m.ch === 'api') return m.op === 'request';
+  // A host may ANSWER a fetch and never start one: `fetch` is the server
+  // naming a path, and a host that could send one would be asking this machine
+  // to read its own disk on the host's behalf.
+  if (m.ch === 'files') return m.op === 'chunk' || m.op === 'done' || m.op === 'error';
   return m.op === 'frame' || m.op === 'attached' || m.op === 'detached';
 }

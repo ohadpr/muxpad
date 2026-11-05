@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { WebSocket } from 'ws';
 import { TranscriptSubscriptions } from '../ptyd/transcript-subscriptions.js';
 import { type LinkUp, decodeLink, encodeLink, hostMaySend } from './link-protocol.js';
+import { sendPath } from './send-files.js';
 
 /**
  * THE HOST'S END OF THE LINK.
@@ -157,6 +158,12 @@ export class LinkServer {
       else if (m.op === 'loadOlder') this.subs.loadOlder(m.paneId);
       return;
     }
+    if (m.ch === 'files') {
+      // Only ever in response to the server naming a path — see send-files.ts
+      // on why this direction is a pull.
+      if (m.op === 'fetch') void this.sendFiles(m.id, m.path);
+      return;
+    }
     if (m.ch === 'api') {
       if (m.op !== 'response') return;
       const settle = this.apiCalls.get(m.id);
@@ -173,6 +180,21 @@ export class LinkServer {
       const r = this.runners.get(m.paneId);
       if (r?.readyState === WebSocket.OPEN) r.send(JSON.stringify(m.frame));
     }
+  }
+
+  /**
+   * Stream one path to the server, for a publish from a chat on this machine.
+   *
+   * ALWAYS TERMINATES with a `done` or an `error`: the far side is holding a
+   * staging directory and an HTTP request open, so a transfer that simply
+   * stops is a publish that hangs and a temp dir that never gets swept.
+   */
+  private async sendFiles(id: string, path: string): Promise<void> {
+    await sendPath(path, {
+      chunk: (rel, b64, last) => this.up({ ch: 'files', op: 'chunk', id, rel, b64, last }),
+      done: (kind, name) => this.up({ ch: 'files', op: 'done', id, kind, name }),
+      error: (reason) => this.up({ ch: 'files', op: 'error', id, reason }),
+    });
   }
 
   /**
