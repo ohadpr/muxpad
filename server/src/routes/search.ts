@@ -5,6 +5,7 @@ import {
   type ArchiveSessionRow,
   MAX_SEARCH_QUERY_BYTES,
 } from '../archive/ArchiveDb.js';
+import { LOCAL_NODE_ID } from '../store/NodeStore.js';
 
 /**
  * Archive search + browse (docs/plans/2026-08-28-session-archive.md §3).
@@ -130,6 +131,52 @@ export function searchRoutes(deps: {
      * as arbitrary. Recency is a fact about the message itself and means the
      * same thing on every machine.
      */
+    /**
+     * IS THIS HIT SHAPED LIKE A HIT?
+     *
+     * A host's answer was spread into the response with only "is it an array"
+     * checked, and a review found both halves of what that allows:
+     *
+     *   · `snippet: null` reaches the client's `snippetParts(null)` and
+     *     THROWS during render — one malformed row breaks the search UI.
+     *   · `session: { pane_id: <a local pane> }` makes the client resolve the
+     *     row to a LOCAL chat and draw the host's invented text under that
+     *     chat's name. Overwriting `host` and `node_id` labels the row's
+     *     origin; it does not stop the row pointing somewhere else.
+     *
+     * So a hit must look like one, and its session must name a pane on the
+     * host that sent it — the same ownership rule the transcript channel
+     * already enforces, applied to the other place a host hands us a paneId.
+     */
+    const hitIsSane = (h: Record<string, unknown>): boolean => {
+      if (typeof h.sid !== 'string' || !h.sid) return false;
+      if (typeof h.snippet !== 'string') return false;
+      if (typeof h.role !== 'string') return false;
+      if (typeof h.ts !== 'number' || !Number.isFinite(h.ts)) return false;
+      const session = h.session;
+      if (session === null || session === undefined) return true;
+      if (typeof session !== 'object') return false;
+      const pane = (session as { pane_id?: unknown }).pane_id;
+      if (pane === null || pane === undefined) return true;
+      if (typeof pane !== 'string') return false;
+      // ── AN ABSENT PANE IS FINE; SOMEBODY ELSE'S IS NOT ─────────────────
+      //
+      // `nodeForPane` answers `local` for a pane it has never heard of, which
+      // is right for its own purpose and wrong here: a chat whose pane was
+      // deleted long ago is precisely what an archive holds, and rejecting
+      // those would drop the legitimate history this feature exists to
+      // search. (Caught by the existing tests, whose fixtures are exactly
+      // that shape.)
+      //
+      // Forging needs an EXISTING pane to point at, so that is the case to
+      // refuse: a row that is there and belongs to a different machine.
+      const row = deps.db.prepare('SELECT node_id FROM panes WHERE id = ?').get(pane) as
+        | { node_id: string | null }
+        | undefined;
+      if (!row) return true;
+      return (row.node_id ?? LOCAL_NODE_ID) === (h.__node as string);
+    };
+
     /** One row of the merged list. A remote hit's extra keys are what tell the
      *  UI which machine it came from; the rest of the shape is identical, so
      *  nothing downstream needs a branch. */
@@ -137,17 +184,20 @@ export function searchRoutes(deps: {
     const rows: Row[] = [
       ...local,
       ...remote.flatMap((r) =>
-        (r.hits as Array<Record<string, unknown>>).map((h) => ({
-          // `session` ARRIVES WITH THE HIT, from that host's own archive —
-          // this machine's tables know nothing of a remote sid, and a hit with
-          // no session is a hit the UI drops as unnavigable. The pane id in it
-          // DOES resolve here, because a remote pane's row lives on this
-          // server with `node_id` set, so a cross-host result is a row you can
-          // click and land in the chat.
-          ...h,
-          host: r.name,
-          node_id: r.nodeId,
-        })),
+        (r.hits as Array<Record<string, unknown>>)
+          .map((h) => ({ ...h, __node: r.nodeId }))
+          .filter(hitIsSane)
+          .map(({ __node, ...h }) => ({
+            // `session` ARRIVES WITH THE HIT, from that host's own archive —
+            // this machine's tables know nothing of a remote sid, and a hit with
+            // no session is a hit the UI drops as unnavigable. The pane id in it
+            // DOES resolve here, because a remote pane's row lives on this
+            // server with `node_id` set, so a cross-host result is a row you can
+            // click and land in the chat.
+            ...h,
+            host: r.name,
+            node_id: r.nodeId,
+          })),
       ),
     ];
     const merged = rows.sort((a, b) => Number(b.ts ?? 0) - Number(a.ts ?? 0));

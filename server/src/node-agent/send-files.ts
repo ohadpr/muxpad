@@ -68,6 +68,16 @@ export async function sendPath(path: string, sink: FileSink): Promise<void> {
   }
   try {
     if (st.isFile()) {
+      // ── THE CAP APPLIES HERE TOO ───────────────────────────────────────
+      // It did not: the directory branch counts bytes as it walks and this
+      // one went straight to sending, so `muxpad publish <a 4GB file>` read
+      // and enqueued the whole thing. The receiver refuses after 64MB, but
+      // nothing tells the SENDER, which keeps reading — host memory, and
+      // every runner and transcript frame queued behind it.
+      if (st.size > MAX_TOTAL_BYTES) {
+        sink.error(`too large (> ${Math.round(MAX_TOTAL_BYTES / 1024 / 1024)}MB)`);
+        return;
+      }
       // `rel: ''` is what tells the server this is a FILE publish, which
       // behaves differently at the far end (a lone .html becomes the slug's
       // index.html; anything else keeps its name and gets a listing).

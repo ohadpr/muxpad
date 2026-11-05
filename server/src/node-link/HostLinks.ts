@@ -84,6 +84,20 @@ export class HostLinks {
     for (const [id, want] of wanted) {
       if (this.links.has(id)) continue;
       this.openLink(id, want.endpoint, want.token);
+      // ── A NEW LINK OBJECT INHERITS THE OLD ONE'S WATCHERS ──────────────
+      //
+      // `HostLink` replays its own subscriptions across a RECONNECT, which
+      // covers a dropped socket. It does not cover being REPLACED: re-point a
+      // node's endpoint (or re-mint its token) while somebody is watching a
+      // remote chat, and `sync` closes that object and builds a new one whose
+      // `subscribed` map is empty. The browser's sink survives here in
+      // `sinks`, so nothing re-subscribes and the chat silently stops
+      // updating — the same symptom as the reconnect bug, by a different
+      // route, which is why the intent is re-stated from the side that owns
+      // the watchers.
+      for (const paneId of this.sinks.keys())
+        if (this.deps.nodes.nodeForPane(paneId) === id)
+          this.links.get(id)?.subscribeTranscript(paneId);
     }
   }
 

@@ -81,6 +81,51 @@ describe('what the server accepts off a link', () => {
     for (const m of bad) expect(wellFormed(m as never), JSON.stringify(m)).toBe(false);
   });
 
+  /**
+   * ── THE ONE THAT ESCAPED ────────────────────────────────────────────────
+   *
+   * `paneId` is interpolated into a loopback WebSocket URL. A review found
+   * that `../chat/<a local pane>` makes `new URL()` normalise
+   * `/ws/agent-runner/../chat/<id>` to `/ws/chat/<id>` — a DIFFERENT
+   * authenticated endpoint, dialled with this server's own install credential
+   * and a same-origin header. The host then receives that local chat's
+   * transcript and can send it `{t:'send'}` frames, which drives somebody
+   * else's agent. `../events` reaches the install-wide event stream.
+   *
+   * Verified before fixing: `new URL('ws://h/ws/agent-runner/' + '../events')`
+   * really does resolve to `/ws/events`.
+   */
+  it('REJECTS a paneId that can be read as a path', () => {
+    for (const paneId of [
+      '../chat/01KX6GKFGSCNWB9S1R87N74WKG',
+      '../events',
+      '..',
+      'a/b',
+      'a\\b',
+      './x',
+      '%2e%2e%2fevents',
+      'x'.repeat(65),
+      '',
+      'has space',
+    ]) {
+      expect(
+        wellFormed({ ch: 'runner', op: 'attached', paneId } as never),
+        JSON.stringify(paneId),
+      ).toBe(false);
+      expect(
+        wellFormed({ ch: 'transcript', op: 'title', paneId, title: 'x' } as never),
+        JSON.stringify(paneId),
+      ).toBe(false);
+    }
+  });
+
+  it('still accepts the ids muxpad actually mints', () => {
+    // ULIDs, and the `-`/`_` that other id shapes in this tree allow.
+    for (const paneId of ['01KX6GKFGSCNWB9S1R87N74WKG', 'test-pane-1', 'a_b-C9']) {
+      expect(wellFormed({ ch: 'runner', op: 'attached', paneId } as never), paneId).toBe(true);
+    }
+  });
+
   it('rejects an op a HOST may not send, even though it is well shaped', () => {
     // `fetch` and `query` are the SERVER naming a path and asking a question.
     // `hostMaySend` refuses them on the host's own side; this refuses them

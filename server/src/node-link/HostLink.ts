@@ -90,14 +90,34 @@ export interface HostLinkDeps {
  * same as the failure mode of a malformed one — whereas the failure mode of
  * not having it was an uncaught TypeError taking down the install.
  */
+/**
+ * A PANE ID, AND NOTHING THAT CAN BE READ AS A PATH.
+ *
+ * `paneId` from a host is interpolated into a loopback WebSocket URL, and a
+ * review found what that allows: `{paneId: "../chat/<a local pane>"}` makes
+ * `new URL()` normalise `/ws/agent-runner/../chat/<id>` to `/ws/chat/<id>` —
+ * a DIFFERENT authenticated endpoint, dialled with this server's own install
+ * credential and a same-origin header. The host then receives that local
+ * chat's transcript and can send it `{t:'send'}` frames, which drives
+ * somebody else's agent. `../events` reaches the install-wide event stream.
+ *
+ * The id is also a database key and a Map key, so the charset is the one
+ * every other id check in this tree uses. Checked HERE rather than only at
+ * the URL, because the same string reaches `nodeForPane`, the sink map and
+ * the relay registry, and a check at one of four uses is the shape of bug
+ * this whole file keeps finding.
+ */
+const PANE_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
 export function wellFormed(m: LinkDown | LinkUp): boolean {
   const str = (v: unknown): boolean => typeof v === 'string';
+  const paneId = (v: unknown): boolean => typeof v === 'string' && PANE_ID.test(v);
   switch (m.ch) {
     case 'ptyd':
       return str((m as { payload?: unknown }).payload);
     case 'transcript': {
       const t = m as { op?: unknown; paneId?: unknown; events?: unknown; title?: unknown };
-      if (!str(t.paneId)) return false;
+      if (!paneId(t.paneId)) return false;
       if (t.op === 'events') return Array.isArray(t.events);
       if (t.op === 'title') return str(t.title);
       if (t.op === 'unavailable') return str((t as { reason?: unknown }).reason);
@@ -105,7 +125,7 @@ export function wellFormed(m: LinkDown | LinkUp): boolean {
     }
     case 'runner': {
       const r = m as { op?: unknown; paneId?: unknown; frame?: unknown };
-      if (!str(r.paneId)) return false;
+      if (!paneId(r.paneId)) return false;
       if (r.op === 'frame') return !!r.frame && typeof r.frame === 'object';
       return r.op === 'attached' || r.op === 'detached';
     }
@@ -143,6 +163,15 @@ export function wellFormed(m: LinkDown | LinkUp): boolean {
       return false;
   }
 }
+
+/**
+ * How many panes may have frames queued at once.
+ *
+ * The per-pane cap bounds one conversation's buffer; this bounds a host that
+ * invents pane ids. Far above any real fan-out — a machine with thirty live
+ * chats is already unusual — and far below "until the server dies".
+ */
+const MAX_PENDING_PANES = 64;
 
 export class HostLink {
   private ws: WebSocket | null = null;
@@ -240,6 +269,9 @@ export class HostLink {
       } catch {}
     }
     this.relays.clear();
+    // Their queues go too: nothing will ever open a relay for a link that is
+    // gone, and the host re-announces its runners on the next `attached`.
+    this.pending.clear();
     // A transfer in flight belonged to a socket that is gone; nothing will
     // ever finish it, and its staging tree would sit in the data dir forever.
     for (const [, f] of this.fetches) {
@@ -366,9 +398,20 @@ export class HostLink {
       // Capped, because a relay that never opens must not grow without bound
       // — and a runner that has sent hundreds of frames before its socket
       // came up is broken in a way more buffer will not fix.
+      // ── BOUNDED PER PANE *AND* ACROSS PANES ───────────────────────────
+      // The 64-frame cap is per pane and there was no cap on PANES. A host
+      // sending frames for `missing-1`, `missing-2`, … creates a queue each
+      // time: the loopback is refused (no such pane), and the relay's close
+      // handler clears `relays` but not `pending`, so every queue stayed. A
+      // compromised host could hold arbitrarily many payloads in the server's
+      // memory, across link drops, until it ran out.
+      //
+      // A pane whose relay cannot open has nothing to deliver to, so the
+      // queue is only ever worth keeping for a relay that is on its way up.
       const q = this.pending.get(m.paneId) ?? [];
       if (q.length < 64) q.push(payload);
-      this.pending.set(m.paneId, q);
+      if (this.pending.size < MAX_PENDING_PANES || this.pending.has(m.paneId))
+        this.pending.set(m.paneId, q);
       if (!r) this.openRelay(m.paneId);
     }
   }
@@ -486,7 +529,12 @@ export class HostLink {
    */
   private openRelay(paneId: string): void {
     this.relays.get(paneId)?.close();
-    const url = `${this.deps.selfUrl.replace(/^http/, 'ws').replace(/\/$/, '')}/ws/agent-runner/${paneId}`;
+    // ENCODED, AND THE ID IS ALREADY CHARSET-CHECKED AT THE BOUNDARY. Both,
+    // deliberately: `wellFormed` is what makes this safe, and this is what
+    // makes it safe if a future caller reaches `openRelay` by another route.
+    // Unencoded, `../chat/<id>` here normalises to a different authenticated
+    // endpoint — see PANE_ID.
+    const url = `${this.deps.selfUrl.replace(/^http/, 'ws').replace(/\/$/, '')}/ws/agent-runner/${encodeURIComponent(paneId)}`;
     const ws = new WebSocket(url, {
       headers: {
         'x-muxpad-node-id': this.deps.nodeId,
@@ -525,7 +573,11 @@ export class HostLink {
       this.send({ ch: 'runner', op: 'frame', paneId, frame });
     });
     ws.on('close', () => {
-      if (this.relays.get(paneId) === ws) this.relays.delete(paneId);
+      if (this.relays.get(paneId) !== ws) return;
+      this.relays.delete(paneId);
+      // …AND ITS QUEUE. A relay that closed is a relay that will not drain
+      // one: without this, every refused pane left its frames behind forever.
+      this.pending.delete(paneId);
     });
     ws.on('error', (e) =>
       this.log(`[hostlink] ${this.deps.nodeId}: relay for ${paneId}: ${(e as Error).message}`),

@@ -389,6 +389,41 @@ describe('publishing from a host', () => {
     expect(fetched).toHaveLength(0);
   });
 
+  it('re-checks ownership AFTER the transfer, because the host holds the clock', async () => {
+    // Time-of-check to time-of-use. The check runs before `fetchFromHost`,
+    // and the host controls how long that takes — up to the two-minute
+    // timeout. A review found the window: ask for a name that is unused (so
+    // the check passes), stall the transfer, let the mac publish that name
+    // meanwhile, then finish sending. The publish route resolves the name
+    // again and replaces the mac's fresh artifact at the url it has just
+    // handed out.
+    let calls = 0;
+    const a = new HostApi({
+      db,
+      selfUrl: 'http://127.0.0.1:7777',
+      apiKey: () => 'secret',
+      fetch: (req) => {
+        fetched.push(req);
+        return ok();
+      },
+      // The transfer "succeeds" — the race is about what happened during it.
+      fetchFromHost: async () => ({ path: '/tmp/staged', dispose: () => {} }),
+      // Free when asked before the transfer, taken when asked after.
+      mayPublishAs: () => ++calls === 1,
+    });
+    const res = await a.handle(
+      'trayo',
+      'POST',
+      '/api/publish',
+      JSON.stringify({ path: '/home/ohad/x', name: 'report' }),
+    );
+    expect(calls).toBe(2);
+    expect(res.status).toBe(403);
+    expect(res.body).toContain('while this transfer ran');
+    // …and nothing was published.
+    expect(fetched).toHaveLength(0);
+  });
+
   it('refuses a name when the server was wired without the check', async () => {
     // Absent `mayPublishAs` means NO host may name an artifact: the safe
     // default for a half-wired server rather than the permissive one.
