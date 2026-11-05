@@ -191,11 +191,13 @@ describe('the spawn cards and the roster read ONE list', () => {
     // land in the log by time without this interleave knowing they exist. What
     // this pins is that the cards are built from THE TRANSCRIPT's entries and
     // the one spawned-card list, not from some second source.
-    // Tolerant of layout, strict about the SOURCE: comments and line breaks are
-    // free (the call is multi-line now that both injections take options), but
-    // the first argument has to resolve to `items`.
+    // Tolerant of layout and of HOW MANY injectors are in the chain — browser
+    // moments, action cards, and whatever draws into the log next all wrap
+    // `items` as ordinary timed entries — but strict about the source: the
+    // innermost argument has to resolve to `items`. Comments and line breaks
+    // are free.
     expect(BODY).toMatch(
-      /interleaveSpawnCards\(\s*(?:\/\/[^\n]*\n\s*)*(?:injectBrowserMoments\(\s*(?:\/\/[^\n]*\n\s*)*)?items[,)]/,
+      /interleaveSpawnCards\(\s*(?:\/\/[^\n]*\n\s*)*(?:inject\w+\(\s*(?:\/\/[^\n]*\n\s*)*)*items[,)]/,
     );
     expect(BODY).toContain('spawnedCards,');
     expect(BODY).toContain('<ChatMentionCard');

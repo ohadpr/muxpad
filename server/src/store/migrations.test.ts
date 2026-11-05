@@ -512,6 +512,21 @@ describe('migrations v21 — agent modes + the living sidebar', () => {
     expect(db.prepare('SELECT id FROM apps WHERE id = ?').get('a1')).toEqual({ id: 'a1' });
   });
 
+  it('creates the chat_actions table, cascading from its pane', () => {
+    // A card has no meaning without the conversation it belongs to, and the
+    // FK is what makes a `deleteForPane` call at every pane-delete site
+    // unnecessary — the one that gets missed leaves rows nothing reads.
+    const db = new Database(':memory:');
+    runMigrations(db);
+    const sql = (
+      db
+        .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='chat_actions'")
+        .get() as { sql: string } | undefined
+    )?.sql;
+    expect(sql).toMatch(/REFERENCES panes\(id\) ON DELETE CASCADE/);
+    db.close();
+  });
+
   it('records the latest schema version', () => {
     const db = new Database(':memory:');
     runMigrations(db);
@@ -521,7 +536,7 @@ describe('migrations v21 — agent modes + the living sidebar', () => {
     expect(v.version).toBe(LATEST_SCHEMA_VERSION);
     // Bumped with the migration that adds it, deliberately: a number that
     // tracks the list automatically would make this assertion say nothing.
-    expect(LATEST_SCHEMA_VERSION).toBe(50);
+    expect(LATEST_SCHEMA_VERSION).toBe(51);
   });
 
   /**

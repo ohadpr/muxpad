@@ -1,0 +1,150 @@
+/*
+ * The action card — one act on an outside system, in the log where it happened.
+ *
+ * DELIBERATELY A SIBLING OF THE BROWSER CARD, down to the grid and the wash:
+ * the two sit in the same conversation and a third visual language in the same
+ * log is one more thing for the eye to resolve before it can read. What differs
+ * is the only thing that should: the glyph, and the colour of the state.
+ *
+ * A LOG ENTRY, NOT A PANEL. Sized to its content and left-aligned, so a chat
+ * that posted three times does not grow three banners across its width.
+ */
+.action-card {
+  /* One hue per outcome. `pending` is the loud one, because it is the only
+     state that is asking for something — and it is where an act spends most of
+     its life, since every outbound integration goes through an approval. */
+  --a-wait: #f0943f;
+  --a-sent: #4f9d69;
+  --a-declined: #8f8fb0;
+  --a-failed: #d4564b;
+  --a-mark: var(--a-sent);
+  --a-wash: 13%;
+  /* One line box shared by the glyph, the text and the link, so all three
+     centre on the same thing rather than each centring on itself. */
+  --a-line: 18px;
+
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: start;
+  column-gap: 9px;
+  row-gap: 3px;
+  width: fit-content;
+  max-width: min(460px, 94%);
+  align-self: flex-start;
+  box-sizing: border-box;
+  padding: 8px 11px;
+  margin: 4px 10px;
+  border-radius: 10px;
+  background: linear-gradient(
+      color-mix(in srgb, var(--chat-fg, #1c1c22) 5%, transparent),
+      transparent 70%
+    ), var(--chat-panel, #fff);
+  border: 1px solid var(--chat-border, #dcdce6);
+  color: var(--chat-fg, #1c1c22);
+  font-family: var(--chrome-font, inherit);
+  font-size: 0.78125rem;
+  line-height: 1.38;
+}
+
+.action-card[data-state="pending"] {
+  --a-mark: var(--a-wait);
+  /* The ONE state that gets a tint, for the same reason the browser card
+     reserves its box: something is waiting on a person, and that is worth
+     finding while scrolling past. */
+  background: color-mix(in srgb, var(--a-wait) var(--a-wash), var(--chat-panel, #fff));
+  border-color: color-mix(in srgb, var(--a-wait) 36%, transparent);
+}
+.action-card[data-state="declined"] {
+  --a-mark: var(--a-declined);
+}
+.action-card[data-state="failed"] {
+  --a-mark: var(--a-failed);
+  border-color: color-mix(in srgb, var(--a-failed) 34%, transparent);
+}
+
+.action-card__glyph {
+  grid-column: 1;
+  grid-row: 1;
+  /* Aligned to the FIRST line rather than to the card, so a wrapped detail
+     does not drag the mark down beside the middle of a paragraph. */
+  height: var(--a-line);
+  display: grid;
+  place-items: center;
+  color: var(--a-mark);
+}
+.action-card__glyph svg {
+  display: block;
+}
+
+.action-card__body {
+  grid-column: 2;
+  min-width: 0;
+}
+.action-card__head {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-height: var(--a-line);
+}
+.action-card__title {
+  font-weight: 560;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The state as a WORD. Colour alone would say nothing in greyscale or to a
+   colourblind reader, and this card's entire job is to be unambiguous about
+   what happened. */
+.action-card__state {
+  flex: 0 0 auto;
+  color: var(--a-mark);
+  font-variant-caps: all-small-caps;
+  letter-spacing: 0.04em;
+}
+.action-card__detail {
+  color: var(--chat-fg-dim, #5b5b6b);
+}
+
+.action-card__toggle {
+  margin-top: 3px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--chat-fg-dim, #5b5b6b);
+  font: inherit;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  cursor: pointer;
+}
+.action-card__toggle:hover {
+  color: var(--chat-fg, #1c1c22);
+}
+/* The message as SENT: whitespace preserved, wrapped, and bounded. A Slack
+   post can be a wall of text, and the card is inside the thing you are
+   scrolling — so it scrolls itself rather than growing without limit. */
+.action-card__text {
+  margin: 5px 0 0;
+  padding: 7px 9px;
+  max-height: 260px;
+  overflow: auto;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--chat-fg, #1c1c22) 6%, transparent);
+  font-family: var(--mono-font, ui-monospace, monospace);
+  font-size: 0.95em;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.action-card__link {
+  grid-column: 3;
+  grid-row: 1;
+  height: var(--a-line);
+  display: grid;
+  place-items: center;
+  color: var(--a-mark);
+  text-decoration: none;
+  font-weight: 560;
+}
+.action-card__link:hover {
+  text-decoration: underline;
+}

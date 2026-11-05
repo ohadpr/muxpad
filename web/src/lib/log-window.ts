@@ -64,3 +64,50 @@ export function windowStart<M extends { at: number }>(
 export function canFlushTail(entries: readonly { at: number | null }[]): boolean {
   return entries.some((e) => e.at !== null);
 }
+
+/**
+ * PLACE TIMED THINGS INTO A LOG — the loop itself, once.
+ *
+ * `windowStart` and `canFlushTail` put the RULE in one place, and the comment
+ * above says the next thing that draws into the log should inherit it rather
+ * than rediscover it. The loop around them was still written out twice (spawn
+ * cards, browser moments), which is two chances to get an edge wrong and the
+ * reason this file exists at all. So: the loop, once.
+ *
+ * Generic over both sides. `entries` are whatever the log already holds, each
+ * with the time it happened (`null` for something undated, like a pending
+ * local echo); `moments` are the things being placed, oldest first; `emit`
+ * turns one into whatever the caller's list holds. The result is the same
+ * shape as `entries`, so injectors compose — which is what lets browser
+ * moments go in first and spawn cards be placed around them.
+ *
+ * `floor` is the oldest loaded TRANSCRIPT time. Read `windowStart`'s note on
+ * why it cannot be derived from `entries`.
+ */
+export function injectByTime<E extends { at: number | null }, M extends { at: number }, T>(
+  entries: readonly E[],
+  moments: readonly M[],
+  emit: (moment: M) => T,
+  keep: (entry: E) => T,
+  floor: number | null,
+): { at: number | null; node: T }[] {
+  const out: { at: number | null; node: T }[] = [];
+  let i = windowStart(moments, floor);
+  for (const entry of entries) {
+    if (entry.at !== null) {
+      while (i < moments.length && (moments[i] as M).at <= entry.at) {
+        const moment = moments[i++] as M;
+        out.push({ at: moment.at, node: emit(moment) });
+      }
+    }
+    out.push({ at: entry.at, node: keep(entry) });
+  }
+  // …and nothing at the bottom until the log has a timeline to hang it on.
+  if (canFlushTail(entries)) {
+    for (; i < moments.length; i++) {
+      const moment = moments[i] as M;
+      out.push({ at: moment.at, node: emit(moment) });
+    }
+  }
+  return out;
+}

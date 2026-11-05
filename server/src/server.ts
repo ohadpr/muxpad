@@ -27,6 +27,7 @@ import { attachmentsRoutes } from './routes/attachments.js';
 import { bootRoutes } from './routes/boot.js';
 import { browserProxyRoutes, browsersRoutes } from './routes/browsers.js';
 import { cardsRoutes } from './routes/cards.js';
+import { chatActionsRoutes } from './routes/chat-actions.js';
 import { cronsRoutes } from './routes/crons.js';
 import { eventsRoutes } from './routes/events.js';
 import { nodesRoutes } from './routes/nodes.js';
@@ -371,6 +372,7 @@ export function createApp(deps: AppDeps): Hono {
   app.route('/api/working-set', workingSetRoutes(resolved));
   app.route('/api/panes', panesScopedRoutes(lifecycle));
   app.route('/api/panes', paneIoRoutes(resolved));
+  app.route('/api/panes', chatActionsRoutes(resolved));
   app.route('/api/panes', attachmentsRoutes(resolved));
   app.route('/api/panes', summaryRoutes(resolved));
   app.route('/api/open', openRoutes(resolved));
