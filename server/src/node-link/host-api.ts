@@ -49,6 +49,15 @@ interface Allowed {
   /** Rebuild the path from validated captures. */
   rebuild: (c: string[]) => string;
   /**
+   * The ONE query string this shape may carry, rebuilt verbatim.
+   *
+   * A query is normally a refusal (see `handle`), because it is free text that
+   * survives the path rebuild. Naming the exact permitted value keeps that
+   * property: the host's string is compared and then thrown away, never
+   * parsed and never passed on.
+   */
+  query?: string;
+  /**
    * Rebuild the BODY, for a shape where the body is not free text.
    *
    * Absent means the body rides through as sent, which is right for the two
@@ -180,6 +189,27 @@ const ALLOWED: Allowed[] = [
       return JSON.stringify(out);
     },
   },
+  // ── muxpad publish: the CLI's pre-flight ────────────────────────────────
+  //
+  // AND IT IS NOT OPTIONAL, which is why it is here. Asked before every
+  // publish to learn whether the server already knows its public base. A 404
+  // reads as "unanswered", and the CLI's fallback ladder for that is to derive
+  // the tailnet name and then EXEC TAILSCALE to create a funnel mapping — on
+  // a machine that has no business doing either, and on a mac that is a TCC
+  // prompt on somebody's physical screen. Observed: a publish from the VM hung
+  // past two minutes in exactly that ladder while the artifact itself had
+  // already transferred fine.
+  //
+  // The answer is a public base URL and a cache flag — the url is on the
+  // printed link of every artifact, so there is nothing here a publisher does
+  // not already have.
+  {
+    method: 'GET',
+    pattern: /^\/api\/publish\/base$/,
+    parts: [],
+    rebuild: () => '/api/publish/base',
+    query: 'probe=0',
+  },
   // ── muxpad publish ──────────────────────────────────────────────────────
   //
   // The one in-pane verb whose payload is BYTES. Published artifacts are
@@ -265,8 +295,10 @@ export class HostApi {
     // request that did something subtly different from what was asked. The
     // rebuild step exists to remove free text from the path; a query is free
     // text that survives it.
-    if (rawPath.includes('?') || rawPath.includes('#')) return NOT_FOUND;
-    const path = rawPath;
+    if (rawPath.includes('#')) return NOT_FOUND;
+    const qAt = rawPath.indexOf('?');
+    const path = qAt === -1 ? rawPath : rawPath.slice(0, qAt);
+    const query = qAt === -1 ? null : rawPath.slice(qAt + 1);
     // Publishing is the one shape that is not "validate, then dispatch": the
     // bytes have to be fetched off the host first, and the path that reaches
     // publish is OURS, never the host's.
@@ -276,6 +308,9 @@ export class HostApi {
       if (a.method !== method.toUpperCase()) continue;
       const m = a.pattern.exec(path);
       if (!m) continue;
+      // A query the shape does not name is a refusal, not something to strip:
+      // stripping would silently change the meaning of the call.
+      if (query !== null && query !== a.query) return NOT_FOUND;
       const captures = m.slice(1).map((s) => decodeURIComponent(s));
       if (!this.capturesOk(nodeId, a.parts, captures)) return NOT_FOUND;
       let out = body;
@@ -287,7 +322,10 @@ export class HostApi {
         if (rebuilt === null) return NOT_FOUND;
         out = rebuilt;
       }
-      return this.dispatch(a.method, a.rebuild(captures), out);
+      // Rebuilt from the SHAPE, not from the request — the host's own string
+      // has been compared and discarded.
+      const dest = a.rebuild(captures) + (a.query && query !== null ? `?${a.query}` : '');
+      return this.dispatch(a.method, dest, out);
     }
     return NOT_FOUND;
   }
