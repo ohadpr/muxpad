@@ -9,6 +9,7 @@ import { NodeSessions } from './node-session.mjs';
 import { listenPasskeyAdmin } from './passkey-admin-socket.mjs';
 import { inlineMode } from './passkey-approval.mjs';
 import { passkeyAdminHandler } from './passkey-http.mjs';
+import { BROKER_ROOT, brokerPath } from './broker-paths.mjs';
 import { assertProtectedPath } from './protected-path.mjs';
 import { slackClient } from './slack.mjs';
 import { listenPrivateSocket } from './socket-listener.mjs';
@@ -17,8 +18,15 @@ import { saveState } from './state-store.mjs';
 // On macOS libuv 1.52+ uses mach_continuous_time for hrtime, including sleep.
 // Refuse runtimes where timed authorization could pause during suspension.
 const [uvMajor, uvMinor] = process.versions.uv.split('.').map(Number);
-if (process.platform !== 'darwin' || uvMajor < 1 || (uvMajor === 1 && uvMinor < 52))
-  throw new Error('Broker requires macOS and libuv 1.52+ for suspend-inclusive expiry');
+// macOS and Linux. The libuv floor is the load-bearing half of this check and
+// it is NOT platform trivia: 1.52 is where the timer clock stops pausing while
+// the machine is suspended, and an approval window that pauses with the lid is
+// an approval that outlives the moment the human was shown. The platform half
+// is now just "is there a protected tree here" — see broker-paths.mjs.
+if (!BROKER_ROOT || uvMajor < 1 || (uvMajor === 1 && uvMinor < 52))
+  throw new Error(
+    `Broker requires macOS or Linux and libuv 1.52+ for suspend-inclusive expiry (have ${process.platform}, libuv ${process.versions.uv})`,
+  );
 
 if (process.getuid?.() === 0) throw new Error('Run as the dedicated unprivileged broker user');
 const configPath = process.argv[2];
@@ -27,8 +35,8 @@ assertProtectedPath(configPath, [0]);
 const config = JSON.parse(readFileSync(configPath, 'utf8'));
 if (config.transport === 'tsnet') {
   if (
-    config.originPath !== '/Library/muxpad-broker/state/origin' ||
-    config.socketPath !== '/Library/muxpad-broker/state/broker.sock'
+    config.originPath !== brokerPath('state', 'origin') ||
+    config.socketPath !== brokerPath('state', 'broker.sock')
   )
     throw Error('Invalid protected transport paths');
   assertProtectedPath(config.originPath, [0, process.getuid()], { mode: 0o600 });
@@ -85,7 +93,7 @@ if (inlineMode(config)) {
   const admin = createHTTPServer(passkeyAdminHandler(broker));
   admin.requestTimeout = 5000;
   admin.headersTimeout = 4000;
-  await listenPasskeyAdmin(admin, '/Library/muxpad-broker/state/passkey-admin.sock');
+  await listenPasskeyAdmin(admin, brokerPath('state', 'passkey-admin.sock'));
 }
 const server =
   config.transport === 'tsnet'

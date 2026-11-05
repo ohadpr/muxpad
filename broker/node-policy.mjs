@@ -2,10 +2,11 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { request } from 'node:http';
 import { isIP } from 'node:net';
+import { brokerPath } from './broker-paths.mjs';
 import { assertProtectedPath } from './protected-path.mjs';
 
-export const NODE_POLICY_PATH = '/Library/muxpad-broker/node-policy.json';
-export const AUTHORITY_SOCKET = '/Library/muxpad-broker/state/authority.sock';
+export const NODE_POLICY_PATH = brokerPath('node-policy.json');
+export const AUTHORITY_SOCKET = brokerPath('state', 'authority.sock');
 export const PEER_HEADER = 'x-muxpad-verified-peer';
 const id = (s) => typeof s === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(s);
 // Both policy and transport assertions have a flat, bounded scalar schema.
