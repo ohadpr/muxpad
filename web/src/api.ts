@@ -234,6 +234,10 @@ export const api = {
    * which is what makes a theme pick land in every open window. `null` means
    * "nothing stored", and the browser's own default shows through.
    */
+  /** The install's settings as they are NOW — the recovery path for a
+   *  `prefs.updated` push that a disconnected window never heard. */
+  prefs: () => req<{ prefs: Record<string, string> }>('/api/prefs'),
+
   setPref: (key: string, value: string | null) =>
     req<{ prefs: Record<string, string> }>(`/api/prefs/${encodeURIComponent(key)}`, {
       method: 'PUT',

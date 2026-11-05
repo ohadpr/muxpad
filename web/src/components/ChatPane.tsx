@@ -1163,6 +1163,15 @@ export function ChatPane({
   const [drawerOpen, setDrawerOpen] = useState(false);
   const subChats = useMemo(() => subChatsOf(corpus, myChat?.tabId ?? ''), [corpus, myChat?.tabId]);
   const runningSubs = subChats.filter(subChatIsOpen).length;
+  /**
+   * A CHILD CHAT IS ON SCREEN, IN THE DRAWER.
+   *
+   * Which means this pane is visible but is no longer the chat you are
+   * talking to — it keeps its scroll position and its history, and gives up
+   * the things that belong to whatever is in front of it. Keyboard claim is
+   * the one that matters: see the type-to-focus effect.
+   */
+  const showingChildChat = drawerOpen && drawer.paneId !== null;
   /** By tab id — how a stored card finds the chat it was sent to, now. */
   const corpusById = useMemo(() => new Map(corpus.map((c) => [c.tabId, c])), [corpus]);
 
@@ -2976,7 +2985,21 @@ export function ChatPane({
   // the keystroke lands there (same as Slack/Discord). Skips modifier combos
   // (shortcuts), other inputs, and when the tool modal is open.
   useEffect(() => {
-    if (!active) return;
+    // ── AND NOT WHILE A CHILD CHAT IS ON SCREEN ─────────────────────────
+    //
+    // This listener is on the WINDOW and gated only on `active`, which the
+    // drawer's nested pane inherits from its parent — so both were claiming
+    // type-to-focus, and the parent, having registered first, won. Click
+    // anywhere non-editable in the worker you are reading, type, and the
+    // PARENT's composer takes the focus; the child's listener then sees an
+    // editable element already focused and declines. Enter sends your message
+    // to the wrong conversation.
+    //
+    // Keeping the parent MOUNTED behind the drawer is deliberate (it is what
+    // preserves its scroll position and loaded history). Keeping its claim on
+    // global keyboard input is not: the chat on screen owns the keyboard, and
+    // while the drawer is showing one, that is the child.
+    if (!active || showingChildChat) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey || e.altKey || e.key.length !== 1) return;
       if (openTool || openImage) return;
@@ -2992,7 +3015,7 @@ export function ChatPane({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [active, openTool, openImage]);
+  }, [active, openTool, openImage, showingChildChat]);
 
   // ── RE-ENTRY ──────────────────────────────────────────────────────────────
   // Becoming visible is an INPUT, and the placement is one call. What was here

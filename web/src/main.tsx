@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client';
 import { bootTheme } from './boot-prefetch';
 import { SlackNoticeDiagnostic } from './components/SlackNoticeDiagnostic';
 import { startEvents, subscribe, subscribeReconnect } from './events';
-import { readTheme } from './lib/app-theme';
+import { applyBootTheme, refreshAppTheme } from './lib/app-theme';
 import { pushOpen } from './lib/external-open-store';
 import { setLastPaneId } from './lib/last-visited';
 import { startPresence } from './lib/presence';
@@ -20,7 +20,6 @@ import {
   windowMayRoutePushTargets,
 } from './lib/push-target';
 import { router } from './router';
-import { setServerTheme } from './settings';
 import { refreshTabs } from './tabs';
 import { refreshWorkspaces, refreshWorkspacesSoon } from './workspaces';
 import './styles.css';
@@ -71,11 +70,20 @@ if (!selfEmbedded) {
   //
   // Not awaited and not gated: a failure here leaves the local default in
   // place, which is exactly what a fresh install looks like.
+  //
+  // Applied through `applyBootTheme`, which drops it if a live value has
+  // already landed — the prefetch has a 1.5s wait budget and the push it would
+  // be overwriting is the one somebody just chose.
   void bootTheme().then((t) => {
-    if (t) setServerTheme(readTheme(t));
+    if (t) applyBootTheme(t);
   });
   startEvents();
-  subscribeReconnect(() => void refreshWorkspaces());
+  subscribeReconnect(() => {
+    void refreshWorkspaces();
+    // The theme too: a push that happened while this socket was down is not
+    // replayed by anything. See lib/app-theme.
+    void refreshAppTheme();
+  });
   // Keep the push service worker registered/updated. No-op over plain
   // http (no secure context → no navigator.serviceWorker) and harmless
   // where push was never enabled — the SW has no fetch handler.
