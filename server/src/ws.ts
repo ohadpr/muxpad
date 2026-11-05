@@ -2440,7 +2440,32 @@ export function attachWsServer(deps: {
             // A backend that never sends the field keeps today's behaviour
             // exactly, which is the right failure direction: an extra bold
             // mark is noise, a missing one loses news.
-            if (!chatHasLeftTheLiveList(paneId) && frame.silent !== true) {
+            //
+            // …AND THE SAME RULE AS THE PUSH GATE, FOR THE SAME REASON — which
+            // is the half of this that was missing and the reason the symptom
+            // came back. `silent` is sent by the RUNNER, and a runner is not
+            // respawned to deliver a fix (it would kill background subagents
+            // and wakeups): the panes that fire the most crons are the
+            // longest-lived, so the one place the fix was most needed is the
+            // one place it could not reach. The Investing chat's runner was
+            // three weeks old and had never heard of the field.
+            //
+            // So a CRON FIRE marks only when its runner positively says it
+            // spoke. Absent field = no mark, which inverts the usual failure
+            // direction for scheduled turns only — and it is the direction
+            // muxpad's own contract already promises: a fire's prose never
+            // reaches the conversation (`cron` is in MACHINE_TURN_VARIANTS),
+            // so a mark on it promises something to read that the log does not
+            // contain. "@Investing keeps showing as new message but nothing is
+            // happening there."
+            //
+            // A FAILURE still marks, whatever started the turn and whatever it
+            // said — the same exception the push gate makes, and for the same
+            // reason: nobody is watching a scheduled job, so its errors are
+            // the news it most needs to be able to deliver.
+            const cronSaidNothing =
+              conn.turnFromCron && frame.silent !== false && frame.ok !== false;
+            if (!chatHasLeftTheLiveList(paneId) && frame.silent !== true && !cronSaidNothing) {
               panes.setUnread(paneId, true);
               emitPaneUpdated(paneId);
             }

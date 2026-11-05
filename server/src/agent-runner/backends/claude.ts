@@ -1208,10 +1208,22 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
    * "mark it" everywhere, which is both the old behaviour and what every other
    * backend will keep sending.
    */
-  const silentField = (): { silent?: true } =>
-    isSilentTurn({ human: turnHuman, said: saidSomethingThisTurn, replies: repliesThisTurn })
-      ? { silent: true }
-      : {};
+  /**
+   * ALWAYS SENT, both ways round — see the field's own note in protocol.ts.
+   *
+   * It used to be `{ silent: true }` or nothing, which left the server unable
+   * to tell "this turn spoke" from "this runner is too old to say". That
+   * mattered because a runner outlives every deploy: the Investing pane's was
+   * three weeks old, so the fix for its hourly card refresher could not reach
+   * the one pane that needed it.
+   */
+  const silentField = (): { silent: boolean } => ({
+    silent: isSilentTurn({
+      human: turnHuman,
+      said: saidSomethingThisTurn,
+      replies: repliesThisTurn,
+    }),
+  });
   const reportBackground = (): void => {
     const live = backgroundCommands.size;
     if (live === lastBackgroundLive) return;

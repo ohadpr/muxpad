@@ -1820,7 +1820,13 @@ export function TabList({
             aria-expanded={doneOpen}
           >
             <SvgCaret open={doneOpen} />
-            {doneCount} done
+            {/* "OLDER", not "done". A chat leaves the live list when its
+                clock runs out — sixteen days of nobody touching it — which is
+                a fact about WHEN it was last used, not about whether it
+                finished. "82 done" read as a pile of completed work and
+                invited being emptied; most of what is in there is simply old,
+                and sending it a message brings it straight back. */}
+            {doneCount} older
           </button>
           {doneOpen ? doneGroups.map((g) => renderGroup(g)) : null}
           {/* ─── AND NOTHING ABOUT SUB-AGENTS, ANY MORE ──────────────────

@@ -321,11 +321,15 @@ describe('the sheet’s rows, and the pane pill that belongs to them', () => {
     expect(out).toContain('data-phase="last-day"');
   });
 
-  it('moves a decayed chat into the done drawer instead of leaving it live', () => {
+  it('moves a decayed chat into the older drawer instead of leaving it live', () => {
     // The drawer was `[]` on this variant, so a chat the server had already
     // marked done stayed in the live list forever. The header is the shared one.
+    //
+    // "OLDER", not "done": a chat leaves the live list when its clock runs
+    // out, which is a fact about when it was last used rather than about
+    // whether it finished. "82 done" read as a pile of completed work.
     const out = sheetHtml([tab('root'), tab('old', { done: true })]);
-    expect(out).toContain('1 done');
+    expect(out).toContain('1 older');
     // Collapsed by default here too, so the decayed row is not in the markup.
     expect(out).not.toContain('>old<');
   });
@@ -336,7 +340,7 @@ describe('the sheet’s rows, and the pane pill that belongs to them', () => {
     const out = sheetHtml([tab('root'), tab('other')]);
     expect(out).not.toContain('data-child="true"');
     expect(out).not.toContain('data-shape="dot"');
-    expect(out).not.toContain('done');
+    expect(out).not.toContain('older');
   });
 });
 
