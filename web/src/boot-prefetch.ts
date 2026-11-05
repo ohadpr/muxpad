@@ -41,6 +41,13 @@ export interface BootPayload {
   workspaces: Workspace[];
   workspaceId: string | null;
   tabs: Tab[];
+  /**
+   * The install's own settings (the theme). Optional here, not on the server:
+   * this payload is parsed from whatever answered, which may be a server from
+   * before prefs existed — and `bootTheme` reads an absent value as "nothing
+   * stored", which is the same thing a fresh install means.
+   */
+  prefs?: Record<string, string> | undefined;
 }
 
 declare global {
@@ -114,6 +121,25 @@ async function payload(): Promise<BootPayload | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * PAINT THE INSTALL'S THEME, as early as this payload can be read.
+ *
+ * The theme is a document-level fact and it lives on the server now (one for
+ * the whole install, pushed to every window). Anything that waited for React
+ * would paint this browser's own default first and repaint — on the one load
+ * where somebody is watching the window appear.
+ *
+ * Deliberately NOT one of the `used*` single-shot readers: those exist so a
+ * few hundred KB of parsed JSON can be released, and this is one string that
+ * several callers may want. It also must not race them — reading the payload
+ * does not consume it.
+ */
+export async function bootTheme(): Promise<string | null> {
+  const got = await payload();
+  const theme = got?.prefs?.theme;
+  return typeof theme === 'string' && theme ? theme : null;
 }
 
 /** Is a prefetch still worth waiting for? Readers ask BEFORE opening their own

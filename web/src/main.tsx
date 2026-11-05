@@ -1,8 +1,10 @@
 import { RouterProvider } from '@tanstack/react-router';
 import { useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
+import { bootTheme } from './boot-prefetch';
 import { SlackNoticeDiagnostic } from './components/SlackNoticeDiagnostic';
 import { startEvents, subscribe, subscribeReconnect } from './events';
+import { readTheme } from './lib/app-theme';
 import { pushOpen } from './lib/external-open-store';
 import { setLastPaneId } from './lib/last-visited';
 import { startPresence } from './lib/presence';
@@ -18,6 +20,7 @@ import {
   windowMayRoutePushTargets,
 } from './lib/push-target';
 import { router } from './router';
+import { setServerTheme } from './settings';
 import { refreshTabs } from './tabs';
 import { refreshWorkspaces, refreshWorkspacesSoon } from './workspaces';
 import './styles.css';
@@ -58,6 +61,19 @@ let pushSink: PushTargetSink | null = null;
 // own subscribe() that merges
 // pane-level events into local state without waiting for any poll.
 if (!selfEmbedded) {
+  // ── THE THEME, BEFORE ANYTHING ELSE ─────────────────────────────────────
+  //
+  // One theme for the install, stored server-side and pushed to every open
+  // window (lib/app-theme). It rides the boot prefetch, which an inline script
+  // fires while the bundle is still downloading — so this paints the right
+  // palette on the FIRST frame rather than showing this browser's own default
+  // and repainting a moment later.
+  //
+  // Not awaited and not gated: a failure here leaves the local default in
+  // place, which is exactly what a fresh install looks like.
+  void bootTheme().then((t) => {
+    if (t) setServerTheme(readTheme(t));
+  });
   startEvents();
   subscribeReconnect(() => void refreshWorkspaces());
   // Keep the push service worker registered/updated. No-op over plain

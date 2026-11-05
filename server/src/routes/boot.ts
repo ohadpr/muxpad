@@ -53,6 +53,16 @@ export interface BootPayload {
   /** Exactly what `GET /api/tabs?workspaceId=<that>` answers. Empty when the
    *  slug did not resolve — NEVER a different workspace's list. */
   tabs: Tab[];
+  /**
+   * The install's own settings — see PrefStore.
+   *
+   * HERE SPECIFICALLY TO AVOID A FLASH. The theme is a document-level fact
+   * and it lives on the server now, so a client that fetched it after mount
+   * would paint its own default first and repaint — on the one load where
+   * somebody is watching the window appear. This endpoint is fired by an
+   * inline script at ~10ms, before the bundle has finished parsing.
+   */
+  prefs: Record<string, string>;
 }
 
 export function bootRoutes(deps: {
@@ -60,6 +70,8 @@ export function bootRoutes(deps: {
   listWorkspaces: (opts: { all: boolean }) => Workspace[];
   /** The same list `GET /api/tabs?workspaceId=` returns, in the same order. */
   listTabs: (workspaceId: string) => Tab[];
+  /** The install's settings, exactly as `GET /api/prefs` answers. */
+  prefs: () => Record<string, string>;
 }): Hono {
   const app = new Hono();
 
@@ -75,6 +87,7 @@ export function bootRoutes(deps: {
       workspaces,
       workspaceId: match?.id ?? null,
       tabs: match ? deps.listTabs(match.id) : [],
+      prefs: deps.prefs(),
     };
     return c.json(payload);
   });

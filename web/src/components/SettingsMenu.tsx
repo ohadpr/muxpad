@@ -1,19 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '../api';
-import { useActiveTab } from '../lib/chat-theme';
+
 import { type PushState, disablePush, enablePush, getPushState, sendTestPush } from '../lib/push';
 import {
   SYSTEM_PAIR,
   THEME_CHOICES,
   type ThemeChoice,
-  getChatTheme,
-  setChatTheme,
+  getServerTheme,
+  setServerTheme,
   themeInForce,
   updateSettings,
   useSettings,
 } from '../settings';
-import { patchTabRow } from '../tabs';
 import { MachinesSettings } from './MachinesSettings';
 import { SlackPasskeySettings } from './SlackPasskeySettings';
 import './SettingsMenu.css';
@@ -177,67 +176,45 @@ export function SettingsMenu() {
  * correctly by hand.
  */
 /**
- * THE GRID SETS THE CHAT YOU ARE IN, NOT THE DEVICE.
+ * THE GRID SETS THE WHOLE INSTALL'S THEME.
  *
- * A theme is two facts now: the device's default, and the chat's own (on the
- * tab row, so it follows you to every device — see lib/chat-theme). This
- * picker writes the CHAT's, because that is what you are looking at while you
- * use it; "Use for every chat" writes the default and clears the override, so
- * the way back is one press rather than a second control.
- *
- * With no chat open — the workspace picker — there is nothing to override, so
- * it writes the default directly and the button does not render.
+ * It wrote the CHAT's for a while — a theme lived on the tab row so it would
+ * follow you between devices — and because a theme defines the rail's palette
+ * as well as the pane's, switching chats repainted the entire window. One
+ * value now, stored server-side and pushed to every open window (see
+ * lib/app-theme), so there is one control and no "and also everywhere" button
+ * beside it.
  */
 export function ThemePicker({ chosen, group = 'theme' }: { chosen: ThemeChoice; group?: string }) {
-  const tab = useActiveTab();
   const [failed, setFailed] = useState(false);
   /**
    * Optimistic, and it UNDOES ITSELF when the write fails.
    *
    * The repaint has to happen on the press — a theme that waited for a round
-   * trip feels like a toggle that sticks. But the first version swallowed the
-   * error, so a server that could not store the value (one running from
-   * before the migration that adds the column, which is every server until it
-   * restarts) produced the worst possible shape: the window repainted, the
-   * next poll delivered the unchanged row, and the theme snapped back with no
-   * explanation. Reported as "tried to change the theme on a chat and it just
-   * didn't work, flickered and returned to the theme it was on".
+   * trip feels like a toggle that sticks. But an earlier version swallowed the
+   * error, so a server that could not store the value produced the worst
+   * possible shape: the window repainted, the next poll delivered the old
+   * value, and the theme snapped back with no explanation. Reported as "tried
+   * to change the theme and it just didn't work, flickered and returned".
    *
    * Reverting here makes the failure immediate and legible instead of
-   * arriving 5 seconds later as a flicker, and the line under the grid says
+   * arriving seconds later as a flicker, and the line under the grid says
    * what to do about it.
+   *
+   * THE PUSH IS WHAT MAKES THE OTHER WINDOWS FOLLOW, not this call — the
+   * server emits `prefs.updated` to everyone, including us, and
+   * `setServerTheme` is a no-op for a value already in force. So the local
+   * repaint is only ever about latency.
    */
-  const write = (value: ThemeChoice | null, chat: { id: string; workspaceId: string }) => {
-    const before = getChatTheme();
+  const pick = (value: ThemeChoice) => {
+    const before = getServerTheme();
     setFailed(false);
-    setChatTheme(value);
-    patchTabRow(chat.workspaceId, chat.id, { theme: value });
-    void api.patchTab(chat.id, { theme: value }).catch((err) => {
-      console.error('could not store the chat theme', err);
-      setChatTheme(before);
-      patchTabRow(chat.workspaceId, chat.id, { theme: before });
+    setServerTheme(value);
+    void api.setPref('theme', value).catch((err) => {
+      console.error('could not store the theme', err);
+      setServerTheme(before);
       setFailed(true);
     });
-  };
-  const pick = (value: ThemeChoice) => {
-    if (!tab) {
-      updateSettings({ theme: value });
-      return;
-    }
-    write(value, tab);
-  };
-  const useEverywhere = () => {
-    if (!tab) return;
-    // `chosen` is the theme in force — the chat's own if it has one. That is
-    // the whole point of the button: take what this chat is wearing and make
-    // it the default, then clear the chat's override so it follows along.
-    //
-    // It used to be the DEVICE DEFAULT, because that is what the caller
-    // passed, so pressing it saved the value that was already the default and
-    // then cleared the pick you had just made — the button did the opposite
-    // of its label, silently.
-    updateSettings({ theme: chosen });
-    write(null, tab);
   };
   return (
     <fieldset className="settings-row settings-themes">
@@ -269,18 +246,16 @@ export function ThemePicker({ chosen, group = 'theme' }: { chosen: ThemeChoice; 
           </label>
         ))}
       </div>
-      {/* The way back. Without it a chat that has been given a theme can never
-          be handed back to the default, and the default itself would be
-          unreachable from the only grid in the app. */}
-      {tab ? (
-        <button type="button" className="settings-theme-default" onClick={useEverywhere}>
-          Use for every chat
-        </button>
-      ) : null}
+      {/* THERE IS NO "USE FOR EVERY CHAT" ANY MORE, and no way back to a
+          default, because there is nothing to come back FROM: one theme, for
+          the install. The button existed to clear a chat's override and
+          promote it to the device default — two concepts that are now one
+          value, and a control whose label described a distinction nobody
+          asked for. */}
       {failed ? (
         <p className="settings-note" role="alert">
-          Couldn’t save this chat’s theme — the server is running a build without the column it
-          lives in. Restart muxpad and try again.
+          Couldn’t save the theme. The server may be running a build from before it moved off this
+          browser — restart muxpad and try again.
         </p>
       ) : null}
     </fieldset>

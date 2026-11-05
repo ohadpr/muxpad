@@ -1,6 +1,6 @@
 import { Outlet, useRouterState } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
-import { useChatTheme } from '../lib/chat-theme';
+import { useAppTheme } from '../lib/app-theme';
 import { MOBILE_BREAKPOINT } from '../lib/mobile-layout';
 import { SIDENAV_MIN_WIDTH, updateSettings, useSettings } from '../settings';
 import { useMediaQuery } from '../use-media-query';
@@ -49,7 +49,12 @@ export function AppLayout() {
   // A chat may carry its own theme (see lib/chat-theme): the whole window
   // follows the tab you are in, and falls back to the device's default for a
   // chat that has no opinion.
-  useChatTheme(activeTabSlug);
+  // ONE THEME, FOR THE INSTALL. It arrives with `/api/boot` (before the
+  // bundle has parsed, so the first paint is already right) and this keeps the
+  // window in step with every other one afterwards. It takes no argument now:
+  // it used to be the active chat's slug, because the chat you were standing
+  // in owned the theme.
+  useAppTheme();
   const activeWorkspace = wsSlug ? workspaces.find((w) => w.slug === wsSlug) : null;
   const isMobile = useMediaQuery(MOBILE_BREAKPOINT);
   const settings = useSettings();

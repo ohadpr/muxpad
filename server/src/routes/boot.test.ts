@@ -21,6 +21,7 @@ function app(over: Partial<Parameters<typeof bootRoutes>[0]> = {}) {
   return bootRoutes({
     listWorkspaces: () => WORKSPACES,
     listTabs: (id) => [tab(`${id}-a`), tab(`${id}-b`)],
+    prefs: () => ({ theme: 'tokyo-night' }),
     ...over,
   });
 }
@@ -85,5 +86,33 @@ describe('GET /api/boot', () => {
     const body = (await get('/?w=work')) as { workspaceId: string; tabs: Tab[] };
     expect(body.workspaceId).toBe('w2');
     expect(body.tabs.map((t) => t.id)).toEqual(['w2-a', 'w2-b']);
+  });
+});
+
+/**
+ * THE PREFS RIDE ALONG TO AVOID A FLASH.
+ *
+ * The theme is a document-level fact and it lives on the server now (one
+ * theme for the whole install, pushed to every window). A client that fetched
+ * it after mount would paint its own default first and repaint — on the one
+ * load where somebody is watching the window appear. This endpoint is fired by
+ * an inline script before the bundle has finished parsing, which is early
+ * enough that the first paint is already right.
+ */
+describe('the install’s settings', () => {
+  it('come back with the first answer', async () => {
+    const body = (await (await app().request('/?w=personal')).json()) as {
+      prefs: Record<string, string>;
+    };
+    expect(body.prefs).toEqual({ theme: 'tokyo-night' });
+  });
+
+  it('are an empty object when nothing is set, never absent', async () => {
+    // A client branches on the VALUE, not on the key's presence; `undefined`
+    // there would be a third state for "no theme chosen".
+    const body = (await (await app({ prefs: () => ({}) }).request('/')).json()) as {
+      prefs: Record<string, string>;
+    };
+    expect(body.prefs).toEqual({});
   });
 });

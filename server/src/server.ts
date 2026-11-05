@@ -34,6 +34,7 @@ import { nodesRoutes } from './routes/nodes.js';
 import { openRoutes } from './routes/open.js';
 import { paneIoRoutes } from './routes/pane-io.js';
 import { panesScopedRoutes, panesTabScopedRoutes } from './routes/panes.js';
+import { prefsRoutes } from './routes/prefs.js';
 import { publishRoutes } from './routes/publish.js';
 import { pushRoutes } from './routes/push.js';
 import { reviewRoutes } from './routes/review.js';
@@ -46,6 +47,7 @@ import { workingSetRoutes } from './routes/working-set.js';
 import { workspacesRoutes } from './routes/workspaces.js';
 import { sameOriginGuard } from './same-origin.js';
 import { readOrCreateSayKey } from './say-key.js';
+import { PrefStore } from './store/PrefStore.js';
 import { WorkspaceStore } from './store/WorkspaceStore.js';
 import type { TabActivity } from './tab-activity.js';
 import { clockSnapshot } from './tab-clock.js';
@@ -353,6 +355,7 @@ export function createApp(deps: AppDeps): Hono {
   app.route(
     '/api/boot',
     bootRoutes({
+      prefs: () => new PrefStore(resolved.db).all(),
       // DECORATED THE SAME WAY `/api/workspaces` decorates them — the whole
       // value of a prefetch is that the app can use it verbatim.
       listWorkspaces: (opts) => {
