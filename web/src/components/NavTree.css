@@ -4142,8 +4142,27 @@ body.sidenav-resizing iframe {
      9% → 6% when the band stopped being pinned. A fixed shelf has to hold its
      own against a list sliding under it; a band that scrolls WITH the list is
      a section of it, and at 9% over a cream rail (memphis) the step read as a
-     grey block rather than as a tint. Row ink stays 4.9–12:1 on all ten. */
-  background: color-mix(in srgb, var(--fg) 6%, transparent);
+     grey block rather than as a tint. Row ink stays 4.9–12:1 on all ten.
+
+     ── AND THEN IT NEEDED MORE SEPARATION ─────────────────────────────────
+     "Style recent active section with a bit more contrast so its different
+     from rest of sidebar. not crazy."
+
+     The tempting move is HUE — a trace of accent, so the band reads as a
+     different kind of area rather than a darker piece of rail. That was
+     tried, measured and rejected before: an accent wash only separates when
+     the accent's luminance differs from the rail's (on riso they are within
+     1.04:1), and at 13% it pushed tokyo-night's row ink under AA. A mix from
+     --fg always moves AWAY from the surface, whatever the theme, which is why
+     the ground is that and the accent does the seam instead. I re-made that
+     mistake and the contrast test caught it.
+
+     So: the same axis, one step. 6% → 8%, short of the 9% that read as a grey
+     block — and that was while the band was PINNED, a fixed shelf holding its
+     own against a list sliding under it; a band that scrolls with the list
+     can carry a little more without becoming furniture. Re-measured on all
+     ten: row ink stays ≥ 4.4:1 (ChatChrome.contrast.test). */
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
   /* ── ONE LINE, NOT FOUR ─────────────────────────────────────────────────
      The top of this rail had become a stack of hairlines: the brand's, this
      band's top border, its bottom border, an inset highlight inside the top
@@ -4156,8 +4175,11 @@ body.sidenav-resizing iframe {
      at the bottom, where the band stops and the ordinary rail begins. */
   /* AND THE SEAM IS THE ACCENT, which is what makes this a different kind of
      shelf rather than a brighter piece of rail. Measured 1.4–3.5:1 against
-     the band on every theme — visible everywhere, loud nowhere. */
-  border-bottom: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+     the band on every theme — visible everywhere, loud nowhere.
+     45% → 55% with the ground above: the boundary is the other half of "it
+     should look different", and a firmer line costs nothing in the way a
+     darker ground does. */
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
 }
 
 /* The heading is a LABEL, not a section header: small caps, wide, quiet.

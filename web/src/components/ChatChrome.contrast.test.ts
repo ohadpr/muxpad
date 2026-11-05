@@ -127,7 +127,11 @@ describe('the recently-active band, on every theme', () => {
     const flat = TREE.replace(/\/\*[\s\S]*?\*\//g, '');
     const rest = flat.slice(flat.indexOf('.navtree-workingset {'));
     const rule = rest.slice(0, rest.indexOf('}'));
-    expect(rule).toMatch(/background:\s*color-mix\(in srgb,\s*var\(--fg\)\s*6%/);
+    // 6% → 8% when the band was asked for more contrast. The NUMBER is
+    // pinned here and the measured floors below are computed from the same
+    // one, so a change has to pass both — which is what caught an accent
+    // wash being reintroduced: it is the move this comment exists to refuse.
+    expect(rule).toMatch(/background:\s*color-mix\(in srgb,\s*var\(--fg\)\s*8%/);
     // …and the accent is the SEAM, which is the part a wash cannot do on a
     // theme whose accent and rail share a luminance.
     // `--accent`, not `--rail-accent`: the island rebinds it, so the rail
@@ -140,16 +144,19 @@ describe('the recently-active band, on every theme', () => {
   it.each(rails.map((t) => [t.name, t] as const))(
     '%s keeps its rows readable on the band',
     (_n, theme) => {
-      const band = mix(theme.tokens.fg as string, theme.tokens['rail-surface'] as string, 6);
+      const band = mix(theme.tokens.fg as string, theme.tokens['rail-surface'] as string, 8);
       expect(ratio(rgb(theme.tokens['rail-ink-dim'] as string), band)).toBeGreaterThanOrEqual(4.4);
     },
   );
 
   it.each(rails.map((t) => [t.name, t] as const))('%s draws a visible seam', (_n, theme) => {
-    const band = mix(theme.tokens.fg as string, theme.tokens['rail-surface'] as string, 6);
+    const band = mix(theme.tokens.fg as string, theme.tokens['rail-surface'] as string, 8);
     const accent = theme.tokens['rail-accent'] ?? theme.tokens.accent;
     if (!accent) return;
-    const seam = rgb(accent).map((v, i) => Math.round(v * 0.45 + (band[i] as number) * 0.55));
+    // 0.45 → 0.55: the seam firmed up with the ground, and it is free
+    // contrast — a line does not touch the row ink the way a darker ground
+    // does.
+    const seam = rgb(accent).map((v, i) => Math.round(v * 0.55 + (band[i] as number) * 0.45));
     expect(ratio(seam, band)).toBeGreaterThan(1.3);
   });
 });
