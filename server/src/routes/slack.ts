@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { z } from 'zod';
 import { verifyPaneKey } from '../pane-key.js';
+import { recordSlackAction, resolveSlackAction } from '../slack-actions.js';
 import { slackBrokerRequest, slackBrokerURL } from '../slack-broker.js';
 import { PaneStore } from '../store/PaneStore.js';
 import { TabStore } from '../store/TabStore.js';
@@ -126,6 +127,10 @@ export function slackRoutes(deps: Deps): Hono {
       }
   };
   const track = (result: Record<string, unknown>, owner?: string) => {
+    // Every status the broker reports, however it arrived — the action's own
+    // reply, the approvals poll, a passkey ceremony — lands here, which makes
+    // this the one place a card learns how its act ended.
+    resolveSlackAction(deps.db, result);
     if (typeof result.id !== 'string' || !/^[a-f0-9-]{36}$/.test(result.id)) return;
     prune();
     const existing = pending.get(result.id);
@@ -186,6 +191,13 @@ export function slackRoutes(deps: Deps): Hono {
       action === 'slack.upload' ? 125000 : 35000,
     );
     safeTrack(result, pane);
+    // ── AND A CARD IN THE CHAT THAT SENT IT ──────────────────────────────
+    //
+    // Recorded HERE, at the one funnel every Slack verb goes through, rather
+    // than in each route: the per-route version is how one of them ends up
+    // not doing it, and `post`/`dm`/`edit`/`upload` are four chances to
+    // forget. The act's own id is what a later status poll resolves against.
+    recordSlackAction(deps.db, { action, payload, pane, result });
     return result;
   };
   app.route(

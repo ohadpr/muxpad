@@ -59,6 +59,7 @@ import {
 } from '../lib/attachments';
 import { browserOpenIntent, injectBrowserMoments } from '../lib/browser-card';
 import { useBrowserFontSize } from '../lib/browser-font';
+import { injectActionCards, useChatActions } from '../lib/chat-actions';
 import { branchPrefill, draftKeyFor } from '../lib/chat-branch';
 import {
   type DirectedWork,
@@ -143,6 +144,7 @@ import type { AgentLink } from '../lib/voice/session';
 import { useVoice } from '../lib/voice/use-voice';
 import { workingVariantFor } from '../lib/working-variant';
 import { insertTabRow } from '../tabs';
+import { ActionCard } from './ActionCard';
 import { AgentBackendLogo, backendFromAssistant } from './AgentLogos';
 import { BrowserCard } from './BrowserCard';
 import { useBrowsers } from './BrowserCards';
@@ -1132,6 +1134,11 @@ export function ChatPane({
     open: openBrowser,
     modal: browserModal,
   } = useBrowsers({ by: paneId, tabId: myChat?.tabId ?? '' });
+  // What this chat did to the outside world — a Slack message sent, and
+  // whatever integrations come next. Same shape as the browsers above: the
+  // machinery is a poll in the lib, the CARDS are placed in the log at the
+  // moment each act happened.
+  const chatActions = useChatActions(paneId);
   /** By tab id — how a stored card finds the chat it was sent to, now. */
   const corpusById = useMemo(() => new Map(corpus.map((c) => [c.tabId, c])), [corpus]);
 
@@ -4395,18 +4402,30 @@ export function ChatPane({
               // spawn-card interleave — and the file it lives in — never has to
               // know browsers exist. A browser opening and an agent getting stuck
               // are two moments in the log, not a status light above it.
-              injectBrowserMoments(
-                items,
-                browserMoments,
-                (moment) => (
-                  <BrowserCard
-                    key={`browser:${moment.profile}:${moment.at}:${moment.kind}`}
-                    moment={moment}
-                    onOpen={(mode) => openBrowser(moment.browser, mode, browserOpenIntent(moment))}
-                  />
+              // ACTIONS go in next, by the same rule and for the same reason:
+              // a Slack message sent from this chat is a thing that happened
+              // at a point in it, and the only durable record of it. The
+              // conversation holds the agent SAYING it posted; this is
+              // whether it went. See lib/chat-actions.
+              injectActionCards(
+                injectBrowserMoments(
+                  items,
+                  browserMoments,
+                  (moment) => (
+                    <BrowserCard
+                      key={`browser:${moment.profile}:${moment.at}:${moment.kind}`}
+                      moment={moment}
+                      onOpen={(mode) =>
+                        openBrowser(moment.browser, mode, browserOpenIntent(moment))
+                      }
+                    />
+                  ),
+                  // The same window floor the cards get — a browser opened before the
+                  // oldest loaded message is not placeable either.
+                  { floor: items.find((e) => e.at !== null)?.at ?? null },
                 ),
-                // The same window floor the cards get — a browser opened before the
-                // oldest loaded message is not placeable either.
+                chatActions,
+                (action) => <ActionCard key={`action:${action.id}`} action={action} />,
                 { floor: items.find((e) => e.at !== null)?.at ?? null },
               ),
               spawnedCards,
@@ -4639,6 +4658,10 @@ export function ChatPane({
     // ago keeps shouting, because the memo never recomputes.
     browserMoments,
     openBrowser,
+    // Same again for the action cards: they live IN the transcript, so it has
+    // to rebuild when one lands or resolves — otherwise a card says "waiting
+    // for you" forever over a message that was approved.
+    chatActions,
     // Both of these were CAPTURED but not listed, which in a memo means the
     // transcript keeps rendering against the values it first saw. `mode` is the
     // one with teeth: switching a live pane between Chat and Agent changed the

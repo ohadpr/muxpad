@@ -2,7 +2,7 @@ import type { ChatClock, SpawnRound } from '@muxpad/shared';
 import type { MentionedChat } from '@muxpad/shared';
 import { type ArchiveSearchHit, req } from '../api';
 import type { ChatChipChat } from '../components/ChatChip';
-import { canFlushTail, windowStart } from './log-window';
+import { injectByTime } from './log-window';
 import {
   type SearchableTab,
   type WorkspaceTabs,
@@ -956,7 +956,6 @@ export function interleaveSpawnCards<T>(
   cards: readonly SpawnCard[],
   opts?: { hasMoreOlder?: boolean; floor?: number | null },
 ): LogEntry<T>[] {
-  const out: LogEntry<T>[] = [];
   // ── THE WINDOW'S LOWER EDGE IS THE TRANSCRIPT'S, NOT THIS LIST'S ──────────
   // `entries` has already had browser moments injected into it by the caller,
   // and a browser opening is dated from whenever it opened — which can be older
@@ -971,22 +970,15 @@ export function interleaveSpawnCards<T>(
     opts?.hasMoreOlder === false
       ? null
       : (opts?.floor ?? entries.find((e) => e.at !== null)?.at ?? null);
-  // The shared rule — see lib/log-window, which exists because this was written
-  // three times and was wrong at an edge each time.
-  let i = windowStart(cards, floor);
-  for (const entry of entries) {
-    if (entry.at !== null) {
-      while (i < cards.length && (cards[i] as SpawnCard).at <= entry.at) {
-        out.push({ kind: 'card', card: cards[i++] as SpawnCard });
-      }
-    }
-    out.push({ kind: 'entry', node: entry.node });
-  }
-  // Only once the log has a timeline to hang them on — see above.
-  if (canFlushTail(entries)) {
-    for (; i < cards.length; i++) out.push({ kind: 'card', card: cards[i] as SpawnCard });
-  }
-  return out;
+  // The shared rule AND the loop around it — see lib/log-window, which exists
+  // because this was written three times and was wrong at an edge each time.
+  return injectByTime<(typeof entries)[number], SpawnCard, LogEntry<T>>(
+    entries,
+    cards,
+    (card) => ({ kind: 'card', card }),
+    (entry) => ({ kind: 'entry', node: entry.node }),
+    floor,
+  ).map((e) => e.node);
 }
 
 // ── The run under the caret ──────────────────────────────────────────────────

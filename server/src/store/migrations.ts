@@ -1617,6 +1617,52 @@ const MIGRATIONS: Migration[] = [
         db.exec("ALTER TABLE pending_pane_kills ADD COLUMN node_id TEXT NOT NULL DEFAULT 'local'");
     },
   },
+  {
+    /**
+     * WHAT THE AGENT DID OUTSIDE THIS CHAT — one row per act, in the chat's
+     * own log.
+     *
+     * A Slack message leaves no trace in the conversation that sent it. The
+     * transcript holds the agent SAYING it posted; the posting itself is an
+     * effect on another system, and the only durable record was a transient
+     * approval alert that disappears the moment it is answered. So "did that
+     * actually go?" was unanswerable a minute later, from the one surface
+     * where the question is asked.
+     *
+     * GENERIC BY CONSTRUCTION, because Slack will not be the only one — email
+     * and WhatsApp are already on the list. `kind` is `<integration>.<verb>`
+     * and everything else is the shape every such act has: when, a line
+     * naming it, the content, somewhere to go, and how it ended. A new
+     * integration is a producer and an icon, not a table.
+     *
+     * `ref` is the OUTSIDE system's id for the act (a broker request id, a
+     * message ts), which is what lets a later status poll find this row again
+     * — the pane and the time cannot, because a chat can send two messages in
+     * the same second.
+     */
+    version: 51,
+    sql: `
+      CREATE TABLE IF NOT EXISTS chat_actions (
+        id TEXT PRIMARY KEY,
+        pane_id TEXT NOT NULL,
+        at INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        title TEXT NOT NULL,
+        body TEXT,
+        url TEXT,
+        state TEXT NOT NULL,
+        detail TEXT,
+        ref TEXT,
+        -- A card belongs to a conversation and has no meaning without it, so
+        -- it goes when the pane goes. A FK rather than a delete call at the
+        -- pane-delete sites, because there are several and the one that gets
+        -- missed leaves rows nothing will ever read or clean up.
+        FOREIGN KEY (pane_id) REFERENCES panes(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_chat_actions_pane ON chat_actions(pane_id, at);
+      CREATE INDEX IF NOT EXISTS idx_chat_actions_ref ON chat_actions(ref);
+    `,
+  },
 ];
 
 /** Highest version in the migration list. Exported so a test can assert the
