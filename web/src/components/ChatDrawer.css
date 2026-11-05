@@ -1,0 +1,253 @@
+/*
+ * The chat's work drawer — sub-chats and artifacts, on the right.
+ *
+ * AN OVERLAY ON THE PANE, not a column beside it. The reason is structural and
+ * is written out in ChatDrawer.tsx: making the chat narrow needs a wrapper
+ * element that only exists while the drawer is open, which remounts the
+ * transcript and throws away the scroll position. Glancing at a worker must
+ * not lose your place in the conversation.
+ */
+.chat-drawer {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 0;
+  z-index: 6;
+  /* Wide enough for a real conversation inside it (the drawer holds a whole
+     chat, not a preview), and capped so it never becomes the whole pane on a
+     laptop. On a phone it takes the lot, which is the right answer there —
+     there is no room for two things and the drawer is the thing you asked
+     for. */
+  width: min(420px, 100%);
+  display: flex;
+  flex-direction: column;
+  background: var(--chat-panel, var(--bg-elev));
+  border-inline-start: 1px solid var(--border);
+  /* The shadow is what says "over", and it is the only thing that does —
+     without it an overlay at the same elevation as the log reads as a column
+     whose text has mysteriously stopped. */
+  box-shadow: -14px 0 32px -18px rgb(0 0 0 / 0.45);
+  font-family: var(--chrome-font, inherit);
+  color: var(--fg);
+}
+
+.chat-drawer__head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 6px 6px 10px;
+  border-bottom: 1px solid var(--border);
+  min-height: 38px;
+}
+.chat-drawer__title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8125rem;
+  font-weight: 560;
+}
+.chat-drawer__tabs {
+  flex: 1 1 auto;
+  display: flex;
+  gap: 2px;
+  min-width: 0;
+}
+.chat-drawer__tab {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: var(--fg-dim);
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+.chat-drawer__tab:hover {
+  color: var(--fg);
+}
+.chat-drawer__tab[aria-selected="true"] {
+  background: var(--bg-hover);
+  color: var(--fg);
+  font-weight: 560;
+}
+/* The count rides the tab rather than sitting in a header: it is part of the
+   label ("Sub-chats 2"), and a number somewhere else would need a second look
+   to attach to the thing it counts. */
+.chat-drawer__count {
+  min-width: 1.2em;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-fg, #fff);
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.chat-drawer__back,
+.chat-drawer__close,
+.chat-drawer__expand {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--fg-dim);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.chat-drawer__back:hover,
+.chat-drawer__close:hover,
+.chat-drawer__expand:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+.chat-drawer__back {
+  font-size: 1.25rem;
+}
+
+.chat-drawer__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+/* A chat inside the drawer gets the whole body and scrolls itself — the
+   transcript is its own scroller, so a second one around it would nest two and
+   leave the composer unreachable. */
+.chat-drawer__chat {
+  position: relative;
+  height: 100%;
+  overflow: hidden;
+}
+.chat-drawer__body:has(> .chat-drawer__chat) {
+  overflow: hidden;
+}
+
+.chat-drawer__list {
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.chat-drawer__row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  text-decoration: none;
+  cursor: pointer;
+}
+.chat-drawer__row:hover {
+  background: var(--bg-hover);
+}
+.chat-drawer__row:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.chat-drawer__row:disabled:hover {
+  background: none;
+}
+.chat-drawer__row-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.chat-drawer__row-name {
+  font-size: 0.8125rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-drawer__row-sub {
+  color: var(--fg-faint);
+  font-size: 0.75rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* A worker still going says so in the accent — the one row in the list that
+   is about now rather than about history. */
+.chat-drawer__row[data-state="working"] .chat-drawer__row-sub {
+  color: var(--accent);
+}
+
+.chat-drawer__empty {
+  margin: 0;
+  padding: 18px 14px;
+  color: var(--fg-dim);
+  font-size: 0.8125rem;
+  line-height: 1.55;
+}
+.chat-drawer__empty code {
+  font-family: var(--mono-font, ui-monospace, monospace);
+  font-size: 0.9em;
+}
+
+/* ── THE CONTROL THAT OPENS IT ───────────────────────────────────────────────
+   Floating at the pane's top-right, over the log. There is deliberately no
+   chat HEAD in this app (see ChatPane.css) — a full-width strip was tried
+   three times and removed — so a header is not available to put this in, and
+   inventing one for a single button would re-import the row cost that was
+   deleted. A 26px control in the corner costs no row at all. */
+.chat-drawer-open {
+  position: absolute;
+  top: 6px;
+  inset-inline-end: 8px;
+  z-index: 5;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  /* Translucent over the transcript: at rest it should be findable and not
+     read as a thing demanding to be pressed. */
+  background: color-mix(in srgb, var(--chat-panel, var(--bg-elev)) 82%, transparent);
+  color: var(--fg-faint);
+  cursor: pointer;
+  backdrop-filter: blur(3px);
+}
+.chat-drawer-open:hover {
+  background: var(--bg-hover);
+  border-color: var(--border);
+  color: var(--fg);
+}
+/* SOMETHING IS RUNNING IN THERE. The only state worth pulling the eye: a
+   worker this chat started is still going, and the drawer is where it is. */
+.chat-drawer-open[data-running="true"] {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.chat-drawer-open__count {
+  position: absolute;
+  top: -3px;
+  inset-inline-end: -3px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-fg, #fff);
+  font-size: 0.625rem;
+  line-height: 14px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}

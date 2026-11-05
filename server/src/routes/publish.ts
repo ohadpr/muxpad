@@ -22,6 +22,7 @@ import {
   durabilityNote,
   normalizeBaseUrl,
 } from '../public-base.js';
+import { recordPublishAction } from '../publish-actions.js';
 import {
   DEFAULT_LIFESPAN_DAYS,
   clearLifespan,
@@ -419,6 +420,14 @@ export function publishRoutes(deps: {
       public_base_url?: unknown;
       audience?: unknown;
       days?: unknown;
+      /**
+       * THE CHAT THAT PUBLISHED THIS, when there is one.
+       *
+       * Nothing anywhere recorded that before: the public dir is keyed by slug
+       * and the expiry store by slug, and neither has ever known who made it.
+       * Optional, because `muxpad publish` runs from ordinary shells too.
+       */
+      pane?: unknown;
     } | null;
     const src = typeof body?.path === 'string' ? body.path : '';
     if (!src || !isAbsolute(src))
@@ -665,12 +674,23 @@ export function publishRoutes(deps: {
 
     const audience = audienceOf(body?.audience);
     const resolved = await resolveForPublish(hint, audience);
+    const url = `${resolved.baseUrl}/${slug}/`;
+    // ── AND A CARD IN THE CHAT THAT MADE IT ──────────────────────────────
+    // The link is the thing anybody wants later, and until now the only
+    // record of which conversation produced it was the conversation itself.
+    recordPublishAction(deps.db, {
+      pane: typeof body?.pane === 'string' ? body.pane : null,
+      name: slugBaseName(slug),
+      slug,
+      url,
+      files,
+    });
     return c.json(
       {
         slug,
         /** The readable half the caller asked for — the slug is name + id. */
         name: slugBaseName(slug),
-        url: `${resolved.baseUrl}/${slug}/`,
+        url,
         ...(expires !== null ? { expires, lifespan_days: days } : { expires: null }),
         files,
         bytes,

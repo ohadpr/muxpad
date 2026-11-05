@@ -23,7 +23,6 @@ import { noticeFromError } from '../lib/notice-store';
 import { activeAge } from '../lib/short-age';
 import { dropFromWorkingSet, useWorkingSet } from '../working-set';
 
-import { recallOpenSubChats, rememberOpenSubChats } from '../lib/rail-folds';
 import { reorderByDrop } from '../lib/reorder';
 import { orderAfterPinnedDrop } from '../lib/tab-drag';
 import { useFrozenTabOrder } from '../lib/tab-freeze';
@@ -1601,33 +1600,16 @@ export function TabList({
   const liveGroups = grouped.live;
   const doneGroups = grouped.done;
   const doneCount = doneChatCount(doneGroups);
-  const subGroups = grouped.doneSubs;
-  const subCount = subGroups.reduce((n, g) => n + g.children.length, 0);
   // COLLAPSED by default. A chat crossing into done should be something you
   // notice leaving the live list, not something that re-opens a drawer of
   // fourteen finished chats under it.
   const [doneOpen, setDoneOpen] = useState(false);
-  const [subsOpen, setSubsOpen] = useState(false);
-  // Which parents' sub-chats are open — REMEMBERED, because collapsing by
-  // default is only tolerable if opening sticks across the remounts a sidebar
-  // sees all day (see lib/rail-folds). Read once, lazily: localStorage in a
-  // render body would run on every keystroke in the rename field.
-  const [openSubs, setOpenSubs] = useState<Set<string>>(() => recallOpenSubChats());
-  // RE-READ, don't edit the snapshot. Every expanded workspace mounts its own
-  // TabList, and the sheet mounts another beside the rail — each one read the
-  // store at ITS mount and then wrote back its whole copy, so opening a group
-  // in one list silently erased the groups opened in a list that mounted
-  // earlier. (Open P in workspace A, then Q in B: the store ends up {Q}, and P
-  // is shut on the next reload.) The store is the shared state; the component
-  // holds a view of it.
-  const toggleSubs = (tabId: string) => {
-    setOpenSubs(() => {
-      const next = recallOpenSubChats();
-      if (!next.delete(tabId)) next.add(tabId);
-      rememberOpenSubChats(next);
-      return next;
-    });
-  };
+  // ── NOTHING TO FOLD ANY MORE ────────────────────────────────────────────
+  // There was a remembered set of expanded sub-chat groups here (lib/rail-folds
+  // still holds the store, and the done drawer still uses its own). It existed
+  // because collapsing forty workers by default is only tolerable if opening
+  // sticks across the remounts a sidebar sees all day. There are no workers in
+  // this list to fold: they are in their parent chat's work drawer.
 
   // Drag-to-reorder is PINNED-ONLY (see lib/tab-drag for why). The hook is
   // fed just the pinned ids, so an unpinned row can neither be dragged into
@@ -1721,18 +1703,10 @@ export function TabList({
    *  switches the row's mark from a tile to a dot in its parent's chip column,
    *  and what puts the one indent step on the row. Nothing about a clock — a
    *  sub-chat has none, and the row reads its own. */
-  const renderRow = (
-    t: Tab,
-    parent?: Tab,
-    group?: SubsGroup,
-    childLast?: boolean,
-    family?: boolean,
-  ) => (
+  const renderRow = (t: Tab, parent?: Tab, childLast?: boolean, family?: boolean) => (
     <TabRow
       key={t.id}
       tab={t}
-      // THE GROUP CONTROL, on the row rather than under it. See SubsPill.
-      {...(group ? { group } : {})}
       // WHICH CHILD ENDS THE RUN, from the only place that knows without
       // guessing. The trunk used to find it in CSS —
       // `[data-child]:has(+ [data-child])` — which is a claim about DOM
@@ -1777,112 +1751,36 @@ export function TabList({
     />
   );
   /**
-   * ─── SUB-CHATS ARE COLLAPSED, AND THE COLLAPSE CARRIES THEIR STATE ────────
+   * ─── ONE ROW PER CONVERSATION, AND NOTHING NESTED UNDER IT ────────────────
    *
-   * A fan-out is the normal shape of work here — this install has a chat with
-   * 65 children — and every one of them was a row. The rail is a list of
-   * CONVERSATIONS; a worker is a thing one of those conversations is doing,
-   * and forty of them in the list is the list not working.
+   * A group used to be a parent plus its sub-chats: a disclosure, a count
+   * pill, a rollup of the family's loudest state, and a row per child. A
+   * fan-out is the normal shape of work here — this install has a chat with 65
+   * children — so the rail was mostly workers, and the collapse, the pill and
+   * the sticky folds all existed to make that survivable.
    *
-   * Shut by default, and the chip under the parent says what is inside
-   * ("6 · 2 running · 1 needs you"). Two things make that safe rather than a
-   * hiding place:
+   * It is not survivable; it is the wrong place. The rail is a list of
+   * CONVERSATIONS, and a worker is a detail of one of them. A chat's workers
+   * now live in that chat's own work drawer, beside the conversation that
+   * started them, with the running ones counted on its badge. See
+   * `groupChats` for the four attempts at this and why that is the one with
+   * somewhere real to put them.
    *
-   *   · the parent's own mark wears the loudest state in the family while shut
-   *     (`subsStatus`), so a blocked worker still reaches the glance; and
-   *   · opening STICKS (`rail-folds`), so the chat you are actually sitting
-   *     with is not re-collapsed by the next tab switch.
-   *
-   * The disclosure is drawn only where there is something to disclose. In the
-   * done drawer's sub-chat section the children are ALREADY behind two
-   * disclosures and the parent is a label, not a row — a third caret there
-   * would be a caret on a caret, so `contextOnly` keeps the flat rendering.
+   * What is left is a row. `ChatGroup` survives as the shape the list is built
+   * from — `done` and `live` are still two lists of chats — and everything
+   * that was about children is gone with the children.
    */
-  const renderGroup = (g: ChatGroup) => {
-    // OPEN WHEREVER YOU ARE. A shut group that contains the chat you are
-    // looking at would leave the rail with no selected row anywhere — tap a
-    // spawn card in the parent, or @-jump to a worker, and the sidebar shows
-    // nothing highlighted. On the phone, where the sheet IS the navigation,
-    // that is "where am I?" with no answer. Not persisted: it is a fact about
-    // where you are, not a disclosure you opened, so leaving the chat
-    // re-shuts the group.
-    const holdsActive = isActiveWorkspace && g.children.some((k) => k.slug === activeTabSlug);
-    // ── THE WHOLE FAMILY, IN BOTH DIRECTIONS ────────────────────────────────
-    // `holdsActive` is only half of it: it asks whether a CHILD is the row you
-    // are on. Standing on the PARENT puts you in the same family, and the
-    // first pass of this missed it by asking each row about its own parent
-    // instead of asking the group once — so a sibling of the active child
-    // compared `signal archive` against the active slug, which is the child's,
-    // and every row came back false. One question, asked of the group.
-    const familyHoldsActive = holdsActive || (isActiveWorkspace && g.chat.slug === activeTabSlug);
-    const open = openSubs.has(g.chat.id) || holdsActive;
-    const foldable = !g.contextOnly && g.children.length > 0;
-    return (
-      <Fragment key={`${g.chat.id}${g.contextOnly ? ':subs' : ''}`}>
-        {g.contextOnly ? (
-          /* A LABEL, not a row. The parent may be live with a row of its own
-             above, or done with one beside these — either way a second clickable
-             copy of it here would be a chat appearing twice in one list, and the
-             live one would go on lighting up as it worked. */
-          <div className="navtree-done-parent" aria-hidden="true">
-            {g.chat.name}
-          </div>
-        ) : (
-          renderRow(
-            g.chat,
-            undefined,
-            foldable
-              ? {
-                  ...subChatCounts(g.children),
-                  open,
-                  // OPEN OR SHUT. The pill is the one object on this row that
-                  // is about the WORKERS, and a pill that goes quiet when you
-                  // expand the group leaves the row saying only what the
-                  // PARENT is doing — which is how a chat with two running
-                  // sub-agents under it came to wear a green tick and nothing
-                  // else. Reported from a screenshot: "there's a green
-                  // checkmark but two sub-agents are working."
-                  //
-                  // The two facts are different and both are true: the tick is
-                  // the parent's unread reply, the pill is the family's work.
-                  // They get one object each and neither has to be silenced.
-                  status: subsStatus(g.children),
-                  title: subChatChipTitle(g.children),
-                  parentName: g.chat.name,
-                  onToggle: () => toggleSubs(g.chat.id),
-                }
-              : undefined,
-            undefined,
-            // The family holds the row you are standing on, and THIS IS NOT
-            // THAT ROW. Without the second half the parent tinted itself while
-            // you were standing on it, and the tint won against the selection
-            // — the row you were in came out fainter than the ones beside it.
-            // See the data-family note in NavTree.css.
-            familyHoldsActive && g.chat.slug !== activeTabSlug,
-          )
-        )}
-        {/* NO ROW OF ITS OWN ANY MORE. The disclosure, the count, the agent
-            glyph and the breakdown used to sit on a line under the parent —
-            four small things costing a whole row of a 240px rail, and a 40px
-            band on the phone, for a group that was usually one or two
-            children. "It feels like we're just wasting space now."
-            They are one pill at the end of the PARENT's row now (SubsPill),
-            which also lets the rollup state and the count stop being two
-            drawings of one fact. */}
-        {!foldable || open
-          ? g.children.map((k, i) =>
-              renderRow(
-                k,
-                g.chat,
-                undefined,
-                i === g.children.length - 1,
-                familyHoldsActive && k.slug !== activeTabSlug,
-              ),
-            )
-          : null}
-      </Fragment>
-    );
-  };
+  const renderGroup = (g: ChatGroup) => (
+    <Fragment key={g.chat.id}>
+      {renderRow(
+        g.chat,
+        undefined,
+        undefined,
+        // Nothing is a family any more, so nothing tints as one.
+        false,
+      )}
+    </Fragment>
+  );
 
   return (
     <div className="navtree-tab-list">
@@ -1911,7 +1809,7 @@ export function TabList({
           Shaped like the workspace header one step quieter: a section head,
           not a third kind of label, and no count badge (the number is the
           label). */}
-      {doneGroups.length > 0 || subCount > 0 ? (
+      {doneGroups.length > 0 ? (
         <>
           <button
             type="button"
@@ -1923,32 +1821,19 @@ export function TabList({
             {doneCount} done
           </button>
           {doneOpen ? doneGroups.map((g) => renderGroup(g)) : null}
-          {/* ─── AND THE AGENTS' WORK, one level further in ──────────────────
-              Delivered sub-chats were IN the list above and filled it with
-              machine-named work nobody recognised: on this install, 104 of them
-              against 28 chats actually abandoned, so the thing the drawer is
-              for was buried under the thing it is not. Reported as the archive
-              filling with unfamiliar stuff.
-              They are not deleted from it — that fixed the noise by removing
-              the only place they could be found. They are one disclosure
-              further in, and NEVER at the top: this sits below the chats you
-              archived yourself, costs one line when shut, and is shut by
-              default even when the drawer above it is open. Two clicks to a
-              place you only go when you are looking for it. */}
-          {doneOpen && subCount > 0 ? (
-            <>
-              <button
-                type="button"
-                className="navtree-done-head -subs"
-                onClick={() => setSubsOpen((o) => !o)}
-                aria-expanded={subsOpen}
-              >
-                <SvgCaret open={subsOpen} />
-                {subCount} sub-agent{subCount === 1 ? '' : 's'}
-              </button>
-              {subsOpen ? subGroups.map((g) => renderGroup(g)) : null}
-            </>
-          ) : null}
+          {/* ─── AND NOTHING ABOUT SUB-AGENTS, ANY MORE ──────────────────
+              There was a second disclosure here holding every delivered
+              sub-chat, grouped by parent. It was the third attempt at where a
+              spawned chat belongs and the best available while the only
+              surfaces were the rail and the log: in the done list it buried
+              the chats you actually abandoned (104 against 28 on this
+              install), and dropped entirely it was unfindable.
+
+              A chat's work now lives in that chat's own work drawer, next to
+              the conversation that started it — running and finished
+              together, with the parent's badge counting what is still going.
+              See `groupChats` for the four answers and why this is the one
+              with somewhere real to put them. */}
         </>
       ) : null}
     </div>
@@ -2148,9 +2033,6 @@ interface TabRowProps {
    * `renderRow`.
    */
   childLast?: boolean | undefined;
-  /** This chat has sub-chats: the row carries their count, their rolled-up
-   *  state and their disclosure, as one pill. See SubsPill. */
-  group?: SubsGroup | undefined;
   /**
    * The state mark to draw INSTEAD of this tab's own.
    *
@@ -2201,17 +2083,16 @@ interface TabRowProps {
 }
 
 /** A top-level chat and the chats spawned under it, in the server's order. */
+/**
+ * One entry in one of the rail's two lists.
+ *
+ * A wrapper around a single chat, and it USED to be a parent plus its
+ * sub-chats — hence the name. The nesting is gone (see `groupChats`), and the
+ * type stayed because `live` and `done` are still two lists built and rendered
+ * the same way, and because a struct is where the next per-entry fact will go.
+ */
 export interface ChatGroup {
   chat: Tab;
-  children: Tab[];
-  /** The parent is a LABEL here, not a row — see `doneSubs`. */
-  contextOnly?: boolean;
-  /**
-   * This group is in the DONE list only to say whose retired sub-chats these
-   * are. `chat` itself is live and has its own row up in the list above, so it
-   * is drawn here as a quiet label rather than as a second, clickable copy of
-   * a row that already exists.
-   */
 }
 
 /**
@@ -2258,22 +2139,38 @@ export interface ChatGroup {
  * function cannot disagree with the server about what has expired.
  */
 export function groupChats(tabs: Tab[]): {
+  /**
+   * ── NO SUB-CHAT IS A ROW IN THIS RAIL ANY MORE ─────────────────────────
+   *
+   * `children` is always empty, and the field stays only because a group is
+   * the shape the rows are rendered from. This is the FOURTH answer to where
+   * a spawned chat belongs, and the first one with somewhere real to put it:
+   *
+   *   1. a second-level row under its parent, always     — 65 rows under one
+   *      chat, and the rail stopped being a list of conversations
+   *   2. delivered ones in the done drawer               — 104 machine-named
+   *      errands burying the 28 chats actually abandoned
+   *   3. a disclosure inside that drawer                 — findable, but two
+   *      clicks into a place you go for something else
+   *   4. THIS: its parent's work drawer, beside the conversation that started
+   *      it, where both the running ones and the finished ones are listed and
+   *      the parent's own badge counts what is still going.
+   *
+   * The rail is a list of places you go. A worker that answered twenty
+   * minutes ago is not one — it is a detail OF a chat, and now it lives with
+   * that chat. `@` still finds it by name, and its result already came back
+   * as a card in the parent's log.
+   *
+   * ── THE ONE EXCEPTION, AND IT IS A RULE, NOT A CORNER ──────────────────
+   * A sub-chat is hidden from the rail only when it HAS a home to be found
+   * in — i.e. its parent resolves in this list. Two cases promote it to a
+   * top-level row instead, both already handled above: a `spawned_by` that
+   * does not resolve here (another workspace, deleted), and a parent that
+   * retired out from under a child still working. A chat is never invisible
+   * because of a pointer.
+   */
   live: ChatGroup[];
   done: ChatGroup[];
-  /**
-   * Delivered sub-chats, grouped under the chat that spawned them, for the
-   * drawer's own second disclosure.
-   *
-   * SEPARATE FROM `done`, which is the whole point. They were in it, and the
-   * drawer filled with machine-named work nobody recognised — 104 of them
-   * against 28 chats actually abandoned, so the thing the drawer is FOR was
-   * buried under the thing it is not. They were then dropped entirely, which
-   * fixed the noise by removing the only place they could be found.
-   *
-   * This is the third answer: still in the drawer, never at the top of it, and
-   * behind a disclosure of their own. Shut, they cost one line.
-   */
-  doneSubs: ChatGroup[];
 } {
   const byId = new Map(tabs.map((t) => [t.id, t]));
   /**
@@ -2336,16 +2233,8 @@ export function groupChats(tabs: Tab[]): {
   }
   const live: ChatGroup[] = [];
   const done: ChatGroup[] = [];
-  const doneSubs: ChatGroup[] = [];
   for (const chat of tops) {
     const children = childrenOf.get(chat.id) ?? [];
-    // Delivered children go to the drawer's sub-chat section WHATEVER their
-    // parent is doing — it may be live above, or done beside them. The group
-    // carries the parent only to name whose work this was; `contextOnly` marks
-    // it as a label rather than a row, because the parent is not the thing
-    // being listed here and may already have a real row elsewhere.
-    const delivered = children.filter((k) => isChatRetired(k));
-    if (delivered.length > 0) doneSubs.push({ chat, children: delivered, contextOnly: true });
     // THE DONE DRAWER HOLDS TOP-LEVEL CHATS ONLY. A sub-chat retires the moment
     // it delivers, so with forty spawned agents the drawer was forty rows of
     // finished errands under a label, and the chats you actually abandoned were
@@ -2356,7 +2245,7 @@ export function groupChats(tabs: Tab[]): {
     // `contextOnly` groups are built above, for the drawer's own sub-chat
     // disclosure — not for this list. Nothing here lists a sub-chat.
     if (isChatDone(chat)) {
-      done.push({ chat, children: [] });
+      done.push({ chat });
       // …BUT A CHILD THAT IS STILL WORKING OUTLIVES IT, as a top-level row.
       // Dropping the whole family was right for the DELIVERED ones and wrong
       // for this case: a sub-chat that has not reported yet is live work, and
@@ -2372,186 +2261,41 @@ export function groupChats(tabs: Tab[]): {
       // Position is safe: a pinned chat never decays, so a done parent is never
       // in the pinned block, and a row promoted at its place therefore always
       // lands after the pinned rows.
-      for (const kid of children) if (!isChatRetired(kid)) live.push({ chat: kid, children: [] });
+      for (const kid of children) if (!isChatRetired(kid)) live.push({ chat: kid });
       continue;
     }
-    live.push({ chat, children: children.filter((k) => !isChatRetired(k)) });
+    // NO CHILDREN ON THE ROW. See the note on the return type: a sub-chat is
+    // listed in its parent's work drawer, and its parent is right here.
+    live.push({ chat });
   }
-  return { live, done, doneSubs };
-}
-
-/**
- * The same chip, with the noun the visible line cannot afford — the hover and
- * the accessible name. One function so the two can never disagree about the
- * counts, which is the only thing a reader is cross-checking between them.
- */
-export function subChatChipTitle(children: readonly Tab[]): string {
-  const { total, parts } = subChatCounts(children);
-  const noun = `${total} sub-agent${total === 1 ? '' : 's'}`;
-  return parts.length === 0 ? noun : `${noun} (${parts.join(' · ')})`;
-}
-
-/**
- * THE STATE A COLLAPSED GROUP SHOWS — the parent's own, or its loudest child's.
- *
- * Collapsing sub-chats hides rows that were carrying the rail's two most
- * consequential signals: a worker that is BLOCKED on a question, and a worker
- * that has finished and is waiting. Hiding those behind a caret would make the
- * collapse a regression rather than a tidy-up — the whole value of the rail is
- * that a glance down it is true.
- *
- * So a collapsed parent wears the loudest state in its family, its own
- * included. Precedence, loudest first:
- *
- *   blocked  somebody is waiting on a human. Nothing outranks it.
- *   working  a turn is running. ABOVE `ready` deliberately: "a still rail
- *            means nothing is running" is a property of the whole rail, and a
- *            collapsed group with a working child inside it must not be still.
- *   ready    finished, waiting for you.
- *   dead     findable, not shouting.
- *   idle     nothing, and no element — see RowMark.
- *
- * Expanded, the parent goes back to its OWN state and the children carry
- * theirs, because then they have rows to carry it on.
- */
-const STATUS_RANK: Record<PaneStatus, number> = {
-  blocked: 4,
-  working: 3,
-  ready: 2,
-  dead: 1,
-  idle: 0,
-};
-
-/**
- * THE LOUDEST STATE AMONG THE CHILDREN — and ONLY the children.
- *
- * It used to take the parent's own state too (`rollupStatus(own, children)`),
- * which was right while this fed the parent ROW's mark: that mark is about the
- * row, and a collapsed group had no other way to surface a blocked worker.
- *
- * The pill is not the row. It counts sub-chats, it names sub-chats in its
- * title, and it opens sub-chats — so a hue taken from the PARENT makes one
- * object say two things about two different subjects. Measured on the live
- * rail at 03:48, with one worker finished and this chat mid-turn:
- *
- *   data-state="working"   title="1 sub-chat (1 ready)"
- *
- * The dot said the parent was working, the words said the child was ready, and
- * a reader has no way to know which half is about what. The parent's own state
- * goes back to the row's own mark, where it has always belonged; this answers
- * only "what are the workers doing".
- */
-export function subsStatus(children: readonly Tab[]): PaneStatus | undefined {
-  let loudest: PaneStatus = 'idle';
-  for (const k of children) {
-    const s = k.status ?? 'idle';
-    if (STATUS_RANK[s] > STATUS_RANK[loudest]) loudest = s;
-  }
-  return loudest === 'idle' ? undefined : loudest;
-}
-
-/**
- * WHAT THE COLLAPSED CHIP SAYS.
- *
- * A bare count ("6") is the thing a caret already implies and answers the
- * wrong question: nobody collapses six workers and then wonders how many there
- * were, they wonder whether any of them needs them. So the chip carries the
- * STATES, in the same words the rest of the product uses — "needs you" is the
- * mark's own title (MARK_TITLES.blocked), not a new vocabulary for the rail.
- *
- * Only non-zero states appear, loudest first, and a family where nothing is
- * happening says so in the shortest possible form: "6 sub-chats". The count
- * leads whenever there IS state to report, because then it is the denominator
- * of what follows — "6 · 2 running · 1 needs you" reads as a fraction of a
- * known whole, which "2 running · 1 needs you" does not.
- */
-export function subChatCounts(children: readonly Tab[]): { total: number; parts: string[] } {
-  const n = children.length;
-  let working = 0;
-  let blocked = 0;
-  let ready = 0;
-  let dead = 0;
-  for (const k of children) {
-    const s = k.status ?? 'idle';
-    if (s === 'working') working++;
-    else if (s === 'blocked') blocked++;
-    else if (s === 'ready') ready++;
-    else if (s === 'dead') dead++;
-  }
-  const parts: string[] = [];
-  if (blocked > 0) parts.push(`${blocked} needs you`);
-  if (working > 0) parts.push(`${working} running`);
-  if (ready > 0) parts.push(`${ready} ready`);
-  // Last, and counted: a worker whose runner exited is quiet, not absent, and
-  // "6 sub-chats" over three dead ones is the shut group telling a lie by
-  // omission. It is the rail's quietest state and it is the last word here.
-  if (dead > 0) parts.push(`${dead} dead`);
-  if (parts.length === 0) return { total: n, parts: [] };
-  // ─── THE NUMBERS MUST ADD UP ─────────────────────────────────────────────
-  // Reported, with a screenshot: "no working indicator but if only 6 are ready
-  // then what are the other 3 doing?" — against a chip reading "9 · 6 ready".
-  // Measured live at the time: 10 children, 1 running, 6 ready, three with no
-  // word anywhere.
-  //
-  // Listing only the loud states left the reader doing subtraction and getting
-  // no answer, which is worse than saying nothing: the total promises an
-  // account of everyone and the segments deliver part of one. An idle worker
-  // is a real and common state — it finished its turn and has not been
-  // retired — and NOTHING is exactly what the reader wants to be told about
-  // it. So the remainder is named rather than left to arithmetic, and the
-  // segments now sum to the total by construction.
-  const idle = n - blocked - working - ready - dead;
-  if (idle > 0) parts.push(`${idle} idle`);
-  // …AND SOMETHING HAS TO SAY WHAT THEY ARE. A bare `9` is a number with no
-  // noun, on a row whose own name is somewhere above it.
-  //
-  // THE WORD DOES NOT FIT, and this was measured rather than guessed:
-  // "11 sub-chats · 1 running · 7 ready · 3 idle" is 228px of text in the
-  // 204px the rail gives this line, so the ellipsis eats the tail — which is
-  // the `3 idle` that was just added to make the numbers add up. A label that
-  // truncates exactly the part that closes the arithmetic is worse than the
-  // bare number it replaced.
-  //
-  // So the noun is the AGENT GLYPH, in the markup (see renderGroup): the
-  // product's existing mark for "an agent did this", worth ~16px against the
-  // word's ~62px, and it sits where the eye already is. The full words are not
-  // lost — they are the chip's `title` and its accessible name, which is where
-  // a reader who is unsure will look and where a screen reader reads from.
-  return { total: n, parts };
-}
-
-/**
- * THE TOTAL IS THE SUBJECT, NOT A FOURTH STATISTIC.
- *
- * "10 · 1 running · 6 ready · 3 idle" puts the total in the same series as the
- * things it is the sum of, with the same separator between them — so the eye
- * reads four statistics and has to work out that the first one is different in
- * kind. Reported exactly that way: "the 10 looks like it's another stat but
- * it's actually the total".
- *
- * Parentheses say "this is a breakdown of the number before it" with no
- * convention to learn, and cost ~10px of a line that measured 170px in 193px.
- * The renderer adds weight on top (see `.navtree-subs-total`); this function is
- * the one that decides the WORDS, and it is also what the hover title reads, so
- * the two cannot drift.
- */
-export function subChatChip(children: readonly Tab[]): string {
-  const { total, parts } = subChatCounts(children);
-  if (parts.length === 0) return `${total} sub-agent${total === 1 ? '' : 's'}`;
-  return `${total} (${parts.join(' · ')})`;
+  return { live, done };
 }
 
 /**
  * How many CHATS the done group holds — the number in its header.
  *
- * One per group now that the drawer holds top-level chats only and every group
- * in it is childless. It is still a function rather than `.length` at the call
- * site because the invariant it encodes is the one that matters: the header's
- * number has to be what you will find when you open it.
+ * One per group: the done list is top-level chats and nothing else. A function
+ * rather than `.length` at the call site because the invariant it encodes is
+ * the one that matters — the header's number has to be what you will find when
+ * you open it, and it has been wrong twice by counting rows that were not
+ * there (children, and a parent rendered as a label).
  */
 export function doneChatCount(groups: readonly ChatGroup[]): number {
-  return groups.reduce((n, g) => n + g.children.length + (g.contextOnly ? 0 : 1), 0);
+  return groups.length;
 }
+
+/* ─── THE SUB-CHAT PILL AND ITS ARITHMETIC ARE GONE ────────────────────────
+   `subChatCounts`, `subsStatus`, `subChatChip`, `subChatChipTitle` and the
+   status ranking they shared described one row's family: how many workers it
+   had, how many were running, and the loudest state among them, rolled up so a
+   COLLAPSED group still reached the glance. Every one of them existed because
+   the rail listed a chat's workers under it.
+
+   It does not. The work is in the chat's own drawer (see `groupChats`), the
+   count that matters is on that drawer's control, and the rail is back to one
+   row per conversation carrying that conversation's own state. Deleted rather
+   than left exported-and-unused: an unused rollup of a relationship that no
+   longer exists is a trap for the next person who needs one. */
 
 /** This row's own state, separate from the child-count pill. Idle renders
  * nothing; running is the only animated mark. Settled states have distinct
@@ -2673,67 +2417,15 @@ function SvgPanesGlyph() {
  * the pill goes quiet — the same rule `rollupStatus` already had, moved from a
  * separate 10px mark onto the one object.
  */
-export interface SubsGroup {
-  total: number;
-  /** The breakdown, already worded: `['2 running', '1 ready']`. */
-  parts: string[];
-  open: boolean;
-  status?: PaneStatus | undefined;
-  /** The full sentence, for the title and the accessible name. */
-  title: string;
-  parentName: string;
-  onToggle: () => void;
-}
+/* ─── SubsGroup AND SubsPill ARE GONE ──────────────────────────────────────
+   One pill at the end of a parent's row: the number of workers under it, the
+   breakdown in words ("2 running · 1 ready"), the loudest state among them as
+   its hue, and the disclosure that opened the group. It replaced a whole row
+   of chrome under the parent and was the right answer to "forty workers is
+   the list not working" — given that the workers had to be in the list.
 
-/** Count hidden workers in plain language. No idle symbol or agent glyph:
- * closed groups say what their children are doing; open groups only count
- * them because each visible child already carries its own state. */
-function SubsPill({ group }: { group: SubsGroup }) {
-  const { total, parts, open, status, title, parentName, onToggle } = group;
-  const hue = status ?? 'idle';
-  const wording = (text: string) =>
-    text.replace(/\bready\b/g, 'unread').replace(/\bdead\b/g, 'stopped');
-  // ── THE LABEL IS THE COUNT, AND THE COUNT IS ALL ──────────────────────────
-  //
-  // It used to be a sentence: "1 running", "2 · 1 unread". Measured on a 272px
-  // row that pill was 91px — a THIRD of the row — and the name it was crowding
-  // got 55. Reported as "all these '1 running', '2 · 1 unread' statuses are
-  // odd" and "chat names can get tiny".
-  //
-  // The sentence was answering a question nobody asks a sidebar. What you want
-  // from a rail is "is there anything under here, and is any of it still
-  // going" — which is a number and a colour, both of which this object already
-  // had. The words were a third encoding of the same two facts.
-  //
-  // They are not lost: `title` and the accessible name still carry the whole
-  // breakdown, which is where a sentence belongs. (Reviewed against Slack,
-  // Linear, VS Code, Mail, GitHub, Discord and Notion — none of them spells a
-  // state out on a list row; every one of them uses a count badge plus a
-  // disclosure, with the words on hover.)
-  const label = String(total);
-  const description = wording(title);
-  return (
-    <button
-      type="button"
-      className="navtree-row-pill navtree-subs-pill"
-      data-state={hue}
-      data-open={open ? 'true' : undefined}
-      onClick={(e) => {
-        // The row behind it navigates. A disclosure that also opened the chat
-        // would make the one control on this row do two things.
-        e.stopPropagation();
-        e.preventDefault();
-        onToggle();
-      }}
-      aria-expanded={open}
-      title={description}
-      aria-label={`${open ? 'Hide' : 'Show'} ${description} of ${parentName}`}
-    >
-      <span className="navtree-row-pill-n">{label}</span>
-      <SvgCaret open={open} />
-    </button>
-  );
-}
+   They do not. A chat's work is in that chat's drawer, which has the count on
+   its control and a row per worker inside it, each carrying its own state. */
 
 /** The row's one control: three dots, the universal "more actions". */
 function SvgRowMenu() {
@@ -2751,7 +2443,6 @@ function TabRow({
   parent,
   family,
   childLast,
-  group,
   workspace,
   isActiveTab,
   workspaceLabel,
@@ -3149,7 +2840,7 @@ function TabRow({
           rather than an auto margin per mark: two auto margins on one flex
           line share the free space between them and the marks drift apart. */}
       {!isEditing &&
-      (workspaceLabel || affords.paneExpander || group || (tab.status && tab.status !== 'idle')) ? (
+      (workspaceLabel || affords.paneExpander || (tab.status && tab.status !== 'idle')) ? (
         <span className="navtree-rail-tail">
           {/* WHERE THIS ROW GOES, when it is not where you already are. It sits
               INSIDE the trailing group rather than after the name, which is
@@ -3206,7 +2897,6 @@ function TabRow({
             </button>
           ) : null}
           {/* The same plain-language child count on desktop and mobile. */}
-          {group ? <SubsPill group={group} /> : null}
           {/* Outside the link, as everywhere else: its visually-hidden state
               text would otherwise join the link's ACCESSIBLE NAME and rename
               the control every time an agent started or stopped.
@@ -3416,7 +3106,7 @@ function TabRow({
               55px and `Orbit Builder` truncates. The time is still on the
               row's own title. Only on a row that HAS sub-chats: a chat
               without them keeps its `◷ 09:00` exactly as before. */}
-          {tab.crons && !group ? <CronMark tab={tab} /> : null}
+          {tab.crons ? <CronMark tab={tab} /> : null}
           {/* ONE control, and it opens the menu that already had everything.
               See TabRowAffordances.menuButton for the measurement that
               collapsed the pin and the archive into it. Keyboard reaches it by
@@ -3439,7 +3129,6 @@ function TabRow({
               <SvgRowMenu />
             </button>
           ) : null}
-          {group ? <SubsPill group={group} /> : null}
         </span>
       ) : null}
       {/* The state mark — the LAST track, so nothing in front of it can push
