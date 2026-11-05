@@ -227,6 +227,19 @@ export const api = {
    * cold-load cost the per-workspace caches exist to avoid, so this is one
    * request, taken lazily on first focus of the box.
    */
+  /**
+   * ONE SETTING THAT BELONGS TO THE INSTALL — see server/src/store/PrefStore.
+   *
+   * The server pushes `prefs.updated` to every connected client afterwards,
+   * which is what makes a theme pick land in every open window. `null` means
+   * "nothing stored", and the browser's own default shows through.
+   */
+  setPref: (key: string, value: string | null) =>
+    req<{ prefs: Record<string, string> }>(`/api/prefs/${encodeURIComponent(key)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ value }),
+    }),
+
   listAllTabs: () => req<{ workspaces: WorkspaceTabs[] }>('/api/tabs/all'),
 
   /**

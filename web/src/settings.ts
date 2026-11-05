@@ -173,12 +173,15 @@ const listeners = new Set<(s: Settings) => void>();
 let current: Settings = typeof window === 'undefined' ? DEFAULTS : read();
 
 /**
- * ── THE CHAT YOU ARE IN MAY OVERRIDE THE DEVICE'S THEME ────────────────────
+ * ── THE INSTALL'S THEME OVERRIDES THIS BROWSER'S ───────────────────────────
  *
- * A theme used to be one fact: what this browser looks like. It is two now —
- * the device's default (here, in localStorage) and the chat's own (on the tab
- * row, so it follows you to every device). The chat wins while you are in it;
- * `null` means it has no opinion and the default shows through.
+ * A theme was one fact (this browser), then two (this browser, and the CHAT
+ * you were standing in). It is one again, and it is not this one: the install
+ * owns it, server-side, pushed to every open window — see lib/app-theme.
+ *
+ * `settings.theme` survives as the fallback for a server that has no value
+ * stored, and as the thing a brand-new install starts from. `null` here means
+ * "the install has not chosen", and the local default shows through.
  *
  * It lives in this module rather than in a React store because the theme is a
  * DOCUMENT-level fact: the `data-theme` attribute is on `<html>`, the OS
@@ -186,23 +189,19 @@ let current: Settings = typeof window === 'undefined' ? DEFAULTS : read();
  * palette out of the cascade. A second owner would be a second answer to
  * "what theme is it right now".
  */
-let chatTheme: ThemeChoice | null = null;
+let serverTheme: ThemeChoice | null = null;
 
-/** What the document is actually wearing: the chat's theme, else the device's. */
 /**
- * The theme ACTUALLY IN FORCE — the chat's own if it has one, otherwise the
- * device default.
+ * The theme ACTUALLY IN FORCE — the install's if it has one, else this
+ * browser's.
  *
  * Exported because the PICKER has to ask the same question the painter does.
- * It was reading `settings.theme` — the device default — while a pick made
- * inside a chat writes the chat's theme, so the two disagreed by
- * construction: the window repainted and the selection ring stayed where it
- * was. Every theme looked unselectable, which is how this surfaced ("memphis
- * is not selectable"), and "Use for every chat" then saved the ring's value
- * rather than the one on screen and cleared the pick.
+ * It once read `settings.theme` while a pick wrote somewhere else, so the two
+ * disagreed by construction: the window repainted and the selection ring
+ * stayed put. Every theme looked unselectable ("memphis is not selectable").
  */
 export function themeInForce(s: Settings): ThemeChoice {
-  return chatTheme ?? s.theme;
+  return serverTheme ?? s.theme;
 }
 
 function applyToDocument(s: Settings) {
@@ -211,23 +210,23 @@ function applyToDocument(s: Settings) {
 }
 
 /**
- * Point the document at the active chat's theme, or `null` to go back to the
- * device default. Called when the active tab changes and when its row does.
+ * Point the document at the INSTALL's theme, or `null` for none stored.
  *
- * A no-op when nothing changes, because this runs on every tab switch and a
- * repaint of every themed surface (the terminal rebuilds its palette) is not
- * free.
+ * Called from the boot payload, from a `prefs.updated` push, and optimistically
+ * by the picker. A no-op when nothing changes: a push arrives in every window
+ * including the one that made the change, and a repaint of every themed
+ * surface (the terminal rebuilds its palette) is not free.
  */
-export function setChatTheme(choice: ThemeChoice | null): void {
-  if (chatTheme === choice) return;
-  chatTheme = choice;
+export function setServerTheme(choice: ThemeChoice | null): void {
+  if (serverTheme === choice) return;
+  serverTheme = choice;
   applyToDocument(current);
   for (const fn of listeners) fn({ ...current });
 }
 
-/** The chat's own theme, or null when it follows the device. */
-export function getChatTheme(): ThemeChoice | null {
-  return chatTheme;
+/** The install's theme, or null when nothing is stored for it. */
+export function getServerTheme(): ThemeChoice | null {
+  return serverTheme;
 }
 
 /**
@@ -242,8 +241,8 @@ export function getChatTheme(): ThemeChoice | null {
 if (typeof window !== 'undefined' && window.matchMedia) {
   const mq = window.matchMedia(DARK_QUERY);
   const onFlip = () => {
-    // `themeInForce`, not `current.theme`: when the chat you are in has
-    // chosen 'system' the device default is irrelevant, and when the chat has
+    // `themeInForce`, not `current.theme`: when the install has chosen
+    // 'system' this browser's own default is irrelevant, and when it has
     // chosen a named theme an OS flip must not repaint anything.
     if (themeInForce(current) !== 'system') return;
     applyToDocument(current);

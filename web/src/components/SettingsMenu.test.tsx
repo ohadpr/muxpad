@@ -468,25 +468,45 @@ describe('the settings dialog does not resize under you', () => {
 /**
  * A FAILED THEME WRITE UNDOES ITSELF, LOUDLY.
  *
- * The first version swallowed the error, so a server that could not store the
- * value — one running from before the migration that adds the column, which
- * is every server until it restarts — produced the worst possible shape: the
- * window repainted, the next poll delivered the unchanged row, and the theme
- * snapped back with no explanation. "Tried to change the theme on a chat and
- * it just didn't work, flickered and returned to the theme it was on."
+ * An early version swallowed the error, so a server that could not store the
+ * value produced the worst possible shape: the window repainted, the next
+ * answer carried the old value, and the theme snapped back with no
+ * explanation. "Tried to change the theme and it just didn't work, flickered
+ * and returned to the theme it was on."
+ *
+ * The write is still optimistic — a theme that waited for a round trip feels
+ * like a toggle that sticks — so the revert is what keeps that honest.
  */
-it('reverts and says so when the chat’s theme cannot be stored', async () => {
+it('reverts and says so when the theme cannot be stored', async () => {
   const src = readFileSync(
     join(dirname(fileURLToPath(import.meta.url)), 'SettingsMenu.tsx'),
     'utf8',
   );
   // The optimistic write captures what it is replacing…
-  expect(src).toMatch(/const before = getChatTheme\(\)/);
-  // …puts it back on failure, in the document AND in the cached row…
-  expect(src).toMatch(/\.catch\(\(err\) => \{[\s\S]{0,320}setChatTheme\(before\)/);
-  expect(src).toMatch(/\.catch\(\(err\) => \{[\s\S]{0,420}patchTabRow\([^)]*theme: before/);
+  expect(src).toMatch(/const before = getServerTheme\(\)/);
+  // …and puts it back on failure.
+  expect(src).toMatch(/\.catch\(\(err\) => \{[\s\S]{0,320}setServerTheme\(before\)/);
   // …and never swallows it.
-  expect(src).not.toMatch(/patchTab\([^)]*\)\.catch\(\(\) => \{\}\)/);
-  // The note names the cause a user can act on.
-  expect(src).toMatch(/Restart muxpad and try again/);
+  expect(src).not.toMatch(/setPref\([^)]*\)\.catch\(\(\) => \{\}\)/);
+  // The note names something a user can act on.
+  expect(src).toMatch(/restart muxpad and try again/i);
+});
+
+/**
+ * ONE THEME, AND NO SECOND PLACE TO PUT ONE.
+ *
+ * The picker wrote the CHAT's theme for a while, and the window repainted on
+ * every tab switch because a theme defines the rail's palette too. The pick is
+ * an install setting now — stored server-side and pushed to every open window
+ * — so the thing to guard is that this component never grows a per-chat write
+ * again.
+ */
+it('writes the install’s theme, never a chat row', async () => {
+  const src = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), 'SettingsMenu.tsx'),
+    'utf8',
+  );
+  expect(src).toMatch(/api\.setPref\('theme', value\)/);
+  expect(src).not.toMatch(/patchTabRow/);
+  expect(src).not.toMatch(/patchTab\(/);
 });

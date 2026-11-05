@@ -763,6 +763,18 @@ export const TabsReorderedEventSchema = z.object({
 export const WorkingSetChangedEventSchema = z.object({
   type: z.literal('working_set.changed'),
 });
+/**
+ * A SETTING THAT BELONGS TO THE INSTALL, not to a browser, changed.
+ *
+ * Carries the whole prefs object rather than a key and a value: there are a
+ * handful of them, they are tiny, and a client that applies a partial update
+ * has to merge — which is a second place for the two copies to disagree. The
+ * one that exists today is the theme.
+ */
+export const PrefsUpdatedEventSchema = z.object({
+  type: z.literal('prefs.updated'),
+  prefs: z.record(z.string(), z.string()),
+});
 export const WorkspaceAddedEventSchema = z.object({
   type: z.literal('workspace.added'),
   workspace: WorkspaceSchema,
@@ -855,6 +867,7 @@ export const MuxpadEventSchema = z.discriminatedUnion('type', [
   TabRemovedEventSchema,
   TabsReorderedEventSchema,
   WorkingSetChangedEventSchema,
+  PrefsUpdatedEventSchema,
   WorkspaceAddedEventSchema,
   WorkspaceUpdatedEventSchema,
   WorkspaceRemovedEventSchema,

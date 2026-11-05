@@ -1663,6 +1663,30 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_chat_actions_ref ON chat_actions(ref);
     `,
   },
+  {
+    /**
+     * SETTINGS THAT BELONG TO THE INSTALL RATHER THAN TO A BROWSER.
+     *
+     * The theme is the first, and it is the reason this exists. It was two
+     * facts at once — a device default in localStorage, and the chat's own on
+     * `tabs.theme` so it would follow you between devices — and the two
+     * together meant switching chats repainted the whole window, including
+     * the rail. "pick a theme: all open muxpad windows change to that theme
+     * no matter what chat they are on."
+     *
+     * One row per key, values as TEXT. A key/value table rather than a column
+     * per preference because the alternative is a migration for every future
+     * one, and these are read as a set and pushed as a set.
+     */
+    version: 52,
+    sql: `
+      CREATE TABLE IF NOT EXISTS app_prefs (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+    `,
+  },
 ];
 
 /** Highest version in the migration list. Exported so a test can assert the
