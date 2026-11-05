@@ -571,12 +571,16 @@ JSON_OUTPUT=0
 if [ -t 1 ]; then
   C_GREEN=$'\033[32m'
   C_RED=$'\033[31m'
+  # `unauthorized` is neither green nor red: a machine running fine with no
+  # credential here is a thing to go and fix, not a fault and not health.
+  C_YELLOW=$'\033[33m'
   C_DIM=$'\033[2m'
   C_BOLD=$'\033[1m'
   C_RESET=$'\033[0m'
 else
   C_GREEN=''
   C_RED=''
+  C_YELLOW=''
   C_DIM=''
   C_BOLD=''
   C_RESET=''
@@ -3721,6 +3725,230 @@ cmd_search() {
     done
 }
 
+# ─── node ──────────────────────────────────────────────────────────────────
+#
+# PAIRING A MACHINE. Two halves on two computers, and the ORDER is the
+# security property: this machine issues the credential, the other is
+# installed with it. Installing first and pairing afterwards leaves an
+# unauthenticated listener on a shared tailnet for however long that takes.
+#
+#   here   muxpad node add trayo --endpoint=ws://host:7797 --name="Trayo VM"
+#          → mints the token, writes it 0600, prints one line
+#   there  muxpad node init --token=<token> [--service]
+#          → writes the token 0600, optionally installs + starts the unit
+#   here   muxpad node list   → it goes `up` within seconds
+#
+# `init` is the only verb that does NOT talk to a server: the machine it runs
+# on has no muxpad server, and (on the tested pair) cannot even reach this
+# one. It is a local file write plus an optional service install.
+
+node_usage() {
+  cat >&2 <<'EOF'
+usage: muxpad node list
+       muxpad node add <id> --endpoint=ws://host:7797 [--name="Label"]
+       muxpad node rm <id> [--force]
+       muxpad node set <id> [--name="Label"] [--endpoint=ws://host:7797]
+       muxpad node init --token=<token> [--port=7797] [--service]   (on the OTHER machine)
+
+A machine runs `muxpad-node` beside its own ptyd and holds its own chats,
+transcripts and credentials. This machine dials it; it never dials back.
+EOF
+}
+
+cmd_node_list() {
+  require_jq
+  local res
+  res="$(http_request GET /api/nodes)"
+  if [ "$JSON_OUTPUT" = "1" ]; then printf '%s\n' "$res"; return; fi
+  printf '%s' "$res" | jq -r '
+    .nodes[] |
+    "\(.id)\t\(.state)\t\(.panes) pane(s)\t\(.endpoint // "this machine")\t\(.name)"
+  ' | while IFS=$'\t' read -r id state panes endpoint name; do
+    local mark
+    case "$state" in
+      up) mark="${C_GREEN}●${C_RESET}" ;;
+      unauthorized) mark="${C_YELLOW}●${C_RESET}" ;;
+      down) mark="${C_RED}●${C_RESET}" ;;
+      *) mark="${C_DIM}●${C_RESET}" ;;
+    esac
+    printf '%s %-12s %s%-14s%s %-11s %s\n' \
+      "$mark" "$id" "$C_DIM" "$state" "$C_RESET" "$panes" "$endpoint"
+    printf '  %s%s%s\n' "$C_DIM" "$name" "$C_RESET"
+  done
+}
+
+cmd_node_add() {
+  reset_flags endpoint name
+  parse_flags endpoint name -- "$@"
+  require_jq
+  local id="${POSITIONAL[0]:-}"
+  if [ -z "$id" ] || [ -z "${FLAG_endpoint:-}" ]; then
+    echo 'usage: muxpad node add <id> --endpoint=ws://host:7797 [--name="Label"]' >&2
+    exit 1
+  fi
+  local body res
+  body="{\"id\":$(json_string "$id"),\"endpoint\":$(json_string "$FLAG_endpoint")"
+  [ -n "${FLAG_name:-}" ] && body="$body,\"name\":$(json_string "$FLAG_name")"
+  body="$body}"
+  res="$(http_request POST /api/nodes "$body")"
+  if [ "$JSON_OUTPUT" = "1" ]; then printf '%s\n' "$res"; return; fi
+  local token
+  token="$(printf '%s' "$res" | jq -r '.token')"
+  printf '%s✓%s paired %s\n\n' "$C_GREEN" "$C_RESET" "$id"
+  # The token is shown HERE and nowhere else in the API — it has to be typed
+  # on the other machine, and that is the only moment anyone needs to see it.
+  printf 'Run this on %s:\n\n  muxpad node init --token=%s --service\n\n' "$id" "$token"
+  printf '%sIt needs the muxpad repo and a build first (muxpad-node ships with the\nserver package). This machine will dial it as soon as it is listening.%s\n' \
+    "$C_DIM" "$C_RESET"
+}
+
+cmd_node_rm() {
+  reset_flags force
+  parse_flags force -- "$@"
+  local id="${POSITIONAL[0]:-}"
+  [ -z "$id" ] && { echo 'usage: muxpad node rm <id> [--force]' >&2; exit 1; }
+  local qs=''
+  [ -n "${FLAG_force:-}" ] && qs='?force=1'
+  http_request DELETE "/api/nodes/$id$qs" >/dev/null
+  printf '%s✓%s removed %s\n' "$C_GREEN" "$C_RESET" "$id"
+}
+
+cmd_node_set() {
+  reset_flags name endpoint
+  parse_flags name endpoint -- "$@"
+  require_jq
+  local id="${POSITIONAL[0]:-}"
+  [ -z "$id" ] && { echo 'usage: muxpad node set <id> [--name=…] [--endpoint=…]' >&2; exit 1; }
+  local body='{'
+  [ -n "${FLAG_name:-}" ] && body="$body\"name\":$(json_string "$FLAG_name"),"
+  [ -n "${FLAG_endpoint:-}" ] && body="$body\"endpoint\":$(json_string "$FLAG_endpoint"),"
+  body="${body%,}}"
+  [ "$body" = '{}' ] && { echo 'muxpad node set: nothing to change' >&2; exit 1; }
+  http_request PATCH "/api/nodes/$id" "$body" >/dev/null
+  printf '%s✓%s updated %s\n' "$C_GREEN" "$C_RESET" "$id"
+}
+
+# `muxpad node init` — RUN ON THE MACHINE BEING PAIRED.
+#
+# The only verb here that talks to no server: this machine has none, and on the
+# tested pair it cannot reach the one that issued the token either. So it is a
+# local file write, plus an optional service install so the agent survives a
+# reboot and a logout.
+cmd_node_init() {
+  reset_flags token port service
+  parse_flags token port service -- "$@"
+  local token="${FLAG_token:-}"
+  if [ -z "$token" ]; then
+    echo 'usage: muxpad node init --token=<token> [--port=7797] [--service]' >&2
+    echo '       (run this ON the machine being paired; get the token from' >&2
+    echo '        `muxpad node add` on the machine with the web UI)' >&2
+    exit 1
+  fi
+  # Same floor the readers use: `readNodeToken` treats anything shorter as
+  # ABSENT rather than as a credential, so a truncated paste would otherwise
+  # install a file that fails closed with no explanation.
+  if [ "${#token}" -lt 32 ]; then
+    echo 'muxpad node init: that token is too short — check the paste' >&2
+    exit 1
+  fi
+  local dir="${MUXPAD_DATA_DIR:-$HOME/.muxpad}"
+  mkdir -p "$dir"
+  chmod 700 "$dir" 2>/dev/null || true
+  # Written with the mode already on it: a world-readable window, however
+  # short, is a window on the whole machine's authentication.
+  ( umask 077; printf '%s\n' "$token" > "$dir/node-token" )
+  chmod 600 "$dir/node-token"
+  printf '%s✓%s token written to %s/node-token\n' "$C_GREEN" "$C_RESET" "$dir"
+
+  local port="${FLAG_port:-7797}"
+  if [ -z "${FLAG_service:-}" ]; then
+    printf '\nStart the agent with:\n\n  node %s/server/dist/node-agent/cli.js --port=%s\n' "$ROOT" "$port"
+    printf '\n%sPass --service to install it as a user service instead.%s\n' "$C_DIM" "$C_RESET"
+    return
+  fi
+  node_install_service "$port"
+}
+
+# Install + start the agent as a USER service, so it survives logout and
+# reboot. systemd on Linux; launchd on macOS. Anything else gets told what to
+# run rather than a half-written unit file.
+node_install_service() {
+  local port="$1"
+  local entry="$ROOT/server/dist/node-agent/cli.js"
+  if [ ! -f "$entry" ]; then
+    echo "muxpad node init: $entry missing — run 'pnpm build' in $ROOT first" >&2
+    exit 1
+  fi
+  local nodebin
+  nodebin="$(command -v node)"
+  case "$(uname -s)" in
+    Linux)
+      local unit="$HOME/.config/systemd/user/muxpad-node.service"
+      mkdir -p "$(dirname "$unit")"
+      cat > "$unit" <<EOF
+[Unit]
+Description=muxpad-node (authenticated front door; proxies to local ptyd)
+After=network-online.target
+
+[Service]
+ExecStart=$nodebin $entry --port=$port
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target
+EOF
+      systemctl --user daemon-reload
+      systemctl --user enable --now muxpad-node.service
+      # Without lingering, a user service dies at logout and never comes back
+      # after a reboot — which is precisely the machine this is for.
+      loginctl enable-linger "$USER" >/dev/null 2>&1 || true
+      printf '%s✓%s muxpad-node.service enabled on port %s\n' "$C_GREEN" "$C_RESET" "$port"
+      printf '  %sjournalctl --user -u muxpad-node -f%s\n' "$C_DIM" "$C_RESET"
+      ;;
+    Darwin)
+      local plist="$HOME/Library/LaunchAgents/dev.muxpad.node.plist"
+      mkdir -p "$(dirname "$plist")"
+      cat > "$plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>dev.muxpad.node</string>
+  <key>ProgramArguments</key><array>
+    <string>$nodebin</string><string>$entry</string><string>--port=$port</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardErrorPath</key><string>$HOME/.muxpad/node-agent.log</string>
+  <key>StandardOutPath</key><string>$HOME/.muxpad/node-agent.log</string>
+</dict></plist>
+EOF
+      launchctl unload "$plist" >/dev/null 2>&1 || true
+      launchctl load "$plist"
+      printf '%s✓%s dev.muxpad.node loaded on port %s\n' "$C_GREEN" "$C_RESET" "$port"
+      printf '  %stail -f ~/.muxpad/node-agent.log%s\n' "$C_DIM" "$C_RESET"
+      ;;
+    *)
+      printf '%smuxpad node init: no service installer for %s — run it yourself:%s\n' \
+        "$C_YELLOW" "$(uname -s)" "$C_RESET" >&2
+      printf '  %s %s --port=%s\n' "$nodebin" "$entry" "$port" >&2
+      ;;
+  esac
+}
+
+cmd_node() {
+  local sub="${1:-}"
+  case "$sub" in
+    ''|--help|-h) node_usage; [ -z "$sub" ] && exit 1 || exit 0 ;;
+    list|ls) shift; cmd_node_list "$@" ;;
+    add) shift; cmd_node_add "$@" ;;
+    rm|remove) shift; cmd_node_rm "$@" ;;
+    set) shift; cmd_node_set "$@" ;;
+    init) shift; cmd_node_init "$@" ;;
+    *) echo "muxpad node: unknown subcommand '$sub'" >&2; node_usage; exit 1 ;;
+  esac
+}
+
 # ─── publish ────────────────────────────────────────────────────────────────
 # Host a file or directory at a PUBLIC internet URL (Tailscale Funnel → the
 # dedicated public static port). The URL is the one thing printed on stdout,
@@ -4803,6 +5031,7 @@ case "$VERB" in
   slack) cmd_slack "${ARGS[@]:1}" ;;
   card) cmd_card "${ARGS[@]:1}" ;;
   publish) cmd_publish "${ARGS[@]:1}" ;;
+  node) cmd_node "${ARGS[@]:1}" ;;
   _agent-hook) cmd_agent_hook ;;
   # Internal: print which tailscale binary this script would use, or nothing.
   # The only seam onto find_tailscale, so tailscale-bin.test.ts can check the

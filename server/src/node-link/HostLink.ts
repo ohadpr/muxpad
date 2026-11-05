@@ -445,6 +445,13 @@ export class HostLink {
     return this.ws?.readyState === WebSocket.OPEN;
   }
 
+  /** What this link was DIALLED at, and with. `HostLinks.sync` compares both:
+   *  a re-pointed endpoint or a re-minted token needs a new dial, because a
+   *  link carries its credential from the dial and nothing re-presents it. */
+  get dialledAt(): { endpoint: string; token: string } {
+    return { endpoint: this.deps.endpoint, token: this.deps.token };
+  }
+
   close(): void {
     this.closed = true;
     if (this.timer) clearTimeout(this.timer);

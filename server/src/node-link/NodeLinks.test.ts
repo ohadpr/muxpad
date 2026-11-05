@@ -143,3 +143,89 @@ describe('a down node yields no transport at all', () => {
     expect(links.get('nope')).toBe(null);
   });
 });
+
+/**
+ * PAIRING MUST NOT NEED A RESTART.
+ *
+ * A restart is the one operation the user is told not to do casually — it
+ * drops every runner's socket — so "add a machine, then restart muxpad" would
+ * have made the paired flow worse than wiring it by hand.
+ */
+describe('syncing links to the table', () => {
+  it('dials a machine added after start', () => {
+    const made: string[] = [];
+    const links = new NodeLinks({
+      nodes,
+      dataDir: dir,
+      makeClient: (o) => {
+        made.push(o.controlUrl);
+        return fakeClient();
+      },
+      log: () => {},
+    });
+    links.start();
+    expect(made).toEqual([]);
+    nodes.add({ id: 'trayo', name: 'VM', endpoint: 'ws://vm:7797' });
+    withToken('trayo');
+    links.sync();
+    expect(made).toEqual(['ws://vm:7797/control']);
+  });
+
+  it('closes one that was removed', async () => {
+    nodes.add({ id: 'trayo', name: 'VM', endpoint: 'ws://vm:7797' });
+    withToken('trayo');
+    const client = fakeClient();
+    const links = new NodeLinks({ nodes, dataDir: dir, makeClient: () => client, log: () => {} });
+    links.start();
+    client.fire('connected');
+    expect(links.isUp('trayo')).toBe(true);
+    nodes.remove('trayo');
+    links.sync();
+    expect(client.close).toHaveBeenCalled();
+    expect(links.get('trayo')).toBe(null);
+  });
+
+  it('REDIALS one that was re-pointed, rather than keeping the old address', async () => {
+    // The open client is pointed at a machine that is no longer the answer;
+    // leaving it would make a corrected endpoint look like it did nothing.
+    nodes.add({ id: 'trayo', name: 'VM', endpoint: 'ws://old:7797' });
+    withToken('trayo');
+    const made: string[] = [];
+    const clients: Array<ReturnType<typeof fakeClient>> = [];
+    const links = new NodeLinks({
+      nodes,
+      dataDir: dir,
+      makeClient: (o) => {
+        made.push(o.controlUrl);
+        const c = fakeClient();
+        clients.push(c);
+        return c;
+      },
+      log: () => {},
+    });
+    links.start();
+    nodes.update('trayo', { endpoint: 'ws://new:7797' });
+    links.sync();
+    expect(made).toEqual(['ws://old:7797/control', 'ws://new:7797/control']);
+    expect(clients[0]?.close).toHaveBeenCalled();
+  });
+
+  it('is idempotent — an unchanged table redials nothing', () => {
+    nodes.add({ id: 'trayo', name: 'VM', endpoint: 'ws://vm:7797' });
+    withToken('trayo');
+    const made: string[] = [];
+    const links = new NodeLinks({
+      nodes,
+      dataDir: dir,
+      makeClient: (o) => {
+        made.push(o.controlUrl);
+        return fakeClient();
+      },
+      log: () => {},
+    });
+    links.start();
+    links.sync();
+    links.sync();
+    expect(made).toHaveLength(1);
+  });
+});

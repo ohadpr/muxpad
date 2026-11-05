@@ -1043,3 +1043,52 @@
   flex: 0 0 auto;
   max-width: 55%;
 }
+
+/* ── PAIRING A MACHINE ──────────────────────────────────────────────────────
+   The form and the one-line handoff. Same card as a machine row, because
+   pairing produces one — and the install line is the only place its token ever
+   appears, so it gets a block of its own and selectable text. */
+.machine-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+.machine-field > span {
+  flex: 0 0 72px;
+  color: var(--fg-dim);
+  font-size: 0.8125rem;
+}
+.machine-field input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.machine-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.machine-btn {
+  margin-top: 8px;
+  align-self: flex-start;
+}
+/* The install line. `pre` so a token never wraps into two halves somebody
+   copies one of — a truncated paste is refused on the far side with nothing
+   to explain it. */
+.machine-install {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--bg-hover);
+  font-family: var(--mono-font, ui-monospace, monospace);
+  font-size: 0.8125rem;
+  overflow-x: auto;
+  white-space: pre;
+  user-select: all;
+}
+.machine-paired {
+  border-color: var(--accent);
+}
+.machines-error {
+  color: var(--status-dead);
+}
