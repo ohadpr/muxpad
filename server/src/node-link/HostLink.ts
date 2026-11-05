@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { WebSocket } from 'ws';
-import { type LinkDown, decodeLink, encodeLink } from '../node-agent/link-protocol.js';
+import { type LinkDown, type LinkUp, decodeLink, encodeLink } from '../node-agent/link-protocol.js';
 import { FileReceiver } from './receive-files.js';
 
 /**
@@ -78,6 +78,72 @@ export interface HostLinkDeps {
   maxBackoffMs?: number;
 }
 
+/**
+ * IS THIS FRAME SHAPED LIKE WHAT IT CLAIMS TO BE?
+ *
+ * Only the fields this side READS, and only for the ops a host may send.
+ * Exported for its test: the interesting inputs are the ones a hostile peer
+ * would send, and they are tedious to produce through a live socket.
+ *
+ * Deliberately not a schema library. The list is short, it sits at one
+ * boundary, and the failure mode of getting it wrong (a dropped frame) is the
+ * same as the failure mode of a malformed one — whereas the failure mode of
+ * not having it was an uncaught TypeError taking down the install.
+ */
+export function wellFormed(m: LinkDown | LinkUp): boolean {
+  const str = (v: unknown): boolean => typeof v === 'string';
+  switch (m.ch) {
+    case 'ptyd':
+      return str((m as { payload?: unknown }).payload);
+    case 'transcript': {
+      const t = m as { op?: unknown; paneId?: unknown; events?: unknown; title?: unknown };
+      if (!str(t.paneId)) return false;
+      if (t.op === 'events') return Array.isArray(t.events);
+      if (t.op === 'title') return str(t.title);
+      if (t.op === 'unavailable') return str((t as { reason?: unknown }).reason);
+      return false;
+    }
+    case 'runner': {
+      const r = m as { op?: unknown; paneId?: unknown; frame?: unknown };
+      if (!str(r.paneId)) return false;
+      if (r.op === 'frame') return !!r.frame && typeof r.frame === 'object';
+      return r.op === 'attached' || r.op === 'detached';
+    }
+    case 'api': {
+      const a = m as {
+        op?: unknown;
+        id?: unknown;
+        method?: unknown;
+        path?: unknown;
+        body?: unknown;
+      };
+      if (a.op !== 'request') return false;
+      return str(a.id) && str(a.method) && str(a.path) && (a.body === undefined || str(a.body));
+    }
+    case 'files': {
+      const f = m as { op?: unknown; id?: unknown; rel?: unknown; b64?: unknown; last?: unknown };
+      if (!str(f.id)) return false;
+      if (f.op === 'chunk') return str(f.rel) && str(f.b64) && typeof f.last === 'boolean';
+      if (f.op === 'done')
+        return (
+          ((f as { kind?: unknown }).kind === 'file' || (f as { kind?: unknown }).kind === 'dir') &&
+          str((f as { name?: unknown }).name)
+        );
+      if (f.op === 'error') return str((f as { reason?: unknown }).reason);
+      return false;
+    }
+    case 'search': {
+      const q = m as { op?: unknown; id?: unknown; hits?: unknown; fallback?: unknown };
+      if (!str(q.id)) return false;
+      if (q.op === 'hits') return Array.isArray(q.hits) && typeof q.fallback === 'boolean';
+      if (q.op === 'error') return str((q as { reason?: unknown }).reason);
+      return false;
+    }
+    default:
+      return false;
+  }
+}
+
 export class HostLink {
   private ws: WebSocket | null = null;
   private closed = false;
@@ -99,6 +165,19 @@ export class HostLink {
    * reason; I wrote it there and did not write it here.
    */
   private readonly pending = new Map<string, string[]>();
+  /**
+   * The panes this server is watching on this host, and with what tail.
+   *
+   * REPLAYED ON EVERY (RE)CONNECT, which is the half that was missing. The
+   * host closes all of its tails when the link drops — correctly: their pushes
+   * would go nowhere — and the comment there says the server "re-subscribes
+   * for whatever is still being viewed". Nothing did. A remote chat therefore
+   * survived a link blip looking recovered (the runner re-registers, the
+   * status comes back) and never rendered another message, because the only
+   * thing that would have re-subscribed was the FIRST watcher arriving and the
+   * watcher had never left.
+   */
+  private readonly subscribed = new Map<string, number | undefined>();
   /** In-flight searches, by correlation id. See {@link search}. */
   private readonly searches = new Map<
     string,
@@ -125,6 +204,18 @@ export class HostLink {
     ws.on('open', () => {
       this.backoff = this.deps.initialBackoffMs ?? 500;
       this.log(`[hostlink] ${this.deps.nodeId}: link up`);
+      // Whatever is still being looked at. The host's `subscribe` tears down
+      // any existing tail and starts a fresh one, so this re-sends the
+      // history phase as well as resuming the live stream — which is exactly
+      // what a reader who has been staring at a frozen chat needs.
+      for (const [paneId, tailBytes] of this.subscribed) {
+        this.send({
+          ch: 'transcript',
+          op: 'subscribe',
+          paneId,
+          ...(tailBytes === undefined ? {} : { tailBytes }),
+        });
+      }
     });
     ws.on('message', (d) => this.onUp(d.toString()));
     ws.on('close', () => this.onGone());
@@ -171,6 +262,24 @@ export class HostLink {
   private onUp(raw: string): void {
     const m = decodeLink(raw);
     if (!m) return;
+    // ── THE ENVELOPE IS CHECKED; THE PAYLOAD WAS NOT ──────────────────────
+    //
+    // `decodeLink` validates the CHANNEL and then casts, which is honest about
+    // what it does and not enough on this side: every branch below reads
+    // fields off a message from a machine that may be compromised. A host that
+    // answers a file fetch with `{ch:'files',op:'chunk',id:'…',rel:null}`
+    // reached `rel.includes('\0')` — a TypeError inside a WebSocket message
+    // handler, which is an uncaught exception and takes the whole server with
+    // it. One malformed frame, install-wide outage.
+    //
+    // So the shapes are checked here rather than deeper: this is the boundary,
+    // and a frame that fails is dropped exactly as a malformed one is. The
+    // protocol's own note promises that a parse failure "closes a message,
+    // never the process" — this is what makes that true of the payload too.
+    if (!wellFormed(m)) {
+      this.log(`[hostlink] ${this.deps.nodeId}: dropped a malformed ${m.ch} frame`);
+      return;
+    }
     if (m.ch === 'transcript') {
       if (m.op === 'events')
         this.deps.onTranscript({
@@ -423,8 +532,17 @@ export class HostLink {
     );
   }
 
-  /** Begin receiving a remote chat's history. Idempotent on the host side. */
+  /**
+   * Begin receiving a remote chat's history.
+   *
+   * Recorded as well as sent, so a reconnect can replay it — see
+   * {@link subscribed}. Safe to call for a pane already subscribed: the host
+   * restarts its tail and re-sends the history phase, and a chat client
+   * dedupes events by id, so a second reader joining costs the first one
+   * nothing.
+   */
   subscribeTranscript(paneId: string, tailBytes?: number): void {
+    this.subscribed.set(paneId, tailBytes);
     this.send({
       ch: 'transcript',
       op: 'subscribe',
@@ -434,6 +552,7 @@ export class HostLink {
   }
 
   unsubscribeTranscript(paneId: string): void {
+    this.subscribed.delete(paneId);
     this.send({ ch: 'transcript', op: 'unsubscribe', paneId });
   }
 

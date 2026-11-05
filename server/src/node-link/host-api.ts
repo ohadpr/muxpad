@@ -240,6 +240,13 @@ const ALLOWED: Allowed[] = [
 export interface HostApiDeps {
   db: Database.Database;
   /**
+   * May this host publish under this `name`? See `hostMayPublishAs`.
+   *
+   * Absent means no host may name an artifact at all — the safe default for a
+   * server wired without the check, rather than the permissive one.
+   */
+  mayPublishAs?: (nodeId: string, name: string) => boolean;
+  /**
    * Pull a path off a host into a staging dir here, for `muxpad publish`.
    *
    * Optional: absent means publishing from a host is refused like anything
@@ -365,8 +372,33 @@ export class HostApi {
     // artifact list of a chat on the mac is not somewhere a VM may write.
     if (typeof v.pane === 'string' && ID.test(v.pane) && this.paneIsOn(nodeId, v.pane))
       out.pane = v.pane;
-    if (typeof v.name === 'string' && /^[a-z0-9-]{1,64}$/.test(v.name)) out.name = v.name;
-    if (v.update === true) out.update = true;
+    // ── A NAME IS A CLAIM ON AN EXISTING PUBLIC URL ──────────────────────
+    //
+    // `--name` is republish-in-place: the slug resolves against the install's
+    // whole public directory and the existing tree rotates to `@2`. So a host
+    // naming an artifact it does not own REPLACES that artifact at the link
+    // somebody has already shared — no `update: true` required. Found in
+    // review, and the one finding in this file that was a real hole rather
+    // than a shape.
+    //
+    // Refused rather than silently dropped: a publish that quietly landed on a
+    // random slug would hand back a url the caller did not ask for and leave
+    // `--update` looking like it worked.
+    if (typeof v.name === 'string' && /^[a-z0-9-]{1,64}$/.test(v.name)) {
+      if (!this.deps.mayPublishAs?.(nodeId, v.name))
+        return {
+          status: 403,
+          body: JSON.stringify({
+            error: {
+              code: 'not_yours',
+              message: `another machine published "${v.name}" — publish under a different name`,
+            },
+          }),
+          contentType: 'application/json',
+        };
+      out.name = v.name;
+      if (v.update === true) out.update = true;
+    }
     if (typeof v.days === 'number' && Number.isFinite(v.days) && v.days > 0 && v.days <= 3650)
       out.days = Math.floor(v.days);
     if (v.audience === 'public' || v.audience === 'private') out.audience = v.audience;

@@ -153,6 +153,14 @@ export class FileReceiver {
    * is the version of this that gets bypassed.
    */
   private pathFor(rel: string): string | null {
+    // NOT A STRING AT ALL is a real input, and it used to be a crash: this is
+    // one call away from a WebSocket message handler, and a host that answered
+    // a fetch with `rel: null` raised a TypeError there — uncaught, so the
+    // whole server went. The link boundary refuses that frame now
+    // (HostLink.wellFormed); this is the belt to its braces, because a
+    // boundary check and a crash-on-bad-input one call behind it is a
+    // single-point-of-failure arrangement.
+    if (typeof rel !== 'string') return null;
     if (rel === '') return join(this.root, SINGLE);
     if (rel.includes('\0') || isAbsolute(rel)) return null;
     const abs = resolve(this.root, rel);

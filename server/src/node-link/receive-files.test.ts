@@ -141,6 +141,19 @@ describe('what the receiver refuses', () => {
     expect(r.error).not.toBe(null);
   });
 
+  it('a `rel` that is not a string at all, without throwing', () => {
+    // Found in review: `pathFor` read `rel.includes('\0')` outside the try, so
+    // a host answering a fetch with `rel: null` raised a TypeError inside a
+    // WebSocket message handler — an uncaught exception, which takes the whole
+    // server down. The frame is now refused at the link boundary
+    // (HostLink.wellFormed), and this is the belt: the receiver itself must
+    // not throw on one either, because it is one call away from a socket.
+    const r = recv();
+    expect(() => r.chunk(null as never, '', true)).not.toThrow();
+    expect(r.error).not.toBe(null);
+    expect(() => r.chunk(7 as never, '', true)).not.toThrow();
+  });
+
   it('more bytes than an artifact has any business being', () => {
     const r = recv();
     const mb = Buffer.alloc(1024 * 1024).toString('base64');

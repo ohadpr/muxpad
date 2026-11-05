@@ -58,10 +58,12 @@ import { startPaneReaper } from './pane-reaper.js';
 import { PtydCache, decoratePane, decorateTab } from './ptyd-cache.js';
 import { PtydClient } from './ptyd-client/PtydClient.js';
 import { createPublicApp } from './public-server.js';
+import { hostMayPublishAs } from './publish-actions.js';
 import { expiryOf } from './publish-expiry.js';
 import { Presence, PushService, attachAttentionPush, createPaneNotifier } from './push.js';
 import { releaseResidentPane } from './resident-release.js';
 import { openAiTranscriber } from './review/transcribe.js';
+import { findExistingSlug, publicDirOf } from './routes/publish.js';
 import { startServeSupervisor } from './serve-supervisor.js';
 import { createApp } from './server.js';
 import { mountStaticWeb } from './static-assets.js';
@@ -170,6 +172,12 @@ const hostLinks: HostLinks = new HostLinks({
     // the const being declared — legal because this body only RUNS when a
     // host publishes, long after the declaration finishes.
     fetchFromHost: (nodeId, path) => hostLinks.fetchFromHost(nodeId, path),
+    // A host may only republish an artifact IT published. `--name` is
+    // republish-in-place against one flat namespace, so without this a
+    // compromised machine could replace any artifact on the install at the
+    // url somebody had already shared. See publish-actions.ts.
+    mayPublishAs: (nodeId, name) =>
+      hostMayPublishAs(db, findExistingSlug(publicDirOf(config.dataDir), name), nodeId),
   }),
 });
 hostLinks.start();

@@ -97,6 +97,24 @@ export class HostLinks {
         selfUrl: this.deps.selfUrl,
         apiKey: this.deps.apiKey,
         onTranscript: (m) => {
+          // ── A HOST MAY ONLY SPEAK FOR ITS OWN PANES ──────────────────────
+          //
+          // This fanned out on the peer-supplied `paneId` alone. The runner
+          // channel checks ownership and the API channel checks ownership;
+          // this one did not, so while a browser watched a chat on host B,
+          // host A could send `transcript/events` naming B's pane and its
+          // content would render as that conversation — and a
+          // `transcript/title` would be WRITTEN, through applyAiTitle.
+          //
+          // Forged conversation content is the exact thing the transcript
+          // chokepoint exists to prevent, arriving by the one door that was
+          // not checked. The principal is the link object, as everywhere else.
+          if (this.deps.nodes.nodeForPane(m.paneId) !== nodeId) {
+            this.deps.log?.(
+              `[hostlink] ${nodeId}: refused a transcript frame for a pane it does not own`,
+            );
+            return;
+          }
           for (const sink of this.sinks.get(m.paneId) ?? []) sink(m);
         },
         // The principal is bound HERE, to the node this server dialled, and
@@ -135,12 +153,22 @@ export class HostLinks {
       set = new Set();
       this.sinks.set(paneId, set);
     }
-    const first = set.size === 0;
     set.add(sink);
-    // Subscribe on the FIRST watcher only. A second browser joins the existing
-    // tail; asking again would be harmless (the host is idempotent) but would
-    // also re-send the whole history to everyone.
-    if (first) link.subscribeTranscript(paneId, tailBytes);
+    // ── SUBSCRIBE FOR EVERY WATCHER, NOT JUST THE FIRST ──────────────────
+    //
+    // It was the first only, to avoid re-sending the whole history to a reader
+    // who already had it. The cost of that was worse than the saving: a second
+    // browser opening a remote chat got NO history at all — it joined a live
+    // tail and showed an empty or half-empty conversation — because the only
+    // thing that would have fetched it was a subscribe nobody was going to
+    // send.
+    //
+    // Re-sending is cheap and harmless: the host's `subscribe` tears down its
+    // tail and starts a fresh one (so the history phase comes again), and a
+    // chat client dedupes events by id, so the reader who was already there
+    // sees nothing happen. Reference counting still does the job it is
+    // actually needed for — the UNSUBSCRIBE, which is the half that leaks.
+    link.subscribeTranscript(paneId, tailBytes);
     return true;
   }
 

@@ -210,7 +210,7 @@ export function versionDirName(slug: string, n: number): string {
 // so existing importers keep working.
 export { PUBLIC_BASE_URL_KEY, normalizeBaseUrl } from '../public-base.js';
 
-function publicDirOf(dataDir: string): string {
+export function publicDirOf(dataDir: string): string {
   return join(dataDir, 'public');
 }
 

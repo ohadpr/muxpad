@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { hostMayPublishAs } from './publish-actions.js';
 import { recordSlackAction, resolveSlackAction, stateFromBroker } from './slack-actions.js';
 import { ChatActionStore } from './store/ChatActionStore.js';
 import { PaneStore } from './store/PaneStore.js';
@@ -254,5 +255,64 @@ describe('the cards of a chat', () => {
     expect(() =>
       store().record({ pane_id: 'no-such-pane', kind: 'slack.post', title: 'x', ref: 'r3' }),
     ).toThrow();
+  });
+});
+
+/**
+ * WHO OWNS A PUBLISHED NAME.
+ *
+ * `--name` is republish-in-place against one flat namespace, so a host naming
+ * an artifact it does not own replaces that artifact at the url somebody has
+ * already shared — no `update: true` needed. Found in review; this is the rule
+ * that closes it, and the ownership record is the publish action itself.
+ */
+describe('hostMayPublishAs', () => {
+  const store = () => new ChatActionStore(db);
+
+  it('allows a name nothing is published under', () => {
+    expect(hostMayPublishAs(db, null, 'trayo')).toBe(true);
+  });
+
+  it('allows a host to republish ITS OWN artifact', () => {
+    const tab = new TabStore(db).create({
+      name: 'T',
+      layout: '',
+      workspace_id: new WorkspaceStore(db).list()[0]?.id as string,
+    }).id;
+    const remote = new PaneStore(db).create({ tab_id: tab, shell: '/bin/bash' }).id;
+    db.prepare('UPDATE panes SET node_id = ? WHERE id = ?').run('trayo', remote);
+    store().record({
+      pane_id: remote,
+      kind: 'publish.create',
+      title: 'Published report',
+      ref: 'publish:report-ab12',
+    });
+    expect(hostMayPublishAs(db, 'report-ab12', 'trayo')).toBe(true);
+  });
+
+  it('REFUSES a host the artifact a LOCAL chat published', () => {
+    // The attack: a compromised VM names the mac's weekly report and replaces
+    // it at its established public url.
+    store().record({
+      pane_id: pane, // the local pane from the outer beforeEach
+      kind: 'publish.create',
+      title: 'Published report',
+      ref: 'publish:report-ab12',
+    });
+    expect(hostMayPublishAs(db, 'report-ab12', 'trayo')).toBe(false);
+  });
+
+  it('REFUSES an UNOWNED artifact, and that is deliberate', () => {
+    // Hundreds predate the record and have no row. Treating "no owner" as
+    // "anyone's" would leave exactly the hole this closes — and those are the
+    // oldest and most-shared links on the install.
+    expect(hostMayPublishAs(db, 'ancient-slug-9z', 'trayo')).toBe(false);
+  });
+
+  it('refuses when it cannot tell at all', () => {
+    // No table, no join, no answer — and "I cannot tell" must not authorise
+    // replacing public content.
+    db.exec('DROP TABLE chat_actions');
+    expect(hostMayPublishAs(db, 'report-ab12', 'trayo')).toBe(false);
   });
 });
