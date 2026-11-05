@@ -135,6 +135,17 @@ export interface ArchiveSearchHit {
     cwd: string | null;
     assistant: string | null;
   };
+  /**
+   * The MACHINE this was said on, when it was not this one.
+   *
+   * Absent for a local hit — presence is the fact, the same rule as the chat's
+   * host cell. A remote hit carries no `session`: that enrichment comes out of
+   * this machine's session tables, where another machine's sid does not
+   * appear, and an empty one would read as a chat with no provenance rather
+   * than a chat whose provenance lives elsewhere.
+   */
+  host?: string;
+  node_id?: string;
 }
 
 export interface ArchiveSearchResponse {
@@ -143,6 +154,15 @@ export interface ArchiveSearchResponse {
    *  as a quoted phrase — the results are still real, just less precise. */
   fallback: boolean;
   hits: ArchiveSearchHit[];
+  /**
+   * Which machines were asked and what each said — only when the cross-host
+   * search ran.
+   *
+   * The errors are the point: "no results" and "the VM was asleep" are
+   * different answers, and a machine that did not report must not be
+   * indistinguishable from one with nothing in it.
+   */
+  machines?: Array<{ node_id: string; name: string; hits: number; error?: string }>;
 }
 
 export interface MovePaneResult {
@@ -217,9 +237,21 @@ export const api = {
    * (server.ts), so a 404 here is a normal configuration, not a failure: the
    * caller stands the whole tier down and keeps the instant tier working.
    */
-  searchMessages: (q: string, limit = 8) =>
+  /**
+   * `hosts` asks every connected machine to search its own archive too and
+   * merges the answers. On by default FROM THE UI: a person typing in the
+   * search box is looking for a conversation, not for a conversation on a
+   * particular computer — and on a single-machine install the flag costs
+   * nothing, because the server has nobody to ask.
+   *
+   * (The in-pane `muxpad search` deliberately does NOT send it: a host's own
+   * tools stay scoped to that host.)
+   */
+  searchMessages: (q: string, limit = 8, hosts = true) =>
     req<ArchiveSearchResponse>(
-      `/api/search?q=${encodeURIComponent(q)}&limit=${encodeURIComponent(String(limit))}`,
+      `/api/search?q=${encodeURIComponent(q)}&limit=${encodeURIComponent(String(limit))}${
+        hosts ? '&hosts=1' : ''
+      }`,
     ),
 
   createTab: (

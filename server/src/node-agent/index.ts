@@ -4,7 +4,14 @@ import { createServer } from 'node:http';
 import { arch, cpus, homedir, platform, totalmem, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { WebSocket, WebSocketServer } from 'ws';
-import { TranscriptTail, identityNormalize, muxpadLocate } from '../chat/TranscriptReader.js';
+import { ArchiveDb } from '../archive/ArchiveDb.js';
+import { Archiver } from '../archive/Archiver.js';
+import {
+  TranscriptTail,
+  identityNormalize,
+  muxpadLocate,
+  projectsDir,
+} from '../chat/TranscriptReader.js';
 import { LinkServer, linkUpgradeKind } from './link-server.js';
 
 /**
@@ -51,6 +58,15 @@ export interface NodeAgentOptions {
   host?: string;
   /** Where ptyd's unix socket is. */
   ptydSocket?: string;
+  /** This machine's muxpad data dir. Where the archive is kept. */
+  dataDir?: string;
+  /**
+   * Keep an archive of this machine's chats and answer searches of it.
+   *
+   * On by default, and off in tests: an archiver is a sweep timer and a
+   * SQLite file, and a unit test for the front door should not acquire either.
+   */
+  archive?: boolean;
   /** The shared token the control plane must present. */
   token: string;
   /** Injected for tests. */
@@ -192,6 +208,34 @@ export async function startNodeAgent(opts: NodeAgentOptions): Promise<{ close: (
   const ptydSocket =
     opts.ptydSocket ?? process.env.MUXPAD_PTYD_SOCKET ?? join(homedir(), '.muxpad', 'ptyd.sock');
   const log = opts.log ?? ((l: string) => console.log(l));
+  const dataDir = opts.dataDir ?? process.env.MUXPAD_DATA_DIR ?? join(homedir(), '.muxpad');
+
+  // ── THIS MACHINE'S OWN ARCHIVE ──────────────────────────────────────────
+  //
+  // A chat on this host writes its transcript HERE, and nothing on the server
+  // ever reads it (the transcript chokepoint refuses) — so until this existed,
+  // a remote chat was unsearchable from anywhere: the server's archiver skips
+  // panes that are not its own, and there was no second archiver.
+  //
+  // It needs no database. The Archiver discovers sessions by SCANNING for
+  // transcripts, and `db` is only for enrichment the server does — which is
+  // exactly the shape a host needs, and the reason this is a few lines rather
+  // than a port of the server's session tables.
+  //
+  // Search across machines is then the SERVER asking each host and merging for
+  // the user to look at. The in-pane `muxpad search` on this machine still
+  // sees only this machine, which is the host-scoping rule and not an
+  // accident of what is implemented.
+  const archive = opts.archive === false ? null : new ArchiveDb(join(dataDir, 'archive.sqlite'));
+  const archiver = archive
+    ? new Archiver({
+        archive,
+        archiveDir: join(dataDir, 'archive'),
+        claudeProjectsDir: projectsDir(),
+        muxpadTranscriptsDir: join(dataDir, 'agent-transcripts'),
+      })
+    : null;
+  archiver?.start();
 
   const http = createServer();
   const wss = new WebSocketServer({ noServer: true });
@@ -205,6 +249,32 @@ export async function startNodeAgent(opts: NodeAgentOptions): Promise<{ close: (
   // is a socket the server already holds open.
   const link = new LinkServer({
     connectPtyd: () => new WebSocket(`ws+unix://${ptydSocket}:/control`),
+    // Absent when archiving is off, which makes the host answer "no index
+    // here" — a different fact from "no hits", and one the server shows.
+    ...(archive
+      ? {
+          /**
+           * Hits WITH their session metadata, because a result has to be
+           * navigable.
+           *
+           * The server cannot enrich these: a remote sid does not appear in
+           * its session tables. But the pane id does — a remote pane's ROW
+           * lives on the server with `node_id` set — so passing the host's
+           * own `archive_sessions` row through is what turns a cross-host hit
+           * into a row you can click and land in the chat.
+           */
+          search: (q: string, o: { limit: number; role?: string }) => {
+            const { hits, fallback } = archive.search(q, o);
+            const metas = new Map<string, unknown>();
+            for (const h of hits)
+              if (!metas.has(h.sid)) metas.set(h.sid, archive.getSession(h.sid) ?? null);
+            return {
+              hits: hits.map((h) => ({ ...h, session: metas.get(h.sid) })),
+              fallback,
+            };
+          },
+        }
+      : {}),
     makeTail: (sid, assistant, sink, tailBytes) =>
       new TranscriptTail(sid, {
         ...(tailBytes === undefined ? {} : { tailBytes }),
@@ -360,6 +430,8 @@ export async function startNodeAgent(opts: NodeAgentOptions): Promise<{ close: (
   log(`[muxpad-node] listening on ${host}:${port} → ptyd ${ptydSocket}`);
   return {
     close: () => {
+      archiver?.stop();
+      archive?.close?.();
       link.close();
       try {
         wss.close();

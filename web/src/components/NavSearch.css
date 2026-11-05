@@ -71,6 +71,15 @@
 .navsearch-row-ws {
   color: var(--fg-dim);
 }
+/* The machine a cross-host hit came from. Takes the accent like the chat's own
+   host cell — one vocabulary for "elsewhere, on purpose" — and sits a shade
+   quieter than a selected row's text so the selection still wins. */
+.navsearch-row-host {
+  color: var(--accent);
+}
+.navsearch-row[data-cursor="true"] .navsearch-row-host {
+  color: var(--accent-fg);
+}
 .navsearch-row-dot {
   margin: 0 4px;
 }

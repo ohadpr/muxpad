@@ -136,6 +136,43 @@ export class HostLinks {
   }
 
   /**
+   * Ask EVERY connected host to search its own archive, in parallel.
+   *
+   * This is the one deliberately cross-host surface, and it is a SERVER
+   * capability: the user looking at a search box gets everything, while the
+   * in-pane `muxpad search` on any machine still sees only that machine. The
+   * two are different paths with different authorisation, which is the whole
+   * content of the host-scoping rule.
+   *
+   * Every host appears in the result, including the ones that failed — a
+   * machine that was asleep must not be indistinguishable from a machine with
+   * nothing in it.
+   */
+  async searchHosts(
+    q: string,
+    opts: { limit: number; role?: string },
+  ): Promise<
+    Array<{
+      nodeId: string;
+      name: string;
+      hits: unknown[];
+      fallback: boolean;
+      error?: string;
+    }>
+  > {
+    const entries = [...this.links.entries()];
+    return Promise.all(
+      entries.map(async ([nodeId, link]) => {
+        const name = this.deps.nodes.get(nodeId)?.name ?? nodeId;
+        const r = await link.search(q, opts);
+        return 'error' in r
+          ? { nodeId, name, hits: [], fallback: false, error: r.error }
+          : { nodeId, name, hits: r.hits, fallback: r.fallback };
+      }),
+    );
+  }
+
+  /**
    * Pull a path off a host into a fresh staging dir, for `muxpad publish`.
    *
    * One directory per transfer, named with randomness and created under the

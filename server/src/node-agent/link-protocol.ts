@@ -36,7 +36,7 @@
  */
 
 /** Which conversation a message belongs to. */
-export type LinkChannel = 'ptyd' | 'transcript' | 'runner' | 'api' | 'files';
+export type LinkChannel = 'ptyd' | 'transcript' | 'runner' | 'api' | 'files' | 'search';
 
 /** Server → host. */
 export type LinkDown =
@@ -50,6 +50,8 @@ export type LinkDown =
   | { ch: 'runner'; op: 'frame'; paneId: string; frame: unknown }
   /** The server is ready to adopt this pane's runner; the host may attach it. */
   | { ch: 'runner'; op: 'adopt'; paneId: string }
+  /** Search this host's own archive. `q` is a raw FTS5 expression. */
+  | { ch: 'search'; op: 'query'; id: string; q: string; limit: number; role?: string }
   /** Send me this path's contents. See the `files` channel note. */
   | { ch: 'files'; op: 'fetch'; id: string; path: string }
   /** The answer to one `api` request. `id` is the host's own correlation id. */
@@ -97,6 +99,21 @@ export type LinkUp =
   | { ch: 'files'; op: 'done'; id: string; kind: 'file' | 'dir'; name: string }
   /** No such path, too big, not readable — said rather than left to time out. */
   | { ch: 'files'; op: 'error'; id: string; reason: string }
+  /**
+   * What this host's archive found. `hits` carries the same shape the local
+   * search route returns, so the server can merge the two lists without a
+   * translation layer that would have to be kept in step.
+   */
+  | {
+      ch: 'search';
+      op: 'hits';
+      id: string;
+      hits: unknown[];
+      fallback: boolean;
+    }
+  /** No archive here, or the query blew up. Distinct from "no hits", which is
+   *  an answer. */
+  | { ch: 'search'; op: 'error'; id: string; reason: string }
   /**
    * One in-pane CLI call, for the server to answer.
    *
@@ -158,5 +175,9 @@ export function hostMaySend(m: LinkDown | LinkUp): boolean {
   // naming a path, and a host that could send one would be asking this machine
   // to read its own disk on the host's behalf.
   if (m.ch === 'files') return m.op === 'chunk' || m.op === 'done' || m.op === 'error';
+  // Same rule as `files`: a host answers a query, it does not ask one. A host
+  // that could send `query` would be asking the server to search ITS archive
+  // — the direction the host-scoping rule exists to prevent.
+  if (m.ch === 'search') return m.op === 'hits' || m.op === 'error';
   return m.op === 'frame' || m.op === 'attached' || m.op === 'detached';
 }

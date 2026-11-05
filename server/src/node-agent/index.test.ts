@@ -103,14 +103,26 @@ describe('the front door', () => {
   it('refuses an upgrade with NO token — the tailnet is not a password', async () => {
     // This runs on a company tailnet with other people's dev VMs on it.
     const p = port();
-    const a = await startNodeAgent({ port: p, host: '127.0.0.1', token: TOKEN, log: () => {} });
+    const a = await startNodeAgent({
+      port: p,
+      host: '127.0.0.1',
+      token: TOKEN,
+      log: () => {},
+      archive: false,
+    });
     stop = a.close;
     expect((await upgrade(p, '/control')).ok).toBe(false);
   });
 
   it('refuses a WRONG token', async () => {
     const p = port();
-    const a = await startNodeAgent({ port: p, host: '127.0.0.1', token: TOKEN, log: () => {} });
+    const a = await startNodeAgent({
+      port: p,
+      host: '127.0.0.1',
+      token: TOKEN,
+      log: () => {},
+      archive: false,
+    });
     stop = a.close;
     expect((await upgrade(p, '/control', 'b'.repeat(64))).ok).toBe(false);
   });
@@ -119,7 +131,13 @@ describe('the front door', () => {
     // Authentication and authorization are different questions; holding the
     // node's token must not mean "proxy anything you like".
     const p = port();
-    const a = await startNodeAgent({ port: p, host: '127.0.0.1', token: TOKEN, log: () => {} });
+    const a = await startNodeAgent({
+      port: p,
+      host: '127.0.0.1',
+      token: TOKEN,
+      log: () => {},
+      archive: false,
+    });
     stop = a.close;
     expect((await upgrade(p, '/api/panes', TOKEN)).ok).toBe(false);
     // NOT /ws/agent-runner any more: that is now a LINK route, where a runner
@@ -139,7 +157,13 @@ describe('the front door', () => {
     // problem as a dead machine, and the control plane could not tell those
     // apart.
     const p = port();
-    const a = await startNodeAgent({ port: p, host: '127.0.0.1', token: TOKEN, log: () => {} });
+    const a = await startNodeAgent({
+      port: p,
+      host: '127.0.0.1',
+      token: TOKEN,
+      log: () => {},
+      archive: false,
+    });
     stop = a.close;
     const r = await fetch(`http://127.0.0.1:${p}/health`);
     expect(r.status).toBe(200);
@@ -148,7 +172,13 @@ describe('the front door', () => {
 
   it('gates /self behind the token', async () => {
     const p = port();
-    const a = await startNodeAgent({ port: p, host: '127.0.0.1', token: TOKEN, log: () => {} });
+    const a = await startNodeAgent({
+      port: p,
+      host: '127.0.0.1',
+      token: TOKEN,
+      log: () => {},
+      archive: false,
+    });
     stop = a.close;
     expect((await fetch(`http://127.0.0.1:${p}/self`)).status).toBe(404);
     const ok = await fetch(`http://127.0.0.1:${p}/self`, {
@@ -167,6 +197,7 @@ describe('the front door', () => {
       host: '127.0.0.1',
       token: TOKEN,
       log: (l) => lines.push(l),
+      archive: false,
     });
     stop = a.close;
     const guess = 'c'.repeat(64);
@@ -242,7 +273,13 @@ describe('who may use the API funnel', () => {
     // A `muxpad card` that never returns reads to the user as the chat
     // freezing, so "no control plane" must be an ANSWER.
     const p = port();
-    const a = await startNodeAgent({ port: p, host: '127.0.0.1', token: TOKEN, log: () => {} });
+    const a = await startNodeAgent({
+      port: p,
+      host: '127.0.0.1',
+      token: TOKEN,
+      log: () => {},
+      archive: false,
+    });
     stop = a.close;
     const res = await fetch(`http://127.0.0.1:${p}/api/say/key`);
     expect(res.status).toBe(503);

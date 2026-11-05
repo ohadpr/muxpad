@@ -144,6 +144,13 @@ export function MessageResult({
         </span>
         <span className="navsearch-row-sub" dir="auto">
           {row.tab.tabName}
+          {/* ── AND WHICH MACHINE IT WAS SAID ON ─────────────────────────
+              Only for a hit from another one: searching across machines is
+              only useful if the answer says where it landed, and a local hit
+              carrying "this machine" would be a label on every row of a
+              one-machine install. Sits with the chat name, because "where"
+              is the same question twice — which chat, and which computer. */}
+          {row.hit.host ? <span className="navsearch-row-host"> · {row.hit.host}</span> : null}
         </span>
       </span>
     </div>
