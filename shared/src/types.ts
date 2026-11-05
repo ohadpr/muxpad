@@ -379,6 +379,17 @@ export const PaneSpecSchema = z.object({
   // acting on different machines. Optional on the wire for rows and servers
   // that predate the column; absent reads as 'local'.
   node_id: z.string().optional(),
+  /**
+   * That machine's NAME, for the one thing the UI has to say about it: this
+   * chat is not running here.
+   *
+   * Derived at read time, never stored, and ABSENT FOR A LOCAL PANE — which is
+   * what makes it usable as the render condition. A client that has to join
+   * `node_id` against a separately-fetched machine list to decide whether to
+   * draw a chip would have a window where it draws nothing, and on a
+   * single-machine install there is no list to fetch.
+   */
+  node_name: z.string().optional(),
 });
 export type PaneSpec = z.infer<typeof PaneSpecSchema>;
 

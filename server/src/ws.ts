@@ -45,6 +45,7 @@ import {
 } from './api-auth.js';
 import { TranscriptTail, identityNormalize, muxpadLocate } from './chat/TranscriptReader.js';
 import { agentPaneHasMessages } from './chat/has-messages.js';
+import { remoteHostName } from './chat/transcript-access.js';
 import type { EventBus } from './events.js';
 import type { HostLinks } from './node-link/HostLinks.js';
 import { readNodeTokenFor } from './node-link/NodeLinks.js';
@@ -2964,6 +2965,21 @@ export function attachWsServer(deps: {
               // the question that neither cries wolf after an ordinary
               // restart nor stays quiet for a pane that really is behind.
               ...(staleRunner(chatPaneId) ? { staleRunner: true } : {}),
+              // ── THIS CHAT IS NOT RUNNING ON THIS MACHINE ────────────────
+              // Only when that is true, so a local chat's frame is the bytes
+              // it has always been — and the field's PRESENCE is the render
+              // condition, so the client needs no second fetch and no join
+              // against a machine list it may not have yet.
+              //
+              // On the session frame rather than the pane payload because
+              // this is the surface the chat actually reads: the pane row
+              // reaches it through a different path, on a different poll, and
+              // an indicator that says WHERE YOUR WORDS ARE GOING must not
+              // lag the socket that carries them.
+              ...(() => {
+                const host = remoteHostName(deps.db, chatPaneId);
+                return host ? { host } : {};
+              })(),
             });
           }
           // ── THE RESUME TARGET MUST ACTUALLY HAVE A TRANSCRIPT ──────────

@@ -70,6 +70,41 @@ export function SvgShellGlyph({ size = 12 }: { size?: number } = {}) {
 }
 
 /**
+ * A SMALL MACHINE, FOR "THIS CHAT IS ON ANOTHER ONE".
+ *
+ * A box with a foot and a link running out of it — the same vocabulary as the
+ * Machines panel, so the rail and the settings page agree about what a host
+ * looks like. Deliberately not a cloud: nothing here is in a cloud, it is a
+ * computer in an office. And not a warning mark of any kind — a chat on
+ * another machine is working exactly as intended, and the red `!` on the old
+ * folder cell is the mistake that teaches.
+ */
+export function SvgHostGlyph({ size = 12 }: { size?: number } = {}) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" aria-hidden="true" fill="none">
+      <rect
+        x="2.2"
+        y="3"
+        width="11.6"
+        height="7.6"
+        rx="1.4"
+        stroke="currentColor"
+        strokeWidth="1.3"
+      />
+      <path
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        d="M6.2 13.2h3.6M8 10.6v2.6"
+      />
+      {/* The link, as two rungs — it reads as "reached over something" at 12px
+          where a dashed line just reads as noise. */}
+      <path stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" d="M5 6.2h2.2M5 8h4.6" />
+    </svg>
+  );
+}
+
+/**
  * A CLOCK RUN BACKWARDS — the mark for "this process is on an older build".
  *
  * Not a warning triangle and not an exclamation: nothing is broken here, and
@@ -145,7 +180,7 @@ export function assistantLabel(a: string | null | undefined): string {
 /** Session status pushed by the agent runner — shape shared with the server
  * pipeline via @muxpad/shared so the two ends can't drift apart. */
 export type AgentStatus = AgentSessionStatus;
-export type StatusPanel = 'folder' | 'model' | 'live' | 'ctx' | 'mode' | 'stale' | null;
+export type StatusPanel = 'folder' | 'model' | 'live' | 'ctx' | 'mode' | 'stale' | 'host' | null;
 
 export interface RosterAgent {
   id: string;
@@ -710,6 +745,7 @@ export function SessionBar({
   onOpenChat,
   mode,
   stale = false,
+  host = null,
 }: {
   paneId: string;
   folder: { cwd: string; hasProject: boolean } | null;
@@ -728,6 +764,16 @@ export function SessionBar({
    *  server would start now (server/src/runner-build.ts). Rare; no cell at
    *  all when false. */
   stale?: boolean;
+  /**
+   * THE MACHINE THIS CHAT RUNS ON, when it is not this one.
+   *
+   * `null` for a local chat and no cell at all — which is every chat on a
+   * single-machine install, so nothing new appears until there is something
+   * true to say. The name comes down on the session frame (ws.ts), not from a
+   * machine list fetched beside it: an indicator about where your words are
+   * going must not lag the socket carrying them.
+   */
+  host?: string | null;
 
   /** Optimistic local echo + the "here is what actually just happened" notice.
    *  The authoritative value still arrives on the next session frame. */
@@ -745,7 +791,8 @@ export function SessionBar({
     else if (panel === 'folder' && !folder) setPanel(null);
     else if (panel === 'mode' && !mode) setPanel(null);
     else if (panel === 'stale' && !stale) setPanel(null);
-  }, [panel, liveLabel, status, folder, mode, stale]);
+    else if (panel === 'host' && !host) setPanel(null);
+  }, [panel, liveLabel, status, folder, mode, stale, host]);
 
   // ── Folder switcher state ────────────────────────────────────────────
   const [draft, setDraft] = useState(folder?.cwd ?? '');
@@ -1033,6 +1080,52 @@ export function SessionBar({
                   Restarting this agent picks up the current build. It also ends any background work
                   and scheduled wake-ups this pane is holding, so do it when the pane is quiet — or
                   just open a new chat, which starts current.
+                </span>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {/* ── WHERE THIS CHAT IS RUNNING ──────────────────────────────────
+          The one fact a remote chat has to make visible. Everything else
+          about it is deliberately identical to a local one — that is the
+          point of the whole design — which is exactly why it needs saying:
+          `~/work` means a different directory, `git log` a different
+          repository, and a file the agent writes is on a machine you are not
+          sitting at.
+
+          Named, not a generic "remote": with two machines the question is
+          never whether this is elsewhere, it is WHICH elsewhere. */}
+      {host ? (
+        <div className="chat-status-seg-wrap">
+          <button
+            type="button"
+            className={`chat-status-seg -host${panel === 'host' ? ' is-open' : ''}`}
+            data-testid="chat-status-host"
+            onClick={() => toggle('host')}
+            aria-haspopup="dialog"
+            aria-expanded={panel === 'host'}
+            title={`This chat runs on ${host}`}
+          >
+            <SvgHostGlyph />
+            <span className="chat-status-seg-label">{host}</span>
+          </button>
+          {panel === 'host' ? (
+            // biome-ignore lint/a11y/useSemanticElements: an anchored popover, not a modal that owns the screen.
+            <div className="chat-status-menu chat-session-menu" role="dialog">
+              <div className="chat-session-head">Running on {host}</div>
+              <div className="chat-session-item -static">
+                <span className="chat-session-item-desc">
+                  This chat's agent, its terminal and its files are on {host}. Paths, repositories
+                  and commands are that machine's — and anything it writes is there, not here.
+                </span>
+              </div>
+              <div className="chat-session-item -static">
+                <span className="chat-session-item-desc">
+                  Its tools reach only that machine: a chat it messages or a worker it spawns lives
+                  there too. If {host} goes away this chat stays in the sidebar and stops answering
+                  until it is back.
                 </span>
               </div>
             </div>

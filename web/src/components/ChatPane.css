@@ -2794,6 +2794,33 @@
   color: var(--chat-warn);
   background: color-mix(in srgb, var(--chat-warn) 12%, transparent);
 }
+/* ── THE HOST CELL ──────────────────────────────────────────────────────────
+   "This chat is on another machine", named. NOT warn-coloured: a remote chat
+   is working exactly as designed, and borrowing the stale cell's amber would
+   say something is wrong for the whole life of a chat that is fine. It takes
+   the accent instead — the colour this app uses for "a real thing, on
+   purpose".
+
+   SHRINKS, unlike `-stale`, and the opposite reasoning applies: the stale cell
+   is two fixed words that mean nothing clipped, while this one is a NAME, and
+   a clipped name is still the right machine ("Trayo dev…"). The glyph is what
+   carries the meaning when the row runs out of width. */
+.chat-status-seg.-host {
+  color: var(--accent);
+  min-width: 0;
+}
+.chat-status-seg.-host svg,
+.chat-status-seg.-host:hover svg,
+.chat-status-seg.-host.is-open svg {
+  color: inherit;
+  flex: 0 0 auto;
+}
+.chat-status-seg.-host:hover,
+.chat-status-seg.-host.is-open {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
 .chat-status-seg.-live .chat-roster-spin {
   flex: 0 0 auto;
   color: inherit;

@@ -87,6 +87,23 @@ export function transcriptIsLocal(db: Database.Database, paneId: string): boolea
   return !!row && (row.node_id ?? LOCAL_NODE_ID) === LOCAL_NODE_ID;
 }
 
+/**
+ * The NAME of the machine a pane runs on, or null when it runs here.
+ *
+ * Null for local is the whole point: callers use it as "is this remote", so
+ * there is one question and not two. A node row deleted from under a live pane
+ * is named by its id rather than reported as local — that is the single thing
+ * an indicator like this must never get wrong.
+ */
+export function remoteHostName(db: Database.Database, paneId: string): string | null {
+  const row = db.prepare('SELECT node_id FROM panes WHERE id = ?').get(paneId) as
+    | { node_id: string | null }
+    | undefined;
+  const nodeId = row?.node_id ?? LOCAL_NODE_ID;
+  if (nodeId === LOCAL_NODE_ID) return null;
+  return new NodeStore(db).get(nodeId)?.name ?? nodeId;
+}
+
 /** The node a pane belongs to, for a message that names the machine. */
 export function nodeLabelForPane(db: Database.Database, paneId: string): string {
   return new NodeStore(db).get(new NodeStore(db).nodeForPane(paneId))?.name ?? 'another machine';
