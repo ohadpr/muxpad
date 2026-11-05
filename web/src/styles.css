@@ -1980,9 +1980,12 @@ select:focus {
   align-items: stretch;
   min-width: 0;
 }
-/* The content side of the body: the working-set tabs, then the panes. It is
-   a column so the strip takes its own height off the top and the hosts take
-   the rest — the same shape the hosts used to have on their own. */
+/* The content side of the body: just the panes now. It became a column to
+   give the working-set tab strip its own height off the top; the strip is
+   gone (the band is back at the top of the rail), and the column is KEPT
+   rather than collapsed back into the hosts — it is one flex level with no
+   layout of its own, and the next thing that wants a row above the panes has
+   somewhere to go. */
 .app-body > .workspace-column {
   flex: 1;
   min-width: 0;
