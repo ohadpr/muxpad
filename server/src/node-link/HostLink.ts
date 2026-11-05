@@ -99,6 +99,11 @@ export class HostLink {
    * reason; I wrote it there and did not write it here.
    */
   private readonly pending = new Map<string, string[]>();
+  /** In-flight searches, by correlation id. See {@link search}. */
+  private readonly searches = new Map<
+    string,
+    (r: { hits: unknown[]; fallback: boolean } | { error: string }) => void
+  >();
   /** In-flight `files` pulls, by correlation id. See {@link fetchPath}. */
   private readonly fetches = new Map<
     string,
@@ -151,6 +156,8 @@ export class HostLink {
       f.settle({ error: 'the link to that machine dropped mid-transfer' });
     }
     this.fetches.clear();
+    for (const [, settle] of this.searches) settle({ error: 'the link dropped' });
+    this.searches.clear();
     if (this.closed) return;
     this.timer = setTimeout(() => this.connect(), this.backoff);
     this.timer.unref?.();
@@ -180,6 +187,14 @@ export class HostLink {
     }
     if (m.ch === 'api') {
       if (m.op === 'request') void this.answerApi(m.id, m.method, m.path, m.body);
+      return;
+    }
+    if (m.ch === 'search') {
+      if (m.op === 'query') return; // our own frame coming back; not an answer
+      const settle = this.searches.get(m.id);
+      if (!settle) return; // already timed out
+      this.searches.delete(m.id);
+      settle(m.op === 'hits' ? { hits: m.hits, fallback: m.fallback } : { error: m.reason });
       return;
     }
     if (m.ch === 'files') {
@@ -247,6 +262,45 @@ export class HostLink {
       this.pending.set(m.paneId, q);
       if (!r) this.openRelay(m.paneId);
     }
+  }
+
+  /**
+   * Search this host's archive.
+   *
+   * ALWAYS resolves, and an unreachable or silent host resolves to an ERROR
+   * rather than to no hits — the value of a cross-host result is knowing
+   * which machines actually answered, and a machine that was asleep must not
+   * look like a machine with nothing in it.
+   *
+   * The timeout is short on purpose: somebody is waiting at a search box, and
+   * one sleeping laptop must not hold the whole result set.
+   */
+  search(
+    q: string,
+    opts: { limit: number; role?: string },
+    timeoutMs = 4_000,
+  ): Promise<{ hits: unknown[]; fallback: boolean } | { error: string }> {
+    if (this.ws?.readyState !== WebSocket.OPEN) return Promise.resolve({ error: 'not connected' });
+    const id = randomUUID();
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        if (!this.searches.delete(id)) return;
+        resolve({ error: 'did not answer in time' });
+      }, timeoutMs);
+      timer.unref?.();
+      this.searches.set(id, (r) => {
+        clearTimeout(timer);
+        resolve(r);
+      });
+      this.send({
+        ch: 'search',
+        op: 'query',
+        id,
+        q,
+        limit: opts.limit,
+        ...(opts.role ? { role: opts.role } : {}),
+      });
+    });
   }
 
   /**

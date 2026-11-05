@@ -551,6 +551,9 @@ void tailnetHostname()
   .catch(() => {});
 
 const app = createApp({
+  // The one deliberately cross-host surface — see routes/search.ts. A server
+  // capability for the user to look at, NOT something a host can reach.
+  searchHosts: (q, opts) => hostLinks.searchHosts(q, opts),
   // The node-aware transport for pane lifecycle; `ptyd` below stays the
   // local socket client for the pty-proxy paths. See server.ts on why both.
   paneOps: paneRouter,

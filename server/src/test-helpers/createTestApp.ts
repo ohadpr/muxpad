@@ -33,6 +33,8 @@ export async function createTestApp(opts: {
   agentBridge?: AgentBridge;
   /** Mounts /api/search + /api/archive when provided (archive e2e tests). */
   archive?: ArchiveDb;
+  /** Stub the cross-host fan-out (`/api/search?hosts=1`). */
+  searchHosts?: Parameters<typeof createApp>[0]['searchHosts'];
   /**
    * Funnel stub for /api/publish tests — never a real tailscale exec.
    * `baseProbe` overrides the base-url reachability check; it defaults to
@@ -88,6 +90,7 @@ export async function createTestApp(opts: {
     ...(opts.events ? { events: opts.events } : {}),
     ...(opts.agentBridge ? { agentBridge: opts.agentBridge } : {}),
     ...(opts.archive ? { archive: opts.archive } : {}),
+    ...(opts.searchHosts ? { searchHosts: opts.searchHosts } : {}),
     ...(opts.publish
       ? {
           publish: {

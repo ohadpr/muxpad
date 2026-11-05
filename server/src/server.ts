@@ -139,6 +139,18 @@ export interface AppDeps {
    */
   archive?: ArchiveDb;
   /**
+   * Ask the other machines to search their own archives too (`hosts=1`).
+   *
+   * Optional, and absent is the single-machine install: the flag then does
+   * nothing rather than erroring, so a client can always send it.
+   */
+  searchHosts?: (
+    q: string,
+    opts: { limit: number; role?: string },
+  ) => Promise<
+    Array<{ nodeId: string; name: string; hits: unknown[]; fallback: boolean; error?: string }>
+  >;
+  /**
    * Publish deps (routes/publish.ts): the funnel manager that ensures the
    * public Tailscale Funnel on publish. Optional so tests can omit it — the
    * routes are still mounted, backed by a localFunnel that NEVER execs
@@ -477,7 +489,13 @@ export function createApp(deps: AppDeps): Hono {
   if (resolved.push) app.route('/api/push', pushRoutes(resolved.push));
   if (resolved.archive) {
     const archiveDeps = { db: resolved.db, archive: resolved.archive };
-    app.route('/api/search', searchRoutes(archiveDeps));
+    app.route(
+      '/api/search',
+      searchRoutes({
+        ...archiveDeps,
+        ...(resolved.searchHosts ? { searchHosts: resolved.searchHosts } : {}),
+      }),
+    );
     app.route('/api/archive', archiveRoutes(archiveDeps));
   }
   return app;

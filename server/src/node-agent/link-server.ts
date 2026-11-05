@@ -33,6 +33,20 @@ import { sendPath } from './send-files.js';
 export interface LinkServerDeps {
   /** Open a socket to this host's local ptyd control endpoint. */
   connectPtyd: () => WebSocket;
+  /**
+   * Search THIS machine's archive, for the server's cross-host view.
+   *
+   * Optional: a host with no archive answers "no index here" rather than
+   * pretending to have searched, which is a different fact from "no hits" and
+   * the server renders it as such.
+   */
+  search?: (
+    q: string,
+    opts: { limit: number; role?: string },
+  ) => {
+    hits: unknown[];
+    fallback: boolean;
+  };
   /** Build a transcript tail. See TranscriptSubscriptions. */
   makeTail: ConstructorParameters<typeof TranscriptSubscriptions>[0]['makeTail'];
   log?: (line: string) => void;
@@ -164,6 +178,10 @@ export class LinkServer {
       if (m.op === 'fetch') void this.sendFiles(m.id, m.path);
       return;
     }
+    if (m.ch === 'search') {
+      if (m.op === 'query') this.answerSearch(m.id, m.q, m.limit, m.role);
+      return;
+    }
     if (m.ch === 'api') {
       if (m.op !== 'response') return;
       const settle = this.apiCalls.get(m.id);
@@ -179,6 +197,29 @@ export class LinkServer {
     if (m.op === 'frame') {
       const r = this.runners.get(m.paneId);
       if (r?.readyState === WebSocket.OPEN) r.send(JSON.stringify(m.frame));
+    }
+  }
+
+  /**
+   * Answer one search of this machine's archive.
+   *
+   * ALWAYS answers. The server is holding an HTTP request open for a user
+   * looking at a search box, and the whole value of a cross-host result is
+   * knowing which machines actually reported — so "I have no index" and "the
+   * query failed" are said out loud rather than becoming a silent gap that
+   * reads as "nothing here".
+   */
+  private answerSearch(id: string, q: string, limit: number, role?: string): void {
+    const search = this.deps.search;
+    if (!search) {
+      this.up({ ch: 'search', op: 'error', id, reason: 'no archive on this machine' });
+      return;
+    }
+    try {
+      const { hits, fallback } = search(q, { limit, ...(role ? { role } : {}) });
+      this.up({ ch: 'search', op: 'hits', id, hits, fallback });
+    } catch (e) {
+      this.up({ ch: 'search', op: 'error', id, reason: (e as Error).message });
     }
   }
 
