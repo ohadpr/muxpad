@@ -4110,6 +4110,14 @@ body.sidenav-resizing iframe {
      Padding, not margin, so the ground below still runs the full width: the
      band is a shelf across the rail, and a shelf with side gaps is a card. */
   padding: 2px var(--nt-pad) 5px;
+  /* ── THE BRACKET PAYS FOR ITS OWN WIDTH ─────────────────────────────────
+     The 3px leading border below is part of this box, so it would push every
+     row in the band 3px right of every row beneath it — which is precisely
+     the misalignment the inset arithmetic above exists to prevent ("the chats
+     there are not horizontally aligned with the rest of the chats below").
+     So the leading padding gives the 3px back. The bracket then sits in the
+     margin the rail already had, and the rows do not move at all. */
+  padding-inline-start: calc(var(--nt-pad) - 3px);
   /* ── AND IT IS TINTED FROM THE ACCENT, NOT FROM THE INK ─────────────────
      A neutral lift is what every other raised surface in the chrome uses, so
      the band read as "the rail, slightly brighter" — "the working on can be
@@ -4144,25 +4152,41 @@ body.sidenav-resizing iframe {
      a section of it, and at 9% over a cream rail (memphis) the step read as a
      grey block rather than as a tint. Row ink stays 4.9–12:1 on all ten.
 
-     ── AND THEN IT NEEDED MORE SEPARATION ─────────────────────────────────
-     "Style recent active section with a bit more contrast so its different
-     from rest of sidebar. not crazy."
+     ── AND THEN IT NEEDED MORE SEPARATION, TWICE ──────────────────────────
+     "Style recent active section with a bit more contrast" and then "needs
+     stronger contrast, it can't look like just another sidebar section."
 
-     The tempting move is HUE — a trace of accent, so the band reads as a
-     different kind of area rather than a darker piece of rail. That was
-     tried, measured and rejected before: an accent wash only separates when
-     the accent's luminance differs from the rail's (on riso they are within
-     1.04:1), and at 13% it pushed tokyo-night's row ink under AA. A mix from
-     --fg always moves AWAY from the surface, whatever the theme, which is why
-     the ground is that and the accent does the seam instead. I re-made that
-     mistake and the contrast test caught it.
+     I answered the first with tint — 6% → 8% — and the second request is the
+     evidence that tint was never going to do it. MEASURED, across all ten
+     themes (the sweep is reproduced in ChatChrome.contrast.test):
 
-     So: the same axis, one step. 6% → 8%, short of the 9% that read as a grey
-     block — and that was while the band was PINNED, a fixed shelf holding its
-     own against a list sliding under it; a band that scrolls with the list
-     can carry a little more without becoming furniture. Re-measured on all
-     ten: row ink stays ≥ 4.4:1 (ChatChrome.contrast.test). */
+       · on MEMPHIS the band-vs-rail step is 1.001:1 at ANY percentage. Its
+         --fg and its rail surface sit at the same luminance, so a wash of one
+         over the other moves nothing. More grey is literally invisible there.
+       · on TOKYO-NIGHT the row ink is already 4.59:1 at 8% and crosses the
+         4.4 floor by 10%. So the ceiling is reached before the effect is.
+
+     Tint is capped by the darkest theme and useless on the lightest. The axis
+     is wrong, and that is also why an accent WASH failed earlier for what
+     looked like a different reason: a 13% mix of anything cannot separate two
+     colours that share a luminance.
+
+     EDGES CAN, because an edge is not a mix. At full strength the accent
+     measures 2.96–12.6:1 against the rail on every theme — riso (2.96) and
+     demoscene (3.04) included, the two a wash could not touch. So the band is
+     BRACKETED rather than shaded: a 3px accent bar down its leading edge and
+     the accent seam under it, both solid, with the 8% ground kept for the
+     themes where it does contribute.
+
+     The leading edge is free: the pinned mark used to be a 2px bar there and
+     is now the row's NAME ink (see --nt-pinned-ink), so nothing else paints
+     in this channel and there is no second vertical to collide with. */
   background: color-mix(in srgb, var(--fg) 8%, transparent);
+  /* ── THE BRACKET ────────────────────────────────────────────────────────
+     3px, solid accent, full width of the band's own ground. This is the thing
+     that makes it read as a different KIND of region on a theme whose rail
+     and ink share a luminance — which is half of them. */
+  border-inline-start: 3px solid var(--accent);
   /* ── ONE LINE, NOT FOUR ─────────────────────────────────────────────────
      The top of this rail had become a stack of hairlines: the brand's, this
      band's top border, its bottom border, an inset highlight inside the top
@@ -4174,12 +4198,12 @@ body.sidenav-resizing iframe {
      lines up with the pane's tab strip), so this keeps exactly one — the seam
      at the bottom, where the band stops and the ordinary rail begins. */
   /* AND THE SEAM IS THE ACCENT, which is what makes this a different kind of
-     shelf rather than a brighter piece of rail. Measured 1.4–3.5:1 against
-     the band on every theme — visible everywhere, loud nowhere.
-     45% → 55% with the ground above: the boundary is the other half of "it
-     should look different", and a firmer line costs nothing in the way a
-     darker ground does. */
-  border-bottom: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+     shelf rather than a brighter piece of rail. It was a 45% mix, then 55%;
+     it is SOLID now, for the same reason the bracket is — a mix toward the
+     band is a mix toward a colour the band may already share, and on riso and
+     demoscene that is most of its strength gone. Measured 2.96–12.6:1 against
+     the rail on all ten. */
+  border-bottom: 1px solid var(--accent);
 }
 
 /* The heading is a LABEL, not a section header: small caps, wide, quiet.
