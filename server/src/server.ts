@@ -376,6 +376,11 @@ export function createApp(deps: AppDeps): Hono {
   app.route('/api/panes', panesScopedRoutes(lifecycle));
   app.route('/api/panes', paneIoRoutes(resolved));
   app.route('/api/panes', chatActionsRoutes(resolved));
+  // One theme for the whole install, pushed to every open window — see
+  // store/PrefStore.ts. Mounted beside the other reads rather than under
+  // /api/settings: there is no per-device settings endpoint and never was,
+  // because every other setting IS per-device and lives in localStorage.
+  app.route('/api/prefs', prefsRoutes({ db: resolved.db, events: resolved.events }));
   app.route('/api/panes', attachmentsRoutes(resolved));
   app.route('/api/panes', summaryRoutes(resolved));
   app.route('/api/open', openRoutes(resolved));

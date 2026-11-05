@@ -341,29 +341,30 @@ describe('the sheet’s rows, and the pane pill that belongs to them', () => {
 });
 
 /**
- * THE WORKING SET IS ON THE SHEET, AND ONLY THE SHEET.
+ * THE WORKING SET IS ON BOTH SURFACES, AT THE TOP OF THE LIST.
  *
- * It was on both. On a desktop it is TABS now, above the pane (see
- * WorkingSetTabs) — a list that looks like the list under it and means
- * something different from it reads as noise however carefully it is
- * coloured, and four rounds of tuning each traded one casualty for another.
+ * Fourth arrangement. It was pinned above the rail's scroller, then inside
+ * it, then out of the rail altogether and into a tab strip above the pane —
+ * on the reasoning that a list which looks like the list under it and means
+ * something different reads as noise however carefully it is coloured.
  *
- * The sheet keeps the band. A tab strip on a phone is six things fighting
- * for 390px, which is the crowding this move exists to undo, reproduced on
- * the surface that can least afford it — and the cost of hunting for a chat
- * is HIGHER there: the list is the whole screen and there is no ⌘K chord on
- * a thumb.
+ * True about the band, and not an argument for a second navigation surface:
+ * the rail already lists those chats, in groups, with their state, so the
+ * strip was a second place to click the same thing and cost a row of the
+ * pane's height to be it. "Rethink tab bar — remove it and bring back the
+ * recent chats section at the top of the sidebar."
+ *
+ * Both surfaces render it inside their own scroller now, which is where the
+ * sheet has had it all along.
  */
-describe('the working-set strip is the sheet’s, now', () => {
+describe('the working-set strip is at the top of both lists', () => {
   const tsx = readFileSync(join(__dirname, 'NavTree.tsx'), 'utf8');
 
-  it('is rendered by the sheet and NOT by the rail', () => {
-    expect(tsx.match(/<WorkingSetStrip/g) ?? []).toHaveLength(1);
-    const rail = tsx.slice(tsx.indexOf('function SidebarTree'), tsx.indexOf('function SheetRail'));
-    expect(rail).not.toContain('<WorkingSetStrip');
+  it('is rendered by the rail AND the sheet', () => {
+    expect(tsx.match(/<WorkingSetStrip/g) ?? []).toHaveLength(2);
   });
 
-  it('renders INSIDE the sheet’s scroller, as the first thing in it', () => {
+  it('renders INSIDE each scroller, as the first thing in it', () => {
     // It was pinned above the scroller — "a strip you have to scroll to is a
     // strip you will search for" — and that assumed a rail mostly below the
     // fold. It is not: the band is six rows at most and sits at the top, so
@@ -371,7 +372,7 @@ describe('the working-set strip is the sheet’s, now', () => {
     // pinning actually bought was a fixed object the list slid under: "I'm
     // not entirely sold on having the recent chats be fixed. I think you
     // should be able to scroll through the whole thing."
-    for (const host of ['function SheetRail']) {
+    for (const host of ['function SidebarTree', 'function SheetRail']) {
       const surface = tsx.slice(tsx.indexOf(host));
       const strip = surface.indexOf('<WorkingSetStrip');
       const scroll = surface.indexOf('className="navtree-scroll"');

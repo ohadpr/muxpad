@@ -585,31 +585,33 @@ function SidebarTree({
   return (
     <nav className="navtree" data-variant={variant} aria-label="Workspaces and tabs">
       <div className="navtree-scroll">
-        {/* ─── THE RECENTLY-ACTIVE BAND ─────────────────────────────────────
-          INSIDE the scroller, as the first thing in it. It was pinned above —
-          "a strip you have to scroll to is a strip you will search for" — and
-          that reasoning assumed a rail that is mostly below the fold. It is
-          not: the band is six rows at most (see shared/working-set.ts for the
-          simulation behind the number) and it is already at the top, so on
-          any rail taller than about ten rows it is on screen whether it is
-          pinned or not. What pinning actually bought was a fixed object the
-          list slid under: "I'm not entirely sold on having the recent chats
-          be fixed. I think you should be able to scroll through the whole
-          thing."
+        {/* ─── THE RECENTLY-ACTIVE BAND, BACK WHERE IT STARTED ──────────────
+          Four arrangements, and this is the fourth:
 
-          So it scrolls with everything else, and the rail is one list again.
+            1. PINNED above the rail's scroller. "A strip you have to scroll to
+               is a strip you will search for" — but the rail is not mostly
+               below the fold, so pinning mostly bought a fixed object the
+               list slid under. Reported: "I'm not entirely sold on having the
+               recent chats be fixed. I think you should be able to scroll
+               through the whole thing."
+            2. INSIDE the scroller, first thing in it.
+            3. OUT of the rail and into a TAB STRIP above the pane, on the
+               reasoning that a list which looks like the list under it and
+               means something different reads as noise however carefully it
+               is coloured.
+            4. HERE. "Rethink tab bar — remove it and bring back the recent
+               chats section at the top of the sidebar."
 
-          ── AND THEN IT LEFT ALTOGETHER ─────────────────────────────────
-          The band is TABS now, above the pane (see WorkingSetTabs). Every
-          complaint it ever collected was the same one: a list that looks
-          like the list under it and means something different from the list
-          under it reads as noise however carefully it is coloured. Four
-          rounds of tuning each traded one casualty for another.
+          The strip was a second navigation surface for the same chats: the
+          rail already lists them, in groups, with their state — and two
+          places to click the same thing is the cost the band was moved to
+          avoid, paid twice over with a row of the pane's height on top.
 
-          The rail has one job again, which is also what makes it something
-          you could collapse without losing your place. The SHEET keeps the
-          band — see the other mount — because a tab strip on a phone is the
-          same crowding on the surface that can least afford it. */}
+          Inside the scroller, as in (2): the rail is one list again, and you
+          can scroll past the band to the workspaces instead of having it hold
+          a fixed slice of the screen. The SHEET has always had it here — see
+          the other mount — so both surfaces now agree. */}
+        <WorkingSetStrip activeTabSlug={activeTabSlug} {...(onNavigate ? { onNavigate } : {})} />
         {/* NO CREATE CONTROL HERE, and none in the list either. It is on each
             WORKSPACE HEADER — see WorkspaceNode. That is the row the action is
             about, so the button needs no label saying where it creates and

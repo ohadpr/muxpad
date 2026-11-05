@@ -15,7 +15,6 @@ import { NoticeToast } from './NoticeToast';
 import { SettingsMenu } from './SettingsMenu';
 import { ThemeSwitch } from './ThemeSwitch';
 import { UpdateBanner } from './UpdateBanner';
-import { WorkingSetTabs } from './WorkingSetTabs';
 import { WorkspaceShell } from './WorkspaceLayout';
 
 const REPO_URL = 'https://github.com/ohadpr/muxpad';
@@ -151,17 +150,22 @@ export function AppLayout() {
               </div>
             </aside>
           )}
-          {/* ── THE WORKING SET, ABOVE THE PANE ───────────────────────────
-              Right of the rail and above the content, which is where a tab
-              bar belongs relative to a sidebar and is the one place it does
-              not look like the tree. It was a band at the top of the sidebar;
-              see WorkingSetTabs for why that could not be tuned into working.
+          {/* ── NO TAB BAR ────────────────────────────────────────────────
+              There was a strip of the recently-active chats here, above the
+              pane: a band moved out of the rail on the reasoning that a list
+              which looks like the list under it and means something different
+              reads as noise however carefully it is coloured.
 
-              Sidebar mode only — the mobile sheet keeps the band, because a
-              tab strip on a phone is six things fighting for 390px, which is
-              the problem this is solving reproduced where it hurts most. */}
+              True about the band in the rail; not an argument for a second
+              navigation surface. The rail already lists those chats, in
+              groups, with their state — so the strip was a second place to
+              click the same thing, and it cost a row of the pane's height to
+              be it. "Rethink tab bar — remove it and bring back the recent
+              chats section at the top of the sidebar."
+
+              The band is back at the top of the rail (NavTree), inside the
+              scroller, which is where the phone sheet has had it all along. */}
           <div className="workspace-column">
-            {sidebarMode && <WorkingSetTabs activeTabSlug={activeTabSlug ?? null} />}
             <div className="workspace-hosts">
               {[...visitedWsSlugs].map((slug) => (
                 <div
