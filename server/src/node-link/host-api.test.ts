@@ -241,6 +241,37 @@ describe('spawning a worker', () => {
     expect(res.status).toBe(200);
   });
 
+  it('sees only ITS OWN panes in a mixed tab', async () => {
+    // `tabIsOn` accepts a tab containing ANY pane on the calling host — the
+    // right rule for a card, which belongs to the conversation, and the wrong
+    // one for this answer, which carries every pane's `env`, `startup_cmd`
+    // and `cwd`. Tabs CAN be mixed: merge preserves each pane's node. So a
+    // host with one pane in a merged tab could read a local pane's
+    // environment by asking about the tab they share. Found in review.
+    const mixed = new HostApi({
+      db,
+      selfUrl: 'http://127.0.0.1:7777',
+      apiKey: () => 'secret',
+      fetch: () =>
+        new Response(
+          JSON.stringify({
+            id: remote.tab,
+            panes: [
+              { id: remote.paneId, env: null },
+              { id: local.paneId, env: { API_TOKEN: 'secret' }, startup_cmd: 'deploy --prod' },
+            ],
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+    });
+    const res = await mixed.handle('trayo', 'GET', `/api/tabs/${remote.tab}`);
+    expect(res.status).toBe(200);
+    const body = JSON.parse(res.body) as { panes: Array<{ id: string }> };
+    expect(body.panes.map((p) => p.id)).toEqual([remote.paneId]);
+    expect(res.body).not.toContain('API_TOKEN');
+    expect(res.body).not.toContain('deploy --prod');
+  });
+
   it('refuses reading a tab on the mac', async () => {
     const res = await api.handle('trayo', 'GET', `/api/tabs/${local.tab}`);
     expect(res.status).toBe(404);
