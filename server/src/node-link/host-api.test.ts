@@ -333,6 +333,22 @@ describe('publishing from a host', () => {
     expect(fetched).toHaveLength(0);
   });
 
+  it('answers the pre-flight, so the CLI never goes looking for tailscale', async () => {
+    // A 404 here reads as "unanswered", and the CLI's ladder for that ends in
+    // execing tailscale to create a funnel mapping — on a machine with no
+    // business doing it. A publish from the VM hung past two minutes there
+    // while the artifact itself had already transferred fine.
+    const res = await api.handle('trayo', 'GET', '/api/publish/base?probe=0');
+    expect(res.status).toBe(200);
+    expect(new URL((fetched[0] as Request).url).search).toBe('?probe=0');
+  });
+
+  it('still refuses a query the shape did not name', async () => {
+    const res = await api.handle('trayo', 'GET', '/api/publish/base?probe=1');
+    expect(res.status).toBe(404);
+    expect(fetched).toHaveLength(0);
+  });
+
   it('is refused outright when the link has no file channel', async () => {
     // `fetchFromHost` absent = publishing from a host is simply not on the
     // list, which is the right default rather than a half-working path.
