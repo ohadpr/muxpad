@@ -38,6 +38,23 @@
 /** Which conversation a message belongs to. */
 export type LinkChannel = 'ptyd' | 'transcript' | 'runner' | 'api' | 'files' | 'search';
 
+/**
+ * The same list, as a value, because {@link decodeLink} has to check it at
+ * runtime.
+ *
+ * Derived from the type by construction — `satisfies` makes adding a channel
+ * to `LinkChannel` and forgetting this one a COMPILE error, which is exactly
+ * the failure that cost an afternoon: a hand-written `ch !== 'a' && ch !== 'b'`
+ * chain that had not learned about `search`, so every search frame was quietly
+ * malformed and the feature reported only timeouts.
+ */
+const CHANNELS = new Set(['ptyd', 'transcript', 'runner', 'api', 'files', 'search'] as const);
+type _ChannelsCoverTheType = LinkChannel extends SetElement<typeof CHANNELS> ? true : never;
+type SetElement<S> = S extends Set<infer T> ? T : never;
+/** Asserts the set above is exhaustive; unused at runtime. */
+const _channelsExhaustive: _ChannelsCoverTheType = true;
+void _channelsExhaustive;
+
 /** Server → host. */
 export type LinkDown =
   /** Forward verbatim to the local ptyd control socket. */
@@ -153,8 +170,11 @@ export function decodeLink(raw: string): (LinkDown | LinkUp) | null {
   }
   if (!v || typeof v !== 'object') return null;
   const ch = (v as { ch?: unknown }).ch;
-  if (ch !== 'ptyd' && ch !== 'transcript' && ch !== 'runner' && ch !== 'api' && ch !== 'files')
-    return null;
+  // ONE LIST, and it is the thing to update when a channel is added. A channel
+  // missing here is not a type error and not a crash: every message on it is
+  // silently "malformed", so the feature simply does nothing — which is how
+  // `search` shipped answering nothing but "did not answer in time".
+  if (!CHANNELS.has(ch as LinkChannel)) return null;
   return v as LinkDown | LinkUp;
 }
 

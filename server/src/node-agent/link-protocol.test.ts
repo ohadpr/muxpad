@@ -63,3 +63,27 @@ describe('what a host is allowed to send', () => {
     }
   });
 });
+
+/**
+ * THE CHANNEL LIST IS THE THING THAT BREAKS QUIETLY.
+ *
+ * `decodeLink` rejects an unknown channel by returning null, which is right —
+ * a parse failure must close a message and never the process. The cost is that
+ * a channel MISSING from that list is not a type error and not a crash: every
+ * message on it is silently malformed, so the feature does nothing at all.
+ * That is how `search` shipped answering only "did not answer in time" on a
+ * host whose archive was fully indexed.
+ */
+describe('every channel decodes', () => {
+  it('accepts a frame on each one', () => {
+    for (const ch of ['ptyd', 'transcript', 'runner', 'api', 'files', 'search'] as const) {
+      expect(decodeLink(JSON.stringify({ ch, op: 'x' })), ch).not.toBe(null);
+    }
+  });
+
+  it('still rejects one that is not a channel', () => {
+    expect(decodeLink(JSON.stringify({ ch: 'shell', op: 'exec' }))).toBe(null);
+    expect(decodeLink(JSON.stringify({ op: 'x' }))).toBe(null);
+    expect(decodeLink('not json')).toBe(null);
+  });
+});
