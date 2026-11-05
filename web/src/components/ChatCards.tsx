@@ -124,7 +124,17 @@ a{color:var(--accent)}`;
  * at the 120px initial guess with its content floating in empty space, which
  * reads as a styling bug and is not one. The body is the content.
  */
-const SELF_MEASURE = `
+/**
+ * EXPORTED FOR ITS TEST, and it is worth saying why that is not a smell.
+ *
+ * This is a string of JavaScript that runs inside a sandboxed frame with no
+ * access to the app, so it cannot import a tested function and the rule it
+ * implements cannot be tested by rendering a card — jsdom has no layout, so
+ * every box in it is 0×0. Exporting the source lets the test evaluate it
+ * against boxes it controls, which is the only way to check the arithmetic
+ * that decides where a folded card is cut.
+ */
+export const SELF_MEASURE = `
 <script>
   var send = function () {
     var b = document.body;
@@ -144,20 +154,48 @@ const SELF_MEASURE = `
     // Unmarked cards fall back to the first element that has a box, which keeps
     // a simple card folding without ceremony.
     var h1 = 0;
-    var mark = b.querySelector('[data-peek]');
-    if (mark) {
-      // ── SYMMETRIC INSET, OR THE FOLD LOOKS BOTTOM-HEAVY ────────────────
-      // The cut is the marked row's bottom edge, so the folded frame contains
-      // the body's TOP padding and nothing below it. The content then sits low
-      // by exactly that padding and reads as a centring bug. Mirror the top
-      // inset underneath: a folded card gets the same air above and below.
-      var pt = parseFloat(getComputedStyle(b).paddingTop) || 0;
-      h1 = Math.ceil(mark.getBoundingClientRect().bottom - b.getBoundingClientRect().top + pt);
-    } else {
+    var top = b.getBoundingClientRect().top;
+    var pt = parseFloat(getComputedStyle(b).paddingTop) || 0;
+    var kept = b.querySelector('[data-peek]');
+    if (!kept) {
       for (var c = b.firstElementChild; c; c = c.nextElementSibling) {
-        var r = c.getBoundingClientRect().height;
-        if (r > 0) { h1 = Math.ceil(r); break; }
+        if (c.getBoundingClientRect().height > 0) { kept = c; break; }
       }
+    }
+    if (kept) {
+      // ── THE CUT GOES IN THE GAP, NOT ON AN EDGE ────────────────────────
+      // Reported as cards that "end up showing cropped content, either their
+      // own line is cropped or the next line starts showing and it's
+      // cropped" — which is two symptoms of one thing: a fold height computed
+      // from ONE element's box is a guess about where the next element starts.
+      //
+      // Too small by a pixel of descender or line-height overflow and the
+      // kept row is shaved; too large by a collapsed margin and the next row
+      // peeks through, cropped, which is worse because it looks like content
+      // the card is trying to show.
+      //
+      // So the frame — which can see its own layout — measures BOTH edges and
+      // cuts between them: everything down to the kept element's bottom, plus
+      // the top inset mirrored underneath, CLAMPED to the next element's top.
+      // The kept row therefore cannot be shaved (the cut is never above its
+      // bottom) and the next row cannot appear (the cut is never below its
+      // first pixel). When the gap is wide enough the card gets the same air
+      // above and below; when it is not, not revealing the next row wins.
+      var keptBottom = kept.getBoundingClientRect().bottom - top;
+      var next = null;
+      for (var n = kept.nextElementSibling; n; n = n.nextElementSibling) {
+        if (n.getBoundingClientRect().height > 0) { next = n; break; }
+      }
+      // A marked element nested inside a wrapper has no sibling worth reading:
+      // walk out to the wrapper's own next sibling, which is the next thing
+      // that will actually appear below it.
+      for (var p = kept.parentElement; !next && p && p !== b; p = p.parentElement) {
+        for (var m = p.nextElementSibling; m; m = m.nextElementSibling) {
+          if (m.getBoundingClientRect().height > 0) { next = m; break; }
+        }
+      }
+      var ceiling = next ? next.getBoundingClientRect().top - top : Infinity;
+      h1 = Math.ceil(Math.min(keptBottom + pt, Math.max(keptBottom, ceiling)));
     }
     // ── IS THERE ANYTHING IN HERE TO CLICK ────────────────────────────
     // Decides whether the frame may take the pointer at all. Most cards are
@@ -181,6 +219,14 @@ const SELF_MEASURE = `
   requestAnimationFrame(send);
   setTimeout(send, 120);
   setTimeout(send, 500);
+  // ── AND AGAIN ONCE THE FONTS HAVE LANDED ──────────────────────────────
+  // A line measured in the fallback face is the wrong height for the one that
+  // ends up on screen, and the ResizeObserver only fires if the BODY's box
+  // changes — a swap that alters a line's height inside a fixed-height card
+  // does not move it. That is the other way a folded card ends up cropped by
+  // a pixel or two, and it is invisible in testing because a warm cache has
+  // the font before first paint.
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(send);
 </script>`;
 
 function HtmlCard({

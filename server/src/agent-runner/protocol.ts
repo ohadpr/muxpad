@@ -118,18 +118,31 @@ export type RunnerFrame =
        */
       background?: number;
       /**
-       * THIS TURN PUT NOTHING IN THE CHAT, and nobody typed it.
+       * DID THIS TURN PUT ANYTHING IN THE CHAT? Three states, deliberately.
        *
-       * No prose, no reply, no `muxpad say` — a cron fire that refreshed a
-       * card and stayed quiet, which is the shape muxpad's own instructions
-       * ask a scheduled job to have. The server reads it to decide whether to
-       * bold the chat in the sidebar: there is nothing new to read, so there
-       * is nothing to mark.
+       *   true       nothing, and nobody typed it — a cron fire that refreshed
+       *              a card and stayed quiet, which is the shape muxpad's own
+       *              instructions ask a scheduled job to have.
+       *   false      it SPOKE: prose, a reply, or a `muxpad say`.
+       *   absent     this runner is too old to say. Not the same as `false`,
+       *              and the difference is the whole reason the field is a
+       *              boolean rather than a flag.
        *
-       * Absent means "mark it", which is the old behaviour and what every
-       * backend that does not set it will keep getting.
+       * `false` was added because a runner is never respawned to deliver a fix
+       * (it would kill background subagents and wakeups), so the panes that
+       * fire the most crons are the longest-lived — the one place a
+       * runner-side fix was most needed was the one place it could not reach.
+       * The Investing chat's runner was three weeks old and had never heard of
+       * this field, so its hourly card refresher bolded the row every weekday
+       * hour. With three states the server can tell "it spoke" from "I cannot
+       * tell", and treat a scheduled turn it cannot judge the way muxpad's
+       * contract already promises.
+       *
+       * Absent still means "mark it" for a HUMAN-started turn, which is the
+       * old behaviour and the right failure direction there: somebody is
+       * waiting on it.
        */
-      silent?: true;
+      silent?: boolean;
     }
   /**
    * The background set CHANGED SIZE outside a turn boundary — in practice, the

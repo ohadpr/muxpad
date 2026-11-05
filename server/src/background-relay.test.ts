@@ -185,6 +185,75 @@ describe('unread after a turn', () => {
     expect(unread(db, pane.id)).toBe(1);
   });
 
+  /**
+   * ─── THE CRON RULE, AND WHY THE SERVER NEEDS ONE AT ALL ─────────────────
+   *
+   * `silent` comes from the RUNNER, and a runner is never respawned to deliver
+   * a fix — it would kill background subagents and wakeups. So the panes that
+   * fire the most crons are the longest-lived, and the one place the fix was
+   * most needed was the one place it could not reach: the Investing chat's
+   * runner was three weeks old and had never heard of the field, so its hourly
+   * card refresher bolded the row every weekday hour. Reported twice.
+   *
+   * A scheduled turn therefore marks only when its runner POSITIVELY says it
+   * spoke. That inverts the usual failure direction for crons alone, and in
+   * the direction muxpad's own contract already promises: a fire's prose never
+   * reaches the conversation, so a mark on it promises something to read that
+   * the log does not contain.
+   */
+  it('does NOT bold for a cron fire from a runner too old to say', async () => {
+    const { pane, runner, db, open } = await boot();
+    await fireCron(open, pane.id);
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    await settle();
+    // No `silent` at all — the three-week-old runner.
+    runner.send(JSON.stringify({ t: 'turn-done', ok: true }));
+    await settle();
+    expect(unread(db, pane.id)).toBe(0);
+  });
+
+  it('DOES bold a cron fire whose runner says it spoke', async () => {
+    // A scheduled job with real news still reaches the quiet channel — which
+    // is why the field is three-state and not a flag.
+    const { pane, runner, db, open } = await boot();
+    await fireCron(open, pane.id);
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    await settle();
+    runner.send(JSON.stringify({ t: 'turn-done', ok: true, silent: false }));
+    await settle();
+    expect(unread(db, pane.id)).toBe(1);
+  });
+
+  it('bolds a FAILED cron fire whatever its runner says', async () => {
+    // The same exception the push gate makes: nobody is watching a scheduled
+    // job, so its errors are the news it most needs to deliver.
+    const { pane, runner, db, open } = await boot();
+    await fireCron(open, pane.id);
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    await settle();
+    runner.send(JSON.stringify({ t: 'turn-done', ok: false, error: 'boom' }));
+    await settle();
+    expect(unread(db, pane.id)).toBe(1);
+  });
+
+  it('still bolds a HUMAN turn from an old runner — somebody is waiting', async () => {
+    // The failure direction only flips for scheduled turns. A typed turn that
+    // says nothing is still worth a mark, because you asked for it.
+    const { pane, runner, db, open } = await boot();
+    const { sock } = await open(`/ws/chat/${pane.id}`);
+    sock.send(JSON.stringify({ t: 'send', text: 'do the thing' }));
+    await settle();
+    await new Promise<void>((resolve) => {
+      sock.once('close', () => resolve());
+      sock.close();
+    });
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    await settle();
+    runner.send(JSON.stringify({ t: 'turn-done', ok: true }));
+    await settle();
+    expect(unread(db, pane.id)).toBe(1);
+  });
+
   it('bolds it for a backend that has never heard of the field', async () => {
     // The failure direction that matters: an extra mark is noise, a missing
     // one loses news. codex and cursor send no `silent`, ever.
