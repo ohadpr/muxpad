@@ -305,7 +305,12 @@ describe('the spawn cards and the roster read ONE list', () => {
     // the card gives you, in the chat where the rest of the work is too.
     expect(BODY).not.toContain('onToggleExpanded');
     expect(BODY).not.toContain('SpawnWorkBody');
-    expect(BODY).toContain('onOpen={() => openChat(kid)}');
+    // …and tapping it now opens that chat in the DRAWER rather than navigating
+    // to it: reading a worker's answer is something you are doing on behalf of
+    // the conversation you are in, so both stay on screen. It still falls
+    // through to a navigation for a chat that is not one of this one's own
+    // workers — see `openSubChatOrNavigate`.
+    expect(BODY).toContain('onOpen={() => openSubChatOrNavigate(kid)}');
   });
 
   it('DRAWS FROM ROUNDS when the conversation has them', () => {

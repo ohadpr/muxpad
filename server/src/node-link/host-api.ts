@@ -361,6 +361,10 @@ export class HostApi {
     // more than its shape.
     if (typeof src !== 'string' || !src.startsWith('/') || src.includes('\0')) return NOT_FOUND;
     const out: Record<string, unknown> = {};
+    // WHICH CHAT PUBLISHED IT, and it must be one of this host's own — the
+    // artifact list of a chat on the mac is not somewhere a VM may write.
+    if (typeof v.pane === 'string' && ID.test(v.pane) && this.paneIsOn(nodeId, v.pane))
+      out.pane = v.pane;
     if (typeof v.name === 'string' && /^[a-z0-9-]{1,64}$/.test(v.name)) out.name = v.name;
     if (v.update === true) out.update = true;
     if (typeof v.days === 'number' && Number.isFinite(v.days) && v.days > 0 && v.days <= 3650)

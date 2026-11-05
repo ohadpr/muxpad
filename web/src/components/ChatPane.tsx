@@ -138,6 +138,7 @@ import {
 import { documentVisible } from '../lib/seen-ack';
 import { composerAfterLateAck, watchdogVerdict } from '../lib/send-watchdog';
 import { NO_ROUNDS, loadSpawnRounds } from '../lib/spawn-rounds';
+import { subChatIsOpen, subChatsOf } from '../lib/sub-chats';
 import { uploadError } from '../lib/upload-error';
 import { type UploadItem, UploadQueue, formatBytes, summarize } from '../lib/upload-queue';
 import type { AgentLink } from '../lib/voice/session';
@@ -150,6 +151,7 @@ import { BrowserCard } from './BrowserCard';
 import { useBrowsers } from './BrowserCards';
 import { ChatCards } from './ChatCards';
 import { ChatDraft, type ChatDraftHandle } from './ChatDraft';
+import { ChatDrawer, SvgWorkDrawer } from './ChatDrawer';
 import { HighlightedText, Markdown } from './ChatMarkdown';
 import { ChatMentionCard, ChatMentionPicker, ChatMentionPill } from './ChatMentionPicker';
 import {
@@ -819,6 +821,7 @@ export function ChatPane({
   active,
   agentNative = false,
   pendingPick = false,
+  nested = false,
 }: {
   paneId: string;
   /** The chat this pane IS — cards hang off the tab, not the pane, because a
@@ -830,6 +833,15 @@ export function ChatPane({
   /** Pane was created "Agent" with no harness chosen yet (`--pick`) — the chat
    *  shows the harness picker instead of a session. */
   pendingPick?: boolean;
+  /**
+   * THIS CHAT IS ITSELF INSIDE A DRAWER.
+   *
+   * Suppresses the work drawer and its control — otherwise a sub-chat opened
+   * in the panel offers its own panel, inside a 420px column, with the parent's
+   * one behind it. A chat's work is reached from the chat, and the chat you
+   * reached it from is one click back.
+   */
+  nested?: boolean;
 }) {
   // undefined = still connecting; null = connected but no agent session.
   const browserFontSize = useBrowserFontSize();
@@ -1139,6 +1151,18 @@ export function ChatPane({
   // machinery is a poll in the lib, the CARDS are placed in the log at the
   // moment each act happened.
   const chatActions = useChatActions(paneId);
+  // ── THE WORK DRAWER ───────────────────────────────────────────────────
+  // What this conversation set in motion, on its right-hand side. Closed by
+  // default and remembered per pane for as long as the pane is mounted —
+  // deliberately NOT persisted: it is a glance, not a layout choice, and a
+  // drawer that reopens itself on every visit is furniture.
+  const [drawer, setDrawer] = useState<{ tab: 'subchats' | 'artifacts'; paneId: string | null }>({
+    tab: 'subchats',
+    paneId: null,
+  });
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const subChats = useMemo(() => subChatsOf(corpus, myChat?.tabId ?? ''), [corpus, myChat?.tabId]);
+  const runningSubs = subChats.filter(subChatIsOpen).length;
   /** By tab id — how a stored card finds the chat it was sent to, now. */
   const corpusById = useMemo(() => new Map(corpus.map((c) => [c.tabId, c])), [corpus]);
 
@@ -1324,6 +1348,31 @@ export function ChatPane({
       });
     },
     [navigate],
+  );
+
+  /**
+   * A SUB-CHAT'S CARD OPENS IT IN THE DRAWER, not as a navigation.
+   *
+   * Clicking a worker's card used to leave the conversation you were reading —
+   * and reading the worker's answer is almost always something you are doing
+   * ON BEHALF of the chat you were in, so you then had to come back. The
+   * drawer keeps both on screen.
+   *
+   * Falls through to a navigation for any chat that is NOT one of this one's
+   * own workers: a pill naming some other conversation is a place to go, and
+   * putting it in this chat's work panel would be a lie about whose work it is.
+   */
+  const openSubChatOrNavigate = useCallback(
+    (chat: { tabId?: string; workspaceSlug: string; tabSlug: string }) => {
+      const mine = chat.tabId ? subChats.find((s) => s.chat.tabId === chat.tabId) : undefined;
+      if (nested || !mine?.paneId) {
+        openChat(chat);
+        return;
+      }
+      setDrawer({ tab: 'subchats', paneId: mine.paneId });
+      setDrawerOpen(true);
+    },
+    [nested, openChat, subChats],
   );
 
   // What every rendered mention in the log resolves through. Memoized so the
@@ -4520,7 +4569,7 @@ export function ChatPane({
                 {...(state === 'working' ? {} : { state: 'started', tone: 'started' })}
                 {...(x.thread ? { thread: x.thread } : {})}
                 {...(x.pair ? { pair: x.pair } : {})}
-                onOpen={() => openChat(kid)}
+                onOpen={() => openSubChatOrNavigate(kid)}
               />
             );
           }
@@ -4600,7 +4649,7 @@ export function ChatPane({
                 : {})}
               {...(x.thread ? { thread: x.thread } : {})}
               {...(x.pair ? { pair: x.pair } : {})}
-              onOpen={() => openChat(kid)}
+              onOpen={() => openSubChatOrNavigate(kid)}
             />
           );
         })}
@@ -4649,7 +4698,10 @@ export function ChatPane({
     // for this chat's children — the rows themselves are memoized, which is what
     // makes the indicator update in place instead of re-parsing the log.
     spawnedCards,
-    openChat,
+    // The card's own open handler — it routes one of THIS chat's workers into
+    // the drawer and anything else to a navigation, and it closes over the
+    // sub-chat list, so the transcript rebuilds when that list changes.
+    openSubChatOrNavigate,
     // The expansion is a disclosure the READER drives, so the transcript has to
     // rebuild when it changes — and when the fetched work lands under it.
     // Same reason as `spawnedCards` above: browser cards live IN the transcript,
@@ -5152,6 +5204,60 @@ export function ChatPane({
           TOUCH SKIPS IT. The app's own top bar is already a header on a phone
           — workspace, chat name, pane controls — and a second one under it
           would be the row this whole exercise is about, moved. */}
+        {/* ── WHAT THIS CHAT SET IN MOTION ───────────────────────────────
+          The control and the panel. At the pane's top-right, over the log,
+          because this app deliberately has no chat head (see ChatPane.css:
+          a full-width strip was tried three times and removed) and inventing
+          one for a single button would re-import the row cost that was
+          deleted.
+
+          Shown in every chat, including one that has never spawned anything:
+          a control that appears only once there is something in it cannot be
+          learned, and the panel's empty state says what it is for. The badge
+          is the part that is conditional — it counts workers still going. */}
+        {!nested ? (
+          <>
+            <button
+              type="button"
+              className="chat-drawer-open"
+              data-running={runningSubs > 0 ? 'true' : undefined}
+              aria-expanded={drawerOpen}
+              aria-label="This chat’s work — sub-chats and artifacts"
+              title="This chat’s work — sub-chats and artifacts"
+              onClick={() => setDrawerOpen((o) => !o)}
+            >
+              <SvgWorkDrawer />
+              {runningSubs > 0 ? (
+                <span className="chat-drawer-open__count">{runningSubs}</span>
+              ) : null}
+            </button>
+            {drawerOpen ? (
+              <ChatDrawer
+                tabId={myChat?.tabId ?? tabId}
+                corpus={corpus}
+                actions={chatActions}
+                tab={drawer.tab}
+                onTab={(t) => setDrawer({ tab: t, paneId: null })}
+                openPaneId={drawer.paneId}
+                onOpenChat={(s) => setDrawer((d) => ({ ...d, paneId: s?.paneId ?? null }))}
+                onClose={() => setDrawerOpen(false)}
+                onNavigate={(chat) => openChat(chat)}
+                // The real chat, mounted in the panel. `nested` is what stops
+                // it offering a work drawer of its own inside a 420px column.
+                renderChat={({ paneId: kidPane, tabId: kidTab }) => (
+                  <ChatPane
+                    key={kidPane}
+                    paneId={kidPane}
+                    tabId={kidTab}
+                    active={active}
+                    agentNative
+                    nested
+                  />
+                )}
+              />
+            ) : null}
+          </>
+        ) : null}
         {/* Keep approval reachable while the chat transport is still connecting. */}
         {active && !session?.current_sid && <SlackApprovalAlert paneId={paneId} />}
         {/* Fixed-position, draws nothing until you take the wheel. Mounted here

@@ -4365,6 +4365,11 @@ cmd_publish() {
   base_url="$(publish_base_url)"
   slug="${update_slug:-$FLAG_name}"
   body="{\"path\":$(json_string "$src")"
+  # WHICH CHAT PUBLISHED THIS. Nothing recorded it before — the public dir is
+  # keyed by slug and so is the expiry store — so a conversation had no way to
+  # list what it had put on the internet. Absent outside a pane, which is an
+  # ordinary way to publish.
+  [ -n "${MUXPAD_PANE_ID:-}" ] && body="$body,\"pane\":$(json_string "$MUXPAD_PANE_ID")"
   [ -n "$slug" ] && body="$body,\"name\":$(json_string "$slug")"
   [ -n "$update_slug" ] && body="$body,\"update\":true"
   [ -n "$FLAG_days" ] && body="$body,\"days\":$FLAG_days"
