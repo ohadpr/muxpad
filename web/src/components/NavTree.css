@@ -1950,6 +1950,43 @@
   border-top-color: transparent;
   animation: navtree-state-spin 0.8s linear infinite;
 }
+/* ── RISO SPINS TWO INK DOTS INSTEAD OF A CUT RING ────────────────────────
+   Same mark, same slot, SAME ANIMATION — only the drawing changes.
+
+   The cut ring is a 10px circle with a 1.5px stroke and one quadrant removed,
+   and on every other theme it is an amber arc on a dark grey rail: low
+   contrast, so the way a 1.5px curve aliases at 10px never shows. Riso puts
+   `#ffd84d` on `#1333c4`, which is about as far apart as two inks get — and
+   at maximum contrast the stroke's stair-stepping and the hard cut are the
+   two loudest things in it. It stops reading as a turning ring and starts
+   reading as a chunky yellow "U" that flips about. Reported from a
+   screenshot, and "harmonious" is the right word for what it is not.
+
+   A FILLED CIRCLE ALIASES FAR BETTER THAN A THIN ARC, because its edge is
+   where the colour is rather than where the colour stops. So riso's mark is
+   two dots on opposite ends of the same 10px box, turning on the same
+   keyframe: no stroke to stair-step, no cut to flip, and the motion reads as
+   an orbit rather than a stutter.
+
+   It is also the right IMAGE for this theme. A risograph prints one flat spot
+   ink at a time and its whole visual signature is two of them — registration
+   marks, halftone dots, overprint. Two ink dots going round is what the
+   process looks like. The second dot is the same hue at 55%, which is the
+   overprint read: the same ink, one pass lighter.
+
+   NO NEW ANIMATION, and that is a hard constraint rather than tidiness — one
+   keyframe in this rail is pinned by a test, because two that agree today are
+   two that can disagree tomorrow. */
+[data-theme="riso"] .navtree-mark[data-state="working"] {
+  border: 0;
+  background: radial-gradient(circle at 50% 17%, var(--status-working) 0 2.1px, transparent 2.3px),
+    radial-gradient(
+      circle at 50% 83%,
+      color-mix(in srgb, var(--status-working) 55%, transparent) 0 2.1px,
+      transparent 2.3px
+    );
+}
+
 .navtree-mark[data-state="ready"],
 .navtree-mark[data-state="blocked"],
 .navtree-mark[data-state="dead"] {
@@ -1991,6 +2028,15 @@
 @media (prefers-reduced-motion: reduce) {
   .navtree-mark[data-state="working"] {
     border-color: var(--status-working);
+    background: var(--status-working);
+  }
+  /* Riso's two dots need saying again: the rule above sets `background`, and
+     the theme's own rule sets `background` too, at higher specificity. Left
+     alone, reduced motion would get a pair of static dots — "indistinguishable
+     from a decoration", which is the one outcome the fallback above exists to
+     avoid. Same solid mark as every other theme. */
+  [data-theme="riso"] .navtree-mark[data-state="working"] {
+    border: 1.5px solid var(--status-working);
     background: var(--status-working);
   }
   /* The active-row arm is gone with the slab, like the four hues above it. It
