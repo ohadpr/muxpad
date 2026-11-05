@@ -60,7 +60,11 @@ describe('the theme’s sources are applied in issue order', () => {
   it('DROPS a refetch that was issued before a push it raced', async () => {
     const t = await load();
     let answer!: (v: { prefs: Record<string, string> }) => void;
-    getPrefs.mockReturnValue(new Promise((res) => (answer = res)));
+    getPrefs.mockReturnValue(
+      new Promise((res) => {
+        answer = res;
+      }),
+    );
     const inFlight = t.refreshAppTheme();
     // The pick lands while the refetch is still out.
     t.applyPushedTheme('riso');

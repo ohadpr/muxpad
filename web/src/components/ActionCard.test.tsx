@@ -93,6 +93,33 @@ describe('the link', () => {
   });
 });
 
+describe('the mark says WHICH integration', () => {
+  it('gives Slack its logo', () => {
+    const box = mount(action({ kind: 'slack.post' }));
+    expect(box.querySelector('.action-card__glyph svg')?.getAttribute('aria-label')).toBe('Slack');
+  });
+
+  it('gives publish a globe, not the unknown-integration arrow', () => {
+    // It fell through to the fallback on its first outing, so the commonest
+    // card in the log wore the mark that means "this client has never heard of
+    // this". A circle is the cheapest thing to assert that the arrow has not.
+    const svg = mount(action({ kind: 'publish.create' })).querySelector('.action-card__glyph svg');
+    expect(svg?.querySelector('circle')).not.toBeNull();
+  });
+
+  it('draws every integration the server can actually produce', () => {
+    // The guard against the above happening to the NEXT one: a kind muxpad
+    // ships must not share the fallback with a kind it has never seen.
+    const unknown = mount(action({ kind: 'carrier-pigeon.send' })).querySelector(
+      '.action-card__glyph svg',
+    )?.innerHTML;
+    for (const kind of ['slack.post', 'publish.create']) {
+      const mine = mount(action({ kind })).querySelector('.action-card__glyph svg')?.innerHTML;
+      expect(mine, `${kind} is still drawing the unknown-integration mark`).not.toBe(unknown);
+    }
+  });
+});
+
 describe('an integration this client has never heard of', () => {
   it('still renders a card', () => {
     // A client older than the server WILL meet kinds it does not know, and a
