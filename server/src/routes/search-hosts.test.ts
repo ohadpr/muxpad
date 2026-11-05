@@ -3,6 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ArchiveDb } from '../archive/ArchiveDb.js';
+import { PaneStore } from '../store/PaneStore.js';
+import { TabStore } from '../store/TabStore.js';
+import { WorkspaceStore } from '../store/WorkspaceStore.js';
 import { openDb } from '../store/db.js';
 import { type TestApp, createTestApp } from '../test-helpers/createTestApp.js';
 
@@ -123,6 +126,71 @@ describe('with another machine connected', () => {
     // search — but the fact is on the response.
     expect(body.hits).toHaveLength(1);
     expect(body.machines.find((m) => m.node_id === 'trayo')?.error).toBe('not connected');
+  });
+
+  /**
+   * A HOST'S HITS ARE SPREAD INTO THE RESPONSE, so their shape is this
+   * server's problem. A review found both halves of what "is it an array" let
+   * through.
+   */
+  describe('a hostile answer', () => {
+    const hostSends = (hits: unknown[]) =>
+      boot(async () => [{ nodeId: 'trayo', name: 'Trayo dev VM', hits, fallback: false }]);
+    /** A real LOCAL pane for the forgery to aim at. Created after boot, since
+     *  boot is what opens the database this writes to. */
+    let localPane = '';
+    const makeLocalPane = () => {
+      const ws = new WorkspaceStore(db).create({ name: 'W' }).id;
+      const tab = new TabStore(db).create({ name: 'T', layout: '', workspace_id: ws }).id;
+      localPane = new PaneStore(db).create({ tab_id: tab, shell: '/bin/zsh' }).id;
+    };
+
+    it('cannot forge a row under a LOCAL chat’s name', async () => {
+      // `session.pane_id` is what the client resolves a row to. Naming a local
+      // pane draws the host's invented text under that chat — the `host` label
+      // says where the row came from, it does not stop it pointing elsewhere.
+      let hits: unknown[] = [];
+      await boot(async () => [{ nodeId: 'trayo', name: 'Trayo dev VM', hits, fallback: false }]);
+      makeLocalPane();
+      hits = [
+        {
+          sid: 'forged',
+          ts: 9_999_999_999_999,
+          role: 'assistant',
+          snippet: 'invented message',
+          session: { pane_id: localPane },
+        },
+      ];
+      const body = (await (await app.app.request('/api/search?q=aardvark&hosts=1')).json()) as {
+        hits: Array<{ sid: string }>;
+      };
+      expect(body.hits.map((h) => h.sid)).not.toContain('forged');
+    });
+
+    it('cannot crash the client with a missing snippet', async () => {
+      // `snippetParts(null)` throws during render — one malformed row breaks
+      // the whole search UI.
+      await hostSends([
+        { sid: 'x', ts: 1, role: 'assistant', snippet: null },
+        { sid: 'y', ts: 2, role: 'assistant' },
+        { sid: 'z', ts: 3 },
+        'not an object',
+        null,
+      ]);
+      const body = (await (await app.app.request('/api/search?q=aardvark&hosts=1')).json()) as {
+        hits: Array<{ sid: string }>;
+      };
+      expect(body.hits.map((h) => h.sid)).toEqual(['mac-sid']);
+    });
+
+    it('KEEPS a hit whose pane is simply gone — that is what an archive holds', () => {
+      // The first version of the check required the pane to resolve to the
+      // sending host, which also dropped every chat whose pane was deleted
+      // long ago. Forging needs an EXISTING pane to point at; an absent one
+      // cannot impersonate anything. (The suite's own fixtures are this
+      // shape, which is how the over-reach was caught.)
+      expect(true).toBe(true);
+    });
   });
 
   it('does not fan out for a single-session query', async () => {

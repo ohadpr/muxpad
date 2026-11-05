@@ -412,6 +412,30 @@ export class HostApi {
         contentType: 'application/json',
       };
     try {
+      // ── AND AGAIN, AFTER THE WAIT ────────────────────────────────────────
+      //
+      // The check above happens BEFORE `fetchFromHost`, and the host controls
+      // how long that takes — up to the two-minute transfer timeout. A review
+      // found the window: ask for a name that is unused (so the check
+      // passes), stall the transfer, let the mac publish that name in the
+      // meantime, then finish sending. The publish route resolves the name
+      // again, now finds the mac's fresh slug, and replaces its contents at
+      // the url that has just been handed out.
+      //
+      // Time-of-check to time-of-use, with the attacker holding the clock. So
+      // the claim is re-made at the moment it is used, which is the only
+      // moment that can be authoritative.
+      if (typeof out.name === 'string' && !this.deps.mayPublishAs?.(nodeId, out.name))
+        return {
+          status: 403,
+          body: JSON.stringify({
+            error: {
+              code: 'not_yours',
+              message: `"${out.name}" was published by another machine while this transfer ran`,
+            },
+          }),
+          contentType: 'application/json',
+        };
       return await this.dispatch(
         'POST',
         '/api/publish',
