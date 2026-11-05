@@ -1601,7 +1601,6 @@ export function TabList({
   const grouped = groupChats(tabs);
   const liveGroups = grouped.live;
   const doneGroups = grouped.done;
-  const doneCount = doneChatCount(doneGroups);
   // COLLAPSED by default. A chat crossing into done should be something you
   // notice leaving the live list, not something that re-opens a drawer of
   // fourteen finished chats under it.
@@ -1820,13 +1819,18 @@ export function TabList({
             aria-expanded={doneOpen}
           >
             <SvgCaret open={doneOpen} />
-            {/* "OLDER", not "done". A chat leaves the live list when its
-                clock runs out — sixteen days of nobody touching it — which is
-                a fact about WHEN it was last used, not about whether it
-                finished. "82 done" read as a pile of completed work and
-                invited being emptied; most of what is in there is simply old,
-                and sending it a message brings it straight back. */}
-            {doneCount} older
+            {/* "older chats", AND NO NUMBER.
+                Two corrections, a day apart. "done" first: a chat leaves the
+                live list when its clock runs out — days of nobody touching it
+                — which is a fact about WHEN it was last used, not about
+                whether it finished, and "82 done" read as a pile of completed
+                work that invited being emptied.
+                Then the count. "82" is a quantity of the thing you are least
+                interested in, printed at the top of the thing you are most
+                interested in, and it grows forever — so the one number on the
+                rail belongs to the archive. It is a door, not a report; what
+                is behind it is counted by scrolling it. */}
+            older chats
           </button>
           {doneOpen ? doneGroups.map((g) => renderGroup(g)) : null}
           {/* ─── AND NOTHING ABOUT SUB-AGENTS, ANY MORE ──────────────────
@@ -2012,8 +2016,8 @@ function SheetPaneList({
                 type="button"
                 className="navtree-close"
                 onClick={(e) => void closePane(e, p, label)}
-                title="Close pane"
-                aria-label={`Close pane ${label}`}
+                title="Close this one"
+                aria-label={`Close ${label}`}
               >
                 <SvgClose size={13} />
               </button>
@@ -2279,18 +2283,17 @@ export function groupChats(tabs: Tab[]): {
   return { live, done };
 }
 
-/**
- * How many CHATS the done group holds — the number in its header.
- *
- * One per group: the done list is top-level chats and nothing else. A function
- * rather than `.length` at the call site because the invariant it encodes is
- * the one that matters — the header's number has to be what you will find when
- * you open it, and it has been wrong twice by counting rows that were not
- * there (children, and a parent rendered as a label).
- */
-export function doneChatCount(groups: readonly ChatGroup[]): number {
-  return groups.length;
-}
+/* ─── AND THE ARCHIVE'S COUNT IS GONE TOO ──────────────────────────────────
+   `doneChatCount` existed to put a number in the archive's header, and the
+   invariant it encoded was a real one: the header's number has to be what you
+   find when you open it. It had been wrong twice by counting rows that were
+   not there (children, and a parent rendered as a label).
+
+   The header has no number now. "82 older" is a quantity of the thing you are
+   least interested in, printed at the top of the thing you are most interested
+   in, and it only ever grows — so the one number on the rail belonged to the
+   archive. It is a door; what is behind it is counted by scrolling it. A
+   function that cannot be read wrong is better than one that was. */
 
 /* ─── THE SUB-CHAT PILL AND ITS ARITHMETIC ARE GONE ────────────────────────
    `subChatCounts`, `subsStatus`, `subChatChip`, `subChatChipTitle` and the
@@ -2574,7 +2577,13 @@ function TabRow({
     // leaving it here would leave the whole affordance alive on mobile.
     // `takes_panes` is the SERVER's answer (decorateTab), because this row does
     // not know its own panes; absent — an older server — reads as "show it".
-    ...(tab.takes_panes === false ? [] : [{ label: 'New pane', onSelect: () => onAddPane() }]),
+    // "Another chat here", not "New pane". A pane is the thing that holds one
+    // process — a pty, a chat, a web view — and it is the right word INSIDE
+    // this codebase and jargon everywhere else. What this does is put a second
+    // chat in the tab you are looking at.
+    ...(tab.takes_panes === false
+      ? []
+      : [{ label: 'Another chat here', onSelect: () => onAddPane() }]),
     // "Move to workspace ▸" with the workspaces in a hover flyout, so the main
     // menu stays short. Omitted entirely when there's nowhere to move to.
     // (Dragging the tab onto a workspace row also works, on desktop.)

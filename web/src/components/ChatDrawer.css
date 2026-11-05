@@ -7,27 +7,59 @@
  * transcript and throws away the scroll position. Glancing at a worker must
  * not lose your place in the conversation.
  */
+/* ── ONE PALETTE, TWO ELEMENTS ─────────────────────────────────────────────
+   The control lives OUTSIDE the panel (it has to: it is what opens it), so a
+   token block on `.chat-drawer` alone did not reach it and every colour on
+   the button resolved to nothing. Declared on both. */
+.chat-drawer,
+.chat-drawer-open {
+  /* ── IT WEARS THE CHAT'S PALETTE, NOT THE APP'S ───────────────────────────
+     First version took `--bg-elev`, `--fg`, `--accent` and friends — the
+     APP's tokens — while sitting inside a chat pane, which rebinds every one
+     of them (`--chat-*`, see ChatPane.css). On a theme where the two differ
+     that is the wrong surface under the wrong ink, which is the same family of
+     bug as the settings popover that painted itself on the rail's purple and
+     kept the pane's dark ink. The fallbacks are the app's tokens, so a drawer
+     rendered outside a chat still has colours. */
+  --d-surface: var(--chat-panel, var(--bg-chrome, #16161e));
+  --d-raised: var(--chat-elev, var(--bg-elev, #1f2335));
+  --d-ink: var(--chat-fg, var(--fg));
+  --d-dim: var(--chat-dim, var(--fg-dim));
+  --d-faint: var(--chat-faint, var(--fg-faint));
+  --d-border: var(--chat-border, var(--border));
+  --d-accent: var(--chat-accent, var(--accent));
+  --d-accent-ink: var(--chat-accent-fg, var(--accent-fg, #fff));
+}
+
 .chat-drawer {
   position: absolute;
-  inset-block: 0;
-  inset-inline-end: 0;
+  /* ── A STRIP OF THE CHAT STAYS VISIBLE, ALWAYS ──────────────────────────
+     "expose a bit on left side so u can see chat behind." Edge to edge it
+     read as a replacement for the conversation rather than something over it
+     — and at `min(420px, 100%)` a narrow pane got a drawer covering the lot,
+     with no visual evidence the chat was still there.
+
+     So the width always leaves `--d-peek` of chat showing, and the panel is
+     INSET from the pane's edges with a radius — a card over the conversation,
+     with the conversation around it on three sides. That is also what makes
+     the shadow legible: a shadow needs something to fall on. */
+  --d-peek: 44px;
+  inset-block: 8px;
+  inset-inline-end: 8px;
   z-index: 6;
-  /* Wide enough for a real conversation inside it (the drawer holds a whole
-     chat, not a preview), and capped so it never becomes the whole pane on a
-     laptop. On a phone it takes the lot, which is the right answer there —
-     there is no room for two things and the drawer is the thing you asked
-     for. */
-  width: min(420px, 100%);
+  width: min(420px, calc(100% - var(--d-peek)));
   display: flex;
   flex-direction: column;
-  background: var(--chat-panel, var(--bg-elev));
-  border-inline-start: 1px solid var(--border);
-  /* The shadow is what says "over", and it is the only thing that does —
-     without it an overlay at the same elevation as the log reads as a column
-     whose text has mysteriously stopped. */
-  box-shadow: -14px 0 32px -18px rgb(0 0 0 / 0.45);
+  border-radius: 12px;
+  background: var(--d-surface);
+  border: 1px solid var(--d-border);
+  /* Deeper and softer than the first attempt: it has to read as ABOVE the log
+     at a glance, and an overlay at the same apparent elevation as the thing
+     behind it reads as a column whose text has mysteriously stopped. */
+  box-shadow: 0 10px 34px -10px rgb(0 0 0 / 0.5), 0 2px 8px -4px rgb(0 0 0 / 0.4);
   font-family: var(--chrome-font, inherit);
-  color: var(--fg);
+  color: var(--d-ink);
+  overflow: hidden;
 }
 
 .chat-drawer__head {
@@ -35,7 +67,7 @@
   align-items: center;
   gap: 4px;
   padding: 6px 6px 6px 10px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--d-border);
   min-height: 38px;
 }
 .chat-drawer__title {
@@ -61,17 +93,17 @@
   border: 0;
   border-radius: 999px;
   background: none;
-  color: var(--fg-dim);
+  color: var(--d-dim);
   font: inherit;
   font-size: 0.8125rem;
   cursor: pointer;
 }
 .chat-drawer__tab:hover {
-  color: var(--fg);
+  color: var(--d-ink);
 }
 .chat-drawer__tab[aria-selected="true"] {
-  background: var(--bg-hover);
-  color: var(--fg);
+  background: color-mix(in srgb, var(--d-ink) 8%, transparent);
+  color: var(--d-ink);
   font-weight: 560;
 }
 /* The count rides the tab rather than sitting in a header: it is part of the
@@ -81,8 +113,8 @@
   min-width: 1.2em;
   padding: 0 4px;
   border-radius: 999px;
-  background: var(--accent);
-  color: var(--accent-fg, #fff);
+  background: var(--d-accent);
+  color: var(--d-accent-ink);
   font-size: 0.6875rem;
   font-variant-numeric: tabular-nums;
   text-align: center;
@@ -99,7 +131,7 @@
   border: 0;
   border-radius: 7px;
   background: none;
-  color: var(--fg-dim);
+  color: var(--d-dim);
   font-size: 1rem;
   line-height: 1;
   cursor: pointer;
@@ -107,8 +139,8 @@
 .chat-drawer__back:hover,
 .chat-drawer__close:hover,
 .chat-drawer__expand:hover {
-  background: var(--bg-hover);
-  color: var(--fg);
+  background: color-mix(in srgb, var(--d-ink) 8%, transparent);
+  color: var(--d-ink);
 }
 .chat-drawer__back {
   font-size: 1.25rem;
@@ -155,7 +187,7 @@
   cursor: pointer;
 }
 .chat-drawer__row:hover {
-  background: var(--bg-hover);
+  background: color-mix(in srgb, var(--d-ink) 8%, transparent);
 }
 .chat-drawer__row:disabled {
   cursor: default;
@@ -176,7 +208,7 @@
   white-space: nowrap;
 }
 .chat-drawer__row-sub {
-  color: var(--fg-faint);
+  color: var(--d-faint);
   font-size: 0.75rem;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -185,13 +217,13 @@
 /* A worker still going says so in the accent — the one row in the list that
    is about now rather than about history. */
 .chat-drawer__row[data-state="working"] .chat-drawer__row-sub {
-  color: var(--accent);
+  color: var(--d-accent);
 }
 
 .chat-drawer__empty {
   margin: 0;
   padding: 18px 14px;
-  color: var(--fg-dim);
+  color: var(--d-dim);
   font-size: 0.8125rem;
   line-height: 1.55;
 }
@@ -219,21 +251,21 @@
   border-radius: 8px;
   /* Translucent over the transcript: at rest it should be findable and not
      read as a thing demanding to be pressed. */
-  background: color-mix(in srgb, var(--chat-panel, var(--bg-elev)) 82%, transparent);
-  color: var(--fg-faint);
+  background: color-mix(in srgb, var(--d-surface) 82%, transparent);
+  color: var(--d-faint);
   cursor: pointer;
   backdrop-filter: blur(3px);
 }
 .chat-drawer-open:hover {
-  background: var(--bg-hover);
-  border-color: var(--border);
-  color: var(--fg);
+  background: color-mix(in srgb, var(--d-ink) 8%, transparent);
+  border-color: var(--d-border);
+  color: var(--d-ink);
 }
 /* SOMETHING IS RUNNING IN THERE. The only state worth pulling the eye: a
    worker this chat started is still going, and the drawer is where it is. */
 .chat-drawer-open[data-running="true"] {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  color: var(--d-accent);
+  border-color: color-mix(in srgb, var(--d-accent) 40%, transparent);
 }
 .chat-drawer-open__count {
   position: absolute;
@@ -244,8 +276,8 @@
   padding: 0 3px;
   box-sizing: border-box;
   border-radius: 999px;
-  background: var(--accent);
-  color: var(--accent-fg, #fff);
+  background: var(--d-accent);
+  color: var(--d-accent-ink);
   font-size: 0.625rem;
   line-height: 14px;
   font-variant-numeric: tabular-nums;

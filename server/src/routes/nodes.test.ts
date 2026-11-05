@@ -195,7 +195,7 @@ describe('forgetting a machine', () => {
     paneOn('trayo');
     const res = await app.request('/trayo', { method: 'DELETE' });
     expect(res.status).toBe(409);
-    expect(JSON.stringify(await res.json())).toContain('1 pane');
+    expect(JSON.stringify(await res.json())).toContain('1 chat');
     expect(existsSync(tokenPath('trayo'))).toBe(true);
     expect(changed).toBe(0);
   });

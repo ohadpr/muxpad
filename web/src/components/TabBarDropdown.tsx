@@ -196,7 +196,7 @@ function TabDropdownItem({
         onMouseLeave={disarm}
         onBlur={disarm}
         aria-pressed={armed}
-        title={armed ? 'Click again — running panes will be killed' : 'Close tab'}
+        title={armed ? 'Click again — anything running here will be killed' : 'Close tab'}
         aria-label={armed ? `Click again to close ${tab.name}` : `Close tab ${tab.name}`}
       >
         <SvgClose />

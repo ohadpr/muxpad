@@ -649,7 +649,7 @@ export function OpenInsteadStrip({
           className="chat-open-instead-btn"
           disabled={busy !== null}
           aria-busy={busy === 'terminal'}
-          title="Turn this pane into a plain terminal"
+          title="Turn this into a plain terminal"
           onClick={onTerminal}
         >
           <SvgTerminalGlyph />
@@ -660,7 +660,7 @@ export function OpenInsteadStrip({
           className="chat-open-instead-btn"
           disabled={busy !== null}
           aria-busy={busy === 'web'}
-          title="Turn this pane into a web view"
+          title="Turn this into a web view"
           onClick={onWeb}
         >
           <SvgGlobe />

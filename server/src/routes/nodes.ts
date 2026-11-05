@@ -159,7 +159,7 @@ export function nodesRoutes(deps: {
   /**
    * Forget a machine.
    *
-   * REFUSED WHILE IT STILL HOLDS PANES, unless `?force=1`. Dropping the row
+   * REFUSED WHILE IT STILL HOLDS CHATS, unless `?force=1`. Dropping the row
    * under a live pane is the specific thing the whole node model exists to
    * prevent: `nodeForPane` would answer `local` for it, and the next recovery
    * sweep would restart that conversation ON THIS MACHINE — a chat silently
@@ -186,7 +186,7 @@ export function nodesRoutes(deps: {
         {
           error: {
             code: 'conflict',
-            message: `${panes} ${panes === 1 ? 'pane' : 'panes'} still live on that machine — move or delete them, or pass force=1 to delete them with it`,
+            message: `${panes} ${panes === 1 ? 'chat' : 'chats'} still live on that machine — move or delete them, or pass force=1 to delete them with it`,
           },
         },
         409,

@@ -250,8 +250,12 @@ export function MachinesSettings() {
             {/* The endpoint is the useful fact for a remote one and noise for
                 this machine, which has no link — its ptyd is a unix socket. */}
             {n.endpoint ? <span>{n.endpoint}</span> : <span>this machine</span>}
+            {/* "chats", not "panes". A pane is the thing that holds one
+                process and it is the right word in the code; on a settings
+                row it is jargon for the number somebody actually wants, which
+                is how much is running over there. */}
             <span>
-              {n.panes} {n.panes === 1 ? 'pane' : 'panes'}
+              {n.panes} {n.panes === 1 ? 'chat' : 'chats'}
             </span>
             {n.capabilities?.platform ? (
               <span>
