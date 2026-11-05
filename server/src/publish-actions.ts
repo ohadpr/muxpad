@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
 import { ChatActionStore } from './store/ChatActionStore.js';
+import { LOCAL_NODE_ID } from './store/NodeStore.js';
 import { PaneStore } from './store/PaneStore.js';
 
 /**
@@ -45,5 +46,56 @@ export function recordPublishAction(
     });
   } catch {
     /* a card is a record of a publish, never a precondition for one */
+  }
+}
+
+/**
+ * MAY THIS MACHINE PUBLISH UNDER THIS NAME?
+ *
+ * `--name` is republish-in-place: the slug is resolved against the install's
+ * WHOLE public directory and the existing tree rotates to `@2`. That is the
+ * point of the flag — the link you already sent keeps working — and it is a
+ * hole the moment a second machine can use it, because the names are a single
+ * flat namespace with no owner.
+ *
+ * Found in review: a compromised host could `POST /api/publish` with its own
+ * file and `name: "<some personal report>"` and replace that artifact at its
+ * established public URL. No `update: true` needed, and repeated writes rotate
+ * the retained versions away too.
+ *
+ * ── THE OWNERSHIP RECORD ALREADY EXISTS ──────────────────────────────────
+ * Every publish now writes a `chat_actions` row with `ref = publish:<slug>`,
+ * tied to a pane, which belongs to a machine. So the question is answerable
+ * without a new table: a host may use a name when
+ *
+ *   · no existing slug carries it — nothing to take over; or
+ *   · the slug that does was published by a pane on THAT SAME host.
+ *
+ * ── AN UNOWNED SLUG IS NOT CLAIMABLE, AND THAT IS DELIBERATE ─────────────
+ * Hundreds of artifacts predate the record and have no row. Treating "no
+ * owner" as "anyone's" would leave exactly the hole this closes — those are
+ * the oldest and most-shared links on the install. So an unowned name is
+ * refused to a host, and the local machine (which has always been able to
+ * publish anything) is unaffected: this is only ever consulted for a host.
+ */
+export function hostMayPublishAs(
+  db: Database.Database,
+  existingSlug: string | null,
+  nodeId: string,
+): boolean {
+  if (!existingSlug) return true; // a fresh name takes nothing from anybody
+  try {
+    const row = db
+      .prepare(
+        `SELECT p.node_id AS node FROM chat_actions a
+           JOIN panes p ON p.id = a.pane_id
+          WHERE a.ref = ? ORDER BY a.at DESC LIMIT 1`,
+      )
+      .get(`publish:${existingSlug}`) as { node: string | null } | undefined;
+    return !!row && (row.node ?? LOCAL_NODE_ID) === nodeId;
+  } catch {
+    // No table, no join, no answer — and "I cannot tell" must not authorise
+    // replacing a public artifact.
+    return false;
   }
 }

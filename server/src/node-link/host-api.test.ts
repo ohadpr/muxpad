@@ -264,6 +264,9 @@ describe('publishing from a host', () => {
         return ok();
       },
       fetchFromHost: impl,
+      // Permissive by default here; the ownership rule has its own tests
+      // below and every other publish test is about the body it builds.
+      mayPublishAs: () => true,
     });
     return { a, disposed };
   };
@@ -347,6 +350,68 @@ describe('publishing from a host', () => {
     const res = await api.handle('trayo', 'GET', '/api/publish/base?probe=1');
     expect(res.status).toBe(404);
     expect(fetched).toHaveLength(0);
+  });
+
+  /**
+   * A NAME IS A CLAIM ON AN EXISTING PUBLIC URL.
+   *
+   * `--name` is republish-in-place: the slug resolves against the install's
+   * whole public directory and the old tree rotates to `@2`. A host naming an
+   * artifact it does not own therefore REPLACES that artifact at the link
+   * somebody has already shared, with no `update: true` required.
+   */
+  it('refuses a name another machine published, and asks nobody to fetch', async () => {
+    let asked = false;
+    const a = new HostApi({
+      db,
+      selfUrl: 'http://127.0.0.1:7777',
+      apiKey: () => 'secret',
+      fetch: (req) => {
+        fetched.push(req);
+        return ok();
+      },
+      fetchFromHost: async () => {
+        asked = true;
+        return { error: 'x' };
+      },
+      mayPublishAs: () => false,
+    });
+    const res = await a.handle(
+      'trayo',
+      'POST',
+      '/api/publish',
+      JSON.stringify({ path: '/home/ohad/x', name: 'personal-report' }),
+    );
+    expect(res.status).toBe(403);
+    expect(res.body).toContain('another machine');
+    // Nothing transferred and nothing published — refused before the fetch.
+    expect(asked).toBe(false);
+    expect(fetched).toHaveLength(0);
+  });
+
+  it('refuses a name when the server was wired without the check', async () => {
+    // Absent `mayPublishAs` means NO host may name an artifact: the safe
+    // default for a half-wired server rather than the permissive one.
+    const a = new HostApi({
+      db,
+      selfUrl: 'http://127.0.0.1:7777',
+      apiKey: () => null,
+      fetch: () => ok(),
+      fetchFromHost: async () => ({ path: '/tmp/x', dispose: () => {} }),
+    });
+    const res = await a.handle(
+      'trayo',
+      'POST',
+      '/api/publish',
+      JSON.stringify({ path: '/x', name: 'anything' }),
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it('still allows an UNNAMED publish, which takes nothing from anybody', async () => {
+    const { a } = withFetch(async () => ({ path: '/tmp/staged', dispose: () => {} }));
+    const res = await a.handle('trayo', 'POST', '/api/publish', JSON.stringify({ path: '/x' }));
+    expect(res.status).toBe(200);
   });
 
   it('is refused outright when the link has no file channel', async () => {
