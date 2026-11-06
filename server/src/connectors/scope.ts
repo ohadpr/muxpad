@@ -160,8 +160,10 @@ export interface ScopeDecision {
  * May a pane on `origin` use `connector`?
  *
  * Pure, so the rule can be tested against a table rather than against a live
- * server — this is the function that decides whether a personal chat can touch
- * the work Slack, and it is worth pinning case by case.
+ * server. It does not DECIDE anything on its own — the broker is asked next
+ * and keeps its own copy — but it is the rule that stops a personal chat
+ * reaching for the work Slack by accident, so it is worth pinning case by
+ * case.
  */
 export function mayUse(
   connector: ConnectorId,
@@ -365,7 +367,7 @@ export function directingOrigin(
                 FROM inbound_messages i
                 JOIN panes p ON p.tab_id = i.tab_id
                WHERE p.id = ? AND i.from_tab_id IS NOT NULL
-               ORDER BY i.at DESC LIMIT 1`)
+               ORDER BY i.at DESC, i.rowid DESC LIMIT 1`)
     .get(paneId) as { fromTab: string; at: number } | undefined;
   if (!row || now - row.at > DIRECTED_WINDOW_MS) return null;
   const sender = db
@@ -379,7 +381,11 @@ export function mayPaneUse(
   db: Database.Database,
   connector: ConnectorId,
   paneId: string,
-  policy: ConnectorPolicy & { problem?: string } = loadPolicy(),
+  // NO DEFAULT. This used to call `loadPolicy()` for a caller that omitted it,
+  // which hid a filesystem read inside a security check and let a mutant swap
+  // the default for UNSCOPED with nothing noticing. A call site must say which
+  // policy it is deciding under.
+  policy: ConnectorPolicy & { problem?: string },
   directedBy: string | null = null,
 ): ScopeDecision {
   // ── AN UNKNOWN PANE IS NOT A LOCAL PANE ───────────────────────────────

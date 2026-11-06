@@ -186,6 +186,18 @@ export function judgeArgv(argv: readonly string[]): PassthroughVerdict {
         command,
         reason: `${name} would point msgvault somewhere other than the approved daemon, so muxpad will not pass it`,
       };
+    // SHORT FLAGS ARE REFUSED unless they are exactly one muxpad knows takes
+    // no value. cobra accepts `-o value`, `-o=value` AND `-ovalue`, so the
+    // `=` form proves nothing about a short flag: `-ologs` is one token too.
+    // Long forms are unambiguous and always available instead.
+    if (!raw.startsWith('--')) {
+      if (VALUELESS_FLAGS.has(raw)) continue;
+      return {
+        ok: false,
+        command,
+        reason: `use the long form of ${raw} — a short flag can carry its value joined on (-ovalue), which muxpad cannot read`,
+      };
+    }
     if (raw.includes('=')) continue;
     if (VALUELESS_FLAGS.has(raw)) continue;
     return {
@@ -339,11 +351,14 @@ export function mediationReady(
       problem:
         'the msgvault archive is owned by the account agents run as, so it can be read without asking — muxpad will not pretend to mediate it',
     };
-  if (db.mode & 0o044)
+  // READABLE **OR WRITABLE**. A writable archive is readable in practice —
+  // anything that can write the database can also open it — and it can be
+  // replaced outright, which is worse.
+  if (db.mode & 0o066)
     return {
       ready: false,
       problem:
-        'the msgvault archive is group- or world-readable, so it can be read without asking — muxpad will not pretend to mediate it',
+        'the msgvault archive is group- or world-accessible, so it can be read or replaced without asking — muxpad will not pretend to mediate it',
     };
   return { ready: true };
 }

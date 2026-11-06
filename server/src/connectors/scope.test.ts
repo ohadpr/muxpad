@@ -601,3 +601,82 @@ describe('being told to do it by another machine', () => {
     );
   });
 });
+
+describe('directingOrigin cannot throw, and breaks ties deterministically', () => {
+  const mk = () => {
+    const Database = require('better-sqlite3');
+    const d = new Database(':memory:');
+    d.exec(`CREATE TABLE panes (id TEXT PRIMARY KEY, tab_id TEXT, node_id TEXT, created_at INTEGER);
+            CREATE TABLE nodes (id TEXT PRIMARY KEY, name TEXT, endpoint TEXT);
+            CREATE TABLE inbound_messages (id TEXT PRIMARY KEY, tab_id TEXT, at INTEGER, text_key TEXT, from_tab_id TEXT)`);
+    d.prepare('INSERT INTO nodes (id, name, endpoint) VALUES (?,?,?)').run('trayo', 'VM', 'ws://x');
+    d.prepare('INSERT INTO panes VALUES (?,?,?,?)').run('p-vm', 't-vm', 'trayo', 1);
+    d.prepare('INSERT INTO panes VALUES (?,?,?,?)').run('p-local', 't-local', null, 1);
+    return d;
+  };
+
+  it('answers null for a sending tab that has no panes left', async () => {
+    // A tab can be deleted while its message survives. Reading `.n` off the
+    // missing row threw, and a security check that throws becomes a 500
+    // instead of a refusal — a mutation run found the guard untested.
+    const { directingOrigin } = await import('./scope.js');
+    const d = mk();
+    d.prepare('INSERT INTO inbound_messages VALUES (?,?,?,?,?)').run(
+      'i',
+      't-vm',
+      100,
+      'k',
+      't-gone',
+    );
+    expect(() => directingOrigin(d, 'p-vm', 100)).not.toThrow();
+    expect(directingOrigin(d, 'p-vm', 100)).toBeNull();
+  });
+
+  it('answers null for a pane that does not exist', async () => {
+    const { directingOrigin } = await import('./scope.js');
+    expect(directingOrigin(mk(), 'nobody', 100)).toBeNull();
+  });
+
+  it('breaks a same-millisecond tie by insertion order, not arbitrarily', async () => {
+    // Two directions in the same millisecond ordered arbitrarily, so a test
+    // would have pinned whichever the engine happened to return. `rowid DESC`
+    // makes the later-recorded one win, which is the one that actually arrived
+    // last.
+    const { directingOrigin } = await import('./scope.js');
+    const d = mk();
+    d.prepare('INSERT INTO panes VALUES (?,?,?,?)').run('p-vm2', 't-vm2', 'trayo', 1);
+    d.prepare('INSERT INTO inbound_messages VALUES (?,?,?,?,?)').run(
+      'a',
+      't-vm',
+      500,
+      'k',
+      't-local',
+    );
+    d.prepare('INSERT INTO inbound_messages VALUES (?,?,?,?,?)').run(
+      'b',
+      't-vm',
+      500,
+      'k',
+      't-vm2',
+    );
+    expect(directingOrigin(d, 'p-vm', 500)).toBe('trayo');
+    // …and the other way round, to prove it is insertion order and not luck.
+    const e = mk();
+    e.prepare('INSERT INTO panes VALUES (?,?,?,?)').run('p-vm2', 't-vm2', 'trayo', 1);
+    e.prepare('INSERT INTO inbound_messages VALUES (?,?,?,?,?)').run(
+      'a',
+      't-vm',
+      500,
+      'k',
+      't-vm2',
+    );
+    e.prepare('INSERT INTO inbound_messages VALUES (?,?,?,?,?)').run(
+      'b',
+      't-vm',
+      500,
+      'k',
+      't-local',
+    );
+    expect(directingOrigin(e, 'p-vm', 500)).toBe('local');
+  });
+});
