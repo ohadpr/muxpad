@@ -125,8 +125,51 @@ export function judgeArgv(argv: readonly string[]): PassthroughVerdict {
   if (argv.length === 0)
     return { ok: false, reason: 'say what to run, e.g. muxpad msgvault search "from:x"' };
 
-  const bare: string[] = [];
+  // ── THE COMMAND PATH COMES FIRST, OR NOT AT ALL ───────────────────────
+  //
+  // The previous rule judged flags wherever they appeared and took the first
+  // bare token as the command. Two reviews broke variants of that, and the
+  // second proposed the rule that removes the whole class: the command path
+  // must be the LEADING tokens, so no flag can sit in front of it and no
+  // flag's value can be mistaken for it. A leading flag is refused outright —
+  // msgvault itself rejects most of them there anyway (`msgvault --json stats`
+  // is "unknown flag: --json", because `--json` belongs to the subcommands).
+  //
+  // It also fixes a real thing the pair rule got wrong: the tree is THREE
+  // levels deep in places (`person provider add`), so "parent plus one" was
+  // never going to be enough.
+  const head = argv[0];
+  if (typeof head !== 'string' || head === '')
+    return { ok: false, reason: 'the first argument must be an msgvault command' };
+  if (head.startsWith('-'))
+    return {
+      ok: false,
+      reason: `put the command first: muxpad msgvault <command> [flags], not ${head} first`,
+    };
+  if (REFUSED_COMMANDS.includes(head))
+    return {
+      ok: false,
+      command: head,
+      reason: `muxpad will not run "${head}" — it reads or moves more of the archive than an approval can describe`,
+    };
+
+  const lead: string[] = [];
   for (const raw of argv) {
+    if (typeof raw !== 'string') return { ok: false, reason: 'arguments must be strings' };
+    if (raw.startsWith('-')) break;
+    lead.push(raw);
+    if (lead.length === MAX_PATH_DEPTH) break;
+  }
+  const command = resolveCommand(lead, COMMAND_VERBS);
+  if (command === undefined)
+    return {
+      ok: false,
+      command: lead.join(' '),
+      reason: `muxpad has no approval mapping for "${lead.join(' ')}", so it cannot say what running it would allow`,
+    };
+
+  // Now the flags, with the same no-ambiguity rule as before.
+  for (const raw of argv.slice(command.split(' ').length)) {
     if (typeof raw !== 'string') return { ok: false, reason: 'arguments must be strings' };
     if (raw === '')
       return { ok: false, reason: 'an empty argument is not something muxpad can judge' };
@@ -135,41 +178,81 @@ export function judgeArgv(argv: readonly string[]): PassthroughVerdict {
         ok: false,
         reason: 'muxpad does not pass a bare `--`: msgvault still reads global flags after it',
       };
-    if (raw.startsWith('-')) {
-      const name = flagName(raw);
-      if (FORBIDDEN_FLAGS.includes(name))
-        return {
-          ok: false,
-          reason: `${name} would point msgvault somewhere other than the approved daemon, so muxpad will not pass it`,
-        };
-      // An `=` makes the value part of the token, so nothing can be swallowed.
-      if (raw.includes('=')) continue;
-      if (VALUELESS_FLAGS.has(raw)) continue;
-      // THE BYPASS THIS PREVENTS: `--log-file search query …` runs `query`,
-      // while a filter counting bare tokens sees `search`.
+    if (!raw.startsWith('-')) continue;
+    const name = flagName(raw);
+    if (FORBIDDEN_FLAGS.includes(name))
       return {
         ok: false,
-        reason: `pass ${name} as ${name}=value — muxpad cannot tell whether a bare flag takes the next word, and msgvault's value-taking flags would otherwise hide the real subcommand`,
+        command,
+        reason: `${name} would point msgvault somewhere other than the approved daemon, so muxpad will not pass it`,
       };
-    }
-    bare.push(raw);
-  }
-
-  const head = bare[0];
-  if (head === undefined) return { ok: false, reason: 'no subcommand — flags alone do nothing' };
-  if (REFUSED_COMMANDS.includes(head))
+    if (raw.includes('=')) continue;
+    if (VALUELESS_FLAGS.has(raw)) continue;
     return {
       ok: false,
-      command: head,
-      reason: `muxpad will not run "${head}" — it reads or moves more of the archive than an approval can describe`,
+      command,
+      reason: `pass ${name} as ${name}=value — muxpad cannot tell whether a bare flag takes the next word, and msgvault's value-taking flags would otherwise hide the real subcommand`,
     };
-  // A parent command says nothing about what will happen; the pair does.
-  if (NESTED.has(head)) {
-    const sub = bare[1];
-    if (!sub) return { ok: false, command: head, reason: `"${head}" needs a subcommand` };
-    return { ok: true, command: `${head} ${sub}` };
   }
-  return { ok: true, command: head };
+  return { ok: true, command };
+}
+
+/**
+ * How many leading tokens can form a command path. `person provider add` is
+ * three levels, so "parent plus one" was never enough.
+ *
+ * This is a BOUND ON THE SCAN, not a rule — operands are bare tokens too, so
+ * the depth of a path is not something this can know. A mutation of it is
+ * invisible to the suite for exactly that reason, and that is honest rather
+ * than a missing test.
+ */
+const MAX_PATH_DEPTH = 3;
+
+/**
+ * The LONGEST leading prefix that is a command muxpad knows.
+ *
+ * Longest, not shortest: if ever both a parent and a `parent sub` are mapped,
+ * the pair is the more specific statement about what will happen, and taking
+ * the parent would classify a subcommand by its family. No pair like that
+ * exists today — every nested parent is deliberately unmapped — which is why
+ * the direction is pinned here with an injected map rather than left to a
+ * fixture that cannot distinguish the two.
+ */
+export function resolveCommand(
+  lead: readonly string[],
+  map: Record<string, string>,
+): string | undefined {
+  for (let n = Math.min(lead.length, MAX_PATH_DEPTH); n >= 1; n--) {
+    const candidate = lead.slice(0, n).join(' ');
+    if (Object.hasOwn(map, candidate)) return candidate;
+  }
+  return undefined;
+}
+
+/**
+ * THE ENVIRONMENT IS AN ARGUMENT TOO.
+ *
+ * `--home` is refused, and `MSGVAULT_HOME` does the same job without a flag;
+ * so do `MSGVAULT_REMOTE_URL` and the other `MSGVAULT_*` switches. A filter
+ * that reads argv and inherits the caller's environment has a second,
+ * unexamined input — so the child gets an ALLOWLISTED environment rather than
+ * a filtered one. An unknown variable that matters is then a bug report, not a
+ * bypass.
+ */
+export const SPAWN_ENV_KEYS = ['PATH', 'TZ', 'LANG', 'LC_ALL', 'TMPDIR'];
+
+export function spawnEnv(
+  parent: Record<string, string | undefined>,
+  injected: Record<string, string>,
+): Record<string, string> {
+  const out: Record<string, string> = Object.create(null);
+  for (const k of SPAWN_ENV_KEYS) {
+    const v = parent[k];
+    if (typeof v === 'string') out[k] = v;
+  }
+  // Last, and deliberately not overridable by the parent environment.
+  for (const [k, v] of Object.entries(injected)) out[k] = v;
+  return out;
 }
 
 /**

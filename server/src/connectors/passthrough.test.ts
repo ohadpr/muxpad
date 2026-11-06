@@ -15,7 +15,9 @@ describe('the pass-through forwards msgvault’s own CLI', () => {
 
   it('refuses nothing to run', () => {
     expect(judgeArgv([]).ok).toBe(false);
-    expect(judgeArgv(['--json']).reason).toMatch(/no subcommand/);
+    // A flag with no command is refused for the same reason as a flag before
+    // one: the command has to lead.
+    expect(judgeArgv(['--json']).reason).toMatch(/put the command first/);
   });
 });
 
@@ -44,8 +46,13 @@ describe('flags that would re-point the tool', () => {
     expect(judgeArgv(['search', 'x', '--']).reason).toMatch(/bare `--`/);
   });
 
-  it('refuses one placed before the subcommand', () => {
-    expect(judgeArgv(['--home', '/elsewhere', 'search', 'x']).ok).toBe(false);
+  it('refuses ANY flag placed before the command', () => {
+    // The command path must lead, so nothing can sit in front of it — and
+    // msgvault rejects most leading flags itself (`--json stats` is "unknown
+    // flag: --json", because --json belongs to the subcommands).
+    for (const f of ['--home', '--json', '--log-level', '-v'])
+      expect(judgeArgv([f, 'search', 'x']).ok, f).toBe(false);
+    expect(judgeArgv(['--json', 'search', 'x']).reason).toMatch(/put the command first/);
   });
 
   it('refuses a bare flag whose value could be the next word', () => {
@@ -53,12 +60,16 @@ describe('flags that would re-point the tool', () => {
     // that value and runs `query` — while a filter counting bare tokens saw
     // `search` and asked for a timed search.read. Arbitrary SQL, approved as a
     // search.
-    const v = judgeArgv(['--log-file', 'search', 'query', 'SELECT * FROM messages']);
-    expect(v.ok).toBe(false);
-    expect(v.reason).toMatch(/cannot tell whether a bare flag takes the next word/);
-    // Same shape with the other value-taking globals.
+    // It is refused twice over now: the flag cannot lead, AND a bare
+    // value-taking flag is refused wherever it appears.
+    const lead = judgeArgv(['--log-file', 'search', 'query', 'SELECT * FROM messages']);
+    expect(lead.ok).toBe(false);
+    expect(lead.reason).toMatch(/put the command first/);
+    const after = judgeArgv(['search', 'x', '--log-file', 'query']);
+    expect(after.ok).toBe(false);
+    expect(after.reason).toMatch(/cannot tell whether a bare flag takes the next word/);
     for (const f of ['--log-level', '--log-sql-slow-ms', '-o'])
-      expect(judgeArgv([f, 'search', 'query', 'SELECT 1']).ok, f).toBe(false);
+      expect(judgeArgv(['search', 'x', f, 'query']).ok, f).toBe(false);
   });
 
   it('allows the value-less flags it knows, bare', () => {
@@ -85,21 +96,33 @@ describe('nested subcommands', () => {
     expect(verbForCommand('calendar freebusy')).toBe('msgvault.calendar.read');
   });
 
-  it('refuses a calendar write by leaving the pair unmapped', () => {
-    for (const sub of ['create', 'update', 'delete', 'move', 'respond']) {
-      const v = judgeArgv(['calendar', sub, '--send-updates=all']);
-      expect(v.ok, sub).toBe(true); // not on the ban list…
-      expect(verbForCommand(v.command as string), sub).toBeNull(); // …but unmapped, so refused
-    }
+  it('refuses a calendar write, which has no mapping', () => {
+    for (const sub of ['create', 'update', 'delete', 'move', 'respond'])
+      expect(judgeArgv(['calendar', sub, '--send-updates=all']).ok, sub).toBe(false);
   });
 
   it('refuses a parent with no subcommand', () => {
     expect(judgeArgv(['calendar']).ok).toBe(false);
-    expect(judgeArgv(['person']).reason).toMatch(/needs a subcommand/);
+    expect(judgeArgv(['person']).reason).toMatch(/no approval mapping/);
   });
 
-  it('is not fooled by a flag between the parent and its subcommand', () => {
-    expect(judgeArgv(['calendar', '--json', 'freebusy']).command).toBe('calendar freebusy');
+  it('refuses a flag BETWEEN a parent and its subcommand', () => {
+    // There is no mapping for `calendar` alone, so this cannot resolve — which
+    // is the fail-closed answer rather than a guess at what was meant.
+    expect(judgeArgv(['calendar', '--json', 'freebusy']).ok).toBe(false);
+  });
+
+  it('handles a THREE-level path, which the pair rule could not', () => {
+    // `person provider add` is real. "Parent plus one" classified `person
+    // provider`, which says nothing about `add`.
+    const v = judgeArgv(['person', 'provider', 'add', '--endpoint=https://x']);
+    expect(v.ok).toBe(false);
+    expect(v.reason).toMatch(/no approval mapping/);
+  });
+
+  it('resolves the LONGEST mapped prefix, so operands are not mistaken for it', () => {
+    expect(judgeArgv(['search', 'from:x']).command).toBe('search');
+    expect(judgeArgv(['calendar', 'freebusy', 'primary']).command).toBe('calendar freebusy');
   });
 });
 
@@ -213,5 +236,71 @@ describe('whether there is anything to mediate yet', () => {
     const { mediationReady } = await import('./passthrough.js');
     expect(mediationReady({ uid: 0, mode: 0o600 }, 501)).toEqual({ ready: true });
     expect(mediationReady({ uid: 285, mode: 0o660 }, 501).ready).toBe(false);
+  });
+});
+
+describe('the environment the child gets', () => {
+  it('is an allowlist, so MSGVAULT_* cannot do what --home is refused for', async () => {
+    // `--home` is blocked and `MSGVAULT_HOME` does the same job with no flag;
+    // so do MSGVAULT_REMOTE_URL and friends. A filter that reads argv and
+    // inherits the caller's environment has a second, unexamined input.
+    const { spawnEnv } = await import('./passthrough.js');
+    const env = spawnEnv(
+      {
+        PATH: '/usr/bin',
+        TZ: 'UTC',
+        MSGVAULT_HOME: '/tmp/evil',
+        MSGVAULT_REMOTE_URL: 'http://evil',
+        MSGVAULT_ENABLE_REMOTE_DELETE: '1',
+        SOME_OTHER: 'x',
+      },
+      { MSGVAULT_HOME: '/opt/mediated' },
+    );
+    expect(env.PATH).toBe('/usr/bin');
+    expect(env.TZ).toBe('UTC');
+    expect(env.SOME_OTHER).toBeUndefined();
+    expect(env.MSGVAULT_REMOTE_URL).toBeUndefined();
+    expect(env.MSGVAULT_ENABLE_REMOTE_DELETE).toBeUndefined();
+  });
+
+  it('lets the injected values win over the caller’s', async () => {
+    const { spawnEnv } = await import('./passthrough.js');
+    const env = spawnEnv(
+      { PATH: '/usr/bin', MSGVAULT_HOME: '/tmp/evil' },
+      { MSGVAULT_HOME: '/opt/mediated' },
+    );
+    expect(env.MSGVAULT_HOME).toBe('/opt/mediated');
+  });
+
+  it('has no prototype, so a variable named __proto__ cannot reach Object', async () => {
+    const { spawnEnv } = await import('./passthrough.js');
+    const env = spawnEnv({ PATH: '/usr/bin' }, {});
+    expect(Object.getPrototypeOf(env)).toBeNull();
+  });
+});
+
+describe('resolving a command path', () => {
+  it('takes the LONGEST mapped prefix, not the first one it finds', async () => {
+    // Pinned with an injected map, because no real pair is mapped both ways —
+    // so a fixture could not tell longest-first from shortest-first, and a
+    // mutation of the direction survived the suite.
+    const { resolveCommand } = await import('./passthrough.js');
+    const map = { calendar: 'read', 'calendar freebusy': 'read', 'a b c': 'read' };
+    expect(resolveCommand(['calendar', 'freebusy', 'primary'], map)).toBe('calendar freebusy');
+    expect(resolveCommand(['calendar'], map)).toBe('calendar');
+    expect(resolveCommand(['a', 'b', 'c'], map)).toBe('a b c');
+  });
+
+  it('stops at three tokens, and returns undefined for an unmapped path', async () => {
+    const { resolveCommand } = await import('./passthrough.js');
+    expect(resolveCommand(['a', 'b', 'c', 'd'], { 'a b c d': 'read' })).toBeUndefined();
+    expect(resolveCommand(['nope'], { search: 'read' })).toBeUndefined();
+    expect(resolveCommand([], { search: 'read' })).toBeUndefined();
+  });
+
+  it('cannot be fooled by a path named after an Object property', async () => {
+    const { resolveCommand } = await import('./passthrough.js');
+    expect(resolveCommand(['constructor'], { search: 'read' })).toBeUndefined();
+    expect(resolveCommand(['toString'], { search: 'read' })).toBeUndefined();
   });
 });
