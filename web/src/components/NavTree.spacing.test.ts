@@ -575,33 +575,6 @@ describe('what the pass was NOT allowed to move', () => {
     ).toBe('start');
   });
 
-  it('a CHILD row takes NO step — the ELBOW says "under that one", not the indent', () => {
-    // This test used to pin an 8px step, and before that a full --nt-indent.
-    // Both were the same idea — move the name right so the eye reads a level —
-    // and on this surface the idea is wrong, because the rail ALREADY spends a
-    // 24px column on every child: the icon cell, kept precisely so the names
-    // line up, with the trunk's elbow landing inside it. An indent on top of
-    // that is a second statement of one fact, paid for with a fifth left
-    // column in a group that measured four (caret 32, trunk 28, parent name
-    // 63, child name 71).
-    //
-    // THIS TEST WAS INERT AND PASSING for three reviews: the rule is correct,
-    // and `data-child="true"` was emitted on no element in the product, because
-    // `renderRow` never forwarded `parent` to `TabRow`. A stylesheet test cannot
-    // see that. Its other half is NavTree.rows.test.tsx, which renders the list
-    // and asserts the attribute and the dot actually reach the DOM — do not
-    // change this selector without it, or the pair goes dead again.
-    const child = ruleBody(
-      NAV_CSS,
-      '.navtree[data-variant="sidebar"] .navtree-tab-row[data-child="true"]',
-    );
-    const parentLeft = resolve(
-      side(decl(ruleBody(NAV_CSS, '.navtree-tab-row'), 'padding'), 'left'),
-      BASE,
-    );
-    expect(resolve(decl(child, 'padding-left'), BASE)).toBe(parentLeft);
-  });
-
   it('…so every name in the rail lands on ONE x, parent or child', () => {
     // The invariant the step was trading away, stated directly.
     // --nt-child-name-x is the token the tick, the group head's caret and the
@@ -668,18 +641,6 @@ describe('what the pass was NOT allowed to move', () => {
     const trunk = resolve(BASE['--nt-trunk-x'] as string, BASE);
     const nameX = resolve(BASE['--nt-child-name-x'] as string, BASE);
     expect(resolve(BASE['--nt-tick-w'] as string, BASE)).toBe(nameX - trunk - 8);
-  });
-
-  it('the trunk is drawn in ONE ink, and it is the token', () => {
-    // With the indent gone the line is the only thing saying "under that one",
-    // so it is load-bearing and gets a name. 18% read as nothing on a tinted
-    // dark rail and snapped to a 1px line at DPR 1 — "the lines don't look
-    // good".
-    const trunkRule = ruleBody(NAV_CSS, '.navtree .navtree-tab-row[data-child="true"]::before');
-    const tickRule = ruleBody(NAV_CSS, '.navtree .navtree-tab-row[data-child="true"]::after');
-    expect(decl(trunkRule, 'border-left')).toContain('var(--nt-trunk-ink)');
-    expect(decl(tickRule, 'border-top')).toContain('var(--nt-trunk-ink)');
-    expect(BASE['--nt-trunk-ink']).toContain('26%');
   });
 });
 
@@ -772,43 +733,6 @@ describe('the MOBILE RAIL — a flex line, and its four numbers', () => {
 
   it('so every name starts at 42px, on every row, in every script', () => {
     expect(chatNameLeft()).toBe(42);
-  });
-
-  it('a CHILD row steps ONE indent — 54px, not 76 — and its dot holds the column', () => {
-    // The sheet had no child row at all: TabList emptied `children` before the
-    // DOM, so a sub-chat came out as a top-level line above its own parent. Both
-    // halves are pinned — the attribute and the dot in NavTree.rows.test.tsx,
-    // the arithmetic here.
-    //
-    // 8px, NOT a full --nt-indent. Both surfaces took a whole step until the
-    // trunk arrived; with a line drawing the relationship the extra 4px only
-    // pushes the name further from the elbow pointing at it. The rail made the
-    // same move for the same reason — see the desktop child rule.
-    //
-    // The ceiling the old comment guarded still stands and is what matters:
-    // indenting by a whole emoji box puts the name 34px off its parent's, which
-    // is the "indentation is too much" this rail was once redrawn to fix. So
-    // the assertion is a RANGE — clearly stepped, clearly under one level —
-    // rather than a number that has now been retuned twice.
-    const child = ruleBody(
-      NAV_CSS,
-      '.navtree[data-variant="sheet"] .navtree-tab-row[data-child="true"]',
-    );
-    const childLead = resolve(decl(child, 'padding-inline-start'), SHEET);
-    const step = childLead - resolve(SHEET['--nt-rail-lead'] as string, SHEET);
-    expect(step).toBeGreaterThanOrEqual(6);
-    expect(step).toBeLessThan(resolve(SHEET['--nt-indent'] as string, SHEET));
-    // The dot's BOX must stay the emoji's box even though the mark itself is now
-    // hidden — the trunk says "child", and a dot where the elbow lands is a
-    // second mark for one meaning. If the box collapsed, every child name would
-    // jump 14px left and the shared x this rule exists to hold would be gone.
-    const dot = ruleBody(NAV_CSS, '.navtree[data-variant="sheet"] .navtree-rail-dot');
-    expect(decl(dot, 'flex')).toBe('0 0 var(--nt-rail-emoji)');
-    expect(resolve(decl(dot, 'inline-size'), SHEET)).toBe(20);
-    expect(decl(dot, 'visibility')).toBe('hidden');
-    // Logical, like every other inset on this surface: the list is read in
-    // Hebrew as often as in English and a physical inset indents the wrong side.
-    expect(child).not.toMatch(/(?:^|;)\s*padding(?:-left|-right):/);
   });
 
   it('there is no leading disclosure track left to push that 42 anywhere', () => {

@@ -1704,7 +1704,7 @@ export function TabList({
    *  switches the row's mark from a tile to a dot in its parent's chip column,
    *  and what puts the one indent step on the row. Nothing about a clock — a
    *  sub-chat has none, and the row reads its own. */
-  const renderRow = (t: Tab, parent?: Tab, childLast?: boolean, family?: boolean) => (
+  const renderRow = (t: Tab) => (
     <TabRow
       key={t.id}
       tab={t}
@@ -1717,7 +1717,6 @@ export function TabList({
       // drew N separate brackets instead of one line. It had been that way
       // since the trunk landed and was simply too faint to see until the ink
       // went up. React knows the index; CSS was being asked to infer it.
-      {...(childLast ? { childLast: true } : {})}
       // The whole reason `renderGroup` knows the parent. Forwarding it was
       // missed, and because every OTHER prop here is spelled out explicitly
       // there was nothing to notice: `TabRow.parent` was simply `undefined` on
@@ -1725,13 +1724,11 @@ export function TabList({
       // drew a tile, and the child dot, the indent and the shared name x were
       // all dead in the product while their CSS and their grouping rule were
       // both correct. Pinned by NavTree.rows.test.tsx.
-      {...(parent ? { parent } : {})}
       // THE FAMILY READS AS ONE BLOCK. Reported: "you stand on a chat that has
       // sub-chats, then the sub-chats don't get a semi-selected background".
       // They are the same piece of work and looked like strangers who happen
       // to be adjacent. Set in both directions — stand on a child and the
       // parent takes it too, so you can always see what a worker belongs to.
-      {...(family ? { family: true } : {})}
       workspace={workspace}
       isActiveTab={isActiveWorkspace && t.slug === activeTabSlug}
       variant={variant}
@@ -1747,7 +1744,11 @@ export function TabList({
       // A CHILD is not draggable: its place in the list is its parent, not an
       // order you arranged, so there is nothing for a drop to mean.
       rowDnd={
-        variant === 'sidebar' && !parent ? (t.pinned ? tabDnd(t.id) : moveOnlyDnd(t.id)) : undefined
+        // `&& !parent` used to sit here, from when a row could be a nested
+        // child. Nothing nests in the rail any more, so the gate was always
+        // open — and `parent` is now a DIFFERENT variable in an enclosing
+        // scope, which is how deleting the prop silently changed behaviour.
+        variant === 'sidebar' ? (t.pinned ? tabDnd(t.id) : moveOnlyDnd(t.id)) : undefined
       }
     />
   );
@@ -1771,17 +1772,7 @@ export function TabList({
    * from — `done` and `live` are still two lists of chats — and everything
    * that was about children is gone with the children.
    */
-  const renderGroup = (g: ChatGroup) => (
-    <Fragment key={g.chat.id}>
-      {renderRow(
-        g.chat,
-        undefined,
-        undefined,
-        // Nothing is a family any more, so nothing tints as one.
-        false,
-      )}
-    </Fragment>
-  );
+  const renderGroup = (g: ChatGroup) => <Fragment key={g.chat.id}>{renderRow(g.chat)}</Fragment>;
 
   return (
     <div className="navtree-tab-list">
@@ -2033,9 +2024,7 @@ interface TabRowProps {
   tab: Tab;
   /** The chat that spawned this one, when it is a child. Supplies the clock
    *  they share, and switches the row's leading mark from tile to dot. */
-  parent?: Tab | undefined;
-  /** This row belongs to the same parent/child family as the active row. */
-  family?: boolean | undefined;
+
   /**
    * This is the LAST child in its parent's run, so its trunk segment stops at
    * the elbow instead of carrying on into whatever follows.
@@ -2044,7 +2033,6 @@ interface TabRowProps {
    * claim about DOM adjacency that the mobile sheet makes false — see
    * `renderRow`.
    */
-  childLast?: boolean | undefined;
   /**
    * The state mark to draw INSTEAD of this tab's own.
    *
@@ -2451,9 +2439,6 @@ function SvgRowMenu() {
 
 function TabRow({
   tab,
-  parent,
-  family,
-  childLast,
   workspace,
   isActiveTab,
   workspaceLabel,
@@ -2659,8 +2644,10 @@ function TabRow({
       chat={{ ...tab, icon: tab.icon ?? fallbackTabIcon(tab.id) }}
       // The shape is told, not inferred. A chat whose `spawned_by` dangles is
       // a TOP-level row in this list (see groupChats), and it must draw a tile
-      // like one — a dot with no parent row above it belongs to nothing.
-      shape={parent ? 'dot' : 'tile'}
+      // like one — a dot with no parent row above it belongs to nothing. The
+      // dot was for a NESTED row, and the rail stopped nesting when sub-chats
+      // moved into the work drawer, so every row here is a tile.
+      shape="tile"
       className="navtree-tab-chip"
       title="Change icon"
       onClick={openPicker}
@@ -2687,9 +2674,9 @@ function TabRow({
    * starting at 42px. A CHILD still gets the 6px dot — a sub-chat has no clock,
    * and nothing here changes that.
    */
-  const sheetLeadCell = parent ? (
-    <ChatChip density="row" chat={tab} shape="dot" className="navtree-rail-dot" title={tab.name} />
-  ) : (
+  // The CHILD branch is gone with the nesting: it drew a 6px dot for a row
+  // under another row, and the rail has none.
+  const sheetLeadCell = (
     <ChatChip
       density="row"
       // No stored icon yet — a stable, per-tab stand-in rather than one shared
@@ -2797,12 +2784,9 @@ function TabRow({
       // row had it, so even once the grouping reached this surface a child
       // would have rendered as an ordinary line — indistinguishable from the
       // chat that spawned it, sitting directly beneath it.
-      data-child={parent ? 'true' : undefined}
-      data-family={family ? 'true' : undefined}
       // THE LAST ONE STOPS THE TRUNK. See renderRow for why this is an
       // attribute and not a CSS sibling test — on THIS surface the sibling
       // test could never have worked.
-      data-child-last={childLast ? 'true' : undefined}
       // PINNED, the same way the desktop row says it — and missing here for
       // the same reason `data-child` above was: a mark gets designed on one
       // surface and the other is left behind. Reported as "mobile sidebar
@@ -2979,9 +2963,6 @@ function TabRow({
       // keyed off that attribute, so not writing it is what removes them. Both
       // went deliberately — see RowMark. The row's state is now told exactly
       // once, by the 10px mark at its right edge.
-      data-child={parent ? 'true' : undefined}
-      data-family={family ? 'true' : undefined}
-      data-child-last={childLast ? 'true' : undefined}
       // Pinned is a 2px accent EDGE on the row's leading rim — see NavTree.css.
       // Off the ink entirely, because the name's colour already says
       // read-vs-unread: a hue there was a second meaning on one channel, and it

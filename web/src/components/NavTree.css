@@ -1745,185 +1745,6 @@
   cursor: pointer;
 }
 
-/* ─── Child rows ──────────────────────────────────────────────────────────
-   A chat spawned under another. Two things make this read as nesting rather
-   than as a list with some words pushed right:
-
-   1. THE DOT IS IN THE MARK COLUMN. It is drawn by the same component, in a
-      box the same width as the parent's tile (ChatChip.css), so it lands in
-      the column the chips occupy instead of floating in the text.
-   2. EVERY CHILD NAME LANDS ON ONE x. It follows from (1): the mark box is a
-      fixed width, so the name after it starts at the same place on every child
-      row in the tree, however deep in the list it sits and whoever its parent
-      is. Before this the children were words at an arbitrary indent, and an
-      indent alone cannot do either job — it moves the name without giving the
-      eye a column to find it on.
-
-   The step is ONE --nt-indent, the same step a tab takes under its workspace
-   name. A child of a chat is exactly one level of the same hierarchy, so it
-   costs the same. */
-.navtree[data-variant="sidebar"] .navtree-tab-row[data-child="true"] {
-  /* NO STEP AT ALL on this surface, which is the one thing here that looks
-     wrong written down and is right on screen. It was 8px (and a full indent
-     before that), and every value of it put a child's name on a different x
-     from its parent's — a fifth column in a group that already had four.
-     The child keeps the full icon column, so it is not the indent that says
-     "under that one": the ELBOW does, and it lands in that column, which is
-     exactly what the column is spent on. The name is then at one x for every
-     row in the rail. The sheet, which has no such column, keeps its step. */
-  padding-left: calc(var(--nt-pad) + var(--nt-indent));
-  position: relative;
-}
-
-/* ─── ONE TRUNK, AND IT NEVER TOUCHES THE PARENT ────────────────────────────
-   Drawn from a sketch, after three rounds of getting it wrong. Two rules:
-
-   1. THE LINE IS THE CHILDREN'S, NOT THE PARENT'S. Every earlier attempt
-      started the connector inside the parent row — which is a chat like any
-      other, and drawing tree furniture onto it says it is part of the
-      scaffolding. The rows are FLUSH (measured: 36px tall, 0 gap), so a line
-      beginning at the parent had nowhere to begin except on top of it. The
-      trunk now starts 7px into the FIRST child's own box, which is the gap.
-
-   2. ONE TRUNK FOR ALL OF THEM. A connector drawn per child repeats its
-      furniture N times; a single vertical with a tick per child is one shape
-      no matter how many there are. Each child paints the segment of the trunk
-      that crosses it, so the pieces abut into one line.
-
-   The last child stops its segment at the tick, so the trunk terminates INSIDE
-   the family rather than trailing into whatever follows. */
-.navtree .navtree-tab-row[data-child="true"]::before {
-  content: "";
-  position: absolute;
-  /* UNDER THE PARENT'S ICON — its CENTRE, not the row's edge. This was
-     `nt-pad + nt-indent`, which is where the parent's icon BEGINS, so the trunk
-     hung 12px to its left and descended out of nothing. A tree line has to come
-     out of the thing it belongs to. Measured: the parent chip sits 16px into the
-     row and is 24 wide, so its centre is 28 — which is what this computes. */
-  left: var(--nt-trunk-x);
-  top: 0;
-  /* CARRIES THROUGH BY DEFAULT, and the LAST child stops it — the inverse of
-     what this was, and the fix for a group that drew N brackets instead of one
-     line.
-     It used to be `bottom: 50%` with
-     `[data-child]:has(+ [data-child])` extending it, which is a claim about DOM
-     ADJACENCY. On the mobile sheet that claim is false: every row there is
-     wrapped in a `.swiperow`, so no two child rows are ever siblings and the
-     rule could never match. Each child therefore drew its own half-height
-     stub with an elbow on the end — three detached ⌐ shapes under one parent —
-     and it had been that way since the trunk landed, too faint to notice until
-     the ink went up.
-     `data-child-last` comes from React, which knows the index without having
-     to infer it from a tree shape that differs per surface.
-     The 1px OVERLAP is deliberate and predates this: the rows are flush and
-     each segment is exactly its row's height, so on paper the pieces abut. On a
-     2x display they do not LOOK it — a 1.5px border is antialiased
-     independently per box, so at every seam two half-covered device pixels sit
-     side by side instead of summing, and the line reads as broken once per row.
-     Reported from a Retina screen as "small visual gap in vertical line in
-     tree"; invisible at 1x, which is why the geometry measured clean. A pixel
-     of overlap is the same line continuing over itself and removes the seam
-     whatever the rounding does. */
-  bottom: -1px;
-  border-left: 1.5px solid var(--nt-trunk-ink);
-}
-/* THE LAST CHILD stops its segment at the tick, so the trunk terminates INSIDE
-   the family rather than trailing into whatever follows. */
-.navtree .navtree-tab-row[data-child="true"][data-child-last="true"]::before {
-  bottom: 50%;
-}
-/* …and the tick into each child. */
-.navtree .navtree-tab-row[data-child="true"]::after {
-  content: "";
-  position: absolute;
-  left: var(--nt-trunk-x);
-  top: 50%;
-  /* Reaches to just short of the child's NAME, so the elbow points at the label
-     instead of stopping in empty space. The name lands at 60 and the trunk is
-     at 28; 24px leaves an 8px breath before the text. */
-  width: var(--nt-tick-w);
-  border-top: 1.5px solid var(--nt-trunk-ink);
-}
-
-/* ─── THE FAMILY YOU ARE STANDING IN ────────────────────────────────────────
-   Reported: "you stand on a chat that has sub-chats, then the sub-chats don't
-   get a semi-selected background — I think it's worth improving."
-
-   Right. The parent and its workers are ONE piece of work, and until now they
-   looked like strangers who happen to be adjacent: the selection painted one
-   row and the rest of the family was indistinguishable from the chats above
-   and below it.
-
-   A tint at 7% of the ink — a third of the selected row's weight, so it reads
-   as "related to the thing you are in" and could never be mistaken for "this
-   is the thing you are in". `data-family` is set in BOTH directions (see
-   NavTree.tsx `inFamily`): stand on a parent and the children take it, stand
-   on a child and the parent does, which is the half a selection highlight
-   cannot do on its own.
-
-   Deliberately NOT the accent. The accent is already spent on selection and
-   focus throughout the rail, and a weak accent wash beside a strong one is the
-   pair every theme reviewed here measured worst — "which of these two am I
-   actually on" is the one question a rail must never raise. A neutral lift
-   answers "same group" without entering that conversation at all. */
-/* `:not([data-active])` is a BELT, not the mechanism — NavTree.tsx already
-   declines to set the attribute on the row you are standing on. It is here
-   because this rule is more specific than the selected row's and would win if
-   the two ever met, which is the one failure this tint must not have. */
-.navtree .navtree-tab-row[data-family="true"]:not([data-active="true"]) {
-  background-color: color-mix(in srgb, var(--fg) 7%, transparent);
-}
-/* …and the trunk that joins them brightens with it, because the line IS the
-   relationship and a tint alone leaves it drawn in the same grey as every
-   other family's.
-
-   DONE BY RE-POINTING THE TOKEN, never by writing a rule for the pseudos. A
-   first pass styled `[data-family]::before, [data-family]::after` directly and
-   NavTree.selection.test.ts failed it on sight — correctly, and that test is
-   the scar from two shipped bugs: `::before` on a tab row is the state track
-   AND the child's trunk, `::after` is the elbow AND was once the active row's
-   fillet, and both times a second claimant over-constrained the box and
-   painted something in the wrong place. The ownership is the invariant.
-   `--nt-trunk-ink` inherits into both pseudos and nothing else changes. */
-.navtree .navtree-tab-row[data-family="true"] {
-  --nt-trunk-ink: color-mix(in srgb, var(--fg) 52%, transparent);
-}
-
-/* NO BULLET. The child wore a dot in its mark column, from when the dot was the
-   ONLY thing saying "this is a child" — an indent alone could not do that job,
-   so the mark had to. The trunk says it now, and says it better, which leaves
-   the dot as a second mark for one meaning sitting exactly where the elbow
-   lands. Hidden, not removed: the grid column it occupies is a fixed 36px and
-   stays, so no child name moves by a pixel. */
-.navtree .navtree-tab-row[data-child="true"] > .navtree-tab-chip {
-  visibility: hidden;
-}
-/* One step quieter than a parent's name, in weight and colour — a child is
-   subordinate, and saying so in the type means not having to say it with a
-   second mark. Hover brings it back up to full ink, because at that point you
-   are reading it. */
-.navtree[data-variant="sidebar"] .navtree-tab-row[data-child="true"] .navtree-name-text {
-  font-weight: 500;
-  font-size: 0.84375rem;
-  color: var(--nt-ink-read-child);
-}
-.navtree[data-variant="sidebar"] .navtree-tab-row[data-child="true"]:hover .navtree-name-text {
-  color: var(--fg);
-}
-/* The variant prefix is LOAD-BEARING, not decoration. The dim rule above
-   carries it and this one did not, so this selector scored one step lower and
-   lost — a selected child kept `--fg-dim` on the accent fill, which is grey
-   ink on violet. Specificity, not a missing rule: the rule was right and
-   unreachable. Hover has the prefix for the same reason.
-   It is still needed over a WASH, for the same reason and a quieter one: a
-   selected child should read like the selected parent does, and --fg-dim under
-   the row you are on is a step the selection has already spent. */
-.navtree[data-variant="sidebar"]
-  .navtree-tab-row[data-child="true"][data-active="true"]
-  .navtree-name-text {
-  color: var(--fg);
-}
-
 /* ─── THE state mark ──────────────────────────────────────────────────────
    One 10px mark, in the row's last track, for every state there is. See
    RowMark in NavTree.tsx for why the 3px left bar, the row tint and the worded
@@ -2810,19 +2631,6 @@
   font-weight: 700;
   /* The colour is half the signal — see --nt-ink-read. Weight alone at 13px,
      with both rows the same ink, is the thing that was "not strong enough". */
-  color: var(--fg);
-}
-/* THE CHILD ARM, and it is load-bearing rather than belt-and-braces. The child
-   rule above is variant-scoped — (0,5,0) against this rule's (0,3,0) — so it
-   won outright, and an unread SUB-CHAT rendered at child weight and child ink:
-   no bold, no step of colour, nothing at all. The one row in the list most
-   likely to be the thing you were waiting for.
-   This file has been bitten by exactly this twice before (see the sheet's
-   selected-and-unread note); an explicit arm cannot be undone by a later move. */
-.navtree[data-variant="sidebar"]
-  .navtree-tab-row[data-child="true"][data-unread="true"]
-  .navtree-name-text {
-  font-weight: 700;
   color: var(--fg);
 }
 /* The WORKSPACE-level unread bold is deliberately gone. `unread` bolded pane +
@@ -3771,33 +3579,6 @@ body.sidenav-resizing iframe {
   .navtree-name-text {
   color: var(--fg-dim);
 }
-
-/* ─── A CHILD row on the sheet ────────────────────────────────────────────
-   The same nesting the desktop rail has, at this surface's scale.
-
-   It had none: the sheet dropped the grouping before it reached the DOM, so a
-   sub-chat arrived as a top-level line sorted by recency and sat ABOVE the
-   chat that spawned it. Both halves are now here — the grouping in NavTree.tsx
-   and this.
-
-   ONE --nt-indent, and the step is deliberately small — the same 12px a tab
-   takes under its workspace name, and the same one step the desktop child row
-   takes. A child of a chat is one level of the same hierarchy, so it costs the
-   same on both surfaces. (Indenting by a whole emoji box instead, which is the
-   obvious reading of "put the dot where the tile was", pushes the child name
-   34px off its parent's — measurably the "indentation is too much" the rail was
-   already once redrawn to fix.)
-
-   The mark is a dot in the emoji's own box (ChatChip, shape="dot"). That is what
-   makes this read as nesting rather than as a line pushed right, and it is what
-   lands every child name in the list on one shared x. */
-.navtree[data-variant="sheet"] .navtree-tab-row[data-child="true"] {
-  /* 8px, matching the rail — see the desktop rule. A full --nt-indent was the
-     step on both surfaces until the trunk arrived; with a line doing the work
-     the extra 4px only pushes the name further from the elbow pointing at it. */
-  padding-inline-start: calc(var(--nt-rail-lead) + 8px);
-  position: relative;
-}
 /* The dot stands in the emoji's box, so it has to BE that box — otherwise the
    flex line closes up around a 6px mark and the name jumps left by 14px on
    every child row, which is the column this whole rule exists to hold. */
@@ -3810,30 +3591,6 @@ body.sidenav-resizing iframe {
      rather than removing keeps the column, which is the thing holding every
      child name on one x (see the comment above). */
   visibility: hidden;
-}
-/* One step quieter in the type, same as the desktop child — a child is
-   subordinate, and saying it in the type means not spending a second mark on
-   it. The active rule carries the variant prefix for the same specificity
-   reason the desktop one does: without it a selected child keeps --fg-dim on
-   the accent fill, which is grey ink on violet. */
-.navtree[data-variant="sheet"] .navtree-tab-row[data-child="true"] .navtree-name-text {
-  font-weight: 400;
-  font-size: 0.875rem;
-  color: var(--fg-dim);
-}
-/* --fg, and this one was WRONG BEFORE THIS PASS rather than by it. The sheet's
-   selection has been a 20% accent wash since it was rebuilt, and this painted
-   --accent-fg over it: 1.04:1 on dracula, 1.81 on alucard — the ink nominated for
-   a saturated fill is the one thing a wash cannot carry. It was written for the
-   rail's slab and left behind on a row that no longer had one, and it survived
-   the sweep because the guard in NavTree.selection.test.ts matched
-   `.navtree-tab-row[data-active="true"]` literally and `[data-child="true"]`
-   sits between the two. The guard is widened with this fix. Same ink as the
-   rail's twin above, for the reason given there. */
-.navtree[data-variant="sheet"]
-  .navtree-tab-row[data-child="true"][data-active="true"]
-  .navtree-name-text {
-  color: var(--fg);
 }
 
 /* ─── The name, and THE BIDI FIX ──────────────────────────────────────────
@@ -4480,24 +4237,6 @@ body.sidenav-resizing iframe {
      its resting ground, NOT `--nt-hover`: that is a 6% wash, which over this
      row's own 8% is a change nobody can see. */
   background-color: color-mix(in srgb, var(--band-ink) 19%, transparent);
-}
-
-/* ── NO CHILD RUNG INSIDE THE BAND ───────────────────────────────────────
-   The tree sets a sub-chat one rung quieter than its parent, which is right
-   where the two are drawn as a hierarchy — the child is indented under the
-   row it belongs to and the ink says the same thing.
-
-   The band is not a tree. It is a flat list of chats you have been in, with
-   no parents on it, so a quieter rung there communicates nothing — and it
-   costs something real: the band's own ground is a lift, and the child ink on
-   top of it measured 4.11:1 on tokyo-night, under AA. Rows here read at the
-   list's ordinary ink.
-
-   `[data-variant]` carries this to (0,6,0) deliberately: the child rule it
-   has to beat is (0,5,0), and a tie would be decided by file order — which is
-   a bundler's business, not a design decision. */
-.navtree[data-variant] .navtree-workingset .navtree-tab-row[data-child="true"] .navtree-name-text {
-  color: var(--nt-ink-read);
 }
 
 /* THE BAND'S OWN GROUND IS ALREADY A LIFT, so a row's hover has to lift again
