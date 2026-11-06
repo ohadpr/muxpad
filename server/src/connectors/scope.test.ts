@@ -239,6 +239,14 @@ describe('mayPaneUse — the function that resolves an origin', () => {
     const Database = require('better-sqlite3');
     const d = new Database(':memory:');
     d.exec('CREATE TABLE panes (id TEXT PRIMARY KEY, node_id TEXT)');
+    d.exec(
+      'CREATE TABLE nodes (id TEXT PRIMARY KEY, name TEXT, endpoint TEXT, status TEXT, last_seen INTEGER, capabilities TEXT, created_at INTEGER)',
+    );
+    d.prepare('INSERT INTO nodes (id, name, endpoint) VALUES (?, ?, ?)').run(
+      'trayo',
+      'Trayo VM',
+      'ws://x:1',
+    );
     d.prepare('INSERT INTO panes (id, node_id) VALUES (?, ?)').run('p-local', null);
     d.prepare('INSERT INTO panes (id, node_id) VALUES (?, ?)').run('p-vm', 'trayo');
     d.prepare('INSERT INTO panes (id, node_id) VALUES (?, ?)').run('p-empty', '');
@@ -277,17 +285,227 @@ describe('mayPaneUse — the function that resolves an origin', () => {
     expect(mayPaneUse(d, 'msgvault', 'p-vm', policy).ok).toBe(false);
   });
 
-  it('treats an EMPTY node id as local, which the panes route accepts', async () => {
-    // It exists, so it is not the unknown-pane case; `''` is how a pane on this
-    // machine can be recorded, and it must not become a hole either way.
+  it('REFUSES an empty node id rather than reading it as local', async () => {
+    // `POST /api/panes` accepts `node_id: ""`, which was a second spelling of
+    // "local" that no policy names — so it inherited the machine with the most
+    // access. An origin that is not a machine is refused.
     const { mayPaneUse } = await import('./scope.js');
-    expect(mayPaneUse(db(), 'msgvault', 'p-empty', policy).origin).toBe('local');
+    const d = mayPaneUse(db(), 'msgvault', 'p-empty', policy);
+    expect(d.ok).toBe(false);
+    expect(d.reason).toMatch(/not one muxpad knows \(blank\)/);
     expect(mayPaneUse(db(), 'slack', 'p-empty', policy).ok).toBe(false);
+  });
+
+  it('refuses a pane whose machine was removed from the table', async () => {
+    const { mayPaneUse } = await import('./scope.js');
+    const d = db();
+    d.prepare('DELETE FROM nodes WHERE id = ?').run('trayo');
+    const r = mayPaneUse(d, 'slack', 'p-vm', policy);
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/not one muxpad knows \(trayo\)/);
   });
 
   it('carries a sealed policy’s problem into the refusal', async () => {
     const { mayPaneUse } = await import('./scope.js');
     const sealedPolicy = { enforce: true, allow: {}, problem: 'tampered' };
     expect(mayPaneUse(db(), 'slack', 'p-vm', sealedPolicy).reason).toBe('tampered');
+  });
+});
+
+describe('the policy file, every branch', () => {
+  // The real checks need a uid-0 file inside uid-0 directories, which a test
+  // cannot create — so the filesystem is injected. Twelve sabotages of this
+  // logic used to pass the suite, including deleting the ancestor walk.
+  const S = (
+    o: Partial<{
+      file: boolean;
+      dir: boolean;
+      link: boolean;
+      uid: number;
+      mode: number;
+      nlink: number;
+    }>,
+  ) =>
+    ({
+      isFile: () => o.file === true,
+      isDirectory: () => o.dir === true,
+      isSymbolicLink: () => o.link === true,
+      uid: o.uid ?? 0,
+      mode: o.mode ?? 0o644,
+      nlink: o.nlink ?? 1,
+    }) as unknown as import('node:fs').Stats;
+
+  const FILE = S({ file: true });
+  const DIR = S({ dir: true, mode: 0o755 });
+
+  /** A filesystem where the policy is good and every ancestor is root's. */
+  const okIO = (
+    over: Partial<Record<string, import('node:fs').Stats>> = {},
+    body = '{"enforce":true,"allow":{"slack":["trayo"]}}',
+  ) => {
+    const dirs: Record<string, import('node:fs').Stats> = {
+      '/Library/muxpad': DIR,
+      '/Library': DIR,
+      '/': DIR,
+      ...over,
+    };
+    return {
+      opened: [] as string[],
+      readFrom: [] as number[],
+      closed: 0,
+      open(path: string) {
+        this.opened.push(path);
+        return 7;
+      },
+      fstat: () => over.__file__ ?? FILE,
+      read(fd: number) {
+        this.readFrom.push(fd);
+        return body;
+      },
+      close() {
+        this.closed++;
+      },
+      lstat: (p: string) => {
+        const st = dirs[p];
+        if (!st) throw Object.assign(new Error('nope'), { code: 'ENOENT' });
+        return st;
+      },
+    };
+  };
+
+  it('loads a good file, reading from the FD rather than the path', async () => {
+    const { loadPolicy } = await import('./scope.js');
+    const io = okIO();
+    const p = loadPolicy('/Library/muxpad/connectors.json', io);
+    expect(p.enforce).toBe(true);
+    expect(p.allow.slack).toEqual(['trayo']);
+    expect(io.readFrom).toEqual([7]); // the fd, not a second open of the path
+    expect(io.closed).toBe(1);
+  });
+
+  it('seals on each ancestor fault, naming the directory', async () => {
+    const { loadPolicy } = await import('./scope.js');
+    const path = '/Library/muxpad/connectors.json';
+    const cases: Array<[string, import('node:fs').Stats, RegExp]> = [
+      [
+        'not root-owned',
+        S({ dir: true, uid: 501, mode: 0o755 }),
+        /\/Library\/muxpad is not root-owned/,
+      ],
+      ['group-writable', S({ dir: true, mode: 0o775 }), /writable by its group/],
+      ['world-writable', S({ dir: true, mode: 0o757 }), /writable by its group or by everyone/],
+      ['a symlink', S({ dir: true, link: true, mode: 0o755 }), /is a symlink/],
+      ['not a directory', S({ file: true }), /is not a directory/],
+    ];
+    for (const [label, st, re] of cases) {
+      const p = loadPolicy(path, okIO({ '/Library/muxpad': st }));
+      expect(p.enforce, label).toBe(true);
+      expect(p.allow, label).toEqual({});
+      expect(p.problem, label).toMatch(re);
+    }
+  });
+
+  it('walks ALL the way up, not just the parent', async () => {
+    const { loadPolicy } = await import('./scope.js');
+    // The parent is fine and the grandparent is not: a walk that stopped early
+    // would load this, and one that started too high would miss the parent.
+    const p = loadPolicy(
+      '/Library/muxpad/connectors.json',
+      okIO({ '/Library': S({ dir: true, uid: 501, mode: 0o755 }) }),
+    );
+    expect(p.problem).toMatch(/\/Library is not root-owned/);
+  });
+
+  it('checks the ROOT too, so a walk that stops short is caught', async () => {
+    // With every intermediate directory fine, only a bad `/` distinguishes a
+    // complete walk from one that gave up early — and giving up early survived
+    // the suite until this case existed.
+    const { loadPolicy } = await import('./scope.js');
+    const p = loadPolicy(
+      '/Library/muxpad/connectors.json',
+      okIO({ '/': S({ dir: true, mode: 0o777 }) }),
+    );
+    expect(p.enforce).toBe(true);
+    expect(p.problem).toMatch(/^\/ is writable/);
+  });
+
+  it('terminates at the root', async () => {
+    const { ancestorProblem } = await import('./scope.js');
+    const io = okIO();
+    expect(ancestorProblem('/Library/muxpad/connectors.json', io)).toBeNull();
+  });
+
+  it('seals when an ancestor cannot be inspected at all', async () => {
+    const { loadPolicy } = await import('./scope.js');
+    const io = okIO();
+    io.lstat = () => {
+      throw new Error('EACCES');
+    };
+    expect(loadPolicy('/Library/muxpad/connectors.json', io).problem).toMatch(
+      /could not be inspected/,
+    );
+  });
+
+  it('is UNSCOPED only for ENOENT, and seals on every other open failure', async () => {
+    const { loadPolicy, UNSCOPED: U } = await import('./scope.js');
+    const io = okIO();
+    for (const [code, expectSealed] of [
+      ['ENOENT', false],
+      ['EACCES', true],
+      ['ELOOP', true],
+      ['ENOTDIR', true],
+      [undefined, true],
+    ] as Array<[string | undefined, boolean]>) {
+      io.open = () => {
+        throw Object.assign(new Error(String(code)), code ? { code } : {});
+      };
+      const p = loadPolicy('/Library/muxpad/connectors.json', io);
+      if (expectSealed) {
+        expect(p.enforce, String(code)).toBe(true);
+        expect(p.problem, String(code)).toMatch(/could not be opened/);
+      } else {
+        expect(p, String(code)).toEqual(U);
+      }
+    }
+  });
+
+  it('seals an EMPTY trusted file — truncating it was a way to switch scoping off', async () => {
+    const { loadPolicy } = await import('./scope.js');
+    for (const body of ['', '   \n']) {
+      const p = loadPolicy('/Library/muxpad/connectors.json', okIO({}, body));
+      expect(p.enforce).toBe(true);
+      expect(p.problem).toMatch(/is empty/);
+    }
+  });
+
+  it('seals when the file metadata is wrong, before reading a byte', async () => {
+    const { loadPolicy } = await import('./scope.js');
+    for (const [st, re] of [
+      [S({ file: true, uid: 501 }), /not root-owned/],
+      [S({ file: true, mode: 0o666 }), /writable by its group/],
+      [S({ file: true, nlink: 3 }), /more than one link/],
+      [S({ dir: true }), /not a regular file/],
+    ] as Array<[import('node:fs').Stats, RegExp]>) {
+      const io = okIO({ __file__: st });
+      const p = loadPolicy('/Library/muxpad/connectors.json', io);
+      expect(p.problem).toMatch(re);
+      expect(io.readFrom, 'must not read a file it refused').toEqual([]);
+    }
+  });
+
+  it('closes the fd even when the decision is a refusal', async () => {
+    const { loadPolicy } = await import('./scope.js');
+    const io = okIO({ __file__: S({ file: true, uid: 501 }) });
+    loadPolicy('/Library/muxpad/connectors.json', io);
+    expect(io.closed).toBe(1);
+  });
+
+  it('survives a close that throws', async () => {
+    const { loadPolicy } = await import('./scope.js');
+    const io = okIO();
+    io.close = () => {
+      throw new Error('EBADF');
+    };
+    expect(loadPolicy('/Library/muxpad/connectors.json', io).enforce).toBe(true);
   });
 });

@@ -214,14 +214,42 @@ export function trustProblem(st: Stats, what: string): string | null {
   return null;
 }
 
+/**
+ * The filesystem, as this module uses it.
+ *
+ * INJECTABLE BECAUSE THE REAL THING NEEDS ROOT. Every refusal below depends on
+ * a file owned by uid 0 inside directories owned by uid 0, which a test cannot
+ * create — so with the calls inline, twelve separate sabotages of this logic
+ * passed the whole suite, including deleting the ancestor walk outright. A
+ * seam here is the difference between code that is argued and code that is
+ * checked.
+ */
+export interface PolicyIO {
+  open(path: string): number;
+  fstat(fd: number): Stats;
+  read(fd: number): string;
+  close(fd: number): void;
+  lstat(path: string): Stats;
+}
+
+export const realIO: PolicyIO = {
+  // O_NOFOLLOW refuses a symlinked final component outright. O_NONBLOCK so a
+  // FIFO that passed every other check cannot park the server on open.
+  open: (path) => openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK),
+  fstat: (fd) => fstatSync(fd),
+  read: (fd) => readFileSync(fd, 'utf8'),
+  close: (fd) => closeSync(fd),
+  lstat: (path) => lstatSync(path),
+};
+
 /** The directories above it must be root's too: a root-owned file in a
  *  directory the agent can write is a file the agent can replace. */
-function ancestorProblem(path: string): string | null {
+export function ancestorProblem(path: string, io: PolicyIO = realIO): string | null {
   let cur = dirname(path);
   for (;;) {
     let st: Stats;
     try {
-      st = lstatSync(cur);
+      st = io.lstat(cur);
     } catch {
       return `${cur} could not be inspected`;
     }
@@ -243,6 +271,10 @@ function ancestorProblem(path: string): string | null {
  * survived every sabotage because nothing could reach it.
  */
 export function trustedBytes(raw: string, path: string): ConnectorPolicy & { problem?: string } {
+  // AN EMPTY TRUSTED FILE SEALS. `parsePolicy('')` is UNSCOPED, which is right
+  // for a value from anywhere else and wrong for a file somebody installed:
+  // truncating the policy to zero bytes was a way to turn scoping off.
+  if (raw.trim() === '') return sealed(`${path} is empty`);
   // A trusted file that does not parse is NOT "no policy": it was put there
   // deliberately, and a typo is not consent to stop scoping.
   return parsePolicy(raw) ?? sealed(`${path} is not valid JSON`);
@@ -255,14 +287,17 @@ export function trustedBytes(raw: string, path: string): ConnectorPolicy & { pro
  * ships in. Present but untrusted → everything refused, loudly. Present and
  * trusted → whatever it says.
  */
-export function loadPolicy(path: string = POLICY_PATH): ConnectorPolicy & { problem?: string } {
+export function loadPolicy(
+  path: string = POLICY_PATH,
+  io: PolicyIO = realIO,
+): ConnectorPolicy & { problem?: string } {
   // OPENED ONCE AND INSPECTED THROUGH THE FD. Stat-then-read is a race: the
   // path can be swapped between the two calls, and `readFileSync` follows a
   // symlink that `lstatSync` only reported. O_NOFOLLOW refuses a symlinked
   // final component outright; everything else is judged on the open file.
   let fd: number;
   try {
-    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    fd = io.open(path);
   } catch (e) {
     // ONLY "it is not there" is unscoped. Every other failure — a directory
     // chmod 0 above it, ELOOP, ENOTDIR, a symlink refused by O_NOFOLLOW — is a
@@ -272,13 +307,20 @@ export function loadPolicy(path: string = POLICY_PATH): ConnectorPolicy & { prob
     return sealed(`${path} could not be opened (${(e as NodeJS.ErrnoException).code})`);
   }
   try {
-    const bad = trustProblem(fstatSync(fd), path) ?? ancestorProblem(path);
+    // fstat on the OPEN FILE, not another lstat of the path: the two calls
+    // would be a race, and the path can be swapped between them.
+    const bad = trustProblem(io.fstat(fd), path) ?? ancestorProblem(path, io);
     if (bad) return sealed(bad);
-    return trustedBytes(readFileSync(fd, 'utf8'), path);
+    return trustedBytes(io.read(fd), path);
   } catch {
     return sealed(`${path} could not be read`);
   } finally {
-    closeSync(fd);
+    // A close that throws must not turn a decision into an exception.
+    try {
+      io.close(fd);
+    } catch {
+      /* the answer is already made */
+    }
   }
 }
 
@@ -317,7 +359,29 @@ export function mayPaneUse(
       enforced: policy.enforce,
       reason: 'no such chat — a connector is used by a chat, and that one does not exist',
     };
-  const origin = row.n || LOCAL_NODE_ID;
+  // ── AND IT MUST NAME A MACHINE WE KNOW ────────────────────────────────
+  //
+  // `''` was being read as `local`, because `nodeForPane` treats a null node
+  // as this machine and `|| LOCAL_NODE_ID` extended that to the empty string.
+  // But `POST /api/panes` accepts `node_id: ""`, so that was a second spelling
+  // of "local" that no policy names — and a row naming a machine since removed
+  // is a third. A connector is scoped to a MACHINE; an origin that is not one
+  // is refused rather than mapped onto the machine with the most access.
+  const raw = row.n;
+  const known =
+    raw === null || raw === LOCAL_NODE_ID
+      ? LOCAL_NODE_ID
+      : raw && new NodeStore(db).get(raw)
+        ? raw
+        : null;
+  if (!known)
+    return {
+      ok: false,
+      origin: raw ?? '',
+      enforced: policy.enforce,
+      reason: `that chat's machine is not one muxpad knows (${raw === '' ? 'blank' : String(raw)})`,
+    };
+  const origin = known;
   const d = mayUse(connector, origin, policy);
   return d.ok || !policy.problem ? d : { ...d, reason: policy.problem };
 }
