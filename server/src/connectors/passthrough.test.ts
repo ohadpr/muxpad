@@ -214,16 +214,16 @@ describe('whether there is anything to mediate yet', () => {
     expect(r.problem).toMatch(/owned by the account agents run as/);
   });
 
-  it('refuses a group- or world-readable archive owned by someone else', async () => {
+  it('refuses a group- or world-accessible archive owned by someone else', async () => {
     const { mediationReady } = await import('./passthrough.js');
     expect(mediationReady({ uid: 0, mode: 0o644 }, 501).problem).toMatch(
-      /group- or world-readable/,
+      /group- or world-accessible/,
     );
     expect(mediationReady({ uid: 0, mode: 0o640 }, 501).problem).toMatch(
-      /group- or world-readable/,
+      /group- or world-accessible/,
     );
     expect(mediationReady({ uid: 0, mode: 0o604 }, 501).problem).toMatch(
-      /group- or world-readable/,
+      /group- or world-accessible/,
     );
   });
 
@@ -302,5 +302,56 @@ describe('resolving a command path', () => {
     const { resolveCommand } = await import('./passthrough.js');
     expect(resolveCommand(['constructor'], { search: 'read' })).toBeUndefined();
     expect(resolveCommand(['toString'], { search: 'read' })).toBeUndefined();
+  });
+});
+
+describe('what may never be mapped', () => {
+  it('maps no command whose head is on the ban list', async () => {
+    // Otherwise a command is allowed by the mapping and refused by the ban
+    // list, and which one wins depends on call order.
+    const { passthroughCommands } = await import('./passthrough.js');
+    const { REFUSED_COMMANDS } = await import('./registry.js');
+    for (const c of passthroughCommands())
+      expect(REFUSED_COMMANDS, c).not.toContain(c.split(' ')[0]);
+  });
+
+  it('maps nothing in the credential or grant family', async () => {
+    // A mutation run found that mapping `agent-token issue` passed every test.
+    // It mints grants; nothing the agent runs may reach it.
+    const { verbForCommand } = await import('./passthrough.js');
+    for (const c of [
+      'agent-token',
+      'agent-token issue',
+      'agent-token revoke',
+      'credentials',
+      'export-token',
+      'add-account',
+      'remove-account',
+      'setup',
+    ])
+      expect(verbForCommand(c), c).toBeNull();
+  });
+});
+
+describe('short flags', () => {
+  it('are refused unless muxpad knows they take no value', async () => {
+    // cobra accepts `-o value`, `-o=value` AND `-ovalue`, so the `=` form
+    // proves nothing about a short flag — `-ologs` is a single token.
+    for (const f of ['-o=x', '-ox', '-o', '-l=5'])
+      expect(judgeArgv(['search', 'x', f]).ok, f).toBe(false);
+    expect(judgeArgv(['search', 'x', '-o=x']).reason).toMatch(/use the long form/);
+  });
+
+  it('allows the value-less short flags it knows', () => {
+    for (const f of ['-v', '-h']) expect(judgeArgv(['search', 'x', f]).ok, f).toBe(true);
+  });
+});
+
+describe('a writable archive', () => {
+  it('is refused too — writable is readable in practice, and replaceable', async () => {
+    const { mediationReady } = await import('./passthrough.js');
+    for (const mode of [0o620, 0o602, 0o660, 0o606])
+      expect(mediationReady({ uid: 0, mode }, 501).ready, mode.toString(8)).toBe(false);
+    expect(mediationReady({ uid: 0, mode: 0o600 }, 501).ready).toBe(true);
   });
 });

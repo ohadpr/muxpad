@@ -119,3 +119,79 @@ describe('the table itself', () => {
       expect(classify(v).ok || classify(v).reason, v).toBeTruthy();
   });
 });
+
+describe('the table is the policy, so the table is pinned', () => {
+  // THE WORST SURVIVOR of an exhaustive mutation run: relabelling a write as a
+  // timed read — slack.dm, slack.react, draft.delete, draft-edit — passed every
+  // test. The behavioural tests all ask "does a write stay untimed", which a
+  // mutant satisfies by making the write a read. So the data itself is asserted
+  // verbatim: this file IS the policy, and a careless edit to it must fail.
+  const EXPECTED: Record<string, { kind: string; timed: boolean; others?: true; refused?: true }> =
+    {
+      'slack.read': { kind: 'read', timed: true },
+      'slack.search': { kind: 'read', timed: true },
+      'slack.channels': { kind: 'read', timed: true },
+      'slack.users': { kind: 'read', timed: true },
+      'slack.thread': { kind: 'read', timed: true },
+      'slack.post': { kind: 'write', timed: false, others: true },
+      'slack.dm': { kind: 'write', timed: false, others: true },
+      'slack.react': { kind: 'write', timed: false, others: true },
+      'slack.edit': { kind: 'write', timed: false, others: true },
+      'slack.unpost': { kind: 'write', timed: false, others: true },
+      'slack.upload': { kind: 'write', timed: false, others: true },
+      'msgvault.search.read': { kind: 'read', timed: true },
+      'msgvault.message.read': { kind: 'read', timed: true },
+      'msgvault.attachment.read': { kind: 'read', timed: true },
+      'msgvault.stats.read': { kind: 'read', timed: true },
+      'msgvault.calendar.read': { kind: 'read', timed: true },
+      'msgvault.calendar.event.read': { kind: 'read', timed: true },
+      'msgvault.draft.create': { kind: 'write', timed: false },
+      'msgvault.draft.edit': { kind: 'write', timed: false },
+      'msgvault.draft.delete': { kind: 'write', timed: false },
+      'msgvault.calendar.write': { kind: 'write', timed: false, others: true },
+      'msgvault.calendar.invite': { kind: 'write', timed: false, others: true, refused: true },
+    };
+
+  it('has exactly these verbs, no more and no fewer', () => {
+    expect(Object.keys(VERBS).sort()).toEqual(Object.keys(EXPECTED).sort());
+  });
+
+  it('classifies each one exactly as written here', () => {
+    for (const [verb, want] of Object.entries(EXPECTED)) {
+      const got = classify(verb);
+      expect(got.kind, verb).toBe(want.kind);
+      expect(got.timed, verb).toBe(want.timed);
+      if (want.refused) {
+        // A refusal carries no flags: nothing will be shown, so there is
+        // nothing for `notifiesOthers` to annotate.
+        expect(got.notifiesOthers, verb).toBeUndefined();
+        expect(got.reason, verb).toBeTruthy();
+      } else {
+        expect(got.notifiesOthers, verb).toBe(want.others);
+      }
+      expect(got.ok, verb).toBe(!want.refused);
+    }
+  });
+
+  it('keeps writes and reads on the right side of their own names', () => {
+    // A rule rather than a list, so a verb added later is covered: anything
+    // that posts, sends, writes, edits, deletes, uploads, reacts, creates or
+    // invites is a write, whatever the table says.
+    for (const verb of Object.keys(VERBS)) {
+      const last = verb.split('.').slice(-1)[0] as string;
+      const writeish = /^(post|unpost|dm|react|edit|upload|write|invite|create|delete|send|move)$/;
+      if (writeish.test(last)) expect(VERBS[verb]?.kind, verb).toBe('write');
+      if (last === 'read') expect(VERBS[verb]?.kind, verb).toBe('read');
+    }
+  });
+
+  it('flags every verb that reaches other people', () => {
+    for (const verb of Object.keys(VERBS)) {
+      const r = VERBS[verb];
+      if (r?.kind !== 'write') continue;
+      // A draft reaches nobody; everything else that writes does.
+      const isDraft = verb.includes('.draft.');
+      expect(r.notifiesOthers === true, verb).toBe(!isDraft);
+    }
+  });
+});
