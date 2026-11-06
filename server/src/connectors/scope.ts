@@ -1,4 +1,6 @@
-import { lstatSync, readFileSync } from 'node:fs';
+import { constants, closeSync, fstatSync, lstatSync, openSync, readFileSync } from 'node:fs';
+import type { Stats } from 'node:fs';
+import { dirname } from 'node:path';
 import type Database from 'better-sqlite3';
 import { LOCAL_NODE_ID, NodeStore } from '../store/NodeStore.js';
 
@@ -28,7 +30,10 @@ import { LOCAL_NODE_ID, NodeStore } from '../store/NodeStore.js';
  *
  * The ORIGIN is never taken from a request body. It is resolved here from the
  * pane's own row, because a host asserting which host it is would be the whole
- * control answering to the thing it controls.
+ * control answering to the thing it controls. What the caller DOES assert is
+ * which pane is asking, so a route must have proven that first (the Slack
+ * routes verify a per-pane key); an unknown pane is refused here rather than
+ * defaulted, which is where the first version of this had a hole.
  *
  * ── ENFORCEMENT IS A SWITCH, AND OFF IS HONEST ───────────────────────────
  * Scoping only makes sense once the chats have moved to the machines they
@@ -51,9 +56,17 @@ import { LOCAL_NODE_ID, NodeStore } from '../store/NodeStore.js';
  * to every browser, which is harmless but tells you what kind of value it was
  * being treated as.
  *
- * So it is a ROOT-OWNED FILE, checked on every read, exactly like the broker's
- * own `node-policy.json`. On this machine `sudo` needs a password, so a
- * root-owned file is genuinely out of an agent's reach.
+ * So it is a ROOT-OWNED FILE, checked on every read in the spirit of the
+ * broker's own `node-policy.json` — though not as strictly: that one also
+ * refuses ACLs, via a shell out to `ls -lde`, and this one does not. A macOS
+ * ACL granting write is invisible to a mode check, so the honest claim is
+ * "root-owned and with root-owned ancestors", not "unforgeable". The broker is
+ * the boundary; this is the fast refusal.
+ *
+ * On this machine `sudo` needs a password, so a root-owned file with
+ * root-owned ancestors is out of an agent's ordinary reach. The ancestors
+ * matter and are checked: a root-owned file inside a directory the agent can
+ * write is a file the agent can replace by replacing its parent.
  *
  * And a TAMPERED file fails CLOSED. If the file exists but is not root-owned,
  * or is group/world-writable, or is a symlink, every connector is refused and
@@ -91,16 +104,37 @@ export const UNSCOPED: ConnectorPolicy = { enforce: false, allow: {} };
  * decisions it produces are marked unscoped and visible as such.
  */
 export function readPolicy(raw: string | null | undefined): ConnectorPolicy {
-  if (!raw) return UNSCOPED;
+  return parsePolicy(raw) ?? UNSCOPED;
+}
+
+/**
+ * Parse, or `null` for "this is not a policy".
+ *
+ * Separate from {@link readPolicy} because the two callers need opposite
+ * things from a malformed value. A string handed in from anywhere reads as
+ * UNSCOPED — lenient. A root-owned FILE that does not parse is SEALED, because
+ * it was put there deliberately and failing open on a typo would have turned
+ * scoping off silently: a trailing comma in a hand-edited policy is not
+ * consent to drop the policy.
+ */
+export function parsePolicy(raw: string | null | undefined): ConnectorPolicy | null {
+  if (raw === null || raw === undefined || raw === '') return UNSCOPED;
   let v: unknown;
   try {
-    v = JSON.parse(raw);
+    // A BOM is what several editors write and `readFileSync(…, 'utf8')` does
+    // not strip it; JSON.parse then throws on a file that is otherwise fine.
+    v = JSON.parse(raw.replace(/^\uFEFF/, ''));
   } catch {
-    return UNSCOPED;
+    return null;
   }
-  if (!v || typeof v !== 'object') return UNSCOPED;
+  // An ARRAY parses as an object and would have come back as a policy with an
+  // empty allow — i.e. as "no policy" rather than as "not a policy".
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
   const o = v as { enforce?: unknown; allow?: unknown };
-  const allow: Record<string, string[]> = {};
+  // NULL-PROTOTYPE, so a connector named `constructor` or `hasOwnProperty`
+  // cannot reach Object's own properties — `policy.allow[c]` was returning a
+  // function for those and throwing on `.length` instead of refusing.
+  const allow: Record<string, string[]> = Object.create(null);
   if (o.allow && typeof o.allow === 'object') {
     for (const [k, list] of Object.entries(o.allow as Record<string, unknown>)) {
       if (!/^[a-z][a-z0-9_-]{0,31}$/.test(k)) continue;
@@ -135,13 +169,16 @@ export function mayUse(
   policy: ConnectorPolicy,
 ): ScopeDecision {
   if (!policy.enforce) return { ok: true, origin, enforced: false };
-  const allowed = policy.allow[connector];
+  const allowed = Object.hasOwn(policy.allow, connector) ? policy.allow[connector] : undefined;
   if (!allowed || allowed.length === 0)
     return {
       ok: false,
       origin,
       enforced: true,
-      reason: `no machine is allowed to use ${connector} — set one in Settings → Connectors`,
+      // Names the FILE, not a Settings page. There is no UI for this and by
+      // this module's own argument there must not be one: a web surface that
+      // could rewrite the policy would hand it back to the agents it binds.
+      reason: `no machine is allowed to use ${connector} — edit ${POLICY_PATH} as root`,
     };
   if (!allowed.includes(origin))
     return {
@@ -157,7 +194,58 @@ export function mayUse(
 
 /** Deny everything, because the policy itself cannot be trusted. */
 function sealed(problem: string): ConnectorPolicy & { problem: string } {
-  return { enforce: true, allow: {}, problem };
+  return { enforce: true, allow: Object.create(null), problem };
+}
+
+/**
+ * What is wrong with this file's metadata, or null.
+ *
+ * Pure and exported so the branches can be table-tested without being root —
+ * the mode and file-type refusals were untestable while this was inline, and
+ * a sabotage of the mode check survived the whole suite.
+ */
+export function trustProblem(st: Stats, what: string): string | null {
+  if (!st.isFile()) return `${what} is not a regular file`;
+  if (st.uid !== 0) return `${what} is not root-owned`;
+  if (st.mode & 0o022) return `${what} is writable by its group or by everyone`;
+  // A hardlink means the same inode is reachable from a path we did not check,
+  // so its ancestors are not the ones we just walked.
+  if (st.nlink !== 1) return `${what} has more than one link`;
+  return null;
+}
+
+/** The directories above it must be root's too: a root-owned file in a
+ *  directory the agent can write is a file the agent can replace. */
+function ancestorProblem(path: string): string | null {
+  let cur = dirname(path);
+  for (;;) {
+    let st: Stats;
+    try {
+      st = lstatSync(cur);
+    } catch {
+      return `${cur} could not be inspected`;
+    }
+    if (st.isSymbolicLink()) return `${cur} is a symlink`;
+    if (!st.isDirectory()) return `${cur} is not a directory`;
+    if (st.uid !== 0) return `${cur} is not root-owned`;
+    if (st.mode & 0o022) return `${cur} is writable by its group or by everyone`;
+    const up = dirname(cur);
+    if (up === cur) return null;
+    cur = up;
+  }
+}
+
+/**
+ * Bytes from a file that PASSED the metadata checks.
+ *
+ * Pure and exported so the fail-closed branch can be tested without being
+ * root: while this was inline, "a trusted file that does not parse fails open"
+ * survived every sabotage because nothing could reach it.
+ */
+export function trustedBytes(raw: string, path: string): ConnectorPolicy & { problem?: string } {
+  // A trusted file that does not parse is NOT "no policy": it was put there
+  // deliberately, and a typo is not consent to stop scoping.
+  return parsePolicy(raw) ?? sealed(`${path} is not valid JSON`);
 }
 
 /**
@@ -168,19 +256,29 @@ function sealed(problem: string): ConnectorPolicy & { problem: string } {
  * trusted → whatever it says.
  */
 export function loadPolicy(path: string = POLICY_PATH): ConnectorPolicy & { problem?: string } {
-  let st: ReturnType<typeof lstatSync>;
+  // OPENED ONCE AND INSPECTED THROUGH THE FD. Stat-then-read is a race: the
+  // path can be swapped between the two calls, and `readFileSync` follows a
+  // symlink that `lstatSync` only reported. O_NOFOLLOW refuses a symlinked
+  // final component outright; everything else is judged on the open file.
+  let fd: number;
   try {
-    st = lstatSync(path);
-  } catch {
-    return UNSCOPED;
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch (e) {
+    // ONLY "it is not there" is unscoped. Every other failure — a directory
+    // chmod 0 above it, ELOOP, ENOTDIR, a symlink refused by O_NOFOLLOW — is a
+    // policy we cannot read, and reading that as "no policy" would let an agent
+    // turn scoping off by making the file unreadable.
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return UNSCOPED;
+    return sealed(`${path} could not be opened (${(e as NodeJS.ErrnoException).code})`);
   }
-  if (st.isSymbolicLink()) return sealed(`${path} is a symlink`);
-  if (st.uid !== 0) return sealed(`${path} is not root-owned`);
-  if (st.mode & 0o022) return sealed(`${path} is writable by its group or by everyone`);
   try {
-    return readPolicy(readFileSync(path, 'utf8'));
+    const bad = trustProblem(fstatSync(fd), path) ?? ancestorProblem(path);
+    if (bad) return sealed(bad);
+    return trustedBytes(readFileSync(fd, 'utf8'), path);
   } catch {
     return sealed(`${path} could not be read`);
+  } finally {
+    closeSync(fd);
   }
 }
 
@@ -197,7 +295,29 @@ export function mayPaneUse(
   paneId: string,
   policy: ConnectorPolicy & { problem?: string } = loadPolicy(),
 ): ScopeDecision {
-  const origin = new NodeStore(db).nodeForPane(paneId) || LOCAL_NODE_ID;
+  // ── AN UNKNOWN PANE IS NOT A LOCAL PANE ───────────────────────────────
+  //
+  // `nodeForPane` answers `local` for a pane it cannot find, which is right
+  // for its own job — a pane with no node row IS local — and wrong here,
+  // because it conflates that with a pane that does not exist. The effect was
+  // a bypass: any connector scoped to `local` was reachable by naming a pane
+  // id that resolves to nothing. Three ways in, all of them real: an invented
+  // id from a caller whose pane was never verified; a VM pane whose row was
+  // deleted with its node (`routes/nodes.ts` removes the rows); and a pane
+  // created with `node_id: ""`, which the panes route accepts.
+  //
+  // So existence is asked separately, and absence refuses.
+  const row = db.prepare('SELECT node_id AS n FROM panes WHERE id = ?').get(paneId) as
+    | { n: string | null }
+    | undefined;
+  if (!row)
+    return {
+      ok: false,
+      origin: '',
+      enforced: policy.enforce,
+      reason: 'no such chat — a connector is used by a chat, and that one does not exist',
+    };
+  const origin = row.n || LOCAL_NODE_ID;
   const d = mayUse(connector, origin, policy);
   return d.ok || !policy.problem ? d : { ...d, reason: policy.problem };
 }

@@ -62,11 +62,22 @@ describe('reading the stored policy', () => {
     const p = readPolicy(
       JSON.stringify({
         enforce: true,
-        allow: { slack: ['trayo'], 'Bad Name': ['x'], empty: [], notlist: 'trayo', mix: ['a', 7] },
+        allow: {
+          slack: ['trayo'],
+          'Bad Name': ['x'],
+          // Uppercase must be DROPPED, not folded: a case-insensitive key regex
+          // survived the first suite, and `Slack` reaching the same entry as
+          // `slack` would mean two names for one rule.
+          Slack: ['anywhere'],
+          empty: [],
+          notlist: 'trayo',
+          mix: ['a', 7],
+        },
       }),
     );
     expect(p.enforce).toBe(true);
     expect(Object.keys(p.allow).sort()).toEqual(['mix', 'slack']);
+    expect(p.allow.slack).toEqual(['trayo']);
     expect(p.allow.mix).toEqual(['a']);
   });
 
@@ -116,6 +127,167 @@ describe('the policy file', () => {
     const link = t.join(t.dir, 'link.json');
     t.writeFileSync(real, '{"enforce":false,"allow":{}}');
     t.symlinkSync(real, link);
-    expect(loadPolicy(link).problem).toMatch(/symlink/);
+    // O_NOFOLLOW refuses the open outright now, so the reason is the errno
+    // rather than our own word for it. Either way it seals.
+    const p = loadPolicy(link);
+    expect(p.enforce).toBe(true);
+    expect(p.allow).toEqual({});
+    expect(p.problem).toMatch(/ELOOP|symlink/);
+  });
+});
+
+describe('exact match, pinned', () => {
+  // A prefix or case-insensitive comparison survived the whole first suite.
+  const policy = { enforce: true, allow: { slack: ['trayo'] } };
+  it('refuses a node whose name merely starts with an allowed one', () => {
+    expect(mayUse('slack', 'trayo2', policy).ok).toBe(false);
+    expect(mayUse('slack', 'tray', policy).ok).toBe(false);
+  });
+  it('refuses a different case and stray whitespace', () => {
+    expect(mayUse('slack', 'Trayo', policy).ok).toBe(false);
+    expect(mayUse('slack', 'trayo ', policy).ok).toBe(false);
+  });
+  it('allows only the exact name', () => {
+    expect(mayUse('slack', 'trayo', policy).ok).toBe(true);
+  });
+});
+
+describe('a connector named after an Object property', () => {
+  it('is refused, not thrown', async () => {
+    // These matched the key regex and reached Object's own properties, so
+    // `allowed.length` was read off a function and threw instead of refusing.
+    const { readPolicy } = await import('./scope.js');
+    const p = readPolicy(JSON.stringify({ enforce: true, allow: { slack: ['trayo'] } }));
+    // Two defences, and each needs its own case. `readPolicy` builds a
+    // null-prototype allow, so a lookup cannot reach Object at all…
+    const names = ['constructor', 'hasOwnProperty', 'isPrototypeOf', 'toString', 'valueOf'];
+    for (const name of names) {
+      expect(() => mayUse(name, 'trayo', p), name).not.toThrow();
+      expect(mayUse(name, 'trayo', p).ok, name).toBe(false);
+    }
+    // …but a caller can hand in an ordinary object literal, which has one. The
+    // `Object.hasOwn` guard is what covers that, and without this case a
+    // sabotage of it survives.
+    const literal = { enforce: true, allow: { slack: ['trayo'] } };
+    for (const name of names) {
+      expect(() => mayUse(name, 'trayo', literal), `literal ${name}`).not.toThrow();
+      expect(mayUse(name, 'trayo', literal).ok, `literal ${name}`).toBe(false);
+    }
+  });
+});
+
+describe('file metadata, table-tested', () => {
+  const st = (
+    o: Partial<{ file: boolean; dir: boolean; uid: number; mode: number; nlink: number }>,
+  ) =>
+    ({
+      isFile: () => o.file !== false,
+      isDirectory: () => o.dir === true,
+      uid: o.uid ?? 0,
+      mode: o.mode ?? 0o644,
+      nlink: o.nlink ?? 1,
+    }) as unknown as import('node:fs').Stats;
+
+  it('names each refusal, and passes a root-owned 0644 regular file', async () => {
+    const { trustProblem } = await import('./scope.js');
+    expect(trustProblem(st({}), 'f')).toBeNull();
+    expect(trustProblem(st({ file: false }), 'f')).toMatch(/not a regular file/);
+    expect(trustProblem(st({ uid: 501 }), 'f')).toMatch(/not root-owned/);
+    expect(trustProblem(st({ mode: 0o664 }), 'f')).toMatch(/group or by everyone/);
+    expect(trustProblem(st({ mode: 0o646 }), 'f')).toMatch(/group or by everyone/);
+    expect(trustProblem(st({ nlink: 2 }), 'f')).toMatch(/more than one link/);
+  });
+});
+
+describe('a trusted file that does not parse', () => {
+  it('SEALS rather than quietly dropping the policy', async () => {
+    const { parsePolicy } = await import('./scope.js');
+    // A trailing comma in a hand-edited policy is not consent to stop scoping.
+    expect(parsePolicy('{"enforce":true,"allow":{"slack":["trayo"],}}')).toBeNull();
+    expect(parsePolicy('{')).toBeNull();
+    expect(parsePolicy('7')).toBeNull();
+    expect(parsePolicy('[]')).toBeNull();
+    expect(parsePolicy('null')).toBeNull();
+    // …while a string from anywhere else stays lenient.
+    expect(readPolicy('{')).toEqual(UNSCOPED);
+  });
+
+  it('seals when the trusted bytes do not parse — the branch, directly', async () => {
+    // Reachable only through a root-owned file, so it is tested here instead:
+    // the fail-open version of this survived every sabotage.
+    const { trustedBytes } = await import('./scope.js');
+    const bad = trustedBytes('{"enforce":true,', '/p.json');
+    expect(bad.enforce).toBe(true);
+    expect(bad.allow).toEqual({});
+    expect(bad.problem).toMatch(/not valid JSON/);
+    // …and passes a good one through untouched.
+    const good = trustedBytes('{"enforce":true,"allow":{"slack":["trayo"]}}', '/p.json');
+    expect(good.problem).toBeUndefined();
+    expect(good.allow.slack).toEqual(['trayo']);
+  });
+
+  it('tolerates a BOM, which editors write and JSON.parse rejects', async () => {
+    const { parsePolicy } = await import('./scope.js');
+    const p = parsePolicy('﻿{"enforce":true,"allow":{"slack":["trayo"]}}');
+    expect(p?.enforce).toBe(true);
+    expect(p?.allow.slack).toEqual(['trayo']);
+  });
+});
+
+describe('mayPaneUse — the function that resolves an origin', () => {
+  const db = () => {
+    const Database = require('better-sqlite3');
+    const d = new Database(':memory:');
+    d.exec('CREATE TABLE panes (id TEXT PRIMARY KEY, node_id TEXT)');
+    d.prepare('INSERT INTO panes (id, node_id) VALUES (?, ?)').run('p-local', null);
+    d.prepare('INSERT INTO panes (id, node_id) VALUES (?, ?)').run('p-vm', 'trayo');
+    d.prepare('INSERT INTO panes (id, node_id) VALUES (?, ?)').run('p-empty', '');
+    return d;
+  };
+  const policy = { enforce: true, allow: { slack: ['trayo'], msgvault: ['local'] } };
+
+  it('resolves a pane with no node row as local', async () => {
+    const { mayPaneUse } = await import('./scope.js');
+    const d = mayPaneUse(db(), 'msgvault', 'p-local', policy);
+    expect(d.origin).toBe('local');
+    expect(d.ok).toBe(true);
+  });
+
+  it('resolves a remote pane to its machine, and refuses the wrong connector', async () => {
+    const { mayPaneUse } = await import('./scope.js');
+    expect(mayPaneUse(db(), 'slack', 'p-vm', policy).ok).toBe(true);
+    const d = mayPaneUse(db(), 'msgvault', 'p-vm', policy);
+    expect(d.ok).toBe(false);
+    expect(d.origin).toBe('trayo');
+  });
+
+  it('REFUSES a pane that does not exist, rather than calling it local', async () => {
+    // The bypass: any connector scoped to `local` was reachable by naming a
+    // pane id that resolves to nothing.
+    const { mayPaneUse } = await import('./scope.js');
+    const d = mayPaneUse(db(), 'msgvault', 'invented', policy);
+    expect(d.ok).toBe(false);
+    expect(d.reason).toMatch(/no such chat/);
+  });
+
+  it('refuses a pane whose row was deleted with its machine', async () => {
+    const { mayPaneUse } = await import('./scope.js');
+    const d = db();
+    d.prepare('DELETE FROM panes WHERE id = ?').run('p-vm');
+    expect(mayPaneUse(d, 'msgvault', 'p-vm', policy).ok).toBe(false);
+  });
+
+  it('treats an EMPTY node id as local, which the panes route accepts', async () => {
+    // It exists, so it is not the unknown-pane case; `''` is how a pane on this
+    // machine can be recorded, and it must not become a hole either way.
+    const { mayPaneUse } = await import('./scope.js');
+    expect(mayPaneUse(db(), 'msgvault', 'p-empty', policy).origin).toBe('local');
+    expect(mayPaneUse(db(), 'slack', 'p-empty', policy).ok).toBe(false);
+  });
+
+  it('carries a sealed policy’s problem into the refusal', async () => {
+    const { mayPaneUse } = await import('./scope.js');
+    const sealedPolicy = { enforce: true, allow: {}, problem: 'tampered' };
+    expect(mayPaneUse(db(), 'slack', 'p-vm', sealedPolicy).reason).toBe('tampered');
   });
 });
