@@ -2,8 +2,10 @@ import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { z } from 'zod';
+import { classify } from '../connectors/registry.js';
+import { directingOrigin, loadPolicy, mayPaneUse } from '../connectors/scope.js';
 import { verifyPaneKey } from '../pane-key.js';
-import { recordSlackAction, resolveSlackAction } from '../slack-actions.js';
+import { recordSlackAction, recordSlackRefusal, resolveSlackAction } from '../slack-actions.js';
 import { slackBrokerRequest, slackBrokerURL } from '../slack-broker.js';
 import { PaneStore } from '../store/PaneStore.js';
 import { TabStore } from '../store/TabStore.js';
@@ -21,6 +23,25 @@ interface Deps {
 /** What a refused call is told, and what it is NOT told. */
 function refusal(why: string, detail?: string) {
   return { error: { code: 'slack_refused', message: why, detail } } as const;
+}
+
+/**
+ * muxpad refused the send before the broker saw it.
+ *
+ * Thrown from the one funnel and mapped to a 403 by `app.onError` below, so
+ * the gate lives in a single place instead of being returned through six
+ * routes that each build their own response. The agent gets the reason
+ * verbatim, because its useful next move is to say so rather than retry.
+ */
+class SlackRefused extends Error {
+  constructor(
+    readonly action: string,
+    readonly payload: unknown,
+    readonly pane: string,
+    readonly why: string,
+  ) {
+    super(why);
+  }
 }
 
 export function slackRoutes(deps: Deps): Hono {
@@ -185,6 +206,28 @@ export function slackRoutes(deps: Deps): Hono {
     }
   };
   const brokerAction = async (action: string, payload: unknown, pane: string) => {
+    // ── THE CONNECTOR GATE ────────────────────────────────────────────────
+    //
+    // Here rather than in each route, for the reason the card below is here:
+    // `post`/`dm`/`react`/`edit`/`unpost`/`upload` are six chances to forget.
+    //
+    // Two questions, both from server/src/connectors:
+    //   · may a chat on THIS MACHINE use Slack at all, and was this chat told
+    //     to by a chat on a machine that may not (scope.ts);
+    //   · is this verb one muxpad can say anything about (registry.ts) —
+    //     `calendar.invite` is the shape of verb that gets refused outright.
+    //
+    // While host scoping is switched off — which is how it ships, and how it
+    // stays until the owner's chats have moved to the machines they belong on
+    // — `mayPaneUse` allows everything and this costs one policy read. The
+    // refusal path is therefore dormant rather than absent, which is the only
+    // way to have it tested before the day it matters.
+    const policy = loadPolicy();
+    const scope = mayPaneUse(deps.db, 'slack', pane, policy, directingOrigin(deps.db, pane));
+    if (!scope.ok) throw new SlackRefused(action, payload, pane, scope.reason ?? 'refused');
+    const verb = classify(action);
+    if (!verb.ok) throw new SlackRefused(action, payload, pane, verb.reason ?? 'refused');
+
     const result = await slackBrokerRequest(
       '/requests',
       { action, payload },
@@ -296,12 +339,26 @@ export function slackRoutes(deps: Deps): Hono {
     }
   });
 
-  app.onError((_error, c) =>
-    c.json(
+  // ONE handler, because Hono keeps only the last one registered — a second
+  // `onError` for the connector gate silently replaced this and every refusal
+  // came back as 502.
+  app.onError((error, c) => {
+    // muxpad refused it before the broker saw it: a 403 with the reason, and a
+    // declined card in the chat that asked.
+    if (error instanceof SlackRefused) {
+      recordSlackRefusal(deps.db, {
+        action: error.action,
+        payload: error.payload,
+        pane: error.pane,
+        why: error.why,
+      });
+      return c.json(refusal(error.why), 403);
+    }
+    return c.json(
       refusal('Slack request failed; protected broker mode never falls back to local credentials'),
       502,
-    ),
-  );
+    );
+  });
 
   app.post('/post', async (c) => {
     const body = z

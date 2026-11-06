@@ -85,6 +85,37 @@ function detailFor(state: ChatActionState, result: Record<string, unknown>): str
  * broker gave back no request id — without one the act cannot be resolved
  * later, and a card stuck on "waiting" forever is worse than no card.
  */
+/**
+ * A SEND MUXPAD ITSELF REFUSED — recorded as a declined card, like one the
+ * human declined.
+ *
+ * The broker never saw it, so there is no request id to key on and
+ * {@link recordSlackAction} would drop it. But a refusal is exactly the thing
+ * you want a record of: "I asked and nothing happened" is the state this whole
+ * mechanism exists to make visible, and an agent's own account of being
+ * refused is not a record. `declined` rather than `failed` for the usual
+ * reason — a rule said no, nothing broke.
+ */
+export function recordSlackRefusal(
+  db: Database.Database,
+  input: { action: string; payload: unknown; pane: string; why: string },
+): void {
+  try {
+    const title = TITLES[input.action];
+    new ChatActionStore(db).record({
+      pane_id: input.pane,
+      kind: input.action,
+      title: title ? title((input.payload ?? {}) as Payload) : input.action,
+      state: 'declined',
+      body: bodyOf(input.action, (input.payload ?? {}) as Payload),
+      detail: input.why,
+      ref: null,
+    });
+  } catch {
+    /* a card is a record of a refusal, never a precondition for one */
+  }
+}
+
 export function recordSlackAction(
   db: Database.Database,
   input: { action: string; payload: unknown; pane: string; result: Record<string, unknown> },
