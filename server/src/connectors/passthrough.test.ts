@@ -3,14 +3,14 @@ import { judgeArgv, passthroughCommands, verbForCommand } from './passthrough.js
 import { classify } from './registry.js';
 
 describe('the pass-through forwards msgvault’s own CLI', () => {
-  it('allows an ordinary read, flags and all', () => {
-    const v = judgeArgv(['search', 'from:alice newer_than:30d', '--json', '--limit', '20']);
+  it('allows an ordinary read with unambiguous flags', () => {
+    const v = judgeArgv(['search', 'from:alice newer_than:30d', '--json', '--limit=20']);
     expect(v.ok).toBe(true);
     expect(v.command).toBe('search');
   });
 
   it('allows a draft verb', () => {
-    expect(judgeArgv(['draft-reply', 'abc123', '--text', 'ok']).ok).toBe(true);
+    expect(judgeArgv(['draft-reply', 'abc123', '--text=ok']).ok).toBe(true);
   });
 
   it('refuses nothing to run', () => {
@@ -37,18 +37,69 @@ describe('flags that would re-point the tool', () => {
     }
   });
 
-  it('refuses one hidden behind a lone `--`', () => {
-    // Conventionally `--` ends option parsing. msgvault's own parser does not
-    // stop there for global flags, so trusting it would hand the flag over.
+  it('refuses a lone `--` outright', () => {
+    // Conventionally it ends option parsing; msgvault's parser does not treat
+    // it that way for global flags, and nothing legitimate here needs it.
     expect(judgeArgv(['search', 'x', '--', '--home', '/elsewhere']).ok).toBe(false);
+    expect(judgeArgv(['search', 'x', '--']).reason).toMatch(/bare `--`/);
   });
 
   it('refuses one placed before the subcommand', () => {
     expect(judgeArgv(['--home', '/elsewhere', 'search', 'x']).ok).toBe(false);
   });
 
-  it('does not refuse an operand that merely looks like a path', () => {
-    expect(judgeArgv(['search', 'from:x', '-o', '/tmp/out.json']).ok).toBe(true);
+  it('refuses a bare flag whose value could be the next word', () => {
+    // THE BYPASS: `--log-file` takes a value, so msgvault consumes `search` as
+    // that value and runs `query` — while a filter counting bare tokens saw
+    // `search` and asked for a timed search.read. Arbitrary SQL, approved as a
+    // search.
+    const v = judgeArgv(['--log-file', 'search', 'query', 'SELECT * FROM messages']);
+    expect(v.ok).toBe(false);
+    expect(v.reason).toMatch(/cannot tell whether a bare flag takes the next word/);
+    // Same shape with the other value-taking globals.
+    for (const f of ['--log-level', '--log-sql-slow-ms', '-o'])
+      expect(judgeArgv([f, 'search', 'query', 'SELECT 1']).ok, f).toBe(false);
+  });
+
+  it('allows the value-less flags it knows, bare', () => {
+    for (const f of ['--json', '--verbose', '-v', '--no-log-file', '--log-sql'])
+      expect(judgeArgv(['search', 'x', f]).ok, f).toBe(true);
+  });
+
+  it('allows any unknown flag in the = form', () => {
+    // muxpad cannot enumerate another project's per-command flags, so the
+    // unambiguous form is always acceptable.
+    expect(judgeArgv(['search', 'x', '--limit=20', '--some-new-flag=1']).ok).toBe(true);
+  });
+
+  it('refuses an empty argument', () => {
+    expect(judgeArgv(['search', '']).ok).toBe(false);
+  });
+});
+
+describe('nested subcommands', () => {
+  it('classifies the PAIR, not the parent', () => {
+    // `calendar` as a parent said nothing: create, delete and move are writes
+    // that can notify guests, and the parent mapped to a timed read.
+    expect(judgeArgv(['calendar', 'freebusy', 'primary']).command).toBe('calendar freebusy');
+    expect(verbForCommand('calendar freebusy')).toBe('msgvault.calendar.read');
+  });
+
+  it('refuses a calendar write by leaving the pair unmapped', () => {
+    for (const sub of ['create', 'update', 'delete', 'move', 'respond']) {
+      const v = judgeArgv(['calendar', sub, '--send-updates=all']);
+      expect(v.ok, sub).toBe(true); // not on the ban list…
+      expect(verbForCommand(v.command as string), sub).toBeNull(); // …but unmapped, so refused
+    }
+  });
+
+  it('refuses a parent with no subcommand', () => {
+    expect(judgeArgv(['calendar']).ok).toBe(false);
+    expect(judgeArgv(['person']).reason).toMatch(/needs a subcommand/);
+  });
+
+  it('is not fooled by a flag between the parent and its subcommand', () => {
+    expect(judgeArgv(['calendar', '--json', 'freebusy']).command).toBe('calendar freebusy');
   });
 });
 
@@ -126,5 +177,41 @@ describe('the verb an approval is asked for', () => {
     const verbs = passthroughCommands().map((c) => verbForCommand(c));
     expect(verbs).not.toContain('msgvault.calendar.invite');
     expect(verbs.filter((v) => /send/.test(v ?? ''))).toEqual([]);
+  });
+});
+
+describe('whether there is anything to mediate yet', () => {
+  it('refuses while the archive is owned by the agents’ own account', async () => {
+    // The live state today: ~/.msgvault/msgvault.db is 0644, owned by the
+    // account every agent runs as. Filtering CLI arguments while that is true
+    // tells the owner a boundary exists where none does.
+    const { mediationReady } = await import('./passthrough.js');
+    const r = mediationReady({ uid: 501, mode: 0o600 }, 501);
+    expect(r.ready).toBe(false);
+    expect(r.problem).toMatch(/owned by the account agents run as/);
+  });
+
+  it('refuses a group- or world-readable archive owned by someone else', async () => {
+    const { mediationReady } = await import('./passthrough.js');
+    expect(mediationReady({ uid: 0, mode: 0o644 }, 501).problem).toMatch(
+      /group- or world-readable/,
+    );
+    expect(mediationReady({ uid: 0, mode: 0o640 }, 501).problem).toMatch(
+      /group- or world-readable/,
+    );
+    expect(mediationReady({ uid: 0, mode: 0o604 }, 501).problem).toMatch(
+      /group- or world-readable/,
+    );
+  });
+
+  it('refuses when there is no archive at all', async () => {
+    const { mediationReady } = await import('./passthrough.js');
+    expect(mediationReady(null, 501).ready).toBe(false);
+  });
+
+  it('is ready only for an archive another account keeps to itself', async () => {
+    const { mediationReady } = await import('./passthrough.js');
+    expect(mediationReady({ uid: 0, mode: 0o600 }, 501)).toEqual({ ready: true });
+    expect(mediationReady({ uid: 285, mode: 0o660 }, 501).ready).toBe(false);
   });
 });
