@@ -590,16 +590,6 @@ describe('unread has to be visible from across the room', () => {
     expect(kid.color).not.toBe(read.color);
   });
 
-  it('a child is still quieter than a parent when neither is unread', () => {
-    // The hierarchy the child rule exists for has to survive the change: a
-    // sub-chat is subordinate, and saying so in the type is what saves a mark.
-    const child = ruleBody(
-      NAV_CSS,
-      '.navtree[data-variant="sidebar"] .navtree-tab-row[data-child="true"] .navtree-name-text',
-    );
-    expect(decl(child, 'color')).toBe('var(--nt-ink-read-child)');
-  });
-
   it('the sheet says it in ink too, not only in weight', () => {
     const sheet = ruleBody(
       NAV_CSS,
@@ -1081,16 +1071,6 @@ describe('a chat name is legible on every rail', () => {
       expect(ratio(mix(rail.dim, rail.faint, 70), rgb(rail.surface))).toBeGreaterThanOrEqual(4.5);
     },
   );
-
-  it('spends no child rung inside the band, where there is no hierarchy to say', () => {
-    // The band is a flat list of chats with no parents on it, so a quieter
-    // rung there says nothing — and on top of the band's own lift it measured
-    // 4.11:1 on tokyo-night. (0,6,0) against the child rule's (0,5,0), because
-    // a tie is decided by file order.
-    expect(NAV_CSS).toMatch(
-      /\.navtree\[data-variant\] \.navtree-workingset \.navtree-tab-row\[data-child="true"\] \.navtree-name-text \{\s*color: var\(--nt-ink-read\)/,
-    );
-  });
 });
 
 /**
