@@ -509,3 +509,95 @@ describe('the policy file, every branch', () => {
     expect(loadPolicy('/Library/muxpad/connectors.json', io).enforce).toBe(true);
   });
 });
+
+describe('being told to do it by another machine', () => {
+  const mk = () => {
+    const Database = require('better-sqlite3');
+    const d = new Database(':memory:');
+    d.exec(`CREATE TABLE panes (id TEXT PRIMARY KEY, tab_id TEXT, node_id TEXT, created_at INTEGER);
+            CREATE TABLE nodes (id TEXT PRIMARY KEY, name TEXT, endpoint TEXT);
+            CREATE TABLE inbound_messages (id TEXT PRIMARY KEY, tab_id TEXT, at INTEGER, text_key TEXT, from_tab_id TEXT)`);
+    d.prepare('INSERT INTO nodes (id, name, endpoint) VALUES (?,?,?)').run('trayo', 'VM', 'ws://x');
+    d.prepare('INSERT INTO panes VALUES (?,?,?,?)').run('p-vm', 't-vm', 'trayo', 1);
+    d.prepare('INSERT INTO panes VALUES (?,?,?,?)').run('p-local', 't-local', null, 1);
+    return d;
+  };
+  const policy = { enforce: true, allow: { slack: ['trayo'], msgvault: ['local'] } };
+  const direct = (d: ReturnType<typeof mk>, into: string, from: string, at: number) =>
+    d.prepare('INSERT INTO inbound_messages VALUES (?,?,?,?,?)').run(`i${at}`, into, at, 'k', from);
+
+  it('refuses a work-chat post that a personal chat asked for', async () => {
+    // The hole scoping alone leaves: the instruction crosses the boundary even
+    // though the request does not.
+    const { mayPaneUse, directingOrigin } = await import('./scope.js');
+    const d = mk();
+    direct(d, 't-vm', 't-local', 1000);
+    expect(directingOrigin(d, 'p-vm', 1000)).toBe('local');
+    const r = mayPaneUse(d, 'slack', 'p-vm', policy, directingOrigin(d, 'p-vm', 1000));
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/directed to by a chat on local/);
+  });
+
+  it('refuses the mirror image — a work chat driving a personal chat into the mail', async () => {
+    const { mayPaneUse, directingOrigin } = await import('./scope.js');
+    const d = mk();
+    direct(d, 't-local', 't-vm', 1000);
+    const r = mayPaneUse(d, 'msgvault', 'p-local', policy, directingOrigin(d, 'p-local', 1000));
+    expect(r.ok).toBe(false);
+  });
+
+  it('allows a chat directed by one on the SAME machine', async () => {
+    const { mayPaneUse, directingOrigin } = await import('./scope.js');
+    const d = mk();
+    d.prepare('INSERT INTO panes VALUES (?,?,?,?)').run('p-vm2', 't-vm2', 'trayo', 1);
+    direct(d, 't-vm', 't-vm2', 1000);
+    expect(mayPaneUse(d, 'slack', 'p-vm', policy, directingOrigin(d, 'p-vm', 1000)).ok).toBe(true);
+  });
+
+  it('forgets an instruction older than the window', async () => {
+    const { mayPaneUse, directingOrigin, DIRECTED_WINDOW_MS } = await import('./scope.js');
+    const d = mk();
+    direct(d, 't-vm', 't-local', 1000);
+    const later = 1000 + DIRECTED_WINDOW_MS + 1;
+    expect(directingOrigin(d, 'p-vm', later)).toBeNull();
+    expect(mayPaneUse(d, 'slack', 'p-vm', policy, directingOrigin(d, 'p-vm', later)).ok).toBe(true);
+  });
+
+  it('takes the MOST RECENT instruction, not the first', async () => {
+    const { directingOrigin } = await import('./scope.js');
+    const d = mk();
+    d.prepare('INSERT INTO panes VALUES (?,?,?,?)').run('p-vm2', 't-vm2', 'trayo', 1);
+    direct(d, 't-vm', 't-local', 1000);
+    direct(d, 't-vm', 't-vm2', 2000);
+    expect(directingOrigin(d, 'p-vm', 2000)).toBe('trayo');
+  });
+
+  it('ignores a human message, which has no sending tab', async () => {
+    const { directingOrigin } = await import('./scope.js');
+    const d = mk();
+    d.prepare('INSERT INTO inbound_messages VALUES (?,?,?,?,?)').run('h', 't-vm', 1000, 'k', null);
+    expect(directingOrigin(d, 'p-vm', 1000)).toBeNull();
+  });
+
+  it('is not WASHED by a later human message', async () => {
+    // The dangerous shape: a personal chat directs the work chat, then anything
+    // without a sending tab lands after it. A query that took the most recent
+    // row REGARDLESS of provenance would read that as "nobody directed this"
+    // and allow the post — laundering with one extra step.
+    const { directingOrigin, mayPaneUse } = await import('./scope.js');
+    const d = mk();
+    direct(d, 't-vm', 't-local', 1000);
+    d.prepare('INSERT INTO inbound_messages VALUES (?,?,?,?,?)').run('h', 't-vm', 1500, 'k', null);
+    expect(directingOrigin(d, 'p-vm', 1500)).toBe('local');
+    expect(mayPaneUse(d, 'slack', 'p-vm', policy, directingOrigin(d, 'p-vm', 1500)).ok).toBe(false);
+  });
+
+  it('is a no-op while enforcement is off', async () => {
+    const { mayPaneUse, directingOrigin } = await import('./scope.js');
+    const d = mk();
+    direct(d, 't-vm', 't-local', 1000);
+    expect(mayPaneUse(d, 'slack', 'p-vm', UNSCOPED, directingOrigin(d, 'p-vm', 1000)).ok).toBe(
+      true,
+    );
+  });
+});
