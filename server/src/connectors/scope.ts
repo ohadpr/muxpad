@@ -331,11 +331,56 @@ export function loadPolicy(
  * `local` for a pane with no node — the correct reading for a pane on this
  * machine and for a pane whose row is gone.
  */
+/**
+ * WHO TOLD THIS CHAT TO DO IT — the laundering path, closed.
+ *
+ * Scoping by the asking chat's machine has an obvious hole: a personal chat
+ * can tell a WORK chat to post to Slack (`muxpad agent send`, or by creating a
+ * pane on that machine and briefing it), and the request that arrives is the
+ * work chat's, which is allowed. The instruction crossed the boundary even
+ * though the request did not.
+ *
+ * So a request carries both machines and must be allowed for BOTH: privilege
+ * is the intersection of the chat doing the work and the chat that directed
+ * it. muxpad already records the provenance this needs — `inbound_messages`
+ * holds which tab sent a message into which tab, and when.
+ *
+ * THE WINDOW IS AN APPROXIMATION AND IS LABELLED AS ONE. There are no turn
+ * boundaries in that table, so "directed by" means "the most recent inbound
+ * message, if it arrived within `DIRECTED_WINDOW_MS`". Too short and a slow
+ * turn launders; too long and a chat stays tainted by an instruction it
+ * finished with hours ago. Fifteen minutes is the compromise, and a wrong
+ * answer here fails toward refusing rather than allowing.
+ */
+export const DIRECTED_WINDOW_MS = 15 * 60_000;
+
+/** The machine of whoever last directed this pane's chat, or null. */
+export function directingOrigin(
+  db: Database.Database,
+  paneId: string,
+  now: number = Date.now(),
+): string | null {
+  const row = db
+    .prepare(`SELECT i.from_tab_id AS fromTab, i.at AS at
+                FROM inbound_messages i
+                JOIN panes p ON p.tab_id = i.tab_id
+               WHERE p.id = ? AND i.from_tab_id IS NOT NULL
+               ORDER BY i.at DESC LIMIT 1`)
+    .get(paneId) as { fromTab: string; at: number } | undefined;
+  if (!row || now - row.at > DIRECTED_WINDOW_MS) return null;
+  const sender = db
+    .prepare('SELECT node_id AS n FROM panes WHERE tab_id = ? ORDER BY created_at ASC LIMIT 1')
+    .get(row.fromTab) as { n: string | null } | undefined;
+  if (!sender) return null;
+  return sender.n || LOCAL_NODE_ID;
+}
+
 export function mayPaneUse(
   db: Database.Database,
   connector: ConnectorId,
   paneId: string,
   policy: ConnectorPolicy & { problem?: string } = loadPolicy(),
+  directedBy: string | null = null,
 ): ScopeDecision {
   // ── AN UNKNOWN PANE IS NOT A LOCAL PANE ───────────────────────────────
   //
@@ -383,5 +428,20 @@ export function mayPaneUse(
     };
   const origin = known;
   const d = mayUse(connector, origin, policy);
-  return d.ok || !policy.problem ? d : { ...d, reason: policy.problem };
+  const withProblem = (x: ScopeDecision) =>
+    x.ok || !policy.problem ? x : { ...x, reason: policy.problem };
+  if (!d.ok) return withProblem(d);
+  // BOTH MACHINES, or neither. The work chat may post; the personal chat that
+  // told it to may not; so this request may not.
+  if (directedBy && directedBy !== origin) {
+    const by = mayUse(connector, directedBy, policy);
+    if (!by.ok)
+      return withProblem({
+        ok: false,
+        origin,
+        enforced: by.enforced,
+        reason: `this chat may use ${connector}, but it was directed to by a chat on ${directedBy}, which may not`,
+      });
+  }
+  return d;
 }
