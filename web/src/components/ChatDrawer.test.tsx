@@ -224,9 +224,10 @@ describe('the sub-chat list has shape', () => {
     expect(groups(onlyRunning).map((g) => g?.replace(/\d+$/, ''))).toEqual(['Running']);
   });
 
-  it('marks only the rows where a mark means something', () => {
-    // Twenty-one identical dots say nothing. The accent is for the block that
-    // is still happening; a finished row's heading says "finished" once.
+  it('says the state in a word, not in a second dot', () => {
+    // Twenty-one identical dots say nothing, so STATE left the mark. Every row
+    // keeps its identity tile — a row without one is a word — and the one
+    // block whose state is news says so at the end of its line.
     const box = mount({
       corpus: corpusOf([
         tab('parent'),
@@ -237,8 +238,8 @@ describe('the sub-chat list has shape', () => {
     const rows = [...box.querySelectorAll('.chat-drawer__row')];
     const rowFor = (name: string) =>
       rows.find((r) => r.querySelector('.chat-drawer__row-name')?.textContent === name);
-    expect(rowFor('going')?.querySelector('.chatchip')).not.toBeNull();
-    expect(rowFor('reported')?.querySelector('.chatchip')).toBeNull();
+    expect(rowFor('going')?.querySelector('.chat-drawer__row-live')).not.toBeNull();
+    expect(rowFor('reported')?.querySelector('.chat-drawer__row-live')).toBeNull();
   });
 
   it('does not repeat the age in a block whose heading already says it', () => {
@@ -258,5 +259,56 @@ describe('the sub-chat list has shape', () => {
       ]),
     });
     expect(names(box)).toEqual(['newer', 'older']);
+  });
+});
+
+describe('a row reads as a chat, not a word', () => {
+  it('gives every row the chat’s identity tile, finished ones included', () => {
+    // Reported: "these don't look like chats or anything it just looks like a
+    // list of words." Removing the status DOT was right; removing the anchor
+    // was not — a chat row without one is text.
+    const box = mount({
+      corpus: corpusOf([
+        tab('parent'),
+        tab('going', { spawned_by: 'parent', status: 'working' }),
+        tab('reported', { spawned_by: 'parent', done: true }),
+      ]),
+    });
+    const tiles = box.querySelectorAll('.chat-drawer__row .chatchip[data-shape="tile"]');
+    expect(tiles).toHaveLength(2);
+    // A tile, never the dot ChatChip draws by default for anything spawned.
+    expect(box.querySelector('.chat-drawer__row .chatchip[data-shape="dot"]')).toBeNull();
+  });
+
+  it('gives the tile a glyph even when the chat has no icon', () => {
+    // Derived from the chat's own id, so a list of twenty has texture to scan
+    // by rather than twenty copies of one placeholder.
+    const box = mount({
+      corpus: corpusOf([
+        tab('parent'),
+        tab('a', { spawned_by: 'parent', done: true }),
+        tab('b', { spawned_by: 'parent', done: true }),
+      ]),
+    });
+    const glyphs = [...box.querySelectorAll('.chat-drawer__row .chatchip-glyph')].map(
+      (e) => e.textContent,
+    );
+    expect(glyphs).toHaveLength(2);
+    for (const g of glyphs) expect(g).toBeTruthy();
+  });
+
+  it('says "working" at the end of a running row, and nothing on a finished one', () => {
+    const box = mount({
+      corpus: corpusOf([
+        tab('parent'),
+        tab('going', { spawned_by: 'parent', status: 'working' }),
+        tab('reported', { spawned_by: 'parent', done: true }),
+      ]),
+    });
+    const rows = [...box.querySelectorAll('.chat-drawer__row')];
+    const rowFor = (name: string) =>
+      rows.find((r) => r.querySelector('.chat-drawer__row-name')?.textContent === name);
+    expect(rowFor('going')?.querySelector('.chat-drawer__row-live')?.textContent).toBe('working');
+    expect(rowFor('reported')?.querySelector('.chat-drawer__row-live')).toBeNull();
   });
 });

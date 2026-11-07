@@ -85,9 +85,19 @@ describe('the row is one line, and the mark is beside the name', () => {
     expect(sub).toMatch(/white-space:\s*nowrap/);
   });
 
-  it('narrows the mark’s box so the dot is not alone in a column', () => {
+  it('sizes the tile to hold a glyph, not a speck', () => {
+    // 13px was right for a status dot and wrong for an identity: at that size
+    // the glyph is unreadable and the row is a line of text with a speck in
+    // front of it — "it just looks like a list of words".
     const chip = rule('.chat-drawer__row .chatchip');
-    expect(chip).toMatch(/--chatchip-size:\s*13px/);
+    expect(chip).toMatch(/--chatchip-size:\s*22px/);
+    expect(chip).toMatch(/--chatchip-glyph:\s*15px/);
+  });
+
+  it('puts the running state in a word, in the accent', () => {
+    const live = rule('.chat-drawer__row-live');
+    expect(live).toMatch(/color:\s*var\(--d-accent\)/);
+    expect(live).toMatch(/margin-inline-start:\s*auto/);
   });
 
   it('keeps the name as the thing that truncates', () => {

@@ -1,4 +1,4 @@
-import type { ChatAction } from '@muxpad/shared';
+import { type ChatAction, fallbackTabIcon } from '@muxpad/shared';
 import { useMemo } from 'react';
 import type { MentionChat } from '../lib/chat-mention';
 import { spawnLabel, spawnState, spawnStateLabel } from '../lib/chat-mention';
@@ -229,19 +229,41 @@ function SubChatList({
                     title={s.paneId ? undefined : 'This chat’s pane is gone'}
                     onClick={() => onOpen(s)}
                   >
-                    {/* ONLY WHERE IT MEANS SOMETHING. A finished worker's mark
-                        was the same dot as the twenty above it; the block
-                        heading says "finished" once instead. A row that failed
-                        keeps its mark, because that one is not like the
-                        others. */}
-                    {live || state === 'failed' ? (
-                      <ChatChip density="row" chat={s.chat.chip} />
-                    ) : null}
+                    {/* ── A ROW HAS TO LOOK LIKE A CHAT ──────────────────────
+                        "These don't look like chats or anything it just looks
+                        like a list of words." Literally true: the previous
+                        pass took the mark off every finished row, and what is
+                        left of a chat row without one is text.
+
+                        Removing the DOT was right — twenty-one identical
+                        status dots said nothing. Removing the ANCHOR was not.
+                        A dot is a state; the TILE is an identity, derived from
+                        the chat's own id, so a column of them has texture you
+                        can scan and come back to.
+
+                        `shape="tile"` because ChatChip draws a dot for
+                        anything with a `spawned_by`. That is right in the
+                        rail, where a sub-chat sits under its parent; here
+                        every row IS a chat and the panel itself says whose. */}
+                    <ChatChip
+                      density="row"
+                      shape="tile"
+                      chat={{
+                        ...s.chat.chip,
+                        icon: s.chat.chip.icon ?? fallbackTabIcon(s.chat.tabId),
+                      }}
+                    />
                     <span className="chat-drawer__row-text">
                       <span className="chat-drawer__row-name" dir="auto">
                         {spawnLabel(s.chat)}
                       </span>
-                      {g.showAge && s.chat.createdAt ? (
+                      {/* RUNNING SAYS SO IN WORDS at the end of its line. The tile is
+                          identity now, so the one block whose state is news
+                          carries it here — the only text on the panel wearing
+                          the accent. */}
+                      {live ? (
+                        <span className="chat-drawer__row-live">working</span>
+                      ) : g.showAge && s.chat.createdAt ? (
                         <span className="chat-drawer__row-sub">
                           {shortAge(now - s.chat.createdAt)}
                         </span>
