@@ -85,18 +85,32 @@ describe('the row is one line, and the mark is beside the name', () => {
     expect(sub).toMatch(/white-space:\s*nowrap/);
   });
 
-  it('tints the one mark by how recent its block is — four steps of one hue', () => {
-    // The accent is the second rendering of "how long ago", not decoration:
-    // the column fades as it ages. One hue at four strengths, because the
-    // blocks are a scale and not four categories.
+  it('runs the scale from FILLED to plain grey, not down one alpha ramp', () => {
+    // Four shades of the same accent is not a scale you can read: the steps
+    // sit a few percent of saturation apart and the bottom of the list looks
+    // like the top with the lights down. The fade has to cross a boundary.
     const mark = rule('.chat-drawer__mark');
     expect(mark).toMatch(/width:\s*22px/);
-    expect(mark).toMatch(/var\(--mark-wash/);
-    const washes = [3, 2, 1, 0].map((h) =>
-      Number(rule(`.chat-drawer__block[data-heat='${h}']`).match(/--mark-wash:\s*(\d+)%/)?.[1]),
+    expect(mark).toMatch(/background:\s*var\(--mark-bg\)/);
+
+    const bg = (h: number) =>
+      rule(`.chat-drawer__block[data-heat='${h}']`).match(/--mark-bg:\s*([^;]+);/)?.[1] ?? '';
+    // Running is SOLID accent — the only filled mark on the panel.
+    expect(bg(3).trim()).toBe('var(--d-accent)');
+    // The middle two are the accent mixed into the panel's own surface, so
+    // they stay opaque and the steps stay even on a light theme.
+    expect(bg(2)).toMatch(/var\(--d-accent\) 30%, var\(--d-surface\)/);
+    expect(bg(1)).toMatch(/var\(--d-accent\) 14%, var\(--d-surface\)/);
+    // And the oldest block has NO hue at all. The colour is the recency, so
+    // none of it means none left.
+    expect(bg(0)).not.toMatch(/--d-accent/);
+    expect(bg(0)).toMatch(/--d-ink/);
+  });
+
+  it('gives the running block a wash of its own, so it reads as one thing', () => {
+    expect(rule("[data-block='running'] .chat-drawer__list")).toMatch(
+      /background:\s*color-mix\(in srgb, var\(--d-accent\) 7%/,
     );
-    expect(washes).toEqual([...washes].sort((a, b) => b - a));
-    expect(new Set(washes).size).toBe(4);
   });
 
   it('draws the count as a pill, not a bare number', () => {

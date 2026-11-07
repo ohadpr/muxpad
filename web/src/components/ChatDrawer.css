@@ -218,16 +218,22 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* ── ONE MARK, TINTED BY HOW RECENT THE BLOCK IS ───────────────────────────
-   "Use more color/aesthetics or something this looks super bland." Sixteen
-   identically tinted squares said "these are all the same thing", which was
-   true and useless. The tint is a SECOND RENDERING of the fact this panel is
-   about — how long ago — so the column fades as it ages and you can see which
-   end is fresh before reading a word.
+/* ── ONE MARK, AND THE SCALE IS FILLED → TINTED → FAINT → GREY ─────────────
+   The first attempt at this faded ONE hue by alpha: 30/19/12/7% of the accent
+   over the panel. Four shades of the same pink, which is not a scale you can
+   read — the steps were a few percent of saturation apart and the bottom of
+   the list looked like the top with the lights down.
 
-   Four steps, from the block's `data-heat`. The accent is the same hue
-   throughout: this is one colour at four strengths, not four colours, because
-   the blocks are one scale and not four categories. */
+   So the fade crosses a boundary instead of walking down an alpha ramp. The
+   running block is SOLID accent with its contrasting ink; the next two are the
+   accent mixed into the panel's own surface, which keeps them opaque and keeps
+   the steps even on a light theme; and the oldest block drops the hue
+   ALTOGETHER and is plain grey. One filled mark at the top, no colour at the
+   bottom, and two legible steps between — that is a scale you can read at a
+   glance, and the thing you are meant to find is the one that is filled in.
+
+   Mixed into `--d-surface` rather than `transparent`: a wash over a light
+   panel barely moves, and these four needed to be visibly apart. */
 .chat-drawer__mark {
   flex: 0 0 auto;
   display: grid;
@@ -235,24 +241,35 @@
   width: 22px;
   height: 22px;
   border-radius: 7px;
-  background: color-mix(in srgb, var(--d-accent) var(--mark-wash, 10%), transparent);
-  color: color-mix(in srgb, var(--d-accent) var(--mark-ink, 60%), var(--d-dim));
+  background: var(--mark-bg);
+  color: var(--mark-ink);
+  box-shadow: inset 0 0 0 1px var(--mark-edge, transparent);
 }
+
+/* RUNNING — filled. The only solid mark on the panel. */
 .chat-drawer__block[data-heat='3'] {
-  --mark-wash: 30%;
-  --mark-ink: 100%;
+  --mark-bg: var(--d-accent);
+  --mark-ink: var(--d-accent-ink);
+  --mark-edge: transparent;
 }
+/* TODAY — clearly the accent, clearly not solid. */
 .chat-drawer__block[data-heat='2'] {
-  --mark-wash: 19%;
-  --mark-ink: 88%;
+  --mark-bg: color-mix(in srgb, var(--d-accent) 30%, var(--d-surface));
+  --mark-ink: color-mix(in srgb, var(--d-accent) 88%, var(--d-ink));
+  --mark-edge: color-mix(in srgb, var(--d-accent) 26%, transparent);
 }
+/* YESTERDAY — the hue is receding. */
 .chat-drawer__block[data-heat='1'] {
-  --mark-wash: 12%;
-  --mark-ink: 68%;
+  --mark-bg: color-mix(in srgb, var(--d-accent) 14%, var(--d-surface));
+  --mark-ink: color-mix(in srgb, var(--d-accent) 60%, var(--d-dim));
+  --mark-edge: color-mix(in srgb, var(--d-accent) 13%, transparent);
 }
+/* EARLIER — no hue at all. Old work is grey, and that is the whole point of
+   the scale: the colour IS the recency, so none of it means none left. */
 .chat-drawer__block[data-heat='0'] {
-  --mark-wash: 7%;
-  --mark-ink: 44%;
+  --mark-bg: color-mix(in srgb, var(--d-ink) 8%, var(--d-surface));
+  --mark-ink: var(--d-faint);
+  --mark-edge: color-mix(in srgb, var(--d-ink) 7%, transparent);
 }/* The age, at the end of the line it belongs to. `auto` rather than a
    justify rule so the NAME keeps the slack and truncates first — the time is
    four characters and never the thing to drop. */
@@ -362,8 +379,10 @@
   min-width: 17px;
   padding: 1px 5px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--d-accent) var(--mark-wash, 10%), transparent);
-  color: color-mix(in srgb, var(--d-accent) var(--mark-ink, 60%), var(--d-dim));
+  /* The same step as the block's mark, so the heading and its rows are
+     obviously one thing. */
+  background: var(--mark-bg);
+  color: var(--mark-ink);
   font-size: 0.625rem;
   font-weight: 700;
   letter-spacing: 0;
@@ -376,15 +395,21 @@
 .chat-drawer__group-rule {
   flex: 1 1 auto;
   height: 1px;
-  background: linear-gradient(
-    to right,
-    color-mix(in srgb, var(--d-accent) var(--mark-wash, 10%), transparent),
-    transparent
-  );
+  background: linear-gradient(to right, var(--mark-bg), transparent 85%);
+  opacity: 0.85;
 }
 /* THE ONE ACCENT. Something is running; nothing else on this panel is news. */
 .chat-drawer__block[data-block='running'] .chat-drawer__group-label {
   color: var(--d-accent);
+}
+/* The live block reads as ONE thing rather than two rows that happen to be
+   marked: a wash behind it, the accent at the strength the rest of the panel
+   never uses. */
+.chat-drawer__block[data-block='running'] .chat-drawer__list {
+  margin: 0 6px;
+  padding: 4px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--d-accent) 7%, transparent);
 }
 /* `working`, at the end of the row, in the accent — the only text on this
    panel wearing it. The tile carries IDENTITY now, so state had to move
