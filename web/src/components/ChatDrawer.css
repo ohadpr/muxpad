@@ -163,13 +163,15 @@
   overflow: hidden;
 }
 
+/* A LITTLE MORE AIR. 2px between rows and 5px inside them was the density of
+   a menu, and this is a list you read down. */
 .chat-drawer__list {
   margin: 0;
-  padding: 6px;
+  padding: 2px 6px 6px;
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
 }
 .chat-drawer__row {
   width: 100%;
@@ -182,8 +184,8 @@
      afternoon here — could not be read without scrolling past most of it.
      The second line carried one short word, and a word that short belongs
      at the END of the line it describes, not under it. */
-  gap: 8px;
-  padding: 5px 8px;
+  gap: 10px;
+  padding: 8px 9px;
   border: 0;
   border-radius: 8px;
   background: none;
@@ -216,19 +218,30 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* ── THE TILE IS WHAT MAKES A ROW A CHAT ───────────────────────────────────
-   A 13px box was right for a status dot and wrong for an identity: at that
-   size the glyph is unreadable and the row goes back to being a line of text
-   with a speck in front of it. 22px holds the glyph, sits under the cap height
-   of the name beside it, and gives a list of twenty rows the texture you
-   actually scan by. */
-.chat-drawer__row .chatchip {
-  --chatchip-size: 22px;
-  --chatchip-radius: 7px;
-  --chatchip-glyph: 15px;
-  --chatchip-glyph-last: 14px;
+/* ── ONE MARK, IN THE ACCENT, AT THE HEAD OF EVERY ROW ─────────────────────
+   "An icon is good, but we just need a little bit of accent colors here to
+   give this structure and not have it read as one massive blob of text."
+
+   A different glyph per chat was noise wearing a second hat. One repeated
+   shape in a tinted square gives the column its rhythm — the eye lands on the
+   marks, counts rows by them, and reads the names as a list instead of a
+   paragraph. The running block tints harder, so the structure and the one
+   piece of news are the same device at two strengths rather than two devices
+   competing. */
+.chat-drawer__mark {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--d-accent) 13%, transparent);
+  color: color-mix(in srgb, var(--d-accent) 78%, var(--d-ink));
 }
-/* The age, at the end of the line it belongs to. `auto` rather than a
+.chat-drawer__block[data-block='running'] .chat-drawer__mark {
+  background: color-mix(in srgb, var(--d-accent) 26%, transparent);
+  color: var(--d-accent);
+}/* The age, at the end of the line it belongs to. `auto` rather than a
    justify rule so the NAME keeps the slack and truncates first — the time is
    four characters and never the thing to drop. */
 .chat-drawer__row-sub {
@@ -316,7 +329,7 @@
    the one thing on screen that is still happening — an accent every row has
    cannot point at anything. */
 .chat-drawer__block + .chat-drawer__block {
-  margin-top: 4px;
+  margin-top: 10px;
 }
 .chat-drawer__group {
   display: flex;

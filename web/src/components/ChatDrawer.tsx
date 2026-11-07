@@ -1,4 +1,4 @@
-import { type ChatAction, fallbackTabIcon } from '@muxpad/shared';
+import type { ChatAction } from '@muxpad/shared';
 import { useMemo } from 'react';
 import type { MentionChat } from '../lib/chat-mention';
 import { spawnLabel, spawnState, spawnStateLabel } from '../lib/chat-mention';
@@ -229,30 +229,36 @@ function SubChatList({
                     title={s.paneId ? undefined : 'This chat’s pane is gone'}
                     onClick={() => onOpen(s)}
                   >
-                    {/* ── A ROW HAS TO LOOK LIKE A CHAT ──────────────────────
-                        "These don't look like chats or anything it just looks
-                        like a list of words." Literally true: the previous
-                        pass took the mark off every finished row, and what is
-                        left of a chat row without one is text.
+                    {/* ── ONE MARK, NOT TWENTY-ONE ───────────────────────
+                        A per-chat glyph was the wrong read of "a row should
+                        look like a chat": twenty-one different icons is
+                        another kind of noise, and none of them mean anything,
+                        because a worker has no identity you would recognise
+                        the way you recognise a conversation you named.
 
-                        Removing the DOT was right — twenty-one identical
-                        status dots said nothing. Removing the ANCHOR was not.
-                        A dot is a state; the TILE is an identity, derived from
-                        the chat's own id, so a column of them has texture you
-                        can scan and come back to.
-
-                        `shape="tile"` because ChatChip draws a dot for
-                        anything with a `spawned_by`. That is right in the
-                        rail, where a sub-chat sits under its parent; here
-                        every row IS a chat and the panel itself says whose. */}
-                    <ChatChip
-                      density="row"
-                      shape="tile"
-                      chat={{
-                        ...s.chat.chip,
-                        icon: s.chat.chip.icon ?? fallbackTabIcon(s.chat.tabId),
-                      }}
-                    />
+                        So every row wears the SAME mark — the branch the work
+                        drawer's own control wears — and the accent does the
+                        structural work instead: a tinted square at the head of
+                        each row gives the column a rhythm, and the running
+                        ones are tinted harder. Text alone is the blob; one
+                        repeated shape in a colour is a list. */}
+                    <span className="chat-drawer__mark" aria-hidden="true">
+                      <svg viewBox="0 0 16 16" width="11" height="11" fill="none">
+                        <path
+                          d="M4.5 3v4.2a2 2 0 0 0 2 2H11"
+                          stroke="currentColor"
+                          strokeWidth="1.6"
+                          strokeLinecap="round"
+                        />
+                        <path
+                          d="M9 7.2 11.4 9.2 9 11.2"
+                          stroke="currentColor"
+                          strokeWidth="1.6"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    </span>
                     <span className="chat-drawer__row-text">
                       <span className="chat-drawer__row-name" dir="auto">
                         {spawnLabel(s.chat)}
