@@ -102,3 +102,74 @@ export function artifactsOf(actions: readonly ChatAction[]): ChatArtifact[] {
     }))
     .sort((a, b) => b.at - a.at);
 }
+
+/**
+ * THE DRAWER'S BLOCKS — the shape a list of twenty workers needs.
+ *
+ * Reported with a screenshot: twenty-one rows, twenty-one identical dots,
+ * and the same four characters of age repeated down the right edge. "No
+ * accent, no information architecture, no nothing." All true, and the cause is
+ * that every row was drawn as though it carried news when twenty of them
+ * carried the same news: finished, a while ago.
+ *
+ * So the list is grouped, and the groups are the information:
+ *
+ *   · RUNNING first, and only this block gets the accent — it is the one thing
+ *     on screen that is still happening. A mark on every row cannot say
+ *     "this one" when every row has it.
+ *   · TODAY / YESTERDAY / EARLIER for the rest. The heading carries the time,
+ *     so the row does not have to repeat "2d" eleven times; only EARLIER keeps
+ *     a per-row age, because that is the block where it actually varies.
+ *
+ * Empty blocks are dropped rather than rendered empty, and a single block is
+ * still labelled here — unlike the first attempt at this, where one unlabelled
+ * block looked like the old flat list and taught the reader nothing about why
+ * the next one would have a heading.
+ */
+export interface SubChatGroup {
+  key: 'running' | 'today' | 'yesterday' | 'earlier';
+  label: string;
+  /** Does this block's rows carry their own age? Only where it varies. */
+  showAge: boolean;
+  subs: SubChat[];
+}
+
+const DAY = 86_400_000;
+
+/** Midnight before `now`, in the reader's own timezone — "today" is a calendar
+ *  word, and a worker that reported at 23:50 is not "yesterday" at 00:10. */
+function startOfDay(now: number): number {
+  const d = new Date(now);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+export function subChatGroups(subs: readonly SubChat[], now: number = Date.now()): SubChatGroup[] {
+  const midnight = startOfDay(now);
+  const running: SubChat[] = [];
+  const today: SubChat[] = [];
+  const yesterday: SubChat[] = [];
+  const earlier: SubChat[] = [];
+  for (const s of subs) {
+    if (subChatIsOpen(s)) {
+      running.push(s);
+      continue;
+    }
+    const at = s.chat.createdAt ?? 0;
+    if (at >= midnight) today.push(s);
+    else if (at >= midnight - DAY) yesterday.push(s);
+    else earlier.push(s);
+  }
+  // Newest first inside the finished blocks: the answer you want from a worker
+  // that has reported is the last one. Running keeps its spawn order so the
+  // list does not reshuffle under the cursor as they finish.
+  const newest = (a: SubChat, b: SubChat) => (b.chat.createdAt ?? 0) - (a.chat.createdAt ?? 0);
+  return (
+    [
+      { key: 'running', label: 'Running', showAge: false, subs: running },
+      { key: 'today', label: 'Today', showAge: false, subs: [...today].sort(newest) },
+      { key: 'yesterday', label: 'Yesterday', showAge: false, subs: [...yesterday].sort(newest) },
+      { key: 'earlier', label: 'Earlier', showAge: true, subs: [...earlier].sort(newest) },
+    ] as SubChatGroup[]
+  ).filter((g) => g.subs.length > 0);
+}

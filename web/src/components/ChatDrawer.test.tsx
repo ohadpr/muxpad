@@ -207,7 +207,9 @@ describe('the sub-chat list has shape', () => {
     expect(names(box)).toEqual(['still-going', 'reported-first']);
   });
 
-  it('labels the two blocks only when both exist', () => {
+  it('labels every block, with its count', () => {
+    // An unlabelled single block looked like the old flat list and taught the
+    // reader nothing about why the next one would have a heading.
     const both = mount({
       corpus: corpusOf([
         tab('parent'),
@@ -215,19 +217,16 @@ describe('the sub-chat list has shape', () => {
         tab('b', { spawned_by: 'parent', done: true }),
       ]),
     });
-    expect(groups(both)).toEqual(['Running', 'Finished']);
-    // One group explains itself; a heading over the only block is furniture.
+    expect(groups(both).map((g) => g?.replace(/\d+$/, ''))).toEqual(['Running', 'Today']);
     const onlyRunning = mount({
-      corpus: corpusOf([
-        tab('parent'),
-        tab('a', { spawned_by: 'parent', status: 'working' }),
-        tab('b', { spawned_by: 'parent', status: 'working' }),
-      ]),
+      corpus: corpusOf([tab('parent'), tab('a', { spawned_by: 'parent', status: 'working' })]),
     });
-    expect(groups(onlyRunning)).toEqual([]);
+    expect(groups(onlyRunning).map((g) => g?.replace(/\d+$/, ''))).toEqual(['Running']);
   });
 
-  it('gives a running row no second line, and a finished one the time', () => {
+  it('marks only the rows where a mark means something', () => {
+    // Twenty-one identical dots say nothing. The accent is for the block that
+    // is still happening; a finished row's heading says "finished" once.
     const box = mount({
       corpus: corpusOf([
         tab('parent'),
@@ -238,9 +237,15 @@ describe('the sub-chat list has shape', () => {
     const rows = [...box.querySelectorAll('.chat-drawer__row')];
     const rowFor = (name: string) =>
       rows.find((r) => r.querySelector('.chat-drawer__row-name')?.textContent === name);
-    // The running row's mark already says it, and the heading says it again.
-    expect(rowFor('going')?.querySelector('.chat-drawer__row-sub')).toBeNull();
-    expect(rowFor('reported')?.querySelector('.chat-drawer__row-sub')).not.toBeNull();
+    expect(rowFor('going')?.querySelector('.chatchip')).not.toBeNull();
+    expect(rowFor('reported')?.querySelector('.chatchip')).toBeNull();
+  });
+
+  it('does not repeat the age in a block whose heading already says it', () => {
+    const box = mount({
+      corpus: corpusOf([tab('parent'), tab('reported', { spawned_by: 'parent', done: true })]),
+    });
+    expect(box.querySelector('.chat-drawer__row-sub')).toBeNull();
   });
 
   it('puts the newest finished one at the top of its block', () => {
