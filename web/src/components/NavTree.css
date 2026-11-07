@@ -4281,6 +4281,6 @@ body.sidenav-resizing iframe {
    worker you have not read is not quieter than one you have. Those rules come
    later in the file and are more specific, so nothing is needed here to let
    them through. */
-.navtree .navtree-tab-row[data-worker='true'] .navtree-name-text {
+.navtree .navtree-tab-row[data-worker="true"] .navtree-name-text {
   color: var(--nt-ink-read);
 }

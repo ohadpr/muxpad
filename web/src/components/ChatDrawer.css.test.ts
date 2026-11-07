@@ -12,8 +12,12 @@ import { describe, expect, it } from 'vitest';
 const CSS = readFileSync(join(__dirname, 'ChatDrawer.css'), 'utf8');
 /** Comments contain the names of the tokens they explain being removed. */
 const flat = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+/** Quotes in an attribute selector belong to the formatter, not to us: biome
+ *  rewrites `'x'` to `"x"`, and a test that pins the quote is a test about
+ *  biome. Callers may write either. */
+const anyQuote = (sel: string) => sel.replace(/['"]/g, `['"]`);
 const rule = (sel: string): string =>
-  new RegExp(`${sel.replace(/[.[\]*]/g, '\\$&')}\\s*\\{[^}]*\\}`).exec(flat)?.[0] ?? '';
+  new RegExp(`${anyQuote(sel.replace(/[.[\]*]/g, '\\$&'))}\\s*\\{[^}]*\\}`).exec(flat)?.[0] ?? '';
 
 describe('it wears the CHAT’s palette, not the app’s', () => {
   it('takes every colour from a --chat-* token', () => {

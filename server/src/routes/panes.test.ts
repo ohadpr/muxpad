@@ -476,7 +476,7 @@ describe('panes routes', () => {
     }
   });
 
-  it('PATCH /panes emits a DECORATED pane.updated — a face switch mid-turn keeps busy', async () => {
+  it('PATCH /panes emits a DECORATED pane.updated — a face switch mid-turn stays working', async () => {
     // D1: the PATCH route used to hand-build the event payload with only
     // attention + app_urls. `busy` came back undefined, which the sidebar reads
     // as "not working" — so face-switching a pane while its agent worked killed
@@ -523,14 +523,14 @@ describe('panes routes', () => {
       const updated = received.find((e) => e.type === 'pane.updated');
       expect(updated).toBeDefined();
       if (updated?.type === 'pane.updated') {
-        expect(updated.pane.busy).toBe(true);
+        expect(updated.pane.status).toBe('working');
         expect(updated.pane.face).toBe('terminal');
         // The rest of decoratePane's fields are present too (not undefined).
         expect(updated.pane.attention).toBe(false);
         expect(updated.pane.app_urls).toEqual([]);
       }
       // …and the response body agrees with the event.
-      expect(((await res.json()) as { busy?: boolean }).busy).toBe(true);
+      expect(((await res.json()) as { status?: string }).status).toBe('working');
     } finally {
       await local.cleanup();
     }
@@ -982,7 +982,7 @@ describe('flat pane enumeration (GET /api/panes)', () => {
       workspace_id: string;
       workspace_name: string;
       isRunning: boolean;
-      busy: boolean;
+      status: string;
       face: string;
     }>;
     expect(list.map((p) => p.id).sort()).toEqual([p1.id, p2.id].sort());
@@ -991,7 +991,7 @@ describe('flat pane enumeration (GET /api/panes)', () => {
     expect(row1?.tab_name).toBe('ta');
     expect(row1?.tab_id).toBe(tabA.id);
     expect(row1?.workspace_id).toBe(wsA.id);
-    expect(typeof row1?.busy).toBe('boolean');
+    expect(typeof row1?.status).toBe('string');
     // Shell panes are eagerly spawned on create → running; url panes never.
     expect(row1?.isRunning).toBe(true);
     const row2 = list.find((p) => p.id === p2.id);

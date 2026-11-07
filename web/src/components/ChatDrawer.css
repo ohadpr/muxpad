@@ -250,7 +250,7 @@
    it. A ring and an inked glyph on a light wash is enough to find instantly;
    a filled square of `--accent` is a shout, and on a theme whose accent is
    #d6006e a column with one of those in it is all you see. */
-.chat-drawer__block[data-heat='3'] {
+.chat-drawer__block[data-heat="3"] {
   --mark-bg: color-mix(in srgb, var(--d-accent) 15%, var(--d-surface));
   --mark-ink: var(--d-accent);
   --mark-edge: color-mix(in srgb, var(--d-accent) 42%, transparent);
@@ -261,21 +261,21 @@
    sixteen rows that are over rather than the two that are not.
    The recency scale survives in the ink: three steps of the panel's own grey,
    which is enough to see the list fade without painting it. */
-.chat-drawer__block[data-heat='2'] {
+.chat-drawer__block[data-heat="2"] {
   --mark-bg: color-mix(in srgb, var(--d-ink) 11%, var(--d-surface));
   --mark-ink: var(--d-dim);
   --mark-edge: color-mix(in srgb, var(--d-ink) 9%, transparent);
 }
-.chat-drawer__block[data-heat='1'] {
+.chat-drawer__block[data-heat="1"] {
   --mark-bg: color-mix(in srgb, var(--d-ink) 8%, var(--d-surface));
   --mark-ink: color-mix(in srgb, var(--d-dim) 80%, var(--d-faint));
   --mark-edge: color-mix(in srgb, var(--d-ink) 6%, transparent);
 }
-.chat-drawer__block[data-heat='0'] {
+.chat-drawer__block[data-heat="0"] {
   --mark-bg: color-mix(in srgb, var(--d-ink) 5%, var(--d-surface));
   --mark-ink: var(--d-faint);
   --mark-edge: transparent;
-}/* The age, at the end of the line it belongs to. `auto` rather than a
+} /* The age, at the end of the line it belongs to. `auto` rather than a
    justify rule so the NAME keeps the slack and truncates first — the time is
    four characters and never the thing to drop. */
 .chat-drawer__row-sub {
@@ -404,13 +404,13 @@
   opacity: 0.85;
 }
 /* THE ONE ACCENT. Something is running; nothing else on this panel is news. */
-.chat-drawer__block[data-block='running'] .chat-drawer__group-label {
+.chat-drawer__block[data-block="running"] .chat-drawer__group-label {
   color: var(--d-accent);
 }
 /* The live block reads as ONE thing rather than two rows that happen to be
    marked: a wash behind it, the accent at the strength the rest of the panel
    never uses. */
-.chat-drawer__block[data-block='running'] .chat-drawer__list {
+.chat-drawer__block[data-block="running"] .chat-drawer__list {
   margin: 0 6px;
   padding: 4px;
   border-radius: 10px;

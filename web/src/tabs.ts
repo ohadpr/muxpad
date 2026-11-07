@@ -295,11 +295,10 @@ const unsubLiveRefresh = subscribe((e) => {
     e.pane.status ?? '',
     e.pane.agents ?? 0,
     // Kept alongside `status` rather than replaced by it: `unread` feeds the
-    // bold name independently of the rolled-up status, and `attention`/`busy`
-    // are what an older server sends.
+    // bold name independently of the rolled-up status, and `attention` keeps
+    // its own meaning (the raw BEL bit), which `status` does not carry.
     e.pane.unread ?? false,
     e.pane.attention ?? false,
-    e.pane.busy ?? false,
   ].join('|');
   if (lastPaneStatus.get(e.pane.id) === status) return; // title/fg-only → no list change
   lastPaneStatus.set(e.pane.id, status);

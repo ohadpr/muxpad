@@ -136,7 +136,7 @@ export class PtydCache extends EventEmitter {
   // Panes with a headless (web-chat-driven) agent turn in flight. A chat turn
   // is a separate `claude -p` process writing the transcript FILE — it produces
   // zero PTY output, so the activity detector above never sees it. The ws chat
-  // layer flips this on turn start/finish; getBusy() ORs it in, which is what
+  // layer flips this on turn start/finish; isWorking() ORs it in, which is what
   // makes the tab/workspace spinners cover chat work like terminal work. Kept
   // OUTSIDE PaneState so PTY lifecycle (paneExit dropping the entry) can't
   // clear a turn that's still running.
@@ -562,11 +562,16 @@ export class PtydCache extends EventEmitter {
   }
 
   /**
-   * Synchronous read — false when ptyd hasn't reported busy state yet.
-   * Busy = PTY output activity OR a headless chat turn in flight (see
-   * setAgentBusy) — both mean "this pane's agent is working".
+   * Is this pane working? A thin read of {@link getStatus}, kept as a NAME
+   * rather than a second concept: callers that only care about the one state
+   * say so, and there is still exactly one place that decides what `working`
+   * means.
+   *
+   * The wire field `busy` that used to shadow this is gone — see
+   * PaneStatusSchema. It was a deprecated alias for one release, and the
+   * release has shipped.
    */
-  getBusy(id: string): boolean {
+  isWorking(id: string): boolean {
     return this.getStatus(id, false) === 'working';
   }
 
@@ -771,8 +776,6 @@ export function decoratePane(
     // fires on its rising edge, and the ws layer already pushes explicitly when
     // a question arrives. Old clients keep exactly the behaviour they had.
     attention: cache.getAttention(pane.id),
-    // Deprecated alias, exact by construction.
-    busy: status === 'working',
     status,
     // Both kinds of parallel work, exactly as the tab row counts them (see
     // decorateTab): the harness roster in THIS pane, plus the chats spawned
@@ -873,12 +876,10 @@ export function decorateTab(
   // be: it only ever appears alongside `done: true`, which is unconditional —
   // so a client coalescing a live row over a done one clears `done` in the
   // same merge, and a stale reason has nothing left to attach to.
-  // Deprecated alias, exact by construction (see PaneStatusSchema).
   return {
     ...tab,
     attention,
     unread,
-    busy: status === 'working',
     status,
     agents,
     // Whether this tab's chrome offers a `+` at all — resolved from the panes

@@ -601,7 +601,7 @@ export class ChatRetirer {
     // pane working RIGHT NOW? That covers a turn already in flight again —
     // the exact state the live failure was found in (`retired_at` set on a
     // pane the daemon called `working`).
-    if (this.deps.cache.getBusy(paneId)) return false;
+    if (this.deps.cache.isWorking(paneId)) return false;
     // A DELIVERY IS SOMETHING A LIVE AGENT DOES. `null` means no runner is
     // connected, so this turn-end was a DISCONNECT rather than a hand-off — see
     // the dep's note for the race that loses. `true` is a turn in flight the

@@ -69,15 +69,15 @@ describe('PtydCache', () => {
 
     // First tick: warming up, not busy yet.
     (c as unknown as EventEmitter).emit('paneActivity', { id: 'p1' });
-    expect(cache.getBusy('p1')).toBe(false);
+    expect(cache.isWorking('p1')).toBe(false);
 
     // A later tick, past the warmup window → real work → busy.
     await new Promise((r) => setTimeout(r, 55));
     (c as unknown as EventEmitter).emit('paneActivity', { id: 'p1' });
-    expect(cache.getBusy('p1')).toBe(true);
+    expect(cache.isWorking('p1')).toBe(true);
 
     await new Promise((r) => setTimeout(r, 200));
-    expect(cache.getBusy('p1')).toBe(false);
+    expect(cache.isWorking('p1')).toBe(false);
     // Exactly two transitions reached consumers: busy:true then busy:false.
     expect(changes.filter((id) => id === 'p1')).toEqual(['p1', 'p1']);
   });
@@ -90,9 +90,9 @@ describe('PtydCache', () => {
     cache.on('paneChange', (id) => changes.push(id));
     // One lone tick, then silence — never qualifies as busy.
     (c as unknown as EventEmitter).emit('paneActivity', { id: 'p1' });
-    expect(cache.getBusy('p1')).toBe(false);
+    expect(cache.isWorking('p1')).toBe(false);
     await new Promise((r) => setTimeout(r, 90));
-    expect(cache.getBusy('p1')).toBe(false);
+    expect(cache.isWorking('p1')).toBe(false);
     expect(changes.filter((id) => id === 'p1')).toEqual([]); // no transitions emitted
   });
 
@@ -108,7 +108,7 @@ describe('PtydCache', () => {
       (c as unknown as EventEmitter).emit('paneActivity', { id: 'p1' });
       await new Promise((r) => setTimeout(r, 20));
     }
-    expect(cache.getBusy('p1')).toBe(false);
+    expect(cache.isWorking('p1')).toBe(false);
 
     // Now the app works on its own (no further input). Once activity sustains
     // past the grace + warmup, it trips busy normally.
@@ -116,7 +116,7 @@ describe('PtydCache', () => {
     (c as unknown as EventEmitter).emit('paneActivity', { id: 'p1' });
     await new Promise((r) => setTimeout(r, 50));
     (c as unknown as EventEmitter).emit('paneActivity', { id: 'p1' });
-    expect(cache.getBusy('p1')).toBe(true);
+    expect(cache.isWorking('p1')).toBe(true);
   });
 
   it('clears decay/warmup state on paneExit so it cannot resurrect the entry', async () => {
@@ -126,7 +126,7 @@ describe('PtydCache', () => {
     (c as unknown as EventEmitter).emit('paneActivity', { id: 'p1' });
     await new Promise((r) => setTimeout(r, 30));
     (c as unknown as EventEmitter).emit('paneActivity', { id: 'p1' });
-    expect(cache.getBusy('p1')).toBe(true);
+    expect(cache.isWorking('p1')).toBe(true);
     (c as unknown as EventEmitter).emit('paneExit', { id: 'p1', code: 0, cause: 'natural' });
     // Past when the decay timer would have fired update({busy:false}).
     await new Promise((r) => setTimeout(r, 100));
@@ -475,12 +475,12 @@ describe('PtydCache', () => {
     cache.attach(c);
     const changes: string[] = [];
     cache.on('paneChange', (id) => changes.push(id));
-    expect(cache.getBusy('p1')).toBe(false);
+    expect(cache.isWorking('p1')).toBe(false);
     cache.setAgentBusy('p1', true);
-    expect(cache.getBusy('p1')).toBe(true);
+    expect(cache.isWorking('p1')).toBe(true);
     cache.setAgentBusy('p1', true); // idempotent — no duplicate event
     cache.setAgentBusy('p1', false);
-    expect(cache.getBusy('p1')).toBe(false);
+    expect(cache.isWorking('p1')).toBe(false);
     expect(changes).toEqual(['p1', 'p1']); // exactly the true and false edges
   });
 
@@ -492,7 +492,7 @@ describe('PtydCache', () => {
     (c as unknown as EventEmitter).emit('paneActivity', { id: 'p1' });
     await new Promise((r) => setTimeout(r, 30));
     (c as unknown as EventEmitter).emit('paneActivity', { id: 'p1' });
-    expect(cache.getBusy('p1')).toBe(true);
+    expect(cache.isWorking('p1')).toBe(true);
     const changes: string[] = [];
     cache.on('paneChange', (id) => changes.push(id));
     // Agent turn starts and ends while PTY busy holds — effective busy never
@@ -503,20 +503,20 @@ describe('PtydCache', () => {
     // Now agent busy holds through the PTY decay: still busy after quiet.
     cache.setAgentBusy('p1', true);
     await new Promise((r) => setTimeout(r, 200));
-    expect(cache.getBusy('p1')).toBe(true); // PTY decayed; agent turn holds it
+    expect(cache.isWorking('p1')).toBe(true); // PTY decayed; agent turn holds it
     cache.setAgentBusy('p1', false);
-    expect(cache.getBusy('p1')).toBe(false);
+    expect(cache.isWorking('p1')).toBe(false);
   });
 
   it('forget() clears agent busy so a recreated pane id starts clean', () => {
     const cache = new PtydCache();
     cache.setAgentBusy('p1', true);
-    expect(cache.getBusy('p1')).toBe(true);
+    expect(cache.isWorking('p1')).toBe(true);
     cache.forget('p1');
-    expect(cache.getBusy('p1')).toBe(false);
+    expect(cache.isWorking('p1')).toBe(false);
   });
 
-  it('decoratePane stamps busy from an agent turn (the tab/workspace rollup source)', () => {
+  it('decoratePane stamps WORKING from an agent turn (the tab/workspace rollup source)', () => {
     const cache = new PtydCache();
     const pane: PaneSpec = {
       id: 'p1',
@@ -532,12 +532,12 @@ describe('PtydCache', () => {
       face_url: null,
       created_at: 0,
     };
-    expect(decoratePane(cache, pane).busy).toBe(false);
+    expect(decoratePane(cache, pane).status).not.toBe('working');
     cache.setAgentBusy('p1', true);
-    expect(decoratePane(cache, pane).busy).toBe(true);
+    expect(decoratePane(cache, pane).status).toBe('working');
   });
 
-  it('a live subagent roster holds busy with NO decay window, and is count-edge-triggered', async () => {
+  it('a live subagent roster holds WORKING with no decay window, and is count-edge-triggered', async () => {
     // Replaces the old 15s-decay poke. Measured (P1, 2026-08): a background
     // subagent parked in one tool call goes 44s+ without a frame while alive,
     // so any decay window evicts a running agent. Membership now has real
@@ -547,7 +547,7 @@ describe('PtydCache', () => {
     cache.on('paneChange', (id: string) => events.push(id));
 
     cache.setSubagentCount('p1', 1);
-    expect(cache.getBusy('p1')).toBe(true);
+    expect(cache.isWorking('p1')).toBe(true);
     expect(cache.getSubagentCount('p1')).toBe(1);
     expect(events).toEqual(['p1']);
 
@@ -561,11 +561,11 @@ describe('PtydCache', () => {
 
     // Long silence changes nothing — there is no window to expire.
     await new Promise((r) => setTimeout(r, 80));
-    expect(cache.getBusy('p1')).toBe(true);
+    expect(cache.isWorking('p1')).toBe(true);
 
     // Only an explicit empty roster clears it.
     cache.setSubagentCount('p1', 0);
-    expect(cache.getBusy('p1')).toBe(false);
+    expect(cache.isWorking('p1')).toBe(false);
     expect(cache.getSubagentCount('p1')).toBe(0);
     expect(events).toEqual(['p1', 'p1', 'p1']);
   });
@@ -575,11 +575,11 @@ describe('PtydCache', () => {
     const cache = new PtydCache();
     cache.setAgentBusy('p1', true);
     cache.setSubagentCount('p1', 1);
-    expect(cache.getBusy('p1')).toBe(true);
+    expect(cache.isWorking('p1')).toBe(true);
     cache.setAgentBusy('p1', false);
-    expect(cache.getBusy('p1')).toBe(true);
+    expect(cache.isWorking('p1')).toBe(true);
     cache.forget('p1');
-    expect(cache.getBusy('p1')).toBe(false);
+    expect(cache.isWorking('p1')).toBe(false);
     expect(cache.getSubagentCount('p1')).toBe(0);
   });
 });
@@ -671,14 +671,14 @@ describe('the five-state status model', () => {
     await new Promise((r) => setTimeout(r, 25));
     cache.noteInput('p1');
     tick();
-    expect(cache.getBusy('p1')).toBe(false);
+    expect(cache.isWorking('p1')).toBe(false);
 
     // Real output (no recent keystroke) crosses the warmup.
     await new Promise((r) => setTimeout(r, 120));
     tick();
     await new Promise((r) => setTimeout(r, 30));
     tick();
-    expect(cache.getBusy('p1')).toBe(true);
+    expect(cache.isWorking('p1')).toBe(true);
 
     // Now type continuously while the app keeps streaming. Every tick lands
     // inside the input grace — the old code dropped them all and let busy
@@ -688,11 +688,11 @@ describe('the five-state status model', () => {
       cache.noteInput('p1');
       tick();
     }
-    expect(cache.getBusy('p1')).toBe(true);
+    expect(cache.isWorking('p1')).toBe(true);
 
     // Output really stops → it decays normally.
     await new Promise((r) => setTimeout(r, 220));
-    expect(cache.getBusy('p1')).toBe(false);
+    expect(cache.isWorking('p1')).toBe(false);
   });
 
   it('…but echo can only SUSTAIN a spell for a bounded window', async () => {
@@ -714,7 +714,7 @@ describe('the five-state status model', () => {
     tick();
     await new Promise((r) => setTimeout(r, 30));
     tick();
-    expect(cache.getBusy('p1')).toBe(true);
+    expect(cache.isWorking('p1')).toBe(true);
 
     // Type steadily, with NO further real output, past the sustain cap.
     for (let i = 0; i < 8; i++) {
@@ -723,17 +723,22 @@ describe('the five-state status model', () => {
       tick();
     }
     await new Promise((r) => setTimeout(r, 200));
-    expect(cache.getBusy('p1')).toBe(false);
+    expect(cache.isWorking('p1')).toBe(false);
   });
 
-  it('decoratePane carries status + agents, with busy as an exact alias', () => {
+  it('decoratePane carries status + agents, and no `busy` shadowing them', () => {
     const cache = new PtydCache();
-    expect(decoratePane(cache, pane())).toMatchObject({ status: 'idle', busy: false, agents: 0 });
+    const idle = decoratePane(cache, pane());
+    expect(idle).toMatchObject({ status: 'idle', agents: 0 });
+    // The alias was kept for one release and that release has shipped. One
+    // state, one name — a second vocabulary for the same fact meant a reader
+    // could not tell which of the two a given surface was written against.
+    expect('busy' in idle).toBe(false);
 
     cache.setSubagentCount('p1', 2);
     const working = decoratePane(cache, pane());
     expect(working.status).toBe('working');
-    expect(working.busy).toBe(true);
+    expect('busy' in working).toBe(false);
     expect(working.agents).toBe(2);
 
     cache.setSubagentCount('p1', 0);

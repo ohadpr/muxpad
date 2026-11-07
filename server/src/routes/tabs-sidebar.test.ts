@@ -143,11 +143,12 @@ describe('living sidebar — tab ordering + pinning', () => {
     const rows = (await (await test.app.request(`/api/tabs?workspaceId=${wsId}`)).json()) as Array<{
       name: string;
       status?: string;
-      busy?: boolean;
       agents?: number;
     }>;
     const bRow = rows.find((t) => t.name === 'B');
-    expect(bRow).toMatchObject({ status: 'working', busy: true, agents: 0 });
+    expect(bRow).toMatchObject({ status: 'working', agents: 0 });
+    // The `busy` alias is gone: one state, one name.
+    expect('busy' in (bRow as object)).toBe(false);
 
     // A background subagent keeps the tab working past turn-done, with a count.
     test.cache.setAgentBusy(bp, false);
@@ -206,7 +207,7 @@ describe('living sidebar — tab ordering + pinning', () => {
     expect(await names()).toEqual(['B', 'A']);
   });
 
-  it('a pinned tab is NOT re-sorted by attention/busy/recency', async () => {
+  it('a pinned tab is NOT re-sorted by attention/status/recency', async () => {
     const a = await makeTab('A');
     const b = await makeTab('B');
     await test.app.request(`/api/tabs/${a.id}`, { method: 'PATCH', ...json({ pinned: true }) });

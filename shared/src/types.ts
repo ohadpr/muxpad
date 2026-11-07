@@ -249,9 +249,11 @@ export function backendSupportsChatMode(backend: string | null | undefined): boo
  * degrades to a blank (reserved) column rather than throwing.
  *
  * Replaces three physically different conditions previously ORed into one
- * `busy` boolean. `busy` remains a DEPRECATED ALIAS on the same rows for one
- * release, so the CLI and any older client keep working:
- *   busy ≡ status === 'working'
+ * `busy` boolean. That alias was kept on the same rows for one release so the
+ * CLI and older clients would keep working; the release has shipped and it is
+ * GONE. One state has one name — the alias was a second vocabulary for the
+ * same fact, and a reader could not tell which of the two a given surface had
+ * been written against.
  *
  * `attention` is NOT an alias and deliberately keeps its ORIGINAL meaning —
  * the raw BEL bit. `blocked` is a superset (BEL ∪ an open agent question),
