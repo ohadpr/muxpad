@@ -309,20 +309,47 @@
   text-align: center;
 }
 
-/* ── THE GROUP HEADING ──────────────────────────────────────────────────────
-   Shown only when both groups exist: one group explains itself, and a heading
-   over the only block on screen is furniture. Small, quiet, and sitting on the
-   list's own left inset rather than the panel's, so the rows below it read as
-   belonging to it. */
+/* ── THE BLOCKS ARE THE INFORMATION ────────────────────────────────────────
+   Twenty-one rows with twenty-one identical dots and "2d" repeated down the
+   right edge is a wall, not a list. The headings carry the time and the shape;
+   the rows carry the names. Only the RUNNING block is accented, because it is
+   the one thing on screen that is still happening — an accent every row has
+   cannot point at anything. */
+.chat-drawer__block + .chat-drawer__block {
+  margin-top: 4px;
+}
 .chat-drawer__group {
-  margin: 10px 0 2px;
-  padding: 0 14px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  padding: 11px 14px 5px;
   font-size: 0.6875rem;
   font-weight: 700;
   letter-spacing: 0.07em;
   text-transform: uppercase;
   color: var(--d-faint);
 }
-.chat-drawer__group:first-child {
-  margin-top: 4px;
+/* The count sits ON the heading, where it is part of the label rather than a
+   number somewhere else that needs a second look to attach to the thing it
+   counts. Tabular, so a column of them does not wobble. */
+.chat-drawer__group-count {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+  color: color-mix(in srgb, var(--d-faint) 72%, transparent);
+}
+/* THE ONE ACCENT. Something is running; nothing else on this panel is news. */
+.chat-drawer__block[data-block='running'] .chat-drawer__group {
+  color: var(--d-accent);
+}
+.chat-drawer__block[data-block='running'] .chat-drawer__group-count {
+  color: color-mix(in srgb, var(--d-accent) 70%, transparent);
+}
+/* A running row carries the mark; the finished ones have none, so their names
+   start where the marked ones' names do rather than sliding left and breaking
+   the column. */
+.chat-drawer__block:not([data-block='running']) .chat-drawer__row {
+  padding-inline-start: 29px;
 }

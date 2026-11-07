@@ -3,7 +3,13 @@ import { useMemo } from 'react';
 import type { MentionChat } from '../lib/chat-mention';
 import { spawnLabel, spawnState, spawnStateLabel } from '../lib/chat-mention';
 import { shortAge } from '../lib/short-age';
-import { type SubChat, artifactsOf, subChatIsOpen, subChatsOf } from '../lib/sub-chats';
+import {
+  type SubChat,
+  artifactsOf,
+  subChatGroups,
+  subChatIsOpen,
+  subChatsOf,
+} from '../lib/sub-chats';
 import { ChatChip } from './ChatChip';
 import './ChatDrawer.css';
 
@@ -164,23 +170,23 @@ export function ChatDrawer({
 }
 
 /**
- * ── RUNNING, THEN FINISHED, AND THE LIST SAYS WHICH IS WHICH ──────────────
+ * ── THE LIST IS ITS BLOCKS ────────────────────────────────────────────────
  *
- * It was one flat run of identical rows in spawn order, so the worker still
- * going sat wherever it happened to start — usually last — and the only thing
- * separating it from one that reported an hour ago was a small word on a second
- * line. Every row carried that word, and for the finished ones it was the same
- * word, which is a line of type per row spent saying "done" eleven times.
+ * Reported with a screenshot of twenty-one rows: "still ugly, no accent no
+ * information architecture no nothing." The rows were fine; the LIST was a
+ * wall. Twenty-one identical dots, and the same four characters of age down
+ * the right edge, because every row was drawn as though it carried news when
+ * twenty of them carried the same news.
  *
- * So: two blocks, running first, each labelled only when the other exists —
- * one group needs no heading to be understood. A running row drops the state
- * line entirely, because its mark already says it and the heading says it
- * again. A finished row spends that line on WHEN instead, which is the thing
- * you are actually comparing them by.
+ * The blocks are the information now (see `subChatGroups`), and two things
+ * follow from that:
  *
- * Finished newest-first, running in spawn order: the one you want from a
- * finished worker is the last answer, and the one you want from running ones is
- * a stable list that does not reshuffle under the cursor while they report.
+ *   · THE ACCENT GOES WHERE SOMETHING IS HAPPENING. Only the running block is
+ *     marked, and only its rows keep the chip. A mark on every row cannot say
+ *     "this one" when every row has one.
+ *   · THE HEADING CARRIES THE TIME, so a finished row does not repeat "2d"
+ *     eleven times. Only `Earlier` keeps a per-row age, because that is the
+ *     block where it varies.
  */
 function SubChatList({
   subs,
@@ -198,90 +204,57 @@ function SubChatList({
         it reports.
       </p>
     );
-  const running = subs.filter(subChatIsOpen);
-  const finished = subs
-    .filter((s) => !subChatIsOpen(s))
-    .sort((a, b) => (b.chat.createdAt ?? 0) - (a.chat.createdAt ?? 0));
-  const both = running.length > 0 && finished.length > 0;
   return (
     <>
-      {running.length > 0 ? (
-        <>
-          {both ? <h3 className="chat-drawer__group">Running</h3> : null}
-          <Rows subs={running} onOpen={onOpen} now={now} />
-        </>
-      ) : null}
-      {finished.length > 0 ? (
-        <>
-          {both ? <h3 className="chat-drawer__group">Finished</h3> : null}
-          <Rows subs={finished} onOpen={onOpen} now={now} />
-        </>
-      ) : null}
+      {subChatGroups(subs, now).map((g) => (
+        <section className="chat-drawer__block" key={g.key} data-block={g.key}>
+          <h3 className="chat-drawer__group">
+            {g.label}
+            <span className="chat-drawer__group-count">{g.subs.length}</span>
+          </h3>
+          <ul className="chat-drawer__list">
+            {g.subs.map((s) => {
+              const state = spawnState(s.chat);
+              const live = g.key === 'running';
+              return (
+                <li key={s.chat.tabId}>
+                  <button
+                    type="button"
+                    className="chat-drawer__row"
+                    data-state={state}
+                    // A row whose pane is gone cannot be mounted. It stays in
+                    // the list — it is part of the record — and says why
+                    // rather than being a control that does nothing.
+                    disabled={!s.paneId}
+                    title={s.paneId ? undefined : 'This chat’s pane is gone'}
+                    onClick={() => onOpen(s)}
+                  >
+                    {/* ONLY WHERE IT MEANS SOMETHING. A finished worker's mark
+                        was the same dot as the twenty above it; the block
+                        heading says "finished" once instead. A row that failed
+                        keeps its mark, because that one is not like the
+                        others. */}
+                    {live || state === 'failed' ? (
+                      <ChatChip density="row" chat={s.chat.chip} />
+                    ) : null}
+                    <span className="chat-drawer__row-text">
+                      <span className="chat-drawer__row-name" dir="auto">
+                        {spawnLabel(s.chat)}
+                      </span>
+                      {g.showAge && s.chat.createdAt ? (
+                        <span className="chat-drawer__row-sub">
+                          {shortAge(now - s.chat.createdAt)}
+                        </span>
+                      ) : null}
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ))}
     </>
-  );
-}
-
-function Rows({
-  subs,
-  onOpen,
-  now,
-}: {
-  subs: SubChat[];
-  onOpen: (s: SubChat) => void;
-  now: number;
-}) {
-  return (
-    <ul className="chat-drawer__list">
-      {subs.map((s) => {
-        const state = spawnState(s.chat);
-        const open = subChatIsOpen(s);
-        return (
-          <li key={s.chat.tabId}>
-            <button
-              type="button"
-              className="chat-drawer__row"
-              data-state={state}
-              // A row whose pane is gone cannot be mounted. It stays in the
-              // list — it is part of the record — and says why rather than
-              // being a control that does nothing.
-              disabled={!s.paneId}
-              title={s.paneId ? undefined : 'This chat’s pane is gone'}
-              onClick={() => onOpen(s)}
-            >
-              {/* The same mark the rail and the spawn card use — one
-                  vocabulary for "how much life is left in this chat", decided
-                  in one place (see ChatChip). */}
-              {/* The same mark the rail and the spawn card use — one
-                  vocabulary for "how much life is left in this chat", decided
-                  in one place (see ChatChip). Its BOX is narrowed in the
-                  stylesheet: `row` and `card` are identical by construction,
-                  so the density prop could not fix a 6px dot sitting alone in
-                  a 24px column. */}
-              <ChatChip density="row" chat={s.chat.chip} />
-              <span className="chat-drawer__row-text">
-                <span className="chat-drawer__row-name" dir="auto">
-                  {spawnLabel(s.chat)}
-                </span>
-                {/* A RUNNING row says nothing here: its mark says it and the
-                    heading above says it again. A finished one spends the line
-                    on when it reported, which is what you compare them by.
-                    `spawnStateLabel` is still the vocabulary when the state is
-                    worth a word — the card in the log and this row describe the
-                    same worker, and two vocabularies for one state is how they
-                    come to disagree. */}
-                {open ? null : (
-                  <span className="chat-drawer__row-sub">
-                    {state === 'delivered' && s.chat.createdAt
-                      ? shortAge(now - s.chat.createdAt)
-                      : spawnStateLabel(state)}
-                  </span>
-                )}
-              </span>
-            </button>
-          </li>
-        );
-      })}
-    </ul>
   );
 }
 
