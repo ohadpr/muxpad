@@ -242,11 +242,19 @@ describe('the sub-chat list has shape', () => {
     expect(rowFor('reported')?.querySelector('.chat-drawer__row-live')).toBeNull();
   });
 
-  it('does not repeat the age in a block whose heading already says it', () => {
+  it('shows how long ago on EVERY finished row, not only in Earlier', () => {
+    // "All chats should show how long ago." Within a block the ages still
+    // differ, and a list of work is read by when as much as by what.
     const box = mount({
-      corpus: corpusOf([tab('parent'), tab('reported', { spawned_by: 'parent', done: true })]),
+      corpus: corpusOf([
+        tab('parent'),
+        tab('today', { spawned_by: 'parent', done: true }),
+        tab('older', { spawned_by: 'parent', done: true, created_at: NOW - 3 * 86_400_000 }),
+      ]),
     });
-    expect(box.querySelector('.chat-drawer__row-sub')).toBeNull();
+    const ages = [...box.querySelectorAll('.chat-drawer__row-sub')].map((e) => e.textContent);
+    expect(ages).toHaveLength(2);
+    for (const a of ages) expect(a).toMatch(/\d/);
   });
 
   it('puts the newest finished one at the top of its block', () => {

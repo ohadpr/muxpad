@@ -45,14 +45,18 @@ describe('the drawer’s blocks', () => {
     expect(g.map((x) => x.key)).toEqual(['today', 'yesterday', 'earlier']);
   });
 
-  it('carries the age only where it varies', () => {
+  it('cools by one step per block, so the list fades as it ages', () => {
+    // The accent is the second rendering of the one fact this panel is about.
     const g = subChatGroups(
-      [sub('a', { done: true, at: at(2) }), sub('b', { done: true, at: at(100) })],
+      [
+        sub('going'),
+        sub('a', { done: true, at: at(2) }),
+        sub('b', { done: true, at: at(26) }),
+        sub('c', { done: true, at: at(100) }),
+      ],
       NOW,
     );
-    // Today's heading already says today; `earlier` spans weeks.
-    expect(g.find((x) => x.key === 'today')?.showAge).toBe(false);
-    expect(g.find((x) => x.key === 'earlier')?.showAge).toBe(true);
+    expect(g.map((x) => x.heat)).toEqual([3, 2, 1, 0]);
   });
 
   it('drops empty blocks rather than drawing them', () => {

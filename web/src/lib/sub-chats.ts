@@ -117,9 +117,14 @@ export function artifactsOf(actions: readonly ChatAction[]): ChatArtifact[] {
  *   · RUNNING first, and only this block gets the accent — it is the one thing
  *     on screen that is still happening. A mark on every row cannot say
  *     "this one" when every row has it.
- *   · TODAY / YESTERDAY / EARLIER for the rest. The heading carries the time,
- *     so the row does not have to repeat "2d" eleven times; only EARLIER keeps
- *     a per-row age, because that is the block where it actually varies.
+ *   · TODAY / YESTERDAY / EARLIER for the rest, each tinted one step cooler
+ *     than the last, so the list fades as it ages and you can see which end is
+ *     fresh before reading a word.
+ *
+ * EVERY ROW CARRIES ITS AGE. An earlier pass showed it only in `Earlier`, on
+ * the grounds that the heading already said "today" — true, and not what was
+ * wanted: "all chats should show how long ago". Within a block the ages still
+ * differ, and a list of work is read by when as much as by what.
  *
  * Empty blocks are dropped rather than rendered empty, and a single block is
  * still labelled here — unlike the first attempt at this, where one unlabelled
@@ -129,8 +134,16 @@ export function artifactsOf(actions: readonly ChatAction[]): ChatArtifact[] {
 export interface SubChatGroup {
   key: 'running' | 'today' | 'yesterday' | 'earlier';
   label: string;
-  /** Does this block's rows carry their own age? Only where it varies. */
-  showAge: boolean;
+  /**
+   * How strongly this block is tinted — 3 is now, 0 is old.
+   *
+   * The accent is not decoration here: it is the SECOND rendering of the one
+   * fact this panel is about, which is how long ago. A column of sixteen
+   * identically tinted marks said "these are all the same thing", which is
+   * true and useless; a column that fades down the list says which end is
+   * fresh before you have read a word.
+   */
+  heat: 0 | 1 | 2 | 3;
   subs: SubChat[];
 }
 
@@ -166,10 +179,10 @@ export function subChatGroups(subs: readonly SubChat[], now: number = Date.now()
   const newest = (a: SubChat, b: SubChat) => (b.chat.createdAt ?? 0) - (a.chat.createdAt ?? 0);
   return (
     [
-      { key: 'running', label: 'Running', showAge: false, subs: running },
-      { key: 'today', label: 'Today', showAge: false, subs: [...today].sort(newest) },
-      { key: 'yesterday', label: 'Yesterday', showAge: false, subs: [...yesterday].sort(newest) },
-      { key: 'earlier', label: 'Earlier', showAge: true, subs: [...earlier].sort(newest) },
+      { key: 'running', label: 'Running', heat: 3, subs: running },
+      { key: 'today', label: 'Today', heat: 2, subs: [...today].sort(newest) },
+      { key: 'yesterday', label: 'Yesterday', heat: 1, subs: [...yesterday].sort(newest) },
+      { key: 'earlier', label: 'Earlier', heat: 0, subs: [...earlier].sort(newest) },
     ] as SubChatGroup[]
   ).filter((g) => g.subs.length > 0);
 }
