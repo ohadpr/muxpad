@@ -1,4 +1,5 @@
 import { statSync } from 'node:fs';
+import { type ConnectorInstall, INSTALLS_PATH, type Installs, loadInstalls } from './install.js';
 
 /**
  * WHAT AN INTEGRATION NEEDS, CHECKED — not described in a wiki.
@@ -29,6 +30,14 @@ import { statSync } from 'node:fs';
  * So muxpad's half is: say precisely what is wrong, give the command that
  * fixes it, and re-check. That is the whole contract, and it is the part that
  * was missing.
+ *
+ * ── AND IT KNOWS NO PATHS ────────────────────────────────────────────────
+ * The first version had `/usr/local/var/msgvault` and four of its neighbours
+ * as string literals across five checks — one machine's install decisions
+ * compiled into a program whose job is to CHECK installs. Every path now comes
+ * from the integration's own declaration (install.ts); a machine that put its
+ * archive somewhere else is checked against where it actually put it, and
+ * moving it is one edit to one root-owned file.
  */
 
 export type CheckState =
@@ -61,7 +70,8 @@ export interface Integration {
 export interface Check {
   id: string;
   question: string;
-  run(env: PreflightEnv): Omit<CheckResult, 'id' | 'question'>;
+  /** `where` is the integration's own declaration — see install.ts. */
+  run(env: PreflightEnv, where: ConnectorInstall): Omit<CheckResult, 'id' | 'question'>;
 }
 
 /** Everything the checks are allowed to look at. Injected, so each one is
@@ -140,65 +150,73 @@ export const INTEGRATIONS: Integration[] = [
     checks: [
       {
         id: 'archive-out-of-reach',
-        question: 'Is the mail archive out of the agent account’s reach?',
-        run: (env) =>
+        question: 'Is the archive out of the agent account’s reach?',
+        run: (env, where) =>
           ownedAwayFromAgents(
             env,
-            '/usr/local/var/msgvault',
+            where.home,
             'the archive',
-            'Move it to a service account: see the integration’s setup steps. While it is readable, mediating the CLI is theatre — an agent can read the database directly.',
+            `Move it to a service account and declare it in ${INSTALLS_PATH}. While it is readable, mediating the CLI is theatre — an agent can read the database directly.`,
           ),
       },
       {
         id: 'binary-root-owned',
         question: 'Is the binary one an agent cannot replace?',
-        run: (env) => {
-          const r = ownedAwayFromAgents(
-            env,
-            '/usr/local/libexec/msgvault/msgvault',
-            'the binary',
-            'sudo cp "$(brew --prefix)/bin/msgvault" /usr/local/libexec/msgvault/ && sudo chown root:wheel /usr/local/libexec/msgvault/msgvault',
-            'runtime',
-          );
-          if (r.state !== 'ok') return r;
-          // Homebrew's own copy stays where it is and is writable by an admin
-          // account; what matters is that the DAEMON runs this one.
-          return { state: 'ok' };
-        },
-      },
-      {
-        id: 'dylib-root-owned',
-        question: 'Are its libraries ones an agent cannot replace?',
-        run: (env) =>
+        run: (env, where) =>
           ownedAwayFromAgents(
             env,
-            '/usr/local/libexec/msgvault/libduckdb.dylib',
-            'libduckdb',
-            'Copy it beside the binary and repoint it:\n  sudo cp "$(brew --prefix duckdb)/lib/libduckdb.dylib" /usr/local/libexec/msgvault/\n  sudo install_name_tool -change "$(brew --prefix duckdb)/lib/libduckdb.dylib" /usr/local/libexec/msgvault/libduckdb.dylib /usr/local/libexec/msgvault/msgvault\n  sudo codesign --force --sign - /usr/local/libexec/msgvault/msgvault\nThe re-sign is NOT optional: install_name_tool invalidates the signature and an unsigned binary will not launch on Apple Silicon.',
+            where.binary,
+            'the binary',
+            `Install a copy outside any directory the agent account can write, and declare it in ${INSTALLS_PATH}.`,
             'runtime',
           ),
       },
       {
+        id: 'libraries-root-owned',
+        question: 'Are its libraries ones an agent cannot replace?',
+        run: (env, where) => {
+          // Declared, because which libraries a build loads from outside the
+          // system is a property of that build, not of this program. Nothing
+          // declared is UNKNOWN rather than ok: silence is not a guarantee.
+          if (!where.libraries?.length)
+            return {
+              state: 'unknown',
+              found: 'no libraries are declared',
+              remedy: `List any non-system libraries the binary loads under "libraries" in ${INSTALLS_PATH} — \`otool -L <binary>\` shows them. Repointing one with install_name_tool invalidates the signature, so re-sign afterwards (\`codesign --force --sign - <binary>\`) or it will not launch on Apple Silicon.`,
+            };
+          for (const lib of where.libraries) {
+            const r = ownedAwayFromAgents(env, lib, `the library ${lib}`, '', 'runtime');
+            if (r.state !== 'ok')
+              return {
+                ...r,
+                remedy: `Copy it beside the binary, repoint it with install_name_tool, then RE-SIGN: codesign --force --sign - ${where.binary}. The re-sign is not optional — install_name_tool invalidates the signature and an unsigned binary will not launch on Apple Silicon.`,
+              };
+          }
+          return { state: 'ok' };
+        },
+      },
+      {
         id: 'daemon-logs-writable',
         question: 'Can the daemon’s account create its log files?',
-        run: (env) => {
-          for (const p of ['/var/log/msgvault.out.log', '/var/log/msgvault.err.log']) {
+        run: (env, where) => {
+          if (!where.logs?.length) return { state: 'ok' };
+          for (const p of where.logs) {
             const st = env.stat(p);
             if (!st)
               return {
                 state: 'blocked',
                 found: `${p} does not exist`,
-                // The failure this prevents is the least obvious one in the
-                // whole install: launchd cannot open the file, so it exits 78
-                // (EX_CONFIG) BEFORE the program runs — and writes no log
-                // saying so, because the log is what it could not open.
-                remedy: `sudo touch ${p} && sudo chown _msgvault:wheel ${p} && sudo chmod 640 ${p}`,
+                // The least obvious failure in the whole install: launchd
+                // cannot open the file, so it exits 78 (EX_CONFIG) BEFORE the
+                // program runs — and writes no log saying so, because the log
+                // is what it could not open.
+                remedy: `sudo touch ${p} && sudo chown ${where.account} ${p} && sudo chmod 640 ${p}`,
               };
             if (st.uid === 0)
               return {
                 state: 'blocked',
                 found: `${p} is root-owned, and the daemon does not run as root`,
-                remedy: `sudo chown _msgvault:wheel ${p}`,
+                remedy: `sudo chown ${where.account} ${p}`,
               };
           }
           return { state: 'ok' };
@@ -207,22 +225,19 @@ export const INTEGRATIONS: Integration[] = [
       {
         id: 'daemon-running',
         question: 'Is the daemon up, under its own account?',
-        run: (env) => {
+        run: (env, where) => {
           const up = env.daemonRunning('msgvault');
           if (up === null)
             return {
               state: 'unknown',
-              found: 'muxpad cannot see another account’s processes',
+              found: `muxpad cannot see ${where.account}’s processes`,
               remedy:
-                "sudo launchctl print system/org.muxpad.msgvault | grep -E 'runs|last exit'\nWant runs = 1 and no exit code. A climbing `runs` is a crash loop that KeepAlive is hiding.",
+                where.statusCommand ??
+                `Check it yourself — whatever supervises it should report one run and no exit code. A climbing run count is a crash loop the supervisor is hiding. Declare the command under "statusCommand" in ${INSTALLS_PATH} and this will print it for you.`,
             };
           return up
             ? { state: 'ok' }
-            : {
-                state: 'blocked',
-                found: 'nothing is listening',
-                remedy: 'sudo launchctl kickstart -k system/org.muxpad.msgvault',
-              };
+            : { state: 'blocked', found: 'nothing is listening', remedy: 'Start the daemon.' };
         },
       },
     ],
@@ -258,10 +273,28 @@ export const INTEGRATIONS: Integration[] = [
 ];
 
 /** Run one integration's checks. Pure given its env. */
-export function preflight(id: string, env: PreflightEnv = realEnv): CheckResult[] {
+export function preflight(
+  id: string,
+  env: PreflightEnv = realEnv,
+  installs: Installs = loadInstalls().installs,
+): CheckResult[] {
   const integration = INTEGRATIONS.find((i) => i.id === id);
   if (!integration) return [];
-  return integration.checks.map((c) => ({ id: c.id, question: c.question, ...c.run(env) }));
+  const where = installs[id];
+  // AN UNDECLARED INTEGRATION IS NOT A BROKEN ONE. There is nothing to check
+  // against, and inventing a path to check would be the hardcoding this file
+  // exists to remove.
+  if (!where)
+    return [
+      {
+        id: 'declared',
+        question: `Where is ${integration.label} installed?`,
+        state: 'unknown',
+        found: `nothing is declared for "${id}"`,
+        remedy: `Add an entry to ${INSTALLS_PATH} (root-owned, 0644) with its home, binary, account and — if its launcher writes them — its log files. Every check below reads from there.`,
+      },
+    ];
+  return integration.checks.map((c) => ({ id: c.id, question: c.question, ...c.run(env, where) }));
 }
 
 /**

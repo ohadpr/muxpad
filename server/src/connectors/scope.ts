@@ -1,8 +1,6 @@
-import { constants, closeSync, fstatSync, lstatSync, openSync, readFileSync } from 'node:fs';
-import type { Stats } from 'node:fs';
-import { dirname } from 'node:path';
 import type Database from 'better-sqlite3';
 import { LOCAL_NODE_ID, NodeStore } from '../store/NodeStore.js';
+import { type FileIO, loadTrustedText, realIO } from './trusted-file.js';
 
 /**
  * WHICH MACHINE'S CHATS MAY USE WHICH CONNECTOR.
@@ -199,79 +197,6 @@ function sealed(problem: string): ConnectorPolicy & { problem: string } {
   return { enforce: true, allow: Object.create(null), problem };
 }
 
-/**
- * What is wrong with this file's metadata, or null.
- *
- * Pure and exported so the branches can be table-tested without being root —
- * the mode and file-type refusals were untestable while this was inline, and
- * a sabotage of the mode check survived the whole suite.
- */
-export function trustProblem(st: Stats, what: string): string | null {
-  if (!st.isFile()) return `${what} is not a regular file`;
-  if (st.uid !== 0) return `${what} is not root-owned`;
-  if (st.mode & 0o022) return `${what} is writable by its group or by everyone`;
-  // A hardlink means the same inode is reachable from a path we did not check,
-  // so its ancestors are not the ones we just walked.
-  if (st.nlink !== 1) return `${what} has more than one link`;
-  return null;
-}
-
-/**
- * The filesystem, as this module uses it.
- *
- * INJECTABLE BECAUSE THE REAL THING NEEDS ROOT. Every refusal below depends on
- * a file owned by uid 0 inside directories owned by uid 0, which a test cannot
- * create — so with the calls inline, twelve separate sabotages of this logic
- * passed the whole suite, including deleting the ancestor walk outright. A
- * seam here is the difference between code that is argued and code that is
- * checked.
- */
-export interface PolicyIO {
-  open(path: string): number;
-  fstat(fd: number): Stats;
-  read(fd: number): string;
-  close(fd: number): void;
-  lstat(path: string): Stats;
-}
-
-export const realIO: PolicyIO = {
-  // O_NOFOLLOW refuses a symlinked final component outright. O_NONBLOCK so a
-  // FIFO that passed every other check cannot park the server on open.
-  open: (path) => openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK),
-  fstat: (fd) => fstatSync(fd),
-  read: (fd) => readFileSync(fd, 'utf8'),
-  close: (fd) => closeSync(fd),
-  lstat: (path) => lstatSync(path),
-};
-
-/** The directories above it must be root's too: a root-owned file in a
- *  directory the agent can write is a file the agent can replace. */
-export function ancestorProblem(path: string, io: PolicyIO = realIO): string | null {
-  let cur = dirname(path);
-  for (;;) {
-    let st: Stats;
-    try {
-      st = io.lstat(cur);
-    } catch {
-      return `${cur} could not be inspected`;
-    }
-    if (st.isSymbolicLink()) return `${cur} is a symlink`;
-    if (!st.isDirectory()) return `${cur} is not a directory`;
-    if (st.uid !== 0) return `${cur} is not root-owned`;
-    if (st.mode & 0o022) return `${cur} is writable by its group or by everyone`;
-    const up = dirname(cur);
-    if (up === cur) return null;
-    cur = up;
-  }
-}
-
-/**
- * Bytes from a file that PASSED the metadata checks.
- *
- * Pure and exported so the fail-closed branch can be tested without being
- * root: while this was inline, "a trusted file that does not parse fails open"
- * survived every sabotage because nothing could reach it.
- */
 export function trustedBytes(raw: string, path: string): ConnectorPolicy & { problem?: string } {
   // AN EMPTY TRUSTED FILE SEALS. `parsePolicy('')` is UNSCOPED, which is right
   // for a value from anywhere else and wrong for a file somebody installed:
@@ -291,48 +216,18 @@ export function trustedBytes(raw: string, path: string): ConnectorPolicy & { pro
  */
 export function loadPolicy(
   path: string = POLICY_PATH,
-  io: PolicyIO = realIO,
+  io: FileIO = realIO,
 ): ConnectorPolicy & { problem?: string } {
-  // OPENED ONCE AND INSPECTED THROUGH THE FD. Stat-then-read is a race: the
-  // path can be swapped between the two calls, and `readFileSync` follows a
-  // symlink that `lstatSync` only reported. O_NOFOLLOW refuses a symlinked
-  // final component outright; everything else is judged on the open file.
-  let fd: number;
-  try {
-    fd = io.open(path);
-  } catch (e) {
-    // ONLY "it is not there" is unscoped. Every other failure — a directory
-    // chmod 0 above it, ELOOP, ENOTDIR, a symlink refused by O_NOFOLLOW — is a
-    // policy we cannot read, and reading that as "no policy" would let an agent
-    // turn scoping off by making the file unreadable.
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return UNSCOPED;
-    return sealed(`${path} could not be opened (${(e as NodeJS.ErrnoException).code})`);
-  }
-  try {
-    // fstat on the OPEN FILE, not another lstat of the path: the two calls
-    // would be a race, and the path can be swapped between them.
-    const bad = trustProblem(io.fstat(fd), path) ?? ancestorProblem(path, io);
-    if (bad) return sealed(bad);
-    return trustedBytes(io.read(fd), path);
-  } catch {
-    return sealed(`${path} could not be read`);
-  } finally {
-    // A close that throws must not turn a decision into an exception.
-    try {
-      io.close(fd);
-    } catch {
-      /* the answer is already made */
-    }
-  }
+  const file = loadTrustedText(path, io);
+  // ONLY "it is not there" is unscoped. Every other failure — a directory
+  // chmod 0 above it, a symlink, an unreadable file — is a policy we cannot
+  // read, and reading that as "no policy" would let an agent turn scoping off
+  // by making the file unreadable.
+  if (file.kind === 'absent') return UNSCOPED;
+  if (file.kind === 'untrusted') return sealed(file.problem);
+  return trustedBytes(file.text, path);
 }
 
-/**
- * The same question, for a live pane.
- *
- * Resolves the origin from the pane's row via `nodeForPane`, which answers
- * `local` for a pane with no node — the correct reading for a pane on this
- * machine and for a pane whose row is gone.
- */
 /**
  * WHO TOLD THIS CHAT TO DO IT — the laundering path, closed.
  *
