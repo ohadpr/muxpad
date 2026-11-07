@@ -396,6 +396,11 @@ export class Broker {
       // asserts — see `create` — but one the human sees before approving, and
       // one a timed grant is bound to.
       origin: r.origin ?? 'unknown',
+      // What a timed approval of THIS request would actually cover, so the
+      // page can describe the promise it is about to make rather than reciting
+      // one that was true in an earlier release.
+      timedScope: this.timedScope(),
+      timedAllowed: this.timedScope() !== READ_SCOPE || READ_ACTIONS.includes(r.action),
       payload: r.payload,
       state: r.state,
       expires: r.expires,

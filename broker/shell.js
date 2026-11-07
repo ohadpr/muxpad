@@ -134,8 +134,10 @@ function describeDuration() {
   const duration = $('duration').value;
   const labels = { once: 'once', '10m': '10 min', '1h': '1 hour', '1d': '1 day' };
   $('approve').textContent = 'Approve';
+  const scope = current.timedScope ?? 'slack-team-all-v2';
+  const readOnly = scope === 'slack-team-read-v1';
   const existing = activePermissions.some(
-    (grant) => grant.permissionScope === 'slack-team-all-v2' && grant.teamID === config.teamID,
+    (grant) => grant.permissionScope === scope && grant.teamID === config.teamID,
   );
   const limits = { '10m': 600_000, '1h': 3_600_000, '1d': 86_400_000 };
   const deadline = Number.isFinite(sessionExpires)
@@ -144,7 +146,9 @@ function describeDuration() {
   $('grant-scope').textContent =
     duration === 'once'
       ? `This request only.${existing ? ' Full Slack access is already active for ALL agents in this team; choosing once does not revoke it. Manage access to revoke.' : ' Existing timed permissions, if any, stay active.'}`
-      : `Full Slack access for ${labels[duration]}: ALL agents may list channels and users, open DMs, read history and threads, search, send, edit and delete messages, react and upload files in team ${config.teamID}, across all policy-permitted channels and searches without further approval. Different message text and search queries are allowed. Protected broker policy still applies. ${deadline ? `Ends no later than ${new Date(deadline).toLocaleString()}. ` : ''}Ends sooner on session expiry, sign-out or broker restart. Revoke under Manage access.`;
+      : readOnly
+        ? `Reading only, for ${labels[duration]}, and only for chats on ${current.origin ?? 'unknown'}: list channels and users, read history and threads, and search in team ${config.teamID}, without further approval. Sending, editing, deleting, reacting and uploading are NOT covered — each of those is approved once, with its message in front of you. ${deadline ? `Ends no later than ${new Date(deadline).toLocaleString()}. ` : ''}Ends sooner on session expiry, sign-out or broker restart. Revoke under Manage access.`
+        : `Full Slack access for ${labels[duration]}, for chats on ${current.origin ?? 'unknown'}: those agents may list channels and users, open DMs, read history and threads, search, send, edit and delete messages, react and upload files in team ${config.teamID}, across all policy-permitted channels and searches without further approval. Different message text and search queries are allowed. Protected broker policy still applies. ${deadline ? `Ends no later than ${new Date(deadline).toLocaleString()}. ` : ''}Ends sooner on session expiry, sign-out or broker restart. Revoke under Manage access.`;
 }
 $('duration').onchange = describeDuration;
 $('close-window').onclick = () => window.close();
@@ -154,6 +158,11 @@ function show(request) {
   failed = false;
   readyAt = Date.now() + 650;
   $('team').textContent = config.teamID;
+  // WHICH MACHINE'S CHAT ASKED. A label muxpad asserts — the broker cannot
+  // verify it, since every request arrives from the hosting machine — but it
+  // is what a timed grant is bound to, so it belongs in front of the human
+  // making that grant.
+  $('origin').textContent = request.origin ?? 'unknown';
   const titles = {
     'slack.post': 'Send message',
     'slack.unpost': 'Delete message',
@@ -188,6 +197,11 @@ function show(request) {
   $('decision-status').textContent = '';
   $('reject').textContent = 'Cancel';
   $('duration').value = 'once';
+  // A WRITE CANNOT BE APPROVED FOR A DURATION under a read-only install, so
+  // the page does not offer it. Offering a choice the broker will refuse is
+  // how a prompt teaches somebody that its own words are approximate.
+  for (const option of $('duration').options)
+    option.hidden = option.value !== 'once' && request.timedAllowed === false;
   describeDuration();
   setButtons(true);
   $('approval').showModal();
@@ -254,7 +268,10 @@ async function decide(decision) {
       fingerprint: shown.fingerprint,
       decision,
       duration,
-      ...(duration !== 'once' ? { scope: 'slack-team-all-v2' } : {}),
+      // The scope NAMED here is the promise this page displayed; the broker
+      // refuses a mismatch rather than substituting its own, so these two can
+      // never drift into approving something other than what was read.
+      ...(duration !== 'once' ? { scope: current?.timedScope ?? 'slack-team-all-v2' } : {}),
     });
     if (!['complete', 'rejected'].includes(result.state)) throw Error(result.error || result.state);
     if (result.grantWarning) {
