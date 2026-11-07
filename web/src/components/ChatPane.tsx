@@ -221,6 +221,12 @@ import { useDismissable } from '../lib/use-dismissable';
 import { useMediaQuery } from '../use-media-query';
 import { SlackApprovalAlert } from './SlackApprovalAlert';
 import './ChatPane.css';
+import {
+  escapeClearsJump,
+  focusesComposerOnArrival,
+  ownsKeyboard,
+  showsScrollArrow,
+} from '../lib/pane-foreground';
 
 /** Stable empties for the report-expansion state, so a pane that never opens one
  *  contributes no new identity to the transcript memo on every render. */
@@ -1171,7 +1177,6 @@ export function ChatPane({
    * the things that belong to whatever is in front of it. Keyboard claim is
    * the one that matters: see the type-to-focus effect.
    */
-  const showingChildChat = drawerOpen && drawer.paneId !== null;
   /** By tab id — how a stored card finds the chat it was sent to, now. */
   const corpusById = useMemo(() => new Map(corpus.map((c) => [c.tabId, c])), [corpus]);
 
@@ -1659,6 +1664,26 @@ export function ChatPane({
     items: MediaItem[];
     index: number;
   } | null>(null);
+
+  /**
+   * WHAT IS IN FRONT OF THIS CONVERSATION — one value, five named states.
+   *
+   * Six places used to re-derive this from their own subset of four flags, and
+   * both bugs it produced were a MISSING TERM rather than a wrong one: typing
+   * went to the parent while a sub-chat was open in the drawer, and the
+   * jump-to-latest arrow painted over the drawer. Each site read correct on its
+   * own. See lib/pane-foreground.
+   */
+  const foreground = useMemo(
+    () => ({
+      active,
+      drawerOpen,
+      drawerPaneId: drawer.paneId,
+      openTool: openTool !== null,
+      openImage: openImage !== null,
+    }),
+    [active, drawerOpen, drawer.paneId, openTool, openImage],
+  );
   // Floating "jump to latest" arrow — shown only when scrolled up off the bottom.
   const [showScrollDown, setShowScrollDown] = useState(false);
   // Bumped whenever the document becomes visible again. `active` only tracks
@@ -2964,7 +2989,7 @@ export function ChatPane({
    */
   // biome-ignore lint/correctness/useExhaustiveDependencies: input is read once on arrival; paneId/showEpoch are triggers
   useEffect(() => {
-    if (!active || openTool || openImage || isMobileLayout()) return;
+    if (!focusesComposerOnArrival(foreground, isMobileLayout())) return;
     const ae = document.activeElement as HTMLElement | null;
     if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return;
     // One frame late: the pane is still being placed on this one (see the
@@ -2978,7 +3003,7 @@ export function ChatPane({
       draft.setCaret(input.length);
     });
     return () => cancelAnimationFrame(h);
-  }, [active, paneId, showEpoch, openTool, openImage]);
+  }, [foreground, paneId, showEpoch]);
 
   // Type-to-focus: when this chat is the visible face and you start typing a
   // printable character with nothing else focused, jump focus to the composer so
@@ -2999,10 +3024,9 @@ export function ChatPane({
     // preserves its scroll position and loaded history). Keeping its claim on
     // global keyboard input is not: the chat on screen owns the keyboard, and
     // while the drawer is showing one, that is the child.
-    if (!active || showingChildChat) return;
+    if (!ownsKeyboard(foreground)) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey || e.altKey || e.key.length !== 1) return;
-      if (openTool || openImage) return;
       const input = inputRef.current?.el();
       if (!input || document.activeElement === input) return;
       const ae = document.activeElement as HTMLElement | null;
@@ -3015,7 +3039,7 @@ export function ChatPane({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [active, openTool, openImage, showingChildChat]);
+  }, [foreground]);
 
   // ── RE-ENTRY ──────────────────────────────────────────────────────────────
   // Becoming visible is an INPUT, and the placement is one call. What was here
@@ -3466,11 +3490,11 @@ export function ChatPane({
     const onKey = (e: KeyboardEvent) => {
       // A modal owns Escape while it is up — closing the lightbox should not
       // also throw away the highlight underneath it.
-      if (e.key === 'Escape' && !openTool && !openImage) clearJump();
+      if (e.key === 'Escape' && escapeClearsJump(foreground)) clearJump();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [jump, active, openTool, openImage, clearJump]);
+  }, [jump, active, foreground, clearJump]);
 
   // Scrolled away. An IntersectionObserver rather than a scroll handler so the
   // rule is "the hit left the screen", not "the reader scrolled N pixels" —
@@ -5660,7 +5684,7 @@ export function ChatPane({
             behind the drawer — so it goes away with it rather than being
             layered under, which would leave it half-visible past the drawer's
             inset edge. */}
-        {showScrollDown && !drawerOpen ? (
+        {showScrollDown && showsScrollArrow(foreground) ? (
           <button
             type="button"
             className="chat-scroll-down"
