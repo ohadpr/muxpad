@@ -251,7 +251,13 @@ function Rows({
               {/* The same mark the rail and the spawn card use — one
                   vocabulary for "how much life is left in this chat", decided
                   in one place (see ChatChip). */}
-              <ChatChip density="card" chat={s.chat.chip} />
+              {/* The same mark the rail and the spawn card use — one
+                  vocabulary for "how much life is left in this chat", decided
+                  in one place (see ChatChip). Its BOX is narrowed in the
+                  stylesheet: `row` and `card` are identical by construction,
+                  so the density prop could not fix a 6px dot sitting alone in
+                  a 24px column. */}
+              <ChatChip density="row" chat={s.chat.chip} />
               <span className="chat-drawer__row-text">
                 <span className="chat-drawer__row-name" dir="auto">
                   {spawnLabel(s.chat)}

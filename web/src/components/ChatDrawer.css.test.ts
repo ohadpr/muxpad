@@ -68,3 +68,29 @@ describe('a strip of the chat stays visible', () => {
     expect(r).toMatch(/box-shadow:/);
   });
 });
+
+describe('the row is one line, and the mark is beside the name', () => {
+  // Reported with a screenshot: twelve rows filled a phone, each carrying a
+  // name over a four-character age, with a 6px dot marooned in a 24px column.
+  it('lays the row out in one line, with the age trailing', () => {
+    const row = rule('.chat-drawer__row-text');
+    expect(row).toMatch(/align-items:\s*baseline/);
+    // NOT a column: that is what made every row two lines tall.
+    expect(row).not.toMatch(/flex-direction:\s*column/);
+    const sub = rule('.chat-drawer__row-sub');
+    expect(sub).toMatch(/margin-inline-start:\s*auto/);
+    // The name keeps the slack and truncates first; four characters of age is
+    // never the thing to drop.
+    expect(sub).toMatch(/flex:\s*0 0 auto/);
+    expect(sub).toMatch(/white-space:\s*nowrap/);
+  });
+
+  it('narrows the mark’s box so the dot is not alone in a column', () => {
+    const chip = rule('.chat-drawer__row .chatchip');
+    expect(chip).toMatch(/--chatchip-size:\s*13px/);
+  });
+
+  it('keeps the name as the thing that truncates', () => {
+    expect(rule('.chat-drawer__row-name')).toMatch(/text-overflow:\s*ellipsis/);
+  });
+});
