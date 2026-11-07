@@ -186,3 +186,72 @@ describe('the artifacts list', () => {
     expect(mount({ tab: 'artifacts' }).textContent).toMatch(/Nothing published/i);
   });
 });
+
+describe('the sub-chat list has shape', () => {
+  // It was one flat run of identical rows in spawn order, so the worker still
+  // going sat wherever it happened to start — usually last — and every row
+  // spent a line of type on the same word.
+  const names = (box: HTMLDivElement) =>
+    [...box.querySelectorAll('.chat-drawer__row-name')].map((e) => e.textContent);
+  const groups = (box: HTMLDivElement) =>
+    [...box.querySelectorAll('.chat-drawer__group')].map((e) => e.textContent);
+
+  it('puts the running ones first, whatever order they were spawned in', () => {
+    const box = mount({
+      corpus: corpusOf([
+        tab('parent'),
+        tab('reported-first', { spawned_by: 'parent', done: true }),
+        tab('still-going', { spawned_by: 'parent', status: 'working' }),
+      ]),
+    });
+    expect(names(box)).toEqual(['still-going', 'reported-first']);
+  });
+
+  it('labels the two blocks only when both exist', () => {
+    const both = mount({
+      corpus: corpusOf([
+        tab('parent'),
+        tab('a', { spawned_by: 'parent', status: 'working' }),
+        tab('b', { spawned_by: 'parent', done: true }),
+      ]),
+    });
+    expect(groups(both)).toEqual(['Running', 'Finished']);
+    // One group explains itself; a heading over the only block is furniture.
+    const onlyRunning = mount({
+      corpus: corpusOf([
+        tab('parent'),
+        tab('a', { spawned_by: 'parent', status: 'working' }),
+        tab('b', { spawned_by: 'parent', status: 'working' }),
+      ]),
+    });
+    expect(groups(onlyRunning)).toEqual([]);
+  });
+
+  it('gives a running row no second line, and a finished one the time', () => {
+    const box = mount({
+      corpus: corpusOf([
+        tab('parent'),
+        tab('going', { spawned_by: 'parent', status: 'working' }),
+        tab('reported', { spawned_by: 'parent', done: true }),
+      ]),
+    });
+    const rows = [...box.querySelectorAll('.chat-drawer__row')];
+    const rowFor = (name: string) =>
+      rows.find((r) => r.querySelector('.chat-drawer__row-name')?.textContent === name);
+    // The running row's mark already says it, and the heading says it again.
+    expect(rowFor('going')?.querySelector('.chat-drawer__row-sub')).toBeNull();
+    expect(rowFor('reported')?.querySelector('.chat-drawer__row-sub')).not.toBeNull();
+  });
+
+  it('puts the newest finished one at the top of its block', () => {
+    // The answer you want from a finished worker is the last one.
+    const box = mount({
+      corpus: corpusOf([
+        tab('parent'),
+        tab('older', { spawned_by: 'parent', done: true, created_at: NOW - 60_000 }),
+        tab('newer', { spawned_by: 'parent', done: true, created_at: NOW }),
+      ]),
+    });
+    expect(names(box)).toEqual(['newer', 'older']);
+  });
+});

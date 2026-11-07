@@ -5653,7 +5653,14 @@ export function ChatPane({
             />
           </div>
         </div>
-        {showScrollDown ? (
+        {/* ── AND NOT WHILE THE DRAWER IS OVER THE LOG ────────────────────
+            It shares the drawer's z-index, so it painted on top of it: a
+            jump-to-latest button floating over a panel whose content it cannot
+            scroll. The arrow belongs to the transcript, and the transcript is
+            behind the drawer — so it goes away with it rather than being
+            layered under, which would leave it half-visible past the drawer's
+            inset edge. */}
+        {showScrollDown && !drawerOpen ? (
           <button
             type="button"
             className="chat-scroll-down"
