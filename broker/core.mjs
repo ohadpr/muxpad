@@ -15,6 +15,25 @@ const equal = (a, b) =>
   Buffer.byteLength(a) === Buffer.byteLength(b) &&
   timingSafeEqual(Buffer.from(a), Buffer.from(b));
 const TEAM_SCOPE = 'slack-team-all-v2';
+/**
+ * WHAT A TIMED GRANT MAY COVER — reads, and nothing else.
+ *
+ * `slack-team-all-v2` covered all eleven actions for up to a day, so
+ * "approve Slack for ten minutes" also approved posting, DMing, editing and
+ * deleting for ten minutes. The payload is the thing a human consents to, and
+ * a grant issued before the payload existed cannot have consented to it.
+ *
+ * So a timed approval now covers the read verbs only. A write is `once` or it
+ * does not happen: you see the message, and then it is sent.
+ */
+const READ_ACTIONS = Object.freeze([
+  'slack.read',
+  'slack.search',
+  'slack.channels',
+  'slack.users',
+  'slack.thread',
+]);
+const READ_SCOPE = 'slack-team-read-v1';
 const TEAM_ACTIONS = Object.freeze([
   'slack.post',
   'slack.unpost',
@@ -170,6 +189,24 @@ export class Broker {
     if (this.requests.size >= 100) fail('Too many requests; wait for expiry');
     const action = input.action;
     if (!TEAM_ACTIONS.includes(action)) fail('Unsupported action');
+    /**
+     * WHICH MACHINE'S CHAT ASKED.
+     *
+     * A LABEL, and the broker says so rather than pretending otherwise: every
+     * request reaches it from the hosting machine, so this is muxpad's claim
+     * about itself, not something the broker can verify. What it buys is real
+     * anyway — it is shown to the human before they approve, and a timed grant
+     * is BOUND to it, so "approve for a day" cannot be spent by a chat on a
+     * different machine than the one you were looking at when you approved.
+     *
+     * An absent origin is `unknown` and never matches a grant minted for a
+     * named one, which is the fail-closed direction: an older muxpad gets
+     * per-request approval and no timed dispatch.
+     */
+    const origin =
+      typeof input.origin === 'string' && /^[a-z0-9][a-z0-9_-]{0,31}$/.test(input.origin)
+        ? input.origin
+        : 'unknown';
     const p = input.payload || {};
     let payload, upload;
     if (action === 'slack.channels') payload = {};
@@ -277,6 +314,7 @@ export class Broker {
     const request = {
       id: randomUUID(),
       action,
+      origin,
       payload: Object.freeze(payload),
       state: 'pending',
       expires: this.now() + 300_000,
@@ -354,6 +392,10 @@ export class Broker {
       id: r.id,
       action: r.action,
       teamID: r.teamID,
+      // Shown to the human: WHICH MACHINE'S CHAT asked. A label muxpad
+      // asserts — see `create` — but one the human sees before approving, and
+      // one a timed grant is bound to.
+      origin: r.origin ?? 'unknown',
       payload: r.payload,
       state: r.state,
       expires: r.expires,
@@ -374,6 +416,11 @@ export class Broker {
         id: r.id,
         action: r.action,
         teamID: r.teamID,
+        // IN THE FINGERPRINT, not merely in the view. The fingerprint is what
+        // the decision is taken against, so an origin that was displayed and
+        // then swapped would otherwise be approved as something else — and the
+        // grant it mints is scoped by exactly this field.
+        origin: r.origin ?? 'unknown',
         payload: r.payload,
         expires: r.expires,
         nonce: r.nonce,
@@ -403,9 +450,31 @@ export class Broker {
     }
     Object.assign(this.state, next);
   }
+  /**
+   * WHAT A TIMED APPROVAL IS ALLOWED TO COVER on this install.
+   *
+   * `read` is the one worth having: a timed grant covers the five read verbs
+   * and a write is `once` or it does not happen. `all` is what shipped —
+   * eleven verbs for up to a day — and it stays the DEFAULT on purpose, so
+   * installing a broker with this code changes nothing until the owner turns
+   * it on in the protected config. A security change that arrives silently is
+   * one nobody reviewed.
+   */
+  timedScope() {
+    return this.config.timedGrants === 'read' ? READ_SCOPE : TEAM_SCOPE;
+  }
   grantScope(request) {
     // Versioned explicit action scope; never authorizes future Slack APIs.
-    return JSON.stringify({ teamID: request.teamID, permissionScope: TEAM_SCOPE });
+    //
+    // The ORIGIN is part of the scope, which is what makes a timed grant
+    // spendable only by the machine it was approved for: matching is
+    // `equal(g.scope, grantScope(request))`, so a request from elsewhere
+    // simply does not find it and goes to the human instead.
+    return JSON.stringify({
+      teamID: request.teamID,
+      origin: request.origin ?? 'unknown',
+      permissionScope: this.timedScope(),
+    });
   }
   activeGrants() {
     for (const [id, grant] of this.grants) {
@@ -450,8 +519,16 @@ export class Broker {
     )
       fail('Invalid approval duration');
     // Old cached clients disclosed a narrower grant. Never silently upgrade it.
-    if (duration === 'once' ? scope !== undefined : scope !== TEAM_SCOPE)
-      fail('Explicit full Slack access scope required for timed approval');
+    // Whichever scope this install uses, the client has to name it: the string
+    // it sent is the promise it DISPLAYED, so accepting a different one would
+    // approve something other than what the human read.
+    const timedScope = this.timedScope();
+    if (duration === 'once' ? scope !== undefined : scope !== timedScope)
+      fail(
+        timedScope === READ_SCOPE
+          ? 'Timed approval covers reading only; re-open muxpad to get the current prompt'
+          : 'Explicit full Slack access scope required for timed approval',
+      );
     const owner =
       session &&
       this.ownerSessions().find(
@@ -465,6 +542,15 @@ export class Broker {
     if (duration !== 'once' && this.activeGrants().length >= 100)
       fail('Too many timed permissions; revoke existing permissions first');
     const r = this.get(id);
+    // A WRITE IS `once` OR IT DOES NOT HAPPEN — under `timedGrants: 'read'`.
+    // The thing you consent to is the payload, and a grant issued before the
+    // payload existed cannot have covered it.
+    if (
+      duration !== 'once' &&
+      this.timedScope() === READ_SCOPE &&
+      !READ_ACTIONS.includes(r.action)
+    )
+      fail(`${r.action} cannot be approved for a duration — only reading can`);
     if (
       r.teamID !== this.config.teamID ||
       r.state !== (reserved ? 'verifying' : 'pending') ||
@@ -541,9 +627,10 @@ export class Broker {
             const grant = {
               id: randomUUID(),
               scope: this.grantScope(r),
-              action: 'slack.all',
-              actions: TEAM_ACTIONS,
-              permissionScope: TEAM_SCOPE,
+              action: this.timedScope() === READ_SCOPE ? 'slack.read-all' : 'slack.all',
+              actions: this.timedScope() === READ_SCOPE ? READ_ACTIONS : TEAM_ACTIONS,
+              permissionScope: this.timedScope(),
+              origin: r.origin ?? 'unknown',
               teamID: r.teamID,
               expires: Math.min(approvedAt + DURATIONS[duration], liveOwner.expires),
               owner: liveOwner.tokenHash,
