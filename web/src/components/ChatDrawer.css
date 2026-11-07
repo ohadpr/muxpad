@@ -216,18 +216,18 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* ── THE MARK SITS NEXT TO THE NAME IT MARKS ───────────────────────────────
-   A sub-chat's mark is a 6px dot, and every chip density boxes it in 24px —
-   `row` and `card` are the same declaration — so in a list of dots the column
-   was four times the ink in it and the dot read as a speck floating off to the
-   left. The box is narrowed HERE, where the list knows what it is drawing,
-   rather than by adding a fourth density to a component three other surfaces
-   share. The dot itself is untouched: it is the same mark, closer in. */
+/* ── THE TILE IS WHAT MAKES A ROW A CHAT ───────────────────────────────────
+   A 13px box was right for a status dot and wrong for an identity: at that
+   size the glyph is unreadable and the row goes back to being a line of text
+   with a speck in front of it. 22px holds the glyph, sits under the cap height
+   of the name beside it, and gives a list of twenty rows the texture you
+   actually scan by. */
 .chat-drawer__row .chatchip {
-  --chatchip-size: 13px;
-  --chatchip-radius: 4px;
+  --chatchip-size: 22px;
+  --chatchip-radius: 7px;
+  --chatchip-glyph: 15px;
+  --chatchip-glyph-last: 14px;
 }
-
 /* The age, at the end of the line it belongs to. `auto` rather than a
    justify rule so the NAME keeps the slack and truncates first — the time is
    four characters and never the thing to drop. */
@@ -347,9 +347,15 @@
 .chat-drawer__block[data-block='running'] .chat-drawer__group-count {
   color: color-mix(in srgb, var(--d-accent) 70%, transparent);
 }
-/* A running row carries the mark; the finished ones have none, so their names
-   start where the marked ones' names do rather than sliding left and breaking
-   the column. */
-.chat-drawer__block:not([data-block='running']) .chat-drawer__row {
-  padding-inline-start: 29px;
+/* `working`, at the end of the row, in the accent — the only text on this
+   panel wearing it. The tile carries IDENTITY now, so state had to move
+   somewhere, and a word is unambiguous where a second coloured dot would just
+   be another dot. */
+.chat-drawer__row-live {
+  flex: 0 0 auto;
+  margin-inline-start: auto;
+  color: var(--d-accent);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
 }
