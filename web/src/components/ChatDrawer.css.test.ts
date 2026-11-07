@@ -85,14 +85,25 @@ describe('the row is one line, and the mark is beside the name', () => {
     expect(sub).toMatch(/white-space:\s*nowrap/);
   });
 
-  it('gives every row one accent-tinted mark, and tints the running block harder', () => {
-    // A different glyph per chat was noise wearing a second hat; one repeated
-    // shape in a tinted square is what gives the column its rhythm.
+  it('tints the one mark by how recent its block is — four steps of one hue', () => {
+    // The accent is the second rendering of "how long ago", not decoration:
+    // the column fades as it ages. One hue at four strengths, because the
+    // blocks are a scale and not four categories.
     const mark = rule('.chat-drawer__mark');
     expect(mark).toMatch(/width:\s*22px/);
-    expect(mark).toMatch(/background:\s*color-mix\(in srgb, var\(--d-accent\) 13%/);
-    const live = rule("[data-block='running'] .chat-drawer__mark");
-    expect(live).toMatch(/var\(--d-accent\) 26%/);
+    expect(mark).toMatch(/var\(--mark-wash/);
+    const washes = [3, 2, 1, 0].map((h) =>
+      Number(rule(`.chat-drawer__block[data-heat='${h}']`).match(/--mark-wash:\s*(\d+)%/)?.[1]),
+    );
+    expect(washes).toEqual([...washes].sort((a, b) => b - a));
+    expect(new Set(washes).size).toBe(4);
+  });
+
+  it('draws the count as a pill, not a bare number', () => {
+    // "YESTERDAY 10" inherits the heading's tracking and renders as "|0".
+    const pill = rule('.chat-drawer__group-count');
+    expect(pill).toMatch(/border-radius:\s*999px/);
+    expect(pill).toMatch(/letter-spacing:\s*0/);
   });
 
   it('gives the list air — a list you read down, not a menu', () => {

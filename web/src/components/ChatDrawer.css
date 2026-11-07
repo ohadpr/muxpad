@@ -218,16 +218,16 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* ── ONE MARK, IN THE ACCENT, AT THE HEAD OF EVERY ROW ─────────────────────
-   "An icon is good, but we just need a little bit of accent colors here to
-   give this structure and not have it read as one massive blob of text."
+/* ── ONE MARK, TINTED BY HOW RECENT THE BLOCK IS ───────────────────────────
+   "Use more color/aesthetics or something this looks super bland." Sixteen
+   identically tinted squares said "these are all the same thing", which was
+   true and useless. The tint is a SECOND RENDERING of the fact this panel is
+   about — how long ago — so the column fades as it ages and you can see which
+   end is fresh before reading a word.
 
-   A different glyph per chat was noise wearing a second hat. One repeated
-   shape in a tinted square gives the column its rhythm — the eye lands on the
-   marks, counts rows by them, and reads the names as a list instead of a
-   paragraph. The running block tints harder, so the structure and the one
-   piece of news are the same device at two strengths rather than two devices
-   competing. */
+   Four steps, from the block's `data-heat`. The accent is the same hue
+   throughout: this is one colour at four strengths, not four colours, because
+   the blocks are one scale and not four categories. */
 .chat-drawer__mark {
   flex: 0 0 auto;
   display: grid;
@@ -235,12 +235,24 @@
   width: 22px;
   height: 22px;
   border-radius: 7px;
-  background: color-mix(in srgb, var(--d-accent) 13%, transparent);
-  color: color-mix(in srgb, var(--d-accent) 78%, var(--d-ink));
+  background: color-mix(in srgb, var(--d-accent) var(--mark-wash, 10%), transparent);
+  color: color-mix(in srgb, var(--d-accent) var(--mark-ink, 60%), var(--d-dim));
 }
-.chat-drawer__block[data-block='running'] .chat-drawer__mark {
-  background: color-mix(in srgb, var(--d-accent) 26%, transparent);
-  color: var(--d-accent);
+.chat-drawer__block[data-heat='3'] {
+  --mark-wash: 30%;
+  --mark-ink: 100%;
+}
+.chat-drawer__block[data-heat='2'] {
+  --mark-wash: 19%;
+  --mark-ink: 88%;
+}
+.chat-drawer__block[data-heat='1'] {
+  --mark-wash: 12%;
+  --mark-ink: 68%;
+}
+.chat-drawer__block[data-heat='0'] {
+  --mark-wash: 7%;
+  --mark-ink: 44%;
 }/* The age, at the end of the line it belongs to. `auto` rather than a
    justify rule so the NAME keeps the slack and truncates first — the time is
    four characters and never the thing to drop. */
@@ -334,7 +346,7 @@
 .chat-drawer__group {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   margin: 0;
   padding: 11px 14px 5px;
   font-size: 0.6875rem;
@@ -343,22 +355,36 @@
   text-transform: uppercase;
   color: var(--d-faint);
 }
-/* The count sits ON the heading, where it is part of the label rather than a
-   number somewhere else that needs a second look to attach to the thing it
-   counts. Tabular, so a column of them does not wobble. */
+/* A PILL, because a bare number inherits the heading's tracking and
+   "YESTERDAY 10" renders as "YESTERDAY |0" in a slab face. A count has to look
+   like a count. */
 .chat-drawer__group-count {
-  font-size: 0.6875rem;
-  font-weight: 600;
+  min-width: 17px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--d-accent) var(--mark-wash, 10%), transparent);
+  color: color-mix(in srgb, var(--d-accent) var(--mark-ink, 60%), var(--d-dim));
+  font-size: 0.625rem;
+  font-weight: 700;
   letter-spacing: 0;
   font-variant-numeric: tabular-nums;
-  color: color-mix(in srgb, var(--d-faint) 72%, transparent);
+  text-align: center;
+}
+/* The horizon line. It takes the block's own tint, so the panel gains four
+   faint rules that say where one span of time ends and the next begins —
+   cheaper than a border on every row and quieter than a divider. */
+.chat-drawer__group-rule {
+  flex: 1 1 auto;
+  height: 1px;
+  background: linear-gradient(
+    to right,
+    color-mix(in srgb, var(--d-accent) var(--mark-wash, 10%), transparent),
+    transparent
+  );
 }
 /* THE ONE ACCENT. Something is running; nothing else on this panel is news. */
-.chat-drawer__block[data-block='running'] .chat-drawer__group {
+.chat-drawer__block[data-block='running'] .chat-drawer__group-label {
   color: var(--d-accent);
-}
-.chat-drawer__block[data-block='running'] .chat-drawer__group-count {
-  color: color-mix(in srgb, var(--d-accent) 70%, transparent);
 }
 /* `working`, at the end of the row, in the accent — the only text on this
    panel wearing it. The tile carries IDENTITY now, so state had to move

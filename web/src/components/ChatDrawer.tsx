@@ -207,10 +207,15 @@ function SubChatList({
   return (
     <>
       {subChatGroups(subs, now).map((g) => (
-        <section className="chat-drawer__block" key={g.key} data-block={g.key}>
+        <section className="chat-drawer__block" key={g.key} data-block={g.key} data-heat={g.heat}>
           <h3 className="chat-drawer__group">
-            {g.label}
+            <span className="chat-drawer__group-label">{g.label}</span>
+            {/* A PILL, not a bare number: "YESTERDAY 10" in a slab face reads
+                as "|0". A count needs to look like a count. */}
             <span className="chat-drawer__group-count">{g.subs.length}</span>
+            {/* The rule carries the block's tint across the panel, which is
+                what gives the list its horizon lines. */}
+            <span className="chat-drawer__group-rule" aria-hidden="true" />
           </h3>
           <ul className="chat-drawer__list">
             {g.subs.map((s) => {
@@ -267,9 +272,12 @@ function SubChatList({
                           identity now, so the one block whose state is news
                           carries it here — the only text on the panel wearing
                           the accent. */}
+                      {/* EVERY ROW SAYS HOW LONG AGO. A running one says what it is
+                          doing instead, which is the more useful fact and the
+                          only one that changes while you look at it. */}
                       {live ? (
                         <span className="chat-drawer__row-live">working</span>
-                      ) : g.showAge && s.chat.createdAt ? (
+                      ) : s.chat.createdAt ? (
                         <span className="chat-drawer__row-sub">
                           {shortAge(now - s.chat.createdAt)}
                         </span>
