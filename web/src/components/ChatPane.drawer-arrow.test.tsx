@@ -17,13 +17,14 @@ const SRC = readFileSync(join(import.meta.dirname, 'ChatPane.tsx'), 'utf8');
 const CSS = readFileSync(join(import.meta.dirname, 'ChatPane.css'), 'utf8');
 
 describe('the jump-to-latest arrow', () => {
-  it('does not render while the drawer is open', () => {
-    expect(SRC).toContain('{showScrollDown && !drawerOpen ? (');
+  it('asks the foreground, rather than naming a surface itself', () => {
+    // It used to name the drawer: `showScrollDown && !drawerOpen`. That was
+    // correct and unextendable — the next surface in front of the log would
+    // have had to find this line. See lib/pane-foreground.
+    expect(SRC).toContain('{showScrollDown && showsScrollArrow(foreground) ? (');
   });
 
   it('is rendered from exactly one place, still gated', () => {
-    // Guards against the condition being widened, or a second render site
-    // appearing without the gate.
     expect(SRC.match(/\{showScrollDown/g)).toHaveLength(1);
     expect(SRC).not.toContain('{showScrollDown ? (');
   });

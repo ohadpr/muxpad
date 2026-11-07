@@ -215,13 +215,19 @@ describe('the composer takes focus on arrival', () => {
     // A pane that was already mounted and merely became visible never
     // re-runs on `active` alone — the same reason the re-entry effect has it.
     expect(effect, 'no arrival-focus effect').not.toBe('');
-    expect(effect).toMatch(/\[active, paneId, showEpoch, openTool, openImage\]/);
+    // `foreground` carries active/drawer/modal state as one value now (see
+    // lib/pane-foreground); paneId and showEpoch stay, because a pane that was
+    // already mounted and merely became visible never re-runs on the rest.
+    expect(effect).toMatch(/\[foreground, paneId, showEpoch\]/);
   });
 
   it('does not raise the keyboard on a phone', () => {
     // Arriving at a chat there is at least as often about READING it, and the
     // keyboard covers half the screen. The composer is one tap away.
     expect(effect).toContain('isMobileLayout()');
+    // …passed IN rather than detected inside the rule: whether this is a touch
+    // layout is the caller's fact, not the foreground's.
+    expect(effect).toContain('focusesComposerOnArrival(foreground, isMobileLayout())');
   });
 
   it('never steals focus from another field', () => {
