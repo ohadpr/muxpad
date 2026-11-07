@@ -283,3 +283,21 @@
   font-variant-numeric: tabular-nums;
   text-align: center;
 }
+
+/* ── THE GROUP HEADING ──────────────────────────────────────────────────────
+   Shown only when both groups exist: one group explains itself, and a heading
+   over the only block on screen is furniture. Small, quiet, and sitting on the
+   list's own left inset rather than the panel's, so the rows below it read as
+   belonging to it. */
+.chat-drawer__group {
+  margin: 10px 0 2px;
+  padding: 0 14px;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--d-faint);
+}
+.chat-drawer__group:first-child {
+  margin-top: 4px;
+}

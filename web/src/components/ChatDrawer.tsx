@@ -2,6 +2,7 @@ import type { ChatAction } from '@muxpad/shared';
 import { useMemo } from 'react';
 import type { MentionChat } from '../lib/chat-mention';
 import { spawnLabel, spawnState, spawnStateLabel } from '../lib/chat-mention';
+import { shortAge } from '../lib/short-age';
 import { type SubChat, artifactsOf, subChatIsOpen, subChatsOf } from '../lib/sub-chats';
 import { ChatChip } from './ChatChip';
 import './ChatDrawer.css';
@@ -162,12 +163,33 @@ export function ChatDrawer({
   );
 }
 
+/**
+ * ── RUNNING, THEN FINISHED, AND THE LIST SAYS WHICH IS WHICH ──────────────
+ *
+ * It was one flat run of identical rows in spawn order, so the worker still
+ * going sat wherever it happened to start — usually last — and the only thing
+ * separating it from one that reported an hour ago was a small word on a second
+ * line. Every row carried that word, and for the finished ones it was the same
+ * word, which is a line of type per row spent saying "done" eleven times.
+ *
+ * So: two blocks, running first, each labelled only when the other exists —
+ * one group needs no heading to be understood. A running row drops the state
+ * line entirely, because its mark already says it and the heading says it
+ * again. A finished row spends that line on WHEN instead, which is the thing
+ * you are actually comparing them by.
+ *
+ * Finished newest-first, running in spawn order: the one you want from a
+ * finished worker is the last answer, and the one you want from running ones is
+ * a stable list that does not reshuffle under the cursor while they report.
+ */
 function SubChatList({
   subs,
   onOpen,
+  now = Date.now(),
 }: {
   subs: SubChat[];
   onOpen: (s: SubChat) => void;
+  now?: number;
 }) {
   if (subs.length === 0)
     return (
@@ -176,10 +198,43 @@ function SubChatList({
         it reports.
       </p>
     );
+  const running = subs.filter(subChatIsOpen);
+  const finished = subs
+    .filter((s) => !subChatIsOpen(s))
+    .sort((a, b) => (b.chat.createdAt ?? 0) - (a.chat.createdAt ?? 0));
+  const both = running.length > 0 && finished.length > 0;
+  return (
+    <>
+      {running.length > 0 ? (
+        <>
+          {both ? <h3 className="chat-drawer__group">Running</h3> : null}
+          <Rows subs={running} onOpen={onOpen} now={now} />
+        </>
+      ) : null}
+      {finished.length > 0 ? (
+        <>
+          {both ? <h3 className="chat-drawer__group">Finished</h3> : null}
+          <Rows subs={finished} onOpen={onOpen} now={now} />
+        </>
+      ) : null}
+    </>
+  );
+}
+
+function Rows({
+  subs,
+  onOpen,
+  now,
+}: {
+  subs: SubChat[];
+  onOpen: (s: SubChat) => void;
+  now: number;
+}) {
   return (
     <ul className="chat-drawer__list">
       {subs.map((s) => {
         const state = spawnState(s.chat);
+        const open = subChatIsOpen(s);
         return (
           <li key={s.chat.tabId}>
             <button
@@ -201,10 +256,20 @@ function SubChatList({
                 <span className="chat-drawer__row-name" dir="auto">
                   {spawnLabel(s.chat)}
                 </span>
-                {/* `spawnStateLabel`, not a word of our own: the card in the
-                    log and this row describe the same worker, and two
-                    vocabularies for one state is how they come to disagree. */}
-                <span className="chat-drawer__row-sub">{spawnStateLabel(state)}</span>
+                {/* A RUNNING row says nothing here: its mark says it and the
+                    heading above says it again. A finished one spends the line
+                    on when it reported, which is what you compare them by.
+                    `spawnStateLabel` is still the vocabulary when the state is
+                    worth a word — the card in the log and this row describe the
+                    same worker, and two vocabularies for one state is how they
+                    come to disagree. */}
+                {open ? null : (
+                  <span className="chat-drawer__row-sub">
+                    {state === 'delivered' && s.chat.createdAt
+                      ? shortAge(now - s.chat.createdAt)
+                      : spawnStateLabel(state)}
+                  </span>
+                )}
               </span>
             </button>
           </li>
