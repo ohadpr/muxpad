@@ -592,8 +592,11 @@ describe('protected muxpad approval modal', () => {
     select.dispatchEvent(new f.win.Event('change'));
     expect(f.win.document.getElementById('approve')?.textContent).toBe('Approve');
     const scope = f.win.document.getElementById('grant-scope')?.textContent || '';
-    expect(scope).toContain('ALL agents');
     expect(scope).toContain('Full Slack access');
+    // It names the MACHINE the grant is scoped to now, instead of claiming
+    // every agent everywhere: a timed grant is bound to the origin that asked,
+    // so "ALL agents" was describing a wider promise than it makes.
+    expect(scope).toMatch(/for chats on /);
     for (const action of [
       'list channels',
       'read history',

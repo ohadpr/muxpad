@@ -751,7 +751,7 @@ backend, mode, status).
   \`working\` (a turn or a background subagent is running),
   \`ready\` (finished, waiting for you), \`dead\` (the runner gave up), \`idle\`.
   \`agents\` alongside it counts live background subagents.
-  \`busy\` is a deprecated alias for \`status === 'working'\`.
+  (A \`busy\` boolean used to shadow this; it is gone.)
 - For a RUNNER-OWNED pane, \`working\` is the runner registry — a turn or the
   durable subagent roster — so it is trustworthy: tailing a dev server on its
   terminal face no longer reads busy, and a silently-thinking agent no longer

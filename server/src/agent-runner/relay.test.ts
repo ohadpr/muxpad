@@ -563,7 +563,7 @@ describe('agent-runner relay', () => {
 
     // The turn is over; the subagent is not. The pane is still WORKING, with
     // no decay window involved.
-    expect(cache.getBusy(paneId)).toBe(true);
+    expect(cache.isWorking(paneId)).toBe(true);
     expect(cache.getSubagentCount(paneId)).toBe(1);
 
     // A chat socket that connects AFTER turn-done still gets the roster — this
@@ -582,7 +582,7 @@ describe('agent-runner relay', () => {
     );
     await new Promise((r) => setTimeout(r, 100));
     expect(cache.getSubagentCount(paneId)).toBe(0);
-    expect(cache.getBusy(paneId)).toBe(false);
+    expect(cache.isWorking(paneId)).toBe(false);
 
     runner.close();
     chat.close();
@@ -634,7 +634,7 @@ describe('agent-runner relay', () => {
     runner.terminate();
     await new Promise((r) => setTimeout(r, 150));
     expect(cache.getSubagentCount(paneId)).toBe(0);
-    expect(cache.getBusy(paneId)).toBe(false);
+    expect(cache.isWorking(paneId)).toBe(false);
 
     // The runner comes back and re-announces its live roster (onConnected).
     const { sock: again } = await openSock(`ws://127.0.0.1:${port}/ws/agent-runner/${paneId}`);

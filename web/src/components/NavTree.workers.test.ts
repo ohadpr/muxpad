@@ -94,12 +94,15 @@ describe('the row says it in the ink', () => {
   const code = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 
   it('styles the attribute it emits — both halves, like the guard requires', () => {
-    expect(code(CSS)).toContain("[data-worker='true']");
+    // Either quote: the formatter owns that choice, the design does not.
+    expect(code(CSS)).toMatch(/\[data-worker=['"]true['"]\]/);
     expect(code(TSX)).toContain("data-worker={worker ? 'true' : undefined}");
   });
 
   it('uses the read-ink token rather than a new colour', () => {
-    const rule = code(CSS).match(/\[data-worker='true'\] \.navtree-name-text \{([^}]*)\}/)?.[1];
+    const rule = code(CSS).match(
+      /\[data-worker=['"]true['"]\] \.navtree-name-text \{([^}]*)\}/,
+    )?.[1];
     expect(rule).toMatch(/var\(--nt-ink-read\)/);
   });
 });

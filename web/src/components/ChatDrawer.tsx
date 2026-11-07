@@ -248,6 +248,7 @@ function SubChatList({
                         ones are tinted harder. Text alone is the blob; one
                         repeated shape in a colour is a list. */}
                     <span className="chat-drawer__mark" aria-hidden="true">
+                      {/* biome-ignore lint/a11y/noSvgWithoutTitle: decorative — the wrapper is aria-hidden and the row's own name carries the meaning */}
                       <svg viewBox="0 0 16 16" width="11" height="11" fill="none">
                         <path
                           d="M4.5 3v4.2a2 2 0 0 0 2 2H11"

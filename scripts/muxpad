@@ -1547,7 +1547,7 @@ cmd_tab_list() {
   print_table "$res" \
     'ID:.id' \
     'PIN:(if .pinned then "*" else "" end)' \
-    'STATUS:(.status // (if .busy then "working" else "idle" end))' \
+    'STATUS:(.status // "idle")' \
     'AGENTS:(.agents // 0)' \
     'NAME:.name'
 }
@@ -1692,12 +1692,12 @@ cmd_pane_list() {
   #   <pane-id>  <ws>/<tab>  <face>  <status>  <title|foreground_cmd>
   #
   # <status> is the pane's FULL five-state status (blocked|working|dead|ready|
-  # idle), not the old busy/idle pair. `busy` is a deprecated alias for exactly
-  # one of those five (working), so printing it collapsed "waiting on you",
-  # "the runner died" and "finished, unreviewed" all into "idle" — the three
-  # states a supervisor most needs to see. The `// (if .busy …)` fallback is for
-  # an older server that ships `busy` but no `status`: its working panes still
-  # read "working", everything else "idle".
+  # idle). It replaced a `busy` boolean that was one of those five, so printing
+  # that collapsed "waiting on you", "the runner died" and "finished,
+  # unreviewed" all into "idle" — the three states a supervisor most needs to
+  # see. `busy` was kept as an alias for one release and is now gone; a server
+  # old enough to lack `status` reads "idle", which is honest, because such a
+  # server cannot tell us anything better.
   local a rest=()
   local all=0
   for a in "$@"; do
@@ -1721,7 +1721,7 @@ cmd_pane_list() {
       return
     fi
     printf '%s' "$res" | jq -r '.[] |
-      "\(.id)  \(.workspace_name)/\(.tab_name)  \(.face)  \(.status // (if .busy then "working" else "idle" end))  \(.name // .title // .foreground_cmd // .url // "")"'
+      "\(.id)  \(.workspace_name)/\(.tab_name)  \(.face)  \(.status // "idle")  \(.name // .title // .foreground_cmd // .url // "")"'
     return
   fi
   set -- ${rest[@]+"${rest[@]}"}

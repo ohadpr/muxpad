@@ -116,11 +116,12 @@ describe('agent-instructions', () => {
 
     // …and no surface still advertises the retired two-state column.
     expect(AGENT_INSTRUCTIONS_SEED).not.toContain('busy|idle');
-    // `busy` survives only as the explicitly-labelled deprecated alias.
+    // `busy` survives only as HISTORY — the field is gone, and the seed may
+    // mention it solely to tell a reader not to look for it.
     for (const m of AGENT_INSTRUCTIONS_SEED.matchAll(/`busy`/g)) {
       const line = AGENT_INSTRUCTIONS_SEED.slice(0, m.index).split('\n').length;
       const text = AGENT_INSTRUCTIONS_SEED.split('\n')[line - 1] ?? '';
-      expect(text).toMatch(/not `busy`|deprecated alias/);
+      expect(text).toMatch(/not `busy`|is gone/);
     }
   });
 
