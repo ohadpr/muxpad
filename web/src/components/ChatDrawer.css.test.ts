@@ -85,13 +85,19 @@ describe('the row is one line, and the mark is beside the name', () => {
     expect(sub).toMatch(/white-space:\s*nowrap/);
   });
 
-  it('sizes the tile to hold a glyph, not a speck', () => {
-    // 13px was right for a status dot and wrong for an identity: at that size
-    // the glyph is unreadable and the row is a line of text with a speck in
-    // front of it — "it just looks like a list of words".
-    const chip = rule('.chat-drawer__row .chatchip');
-    expect(chip).toMatch(/--chatchip-size:\s*22px/);
-    expect(chip).toMatch(/--chatchip-glyph:\s*15px/);
+  it('gives every row one accent-tinted mark, and tints the running block harder', () => {
+    // A different glyph per chat was noise wearing a second hat; one repeated
+    // shape in a tinted square is what gives the column its rhythm.
+    const mark = rule('.chat-drawer__mark');
+    expect(mark).toMatch(/width:\s*22px/);
+    expect(mark).toMatch(/background:\s*color-mix\(in srgb, var\(--d-accent\) 13%/);
+    const live = rule("[data-block='running'] .chat-drawer__mark");
+    expect(live).toMatch(/var\(--d-accent\) 26%/);
+  });
+
+  it('gives the list air — a list you read down, not a menu', () => {
+    expect(rule('.chat-drawer__list')).toMatch(/gap:\s*4px/);
+    expect(rule('.chat-drawer__row')).toMatch(/padding:\s*8px 9px/);
   });
 
   it('puts the running state in a word, in the accent', () => {

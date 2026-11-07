@@ -263,10 +263,11 @@ describe('the sub-chat list has shape', () => {
 });
 
 describe('a row reads as a chat, not a word', () => {
-  it('gives every row the chat’s identity tile, finished ones included', () => {
-    // Reported: "these don't look like chats or anything it just looks like a
-    // list of words." Removing the status DOT was right; removing the anchor
-    // was not — a chat row without one is text.
+  it('gives every row the same mark — finished ones included', () => {
+    // Removing the status dot was right; removing the ANCHOR left a list of
+    // words. One repeated mark, not a glyph per chat: twenty-one different
+    // icons is another kind of noise, and a worker has no identity you would
+    // recognise the way you recognise a conversation you named.
     const box = mount({
       corpus: corpusOf([
         tab('parent'),
@@ -274,27 +275,9 @@ describe('a row reads as a chat, not a word', () => {
         tab('reported', { spawned_by: 'parent', done: true }),
       ]),
     });
-    const tiles = box.querySelectorAll('.chat-drawer__row .chatchip[data-shape="tile"]');
-    expect(tiles).toHaveLength(2);
-    // A tile, never the dot ChatChip draws by default for anything spawned.
-    expect(box.querySelector('.chat-drawer__row .chatchip[data-shape="dot"]')).toBeNull();
-  });
-
-  it('gives the tile a glyph even when the chat has no icon', () => {
-    // Derived from the chat's own id, so a list of twenty has texture to scan
-    // by rather than twenty copies of one placeholder.
-    const box = mount({
-      corpus: corpusOf([
-        tab('parent'),
-        tab('a', { spawned_by: 'parent', done: true }),
-        tab('b', { spawned_by: 'parent', done: true }),
-      ]),
-    });
-    const glyphs = [...box.querySelectorAll('.chat-drawer__row .chatchip-glyph')].map(
-      (e) => e.textContent,
-    );
-    expect(glyphs).toHaveLength(2);
-    for (const g of glyphs) expect(g).toBeTruthy();
+    expect(box.querySelectorAll('.chat-drawer__row .chat-drawer__mark')).toHaveLength(2);
+    // …and it is NOT a per-chat chip any more.
+    expect(box.querySelector('.chat-drawer__row .chatchip')).toBeNull();
   });
 
   it('says "working" at the end of a running row, and nothing on a finished one', () => {
