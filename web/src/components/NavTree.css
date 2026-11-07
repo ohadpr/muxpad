@@ -4268,3 +4268,19 @@ body.sidenav-resizing iframe {
 .navtree-ws-slot[data-touch="true"] .navtree-slot-drop {
   display: none;
 }
+
+/* ── A WORKER IS QUIETER, NOT INDENTED ──────────────────────────────────────
+   A sub-chat that is still running is a row on the rail again (see
+   `groupChats`), and it has to read as somebody else's work without costing a
+   column. The rail stopped nesting precisely so depth would stop being drawn,
+   so this says it in the INK: one rung down from a conversation's name, which
+   is the same move the deleted child rows made and the only part of them worth
+   keeping.
+
+   Unread and active both still win, because they are about what needs you — a
+   worker you have not read is not quieter than one you have. Those rules come
+   later in the file and are more specific, so nothing is needed here to let
+   them through. */
+.navtree .navtree-tab-row[data-worker='true'] .navtree-name-text {
+  color: var(--nt-ink-read);
+}

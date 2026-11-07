@@ -42,22 +42,27 @@ function tab(id: string, opts: Partial<Tab> & { agedDays?: number } = {}): Tab {
 const shape = (groups: readonly { chat: Tab }[]) => groups.map((g) => g.chat.id);
 
 describe('groupChats', () => {
-  it('keeps a spawned chat OUT of the rail — it is in its parent’s drawer', () => {
-    // It used to be a second-level row here. See `groupChats` for the four
-    // answers to where a sub-chat belongs and why this is the one that works:
-    // the rail is a list of conversations, and a worker is a detail of one.
-    const { live } = groupChats([tab('a'), tab('kid', { spawned_by: 'a' }), tab('b')]);
-    expect(shape(live)).toEqual(['a', 'b']);
+  it('lists a RUNNING worker first, and keeps a delivered one out', () => {
+    // The rule is about STATE, not kind. A worker still going is a place
+    // something is happening, so it is a row and it sorts above the
+    // conversations; a delivered one is a detail of its parent, and its result
+    // is already a card in that parent's log.
+    const running = groupChats([tab('a'), tab('kid', { spawned_by: 'a' }), tab('b')]);
+    expect(shape(running.live)).toEqual(['kid', 'a', 'b']);
+    const delivered = groupChats([tab('a'), tab('kid', { spawned_by: 'a', done: true }), tab('b')]);
+    expect(shape(delivered.live)).toEqual(['a', 'b']);
   });
 
-  it('keeps the server’s order for the chats it does list', () => {
+  it('keeps the server’s order inside each block', () => {
+    // Workers first, then conversations, and the server's order preserved
+    // within both — the sort is one stable partition, not a re-ranking.
     const { live } = groupChats([
       tab('a'),
       tab('b'),
       tab('k2', { spawned_by: 'a' }),
       tab('k1', { spawned_by: 'a' }),
     ]);
-    expect(shape(live)).toEqual(['a', 'b']);
+    expect(shape(live)).toEqual(['k2', 'k1', 'a', 'b']);
   });
 
   // A chat must never be invisible because of a pointer. The parent may live in
@@ -131,15 +136,15 @@ describe('groupChats', () => {
       expect(done).toEqual([]);
     });
 
-    it('does not nest a WORKING child either — the parent’s badge counts it', () => {
+    it('lists the WORKING child and not the delivered one', () => {
       const { live, done } = groupChats([
         tab('parent'),
         tab('working', { spawned_by: 'parent', done: false }),
         tab('delivered', { spawned_by: 'parent', done: true }),
       ]);
-      // One row, no children. A worker still going is in the drawer with the
-      // rest of the family, and the drawer's control badges it.
-      expect(shape(live)).toEqual(['parent']);
+      // Two rows: the worker that is still going, above the chat that started
+      // it. The delivered one is in that chat's drawer, where its card is.
+      expect(shape(live)).toEqual(['working', 'parent']);
       expect(done).toEqual([]);
     });
 
@@ -161,10 +166,10 @@ describe('groupChats', () => {
         tab('parent'),
         tab('ancient', { spawned_by: 'parent', agedDays: 99, done: false }),
       ]);
-      // Not a child row any more — but still NOT retired, which is what this
-      // test is about: age must not decide a sub-chat's fate. Its liveness
-      // shows in the parent's drawer badge.
-      expect(shape(live)).toEqual(['parent']);
+      // Still NOT retired, which is what this test is about: age must not
+      // decide a sub-chat's fate. Ninety-nine days old and still running is
+      // still a row — and still above the conversation it came from.
+      expect(shape(live)).toEqual(['ancient', 'parent']);
       expect(done).toEqual([]);
     });
 
@@ -232,39 +237,38 @@ describe('a grandchild lists under the root, not into a hole', () => {
     ]);
     // `rootOf` still has to RESOLVE both of them — the bug this guards is a
     // grandchild landing in `childrenOf[child.id]`, which nothing reads, so it
-    // appeared in neither list. What changed is where a resolved descendant
-    // goes: not onto the rail at all, but into its own parent's work drawer.
-    expect(shape(live)).toEqual(['root']);
+    // appeared in neither list. Both are running, so both are rows, above the
+    // conversation they came from.
+    expect(shape(live)).toEqual(['child', 'grandchild', 'root']);
     expect(shape(done)).toEqual([]);
   });
 
   it('resolves a delivered grandchild to its root, and then drops it', () => {
     // The bug this guards is the grandchild going into `childrenOf[child.id]`,
     // which nothing reads — a row in NEITHER list. It still has to resolve to
-    // the root; what changed is where it lands once it has. A delivered
-    // sub-chat is not listed at any depth, so it leaves the live list and does
-    // not appear in the drawer either.
+    // the root; what changed is what happens once it has. DELIVERED, so it is
+    // dropped at any depth — while its still-running parent is a row.
     const { live, done } = groupChats([
       tab('root'),
       tab('child', { spawned_by: 'root' }),
       tab('grandchild', { spawned_by: 'child', done: true }),
     ]);
-    expect(shape(live)).toEqual(['root']);
+    expect(shape(live)).toEqual(['child', 'root']);
     expect(done).toEqual([]);
   });
 
-  it('takes a whole chain of handoffs off the rail, however deep', () => {
+  it('lists a whole chain of running handoffs, however deep, above the root', () => {
     // What `agent-orchestration` actually produces: a hands off to b hands off
-    // to c. The rail shows the conversation that started it and nothing else;
-    // each worker is listed in the drawer of the chat that spawned IT, which
-    // is one hop, not the flattened root (see lib/sub-chats).
+    // to c. Every link still going is a row — three places work is happening —
+    // and the conversation that started it sits below them. Finished links drop
+    // out as they deliver, so the block shrinks on its own.
     const { live } = groupChats([
       tab('root'),
       tab('a', { spawned_by: 'root' }),
       tab('b', { spawned_by: 'a' }),
       tab('c', { spawned_by: 'b' }),
     ]);
-    expect(shape(live)).toEqual(['root']);
+    expect(shape(live)).toEqual(['a', 'b', 'c', 'root']);
   });
 
   it('takes the DELIVERED family down when the ROOT is done, and promotes the rest', () => {
@@ -291,8 +295,9 @@ describe('a grandchild lists under the root, not into a hole', () => {
     ]);
     // `child` is promoted because its chain leaves the list — a chat is never
     // invisible because of a pointer. `grandchild` resolves to `child`, which
-    // IS in the list, so it has a drawer to be found in and no row here.
-    expect(shape(live)).toEqual(['child']);
+    // IS in the list, so it is `child`'s worker: a row, above it, and still
+    // running.
+    expect(shape(live)).toEqual(['grandchild', 'child']);
   });
 
   it('does not spin on a spawned_by cycle', () => {
