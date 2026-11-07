@@ -85,7 +85,7 @@ describe('the row is one line, and the mark is beside the name', () => {
     expect(sub).toMatch(/white-space:\s*nowrap/);
   });
 
-  it('runs the scale from FILLED to plain grey, not down one alpha ramp', () => {
+  it('spends colour only where work is happening, and greys the rest', () => {
     // Four shades of the same accent is not a scale you can read: the steps
     // sit a few percent of saturation apart and the bottom of the list looks
     // like the top with the lights down. The fade has to cross a boundary.
@@ -95,21 +95,28 @@ describe('the row is one line, and the mark is beside the name', () => {
 
     const bg = (h: number) =>
       rule(`.chat-drawer__block[data-heat='${h}']`).match(/--mark-bg:\s*([^;]+);/)?.[1] ?? '';
-    // Running is SOLID accent — the only filled mark on the panel.
-    expect(bg(3).trim()).toBe('var(--d-accent)');
-    // The middle two are the accent mixed into the panel's own surface, so
-    // they stay opaque and the steps stay even on a light theme.
-    expect(bg(2)).toMatch(/var\(--d-accent\) 30%, var\(--d-surface\)/);
-    expect(bg(1)).toMatch(/var\(--d-accent\) 14%, var\(--d-surface\)/);
-    // And the oldest block has NO hue at all. The colour is the recency, so
-    // none of it means none left.
-    expect(bg(0)).not.toMatch(/--d-accent/);
-    expect(bg(0)).toMatch(/--d-ink/);
+    // RUNNING is the only block that spends any colour, and it spends it on a
+    // ring and a glyph rather than a filled square — on a theme whose accent
+    // is #d6006e, one filled square is all you see.
+    expect(bg(3)).toMatch(/var\(--d-accent\) 15%, var\(--d-surface\)/);
+    expect(rule(".chat-drawer__block[data-heat='3']")).toMatch(/--mark-ink:\s*var\(--d-accent\)/);
+    // EVERY FINISHED BLOCK IS NEUTRAL. Colour on the sixteen rows that are
+    // over is colour not available to the two that are not.
+    for (const h of [2, 1, 0]) {
+      expect(bg(h), `heat ${h}`).not.toMatch(/--d-accent/);
+      expect(bg(h), `heat ${h}`).toMatch(/--d-ink/);
+    }
+    // …and they still step, so the list fades without being painted.
+    const inks = [2, 1, 0].map((h) =>
+      Number(rule(`.chat-drawer__block[data-heat='${h}']`).match(/--d-ink\) (\d+)%/)?.[1]),
+    );
+    expect(inks).toEqual([...inks].sort((a, b) => b - a));
+    expect(new Set(inks).size).toBe(3);
   });
 
   it('gives the running block a wash of its own, so it reads as one thing', () => {
     expect(rule("[data-block='running'] .chat-drawer__list")).toMatch(
-      /background:\s*color-mix\(in srgb, var\(--d-accent\) 7%/,
+      /background:\s*color-mix\(in srgb, var\(--d-accent\) 5%/,
     );
   });
 

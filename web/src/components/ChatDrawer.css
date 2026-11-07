@@ -246,30 +246,35 @@
   box-shadow: inset 0 0 0 1px var(--mark-edge, transparent);
 }
 
-/* RUNNING — filled. The only solid mark on the panel. */
+/* RUNNING — the ONLY coloured thing on the panel, and not a solid block of
+   it. A ring and an inked glyph on a light wash is enough to find instantly;
+   a filled square of `--accent` is a shout, and on a theme whose accent is
+   #d6006e a column with one of those in it is all you see. */
 .chat-drawer__block[data-heat='3'] {
-  --mark-bg: var(--d-accent);
-  --mark-ink: var(--d-accent-ink);
-  --mark-edge: transparent;
+  --mark-bg: color-mix(in srgb, var(--d-accent) 15%, var(--d-surface));
+  --mark-ink: var(--d-accent);
+  --mark-edge: color-mix(in srgb, var(--d-accent) 42%, transparent);
 }
-/* TODAY — clearly the accent, clearly not solid. */
+/* EVERYTHING FINISHED IS NEUTRAL. The earlier version walked the accent down
+   through the finished blocks too, which made the whole column that hue —
+   "this red is annoying", and it was, because colour was being spent on the
+   sixteen rows that are over rather than the two that are not.
+   The recency scale survives in the ink: three steps of the panel's own grey,
+   which is enough to see the list fade without painting it. */
 .chat-drawer__block[data-heat='2'] {
-  --mark-bg: color-mix(in srgb, var(--d-accent) 30%, var(--d-surface));
-  --mark-ink: color-mix(in srgb, var(--d-accent) 88%, var(--d-ink));
-  --mark-edge: color-mix(in srgb, var(--d-accent) 26%, transparent);
+  --mark-bg: color-mix(in srgb, var(--d-ink) 11%, var(--d-surface));
+  --mark-ink: var(--d-dim);
+  --mark-edge: color-mix(in srgb, var(--d-ink) 9%, transparent);
 }
-/* YESTERDAY — the hue is receding. */
 .chat-drawer__block[data-heat='1'] {
-  --mark-bg: color-mix(in srgb, var(--d-accent) 14%, var(--d-surface));
-  --mark-ink: color-mix(in srgb, var(--d-accent) 60%, var(--d-dim));
-  --mark-edge: color-mix(in srgb, var(--d-accent) 13%, transparent);
-}
-/* EARLIER — no hue at all. Old work is grey, and that is the whole point of
-   the scale: the colour IS the recency, so none of it means none left. */
-.chat-drawer__block[data-heat='0'] {
   --mark-bg: color-mix(in srgb, var(--d-ink) 8%, var(--d-surface));
+  --mark-ink: color-mix(in srgb, var(--d-dim) 80%, var(--d-faint));
+  --mark-edge: color-mix(in srgb, var(--d-ink) 6%, transparent);
+}
+.chat-drawer__block[data-heat='0'] {
+  --mark-bg: color-mix(in srgb, var(--d-ink) 5%, var(--d-surface));
   --mark-ink: var(--d-faint);
-  --mark-edge: color-mix(in srgb, var(--d-ink) 7%, transparent);
+  --mark-edge: transparent;
 }/* The age, at the end of the line it belongs to. `auto` rather than a
    justify rule so the NAME keeps the slack and truncates first — the time is
    four characters and never the thing to drop. */
@@ -409,7 +414,7 @@
   margin: 0 6px;
   padding: 4px;
   border-radius: 10px;
-  background: color-mix(in srgb, var(--d-accent) 7%, transparent);
+  background: color-mix(in srgb, var(--d-accent) 5%, transparent);
 }
 /* `working`, at the end of the row, in the accent — the only text on this
    panel wearing it. The tile carries IDENTITY now, so state had to move
