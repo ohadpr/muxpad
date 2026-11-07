@@ -189,7 +189,7 @@ describe('file metadata, table-tested', () => {
     }) as unknown as import('node:fs').Stats;
 
   it('names each refusal, and passes a root-owned 0644 regular file', async () => {
-    const { trustProblem } = await import('./scope.js');
+    const { trustProblem } = await import('./trusted-file.js');
     expect(trustProblem(st({}), 'f')).toBeNull();
     expect(trustProblem(st({ file: false }), 'f')).toMatch(/not a regular file/);
     expect(trustProblem(st({ uid: 501 }), 'f')).toMatch(/not root-owned/);
@@ -430,7 +430,7 @@ describe('the policy file, every branch', () => {
   });
 
   it('terminates at the root', async () => {
-    const { ancestorProblem } = await import('./scope.js');
+    const { ancestorProblem } = await import('./trusted-file.js');
     const io = okIO();
     expect(ancestorProblem('/Library/muxpad/connectors.json', io)).toBeNull();
   });
