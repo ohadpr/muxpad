@@ -1704,8 +1704,9 @@ export function TabList({
    *  switches the row's mark from a tile to a dot in its parent's chip column,
    *  and what puts the one indent step on the row. Nothing about a clock — a
    *  sub-chat has none, and the row reads its own. */
-  const renderRow = (t: Tab) => (
+  const renderRow = (t: Tab, worker?: true) => (
     <TabRow
+      {...(worker ? { worker } : {})}
       key={t.id}
       tab={t}
       // WHICH CHILD ENDS THE RUN, from the only place that knows without
@@ -1772,7 +1773,9 @@ export function TabList({
    * from — `done` and `live` are still two lists of chats — and everything
    * that was about children is gone with the children.
    */
-  const renderGroup = (g: ChatGroup) => <Fragment key={g.chat.id}>{renderRow(g.chat)}</Fragment>;
+  const renderGroup = (g: ChatGroup) => (
+    <Fragment key={g.chat.id}>{renderRow(g.chat, g.worker)}</Fragment>
+  );
 
   return (
     <div className="navtree-tab-list">
@@ -2021,6 +2024,16 @@ function SheetPaneList({
 }
 
 interface TabRowProps {
+  /**
+   * A worker some chat spawned, still running.
+   *
+   * The row says so by being QUIETER, not by being indented: the rail stopped
+   * nesting when sub-chats moved into the work drawer, and a second visual
+   * language for depth is what that removal was for. One rung down in the ink
+   * is enough to separate "something I am doing" from "something being done
+   * for me", and it costs no column.
+   */
+  worker?: true | undefined;
   tab: Tab;
   /** The chat that spawned this one, when it is a child. Supplies the clock
    *  they share, and switches the row's leading mark from tile to dot. */
@@ -2093,6 +2106,13 @@ interface TabRowProps {
  */
 export interface ChatGroup {
   chat: Tab;
+  /**
+   * This row is a WORKER some chat spawned, and it is still going.
+   *
+   * Set only for the sub-chats the rail shows (see `groupChats`). The row reads
+   * as subordinate because of it, and it sorts to the top.
+   */
+  worker?: true;
 }
 
 /**
@@ -2233,8 +2253,31 @@ export function groupChats(tabs: Tab[]): {
   }
   const live: ChatGroup[] = [];
   const done: ChatGroup[] = [];
+  /**
+   * ── THE RUNNING WORKERS COME BACK, AND THEY COME FIRST ────────────────
+   *
+   * Decision 4 above — "a worker is a detail OF a chat, so it lives in that
+   * chat's drawer" — was right about the FINISHED ones and wrong about the
+   * running ones, and the owner said so: "show active sub chats first".
+   *
+   * The rail is a list of places you go, and a worker that is still going is
+   * exactly that: something is happening, somewhere, that you may want to look
+   * at or interrupt. A worker that answered twenty minutes ago is not — its
+   * result is already a card in its parent's log, and it stays in the drawer.
+   *
+   * So the rule is now about STATE rather than kind: still working and it is a
+   * row; delivered and it is a detail. Which also closes the gap the old
+   * exception was patching by hand — a running child whose parent had retired
+   * was promoted so it would not vanish, and now every running child is listed
+   * for the same reason rather than only the orphaned ones.
+   *
+   * They sort FIRST because they are the only rows on the rail that are about
+   * right now. Everything else is a conversation you can return to.
+   */
+  const workers: ChatGroup[] = [];
   for (const chat of tops) {
     const children = childrenOf.get(chat.id) ?? [];
+    for (const kid of children) if (!isChatRetired(kid)) workers.push({ chat: kid, worker: true });
     // THE DONE DRAWER HOLDS TOP-LEVEL CHATS ONLY. A sub-chat retires the moment
     // it delivers, so with forty spawned agents the drawer was forty rows of
     // finished errands under a label, and the chats you actually abandoned were
@@ -2261,14 +2304,15 @@ export function groupChats(tabs: Tab[]): {
       // Position is safe: a pinned chat never decays, so a done parent is never
       // in the pinned block, and a row promoted at its place therefore always
       // lands after the pinned rows.
-      for (const kid of children) if (!isChatRetired(kid)) live.push({ chat: kid });
+      // Its running children are already in `workers` — collected for every
+      // parent above, retired or not, so this case needs no second rule.
       continue;
     }
     // NO CHILDREN ON THE ROW. See the note on the return type: a sub-chat is
     // listed in its parent's work drawer, and its parent is right here.
     live.push({ chat });
   }
-  return { live, done };
+  return { live: [...workers, ...live], done };
 }
 
 /* ─── AND THE ARCHIVE'S COUNT IS GONE TOO ──────────────────────────────────
@@ -2438,6 +2482,7 @@ function SvgRowMenu() {
 }
 
 function TabRow({
+  worker,
   tab,
   workspace,
   isActiveTab,
@@ -2780,6 +2825,7 @@ function TabRow({
     <div
       className="navtree-tab-row"
       data-active={isActiveTab ? 'true' : undefined}
+      data-worker={worker ? 'true' : undefined}
       // The sheet's half of the nesting. It was missing here while the desktop
       // row had it, so even once the grouping reached this surface a child
       // would have rendered as an ordinary line — indistinguishable from the
@@ -2958,6 +3004,7 @@ function TabRow({
     <div
       className="navtree-tab-row"
       data-active={isActiveTab ? 'true' : undefined}
+      data-worker={worker ? 'true' : undefined}
       // NO `data-state`, and its absence is the mechanism rather than an
       // oversight: the 3px left bar and the row tint in StateChip.css are both
       // keyed off that attribute, so not writing it is what removes them. Both

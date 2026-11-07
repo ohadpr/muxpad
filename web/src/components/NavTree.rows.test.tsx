@@ -116,28 +116,6 @@ const aged = (days: number) =>
  * were each present on exactly one of them.
  */
 describe('the rail lists conversations, not workers', () => {
-  it('draws no row for a spawned chat, on the rail', () => {
-    const html = railHtml([tab('parent'), tab('kid', { spawned_by: 'parent' })]);
-    expect(html).toContain('parent');
-    expect(html).not.toContain('kid');
-  });
-
-  it('draws no row for a spawned chat on the sheet either', () => {
-    TABS = [tab('parent'), tab('kid', { spawned_by: 'parent' })];
-    const html = renderToStaticMarkup(
-      <TabList
-        workspace={WS}
-        isActiveWorkspace={true}
-        activeTabSlug={null}
-        variant="sheet"
-        editing={null}
-        setEditing={() => {}}
-      />,
-    );
-    expect(html).toContain('parent');
-    expect(html).not.toContain('kid');
-  });
-
   it('STILL draws one when the chat has no home to be found in', () => {
     // A chat is never invisible because of a pointer. Its parent is in another
     // workspace or gone, so there is no drawer it would be listed in — it is a
