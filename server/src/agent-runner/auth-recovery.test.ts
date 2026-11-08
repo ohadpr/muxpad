@@ -204,7 +204,7 @@ describe('a dead credential re-execs the session instead of ending the turn', ()
     // The new session answers, and that is the end of it.
     await fx.runner.feed([sdk.text('The plan is to ship it.'), sdk.result('success')]);
     expect(fx.runner.sent.filter((f) => f.t === 'turn-done')).toEqual([
-      { t: 'turn-done', ok: true, summary: 'The plan is to ship it.' },
+      { t: 'turn-done', ok: true, silent: false, summary: 'The plan is to ship it.' },
     ]);
   });
 
@@ -340,7 +340,7 @@ describe('what must NOT trigger a re-exec', () => {
     expect(first.closed).toBe(false);
     // …and it completes as the ordinary turn it was.
     expect(fx.runner.sent.filter((f) => f.t === 'turn-done')).toEqual([
-      { t: 'turn-done', ok: true, summary: NOT_LOGGED_IN },
+      { t: 'turn-done', ok: true, silent: false, summary: NOT_LOGGED_IN },
     ]);
   });
 
