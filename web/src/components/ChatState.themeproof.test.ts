@@ -37,7 +37,11 @@ function rulesOf(css: string): Array<{ sel: string; body: string }> {
       if (part.trim()) out.push({ sel: part.trim().replace(/\s+/g, ' '), body: m[2] ?? '' });
   return out;
 }
-const classCount = (sel: string) => (sel.match(/\.[\w-]+|\[[^\]]+\]/g) ?? []).length;
+/** Specificity's class column: classes, attributes AND state pseudo-classes —
+ *  `:disabled` weighs exactly as much as `.is-queue`, which is the whole
+ *  reason the send key lost. */
+const classCount = (sel: string) =>
+  (sel.match(/\.[\w-]+|\[[^\]]+\]|:(?:disabled|checked|empty)\b/g) ?? []).length;
 const propsOf = (body: string) =>
   new Set(
     body
@@ -66,9 +70,17 @@ describe('chat state survives every theme', () => {
   it('has no state rule a theme outranks on the same property', () => {
     const losses: string[] = [];
     for (const { sel, body } of rulesOf(CHAT)) {
-      // A STATE rule: a second class or attribute on the same element, e.g.
-      // `.chat-send.is-queue` or `.chat-chip[data-state="queued"]`.
-      if (!/\.chat-[\w-]+[.[]/.test(sel)) continue;
+      // A STATE rule: a second class, an attribute, or a state PSEUDO-class
+      // on the same element — `.chat-send.is-queue`,
+      // `.chat-chip[data-state="queued"]`, `.chat-send:disabled`.
+      //
+      // The pseudo-class arm was missing, and that is the hole the dead-but-
+      // bright send key came through: `:disabled` carries the same
+      // specificity weight as a class, so the collision is identical, but the
+      // detector only looked for `.` and `[`. Interaction pseudos (:hover,
+      // :active, :focus) are deliberately NOT states here — a theme owning
+      // how its own button reacts to a finger is fine.
+      if (!/\.chat-[\w-]+(?:[.[]|:(?:disabled|checked|empty)\b)/.test(sel)) continue;
       const base = /\.(chat-[\w-]+)/.exec(sel)?.[1];
       if (!base) continue;
       for (const theme of themed.get(base) ?? []) {
@@ -80,6 +92,22 @@ describe('chat state survives every theme', () => {
       }
     }
     expect(losses, 'these states are erased by a theme').toEqual([]);
+  });
+
+  it('says DISABLED the same way — orthogonal to every skin', () => {
+    // An empty composer on memphis drew a full-strength yellow sticker,
+    // because the disabled rule spoke in `background`/`color`/`box-shadow`,
+    // which is a theme's own vocabulary, at a specificity that merely TIED.
+    const flat = CHAT.replace(/\/\*[\s\S]*?\*\//g, '');
+    const i = flat.indexOf('.chat-send:disabled {');
+    const rule = flat.slice(i, flat.indexOf('}', i));
+    expect(rule).toMatch(/opacity:/);
+    expect(rule).toMatch(/filter:\s*grayscale/);
+    // …and it must NOT reach for the properties a skin claims.
+    for (const p of ['background', 'box-shadow', 'border'])
+      expect(rule, `disabled must not fight a theme over ${p}`).not.toMatch(
+        new RegExp(`(^|;|\\s)${p}:`),
+      );
   });
 
   it('says PENDING with properties and words no theme can take away', () => {
