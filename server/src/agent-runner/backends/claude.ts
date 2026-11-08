@@ -1273,6 +1273,48 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
   let turnHuman = false;
   /** This turn was fired by a cron — see proseSpeaks. */
   let turnCron = false;
+
+  /**
+   * EVERYTHING A TURN STARTS CLEAN — in one place, because there are two ways
+   * in.
+   *
+   * A turn begins either from a dequeued message or autonomously (a wakeup or
+   * a cron firing inside the persistent session), and each entry used to carry
+   * its own hand-written block of sixteen assignments. They were identical
+   * bar one field, which is the good case: the bad case is a fifteenth fact
+   * added to one of them and not the other, after which it leaks from the
+   * previous turn into this one, and only on whichever path nobody edited.
+   *
+   * The flags this resets are PER-TURN facts. The session's own lifecycle —
+   * `shuttingDown`, `quotaPaused`, `recoveryInFlight` — deliberately survives,
+   * because those outlive any single turn and resetting them here is how a
+   * paused session would quietly resume.
+   *
+   * `clearRequested` is NOT here: `/clear` only ever arrives as a dequeued
+   * message, so the autonomous path has nothing to say about it, and setting
+   * it from here would be inventing a transition the caller did not make.
+   */
+  const beginTurn = (text: string | null, kind: 'human' | 'cron' | 'slash' | 'autonomous') => {
+    inTurn = true;
+    interruptRequested = false;
+    lastAssistantText = '';
+    answeredThisTurn = false;
+    repliesThisTurn = 0;
+    streamedTextThisTurn = false;
+    saidSomethingThisTurn = false;
+    firstReplyText = '';
+    currentTurnText = text;
+    authFailureThisTurn = null;
+    quotaFailure = null;
+    unresolvedTools.clear();
+    uncertainToolResult = false;
+    toolUsesThisTurn = 0;
+    turnCron = kind === 'cron';
+    // Only a person is owed a reply. A cron is a relay, a slash command talks
+    // to the session rather than the agent, and nobody asked for an
+    // autonomous turn at all.
+    turnHuman = kind === 'human';
+  };
   /**
    * The message whose send has already triggered ONE compaction.
    *
@@ -1403,28 +1445,16 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
         }
         const text = pendingTexts.shift() as string;
         if (firstUserText === null) firstUserText = text;
-        inTurn = true;
-        interruptRequested = false;
-        lastAssistantText = '';
-        answeredThisTurn = false;
-        repliesThisTurn = 0;
-        streamedTextThisTurn = false;
-        saidSomethingThisTurn = false;
-        firstReplyText = '';
-        currentTurnText = text;
-        authFailureThisTurn = null;
-        quotaFailure = null;
-        unresolvedTools.clear();
-        uncertainToolResult = false;
-        toolUsesThisTurn = 0;
         // A cron fire is a relay, not a person: the scheduler wrote it and
         // nobody is sitting there, so it may legitimately end silent. Read off
         // the message itself (the marker rides the text), exactly as ws.ts's
         // `isHumanMessage` does — a flag would be lost across the durable queue
         // and a server restart. A slash command is the user talking to the
         // SESSION (`/compact`, `/clear`), not asking the agent anything.
-        turnCron = parseCronMarker(text) !== null;
-        turnHuman = !turnCron && !text.startsWith('/');
+        beginTurn(
+          text,
+          parseCronMarker(text) !== null ? 'cron' : text.startsWith('/') ? 'slash' : 'human',
+        );
         // `/clear` is the one message whose SIDE EFFECT is a new session id.
         // Remembered from here (not from slash(), which only queues it) so the
         // id rotation it causes can be told apart from a drift nobody asked
@@ -2215,28 +2245,13 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
     // call, a subagent's traffic, a stream delta — whichever lands first.
     const noteAutonomousTurn = () => {
       if (inTurn) return;
-      inTurn = true;
-      interruptRequested = false;
-      lastAssistantText = '';
-      answeredThisTurn = false;
-      repliesThisTurn = 0;
-      streamedTextThisTurn = false;
-      saidSomethingThisTurn = false;
-      firstReplyText = '';
       // An autonomous turn has no text anyone is waiting on, so a re-exec has
-      // nothing to put back — see the turn-result branch.
-      currentTurnText = null;
-      authFailureThisTurn = null;
-      quotaFailure = null;
-      unresolvedTools.clear();
-      uncertainToolResult = false;
-      toolUsesThisTurn = 0;
-      // Nobody asked for this turn, so nobody is owed an answer for it — the
-      // reply guard stays out of the way. (This is the distinction xAI's
-      // harness never drew: they applied "you must always reply" everywhere,
-      // which is unenforceable, instead of enforcing it where it is true.)
-      turnHuman = false;
-      turnCron = false;
+      // nothing to put back (see the turn-result branch) — and nobody asked
+      // for it, so nobody is owed an answer and the reply guard stays out of
+      // the way. (This is the distinction xAI's harness never drew: they
+      // applied "you must always reply" everywhere, which is unenforceable,
+      // instead of enforcing it where it is true.)
+      beginTurn(null, 'autonomous');
       emit({ t: 'turn-start' });
       log(dim('▸ autonomous turn (wakeup/cron/background)'));
     };
