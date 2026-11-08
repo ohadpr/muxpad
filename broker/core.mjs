@@ -14,6 +14,9 @@ const equal = (a, b) =>
   typeof b === 'string' &&
   Buffer.byteLength(a) === Buffer.byteLength(b) &&
   timingSafeEqual(Buffer.from(a), Buffer.from(b));
+import { CAPABILITIES, capabilityOf } from './capabilities.mjs';
+import { describeMsgvault, msgvaultArgv, validateMsgvault } from './msgvault.mjs';
+
 const TEAM_SCOPE = 'slack-team-all-v2';
 /**
  * WHAT A TIMED GRANT MAY COVER — reads, and nothing else.
@@ -57,6 +60,10 @@ export class Broker {
     state,
     save,
     slack,
+    /** The msgvault executor. Absent on an install with no archive declared:
+     *  a request then fails at dispatch rather than at boot, which is the
+     *  same shape as every other policy recheck. */
+    msgvault = async () => fail('msgvault is not configured on this broker'),
     now = Date.now,
     elapsed = () => Number(process.hrtime.bigint() / 1_000_000n),
     sessionLive = (s) => !!s && s.expires > now(),
@@ -74,6 +81,7 @@ export class Broker {
     this.state = state;
     this.save = save;
     this.slack = slack;
+    this.msgvault = msgvault;
     this.elapsed = elapsed;
     this.lastElapsed = elapsed();
     this.lastClock = now();
@@ -188,7 +196,12 @@ export class Broker {
     this.prune();
     if (this.requests.size >= 100) fail('Too many requests; wait for expiry');
     const action = input.action;
-    if (!TEAM_ACTIONS.includes(action)) fail('Unsupported action');
+    // WHICH CAPABILITY IS BEING ASKED FOR. The prefix is the answer and the
+    // only answer: an action nobody registered is refused here, before any
+    // payload is looked at, so an unknown capability can never reach a
+    // validator or an executor.
+    const cap = capabilityOf(action);
+    if (!cap || !cap.actions.includes(action)) fail('Unsupported action');
     /**
      * WHICH MACHINE'S CHAT ASKED.
      *
@@ -209,7 +222,12 @@ export class Broker {
         : 'unknown';
     const p = input.payload || {};
     let payload, upload;
-    if (action === 'slack.channels') payload = {};
+    if (cap.id === 'msgvault') {
+      // Composed, never forwarded — see msgvault.mjs. What comes back is a
+      // fresh object built from checked fields, so nothing caller-owned
+      // survives into the pending request.
+      payload = validateMsgvault(action, p);
+    } else if (action === 'slack.channels') payload = {};
     else if (action === 'slack.users') {
       if (typeof p.name !== 'string' || !/^[a-zA-Z0-9._-]{1,80}$/.test(p.name))
         fail('Use an exact Slack username or user ID');
@@ -400,7 +418,10 @@ export class Broker {
       // page can describe the promise it is about to make rather than reciting
       // one that was true in an earlier release.
       timedScope: this.timedScope(),
-      timedAllowed: this.timedScope() !== READ_SCOPE || READ_ACTIONS.includes(r.action),
+      timedAllowed:
+        this.timedScope(this.capabilityOfRequest(r)) !==
+          this.capabilityOfRequest(r).readScope ||
+        this.capabilityOfRequest(r).readActions.includes(r.action),
       payload: r.payload,
       state: r.state,
       expires: r.expires,
@@ -465,8 +486,16 @@ export class Broker {
    * it on in the protected config. A security change that arrives silently is
    * one nobody reviewed.
    */
-  timedScope() {
-    return this.config.timedGrants === 'read' ? READ_SCOPE : TEAM_SCOPE;
+  timedScope(capability = CAPABILITIES.slack) {
+    // A capability with no write set has nothing to hold back, so its read
+    // scope IS its full scope and the owner's `timedGrants` switch does not
+    // apply to it — there is no wider thing it could accidentally mean.
+    if (capability.readScope === capability.fullScope) return capability.readScope;
+    return this.config.timedGrants === 'read' ? capability.readScope : capability.fullScope;
+  }
+  /** The capability a pending request belongs to. */
+  capabilityOfRequest(r) {
+    return capabilityOf(r.action) ?? CAPABILITIES.slack;
   }
   grantScope(request) {
     // Versioned explicit action scope; never authorizes future Slack APIs.
@@ -478,7 +507,7 @@ export class Broker {
     return JSON.stringify({
       teamID: request.teamID,
       origin: request.origin ?? 'unknown',
-      permissionScope: this.timedScope(),
+      permissionScope: this.timedScope(this.capabilityOfRequest(request)),
     });
   }
   activeGrants() {
@@ -527,11 +556,16 @@ export class Broker {
     // Whichever scope this install uses, the client has to name it: the string
     // it sent is the promise it DISPLAYED, so accepting a different one would
     // approve something other than what the human read.
-    const timedScope = this.timedScope();
+    const decideCap = capabilityOf(this.get(id)?.action) ?? CAPABILITIES.slack;
+    const timedScope = this.timedScope(decideCap);
     if (duration === 'once' ? scope !== undefined : scope !== timedScope)
       fail(
-        timedScope === READ_SCOPE
-          ? 'Timed approval covers reading only; re-open muxpad to get the current prompt'
+        timedScope === decideCap.readScope
+          ? // The wording is Slack's and stays Slack's: an older cached client
+            // matches on this string, and the dialog already names the
+            // capability, so there is nothing for a capability name to add
+            // here except a broken contract.
+            'Timed approval covers reading only; re-open muxpad to get the current prompt'
           : 'Explicit full Slack access scope required for timed approval',
       );
     const owner =
@@ -550,10 +584,11 @@ export class Broker {
     // A WRITE IS `once` OR IT DOES NOT HAPPEN — under `timedGrants: 'read'`.
     // The thing you consent to is the payload, and a grant issued before the
     // payload existed cannot have covered it.
+    const rCap = this.capabilityOfRequest(r);
     if (
       duration !== 'once' &&
-      this.timedScope() === READ_SCOPE &&
-      !READ_ACTIONS.includes(r.action)
+      this.timedScope(rCap) === rCap.readScope &&
+      !rCap.readActions.includes(r.action)
     )
       fail(`${r.action} cannot be approved for a duration — only reading can`);
     if (
@@ -581,7 +616,7 @@ export class Broker {
         at: this.now(),
         mode: 'session',
         duration,
-        permissionScope: duration === 'once' ? 'exact-request' : TEAM_SCOPE,
+        permissionScope: duration === 'once' ? 'exact-request' : this.timedScope(rCap),
         teamID: r.teamID,
       });
       if (decision === 'reject') r.state = 'rejected';
@@ -632,9 +667,11 @@ export class Broker {
             const grant = {
               id: randomUUID(),
               scope: this.grantScope(r),
-              action: this.timedScope() === READ_SCOPE ? 'slack.read-all' : 'slack.all',
-              actions: this.timedScope() === READ_SCOPE ? READ_ACTIONS : TEAM_ACTIONS,
-              permissionScope: this.timedScope(),
+              action:
+                this.timedScope(rCap) === rCap.readScope ? `${rCap.id}.read-all` : `${rCap.id}.all`,
+              actions:
+                this.timedScope(rCap) === rCap.readScope ? rCap.readActions : rCap.actions,
+              permissionScope: this.timedScope(rCap),
               origin: r.origin ?? 'unknown',
               teamID: r.teamID,
               expires: Math.min(approvedAt + DURATIONS[duration], liveOwner.expires),
@@ -728,12 +765,13 @@ export class Broker {
       // Recheck protected policy at dispatch, after any asynchronous audit work.
       if (
         r.teamID !== this.config.teamID ||
-        !TEAM_ACTIONS.includes(r.action) ||
+        !(capabilityOf(r.action)?.actions ?? []).includes(r.action) ||
         (inlineMode(this.config) && r.elapsedExpires <= this.elapsed())
       )
         fail('Team/action policy changed');
       if (
         this.config.channels?.length &&
+        capabilityOf(r.action)?.id === 'slack' &&
         (['slack.search', 'slack.dm'].includes(r.action) ||
           (r.payload.channel && !this.config.channels.includes(r.payload.channel)))
       )
@@ -745,7 +783,10 @@ export class Broker {
         )
       )
         fail('Message outside muxpad edit policy');
-      r.result = await this.slack(r.action, r.payload, this.uploads.get(r.id));
+      r.result =
+        capabilityOf(r.action)?.id === 'msgvault'
+          ? await this.msgvault(r.action, r.payload)
+          : await this.slack(r.action, r.payload, this.uploads.get(r.id));
       if (
         r.action === 'slack.post' &&
         typeof r.result?.channel === 'string' &&
