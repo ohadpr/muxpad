@@ -32,9 +32,12 @@ describe('the composer holds one button', () => {
     // down now.
     const queue = busy.slice(0, busy.indexOf(') : micInsteadOfSend ? ('));
     expect(queue).toMatch(/className="chat-send is-queue"/);
-    expect(queue).toMatch(
-      /disabled=\{uploadsInFlight \|\| \(!input\.trim\(\) && chips\.length === 0\)\}/,
-    );
+    // ONE FUNCTION DECIDES IT, for both buttons and for the send path itself.
+    // The old expression counted EVERY chip, while sendMessage only sends the
+    // ones that landed — so an empty box plus a FAILED attachment drew an
+    // enabled button that did nothing. Reported as "the send button does not
+    // always look disabled".
+    expect(queue).toMatch(/disabled=\{!canSend\}/);
     // …and exactly one <button> in that branch. The whole point: the right
     // edge of the composer holds ONE target in every state — queue while a
     // turn runs, send when there is something to send, the mic when there is
@@ -45,6 +48,18 @@ describe('the composer holds one button', () => {
         const slice = SRC.slice(SRC.indexOf(branch));
         expect(slice.slice(0, slice.indexOf(') : (')).match(/<button/g) ?? []).toHaveLength(1);
       }
+  });
+
+  it('derives that from the same predicate the send path uses', () => {
+    // `canSendDraft` is the only place that answers "is there anything to
+    // send": it refuses while an upload is still running, accepts any typed
+    // text, and otherwise requires at least one chip that actually LANDED —
+    // the same `state === 'done' && path` filter `sendMessage` applies before
+    // building the message. Two copies of that rule is how they drifted.
+    expect(SRC).toMatch(/const canSend = canSendDraft\(input, chips\);/);
+    expect(SRC).toMatch(/canSendDraft/);
+    expect(SRC).not.toMatch(/disabled=\{uploadsInFlight \|\|/);
+    expect((SRC.match(/disabled=\{!canSend\}/g) ?? []).length).toBeGreaterThanOrEqual(2);
   });
 });
 

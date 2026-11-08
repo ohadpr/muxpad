@@ -294,3 +294,31 @@ export function summaryLabel(s: UploadSummary): string {
   const size = s.bytes > 0 ? ` · ${formatBytes(s.loaded)} of ${formatBytes(s.bytes)}` : '';
   return `${which}${Math.floor(s.pct)}%${size}`;
 }
+
+/**
+ * IS THERE ANYTHING TO SEND?
+ *
+ * The composer's button used to answer this with `!text.trim() && chips.length
+ * === 0`, while `sendMessage` answered it with "text, or an attachment that is
+ * `done` and has a path". Those disagree for exactly one case, and it is a
+ * case that happens: an upload FAILS, its chip stays in the row so you can see
+ * why, nothing is uploading any more — and the button renders ENABLED over an
+ * empty composer, then does nothing when pressed, because the send guard
+ * refuses it.
+ *
+ * Reported as "when that composer box is empty the send button does not always
+ * look disabled". It is not a styling bug: the button was genuinely enabled.
+ *
+ * So both read this. The button is enabled exactly when pressing it would do
+ * something, which is the only honest definition a button has.
+ */
+export function canSendDraft(text: string, items: readonly UploadItem[]): boolean {
+  // Still uploading: wait, so the message and its attachment travel together.
+  // `canceled` items are already excluded from `active` by `summarize`.
+  if (summarize(items).active > 0) return false;
+  if (text.trim()) return true;
+  // An attachment with no path is a reference the agent cannot follow, which
+  // is why the send guard drops it — and why it cannot count towards sending
+  // either.
+  return items.some((i) => i.state === 'done' && !!i.path);
+}
