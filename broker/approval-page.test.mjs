@@ -61,3 +61,48 @@ test('the review page stands alone — it does not wrap muxpad', () => {
   // agreed to: muxpad rings the bell, the broker draws the dialog.
   assert.match(JS, /\$\('muxpad'\)\.hidden = reviewOnly/);
 });
+
+/**
+ * …AND IT NAMES THE RIGHT SYSTEM.
+ *
+ * Everything above was written when Slack was the only thing behind this
+ * page. A dialog that says "Slack" above a request to read somebody's mail
+ * archive is not merely vague — it is a confident claim about what is being
+ * approved, which is the one thing an approval prompt must never get wrong.
+ */
+const CSS = readFileSync(new URL('./shell.css', import.meta.url), 'utf8');
+
+test('the brand pair follows the request, not a default', () => {
+  assert.match(JS, /document\.body\.dataset\.capability = capability/);
+  // The capability comes from the ACTION, so it cannot disagree with what is
+  // about to run.
+  assert.match(JS, /String\(request\.action \|\| ''\)\.split\('\.'\)\[0\]/);
+  assert.match(HTML, /class="brand-pair brand-archive"/);
+  assert.match(CSS, /body\[data-capability="msgvault"\] \.brand-pair:not\(\.brand-archive\)/);
+});
+
+test('every msgvault verb has a title that names what is read', () => {
+  // "Search" is a verb with no object, and approving a verb with no object is
+  // approving nothing. Each title says what is being reached for.
+  const titles = JS.slice(JS.indexOf('const titles = {'));
+  const body = titles.slice(0, titles.indexOf('};'));
+  for (const action of [
+    'msgvault.search',
+    'msgvault.show-message',
+    'msgvault.show-thread',
+    'msgvault.list-senders',
+    'msgvault.stats',
+    'msgvault.meetings',
+    'msgvault.person',
+  ]) {
+    const line = new RegExp(`'${action}':\\s*'([^']+)'`).exec(body);
+    assert.ok(line, `${action} has no title`);
+    assert.ok(line[1].length > 8, `${action} title is too thin: ${line[1]}`);
+  }
+  // …and the fallback is not Slack's when the request is not Slack's.
+  assert.match(JS, /isSlack \? 'Approve Slack action' : 'Approve archive access'/);
+});
+
+test('the context line does not call the archive a Slack team', () => {
+  assert.match(JS, /isSlack \? 'Slack team ' : 'msgvault — '/);
+});

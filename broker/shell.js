@@ -157,7 +157,16 @@ function show(request) {
   $('review-idle').hidden = true;
   failed = false;
   readyAt = Date.now() + 650;
-  $('team').textContent = config.teamID;
+  // ── WHICH CAPABILITY IS BEING ASKED FOR ──────────────────────────────────
+  // The page was written when Slack was the only thing behind this dialog, so
+  // it said "Slack" in the title, the context line and the brand pair. A
+  // prompt that names the wrong system is worse than a vague one: it is a
+  // confident claim about what you are approving.
+  const capability = String(request.action || '').split('.')[0];
+  const isSlack = capability !== 'msgvault';
+  document.body.dataset.capability = capability;
+  $('team').textContent = isSlack ? config.teamID : 'your mail, calendar and contacts archive';
+  $('request-context').firstChild.textContent = isSlack ? 'Slack team ' : 'msgvault — ';
   // WHICH MACHINE'S CHAT ASKED. A label muxpad asserts — the broker cannot
   // verify it, since every request arrives from the hosting machine — but it
   // is what a timed grant is bound to, so it belongs in front of the human
@@ -169,8 +178,18 @@ function show(request) {
     'slack.read': 'Read history',
     'slack.search': 'Search messages',
     'slack.channels': 'List channels',
+    // Each one says WHAT IS BEING READ. "Search" alone would be a verb with
+    // no object, and approving a verb with no object is approving nothing.
+    'msgvault.search': 'Search your mail archive',
+    'msgvault.show-message': 'Read one message',
+    'msgvault.show-thread': 'Read a whole thread',
+    'msgvault.list-senders': 'List who emails you most',
+    'msgvault.stats': 'Read archive totals',
+    'msgvault.meetings': 'Read meeting notes',
+    'msgvault.person': 'Look up a contact',
   };
-  $('approval-title').textContent = titles[request.action] || 'Approve Slack action';
+  $('approval-title').textContent =
+    titles[request.action] || (isSlack ? 'Approve Slack action' : 'Approve archive access');
   const { text, ...details } = request.payload;
   const message = $('message');
   message.hidden = typeof text !== 'string';

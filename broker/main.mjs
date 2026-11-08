@@ -11,6 +11,7 @@ import { inlineMode } from './passkey-approval.mjs';
 import { passkeyAdminHandler } from './passkey-http.mjs';
 import { BROKER_ROOT, brokerPath } from './broker-paths.mjs';
 import { assertProtectedPath } from './protected-path.mjs';
+import { msgvaultRunner } from './msgvault-runner.mjs';
 import { slackClient } from './slack.mjs';
 import { listenPrivateSocket } from './socket-listener.mjs';
 import { saveState } from './state-store.mjs';
@@ -84,6 +85,10 @@ const broker = new Broker({
       }
     : {}),
   slack: (action, payload, upload) => slack.run(action, payload, upload),
+  // Built unconditionally and cheap to hold: it reads the declaration per
+  // call, so a machine with no archive declared simply refuses at dispatch,
+  // and one that gains an archive needs no restart.
+  msgvault: msgvaultRunner(),
 });
 const requestHandler = handler(broker, config.origin, {
   config,

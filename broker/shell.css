@@ -324,3 +324,16 @@ pre {
 #approval .brand-pair {
   margin-bottom: 16px;
 }
+
+/* ── THE PROMPT NAMES THE RIGHT SYSTEM ──────────────────────────────────────
+   This page was written when Slack was the only thing behind it, so the brand
+   pair at the top of the dialog is Slack's mark and the word "Slack". Shown
+   above a request to read somebody's mail archive, that is not merely vague —
+   it is a confident claim about what is being approved, which is the one thing
+   an approval prompt must never get wrong.
+
+   `shell.js` sets `data-capability` on <body> from the action's own prefix, so
+   the pair that is shown always follows the request rather than a default. */
+.brand-archive { display: none; }
+body[data-capability="msgvault"] .brand-pair:not(.brand-archive) { display: none; }
+body[data-capability="msgvault"] .brand-archive { display: inline-flex; }
