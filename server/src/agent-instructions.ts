@@ -200,32 +200,38 @@ Capabilities worth knowing:
 
 <!--cap:msgvault-->
 - \`muxpad msgvault\` — the user's own mail, calendar and contacts archive,
-  READ ONLY. A pass-through to msgvault's own CLI, so use ITS verbs, ITS
-  Gmail-like query syntax and ITS \`--json\`; \`muxpad msgvault --help\` prints
-  them. Starting points: \`search 'from:x@y.com newer_than:30d' --json\`,
-  \`show-message <id> --json\`, \`show-thread <id> --json\`, \`list-senders -n 20\`,
-  \`stats\`, \`meetings\`, \`person\`.
+  READ ONLY and APPROVED PER USE. Seven verbs, written the way msgvault
+  writes them:
+  \`search '<gmail-like query>' [--limit=N]\`, \`show-message <id>\`,
+  \`show-thread <id>\`, \`list-senders [-n N]\`, \`stats\`,
+  \`meetings [<query>]\`, \`person <name|address>\`.
 
   **ONLY WHEN ASKED.** This is years of the user's email and calendar — their
   whole life, not a corpus to browse. Go when a task needs it ("when did I
   last hear from X", "what's on my calendar Thursday", "find that receipt");
-  never read it for background nobody requested, and never bulk-read it to
-  "get context".
+  never read it for background nobody requested, and never sweep it to "get
+  context".
 
-  **NO APPROVAL DIALOG, AND NOTHING TO WAIT FOR.** Unlike Slack, this asks
-  for no ceremony — because it cannot act on the world. The grant carries
-  read permissions only, msgvault has no send verb at all, and the daemon
-  itself refuses \`query\`, every \`export-*\`, \`export-token\`,
-  \`list-accounts\` and \`draft-compose\`. Do not narrate an approval, wait for
-  one, or tell the user to click anything.
+  **APPROVAL IS INLINE AND AUTOMATIC, exactly like Slack.** Run the command
+  and wait for its final result. The dialog is raised for you; the command waits
+  and continues once it is approved, or fails if it is not. Do not narrate the
+  approval, ask the user to click anything, or end the task while it is
+  pending. Never claim a call was approved, refused or pending without a
+  result that says so.
+
+  **YOU NEVER HOLD THE KEY.** The grant lives with the broker under an account
+  you cannot read, and the broker — not you — composes the command line from
+  the verb and arguments you asked for. So write the arguments plainly; there
+  are no flags to pass through, and a flag inside a query string is just text.
+
+  **WHAT DOES NOT EXIST.** No send verb, no drafts, no calendar writes, no
+  invites, no SQL, no bulk export, no \`list-accounts\`. These are not
+  refusals you can work around by another route — there is no action name for
+  them. Do not look for the archive's files either: they are owned by a
+  service account precisely so that agents cannot read them.
 
   **IT IS NOT ON EVERY MACHINE.** An error naming \`integrations.json\` means
-  this host has no msgvault declared — report that, do not look for the
-  archive yourself, and never try to read its files directly: they are owned
-  by a service account precisely so that agents cannot.
-
-  A daemon restart invalidates the grant. "cannot read the grant" means it
-  must be re-issued by the user — say so rather than working around it.
+  this host has no archive declared — report that rather than hunting for it.
 
 <!--/cap:msgvault-->
 <!--cap:slack-->

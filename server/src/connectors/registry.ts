@@ -73,34 +73,37 @@ const SLACK: Record<string, VerbRule> = {
 };
 
 /**
- * msgvault, matching the permission vocabulary `agent-token issue` accepts.
+ * msgvault — the ACTIONS THE BROKER ACCEPTS, which is now the only vocabulary.
  *
- * There is no send permission and no send verb, which is half of "never
- * sends"; the other half is that the mediator exposes no endpoint for one.
+ * ── WHY THIS LIST CHANGED SHAPE ──────────────────────────────────────────
+ * It used to mirror the permission words `agent-token issue` takes
+ * (`search.read`, `draft.create`, `calendar.invite`…), because the design at
+ * the time was: hand the agent a scoped token and FILTER the argv it writes.
+ * That design is gone. The broker composes the command line itself from a
+ * validated payload (broker/capabilities.mjs, broker/msgvault.mjs), so what
+ * muxpad must be able to classify is the broker's action, not msgvault's
+ * permission word.
  *
- * `calendar.write` and `calendar.invite` are the two that leave the machine.
- * Invite is REFUSED here rather than merely prompted: it emails the attendees,
- * so under a requirement of "drafts, never send email" it is a send with a
- * different name. If the owner wants it later it is one line and a prompt that
- * says who gets the mail.
+ * Two vocabularies for one connector is how a verb ends up approved under a
+ * name that does not describe it — which is the exact bug a reviewer found in
+ * the argv filter. So there is one.
+ *
+ * EVERY ACTION IS A READ. The write verbs that used to be listed here
+ * (`draft.*`, `calendar.write`, and `calendar.invite`, refused outright
+ * because mailing attendees is sending mail under another name) are not
+ * refused by this table any more — they are ABSENT FROM THE BROKER, which is
+ * stronger: there is no action name to request, no validator to reach and no
+ * argv template to fill. msgvault's own delegated mode refuses them a third
+ * time.
  */
 const MSGVAULT: Record<string, VerbRule> = {
-  'msgvault.search.read': { kind: 'read', timed: true },
-  'msgvault.message.read': { kind: 'read', timed: true },
-  'msgvault.attachment.read': { kind: 'read', timed: true },
-  'msgvault.stats.read': { kind: 'read', timed: true },
-  'msgvault.calendar.read': { kind: 'read', timed: true },
-  'msgvault.calendar.event.read': { kind: 'read', timed: true },
-  'msgvault.draft.create': { kind: 'write', timed: false },
-  'msgvault.draft.edit': { kind: 'write', timed: false },
-  'msgvault.draft.delete': { kind: 'write', timed: false },
-  'msgvault.calendar.write': { kind: 'write', timed: false, notifiesOthers: true },
-  'msgvault.calendar.invite': {
-    kind: 'write',
-    timed: false,
-    notifiesOthers: true,
-    refuse: 'a calendar invite emails the attendees, which is sending mail under another name',
-  },
+  'msgvault.search': { kind: 'read', timed: true },
+  'msgvault.show-message': { kind: 'read', timed: true },
+  'msgvault.show-thread': { kind: 'read', timed: true },
+  'msgvault.list-senders': { kind: 'read', timed: true },
+  'msgvault.stats': { kind: 'read', timed: true },
+  'msgvault.meetings': { kind: 'read', timed: true },
+  'msgvault.person': { kind: 'read', timed: true },
 };
 
 export const VERBS: Record<string, VerbRule> = { ...SLACK, ...MSGVAULT };
@@ -151,58 +154,21 @@ export function verbsOf(connector: string): string[] {
 }
 
 /**
- * GLOBAL FLAGS THE PASS-THROUGH MUST NOT FORWARD.
+ * ── WHAT USED TO BE HERE, AND WHY IT IS NOT ──────────────────────────────
+ * `FORBIDDEN_FLAGS` and `REFUSED_COMMANDS`: the flags and subcommands the
+ * argv pass-through had to strip — `--agent-url`, `--home`, `query`,
+ * `export-*`, `export-token` and the rest.
  *
- * `muxpad msgvault <args>` hands the agent's argv to the real binary, which is
- * the point — the CLI is rich and documented and muxpad should not re-model
- * it. These are the flags that would escape the mediator rather than use it:
- * two of them re-point the tool at a different daemon or credential, and two
- * re-point it at a different archive entirely.
+ * They are gone because the thing they protected is gone. The agent no longer
+ * writes argv at all: it sends an action and a payload, and the broker
+ * composes the command line from a fixed template (broker/capabilities.mjs,
+ * broker/msgvault.mjs). A filter has to enumerate what is dangerous and a
+ * reviewer broke this one in a single line — `--log-file search query
+ * \'SELECT …\'` ran arbitrary SQL approved as a search, because a
+ * value-taking flag swallowed the subcommand. A template has no slot to
+ * smuggle a flag through, so the class of attack is absent rather than
+ * defended against.
  *
- * Enforced in the broker as well. A filter that lives only in muxpad's process
- * is a filter inside the thing it is filtering.
+ * Do not bring them back without bringing back argv forwarding, which is the
+ * only thing they were ever for.
  */
-export const FORBIDDEN_FLAGS = [
-  '--home',
-  '--config',
-  '--agent-url',
-  '--agent-token-file',
-  '--agent-allow-insecure',
-  '--local',
-];
-
-/**
- * SUBCOMMANDS THE PASS-THROUGH REFUSES.
- *
- * Each one reads or moves more than any grant describes:
- *   query              arbitrary SQL over the whole archive, under search.read
- *   export-*           bulk extraction to disk, where no grant follows it
- *   create-subset      a second copy of the archive, unmediated
- *   export-token       hands out the provider credential itself
- *   backup, gc         move or destroy the archive
- *   remove-account     destroys an account's data
- *   tui, mcp, serve    long-lived surfaces that outlive the request
- *   credentials        provider credentials on the daemon host
- */
-export const REFUSED_COMMANDS = [
-  'query',
-  'create-subset',
-  'export-token',
-  'export-messages',
-  'export-eml',
-  'export-attachment',
-  'export-attachments',
-  'export-discord',
-  'backup',
-  'gc',
-  'remove-account',
-  'credentials',
-  'tui',
-  'mcp',
-  'serve',
-  'daemon',
-  'setup',
-  'update',
-  'skills',
-  'openapi',
-];
