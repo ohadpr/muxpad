@@ -879,6 +879,58 @@ json_string() {
   printf '%s' "$1" | jq -Rs .
 }
 
+# ─── msgvault ──────────────────────────────────────────────────────────────
+#
+# A PASS-THROUGH, NOT A WRAPPER API. The owner's instruction was explicit:
+# "Ideally agent uses msgvault CLI because it's likely rich and well
+# documented… I'd rather not invent a wrapper API around it." So every
+# argument goes to msgvault's own parser and the agent learns msgvault, not a
+# muxpad dialect of it. All this adds is the three flags that say WHO IS
+# ASKING, which an agent should not have to know or be trusted to get right.
+#
+# ── NOTHING HERE IS A PATH THIS SCRIPT KNOWS ───────────────────────────────
+# The binary, the daemon's url and the grant file all come from
+# /Library/muxpad/integrations.json — root-owned, so an agent cannot point
+# this at a different binary, a different daemon or a different credential.
+# An absent declaration means NOT CONFIGURED; it never falls back to a guess.
+#
+# ── AND THE RESTRAINT IS NOT HERE EITHER ───────────────────────────────────
+# This script runs as the agent's own user, so anything it enforced the agent
+# could edit out. It enforces nothing. The grant in that file carries read
+# permissions only, and msgvault's delegated mode refuses the verbs that would
+# escape one — `query` (arbitrary SQL), the whole `export-*` family,
+# `export-token` (the provider credential itself), `list-accounts`,
+# `draft-compose`. Measured on this install, all five refused. There is no
+# send verb in msgvault at all.
+MSGVAULT_DECL=/Library/muxpad/integrations.json
+
+cmd_msgvault() {
+  require_jq
+  [ -r "$MSGVAULT_DECL" ] || {
+    echo "muxpad: msgvault: no integration declared in $MSGVAULT_DECL" >&2
+    echo 'muxpad: msgvault: declare "binary", "agentUrl" and "tokenFile" there (root-owned)' >&2
+    exit 1; }
+  local bin url tok
+  bin="$(jq -r '.msgvault.binary // empty' "$MSGVAULT_DECL")"
+  url="$(jq -r '.msgvault.agentUrl // empty' "$MSGVAULT_DECL")"
+  tok="$(jq -r '.msgvault.tokenFile // empty' "$MSGVAULT_DECL")"
+  for pair in "binary:$bin" "agentUrl:$url" "tokenFile:$tok"; do
+    [ -n "${pair#*:}" ] || {
+      echo "muxpad: msgvault: ${pair%%:*} is not declared in $MSGVAULT_DECL" >&2; exit 1; }
+  done
+  [ -x "$bin" ] || { echo "muxpad: msgvault: $bin is not executable" >&2; exit 1; }
+  [ -r "$tok" ] || {
+    echo "muxpad: msgvault: cannot read the grant at $tok" >&2
+    echo 'muxpad: msgvault: a daemon restart invalidates it — re-issue and try again' >&2
+    exit 1; }
+  [ $# -gt 0 ] || { "$bin" --help; return; }
+  # --agent-allow-insecure is honest here and nowhere else: the url is pinned
+  # to loopback by the declaration's own parser, so the "insecure" transport
+  # never leaves this machine.
+  exec "$bin" --agent-url "$url" --agent-token-file "$tok" \
+    --agent-allow-insecure --no-log-file "$@"
+}
+
 # ─── slack ─────────────────────────────────────────────────────────────────
 #
 # A THIN CLIENT. Every call below is one request to the muxpad server, which
@@ -1181,6 +1233,7 @@ usage:
   muxpad slack read <#channel|ID> [--since=2h] [--limit=50]
   muxpad slack search "<query>" [--limit=20]
   muxpad slack post <#channel|ID> "<text>"
+  muxpad msgvault <any msgvault args>    read the mail/calendar archive
   muxpad slack unpost <channelID> <ts>
   muxpad slack channels
   muxpad slack user <@username|userID>
@@ -5034,6 +5087,7 @@ case "$VERB" in
   cron) cmd_cron "${ARGS[@]:1}" ;;
   search) cmd_search "${ARGS[@]:1}" ;;
   slack) cmd_slack "${ARGS[@]:1}" ;;
+  msgvault) cmd_msgvault "${ARGS[@]:1}" ;;
   card) cmd_card "${ARGS[@]:1}" ;;
   publish) cmd_publish "${ARGS[@]:1}" ;;
   node) cmd_node "${ARGS[@]:1}" ;;

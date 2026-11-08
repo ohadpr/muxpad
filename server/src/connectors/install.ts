@@ -43,6 +43,11 @@ export interface ConnectorInstall {
   logs?: string[];
   /** How to ask whether it is up — printed, never run by muxpad. */
   statusCommand?: string;
+  /** Where the tool's own daemon answers, when it speaks over a local API. */
+  agentUrl?: string;
+  /** The delegated grant muxpad presents to it. A PATH, never the secret:
+   *  muxpad hands the file to the tool and never reads it itself. */
+  tokenFile?: string;
 }
 
 export type Installs = Record<string, ConnectorInstall>;
@@ -69,6 +74,13 @@ export function parseInstalls(raw: unknown): Installs {
       ...(list(v.libraries)?.length ? { libraries: list(v.libraries) as string[] } : {}),
       ...(list(v.logs)?.length ? { logs: list(v.logs) as string[] } : {}),
       ...(str(v.statusCommand) ? { statusCommand: v.statusCommand } : {}),
+      // Loopback only. A declaration that points the grant at another host
+      // would send the token off this machine — and the file is root-owned
+      // precisely so that nothing an agent can edit decides where it goes.
+      ...(str(v.agentUrl) && /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:|\/|$)/.test(v.agentUrl)
+        ? { agentUrl: v.agentUrl }
+        : {}),
+      ...(absolute(v.tokenFile) ? { tokenFile: v.tokenFile } : {}),
     };
   }
   return out;

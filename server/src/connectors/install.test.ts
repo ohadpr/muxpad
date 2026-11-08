@@ -109,3 +109,35 @@ describe('loading it', () => {
     expect(got.problem).toMatch(/not valid JSON/);
   });
 });
+
+describe('a delegated grant may only point at this machine', () => {
+  const one = (over: Record<string, unknown>) =>
+    parseInstalls({ msgvault: { home: '/h', binary: '/b', account: 'a', ...over } }).msgvault;
+
+  it('keeps a loopback url and the token PATH', () => {
+    const e = one({ agentUrl: 'http://127.0.0.1:8787', tokenFile: '/Library/muxpad/mv-token' });
+    expect(e?.agentUrl).toBe('http://127.0.0.1:8787');
+    expect(e?.tokenFile).toBe('/Library/muxpad/mv-token');
+  });
+
+  it('drops a url that would send the grant off this machine', () => {
+    // The file is root-owned so that nothing an agent can edit decides where
+    // the token goes. A host in this field is that decision.
+    for (const url of [
+      'http://10.0.0.5:8787',
+      'https://evil.example.com',
+      'http://127.0.0.1.evil.com',
+      'http://localhost.evil.com/x',
+    ])
+      expect(one({ agentUrl: url })?.agentUrl, url).toBeUndefined();
+  });
+
+  it('takes localhost and ::1 too, which are the same machine', () => {
+    expect(one({ agentUrl: 'http://localhost:8787' })?.agentUrl).toBeTruthy();
+    expect(one({ agentUrl: 'http://[::1]:8787' })?.agentUrl).toBeTruthy();
+  });
+
+  it('refuses a relative token path', () => {
+    expect(one({ tokenFile: 'mv-token' })?.tokenFile).toBeUndefined();
+  });
+});
