@@ -1570,10 +1570,21 @@
 .chat-send:active:not(:disabled) {
   transform: scale(0.94);
 }
+/* DISABLED IS SAID WITH PROPERTIES NO THEME PAINTS.
+   This rule used to say it with `background`, `color` and `box-shadow` —
+   which is exactly what a theme skins a button with. `[data-theme="memphis"]
+   .chat-send` is (0,2,0) and so is `.chat-send:disabled`: a tie, decided by
+   file order, and styles.css loads last. So on memphis the dead button kept
+   its full yellow sticker and read as the liveliest control on the screen.
+   Reported, with a photo of an empty composer and a bright Queue key.
+
+   Same family as the queued bubble above: not "win the cascade" — say it in
+   a vocabulary a skin does not use. Opacity and grayscale are orthogonal to
+   every fill, border and offset shadow a theme can draw, so this holds for
+   themes that do not exist yet. */
 .chat-send:disabled {
-  background: color-mix(in srgb, var(--chat-fg) 12%, var(--chat-elev));
-  color: color-mix(in srgb, var(--chat-faint) 80%, transparent);
-  box-shadow: none;
+  opacity: 0.45;
+  filter: grayscale(1);
   cursor: default;
 }
 .chat-send-glyph {
