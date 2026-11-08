@@ -198,6 +198,36 @@ Capabilities worth knowing:
   APPS ARE PRIVATE (tailnet only) — never publish an app's data or suggest
   exposing it; \`publish\` is for static artifacts you MEAN to be public.
 
+<!--cap:msgvault-->
+- \`muxpad msgvault\` — the user's own mail, calendar and contacts archive,
+  READ ONLY. A pass-through to msgvault's own CLI, so use ITS verbs, ITS
+  Gmail-like query syntax and ITS \`--json\`; \`muxpad msgvault --help\` prints
+  them. Starting points: \`search 'from:x@y.com newer_than:30d' --json\`,
+  \`show-message <id> --json\`, \`show-thread <id> --json\`, \`list-senders -n 20\`,
+  \`stats\`, \`meetings\`, \`person\`.
+
+  **ONLY WHEN ASKED.** This is years of the user's email and calendar — their
+  whole life, not a corpus to browse. Go when a task needs it ("when did I
+  last hear from X", "what's on my calendar Thursday", "find that receipt");
+  never read it for background nobody requested, and never bulk-read it to
+  "get context".
+
+  **NO APPROVAL DIALOG, AND NOTHING TO WAIT FOR.** Unlike Slack, this asks
+  for no ceremony — because it cannot act on the world. The grant carries
+  read permissions only, msgvault has no send verb at all, and the daemon
+  itself refuses \`query\`, every \`export-*\`, \`export-token\`,
+  \`list-accounts\` and \`draft-compose\`. Do not narrate an approval, wait for
+  one, or tell the user to click anything.
+
+  **IT IS NOT ON EVERY MACHINE.** An error naming \`integrations.json\` means
+  this host has no msgvault declared — report that, do not look for the
+  archive yourself, and never try to read its files directly: they are owned
+  by a service account precisely so that agents cannot.
+
+  A daemon restart invalidates the grant. "cannot read the grant" means it
+  must be re-issued by the user — say so rather than working around it.
+
+<!--/cap:msgvault-->
 <!--cap:slack-->
 - \`muxpad slack\` — the company Slack, read/write, from any pane and any
   harness. \`slack read <channel-name|conversationID> [--since=2h]\`, \`slack search

@@ -418,3 +418,62 @@ ${name} "$@"
       });
   });
 });
+
+/**
+ * `muxpad msgvault` — the same discipline, a different shape.
+ *
+ * Slack's restraint is a server that holds the token. msgvault's is the
+ * DAEMON: a delegated grant with read permissions only, enforced on the other
+ * side of a local API, which refuses `query`, every `export-*`, `export-token`
+ * and `draft-compose` outright. This script therefore enforces nothing — it
+ * runs as the agent's own user, where anything it enforced the agent could
+ * edit out. What it must not do is know a path.
+ */
+describe('msgvault knows no paths of its own', () => {
+  it('reads the binary, the url and the grant from the root-owned declaration', () => {
+    const fn = CODE.slice(CODE.indexOf('cmd_msgvault() {'));
+    const body = fn.slice(0, fn.indexOf('\n}\n'));
+    expect(body).toMatch(/\.msgvault\.binary/);
+    expect(body).toMatch(/\.msgvault\.agentUrl/);
+    expect(body).toMatch(/\.msgvault\.tokenFile/);
+    expect(body).toMatch(/MSGVAULT_DECL/);
+    // An absent declaration is NOT CONFIGURED. A default here would be the
+    // hardcoding wearing a hat — and it would point the grant somewhere
+    // nobody chose.
+    expect(body).not.toMatch(/\/usr\/local\//);
+    expect(body).not.toMatch(/127\.0\.0\.1/);
+  });
+
+  it('declares the file root-owned, and never reads the secret itself', () => {
+    expect(CODE).toMatch(/MSGVAULT_DECL=\/Library\/muxpad\/integrations\.json/);
+    // The token is handed to msgvault as a PATH. muxpad never opens it, so
+    // there is no step at which it could be printed, logged or forwarded.
+    const fn = CODE.slice(CODE.indexOf('cmd_msgvault() {'));
+    const body = fn.slice(0, fn.indexOf('\n}\n'));
+    expect(body).toMatch(/--agent-token-file "\$tok"/);
+    expect(body).not.toMatch(/cat "\$tok"|\$\(<\s*"\$tok"/);
+  });
+
+  it('calls helpers this script actually defines', () => {
+    // `need jq` was written here and there is no `need` — every msgvault call
+    // died with "command not found" before it reached the declaration. A
+    // shell function that does not exist is a runtime error, not a syntax
+    // one, so `bash -n` is clean and only running it finds out.
+    const fn = CODE.slice(CODE.indexOf('cmd_msgvault() {'));
+    const body = fn.slice(0, fn.indexOf('\n}\n'));
+    for (const call of body.match(/^\s*([a-z_][a-z0-9_]*)\b(?= )/gm) ?? []) {
+      const name = call.trim();
+      if (!/^(require_jq|json_string|need_pane|die)$/.test(name)) continue;
+      expect(CODE, `${name} is called but never defined`).toMatch(
+        new RegExp(`^${name}\\(\\) \\{`, 'm'),
+      );
+    }
+    expect(body).toMatch(/require_jq/);
+  });
+
+  it('passes the agent’s own argv through, inventing no dialect', () => {
+    const fn = CODE.slice(CODE.indexOf('cmd_msgvault() {'));
+    const body = fn.slice(0, fn.indexOf('\n}\n'));
+    expect(body).toMatch(/exec "\$bin" .*"\$@"/s);
+  });
+});
