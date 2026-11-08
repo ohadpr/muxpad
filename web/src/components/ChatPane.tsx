@@ -140,7 +140,13 @@ import { composerAfterLateAck, watchdogVerdict } from '../lib/send-watchdog';
 import { NO_ROUNDS, loadSpawnRounds } from '../lib/spawn-rounds';
 import { subChatIsOpen, subChatsOf } from '../lib/sub-chats';
 import { uploadError } from '../lib/upload-error';
-import { type UploadItem, UploadQueue, formatBytes, summarize } from '../lib/upload-queue';
+import {
+  type UploadItem,
+  UploadQueue,
+  canSendDraft,
+  formatBytes,
+  summarize,
+} from '../lib/upload-queue';
 import type { AgentLink } from '../lib/voice/session';
 import { useVoice } from '../lib/voice/use-voice';
 import { workingVariantFor } from '../lib/working-variant';
@@ -2781,6 +2787,17 @@ export function ChatPane({
   // change is about. Cancel is one tap away on every chip if the wait is not
   // wanted.
   const uploadsInFlight = uploads.active > 0;
+  /**
+   * The button is enabled exactly when pressing it would do something.
+   *
+   * It used to ask `!input.trim() && chips.length === 0` while `sendMessage`
+   * asked for text OR an attachment that is `done` with a path. Those disagree
+   * on a case that happens: an upload fails, its chip stays in the row so the
+   * failure is visible, nothing is uploading any more — and Send renders
+   * ENABLED over an empty composer and then does nothing, because the guard
+   * refuses it. One function answers for both now (lib/upload-queue).
+   */
+  const canSend = canSendDraft(input, chips);
   /**
    * WHAT WENT WRONG, IN WORDS, STILL ON SCREEN.
    *
@@ -5941,7 +5958,7 @@ export function ChatPane({
                     type="button"
                     className="chat-send is-queue"
                     onClick={sendMessage}
-                    disabled={uploadsInFlight || (!input.trim() && chips.length === 0)}
+                    disabled={!canSend}
                     aria-label="Queue message — sends when the agent is free"
                     title={
                       uploadsInFlight
@@ -5977,7 +5994,7 @@ export function ChatPane({
                     type="button"
                     className="chat-send"
                     onClick={sendMessage}
-                    disabled={uploadsInFlight || (!input.trim() && chips.length === 0)}
+                    disabled={!canSend}
                     aria-label={uploadsInFlight ? 'Waiting for uploads' : 'Send'}
                     title={
                       uploadsInFlight
