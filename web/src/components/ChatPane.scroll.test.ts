@@ -258,6 +258,34 @@ describe('the mention picker’s ceiling is MEASURED, not derived', () => {
     expect(tsx).toMatch(/vv\?\.removeEventListener\('resize', measure\)/);
   });
 
+  it('never publishes a COLLAPSED box as a measurement', () => {
+    // Every mounted pane listens to visualViewport, so raising the keyboard
+    // in one chat runs `measure` in all of them — the hidden ones included,
+    // where the rect is all zeroes. Publishing that made the picker's
+    // `calc(0 - notch - 10px)` clamp to nothing: nine pixels of empty panel,
+    // no rows. Reported as "the @ menu is 10 pixels high so no items are
+    // visible".
+    //
+    // The height has been guarded against this since the display:none bug;
+    // the top sat unguarded on the next line. One gate now covers both.
+    const body = tsx.slice(tsx.indexOf('const measure = () => {'));
+    const fn = body.slice(0, body.indexOf('\n    };'));
+    const bail = fn.indexOf('if (h <= 0) return;');
+    expect(bail).toBeGreaterThan(-1);
+    expect(bail).toBeLessThan(fn.indexOf('setComposerH('));
+    expect(bail).toBeLessThan(fn.indexOf('setComposerTop('));
+    // …and nothing may slip past it by testing the height on its own again.
+    expect(fn).not.toMatch(/if \(h > 0\) setComposer/);
+  });
+
+  it('re-measures as the picker opens, which no event announces', () => {
+    // Opening is not a resize and not a viewport move, so without this the
+    // list is sized by whatever the last event left behind — on a phone,
+    // the value from before the keyboard came up.
+    expect(tsx).toMatch(/if \(mentionOpen\) measureRef\.current\(\);/);
+    expect(tsx).toMatch(/measureRef\.current = measure;/);
+  });
+
   it('and the picker is bounded by it', () => {
     // Comments stripped: the note explaining why the old derivation was wrong
     // NAMES it, and prose about a declaration is not one.
