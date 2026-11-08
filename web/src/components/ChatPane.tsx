@@ -121,6 +121,7 @@ import { canAutoPageHistory, showLoadEarlier } from '../lib/history-budget';
 import { NO_SENDERS, loadInboundSenders, matchInboundSenders } from '../lib/inbound-senders';
 import { showFolderChip } from '../lib/nav-row-affordances';
 import { type WorkspaceTabs, paneIndex } from '../lib/nav-search';
+import { type SendGuard, freshGuard, isDoubleFire } from '../lib/one-send';
 import { useReview } from '../lib/review/use-review';
 import {
   type HighlightRun,
@@ -1214,6 +1215,17 @@ export function ChatPane({
   // Open only while there is something to choose. A query that matches nothing
   // must give Enter back to the composer rather than swallow it.
   const mentionOpen = mentionRun !== null && mentionRows.length > 0;
+  // ── MEASURE AT THE MOMENT THE NUMBER IS READ ────────────────────────────
+  // `--chat-composer-top` is the picker's whole height budget, and it is only
+  // refreshed by events: a resize of the composer, or a visualViewport move.
+  // Opening the picker is neither, so it renders against whatever the last
+  // event left behind — which on a phone is the value from before the
+  // keyboard came up. One measure here costs a layout read on a keystroke
+  // that was already going to re-render the list.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: measureRef is a stable ref; mentionOpen is the trigger.
+  useEffect(() => {
+    if (mentionOpen) measureRef.current();
+  }, [mentionOpen]);
   const mentionSafeCursor =
     mentionRows.length === 0 ? 0 : Math.min(mentionCursor, mentionRows.length - 1);
 
@@ -1706,6 +1718,10 @@ export function ChatPane({
   /** The composer's distance from the top of the screen — the mention picker's
    *  real ceiling. See the measure effect. */
   const [composerTop, setComposerTop] = useState(0);
+  /** The composer measurement, callable from outside its effect — the picker
+   *  re-runs it as it opens, because that is the instant the number is read
+   *  and the keyboard may have moved the composer since the last event. */
+  const measureRef = useRef<() => void>(() => {});
   // Live assistant text streamed from the headless turn (token-level), shown
   // as a preview until the final message lands in the transcript tail.
   const [streamingText, setStreamingText] = useState('');
@@ -1832,6 +1848,14 @@ export function ChatPane({
   // The text of the in-flight send, held so a socket death before the ack
   // can restore it into the composer instead of losing it.
   const pendingText = useRef('');
+  /** The draft that just left, remembered SYNCHRONOUSLY — `input` is cleared
+   *  by a state update, which is one task too late to stop the second click
+   *  of a single gesture. Released by any edit to the composer, and by every
+   *  recovery path that puts text back. See lib/one-send. */
+  const sendGuard = useRef<SendGuard>(freshGuard());
+  const releaseSendGuard = () => {
+    sendGuard.current = freshGuard();
+  };
   /** What recovery last put back in the composer, so a late ack can undo
    *  it. Null whenever the composer's contents are the user's own. */
   const restoredText = useRef<string | null>(null);
@@ -2302,6 +2326,9 @@ export function ChatPane({
           if (lost) {
             restoredText.current = lost;
             setInput((prev) => prev || lost);
+            // Back in the composer and the user's again: re-sending it is a
+            // new message, not the ghost half of the old gesture.
+            sendGuard.current = freshGuard();
             setNotice({
               text: 'Connection dropped before the message was sent — try again.',
               tone: 'info',
@@ -2431,6 +2458,7 @@ export function ChatPane({
         // next socket.
         restoredText.current = text;
         setInput((prev) => prev || text);
+        sendGuard.current = freshGuard();
         setNotice({ text: 'Message not delivered — reconnecting. Try again.', tone: 'info' });
         try {
           wsRef.current?.close();
@@ -2647,7 +2675,15 @@ export function ChatPane({
     // `muxpad agent send`.
     const mentioned = mentionedChats(input, corpus, livePicks);
     const outgoing = withMentionContext(composeOutgoingMessage(text, attachmentPaths), mentioned);
-    if (!deliver(outgoing)) return;
+    // THE SAME GESTURE, COUNTED TWICE, IS NOT TWO MESSAGES. See lib/one-send:
+    // this draft is already gone, and the composer has not been edited since.
+    if (isDoubleFire(sendGuard.current, outgoing, Date.now())) return;
+    sendGuard.current = { text: outgoing, at: Date.now() };
+    if (!deliver(outgoing)) {
+      // Nothing left; the draft is still the user's to re-send.
+      releaseSendGuard();
+      return;
+    }
     setInput('');
     clearChips();
   };
@@ -2928,7 +2964,28 @@ export function ChatPane({
       // ancestor collapsing it, and swapping in getBoundingClientRect().height
       // silently broke the two tests that stub `offsetHeight` to drive it.
       const h = el.offsetHeight;
-      if (h > 0) setComposerH(h);
+      // A COLLAPSED BOX IS NOT A MEASUREMENT, FOR EITHER NUMBER. The height
+      // has been guarded since the display:none bug above; `composerTop` was
+      // published unconditionally right beside it, and that is the second
+      // half of the same defect — the transition written in one place and not
+      // the other.
+      //
+      // It bites on exactly the surface the guard was added for. Every
+      // mounted pane listens to `visualViewport`, so raising the keyboard in
+      // ONE chat runs `measure` in all of them, including the hidden ones:
+      // their rect is all zeroes, they publish `--chat-composer-top: 0px`,
+      // and the picker's `calc(0 - notch - 10px)` clamps to nothing. Switch
+      // to that chat, type `@`, and the list is its own padding — nine
+      // pixels of empty panel with no rows in it. Reported as "I do the @ it
+      // no longer shows the autocomplete menu, or it's 10 pixels high so no
+      // items are visible".
+      //
+      // It un-sticks itself once something resizes the composer FOR REAL —
+      // which is why typing the whole chat name made it appear: the draft
+      // wrapped to a second line, the ResizeObserver fired, and the measure
+      // finally ran on an element with a box.
+      if (h <= 0) return;
+      setComposerH(h);
       // ── HOW MUCH ROOM IS ABOVE THE COMPOSER ───────────────────────────────
       // The mention picker opens upward from here, and the height it may take
       // is exactly this number less the notch. It used to be DERIVED —
@@ -2944,6 +3001,7 @@ export function ChatPane({
       // whatever moved it.
       setComposerTop(Math.max(0, Math.round(el.getBoundingClientRect().top)));
     };
+    measureRef.current = measure;
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
@@ -5874,6 +5932,8 @@ export function ChatPane({
                   }
                   onChange={(text, caret) => {
                     setInput(text);
+                    // An edit is a NEW draft — the guard above is spent.
+                    releaseSendGuard();
                     syncMentionRun(text, caret);
                     // Editing retires a search highlight. Typing into the
                     // composer means you have stopped reading the result you were
