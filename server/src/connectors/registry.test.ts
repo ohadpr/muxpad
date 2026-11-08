@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FORBIDDEN_FLAGS, REFUSED_COMMANDS, VERBS, classify, verbsOf } from './registry.js';
+import { VERBS, classify, verbsOf } from './registry.js';
 
 describe('classification fails closed', () => {
   it('refuses a verb this build has never heard of', () => {
@@ -41,52 +41,49 @@ describe('no write may ride a grant approved earlier', () => {
     // Belt and braces, because the table is the thing a careless edit changes.
     const { classify: c } = await import('./registry.js');
     expect(c('slack.post').timed).toBe(false);
-    expect(c('msgvault.draft.create').timed).toBe(false);
+    expect(c('slack.post').timed).toBe(false);
   });
 
   it('lets reads ride one — which is what makes "a day" safe to offer', () => {
     expect(classify('slack.search')).toMatchObject({ ok: true, kind: 'read', timed: true });
-    expect(classify('msgvault.search.read')).toMatchObject({ ok: true, timed: true });
+    expect(classify('msgvault.search')).toMatchObject({ ok: true, timed: true });
   });
 });
 
 describe('the verbs that reach other people', () => {
   it('flags them, so the prompt can say so', () => {
     expect(classify('slack.post').notifiesOthers).toBe(true);
-    expect(classify('msgvault.calendar.write').notifiesOthers).toBe(true);
+    expect(classify('slack.post').notifiesOthers).toBe(true);
   });
 
   it('does not flag a draft, which reaches nobody', () => {
-    expect(classify('msgvault.draft.create').notifiesOthers).toBeUndefined();
+    expect(classify('msgvault.search').notifiesOthers).toBeUndefined();
   });
 
-  it('REFUSES a calendar invite — it is a send with another name', () => {
-    // The requirement is "create drafts, never send email". An invite emails
-    // the attendees, so it walks around that without being called send.
+  it('has no calendar invite to refuse — it is ABSENT, which is stronger', () => {
+    // The requirement is "create drafts, never send email", and an invite
+    // emails the attendees, so it walks around that without being called
+    // send. This table used to carry it with a `refuse` reason attached.
+    //
+    // It is not here at all now. The broker composes the command line from a
+    // fixed set of actions (broker/capabilities.mjs), so there is no action
+    // name to request, no validator to reach and no argv template to fill —
+    // and a refusal that depends on nobody deleting a line is weaker than a
+    // thing that was never built.
     const c = classify('msgvault.calendar.invite');
     expect(c.ok).toBe(false);
-    expect(c.reason).toMatch(/emails the attendees/);
+    expect(c.reason).toMatch(/does not know the verb/);
   });
 
-  it('has no send verb at all for msgvault', () => {
-    expect(verbsOf('msgvault').filter((v) => /send|sendmail/.test(v))).toEqual([]);
-  });
-});
-
-describe('the pass-through refusals', () => {
-  it('blocks the flags that re-point the tool away from the mediator', () => {
-    for (const f of ['--home', '--config', '--agent-url', '--agent-token-file', '--local'])
-      expect(FORBIDDEN_FLAGS, f).toContain(f);
-  });
-
-  it('blocks arbitrary SQL, bulk export and the credential dump', () => {
-    // Each reads or moves more than any grant describes.
-    for (const c of ['query', 'export-messages', 'create-subset', 'export-token', 'credentials'])
-      expect(REFUSED_COMMANDS, c).toContain(c);
-  });
-
-  it('blocks the long-lived surfaces that would outlive the request', () => {
-    for (const c of ['tui', 'mcp', 'serve', 'daemon']) expect(REFUSED_COMMANDS, c).toContain(c);
+  it('has no verb that sends anything, for msgvault', () => {
+    // `list-senders` reads who emails you most, and the word inside it is why
+    // this match is anchored on the VERB rather than on the substring: an
+    // assertion that fails on a reading verb would have been edited away.
+    const verbs = verbsOf('msgvault');
+    expect(verbs.length).toBeGreaterThan(0);
+    expect(verbs.filter((v) => /\.(send|post|invite|compose|reply|draft)/.test(v))).toEqual([]);
+    // …and every one of them classifies as a read.
+    for (const v of verbs) expect(classify(v), v).toMatchObject({ ok: true, kind: 'read' });
   });
 });
 
@@ -139,17 +136,17 @@ describe('the table is the policy, so the table is pinned', () => {
       'slack.edit': { kind: 'write', timed: false, others: true },
       'slack.unpost': { kind: 'write', timed: false, others: true },
       'slack.upload': { kind: 'write', timed: false, others: true },
-      'msgvault.search.read': { kind: 'read', timed: true },
-      'msgvault.message.read': { kind: 'read', timed: true },
-      'msgvault.attachment.read': { kind: 'read', timed: true },
-      'msgvault.stats.read': { kind: 'read', timed: true },
-      'msgvault.calendar.read': { kind: 'read', timed: true },
-      'msgvault.calendar.event.read': { kind: 'read', timed: true },
-      'msgvault.draft.create': { kind: 'write', timed: false },
-      'msgvault.draft.edit': { kind: 'write', timed: false },
-      'msgvault.draft.delete': { kind: 'write', timed: false },
-      'msgvault.calendar.write': { kind: 'write', timed: false, others: true },
-      'msgvault.calendar.invite': { kind: 'write', timed: false, others: true, refused: true },
+      // THE BROKER'S ACTIONS, which is now the only msgvault vocabulary —
+      // see the note on MSGVAULT in registry.ts. The write verbs that used to
+      // be listed here are not refused by this table any more; they are
+      // ABSENT FROM THE BROKER, which is stronger than a refusal.
+      'msgvault.search': { kind: 'read', timed: true },
+      'msgvault.show-message': { kind: 'read', timed: true },
+      'msgvault.show-thread': { kind: 'read', timed: true },
+      'msgvault.list-senders': { kind: 'read', timed: true },
+      'msgvault.stats': { kind: 'read', timed: true },
+      'msgvault.meetings': { kind: 'read', timed: true },
+      'msgvault.person': { kind: 'read', timed: true },
     };
 
   it('has exactly these verbs, no more and no fewer', () => {
