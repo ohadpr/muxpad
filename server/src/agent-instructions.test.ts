@@ -207,8 +207,13 @@ describe('the browser policy names app bundles specifically', () => {
 describe('the browser policy teaches the handoff', () => {
   const policy = AGENT_INSTRUCTIONS_SEED;
 
-  it('names the endpoint an agent calls to ask for a person', () => {
-    expect(policy).toContain('/needs-you');
+  it('names the command an agent runs to ask for a person', () => {
+    // A VERB, not a raw curl at the endpoint. The curl was the one documented
+    // call that sent no credential, so it becomes a 401 the day API auth is
+    // enforced — on the one path whose whole job is "only a human can clear
+    // this", raised by a caller that has just been told not to retry.
+    expect(policy).toContain('muxpad browser needs-you');
+    expect(policy).not.toMatch(/curl[^\n]*needs-you/);
   });
 
   it('says NOT to retry, and not to try to solve it', () => {
@@ -222,10 +227,13 @@ describe('the browser policy teaches the handoff', () => {
     expect(policy).toMatch(/payment|card/i);
   });
 
-  it('tells the agent to pass its tab, or the card lands in no conversation', () => {
+  it('says the summons lands in the browser this pane is stuck in', () => {
     // Scoping is the difference between a summons in the chat that is waiting
-    // for it and a summons nobody ever sees.
-    expect(policy).toMatch(/MUXPAD_TAB_ID/);
+    // for it and a summons nobody ever sees. The verb defaults to this pane's
+    // own browser, so the instruction promises that rather than asking the
+    // agent to interpolate a variable into a URL.
+    expect(policy).toMatch(/YOUR browser/);
+    expect(policy).toMatch(/any other browser/);
   });
 
   it('says a refusal means WAIT, not try again', () => {

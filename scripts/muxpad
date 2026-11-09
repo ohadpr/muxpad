@@ -1281,6 +1281,79 @@ PYUPLOAD
   slack_call POST /api/slack/upload "$body"
 }
 
+# ── SUMMONING A PERSON TO THE BROWSER ───────────────────────────────────────
+#
+# This was a documented `curl` in the agent instructions, and it was the one
+# documented call that sent NO credential. In `off` and `observe` that costs
+# nothing; the moment API auth is enforced it is a 401 on the one path whose
+# whole job is "I am stuck and only a human can clear this" — a failure at
+# exactly the worst moment, in the hands of a caller told to stop and not
+# retry.
+#
+# A verb instead, so the credential comes from `http_request` like every other
+# CLI call. It is also the shorter thing to type, which is the honest reason
+# the curl kept getting copied with its headers mangled.
+cmd_browser_needs_you() {
+  local reason="" selector="" target="" profile=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --reason=*) reason="${1#*=}" ;;
+      --selector=*) selector="${1#*=}" ;;
+      --target=*) target="${1#*=}" ;;
+      --profile=*) profile="${1#*=}" ;;
+      -*) { echo "muxpad: unknown option: $1" >&2; return 1; } ;;
+      *) [ -z "$reason" ] && reason="$1" || { echo "muxpad: unexpected argument: $1" >&2; return 1; } ;;
+    esac
+    shift
+  done
+  [ -n "$reason" ] || { echo "muxpad: needs-you wants a reason — one short line, about five words" >&2; return 1; }
+  # YOUR browser, the one you are stuck in. Summoning a person to any other
+  # profile asks them to log in somewhere the caller cannot see.
+  [ -n "$profile" ] || profile="s-${MUXPAD_TAB_ID:-}"
+  [ "$profile" != "s-" ] || { echo "muxpad: no MUXPAD_TAB_ID — run this from inside a muxpad pane, or pass --profile" >&2; return 1; }
+  require_jq
+  local body
+  body="$(jq -nc \
+    --arg reason "$reason" \
+    --arg selector "$selector" \
+    --arg target "$target" \
+    --arg tab "${MUXPAD_TAB_ID:-}" \
+    '{reason: $reason}
+     + (if $selector == "" then {} else {selector: $selector} end)
+     + (if $target == "" then {} else {targetId: $target} end)
+     + (if $tab == "" then {} else {tabId: $tab} end)')"
+  http_request POST "/api/browsers/$profile/needs-you" "$body" >/dev/null
+  printf 'asked for a person: %s\n' "$reason"
+}
+
+# The agent got past it on its own; put the hand down.
+cmd_browser_resolved() {
+  local profile="${1:-s-${MUXPAD_TAB_ID:-}}"
+  [ "$profile" != "s-" ] || { echo "muxpad: no MUXPAD_TAB_ID — run this from inside a muxpad pane" >&2; return 1; }
+  http_request DELETE "/api/browsers/$profile/needs-you" >/dev/null
+  printf 'hand down\n'
+}
+
+cmd_browser() {
+  case "${1:-}" in
+    needs-you) cmd_browser_needs_you "${@:2}" ;;
+    resolved) cmd_browser_resolved "${@:2}" ;;
+    *)
+      cat >&2 <<'EOF'
+usage:
+  muxpad browser needs-you "<five words>" [--selector=<css>] [--target=<id>]
+  muxpad browser resolved
+
+  needs-you summons a person to the browser THIS pane is driving, and rings
+  the thing that needs them. Walk to the wall first — the login form, the
+  captcha, the payment step — then call it, say what you are waiting for and
+  STOP. Do not poll and do not retry.
+EOF
+      return 1
+      ;;
+  esac
+}
+
 cmd_slack() {
   case "${1:-}" in
     read) cmd_slack_read "${@:2}" ;;
@@ -5153,6 +5226,7 @@ case "$VERB" in
   cron) cmd_cron "${ARGS[@]:1}" ;;
   search) cmd_search "${ARGS[@]:1}" ;;
   slack) cmd_slack "${ARGS[@]:1}" ;;
+  browser) cmd_browser "${ARGS[@]:1}" ;;
   msgvault) cmd_msgvault "${ARGS[@]:1}" ;;
   card) cmd_card "${ARGS[@]:1}" ;;
   publish) cmd_publish "${ARGS[@]:1}" ;;

@@ -588,7 +588,7 @@ become passable by trying again. **Do not try to solve them.** What
 you do instead is ask for the human, in one call:
 
 \`\`\`
-curl -sS -X POST "\$MUXPAD_API_URL/api/browsers/s-\$MUXPAD_TAB_ID/needs-you" -H 'content-type: application/json' -d '{"reason":"<five words>","selector":"input[type=password]","tabId":"'"\$MUXPAD_TAB_ID"'"}'
+muxpad browser needs-you "<five words>" --selector='input[type=password]'
 \`\`\`
 
 WALK TO THE WALL FIRST. Do not hand somebody a home page and let them hunt for
@@ -618,12 +618,14 @@ Say the thing that is in the way, not the story of how you got there:
 What you would have put in the long version belongs in your REPLY, where there
 is room for it. The card is a doorbell, not a letter.
 
-The profile is \`s-\$MUXPAD_TAB_ID\` — YOUR browser, the one you are stuck in.
-Summoning somebody to any other browser asks them to log in somewhere you cannot
-see, which is the bug this replaced. A card appears in that conversation, goes
-loud, and offers them the wheel — on their phone if that is where they are. Pass \`$MUXPAD_TAB_ID\` or the card lands
-in no conversation and nobody ever sees it. Then **say what you are waiting for
-and stop**, in that turn. Do not poll, do not retry the click, do not try a
+It summons them to YOUR browser — the one you are stuck in — because that is
+what the verb defaults to. Summoning somebody to any other browser asks them to
+log in somewhere you cannot see, which is the bug this replaced. (\`muxpad
+browser resolved\` puts the hand back down if you get past it on your own.)
+
+A card appears in your conversation, goes loud, and offers them the wheel — on
+their phone if that is where they are. Then **say what you are waiting for and
+stop**, in that turn. Do not poll, do not retry the click, do not try a
 different selector. Somebody dealing with a login is not a race you can win, and
 the retries are pure cost: a session on this machine burned several turns on
 them and got nowhere. **Do not retry.**
