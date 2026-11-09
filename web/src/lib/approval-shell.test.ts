@@ -318,10 +318,19 @@ describe('protected muxpad approval modal', () => {
     expect(
       f.win.document.getElementById('approval-permissions')?.closest('details'),
     ).not.toBeNull();
-    expect(f.win.document.querySelectorAll('.brand-pair svg')).toHaveLength(2);
-    expect(f.win.document.querySelector('.brand-pair')?.getAttribute('aria-label')).toBe(
+    // TWO PAIRS NOW, one per connector, because this page is no longer only
+    // Slack's — and a Slack mark over a request to read somebody's mail is a
+    // claim about which system is being touched. CSS shows exactly one, keyed
+    // on `data-capability`, which shell.js sets from the action's own prefix.
+    const pairs = [...f.win.document.querySelectorAll('.brand-pair')];
+    expect(pairs).toHaveLength(2);
+    for (const pair of pairs) expect(pair.querySelectorAll('svg')).toHaveLength(2);
+    expect(pairs.map((p) => p.getAttribute('aria-label'))).toEqual([
       'muxpad connected to Slack',
-    );
+      'muxpad connected to your archive',
+    ]);
+    // …and this request is Slack's, so that is the one on screen.
+    expect(f.win.document.body.dataset.capability).toBe('slack');
     expect(f.win.document.querySelector('svg image, svg use, img')).toBeNull();
   });
 
