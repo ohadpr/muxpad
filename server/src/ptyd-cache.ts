@@ -871,6 +871,12 @@ export function decorateTab(
     : tabLiveChildTabs(db, tab.id, Date.now());
   const childWork: PaneStatus[] = [];
   for (const childId of childTabs) {
+    // …AND THE ONE THAT STOPPED TO ASK YOU SOMETHING. A worker ends its turn
+    // with a question, so its pane is `ready` and nothing about its STATE
+    // says it is stuck — the fact lives on the tab, as `spawn_report_state`.
+    // Without this the signal reaches only the drawer, which you have to open
+    // to read, and a sub-chat is not a row anywhere else.
+    if (clocks?.index.get(childId)?.spawn_report_state === 'awaiting') childWork.push('blocked');
     const childPanes = panesByTabId?.get(childId) ?? new PaneStore(db).listByTab(childId);
     for (const p of childPanes) {
       const s = cache.getStatus(p.id, p.unread === true);
