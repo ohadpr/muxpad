@@ -8,6 +8,7 @@ import {
   artifactsOf,
   subChatGroups,
   subChatIsOpen,
+  subChatLiveWord,
   subChatsOf,
 } from '../lib/sub-chats';
 import { ChatChip } from './ChatChip';
@@ -220,7 +221,7 @@ function SubChatList({
           <ul className="chat-drawer__list">
             {g.subs.map((s) => {
               const state = spawnState(s.chat);
-              const live = g.key === 'running';
+              const liveWord = subChatLiveWord(s);
               return (
                 <li key={s.chat.tabId}>
                   <button
@@ -276,8 +277,19 @@ function SubChatList({
                       {/* EVERY ROW SAYS HOW LONG AGO. A running one says what it is
                           doing instead, which is the more useful fact and the
                           only one that changes while you look at it. */}
-                      {live ? (
-                        <span className="chat-drawer__row-live">working</span>
+                      {/* THE WORD COMES FROM `spawnState`, not from "is it
+                          retired". A worker that stopped to ask you something
+                          does not retire, so `!done` read it as working and
+                          this said so — while its own card in the log said
+                          AWAITING. One worker, two surfaces, two different
+                          claims about whether it needs you. */}
+                      {liveWord ? (
+                        <span
+                          className="chat-drawer__row-live"
+                          data-state={liveWord === 'needs you' ? 'blocked' : 'working'}
+                        >
+                          {liveWord}
+                        </span>
                       ) : s.chat.createdAt ? (
                         <span className="chat-drawer__row-sub">
                           {shortAge(now - s.chat.createdAt)}
