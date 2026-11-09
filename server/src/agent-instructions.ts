@@ -223,6 +223,8 @@ Capabilities worth knowing:
   you cannot read, and the broker — not you — composes the command line from
   the verb and arguments you asked for. So write the arguments plainly; there
   are no flags to pass through, and a flag inside a query string is just text.
+  Quote a query that contains spaces, exactly as you would for msgvault
+  itself: \`muxpad msgvault search 'from:x@y.com newer_than:30d'\`.
 
   **WHAT DOES NOT EXIST.** No send verb, no drafts, no calendar writes, no
   invites, no SQL, no bulk export, no \`list-accounts\`. These are not

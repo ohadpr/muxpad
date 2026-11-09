@@ -222,8 +222,14 @@ export function slackRoutes(deps: Deps): Hono {
     // — `mayPaneUse` allows everything and this costs one policy read. The
     // refusal path is therefore dormant rather than absent, which is the only
     // way to have it tested before the day it matters.
+    // WHICH CONNECTOR, FROM THE ACTION ITSELF. `slack.post` is Slack's,
+    // `msgvault.search` is the archive's, and the prefix is the only place
+    // that answers it — so a verb cannot be checked against the wrong
+    // connector's host policy, which is the mistake a second hardcoded
+    // 'slack' here would eventually become.
+    const connector = action.slice(0, action.indexOf('.'));
     const policy = loadPolicy();
-    const scope = mayPaneUse(deps.db, 'slack', pane, policy, directingOrigin(deps.db, pane));
+    const scope = mayPaneUse(deps.db, connector, pane, policy, directingOrigin(deps.db, pane));
     if (!scope.ok) throw new SlackRefused(action, payload, pane, scope.reason ?? 'refused');
     const verb = classify(action);
     if (!verb.ok) throw new SlackRefused(action, payload, pane, verb.reason ?? 'refused');
@@ -233,6 +239,10 @@ export function slackRoutes(deps: Deps): Hono {
       { action, payload },
       action === 'slack.upload' ? 125000 : 35000,
     );
+    // The broker is the only thing that holds a credential for either of
+    // them, so from here down nothing is Slack-specific: a request is
+    // tracked for the approval dialog and recorded as a card the same way
+    // whichever connector it names.
     safeTrack(result, pane);
     // ── AND A CARD IN THE CHAT THAT SENT IT ──────────────────────────────
     //
@@ -545,5 +555,45 @@ export function slackRoutes(deps: Deps): Hono {
   app.on(['PUT', 'DELETE'], '/token', (c) =>
     c.json(refusal('Manage credentials directly in the protected broker'), 403),
   );
+  /**
+   * ── THE ARCHIVE, THROUGH THE SAME DOOR ───────────────────────────────────
+   *
+   * Mounted from inside this closure deliberately. Everything that makes an
+   * approval real is here and nowhere else: the host-scoping gate, the
+   * pending-notice table the inline dialog polls, the card recorded in the
+   * chat that asked, and the one `onError` that turns a refusal into a 403.
+   * A second route file would have been a second copy of all four, and the
+   * owner's requirement was the opposite of that:
+   *
+   *   "I WANT ALL APPROVAL MECHANISM TO BE SINGULAR."
+   *
+   * So msgvault is a set of routes over the same funnel, not a second
+   * mechanism that happens to look similar.
+   *
+   * NO PAYLOAD IS SHAPED HERE. Each route hands the query through and the
+   * BROKER validates it and composes the command line (broker/msgvault.mjs).
+   * Validating here as well would be a second opinion about what is legal,
+   * and the one that matters is the one on the far side of the wall.
+   */
+  const archive = new Hono();
+  const count = (v: string | undefined) => (v === undefined ? undefined : Number(v));
+  const ARCHIVE_ROUTES: Array<[string, string, (q: Record<string, string>) => unknown]> = [
+    ['/search', 'msgvault.search', (q) => ({ query: q.q, limit: count(q.limit) })],
+    ['/message', 'msgvault.show-message', (q) => ({ id: q.id })],
+    ['/thread', 'msgvault.show-thread', (q) => ({ id: q.id })],
+    ['/senders', 'msgvault.list-senders', (q) => ({ limit: count(q.limit) })],
+    ['/stats', 'msgvault.stats', () => ({})],
+    ['/meetings', 'msgvault.meetings', (q) => (q.q ? { query: q.q } : {})],
+    ['/person', 'msgvault.person', (q) => ({ query: q.q })],
+  ];
+  for (const [path, action, payload] of ARCHIVE_ROUTES)
+    archive.get(path, async (c) => {
+      const q = c.req.query();
+      const auth = await authorize(q.pane, q.key);
+      if (!auth.ok) return c.json(auth.body, auth.status);
+      return c.json(await brokerAction(action, payload(q), auth.pane), 202);
+    });
+  app.route('/msgvault', archive);
+
   return app;
 }

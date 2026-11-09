@@ -881,54 +881,102 @@ json_string() {
 
 # ─── msgvault ──────────────────────────────────────────────────────────────
 #
-# A PASS-THROUGH, NOT A WRAPPER API. The owner's instruction was explicit:
-# "Ideally agent uses msgvault CLI because it's likely rich and well
-# documented… I'd rather not invent a wrapper API around it." So every
-# argument goes to msgvault's own parser and the agent learns msgvault, not a
-# muxpad dialect of it. All this adds is the three flags that say WHO IS
-# ASKING, which an agent should not have to know or be trusted to get right.
+# A THIN CLIENT. Every call below is one request to the muxpad server, which
+# hands it to the protected broker, which raises the approval dialog and —
+# only if you approve — runs msgvault itself with a grant this process cannot
+# read. Nothing here holds a credential, and there is no file to read one
+# from: `/Library/muxpad-broker/msgvault-agent-token` is 0600 and owned by the
+# broker's own account.
 #
-# ── NOTHING HERE IS A PATH THIS SCRIPT KNOWS ───────────────────────────────
-# The binary, the daemon's url and the grant file all come from
-# /Library/muxpad/integrations.json — root-owned, so an agent cannot point
-# this at a different binary, a different daemon or a different credential.
-# An absent declaration means NOT CONFIGURED; it never falls back to a guess.
+# ── WHY IT IS NOT A PASS-THROUGH ANY MORE ──────────────────────────────────
+# It was, for about an hour. `muxpad msgvault <any msgvault args>` handed the
+# agent's argv to the real binary with a read-only grant, and the owner called
+# the hole in it:
 #
-# ── AND THE RESTRAINT IS NOT HERE EITHER ───────────────────────────────────
-# This script runs as the agent's own user, so anything it enforced the agent
-# could edit out. It enforces nothing. The grant in that file carries read
-# permissions only, and msgvault's delegated mode refuses the verbs that would
-# escape one — `query` (arbitrary SQL), the whole `export-*` family,
-# `export-token` (the provider credential itself), `list-accounts`,
-# `draft-compose`. Measured on this install, all five refused. There is no
-# send verb in msgvault at all.
-MSGVAULT_DECL=/Library/muxpad/integrations.json
+#   "msgvault is like slack. I want any such integration to have to go through
+#    a popup dialog asking to approve this call... otherwise there is no sense
+#    in all the separation work we did to put msgvault in a place that isn't
+#    directly accessible to the agent. What's the benefit if the user doesn't
+#    approve?"
+#
+# Right, and the threat model behind the first version was wrong: approval
+# here is about CONFIDENTIALITY, not side effects. A read-only grant that any
+# agent can pick up unattended is an agent that can read years of somebody's
+# mail — which is most of what the separation was for.
+#
+# So the verbs below are a FIXED SET. The broker composes the command line
+# from the action and a validated payload (broker/msgvault.mjs); no argument
+# written here becomes a flag over there. That is also why there is no
+# `--anything` escape: an escape would be the pass-through again.
+#
+# WRITES DO NOT EXIST. Not refused — absent. There is no action name for a
+# draft, a calendar write, an invite, SQL or a bulk export, so there is
+# nothing here to ask for and nothing there to answer.
+
+msgvault_usage() {
+  cat >&2 <<'EOF'
+usage: muxpad msgvault <verb>
+
+  search "<gmail-like query>" [--limit=N]   search the archive
+  show-message <id>                         one message in full
+  show-thread <id>                          the thread around a message
+  list-senders [-n N]                       who emails you most
+  stats                                     archive totals, no content
+  meetings ["<query>"]                      archived meeting context
+  person "<name|address>"                   look up a contact
+
+Each call asks you to approve it, once, or rides an approval you already gave.
+EOF
+  exit 1
+}
 
 cmd_msgvault() {
   require_jq
-  [ -r "$MSGVAULT_DECL" ] || {
-    echo "muxpad: msgvault: no integration declared in $MSGVAULT_DECL" >&2
-    echo 'muxpad: msgvault: declare "binary", "agentUrl" and "tokenFile" there (root-owned)' >&2
-    exit 1; }
-  local bin url tok
-  bin="$(jq -r '.msgvault.binary // empty' "$MSGVAULT_DECL")"
-  url="$(jq -r '.msgvault.agentUrl // empty' "$MSGVAULT_DECL")"
-  tok="$(jq -r '.msgvault.tokenFile // empty' "$MSGVAULT_DECL")"
-  for pair in "binary:$bin" "agentUrl:$url" "tokenFile:$tok"; do
-    [ -n "${pair#*:}" ] || {
-      echo "muxpad: msgvault: ${pair%%:*} is not declared in $MSGVAULT_DECL" >&2; exit 1; }
-  done
-  [ -x "$bin" ] || { echo "muxpad: msgvault: $bin is not executable" >&2; exit 1; }
-  [ -r "$tok" ] || {
-    echo "muxpad: msgvault: cannot read the grant at $tok" >&2
-    echo 'muxpad: msgvault: a daemon restart invalidates it — re-issue and try again' >&2
-    exit 1; }
-  [ $# -gt 0 ] || { "$bin" --help; return; }
-  # --agent-allow-insecure is honest here and nowhere else: the url is pinned
-  # to loopback by the declaration's own parser, so the "insecure" transport
-  # never leaves this machine.
-  exec "$bin" --agent-url "$url" --agent-token-file "$tok" \
-    --agent-allow-insecure --no-log-file "$@"
+  slack_require_pane
+  BROKER_LABEL=msgvault
+  local verb="${1:-}"; shift || true
+  local q="pane=$MUXPAD_PANE_ID&key=$MUXPAD_PANE_KEY"
+  # Percent-encode with jq, so a query full of punctuation stays one argument
+  # the whole way to the broker.
+  local enc
+  case "$verb" in
+    search)
+      [ -n "${1:-}" ] || msgvault_usage
+      enc="$(printf '%s' "$1" | jq -sRr @uri)"; shift
+      local limit=""
+      case "${1:-}" in --limit=*) limit="&limit=${1#--limit=}";; esac
+      slack_call GET "/api/msgvault/search?$q&q=$enc$limit" ;;
+    # SPELLED OUT, not computed. `${verb#show-}` built the path from the word
+    # the caller typed, which is one `case` arm away from being the caller's
+    # choice of endpoint — and it made the route set unreadable to anything
+    # checking what this command can reach.
+    show-message)
+      [ -n "${1:-}" ] || msgvault_usage
+      enc="$(printf '%s' "$1" | jq -sRr @uri)"
+      slack_call GET "/api/msgvault/message?$q&id=$enc" ;;
+    show-thread)
+      [ -n "${1:-}" ] || msgvault_usage
+      enc="$(printf '%s' "$1" | jq -sRr @uri)"
+      slack_call GET "/api/msgvault/thread?$q&id=$enc" ;;
+    list-senders)
+      local n=""
+      case "${1:-}" in -n) n="&limit=${2:-20}";; -n*) n="&limit=${1#-n}";; esac
+      slack_call GET "/api/msgvault/senders?$q$n" ;;
+    stats)
+      slack_call GET "/api/msgvault/stats?$q" ;;
+    meetings)
+      if [ -n "${1:-}" ]; then
+        enc="$(printf '%s' "$1" | jq -sRr @uri)"
+        slack_call GET "/api/msgvault/meetings?$q&q=$enc"
+      else
+        slack_call GET "/api/msgvault/meetings?$q"
+      fi ;;
+    person)
+      [ -n "${1:-}" ] || msgvault_usage
+      enc="$(printf '%s' "$1" | jq -sRr @uri)"
+      slack_call GET "/api/msgvault/person?$q&q=$enc" ;;
+    *) msgvault_usage ;;
+  esac
 }
 
 # ─── slack ─────────────────────────────────────────────────────────────────
@@ -990,6 +1038,10 @@ EOF
 # The server speaks HTTP; its refusals carry a message and sometimes a detail,
 # and both are worth printing — one says what happened, the other says what to
 # do about it.
+# The label in this function's messages. `slack_call` is the approval wait
+# loop — submit, poll while pending/verifying/executing, print the result or
+# the refusal — and none of that is Slack-specific. Only the word was.
+BROKER_LABEL=slack
 slack_call() {
   require_jq
   local method="$1" path="$2" body="${3:-}"
@@ -1004,7 +1056,7 @@ slack_call() {
   fi
   if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
     {
-      printf 'muxpad: slack: %s\n' "$(jq -r '.error.message // "request failed"' "$tmp" 2>/dev/null)"
+      printf 'muxpad: %s: %s\n' "$BROKER_LABEL" "$(jq -r '.error.message // "request failed"' "$tmp" 2>/dev/null)"
       local detail; detail="$(jq -r '.error.detail // empty' "$tmp" 2>/dev/null)"
       [ -n "$detail" ] && printf '\n%s\n' "$detail"
     } >&2
@@ -1019,20 +1071,20 @@ slack_call() {
     while [ "$state" = pending ] || [ "$state" = verifying ] || [ "$state" = executing ]; do
       rounds=$((rounds + 1))
       if [ "$rounds" -gt 170 ]; then
-        echo 'muxpad: slack: timed out waiting; inspect the broker before retrying' >&2
+        echo "muxpad: $BROKER_LABEL: timed out waiting; inspect the broker before retrying" >&2
         rm -f "$tmp"; exit 1
       fi
       sleep 2
       status="$(curl -sS --max-time 40 -o "$tmp" -w '%{http_code}' \
         "${MUXPAD_API_URL%/}/api/slack/requests/$request_id?pane=$MUXPAD_PANE_ID&key=$MUXPAD_PANE_KEY")"
       if [ "$status" != 200 ]; then
-        echo 'muxpad: slack: cannot read broker status; inspect the broker before retrying' >&2
+        echo "muxpad: $BROKER_LABEL: cannot read broker status; inspect the broker before retrying" >&2
         rm -f "$tmp"; exit 1
       fi
       state="$(jq -r '.state // empty' "$tmp")"
     done
     if [ "$state" != complete ]; then
-      printf 'muxpad: slack: %s\n' "$(jq -r '.error // .state // "invalid broker response"' "$tmp")" >&2
+      printf 'muxpad: %s: %s\n' "$BROKER_LABEL" "$(jq -r '.error // .state // "invalid broker response"' "$tmp")" >&2
       rm -f "$tmp"; exit 1
     fi
     jq '.result' "$tmp"
@@ -1233,7 +1285,7 @@ usage:
   muxpad slack read <#channel|ID> [--since=2h] [--limit=50]
   muxpad slack search "<query>" [--limit=20]
   muxpad slack post <#channel|ID> "<text>"
-  muxpad msgvault <any msgvault args>    read the mail/calendar archive
+  muxpad msgvault <verb> [args]          read the mail/calendar archive (approved per use)
   muxpad slack unpost <channelID> <ts>
   muxpad slack channels
   muxpad slack user <@username|userID>

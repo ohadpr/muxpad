@@ -79,7 +79,7 @@ while /usr/bin/dscl . -search /Users UniqueID "$BROKER_UID" | /usr/bin/grep -q .
 /usr/bin/dscl . -create /Users/$ACCOUNT Password '*'
 /usr/bin/install -d -o root -g wheel -m 755 "$DEST" "$DEST/code"
 /usr/bin/install -d -o "$ACCOUNT" -g staff -m 700 "$DEST/state"
-for file in core.mjs device-auth.mjs device-client.mjs http.mjs main.mjs slack.mjs human-session.mjs protected-path.mjs state-store.mjs socket-listener.mjs page.html client.js shell.html shell.js shell.css; do /usr/bin/install -o root -g wheel -m 644 "$SOURCE/$file" "$DEST/code/$file"; done
+for file in broker-paths.mjs capabilities.mjs client.js core.mjs device-auth.mjs device-client.mjs http.mjs human-session.mjs main.mjs msgvault-runner.mjs msgvault.mjs node-policy.mjs node-session.mjs page.html passkey-admin-socket.mjs passkey-approval.mjs passkey-http.mjs protected-path.mjs shell.css shell.html shell.js slack.mjs socket-listener.mjs state-store.mjs; do /usr/bin/install -o root -g wheel -m 644 "$SOURCE/$file" "$DEST/code/$file"; done
 # Refuse dependency symlinks before copying code into the protected boundary.
 [[ -z $(/usr/bin/find "$SOURCE/node_modules" -type l -print -quit) ]] || { echo 'Unexpected dependency symlink'; exit 1; }
 /bin/cp -R "$SOURCE/node_modules" "$DEST/code/node_modules"
@@ -90,7 +90,7 @@ for file in core.mjs device-auth.mjs device-client.mjs http.mjs main.mjs slack.m
 check_path "$DEST/code"
 # Prove the dedicated UID can traverse dependencies and load the actual module
 # before asking for any credential or attempting daemon activation.
-(cd "$DEST/code" && /usr/bin/sudo -u "$ACCOUNT" -- /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin "$RUNTIME" --input-type=module -e 'await Promise.all(["core.mjs","http.mjs","slack.mjs","human-session.mjs","protected-path.mjs","state-store.mjs","socket-listener.mjs"].map(name=>import("./"+name)))')
+(cd "$DEST/code" && /usr/bin/sudo -u "$ACCOUNT" -- /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin "$RUNTIME" --input-type=module -e 'await Promise.all(["broker-paths.mjs","capabilities.mjs","core.mjs","device-auth.mjs","http.mjs","human-session.mjs","main.mjs","msgvault-runner.mjs","msgvault.mjs","node-policy.mjs","node-session.mjs","passkey-admin-socket.mjs","passkey-approval.mjs","passkey-http.mjs","protected-path.mjs","slack.mjs","socket-listener.mjs","state-store.mjs"].map(name=>import("./"+name)))')
 umask 077
 read -r -s -p 'New Slack user OAuth token (input hidden): ' TOKEN; echo
 [[ $TOKEN == xoxp-* ]] || { echo 'Expected xoxp user token'; exit 1; }

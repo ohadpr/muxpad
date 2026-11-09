@@ -103,3 +103,52 @@ test('rollover refuses symlinked completed trees without moving the marker', () 
     f.clean();
   }
 });
+
+/**
+ * EVERY MODULE THE BROKER IMPORTS MUST BE IN THE RELEASE.
+ *
+ * The manifest is an explicit list, which is right — a release should name
+ * what it ships rather than sweep a directory. The cost is that adding a
+ * module and forgetting the list produces a broker that passes every test
+ * here and then cannot START on the target machine, because `core.mjs`
+ * imports something that was never copied. Nothing else would have caught
+ * that: the import is valid in the repository and absent only in
+ * /Library/muxpad-broker.
+ *
+ * So the list is checked against the imports themselves.
+ */
+test('the release manifest covers every local import', () => {
+  const here = new URL('.', import.meta.url).pathname;
+  const manifest = /FILES=\(([^)]*)\)/.exec(readFileSync(join(here, 'update-code.sh'), 'utf8'));
+  assert.ok(manifest, 'no FILES=( … ) in update-code.sh');
+  const shipped = new Set(manifest[1].trim().split(/\s+/));
+
+  const seen = new Set();
+  const walk = (entry) => {
+    if (seen.has(entry)) return;
+    seen.add(entry);
+    const src = readFileSync(join(here, entry), 'utf8');
+    // BOTH WAYS A FILE BECOMES A DEPENDENCY. `import` is the obvious one;
+    // `readFileSync(new URL('./x', import.meta.url))` is how http.mjs serves
+    // the pages and device-client.mjs, and an import-only walk does not see
+    // it — which is exactly how device-client.mjs fell out of the manifest
+    // the first time this list was generated from the graph.
+    const refs = [
+      ...src.matchAll(/^import[^'"]*['"]\.\/([^'"]+)['"]/gm),
+      ...src.matchAll(/new URL\('\.\/([^']+)'/g),
+    ];
+    for (const m of refs) {
+      assert.ok(shipped.has(m[1]), `${entry} needs ${m[1]}, which the release does not ship`);
+      walk(m[1]);
+    }
+  };
+  walk('main.mjs');
+  // …and it is not vacuous: main.mjs really does reach the new modules.
+  for (const proof of [
+    'capabilities.mjs',
+    'msgvault-runner.mjs',
+    'passkey-approval.mjs',
+    'device-client.mjs',
+  ])
+    assert.ok(seen.has(proof), `walk never reached ${proof}`);
+});
