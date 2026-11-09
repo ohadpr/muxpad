@@ -45,10 +45,10 @@ const labels: Record<string, string> = {
   'msgvault.search': 'Search your mail archive',
   'msgvault.show-message': 'Read one archived message',
   'msgvault.show-thread': 'Read an archived thread',
-  'msgvault.list-senders': 'List who emails you most',
   'msgvault.stats': 'Read archive totals',
-  'msgvault.meetings': 'Read archived meeting notes',
-  'msgvault.person': 'Look up a contact',
+  // FOUR, not seven: list-senders, meetings and person cannot work against
+  // msgvault 0.22.0 and are gone from the broker, so a label for them would
+  // describe a request that can never arrive.
 };
 
 /** Which system a request belongs to, from the action's own prefix — so what
