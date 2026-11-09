@@ -573,6 +573,11 @@
   display: flex;
   align-items: center;
   min-height: 1.3em;
+  /* The hint must be able to ellipsise, which needs the ROW to be allowed to
+     be narrower than its content. Without this the row grows and the chat
+     reflows on every tool call. */
+  min-width: 0;
+  max-width: 100%;
 }
 /* Context next to the dots — names the tool during long silent calls. */
 .chat-working-label {
@@ -580,6 +585,32 @@
   /* em — see .chat-md pre code */
   font-size: 0.775em;
   color: var(--chat-faint);
+  /* Does not shrink: the tool name is the one thing only this row can say,
+     so the hint beside it gives way first. */
+  flex: 0 0 auto;
+}
+
+/* ── WHAT IT LAST SAID IT WAS DOING ─────────────────────────────────────────
+   One line, and it must STAY one line. The whole point of putting this in the
+   indicator rather than the log is that it occupies the same pixels every
+   time — a hint that wrapped to three lines would push the conversation up on
+   every tool call, which is the growing verbose log this exists to avoid.
+
+   `min-width: 0` is load-bearing: a flex item will not shrink below its
+   content without it, so the ellipsis never appears and the row grows
+   instead. Quieter than the tool name on purpose — it is a clue, not a
+   label. */
+.chat-working-hint {
+  margin-left: 8px;
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.75em;
+  font-style: italic;
+  color: var(--chat-faint);
+  opacity: 0.85;
 }
 
 /* Running-subagents indicator — one row per live Task, visible even after

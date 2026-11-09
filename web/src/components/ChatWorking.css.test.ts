@@ -91,3 +91,45 @@ describe('every working indicator', () => {
     expect(block).not.toContain('display: none');
   });
 });
+
+/**
+ * THE HINT STAYS ONE LINE.
+ *
+ * The owner asked for a clue about what is happening during a long tool
+ * stretch, explicitly NOT as "a log where five of these would cause the whole
+ * view to push up". That promise is kept in CSS: if this ever wraps, the
+ * indicator grows and the conversation reflows on every tool call, which is
+ * precisely the thing it was built to avoid.
+ */
+describe('the working hint cannot become a paragraph', () => {
+  const css = readFileSync(join(import.meta.dirname, 'ChatPane.css'), 'utf8').replace(
+    /\/\*[\s\S]*?\*\//g,
+    '',
+  );
+  const rule = (sel: string) => {
+    const i = css.indexOf(`${sel} {`);
+    expect(i, `${sel} has no rule`).toBeGreaterThan(-1);
+    return css.slice(i, css.indexOf('}', i));
+  };
+
+  it('clamps to one line, with an ellipsis', () => {
+    const r = rule('.chat-working-hint');
+    expect(r).toMatch(/white-space:\s*nowrap/);
+    expect(r).toMatch(/text-overflow:\s*ellipsis/);
+    expect(r).toMatch(/overflow:\s*hidden/);
+  });
+
+  it('is allowed to shrink — without this the ellipsis never appears', () => {
+    // A flex item will not go below its content width unless told to, so the
+    // row grows instead of truncating. Both the item and its container.
+    expect(rule('.chat-working-hint')).toMatch(/min-width:\s*0/);
+    expect(rule('.chat-working')).toMatch(/min-width:\s*0/);
+  });
+
+  it('gives way before the tool name does', () => {
+    // The tool name is the one thing only this row can say; the hint is the
+    // nicety beside it.
+    expect(rule('.chat-working-label')).toMatch(/flex:\s*0 0 auto/);
+    expect(rule('.chat-working-hint')).toMatch(/flex:\s*0 1 auto/);
+  });
+});
