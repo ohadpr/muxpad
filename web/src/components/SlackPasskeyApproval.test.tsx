@@ -120,7 +120,8 @@ it('timed selection visibly discloses ALL agents/read/search/send/delete and bin
     select.dispatchEvent(new Event('change', { bubbles: true }));
   });
   expect(host.textContent).toContain('All agents can read, search, send, edit, delete');
-  expect(host.querySelector('details')!.open).toBe(false);
+  // The scope sentence is additional to the request, never instead of it.
+  expect(host.querySelector('.slack-passkey-payload')!.textContent).toBe(request.payload.text);
   const next = {
     ...request,
     id: 'request-b',
@@ -357,16 +358,44 @@ it('discards an older poll throughout timed options and signing without changing
   expect(host.querySelector('dialog')!.open).toBe(false);
 });
 
-it('shows a compact generic access prompt with optional exact request details', async () => {
+it('leads with the ask and shows the whole payload without a disclosure', async () => {
   await render();
-  expect(host.querySelector('h2')!.textContent).toBe('muxpad wants to access Slack');
-  expect(host.querySelector('details')!.open).toBe(false);
+  // The heading is the VERB with its object, not "muxpad wants to access X".
+  expect(host.querySelector('h2')!.textContent).toBe('Post to C123');
+  expect(host.querySelector('.slack-passkey-qualifier')!.textContent).toBe('as you, prefixed 🤖');
+  // The text being posted is the payload block, rendered as text — the
+  // fixture is a stored-XSS probe and must never become markup.
+  const payload = host.querySelector('.slack-passkey-payload')!;
+  expect(payload.textContent).toBe(request.payload.text);
+  expect(payload.querySelector('img')).toBeNull();
+  // Nothing hides: a security prompt that conceals part of the request is
+  // asking for approval of something it did not show.
+  expect(host.querySelector('details')).toBeNull();
+  const rest = [...host.querySelectorAll('.slack-passkey-rest dt')].map((d) => d.textContent);
+  expect(rest).toEqual(['channel', 'metadata']);
+  expect(host.querySelector('.slack-passkey-rest')!.textContent).toContain('"keep":"exact"');
   expect([...host.querySelectorAll('dialog button')].map((b) => b.textContent)).toEqual([
     'Deny',
     'Approve',
   ]);
   expect(host.textContent).not.toContain('Choose 1Password');
-  expect(host.querySelector('details')!.textContent).toContain(request.payload.text);
+});
+
+it('puts the mark that says what is read beside the verb, and the Slack workspace with who asked', async () => {
+  pending = [
+    { ...request, action: 'msgvault.stats', payload: {}, origin: 'local' } as unknown as typeof request,
+  ];
+  await render();
+  expect(host.querySelector('h2')!.textContent).toBe('Read archive totals');
+  // stats is the one verb that spans the archive — and it must say the
+  // totals are not content, or three lit marks read worse than the truth.
+  expect(
+    [...host.querySelectorAll('.slack-passkey-mark svg')].map((s) => s.getAttribute('aria-label')),
+  ).toEqual(['Mail', 'Calendar', 'Contacts']);
+  expect(host.textContent).toContain('counts only — no message content');
+  // No Slack mark and no Slack team id anywhere on an archive request.
+  expect(host.querySelector('dialog')!.textContent).not.toContain('T1');
+  expect(host.querySelector('.slack-passkey-head')!.innerHTML).not.toContain('36c5f0');
 });
 
 it('closes immediately after passkey returns while single signed submission is still pending', async () => {

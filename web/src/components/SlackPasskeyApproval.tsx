@@ -1,7 +1,8 @@
 import { useEffect, useId, useRef, useState } from 'react';
+import { describeRequest, marksFor } from '../lib/approval-request';
 import { passkeyAPI, passkeyCeremony } from '../lib/slack-passkey';
-import { BrandMark } from './Brand';
 import { SlackLogo } from './SlackLogo';
+import { SourceMarks } from './SourceMarks';
 import './SlackPasskeyApproval.css';
 type RequestView = {
   id: string;
@@ -22,34 +23,14 @@ type RequestView = {
   grantWarning?: string;
   error?: string;
 };
-const labels: Record<string, string> = {
-  'slack.post': 'Send Slack message',
-  'slack.unpost': 'Delete Slack message',
-  'slack.read': 'Read Slack messages',
-  'slack.search': 'Search Slack',
-  'slack.channels': 'List Slack channels',
-  'slack.users': 'Look up Slack user',
-  'slack.dm': 'Open direct message',
-  'slack.thread': 'Read Slack thread',
-  'slack.react': 'Change reaction',
-  'slack.edit': 'Edit Slack message',
-  'slack.upload': 'Upload file to Slack',
-  // ── THE ARCHIVE IS NOT SLACK ─────────────────────────────────────────────
-  // This card is the approval surface for EVERY connector now, and it was
-  // written when there was one. An msgvault failure rendered as "Slack
-  // request failed" under a Slack logo, in a chat on a machine where Slack is
-  // not even supposed to be reachable — reported, reasonably, as alarm.
-  //
-  // Each label says WHAT IS READ, for the same reason the broker's own dialog
-  // does: approving a verb with no object is approving nothing.
-  'msgvault.search': 'Search your mail archive',
-  'msgvault.show-message': 'Read one archived message',
-  'msgvault.show-thread': 'Read an archived thread',
-  'msgvault.stats': 'Read archive totals',
-  // FOUR, not seven: list-senders, meetings and person cannot work against
-  // msgvault 0.22.0 and are gone from the broker, so a label for them would
-  // describe a request that can never arrive.
-};
+/**
+ * WHAT A REQUEST SAYS IT IS — one description, in `approval-request.ts`.
+ *
+ * This file used to carry a `labels` map whose only consumer was a line
+ * inside a collapsed <details>. The card now leads with that description
+ * instead of burying it, and the verb's object, its limits and which of your
+ * data it reaches come from the same table, so they cannot drift apart.
+ */
 
 /** Which system a request belongs to, from the action's own prefix — so what
  *  the card says can never disagree with what is about to run. */
@@ -197,9 +178,7 @@ export function SlackPasskeyApproval({
       // the UI's braces, and forced HERE rather than via setDuration, which
       // would not have landed before this line runs.
       const chosen =
-        decision === 'reject' || diagnosticID || request.timedAllowed === false
-          ? 'once'
-          : duration;
+        decision === 'reject' || diagnosticID || request.timedAllowed === false ? 'once' : duration;
       const ceremony = await passkeyAPI('options', {
         id: request.id,
         fingerprint: request.fingerprint,
@@ -273,6 +252,11 @@ export function SlackPasskeyApproval({
       }
     }
   };
+  /** One description of the live request — heading, qualifier, the field the
+   *  decision turns on, and everything else that will be sent. */
+  const described = request
+    ? describeRequest(request.action, request.payload)
+    : { title: '', rest: [] as Array<[string, string]> };
   const close = () => {
     dialog.current?.close();
     setDismissed(true);
@@ -329,49 +313,89 @@ export function SlackPasskeyApproval({
       >
         {request && (
           <>
-            <div className="slack-passkey-brand">
-              <BrandMark />
-              <span>muxpad</span>
-              <span aria-hidden="true">↔</span>
-              {connectorOf(request.action) === SLACK ? (
-                <SlackLogo />
-              ) : (
-                <span aria-hidden="true">📥</span>
-              )}
-              <span>{connectorOf(request.action).name}</span>
+            {/* ── THE ASK IS THE HEADLINE ──────────────────────────────────
+                The mark says which system and which of YOUR DATA this
+                reaches; the heading is the verb with its object. Neither
+                repeats the other, and between them the old brand line
+                ("muxpad ↔ your archive") and the old generic heading
+                ("muxpad wants to access your archive") say nothing that is
+                not already on screen, so both are gone. */}
+            <div className="slack-passkey-head">
+              <SourceMarks marks={marksFor(request.action)} />
+              <div className="slack-passkey-headtext">
+                <h2 id={titleID}>{described.title}</h2>
+                {described.qualifier && (
+                  <p className="slack-passkey-qualifier">{described.qualifier}</p>
+                )}
+              </div>
             </div>
-            <h2 id={titleID}>muxpad wants to access {connectorOf(request.action).name}</h2>
-            {/* ── ONLY OFFER WHAT THE BROKER WOULD ACCEPT ──────────────────
-                `timedAllowed: false` means a duration will be REFUSED at the
-                decision: the broker cannot attribute this request's origin,
-                so a lasting permission would rest on a claim anything on this
-                machine could make. Offering 10m/1h/1d anyway invited the one
-                failure that teaches people to distrust a dialog — pick an
-                option, sign the ceremony, watch it fail.
-                The reason is shown rather than the control being silently
-                missing: "unavailable" with no explanation is its own puzzle. */}
-            {request.timedAllowed === false ? (
-              <p className="slack-passkey-note">
-                This request can only be approved <strong>once</strong>.{' '}
-                {request.timedRefusedReason ??
-                  'The broker cannot verify which machine asked, so a lasting permission is not offered.'}
-              </p>
-            ) : (
-              <label className="slack-passkey-duration">
-                Allow for
-                <select
-                  aria-label="Approval duration"
-                  disabled={busy || !!diagnosticID}
-                  value={duration}
-                  onChange={(e) => setDuration(e.target.value)}
-                >
-                  <option value="once">This request</option>
-                  <option value="10m">10 minutes</option>
-                  <option value="1h">1 hour</option>
-                  <option value="1d">1 day</option>
-                </select>
-              </label>
+            {/* THE THING YOU ARE ACTUALLY DECIDING, at the size that implies.
+                It used to be the smallest text in the box, behind a
+                disclosure triangle, under two lines that named the capability
+                twice. */}
+            {described.primary && (
+              <p className="slack-passkey-payload">{described.primary.value}</p>
             )}
+            {/* …AND THE REST OF THE PAYLOAD, VISIBLE. Not a <details>: a
+                security prompt that hides part of what it is about is asking
+                for approval of something it did not show. */}
+            {described.rest.length > 0 && (
+              <dl className="slack-passkey-rest">
+                {described.rest.map(([key, value]) => (
+                  <div key={key}>
+                    <dt>{key}</dt>
+                    <dd>{value}</dd>
+                  </div>
+                ))}
+              </dl>
+            )}
+            {/* WHO ASKED, AND FOR HOW LONG — one row, because they are one
+                question: this machine, this once. */}
+            <div className="slack-passkey-foot">
+              {/* THE MACHINE THAT ASKED. The broker's whole justification for
+                  carrying `origin` is "it is shown to the human before they
+                  approve", and in this mode it never was. It is a LABEL the
+                  asking side asserts — said plainly, because a duration is now
+                  refused for any origin the broker cannot attribute. */}
+              <p className="slack-passkey-note">
+                asked by <strong>{request.origin ?? 'unknown'}</strong>
+                {/* The Slack workspace belongs with WHO ASKED, not on a line of
+                    its own — and it means nothing at all on an archive read. */}
+                {connectorOf(request.action) === SLACK ? ` · ${request.teamID}` : ''}
+                {request.origin === 'local' ? '' : ' — unverified, so approve-once only'}
+              </p>
+              {/* ── ONLY OFFER WHAT THE BROKER WOULD ACCEPT ──────────────────
+                  `timedAllowed: false` means a duration will be REFUSED at the
+                  decision: the broker cannot attribute this request's origin,
+                  so a lasting permission would rest on a claim anything on this
+                  machine could make. Offering 10m/1h/1d anyway invited the one
+                  failure that teaches people to distrust a dialog — pick an
+                  option, sign the ceremony, watch it fail.
+                  The reason is shown rather than the control being silently
+                  missing: "unavailable" with no explanation is its own puzzle. */}
+              {request.timedAllowed === false ? (
+                <p className="slack-passkey-note">
+                  This request can only be approved <strong>once</strong>.{' '}
+                  {request.timedRefusedReason ??
+                    'The broker cannot verify which machine asked, so a lasting permission is not offered.'}
+                </p>
+              ) : (
+                <label className="slack-passkey-duration">
+                  Allow for
+                  <select
+                    aria-label="Approval duration"
+                    disabled={busy || !!diagnosticID}
+                    value={duration}
+                    onChange={(e) => setDuration(e.target.value)}
+                  >
+                    <option value="once">This request</option>
+                    <option value="10m">10 minutes</option>
+                    <option value="1h">1 hour</option>
+                    <option value="1d">1 day</option>
+                  </select>
+                </label>
+              )}
+            </div>
             {/* WHAT A DURATION ACTUALLY COVERS, for THIS capability. It said
                 "read, search, send, edit, delete, react, open DMs and upload
                 files in this Slack workspace" above an archive read — a
@@ -384,15 +408,6 @@ export function SlackPasskeyApproval({
                 Ends within the selected period, on restart or when revoked in Settings.
               </p>
             )}
-            {/* THE MACHINE THAT ASKED. The broker's whole justification for
-                carrying `origin` is "it is shown to the human before they
-                approve", and in this mode it never was. It is a LABEL the
-                asking side asserts — said plainly, because a duration is now
-                refused for any origin the broker cannot attribute. */}
-            <p className="slack-passkey-note">
-              asked by <strong>{request.origin ?? 'unknown'}</strong>
-              {request.origin === 'local' ? '' : ' — unverified, so approve-once only'}
-            </p>
             {/* …and only for the SAME capability. "Timed Slack access is
                 already active" appeared whenever any grant existed, archive
                 grants included. */}
@@ -402,22 +417,6 @@ export function SlackPasskeyApproval({
                 Settings.
               </p>
             )}
-            <details className="slack-passkey-details">
-              <summary>Request details</summary>
-              <p>
-                {labels[request.action] ?? request.action}
-                {/* The Slack team id means nothing on an archive request. */}
-                {connectorOf(request.action) === SLACK ? ` · ${request.teamID}` : ''}
-              </p>
-              <dl>
-                {Object.entries(request.payload).map(([key, value]) => (
-                  <div key={key}>
-                    <dt>{key}</dt>
-                    <dd>{typeof value === 'string' ? value : JSON.stringify(value)}</dd>
-                  </div>
-                ))}
-              </dl>
-            </details>
             {error && <output className="slack-passkey-error">{error}</output>}
             {secureURL && (
               <p>
