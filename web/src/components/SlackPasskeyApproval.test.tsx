@@ -574,3 +574,58 @@ it('still says approve-once when the broker refuses a duration', async () => {
   // …and the control that would contradict it is not there at all.
   expect(host.querySelector('select')).toBeNull();
 });
+
+it('lets a stuck approval be put down, and does not put it straight back', async () => {
+  // The bar had no exit: closing the dialog rendered it, it offered only
+  // "Review", and the poll re-opened the card if you closed that too. The
+  // only way out was waiting five minutes for the request to expire.
+  vi.mocked(passkeyCeremony).mockRejectedValue(
+    Object.assign(Error('The operation either timed out or was not allowed. See: https://…'), {
+      name: 'NotAllowedError',
+    }),
+  );
+  await render();
+  await click('Approve');
+  // The ceremony threw, so the dialog stays open with the error — exactly
+  // what a cancelled Touch ID prompt looks like. Closing it is what puts the
+  // bar above the composer, and the bar is what had no way out.
+  expect(host.querySelector('dialog')!.open).toBe(true);
+  await click('Close');
+  const bar = host.querySelector('.slack-passkey-inline')!;
+  // The implementer-facing WebAuthn string never reaches the person.
+  expect(bar.textContent).not.toContain('w3.org');
+  expect(bar.textContent).toContain('cancelled or timed out');
+  const dismiss = [...host.querySelectorAll('.slack-passkey-inline button')].find(
+    (b) => b.textContent === 'Dismiss',
+  ) as HTMLButtonElement;
+  expect(dismiss, 'no way to dismiss the bar').toBeTruthy();
+  await act(async () => dismiss.click());
+  expect(host.querySelector('.slack-passkey-inline')).toBeNull();
+  expect(host.querySelector('dialog')!.open).toBe(false);
+  // …and the poll does not resurrect it while the request is still pending.
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(6000);
+  });
+  expect(host.querySelector('.slack-passkey-inline')).toBeNull();
+  expect(host.querySelector('dialog')!.open).toBe(false);
+});
+
+it('dismissing decides nothing — no decision is ever sent', async () => {
+  vi.mocked(passkeyCeremony).mockRejectedValue(
+    Object.assign(Error('cancelled'), { name: 'NotAllowedError' }),
+  );
+  await render();
+  await click('Approve');
+  await click('Close');
+  const before = vi.mocked(passkeyAPI).mock.calls.filter(([p]) => p === 'decision').length;
+  const dismiss = [...host.querySelectorAll('.slack-passkey-inline button')].find(
+    (b) => b.textContent === 'Dismiss',
+  ) as HTMLButtonElement;
+  await act(async () => dismiss.click());
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(6000);
+  });
+  // Walking away is not "deny": the request stays pending at the broker and
+  // expires on its own. Saying no is a decision, and a decision is signed.
+  expect(vi.mocked(passkeyAPI).mock.calls.filter(([p]) => p === 'decision')).toHaveLength(before);
+});

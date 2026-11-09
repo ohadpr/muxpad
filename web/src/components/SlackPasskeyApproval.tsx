@@ -43,6 +43,27 @@ const connectorOf = (action: string | undefined) =>
  *  appear for the capability being asked about. */
 const connectorOfGrant = (g: { action?: string; actions?: string[] }) =>
   connectorOf(g.actions?.[0] ?? g.action);
+/**
+ * WHAT WENT WRONG, in a sentence a person can act on.
+ *
+ * A cancelled or timed-out passkey prompt throws a `NotAllowedError` whose
+ * message is written for implementers — "The operation either timed out or
+ * was not allowed. See: https://www.w3.org/TR/webauthn-2/#sctn-privacy-
+ * considerations-client." That landed verbatim in the dialog and in the bar
+ * above the composer, where it reads as a system fault rather than as "you
+ * dismissed the Touch ID prompt", which is what it usually is.
+ *
+ * Everything else is passed through unchanged: a message nobody wrote for a
+ * human is still better than a reassuring one that hides the cause.
+ */
+const humanError = (e: unknown): string => {
+  const name = (e as { name?: unknown })?.name;
+  const message = e instanceof Error ? e.message : '';
+  if (name === 'NotAllowedError' || /timed out or was not allowed/i.test(message))
+    return 'The passkey prompt was cancelled or timed out. Nothing was approved — Approve to try again, or Dismiss to leave the request alone.';
+  return message || 'Approval unavailable. No automatic retry.';
+};
+
 export function SlackPasskeyApproval({
   paneId,
   diagnosticID,
@@ -70,6 +91,16 @@ export function SlackPasskeyApproval({
   const generation = useRef(0);
   const blocked = useRef(false);
   const finished = useRef(new Set<string>());
+  /**
+   * Requests the human has waved away WITHOUT deciding them.
+   *
+   * Distinct from `finished`, which means the broker gave a terminal answer.
+   * This one means "stop showing me this": the request is still pending over
+   * there and expires on its own. Kept so the poll below does not put the
+   * same card back a second later — which is what made the bar impossible to
+   * dismiss, since every dismissal was undone by the next tick.
+   */
+  const hidden = useRef(new Set<string>());
   const refresh = async () => {
     const result = await passkeyAPI(
       diagnosticID
@@ -92,6 +123,7 @@ export function SlackPasskeyApproval({
   useEffect(() => {
     generation.current++;
     finished.current.clear();
+    hidden.current.clear();
     blocked.current = false;
     busyRef.current = false;
     setBusy(false);
@@ -112,7 +144,7 @@ export function SlackPasskeyApproval({
           if (active && !busyRef.current && generation.current === pollEpoch) {
             setStatus(r.status);
             const waiting = r.requests.filter(
-              (item: RequestView) => !finished.current.has(item.id),
+              (item: RequestView) => !finished.current.has(item.id) && !hidden.current.has(item.id),
             );
             const next = (waiting.find((item: RequestView) => item.id === current.current?.id) ??
               waiting[0]) as RequestView | undefined;
@@ -240,7 +272,7 @@ export function SlackPasskeyApproval({
       if (live()) {
         if (current.current) {
           blocked.current = true;
-          setError(e instanceof Error ? e.message : 'Approval unavailable. No automatic retry.');
+          setError(humanError(e));
           const target = (e as { secureURL?: unknown })?.secureURL;
           if (typeof target === 'string' && target.startsWith('https://')) setSecureURL(target);
         }
@@ -290,15 +322,43 @@ export function SlackPasskeyApproval({
               : error || `${connectorOf(request.action).name} approval`}
           </output>
           {!busy && (
-            <button
-              type="button"
-              onClick={() => {
-                setDismissed(false);
-                dialog.current?.showModal();
-              }}
-            >
-              Review
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  setDismissed(false);
+                  dialog.current?.showModal();
+                }}
+              >
+                Review
+              </button>
+              {/* ── IT HAS TO BE POSSIBLE TO PUT THIS DOWN ──────────────────
+                  This bar had no way out. Closing the dialog set `dismissed`,
+                  which rendered the bar; the bar offered only "Review", which
+                  reopened the dialog; and the poll put the card straight back
+                  if you closed it again. The only exit was waiting five
+                  minutes for the request to expire, with a WebAuthn error
+                  pinned above the composer the whole time.
+
+                  Dismissing decides NOTHING. The request stays pending at the
+                  broker and expires on its own — which is the honest meaning
+                  of walking away, and the reason this is not spelled "Deny".
+                  Saying no is a decision, and a decision is signed. */}
+              <button
+                type="button"
+                onClick={() => {
+                  hidden.current.add(request.id);
+                  current.current = null;
+                  setRequest(null);
+                  setError('');
+                  blocked.current = false;
+                  setDismissed(false);
+                  dialog.current?.close();
+                }}
+              >
+                Dismiss
+              </button>
+            </>
           )}
         </div>
       )}
