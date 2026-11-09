@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { test } from 'node:test';
+import { Origins, sign } from './origins.mjs';
 import { Broker } from './core.mjs';
 import { HumanSessions, SESSION_COOKIE } from './human-session.mjs';
 
@@ -18,7 +19,7 @@ import { HumanSessions, SESSION_COOKIE } from './human-session.mjs';
  */
 const secret = 'a-long-random-test-only-pairing-secret-12345';
 
-function fixture({ timedGrants } = {}) {
+function fixture({ timedGrants, origins } = {}) {
   let now = 1000;
   let elapsed = 0;
   const state = {};
@@ -44,6 +45,7 @@ function fixture({ timedGrants } = {}) {
     save,
     now: () => now,
     elapsed: () => elapsed,
+    ...(origins ? { origins } : {}),
     slack: async () => ({ channel: 'C123', ts: '1.2' }),
     msgvault: async (action, payload) => {
       ran.push([action, payload]);
@@ -140,15 +142,13 @@ test('a grant is bound to the machine that asked — and only `local` may hold o
   assert.equal(f.ran.length, 1);
   // The same verb from a different machine does not find it.
   assert.equal((await ask(f, 'msgvault.stats', {}, 'trayo')).state, 'pending');
-  // …and that machine cannot mint one of its own, which is the half the
-  // binding was previously taken to provide and never did: `origin` is a
-  // caller-chosen string on an unauthenticated endpoint, so a grant bound to
-  // a remote name is spendable by anything on THIS machine willing to claim
-  // it. Remote origins are approve-once until the caller can be
-  // authenticated.
+  // …and a machine that does not PROVE it asked cannot mint one of its own.
+  // `origin` is a caller-chosen string on an unauthenticated endpoint, so a
+  // grant bound to an unproven remote name would be spendable by anything on
+  // THIS machine willing to claim it.
   const remote = await ask(f, 'msgvault.stats', {}, 'trayo');
   assert.equal(remote.timedAllowed, false);
-  assert.match(remote.timedRefusedReason, /cannot verify/);
+  assert.match(remote.timedRefusedReason, /did not prove it/);
   await assert.rejects(
     f.broker.decideSession(remote.id, remote.fingerprint, 'approve', {
       duration: '1h',
@@ -246,4 +246,121 @@ test('an unregistered action never reaches a validator or an executor', async ()
   for (const action of ['msgvault.query', 'msgvault.export-messages', 'msgvault.draft-compose'])
     await assert.rejects(f.broker.create({ action, payload: {} }), /Unsupported action/, action);
   assert.deepEqual(f.ran, []);
+});
+
+/**
+ * …AND THE MACHINE THAT DOES PROVE IT.
+ *
+ * This is the half that did not exist. Every call from the one machine the
+ * policy actually permits to use Slack asked for approval again, forever,
+ * because a grant bound to `trayo` would have been spendable by anything on
+ * the mini willing to type the name. A host holding a key the broker also
+ * holds can sign the request it is asking for — which the hosting machine
+ * cannot forge, because the key is not on it.
+ */
+const KEY = 'trayo-key-'.padEnd(48, 'x');
+const knowing = (keys, now) =>
+  new Origins({
+    dir: '/x',
+    now,
+    io: {
+      readFileSync: (path) => {
+        const name = String(path).split('/').pop().replace(/\.key$/, '');
+        if (!(name in keys)) throw Object.assign(new Error('nope'), { code: 'ENOENT' });
+        return keys[name];
+      },
+      assertProtectedPath: () => {},
+    },
+  });
+/** A signed request body, the way the remote node agent builds one. */
+const signed = (action, payload, origin, ts, key = KEY) => {
+  const nonce = `${Math.random()}`.padEnd(24, '0');
+  return {
+    action,
+    payload,
+    origin,
+    proof: { ts, nonce, sig: sign(key, { origin, action, payload, ts, nonce }) },
+  };
+};
+
+test('a remote host that PROVES it asked may hold a timed grant', async () => {
+  let now = 1000;
+  const f = fixture({ origins: knowing({ trayo: KEY }, () => now) });
+  const session = f.pair();
+  const r = await f.broker.create(signed('msgvault.stats', {}, 'trayo', now));
+  assert.equal(r.timedAllowed, true, 'a proven origin may be trusted for a duration');
+  assert.equal(r.timedRefusedReason, undefined);
+  assert.equal(
+    (
+      await f.broker.decideSession(r.id, r.fingerprint, 'approve', {
+        duration: '1h',
+        scope: 'msgvault-read-v1',
+        session,
+      })
+    ).state,
+    'complete',
+  );
+  // …and the next call from that machine rides the grant, with no dialog.
+  const second = await f.broker.create(signed('msgvault.stats', {}, 'trayo', now));
+  assert.equal(second.state, 'complete');
+  assert.equal(f.ran.length, 2);
+});
+
+test('the hosting machine cannot forge the proof, so it cannot spend the grant', async () => {
+  let now = 1000;
+  const f = fixture({ origins: knowing({ trayo: KEY }, () => now) });
+  const session = f.pair();
+  const r = await f.broker.create(signed('msgvault.stats', {}, 'trayo', now));
+  await f.broker.decideSession(r.id, r.fingerprint, 'approve', {
+    duration: '1h',
+    scope: 'msgvault-read-v1',
+    session,
+  });
+  assert.equal(f.ran.length, 1);
+  // Anything on the mini can type "trayo". Without the key it gets a dialog,
+  // which is the entire point of binding the grant to a PROOF.
+  const liar = await f.broker.create(
+    signed('msgvault.stats', {}, 'trayo', now, 'a key the mini does not have!!'),
+  );
+  assert.equal(liar.state, 'pending');
+  assert.equal(liar.timedAllowed, false);
+  assert.equal(f.ran.length, 1);
+  // …and a bare claim with no proof at all, likewise.
+  assert.equal((await f.broker.create({ action: 'msgvault.stats', payload: {}, origin: 'trayo' })).state, 'pending');
+  assert.equal(f.ran.length, 1);
+});
+
+test('a proof is spent once, so a captured request cannot be replayed into the grant', async () => {
+  let now = 1000;
+  const f = fixture({ origins: knowing({ trayo: KEY }, () => now) });
+  f.pair();
+  const body = signed('msgvault.stats', {}, 'trayo', now);
+  const first = await f.broker.create(body);
+  assert.equal(first.timedAllowed, true);
+  const again = await f.broker.create(body);
+  assert.equal(again.timedAllowed, false, 'the same proof must not prove twice');
+});
+
+test('until-revoked outlives the clock, and dies with the session that minted it', async () => {
+  let now = 1000;
+  const f = fixture({ origins: knowing({ trayo: KEY }, () => now) });
+  const session = f.pair();
+  const r = await f.broker.create(signed('msgvault.stats', {}, 'trayo', now));
+  await f.broker.decideSession(r.id, r.fingerprint, 'approve', {
+    duration: 'until-revoked',
+    scope: 'msgvault-read-v1',
+    session,
+  });
+  assert.equal(f.ran.length, 1);
+  // A day later — where `1d` would have lapsed — it still runs.
+  f.tick(86_400_000 + 60_000);
+  now += 86_400_000 + 60_000;
+  const later = await f.broker.create(signed('msgvault.stats', {}, 'trayo', now));
+  assert.equal(later.state, 'complete');
+  assert.equal(f.ran.length, 2);
+  // Revoked by hand, and it is gone.
+  f.broker.revokeGrants('all');
+  const after = await f.broker.create(signed('msgvault.stats', {}, 'trayo', now));
+  assert.equal(after.state, 'pending');
+  assert.equal(f.ran.length, 2);
 });

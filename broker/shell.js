@@ -132,14 +132,29 @@ const setButtons = (disabled) => {
 function describeDuration() {
   if (!current) return;
   const duration = $('duration').value;
-  const labels = { once: 'once', '10m': '10 min', '1h': '1 hour', '1d': '1 day' };
+  const labels = {
+    once: 'once',
+    '10m': '10 min',
+    '1h': '1 hour',
+    '1d': '1 day',
+    'until-revoked': 'until you revoke it',
+  };
   $('approve').textContent = 'Approve';
   const scope = current.timedScope ?? 'slack-team-all-v2';
   const readOnly = scope === 'slack-team-read-v1';
   const existing = activePermissions.some(
     (grant) => grant.permissionScope === scope && grant.teamID === config.teamID,
   );
-  const limits = { '10m': 600_000, '1h': 3_600_000, '1d': 86_400_000 };
+  // `until-revoked` has no clock of its own, so the deadline it shows is the
+  // one that actually binds it: the session. Saying "no later than <session
+  // expiry>" is the honest version of "forever" in a broker that keeps its
+  // grants in memory.
+  const limits = {
+    '10m': 600_000,
+    '1h': 3_600_000,
+    '1d': 86_400_000,
+    'until-revoked': Number.POSITIVE_INFINITY,
+  };
   const deadline = Number.isFinite(sessionExpires)
     ? Math.min(Date.now() + limits[duration], sessionExpires)
     : null;

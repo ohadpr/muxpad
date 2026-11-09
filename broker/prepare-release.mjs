@@ -53,6 +53,7 @@ try {
     'msgvault-runner.mjs',
     'msgvault.mjs',
     'node-policy.mjs',
+    'origins.mjs',
     'node-session.mjs',
     'page.html',
     'passkey-admin-socket.mjs',

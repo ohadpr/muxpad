@@ -23,11 +23,15 @@ import { assertProtectedPath } from './protected-path.mjs';
  * policy against a self-asserted origin stops an honest mistake and a
  * misrouted chat; it does not stop a process that lies.
  *
- * That is why `timedOriginTrusted` exists below and why it is deliberately
- * narrow. See core.mjs for how it is used: a capability the policy does not
- * grant to the asserted origin is refused outright, and a DURATION is only
- * ever offered for an origin whose claim adds nothing — `local`, which is
- * where the request physically came from anyway.
+ * That is why `timedOriginTrusted` exists below. A capability the policy does
+ * not grant to the asserted origin is still refused outright on the label
+ * alone — which stops an honest mistake and a misrouted chat, and does not
+ * stop a liar.
+ *
+ * A DURATION is the part that must not rest on a label, and no longer does:
+ * it is offered for `local`, whose claim adds nothing, and for a remote host
+ * that PROVED it asked by signing the request with a key this machine's
+ * agents cannot read. See origins.mjs.
  */
 
 export const POLICY_PATH = '/Library/muxpad/connectors.json';
@@ -130,6 +134,19 @@ export function policyAllows(policy, capability, origin) {
  * `origin` is evidence rather than a label; until that exists, nothing here
  * should be described as a guarantee.
  */
-export function timedOriginTrusted(origin) {
-  return (origin ?? 'unknown') === LOCAL_ORIGIN;
+export function timedOriginTrusted(origin, proven = false) {
+  if ((origin ?? 'unknown') === LOCAL_ORIGIN) return true;
+  // ── AND THE FLOOR CAME UP ─────────────────────────────────────────────
+  // The paragraph above described the only arrangement that existed: a label
+  // nobody could check. A remote host that holds a key the broker also holds
+  // can now SIGN the request it is asking for, which the hosting machine
+  // cannot forge because the key is not on it (origins.mjs). `proven` is that
+  // verification, performed once when the request was minted.
+  //
+  // Still a floor, in a different place: it proves a MACHINE, not a person or
+  // an agent, because on that machine the key is readable by anything running
+  // as that user. That is the granularity the policy is written at — "slack:
+  // trayo" is a statement about a machine — but it is not a claim about who,
+  // and nothing downstream should read it as one.
+  return proven === true;
 }
