@@ -154,6 +154,7 @@ import { workingHint } from '../lib/working-hint';
 import { workingVariantFor } from '../lib/working-variant';
 import { insertTabRow } from '../tabs';
 import { ActionCard } from './ActionCard';
+import { ActionRunCard } from './ActionRunCard';
 import { AgentBackendLogo, backendFromAssistant } from './AgentLogos';
 import { BrowserCard } from './BrowserCard';
 import { useBrowsers } from './BrowserCards';
@@ -4598,7 +4599,17 @@ export function ChatPane({
                 ),
                 chatActions,
                 (action) => <ActionCard key={`action:${action.id}`} action={action} />,
-                { floor: items.find((e) => e.at !== null)?.at ?? null },
+                {
+                  floor: items.find((e) => e.at !== null)?.at ?? null,
+                  // A run of READS folds to one row. Fifteen cards saying what
+                  // was searched, with the answer below all of them, is the
+                  // wall this removes — and the fold it borrows is the one
+                  // already above it on the tool calls. Writes never fold:
+                  // see lib/action-runs.
+                  renderRun: (run) => (
+                    <ActionRunCard key={`run:${run.actions[0]?.id ?? ''}`} run={run} />
+                  ),
+                },
               ),
               spawnedCards,
               // The window's lower edge, taken from the TRANSCRIPT rather than from

@@ -26,13 +26,24 @@ const TITLES: Record<string, (p: Payload) => string> = {
   'slack.upload': (p) => `Uploaded a file to ${channel(p)}`,
   'slack.react': (p) => `Reacted in ${channel(p)}`,
   'slack.unpost': (p) => `Deleted a message in ${channel(p)}`,
-  // The archive's reads get titles too, or the card shows a bare action name.
-  // Each says WHAT WAS READ: a card that says "search" is a card that tells
-  // you nothing about what left the archive.
-  'msgvault.search': (p) => `Searched the archive for ${JSON.stringify(p.query ?? '')}`,
-  'msgvault.show-message': (p) => `Read archived message ${String(p.id ?? '')}`,
-  'msgvault.show-thread': (p) => `Read an archived thread (${String(p.id ?? '')})`,
-  'msgvault.stats': () => 'Read archive totals',
+  // ── SAY WHAT IT IS, NOT WHAT WE CALL IT ───────────────────────────────
+  //
+  // These read "Searched the archive", "Read archived message 150889", "Read
+  // archive totals". `archive` is muxpad's own word for the component — it is
+  // what the store is called in this codebase — and it tells a reader nothing
+  // about what was touched. Asked directly: "what does the word archive mean
+  // here? we need something more fitting."
+  //
+  // What was touched is MAIL. The vault holds other sources too, which is
+  // exactly why `stats` names all three rather than claiming to have read
+  // messages: it counts, across everything.
+  //
+  // Each still says WHAT WAS READ — a card that says "search" is a card that
+  // tells you nothing about what left the machine.
+  'msgvault.search': (p) => `Searched your mail for ${JSON.stringify(p.query ?? '')}`,
+  'msgvault.show-message': (p) => `Read one email (${String(p.id ?? '')})`,
+  'msgvault.show-thread': (p) => `Read an email thread (${String(p.id ?? '')})`,
+  'msgvault.stats': () => 'Counted your mail, calendar and contacts',
 };
 
 interface Payload {

@@ -110,7 +110,7 @@ describe('the approval card follows the request', () => {
 describe('the card describes the grant it is actually making', () => {
   it('describes a duration per capability, not always as Slack', () => {
     expect(CODE).toMatch(/connectorOf\(request\.action\) === SLACK\s*\?\s*'All agents can read/);
-    expect(CODE).toMatch(/search and read your mail archive/);
+    expect(CODE).toMatch(/search and read your mail/);
     expect(CODE).toMatch(/cannot send, draft or change anything/);
   });
 

@@ -140,17 +140,17 @@ const RULES: Record<string, Rule> = {
     primary: 'query',
   },
   'msgvault.show-message': {
-    title: () => 'Read one archived message',
+    title: () => 'Read one email',
     qualifier: () => 'read-only · one message',
     primary: 'id',
   },
   'msgvault.show-thread': {
-    title: () => 'Read an archived thread',
+    title: () => 'Read an email thread',
     qualifier: () => 'read-only · one thread',
     primary: 'id',
   },
   'msgvault.stats': {
-    title: () => 'Read archive totals',
+    title: () => 'Count your mail, calendar and contacts',
     // Three lit marks say "this touches everything you have", and without
     // this line that reads worse than the truth: it is counts, not content.
     qualifier: () => 'counts only — no message content',
