@@ -39,7 +39,7 @@ for tree in "$SOURCE" "$DEST/code"; do
   if [[ -f $entry && $(/usr/bin/stat -f '%l' "$entry") != 1 ]]; then echo 'Hardlink refused'; exit 1; fi
  done < <(/usr/bin/find "$tree" -print0)
 done
-FILES=(broker-paths.mjs capabilities.mjs client.js core.mjs device-auth.mjs device-client.mjs http.mjs human-session.mjs main.mjs msgvault-runner.mjs msgvault.mjs node-policy.mjs node-session.mjs page.html passkey-admin-socket.mjs passkey-approval.mjs passkey-http.mjs protected-path.mjs shell.css shell.html shell.js slack.mjs socket-listener.mjs state-store.mjs)
+FILES=(broker-paths.mjs capabilities.mjs client.js core.mjs device-auth.mjs device-client.mjs http.mjs human-session.mjs main.mjs msgvault-runner.mjs msgvault.mjs node-policy.mjs node-session.mjs page.html passkey-admin-socket.mjs passkey-approval.mjs passkey-http.mjs policy.mjs protected-path.mjs shell.css shell.html shell.js slack.mjs socket-listener.mjs state-store.mjs)
 for file in "${FILES[@]}"; do
  [[ -f $SOURCE/$file ]] || { echo "Missing release file: $file"; exit 1; }
 done

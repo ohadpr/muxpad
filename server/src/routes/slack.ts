@@ -648,16 +648,17 @@ export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
    * Validating here as well would be a second opinion about what is legal,
    * and the one that matters is the one on the far side of the wall.
    */
+  // FOUR VERBS. `list-senders`, `meetings` and `person` were advertised and
+  // cannot work against msgvault 0.22.0 — `list-senders` is refused by
+  // delegated mode, the other two are parent commands with no positional and
+  // no --json. Verified against the real binary; see broker/msgvault.mjs.
   const archive = new Hono();
   const count = (v: string | undefined) => (v === undefined ? undefined : Number(v));
   const ARCHIVE_ROUTES: Array<[string, string, (q: Record<string, string>) => unknown]> = [
     ['/search', 'msgvault.search', (q) => ({ query: q.q, limit: count(q.limit) })],
     ['/message', 'msgvault.show-message', (q) => ({ id: q.id })],
     ['/thread', 'msgvault.show-thread', (q) => ({ id: q.id })],
-    ['/senders', 'msgvault.list-senders', (q) => ({ limit: count(q.limit) })],
     ['/stats', 'msgvault.stats', () => ({})],
-    ['/meetings', 'msgvault.meetings', (q) => (q.q ? { query: q.q } : {})],
-    ['/person', 'msgvault.person', (q) => ({ query: q.q })],
   ];
   for (const [path, action, payload] of ARCHIVE_ROUTES)
     archive.get(path, async (c) => {

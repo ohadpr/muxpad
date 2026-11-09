@@ -32,11 +32,7 @@ const TITLES: Record<string, (p: Payload) => string> = {
   'msgvault.search': (p) => `Searched the archive for ${JSON.stringify(p.query ?? '')}`,
   'msgvault.show-message': (p) => `Read archived message ${String(p.id ?? '')}`,
   'msgvault.show-thread': (p) => `Read an archived thread (${String(p.id ?? '')})`,
-  'msgvault.list-senders': () => 'Listed the archive’s top senders',
   'msgvault.stats': () => 'Read archive totals',
-  'msgvault.meetings': (p) =>
-    p.query ? `Searched meetings for ${JSON.stringify(p.query)}` : 'Read meeting context',
-  'msgvault.person': (p) => `Looked up the contact ${JSON.stringify(p.query ?? '')}`,
 };
 
 interface Payload {

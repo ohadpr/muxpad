@@ -466,35 +466,25 @@ describe('msgvault goes through the broker, holding nothing', () => {
   it('offers a FIXED set of verbs, with no escape to arbitrary arguments', () => {
     // An escape would be the pass-through again, and the pass-through is the
     // thing that had no dialog in front of it.
-    const verbs = [
-      'search',
-      'show-message',
-      'show-thread',
-      'list-senders',
-      'stats',
-      'meetings',
-      'person',
-    ];
+    const verbs = ['search', 'show-message', 'show-thread', 'stats'];
     for (const v of verbs) expect(body, v).toContain(v);
     // Nothing forwards the caller's remaining words wholesale.
     expect(body).not.toMatch(/"\$@"/);
   });
 
-  it('calls exactly seven endpoints, all of them reads', () => {
+  it('calls exactly four endpoints, all of them reads', () => {
     // Asserted as a SET rather than by searching for forbidden words, because
     // `senders` contains "send" and a test that fails on a reading verb is a
     // test somebody edits away. The writes are not missing from this list by
     // omission — there is no action name for them anywhere in the broker.
     const called = new Set([...body.matchAll(/\/api\/msgvault\/([a-z-]+)/g)].map((m) => m[1]));
-    expect([...called].sort()).toEqual([
-      'meetings',
-      'message',
-      'person',
-      'search',
-      'senders',
-      'stats',
-      'thread',
-    ]);
+    // FOUR. `senders`, `meetings` and `person` were advertised and cannot
+    // work against msgvault 0.22.0 — verified against the real binary:
+    // delegated mode refuses `list-senders`, and `meetings`/`person` are
+    // parent command trees with no positional and no `--json`. A verb the CLI
+    // offers and the tool refuses is a dialog asking for something that
+    // cannot happen.
+    expect([...called].sort()).toEqual(['message', 'search', 'stats', 'thread']);
   });
 
   it('says in its own help that each call is approved', () => {

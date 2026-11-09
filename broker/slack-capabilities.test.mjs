@@ -17,6 +17,10 @@ function mock(results) {
 }
 function broker(config = {}) {
   return new Broker({
+    // UNSCOPED, INJECTED. The broker reads the host policy itself now, and a
+    // test that fell through to the real /Library/muxpad/connectors.json would
+    // pass or fail on the state of the machine it runs on.
+    hostPolicy: () => ({ enforce: false, allow: {} }),
     config: { teamID: 'T123', ...config },
     state: { credential: { id: 'test' } },
     save: () => {},
@@ -162,6 +166,7 @@ test('upload URL rejects arbitrary targets and redirects; uncertain upload is no
 test('broker snapshots file bytes privately and binds filename/hash/length/destination, expiry frees budget', async () => {
   const b = broker(),
     r = await b.create({
+      origin: 'local',
       action: 'slack.upload',
       payload: { ref: 'C1', filename: 'a.txt', content: Buffer.from('hello').toString('base64') },
     });
@@ -180,42 +185,44 @@ test('invalid upload fields, unsafe channel, invalid threads/reactions, unrecord
     { ref: 'C1', filename: 'a', content: 'YR==' },
     { ref: 'C1', filename: 'a', content: '' },
   ])
-    await assert.rejects(b.create({ action: 'slack.upload', payload }));
+    await assert.rejects(b.create({ origin: 'local', action: 'slack.upload', payload }));
   await assert.rejects(
-    b.create({ action: 'slack.edit', payload: { ref: 'C1', ts: '1.1', text: 'oops' } }),
+    b.create({ origin: 'local', action: 'slack.edit', payload: { ref: 'C1', ts: '1.1', text: 'oops' } }),
     /Only messages/,
   );
   await assert.rejects(
-    b.create({ action: 'slack.post', payload: { ref: 'C1', text: 'a', thread_ts: 'bad' } }),
+    b.create({ origin: 'local', action: 'slack.post', payload: { ref: 'C1', text: 'a', thread_ts: 'bad' } }),
   );
   await assert.rejects(
     b.create({
+      origin: 'local',
       action: 'slack.react',
       payload: { ref: 'C1', ts: '1.1', name: 'eyes', operation: 'delete' },
     }),
   );
   await assert.rejects(
-    broker({ channels: ['C1'] }).create({ action: 'slack.dm', payload: { user: 'U1' } }),
+    broker({ channels: ['C1'] }).create({ origin: 'local', action: 'slack.dm', payload: { user: 'U1' } }),
   );
 });
 test('recorded muxpad message can be edited; human messages cannot; post registry persists before completion', async () => {
   const b = broker();
   b.slack = async () => ({ channel: 'C1', ts: '1.1' });
-  const r = await b.create({ action: 'slack.post', payload: { ref: 'C1', text: 'hello' } });
+  const r = await b.create({ origin: 'local', action: 'slack.post', payload: { ref: 'C1', text: 'hello' } });
   await b.execute(b.get(r.id));
   const edit = await b.create({
+    origin: 'local',
     action: 'slack.edit',
     payload: { ref: 'C1', ts: '1.1', text: 'updated' },
   });
   assert.equal(edit.payload.text, '🤖 updated');
   await assert.rejects(
-    b.create({ action: 'slack.edit', payload: { ref: 'C1', ts: '2.1', text: 'human' } }),
+    b.create({ origin: 'local', action: 'slack.edit', payload: { ref: 'C1', ts: '2.1', text: 'human' } }),
   );
 });
 test('stale v1 timed decisions cannot grant expanded scope', async () => {
   const b = broker({ approvalMode: 'session' });
   b.state.humanPaired = true;
-  const r = await b.create({ action: 'slack.channels' });
+  const r = await b.create({ origin: 'local', action: 'slack.channels' });
   await assert.rejects(
     b.decideSession(r.id, r.fingerprint, 'approve', {
       duration: '10m',
@@ -230,11 +237,12 @@ test('pending upload budget is bounded and consumed bytes are released on dispat
   const b = broker();
   b.uploads.set('other', Buffer.alloc(20 * 1024 * 1024));
   await assert.rejects(
-    b.create({ action: 'slack.upload', payload: { ref: 'C1', filename: 'a', content: 'YQ==' } }),
+    b.create({ origin: 'local', action: 'slack.upload', payload: { ref: 'C1', filename: 'a', content: 'YQ==' } }),
     /limit/,
   );
   b.uploads.clear();
   const r = await b.create({
+    origin: 'local',
     action: 'slack.upload',
     payload: { ref: 'C1', filename: 'a', content: 'YQ==' },
   });
@@ -251,6 +259,7 @@ test('maximum-size 10 MiB upload validates without regex stack growth and exact 
   const b = broker(),
     bytes = Buffer.alloc(10 * 1024 * 1024, 0xab);
   const r = await b.create({
+    origin: 'local',
     action: 'slack.upload',
     payload: { ref: 'C1', filename: 'max.bin', content: bytes.toString('base64') },
   });
@@ -259,6 +268,7 @@ test('maximum-size 10 MiB upload validates without regex stack growth and exact 
   assert.deepEqual(b.uploads.get(r.id), bytes);
   await assert.rejects(
     b.create({
+      origin: 'local',
       action: 'slack.upload',
       payload: {
         ref: 'C1',

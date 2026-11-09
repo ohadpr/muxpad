@@ -79,7 +79,7 @@ while /usr/bin/dscl . -search /Users UniqueID "$BROKER_UID" | /usr/bin/grep -q .
 /usr/bin/dscl . -create /Users/$ACCOUNT Password '*'
 /usr/bin/install -d -o root -g wheel -m 755 "$DEST" "$DEST/code"
 /usr/bin/install -d -o "$ACCOUNT" -g staff -m 700 "$DEST/state"
-for file in broker-paths.mjs capabilities.mjs client.js core.mjs device-auth.mjs device-client.mjs http.mjs human-session.mjs main.mjs msgvault-runner.mjs msgvault.mjs node-policy.mjs node-session.mjs page.html passkey-admin-socket.mjs passkey-approval.mjs passkey-http.mjs protected-path.mjs shell.css shell.html shell.js slack.mjs socket-listener.mjs state-store.mjs; do /usr/bin/install -o root -g wheel -m 644 "$SOURCE/$file" "$DEST/code/$file"; done
+for file in broker-paths.mjs capabilities.mjs client.js core.mjs device-auth.mjs device-client.mjs http.mjs human-session.mjs main.mjs msgvault-runner.mjs msgvault.mjs node-policy.mjs node-session.mjs page.html passkey-admin-socket.mjs passkey-approval.mjs passkey-http.mjs policy.mjs protected-path.mjs shell.css shell.html shell.js slack.mjs socket-listener.mjs state-store.mjs; do /usr/bin/install -o root -g wheel -m 644 "$SOURCE/$file" "$DEST/code/$file"; done
 # Refuse dependency symlinks before copying code into the protected boundary.
 [[ -z $(/usr/bin/find "$SOURCE/node_modules" -type l -print -quit) ]] || { echo 'Unexpected dependency symlink'; exit 1; }
 /bin/cp -R "$SOURCE/node_modules" "$DEST/code/node_modules"

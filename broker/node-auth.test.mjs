@@ -59,6 +59,12 @@ function fixture() {
     config,
     state,
     save: () => {},
+    // UNSCOPED, INJECTED — and named `hostPolicy` so it cannot be confused
+    // with the NodeSessions `policy` a few lines up, which is a different
+    // thing entirely. Without this the broker falls through to the real
+    // /Library/muxpad/connectors.json and these tests pass or fail on the
+    // state of the machine they run on.
+    hostPolicy: () => ({ enforce: false, allow: {} }),
     now: () => now,
     elapsed: () => now,
     slack: async (a, p) => {
@@ -96,7 +102,7 @@ function fixture() {
   };
 }
 const pending = (f) =>
-  f.broker.create({ action: 'slack.post', payload: { ref: 'C123', text: 'Exact immutable text' } });
+  f.broker.create({ origin: 'local', action: 'slack.post', payload: { ref: 'C123', text: 'Exact immutable text' } });
 const approve = (f, r, session) =>
   f.broker.decideSession(r.id, r.fingerprint, 'approve', {
     duration: '10m',
@@ -686,11 +692,12 @@ test('explicit peer timed grant delegates across agents/actions without consumin
   const f = fixture();
   const { session } = f.issue();
   const queued = await pending(f);
-  const listing = await f.broker.create({ action: 'slack.channels', payload: {} });
+  const listing = await f.broker.create({ origin: 'local', action: 'slack.channels', payload: {} });
   assert.equal((await approve(f, listing, session)).state, 'complete');
   assert.equal(f.broker.view(queued.id).state, 'pending');
   assert.equal(f.calls.length, 1);
   const delegated = await f.broker.create({
+    origin: 'local',
     action: 'slack.unpost',
     payload: { ref: 'C999', ts: '2.3' },
   });

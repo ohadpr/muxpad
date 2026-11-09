@@ -912,6 +912,13 @@ json_string() {
 # WRITES DO NOT EXIST. Not refused — absent. There is no action name for a
 # draft, a calendar write, an invite, SQL or a bulk export, so there is
 # nothing here to ask for and nothing there to answer.
+#
+# AND THREE READS DO NOT EXIST EITHER. `list-senders`, `meetings` and
+# `person` were advertised here and cannot work against msgvault 0.22.0 —
+# verified against the real binary: `list-senders` is refused by
+# agent-delegated mode, and the other two are parent command trees with no
+# positional and no --json. Four verbs that work beat seven that are
+# three-sevenths fiction.
 
 msgvault_usage() {
   cat >&2 <<'EOF'
@@ -920,10 +927,7 @@ usage: muxpad msgvault <verb>
   search "<gmail-like query>" [--limit=N]   search the archive
   show-message <id>                         one message in full
   show-thread <id>                          the thread around a message
-  list-senders [-n N]                       who emails you most
   stats                                     archive totals, no content
-  meetings ["<query>"]                      archived meeting context
-  person "<name|address>"                   look up a contact
 
 Each call asks you to approve it, once, or rides an approval you already gave.
 EOF
@@ -962,23 +966,8 @@ cmd_msgvault() {
       [ -n "${1:-}" ] || msgvault_usage
       enc="$(printf '%s' "$1" | jq -sRr @uri)"
       slack_call GET "/api/msgvault/thread?$q&id=$enc" ;;
-    list-senders)
-      local n=""
-      case "${1:-}" in -n) n="&limit=${2:-20}";; -n*) n="&limit=${1#-n}";; esac
-      slack_call GET "/api/msgvault/senders?$q$n" ;;
     stats)
       slack_call GET "/api/msgvault/stats?$q" ;;
-    meetings)
-      if [ -n "${1:-}" ]; then
-        enc="$(printf '%s' "$1" | jq -sRr @uri)"
-        slack_call GET "/api/msgvault/meetings?$q&q=$enc"
-      else
-        slack_call GET "/api/msgvault/meetings?$q"
-      fi ;;
-    person)
-      [ -n "${1:-}" ] || msgvault_usage
-      enc="$(printf '%s' "$1" | jq -sRr @uri)"
-      slack_call GET "/api/msgvault/person?$q&q=$enc" ;;
     *) msgvault_usage ;;
   esac
 }

@@ -40,18 +40,37 @@ test('the broker composes the command line; nothing is forwarded', () => {
     '--agent-allow-insecure',
     '--no-log-file',
   ]);
-  assert.deepEqual(a.slice(6), ['search', 'from:x@y.com newer_than:30d', '--limit', '50', '--json']);
+  // Flags first, then `--`, then the positional. The order is load-bearing:
+  // `--` before the flags makes THEM positionals too (verified: `show-message
+  // -- --local --json` is "accepts 1 arg(s), received 2").
+  assert.deepEqual(a.slice(6), [
+    'search',
+    '--limit',
+    '50',
+    '--json',
+    '--',
+    'from:x@y.com newer_than:30d',
+  ]);
 });
 
-test('a query that LOOKS like flags is still one argument', () => {
-  // The whole reason for composing rather than filtering. As a string in an
-  // argv array this can never become a flag — there is no shell and no
-  // re-split. The filter this replaced was broken by exactly this shape:
-  // `--log-file search query 'SELECT …'` ran SQL approved as a search.
-  const a = argv('msgvault.search', { query: '--log-file x query SELECT * FROM messages' });
-  assert.equal(a[7], '--log-file x query SELECT * FROM messages');
+test('a value that looks like a flag is refused, and `--` guards the rest', () => {
+  // THE EARLIER CLAIM HERE WAS FALSE, and a review disproved it at the
+  // binary: msgvault is cobra/pflag, so a positional beginning with `-` is
+  // parsed as a flag however tidy the argv array is. `search '--local'` came
+  // back "provide a search query" — the query had been eaten. Asserting on
+  // the array proved nothing about the program.
+  //
+  // Two defences now, and this checks both.
+  assert.throws(() => validateMsgvault('msgvault.search', { query: '--account=x' }), /query/);
+  assert.throws(() => validateMsgvault('msgvault.show-message', { id: '--local' }), /id/);
+
+  // …and a query that is merely ALARMING, not flag-shaped, rides after `--`
+  // as one argument. Verified against 0.22.0: this reaches the daemon with
+  // the string intact.
+  const a = argv('msgvault.search', { query: 'query SELECT * FROM messages' });
+  assert.equal(a[a.length - 1], 'query SELECT * FROM messages');
+  assert.equal(a[a.length - 2], '--');
   assert.equal(a[6], 'search');
-  // and the verb is a constant, so no payload can move it
   assert.equal(a.filter((x) => x === 'search').length, 1);
 });
 
@@ -65,7 +84,10 @@ test('every payload is checked before it is placed', () => {
     ['msgvault.show-message', { id: 'a b' }, /message id/],
     ['msgvault.show-message', { id: '../../etc/passwd' }, /message id/],
     ['msgvault.show-message', {}, /message id/],
-    ['msgvault.person', { query: '' }, /name or address/],
+    ['msgvault.search', { query: '-x' }, /query/],
+    ['msgvault.person', {}, /Unsupported/],
+    ['msgvault.meetings', {}, /Unsupported/],
+    ['msgvault.list-senders', {}, /Unsupported/],
     ['msgvault.nope', {}, /Unsupported/],
     ['slack.post', {}, /Unsupported/],
   ];
@@ -77,6 +99,25 @@ test('a missing declaration refuses rather than guessing a path', () => {
   const p = validateMsgvault('msgvault.stats', {});
   for (const bad of [undefined, {}, { binary: '/b' }, { binary: '/b', agentUrl: 'u' }])
     assert.throws(() => msgvaultArgv('msgvault.stats', p, bad), /not declared/);
+});
+
+test('only verbs that work against 0.22.0 are offered', () => {
+  // Verified offline against the real binary, dummy token, dead agent-url —
+  // so each refusal is msgvault's own argument handling, not a daemon.
+  // `list-senders` is refused by delegated mode; `meetings` and `person` are
+  // parent commands with no positional and no --json. An action the broker
+  // accepts and the tool refuses is a dialog asking for something that cannot
+  // happen.
+  for (const dead of ['msgvault.list-senders', 'msgvault.meetings', 'msgvault.person']) {
+    assert.ok(!CAPABILITIES.msgvault.actions.includes(dead), dead);
+    assert.throws(() => validateMsgvault(dead, {}), /Unsupported action/, dead);
+  }
+  assert.deepEqual([...CAPABILITIES.msgvault.actions], [
+    'msgvault.search',
+    'msgvault.show-message',
+    'msgvault.show-thread',
+    'msgvault.stats',
+  ]);
 });
 
 test('the dialog names the thing being asked for, not just the verb', () => {

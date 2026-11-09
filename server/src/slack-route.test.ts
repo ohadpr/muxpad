@@ -668,7 +668,10 @@ describe('the archive mounts on its own path', () => {
     const db = openDb(':memory:');
     const app = new Hono();
     app.route('/api/msgvault', connectorRoutes({ db, dataDir: dir }).archive);
-    for (const path of ['search', 'message', 'thread', 'senders', 'stats', 'meetings', 'person'])
+    // FOUR. `senders`, `meetings` and `person` were removed: they cannot work
+    // against msgvault 0.22.0 (verified against the real binary — delegated
+    // mode refuses list-senders, and the other two are parent command trees).
+    for (const path of ['search', 'message', 'thread', 'stats'])
       expect((await app.request(`/api/msgvault/${path}`)).status, path).not.toBe(404);
     db.close();
     rmSync(dir, { recursive: true, force: true });

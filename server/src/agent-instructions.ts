@@ -200,11 +200,14 @@ Capabilities worth knowing:
 
 <!--cap:msgvault-->
 - \`muxpad msgvault\` — the user's own mail, calendar and contacts archive,
-  READ ONLY and APPROVED PER USE. Seven verbs, written the way msgvault
+  READ ONLY and APPROVED PER USE. Four verbs, written the way msgvault
   writes them:
   \`search '<gmail-like query>' [--limit=N]\`, \`show-message <id>\`,
-  \`show-thread <id>\`, \`list-senders [-n N]\`, \`stats\`,
-  \`meetings [<query>]\`, \`person <name|address>\`.
+  \`show-thread <id>\`, \`stats\`.
+
+  There is no sender list, no meetings verb and no contact lookup: those
+  exist in msgvault but cannot be reached in its delegated mode, so muxpad
+  does not offer them. Do not try to reach them another way.
 
   **ONLY WHEN ASKED.** This is years of the user's email and calendar — their
   whole life, not a corpus to browse. Go when a task needs it ("when did I

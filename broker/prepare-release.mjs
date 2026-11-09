@@ -58,6 +58,7 @@ try {
     'passkey-admin-socket.mjs',
     'passkey-approval.mjs',
     'passkey-http.mjs',
+    'policy.mjs',
     'protected-path.mjs',
     'shell.css',
     'shell.html',

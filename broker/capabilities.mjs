@@ -77,14 +77,15 @@ export const MSGVAULT = Object.freeze({
   label: 'your mail archive',
   readScope: 'msgvault-read-v1',
   fullScope: 'msgvault-read-v1',
+  // FOUR, not seven. `list-senders`, `meetings` and `person` cannot work
+  // against msgvault 0.22.0 — see the note in msgvault.mjs, verified against
+  // the real binary. An action name the broker accepts and the tool refuses
+  // is a dialog that asks for something that cannot happen.
   readActions: Object.freeze([
     'msgvault.search',
     'msgvault.show-message',
     'msgvault.show-thread',
-    'msgvault.list-senders',
     'msgvault.stats',
-    'msgvault.meetings',
-    'msgvault.person',
   ]),
   get actions() {
     return this.readActions;

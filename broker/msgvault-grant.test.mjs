@@ -35,6 +35,10 @@ function fixture({ timedGrants } = {}) {
   const save = () => {};
   const sessions = new HumanSessions({ config, state, save, now: () => now });
   const broker = new Broker({
+    // UNSCOPED, INJECTED. The broker reads the host policy itself now, and a
+    // test that fell through to the real /Library/muxpad/connectors.json would
+    // pass or fail on the state of the machine it runs on.
+    hostPolicy: () => ({ enforce: false, allow: {} }),
     config,
     state,
     save,
@@ -62,7 +66,10 @@ function fixture({ timedGrants } = {}) {
   };
 }
 
-const ask = (f, action, payload, origin = 'mini') =>
+// `local` by default: the broker only grants a DURATION to an origin whose
+// claim adds nothing, because the field is caller-chosen on an endpoint with
+// no caller authentication. See policy.mjs and the test below.
+const ask = (f, action, payload, origin = 'local') =>
   f.broker.create({ action, payload, origin });
 
 test('nothing runs until a human approves it', async () => {
@@ -121,10 +128,10 @@ test('a timed grant runs later calls — and STOPS when the window closes', asyn
   assert.equal(f.ran.length, 2);
 });
 
-test('a grant is bound to the machine that asked for it', async () => {
+test('a grant is bound to the machine that asked — and only `local` may hold one', async () => {
   const f = fixture();
   const session = f.pair();
-  const r = await ask(f, 'msgvault.stats', {}, 'mini');
+  const r = await ask(f, 'msgvault.stats', {}, 'local');
   await f.broker.decideSession(r.id, r.fingerprint, 'approve', {
     duration: '1h',
     scope: 'msgvault-read-v1',
@@ -133,6 +140,23 @@ test('a grant is bound to the machine that asked for it', async () => {
   assert.equal(f.ran.length, 1);
   // The same verb from a different machine does not find it.
   assert.equal((await ask(f, 'msgvault.stats', {}, 'trayo')).state, 'pending');
+  // …and that machine cannot mint one of its own, which is the half the
+  // binding was previously taken to provide and never did: `origin` is a
+  // caller-chosen string on an unauthenticated endpoint, so a grant bound to
+  // a remote name is spendable by anything on THIS machine willing to claim
+  // it. Remote origins are approve-once until the caller can be
+  // authenticated.
+  const remote = await ask(f, 'msgvault.stats', {}, 'trayo');
+  assert.equal(remote.timedAllowed, false);
+  assert.match(remote.timedRefusedReason, /cannot verify/);
+  await assert.rejects(
+    f.broker.decideSession(remote.id, remote.fingerprint, 'approve', {
+      duration: '1h',
+      scope: 'msgvault-read-v1',
+      session,
+    }),
+    /can only be approved once/,
+  );
   assert.equal(f.ran.length, 1);
   // …nor does a request that names no machine at all.
   assert.equal((await f.broker.create({ action: 'msgvault.stats', payload: {} })).state, 'pending');

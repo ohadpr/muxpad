@@ -15,6 +15,10 @@ type RequestView = {
    *  it per capability; sending a hardcoded one approved the wrong thing. */
   timedScope?: string;
   timedAllowed?: boolean;
+  /** Which machine the asking side SAYS it is. A label, not a fact — shown
+   *  because a human approving a duration should see what it is bound to. */
+  origin?: string;
+  timedRefusedReason?: string;
   grantWarning?: string;
   error?: string;
 };
@@ -53,6 +57,11 @@ const SLACK = { id: 'slack', name: 'Slack' } as const;
 const CONNECTORS = [SLACK, { id: 'msgvault', name: 'your archive' } as const];
 const connectorOf = (action: string | undefined) =>
   CONNECTORS.find((c) => c.id === String(action ?? '').split('.')[0]) ?? SLACK;
+/** Which connector a live grant belongs to. A grant names its own actions, so
+ *  the first of them answers it — and an "already active" note must only
+ *  appear for the capability being asked about. */
+const connectorOfGrant = (g: { action?: string; actions?: string[] }) =>
+  connectorOf(g.actions?.[0] ?? g.action);
 export function SlackPasskeyApproval({
   paneId,
   diagnosticID,
@@ -68,7 +77,10 @@ export function SlackPasskeyApproval({
   const [status, setStatus] = useState<{
     serverNow: number;
     sessionExpires: number | null;
-    grants?: unknown[];
+    // Shaped, not `unknown[]`: the "already active" note must only appear
+    // for the capability being asked about, and that needs the grant's own
+    // actions. Both fields optional — an older broker sends one or neither.
+    grants?: Array<{ action?: string; actions?: string[] }>;
   } | null>(null);
   const dialog = useRef<HTMLDialogElement>(null);
   const busyRef = useRef(false);
@@ -337,22 +349,42 @@ export function SlackPasskeyApproval({
                 <option value="1d">1 day</option>
               </select>
             </label>
+            {/* WHAT A DURATION ACTUALLY COVERS, for THIS capability. It said
+                "read, search, send, edit, delete, react, open DMs and upload
+                files in this Slack workspace" above an archive read — a
+                description of a grant that was not being made. */}
             {duration !== 'once' && (
               <p className="slack-passkey-scope">
-                All agents can read, search, send, edit, delete, react, open DMs and upload files in
-                this Slack workspace. Ends within the selected period, on restart or when revoked in
-                Settings.
+                {connectorOf(request.action) === SLACK
+                  ? 'All agents can read, search, send, edit, delete, react, open DMs and upload files in this Slack workspace.'
+                  : 'All agents on this machine can search and read your mail archive. It cannot send, draft or change anything.'}{' '}
+                Ends within the selected period, on restart or when revoked in Settings.
               </p>
             )}
-            {!!status?.grants?.length && (
+            {/* THE MACHINE THAT ASKED. The broker's whole justification for
+                carrying `origin` is "it is shown to the human before they
+                approve", and in this mode it never was. It is a LABEL the
+                asking side asserts — said plainly, because a duration is now
+                refused for any origin the broker cannot attribute. */}
+            <p className="slack-passkey-note">
+              asked by <strong>{request.origin ?? 'unknown'}</strong>
+              {request.origin === 'local' ? '' : ' — unverified, so approve-once only'}
+            </p>
+            {/* …and only for the SAME capability. "Timed Slack access is
+                already active" appeared whenever any grant existed, archive
+                grants included. */}
+            {!!status?.grants?.some((g) => connectorOfGrant(g) === connectorOf(request.action)) && (
               <p className="slack-passkey-note">
-                Timed Slack access is already active. Manage it in Settings.
+                Timed {connectorOf(request.action).name} access is already active. Manage it in
+                Settings.
               </p>
             )}
             <details className="slack-passkey-details">
               <summary>Request details</summary>
               <p>
-                {labels[request.action] ?? request.action} · {request.teamID}
+                {labels[request.action] ?? request.action}
+                {/* The Slack team id means nothing on an archive request. */}
+                {connectorOf(request.action) === SLACK ? ` · ${request.teamID}` : ''}
               </p>
               <dl>
                 {Object.entries(request.payload).map(([key, value]) => (

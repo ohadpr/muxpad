@@ -26,6 +26,10 @@ function fixture() {
   const save = (value) => saves.push(structuredClone(value));
   const sessions = new HumanSessions({ config, state, save, now: () => now });
   const broker = new Broker({
+    // UNSCOPED, INJECTED. The broker reads the host policy itself now, and a
+    // test that fell through to the real /Library/muxpad/connectors.json would
+    // pass or fail on the state of the machine it runs on.
+    hostPolicy: () => ({ enforce: false, allow: {} }),
     config,
     state,
     save,
@@ -63,6 +67,7 @@ function fixture() {
 }
 const request = (f) =>
   f.broker.create({
+    origin: 'local',
     action: 'slack.post',
     payload: { ref: 'C123', text: 'Exact message <script>never execute</script>' },
   });
@@ -274,6 +279,7 @@ test('timed approval allows future supported actions across destinations in the 
   assert.equal(result.state, 'complete');
   assert.ok(result.grantID);
   const again = await f.broker.create({
+    origin: 'local',
     action: 'slack.post',
     payload: { ref: 'C123', text: 'Different message, same permitted scope' },
   });
@@ -285,6 +291,7 @@ test('timed approval allows future supported actions across destinations in the 
   assert.equal(
     (
       await f.broker.create({
+        origin: 'local',
         action: 'slack.post',
         payload: { ref: 'C456', text: 'Other channel' },
       })
@@ -292,11 +299,11 @@ test('timed approval allows future supported actions across destinations in the 
     'complete',
   );
   assert.equal(
-    (await f.broker.create({ action: 'slack.unpost', payload: { ref: 'C123', ts: '1.2' } })).state,
+    (await f.broker.create({ origin: 'local', action: 'slack.unpost', payload: { ref: 'C123', ts: '1.2' } })).state,
     'complete',
   );
   assert.equal(
-    (await f.broker.create({ action: 'slack.read', payload: { ref: 'C123' } })).state,
+    (await f.broker.create({ origin: 'local', action: 'slack.read', payload: { ref: 'C123' } })).state,
     'complete',
   );
   f.config.teamID = 'T_OTHER';
@@ -306,6 +313,7 @@ test('approve once never creates a timed permission and agents cannot request th
   const f = fixture();
   f.pair();
   const r = await f.broker.create({
+    origin: 'local',
     action: 'slack.post',
     payload: { ref: 'C123', text: 'hello', duration: '1d' },
     duration: '1d',
@@ -351,6 +359,10 @@ test('one-day permission is clamped to human session expiry and never survives r
   const { cookie, csrf } = await allowTimed(f, '1d');
   assert.equal(f.broker.listGrants()[0].expires, 3601_000);
   const replacement = new Broker({
+    // UNSCOPED, INJECTED. The broker reads the host policy itself now, and a
+    // test that fell through to the real /Library/muxpad/connectors.json would
+    // pass or fail on the state of the machine it runs on.
+    hostPolicy: () => ({ enforce: false, allow: {} }),
     config: f.config,
     state: f.state,
     save: () => {},
@@ -435,6 +447,7 @@ test('full-team timed permission includes different queries and result limits', 
   const f = fixture();
   f.pair();
   const r = await f.broker.create({
+    origin: 'local',
     action: 'slack.search',
     payload: { query: 'in:general project', limit: 5 },
   });
@@ -446,6 +459,7 @@ test('full-team timed permission includes different queries and result limits', 
   assert.equal(
     (
       await f.broker.create({
+        origin: 'local',
         action: 'slack.search',
         payload: { query: 'in:general project', limit: 5 },
       })
@@ -455,6 +469,7 @@ test('full-team timed permission includes different queries and result limits', 
   assert.equal(
     (
       await f.broker.create({
+        origin: 'local',
         action: 'slack.search',
         payload: { query: 'in:general project', limit: 100 },
       })
@@ -462,7 +477,7 @@ test('full-team timed permission includes different queries and result limits', 
     'complete',
   );
   assert.equal(
-    (await f.broker.create({ action: 'slack.search', payload: { query: 'all', limit: 5 } })).state,
+    (await f.broker.create({ origin: 'local', action: 'slack.search', payload: { query: 'all', limit: 5 } })).state,
     'complete',
   );
 });
@@ -528,6 +543,7 @@ test('full-team scope safely supports different Unicode search queries', async (
   const f = fixture();
   f.pair();
   const first = await f.broker.create({
+    origin: 'local',
     action: 'slack.search',
     payload: { query: 'é', limit: 5 },
   });
@@ -537,7 +553,7 @@ test('full-team scope safely supports different Unicode search queries', async (
     session: f.state.humanSessions[0],
   });
   assert.equal(
-    (await f.broker.create({ action: 'slack.search', payload: { query: 'a', limit: 5 } })).state,
+    (await f.broker.create({ origin: 'local', action: 'slack.search', payload: { query: 'a', limit: 5 } })).state,
     'complete',
   );
 });
@@ -676,7 +692,7 @@ test('explicit timed channel listing permits exactly all five actions for this t
   const f = fixture();
   const { cookie } = f.pair();
   const queued = await request(f);
-  const listing = await f.broker.create({ action: 'slack.channels', payload: {} });
+  const listing = await f.broker.create({ origin: 'local', action: 'slack.channels', payload: {} });
   const approved = await f.broker.decideSession(listing.id, listing.fingerprint, 'approve', {
     duration: '10m',
     scope: 'slack-team-all-v2',
@@ -686,7 +702,7 @@ test('explicit timed channel listing permits exactly all five actions for this t
   assert.equal(f.broker.view(queued.id).state, 'pending');
   assert.equal(f.calls.length, 1);
   for (const [action, payload] of supportedInputs) {
-    const result = await f.broker.create({ action, payload });
+    const result = await f.broker.create({ origin: 'local', action, payload });
     assert.equal(result.state, 'complete', action);
     assert.equal(result.grantID, approved.grantID);
   }
@@ -705,10 +721,10 @@ test('explicit timed channel listing permits exactly all five actions for this t
   ]);
   assert.equal(f.broker.listGrants()[0].permissionScope, 'slack-team-all-v2');
   assert.equal(f.broker.listGrants()[0].teamID, 'T123');
-  await assert.rejects(f.broker.create({ action: 'slack.future-admin-action', payload: {} }));
+  await assert.rejects(f.broker.create({ origin: 'local', action: 'slack.future-admin-action', payload: {} }));
   f.config.teamID = 'T_OTHER';
   for (const [action, payload] of supportedInputs)
-    assert.equal((await f.broker.create({ action, payload })).state, 'pending', action);
+    assert.equal((await f.broker.create({ origin: 'local', action, payload })).state, 'pending', action);
   assert.equal(f.broker.view(queued.id).teamID, 'T123');
   await assert.rejects(f.broker.decideSession(queued.id, queued.fingerprint, 'approve'));
 });
@@ -734,6 +750,7 @@ test('missing/unknown timed scope and scope-once combinations fail before consum
   assert.equal(f.calls.length, 0);
   assert.deepEqual(f.broker.listGrants(), []);
   const forged = await f.broker.create({
+    origin: 'local',
     action: 'slack.channels',
     payload: { scope: 'slack-team-all-v2', duration: '1d' },
     scope: 'slack-team-all-v2',
@@ -766,15 +783,16 @@ test('team-wide grants never override channel policy, including changes during t
   await allowTimed(f);
   f.config.channels = ['C123'];
   await assert.rejects(
-    f.broker.create({ action: 'slack.post', payload: { ref: 'C456', text: 'Forbidden' } }),
+    f.broker.create({ origin: 'local', action: 'slack.post', payload: { ref: 'C456', text: 'Forbidden' } }),
   );
   await assert.rejects(
-    f.broker.create({ action: 'slack.search', payload: { query: 'Forbidden' } }),
+    f.broker.create({ origin: 'local', action: 'slack.search', payload: { query: 'Forbidden' } }),
   );
   f.broker.save = () => {
     f.config.channels = ['C999'];
   };
   const result = await f.broker.create({
+    origin: 'local',
     action: 'slack.post',
     payload: { ref: 'C123', text: 'Denied after audit' },
   });
@@ -792,6 +810,10 @@ for (const boundary of ['expiry', 'revoke', 'logout', 'restart'])
     const broker =
       boundary === 'restart'
         ? new Broker({
+    // UNSCOPED, INJECTED. The broker reads the host policy itself now, and a
+    // test that fell through to the real /Library/muxpad/connectors.json would
+    // pass or fail on the state of the machine it runs on.
+    hostPolicy: () => ({ enforce: false, allow: {} }),
             config: f.config,
             state: f.state,
             save: () => {},
@@ -801,6 +823,6 @@ for (const boundary of ['expiry', 'revoke', 'logout', 'restart'])
           })
         : f.broker;
     for (const [action, payload] of supportedInputs)
-      assert.equal((await broker.create({ action, payload })).state, 'pending', action);
+      assert.equal((await broker.create({ origin: 'local', action, payload })).state, 'pending', action);
     assert.equal(f.calls.length, 1);
   });

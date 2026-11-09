@@ -46,7 +46,11 @@ it('explicit read-only test submits channels exactly once; same operation recove
   expect(await r.json()).toMatchObject({ requestID: id });
   await post(a, { operationID: op });
   expect(vi.mocked(slackBrokerRequest).mock.calls.filter(([p]) => p === '/requests')).toEqual([
-    ['/requests', { action: 'slack.channels', payload: {} }],
+    // …carrying the machine it runs on, so the host policy applies to
+    // muxpad's own Settings test too. It used to send none and reach the
+    // broker as `unknown`: a Slack request from the mini that
+    // connectors.json never saw.
+    ['/requests', { action: 'slack.channels', payload: {}, origin: 'local' }],
   ]);
 });
 it('does not accept caller actions/payloads and refuses cross-origin creation', async () => {
