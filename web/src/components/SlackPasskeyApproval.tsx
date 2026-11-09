@@ -362,7 +362,24 @@ export function SlackPasskeyApproval({
                 {/* The Slack workspace belongs with WHO ASKED, not on a line of
                     its own — and it means nothing at all on an archive read. */}
                 {connectorOf(request.action) === SLACK ? ` · ${request.teamID}` : ''}
-                {request.origin === 'local' ? '' : ' — unverified, so approve-once only'}
+                {/* ── WHETHER THAT NAME IS EVIDENCE ──────────────────────
+                    This said "unverified, so approve-once only" for ANY
+                    remote origin, which was true when no remote machine could
+                    prove anything. It is not any more, and the first proven
+                    request showed the contradiction immediately: a full
+                    duration menu under a line insisting the opposite. A
+                    dialog that argues with itself is worse than one that says
+                    nothing at all.
+
+                    The broker is the only thing that knows — it holds the key
+                    — so the answer comes from `timedAllowed`, its verdict on
+                    THIS request, rather than from a guess about what the
+                    origin's name implies. */}
+                {request.origin === 'local'
+                  ? ''
+                  : request.timedAllowed === false
+                    ? ' — unverified, so approve-once only'
+                    : ' — verified'}
               </p>
               {/* ── ONLY OFFER WHAT THE BROKER WOULD ACCEPT ──────────────────
                   `timedAllowed: false` means a duration will be REFUSED at the
