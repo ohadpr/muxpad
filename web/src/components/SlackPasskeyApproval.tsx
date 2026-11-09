@@ -339,16 +339,22 @@ export function SlackPasskeyApproval({
             {/* …AND THE REST OF THE PAYLOAD, VISIBLE. Not a <details>: a
                 security prompt that hides part of what it is about is asking
                 for approval of something it did not show. */}
-            {described.rest.length > 0 && (
-              <dl className="slack-passkey-rest">
-                {described.rest.map(([key, value]) => (
-                  <div key={key}>
-                    <dt>{key}</dt>
-                    <dd>{value}</dd>
-                  </div>
-                ))}
-              </dl>
-            )}
+            {(() => {
+              const fields =
+                connectorOf(request.action) === SLACK
+                  ? [...described.rest, ['workspace', request.teamID] as [string, string]]
+                  : described.rest;
+              return fields.length > 0 ? (
+                <dl className="slack-passkey-rest">
+                  {fields.map(([key, value]) => (
+                    <div key={key}>
+                      <dt>{key}</dt>
+                      <dd>{value}</dd>
+                    </div>
+                  ))}
+                </dl>
+              ) : null;
+            })()}
             {/* WHO ASKED, AND FOR HOW LONG — one row, because they are one
                 question: this machine, this once. */}
             <div className="slack-passkey-foot">
@@ -359,9 +365,12 @@ export function SlackPasskeyApproval({
                   refused for any origin the broker cannot attribute. */}
               <p className="slack-passkey-note">
                 asked by <strong>{request.origin ?? 'unknown'}</strong>
-                {/* The Slack workspace belongs with WHO ASKED, not on a line of
-                    its own — and it means nothing at all on an archive read. */}
-                {connectorOf(request.action) === SLACK ? ` · ${request.teamID}` : ''}
+                {/* The workspace id used to sit here, between the machine
+                    name and the verdict — three facts of different weight in
+                    one 0.75rem line, which then wrapped and shoved the
+                    duration picker onto a row of its own. It is a DETAIL, so
+                    it sits with the details below; still Slack-only, because
+                    it means nothing on an archive read. */}
                 {/* ── WHETHER THAT NAME IS EVIDENCE ──────────────────────
                     This said "unverified, so approve-once only" for ANY
                     remote origin, which was true when no remote machine could

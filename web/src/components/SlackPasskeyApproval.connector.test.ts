@@ -82,7 +82,7 @@ describe('the approval card follows the request', () => {
     // <details>. A security prompt that conceals part of what it is about is
     // asking for approval of something it did not show.
     expect(CODE).not.toContain('<details');
-    expect(CODE).toMatch(/described\.rest\.map/);
+    expect(CODE).toMatch(/fields\.map/);
   });
 
   it('sends the REQUEST’s timed scope, not Slack’s', () => {
@@ -130,7 +130,14 @@ describe('the card describes the grant it is actually making', () => {
   });
 
   it('does not put a Slack team id on an archive request', () => {
-    expect(CODE).toMatch(/=== SLACK \? ` · \$\{request\.teamID\}` : ''/);
+    // It moved out of the origin line and in with the other payload fields —
+    // it is a detail, and three facts of different weight in one small line
+    // is what unbalanced the card. Still guarded: a workspace id means
+    // nothing on an archive read.
+    expect(CODE).toMatch(
+      /=== SLACK\s*\?\s*\[\.\.\.described\.rest, \['workspace', request\.teamID\]/,
+    );
+    expect(CODE).not.toMatch(/` · \$\{request\.teamID\}`/);
   });
 });
 
