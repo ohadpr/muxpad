@@ -428,3 +428,10 @@
   font-weight: 600;
   letter-spacing: 0.01em;
 }
+/* …and "needs you" is a different fact from "working", so it does not wear
+   the same ink. A worker waiting on a human is the one row on this panel you
+   might act on, and the accent is already spoken for by the ones that are
+   simply busy. */
+.chat-drawer__row-live[data-state="blocked"] {
+  color: var(--status-blocked, var(--danger, var(--d-accent)));
+}
