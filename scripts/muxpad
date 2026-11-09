@@ -1049,8 +1049,29 @@ slack_call() {
   fi
   if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
     {
-      printf 'muxpad: %s: %s\n' "$BROKER_LABEL" "$(jq -r '.error.message // "request failed"' "$tmp" 2>/dev/null)"
-      local detail; detail="$(jq -r '.error.detail // empty' "$tmp" 2>/dev/null)"
+      # ALWAYS SAY SOMETHING. `jq -r '.error.message // "x"'` only falls back
+      # when the FIELD is null; when the body is not JSON at all, jq fails,
+      # `2>/dev/null` eats the complaint and the substitution is EMPTY. The
+      # VM printed exactly `muxpad: slack:` and nothing else, twice, which
+      # told its reader nothing — the body was a 404 from the node link,
+      # which is not JSON.
+      #
+      # So: the field, or the first line of whatever the body actually was,
+      # or the status code. In that order, and one of them always exists.
+      local why structured
+      why="$(jq -r '.error.message // empty' "$tmp" 2>/dev/null || true)"
+      structured=1
+      if [ -z "$why" ]; then
+        structured=
+        why="$(tr -d '\r' < "$tmp" 2>/dev/null | head -c 200 | head -1 || true)"
+      fi
+      [ -n "$why" ] || why="HTTP $status"
+      printf 'muxpad: %s: %s\n' "$BROKER_LABEL" "$why"
+      # The URL, but only when the body did not explain itself. A 404 from the
+      # node link and a 404 from the server read identically otherwise, and
+      # the path is what tells them apart.
+      [ -n "$structured" ] || printf '  while calling %s (HTTP %s)\n' "$path" "$status"
+      local detail; detail="$(jq -r '.error.detail // empty' "$tmp" 2>/dev/null || true)"
       [ -n "$detail" ] && printf '\n%s\n' "$detail"
     } >&2
     rm -f "$tmp"

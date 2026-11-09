@@ -520,3 +520,30 @@ describe('a connector names itself', () => {
     expect(CODE).not.toMatch(/muxpad: slack: this pane cannot prove/);
   });
 });
+
+describe('a failure always says why', () => {
+  it('never prints a bare label — the VM printed exactly "muxpad: slack:"', () => {
+    // `jq -r '.error.message // "x"'` falls back only when the FIELD is null.
+    // When the body is not JSON at all, jq fails, `2>/dev/null` eats the
+    // complaint, and the substitution is EMPTY. That is what the Trayo VM
+    // saw, twice: a label, a colon, and nothing — the body was a node-link
+    // 404, which is not JSON.
+    const call = CODE.slice(CODE.indexOf('slack_call() {'));
+    const branch = call.slice(0, call.indexOf('\n}\n'));
+    // Three sources, in order, and the last cannot be empty.
+    expect(branch).toMatch(/\.error\.message \/\/ empty/);
+    expect(branch).toMatch(/head -c 200 \| head -1/);
+    expect(branch).toMatch(/why="HTTP \$status"/);
+    // The old form, which could produce nothing at all, is gone.
+    expect(branch).not.toMatch(/\.error\.message \/\/ "request failed"/);
+  });
+
+  it('names the URL only when the body did not explain itself', () => {
+    // A node-link 404 and a server 404 read identically otherwise, and the
+    // path is what tells them apart — but repeating it after a real refusal
+    // is noise.
+    const call = CODE.slice(CODE.indexOf('slack_call() {'));
+    const branch = call.slice(0, call.indexOf('\n}\n'));
+    expect(branch).toMatch(/\[ -n "\$structured" \] \|\| printf ' {2}while calling/);
+  });
+});

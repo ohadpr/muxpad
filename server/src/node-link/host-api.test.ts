@@ -505,3 +505,96 @@ describe('a router that throws', () => {
     await expect(boom.handle('trayo', 'GET', '/api/say/key')).rejects.toThrow('nope');
   });
 });
+
+/**
+ * SLACK, FROM THE MACHINE SLACK IS SCOPED TO.
+ *
+ * The policy says Slack belongs to the Trayo VM. This allowlist had no
+ * `/api/slack` shape at all, so the one machine allowed to use Slack was the
+ * one machine that could not reach it: `muxpad slack channels` on the VM died
+ * with an empty error, twice. The policy and the transport contradicted each
+ * other, and neither said so.
+ *
+ * The caller identity travels in the QUERY for these routes, which the path
+ * rebuild deliberately throws away — so the query is rebuilt too, under the
+ * same discipline: parsed, checked, and a new string built from two values.
+ */
+describe('slack reaches the host it is scoped to', () => {
+  it('passes a channel list for one of its OWN panes, with the query rebuilt', async () => {
+    const res = await api.handle(
+      'trayo',
+      'GET',
+      `/api/slack/channels?pane=${remote.paneId}&key=abc123`,
+    );
+    expect(res.status).toBe(200);
+    const url = new URL((fetched[0] as Request).url);
+    expect(url.pathname).toBe('/api/slack/channels');
+    // Rebuilt in a FIXED ORDER from two validated values — not the host's
+    // string passed along.
+    expect(url.search).toBe(`?pane=${remote.paneId}&key=abc123`);
+  });
+
+  it('refuses a pane that is not this host’s — the whole point of the allowlist', async () => {
+    const res = await api.handle(
+      'trayo',
+      'GET',
+      `/api/slack/channels?pane=${local.paneId}&key=abc123`,
+    );
+    expect(res.status).toBe(404);
+    expect(fetched).toHaveLength(0);
+  });
+
+  it('refuses a query that is missing, malformed, or carrying extras', async () => {
+    for (const q of [
+      '',
+      '?pane=',
+      `?pane=${remote.paneId}`,
+      '?key=abc123',
+      '?pane=../../etc&key=abc',
+      `?pane=${remote.paneId}&key=${'x'.repeat(300)}`,
+    ]) {
+      const res = await api.handle('trayo', 'GET', `/api/slack/channels${q}`);
+      expect(res.status, q).toBe(404);
+    }
+    expect(fetched).toHaveLength(0);
+  });
+
+  it('drops anything extra the host put in the query', async () => {
+    // A third parameter is not an error to strip silently — it is simply not
+    // rebuilt, because the rebuild names what may travel.
+    await api.handle(
+      'trayo',
+      'GET',
+      `/api/slack/channels?pane=${remote.paneId}&key=abc123&as=admin&scope=all`,
+    );
+    const url = new URL((fetched[0] as Request).url);
+    expect(url.search).toBe(`?pane=${remote.paneId}&key=abc123`);
+    expect(url.search).not.toContain('admin');
+  });
+
+  it('passes the approval poll, which is the other half of one call', async () => {
+    const res = await api.handle(
+      'trayo',
+      'GET',
+      `/api/slack/requests/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d?pane=${remote.paneId}&key=k`,
+    );
+    expect(res.status).toBe(200);
+    expect(new URL((fetched[0] as Request).url).pathname).toBe(
+      '/api/slack/requests/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d',
+    );
+  });
+
+  it('still refuses a WRITE — those are a separate decision', async () => {
+    // Reads and the approval poll only. Six write verbs with six bodies to
+    // rebuild, added untested in one go, is how an allowlist stops being one.
+    for (const [method, path] of [
+      ['POST', '/api/slack/post'],
+      ['POST', '/api/slack/dm'],
+      ['POST', '/api/slack/upload'],
+    ] as const) {
+      const res = await api.handle('trayo', method, `${path}?pane=${remote.paneId}&key=k`);
+      expect(res.status, path).toBe(404);
+    }
+    expect(fetched).toHaveLength(0);
+  });
+});

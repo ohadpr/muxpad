@@ -58,6 +58,21 @@ interface Allowed {
    */
   query?: string;
   /**
+   * Rebuild a VARIABLE query from validated parts — same discipline as
+   * `rebuildBody`, for the shapes whose caller identity travels in the query
+   * rather than the path.
+   *
+   * `query` above names ONE literal and is right for a constant. The Slack
+   * routes take `?pane=…&key=…`, which is neither constant nor skippable:
+   * without it the route answers "requires a caller pane". So the host's
+   * query is PARSED, the pane is checked to be one of this host's, the key is
+   * charset-checked, and a NEW string is built from those two values. The
+   * host's own string is discarded exactly as its path and body are.
+   *
+   * `null` is a refusal.
+   */
+  rebuildQuery?: (query: string | null, ctx: BodyContext) => string | null;
+  /**
    * Trim the ANSWER before it goes back, for a shape whose route knows more
    * than the caller should.
    *
@@ -88,7 +103,64 @@ interface BodyContext {
 const ID = /^[A-Za-z0-9_-]{1,64}$/;
 const CARD_NAME = /^[A-Za-z0-9_.-]{1,64}$/;
 
+/**
+ * `?pane=…&key=…`, rebuilt.
+ *
+ * The pane must be ONE OF THIS HOST'S — the same rule every id in a path
+ * obeys, and the reason a VM cannot act as a chat on the mini. The key is a
+ * server-minted proof for that pane; it is charset-checked and copied, never
+ * interpreted here, and the server verifies it properly.
+ */
+const callerQuery = (query: string | null, ctx: BodyContext): string | null => {
+  if (!query) return null;
+  const p = new URLSearchParams(query);
+  const pane = p.get('pane');
+  const key = p.get('key');
+  if (!pane || !key) return null;
+  if (!ID.test(pane) || !/^[A-Za-z0-9_.:-]{1,256}$/.test(key)) return null;
+  if (!ctx.paneIsOurs(pane)) return null;
+  // Built fresh, in a fixed order, from two checked values.
+  return `pane=${encodeURIComponent(pane)}&key=${encodeURIComponent(key)}`;
+};
+
 const ALLOWED: Allowed[] = [
+  // ── muxpad slack ────────────────────────────────────────────────────────
+  //
+  // WITHOUT THESE, "Slack only from the Trayo VM" IS UNREACHABLE. The policy
+  // scopes Slack to the VM and this allowlist had no `/api/slack` shape at
+  // all, so the one machine allowed to use Slack was the one machine that
+  // could not reach it: `muxpad slack channels` on the VM died with an empty
+  // error, twice, which is how it was found.
+  //
+  // READS AND THE APPROVAL POLL ONLY, deliberately. A write (`post`, `dm`,
+  // `upload`, `edit`, `unpost`, `react`) is a separate decision with a
+  // separate body to rebuild, and adding six of them untested in one go is
+  // how an allowlist stops being one. They are listed in the runbook.
+  //
+  // What a VM gains from these: it can list channels and read the status of
+  // an approval it asked for. Every one of them still goes through the
+  // broker and the host policy, and the pane in the query must be its own.
+  {
+    method: 'GET',
+    pattern: /^\/api\/slack\/channels$/,
+    parts: [],
+    rebuild: () => '/api/slack/channels',
+    rebuildQuery: callerQuery,
+  },
+  {
+    method: 'GET',
+    pattern: /^\/api\/slack\/requests\/([^/]+)$/,
+    parts: ['name'],
+    rebuild: ([id]) => `/api/slack/requests/${id}`,
+    rebuildQuery: callerQuery,
+  },
+  {
+    method: 'GET',
+    pattern: /^\/api\/slack\/approvals$/,
+    parts: [],
+    rebuild: () => '/api/slack/approvals',
+    rebuildQuery: callerQuery,
+  },
   // ── muxpad card ─────────────────────────────────────────────────────────
   {
     method: 'GET',
@@ -357,7 +429,7 @@ export class HostApi {
       if (!m) continue;
       // A query the shape does not name is a refusal, not something to strip:
       // stripping would silently change the meaning of the call.
-      if (query !== null && query !== a.query) return NOT_FOUND;
+      if (!a.rebuildQuery && query !== null && query !== a.query) return NOT_FOUND;
       const captures = m.slice(1).map((s) => decodeURIComponent(s));
       if (!this.capturesOk(nodeId, a.parts, captures)) return NOT_FOUND;
       let out = body;
@@ -371,7 +443,16 @@ export class HostApi {
       }
       // Rebuilt from the SHAPE, not from the request — the host's own string
       // has been compared and discarded.
-      const dest = a.rebuild(captures) + (a.query && query !== null ? `?${a.query}` : '');
+      let suffix = a.query && query !== null ? `?${a.query}` : '';
+      if (a.rebuildQuery) {
+        const q = a.rebuildQuery(query, {
+          nodeId,
+          paneIsOurs: (paneId) => this.paneIsOn(nodeId, paneId),
+        });
+        if (q === null) return NOT_FOUND;
+        suffix = `?${q}`;
+      }
+      const dest = a.rebuild(captures) + suffix;
       const res = await this.dispatch(a.method, dest, out);
       if (!a.filterResponse || res.status >= 400) return res;
       return {
