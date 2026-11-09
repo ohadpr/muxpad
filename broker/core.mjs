@@ -15,6 +15,7 @@ const equal = (a, b) =>
   Buffer.byteLength(a) === Buffer.byteLength(b) &&
   timingSafeEqual(Buffer.from(a), Buffer.from(b));
 import { CAPABILITIES, capabilityOf } from './capabilities.mjs';
+import { Origins } from './origins.mjs';
 import { loadPolicy, policyAllows, timedOriginTrusted } from './policy.mjs';
 import { describeMsgvault, msgvaultArgv, validateMsgvault } from './msgvault.mjs';
 
@@ -51,7 +52,24 @@ const TEAM_ACTIONS = Object.freeze([
   'slack.edit',
   'slack.upload',
 ]);
-const DURATIONS = Object.freeze({ once: 0, '10m': 600_000, '1h': 3_600_000, '1d': 86_400_000 });
+/**
+ * How long an approval lasts.
+ *
+ * `until-revoked` is Infinity on purpose, and every arithmetic site below
+ * already clamps it: a grant can never outlive the owner session that minted
+ * it (`Math.min(approvedAt + DURATIONS[duration], owner.expires)`), and no
+ * grant survives a broker restart, because `grants` is memory. So the longest
+ * honest description of it is "until you revoke it, the session ends, or the
+ * broker restarts" — which is what the dialog says. It is not persistence,
+ * and nothing here should be read as promising any.
+ */
+const DURATIONS = Object.freeze({
+  once: 0,
+  '10m': 600_000,
+  '1h': 3_600_000,
+  '1d': 86_400_000,
+  'until-revoked': Number.POSITIVE_INFINITY,
+});
 const fail = (message) => {
   throw new Error(message);
 };
@@ -70,6 +88,9 @@ export class Broker {
      *  edited on disk takes effect at the next request rather than the next
      *  restart — at a human-paced rate, which this is. */
     hostPolicy = () => loadPolicy(),
+    /** Verifies that a remote origin really is that machine. One instance,
+     *  because the replay memory is the point: a proof is good once. */
+    origins = null,
     now = Date.now,
     elapsed = () => Number(process.hrtime.bigint() / 1_000_000n),
     sessionLive = (s) => !!s && s.expires > now(),
@@ -89,6 +110,7 @@ export class Broker {
     this.slack = slack;
     this.msgvault = msgvault;
     this.hostPolicy = hostPolicy;
+    this.origins = origins ?? new Origins({ now: () => this.now() });
     this.elapsed = elapsed;
     this.lastElapsed = elapsed();
     this.lastClock = now();
@@ -127,7 +149,7 @@ export class Broker {
         // Per-capability, from the one place that knows: a constant here is
         // exactly what made every timed archive approval fail in this mode.
         timedScope: (r) => this.timedScope(this.capabilityOfRequest(r)),
-        timedOriginTrusted: (origin) => timedOriginTrusted(origin),
+        timedOriginTrusted: (origin, verified) => timedOriginTrusted(origin, verified),
         invalidate: () => {
           this.grants.clear();
           this.grantEpoch++;
@@ -231,6 +253,25 @@ export class Broker {
       typeof input.origin === 'string' && /^[a-z0-9][a-z0-9_-]{0,31}$/.test(input.origin)
         ? input.origin
         : 'unknown';
+    /**
+     * …AND WHETHER THAT LABEL IS EVIDENCE.
+     *
+     * The paragraph above was the whole story until now: a label, believed
+     * for `local` because believing it added nothing. A remote host can hold
+     * a key this broker also has, and sign the request it is asking for —
+     * which the hosting machine cannot forge, because the key is not on it.
+     *
+     * Verified here, ONCE, at the moment the request is minted, so the rest
+     * of the broker reads a boolean rather than re-checking a proof whose
+     * nonce has already been spent. An absent or bad proof is not a refusal:
+     * it is the old behaviour, approve-once, with the dialog saying why.
+     */
+    const originVerified = this.origins.verify({
+      origin,
+      action,
+      payload: input.payload ?? {},
+      proof: input.proof,
+    });
     // ── THE HOST POLICY, CHECKED HERE TOO ─────────────────────────────────
     // muxpad checks it before sending; so does the broker, because `/requests`
     // is reachable without going through muxpad at all and the broker is the
@@ -362,16 +403,37 @@ export class Broker {
       nonce: randomBytes(32).toString('base64url'),
     };
     Object.defineProperty(request, 'teamID', { value: this.config.teamID, enumerable: true });
+    // NOT enumerable: the view below decides what a caller sees, and a raw
+    // boolean named "verified" on the request object is exactly the field
+    // something downstream would one day trust without asking how it got set.
+    Object.defineProperty(request, 'originVerified', { value: originVerified });
     if (inlineMode(this.config))
       Object.defineProperty(request, 'elapsedExpires', { value: this.elapsed() + 300000 });
     this.requests.set(request.id, request);
     if (upload) this.uploads.set(request.id, upload);
-    const grant = this.activeGrants().find(
-      (g) =>
-        g.teamID === request.teamID &&
-        g.actions.includes(request.action) &&
-        equal(g.scope, this.grantScope(request)),
-    );
+    /**
+     * ── A GRANT IS SPENT ON THE SAME TERMS IT WAS MINTED ──────────────────
+     *
+     * The scope below binds a grant to an origin, and for a long time that
+     * was a LABEL on both sides — minted against "trayo", matched against
+     * "trayo", with nothing checking either. Making the minting side require
+     * a proof is not enough on its own, and a test caught it: without this
+     * line a request that merely CLAIMS the name still matched the grant a
+     * proven machine had earned, and ran with no dialog. The hole would have
+     * been in the one direction that matters, and it would have been opened
+     * by the change meant to close it.
+     *
+     * So the spend is gated by the same rule as the offer: `local`, or a
+     * machine that proved this request.
+     */
+    const grant = timedOriginTrusted(origin, originVerified)
+      ? this.activeGrants().find(
+          (g) =>
+            g.teamID === request.teamID &&
+            g.actions.includes(request.action) &&
+            equal(g.scope, this.grantScope(request)),
+        )
+      : undefined;
     if (grant) {
       // Consume before audit or asynchronous identity checks: manual approval
       // must never race this automatic dispatch.
@@ -454,14 +516,14 @@ export class Broker {
       // only because believing it adds nothing — the request did come from
       // here. Everything else is approve-once. See policy.mjs.
       timedAllowed:
-        timedOriginTrusted(r.origin) &&
+        timedOriginTrusted(r.origin, r.originVerified) &&
         (this.timedScope(this.capabilityOfRequest(r)) !==
           this.capabilityOfRequest(r).readScope ||
           this.capabilityOfRequest(r).readActions.includes(r.action)),
       /** Why a duration is not on offer, for the dialog to say out loud. */
-      timedRefusedReason: timedOriginTrusted(r.origin)
+      timedRefusedReason: timedOriginTrusted(r.origin, r.originVerified)
         ? undefined
-        : `approve-once only: this request says it is from "${r.origin ?? 'unknown'}", and the broker cannot verify that, so a lasting permission would rest on a claim anything on this machine could make`,
+        : `approve-once only: this request says it is from "${r.origin ?? 'unknown'}" and did not prove it, so a lasting permission would rest on a claim anything on this machine could make`,
       payload: r.payload,
       state: r.state,
       expires: r.expires,
@@ -627,9 +689,9 @@ export class Broker {
     const rCap = this.capabilityOfRequest(r);
     // THE SAME RULE AT THE DECISION, not only in the offer. The view is a
     // hint to a UI; this is the gate.
-    if (duration !== 'once' && !timedOriginTrusted(r.origin))
+    if (duration !== 'once' && !timedOriginTrusted(r.origin, r.originVerified))
       fail(
-        `${r.action} can only be approved once from "${r.origin ?? 'unknown'}" — the broker cannot verify which machine asked, so a timed permission would be spendable by anything on this one`,
+        `${r.action} can only be approved once from "${r.origin ?? 'unknown'}" — that machine did not prove it asked, so a timed permission would be spendable by anything on this one`,
       );
     if (
       duration !== 'once' &&

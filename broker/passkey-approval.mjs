@@ -6,7 +6,16 @@ const equal = (a, b) =>
   typeof b === 'string' &&
   Buffer.byteLength(a) === Buffer.byteLength(b) &&
   timingSafeEqual(Buffer.from(a), Buffer.from(b));
-const durations = Object.freeze({ once: 0, '10m': 600000, '1h': 3600000, '1d': 86400000 });
+// Mirrors DURATIONS in core.mjs. `until-revoked` is Infinity here for the
+// same reason it is there: every arithmetic use clamps it to the owner
+// session, and no grant survives a broker restart.
+const durations = Object.freeze({
+  once: 0,
+  '10m': 600000,
+  '1h': 3600000,
+  '1d': 86400000,
+  'until-revoked': Number.POSITIVE_INFINITY,
+});
 // NO MODULE-LEVEL SCOPE. It was `const scope = 'slack-team-all-v2'`, from when
 // Slack was the only capability, and `options()` required the client to send
 // exactly that for any non-"once" duration. The web client correctly sends the

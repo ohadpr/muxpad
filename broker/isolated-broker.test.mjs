@@ -172,20 +172,18 @@ test('an isolated broker runs nothing until a human decides, per capability', as
 });
 
 test('an isolated broker refuses a lasting permission it cannot attribute', async () => {
-  // THE BINDING IS SCOPE EQUALITY, NOT CALLER AUTHENTICATION, and a review
-  // caught the difference being described as the latter. `origin` is a string
-  // the caller chooses, `/requests` has no caller authentication, and every
-  // request reaches this broker from the same machine as the agents it
-  // restrains. A grant bound to `trayo` was therefore spendable by anything
-  // on the mini willing to type `"origin":"trayo"`.
-  //
-  // So the half that rested on the claim is gone: a duration is only offered
-  // where believing the claim adds nothing. Everything else is approve-once.
+  // `origin` is a string the caller chooses, `/requests` has no caller
+  // authentication, and every request reaches this broker from the same
+  // machine as the agents it restrains. A grant bound to `trayo` would
+  // therefore be spendable by anything on the mini willing to type
+  // `"origin":"trayo"` — unless that machine PROVES it asked, which this one
+  // does not: a real broker has no key for `trayo` under /Library/muxpad, so
+  // this is the unproven path end to end, through HTTP.
   const b = await isolatedBroker();
   try {
     const remote = await b.ask('slack.channels', {}, 'trayo');
     assert.equal(remote.body.timedAllowed, false);
-    assert.match(remote.body.timedRefusedReason, /cannot verify/);
+    assert.match(remote.body.timedRefusedReason, /did not prove it/);
     await assert.rejects(
       b.broker.decideSession(remote.body.id, remote.body.fingerprint, 'approve', {
         duration: '1h',
