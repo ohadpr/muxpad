@@ -219,6 +219,10 @@ Capabilities worth knowing:
   pending. Never claim a call was approved, refused or pending without a
   result that says so.
 
+  **FROM A CHAT PANE.** The dialog appears in the chat that asked, so a call
+  from a terminal pane is refused up front — there would be nowhere to show
+  it. If you are driving a terminal, ask the chat to make the call.
+
   **YOU NEVER HOLD THE KEY.** The grant lives with the broker under an account
   you cannot read, and the broker — not you — composes the command line from
   the verb and arguments you asked for. So write the arguments plainly; there
