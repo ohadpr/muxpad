@@ -372,7 +372,9 @@ it('leads with the ask and shows the whole payload without a disclosure', async 
   // asking for approval of something it did not show.
   expect(host.querySelector('details')).toBeNull();
   const rest = [...host.querySelectorAll('.slack-passkey-rest dt')].map((d) => d.textContent);
-  expect(rest).toEqual(['channel', 'metadata']);
+  // The workspace id rides with the other details rather than in the origin
+  // line, where it was one fact too many for a 0.75rem row.
+  expect(rest).toEqual(['channel', 'metadata', 'workspace']);
   expect(host.querySelector('.slack-passkey-rest')!.textContent).toContain('"keep":"exact"');
   expect([...host.querySelectorAll('dialog button')].map((b) => b.textContent)).toEqual([
     'Deny',
