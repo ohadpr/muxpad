@@ -36,6 +36,10 @@ function fixture(response) {
   };
   const client = slackClient(secret, 'T1');
   const broker = new Broker({
+    // UNSCOPED, INJECTED. The broker reads the host policy itself now, and a
+    // test that fell through to the real /Library/muxpad/connectors.json would
+    // pass or fail on the state of the machine it runs on.
+    hostPolicy: () => ({ enforce: false, allow: {} }),
     config: { teamID: 'T1', channels: [] },
     state: {},
     save: () => {},

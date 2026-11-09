@@ -54,6 +54,10 @@ function fixture() {
     teamID: 'T1',
   };
   const broker = new Broker({
+    // UNSCOPED, INJECTED. The broker reads the host policy itself now, and a
+    // test that fell through to the real /Library/muxpad/connectors.json would
+    // pass or fail on the state of the machine it runs on.
+    hostPolicy: () => ({ enforce: false, allow: {} }),
     config,
     state,
     now: () => wall,
@@ -62,6 +66,13 @@ function fixture() {
       saveHook();
       if (failSave) throw Error('PRIVATE disk failure');
       saves.push(structuredClone(s));
+    },
+    // A FAKE ARCHIVE RUNNER. Without one an msgvault request dispatches and
+    // fails, and a failed dispatch mints no grant — which hid what these
+    // cases are actually about.
+    msgvault: async (action, payload) => {
+      calls.push([action, payload]);
+      return { action, result: { ok: true } };
     },
     slack: async (a, p) => {
       calls.push([a, p]);
@@ -124,18 +135,23 @@ function fixture() {
       clientExtensionResults: { credProps: { rk: true } },
     };
   }
-  const request = (action = 'slack.post', payload = { ref: 'C123', text: 'exact message' }) =>
-    broker.create({ action, payload });
-  const options = (r, duration = 'once', decision = 'approve') =>
+  const request = (
+    action = 'slack.post',
+    payload = { ref: 'C123', text: 'exact message' },
+    origin = 'local',
+  ) => broker.create({ origin, action, payload });
+  const options = (r, duration = 'once', decision = 'approve', scope) =>
     broker.passkeys.options({
       id: r.id,
       fingerprint: r.fingerprint,
       decision,
       duration,
-      ...(duration !== 'once' ? { scope: 'slack-team-all-v2' } : {}),
+      // THE REQUEST'S OWN SCOPE by default, which is what the web client
+      // sends. A constant here is what hid the bug this mode shipped with.
+      ...(duration !== 'once' ? { scope: scope ?? r.timedScope } : {}),
     });
-  const approve = async (r, duration = 'once', decision = 'approve') => {
-    const o = await options(r, duration, decision);
+  const approve = async (r, duration = 'once', decision = 'approve', scope) => {
+    const o = await options(r, duration, decision, scope);
     return broker.passkeys.verify({ ceremonyID: o.ceremonyID, response: assertion(o.options) });
   };
   return {
@@ -511,4 +527,53 @@ test('enrollment may omit UV but still rejects absent presence without activatin
   );
   assert.equal(f.broker.passkeys.credential(), null);
   assert.equal(f.state.inlineCandidate, undefined);
+});
+
+/**
+ * THE MODE THIS INSTALL ACTUALLY RUNS IN.
+ *
+ * A review found the gap exactly: every capability test drove `decideSession`,
+ * and this install runs `approvalMode: passkey-inline`. The inline path had a
+ * module-level `const scope = 'slack-team-all-v2'` left from when Slack was
+ * the only capability, so EVERY timed archive approval failed with "Invalid
+ * approval scope" — and the Slack value that was accepted then failed later
+ * against the capability-aware check in core.mjs. Fail-closed, and invisible
+ * to every test that existed.
+ */
+test('inline mode accepts the request’s own scope, per capability', async () => {
+  const f = fixture();
+
+  // The archive, for an hour, with the scope the web client actually sends.
+  const archive = await f.request('msgvault.search', { query: 'tax 2025' });
+  assert.equal(archive.timedScope, 'msgvault-read-v1');
+  const ok = await f.approve(archive, '1h');
+  assert.equal(ok.state, 'complete');
+  assert.equal(f.broker.listGrants()[0].permissionScope, 'msgvault-read-v1');
+
+  // And Slack's scope is NOT accepted for an archive request — the mistake
+  // the old constant made mandatory.
+  const second = await f.request('msgvault.stats', {});
+  await assert.rejects(
+    f.options(second, '1h', 'approve', 'slack-team-all-v2'),
+    /Invalid approval scope/,
+  );
+});
+
+test('inline mode refuses a duration it cannot attribute', async () => {
+  // Same rule as the session path. A rule enforced in one of two doors is not
+  // a rule, and this is the door that is open.
+  const f = fixture();
+  const remote = await f.request('slack.read', { ref: 'C123' }, 'trayo');
+  assert.equal(remote.timedAllowed, false);
+  await assert.rejects(f.options(remote, '1h'), /machine the broker can attribute/);
+  // Once still works.
+  assert.equal((await f.approve(remote)).state, 'complete');
+});
+
+test('inline mode still refuses a scope that is not the request’s', async () => {
+  const f = fixture();
+  const r = await f.request('slack.read', { ref: 'C123' });
+  for (const bogus of ['msgvault-read-v1', 'slack-team-read-v1', 'anything'])
+    await assert.rejects(f.options(r, '1h', 'approve', bogus), /Invalid approval scope/, bogus);
+  assert.equal((await f.approve(r, '1h')).state, 'complete');
 });

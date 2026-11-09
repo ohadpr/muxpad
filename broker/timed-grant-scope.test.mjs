@@ -21,6 +21,19 @@ import { HumanSessions, SESSION_COOKIE } from './human-session.mjs';
  *
  * The mode DEFAULTS to what shipped. A security change that arrives silently
  * with an upgrade is one nobody reviewed.
+ *
+ * ── AND THE ORIGIN HALF IS WEAKER THAN IT READS ──────────────────────────
+ * A review put it plainly: `origin` is a string the caller chooses, on an
+ * endpoint with no caller authentication, and every request reaches the
+ * broker from the same machine as the agents it restrains. So a grant bound
+ * to `trayo` was spendable by anything on the mini willing to say `trayo`.
+ *
+ * The scope still carries the origin — that part is real and keeps one
+ * machine's grant from being found by another's request. What changed is that
+ * a DURATION is now only offered to an origin whose claim adds nothing
+ * (`local`, where the request demonstrably came from). Everything else is
+ * approve-once. Hence `local` throughout this file: these cases are about
+ * what a scope COVERS, and a remote origin can no longer get one at all.
  */
 
 const secret = 'a-long-random-test-only-pairing-secret-12345';
@@ -42,6 +55,10 @@ function fixture({ timedGrants } = {}) {
   const save = () => {};
   const sessions = new HumanSessions({ config, state, save, now: () => now });
   const broker = new Broker({
+    // UNSCOPED, INJECTED. The broker reads the host policy itself now, and a
+    // test that fell through to the real /Library/muxpad/connectors.json would
+    // pass or fail on the state of the machine it runs on.
+    hostPolicy: () => ({ enforce: false, allow: {} }),
     config,
     state,
     save,
@@ -75,7 +92,7 @@ const approveFor = (f, r, duration, session, scope) =>
 test('by default nothing changes: a timed grant still covers every action', async () => {
   const f = fixture();
   const session = f.pair();
-  const r = await ask(f, 'slack.post', 'trayo');
+  const r = await ask(f, 'slack.post', 'local');
   const out = await approveFor(f, r, '10m', session, 'slack-team-all-v2');
   assert.equal(out.state, 'complete');
   assert.deepEqual(f.broker.listGrants()[0].permissionScope, 'slack-team-all-v2');
@@ -84,7 +101,7 @@ test('by default nothing changes: a timed grant still covers every action', asyn
 test('under timedGrants:read a WRITE cannot be approved for a duration at all', async () => {
   const f = fixture({ timedGrants: 'read' });
   const session = f.pair();
-  const r = await ask(f, 'slack.post', 'trayo');
+  const r = await ask(f, 'slack.post', 'local');
   await assert.rejects(
     approveFor(f, r, '1d', session, 'slack-team-read-v1'),
     /slack\.post cannot be approved for a duration/,
@@ -97,7 +114,7 @@ test('under timedGrants:read a WRITE cannot be approved for a duration at all', 
 test('under timedGrants:read the grant covers the five read verbs and no others', async () => {
   const f = fixture({ timedGrants: 'read' });
   const session = f.pair();
-  const r = await ask(f, 'slack.read', 'trayo');
+  const r = await ask(f, 'slack.read', 'local');
   await approveFor(f, r, '1h', session, 'slack-team-read-v1');
   const grant = f.broker.listGrants()[0];
   assert.deepEqual([...grant.actions].sort(), [
@@ -116,7 +133,7 @@ test('a client that names the OLD scope is refused, not quietly narrowed', async
   // would approve something other than what the human read.
   const f = fixture({ timedGrants: 'read' });
   const session = f.pair();
-  const r = await ask(f, 'slack.read', 'trayo');
+  const r = await ask(f, 'slack.read', 'local');
   await assert.rejects(
     approveFor(f, r, '10m', session, 'slack-team-all-v2'),
     /Timed approval covers reading only/,
@@ -126,19 +143,22 @@ test('a client that names the OLD scope is refused, not quietly narrowed', async
 test('a timed grant is spendable only by the machine it was approved for', async () => {
   const f = fixture({ timedGrants: 'read' });
   const session = f.pair();
-  const approved = await ask(f, 'slack.read', 'trayo');
+  const approved = await ask(f, 'slack.read', 'local');
   await approveFor(f, approved, '1h', session, 'slack-team-read-v1');
   assert.equal(f.calls.length, 1);
 
   // Same machine: dispatched without asking again.
-  const same = await ask(f, 'slack.read', 'trayo');
+  const same = await ask(f, 'slack.read', 'local');
   assert.notEqual(f.broker.view(same.id).state, 'pending');
   assert.equal(f.calls.length, 2);
 
   // ANOTHER machine: the grant does not match, so it goes to the human. This
   // is the owner's exact worry — a day approved for the work VM must not be
   // spendable by a personal chat.
-  const elsewhere = await ask(f, 'slack.read', 'local');
+  // Minted by `local`, requested by another machine: the scope does not
+  // match, so it goes to the human. That half of the binding is real — it is
+  // scope equality, not a claim about who is calling.
+  const elsewhere = await ask(f, 'slack.read', 'trayo');
   assert.equal(f.broker.view(elsewhere.id).state, 'pending');
   assert.equal(f.calls.length, 2);
 });
@@ -148,7 +168,7 @@ test('a request with no origin never rides a grant minted for a named one', asyn
   // per-request approval rather than inheriting somebody else's day.
   const f = fixture({ timedGrants: 'read' });
   const session = f.pair();
-  const approved = await ask(f, 'slack.read', 'trayo');
+  const approved = await ask(f, 'slack.read', 'local');
   await approveFor(f, approved, '1h', session, 'slack-team-read-v1');
   const anonymous = await ask(f, 'slack.read');
   assert.equal(f.broker.view(anonymous.id).state, 'pending');
@@ -157,8 +177,8 @@ test('a request with no origin never rides a grant minted for a named one', asyn
 test('the origin is recorded on the request, so the prompt can show it', async () => {
   const f = fixture();
   f.pair(); // a request needs a paired human before it can be created at all
-  const r = await ask(f, 'slack.post', 'trayo');
-  assert.equal(f.broker.view(r.id).origin, 'trayo');
+  const r = await ask(f, 'slack.post', 'local');
+  assert.equal(f.broker.view(r.id).origin, 'local');
   // A junk origin is not trusted into the record; it becomes `unknown`, which
   // matches no named grant.
   const bad = await ask(f, 'slack.post', '../../etc/passwd');
@@ -171,9 +191,9 @@ test('origin binding holds in the DEFAULT mode too', async () => {
   // machine's day on another's request.
   const f = fixture();
   const session = f.pair();
-  const approved = await ask(f, 'slack.read', 'trayo');
+  const approved = await ask(f, 'slack.read', 'local');
   await approveFor(f, approved, '1h', session, 'slack-team-all-v2');
-  const elsewhere = await ask(f, 'slack.read', 'local');
+  const elsewhere = await ask(f, 'slack.read', 'trayo');
   assert.equal(f.broker.view(elsewhere.id).state, 'pending');
 });
 
@@ -191,11 +211,40 @@ test('the fingerprint moves with the origin, so a displayed one cannot be swappe
     expires: 9_999,
     nonce: 'same-nonce',
   };
-  const a = f.broker.fingerprint({ ...base, origin: 'trayo' });
-  const b = f.broker.fingerprint({ ...base, origin: 'local' });
+  const a = f.broker.fingerprint({ ...base, origin: 'local' });
+  const b = f.broker.fingerprint({ ...base, origin: 'trayo' });
   assert.notEqual(a, b);
   // …and an absent origin is not the same as any named one.
   assert.notEqual(f.broker.fingerprint(base), a);
   // Identical inputs still agree, or nothing could be approved at all.
-  assert.equal(a, f.broker.fingerprint({ ...base, origin: 'trayo' }));
+  assert.equal(a, f.broker.fingerprint({ ...base, origin: 'local' }));
+});
+
+test('a remote origin cannot hold a timed grant at all', async () => {
+  // The binding was doing work the broker could not back. Rather than keep
+  // describing it as a guarantee, the broker refuses the thing that depended
+  // on it: a lasting permission for a machine it cannot identify.
+  const f = fixture();
+  const session = f.pair();
+  const r = await ask(f, 'slack.read', 'trayo');
+  assert.equal(r.timedAllowed, false);
+  assert.match(r.timedRefusedReason, /approve-once only/);
+  await assert.rejects(
+    approveFor(f, r, '10m', session, 'slack-team-all-v2'),
+    /can only be approved once from "trayo"/,
+  );
+  // …and it is still approvable ONCE, which is the whole point: you see the
+  // action, and then it happens.
+  assert.equal((await f.broker.decideSession(r.id, r.fingerprint, 'approve')).state, 'complete');
+});
+
+test('an unnamed origin is treated as unverifiable, not as local', async () => {
+  const f = fixture();
+  const session = f.pair();
+  const r = await f.broker.create({ action: 'slack.read', payload: { ref: 'C123' } });
+  assert.equal(r.timedAllowed, false);
+  await assert.rejects(
+    approveFor(f, r, '1h', session, 'slack-team-all-v2'),
+    /can only be approved once from "unknown"/,
+  );
 });

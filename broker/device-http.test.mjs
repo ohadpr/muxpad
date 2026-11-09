@@ -25,6 +25,10 @@ test('device HTTP endpoints preserve origin, registration, signature, cookie and
   const cookie = `${SESSION_COOKIE}=${sessions.pair('pair').token}`;
   const csrf = sessions.authenticate(cookie).csrf;
   const broker = new Broker({
+    // UNSCOPED, INJECTED. The broker reads the host policy itself now, and a
+    // test that fell through to the real /Library/muxpad/connectors.json would
+    // pass or fail on the state of the machine it runs on.
+    hostPolicy: () => ({ enforce: false, allow: {} }),
     config,
     state,
     save,

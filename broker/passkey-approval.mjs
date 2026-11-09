@@ -7,7 +7,16 @@ const equal = (a, b) =>
   Buffer.byteLength(a) === Buffer.byteLength(b) &&
   timingSafeEqual(Buffer.from(a), Buffer.from(b));
 const durations = Object.freeze({ once: 0, '10m': 600000, '1h': 3600000, '1d': 86400000 });
-const scope = 'slack-team-all-v2';
+// NO MODULE-LEVEL SCOPE. It was `const scope = 'slack-team-all-v2'`, from when
+// Slack was the only capability, and `options()` required the client to send
+// exactly that for any non-"once" duration. The web client correctly sends the
+// REQUEST'S scope — `msgvault-read-v1` for an archive read — so every timed
+// archive approval failed with "Invalid approval scope", and the Slack value
+// that WAS accepted then failed later against the capability-aware check in
+// core.mjs. Fail-closed, and broken in the mode this install actually runs.
+//
+// The scope a request may be approved with is a property of the request, so it
+// is asked for per request now (`timedScope` below).
 export function canonicalIntent(value) {
   if (Array.isArray(value)) return '[' + value.map(canonicalIntent).join(',') + ']';
   if (value && typeof value === 'object')
@@ -112,6 +121,12 @@ export class PasskeyApproval {
     view,
     grantEpoch,
     revokeGrants,
+    /** The scope THIS request may be approved with — per capability, from the
+     *  broker, because a module-level constant is what broke archive
+     *  approvals in this mode. */
+    timedScope,
+    /** Whether a duration may rest on this request's origin at all. */
+    timedOriginTrusted,
   }) {
     Object.assign(this, {
       config,
@@ -127,6 +142,8 @@ export class PasskeyApproval {
       view,
       grantEpoch,
       revokeGrants,
+      timedScope,
+      timedOriginTrusted,
     });
     this.boot = randomUUID();
     this.epoch = 0;
@@ -462,14 +479,22 @@ export class PasskeyApproval {
     exact(body, ['id', 'fingerprint', 'decision', 'duration'], ['scope']);
     const c = this.credential();
     if (!c) throw Error('Passkey not enrolled');
+    // THE REQUEST FIRST: the scope it may be approved with is its own, and a
+    // duration is only legal for an origin the broker can attribute.
+    const r = this.get(body.id);
     if (
       !['approve', 'reject'].includes(body.decision) ||
       !Object.hasOwn(durations, body.duration) ||
       (body.decision === 'reject' && body.duration !== 'once') ||
-      (body.duration === 'once' ? body.scope !== undefined : body.scope !== scope)
+      (body.duration === 'once' ? body.scope !== undefined : body.scope !== this.timedScope(r))
     )
       throw Error('Invalid approval scope');
-    const r = this.get(body.id);
+    // `origin` is caller-chosen on an unauthenticated endpoint, so a lasting
+    // permission may only rest on the one claim that is already true. Same
+    // rule as the session path; enforced here too, because this is the mode
+    // this install runs in and a rule in one of two doors is not a rule.
+    if (body.duration !== 'once' && !this.timedOriginTrusted(r.origin))
+      throw Error('Timed approval needs a machine the broker can attribute');
     if (
       r.state !== 'pending' ||
       r.teamID !== this.config.teamID ||

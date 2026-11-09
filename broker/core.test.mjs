@@ -27,6 +27,10 @@ function fixture(config = {}) {
   const id = credentialID.toString('base64url');
   const state = { credential: { id, publicKey: cose.toString('base64url'), counter: 0 } };
   const broker = new Broker({
+    // UNSCOPED, INJECTED. The broker reads the host policy itself now, and a
+    // test that fell through to the real /Library/muxpad/connectors.json would
+    // pass or fail on the state of the machine it runs on.
+    hostPolicy: () => ({ enforce: false, allow: {} }),
     config: { origin, rpID, bootstrapHash: hash('s'.repeat(40)).toString('base64url'), ...config },
     state,
     save: (s) => saves.push(structuredClone(s)),
@@ -111,7 +115,7 @@ function fixture(config = {}) {
   };
 }
 const request = (f) =>
-  f.broker.create({ action: 'slack.post', payload: { ref: 'C123', text: 'Hello' } });
+  f.broker.create({ origin: 'local', action: 'slack.post', payload: { ref: 'C123', text: 'Hello' } });
 test('a real signed, user-verified assertion executes the exact displayed payload once', async () => {
   const f = fixture();
   const r = await request(f);
@@ -184,22 +188,22 @@ test('reject decision, expiry and failed persistence never execute Slack', async
 });
 test('reads need approval by default and policy blocks out-of-scope requests', async () => {
   const f = fixture({ channels: ['C123'] });
-  const r = await f.broker.create({ action: 'slack.read', payload: { ref: 'C123' } });
+  const r = await f.broker.create({ origin: 'local', action: 'slack.read', payload: { ref: 'C123' } });
   assert.equal(r.state, 'pending');
   assert.equal(f.calls.length, 0);
   await assert.rejects(
-    f.broker.create({ action: 'slack.post', payload: { ref: 'C456', text: 'no' } }),
+    f.broker.create({ origin: 'local', action: 'slack.post', payload: { ref: 'C456', text: 'no' } }),
   );
-  await assert.rejects(f.broker.create({ action: 'slack.search', payload: { query: 'all' } }));
-  await assert.rejects(f.broker.create({ action: 'arbitrary.fetch', payload: {} }));
+  await assert.rejects(f.broker.create({ origin: 'local', action: 'slack.search', payload: { query: 'all' } }));
+  await assert.rejects(f.broker.create({ origin: 'local', action: 'arbitrary.fetch', payload: {} }));
   await assert.rejects(
-    f.broker.create({ action: 'slack.post', payload: { ref: '#mutable-name', text: 'no' } }),
+    f.broker.create({ origin: 'local', action: 'slack.post', payload: { ref: '#mutable-name', text: 'no' } }),
   );
 });
 test('root policy can explicitly auto-allow reads but never writes', async () => {
   const f = fixture({ autoRead: true });
   assert.equal(
-    (await f.broker.create({ action: 'slack.channels', payload: {} })).state,
+    (await f.broker.create({ origin: 'local', action: 'slack.channels', payload: {} })).state,
     'complete',
   );
   assert.equal((await request(f)).state, 'pending');

@@ -88,6 +88,13 @@ const SLACK: Record<string, VerbRule> = {
  * name that does not describe it — which is the exact bug a reviewer found in
  * the argv filter. So there is one.
  *
+ * FOUR, not seven. `list-senders`, `meetings` and `person` were listed and
+ * cannot work against msgvault 0.22.0 — verified against the real binary:
+ * `list-senders` is refused by agent-delegated mode, and the other two are
+ * parent command trees with no positional and no `--json`. A verb muxpad
+ * will classify and the tool will refuse is a prompt asking for something
+ * that cannot happen.
+ *
  * EVERY ACTION IS A READ. The write verbs that used to be listed here
  * (`draft.*`, `calendar.write`, and `calendar.invite`, refused outright
  * because mailing attendees is sending mail under another name) are not
@@ -100,10 +107,7 @@ const MSGVAULT: Record<string, VerbRule> = {
   'msgvault.search': { kind: 'read', timed: true },
   'msgvault.show-message': { kind: 'read', timed: true },
   'msgvault.show-thread': { kind: 'read', timed: true },
-  'msgvault.list-senders': { kind: 'read', timed: true },
   'msgvault.stats': { kind: 'read', timed: true },
-  'msgvault.meetings': { kind: 'read', timed: true },
-  'msgvault.person': { kind: 'read', timed: true },
 };
 
 export const VERBS: Record<string, VerbRule> = { ...SLACK, ...MSGVAULT };

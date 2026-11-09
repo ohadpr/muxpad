@@ -3,6 +3,7 @@ import { bodyLimit } from 'hono/body-limit';
 import { z } from 'zod';
 import { slackBrokerRequest } from '../slack-broker.js';
 import { slackSetupStatus } from '../slack-setup.js';
+import { LOCAL_NODE_ID } from '../store/NodeStore.js';
 /** Advisory integration diagnostics. Every external call still needs broker approval. */
 export function slackSetupRoutes() {
   const app = new Hono();
@@ -55,7 +56,21 @@ export function slackSetupRoutes() {
     lastCreated = Date.now();
     try {
       const version = (await slackBrokerRequest('/health', undefined, 3000)).version;
-      const r = await slackBrokerRequest('/requests', { action: 'slack.channels', payload: {} });
+      // DECLARES THE MACHINE IT IS. This is muxpad's own Settings test,
+      // running on the server, so it is `local` — and saying so puts it under
+      // the same host policy as every other Slack call. It used to send no
+      // origin at all, which reached the broker as `unknown`: a Slack request
+      // from the mini that connectors.json never saw.
+      //
+      // Under a trayo-only policy this test is therefore REFUSED on the mini,
+      // and that is the correct answer rather than a regression: Slack is not
+      // allowed from here, and a Settings button that proved otherwise would
+      // be proving the wrong thing.
+      const r = await slackBrokerRequest('/requests', {
+        action: 'slack.channels',
+        payload: {},
+        origin: LOCAL_NODE_ID,
+      });
       if (
         typeof r.id !== 'string' ||
         !/^[a-f0-9-]{36}$/.test(r.id) ||

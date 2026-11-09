@@ -90,7 +90,9 @@ describe('the verbs that reach other people', () => {
 describe('the table itself', () => {
   it('groups by connector', () => {
     expect(verbsOf('slack').length).toBeGreaterThan(5);
-    expect(verbsOf('msgvault').length).toBeGreaterThan(5);
+    // FOUR. Three advertised verbs could not work against msgvault 0.22.0 and
+    // were removed rather than repaired — see the note on MSGVAULT.
+    expect(verbsOf('msgvault')).toHaveLength(4);
     expect(verbsOf('slack').every((v) => v.startsWith('slack.'))).toBe(true);
     // A prefix that is not a connector gets nothing, rather than everything.
     expect(verbsOf('')).toEqual([]);
@@ -143,10 +145,7 @@ describe('the table is the policy, so the table is pinned', () => {
       'msgvault.search': { kind: 'read', timed: true },
       'msgvault.show-message': { kind: 'read', timed: true },
       'msgvault.show-thread': { kind: 'read', timed: true },
-      'msgvault.list-senders': { kind: 'read', timed: true },
       'msgvault.stats': { kind: 'read', timed: true },
-      'msgvault.meetings': { kind: 'read', timed: true },
-      'msgvault.person': { kind: 'read', timed: true },
     };
 
   it('has exactly these verbs, no more and no fewer', () => {

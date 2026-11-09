@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, expect, it, vi } from 'vitest';
 import { slackBrokerRequest, slackBrokerURL } from './slack-broker.js';
 import { SLACK_VERSION, slackSetupStatus } from './slack-setup.js';
@@ -54,4 +57,18 @@ it('offers only exact-origin/exact-predecessor compatible update command', async
   };
   expect((await slackSetupStatus('https://app.test', [release])).commands).toHaveLength(1);
   expect((await slackSetupStatus('https://other.test', [release])).commands).toHaveLength(0);
+});
+
+it('the Settings test declares the machine it runs on, so the policy applies', async () => {
+  // It used to send no origin, so it reached the broker as `unknown` — a
+  // Slack request from the mini that connectors.json never saw. It is
+  // muxpad's own test, running on the server, so it is `local`; under a
+  // trayo-only policy it is now refused here, which is the correct answer
+  // rather than a regression.
+  const src = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), 'routes', 'slack-setup.ts'),
+    'utf8',
+  );
+  const call = src.slice(src.indexOf("action: 'slack.channels'"));
+  expect(call.slice(0, 200)).toMatch(/origin: LOCAL_NODE_ID/);
 });

@@ -70,3 +70,42 @@ describe('the approval card follows the request', () => {
     expect(CODE).not.toMatch(/: 'slack-team-all-v2',\s*\}\)/);
   });
 });
+
+/**
+ * …AND THE REST OF THE CARD, which a review found still speaking Slack.
+ *
+ * Picking any duration other than "once" on an ARCHIVE request printed "All
+ * agents can read, search, send, edit, delete, react, open DMs and upload
+ * files in this Slack workspace" — a description of a grant that was not
+ * being made. The details line showed the Slack team id. "Timed Slack access
+ * is already active" appeared whenever ANY grant existed, archive ones
+ * included. And the origin — the broker's entire justification for carrying
+ * the field is "it is shown to the human before they approve" — was never
+ * displayed in this mode at all.
+ */
+describe('the card describes the grant it is actually making', () => {
+  it('describes a duration per capability, not always as Slack', () => {
+    expect(CODE).toMatch(/connectorOf\(request\.action\) === SLACK\s*\?\s*'All agents can read/);
+    expect(CODE).toMatch(/search and read your mail archive/);
+    expect(CODE).toMatch(/cannot send, draft or change anything/);
+  });
+
+  it('shows the machine that asked, and says when it is unverified', () => {
+    expect(CODE).toMatch(/asked by/);
+    expect(CODE).toMatch(/request\.origin \?\? 'unknown'/);
+    // A duration is refused for an origin the broker cannot attribute, so the
+    // card must not imply otherwise.
+    expect(CODE).toMatch(/unverified, so approve-once only/);
+  });
+
+  it('only says "already active" for the SAME capability', () => {
+    expect(CODE).toMatch(/grants\?\.some\(/);
+    expect(CODE).toMatch(/connectorOfGrant\(g\) === connectorOf\(request\.action\)/);
+    // The unconditional version is gone.
+    expect(CODE).not.toMatch(/Timed Slack access is already active/);
+  });
+
+  it('does not put a Slack team id on an archive request', () => {
+    expect(CODE).toMatch(/=== SLACK \? ` · \$\{request\.teamID\}` : ''/);
+  });
+});

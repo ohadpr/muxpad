@@ -15,6 +15,7 @@ const equal = (a, b) =>
   Buffer.byteLength(a) === Buffer.byteLength(b) &&
   timingSafeEqual(Buffer.from(a), Buffer.from(b));
 import { CAPABILITIES, capabilityOf } from './capabilities.mjs';
+import { loadPolicy, policyAllows, timedOriginTrusted } from './policy.mjs';
 import { describeMsgvault, msgvaultArgv, validateMsgvault } from './msgvault.mjs';
 
 const TEAM_SCOPE = 'slack-team-all-v2';
@@ -64,6 +65,11 @@ export class Broker {
      *  a request then fails at dispatch rather than at boot, which is the
      *  same shape as every other policy recheck. */
     msgvault = async () => fail('msgvault is not configured on this broker'),
+    /** How the host policy is read. Injected by tests; the real one is the
+     *  root-owned file every machine shares. Read PER CALL, so a policy
+     *  edited on disk takes effect at the next request rather than the next
+     *  restart — at a human-paced rate, which this is. */
+    hostPolicy = () => loadPolicy(),
     now = Date.now,
     elapsed = () => Number(process.hrtime.bigint() / 1_000_000n),
     sessionLive = (s) => !!s && s.expires > now(),
@@ -82,6 +88,7 @@ export class Broker {
     this.save = save;
     this.slack = slack;
     this.msgvault = msgvault;
+    this.hostPolicy = hostPolicy;
     this.elapsed = elapsed;
     this.lastElapsed = elapsed();
     this.lastClock = now();
@@ -117,6 +124,10 @@ export class Broker {
         complete: (...args) => this.#decideAuthorized(...args),
         grantEpoch: () => this.grantEpoch,
         revokeGrants: () => this.revokeGrants('all'),
+        // Per-capability, from the one place that knows: a constant here is
+        // exactly what made every timed archive approval fail in this mode.
+        timedScope: (r) => this.timedScope(this.capabilityOfRequest(r)),
+        timedOriginTrusted: (origin) => timedOriginTrusted(origin),
         invalidate: () => {
           this.grants.clear();
           this.grantEpoch++;
@@ -220,6 +231,18 @@ export class Broker {
       typeof input.origin === 'string' && /^[a-z0-9][a-z0-9_-]{0,31}$/.test(input.origin)
         ? input.origin
         : 'unknown';
+    // ── THE HOST POLICY, CHECKED HERE TOO ─────────────────────────────────
+    // muxpad checks it before sending; so does the broker, because `/requests`
+    // is reachable without going through muxpad at all and the broker is the
+    // component that is supposed to hold against agents. A policy it cannot
+    // read refuses everything rather than reading as "no policy".
+    //
+    // It is checked against a SELF-ASSERTED origin, which stops a misrouted
+    // chat and not a liar — see policy.mjs. The part that must not rest on a
+    // label is the timed grant, and that is handled separately.
+    const verdict = policyAllows(this.hostPolicy(), cap.id, origin);
+    if (!verdict.ok) fail(verdict.reason);
+
     const p = input.payload || {};
     let payload, upload;
     if (cap.id === 'msgvault') {
@@ -424,10 +447,21 @@ export class Broker {
       // came back as a scope `decideSession` then refused. Fail-closed, and
       // wrong in the one place a human is reading.
       timedScope: this.timedScope(this.capabilityOfRequest(r)),
+      // A DURATION IS ONLY OFFERED WHERE IT CAN REST ON SOMETHING CHECKED.
+      // `origin` is chosen by the caller on an endpoint with no caller
+      // authentication, so a grant bound to a remote machine is spendable by
+      // anything on this one willing to claim that name. `local` is believed
+      // only because believing it adds nothing — the request did come from
+      // here. Everything else is approve-once. See policy.mjs.
       timedAllowed:
-        this.timedScope(this.capabilityOfRequest(r)) !==
+        timedOriginTrusted(r.origin) &&
+        (this.timedScope(this.capabilityOfRequest(r)) !==
           this.capabilityOfRequest(r).readScope ||
-        this.capabilityOfRequest(r).readActions.includes(r.action),
+          this.capabilityOfRequest(r).readActions.includes(r.action)),
+      /** Why a duration is not on offer, for the dialog to say out loud. */
+      timedRefusedReason: timedOriginTrusted(r.origin)
+        ? undefined
+        : `approve-once only: this request says it is from "${r.origin ?? 'unknown'}", and the broker cannot verify that, so a lasting permission would rest on a claim anything on this machine could make`,
       payload: r.payload,
       state: r.state,
       expires: r.expires,
@@ -591,6 +625,12 @@ export class Broker {
     // The thing you consent to is the payload, and a grant issued before the
     // payload existed cannot have covered it.
     const rCap = this.capabilityOfRequest(r);
+    // THE SAME RULE AT THE DECISION, not only in the offer. The view is a
+    // hint to a UI; this is the gate.
+    if (duration !== 'once' && !timedOriginTrusted(r.origin))
+      fail(
+        `${r.action} can only be approved once from "${r.origin ?? 'unknown'}" — the broker cannot verify which machine asked, so a timed permission would be spendable by anything on this one`,
+      );
     if (
       duration !== 'once' &&
       this.timedScope(rCap) === rCap.readScope &&

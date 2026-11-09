@@ -37,7 +37,7 @@ after(() => {
   for (const d of dirs) rmSync(d, { recursive: true, force: true });
 });
 
-async function isolatedBroker() {
+async function isolatedBroker({ hostPolicy } = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), 'broker-isolated-'));
   dirs.push(dataDir);
   let now = 1_000_000;
@@ -54,6 +54,10 @@ async function isolatedBroker() {
   const save = () => {};
   const sessions = new HumanSessions({ config, state, save, now: () => now });
   const broker = new Broker({
+    // UNSCOPED, INJECTED. The broker reads the host policy itself now, and a
+    // test that fell through to the real /Library/muxpad/connectors.json would
+    // pass or fail on the state of the machine it runs on.
+    hostPolicy: () => hostPolicy ?? { enforce: false, allow: {} },
     config,
     state,
     save,
@@ -167,27 +171,104 @@ test('an isolated broker runs nothing until a human decides, per capability', as
   }
 });
 
-test('an isolated broker binds a Slack grant to the machine that asked', async () => {
+test('an isolated broker refuses a lasting permission it cannot attribute', async () => {
+  // THE BINDING IS SCOPE EQUALITY, NOT CALLER AUTHENTICATION, and a review
+  // caught the difference being described as the latter. `origin` is a string
+  // the caller chooses, `/requests` has no caller authentication, and every
+  // request reaches this broker from the same machine as the agents it
+  // restrains. A grant bound to `trayo` was therefore spendable by anything
+  // on the mini willing to type `"origin":"trayo"`.
+  //
+  // So the half that rested on the claim is gone: a duration is only offered
+  // where believing the claim adds nothing. Everything else is approve-once.
   const b = await isolatedBroker();
   try {
-    const first = await b.ask('slack.channels', {}, 'trayo');
-    assert.equal(first.body.timedScope, 'slack-team-all-v2');
-    await b.broker.decideSession(first.body.id, first.body.fingerprint, 'approve', {
-      duration: '1h',
-      scope: first.body.timedScope,
+    const remote = await b.ask('slack.channels', {}, 'trayo');
+    assert.equal(remote.body.timedAllowed, false);
+    assert.match(remote.body.timedRefusedReason, /cannot verify/);
+    await assert.rejects(
+      b.broker.decideSession(remote.body.id, remote.body.fingerprint, 'approve', {
+        duration: '1h',
+        scope: remote.body.timedScope,
+        session: b.session,
+      }),
+      /can only be approved once/,
+    );
+    assert.equal(b.ran.length, 0);
+    // Approving it ONCE still works, and runs exactly once.
+    await b.broker.decideSession(remote.body.id, remote.body.fingerprint, 'approve', {
       session: b.session,
     });
     assert.equal(b.ran.length, 1);
+    assert.equal(b.broker.listGrants().length, 0, 'a remote approval minted a grant');
 
-    // Same verb, same hour, different machine → back to the human.
-    assert.equal((await b.ask('slack.channels', {}, 'local')).body.state, 'pending');
-    assert.equal(b.ran.length, 1);
-    // Same machine → rides the grant.
-    assert.equal((await b.ask('slack.channels', {}, 'trayo')).body.state, 'complete');
+    // `local` may hold one, because the request did come from this machine —
+    // and the scope still keeps another machine's request from finding it.
+    const here = await b.ask('slack.channels', {}, 'local');
+    assert.equal(here.body.timedAllowed, true);
+    await b.broker.decideSession(here.body.id, here.body.fingerprint, 'approve', {
+      duration: '1h',
+      scope: here.body.timedScope,
+      session: b.session,
+    });
     assert.equal(b.ran.length, 2);
-    // An unnamed origin never matches a grant minted for a named one.
+    assert.equal((await b.ask('slack.channels', {}, 'local')).body.state, 'complete');
+    assert.equal((await b.ask('slack.channels', {}, 'trayo')).body.state, 'pending');
     assert.equal((await b.ask('slack.channels', {})).body.state, 'pending');
-    assert.equal(b.ran.length, 2);
+    assert.equal(b.ran.length, 3);
+  } finally {
+    b.close();
+  }
+});
+
+test('an isolated broker enforces the host policy itself', async () => {
+  // muxpad checks connectors.json before sending; so must the broker, because
+  // `/requests` is reachable without going through muxpad at all. A review
+  // found the one component meant to hold against agents had never read the
+  // rule it was meant to hold.
+  const b = await isolatedBroker({
+    hostPolicy: { enforce: true, allow: { slack: ['trayo'], msgvault: ['local'] } },
+  });
+  try {
+    // Allowed by the policy.
+    assert.equal((await b.ask('msgvault.stats', {}, 'local')).body.state, 'pending');
+    assert.equal((await b.ask('slack.channels', {}, 'trayo')).body.state, 'pending');
+
+    // Refused BY THE BROKER, over HTTP, before anything is created.
+    for (const [action, origin, re] of [
+      ['slack.channels', 'local', /slack is scoped to trayo/],
+      ['msgvault.stats', 'trayo', /msgvault is scoped to local/],
+      ['slack.channels', undefined, /is from unknown/],
+    ]) {
+      // Over HTTP the reason is deliberately generic — the boundary does not
+      // narrate the broker's internals to its caller, and muxpad's own gate
+      // is what produces the readable sentence an agent repeats.
+      const r = await b.ask(action, {}, origin);
+      assert.equal(r.status, 400, `${action}/${origin}`);
+      assert.match(JSON.stringify(r.body), /refused or invalid/);
+      // The reason itself is asserted where it exists.
+      await assert.rejects(b.broker.create({ action, payload: {}, origin }), re);
+    }
+    assert.deepEqual(b.ran, []);
+  } finally {
+    b.close();
+  }
+});
+
+test('an unreadable policy refuses every capability', async () => {
+  const b = await isolatedBroker({
+    hostPolicy: { enforce: false, allow: {}, problem: 'connector policy unreadable: EACCES' },
+  });
+  try {
+    for (const action of ['slack.channels', 'msgvault.stats']) {
+      assert.equal((await b.ask(action, {}, 'local')).status, 400, action);
+      await assert.rejects(
+        b.broker.create({ action, payload: {}, origin: 'local' }),
+        /unreadable/,
+        action,
+      );
+    }
+    assert.deepEqual(b.ran, []);
   } finally {
     b.close();
   }
