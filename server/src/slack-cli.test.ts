@@ -511,3 +511,20 @@ describe('msgvault goes through the broker, holding nothing', () => {
     expect(CODE).not.toMatch(/printf 'muxpad: slack: %s/);
   });
 });
+
+test('a connector names itself before any check can speak for it', () => {
+  // `slack_require_pane` and `slack_ident` report in $BROKER_LABEL, and
+  // cmd_msgvault set the label AFTER calling them — so an archive call that
+  // could not identify its pane answered "muxpad: slack: works only from
+  // inside a muxpad pane". The prompt naming the wrong system, one layer
+  // further down than the dialog that did it last time.
+  const fn = CODE.slice(CODE.indexOf('cmd_msgvault() {'));
+  const body = fn.slice(0, fn.indexOf('\n}\n'));
+  const label = body.indexOf('BROKER_LABEL=msgvault');
+  expect(label).toBeGreaterThan(-1);
+  for (const call of ['require_jq', 'slack_require_pane'])
+    expect(label, `${call} runs before the label is set`).toBeLessThan(body.indexOf(call));
+  // …and neither of those two hardcodes a connector name any more.
+  expect(CODE).not.toMatch(/muxpad: slack: works only from inside/);
+  expect(CODE).not.toMatch(/muxpad: slack: this pane cannot prove/);
+});

@@ -931,9 +931,13 @@ EOF
 }
 
 cmd_msgvault() {
+  # THE LABEL FIRST. `slack_require_pane` and `slack_ident` report in it too,
+  # and setting it after them meant an archive call that could not identify
+  # its pane introduced itself as Slack — the prompt naming the wrong system
+  # again, one layer further down than the last time.
+  BROKER_LABEL=msgvault
   require_jq
   slack_require_pane
-  BROKER_LABEL=msgvault
   local verb="${1:-}"; shift || true
   local q="pane=$MUXPAD_PANE_ID&key=$MUXPAD_PANE_KEY"
   # Percent-encode with jq, so a query full of punctuation stays one argument
@@ -1025,8 +1029,8 @@ slack_ident() {
   # Same server-issued pane proof; compatible with shells that filter KEY names.
   MUXPAD_PANE_KEY="${MUXPAD_PANE_KEY:-${MUXPAD_PANE_PROOF:-}}"
   [ -n "${MUXPAD_PANE_ID:-}" ] && [ -n "${MUXPAD_PANE_KEY:-}" ] && return 0
-  cat >&2 <<'EOF'
-muxpad: slack: this pane cannot prove which workspace it is in.
+  cat >&2 <<EOF
+muxpad: $BROKER_LABEL: this pane cannot prove which chat it is.
 
 Panes started before muxpad issued per-pane keys have none, and one cannot be
 added to a process that is already running. Restart this pane, or open a new
@@ -1096,7 +1100,7 @@ slack_call() {
 
 slack_require_pane() {
   [ -n "${MUXPAD_API_URL:-}" ] || {
-    echo 'muxpad: slack: works only from inside a muxpad pane' >&2; exit 1; }
+    echo "muxpad: $BROKER_LABEL: works only from inside a muxpad pane (no \$MUXPAD_API_URL)" >&2; exit 1; }
   slack_ident
 }
 

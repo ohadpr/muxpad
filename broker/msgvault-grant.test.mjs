@@ -167,6 +167,32 @@ test('a Slack grant buys nothing on the archive, and the reverse', async () => {
   );
 });
 
+test('the scope it advertises is its own, not Slack\'s', async () => {
+  // `timedScope` is what the approval page DISPLAYS and what the client sends
+  // back when you pick a duration. It sat one line above `timedAllowed`, which
+  // was made capability-aware while this was left alone — so an archive read
+  // advertised `slack-team-all-v2`, the page offered "full Slack access" for a
+  // mail read, and the duration came back as a scope decideSession refused.
+  const f = fixture();
+  const session = f.pair();
+  const r = await ask(f, 'msgvault.search', { query: 'x' });
+  assert.equal(r.timedScope, 'msgvault-read-v1');
+  const s = await ask(f, 'slack.read', { ref: 'C123' });
+  assert.equal(s.timedScope, 'slack-team-all-v2');
+  // …and the scope it advertises is the one a duration is actually accepted
+  // with, which is the property that was broken.
+  assert.equal(
+    (
+      await f.broker.decideSession(r.id, r.fingerprint, 'approve', {
+        duration: '1h',
+        scope: r.timedScope,
+        session,
+      })
+    ).state,
+    'complete',
+  );
+});
+
 test('every msgvault verb is a read, so a duration is offered for all of them', async () => {
   // Slack holds writes back from timed approval. msgvault has no write set at
   // all, so the owner's `timedGrants` switch has nothing to hold back and the

@@ -39,7 +39,7 @@ import { publishRoutes } from './routes/publish.js';
 import { pushRoutes } from './routes/push.js';
 import { reviewRoutes } from './routes/review.js';
 import { archiveRoutes, searchRoutes } from './routes/search.js';
-import { slackRoutes } from './routes/slack.js';
+import { connectorRoutes } from './routes/slack.js';
 import { summaryRoutes } from './routes/summary.js';
 import { tabsRoutes } from './routes/tabs.js';
 import { voiceRoutes } from './routes/voice.js';
@@ -348,7 +348,11 @@ export function createApp(deps: AppDeps): Hono {
   setSayKey(theSayKey);
   app.get('/api/say/key', (c) => c.json({ key: theSayKey }));
 
-  app.route('/api/slack', slackRoutes({ db: resolved.db, dataDir: resolved.dataDir }));
+  const connectors = connectorRoutes({ db: resolved.db, dataDir: resolved.dataDir });
+  app.route('/api/slack', connectors.slack);
+  // Its own top-level path: the archive is not part of Slack, and the two
+  // only share the approval funnel behind them.
+  app.route('/api/msgvault', connectors.archive);
   // ONE request for the sidebar's first two rungs, fired by an inline script
   // in index.html while the bundle is still downloading. See routes/boot.ts
   // for the cold-load trace that justifies it.
