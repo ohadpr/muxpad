@@ -110,3 +110,26 @@ describe('the card describes the grant it is actually making', () => {
     expect(CODE).toMatch(/=== SLACK \? ` · \$\{request\.teamID\}` : ''/);
   });
 });
+
+describe('it offers only what the broker would accept', () => {
+  it('replaces the duration picker with the reason when a duration is refused', () => {
+    // `timedAllowed: false` means the broker will refuse any duration: it
+    // cannot attribute the origin, so a lasting permission would rest on a
+    // claim anything on this machine could make. Offering 10m/1h/1d anyway
+    // invited the failure that teaches people to distrust a dialog — pick,
+    // sign the ceremony, watch it fail.
+    expect(CODE).toMatch(/request\.timedAllowed === false \?/);
+    expect(CODE).toMatch(/can only be approved <strong>once<\/strong>/);
+    // The REASON is shown, not just an absence: "unavailable" with no
+    // explanation is its own puzzle.
+    expect(CODE).toMatch(/request\.timedRefusedReason \?\?/);
+  });
+
+  it('never sends a duration it was told would be refused', () => {
+    const decide = CODE.slice(CODE.indexOf('const chosen ='));
+    expect(decide.slice(0, 220)).toMatch(/request\.timedAllowed === false/);
+    // Forced where the value is USED. setDuration is async and would not have
+    // landed before the ceremony is built.
+    expect(CODE).not.toMatch(/timedAllowed === false && duration !== 'once'\) setDuration/);
+  });
+});

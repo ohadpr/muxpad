@@ -29,6 +29,13 @@ import { openDb } from './store/db.js';
  * already in the protocol. The test that matters most is the one where a
  * caller names somebody else's pane.
  */
+// UNSCOPED, INJECTED. These cases are about the broker funnel, not about host
+// scoping — and without this they read the REAL
+// /Library/muxpad/connectors.json and pass or fail on the state of the
+// machine they run on. They did: the day the policy became trayo-only, four
+// of them started returning 403.
+const UNSCOPED_FOR_TESTS = () => ({ enforce: false, allow: {} }) as never;
+
 let dir: string;
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'slackroute-'));
@@ -54,7 +61,7 @@ function harness(opts: { slack: boolean }) {
   // wait for something nobody can see. Agent tabs are created `face: 'chat'`,
   // so this matches how a real one arrives rather than leaning on a default.
   const pane = new PaneStore(db).create({ tab_id: tab.id, startup_cmd: '', face: 'chat' });
-  const app = slackRoutes({ db, dataDir: dir });
+  const app = slackRoutes({ db, dataDir: dir, policy: UNSCOPED_FOR_TESTS });
   return { app, ws, pane, db, key: paneKeyFor(pane.id) as string };
 }
 
@@ -288,13 +295,13 @@ describe('protected broker mode', () => {
     const { app, pane, key, db } = harness({ slack: true });
     try {
       await post(app, { pane: pane.id, key, ref: 'C123', text: 'hello' });
-      const restarted = slackRoutes({ db, dataDir: dir });
+      const restarted = slackRoutes({ db, dataDir: dir, policy: UNSCOPED_FOR_TESTS });
       expect((await (await restarted.request(`/approvals?pane=${pane.id}`)).json()).pending).toBe(
         1,
       );
       unknown = true;
       // A second route instance models restart recovery before a CLI polls the ID.
-      const recovered = slackRoutes({ db, dataDir: dir });
+      const recovered = slackRoutes({ db, dataDir: dir, policy: UNSCOPED_FOR_TESTS });
       await recovered.request(`/approvals?pane=${pane.id}`);
       await vi.waitFor(async () =>
         expect((await (await recovered.request(`/approvals?pane=${pane.id}`)).json()).pending).toBe(
@@ -404,7 +411,7 @@ describe('protected broker mode', () => {
       await app.request(`/requests/${id}?pane=${other.id}&key=${otherKey}`);
       expect((await (await app.request(`/approvals?pane=${pane.id}`)).json()).pending).toBe(1);
       expect((await (await app.request(`/approvals?pane=${other.id}`)).json()).pending).toBe(0);
-      const restarted = slackRoutes({ db, dataDir: dir });
+      const restarted = slackRoutes({ db, dataDir: dir, policy: UNSCOPED_FOR_TESTS });
       expect((await (await restarted.request(`/approvals?pane=${pane.id}`)).json()).pending).toBe(
         1,
       );
@@ -430,7 +437,7 @@ describe('protected broker mode', () => {
       const insert = db.prepare('INSERT INTO slack_approval_notices VALUES (?, ?)');
       insert.run('55555555-5555-4555-8555-555555555555', Date.now() + 300_000);
       insert.run('overflow', Date.now() + 300_000);
-      const app = slackRoutes({ db, dataDir: dir });
+      const app = slackRoutes({ db, dataDir: dir, policy: UNSCOPED_FOR_TESTS });
       const status = await (await app.request(`/approvals?pane=${pane.id}`)).json();
       expect(status.pending).toBe(0);
       expect(status.incomplete).toBe(false);
@@ -495,7 +502,7 @@ describe('protected broker mode', () => {
       );
       const otherStatus = await (await app.request(`/approvals?pane=${other.id}`)).json();
       expect(otherStatus).toMatchObject({ pending: 0, incomplete: false, stale: false });
-      const restarted = slackRoutes({ db, dataDir: dir });
+      const restarted = slackRoutes({ db, dataDir: dir, policy: UNSCOPED_FOR_TESTS });
       expect(
         (await (await restarted.request(`/approvals?pane=${pane.id}`)).json()).incomplete,
       ).toBe(true);
@@ -649,7 +656,7 @@ describe('the archive mounts on its own path', () => {
   it('is reachable at /api/msgvault, not under /api/slack', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'mv-route-'));
     const db = openDb(':memory:');
-    const { slack, archive } = connectorRoutes({ db, dataDir: dir });
+    const { slack, archive } = connectorRoutes({ db, dataDir: dir, policy: UNSCOPED_FOR_TESTS });
     const app = new Hono();
     app.route('/api/slack', slack);
     app.route('/api/msgvault', archive);
@@ -667,7 +674,10 @@ describe('the archive mounts on its own path', () => {
     const dir = mkdtempSync(join(tmpdir(), 'mv-route-'));
     const db = openDb(':memory:');
     const app = new Hono();
-    app.route('/api/msgvault', connectorRoutes({ db, dataDir: dir }).archive);
+    app.route(
+      '/api/msgvault',
+      connectorRoutes({ db, dataDir: dir, policy: UNSCOPED_FOR_TESTS }).archive,
+    );
     // FOUR. `senders`, `meetings` and `person` were removed: they cannot work
     // against msgvault 0.22.0 (verified against the real binary — delegated
     // mode refuses list-senders, and the other two are parent command trees).

@@ -20,6 +20,73 @@ check_path() {
   path=$(/usr/bin/dirname "$path")
  done
 }
+# ── THE TREE WALK, IN ONE PROCESS ────────────────────────────────────────
+# `check_path` above forks `stat` twice, `ls -lde` once and `dirname` once for
+# EVERY ANCESTOR of EVERY FILE. Over the installed tree — ~1,450 files, up to
+# twelve deep — that is ~28,000 processes and 10–12 minutes per pass, which is
+# how two updates came to be abandoned halfway and left the broker disabled.
+#
+# This does the identical walk in a single node process: one lstat per path
+# (no fork), ancestors memoised because they are shared, and ONE batched
+# `ls -lde` per 160 paths for the ACL check. Measured: 1,453 paths in 0.12s.
+#
+# IT IS NOT WEAKER. Same five refusals — symlink, wrong owner, group/other
+# write, hardlinked regular file, ACL — plus the same "unexpected file type".
+# Proved against the original on a matrix of clean/symlink/group-writable/
+# other-writable/hardlink/ACL-on-file/ACL-on-dir/fifo: both allow the clean
+# tree and refuse all seven, every time.
+#
+# EMBEDDED, not a file in the release. A separate script would have to be
+# validated before it could be trusted to validate anything, which is the
+# bootstrap problem this avoids: bash validates the node BINARY, and this
+# program travels inside the already-validated update-code.sh.
+#
+# The bash `check_path` stays for the handful of single paths checked before
+# the runtime is trusted — four files, a few dozen forks.
+check_tree() {
+ /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin "$DEST/runtime/node" --input-type=module - 0 -- "$@" <<'JS'
+import {execFileSync} from 'node:child_process';
+import {lstatSync,readdirSync} from 'node:fs';
+import {dirname,resolve} from 'node:path';
+const argv=process.argv.slice(2);
+// Owners as an ARGUMENT, never an environment variable: this runs under
+// `env -i` and update-code.sh owns the argv, so nothing a caller sets widens it.
+const OWNERS=new Set(String(argv.shift()??'0').split(',').map(Number));
+const cut=argv.indexOf('--');
+const roots=cut===-1?argv:argv.slice(0,cut);
+const trees=cut===-1?[]:argv.slice(cut+1);
+const die=(m)=>{console.error(m);process.exit(1)};
+const seen=new Set();const all=[];
+function judge(path,recurse){
+ if(seen.has(path))return;seen.add(path);
+ // A newline would break the batched `ls` parse below. Nothing in a release
+ // has one, and refusing is the safe direction.
+ if(/[\n\r]/.test(path))die('Newline in protected path');
+ let st;try{st=lstatSync(path)}catch{die('Not a protected path: '+path)}
+ if(st.isSymbolicLink())die('Symlink in protected path: '+path);
+ if(!st.isFile()&&!st.isDirectory())die('Unexpected file type: '+path);
+ if(!OWNERS.has(st.uid)||st.mode&0o022)die('Unprotected path: '+path);
+ if(st.isFile()&&st.nlink!==1)die('Hardlink refused: '+path);
+ all.push(path);
+ const parent=dirname(path);
+ if(parent!==path&&path!=='/')judge(parent,false);
+ if(recurse&&st.isDirectory())for(const n of readdirSync(path))judge(resolve(path,n),true);
+}
+for(const p of roots){if(!p.startsWith('/'))die('Not a protected path: '+p);judge(p,false)}
+for(const t of trees){if(!t.startsWith('/'))die('Not a protected path: '+t);judge(t,true)}
+const CHUNK=160;
+for(let i=0;i<all.length;i+=CHUNK){
+ const batch=all.slice(i,i+CHUNK);let out;
+ try{out=execFileSync('/bin/ls',['-lde','--',...batch],{encoding:'utf8',maxBuffer:64<<20})}
+ catch(e){out=String(e.stdout??'');if(!out)die('Could not inspect ACLs')}
+ let current='';
+ for(const line of out.split('\n')){
+  if(/^\s*\d+:\s/.test(line))die('ACL on protected path: '+current.trim());
+  if(line.trim())current=line;
+ }
+}
+JS
+}
 check_path "$SOURCE/update-code.sh"
 check_path "$DEST/code"
 check_path "$DEST/runtime/node"
@@ -33,11 +100,7 @@ if [[ $# == 0 ]]; then
 fi
 # Validate existing runtime/code and the source before any service interruption.
 for tree in "$SOURCE" "$DEST/code"; do
- while IFS= read -r -d '' entry; do
-  [[ ! -L $entry && ( -f $entry || -d $entry ) ]] || { echo 'Unexpected file type'; exit 1; }
-  check_path "$entry"
-  if [[ -f $entry && $(/usr/bin/stat -f '%l' "$entry") != 1 ]]; then echo 'Hardlink refused'; exit 1; fi
- done < <(/usr/bin/find "$tree" -print0)
+ check_tree "$tree" || exit 1
 done
 FILES=(broker-paths.mjs capabilities.mjs client.js core.mjs device-auth.mjs device-client.mjs http.mjs human-session.mjs main.mjs msgvault-runner.mjs msgvault.mjs node-policy.mjs node-session.mjs page.html passkey-admin-socket.mjs passkey-approval.mjs passkey-http.mjs policy.mjs protected-path.mjs shell.css shell.html shell.js slack.mjs socket-listener.mjs state-store.mjs)
 for file in "${FILES[@]}"; do
@@ -71,11 +134,7 @@ archive_completed_update() {
    entry="$archive/$part"
   fi
   [[ -d $entry ]] || { echo 'Missing completed update tree'; exit 1; }
-  while IFS= read -r -d '' entry; do
-   [[ ! -L $entry && ( -f $entry || -d $entry ) ]] || { echo 'Unexpected completed file type'; exit 1; }
-   check_path "$entry"
-   [[ ! -f $entry || $(/usr/bin/stat -f '%l' "$entry") == 1 ]] || { echo 'Hardlinked completed file refused'; exit 1; }
-  done < <(/usr/bin/find "$entry" -print0)
+  check_tree "$entry" || exit 1
   if [[ -e $DEST/$part ]]; then /bin/mv "$DEST/$part" "$archive/$part"; fi
  done
  /bin/mv "$MARKER" "$archive/marker"
@@ -115,11 +174,7 @@ fi
 # Validate all staged paths even during retry. No symlinks/hardlinks accepted.
 for tree in "$DEST/code.previous" "$DEST/code.next"; do
  check_path "$tree"
- while IFS= read -r -d '' entry; do
-  [[ ! -L $entry && ( -f $entry || -d $entry ) ]] || { echo 'Unexpected staged file type'; exit 1; }
-  check_path "$entry"
-  [[ ! -f $entry || $(/usr/bin/stat -f '%l' "$entry") == 1 ]] || { echo 'Hardlink refused'; exit 1; }
- done < <(/usr/bin/find "$tree" -print0)
+ check_tree "$tree" || exit 1
 done
 for file in "${FILES[@]}"; do /usr/bin/cmp -s "$SOURCE/$file" "$DEST/code.next/$file"; done
 # Complete dependency closure and private-file access, under the actual service UID.
@@ -129,10 +184,24 @@ for file in "${FILES[@]}"; do /usr/bin/cmp -s "$SOURCE/$file" "$DEST/code.next/$
 phase inhibiting
 /bin/launchctl disable system/org.muxpad.broker
 phase stopping
+# ── BOOTOUT IS ASYNCHRONOUS, SO WAIT FOR IT ──────────────────────────────
+# `launchctl bootout` returns before teardown finishes. The check used to run
+# on the very next line, saw the service still loaded, and refused — leaving
+# the broker booted out AND `launchctl disable`d, which persists across
+# reboot, with the update half done. That happened on BOTH attempted runs and
+# each one needed a second pass to recover.
+#
+# So the refusal is still there, and it now means what it says: thirty
+# seconds of asking, not one look. Polling rather than sleeping, so the normal
+# case costs a fraction of a second.
 if /bin/launchctl print system/org.muxpad.broker >/dev/null 2>&1; then
  /bin/launchctl bootout system/org.muxpad.broker
 fi
-if /bin/launchctl print system/org.muxpad.broker >/dev/null 2>&1; then echo 'Broker still loaded; refusing live code writes'; exit 1; fi
+for _ in $(/usr/bin/seq 1 60); do
+ /bin/launchctl print system/org.muxpad.broker >/dev/null 2>&1 || break
+ /bin/sleep 0.5
+done
+if /bin/launchctl print system/org.muxpad.broker >/dev/null 2>&1; then echo 'Broker still loaded after 30s; refusing live code writes'; exit 1; fi
 phase installing
 # Keep the fixed code directory present. An interrupted copy is completed by retry,
 # while the daemon remains unloaded. Never automatically downgrade device state.

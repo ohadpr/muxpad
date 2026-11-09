@@ -20,11 +20,13 @@ const io = (text, problem) => ({
   },
 });
 
-test('an absent policy is unscoped; an unreadable one refuses everything', () => {
+test('every failure refuses — absent included', () => {
+  // Absent used to be unscoped, which was right while scoping was being
+  // rolled out and is wrong now that it is the live arrangement: deleting a
+  // file would switch every restraint off, silently.
   const absent = loadPolicy('/x', io(null, { code: 'ENOENT', message: 'no such file' }));
-  assert.equal(absent.enforce, false);
-  assert.equal(absent.problem, undefined);
-  assert.deepEqual(policyAllows(absent, 'slack', 'anything'), { ok: true, enforced: false });
+  assert.match(absent.problem, /missing/);
+  assert.equal(policyAllows(absent, 'slack', 'anything').ok, false);
 
   // Anything OTHER than absence is a policy we cannot read. Treating that as
   // "no policy" would let anyone switch scoping off by breaking the file.
@@ -36,9 +38,20 @@ test('an absent policy is unscoped; an unreadable one refuses everything', () =>
     assert.match(broken.problem, /unreadable/);
     assert.equal(policyAllows(broken, 'slack', 'local').ok, false);
   }
-  // …and so is a file that is not JSON, or not an object.
+  // …and so is a file that is not JSON, not an object, or whose central
+  // switch is not a boolean. `"true"` is the most likely way to mistype this
+  // file and it used to read as FALSE — allowing everything.
   assert.match(loadPolicy('/x', io('{nope')).problem, /not valid JSON/);
   assert.match(loadPolicy('/x', io('[]')).problem, /not an object/);
+  for (const bad of ['"true"', '1', '0', 'null', '"yes"']) {
+    const p = loadPolicy('/x', io(`{"enforce": ${bad}, "allow": {"slack": ["trayo"]}}`));
+    assert.match(p.problem, /must be true or false/, bad);
+    assert.equal(policyAllows(p, 'slack', 'trayo').ok, false, bad);
+  }
+  assert.match(loadPolicy('/x', io('{"allow": {}}')).problem, /must be true or false/);
+  // A real boolean still works, both ways.
+  assert.equal(loadPolicy('/x', io('{"enforce": false, "allow": {}}')).problem, undefined);
+  assert.equal(policyAllows(loadPolicy('/x', io('{"enforce": false, "allow": {}}')), 'slack', 'x').ok, true);
 });
 
 test('it enforces exactly what the file says', () => {
