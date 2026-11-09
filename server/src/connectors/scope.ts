@@ -187,7 +187,11 @@ export function mayUse(
       enforced: true,
       // Names the machine, because the agent's useful next move is to say so
       // rather than to retry: "this chat is on the wrong machine for that".
-      reason: `${connector} is scoped to ${allowed.join(', ')}; this chat runs on ${origin}`,
+      // NAMES THE POLICY AND WHERE IT LIVES. The agent repeats this verbatim
+      // to the owner, and "refused" without the file to edit is a dead end —
+      // especially for the case this exists for, where the answer is "use a
+      // chat on the other machine" rather than "change anything".
+      reason: `${connector} is scoped to ${allowed.join(', ')}; this chat runs on ${origin}. Use a chat on ${allowed.join(' or ')}, or change ${POLICY_PATH} as root.`,
     };
   return { ok: true, origin, enforced: true };
 }

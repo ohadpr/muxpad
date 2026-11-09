@@ -3,7 +3,12 @@ import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { z } from 'zod';
 import { classify } from '../connectors/registry.js';
-import { directingOrigin, loadPolicy, mayPaneUse } from '../connectors/scope.js';
+import {
+  type ConnectorPolicy,
+  directingOrigin,
+  loadPolicy,
+  mayPaneUse,
+} from '../connectors/scope.js';
 import { verifyPaneKey } from '../pane-key.js';
 import { recordSlackAction, recordSlackRefusal, resolveSlackAction } from '../slack-actions.js';
 import { slackBrokerRequest, slackBrokerURL } from '../slack-broker.js';
@@ -18,6 +23,15 @@ import { slackSetupRoutes } from './slack-setup.js';
 interface Deps {
   db: Database.Database;
   dataDir: string;
+  /**
+   * How the host-scoping policy is read. Injected only by tests.
+   *
+   * A path would not have been enough: the real policy must be ROOT-OWNED to
+   * be trusted at all, so a file a test can write is refused by design and
+   * every connector would read as blocked. The loader is the seam; the
+   * file-trust rules themselves are covered in connectors/scope.test.ts.
+   */
+  policy?: () => ConnectorPolicy & { problem?: string };
 }
 
 /** What a refused call is told, and what it is NOT told. */
@@ -228,7 +242,7 @@ export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
     // connector's host policy, which is the mistake a second hardcoded
     // 'slack' here would eventually become.
     const connector = action.slice(0, action.indexOf('.'));
-    const policy = loadPolicy();
+    const policy = (deps.policy ?? loadPolicy)();
     const scope = mayPaneUse(deps.db, connector, pane, policy, directingOrigin(deps.db, pane));
     if (!scope.ok) throw new SlackRefused(action, payload, pane, scope.reason ?? 'refused');
     const verb = classify(action);
@@ -363,23 +377,40 @@ export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
   // ONE handler, because Hono keeps only the last one registered — a second
   // `onError` for the connector gate silently replaced this and every refusal
   // came back as 502.
-  app.onError((error, c) => {
-    // muxpad refused it before the broker saw it: a 403 with the reason, and a
-    // declined card in the chat that asked.
-    if (error instanceof SlackRefused) {
-      recordSlackRefusal(deps.db, {
-        action: error.action,
-        payload: error.payload,
-        pane: error.pane,
-        why: error.why,
-      });
-      return c.json(refusal(error.why), 403);
-    }
-    return c.json(
-      refusal('Slack request failed; protected broker mode never falls back to local credentials'),
-      502,
-    );
-  });
+  /**
+   * ONE ERROR HANDLER, ON BOTH APPS.
+   *
+   * It used to be registered on the Slack app alone, which was the whole
+   * surface at the time. Splitting the archive onto its own app left it with
+   * NO handler, so a policy refusal — the one case this exists for — came
+   * back as a bare 500 with no reason in it. Measured, not reasoned about:
+   * the end-to-end policy test caught it on the first run.
+   *
+   * A second copy would be the same defect waiting to happen, so there is one
+   * and both apps are given it.
+   */
+  const onError =
+    (who: string) => (error: Error, c: Parameters<Parameters<Hono['onError']>[0]>[1]) => {
+      // muxpad refused it before the broker saw it: a 403 with the reason, and a
+      // declined card in the chat that asked.
+      if (error instanceof SlackRefused) {
+        recordSlackRefusal(deps.db, {
+          action: error.action,
+          payload: error.payload,
+          pane: error.pane,
+          why: error.why,
+        });
+        return c.json(refusal(error.why), 403);
+      }
+      // Names the capability that failed rather than always saying Slack.
+      return c.json(
+        refusal(
+          `${who} request failed; protected broker mode never falls back to local credentials`,
+        ),
+        502,
+      );
+    };
+  app.onError(onError('Slack'));
 
   app.post('/post', async (c) => {
     const body = z
@@ -604,6 +635,7 @@ export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
       if (!auth.ok) return c.json(auth.body, auth.status);
       return c.json(await brokerAction(action, payload(q), auth.pane), 202);
     });
+  archive.onError(onError('msgvault'));
   return { slack: app, archive };
 }
 
