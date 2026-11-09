@@ -2254,30 +2254,35 @@ export function groupChats(tabs: Tab[]): {
   const live: ChatGroup[] = [];
   const done: ChatGroup[] = [];
   /**
-   * ── THE RUNNING WORKERS COME BACK, AND THEY COME FIRST ────────────────
+   * ── NO SUB-CHAT IS A ROW ON THE RAIL ──────────────────────────────────
    *
-   * Decision 4 above — "a worker is a detail OF a chat, so it lives in that
-   * chat's drawer" — was right about the FINISHED ones and wrong about the
-   * running ones, and the owner said so: "show active sub chats first".
+   * This has been answered five different ways. The one that holds is the
+   * simplest, and it is the owner's: a sub-chat is a sub-chat. It lives in
+   * its parent's work drawer, in every state, and the rail lists
+   * CONVERSATIONS.
    *
-   * The rail is a list of places you go, and a worker that is still going is
-   * exactly that: something is happening, somewhere, that you may want to look
-   * at or interrupt. A worker that answered twenty minutes ago is not — its
-   * result is already a card in its parent's log, and it stays in the drawer.
+   * The version this replaces listed every RUNNING child as a top-level row,
+   * sorted first. That was reasoned from a real case — a child still working
+   * under a parent that had been filed away, which would otherwise render
+   * nowhere — and then applied to every parent, including the overwhelming
+   * majority whose drawer is one click away in the rail. A narrow rescue
+   * became a general flattening: a spawned errand drawn as prominently as a
+   * conversation, and a chat that moved between two places depending on when
+   * you looked at it.
    *
-   * So the rule is now about STATE rather than kind: still working and it is a
-   * row; delivered and it is a detail. Which also closes the gap the old
-   * exception was patching by hand — a running child whose parent had retired
-   * was promoted so it would not vanish, and now every running child is listed
-   * for the same reason rather than only the orphaned ones.
+   * The orphan case it was protecting is not lost and never was: a done
+   * parent is still in the done drawer, and its own drawer still lists the
+   * child. Two clicks, not invisible. Paying for that with a rule that
+   * flattens the hierarchy for every other chat was the wrong trade.
    *
-   * They sort FIRST because they are the only rows on the rail that are about
-   * right now. Everything else is a conversation you can return to.
+   * WHAT IS GENUINELY GIVEN UP, so the next person does not rediscover it as
+   * a bug: a worker running under a chat you are not looking at has no mark
+   * in the rail, because the PARENT's row will not spin — its own pane is
+   * idle while its child works. If that wants fixing, the fix is a mark on
+   * the parent's row that opens the drawer, not a row for the child. A
+   * child row answers "where is it" with "somewhere else entirely".
    */
-  const workers: ChatGroup[] = [];
   for (const chat of tops) {
-    const children = childrenOf.get(chat.id) ?? [];
-    for (const kid of children) if (!isChatRetired(kid)) workers.push({ chat: kid, worker: true });
     // THE DONE DRAWER HOLDS TOP-LEVEL CHATS ONLY. A sub-chat retires the moment
     // it delivers, so with forty spawned agents the drawer was forty rows of
     // finished errands under a label, and the chats you actually abandoned were
@@ -2304,15 +2309,16 @@ export function groupChats(tabs: Tab[]): {
       // Position is safe: a pinned chat never decays, so a done parent is never
       // in the pinned block, and a row promoted at its place therefore always
       // lands after the pinned rows.
-      // Its running children are already in `workers` — collected for every
-      // parent above, retired or not, so this case needs no second rule.
+      // Its children — running or not — stay in this chat's own drawer. A
+      // done parent is still reachable in the done drawer, so nothing here
+      // renders nowhere.
       continue;
     }
     // NO CHILDREN ON THE ROW. See the note on the return type: a sub-chat is
     // listed in its parent's work drawer, and its parent is right here.
     live.push({ chat });
   }
-  return { live: [...workers, ...live], done };
+  return { live, done };
 }
 
 /* ─── AND THE ARCHIVE'S COUNT IS GONE TOO ──────────────────────────────────
