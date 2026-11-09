@@ -222,6 +222,23 @@ describe('living sidebar — tab ordering + pinning', () => {
       expect((await rowFor('P')).status).toBe('idle');
     });
 
+    it('a sub-chat that stopped to ask something says so on the parent', async () => {
+      // The worker ENDED its turn to ask, so its pane is idle and nothing
+      // about its state says it is stuck — the fact lives on the tab. Without
+      // this it reaches only the drawer, which you have to open to read.
+      const parent = await makeTab('P');
+      const child = await makeTab('C');
+      await paneOf(parent.id);
+      await paneOf(child.id);
+      spawn(child.id, parent.id);
+      expect((await rowFor('P')).status).toBe('idle');
+      db.prepare("UPDATE tabs SET spawn_report_state = 'awaiting' WHERE id = ?").run(child.id);
+      expect((await rowFor('P')).status).toBe('blocked');
+      // A worker that reported normally says nothing.
+      db.prepare("UPDATE tabs SET spawn_report_state = 'ok' WHERE id = ?").run(child.id);
+      expect((await rowFor('P')).status).toBe('idle');
+    });
+
     it('a retired sub-chat stops counting for anything', async () => {
       const parent = await makeTab('P');
       const child = await makeTab('C');

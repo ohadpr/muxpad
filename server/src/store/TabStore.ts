@@ -109,7 +109,7 @@ export interface SpawnReportWrite {
  * would not.
  */
 const CLOCK_COLUMNS = `tabs.id, tabs.spawned_by, tabs.pinned, tabs.clock_started_at,
-    tabs.retired_at, tabs.retired_reason,
+    tabs.retired_at, tabs.retired_reason, tabs.spawn_report_state,
     EXISTS (SELECT 1 FROM panes p
              WHERE p.tab_id = tabs.id AND p.startup_cmd LIKE 'muxpad agent%') AS has_agent`;
 
@@ -120,6 +120,7 @@ interface RawClockRow {
   clock_started_at: number | null;
   retired_at: number | null;
   retired_reason: string | null;
+  spawn_report_state: string | null;
   has_agent: number;
 }
 
@@ -130,6 +131,7 @@ function toClockRow(r: RawClockRow): TabClockRow {
     pinned: !!r.pinned,
     clock_started_at: r.clock_started_at,
     retired_at: r.retired_at,
+    spawn_report_state: r.spawn_report_state,
     // Anything unrecognised reads as a hand archive: it is the conservative
     // one (it claims only that a person did this), and the alternative would
     // be a row that is retired for no stated reason at all.
@@ -160,6 +162,16 @@ export interface TabClockRow {
   clock_started_at: number | null;
   retired_at: number | null;
   retired_reason: RetireReason | null;
+  /**
+   * `awaiting` when this worker stopped to ask something.
+   *
+   * Carried on the CLOCK row, which is the one whole-table read the sidebar
+   * already does, so a parent can say that a child needs a human without a
+   * query per child. A sub-chat is not a row on the rail, so if this does not
+   * climb to its parent, "it asked you a question" reaches nothing but the
+   * drawer — which you have to open to see.
+   */
+  spawn_report_state: string | null;
   /**
    * Is there an AGENT in this tab — something a message could be sent to?
    *
