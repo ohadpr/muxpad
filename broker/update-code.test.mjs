@@ -192,3 +192,19 @@ test('the readiness check reads its versions from the release, not a literal', (
   // …and refuses rather than guessing if it finds none.
   assert.match(script, /refusing to guess/);
 });
+
+test('the packager can actually stage the dependency tree', () => {
+  // broker/node_modules is deliberately a symlink to a worktree outside the
+  // synced folder, and `copy` refuses symlinks — correct in general, and it
+  // left this packager unable to stage dependencies at all from the day that
+  // link was made. A release without them updates fine (update-code.sh keeps
+  // what is installed) and cannot be INSTALLED, which only surfaces on a
+  // machine that has no broker yet.
+  const here = new URL('.', import.meta.url).pathname;
+  const packer = readFileSync(join(here, 'prepare-release.mjs'), 'utf8');
+  // Resolved by name, once, and required to be a directory.
+  assert.match(packer, /realpathSync\(join\(source, 'node_modules'\)\)/);
+  assert.match(packer, /must resolve to a directory/);
+  // …and the blanket refusal is still in `copy`, so nothing else slips in.
+  assert.match(packer, /isSymbolicLink\(\)[\s\S]{0,120}Release inputs must be regular/);
+});

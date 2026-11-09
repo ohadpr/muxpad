@@ -8,6 +8,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -73,9 +74,24 @@ try {
     // at all, which is the worst of the two to discover on a new machine.
     'package.json',
     'package-lock.json',
-    'node_modules',
   ])
     copy(join(source, name), join(stage, name));
+  // ── THE ONE SYMLINK THIS RESOLVES, AND WHY ───────────────────────────────
+  // `copy` refuses symlinks outright, which is right: a link in a release can
+  // point anywhere, and the installer trusts what it unpacks. But
+  // broker/node_modules is DELIBERATELY a link to a worktree outside the
+  // synced folder — heavy dependency trees do not belong in Dropbox — so the
+  // blanket refusal made this packager unable to stage dependencies at all
+  // from the moment that link was created. A release without them updates
+  // fine and cannot be INSTALLED, which only shows up on a machine that has
+  // no broker yet.
+  //
+  // So the link is resolved HERE, once, by name, and what it resolves to must
+  // be a real directory. Everything inside is still copied by `copy`, which
+  // still refuses every symlink it meets — so the staged tree has none.
+  const deps = realpathSync(join(source, 'node_modules'));
+  if (!lstatSync(deps).isDirectory()) throw Error('node_modules must resolve to a directory');
+  copy(deps, join(stage, 'node_modules'));
   if (tsnetRelease) {
     copy(join(source, 'install-tsnet.sh'), join(stage, 'install-tsnet.sh'));
     copy(join(source, 'tsnet'), join(stage, 'tsnet-source'));
