@@ -64,6 +64,16 @@ try {
     'slack.mjs',
     'socket-listener.mjs',
     'state-store.mjs',
+    // THE DEPENDENCIES, which a fresh `install.sh` copies wholesale and
+    // refuses to run without (it checks for @simplewebauthn/server by hand).
+    // They are not in update-code.sh's FILES because that path keeps the
+    // dependencies already installed — it builds code.next by dittoing the
+    // live tree and overwriting only the manifest. A release that carries
+    // the modules but not the deps therefore UPDATES fine and INSTALLS not
+    // at all, which is the worst of the two to discover on a new machine.
+    'package.json',
+    'package-lock.json',
+    'node_modules',
   ])
     copy(join(source, name), join(stage, name));
   if (tsnetRelease) {

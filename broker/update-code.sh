@@ -162,8 +162,20 @@ if(u.protocol!=='https:'||u.origin!==origin||!u.hostname.endsWith('.ts.net'))thr
 console.log(origin);
 JS
 )
+# THE READINESS VERSIONS COME FROM THE RELEASE, NOT FROM A LITERAL HERE.
+# This check asserted one hardcoded string and the shipped code had moved on,
+# so a PERFECTLY GOOD update ended with "readiness is unconfirmed" and exit 1 —
+# which reads exactly like a broken install and sent somebody re-running a
+# frozen release against a broker that was already healthy.
+#
+# Replacing the literal with a newer literal would rebuild the same trap, and
+# sooner than it looks: http.mjs reports a DIFFERENT version under
+# `approvalMode: session` than under `passkey-inline`, so the next cutover
+# would have failed this check in the middle of a security change.
+ALLOWED=$(/usr/bin/grep -oE "'[A-Za-z0-9-]+-v[0-9]+-20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]'" "$SOURCE/http.mjs" | /usr/bin/tr -d "'")
+[[ -n $ALLOWED ]] || { echo 'No health version found in the release; refusing to guess'; exit 1; }
 for attempt in {1..30}; do
- if /usr/bin/curl --silent --fail --max-time 2 "$ORIGIN/health" | /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin "$DEST/runtime/node" --input-type=module -e 'let s="";for await(const c of process.stdin)s+=c;try{if(JSON.parse(s).version!=="full-slack-v1-2026-10-19")process.exit(1)}catch{process.exit(1)}'; then
+ if /usr/bin/curl --silent --fail --max-time 2 "$ORIGIN/health" | /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin "$DEST/runtime/node" --input-type=module -e 'let s="";for await(const c of process.stdin)s+=c;try{if(!process.argv.slice(1).includes(JSON.parse(s).version))process.exit(1)}catch{process.exit(1)}' $ALLOWED; then
   phase ready
   echo 'New popup broker is ready. Existing pairing and private state preserved.'
   exit 0

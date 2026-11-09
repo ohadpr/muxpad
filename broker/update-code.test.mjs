@@ -152,3 +152,43 @@ test('the release manifest covers every local import', () => {
   ])
     assert.ok(seen.has(proof), `walk never reached ${proof}`);
 });
+
+test('the release carries the dependencies a fresh install needs', () => {
+  // `install.sh` refuses to run without @simplewebauthn/server and copies
+  // node_modules wholesale; `update-code.sh` keeps whatever is already
+  // installed. So a release missing the deps updates cleanly and cannot be
+  // INSTALLED — a failure that only shows up on a machine that has no broker
+  // yet, which is the worst place to find it.
+  const here = new URL('.', import.meta.url).pathname;
+  const staged = readFileSync(join(here, 'prepare-release.mjs'), 'utf8');
+  for (const needed of ['package.json', 'package-lock.json', 'node_modules'])
+    assert.ok(staged.includes(`'${needed}'`), `the release does not stage ${needed}`);
+  // …and install.sh still expects them where the release puts them.
+  const installer = readFileSync(join(here, 'install.sh'), 'utf8');
+  assert.match(installer, /\$SOURCE\/node_modules/);
+});
+
+test('the readiness check reads its versions from the release, not a literal', () => {
+  // A hardcoded version here asserted `full-slack-v1-2026-10-19` while the
+  // shipped code reported `inchat-slack-capabilities-v2-2026-10-20`, so a
+  // SUCCESSFUL update ended "readiness is unconfirmed" and exit 1 — which
+  // reads exactly like a broken install.
+  //
+  // And replacing it with a newer literal rebuilds the trap immediately:
+  // http.mjs reports a different version under `approvalMode: session` than
+  // under `passkey-inline`, so the next cutover would fail this check in the
+  // middle of a security change.
+  const here = new URL('.', import.meta.url).pathname;
+  const script = readFileSync(join(here, 'update-code.sh'), 'utf8');
+  const http = readFileSync(join(here, 'http.mjs'), 'utf8');
+
+  const shipped = [...http.matchAll(/'([A-Za-z0-9-]+-v\d+-20\d\d-\d\d-\d\d)'/g)].map((m) => m[1]);
+  assert.ok(shipped.length >= 2, 'expected at least two health versions in http.mjs');
+
+  // The script must not name any of them — it derives them.
+  for (const v of shipped)
+    assert.ok(!script.includes(v), `update-code.sh hardcodes the health version ${v}`);
+  assert.match(script, /ALLOWED=\$\(.*http\.mjs/);
+  // …and refuses rather than guessing if it finds none.
+  assert.match(script, /refusing to guess/);
+});
