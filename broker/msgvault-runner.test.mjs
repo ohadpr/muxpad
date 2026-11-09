@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { existsSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { msgvaultRunner } from './msgvault-runner.mjs';
 
@@ -92,4 +93,37 @@ test('non-JSON output comes back as text rather than throwing', async () => {
   const h = harness({ cb: (done) => done(null, 'Messages: 338,818\n', '') });
   const out = await h.runner('msgvault.stats', {});
   assert.match(out.text, /338,818/);
+});
+
+/**
+ * …AND IT MUST CALL THAT GUARD CORRECTLY.
+ *
+ * Every test above injects `assertProtectedPath`, which is right for checking
+ * WHEN it is called — and is exactly why they all passed while the real call
+ * was wrong. `mode` is an EXACT expected mode, not a mask; `{ mode: 0o022 }`
+ * asserted "this file is ----w--w-", which no readable file is, so every
+ * request failed with 'Incorrect protected file mode' before msgvault ran.
+ *
+ * A mocked seam cannot catch a misused API. These two use the real one.
+ */
+import { assertProtectedPath } from './protected-path.mjs';
+
+test('the real guard accepts the files this actually runs against', () => {
+  // The declaration is root-owned 0644; the installed binary root-owned 0755.
+  // Both are "protected" in the sense that matters — no group or other write,
+  // all the way up — and neither has a single exact mode this could pin.
+  for (const path of ['/Library/muxpad/integrations.json'])
+    if (existsSync(path)) assertProtectedPath(path, [0]);
+});
+
+test('passing a mode makes it reject the very files it guards', () => {
+  const path = '/Library/muxpad/integrations.json';
+  if (!existsSync(path)) return;
+  assert.throws(() => assertProtectedPath(path, [0], { mode: 0o022 }), /Incorrect protected file mode/);
+  assert.doesNotThrow(() => assertProtectedPath(path, [0]));
+});
+
+test('the runner passes no mode', () => {
+  const src = readFileSync(new URL('./msgvault-runner.mjs', import.meta.url), 'utf8');
+  assert.ok(!/assertProtectedPath\([^)]*mode:/.test(src), 'the runner pins an exact mode again');
 });

@@ -30,7 +30,13 @@ export function msgvaultRunner({
   maxBytes = 4 * 1024 * 1024,
 } = {}) {
   return async (action, payload) => {
-    io.assertProtectedPath(declarationPath, [0], { mode: 0o022 });
+    // NO `mode` OPTION. It is an EXACT expected mode, not a mask — passing
+    // 0o022 asserted "this file is mode ----w--w-", which no readable file
+    // ever is, so every call threw 'Incorrect protected file mode' and the
+    // whole path was dead on arrival. The walk itself already refuses any
+    // group/other write (`st.mode & 0o022`) on the file and every ancestor,
+    // which is the property wanted here.
+    io.assertProtectedPath(declarationPath, [0]);
     const declared = JSON.parse(io.readFileSync(declarationPath, 'utf8'))?.msgvault;
     if (!declared) throw new Error('msgvault is not declared on this machine');
     // Loopback only, re-asserted here rather than assumed from the writer:
@@ -38,7 +44,7 @@ export function msgvaultRunner({
     if (!/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:|\/|$)/.test(String(declared.agentUrl)))
       throw new Error('msgvault agentUrl must be loopback');
     // The binary must be as protected as the declaration that names it.
-    io.assertProtectedPath(declared.binary, [0], { mode: 0o022 });
+    io.assertProtectedPath(declared.binary, [0]);
     const { binary, args } = msgvaultArgv(action, payload, declared);
     return await new Promise((resolve, reject) => {
       run(

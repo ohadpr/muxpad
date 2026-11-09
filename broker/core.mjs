@@ -811,10 +811,22 @@ export class Broker {
       r.state = 'complete';
     } catch (error) {
       r.state = 'failed';
-      const code = safeSlackErrorCode(error);
-      r.error = code
-        ? `Slack request failed (${code}); inspect Slack before retrying`
-        : 'Slack request failed; inspect Slack before retrying';
+      // NAME THE SYSTEM THAT FAILED. This said "Slack request failed;
+      // inspect Slack before retrying" for an archive read — which sends
+      // somebody to look at the wrong thing, and hid the real cause behind
+      // a sanitiser built for Slack's error codes.
+      const cap = capabilityOf(r.action);
+      if (cap && cap.id !== 'slack') {
+        // Not run through the Slack sanitiser: these messages are msgvault's
+        // own refusals and a local path at worst. The grant is never in them
+        // — it is passed as a file.
+        r.error = `${cap.label} request failed: ${String(error?.message ?? error).slice(0, 200)}`;
+      } else {
+        const code = safeSlackErrorCode(error);
+        r.error = code
+          ? `Slack request failed (${code}); inspect Slack before retrying`
+          : 'Slack request failed; inspect Slack before retrying';
+      }
     } finally {
       this.uploads.delete(r.id);
     }
