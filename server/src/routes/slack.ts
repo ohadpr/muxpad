@@ -44,7 +44,7 @@ class SlackRefused extends Error {
   }
 }
 
-export function slackRoutes(deps: Deps): Hono {
+export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
   const app = new Hono();
   app.route('/setup', slackSetupRoutes());
   const workspaces = new WorkspaceStore(deps.db);
@@ -234,9 +234,20 @@ export function slackRoutes(deps: Deps): Hono {
     const verb = classify(action);
     if (!verb.ok) throw new SlackRefused(action, payload, pane, verb.reason ?? 'refused');
 
+    // ── WHICH MACHINE IS ASKING ──────────────────────────────────────────
+    // `mayPaneUse` already resolved it from the pane's own row, and it was
+    // being thrown away: every request reached the broker as `origin:
+    // unknown`, which by the broker's own rule never matches a grant minted
+    // for a named machine. So timed approvals could not be spent at all, and
+    // the machine binding the owner asked for — "I think machine is good" —
+    // was never actually on.
+    //
+    // The broker treats this as a LABEL muxpad asserts, not a fact it can
+    // verify, which is exactly right: it is shown to the human before they
+    // approve, and the grant is bound to it afterwards.
     const result = await slackBrokerRequest(
       '/requests',
-      { action, payload },
+      { action, payload, origin: scope.origin },
       action === 'slack.upload' ? 125000 : 35000,
     );
     // The broker is the only thing that holds a credential for either of
@@ -593,7 +604,18 @@ export function slackRoutes(deps: Deps): Hono {
       if (!auth.ok) return c.json(auth.body, auth.status);
       return c.json(await brokerAction(action, payload(q), auth.pane), 202);
     });
-  app.route('/msgvault', archive);
+  return { slack: app, archive };
+}
 
-  return app;
+/**
+ * Backwards-compatible shape: the Slack app alone.
+ *
+ * The archive's routes are built inside `connectorRoutes` so they share the
+ * one funnel — the gate, the pending-notice table, the card, the single
+ * onError. What they must NOT share is the URL: mounting them inside the
+ * Slack app put them at `/api/slack/msgvault/...`, which says the archive is
+ * part of Slack and was a 404 against the path the CLI actually calls.
+ */
+export function slackRoutes(deps: Deps): Hono {
+  return connectorRoutes(deps).slack;
 }

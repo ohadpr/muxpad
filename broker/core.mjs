@@ -417,7 +417,13 @@ export class Broker {
       // What a timed approval of THIS request would actually cover, so the
       // page can describe the promise it is about to make rather than reciting
       // one that was true in an earlier release.
-      timedScope: this.timedScope(),
+      // THE REQUEST'S OWN SCOPE, not Slack's. This line sat one above
+      // `timedAllowed`, which was made capability-aware while this was left
+      // alone — so an archive request advertised `slack-team-all-v2`, the
+      // page offered "full Slack access" for a mail read, and the duration
+      // came back as a scope `decideSession` then refused. Fail-closed, and
+      // wrong in the one place a human is reading.
+      timedScope: this.timedScope(this.capabilityOfRequest(r)),
       timedAllowed:
         this.timedScope(this.capabilityOfRequest(r)) !==
           this.capabilityOfRequest(r).readScope ||

@@ -1,9 +1,10 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { __resetPaneKeys, initPaneKeys, paneKeyFor } from './pane-key.js';
-import { slackRoutes } from './routes/slack.js';
+import { connectorRoutes, slackRoutes } from './routes/slack.js';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
 import { WorkspaceStore } from './store/WorkspaceStore.js';
@@ -166,6 +167,11 @@ describe('protected broker mode', () => {
     expect(JSON.parse(options.body as string)).toEqual({
       action: 'slack.post',
       payload: { ref: 'C123', text: 'exact text' },
+      // WHICH MACHINE IS ASKING. Resolved from the pane's own row and sent,
+      // because the broker binds a timed grant to it — and without it every
+      // request arrived as `unknown`, which matches no grant, so timed
+      // approvals could not be spent at all.
+      origin: 'local',
     });
     expect(options.headers).not.toHaveProperty('authorization');
     db.close();
@@ -580,6 +586,7 @@ describe('expanded Slack endpoints retain caller authentication and exact payloa
         expect(JSON.parse(fetchMock.mock.calls[0]![1]!.body as string)).toEqual({
           action,
           payload,
+          origin: 'local',
         });
         db.close();
       }
@@ -614,8 +621,51 @@ describe('expanded Slack endpoints retain caller authentication and exact payloa
       expect((await send('wrong')).status).toBe(403);
       expect(fetchMock).not.toHaveBeenCalled();
       expect((await send(key)).status).toBe(202);
-      expect(JSON.parse(fetchMock.mock.calls[0]![1]!.body as string)).toEqual({ action, payload });
+      expect(JSON.parse(fetchMock.mock.calls[0]![1]!.body as string)).toEqual({
+        action,
+        payload,
+        origin: 'local',
+      });
       db.close();
     },
   );
+});
+
+/**
+ * THE ARCHIVE IS NOT PART OF SLACK, and the URL has to say so.
+ *
+ * Its routes are built inside the same funnel deliberately — one gate, one
+ * notice table, one card writer, one onError. Mounting them inside the Slack
+ * APP as well put them at `/api/slack/msgvault/...`, which is both a wrong
+ * claim and a 404 against the path the CLI calls. The shared thing is the
+ * machinery behind them, not the path in front.
+ */
+describe('the archive mounts on its own path', () => {
+  it('is reachable at /api/msgvault, not under /api/slack', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mv-route-'));
+    const db = openDb(':memory:');
+    const { slack, archive } = connectorRoutes({ db, dataDir: dir });
+    const app = new Hono();
+    app.route('/api/slack', slack);
+    app.route('/api/msgvault', archive);
+    // No pane key, so this stops at `authorize` — which is enough: a 404 means
+    // the route does not exist, and anything else means it does.
+    const own = await app.request('/api/msgvault/stats');
+    expect(own.status).not.toBe(404);
+    const nested = await app.request('/api/slack/msgvault/stats');
+    expect(nested.status).toBe(404);
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('exposes every verb the CLI calls', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mv-route-'));
+    const db = openDb(':memory:');
+    const app = new Hono();
+    app.route('/api/msgvault', connectorRoutes({ db, dataDir: dir }).archive);
+    for (const path of ['search', 'message', 'thread', 'senders', 'stats', 'meetings', 'person'])
+      expect((await app.request(`/api/msgvault/${path}`)).status, path).not.toBe(404);
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
 });
