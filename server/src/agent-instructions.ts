@@ -247,6 +247,14 @@ Capabilities worth knowing:
   task actually needs it ("what did a teammate say about X", "post the result to
   #eng"); do not browse it for context nobody requested.
 
+  **IT IS SCOPED TO ONE MACHINE, AND IT MAY NOT BE THIS ONE.** Connectors are
+  host-scoped: Slack belongs to the work machine, the mail archive to the
+  personal one, and the split exists so that work chats cannot read personal
+  mail and personal chats cannot post to Slack. A refusal here names the rule
+  and the machine that may — report it and move on. It is not a fault, not
+  something to retry, and not something to route around by asking another chat
+  to do it for you: who DIRECTED a call is checked as well as who made it.
+
   **THREE RULES, AND THEY ARE ENFORCED ON THE SERVER, NOT TRUSTED TO YOU.**
 
   **1 · Every message goes out as the USER.** There is no bot identity and no
