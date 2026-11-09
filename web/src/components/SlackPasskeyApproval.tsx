@@ -11,6 +11,10 @@ type RequestView = {
   payload: Record<string, unknown>;
   expires: number;
   state: string;
+  /** What a timed approval of THIS request would cover. The broker computes
+   *  it per capability; sending a hardcoded one approved the wrong thing. */
+  timedScope?: string;
+  timedAllowed?: boolean;
   grantWarning?: string;
   error?: string;
 };
@@ -26,7 +30,29 @@ const labels: Record<string, string> = {
   'slack.react': 'Change reaction',
   'slack.edit': 'Edit Slack message',
   'slack.upload': 'Upload file to Slack',
+  // ── THE ARCHIVE IS NOT SLACK ─────────────────────────────────────────────
+  // This card is the approval surface for EVERY connector now, and it was
+  // written when there was one. An msgvault failure rendered as "Slack
+  // request failed" under a Slack logo, in a chat on a machine where Slack is
+  // not even supposed to be reachable — reported, reasonably, as alarm.
+  //
+  // Each label says WHAT IS READ, for the same reason the broker's own dialog
+  // does: approving a verb with no object is approving nothing.
+  'msgvault.search': 'Search your mail archive',
+  'msgvault.show-message': 'Read one archived message',
+  'msgvault.show-thread': 'Read an archived thread',
+  'msgvault.list-senders': 'List who emails you most',
+  'msgvault.stats': 'Read archive totals',
+  'msgvault.meetings': 'Read archived meeting notes',
+  'msgvault.person': 'Look up a contact',
 };
+
+/** Which system a request belongs to, from the action's own prefix — so what
+ *  the card says can never disagree with what is about to run. */
+const SLACK = { id: 'slack', name: 'Slack' } as const;
+const CONNECTORS = [SLACK, { id: 'msgvault', name: 'your archive' } as const];
+const connectorOf = (action: string | undefined) =>
+  CONNECTORS.find((c) => c.id === String(action ?? '').split('.')[0]) ?? SLACK;
 export function SlackPasskeyApproval({
   paneId,
   diagnosticID,
@@ -139,6 +165,7 @@ export function SlackPasskeyApproval({
       if (!dialog.current?.open) dialog.current?.showModal();
     }
   }, [request?.id]);
+  const [outcomeConnector, setOutcomeConnector] = useState<(typeof CONNECTORS)[number]>(SLACK);
   const decide = async (decision: 'approve' | 'reject') => {
     if (!request || busyRef.current) return;
     const epoch = ++generation.current;
@@ -160,7 +187,11 @@ export function SlackPasskeyApproval({
         fingerprint: request.fingerprint,
         decision,
         duration: chosen,
-        ...(chosen === 'once' ? {} : { scope: 'slack-team-all-v2' }),
+        // THE REQUEST'S OWN SCOPE. Hardcoding Slack's meant a timed approval
+        // of an archive read asked for `slack-team-all-v2` — the broker then
+        // refused it, and had it not, the human would have granted something
+        // other than what the card described.
+        ...(chosen === 'once' ? {} : { scope: request.timedScope ?? 'slack-team-all-v2' }),
       });
       if (!intentLive()) return;
       const response = await passkeyCeremony(ceremony, false, {
@@ -172,7 +203,7 @@ export function SlackPasskeyApproval({
         payload: request.payload,
         decision,
         duration: chosen,
-        scope: chosen === 'once' ? null : 'slack-team-all-v2',
+        scope: chosen === 'once' ? null : (request.timedScope ?? 'slack-team-all-v2'),
       });
       if (!intentLive()) return;
       // The native confirmation is finished. Return to chat while the single
@@ -192,8 +223,12 @@ export function SlackPasskeyApproval({
       current.current = null;
       setRequest(null);
       dialog.current?.close();
-      if (result.state === 'failed') setOutcome('Slack request failed. Nothing was retried.');
-      else if (result.state === 'expired') setOutcome('Slack request expired.');
+      // `request` was nulled two lines up when the dialog closed; `selected`
+      // is the one this result belongs to.
+      setOutcomeConnector(connectorOf(selected.action));
+      const who = connectorOf(selected.action).name;
+      if (result.state === 'failed') setOutcome(`${who} request failed. Nothing was retried.`);
+      else if (result.state === 'expired') setOutcome(`${who} request expired.`);
       else if (result.grantWarning) setOutcome('Request finished; timed access was not granted.');
       const snapshot = await refresh();
       if (!live()) return;
@@ -229,17 +264,29 @@ export function SlackPasskeyApproval({
     <>
       {outcome && (
         <output className="slack-passkey-inline">
-          <SlackLogo />
+          {/* NO SLACK MARK ON A NON-SLACK RESULT. A Slack logo over "request
+              failed" for an archive read is a claim about which system was
+              touched, on a machine where Slack is not meant to be reachable
+              at all — which is exactly how it was read when it happened. */}
+          {outcomeConnector === SLACK ? <SlackLogo /> : <span aria-hidden="true">📥</span>}
           <span>{outcome}</span>
-          <button type="button" aria-label="Dismiss Slack status" onClick={() => setOutcome('')}>
+          <button type="button" aria-label="Dismiss status" onClick={() => setOutcome('')}>
             Dismiss
           </button>
         </output>
       )}
       {dismissed && request && (
         <div className="slack-passkey-inline">
-          <SlackLogo />
-          <output>{busy ? 'Finishing Slack approval…' : error || 'Slack approval'}</output>
+          {connectorOf(request.action) === SLACK ? (
+            <SlackLogo />
+          ) : (
+            <span aria-hidden="true">📥</span>
+          )}
+          <output>
+            {busy
+              ? `Finishing ${connectorOf(request.action).name} approval…`
+              : error || `${connectorOf(request.action).name} approval`}
+          </output>
           {!busy && (
             <button
               type="button"
@@ -268,10 +315,14 @@ export function SlackPasskeyApproval({
               <BrandMark />
               <span>muxpad</span>
               <span aria-hidden="true">↔</span>
-              <SlackLogo />
-              <span>Slack</span>
+              {connectorOf(request.action) === SLACK ? (
+                <SlackLogo />
+              ) : (
+                <span aria-hidden="true">📥</span>
+              )}
+              <span>{connectorOf(request.action).name}</span>
             </div>
-            <h2 id={titleID}>muxpad wants to access Slack</h2>
+            <h2 id={titleID}>muxpad wants to access {connectorOf(request.action).name}</h2>
             <label className="slack-passkey-duration">
               Allow for
               <select
