@@ -111,6 +111,29 @@ export function chromeArgv(opts: BrowserLaunchOptions): string[] {
     '--password-store=basic',
     '--use-mock-keychain',
 
+    // NO LOCAL NETWORK DISCOVERY. Chrome's Cast / Media Router multicasts on
+    // the local subnet at startup to look for cast targets, and on macOS that
+    // is what raises
+    //
+    //     Allow "Google Chrome for Testing Helper" to find devices
+    //     on local networks?
+    //
+    // on the user's real screen — with nobody having navigated anywhere. Same
+    // family as the Keychain dialog above, same fix: do not do the thing.
+    //
+    // The preferred binary (chrome-headless-shell) has no media router to
+    // disable, so this is for the MUXPAD_CHROME_BIN escape hatch, where
+    // somebody has pointed muxpad at a full browser and should not be
+    // punished for it with a system prompt.
+    '--disable-features=MediaRouter,DialMediaRouteProvider',
+
+    // muxpad's browser is driven, never browsed. It needs no component
+    // updates, no variations fetch and no safe-browsing list downloads — all
+    // of which are background traffic nobody asked for on a machine that is
+    // on a tailnet.
+    '--disable-background-networking',
+    '--disable-component-update',
+
     `--window-size=${win.width},${win.height}`,
     '--no-first-run',
     '--no-default-browser-check',

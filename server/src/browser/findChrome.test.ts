@@ -122,7 +122,7 @@ describe('what it picks', () => {
     expect(found?.path).toBe(
       `${PW}/chromium-1246/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing`,
     );
-    expect(found?.source).toBe('playwright');
+    expect(found?.source).toBe('playwright chromium');
   });
 
   it('handles the older Chromium.app layout', () => {
@@ -173,5 +173,78 @@ describe('picking a playwright build', () => {
 
   it('is null when there is nothing to pick', () => {
     expect(newestPlaywrightChromium([])).toBeNull();
+  });
+});
+
+describe('the shell is preferred over the browser', () => {
+  // `--headless=new` means no WINDOW, not no APP: the full bundle still
+  // registers a macOS menu-bar item and still trips the Local Network gate
+  // via Chrome's own multicast discovery. Both were observed on the owner's
+  // physical screen, from a browser with no window.
+  const cache = (entries: Record<string, string[]>) => ({
+    home: '/home',
+    env: {},
+    list: (dir: string) => entries[dir] ?? [],
+  });
+
+  it('takes chrome-headless-shell when both are downloaded', () => {
+    const found = findChrome(
+      cache({
+        '/home/Library/Caches/ms-playwright': ['chromium-1248', 'chromium_headless_shell-1248'],
+        '/home/Library/Caches/ms-playwright/chromium_headless_shell-1248': [
+          'chrome-headless-shell-mac-arm64',
+        ],
+        '/home/Library/Caches/ms-playwright/chromium_headless_shell-1248/chrome-headless-shell-mac-arm64':
+          ['chrome-headless-shell'],
+        '/home/Library/Caches/ms-playwright/chromium-1248': ['chrome-mac-arm64'],
+        '/home/Library/Caches/ms-playwright/chromium-1248/chrome-mac-arm64': [
+          'Google Chrome for Testing.app',
+        ],
+      }),
+    );
+    expect(found?.path).toMatch(/chrome-headless-shell$/);
+    expect(found?.source).toBe('playwright headless shell');
+    // …and it is NOT inside a bundle, which is the whole property.
+    expect(found?.path).not.toMatch(/\.app\//);
+  });
+
+  it('falls back to the full browser when no shell is downloaded', () => {
+    const found = findChrome(
+      cache({
+        '/home/Library/Caches/ms-playwright': ['chromium-1248'],
+        '/home/Library/Caches/ms-playwright/chromium-1248': ['chrome-mac-arm64'],
+        '/home/Library/Caches/ms-playwright/chromium-1248/chrome-mac-arm64': [
+          'Google Chrome for Testing.app',
+        ],
+      }),
+    );
+    expect(found?.source).toBe('playwright chromium');
+  });
+
+  it('still picks the highest shell revision, not the highest string', () => {
+    const found = findChrome(
+      cache({
+        '/home/Library/Caches/ms-playwright': [
+          'chromium_headless_shell-999',
+          'chromium_headless_shell-1248',
+        ],
+        '/home/Library/Caches/ms-playwright/chromium_headless_shell-1248': ['chrome-mac-arm64'],
+        '/home/Library/Caches/ms-playwright/chromium_headless_shell-1248/chrome-mac-arm64': [
+          'chrome-headless-shell',
+        ],
+      }),
+    );
+    expect(found?.path).toContain('chromium_headless_shell-1248');
+  });
+
+  it('is still overridden outright by MUXPAD_CHROME_BIN — the escape hatch', () => {
+    // A login-walled site that fingerprints the shell is answered by pointing
+    // this at the real browser. Nothing else changes.
+    const found = findChrome({
+      home: '/home',
+      env: { MUXPAD_CHROME_BIN: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' },
+      list: () => ['chromium_headless_shell-1248'],
+    });
+    expect(found?.source).toBe('MUXPAD_CHROME_BIN');
   });
 });
