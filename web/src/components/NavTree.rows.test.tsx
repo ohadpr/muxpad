@@ -124,14 +124,20 @@ describe('the rail lists conversations, not workers', () => {
     expect(html).toContain('orphan');
   });
 
-  it('…and when its parent retired out from under it while it was working', () => {
-    // The same rule from the other direction: the parent is in the done list,
-    // two clicks away, so a worker still running would be unreachable.
+  it('…but NOT when its parent is merely done — the drawer still holds it', () => {
+    // The near-miss, and the one this rule used to get wrong. A parent in the
+    // done list is still ON the rail and still openable, and its work drawer
+    // still lists this child. So the child is two clicks away, not invisible,
+    // and it does not need a row of its own.
+    //
+    // That is the whole difference from the case above: there, the pointer
+    // resolves to nothing and there IS no drawer; here it resolves fine.
     const html = railHtml([
       tab('old', { clock: aged(9), done: true }),
       tab('kid', { spawned_by: 'old', clock: null, done: false }),
     ]);
-    expect(html).toContain('kid');
+    expect(html).toContain('old');
+    expect(html).not.toContain('kid');
   });
 });
 

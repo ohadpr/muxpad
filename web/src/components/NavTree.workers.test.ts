@@ -5,15 +5,25 @@ import { describe, expect, it } from 'vitest';
 import { groupChats } from './NavTree';
 
 /**
- * WHICH WORKERS THE RAIL SHOWS, AND WHERE.
+ * WHICH WORKERS THE RAIL SHOWS: NONE.
  *
  * `groupChats` decides what you can see, so it is the one part of the rail
- * tested against a list rather than by eye. The rule changed shape here: it
- * used to be about KIND — a sub-chat is a detail of a chat, so it lives in
- * that chat's drawer — and it is now about STATE. Still working and it is a
- * row, because something is happening that you may want to look at or stop;
- * delivered and it is a detail, because its result is already a card in its
- * parent's log.
+ * tested against a list rather than by eye.
+ *
+ * This answer has changed five times. The one that holds is the simplest, and
+ * it is the owner's: a sub-chat is a sub-chat. It lives in its parent's work
+ * drawer in every state, and the rail lists CONVERSATIONS.
+ *
+ * The version this replaces listed every RUNNING child as a top-level row,
+ * sorted first. It was reasoned from a real case — a child still working
+ * under a filed-away parent — and then applied to every parent, including the
+ * ones whose drawer is one click away. A narrow rescue became a general
+ * flattening, and a spawned errand was drawn as prominently as a
+ * conversation.
+ *
+ * The orphan it protected is not lost: a done parent is still in the done
+ * drawer, and its own drawer still lists the child. Two clicks, not
+ * invisible. One rule beats a rule with an exception.
  */
 const tab = (id: string, o: Partial<Tab> = {}): Tab =>
   ({
@@ -28,57 +38,54 @@ const tab = (id: string, o: Partial<Tab> = {}): Tab =>
 
 const ids = (gs: { chat: Tab }[]) => gs.map((g) => g.chat.id);
 
-describe('running workers are rows, and they come first', () => {
-  it('lists a running worker above the conversations', () => {
-    const { live } = groupChats([
+describe('a sub-chat is never a row on the rail', () => {
+  it('leaves a RUNNING worker out of the rail — it is in its parent’s drawer', () => {
+    const { live, done } = groupChats([
       tab('chat-a'),
       tab('chat-b'),
       tab('worker', { spawned_by: 'chat-a' }),
     ]);
-    expect(ids(live)).toEqual(['worker', 'chat-a', 'chat-b']);
+    expect(ids(live)).toEqual(['chat-a', 'chat-b']);
+    // …and it is not swept into the archive either.
+    expect(ids(done)).toEqual([]);
   });
 
-  it('marks it as a worker, which is how the row reads as subordinate', () => {
-    const { live } = groupChats([tab('chat-a'), tab('worker', { spawned_by: 'chat-a' })]);
-    expect(live[0]?.worker).toBe(true);
-    expect(live[1]?.worker).toBeUndefined();
-  });
-
-  it('hides a DELIVERED worker — its result is a card in the parent’s log', () => {
+  it('leaves a DELIVERED worker out too — one rule, not two', () => {
     const { live, done } = groupChats([
       tab('chat-a'),
       tab('worker', { spawned_by: 'chat-a', done: true }),
     ]);
     expect(ids(live)).toEqual(['chat-a']);
-    // …and it does not clutter the archive either, which is what the drawer
-    // was introduced to fix.
     expect(ids(done)).toEqual([]);
   });
 
-  it('keeps a running worker whose parent has retired', () => {
-    // The case the old hand-written exception existed for. Now it is just the
-    // ordinary rule, so there is one path instead of two.
+  it('keeps a running worker out even when its parent is done', () => {
+    // The case the promotion existed for. The parent is still reachable in
+    // the done drawer and still lists this child, so nothing renders nowhere
+    // — and the rail stays a list of conversations.
     const { live, done } = groupChats([
       tab('chat-a', { done: true }),
       tab('worker', { spawned_by: 'chat-a' }),
     ]);
-    expect(ids(live)).toEqual(['worker']);
+    expect(ids(live)).toEqual([]);
     expect(ids(done)).toEqual(['chat-a']);
   });
 
-  it('flattens a chain of handoffs to the root, and lists each running link', () => {
+  it('keeps a whole chain of handoffs out, however deep', () => {
     const { live } = groupChats([
       tab('chat-a'),
       tab('w1', { spawned_by: 'chat-a' }),
       tab('w2', { spawned_by: 'w1' }),
     ]);
-    expect(ids(live)).toEqual(['w1', 'w2', 'chat-a']);
+    expect(ids(live)).toEqual(['chat-a']);
   });
 
-  it('promotes a worker whose parent is not in this list', () => {
+  it('still promotes a chat whose parent is not in this list at all', () => {
+    // NOT an exception to the rule above — it is the rule that a chat is
+    // never invisible because of a dangling pointer. There is no parent here
+    // to hold it, so there is no drawer for it to live in.
     const { live } = groupChats([tab('orphan', { spawned_by: 'elsewhere' })]);
     expect(ids(live)).toEqual(['orphan']);
-    // It is nobody's worker HERE, so it is not drawn as one.
     expect(live[0]?.worker).toBeUndefined();
   });
 
