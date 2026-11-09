@@ -45,15 +45,16 @@ describe('the approval card follows the request', () => {
     }
   });
 
-  it('labels every msgvault verb with what it reads', () => {
+  it('labels every msgvault verb with what it reads — and only the live ones', () => {
+    // A label for a verb the broker no longer accepts describes a request
+    // that can never arrive.
+    for (const dead of ['msgvault.list-senders', 'msgvault.meetings', 'msgvault.person'])
+      expect(CODE, dead).not.toContain(`'${dead}':`);
     for (const action of [
       'msgvault.search',
       'msgvault.show-message',
       'msgvault.show-thread',
-      'msgvault.list-senders',
       'msgvault.stats',
-      'msgvault.meetings',
-      'msgvault.person',
     ]) {
       const label = new RegExp(`'${action}': '([^']+)'`).exec(CODE);
       expect(label, `${action} has no label`).toBeTruthy();
