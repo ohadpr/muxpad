@@ -544,3 +544,31 @@ it('offers an approval that lasts until revoked, and says what that actually mea
   expect(host.textContent).toContain('when the broker restarts');
   expect(host.textContent).toContain('not stored on disk');
 });
+
+it('never argues with itself about whether the asking machine is verified', async () => {
+  // The first proven request from the VM showed a full duration menu under a
+  // line reading "unverified, so approve-once only". The caveat belonged to a
+  // world where no remote machine could prove anything; the broker's own
+  // verdict is the only thing that knows.
+  pending = [{ ...request, origin: 'trayo', timedAllowed: true } as unknown as typeof request];
+  await render();
+  expect(host.textContent).toContain('asked by');
+  expect(host.textContent).not.toContain('unverified');
+  expect(host.textContent).toContain('verified');
+  expect(host.querySelector('select')).toBeTruthy();
+});
+
+it('still says approve-once when the broker refuses a duration', async () => {
+  pending = [
+    {
+      ...request,
+      origin: 'trayo',
+      timedAllowed: false,
+      timedRefusedReason: 'did not prove it',
+    } as unknown as typeof request,
+  ];
+  await render();
+  expect(host.textContent).toContain('unverified, so approve-once only');
+  // …and the control that would contradict it is not there at all.
+  expect(host.querySelector('select')).toBeNull();
+});
