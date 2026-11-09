@@ -41,8 +41,9 @@ const EMPTY = Object.freeze({ enforce: false, allow: Object.create(null) });
 /**
  * Read and parse the policy.
  *
- * `absent` → unscoped, which is how an install with no policy has always
- * behaved. Anything else unreadable → `problem`, and every call is refused.
+ * EVERY failure is a `problem`, and a `problem` refuses every call: absent,
+ * unreadable, not JSON, not an object, or an `enforce` that is not a boolean.
+ * There is no shape of this file that means "allow everything by accident".
  */
 export function loadPolicy(path = POLICY_PATH, io = { readFileSync, assertProtectedPath }) {
   let raw;
@@ -50,10 +51,13 @@ export function loadPolicy(path = POLICY_PATH, io = { readFileSync, assertProtec
     io.assertProtectedPath(path, [0]);
     raw = io.readFileSync(path, 'utf8');
   } catch (error) {
-    // ENOENT is the only absence. Everything else — a chmod'd parent, a
-    // symlink, an ACL — is a policy we cannot read, and reading that as "no
-    // policy" would let anyone switch scoping off by breaking the file.
-    if (error?.code === 'ENOENT') return { ...EMPTY };
+    // ── ABSENT IS NOT PERMISSION ──────────────────────────────────────────
+    // This used to read ENOENT as "unscoped", which was right while scoping
+    // was being rolled out and is wrong now that it is the live arrangement:
+    // deleting a file would switch every restraint off, silently. There is a
+    // policy on this machine; its absence is a broken install, not consent.
+    if (error?.code === 'ENOENT')
+      return { ...EMPTY, problem: `connector policy missing at ${path}` };
     return { ...EMPTY, problem: `connector policy unreadable: ${String(error?.message ?? error)}` };
   }
   let parsed;
@@ -64,6 +68,15 @@ export function loadPolicy(path = POLICY_PATH, io = { readFileSync, assertProtec
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
     return { ...EMPTY, problem: 'connector policy is not an object' };
+  // ── `enforce` MUST BE A BOOLEAN ───────────────────────────────────────
+  // It was `parsed.enforce === true`, so `"true"` — a string, and the most
+  // likely way to mistype this file — read as FALSE and allowed everything.
+  // A policy whose central switch cannot be read is a policy we cannot obey.
+  if (typeof parsed.enforce !== 'boolean')
+    return {
+      ...EMPTY,
+      problem: `connector policy "enforce" must be true or false, not ${JSON.stringify(parsed.enforce)}`,
+    };
   // Null prototype: `allow['constructor']` must not find Object's own.
   const allow = Object.create(null);
   const src = parsed.allow;
@@ -73,7 +86,7 @@ export function loadPolicy(path = POLICY_PATH, io = { readFileSync, assertProtec
         const machines = v.filter((m) => typeof m === 'string' && /^[a-z0-9][a-z0-9_-]{0,31}$/.test(m));
         if (machines.length) allow[k] = machines;
       }
-  return { enforce: parsed.enforce === true, allow };
+  return { enforce: parsed.enforce, allow };
 }
 
 /**

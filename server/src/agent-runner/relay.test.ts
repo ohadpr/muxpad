@@ -1,5 +1,7 @@
+import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 import { EventBus } from '../events.js';
@@ -1128,4 +1130,38 @@ describe('AgentSessionStore runner methods', () => {
     // view_mode survives — the pane still shows chat when the runner re-hellos.
     expect(agents.getByPane(p1)?.view_mode).toBe('chat');
   });
+});
+
+it('tells a runner started for ANOTHER machine’s pane to exit, not to retry', async () => {
+  // Found live: one local runner holding a `trayo` pane id wrote 180,397
+  // refusal lines over four days — its error path retried every two seconds
+  // because an HTTP-level refusal carries no close code. Meanwhile the chat
+  // it belonged to queued every message with nothing to drain it.
+  //
+  // The refusal is unchanged; what is new is that it SAYS SO in a way the
+  // runner acts on, reusing the 4001 exit path.
+  const src = readFileSync(join(import.meta.dirname, '..', 'ws.ts'), 'utf8');
+  // COMMENTS STRIPPED FIRST: the note explaining this change NAMES the call
+  // it replaced, and a test reading the raw file fails on the sentence that
+  // documents the fix.
+  const code = src.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+  const guard = code.slice(code.indexOf('if (!nodeOwnershipOk('));
+  expect(guard.slice(0, 700)).toContain('CLOSE_RUNNER_FOREIGN_PANE');
+  // The old path answered "set MUXPAD_ALLOWED_ORIGINS" — a reason with
+  // nothing to do with ownership — and carried no close code at all.
+  // Scoped to the RUNNER guard: the browser PTY-attach path a thousand lines
+  // below still refuses at the HTTP level, correctly — a browser has no
+  // runner exit semantics to appeal to.
+  expect(guard.slice(0, 700)).not.toContain('refuseUpgrade');
+
+  const runner = readFileSync(join(import.meta.dirname, 'index.ts'), 'utf8').replace(
+    /\/\/.*$/gm,
+    '',
+  );
+  const exits = runner.slice(runner.indexOf('if (code === CLOSE_RUNNER_FOREIGN_PANE)'));
+  expect(exits.slice(0, 200)).toContain('shutdown(0)');
+  // …and it must come BEFORE the blanket retry, or it changes nothing.
+  expect(runner.indexOf('CLOSE_RUNNER_FOREIGN_PANE)')).toBeLessThan(
+    runner.indexOf('setTimeout(connect, 2000)'),
+  );
 });

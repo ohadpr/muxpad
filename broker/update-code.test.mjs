@@ -45,6 +45,7 @@ FAIL_MOVE=$3
 MARKER="$DEST/code-update"
 move_count=0
 check_path() { [[ -e $1 && ! -L $1 ]] || exit 51; }
+check_tree() { [[ -e $1 && ! -L $1 ]] || exit 51; }
 move_fixture() { move_count=$((move_count+1)); [[ $move_count != "$FAIL_MOVE" ]] || return 52; /bin/mv "$@"; }
 ${rollover}`,
       encoding: 'utf8',
@@ -207,4 +208,57 @@ test('the packager can actually stage the dependency tree', () => {
   assert.match(packer, /must resolve to a directory/);
   // …and the blanket refusal is still in `copy`, so nothing else slips in.
   assert.match(packer, /isSymbolicLink\(\)[\s\S]{0,120}Release inputs must be regular/);
+});
+
+/**
+ * THE TWO THINGS THAT MADE THIS SCRIPT UNUSABLE IN PRACTICE.
+ *
+ * Both were found by running it, not by reading it: it was abandoned halfway
+ * twice, each time leaving the broker booted out AND `launchctl disable`d —
+ * a state that survives reboot.
+ */
+test('bootout is waited for, not merely looked at once', () => {
+  const here = new URL('.', import.meta.url).pathname;
+  const sh = readFileSync(join(here, 'update-code.sh'), 'utf8');
+  const stop = sh.slice(sh.indexOf('phase stopping'));
+  const gate = stop.indexOf('refusing live code writes');
+  const poll = stop.indexOf('for _ in $(/usr/bin/seq 1 60)');
+  assert.ok(poll > -1, 'no poll loop');
+  assert.ok(poll < gate, 'the refusal still runs before the wait');
+  // 60 × 0.5s. The number matters: a shorter wait is the bug again.
+  assert.match(stop.slice(poll, poll + 200), /\/bin\/sleep 0\.5/);
+  assert.match(stop.slice(gate - 120, gate + 40), /after 30s/);
+  // …and the refusal is still THERE. Waiting is not the same as giving up.
+  assert.match(stop, /exit 1/);
+});
+
+test('the tree walk is one process, and still refuses everything it did', () => {
+  const here = new URL('.', import.meta.url).pathname;
+  const sh = readFileSync(join(here, 'update-code.sh'), 'utf8');
+  // The per-entry fork loop is gone …
+  assert.ok(!/while IFS= read -r -d '' entry; do/.test(sh), 'a per-entry walk survived');
+  assert.ok(!/find "\$tree" -print0/.test(sh), 'a find-based walk survived');
+  // … replaced by one call per tree.
+  assert.equal((sh.match(/check_tree "\$(tree|entry)"/g) ?? []).length, 3);
+
+  // Every refusal the original made, still made. Asserted on the embedded
+  // program rather than on a comment about it.
+  const prog = sh.slice(sh.indexOf('check_tree() {'), sh.indexOf('\nJS\n'));
+  for (const [what, re] of [
+    ['symlink', /isSymbolicLink\(\)\)die\('Symlink/],
+    ['file type', /!st\.isFile\(\)&&!st\.isDirectory\(\)\)die\('Unexpected file type/],
+    ['owner + group\\/other write', /!OWNERS\.has\(st\.uid\)\|\|st\.mode&0o022\)die\('Unprotected/],
+    ['hardlink', /st\.nlink!==1\)die\('Hardlink refused/],
+    ['ACL', /die\('ACL on protected path/],
+  ])
+    assert.match(prog, re, `the ${what} refusal is missing`);
+
+  // Owners come from argv, never the environment: this runs under `env -i`
+  // and the script owns the argv, so nothing a caller sets can widen it.
+  assert.match(prog, /argv\.shift\(\)\?\?'0'/);
+  assert.ok(!/process\.env/.test(prog), 'the checker reads the environment');
+
+  // And it is EMBEDDED. A separate file would have to be validated before it
+  // could be trusted to validate anything.
+  assert.ok(!/check-tree\.mjs/.test(sh));
 });

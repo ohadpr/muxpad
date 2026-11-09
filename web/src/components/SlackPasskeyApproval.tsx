@@ -193,7 +193,13 @@ export function SlackPasskeyApproval({
       setDismissed(true);
     }
     try {
-      const chosen = decision === 'reject' || diagnosticID ? 'once' : duration;
+      // `once` whenever a duration would be refused at the decision — belt to
+      // the UI's braces, and forced HERE rather than via setDuration, which
+      // would not have landed before this line runs.
+      const chosen =
+        decision === 'reject' || diagnosticID || request.timedAllowed === false
+          ? 'once'
+          : duration;
       const ceremony = await passkeyAPI('options', {
         id: request.id,
         fingerprint: request.fingerprint,
@@ -335,20 +341,37 @@ export function SlackPasskeyApproval({
               <span>{connectorOf(request.action).name}</span>
             </div>
             <h2 id={titleID}>muxpad wants to access {connectorOf(request.action).name}</h2>
-            <label className="slack-passkey-duration">
-              Allow for
-              <select
-                aria-label="Approval duration"
-                disabled={busy || !!diagnosticID}
-                value={duration}
-                onChange={(e) => setDuration(e.target.value)}
-              >
-                <option value="once">This request</option>
-                <option value="10m">10 minutes</option>
-                <option value="1h">1 hour</option>
-                <option value="1d">1 day</option>
-              </select>
-            </label>
+            {/* ── ONLY OFFER WHAT THE BROKER WOULD ACCEPT ──────────────────
+                `timedAllowed: false` means a duration will be REFUSED at the
+                decision: the broker cannot attribute this request's origin,
+                so a lasting permission would rest on a claim anything on this
+                machine could make. Offering 10m/1h/1d anyway invited the one
+                failure that teaches people to distrust a dialog — pick an
+                option, sign the ceremony, watch it fail.
+                The reason is shown rather than the control being silently
+                missing: "unavailable" with no explanation is its own puzzle. */}
+            {request.timedAllowed === false ? (
+              <p className="slack-passkey-note">
+                This request can only be approved <strong>once</strong>.{' '}
+                {request.timedRefusedReason ??
+                  'The broker cannot verify which machine asked, so a lasting permission is not offered.'}
+              </p>
+            ) : (
+              <label className="slack-passkey-duration">
+                Allow for
+                <select
+                  aria-label="Approval duration"
+                  disabled={busy || !!diagnosticID}
+                  value={duration}
+                  onChange={(e) => setDuration(e.target.value)}
+                >
+                  <option value="once">This request</option>
+                  <option value="10m">10 minutes</option>
+                  <option value="1h">1 hour</option>
+                  <option value="1d">1 day</option>
+                </select>
+              </label>
+            )}
             {/* WHAT A DURATION ACTUALLY COVERS, for THIS capability. It said
                 "read, search, send, edit, delete, react, open DMs and upload
                 files in this Slack workspace" above an archive read — a

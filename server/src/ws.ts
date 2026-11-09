@@ -29,6 +29,7 @@ import {
 import {
   type AgentQuestion,
   CLOSE_RUNNER_DISPLACED,
+  CLOSE_RUNNER_FOREIGN_PANE,
   type NotifyStatus,
   type RunnerFrame,
   type ServerFrame,
@@ -1864,9 +1865,25 @@ export function attachWsServer(deps: {
       const runnerSpeaksFor = socketNodeId(req.headers);
       if (!nodeOwnershipOk(runnerPane.node_id ?? null, runnerSpeaksFor)) {
         console.warn(
-          `[ws] refused runner for pane ${paneId}: socket speaks for ${runnerSpeaksFor}, pane lives on ${runnerPane.node_id ?? LOCAL_NODE_ID}`,
+          `[ws] refused runner for pane ${paneId}: socket speaks for ${runnerSpeaksFor}, pane lives on ${runnerPane.node_id ?? LOCAL_NODE_ID} — telling it to exit`,
         );
-        refuseUpgrade(socket, 'pane belongs to another machine');
+        // ── REFUSE BY CLOSING, NOT BY SLAMMING THE DOOR ────────────────────
+        // This used to call `refuseUpgrade`, which (a) answers with "set
+        // MUXPAD_ALLOWED_ORIGINS", a reason that has nothing to do with
+        // ownership, and (b) gives the runner no close code — so its error
+        // path retried every two seconds, forever. One stray local runner
+        // for a trayo pane wrote 180,397 refusal lines over four days, and
+        // the chat it belonged to queued every message with nothing to drain
+        // it.
+        //
+        // The upgrade is ACCEPTED and immediately closed with a code that
+        // means stop. That is not a weaker check — the request is already
+        // past authentication and CSRF, and ownership is a routing fact, not
+        // an authorisation one — and it reuses the exit path the runner
+        // already honours for 4001.
+        wss.handleUpgrade(req, socket, head, (ws) => {
+          ws.close(CLOSE_RUNNER_FOREIGN_PANE, 'pane belongs to another machine');
+        });
         return;
       }
       wss.handleUpgrade(req, socket, head, (ws) => {

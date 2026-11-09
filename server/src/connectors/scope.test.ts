@@ -101,9 +101,40 @@ describe('the policy file', () => {
     };
   };
 
-  it('is UNSCOPED when absent — the state this ships in', async () => {
+  it('SEALS when absent — a missing policy is a broken install, not consent', async () => {
+    // Absent used to be UNSCOPED, which was right while scoping was being
+    // rolled out: an install with no policy had to keep working. It is wrong
+    // now that scoping is the live arrangement, because it means DELETING A
+    // FILE switches every restraint off, silently.
     const { loadPolicy } = await import('./scope.js');
-    expect(loadPolicy('/nonexistent/connectors.json')).toEqual(UNSCOPED);
+    const p = loadPolicy('/nonexistent/connectors.json');
+    expect(p.enforce).toBe(true);
+    expect(p.problem).toMatch(/missing/);
+    expect(p.allow).toEqual({});
+  });
+
+  it('SEALS an `enforce` that is not a boolean — "true" is not true', async () => {
+    // The most likely way to mistype this file. It read as FALSE and allowed
+    // everything: a policy whose central switch cannot be read is a policy
+    // that cannot be obeyed.
+    // Asserted through `trustedBytes` — the path a real installed file takes.
+    // `readPolicy` is the lenient variant for values from anywhere else.
+    const { trustedBytes } = await import('./scope.js');
+    const at = '/Library/muxpad/connectors.json';
+    for (const bad of ['"true"', '1', '0', 'null', '"yes"']) {
+      const p = trustedBytes(`{"enforce": ${bad}, "allow": {"slack": ["trayo"]}}`, at);
+      expect(p.enforce, bad).toBe(true);
+      expect(p.problem, bad).toBeTruthy();
+      expect(p.allow, bad).toEqual({});
+    }
+    // …and a missing key is just as ambiguous.
+    expect(trustedBytes('{"allow": {"slack": ["trayo"]}}', at).problem).toBeTruthy();
+    // A real boolean still works, both ways.
+    expect(trustedBytes('{"enforce": false, "allow": {}}', at).enforce).toBe(false);
+    expect(trustedBytes('{"enforce": true, "allow": {"slack": ["trayo"]}}', at).enforce).toBe(true);
+    expect(
+      trustedBytes('{"enforce": true, "allow": {"slack": ["trayo"]}}', at).problem,
+    ).toBeUndefined();
   });
 
   it('SEALS everything when the file is not root-owned', async () => {
@@ -446,11 +477,11 @@ describe('the policy file, every branch', () => {
     );
   });
 
-  it('is UNSCOPED only for ENOENT, and seals on every other open failure', async () => {
-    const { loadPolicy, UNSCOPED: U } = await import('./scope.js');
+  it('seals on EVERY open failure, ENOENT included', async () => {
+    const { loadPolicy } = await import('./scope.js');
     const io = okIO();
     for (const [code, expectSealed] of [
-      ['ENOENT', false],
+      ['ENOENT', true],
       ['EACCES', true],
       ['ELOOP', true],
       ['ENOTDIR', true],
@@ -460,12 +491,11 @@ describe('the policy file, every branch', () => {
         throw Object.assign(new Error(String(code)), code ? { code } : {});
       };
       const p = loadPolicy('/Library/muxpad/connectors.json', io);
-      if (expectSealed) {
-        expect(p.enforce, String(code)).toBe(true);
-        expect(p.problem, String(code)).toMatch(/could not be opened/);
-      } else {
-        expect(p, String(code)).toEqual(U);
-      }
+      expect(expectSealed, 'every open failure seals now').toBe(true);
+      expect(p.enforce, String(code)).toBe(true);
+      expect(p.problem, String(code)).toMatch(
+        code === 'ENOENT' ? /missing/ : /could not be opened/,
+      );
     }
   });
 

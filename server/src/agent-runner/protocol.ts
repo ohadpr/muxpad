@@ -305,6 +305,20 @@ export type ServerFrame =
  * path might reuse by accident.
  */
 export const CLOSE_RUNNER_DISPLACED = 4001;
+/**
+ * This pane lives on another machine — stop, do not reconnect.
+ *
+ * A runner started LOCALLY for a pane whose `node_id` is a remote host is
+ * refused by the ownership check, and refusing is right. What was missing is
+ * a way to say so: the refusal happened at the HTTP upgrade, so there was no
+ * close code, the runner's error path retried every two seconds, and one
+ * stray process wrote 180,397 refusal lines over four days while the chat it
+ * belonged to silently queued every message.
+ *
+ * Same lesson as 4001: the loser's correct move is to exit, and it can only
+ * take that move if it is told.
+ */
+export const CLOSE_RUNNER_FOREIGN_PANE = 4002;
 
 export function parseFrame<T>(data: unknown): T | null {
   try {

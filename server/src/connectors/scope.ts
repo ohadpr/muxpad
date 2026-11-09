@@ -141,7 +141,13 @@ export function parsePolicy(raw: string | null | undefined): ConnectorPolicy | n
       if (nodes.length > 0) allow[k] = nodes;
     }
   }
-  return { enforce: o.enforce === true, allow };
+  // ── `enforce` MUST BE A BOOLEAN ───────────────────────────────────────
+  // It was `o.enforce === true`, so `"true"` — a string, and the most likely
+  // way to mistype this file — read as FALSE and allowed everything. A policy
+  // whose central switch cannot be read is a policy we cannot obey, so this
+  // returns null and the caller seals it.
+  if (typeof o.enforce !== 'boolean') return null;
+  return { enforce: o.enforce, allow };
 }
 
 export interface ScopeDecision {
@@ -214,20 +220,21 @@ export function trustedBytes(raw: string, path: string): ConnectorPolicy & { pro
 /**
  * Load the policy from disk.
  *
- * Absent file → UNSCOPED, which is the fresh-install state and the state this
- * ships in. Present but untrusted → everything refused, loudly. Present and
- * trusted → whatever it says.
+ * EVERY failure refuses. Absent, untrusted, unparseable, or an `enforce` that
+ * is not a boolean — all of them seal.
+ *
+ * Absent used to mean UNSCOPED, and that was right while scoping was being
+ * rolled out: an install with no policy had to keep working. It is wrong now
+ * that scoping is the live arrangement, because it means DELETING A FILE
+ * switches every restraint off, silently. There is a policy on this machine;
+ * its absence is a broken install, not consent.
  */
 export function loadPolicy(
   path: string = POLICY_PATH,
   io: FileIO = realIO,
 ): ConnectorPolicy & { problem?: string } {
   const file = loadTrustedText(path, io);
-  // ONLY "it is not there" is unscoped. Every other failure — a directory
-  // chmod 0 above it, a symlink, an unreadable file — is a policy we cannot
-  // read, and reading that as "no policy" would let an agent turn scoping off
-  // by making the file unreadable.
-  if (file.kind === 'absent') return UNSCOPED;
+  if (file.kind === 'absent') return sealed(`connector policy missing at ${path}`);
   if (file.kind === 'untrusted') return sealed(file.problem);
   return trustedBytes(file.text, path);
 }

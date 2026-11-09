@@ -25,6 +25,7 @@ import { createBackend } from './backends/index.js';
 import type { AgentBackend, RunnerHost } from './backends/types.js';
 import {
   CLOSE_RUNNER_DISPLACED,
+  CLOSE_RUNNER_FOREIGN_PANE,
   type RunnerFrame,
   type ServerFrame,
   parseAgentMode,
@@ -317,6 +318,16 @@ function connect(): void {
     // the survivor.
     if (code === CLOSE_RUNNER_DISPLACED) {
       log('another runner took over this pane — exiting');
+      shutdown(0);
+      return;
+    }
+    // THIS PANE IS NOT OURS TO RUN. Started locally for a pane whose row says
+    // it lives on another machine: the server refuses the registration, and
+    // reconnecting cannot change that. Retrying did, though — every two
+    // seconds, for days, with the chat queueing messages that nothing would
+    // ever drain.
+    if (code === CLOSE_RUNNER_FOREIGN_PANE) {
+      log('this pane belongs to another machine — exiting');
       shutdown(0);
       return;
     }
