@@ -26,6 +26,17 @@ const TITLES: Record<string, (p: Payload) => string> = {
   'slack.upload': (p) => `Uploaded a file to ${channel(p)}`,
   'slack.react': (p) => `Reacted in ${channel(p)}`,
   'slack.unpost': (p) => `Deleted a message in ${channel(p)}`,
+  // The archive's reads get titles too, or the card shows a bare action name.
+  // Each says WHAT WAS READ: a card that says "search" is a card that tells
+  // you nothing about what left the archive.
+  'msgvault.search': (p) => `Searched the archive for ${JSON.stringify(p.query ?? '')}`,
+  'msgvault.show-message': (p) => `Read archived message ${String(p.id ?? '')}`,
+  'msgvault.show-thread': (p) => `Read an archived thread (${String(p.id ?? '')})`,
+  'msgvault.list-senders': () => 'Listed the archive’s top senders',
+  'msgvault.stats': () => 'Read archive totals',
+  'msgvault.meetings': (p) =>
+    p.query ? `Searched meetings for ${JSON.stringify(p.query)}` : 'Read meeting context',
+  'msgvault.person': (p) => `Looked up the contact ${JSON.stringify(p.query ?? '')}`,
 };
 
 interface Payload {
@@ -34,6 +45,9 @@ interface Payload {
   text?: unknown;
   emoji?: unknown;
   filename?: unknown;
+  /** msgvault reads: the message id, or the query that was run. */
+  id?: unknown;
+  query?: unknown;
 }
 
 /**

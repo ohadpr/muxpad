@@ -113,6 +113,30 @@ function Glyph({ kind }: { kind: string }) {
   switch (actionIntegration(kind)) {
     case 'slack':
       return <SlackLogo />;
+    case 'msgvault':
+      // AN ARCHIVE TRAY. msgvault fell through to the generic arrow — the
+      // same "unrecognised integration in its own chat" that publish wore on
+      // its first outing, and the one this switch exists to prevent. It is
+      // also the wrong SHAPE of wrong here: a card about somebody's mail
+      // should not be ambiguous about which system it touched, on a machine
+      // where another connector is deliberately not allowed.
+      return (
+        // biome-ignore lint/a11y/noSvgWithoutTitle: decorative — the wrapper is aria-hidden and the card's text carries the meaning
+        <svg viewBox="0 0 16 16" width="15" height="15" fill="none">
+          <path
+            d="M1.8 9.2h3.4l1 1.6h3.6l1-1.6h3.4"
+            stroke="currentColor"
+            strokeWidth="1.3"
+            strokeLinejoin="round"
+          />
+          <path
+            d="M1.8 9.2 3.9 3.3A1 1 0 0 1 4.85 2.6h6.3a1 1 0 0 1 .95.7l2.1 5.9v3a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1Z"
+            stroke="currentColor"
+            strokeWidth="1.3"
+            strokeLinejoin="round"
+          />
+        </svg>
+      );
     case 'publish':
       // A GLOBE, because that is what publishing means here: the artifact is
       // on the public internet at a url anybody with the link can open. This
