@@ -420,60 +420,94 @@ ${name} "$@"
 });
 
 /**
- * `muxpad msgvault` — the same discipline, a different shape.
+ * `muxpad msgvault` — THE SAME DOOR, NOT A SECOND ONE.
  *
- * Slack's restraint is a server that holds the token. msgvault's is the
- * DAEMON: a delegated grant with read permissions only, enforced on the other
- * side of a local API, which refuses `query`, every `export-*`, `export-token`
- * and `draft-compose` outright. This script therefore enforces nothing — it
- * runs as the agent's own user, where anything it enforced the agent could
- * edit out. What it must not do is know a path.
+ * It was a pass-through for about an hour: the agent's argv handed to the real
+ * binary with a read-only grant it could read. The owner named the hole —
+ * "what's the benefit if the user doesn't approve?" — and he was right. The
+ * threat model behind that version was wrong: approval here is about
+ * CONFIDENTIALITY, not side effects, and a grant any agent can pick up
+ * unattended is an agent that can read years of somebody's mail.
+ *
+ * So these assertions are mostly about ABSENCE, like Slack's above: no
+ * credential, no path, no argv, no escape hatch.
  */
-describe('msgvault knows no paths of its own', () => {
-  it('reads the binary, the url and the grant from the root-owned declaration', () => {
+describe('msgvault goes through the broker, holding nothing', () => {
+  const body = (() => {
     const fn = CODE.slice(CODE.indexOf('cmd_msgvault() {'));
-    const body = fn.slice(0, fn.indexOf('\n}\n'));
-    expect(body).toMatch(/\.msgvault\.binary/);
-    expect(body).toMatch(/\.msgvault\.agentUrl/);
-    expect(body).toMatch(/\.msgvault\.tokenFile/);
-    expect(body).toMatch(/MSGVAULT_DECL/);
-    // An absent declaration is NOT CONFIGURED. A default here would be the
-    // hardcoding wearing a hat — and it would point the grant somewhere
-    // nobody chose.
+    return fn.slice(0, fn.indexOf('\n}\n'));
+  })();
+
+  it('holds no credential and names no path to one', () => {
+    // The grant is 0600 and owned by the broker's account; this process could
+    // not read it if it tried. What matters here is that it does not try.
+    expect(body).not.toMatch(/msgvault-agent-token/);
+    expect(body).not.toMatch(/integrations\.json/);
     expect(body).not.toMatch(/\/usr\/local\//);
-    expect(body).not.toMatch(/127\.0\.0\.1/);
+    expect(body).not.toMatch(/agent-token-file|agent-url|agent-allow-insecure/);
+    expect(CODE).not.toMatch(/MSGVAULT_DECL/);
   });
 
-  it('declares the file root-owned, and never reads the secret itself', () => {
-    expect(CODE).toMatch(/MSGVAULT_DECL=\/Library\/muxpad\/integrations\.json/);
-    // The token is handed to msgvault as a PATH. muxpad never opens it, so
-    // there is no step at which it could be printed, logged or forwarded.
-    const fn = CODE.slice(CODE.indexOf('cmd_msgvault() {'));
-    const body = fn.slice(0, fn.indexOf('\n}\n'));
-    expect(body).toMatch(/--agent-token-file "\$tok"/);
-    expect(body).not.toMatch(/cat "\$tok"|\$\(<\s*"\$tok"/);
+  it('never execs the binary — every call is a request to the server', () => {
+    expect(body).not.toMatch(/exec "/);
+    expect(body).not.toMatch(/\$bin/);
+    expect(body).toMatch(/slack_call GET "\/api\/msgvault\//);
+    // …through the one function that waits for the approval to resolve.
+    expect(CODE).toMatch(/slack_call\(\) \{/);
   });
 
-  it('calls helpers this script actually defines', () => {
-    // `need jq` was written here and there is no `need` — every msgvault call
-    // died with "command not found" before it reached the declaration. A
-    // shell function that does not exist is a runtime error, not a syntax
-    // one, so `bash -n` is clean and only running it finds out.
-    const fn = CODE.slice(CODE.indexOf('cmd_msgvault() {'));
-    const body = fn.slice(0, fn.indexOf('\n}\n'));
-    for (const call of body.match(/^\s*([a-z_][a-z0-9_]*)\b(?= )/gm) ?? []) {
-      const name = call.trim();
-      if (!/^(require_jq|json_string|need_pane|die)$/.test(name)) continue;
-      expect(CODE, `${name} is called but never defined`).toMatch(
-        new RegExp(`^${name}\\(\\) \\{`, 'm'),
-      );
-    }
-    expect(body).toMatch(/require_jq/);
+  it('identifies the caller the same way Slack does, and cannot assert it', () => {
+    // $MUXPAD_PANE_ID alone was the old hole: a value any caller can set. The
+    // server-minted key beside it is what makes the id believable.
+    expect(body).toMatch(/slack_require_pane/);
+    expect(body).toMatch(/pane=\$MUXPAD_PANE_ID&key=\$MUXPAD_PANE_KEY/);
   });
 
-  it('passes the agent’s own argv through, inventing no dialect', () => {
-    const fn = CODE.slice(CODE.indexOf('cmd_msgvault() {'));
-    const body = fn.slice(0, fn.indexOf('\n}\n'));
-    expect(body).toMatch(/exec "\$bin" .*"\$@"/s);
+  it('offers a FIXED set of verbs, with no escape to arbitrary arguments', () => {
+    // An escape would be the pass-through again, and the pass-through is the
+    // thing that had no dialog in front of it.
+    const verbs = [
+      'search',
+      'show-message',
+      'show-thread',
+      'list-senders',
+      'stats',
+      'meetings',
+      'person',
+    ];
+    for (const v of verbs) expect(body, v).toContain(v);
+    // Nothing forwards the caller's remaining words wholesale.
+    expect(body).not.toMatch(/"\$@"/);
+  });
+
+  it('calls exactly seven endpoints, all of them reads', () => {
+    // Asserted as a SET rather than by searching for forbidden words, because
+    // `senders` contains "send" and a test that fails on a reading verb is a
+    // test somebody edits away. The writes are not missing from this list by
+    // omission — there is no action name for them anywhere in the broker.
+    const called = new Set([...body.matchAll(/\/api\/msgvault\/([a-z-]+)/g)].map((m) => m[1]));
+    expect([...called].sort()).toEqual([
+      'meetings',
+      'message',
+      'person',
+      'search',
+      'senders',
+      'stats',
+      'thread',
+    ]);
+  });
+
+  it('says in its own help that each call is approved', () => {
+    const usage = CODE.slice(CODE.indexOf('msgvault_usage() {'));
+    expect(usage.slice(0, usage.indexOf('\n}\n'))).toMatch(/approve/i);
+  });
+
+  it('labels its own errors, rather than calling itself Slack', () => {
+    // `slack_call` is the generic approval wait loop; only the word was
+    // Slack's. An archive refusal that printed "muxpad: slack:" would be the
+    // prompt naming the wrong system, one layer down.
+    expect(body).toMatch(/BROKER_LABEL=msgvault/);
+    expect(CODE).toMatch(/BROKER_LABEL=slack/);
+    expect(CODE).not.toMatch(/printf 'muxpad: slack: %s/);
   });
 });
