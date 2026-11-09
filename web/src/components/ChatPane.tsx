@@ -150,6 +150,7 @@ import {
 } from '../lib/upload-queue';
 import type { AgentLink } from '../lib/voice/session';
 import { useVoice } from '../lib/voice/use-voice';
+import { workingHint } from '../lib/working-hint';
 import { workingVariantFor } from '../lib/working-variant';
 import { insertTabRow } from '../tabs';
 import { ActionCard } from './ActionCard';
@@ -4866,6 +4867,15 @@ export function ChatPane({
   // apart until the decision moved next to the bar's own.
   const unresolvedTool = agentWorking ? (toolIndex.unresolvedTools[0] ?? null) : null;
   const workingLabel = workingRowLabel(unresolvedTool?.name);
+  // ── AND WHAT IT LAST SAID IT WAS DOING ────────────────────────────────
+  // One line, from text the chat is HIDING, replaced rather than appended,
+  // gone when the turn ends. See lib/working-hint for why this is not the
+  // live scratchpad the comment below declines to stream.
+  //
+  // Derived from `voiced` rather than `events`: that is the list the reader
+  // actually sees, so "is this already on screen" is asked of the same thing
+  // that answers it.
+  const hint = useMemo(() => (agentWorking ? workingHint(voiced) : null), [agentWorking, voiced]);
 
   // The live roster is the union of two sources, and they cover each other's
   // blind spot:
@@ -5524,6 +5534,10 @@ export function ChatPane({
                       {workingLabel ? (
                         <span className="chat-working-label">{workingLabel}</span>
                       ) : null}
+                      {/* The clue, if there is one. One line, clamped by CSS
+                          as well as by the derivation — a long sentence must
+                          never wrap this row into a paragraph. */}
+                      {hint ? <span className="chat-working-hint">{hint}</span> : null}
                     </div>
                   )}
                   {/* ── STOP LIVES WITH THE TURN IT STOPS ─────────────────────
