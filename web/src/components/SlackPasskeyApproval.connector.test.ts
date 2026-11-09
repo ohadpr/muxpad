@@ -17,8 +17,11 @@ import { describe, expect, it } from 'vitest';
  * Fourth instance of this defect in one day — the broker's dialog, the CLI's
  * messages, the broker's error text, and this. Hence a test.
  */
-const SRC = readFileSync(join(__dirname, 'SlackPasskeyApproval.tsx'), 'utf8');
-const CODE = SRC.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+const strip = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+const CODE = strip(readFileSync(join(__dirname, 'SlackPasskeyApproval.tsx'), 'utf8'));
+/* What a request SAYS it is now lives in one module, so the heading, the
+   limits and the marks cannot drift apart. */
+const DESC = strip(readFileSync(join(__dirname, '..', 'lib', 'approval-request.ts'), 'utf8'));
 
 describe('the approval card follows the request', () => {
   it('derives the connector from the action, never from a default', () => {
@@ -45,21 +48,41 @@ describe('the approval card follows the request', () => {
     }
   });
 
-  it('labels every msgvault verb with what it reads — and only the live ones', () => {
-    // A label for a verb the broker no longer accepts describes a request
-    // that can never arrive.
+  it('describes every msgvault verb by what it reads — and only the live ones', () => {
+    // A description of a verb the broker no longer accepts describes a
+    // request that can never arrive.
     for (const dead of ['msgvault.list-senders', 'msgvault.meetings', 'msgvault.person'])
-      expect(CODE, dead).not.toContain(`'${dead}':`);
+      expect(DESC, dead).not.toContain(`'${dead}'`);
     for (const action of [
       'msgvault.search',
       'msgvault.show-message',
       'msgvault.show-thread',
       'msgvault.stats',
     ]) {
-      const label = new RegExp(`'${action}': '([^']+)'`).exec(CODE);
-      expect(label, `${action} has no label`).toBeTruthy();
-      expect(label?.[1]?.length ?? 0).toBeGreaterThan(8);
+      const title = new RegExp(`'${action}': \\{[\\s\\S]*?title: \\(\\) => '([^']+)'`).exec(DESC);
+      expect(title, `${action} has no heading`).toBeTruthy();
+      expect(title?.[1]?.length ?? 0).toBeGreaterThan(8);
     }
+  });
+
+  it('decides the mark from the verb alone, never from the payload', () => {
+    // A mark guessed from a query that says "standup" is wrong the moment
+    // somebody emails about a standup, and a mark that lies about what is
+    // being read is worse than no mark at all.
+    expect(DESC).toMatch(/const MARKS: Record<string, readonly SourceMark\[\]>/);
+    expect(DESC).toMatch(/'msgvault.stats': \['gmail', 'calendar', 'contacts'\]/);
+    const marksFor = DESC.slice(DESC.indexOf('export const marksFor'));
+    expect(marksFor.slice(0, 200)).not.toMatch(/payload|query/);
+    // …and the card asks for them by action, not by connector.
+    expect(CODE).toMatch(/marksFor\(request\.action\)/);
+  });
+
+  it('never hides part of the request behind a disclosure', () => {
+    // The card used to put the query in 0.75rem inside a collapsed
+    // <details>. A security prompt that conceals part of what it is about is
+    // asking for approval of something it did not show.
+    expect(CODE).not.toContain('<details');
+    expect(CODE).toMatch(/described\.rest\.map/);
   });
 
   it('sends the REQUEST’s timed scope, not Slack’s', () => {

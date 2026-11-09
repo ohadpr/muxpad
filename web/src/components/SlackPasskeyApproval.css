@@ -14,9 +14,10 @@
   background: rgb(0 0 0 / 0.5);
 }
 .slack-passkey-dialog h2 {
-  font-size: 1.125rem;
-  line-height: 1.3;
-  margin: 20px 0;
+  font-size: 1.0625rem;
+  line-height: 1.25;
+  margin: 0;
+  font-weight: 650;
 }
 .slack-passkey-brand,
 .slack-passkey-actions {
@@ -206,4 +207,103 @@ dialog.slack-passkey-dialog button:active:not(:disabled) {
 dialog.slack-passkey-dialog button:disabled {
   opacity: 0.6;
   cursor: default;
+}
+
+/* ── THE ASK IS THE HEADLINE ────────────────────────────────────────────────
+   The card used to open with a brand pair and a generic sentence, and put the
+   query — the only thing the decision turns on — in 0.75rem behind a
+   disclosure triangle. The order is inverted: mark, verb, argument. */
+.slack-passkey-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.slack-passkey-headtext {
+  min-width: 0;
+}
+.slack-passkey-qualifier {
+  margin: 2px 0 0;
+  color: var(--fg-dim);
+  font-size: 0.75rem;
+}
+.slack-passkey-marks {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+/* The marks are the one place a third party's colours appear, so they sit on
+   their own ground rather than on the dialog's — otherwise a white Gmail
+   envelope on a white card has no edge at all in a light theme. */
+.slack-passkey-mark {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+/* THE ARGUMENT, at the size that implies. */
+.slack-passkey-payload {
+  margin: 0;
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  font: 0.8125rem / 1.5 var(--term-font, monospace);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  /* A 40-line draft must not push the buttons off a phone. */
+  max-height: 11rem;
+  overflow: auto;
+}
+
+/* EVERYTHING ELSE THAT WILL BE SENT — visible, not behind a triangle. */
+.slack-passkey-rest {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  margin: 12px 0 0;
+  font-size: 0.75rem;
+}
+.slack-passkey-rest > div {
+  display: contents;
+}
+.slack-passkey-rest dt {
+  color: var(--fg-dim);
+  font-size: 0.75rem;
+}
+.slack-passkey-rest dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  font: 0.75rem / 1.5 var(--term-font, monospace);
+}
+
+/* WHO ASKED AND FOR HOW LONG — one row, one question. It wraps to two on a
+   narrow phone, and the refusal note (a sentence, not a control) always takes
+   its own line. */
+.slack-passkey-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin: 16px 0 0;
+}
+.slack-passkey-foot .slack-passkey-note {
+  margin: 0;
+}
+.slack-passkey-foot .slack-passkey-duration {
+  margin: 0;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.slack-passkey-foot > .slack-passkey-note:only-child,
+.slack-passkey-foot > .slack-passkey-note + .slack-passkey-note {
+  flex: 1 1 100%;
 }
