@@ -162,6 +162,90 @@ describe('living sidebar — tab ordering + pinning', () => {
     expect(await names()).toEqual(['A', 'B']);
   });
 
+  /**
+   * A CHAT SPEAKS FOR THE WORK IT STARTED.
+   *
+   * Sub-chats are not rows on the rail — they live in the parent's drawer —
+   * so a parent whose own pane is idle while its workers grind had no
+   * indication anywhere on screen. Reported as "the main chat shows no
+   * activity but it has two active sub-chats".
+   */
+  describe('a parent carries its live sub-chats', () => {
+    const paneOf = async (tabId: string) =>
+      (
+        (await (
+          await test.app.request(`/api/tabs/${tabId}/panes`, { method: 'POST', ...json({}) })
+        ).json()) as { id: string }
+      ).id;
+    const spawn = (childId: string, parentId: string) =>
+      db.prepare('UPDATE tabs SET spawned_by = ? WHERE id = ?').run(parentId, childId);
+    const rowFor = async (name: string) =>
+      (await list()).find((t) => t.name === name) as Tab & { status?: string; agents?: number };
+
+    it('shows working while a sub-chat works, and stops when it stops', async () => {
+      const parent = await makeTab('P');
+      const child = await makeTab('C');
+      await paneOf(parent.id);
+      const cp = await paneOf(child.id);
+      spawn(child.id, parent.id);
+      expect((await rowFor('P')).status).toBe('idle');
+
+      test.cache.setAgentBusy(cp, true);
+      expect(await rowFor('P')).toMatchObject({ status: 'working', agents: 1 });
+      // …and the parent's own pane never started a turn.
+      test.cache.setAgentBusy(cp, false);
+      expect((await rowFor('P')).status).toBe('idle');
+    });
+
+    it('a sub-chat that wants a human outranks everything on the parent', async () => {
+      // `blocked` has no other way to reach the glance: the child is not a row.
+      const parent = await makeTab('P');
+      const child = await makeTab('C');
+      const pp = await paneOf(parent.id);
+      const cp = await paneOf(child.id);
+      spawn(child.id, parent.id);
+      test.cache.setAgentBusy(pp, true);
+      test.cache.setBlocked(cp, true);
+      expect((await rowFor('P')).status).toBe('blocked');
+    });
+
+    it('a FINISHED sub-chat does not mark the parent', async () => {
+      // A child's result comes back as a message, which already marks the
+      // chat unread. A ✓ that outlives the reading of that message is a mark
+      // nobody can clear.
+      const parent = await makeTab('P');
+      const child = await makeTab('C');
+      await paneOf(parent.id);
+      const cp = await paneOf(child.id);
+      spawn(child.id, parent.id);
+      db.prepare('UPDATE panes SET unread = 1 WHERE id = ?').run(cp);
+      expect((await rowFor('P')).status).toBe('idle');
+    });
+
+    it('a retired sub-chat stops counting for anything', async () => {
+      const parent = await makeTab('P');
+      const child = await makeTab('C');
+      await paneOf(parent.id);
+      const cp = await paneOf(child.id);
+      spawn(child.id, parent.id);
+      test.cache.setAgentBusy(cp, true);
+      expect((await rowFor('P')).status).toBe('working');
+      db.prepare('UPDATE tabs SET retired_at = ? WHERE id = ?').run(Date.now(), child.id);
+      expect(await rowFor('P')).toMatchObject({ status: 'idle', agents: 0 });
+    });
+
+    it('the child still speaks for itself', async () => {
+      // Rolling up must not swallow the child's own row wherever it IS shown.
+      const parent = await makeTab('P');
+      const child = await makeTab('C');
+      await paneOf(parent.id);
+      const cp = await paneOf(child.id);
+      spawn(child.id, parent.id);
+      test.cache.setAgentBusy(cp, true);
+      expect((await rowFor('C')).status).toBe('working');
+    });
+  });
+
   it('null last_activity_at (a migrated row) sinks below every known timestamp', async () => {
     const a = await makeTab('A');
     const b = await makeTab('B');
