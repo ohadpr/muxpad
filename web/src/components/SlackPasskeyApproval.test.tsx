@@ -383,7 +383,12 @@ it('leads with the ask and shows the whole payload without a disclosure', async 
 
 it('puts the mark that says what is read beside the verb, and the Slack workspace with who asked', async () => {
   pending = [
-    { ...request, action: 'msgvault.stats', payload: {}, origin: 'local' } as unknown as typeof request,
+    {
+      ...request,
+      action: 'msgvault.stats',
+      payload: {},
+      origin: 'local',
+    } as unknown as typeof request,
   ];
   await render();
   expect(host.querySelector('h2')!.textContent).toBe('Read archive totals');
@@ -521,4 +526,21 @@ it('confirmed Deny never reopens the same request from a stale pending snapshot'
   });
   expect(host.querySelector('dialog')!.open).toBe(false);
   expect(passkeyCeremony).toHaveBeenCalledTimes(1);
+});
+
+it('offers an approval that lasts until revoked, and says what that actually means', async () => {
+  await render();
+  const options = [...host.querySelectorAll('option')].map((o) => (o as HTMLOptionElement).value);
+  expect(options).toEqual(['once', '10m', '1h', '1d', 'until-revoked']);
+  await act(async () => {
+    const select = host.querySelector('select')!;
+    select.value = 'until-revoked';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  // NOT "forever". Broker grants live in memory and cannot outlive the
+  // session that minted them, so the dialog must not promise persistence it
+  // does not have.
+  expect(host.textContent).not.toMatch(/forever/i);
+  expect(host.textContent).toContain('when the broker restarts');
+  expect(host.textContent).toContain('not stored on disk');
 });

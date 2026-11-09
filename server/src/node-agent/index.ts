@@ -13,6 +13,7 @@ import {
   projectsDir,
 } from '../chat/TranscriptReader.js';
 import { LinkServer, linkUpgradeKind } from './link-server.js';
+import { readOriginIdentity } from './origin-identity.js';
 
 /**
  * MUXPAD-NODE — the front door of a machine that is not the one with the UI.
@@ -275,6 +276,12 @@ export async function startNodeAgent(opts: NodeAgentOptions): Promise<{ close: (
           },
         }
       : {}),
+    /**
+     * Read PER SIGNATURE, not cached: rotating the key is then a file write,
+     * where caching would make it a node-agent restart — and a restart here
+     * drops every pane's link on this machine.
+     */
+    originKey: () => readOriginIdentity(dataDir),
     makeTail: (sid, assistant, sink, tailBytes) =>
       new TranscriptTail(sid, {
         ...(tailBytes === undefined ? {} : { tailBytes }),
@@ -356,7 +363,26 @@ export async function startNodeAgent(opts: NodeAgentOptions): Promise<{ close: (
         return;
       }
     }
-    const out = await link.callApi(req.method ?? 'GET', req.url ?? '/', body);
+    /**
+     * WHAT THE CALLER SAYS THIS CALL IS FOR.
+     *
+     * A label from the in-pane CLI (`x-muxpad-connector-action: slack.post`),
+     * carried no further than this machine: the control plane never sees it,
+     * and it is used for exactly one thing — refusing to sign an action the
+     * caller did not ask for, when the server later asks this host to prove
+     * the request is its own. See LinkServer#signOrigin.
+     *
+     * Unvalidated beyond a charset, because it is not authority. A caller
+     * that lies about its own action only narrows what it can get signed.
+     */
+    const declared = req.headers['x-muxpad-connector-action'];
+    const action = (Array.isArray(declared) ? declared[0] : declared) ?? '';
+    const out = await link.callApi(
+      req.method ?? 'GET',
+      req.url ?? '/',
+      body,
+      /^[a-z][a-z0-9]*\.[a-z][a-z0-9-]*$/.test(action) ? action : undefined,
+    );
     reply(out.status, out.body, out.contentType ?? 'application/json');
   }
 

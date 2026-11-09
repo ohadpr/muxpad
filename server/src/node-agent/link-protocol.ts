@@ -36,7 +36,27 @@
  */
 
 /** Which conversation a message belongs to. */
-export type LinkChannel = 'ptyd' | 'transcript' | 'runner' | 'api' | 'files' | 'search';
+export type LinkChannel =
+  | 'ptyd'
+  | 'transcript'
+  | 'runner'
+  | 'api'
+  | 'files'
+  | 'search'
+  /**
+   * The host proves it is the host.
+   *
+   * `origin` has been a label the server asserts to the broker on the host's
+   * behalf, which the broker cannot check — so a lasting Slack permission
+   * bound to a remote machine would have been spendable by anything on THIS
+   * one willing to type the name. The host holds a key the broker also holds;
+   * the server asks it to sign the exact action it is about to send, and can
+   * neither forge that nor reuse it.
+   *
+   * It rides this socket because this socket is the server's, not an agent's:
+   * a process on the server's machine cannot ask for a signature at all.
+   */
+  | 'origin';
 
 /**
  * The same list, as a value, because {@link decodeLink} has to check it at
@@ -48,7 +68,15 @@ export type LinkChannel = 'ptyd' | 'transcript' | 'runner' | 'api' | 'files' | '
  * chain that had not learned about `search`, so every search frame was quietly
  * malformed and the feature reported only timeouts.
  */
-const CHANNELS = new Set(['ptyd', 'transcript', 'runner', 'api', 'files', 'search'] as const);
+const CHANNELS = new Set([
+  'ptyd',
+  'transcript',
+  'runner',
+  'api',
+  'files',
+  'search',
+  'origin',
+] as const);
 type _ChannelsCoverTheType = LinkChannel extends SetElement<typeof CHANNELS> ? true : never;
 type SetElement<S> = S extends Set<infer T> ? T : never;
 /** Asserts the set above is exhaustive; unused at runtime. */
@@ -71,6 +99,16 @@ export type LinkDown =
   | { ch: 'search'; op: 'query'; id: string; q: string; limit: number; role?: string }
   /** Send me this path's contents. See the `files` channel note. */
   | { ch: 'files'; op: 'fetch'; id: string; path: string }
+  /**
+   * Sign this action, for a call YOU are relaying.
+   *
+   * `callId` is the host's own in-flight `api` correlation id, and `action` is
+   * what the server is about to ask the broker to do. The host signs only if
+   * that call is genuinely in flight AND the action matches what its own
+   * caller declared — so a server that has been taken over cannot turn a
+   * `slack.channels` the host is relaying into a `slack.post`.
+   */
+  | { ch: 'origin'; op: 'sign'; id: string; callId: string; action: string; payload: unknown }
   /** The answer to one `api` request. `id` is the host's own correlation id. */
   | {
       ch: 'api';
@@ -148,7 +186,18 @@ export type LinkUp =
       method: string;
       path: string;
       body?: string;
-    };
+    }
+  /** The proof, for the broker. Opaque to the server, which cannot make one. */
+  | { ch: 'origin'; op: 'signed'; id: string; proof: unknown }
+  /**
+   * No signature — no key here, no such call in flight, or the action does
+   * not match what the caller asked for.
+   *
+   * Never an error the request dies on: the server sends the broker request
+   * unproven, and the human approves it once. A key rotated on one side only
+   * must make the dialog ask every time, not take the connector off the air.
+   */
+  | { ch: 'origin'; op: 'unavailable'; id: string; reason: string };
 
 export function encodeLink(m: LinkDown | LinkUp): string {
   return JSON.stringify(m);
@@ -199,5 +248,10 @@ export function hostMaySend(m: LinkDown | LinkUp): boolean {
   // that could send `query` would be asking the server to search ITS archive
   // — the direction the host-scoping rule exists to prevent.
   if (m.ch === 'search') return m.op === 'hits' || m.op === 'error';
+  // A host ANSWERS a signing request and never sends one. A host that could
+  // send `sign` would be asking this machine to sign something, which is the
+  // wrong direction for a mechanism whose whole purpose is that the HOST is
+  // the only side holding the key.
+  if (m.ch === 'origin') return m.op === 'signed' || m.op === 'unavailable';
   return m.op === 'frame' || m.op === 'attached' || m.op === 'detached';
 }

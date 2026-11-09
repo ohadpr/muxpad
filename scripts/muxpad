@@ -1035,17 +1035,49 @@ EOF
 # loop — submit, poll while pending/verifying/executing, print the result or
 # the refusal — and none of that is Slack-specific. Only the word was.
 BROKER_LABEL=slack
+# ── WHAT THIS CALL IS FOR ───────────────────────────────────────────────────
+#
+# A label, sent only to the LOCAL node agent on a remote host and never beyond
+# it. Its one job: the host refuses to sign an action its own caller did not
+# ask for, so a control plane that has been taken over cannot turn a
+# `slack.channels` somebody is relaying into a `slack.post`. See
+# LinkServer#signOrigin.
+#
+# On the machine the server runs on this header goes nowhere and costs
+# nothing — there is no node agent in the path, and `local` needs no proof.
+#
+# The two archive verbs whose PATH is not their ACTION are named explicitly;
+# everything else is `<connector>.<last path segment>`. That divergence is
+# locked to the server's own table by connector-action.test.ts, because a
+# drift here would not fail anything — it would quietly make every proof
+# unverifiable, which looks exactly like having no key.
+connector_action() {
+  local path="${1%%\?*}"
+  case "$path" in
+    /api/msgvault/message) printf 'msgvault.show-message' ;;
+    /api/msgvault/thread) printf 'msgvault.show-thread' ;;
+    /api/slack/*) printf 'slack.%s' "${path##*/}" ;;
+    /api/msgvault/*) printf 'msgvault.%s' "${path##*/}" ;;
+    *) printf '' ;;
+  esac
+}
+
 slack_call() {
   require_jq
   local method="$1" path="$2" body="${3:-}"
   local tmp status
   tmp="$(mktemp)"
+  local -a act=()
+  local declared
+  declared="$(connector_action "$path")"
+  [ -n "$declared" ] && act=(-H "x-muxpad-connector-action: $declared")
   if [ -n "$body" ]; then
     status="$(printf '%s' "$body" | curl -sS -o "$tmp" -w '%{http_code}' -X "$method" \
-      -H 'content-type: application/json' --data-binary @- \
+      -H 'content-type: application/json' ${act[@]+"${act[@]}"} --data-binary @- \
       "${MUXPAD_API_URL%/}$path")"
   else
-    status="$(curl -sS -o "$tmp" -w '%{http_code}' -X "$method" "${MUXPAD_API_URL%/}$path")"
+    status="$(curl -sS -o "$tmp" -w '%{http_code}' -X "$method" \
+      ${act[@]+"${act[@]}"} "${MUXPAD_API_URL%/}$path")"
   fi
   if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
     {

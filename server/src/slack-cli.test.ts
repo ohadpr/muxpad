@@ -116,9 +116,15 @@ describe('one identity, and the disclosure is not ours to forget', () => {
 });
 
 describe('broker CLI outcomes', () => {
-  const start = SRC.indexOf('slack_call() {');
-  const end = SRC.indexOf('\n}\n', start) + 3;
-  const fn = SRC.slice(start, end);
+  const slice = (name: string) => {
+    const at = SRC.indexOf(`${name}() {`);
+    return SRC.slice(at, SRC.indexOf('\n}\n', at) + 3);
+  };
+  // The REAL helper, not a stub: `slack_call` declares what each call is for
+  // so a remote host can refuse to sign an action its caller did not ask for,
+  // and a harness that stubbed that out would stop testing the funnel it is
+  // here to test.
+  const fn = `${slice('connector_action')}\n${slice('slack_call')}`;
   const invoke = (outcome: string) =>
     spawnSync(
       'bash',
@@ -307,6 +313,7 @@ curl() {
   *) return 9 ;;
  esac
 }
+${extract('connector_action')}
 ${extract('slack_call')}
 ${extract('slack_resolve_ref')}
 ${extract('cmd_slack_post')}

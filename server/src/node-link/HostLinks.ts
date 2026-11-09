@@ -136,13 +136,31 @@ export class HostLinks {
         // whose authority to use.
         ...(this.deps.hostApi
           ? {
+              // `m.id` travels with it so a connector call can ask THIS host
+              // to prove the request is its own — the host signs only for a
+              // call it is itself relaying. See HostApi#dispatch.
               onApiRequest: (m) =>
-                (this.deps.hostApi as HostApi).handle(nodeId, m.method, m.path, m.body),
+                (this.deps.hostApi as HostApi).handle(nodeId, m.method, m.path, m.body, m.id),
             }
           : {}),
         ...(this.deps.log ? { log: this.deps.log } : {}),
       }),
     );
+  }
+
+  /**
+   * Ask a named host to prove the call it is relaying is its own.
+   *
+   * Null when that host has no link here — which is the same answer as "no
+   * key over there", and means the same thing downstream: approve once.
+   */
+  signOrigin(
+    nodeId: string,
+    callId: string,
+    action: string,
+    payload: unknown,
+  ): Promise<unknown | null> {
+    return this.links.get(nodeId)?.signOrigin(callId, action, payload) ?? Promise.resolve(null);
   }
 
   /** The link that owns this pane, or null when it is local or unreachable. */
