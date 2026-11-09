@@ -35,7 +35,9 @@ type RequestView = {
 /** Which system a request belongs to, from the action's own prefix — so what
  *  the card says can never disagree with what is about to run. */
 const SLACK = { id: 'slack', name: 'Slack' } as const;
-const CONNECTORS = [SLACK, { id: 'msgvault', name: 'your archive' } as const];
+/* `your archive` was muxpad's word for the component, and it told a reader
+   nothing about what was being touched. It is mail. */
+const CONNECTORS = [SLACK, { id: 'msgvault', name: 'your mail' } as const];
 const connectorOf = (action: string | undefined) =>
   CONNECTORS.find((c) => c.id === String(action ?? '').split('.')[0]) ?? SLACK;
 /** Which connector a live grant belongs to. A grant names its own actions, so
@@ -495,7 +497,7 @@ export function SlackPasskeyApproval({
               <p className="slack-passkey-scope">
                 {connectorOf(request.action) === SLACK
                   ? 'All agents can read, search, send, edit, delete, react, open DMs and upload files in this Slack workspace.'
-                  : 'All agents on this machine can search and read your mail archive. It cannot send, draft or change anything.'}{' '}
+                  : 'All agents on this machine can search and read your mail. They cannot send, draft or change anything.'}{' '}
                 {duration === 'until-revoked'
                   ? ' Ends when you revoke it in Settings, when the broker restarts, or when this approval session expires — it is not stored on disk.'
                   : ' Ends within the selected period, on restart or when revoked in Settings.'}

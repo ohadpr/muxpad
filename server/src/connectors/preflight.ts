@@ -146,7 +146,12 @@ export const INTEGRATIONS: Integration[] = [
   {
     id: 'msgvault',
     label: 'msgvault — mail, calendar, contacts',
-    grants: 'search and read your archive, and create drafts. It can never send.',
+    // WHAT IT ACTUALLY GRANTS TODAY. This read "search and read your archive,
+    // and create drafts" — the second half describing the design rather than
+    // the build: the broker exposes four read verbs and no draft verb at all,
+    // so an agent asked to write one correctly says it cannot. A preflight
+    // that overstates the grant is worse than one that understates it.
+    grants: 'search and read your mail. It cannot draft, send or change anything.',
     checks: [
       {
         id: 'archive-out-of-reach',

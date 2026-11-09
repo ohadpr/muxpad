@@ -204,8 +204,13 @@ describe('every check is answerable', () => {
 
   it('says what each integration grants, in one line', () => {
     for (const i of INTEGRATIONS) expect(i.grants.length, i.id).toBeGreaterThan(20);
-    // The one promise that must survive every future edit.
-    expect(INTEGRATIONS.find((i) => i.id === 'msgvault')?.grants).toMatch(/never send/);
+    // The one promise that must survive every future edit — and it must be
+    // about what is BUILT. This line said "and create drafts" while the
+    // broker exposed four read verbs and no draft verb, so an agent asked for
+    // one correctly refused and the preflight read as a broken promise.
+    const mv = INTEGRATIONS.find((i) => i.id === 'msgvault')?.grants ?? '';
+    expect(mv).toMatch(/send/);
+    expect(mv, 'claims a capability the broker does not expose').not.toMatch(/create drafts/);
   });
 });
 

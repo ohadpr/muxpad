@@ -393,7 +393,7 @@ it('puts the mark that says what is read beside the verb, and the Slack workspac
     } as unknown as typeof request,
   ];
   await render();
-  expect(host.querySelector('h2')!.textContent).toBe('Read archive totals');
+  expect(host.querySelector('h2')!.textContent).toBe('Count your mail, calendar and contacts');
   // stats is the one verb that spans the archive — and it must say the
   // totals are not content, or three lit marks read worse than the truth.
   expect(
