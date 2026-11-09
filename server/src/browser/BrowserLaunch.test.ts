@@ -97,3 +97,29 @@ describe('the launch spec as a whole', () => {
     expect(spec.args.every((a) => typeof a === 'string')).toBe(true);
   });
 });
+
+describe('nothing it launches may reach the local network on its own', () => {
+  const args = chromeArgv({ profile: 'p', port: 9400, dataDir: '/d', chromePath: '/c' });
+
+  it('turns off Cast discovery, which is what raised the Local Network prompt', () => {
+    // Observed on the owner's real screen, from a browser with NO WINDOW:
+    // "Allow Google Chrome for Testing Helper to find devices on local
+    // networks?" — Chrome's own multicast, not anything an agent navigated
+    // to. Same family as the Keychain dialog this file already guards.
+    const features = args.find((a) => a.startsWith('--disable-features='));
+    expect(features).toBeDefined();
+    expect(features).toContain('MediaRouter');
+  });
+
+  it('does no background networking either', () => {
+    expect(args).toContain('--disable-background-networking');
+    expect(args).toContain('--disable-component-update');
+  });
+
+  it('still binds the debugger to loopback only', () => {
+    // Re-asserted beside the new flags: this machine is on a tailnet, and the
+    // one thing that must never widen is the port that drives the browser.
+    expect(args).toContain('--remote-debugging-address=127.0.0.1');
+    expect(args.some((a) => /--remote-debugging-address=(0\.0\.0\.0|::)/.test(a))).toBe(false);
+  });
+});
