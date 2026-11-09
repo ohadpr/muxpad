@@ -248,6 +248,37 @@ export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
     const verb = classify(action);
     if (!verb.ok) throw new SlackRefused(action, payload, pane, verb.reason ?? 'refused');
 
+    // ── CAN THIS PANE BE ASKED? ───────────────────────────────────────────
+    //
+    // The approval dialog is mounted by ChatPane and the broker's pending
+    // list is scoped to the pane that asked. So a connector call from a
+    // TERMINAL pane created a request nobody was ever shown: it sat for five
+    // minutes and expired, and the caller saw a hang with no explanation.
+    //
+    // Refused HERE rather than in the CLI, and AFTER the policy gate above,
+    // because those are the two halves of getting this right:
+    //
+    //   · after the gate, so a policy refusal still reaches a terminal — the
+    //     whole point of "slack is scoped to trayo" is that you can run it
+    //     anywhere and be told clearly;
+    //   · before the broker request, because the broker has no cancel
+    //     endpoint. A request made and then abandoned is exactly the silent
+    //     expiry this is removing.
+    //
+    // THE COST, stated rather than hidden: a terminal pane also loses calls
+    // that would have ridden an existing timed grant and needed no dialog at
+    // all. muxpad cannot know which those are without asking the broker, and
+    // a call that sometimes hangs is worse than one that always explains
+    // itself.
+    const asking = panes.getById(pane);
+    if (asking && asking.face !== 'chat')
+      throw new SlackRefused(
+        action,
+        payload,
+        pane,
+        `${connector} needs your approval, and approvals appear in a chat — this is a ${asking.face} pane, so the request would wait for a dialog nobody can see. Run it from a chat pane, or ask that chat to run it.`,
+      );
+
     // ── WHICH MACHINE IS ASKING ──────────────────────────────────────────
     // `mayPaneUse` already resolved it from the pane's own row, and it was
     // being thrown away: every request reached the broker as `origin:

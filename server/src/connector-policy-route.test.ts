@@ -50,11 +50,12 @@ function harness(policy: unknown = TRAYO_ONLY) {
   const ws = new WorkspaceStore(db).create({ name: 'W' });
   const panes = new PaneStore(db);
   const tabs = new TabStore(db);
-  const make = (node: string | null) => {
+  const make = (node: string | null, face: 'chat' | 'terminal' | 'web' = 'chat') => {
     const tab = tabs.create({ name: 'T', workspace_id: ws.id, layout: '' });
     const pane = panes.create({
       tab_id: tab.id,
       startup_cmd: '',
+      face,
       ...(node ? { node_id: node } : {}),
     });
     return { id: pane.id, key: paneKeyFor(pane.id) as string };
@@ -64,7 +65,15 @@ function harness(policy: unknown = TRAYO_ONLY) {
     dataDir: dir,
     policy: () => policy as never,
   });
-  return { slack, archive, db, mini: make(null), vm: make('trayo') };
+  return {
+    slack,
+    archive,
+    db,
+    mini: make(null),
+    vm: make('trayo'),
+    miniTerminal: make(null, 'terminal'),
+    vmTerminal: make('trayo', 'terminal'),
+  };
 }
 
 /** The last body posted to the broker, or null when nothing was. */
@@ -148,6 +157,67 @@ describe('slack is the VM’s, the archive is the mini’s', () => {
         /group-writable/,
       );
     }
+    expect(broker.count()).toBe(0);
+  });
+});
+
+/**
+ * A REQUEST NOBODY CAN BE SHOWN IS NOT MADE.
+ *
+ * The approval dialog is mounted by ChatPane and the pending list is scoped to
+ * the pane that asked, so a connector call from a terminal pane created a
+ * broker request nobody ever saw. It expired after five minutes and the caller
+ * saw a hang with no explanation. The broker has no cancel endpoint, so the
+ * only honest moment to stop it is before the request exists.
+ */
+describe('a pane that cannot be asked is told so', () => {
+  it('refuses a terminal pane, naming the reason and the fix', async () => {
+    const h = harness();
+    const broker = brokerCalls();
+    const r = await h.archive.request(`/stats?pane=${h.miniTerminal.id}&key=${h.miniTerminal.key}`);
+    expect(r.status).toBe(403);
+    const why = ((await r.json()) as { error: { message: string } }).error.message;
+    expect(why).toMatch(/approvals appear in a chat/);
+    expect(why).toMatch(/terminal pane/);
+    expect(why).toMatch(/Run it from a chat pane/);
+    // …and nothing was created that could expire unseen.
+    expect(broker.count()).toBe(0);
+  });
+
+  it('lets the same call through from a chat pane', async () => {
+    const h = harness();
+    const broker = brokerCalls();
+    expect((await h.archive.request(`/stats?pane=${h.mini.id}&key=${h.mini.key}`)).status).toBe(
+      202,
+    );
+    expect(broker.count()).toBe(1);
+  });
+
+  it('still answers a POLICY refusal from a terminal, which needs no dialog', async () => {
+    // The order matters and is the point: scoping is checked first, so
+    // "slack is scoped to trayo" reaches you wherever you run it. Only the
+    // calls that WOULD have needed a human are stopped for want of one.
+    const h = harness();
+    const broker = brokerCalls();
+    const r = await h.slack.request(
+      `/channels?pane=${h.miniTerminal.id}&key=${h.miniTerminal.key}`,
+    );
+    expect(r.status).toBe(403);
+    const why = ((await r.json()) as { error: { message: string } }).error.message;
+    expect(why).toMatch(/slack is scoped to trayo/);
+    expect(why).not.toMatch(/approvals appear in a chat/);
+    expect(broker.count()).toBe(0);
+  });
+
+  it('refuses a terminal on the machine that IS allowed', async () => {
+    // Allowed by policy, still unaskable. Both gates are real.
+    const h = harness();
+    const broker = brokerCalls();
+    const r = await h.slack.request(`/channels?pane=${h.vmTerminal.id}&key=${h.vmTerminal.key}`);
+    expect(r.status).toBe(403);
+    expect(((await r.json()) as { error: { message: string } }).error.message).toMatch(
+      /approvals appear in a chat/,
+    );
     expect(broker.count()).toBe(0);
   });
 });

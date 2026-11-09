@@ -49,7 +49,11 @@ function harness(policy?: { enforce: boolean; allow: Record<string, string[]> })
   const db = openDb(':memory:');
   const ws = new WorkspaceStore(db).create({ name: 'W' });
   const tab = new TabStore(db).create({ name: 'T', workspace_id: ws.id, layout: '' });
-  const pane = new PaneStore(db).create({ tab_id: tab.id, startup_cmd: '' });
+  // A CHAT pane: the funnel refuses a connector call from a terminal, because
+  // the approval dialog is drawn by ChatPane and a terminal's request would
+  // wait for something nobody can see. Agent tabs are created `face: 'chat'`,
+  // so this is how a real one arrives rather than a default.
+  const pane = new PaneStore(db).create({ tab_id: tab.id, startup_cmd: '', face: 'chat' });
   vi.spyOn(scope, 'loadPolicy').mockReturnValue(
     policy ? scope.readPolicy(JSON.stringify(policy)) : scope.UNSCOPED,
   );
@@ -110,7 +114,7 @@ describe('the gate on the Slack funnel', () => {
     const db = openDb(':memory:');
     const ws = new WorkspaceStore(db).create({ name: 'W' });
     const tab = new TabStore(db).create({ name: 'T', workspace_id: ws.id, layout: '' });
-    const pane = new PaneStore(db).create({ tab_id: tab.id, startup_cmd: '' });
+    const pane = new PaneStore(db).create({ tab_id: tab.id, startup_cmd: '', face: 'chat' });
     const app = slackRoutes({ db, dataDir: dir });
     const res = await post(app, { pane: pane.id, key: paneKeyFor(pane.id), ref: '#x', text: 'hi' });
     expect(res.status).toBe(403);

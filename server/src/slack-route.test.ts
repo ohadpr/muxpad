@@ -48,7 +48,12 @@ function harness(opts: { slack: boolean }) {
     ws.id,
   );
   const tab = new TabStore(db).create({ name: 'T', workspace_id: ws.id, layout: '' });
-  const pane = new PaneStore(db).create({ tab_id: tab.id, startup_cmd: '' });
+  // A CHAT pane, which is what these cases are: an agent in a chat making a
+  // Slack call. A connector call from a terminal pane is refused now — the
+  // approval dialog is mounted by ChatPane, so a terminal's request would
+  // wait for something nobody can see. Agent tabs are created `face: 'chat'`,
+  // so this matches how a real one arrives rather than leaning on a default.
+  const pane = new PaneStore(db).create({ tab_id: tab.id, startup_cmd: '', face: 'chat' });
   const app = slackRoutes({ db, dataDir: dir });
   return { app, ws, pane, db, key: paneKeyFor(pane.id) as string };
 }
