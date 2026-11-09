@@ -161,6 +161,18 @@ export interface AppDeps {
     Array<{ nodeId: string; name: string; hits: unknown[]; fallback: boolean; error?: string }>
   >;
   /**
+   * Ask a host to prove the connector call it is relaying is its own.
+   *
+   * Optional, like every other host-shaped dep here: an install with no hosts
+   * simply never has a proof to offer, and every connector call is local.
+   */
+  signOrigin?: (
+    nodeId: string,
+    callId: string,
+    action: string,
+    payload: unknown,
+  ) => Promise<unknown | null>;
+  /**
    * Publish deps (routes/publish.ts): the funnel manager that ensures the
    * public Tailscale Funnel on publish. Optional so tests can omit it — the
    * routes are still mounted, backed by a localFunnel that NEVER execs
@@ -348,7 +360,13 @@ export function createApp(deps: AppDeps): Hono {
   setSayKey(theSayKey);
   app.get('/api/say/key', (c) => c.json({ key: theSayKey }));
 
-  const connectors = connectorRoutes({ db: resolved.db, dataDir: resolved.dataDir });
+  const connectors = connectorRoutes({
+    db: resolved.db,
+    dataDir: resolved.dataDir,
+    // A connector call relayed from a host can be PROVEN to come from that
+    // host, which is what lets a remote machine hold a timed approval at all.
+    ...(resolved.signOrigin ? { signOrigin: resolved.signOrigin } : {}),
+  });
   app.route('/api/slack', connectors.slack);
   // Its own top-level path: the archive is not part of Slack, and the two
   // only share the approval funnel behind them.

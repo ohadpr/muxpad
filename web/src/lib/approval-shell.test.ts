@@ -592,10 +592,19 @@ describe('protected muxpad approval modal', () => {
     expect(f.calls.filter((c) => c.path === '/human/decision')).toHaveLength(0);
   });
 
-  it('offers finite durations, defaults to once and explicitly states full-team all-action scope', async () => {
+  it('offers the durations the broker accepts, defaults to once and explicitly states full-team all-action scope', async () => {
     const f = await harness();
     const select = f.win.document.getElementById('duration') as HTMLSelectElement;
-    expect([...select.options].map((o) => o.value)).toEqual(['once', '10m', '1h', '1d']);
+    // `until-revoked` is not a clock, and the page must not present it as a
+    // longer one: it is bounded by the session, which the deadline line below
+    // is asserted to name.
+    expect([...select.options].map((o) => o.value)).toEqual([
+      'once',
+      '10m',
+      '1h',
+      '1d',
+      'until-revoked',
+    ]);
     expect(select.value).toBe('once');
     select.value = '10m';
     select.dispatchEvent(new f.win.Event('change'));
@@ -606,6 +615,15 @@ describe('protected muxpad approval modal', () => {
     // every agent everywhere: a timed grant is bound to the origin that asked,
     // so "ALL agents" was describing a wider promise than it makes.
     expect(scope).toMatch(/for chats on /);
+    // …and the open-ended one is still bounded, out loud, by the session.
+    select.value = 'until-revoked';
+    select.dispatchEvent(new f.win.Event('change'));
+    const openEnded = f.win.document.getElementById('grant-scope')?.textContent || '';
+    expect(openEnded).toContain('until you revoke it');
+    expect(openEnded).toMatch(/Ends no later than /);
+    expect(openEnded).not.toMatch(/forever/i);
+    select.value = '10m';
+    select.dispatchEvent(new f.win.Event('change'));
     for (const action of [
       'list channels',
       'read history',

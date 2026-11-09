@@ -32,6 +32,20 @@ interface Deps {
    * file-trust rules themselves are covered in connectors/scope.test.ts.
    */
   policy?: () => ConnectorPolicy & { problem?: string };
+  /**
+   * Ask a remote host to prove the request it is relaying is its own.
+   *
+   * Absent on an install with no hosts, and resolving to null is ORDINARY —
+   * no key over there, the link dropped, or the action does not match what
+   * the host's own caller asked for. The request then goes to the broker
+   * unproven and a human approves it once. See HostLink#signOrigin.
+   */
+  signOrigin?: (
+    nodeId: string,
+    callId: string,
+    action: string,
+    payload: unknown,
+  ) => Promise<unknown | null>;
 }
 
 /** What a refused call is told, and what it is NOT told. */
@@ -70,11 +84,27 @@ export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
   );
 
   /** Identify the originating pane for chat-local notices; the broker authorizes Slack. */
+  /**
+   * Which host's in-flight call this is, if any.
+   *
+   * Written by {@link HostApi#dispatch} on the way in — a header this server
+   * built, not one a host sent. On a local call it is absent, which is right:
+   * `local` needs no proof.
+   */
+  const callerOf = (c: {
+    req: { header: (name: string) => string | undefined };
+  }): { nodeId: string; callId: string } | undefined => {
+    const [nodeId, callId] = (c.req.header('x-muxpad-host-call') ?? '').split(' ');
+    return nodeId && callId ? { nodeId, callId } : undefined;
+  };
+
   async function authorize(
     paneId: unknown,
     paneKey: unknown,
+    caller?: { nodeId: string; callId: string },
   ): Promise<
-    { ok: true; pane: string } | { ok: false; status: 403 | 400; body: ReturnType<typeof refusal> }
+    | { ok: true; pane: string; caller?: { nodeId: string; callId: string } }
+    | { ok: false; status: 403 | 400; body: ReturnType<typeof refusal> }
   > {
     if (typeof paneId !== 'string' || !paneId)
       return {
@@ -110,7 +140,7 @@ export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
           'Configure the protected broker; local Slack credentials are unsupported.',
         ),
       };
-    return { ok: true, pane: paneId };
+    return { ok: true, pane: paneId, ...(caller ? { caller } : {}) };
   }
 
   // Advisory ownership comes only from an authenticated action caller, never a
@@ -219,7 +249,14 @@ export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
         );
     }
   };
-  const brokerAction = async (action: string, payload: unknown, pane: string) => {
+  const brokerAction = async (
+    action: string,
+    payload: unknown,
+    /** The authorized caller: the pane, and the host relaying for it. */
+    caller: { pane: string; caller?: { nodeId: string; callId: string } } | string,
+  ) => {
+    const pane = typeof caller === 'string' ? caller : caller.pane;
+    const relay = typeof caller === 'string' ? undefined : caller.caller;
     // ── THE CONNECTOR GATE ────────────────────────────────────────────────
     //
     // Here rather than in each route, for the reason the card below is here:
@@ -290,9 +327,32 @@ export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
     // The broker treats this as a LABEL muxpad asserts, not a fact it can
     // verify, which is exactly right: it is shown to the human before they
     // approve, and the grant is bound to it afterwards.
+    /**
+     * ── AND THE MACHINE PROVES IT ────────────────────────────────────────
+     *
+     * `origin` above is a LABEL this server asserts on the host's behalf, and
+     * the broker has no way to check it — so a lasting permission bound to a
+     * remote machine would have been spendable by anything on THIS one
+     * willing to claim the name, and the broker rightly refused to offer one.
+     *
+     * So the host signs the action itself, with a key this machine does not
+     * have. Asked for HERE, at the one funnel every connector verb goes
+     * through, and only for a call a host is actually relaying: a local call
+     * needs no proof, because believing "this came from here" adds nothing.
+     *
+     * A null proof is ORDINARY — no key over there, a dropped link, a slow
+     * answer, or an action that does not match what the host's own caller
+     * asked for. The request goes on without it and a human approves it once,
+     * which is exactly where this stood before. A connector must not go off
+     * the air because a key was rotated on one side.
+     */
+    const proof =
+      relay && deps.signOrigin
+        ? await deps.signOrigin(relay.nodeId, relay.callId, action, payload)
+        : null;
     const result = await slackBrokerRequest(
       '/requests',
-      { action, payload, origin: scope.origin },
+      { action, payload, origin: scope.origin, ...(proof ? { proof } : {}) },
       action === 'slack.upload' ? 125000 : 35000,
     );
     // The broker is the only thing that holds a credential for either of
@@ -386,7 +446,7 @@ export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
   });
 
   app.get('/requests/:id', async (c) => {
-    const auth = await authorize(c.req.query('pane'), c.req.query('key'));
+    const auth = await authorize(c.req.query('pane'), c.req.query('key'), callerOf(c));
     if (!auth.ok) return c.json(auth.body, auth.status);
     const id = c.req.param('id');
     if (!/^[a-f0-9-]{36}$/.test(id) || !slackBrokerURL())
@@ -453,7 +513,7 @@ export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
         thread_ts: z.string().optional(),
       })
       .parse(await c.req.json());
-    const auth = await authorize(body.pane, body.key);
+    const auth = await authorize(body.pane, body.key, callerOf(c));
     if (!auth.ok) return c.json(auth.body, auth.status);
     return c.json(
       await brokerAction(
@@ -478,17 +538,17 @@ export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
         ts: z.string().min(1),
       })
       .parse(await c.req.json());
-    const auth = await authorize(body.pane, body.key);
+    const auth = await authorize(body.pane, body.key, callerOf(c));
     if (!auth.ok) return c.json(auth.body, auth.status);
     return c.json(
-      await brokerAction('slack.unpost', { ref: body.channel, ts: body.ts }, auth.pane),
+      await brokerAction('slack.unpost', { ref: body.channel, ts: body.ts }, auth),
       202,
     );
   });
 
   app.get('/read', async (c) => {
     const q = c.req.query();
-    const auth = await authorize(q.pane, q.key);
+    const auth = await authorize(q.pane, q.key, callerOf(c));
     if (!auth.ok) return c.json(auth.body, auth.status);
     return c.json(
       await brokerAction(
@@ -506,29 +566,26 @@ export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
 
   app.get('/search', async (c) => {
     const q = c.req.query();
-    const auth = await authorize(q.pane, q.key);
+    const auth = await authorize(q.pane, q.key, callerOf(c));
     if (!auth.ok) return c.json(auth.body, auth.status);
-    return c.json(
-      await brokerAction('slack.search', { query: q.q, limit: q.limit }, auth.pane),
-      202,
-    );
+    return c.json(await brokerAction('slack.search', { query: q.q, limit: q.limit }, auth), 202);
   });
 
   app.get('/channels', async (c) => {
-    const auth = await authorize(c.req.query('pane'), c.req.query('key'));
+    const auth = await authorize(c.req.query('pane'), c.req.query('key'), callerOf(c));
     if (!auth.ok) return c.json(auth.body, auth.status);
-    return c.json(await brokerAction('slack.channels', {}, auth.pane), 202);
+    return c.json(await brokerAction('slack.channels', {}, auth), 202);
   });
 
   app.get('/users', async (c) => {
     const q = c.req.query();
-    const auth = await authorize(q.pane, q.key);
+    const auth = await authorize(q.pane, q.key, callerOf(c));
     if (!auth.ok) return c.json(auth.body, auth.status);
-    return c.json(await brokerAction('slack.users', { name: q.name }, auth.pane), 202);
+    return c.json(await brokerAction('slack.users', { name: q.name }, auth), 202);
   });
   app.get('/thread', async (c) => {
     const q = c.req.query();
-    const auth = await authorize(q.pane, q.key);
+    const auth = await authorize(q.pane, q.key, callerOf(c));
     if (!auth.ok) return c.json(auth.body, auth.status);
     return c.json(
       await brokerAction(
@@ -543,9 +600,9 @@ export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
     const b = z
       .object({ pane: z.string(), key: z.string(), user: z.string() })
       .parse(await c.req.json());
-    const auth = await authorize(b.pane, b.key);
+    const auth = await authorize(b.pane, b.key, callerOf(c));
     if (!auth.ok) return c.json(auth.body, auth.status);
-    return c.json(await brokerAction('slack.dm', { user: b.user }, auth.pane), 202);
+    return c.json(await brokerAction('slack.dm', { user: b.user }, auth), 202);
   });
   app.post('/react', async (c) => {
     const b = z
@@ -558,7 +615,7 @@ export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
         operation: z.enum(['add', 'remove']),
       })
       .parse(await c.req.json());
-    const auth = await authorize(b.pane, b.key);
+    const auth = await authorize(b.pane, b.key, callerOf(c));
     if (!auth.ok) return c.json(auth.body, auth.status);
     return c.json(
       await brokerAction(
@@ -579,10 +636,10 @@ export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
         text: z.string(),
       })
       .parse(await c.req.json());
-    const auth = await authorize(b.pane, b.key);
+    const auth = await authorize(b.pane, b.key, callerOf(c));
     if (!auth.ok) return c.json(auth.body, auth.status);
     return c.json(
-      await brokerAction('slack.edit', { ref: b.ref, ts: b.ts, text: b.text }, auth.pane),
+      await brokerAction('slack.edit', { ref: b.ref, ts: b.ts, text: b.text }, auth),
       202,
     );
   });
@@ -598,7 +655,7 @@ export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
         thread_ts: z.string().optional(),
       })
       .parse(await c.req.json());
-    const auth = await authorize(b.pane, b.key);
+    const auth = await authorize(b.pane, b.key, callerOf(c));
     if (!auth.ok) return c.json(auth.body, auth.status);
     return c.json(
       await brokerAction(
@@ -663,9 +720,9 @@ export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
   for (const [path, action, payload] of ARCHIVE_ROUTES)
     archive.get(path, async (c) => {
       const q = c.req.query();
-      const auth = await authorize(q.pane, q.key);
+      const auth = await authorize(q.pane, q.key, callerOf(c));
       if (!auth.ok) return c.json(auth.body, auth.status);
-      return c.json(await brokerAction(action, payload(q), auth.pane), 202);
+      return c.json(await brokerAction(action, payload(q), auth), 202);
     });
   archive.onError(onError('msgvault'));
   return { slack: app, archive };

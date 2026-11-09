@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { WebSocket } from 'ws';
 import { TranscriptSubscriptions } from '../ptyd/transcript-subscriptions.js';
 import { type LinkUp, decodeLink, encodeLink, hostMaySend } from './link-protocol.js';
+import { sign } from './origin-proof.js';
 import { sendPath } from './send-files.js';
 
 /**
@@ -49,6 +50,15 @@ export interface LinkServerDeps {
   };
   /** Build a transcript tail. See TranscriptSubscriptions. */
   makeTail: ConstructorParameters<typeof TranscriptSubscriptions>[0]['makeTail'];
+  /**
+   * THIS MACHINE'S ORIGIN KEY, and the name it signs as.
+   *
+   * Absent on a host with no key, which is the normal state and not an error:
+   * every connector call from here is then approved once, exactly as before.
+   * Read per signature rather than cached, so rotating the file takes effect
+   * without restarting the agent — a restart here drops every pane's link.
+   */
+  originKey?: () => { origin: string; key: string } | null;
   log?: (line: string) => void;
 }
 
@@ -84,6 +94,16 @@ export class LinkServer {
     string,
     (r: { status: number; body: string; contentType?: string }) => void
   >();
+  /**
+   * What the in-pane CLI said each in-flight call is FOR.
+   *
+   * The server asks this host to sign the action it is about to send to the
+   * broker; without this the host would have to take the server's word for
+   * what the call was, and a server that had been taken over could turn a
+   * `slack.channels` somebody is relaying into a `slack.post`. Keyed by the
+   * same correlation id as `apiCalls`, and dropped with it.
+   */
+  private readonly apiActions = new Map<string, string>();
   private readonly subs: TranscriptSubscriptions;
   private readonly log: (line: string) => void;
 
@@ -194,10 +214,43 @@ export class LinkServer {
       });
       return;
     }
+    if (m.ch === 'origin') {
+      if (m.op === 'sign') this.signOrigin(m.id, m.callId, m.action, m.payload);
+      return;
+    }
     if (m.op === 'frame') {
       const r = this.runners.get(m.paneId);
       if (r?.readyState === WebSocket.OPEN) r.send(JSON.stringify(m.frame));
     }
+  }
+
+  /**
+   * Prove that THIS machine is asking, for one call it is relaying.
+   *
+   * ALWAYS answers, and an answer of "no" is normal: no key here, the call is
+   * not in flight, or the action is not the one the caller asked for. The
+   * server then sends the broker request unproven and a human approves it
+   * once — which is where everything stood before this existed, and the right
+   * failure for a key that has been rotated on one side only.
+   *
+   * The two checks are the whole security argument:
+   *
+   *   · IN FLIGHT — the host signs only for a call it is itself relaying, so
+   *     a server cannot collect signatures for requests nobody made;
+   *   · THE DECLARED ACTION — the host signs what its own caller asked for,
+   *     so a server cannot upgrade a read it is relaying into a write.
+   */
+  private signOrigin(id: string, callId: string, action: string, payload: unknown): void {
+    const refuse = (reason: string) => this.up({ ch: 'origin', op: 'unavailable', id, reason });
+    const identity = this.deps.originKey?.() ?? null;
+    if (!identity) return refuse('no origin key on this host');
+    const declared = this.apiActions.get(callId);
+    if (!declared) return refuse('no such call in flight');
+    if (declared !== action) return refuse(`call is for ${declared}, not ${action}`);
+    const ts = Date.now();
+    const nonce = randomUUID();
+    const sig = sign(identity.key, { origin: identity.origin, action, payload, ts, nonce });
+    this.up({ ch: 'origin', op: 'signed', id, proof: { ts, nonce, sig } });
   }
 
   /**
@@ -251,6 +304,10 @@ export class LinkServer {
     method: string,
     path: string,
     body: string | undefined,
+    /** What the caller says this call is for — `slack.post`, `msgvault.search`.
+     *  A label from the in-pane CLI, used for ONE thing: refusing to sign an
+     *  action the caller did not ask for. */
+    declaredAction?: string,
     timeoutMs = 15_000,
   ): Promise<{ status: number; body: string; contentType?: string }> {
     if (this.link?.readyState !== WebSocket.OPEN) {
@@ -263,6 +320,7 @@ export class LinkServer {
     const id = randomUUID();
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
+        this.apiActions.delete(id);
         if (!this.apiCalls.delete(id)) return;
         resolve({
           status: 504,
@@ -273,8 +331,10 @@ export class LinkServer {
       timer.unref?.();
       this.apiCalls.set(id, (r) => {
         clearTimeout(timer);
+        this.apiActions.delete(id);
         resolve(r);
       });
+      if (declaredAction) this.apiActions.set(id, declaredAction);
       this.up({
         ch: 'api',
         op: 'request',
@@ -295,6 +355,7 @@ export class LinkServer {
       });
     }
     this.apiCalls.clear();
+    this.apiActions.clear();
   }
 
   /**

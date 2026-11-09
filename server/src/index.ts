@@ -562,6 +562,10 @@ const app = createApp({
   // The one deliberately cross-host surface — see routes/search.ts. A server
   // capability for the user to look at, NOT something a host can reach.
   searchHosts: (q, opts) => hostLinks.searchHosts(q, opts),
+  // What lets a REMOTE machine hold a timed connector approval: it signs the
+  // action with a key this machine does not have. See routes/slack.ts.
+  signOrigin: (nodeId, callId, action, payload) =>
+    hostLinks.signOrigin(nodeId, callId, action, payload),
   // Pairing a machine takes effect at once: both link sets re-read the table
   // and dial (or drop) accordingly. Without this, `muxpad node add` would end
   // in "restart muxpad", which drops every runner's socket.

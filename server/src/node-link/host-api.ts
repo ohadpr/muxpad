@@ -404,6 +404,10 @@ export class HostApi {
     method: string,
     rawPath: string,
     body?: string,
+    /** The host's own correlation id for this call, so a route can ask that
+     *  host to sign the action it is about to take. Never from the wire as
+     *  authority — it names a call, and the host decides whether it is real. */
+    callId?: string,
   ): Promise<HostApiResult> {
     // A host is never `local`: that id means "this machine", and honouring it
     // would hand a host the whole local pane set.
@@ -453,7 +457,7 @@ export class HostApi {
         suffix = `?${q}`;
       }
       const dest = a.rebuild(captures) + suffix;
-      const res = await this.dispatch(a.method, dest, out);
+      const res = await this.dispatch(a.method, dest, out, callId ? { nodeId, callId } : undefined);
       if (!a.filterResponse || res.status >= 400) return res;
       return {
         ...res,
@@ -625,10 +629,25 @@ export class HostApi {
    * same-origin `Origin` so the CSRF guard sees what it expects, and nothing
    * the host sent. `Upgrade` cannot appear because we never copy a header.
    */
-  private async dispatch(method: string, path: string, body?: string): Promise<HostApiResult> {
+  private async dispatch(
+    method: string,
+    path: string,
+    body?: string,
+    /**
+     * Which host, and which of its in-flight calls, this is.
+     *
+     * Passed on as a header WE build — the rule that none of the host's
+     * headers survive is untouched. A route that is about to ask the broker
+     * to do something uses it to have the host sign that action; the header
+     * names a call, and the host is the side that decides whether the call is
+     * real and whether the action matches what its own caller asked for.
+     */
+    caller?: { nodeId: string; callId: string },
+  ): Promise<HostApiResult> {
     const key = this.deps.apiKey();
     const headers: Record<string, string> = {
       origin: this.deps.selfUrl,
+      ...(caller ? { 'x-muxpad-host-call': `${caller.nodeId} ${caller.callId}` } : {}),
       ...(key ? { 'x-muxpad-key': key } : {}),
       ...(body === undefined ? {} : { 'content-type': 'application/json' }),
     };

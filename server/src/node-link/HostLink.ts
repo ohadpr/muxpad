@@ -63,6 +63,9 @@ export interface HostLinkDeps {
     method: string;
     path: string;
     body?: string;
+    /** This host's own correlation id for the call, so a route can ask the
+     *  host to prove the request it is relaying is its own. */
+    id: string;
   }) => Promise<{ status: number; body: string; contentType?: string }>;
   /** A remote chat's events arrived. */
   onTranscript: (m: {
@@ -159,6 +162,17 @@ export function wellFormed(m: LinkDown | LinkUp): boolean {
       if (q.op === 'error') return str((q as { reason?: unknown }).reason);
       return false;
     }
+    case 'origin': {
+      // The proof is OPAQUE here on purpose: this machine cannot make one and
+      // does not read one — it carries it to the broker, which holds the key
+      // and is the only side that can say whether it means anything. All this
+      // checks is that the envelope is answerable.
+      const o = m as { op?: unknown; id?: unknown; proof?: unknown };
+      if (!str(o.id)) return false;
+      if (o.op === 'signed') return !!o.proof && typeof o.proof === 'object';
+      if (o.op === 'unavailable') return str((o as { reason?: unknown }).reason);
+      return false;
+    }
     default:
       return false;
   }
@@ -207,6 +221,8 @@ export class HostLink {
    * watcher had never left.
    */
   private readonly subscribed = new Map<string, number | undefined>();
+  /** In-flight signature requests, by correlation id. See {@link signOrigin}. */
+  private readonly signings = new Map<string, (r: unknown | null) => void>();
   /** In-flight searches, by correlation id. See {@link search}. */
   private readonly searches = new Map<
     string,
@@ -281,6 +297,10 @@ export class HostLink {
     this.fetches.clear();
     for (const [, settle] of this.searches) settle({ error: 'the link dropped' });
     this.searches.clear();
+    // A dropped link is "no proof", which is approve-once — never a hang on
+    // a request a human is waiting to be asked about.
+    for (const [, settle] of this.signings) settle(null);
+    this.signings.clear();
     if (this.closed) return;
     this.timer = setTimeout(() => this.connect(), this.backoff);
     this.timer.unref?.();
@@ -328,6 +348,14 @@ export class HostLink {
     }
     if (m.ch === 'api') {
       if (m.op === 'request') void this.answerApi(m.id, m.method, m.path, m.body);
+      return;
+    }
+    if (m.ch === 'origin') {
+      if (m.op === 'sign') return; // our own frame coming back; not an answer
+      const settle = this.signings.get(m.id);
+      if (!settle) return; // already timed out
+      this.signings.delete(m.id);
+      settle(m.op === 'signed' ? m.proof : null);
       return;
     }
     if (m.ch === 'search') {
@@ -427,6 +455,41 @@ export class HostLink {
    * The timeout is short on purpose: somebody is waiting at a search box, and
    * one sleeping laptop must not hold the whole result set.
    */
+  /**
+   * Ask this host to prove the request it is relaying is its own.
+   *
+   * Resolves to the host's proof, or to null — and null is ORDINARY: no key
+   * over there, the call already finished, the action does not match what the
+   * host's own caller asked for, or the link dropped. The caller sends the
+   * broker request unproven and a human approves it once, which is where
+   * everything stood before this existed.
+   *
+   * SHORT TIMEOUT on purpose. This sits inside a connector call somebody is
+   * waiting on, and the fallback is not a failure — so waiting seconds for a
+   * proof is strictly worse than asking the human.
+   */
+  signOrigin(
+    callId: string,
+    action: string,
+    payload: unknown,
+    timeoutMs = 2_000,
+  ): Promise<unknown | null> {
+    if (this.ws?.readyState !== WebSocket.OPEN) return Promise.resolve(null);
+    const id = randomUUID();
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        if (!this.signings.delete(id)) return;
+        resolve(null);
+      }, timeoutMs);
+      timer.unref?.();
+      this.signings.set(id, (r) => {
+        clearTimeout(timer);
+        resolve(r);
+      });
+      this.send({ ch: 'origin', op: 'sign', id, callId, action, payload });
+    });
+  }
+
   search(
     q: string,
     opts: { limit: number; role?: string },
@@ -509,6 +572,7 @@ export class HostLink {
     try {
       out =
         (await this.deps.onApiRequest?.({
+          id,
           method,
           path,
           ...(body === undefined ? {} : { body }),

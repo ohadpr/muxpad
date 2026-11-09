@@ -392,6 +392,11 @@ export function SlackPasskeyApproval({
                     <option value="10m">10 minutes</option>
                     <option value="1h">1 hour</option>
                     <option value="1d">1 day</option>
+                    {/* NOT "forever", which this cannot be and must not
+                        claim. Broker grants live in memory and cannot outlive
+                        the session that minted them, so the honest name is
+                        the one the scope line below then spells out. */}
+                    <option value="until-revoked">Until I revoke it</option>
                   </select>
                 </label>
               )}
@@ -405,7 +410,9 @@ export function SlackPasskeyApproval({
                 {connectorOf(request.action) === SLACK
                   ? 'All agents can read, search, send, edit, delete, react, open DMs and upload files in this Slack workspace.'
                   : 'All agents on this machine can search and read your mail archive. It cannot send, draft or change anything.'}{' '}
-                Ends within the selected period, on restart or when revoked in Settings.
+                {duration === 'until-revoked'
+                  ? ' Ends when you revoke it in Settings, when the broker restarts, or when this approval session expires — it is not stored on disk.'
+                  : ' Ends within the selected period, on restart or when revoked in Settings.'}
               </p>
             )}
             {/* …and only for the SAME capability. "Timed Slack access is
