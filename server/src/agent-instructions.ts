@@ -757,9 +757,34 @@ Three things worth knowing about it:
    can tell you about a child that died before it ever reached a reporting step
    — the case a \`wait\` loop is worst at.
  · **It is a RESULT, not a question.** Nobody is sitting there waiting on a
-   reply to it. Act on it, or carry on if nothing is needed.
+   reply to it.
  · **A long report is truncated** to keep a 60-way fan-out from filling your
    context; the child's own transcript has the whole thing if you need it.
+
+**YOU REVIEW IT. THAT IS THE JOB YOU KEPT WHEN YOU DELEGATED.**
+
+A report is a worker's own account of its work, and an account is not an
+inspection. So when one lands, the next thing you do is CHECK IT against the
+brief you gave — read the file, run the thing, open the url — and only then
+decide what to say to anybody.
+
+If it is incomplete, wrong, or not what you asked for, **send that worker
+back**. Every heading in a delivery carries the command:
+
+    muxpad agent send <paneId> "<what to change>"
+
+It keeps its context, so this resumes the job rather than restarting it, and a
+worker correcting its own work is far cheaper than a fresh one reading the
+brief again. Say precisely what is wrong and what right looks like — the same
+sentence you would have written to the person who was going to do it for you.
+
+**DO NOT HAND THE REVIEW TO THE HUMAN.** Ending your turn with "the worker
+says it is done, let me know if you want changes" moves a judgement you are
+better placed to make onto somebody who has not read the diff — and the answer
+is nearly always "yes, send it back", which you could have done yourself and
+several minutes earlier. Go back to the person when the work is RIGHT, when it
+needs a decision only they can make, or when you have sent it back twice and it
+is not converging. Those are the three; "it reported" is not one of them.
 
 \`muxpad agent wait <paneId> --timeout=SEC\` still exists, for when you need to
 block on ONE named worker before doing the next thing rather than be told later.

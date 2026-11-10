@@ -115,6 +115,37 @@ describe('report delivery — the join', () => {
     clock = NOW + 2000;
   });
 
+  /**
+   * THE HANDLE REACHES THE PARENT, FROM THE REAL LOOKUP.
+   *
+   * The owner's report: "the moment the chat yields, it's back at me — and 99%
+   * of the time I need to send it back to do something." Part of why was that
+   * the message carried TAB ids while sending a worker back needs a PANE id,
+   * so the one action an orchestrator most needs after reading a report took a
+   * lookup it had no reason to know how to do.
+   *
+   * shared/spawn-delivery.test.ts proves the message RENDERS the command when
+   * given a pane. This proves the server finds the right one: the CHILD's
+   * agent pane, not the parent's — the mistake available here, since both go
+   * through the same helper.
+   */
+  it('carries the command to send that worker back, naming the CHILD’s pane', () => {
+    const p = parent('P');
+    const c = child('C', p);
+    make().onReport(c);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.paneId, 'delivered to the parent').toBe(`p-${p}`);
+    expect(sent[0]?.text).toContain(`muxpad agent send p-${c}`);
+    expect(sent[0]?.text).not.toContain(`muxpad agent send p-${p}`);
+  });
+
+  it('tells the parent to review it rather than relay it', () => {
+    const p = parent('P');
+    make().onReport(child('C', p));
+    expect(sent[0]?.text).toMatch(/REVIEW each result against what you asked for/);
+    expect(sent[0]?.text).not.toMatch(/carry on if nothing is needed/);
+  });
+
   afterEach(() => {
     db.close();
     rmSync(dir, { recursive: true, force: true });

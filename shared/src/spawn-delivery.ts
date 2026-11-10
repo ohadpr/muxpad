@@ -47,6 +47,16 @@ export interface SpawnDeliveryEntry {
   report: string | null;
   /** Published urls the child produced. */
   artifacts?: string[];
+  /**
+   * The child's agent PANE — the handle `muxpad agent send` takes.
+   *
+   * Without it the parent could read a result and not act on it: the message
+   * carried tab ids, and sending a worker back needs a pane. So the one thing
+   * an orchestrator most needs after reading a report — "go and fix this" —
+   * required a lookup it had no reason to know how to do, and the path of
+   * least resistance was to hand the whole thing to the human instead.
+   */
+  paneId?: string;
 }
 
 export interface SpawnDeliveryMarker {
@@ -127,17 +137,40 @@ export function renderSpawnDelivery(entries: readonly SpawnDeliveryEntry[]): str
   const budget = perChildBudget(n);
   const ids = entries.map((e) => e.tabId).join(',');
   const subject = n === 1 ? 'sub-chat' : 'sub-chats';
+  /**
+   * ── THIS IS WORK TO REVIEW, NOT NEWS TO RELAY ──────────────────────────
+   *
+   * The note used to end "act on them, or carry on if nothing is needed",
+   * which reads as permission to do nothing. The observed result: a parent
+   * read the report, summarised it to the human, and ENDED ITS TURN — and
+   * the human then sent it back with the correction the parent could have
+   * made itself. "99% of the time I need to send it back to do something,
+   * and an agent can surely do a better job at that than me."
+   *
+   * So the note names the loop instead, and the per-child line below carries
+   * the handle that makes the loop possible.
+   */
   const note = [
     `Delivered by muxpad: ${n} ${subject} you spawned ${n === 1 ? 'has' : 'have'} finished.`,
     'This is muxpad reporting a result, not a human asking a question.',
-    'You do not need to poll or wait for these — act on them, or carry on if nothing is needed.',
+    'You do not need to poll or wait for these.',
+    'REVIEW each result against what you asked for before you say anything to the human:',
+    'if it is incomplete, wrong, or not what you briefed, send that worker back with',
+    'specific corrections using the command under its heading — it keeps its context,',
+    'so you are resuming the job, not restarting it.',
+    'Come back to the person when the work is right, or when it needs a decision only they can make.',
   ].join(' ');
   const body = entries
     .map((e) => {
       const head = `## ${e.name}${stateNote(e.state)}`;
       const text = e.report ? clip(e.report, budget) : '(no report)';
       const links = e.artifacts?.length ? `\n\nArtifacts: ${e.artifacts.join(' ')}` : '';
-      return `${head}\n\n${text}${links}`;
+      // The handle, under the result it belongs to — so "send it back" is one
+      // line away from the thing being judged, not a lookup.
+      const back = e.paneId
+        ? `\n\nSend back: \`muxpad agent send ${e.paneId} "<what to change>"\``
+        : '';
+      return `${head}\n\n${text}${links}${back}`;
     })
     .join('\n\n');
   return `<muxpad-delivery count="${n}" from="${ids}">\n${note}\n</muxpad-delivery>\n\n${body}`;
