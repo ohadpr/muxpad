@@ -425,14 +425,34 @@ export class Broker {
      *
      * So the spend is gated by the same rule as the offer: `local`, or a
      * machine that proved this request.
+     *
+     * ── AND A `timedReadOnly` WRITE IS REFUSED TWICE ──────────────────────
+     *
+     * `grantScope` is built from `timedScope`, which for a `timedReadOnly`
+     * capability is ALWAYS the read scope. So a draft's scope string is
+     * byte-identical to the scope of a read grant, and scope equality — the
+     * thing this block leans on everywhere else — does not separate them.
+     * What separates them today is one list: a read grant carries
+     * `readActions`, which has no draft in it.
+     *
+     * That is true and it is one edit away from not being true, in the
+     * direction where the failure is silent: a write dispatched against a
+     * grant somebody approved for reading. So the rule is also stated here,
+     * about the ACTION rather than about the list that happens to hold it. A
+     * capability that declares `timedReadOnly` has no standing permission for
+     * anything outside its read set, whatever a grant says it covers.
      */
+    const spendable = (g) => {
+      const cap = this.capabilityOfRequest(request);
+      if (cap.timedReadOnly && !cap.readActions.includes(request.action)) return false;
+      return (
+        g.teamID === request.teamID &&
+        g.actions.includes(request.action) &&
+        equal(g.scope, this.grantScope(request))
+      );
+    };
     const grant = timedOriginTrusted(origin, originVerified)
-      ? this.activeGrants().find(
-          (g) =>
-            g.teamID === request.teamID &&
-            g.actions.includes(request.action) &&
-            equal(g.scope, this.grantScope(request)),
-        )
+      ? this.activeGrants().find(spendable)
       : undefined;
     if (grant) {
       // Consume before audit or asynchronous identity checks: manual approval
