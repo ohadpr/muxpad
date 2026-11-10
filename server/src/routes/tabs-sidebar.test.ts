@@ -239,6 +239,37 @@ describe('living sidebar — tab ordering + pinning', () => {
       expect((await rowFor('P')).status).toBe('idle');
     });
 
+    it('a sub-chat whose agent GAVE UP says so on the parent', async () => {
+      /**
+       * The case this app used to be silent about. A worker's runner dies, the
+       * respawn budget is spent ("agent process died — restarting (attempt
+       * 3/3)"), and that child will never answer and never report.
+       *
+       * The parent's row showed NOTHING. Not a mark, not a colour — a chat
+       * with work quietly dead underneath it looked like a chat with nothing
+       * going on, and the only way to find out was to open the drawer.
+       *
+       * It contradicted this app's own precedence table: STATUS_ORDER puts
+       * `dead` above `ready` precisely so "it finished" cannot mask "it
+       * crashed", and then the child rollup dropped `dead` on the floor.
+       */
+      const parent = await makeTab('P');
+      const child = await makeTab('C');
+      await paneOf(parent.id);
+      const cp = await paneOf(child.id);
+      spawn(child.id, parent.id);
+      expect((await rowFor('P')).status).toBe('idle');
+
+      test.cache.setDead(cp, true);
+      // BLOCKED, not `dead`: the parent's own agent is fine, and `dead` on its
+      // row would say otherwise. What is true is that something under this
+      // chat has stopped for good and wants a human.
+      expect((await rowFor('P')).status).toBe('blocked');
+
+      // …and the child's own row still tells the truth about itself.
+      expect((await rowFor('C')).status).toBe('dead');
+    });
+
     it('a retired sub-chat stops counting for anything', async () => {
       const parent = await makeTab('P');
       const child = await makeTab('C');

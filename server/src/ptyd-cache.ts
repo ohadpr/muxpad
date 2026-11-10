@@ -887,6 +887,24 @@ export function decorateTab(
     for (const p of childPanes) {
       const s = cache.getStatus(p.id, p.unread === true);
       if (s === 'working' || s === 'blocked') childWork.push(s);
+      // ── …AND THE ONE WHOSE AGENT GAVE UP ───────────────────────────────
+      //
+      // `dead` used to be dropped here, which contradicted this app's own
+      // precedence table one file over: STATUS_ORDER ranks `dead` ABOVE
+      // `ready` precisely so that "it finished" cannot mask "it crashed".
+      // A child's crash was then the one thing a parent's row never showed —
+      // it read as a chat with nothing going on, and the only way to find out
+      // was to open the drawer.
+      //
+      // It is pushed as `blocked`, NOT as `dead`. The parent's own agent is
+      // fine, and `dead` on its row would say otherwise. What is true is that
+      // something under this chat has stopped for good and will never report:
+      // that wants a human, which is exactly what `blocked` means here.
+      //
+      // The delivery card still arrives when the crash report lands — this is
+      // the signal for the gap before it, and for the case where the report
+      // never comes at all.
+      else if (s === 'dead') childWork.push('blocked');
     }
   }
   const status = rollupStatus([

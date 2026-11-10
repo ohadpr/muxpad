@@ -64,6 +64,26 @@ describe('the serve supervisor backs off far enough to matter', () => {
     expect(script).toMatch(/fails=0\n\s*backoff=2/);
   });
 
+  it('gives up after a term, and that term is seven days by default', () => {
+    // The owner's call: a thing muxpad runs for you should survive a weekend
+    // outage and a Monday morning, and should NOT still be hammering a broken
+    // command a fortnight later with nobody told.
+    expect(script).toMatch(/FLAG_retry_for:-7d/);
+    // The spell is what is timed, not the process: a command that works all
+    // week and breaks on Friday gets its own full term from Friday.
+    expect(script).toMatch(/first_fail=\$SECONDS/);
+    expect(script).toMatch(/first_fail=0/);
+    expect(script).toMatch(/giving up/);
+    // …and forever is still available for the command that must never stop.
+    expect(script).toMatch(/retry_for" != "0"/);
+  });
+
+  it('refuses a malformed term instead of guessing one', () => {
+    // `bogus` ends in `s`, so a loose parser read it as seconds, kept "bogu",
+    // and a typo silently configured a retry term of nothing at all.
+    expect(script).toMatch(/\*\[!0-9dhms\]\*/);
+  });
+
   it('says once, out loud, that the command is not starting', () => {
     // The per-restart line scrolls past. Somebody opening this pane an hour
     // later needs to know it has been failing since long before they looked.
