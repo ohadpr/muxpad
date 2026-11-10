@@ -316,3 +316,77 @@ describe('hostMayPublishAs', () => {
     expect(hostMayPublishAs(db, 'report-ab12', 'trayo')).toBe(false);
   });
 });
+
+/**
+ * A CARD IS A PERMANENT RECORD, SO IT MUST NOT NAME THE WRONG SYSTEM.
+ *
+ * The failure detail said "Slack refused it" whatever had been asked. This
+ * file stopped being Slack-only when the archive arrived, so a mail draft
+ * that failed without an error string reported a refusal from a system it had
+ * never contacted. A record naming the wrong system is worse than one naming
+ * none at all.
+ */
+describe('a failed card says who actually refused', () => {
+  const card = () =>
+    db.prepare('SELECT kind, state, detail FROM chat_actions').get() as {
+      kind: string;
+      state: string;
+      detail: string | null;
+    };
+
+  it('does not blame Slack for the mail archive', () => {
+    recordSlackAction(db, {
+      action: 'msgvault.draft-reply',
+      payload: { id: '150889', body: 'b' },
+      pane,
+      result: { id: 'r-1', state: 'failed' },
+    });
+    expect(card().state).toBe('failed');
+    expect(card().detail).toBe('The mail archive refused it');
+  });
+
+  it('still names Slack when it was Slack', () => {
+    recordSlackAction(db, {
+      action: 'slack.post',
+      payload: { ref: 'C1', text: 'hi' },
+      pane,
+      result: { id: 'r-2', state: 'failed' },
+    });
+    expect(card().detail).toBe('Slack refused it');
+  });
+
+  it('prefers the broker’s own error over any guess', () => {
+    recordSlackAction(db, {
+      action: 'msgvault.draft-reply',
+      payload: { id: '1', body: 'b' },
+      pane,
+      result: { id: 'r-3', state: 'failed', error: 'draft_disabled' },
+    });
+    expect(card().detail).toBe('draft_disabled');
+  });
+
+  it('names the system on a later resolve too, from the result’s own action', () => {
+    recordSlackAction(db, {
+      action: 'msgvault.draft-reply',
+      payload: { id: '1', body: 'b' },
+      pane,
+      result: { id: 'r-4', state: 'pending' },
+    });
+    expect(card().state).toBe('pending');
+    // The approvals poll reports the end state separately, and it carries the
+    // action — so the card does not fall back to a bare "it was refused".
+    resolveSlackAction(db, { id: 'r-4', state: 'failed', action: 'msgvault.draft-reply' });
+    expect(card().detail).toBe('The mail archive refused it');
+  });
+
+  it('refuses to guess when nothing says which system it was', () => {
+    recordSlackAction(db, {
+      action: 'slack.post',
+      payload: { ref: 'C1', text: 'hi' },
+      pane,
+      result: { id: 'r-5', state: 'pending' },
+    });
+    resolveSlackAction(db, { id: 'r-5', state: 'failed' });
+    expect(card().detail).toBe('It was refused');
+  });
+});
