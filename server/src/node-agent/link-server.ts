@@ -1,9 +1,76 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { WebSocket } from 'ws';
 import { TranscriptSubscriptions } from '../ptyd/transcript-subscriptions.js';
 import { type LinkUp, decodeLink, encodeLink, hostMaySend } from './link-protocol.js';
 import { sign } from './origin-proof.js';
 import { sendPath } from './send-files.js';
+
+/** One call this host is relaying, remembered only while it is in flight. */
+interface InFlightCall {
+  /** What the in-pane CLI said the call is for — `slack.post`, `msgvault.search`. */
+  action: string;
+  /** Every value the call actually carried, stringified. The host refuses to
+   *  sign a payload that does not contain all of them. */
+  values: string[];
+}
+
+/** `pane` and `key` identify the caller, not the request, and never reach the
+ *  broker payload — binding on them would refuse every honest signature. */
+const NOT_THE_REQUEST = new Set(['pane', 'key']);
+
+/** One stringified form for both sides, so a number in a query string and a
+ *  number in a payload compare equal. Objects and arrays get a stable
+ *  serialisation; key order must not decide whether a proof is issued.
+ *
+ *  Anything long is reduced to a digest. `slack.upload` carries ~14MB of
+ *  base64, and holding a second copy of it for the lifetime of the call —
+ *  then hashing it twice to compare — is a real cost for a check whose only
+ *  job is equality. A digest compares exactly the same and is 71 bytes. */
+const LONG = 256;
+const asValue = (v: unknown): string => {
+  const raw = v !== null && typeof v === 'object' ? JSON.stringify(stableValue(v)) : String(v);
+  return raw.length > LONG ? `sha256:${createHash('sha256').update(raw).digest('hex')}` : raw;
+};
+
+const stableValue = (v: unknown): unknown => {
+  if (Array.isArray(v)) return v.map(stableValue);
+  if (v && typeof v === 'object')
+    return Object.fromEntries(
+      Object.keys(v as Record<string, unknown>)
+        .sort()
+        .map((k) => [k, stableValue((v as Record<string, unknown>)[k])]),
+    );
+  return v;
+};
+
+/** What a relayed call carries, from either place it can carry it: the query
+ *  string of a GET or the JSON body of a POST. Empty values bind nothing and
+ *  are dropped — requiring `""` to appear would be a rule about nothing. */
+export function callValues(path: string, body: string | undefined): string[] {
+  const out: string[] = [];
+  const query = path.includes('?') ? new URLSearchParams(path.slice(path.indexOf('?') + 1)) : null;
+  if (query)
+    for (const [k, v] of query) if (!NOT_THE_REQUEST.has(k) && v !== '') out.push(asValue(v));
+  if (body)
+    try {
+      const parsed: unknown = JSON.parse(body);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed))
+        for (const [k, v] of Object.entries(parsed as Record<string, unknown>))
+          if (!NOT_THE_REQUEST.has(k) && v !== '' && v !== undefined) out.push(asValue(v));
+    } catch {
+      // A body this host cannot parse binds nothing, and the signature then
+      // rests on the action alone — the behaviour before this existed.
+    }
+  return out;
+}
+
+/** The values a payload offers, flattened one level: the broker's payloads
+ *  are flat objects of scalars and small arrays, and a nested match would
+ *  invite a payload that buries the real value somewhere it is not used. */
+export function payloadValues(payload: unknown): string[] {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return [];
+  return Object.values(payload as Record<string, unknown>).map(asValue);
+}
 
 /**
  * THE HOST'S END OF THE LINK.
@@ -103,7 +170,7 @@ export class LinkServer {
    * `slack.channels` somebody is relaying into a `slack.post`. Keyed by the
    * same correlation id as `apiCalls`, and dropped with it.
    */
-  private readonly apiActions = new Map<string, string>();
+  private readonly apiActions = new Map<string, InFlightCall>();
   private readonly subs: TranscriptSubscriptions;
   private readonly log: (line: string) => void;
 
@@ -233,12 +300,36 @@ export class LinkServer {
    * once — which is where everything stood before this existed, and the right
    * failure for a key that has been rotated on one side only.
    *
-   * The two checks are the whole security argument:
+   * The three checks are the whole security argument:
    *
    *   · IN FLIGHT — the host signs only for a call it is itself relaying, so
    *     a server cannot collect signatures for requests nobody made;
    *   · THE DECLARED ACTION — the host signs what its own caller asked for,
-   *     so a server cannot upgrade a read it is relaying into a write.
+   *     so a server cannot upgrade a read it is relaying into a write;
+   *   · AND THE VALUES — every value this host actually relayed has to be in
+   *     the payload it is being asked to sign.
+   *
+   * The third one was missing, and without it the second was worth less than
+   * its comment claimed. "The host signs what its own caller asked for" was
+   * true of the ACTION and false of the REQUEST: any payload at all could be
+   * signed while some call for that action was in flight. A `msgvault.search`
+   * the VM ran for "dinner" would mint a proof for a search of anything, and
+   * a `slack.post` to one channel would mint a proof for a post to another.
+   * That matters because a proof is what lets a timed grant be SPENT — so
+   * whoever can drive this link could ride a grant with a request this
+   * machine never made.
+   *
+   * Binding is by VALUE rather than by key, because the server legitimately
+   * renames and adds: `?q=` becomes `{query}`, `?limit=25` becomes a number,
+   * and absent options arrive as defaults like `all: false`. Requiring every
+   * relayed value to appear among the payload's own values survives all of
+   * that and still pins the fields that carry meaning — the query, the id,
+   * the channel, the text.
+   *
+   * A wrong refusal here is SAFE and that is why the rule can be strict: an
+   * unproven request is approved once by a human, which is where everything
+   * stood before proofs existed. The failure mode is a dialog, never a
+   * broken call.
    */
   private signOrigin(id: string, callId: string, action: string, payload: unknown): void {
     const refuse = (reason: string): void => {
@@ -249,13 +340,22 @@ export class LinkServer {
       refuse('no origin key on this host');
       return;
     }
-    const declared = this.apiActions.get(callId);
-    if (!declared) {
+    const call = this.apiActions.get(callId);
+    if (!call) {
       refuse('no such call in flight');
       return;
     }
-    if (declared !== action) {
-      refuse(`call is for ${declared}, not ${action}`);
+    if (call.action !== action) {
+      refuse(`call is for ${call.action}, not ${action}`);
+      return;
+    }
+    const offered = new Set(payloadValues(payload));
+    const missing = call.values.find((v) => !offered.has(v));
+    if (missing !== undefined) {
+      // The value itself is NOT named in the reason: it is the user's search
+      // text or message body, and this string is relayed to the other
+      // machine and logged there.
+      refuse('payload does not match the call this host relayed');
       return;
     }
     const ts = Date.now();
@@ -345,7 +445,8 @@ export class LinkServer {
         this.apiActions.delete(id);
         resolve(r);
       });
-      if (declaredAction) this.apiActions.set(id, declaredAction);
+      if (declaredAction)
+        this.apiActions.set(id, { action: declaredAction, values: callValues(path, body) });
       this.up({
         ch: 'api',
         op: 'request',
