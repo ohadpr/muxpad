@@ -69,7 +69,16 @@ describe('the serve supervisor backs off far enough to matter', () => {
     // The owner's call: a thing muxpad runs for you should survive a weekend
     // outage and a Monday morning, and should NOT still be hammering a broken
     // command a fortnight later with nobody told.
-    expect(script).toMatch(/FLAG_retry_for:-7d/);
+    expect(script).toMatch(/FLAG_retry:-7d/);
+    // ── THE FLAG NAME IS A SHELL VARIABLE NAME ──────────────────────────
+    // It shipped as `--retry-for`, and `unset FLAG_retry-for` is not a valid
+    // identifier: under `set -e` that killed `cmd_serve` on its first line,
+    // so EVERY hosted app — browser hosts, dev servers, the tunnel — failed
+    // to start. Caught by hosted-e2e, which is the only test that runs a
+    // real `muxpad serve`.
+    expect(script).not.toMatch(/reset_flags[^\n]*\bretry-for\b/);
+    // …and the parser now refuses such a name out loud instead of dying.
+    expect(script).toMatch(/flag name '\$f' must be letters, digits or _/);
     // The spell is what is timed, not the process: a command that works all
     // week and breaks on Friday gets its own full term from Friday.
     expect(script).toMatch(/first_fail=\$SECONDS/);
