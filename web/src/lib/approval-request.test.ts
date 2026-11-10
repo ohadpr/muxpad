@@ -93,8 +93,8 @@ describe('the whole payload is on screen', () => {
   });
 
   it('never shows the same value twice', () => {
-    const d = describeRequest('msgvault.search', { query: 'from:vuori', limit: 50 });
-    expect(d.primary?.value).toBe('from:vuori');
+    const d = describeRequest('msgvault.search', { query: 'from:acme', limit: 50 });
+    expect(d.primary?.value).toBe('from:acme');
     expect(d.rest.map(([k]) => k)).not.toContain('query');
   });
 
