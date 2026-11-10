@@ -80,6 +80,31 @@ export async function refreshWorkingSet(): Promise<WorkingRow[]> {
  * showing, never adds or reorders one.
  */
 subscribe((e) => {
+  /**
+   * ── AND A CHAT THAT NO LONGER EXISTS HAS TO GO ────────────────────────
+   *
+   * This listener handled `tab.updated` and returned on everything else, so
+   * a DELETED chat kept its slot: the row sat in Recently Active with the
+   * name and status it had when it died, and clicking it opened nothing.
+   *
+   * It is also the whole reason "delete doesn't work, only archive works"
+   * was a reasonable thing to believe. Archive emits `tab.updated` — the
+   * patch below runs, the row visibly becomes done, the action looks like it
+   * landed. Delete emits `tab.removed` and NOTHING here listened, so the one
+   * action that really did destroy the chat was the one that appeared to do
+   * nothing. The two actions differed on screen by exactly the event this
+   * function ignored.
+   *
+   * Dropping a row is the one shape change the strip may make on its own.
+   * The SET is still the server's: this never adds a chat and never reorders
+   * one, it only stops drawing something that is gone — and the server's
+   * next `working_set.changed` refills the slot.
+   */
+  if (e.type === 'tab.removed') {
+    const without = cache.filter((s) => s.tab.id !== e.tab_id);
+    if (without.length !== cache.length) publish(without);
+    return;
+  }
   if (e.type !== 'tab.updated') return;
   const i = cache.findIndex((s) => s.tab.id === e.tab.id);
   if (i === -1) return;
