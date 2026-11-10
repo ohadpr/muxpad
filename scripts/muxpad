@@ -808,6 +808,23 @@ strip_global_flags() {
 # Unknown flags error out.
 reset_flags() {
   for f in "$@"; do
+    # ── A FLAG NAME IS A SHELL VARIABLE NAME ──────────────────────────────
+    #
+    # `FLAG_retry-for` is not an identifier, so `unset` fails, and under
+    # `set -e` the whole command dies on its first line. That is exactly what
+    # happened: one hyphenated flag added to `muxpad serve` meant EVERY
+    # hosted app — browser hosts, dev servers, the tunnel — failed to start,
+    # with no message anywhere naming the cause.
+    #
+    # The parser has never supported hyphens (there is no normalisation step
+    # in parse_flags either, which is why every flag in this script is one
+    # word). It now says so, here, instead of taking the process with it.
+    case "$f" in
+      *[!a-zA-Z0-9_]*)
+        echo "muxpad: internal: flag name '$f' must be letters, digits or _ (the parser maps it to a shell variable)" >&2
+        exit 2
+        ;;
+    esac
     unset "FLAG_$f"
     eval "FLAG_$f=''"
   done
@@ -2324,8 +2341,8 @@ cmd_app_url() {
 #     the face menu offers Terminal ⇄ Web — same pattern as agent chat panes;
 #   - restarts the command when it dies (crash-loop backoff: quick deaths
 #     back off 2s→300s; a run that lived >10s resets to 2s);
-#   - gives up after --retry-for (default 7d) of a command that has never
-#     started successfully, and says so — `--retry-for=0` tries for ever;
+#   - gives up after --retry (default 7d) of a command that has never
+#     started successfully, and says so — `--retry=0` tries for ever;
 #   - Ctrl-C stops for real (the loop exits instead of restarting).
 # The web face's dead-URL probe shows "server stopped" during the gap and
 # self-heals when the restart comes up — no manual reload.
@@ -2371,10 +2388,10 @@ cmd_serve() {
     echo "muxpad serve: must be run inside a muxpad pane" >&2
     exit 1
   fi
-  reset_flags url label retry-for
-  parse_flags url label retry-for -- "$@"
+  reset_flags url label retry
+  parse_flags url label retry -- "$@"
   if [ "${#POSITIONAL[@]}" -lt 1 ]; then
-    echo 'usage: muxpad serve [--url <url>] [--label <text>] [--retry-for <7d|0>] -- <command...>' >&2
+    echo 'usage: muxpad serve [--url <url>] [--label <text>] [--retry <7d|0>] -- <command...>' >&2
     exit 1
   fi
   # Snapshot NOW: FLAG_*/POSITIONAL are globals, and cmd_app_url below runs
@@ -2385,11 +2402,11 @@ cmd_serve() {
   # Seven days by default. The reasoning is the owner's: a thing muxpad runs
   # for you should survive a weekend outage and a Monday morning, and should
   # NOT still be hammering a broken command a fortnight later with nobody
-  # told. `--retry-for=0` is the old behaviour, forever, for the rare command
+  # told. `--retry=0` is the old behaviour, forever, for the rare command
   # that genuinely must never stop being attempted.
   local retry_for
-  retry_for=$(parse_duration_days "${FLAG_retry_for:-7d}") || {
-    echo "muxpad serve: --retry-for wants something like 7d, 36h, 90m or 0 (forever)" >&2
+  retry_for=$(parse_duration_days "${FLAG_retry:-7d}") || {
+    echo "muxpad serve: --retry wants something like 7d, 36h, 90m or 0 (forever)" >&2
     exit 1
   }
   local cmdv=("${POSITIONAL[@]}")
@@ -2478,7 +2495,7 @@ cmd_serve() {
     fi
     if [ "$retry_for" != "0" ] && [ "$first_fail" != "-1" ] \
        && [ $((SECONDS - first_fail)) -ge "$retry_for" ]; then
-      echo "muxpad serve: giving up — this command has not started successfully for $((retry_for / 86400))d. Fix it and run 'muxpad app start' (or pass --retry-for=0 to keep trying for ever)."
+      echo "muxpad serve: giving up — this command has not started successfully for $((retry_for / 86400))d. Fix it and run 'muxpad app start' (or pass --retry=0 to keep trying for ever)."
       break
     fi
     if [ "$fails" = "10" ]; then
