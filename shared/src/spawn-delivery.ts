@@ -48,6 +48,16 @@ export interface SpawnDeliveryEntry {
   /** Published urls the child produced. */
   artifacts?: string[];
   /**
+   * Where the FULL report was written, when it was too long to inline.
+   *
+   * The inline text is a preview in that case; this is the whole thing. A
+   * parent reviewing work needs all of it — truncation is exactly the wrong
+   * economy for the one message whose job is to be acted on — but a 65-way
+   * fan-out of unabridged reports is a context window, not a message. A file
+   * is both: small to mention, complete to read.
+   */
+  reportPath?: string;
+  /**
    * The child's agent PANE — the handle `muxpad agent send` takes.
    *
    * Without it the parent could read a result and not act on it: the message
@@ -94,7 +104,16 @@ function attr(attrs: string, name: string): string | null {
 export const DELIVERY_BODY_BUDGET = 24_000;
 /** No child's report is cut below this, however many siblings there are. */
 export const DELIVERY_MIN_PER_CHILD = 240;
-/** …and none gets more than this even when it is the only one. */
+/**
+ * …and none gets more than this inline, even when it is the only one.
+ *
+ * NOT a limit on what the parent can read — see `reportPath`. A report longer
+ * than this is written to a file in full and the path travels with it, so the
+ * message stays a message and nothing is lost. Before that existed this cap
+ * was a hard ceiling on a worker's output: a 6,000-character code review
+ * arrived as its first 1,200 characters, cut mid-word, and the parent
+ * reviewed a fragment while believing it had the report.
+ */
 export const DELIVERY_MAX_PER_CHILD = 1_200;
 
 /** Per-child character budget for `n` children. */
@@ -163,7 +182,13 @@ export function renderSpawnDelivery(entries: readonly SpawnDeliveryEntry[]): str
   const body = entries
     .map((e) => {
       const head = `## ${e.name}${stateNote(e.state)}`;
+      const full = e.report ?? '';
+      const clipped = full.trim().length > budget;
       const text = e.report ? clip(e.report, budget) : '(no report)';
+      // Only when it was actually cut: a path on a report you have read in
+      // full is noise, and it would teach a parent to go and read the file
+      // every time.
+      const whole = clipped && e.reportPath ? `\n\nFull report: \`${e.reportPath}\`` : '';
       const links = e.artifacts?.length ? `\n\nArtifacts: ${e.artifacts.join(' ')}` : '';
       // The handle, under the result it belongs to — so "send it back" is one
       // line away from the thing being judged, not a lookup.
@@ -179,7 +204,7 @@ export function renderSpawnDelivery(entries: readonly SpawnDeliveryEntry[]): str
         : e.state === 'crashed'
           ? '\n\nThis worker cannot be resumed — its agent died. Spawn a fresh one with `muxpad agent new` if the work still needs doing.'
           : '';
-      return `${head}\n\n${text}${links}${back}`;
+      return `${head}\n\n${text}${whole}${links}${back}`;
     })
     .join('\n\n');
   return `<muxpad-delivery count="${n}" from="${ids}">\n${note}\n</muxpad-delivery>\n\n${body}`;

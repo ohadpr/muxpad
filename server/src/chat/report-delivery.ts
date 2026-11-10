@@ -1,4 +1,10 @@
-import { type SpawnDeliveryEntry, renderSpawnDelivery } from '@muxpad/shared';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import {
+  DELIVERY_MAX_PER_CHILD,
+  type SpawnDeliveryEntry,
+  renderSpawnDelivery,
+} from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { PaneStore } from '../store/PaneStore.js';
 import { type SpawnRound, SpawnRoundStore } from '../store/SpawnRoundStore.js';
@@ -92,6 +98,12 @@ export interface SubmitSendResult {
 export interface ReportDeliveryDeps {
   db: Database.Database;
   /**
+   * Where a report too long to inline is written in full. Optional: without
+   * it a long report is still delivered, just clipped — the old behaviour,
+   * and the right failure for a server that has nowhere to put a file.
+   */
+  dataDir?: string;
+  /**
    * The ONE injection primitive — ws.ts `submitSend`. Synchronous, and this
    * file depends on that: see `flushParent` for why the read-decide-stamp-send
    * sequence must not be interleaved with another flush of the same parent.
@@ -117,6 +129,7 @@ export class ReportDelivery {
   private readonly db: Database.Database;
   private readonly submitSend: ReportDeliveryDeps['submitSend'];
   private readonly now: () => number;
+  private readonly dataDir: string | null;
   private timer: ReturnType<typeof setInterval> | null = null;
   /**
    * Parents whose refusal we have already reported, this process.
@@ -136,6 +149,36 @@ export class ReportDelivery {
     this.db = deps.db;
     this.submitSend = deps.submitSend;
     this.now = deps.now ?? (() => Date.now());
+    this.dataDir = deps.dataDir ?? null;
+  }
+
+  /**
+   * Write a long report in full, and answer with the path — or null.
+   *
+   * A parent reviewing work needs all of it, and truncation is exactly the
+   * wrong economy for the one message whose job is to be acted on. But 65
+   * unabridged reports is a context window rather than a message. A file is
+   * both: cheap to mention, complete to read.
+   *
+   * BEST EFFORT, ALWAYS. A failure here costs the PATH, never the delivery —
+   * the report still goes out clipped, which is where this started. So every
+   * error is swallowed deliberately: there is no outcome worth failing a
+   * delivery over.
+   */
+  private writeFullReport(round: SpawnRound, report: string): string | null {
+    if (!this.dataDir) return null;
+    try {
+      const dir = join(this.dataDir, 'spawn-reports');
+      mkdirSync(dir, { recursive: true });
+      // Named for the ROUND, not the tab: a worker sent back produces another
+      // round and another report, and the earlier one must stay readable —
+      // that is the whole shape of the review loop.
+      const path = join(dir, `${round.id}.md`);
+      writeFileSync(path, report.endsWith('\n') ? report : `${report}\n`, 'utf8');
+      return path;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -427,6 +470,15 @@ export class ReportDelivery {
       state: round.report_state ?? (round.report ? null : 'failed'),
       report: round.report,
       artifacts: round.artifacts,
+      // Only when it will actually be clipped — a path beside a report you
+      // have read in full is noise, and teaches a parent to open the file
+      // every time.
+      ...(() => {
+        const text = round.report?.trim();
+        if (!text || text.length <= DELIVERY_MAX_PER_CHILD) return {};
+        const path = this.writeFullReport(round, text);
+        return path ? { reportPath: path } : {};
+      })(),
       // The handle for sending this worker back — see `resumablePaneOf` for
       // the two cases where there is deliberately none.
       ...(() => {
