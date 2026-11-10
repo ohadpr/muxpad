@@ -110,3 +110,45 @@ describe('the whole payload is on screen', () => {
     ).not.toThrow();
   });
 });
+
+describe('a draft is described by what goes into the mailbox', () => {
+  it('leads with who it is to, and makes the BODY the thing you read', () => {
+    const d = describeRequest('msgvault.draft', {
+      to: ['a@b.com'],
+      subject: 'Dinner',
+      body: 'Are you free Thursday?',
+    });
+    expect(d.title).toBe('Draft an email to a@b.com');
+    // The body is the primary field: a dialog that showed the recipient but
+    // not the text would be asking for consent to something it had not shown.
+    expect(d.primary).toEqual({ key: 'body', value: 'Are you free Thursday?' });
+    expect(d.qualifier).toBe('saved as a draft — it cannot be sent');
+    // …and the rest is still all on screen.
+    expect(d.rest.map(([k]) => k)).toEqual(['to', 'subject']);
+  });
+
+  it('names a crowd without listing it in the heading', () => {
+    const many = describeRequest('msgvault.draft', {
+      to: ['a@b.com', 'c@d.com', 'e@f.com'],
+      subject: 's',
+      body: 'b',
+    });
+    expect(many.title).toBe('Draft an email to a@b.com and 2 others');
+    // The full list is a field, so nothing is hidden.
+    expect(many.rest.find(([k]) => k === 'to')?.[1]).toContain('e@f.com');
+  });
+
+  it('says out loud when a reply goes to everyone', () => {
+    expect(describeRequest('msgvault.draft-reply', { id: '1', body: 'ok' }).title).toBe(
+      'Draft a reply',
+    );
+    expect(describeRequest('msgvault.draft-reply', { id: '1', body: 'ok', all: true }).title).toBe(
+      'Draft a reply to everyone on the thread',
+    );
+  });
+
+  it('marks a draft as mail — the mark is about your data, not about reading', () => {
+    expect(marksFor('msgvault.draft')).toEqual(['gmail']);
+    expect(marksFor('msgvault.draft-reply')).toEqual(['gmail']);
+  });
+});

@@ -56,8 +56,15 @@ describe('the verbs that reach other people', () => {
     expect(classify('slack.post').notifiesOthers).toBe(true);
   });
 
-  it('does not flag a draft, which reaches nobody', () => {
-    expect(classify('msgvault.search').notifiesOthers).toBeUndefined();
+  it('says FALSE for a verb that reaches nobody, rather than saying nothing', () => {
+    // It used to be absent, which reads as false at a call site that forgot
+    // to think about it and as "nobody asked" at one that did. Now that a
+    // draft exists — a write that genuinely reaches no one — the difference
+    // is load-bearing.
+    expect(classify('msgvault.search').notifiesOthers).toBe(false);
+    expect(classify('msgvault.draft').notifiesOthers).toBe(false);
+    expect(classify('msgvault.draft-reply').notifiesOthers).toBe(false);
+    expect(classify('slack.post').notifiesOthers).toBe(true);
   });
 
   it('has no calendar invite to refuse — it is ABSENT, which is stronger', () => {
@@ -75,15 +82,22 @@ describe('the verbs that reach other people', () => {
     expect(c.reason).toMatch(/does not know the verb/);
   });
 
-  it('has no verb that sends anything, for msgvault', () => {
-    // `list-senders` reads who emails you most, and the word inside it is why
-    // this match is anchored on the VERB rather than on the substring: an
-    // assertion that fails on a reading verb would have been edited away.
+  it('has no verb that SENDS anything, for msgvault', () => {
+    // Drafting arrived, so "nothing that writes" is no longer the claim. The
+    // claim is narrower and is the one that matters: nothing LEAVES. A draft
+    // sits in the mailbox; `send`, `post` and `invite` put something in front
+    // of another person under the owner's name, and none of them exists.
     const verbs = verbsOf('msgvault');
     expect(verbs.length).toBeGreaterThan(0);
-    expect(verbs.filter((v) => /\.(send|post|invite|compose|reply|draft)/.test(v))).toEqual([]);
-    // …and every one of them classifies as a read.
-    for (const v of verbs) expect(classify(v), v).toMatchObject({ ok: true, kind: 'read' });
+    expect(verbs.filter((v) => /\.(send|post|invite)/.test(v))).toEqual([]);
+    // Every READ may ride a grant; every WRITE is approved on its own, so a
+    // draft can never be dispatched by an approval given for something else.
+    for (const v of verbs) {
+      const c = classify(v);
+      expect(c.ok, v).toBe(true);
+      if (/draft/.test(v)) expect(c, v).toMatchObject({ kind: 'write', timed: false });
+      else expect(c, v).toMatchObject({ kind: 'read', timed: true });
+    }
   });
 });
 
@@ -92,7 +106,7 @@ describe('the table itself', () => {
     expect(verbsOf('slack').length).toBeGreaterThan(5);
     // FOUR. Three advertised verbs could not work against msgvault 0.22.0 and
     // were removed rather than repaired — see the note on MSGVAULT.
-    expect(verbsOf('msgvault')).toHaveLength(4);
+    expect(verbsOf('msgvault')).toHaveLength(6);
     expect(verbsOf('slack').every((v) => v.startsWith('slack.'))).toBe(true);
     // A prefix that is not a connector gets nothing, rather than everything.
     expect(verbsOf('')).toEqual([]);
@@ -125,28 +139,36 @@ describe('the table is the policy, so the table is pinned', () => {
   // test. The behavioural tests all ask "does a write stay untimed", which a
   // mutant satisfies by making the write a read. So the data itself is asserted
   // verbatim: this file IS the policy, and a careless edit to it must fail.
-  const EXPECTED: Record<string, { kind: string; timed: boolean; others?: true; refused?: true }> =
-    {
-      'slack.read': { kind: 'read', timed: true },
-      'slack.search': { kind: 'read', timed: true },
-      'slack.channels': { kind: 'read', timed: true },
-      'slack.users': { kind: 'read', timed: true },
-      'slack.thread': { kind: 'read', timed: true },
-      'slack.post': { kind: 'write', timed: false, others: true },
-      'slack.dm': { kind: 'write', timed: false, others: true },
-      'slack.react': { kind: 'write', timed: false, others: true },
-      'slack.edit': { kind: 'write', timed: false, others: true },
-      'slack.unpost': { kind: 'write', timed: false, others: true },
-      'slack.upload': { kind: 'write', timed: false, others: true },
-      // THE BROKER'S ACTIONS, which is now the only msgvault vocabulary —
-      // see the note on MSGVAULT in registry.ts. The write verbs that used to
-      // be listed here are not refused by this table any more; they are
-      // ABSENT FROM THE BROKER, which is stronger than a refusal.
-      'msgvault.search': { kind: 'read', timed: true },
-      'msgvault.show-message': { kind: 'read', timed: true },
-      'msgvault.show-thread': { kind: 'read', timed: true },
-      'msgvault.stats': { kind: 'read', timed: true },
-    };
+  const EXPECTED: Record<
+    string,
+    { kind: string; timed: boolean; others?: boolean; refused?: true }
+  > = {
+    'slack.read': { kind: 'read', timed: true },
+    'slack.search': { kind: 'read', timed: true },
+    'slack.channels': { kind: 'read', timed: true },
+    'slack.users': { kind: 'read', timed: true },
+    'slack.thread': { kind: 'read', timed: true },
+    'slack.post': { kind: 'write', timed: false, others: true },
+    'slack.dm': { kind: 'write', timed: false, others: true },
+    'slack.react': { kind: 'write', timed: false, others: true },
+    'slack.edit': { kind: 'write', timed: false, others: true },
+    'slack.unpost': { kind: 'write', timed: false, others: true },
+    'slack.upload': { kind: 'write', timed: false, others: true },
+    // THE BROKER'S ACTIONS, which is now the only msgvault vocabulary —
+    // see the note on MSGVAULT in registry.ts. The write verbs that used to
+    // be listed here are not refused by this table any more; they are
+    // ABSENT FROM THE BROKER, which is stronger than a refusal.
+    'msgvault.search': { kind: 'read', timed: true },
+    'msgvault.show-message': { kind: 'read', timed: true },
+    'msgvault.show-thread': { kind: 'read', timed: true },
+    'msgvault.stats': { kind: 'read', timed: true },
+    // THE TWO WRITES. `others: false` is the point of listing them beside
+    // Slack's: a draft lands in the owner's own mailbox and nobody else
+    // learns anything, which is exactly what separates it from `slack.post`
+    // and from the calendar invite this connector still refuses to have.
+    'msgvault.draft': { kind: 'write', timed: false, others: false },
+    'msgvault.draft-reply': { kind: 'write', timed: false, others: false },
+  };
 
   it('has exactly these verbs, no more and no fewer', () => {
     expect(Object.keys(VERBS).sort()).toEqual(Object.keys(EXPECTED).sort());
@@ -163,7 +185,9 @@ describe('the table is the policy, so the table is pinned', () => {
         expect(got.notifiesOthers, verb).toBeUndefined();
         expect(got.reason, verb).toBeTruthy();
       } else {
-        expect(got.notifiesOthers, verb).toBe(want.others);
+        // `want.others` is written only for the verbs that have it; absent
+        // means false, and `classify` now ALWAYS answers with a boolean.
+        expect(got.notifiesOthers, verb).toBe(want.others === true);
       }
       expect(got.ok, verb).toBe(!want.refused);
     }
@@ -185,8 +209,11 @@ describe('the table is the policy, so the table is pinned', () => {
     for (const verb of Object.keys(VERBS)) {
       const r = VERBS[verb];
       if (r?.kind !== 'write') continue;
-      // A draft reaches nobody; everything else that writes does.
-      const isDraft = verb.includes('.draft.');
+      // A draft reaches nobody; everything else that writes does. Matched on
+      // the verb's own name — `msgvault.draft`, `msgvault.draft-reply` — and
+      // not on `.draft.`, which was the shape of a naming that never shipped
+      // and silently matched nothing once the real verbs arrived.
+      const isDraft = /\.draft(-|$)/.test(verb);
       expect(r.notifiesOthers === true, verb).toBe(!isDraft);
     }
   });

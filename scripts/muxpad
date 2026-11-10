@@ -924,12 +924,19 @@ msgvault_usage() {
   cat >&2 <<'EOF'
 usage: muxpad msgvault <verb>
 
-  search "<gmail-like query>" [--limit=N]   search the archive
+read:
+  search "<gmail-like query>" [--limit=N]   search your mail
   show-message <id>                         one message in full
   show-thread <id>                          the thread around a message
-  stats                                     archive totals, no content
+  stats                                     totals only, no content
 
-Each call asks you to approve it, once, or rides an approval you already gave.
+write (a draft; it can never send):
+  draft --to=a@b.com [--cc=…] [--bcc=…] --subject="…" --body="…"
+  draft-reply <message-id> --body="…" [--all]
+
+Each call asks you to approve it. A READ may be approved for a stretch of
+time; a draft is approved one at a time, with its text in front of you, and
+--all means the reply goes to everyone on the thread rather than the sender.
 EOF
   exit 1
 }
@@ -968,6 +975,52 @@ cmd_msgvault() {
       slack_call GET "/api/msgvault/thread?$q&id=$enc" ;;
     stats)
       slack_call GET "/api/msgvault/stats?$q" ;;
+    # ── THE TWO WRITES ──────────────────────────────────────────────────
+    # A draft is the only thing here that leaves something behind, and it
+    # still cannot send: the grant carries draft permissions and no send
+    # permission at all. Both go through the same approval as every read,
+    # and neither can be approved for a duration — see the broker.
+    draft)
+      local to=() cc=() bcc=() subject="" body=""
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --to=*) to+=("${1#*=}") ;;
+          --cc=*) cc+=("${1#*=}") ;;
+          --bcc=*) bcc+=("${1#*=}") ;;
+          --subject=*) subject="${1#*=}" ;;
+          --body=*) body="${1#*=}" ;;
+          -*) echo "muxpad: unknown option: $1" >&2; return 1 ;;
+          *) echo "muxpad: unexpected argument: $1" >&2; return 1 ;;
+        esac
+        shift
+      done
+      [ ${#to[@]} -gt 0 ] || { echo 'muxpad: draft needs --to=' >&2; return 1; }
+      [ -n "$subject" ] || { echo 'muxpad: draft needs --subject=' >&2; return 1; }
+      [ -n "$body" ] || { echo 'muxpad: draft needs --body=' >&2; return 1; }
+      # Built by jq so an address list, a subject with quotes and a body with
+      # newlines all survive as data rather than as shell.
+      slack_call POST /api/msgvault/draft "$(jq -nc \
+        --arg pane "$MUXPAD_PANE_ID" --arg key "$MUXPAD_PANE_KEY" \
+        --arg subject "$subject" --arg body "$body" \
+        --args '{pane:$pane,key:$key,subject:$subject,body:$body,to:$ARGS.positional[0:'"${#to[@]}"'],cc:[],bcc:[]}' \
+        ${to[@]+"${to[@]}"})" ;;
+    draft-reply)
+      [ -n "${1:-}" ] || msgvault_usage
+      local id="$1"; shift
+      local rbody="" all=false
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --body=*) rbody="${1#*=}" ;;
+          --all) all=true ;;
+          *) echo "muxpad: unknown option: $1" >&2; return 1 ;;
+        esac
+        shift
+      done
+      [ -n "$rbody" ] || { echo 'muxpad: draft-reply needs --body=' >&2; return 1; }
+      slack_call POST /api/msgvault/draft-reply "$(jq -nc \
+        --arg pane "$MUXPAD_PANE_ID" --arg key "$MUXPAD_PANE_KEY" \
+        --arg id "$id" --arg body "$rbody" --argjson all "$all" \
+        '{pane:$pane,key:$key,id:$id,body:$body,all:$all}')" ;;
     *) msgvault_usage ;;
   esac
 }
@@ -1056,6 +1109,8 @@ connector_action() {
   case "$path" in
     /api/msgvault/message) printf 'msgvault.show-message' ;;
     /api/msgvault/thread) printf 'msgvault.show-thread' ;;
+    /api/msgvault/draft) printf 'msgvault.draft' ;;
+    /api/msgvault/draft-reply) printf 'msgvault.draft-reply' ;;
     /api/slack/*) printf 'slack.%s' "${path##*/}" ;;
     /api/msgvault/*) printf 'msgvault.%s' "${path##*/}" ;;
     *) printf '' ;;

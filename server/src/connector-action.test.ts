@@ -65,6 +65,16 @@ describe('what the CLI declares is what the server asks the broker for', () => {
     expect(table.some(([p, a]) => `msgvault${p.replace('/', '.')}` !== a)).toBe(true);
   });
 
+  it('names the two write verbs, whose paths are not in the read table', () => {
+    // They are POST routes with a body, so they are declared by hand in
+    // routes/slack.ts rather than in ARCHIVE_ROUTES — and a hand-written
+    // route is exactly the kind that gets forgotten in the CLI's table.
+    expect(ROUTES).toMatch(/brokerAction\(\s*'msgvault\.draft'/);
+    expect(ROUTES).toMatch(/brokerAction\(\s*'msgvault\.draft-reply'/);
+    expect(ask('/api/msgvault/draft')).toBe('msgvault.draft');
+    expect(ask('/api/msgvault/draft-reply')).toBe('msgvault.draft-reply');
+  });
+
   it('declares nothing for a path that is not a connector call', () => {
     for (const p of ['/api/tabs', '/api/panes/x', '/api/publish']) expect(ask(p)).toBe('');
   });

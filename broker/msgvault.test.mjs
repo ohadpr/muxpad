@@ -18,10 +18,15 @@ test('an action belongs to exactly one capability, by its prefix', () => {
     assert.equal(capabilityOf(a), undefined, String(a));
 });
 
-test('msgvault has no write set to hold back, so its two scopes are one list', () => {
+test('msgvault holds its writes back from the read scope', () => {
+  // It used to have no writes, so the two scopes were one list and a timed
+  // grant covered exactly what one approval would have. Drafting breaks that
+  // on purpose: a duration is offered only for the READ scope (core.mjs), so
+  // putting text in the owner's mailbox is always approve-once.
   const c = CAPABILITIES.msgvault;
-  assert.deepEqual([...c.actions], [...c.readActions]);
-  assert.equal(c.readScope, c.fullScope);
+  assert.deepEqual([...c.actions], [...c.readActions, ...c.writeActions]);
+  assert.notEqual(c.readScope, c.fullScope);
+  for (const w of c.writeActions) assert.ok(!c.readActions.includes(w), w);
   // …and its scope can never be mistaken for Slack's, which is what keeps a
   // grant for one from being spent on the other.
   assert.notEqual(c.readScope, CAPABILITIES.slack.readScope);
@@ -92,7 +97,11 @@ test('every payload is checked before it is placed', () => {
     ['slack.post', {}, /Unsupported/],
   ];
   for (const [action, payload, re] of refused)
-    assert.throws(() => validateMsgvault(action, payload), re, `${action} ${JSON.stringify(payload)}`);
+    assert.throws(
+      () => validateMsgvault(action, payload),
+      re,
+      `${action} ${JSON.stringify(payload)}`,
+    );
 });
 
 test('a missing declaration refuses rather than guessing a path', () => {
@@ -112,12 +121,27 @@ test('only verbs that work against 0.22.0 are offered', () => {
     assert.ok(!CAPABILITIES.msgvault.actions.includes(dead), dead);
     assert.throws(() => validateMsgvault(dead, {}), /Unsupported action/, dead);
   }
-  assert.deepEqual([...CAPABILITIES.msgvault.actions], [
-    'msgvault.search',
-    'msgvault.show-message',
-    'msgvault.show-thread',
-    'msgvault.stats',
-  ]);
+  assert.deepEqual(
+    [...CAPABILITIES.msgvault.actions],
+    [
+      'msgvault.search',
+      'msgvault.show-message',
+      'msgvault.show-thread',
+      'msgvault.stats',
+      'msgvault.draft',
+      'msgvault.draft-reply',
+    ],
+  );
+  // The dead list again, this time as the SHAPE of the fix: `person` is
+  // refused by delegated mode itself ("get is not available in
+  // agent-delegated mode") and the agent-token permission set has no
+  // contacts scope at all — search.read, message.read, attachment.read,
+  // stats.read, draft.create/edit/delete, calendar.*. Contacts cannot be
+  // delegated at this version, so muxpad does not pretend otherwise.
+  assert.deepEqual(
+    [...CAPABILITIES.msgvault.readActions],
+    ['msgvault.search', 'msgvault.show-message', 'msgvault.show-thread', 'msgvault.stats'],
+  );
 });
 
 test('the dialog names the thing being asked for, not just the verb', () => {
@@ -125,8 +149,131 @@ test('the dialog names the thing being asked for, not just the verb', () => {
   assert.match(describeMsgvault('msgvault.search', { query: 'tax 2025' }), /"tax 2025"/);
   assert.match(describeMsgvault('msgvault.show-message', { id: 'abc' }), /abc/);
   assert.match(describeMsgvault('msgvault.stats', {}), /no message content/);
+  // EVERY action, including the writes — one payload that satisfies all of
+  // them, so adding a verb without a description fails here rather than
+  // showing a human the raw action name in a dialog.
+  const anything = { query: 'q', id: 'i', to: ['a@b.com'], subject: 's', body: 'b' };
   for (const a of CAPABILITIES.msgvault.actions) {
-    const d = describeMsgvault(a, validateMsgvault(a, { query: 'q', id: 'i' }));
+    const d = describeMsgvault(a, validateMsgvault(a, anything));
     assert.ok(d.length > 10 && !d.startsWith('msgvault.'), `${a} -> ${d}`);
   }
+  // A draft's description carries the two things you are agreeing to: who it
+  // is addressed to, and what it is about.
+  const draft = describeMsgvault('msgvault.draft', validateMsgvault('msgvault.draft', anything));
+  assert.match(draft, /a@b\.com/);
+  assert.match(draft, /"s"/);
+});
+
+/**
+ * THE TWO WRITES.
+ *
+ * A draft puts text an agent wrote into the owner's mailbox under their name.
+ * These assertions are about the two things that keeps honest: every argument
+ * is composed rather than forwarded, and neither verb can become a send.
+ */
+test('a draft is composed from checked fields, never from the caller’s flags', () => {
+  const p = validateMsgvault('msgvault.draft', {
+    to: ['a@b.com', 'c@d.com'],
+    cc: ['e@f.com'],
+    subject: 'Dinner',
+    body: 'Are you free Thursday?',
+  });
+  const { args } = msgvaultArgv('msgvault.draft', p, INSTALL);
+  assert.deepEqual(args.slice(6), [
+    'draft-compose',
+    '--json',
+    '--to',
+    'a@b.com',
+    '--to',
+    'c@d.com',
+    '--cc',
+    'e@f.com',
+    '--subject',
+    'Dinner',
+    '--body',
+    'Are you free Thursday?',
+  ]);
+});
+
+test('a reply names the message it answers, and says who it goes to', () => {
+  const one = validateMsgvault('msgvault.draft-reply', { id: '150889', body: 'Yes' });
+  assert.deepEqual(msgvaultArgv('msgvault.draft-reply', one, INSTALL).args.slice(6), [
+    'draft-reply',
+    '--json',
+    '--body',
+    'Yes',
+    '--',
+    '150889',
+  ]);
+  assert.match(describeMsgvault('msgvault.draft-reply', one), /to the sender of message 150889/);
+  // Reply-all is OPT IN: answering nine people instead of one is exactly the
+  // difference a person must approve knowingly.
+  const all = validateMsgvault('msgvault.draft-reply', { id: '150889', body: 'Yes', all: true });
+  assert.ok(msgvaultArgv('msgvault.draft-reply', all, INSTALL).args.includes('--all'));
+  assert.match(describeMsgvault('msgvault.draft-reply', all), /to everyone on/);
+  // …and anything other than `true` is not reply-all.
+  for (const v of ['true', 1, {}, []])
+    assert.equal(
+      validateMsgvault('msgvault.draft-reply', { id: '1', body: 'x', all: v }).all,
+      false,
+      JSON.stringify(v),
+    );
+});
+
+test('neither verb can be turned into a send, or into another flag', () => {
+  for (const action of ['msgvault.draft', 'msgvault.draft-reply']) {
+    const p =
+      action === 'msgvault.draft'
+        ? { to: ['a@b.com'], subject: 's', body: 'b' }
+        : { id: '1', body: 'b' };
+    const { args } = msgvaultArgv(action, validateMsgvault(action, p), INSTALL);
+    assert.ok(!args.some((a) => /send/i.test(a)), args.join(' '));
+    // The verb is a constant and the only flags present are the ones this
+    // module wrote — there is no slot for a caller's.
+    assert.equal(args.filter((a) => a.startsWith('--account') || a.startsWith('--from')).length, 0);
+  }
+});
+
+test('a draft refuses a recipient that is not an address', () => {
+  for (const to of [[], ['nope'], ['a@b'], ['-x@b.com'], 'a@b.com '.repeat(1), [1]])
+    assert.throws(
+      () => validateMsgvault('msgvault.draft', { to, subject: 's', body: 'b' }),
+      /recipient|address/i,
+      JSON.stringify(to),
+    );
+  // …and a flag-shaped subject or body, for the reason the whole file exists.
+  assert.throws(
+    () => validateMsgvault('msgvault.draft', { to: ['a@b.com'], subject: '--local', body: 'b' }),
+    /subject/i,
+  );
+  assert.throws(
+    () => validateMsgvault('msgvault.draft', { to: ['a@b.com'], subject: 's', body: '--local' }),
+    /body/i,
+  );
+});
+
+test('a draft is bounded — a caller cannot mail a hundred people a novel', () => {
+  const many = Array.from({ length: 21 }, (_, i) => `a${i}@b.com`);
+  assert.throws(
+    () => validateMsgvault('msgvault.draft', { to: many, subject: 's', body: 'b' }),
+    /Too many/,
+  );
+  assert.throws(
+    () =>
+      validateMsgvault('msgvault.draft', {
+        to: ['a@b.com'],
+        subject: 's',
+        body: 'x'.repeat(20001),
+      }),
+    /body/i,
+  );
+});
+
+test('a reply refuses a message id it could not have learned', () => {
+  for (const id of ['', '../etc/passwd', '-x', 'a b', 'x'.repeat(129)])
+    assert.throws(
+      () => validateMsgvault('msgvault.draft-reply', { id, body: 'b' }),
+      /message id/i,
+      JSON.stringify(id),
+    );
 });
