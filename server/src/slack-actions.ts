@@ -92,14 +92,36 @@ export function stateFromBroker(state: unknown): ChatActionState {
   }
 }
 
-/** The line under the title, for a state that needs explaining. */
-function detailFor(state: ChatActionState, result: Record<string, unknown>): string | null {
+/**
+ * The line under the title, for a state that needs explaining.
+ *
+ * The fallback used to say "Slack refused it" whatever had been asked, so a
+ * mail draft that failed without an error string told you Slack had refused
+ * it. This file stopped being Slack-only when the archive arrived; the card
+ * is a permanent record, and a record that names the wrong system is worse
+ * than one that names none.
+ */
+function detailFor(
+  state: ChatActionState,
+  result: Record<string, unknown>,
+  action?: string,
+): string | null {
   if (state === 'declined') return 'You declined it';
   if (state === 'failed') {
     const why = typeof result.error === 'string' ? result.error : null;
-    return why ?? (String(result.state) === 'expired' ? 'The request expired' : 'Slack refused it');
+    if (why) return why;
+    if (String(result.state) === 'expired') return 'The request expired';
+    return refusedBy(action ?? (typeof result.action === 'string' ? result.action : undefined));
   }
   return null;
+}
+
+/** Who refused, named only when the action says so. */
+function refusedBy(action: string | undefined): string {
+  const connector = String(action ?? '').split('.')[0];
+  if (connector === 'slack') return 'Slack refused it';
+  if (connector === 'msgvault') return 'The mail archive refused it';
+  return 'It was refused';
 }
 
 /**
@@ -157,7 +179,7 @@ export function recordSlackAction(
       title: title(p),
       state,
       body: bodyOf(input.action, p),
-      detail: detailFor(state, input.result),
+      detail: detailFor(state, input.result, input.action),
       url: typeof input.result.permalink === 'string' ? input.result.permalink : null,
       ref,
     });
