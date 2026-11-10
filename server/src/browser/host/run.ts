@@ -144,8 +144,7 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
    */
   if (await portIsLive(spec.url)) {
     throw new Error(
-      `a browser is already answering on ${spec.url} for profile ${opts.profile} — ` +
-        'not starting a second one (stop the owner first)',
+      `a browser is already answering on ${spec.url} for profile ${opts.profile} — not starting a second one (stop the owner first)`,
     );
   }
 
