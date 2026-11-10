@@ -1717,6 +1717,106 @@ const MIGRATIONS: Migration[] = [
         db.exec('ALTER TABLE tabs ADD COLUMN spawn_deliver TEXT');
     },
   },
+  {
+    /**
+     * THE SPLIT IS GONE — every pane in a layout becomes its own chat.
+     *
+     * A tab could hold several panes in a mosaic. Two did, and the primitive
+     * cost more than it paid: a sub-chat's report is delivered to "the tab's
+     * agent pane", which with two of them means the FIRST one by creation
+     * order. The owner spawned a worker from the right-hand pane of
+     * "Netlify financial analysis", the 77KB writeup it produced was
+     * delivered into the left-hand pane, and the chat he was reading had no
+     * record of ever having asked. Nothing was lost and everything looked
+     * lost, which is the worst shape a bug can take.
+     *
+     * Every other ambiguity of the same kind — which pane is "the chat",
+     * which one a status belongs to, which one gets the keyboard — had the
+     * same root. One pane per layout removes the class.
+     *
+     * The FIRST pane in layout order keeps the tab. Each later one is moved
+     * to a new tab of its own, created beside it, carrying the original's
+     * name with a number so the pair is recognisable in the rail.
+     *
+     * NOT a pane count rule: a document's backing tab deliberately holds one
+     * pane per agent block and never renders a mosaic (web/src/lib/
+     * doc-store.ts). Those panes are not in any layout, so they are not
+     * touched here.
+     */
+    version: 54,
+    apply: (db) => {
+      const tabs = db
+        .prepare(
+          'SELECT id, name, slug, workspace_id, position, created_at, updated_at, layout FROM tabs WHERE layout LIKE \'%"first"%\'',
+        )
+        .all() as Array<{
+        id: string;
+        name: string;
+        workspace_id: string;
+        position: number;
+        created_at: number;
+        updated_at: number;
+        layout: string;
+      }>;
+      if (tabs.length === 0) return;
+
+      /** Pane ids in a layout tree, left to right. */
+      const leaves = (node: unknown): string[] => {
+        if (typeof node === 'string') return [node];
+        if (!node || typeof node !== 'object') return [];
+        const n = node as { first?: unknown; second?: unknown };
+        return [...leaves(n.first), ...leaves(n.second)];
+      };
+      const ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+      const slugExists = db.prepare('SELECT 1 FROM tabs WHERE slug = ?');
+      const newSlug = (): string => {
+        for (let i = 0; i < 200; i++) {
+          let s = '';
+          for (let j = 0; j < 8; j++) s += ALPHABET[Math.floor(Math.random() * ALPHABET.length)];
+          if (!slugExists.get(s)) return s;
+        }
+        throw new Error('migration 54: cannot allocate a tab slug');
+      };
+      const insert = db.prepare(
+        `INSERT INTO tabs (id, slug, name, layout, workspace_id, position, created_at, updated_at, view_mode)
+         VALUES (?,?,?,?,?,?,?,?, 'tabbed')`,
+      );
+      const moveePane = db.prepare('UPDATE panes SET tab_id = ? WHERE id = ?');
+      const setLayout = db.prepare('UPDATE tabs SET layout = ? WHERE id = ?');
+
+      for (const t of tabs) {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(t.layout);
+        } catch {
+          continue;
+        }
+        const panes = leaves(parsed).filter((id) =>
+          db.prepare('SELECT 1 FROM panes WHERE id = ? AND tab_id = ?').get(id, t.id),
+        );
+        if (panes.length < 2) continue;
+        const [keep, ...moved] = panes;
+        setLayout.run(JSON.stringify(keep), t.id);
+        moved.forEach((paneId, n) => {
+          // A ULID would be better company for its siblings, but a migration
+          // has no ulid() to hand and uniqueness is all this needs: the id is
+          // opaque everywhere, and the slug is what a url shows.
+          const id = `01M${newSlug()}${newSlug()}`.slice(0, 26);
+          insert.run(
+            id,
+            newSlug(),
+            `${t.name} (${n + 2})`,
+            JSON.stringify(paneId),
+            t.workspace_id,
+            t.position,
+            t.created_at,
+            t.updated_at,
+          );
+          moveePane.run(id, paneId);
+        });
+      }
+    },
+  },
 ];
 
 /** Highest version in the migration list. Exported so a test can assert the
