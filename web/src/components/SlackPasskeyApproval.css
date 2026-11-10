@@ -74,7 +74,22 @@ dialog.slack-passkey-dialog select {
 }
 .slack-passkey-actions {
   justify-content: flex-end;
-  margin: 12px 0;
+  margin: 12px 0 0;
+  /* ── DENY AND APPROVE ARE ALWAYS REACHABLE ──────────────────────────────
+     The dialog scrolls (`max-height: 100dvh - 24px`), and its contents are
+     not bounded by anything this component controls: a draft body may be
+     20,000 characters and the scope slot is now sized to its tallest copy.
+     On a short window that put the buttons below the fold, where a person
+     has to scroll an approval dialog to find out how to refuse it.
+
+     Sticky to the bottom of the scroll box, with the dialog's own background
+     under it so text does not show through as it passes beneath. The padding
+     matches the dialog's, so the buttons sit where they would have anyway
+     when everything fits. */
+  position: sticky;
+  bottom: 0;
+  padding: 12px 0 0;
+  background: var(--bg-elev);
 }
 
 .slack-passkey-scope {
@@ -352,4 +367,16 @@ dialog.slack-passkey-dialog button:disabled {
 }
 .slack-passkey-scope-slot > .slack-passkey-scope[data-shown="false"] {
   visibility: hidden;
+}
+
+/* ── AND THE TEXT CANNOT REORDER THE DIALOG AROUND IT ───────────────────────
+   Making deceptive characters visible (see approval-request.ts) handles the
+   payload's own contents. This handles the other half: ordinary right-to-left
+   text is perfectly legitimate and must not be allowed to drag the labels,
+   the buttons or the punctuation beside it into a different order. `isolate`
+   gives each value its own bidi context, so a Hebrew draft body reads
+   correctly inside its box and changes nothing outside it. */
+.slack-passkey-payload,
+.slack-passkey-dialog dd {
+  unicode-bidi: isolate;
 }
