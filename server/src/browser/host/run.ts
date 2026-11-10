@@ -103,6 +103,9 @@ export interface BrowserHost {
 
 const CDP_READY_TIMEOUT_MS = 20_000;
 
+/** How long to wait when asking whether somebody already owns our port. */
+const PORT_PROBE_MS = 1_500;
+
 /**
  * How long a tidy shutdown gets before the browser is killed anyway. Short on
  * purpose: everything inside it is a courtesy, and a host that cannot finish is
@@ -126,6 +129,26 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
   let closing = false;
   const spec = browserLaunchSpec(opts);
 
+  /**
+   * ── IS SOMETHING ALREADY ON OUR PORT? THEN DO NOT SPAWN ────────────────
+   *
+   * Every instance of a profile asks for the same debugging port. If one is
+   * already answering there, a second Chrome cannot have it — it will start,
+   * fail to bind, never answer CDP, and be left behind when this host gives
+   * up. That is precisely how one leak became 452 on this machine: the first
+   * orphan held 9495 forever, and every restart donated another.
+   *
+   * Checked BEFORE the spawn, so the failure costs nothing. The supervisor
+   * restarts us either way; the difference is whether each attempt leaves a
+   * process behind.
+   */
+  if (await portIsLive(spec.url)) {
+    throw new Error(
+      `a browser is already answering on ${spec.url} for profile ${opts.profile} — ` +
+        'not starting a second one (stop the owner first)',
+    );
+  }
+
   mkdirSync(spec.profileDir, { recursive: true });
   // A lock left by an unclean exit makes every subsequent launch die on
   // startup, which `muxpad serve` then retries forever. One profile has one
@@ -133,6 +156,29 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
   clearStaleProfileLock(spec.profileDir);
   const chrome = spawn(spec.command, spec.args, { stdio: ['ignore', 'pipe', 'pipe'] });
   chrome.stderr?.on('data', (b) => log(`[chrome] ${String(b).trimEnd()}`));
+  /**
+   * CHROME DOES NOT OUTLIVE THIS PROCESS. EVER.
+   *
+   * The tidy paths were all covered — `close()` kills it, and the signal
+   * handlers in cli.ts call `close()`. What was not covered is the untidy
+   * one, and it is the one that happened: a throw anywhere in the ~200 lines
+   * of startup below took the process down with Chrome already running, and
+   * nothing killed it. The supervisor restarted the host, which leaked
+   * another, for ten hours.
+   *
+   * `exit` fires for a normal return, an uncaught exception and an unhandled
+   * rejection alike, and `kill` is a synchronous syscall, so it is safe in
+   * that handler. It cannot help if the host is SIGKILLed — nothing can —
+   * but that is now the only way to orphan a browser.
+   */
+  const killChrome = () => {
+    try {
+      chrome.kill('SIGKILL');
+    } catch {
+      // already gone, which is the outcome this wanted
+    }
+  };
+  process.once('exit', killChrome);
   // WHEN CHROME DIES, THIS PROCESS DIES. It used to just log, and the result was
   // a host serving a viewer against a dead browser: the socket opened, no frames
   // ever came, and /healthz cheerfully said ok. `muxpad serve` already supplies
@@ -155,7 +201,37 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
     log(`[chrome] ${spawnFailure.message}`);
   });
 
-  await waitForCdp(spec.url, chrome, () => spawnFailure);
+  /**
+   * ── EVERY FAILURE FROM HERE ON KILLS THE BROWSER IT STARTED ────────────
+   *
+   * Chrome is already running by this line. Nothing below used to be guarded,
+   * so any failure — a CDP port that never answered, a refused websocket, a
+   * bad page — propagated out of this function, took the process down, and
+   * LEFT CHROME RUNNING. `muxpad serve` then restarted the host, which
+   * spawned another, which leaked too.
+   *
+   * It is not a slow leak. Measured on this machine: 1,001 orphaned
+   * `chrome-headless-shell` processes, 3,014 processes with their gpu and
+   * utility helpers, against 4,040 on the box — one profile had 452 of them.
+   * The machine was unusable.
+   *
+   * And it could not recover on its own, because every instance of a profile
+   * asks for the SAME debugging port. The first orphan holds it forever, so
+   * each restart times out waiting for a port it can never have, and leaks
+   * one more. The loop is self-feeding: one leak is permanent failure.
+   *
+   * So: one try, one kill, and the error still propagates — a host that
+   * cannot start must still exit, because the supervisor's restart is the
+   * recovery. What changes is that it no longer leaves a process behind to
+   * guarantee the restart fails too.
+   */
+  try {
+    await waitForCdp(spec.url, chrome, () => spawnFailure);
+  } catch (err) {
+    closing = true; // the exit handler above must not call onChromeExit now
+    chrome.kill('SIGKILL');
+    throw err;
+  }
 
   const cdp = new CdpConnection({
     endpoint: spec.url,
@@ -1075,9 +1151,23 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
       } finally {
         clearInterval(heartbeat);
         chrome.kill();
+        process.off('exit', killChrome);
       }
     },
   };
+}
+
+/** Is a browser already answering on this endpoint? One short probe: a port
+ *  nothing holds refuses at once, so this does not delay an honest start. */
+async function portIsLive(endpoint: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${endpoint}/json/version`, {
+      signal: AbortSignal.timeout(PORT_PROBE_MS),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
 /**
