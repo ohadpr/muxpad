@@ -48,6 +48,18 @@ export interface SpawnDeliveryEntry {
   /** Published urls the child produced. */
   artifacts?: string[];
   /**
+   * How many times this worker has been asked to do the work — the first
+   * brief plus every send-back since.
+   *
+   * Surfaced, not enforced. Nothing in muxpad bounds this loop (verified: no
+   * round cap, and the queue limit counts pending messages so a sequential
+   * exchange never reaches it), and a hard cap would break the long iteration
+   * the feature exists to enable. What a count removes is the excuse — an
+   * orchestrator cannot lose track of how many times it has been round a loop
+   * when the number is in front of it.
+   */
+  rounds?: number;
+  /**
    * Where the FULL report was written, when it was too long to inline.
    *
    * The inline text is a preview in that case; this is the whole thing. A
@@ -133,6 +145,21 @@ function clip(text: string, budget: number): string {
   return `${(sp > budget * 0.6 ? head.slice(0, sp) : head).trimEnd()}… [report truncated]`;
 }
 
+/**
+ * "You have been round this loop N times."
+ *
+ * Silent for the first two, which are ordinary: a brief and one correction is
+ * the loop working. From the third it says so, and from the fifth it says to
+ * stop — the point at which "not converging" has stopped being a risk and
+ * become an observation.
+ */
+function roundNote(rounds: number | undefined): string {
+  if (!rounds || rounds < 3) return '';
+  if (rounds >= 5)
+    return `\n\nYou have sent this worker back ${rounds - 1} times and it is not converging. Stop iterating and bring it to the person, with what you have and what is still wrong.`;
+  return `\n\nThis is attempt ${rounds} for this worker. If the next one does not land it, take it to the person rather than going round again.`;
+}
+
 /** `ok` is the uninteresting case and says nothing a reader needs. */
 function stateNote(state: string | null): string {
   if (!state || state === 'ok') return '';
@@ -204,7 +231,7 @@ export function renderSpawnDelivery(entries: readonly SpawnDeliveryEntry[]): str
         : e.state === 'crashed'
           ? '\n\nThis worker cannot be resumed — its agent died. Spawn a fresh one with `muxpad agent new` if the work still needs doing.'
           : '';
-      return `${head}\n\n${text}${whole}${links}${back}`;
+      return `${head}\n\n${text}${whole}${links}${back}${roundNote(e.rounds)}`;
     })
     .join('\n\n');
   return `<muxpad-delivery count="${n}" from="${ids}">\n${note}\n</muxpad-delivery>\n\n${body}`;

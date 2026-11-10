@@ -281,3 +281,51 @@ describe('a report too long to inline is still readable in full', () => {
     expect(out).not.toContain('Full report');
   });
 });
+
+/**
+ * THE LOOP COUNTS ITSELF.
+ *
+ * An adversarial review checked for anything that bounds parent↔worker
+ * send-backs and found nothing: open rounds are serialised but successive
+ * ones are unlimited, `MAX_QUEUED_SENDS` counts PENDING messages so a
+ * sequential exchange never reaches it, and retirement explicitly
+ * accommodates revival. "Send it back twice if it is not converging" was
+ * prose and nothing else.
+ *
+ * A hard cap would break the long iteration this feature exists to enable.
+ * A count removes the excuse instead.
+ */
+describe('a delivery says how many times round the loop it is', () => {
+  const at = (rounds: number) =>
+    renderSpawnDelivery([
+      { tabId: 't1', paneId: 'p1', name: 'build it', state: 'ok', report: 'done', rounds },
+    ]);
+
+  it('says nothing for the ordinary first attempts', () => {
+    // A brief and one correction is the loop WORKING. Narrating it would
+    // teach an orchestrator to treat its own normal behaviour as a problem.
+    expect(at(1)).not.toMatch(/attempt|not converging/);
+    expect(at(2)).not.toMatch(/attempt|not converging/);
+  });
+
+  it('names the attempt once it is the third', () => {
+    expect(at(3)).toMatch(/This is attempt 3 for this worker/);
+    expect(at(3)).toMatch(/take it to the person/);
+  });
+
+  it('stops asking and tells it to go to the person', () => {
+    // By five the risk has stopped being a risk and become an observation.
+    expect(at(5)).toMatch(/sent this worker back 4 times and it is not converging/);
+    expect(at(5)).toMatch(/Stop iterating/);
+    expect(at(9)).toMatch(/sent this worker back 8 times/);
+  });
+
+  it('is silent when the count is unknown', () => {
+    // An older server, or a path that does not carry it: say nothing rather
+    // than guess at a number the reader would act on.
+    const out = renderSpawnDelivery([
+      { tabId: 't1', paneId: 'p1', name: 'build it', state: 'ok', report: 'done' },
+    ]);
+    expect(out).not.toMatch(/attempt|not converging/);
+  });
+});
