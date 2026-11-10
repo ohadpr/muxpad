@@ -109,7 +109,14 @@ describe('the approval card follows the request', () => {
  */
 describe('the card describes the grant it is actually making', () => {
   it('describes a duration per capability, not always as Slack', () => {
-    expect(CODE).toMatch(/connectorOf\(request\.action\) === SLACK\s*\?\s*'All agents can read/);
+    // Matched on the copy and on the fact that a connector decides WHICH,
+    // not on the shape of the conditional: the two sentences used to sit in
+    // a ternary inside the markup and now sit in `scopeCopy`, and a test that
+    // pins the arrangement rather than the promise breaks on every tidy-up
+    // while catching nothing. The rendered behaviour is asserted in
+    // SlackPasskeyApproval.test.tsx, which is the stronger version of this.
+    expect(CODE).toMatch(/scopeCopy\(key, connectorOf\(request\.action\) === SLACK\)/);
+    expect(CODE).toMatch(/All agents can read/);
     expect(CODE).toMatch(/search and read your mail/);
     // Drafting exists now, so "cannot draft" would be false. What a DURATION
     // covers is still reading only, and the sentence has to say which of the
