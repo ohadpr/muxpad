@@ -226,3 +226,58 @@ describe('a delivery is work to review, not news to relay', () => {
     expect(out).not.toContain('muxpad agent send');
   });
 });
+
+/**
+ * NOTHING A WORKER SAID IS LOST.
+ *
+ * A single child's report was capped at 1,200 characters, so a 6,000-character
+ * code review arrived as its first fifth, cut mid-word — and the parent
+ * reviewed a fragment while believing it had the report. Truncation is exactly
+ * the wrong economy for the one message whose job is to be acted on.
+ *
+ * But 65 unabridged reports is a context window, not a message. So the inline
+ * text stays bounded and the whole thing goes to a file whose path travels
+ * with it.
+ */
+describe('a report too long to inline is still readable in full', () => {
+  const long = 'x'.repeat(5_000);
+
+  it('names the file when the text was cut', () => {
+    const out = renderSpawnDelivery([
+      {
+        tabId: 't1',
+        name: 'review',
+        state: 'ok',
+        report: long,
+        reportPath: '/Users/me/.muxpad/spawn-reports/r-1.md',
+      },
+    ]);
+    expect(out).toContain('[report truncated]');
+    expect(out).toContain('Full report: `/Users/me/.muxpad/spawn-reports/r-1.md`');
+  });
+
+  it('does NOT name a file for a report that arrived whole', () => {
+    // A path beside something you have already read in full is noise, and it
+    // teaches a parent to open the file every time.
+    const out = renderSpawnDelivery([
+      {
+        tabId: 't1',
+        name: 'review',
+        state: 'ok',
+        report: 'short and complete',
+        reportPath: '/Users/me/.muxpad/spawn-reports/r-1.md',
+      },
+    ]);
+    expect(out).toContain('short and complete');
+    expect(out).not.toContain('Full report');
+    expect(out).not.toContain('[report truncated]');
+  });
+
+  it('still says it was cut when there is no file to point at', () => {
+    // A server with nowhere to write degrades to the old behaviour rather
+    // than losing the delivery.
+    const out = renderSpawnDelivery([{ tabId: 't1', name: 'review', state: 'ok', report: long }]);
+    expect(out).toContain('[report truncated]');
+    expect(out).not.toContain('Full report');
+  });
+});

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseSpawnDelivery } from '@muxpad/shared';
@@ -144,6 +144,56 @@ describe('report delivery — the join', () => {
     make().onReport(child('C', p));
     expect(sent[0]?.text).toMatch(/REVIEW each result against what you asked for/);
     expect(sent[0]?.text).not.toMatch(/carry on if nothing is needed/);
+  });
+
+  /**
+   * THE FILE IS WRITTEN, AND IT HOLDS THE WHOLE REPORT.
+   *
+   * shared/ proves the message NAMES a path when one is supplied. This proves
+   * the server writes it, with the untruncated text in it — the half that makes
+   * "nothing is lost" true rather than merely promised.
+   */
+  describe('a long report is written in full beside the delivery', () => {
+    it('writes the whole thing and hands the parent its path', () => {
+      const long = `${'y'.repeat(4_000)} END-SENTINEL`;
+      const p = parent('P');
+      const c = child('C', p, { report: long });
+      new ReportDelivery({
+        db,
+        dataDir: dir,
+        submitSend: (paneId, text) => {
+          sent.push({ paneId, text });
+          return result;
+        },
+        now: () => clock,
+      }).onReport(c);
+
+      const m = /Full report: `([^`]+)`/.exec(sent[0]?.text ?? '');
+      expect(m, 'no path in the delivery').toBeTruthy();
+      const onDisk = readFileSync(m?.[1] as string, 'utf8');
+      // The END of the report, which is exactly what truncation ate.
+      expect(onDisk).toContain('END-SENTINEL');
+      expect(onDisk.length).toBeGreaterThan(4_000);
+      // …and the message itself stayed a message.
+      expect((sent[0]?.text ?? '').length).toBeLessThan(long.length);
+    });
+
+    it('delivers anyway when there is nowhere to write', () => {
+      // A failure to write costs the PATH, never the delivery.
+      const p = parent('P');
+      const c = child('C', p, { report: 'z'.repeat(4_000) });
+      new ReportDelivery({
+        db,
+        submitSend: (paneId, text) => {
+          sent.push({ paneId, text });
+          return result;
+        },
+        now: () => clock,
+      }).onReport(c);
+      expect(sent).toHaveLength(1);
+      expect(sent[0]?.text).toContain('[report truncated]');
+      expect(sent[0]?.text).not.toContain('Full report');
+    });
   });
 
   afterEach(() => {

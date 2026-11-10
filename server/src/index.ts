@@ -256,6 +256,7 @@ tabActivity.attach(ptyd);
 // is attached, so the reference is resolved long before it is read.
 const reportDelivery = new ReportDelivery({
   db,
+  dataDir: config.dataDir,
   submitSend: (paneId, text) => agentBridge.submitSend(paneId, text),
 });
 const spawnReports = new SpawnReportWriter({
