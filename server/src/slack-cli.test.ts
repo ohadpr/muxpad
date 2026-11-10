@@ -479,7 +479,7 @@ describe('msgvault goes through the broker, holding nothing', () => {
     expect(body).not.toMatch(/"\$@"/);
   });
 
-  it('calls exactly these endpoints — four reads and two drafts', () => {
+  it('calls exactly these endpoints — four reads and one draft', () => {
     // Asserted as a SET rather than by searching for forbidden words, because
     // `senders` contains "send" and a test that fails on a reading verb is a
     // test somebody edits away.
@@ -490,14 +490,11 @@ describe('msgvault goes through the broker, holding nothing', () => {
     // agent-token permission set has no contacts scope at all. A verb the CLI
     // offers and the tool refuses is a dialog asking for something that
     // cannot happen.
-    expect([...called].sort()).toEqual([
-      'draft',
-      'draft-reply',
-      'message',
-      'search',
-      'stats',
-      'thread',
-    ]);
+    // `draft` — composing a NEW email — went the same way for the same
+    // reason, measured rather than assumed: a Gmail source answers
+    // msgvault's `draft-compose` with `draft_disabled` while `draft-reply`
+    // creates a real draft in the thread.
+    expect([...called].sort()).toEqual(['draft-reply', 'message', 'search', 'stats', 'thread']);
     // AND THE THING THAT MUST STAY TRUE: nothing here sends. A draft lands in
     // the owner's own mailbox; the grant carries draft permissions and no
     // send permission, and muxpad asks for no send verb.

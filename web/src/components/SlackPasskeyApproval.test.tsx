@@ -731,3 +731,45 @@ it('keeps every scope variant mounted, so choosing a duration cannot move the bu
       );
   }
 });
+
+/**
+ * WHAT A DURATION BUYS IS DIFFERENT PER CAPABILITY, AND THE DIALOG SAYS SO.
+ *
+ * This used to be asserted by matching the component's source for a ternary,
+ * which pinned the arrangement rather than the promise and broke the moment
+ * the copy moved into a helper. What actually matters is what a person reads
+ * before they approve, so read it.
+ *
+ * The msgvault sentence is the owner-facing half of `timedReadOnly` in the
+ * broker: a duration covers reading, drafting is approved on its own every
+ * time, and nothing here can send. If the dialog and the broker ever stop
+ * agreeing, the dialog is the one telling somebody a falsehood.
+ */
+it('promises mail things for mail and Slack things for Slack', async () => {
+  const shown = () =>
+    [...host.querySelectorAll('.slack-passkey-scope')].find(
+      (p) => p.getAttribute('data-shown') === 'true',
+    )?.textContent ?? '';
+  const pickADuration = async () => {
+    await act(async () => {
+      const select = host.querySelector('select')!;
+      select.value = '1h';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  };
+
+  pending = [
+    {
+      ...request,
+      action: 'msgvault.search',
+      payload: { query: 'dinner' },
+    } as unknown as typeof request,
+  ];
+  await render();
+  await pickADuration();
+  expect(shown()).toContain('search and read your mail');
+  expect(shown()).toContain('Drafting is never covered by a duration');
+  expect(shown()).toContain('nothing here can send');
+  // The Slack sentence must not appear on an archive request.
+  expect(shown()).not.toContain('Slack workspace');
+});
