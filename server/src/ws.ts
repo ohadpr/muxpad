@@ -540,6 +540,24 @@ export function attachWsServer(deps: {
    */
   onReportStated?: (tabId: string, text: string) => void;
 }): WsServerHandle {
+  /**
+   * Count this socket as alive on anything it sends.
+   *
+   * Replaces three copies of `isAlive = true` on attach + pong. The pong half
+   * was never the useful half: a peer that is sending frames is alive by
+   * definition, and the peers most likely to miss a ping are precisely the ones
+   * working hardest. See the heartbeat sweep for what this costs and collects.
+   */
+  function keepAlive(ws: WebSocket): void {
+    const live = ws as WebSocket & { misses?: number };
+    const seen = () => {
+      live.misses = 0;
+    };
+    seen();
+    ws.on('pong', seen);
+    ws.on('message', seen);
+  }
+
   const wss = new WebSocketServer({ noServer: true });
   const allowedOrigins =
     deps.allowedOrigins ?? parseAllowedOrigins(process.env.MUXPAD_ALLOWED_ORIGINS);
@@ -1677,14 +1695,37 @@ export function attachWsServer(deps: {
   // sockets. This heartbeat is independent — it's the main server detecting
   // browser-side ghosts on the WSes IT terminates.
   const HEARTBEAT_MS = deps.heartbeatMs ?? 15_000;
+  /**
+   * ── A BUSY PEER IS NOT A DEAD PEER ──────────────────────────────────────
+   *
+   * This counted PONGS and nothing else, and terminated anything that missed
+   * ONE round. A runner mid-turn — streaming output, event loop saturated by
+   * the very work it is reporting — cannot always answer a protocol ping
+   * inside 15s. It was killed as a ghost while actively delivering frames,
+   * reconnected two seconds later, and because its turn was still open the
+   * server told every chat client `agent disconnected`. 382 reconnects in one
+   * pane in a day, each one a red banner and a stall, with nothing in any log
+   * saying why. Reported as "constantly see agent disconnected… still works".
+   *
+   * Two changes, and the first is the real one:
+   *
+   *   · ANY INBOUND FRAME IS LIVENESS. A socket that just handed you data is
+   *     alive, and no amount of pong bookkeeping is a better answer than
+   *     that. See {@link keepAlive}.
+   *   · TWO STRIKES. One missed round is noise — a GC pause, a burst of
+   *     output, a laptop lid. Two consecutive misses (30s of total silence,
+   *     not merely of pongs) is a pattern. The ghost this exists to collect
+   *     is still collected, half a minute later.
+   */
+  const MISSES_BEFORE_TERMINATE = 2;
   const heartbeat = setInterval(() => {
     for (const client of wss.clients) {
-      const live = client as WebSocket & { isAlive?: boolean };
-      if (live.isAlive === false) {
+      const live = client as WebSocket & { misses?: number };
+      live.misses = (live.misses ?? 0) + 1;
+      if (live.misses > MISSES_BEFORE_TERMINATE) {
         live.terminate();
         continue;
       }
-      live.isAlive = false;
       try {
         live.ping();
       } catch {
@@ -1832,11 +1873,7 @@ export function attachWsServer(deps: {
         // Heartbeat participation: the sweep above pings every wss client.
         // Mark this socket alive on attach + pong so it doesn't get
         // terminated as a ghost on the next round.
-        const live = ws as WebSocket & { isAlive?: boolean };
-        live.isAlive = true;
-        ws.on('pong', () => {
-          live.isAlive = true;
-        });
+        keepAlive(ws);
         const unsub = deps.events.subscribe((e) => {
           if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(e));
         });
@@ -1887,11 +1924,7 @@ export function attachWsServer(deps: {
         return;
       }
       wss.handleUpgrade(req, socket, head, (ws) => {
-        const live = ws as WebSocket & { isAlive?: boolean };
-        live.isAlive = true;
-        ws.on('pong', () => {
-          live.isAlive = true;
-        });
+        keepAlive(ws);
         // Newest runner wins: a respawn (pane reload, crashed process) may
         // connect before the old socket's close fires. Close the old one
         // with 4001 — a DISPLACED runner that is still a live process (an
@@ -2764,11 +2797,7 @@ export function attachWsServer(deps: {
         return;
       }
       wss.handleUpgrade(req, socket, head, (ws) => {
-        const live = ws as WebSocket & { isAlive?: boolean };
-        live.isAlive = true;
-        ws.on('pong', () => {
-          live.isAlive = true;
-        });
+        keepAlive(ws);
         const send = (obj: unknown) => {
           if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
         };
@@ -3375,14 +3404,9 @@ export function attachWsServer(deps: {
       return;
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
-      // Liveness: mark alive on connect and on every pong. The heartbeat
-      // sweep above flips this to false before each ping; a client that
-      // doesn't pong before the next sweep is terminated as a ghost.
-      const live = ws as WebSocket & { isAlive?: boolean };
-      live.isAlive = true;
-      ws.on('pong', () => {
-        live.isAlive = true;
-      });
+      // Liveness on anything this socket sends, not only on pongs — a
+      // terminal that is pouring output is alive. See keepAlive.
+      keepAlive(ws);
 
       // pane.shell / pane.cwd are nullable on PaneSpec (URL panes), but
       // we've already rejected kind === 'url' upgrades above; fall back
