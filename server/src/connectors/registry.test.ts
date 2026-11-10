@@ -62,7 +62,6 @@ describe('the verbs that reach other people', () => {
     // draft exists — a write that genuinely reaches no one — the difference
     // is load-bearing.
     expect(classify('msgvault.search').notifiesOthers).toBe(false);
-    expect(classify('msgvault.draft').notifiesOthers).toBe(false);
     expect(classify('msgvault.draft-reply').notifiesOthers).toBe(false);
     expect(classify('slack.post').notifiesOthers).toBe(true);
   });
@@ -104,9 +103,11 @@ describe('the verbs that reach other people', () => {
 describe('the table itself', () => {
   it('groups by connector', () => {
     expect(verbsOf('slack').length).toBeGreaterThan(5);
-    // FOUR. Three advertised verbs could not work against msgvault 0.22.0 and
-    // were removed rather than repaired — see the note on MSGVAULT.
-    expect(verbsOf('msgvault')).toHaveLength(6);
+    // FIVE: four reads and one write. Three advertised verbs could not work
+    // against msgvault 0.22.0 and were removed rather than repaired, and a
+    // compose verb went the same way once a Gmail source was measured
+    // refusing it — see the note on MSGVAULT.
+    expect(verbsOf('msgvault')).toHaveLength(5);
     expect(verbsOf('slack').every((v) => v.startsWith('slack.'))).toBe(true);
     // A prefix that is not a connector gets nothing, rather than everything.
     expect(verbsOf('')).toEqual([]);
@@ -162,11 +163,13 @@ describe('the table is the policy, so the table is pinned', () => {
     'msgvault.show-message': { kind: 'read', timed: true },
     'msgvault.show-thread': { kind: 'read', timed: true },
     'msgvault.stats': { kind: 'read', timed: true },
-    // THE TWO WRITES. `others: false` is the point of listing them beside
+    // THE ONE WRITE. `others: false` is the point of listing it beside
     // Slack's: a draft lands in the owner's own mailbox and nobody else
     // learns anything, which is exactly what separates it from `slack.post`
     // and from the calendar invite this connector still refuses to have.
-    'msgvault.draft': { kind: 'write', timed: false, others: false },
+    //
+    // There is no `msgvault.draft`: composing a new email is refused by a
+    // Gmail source itself (`draft_disabled`), so muxpad never offers it.
     'msgvault.draft-reply': { kind: 'write', timed: false, others: false },
   };
 
@@ -210,9 +213,9 @@ describe('the table is the policy, so the table is pinned', () => {
       const r = VERBS[verb];
       if (r?.kind !== 'write') continue;
       // A draft reaches nobody; everything else that writes does. Matched on
-      // the verb's own name — `msgvault.draft`, `msgvault.draft-reply` — and
-      // not on `.draft.`, which was the shape of a naming that never shipped
-      // and silently matched nothing once the real verbs arrived.
+      // the verb's own name — `msgvault.draft-reply` — and not on `.draft.`,
+      // which was the shape of a naming that never shipped and silently
+      // matched nothing once the real verb arrived.
       const isDraft = /\.draft(-|$)/.test(verb);
       expect(r.notifiesOthers === true, verb).toBe(!isDraft);
     }

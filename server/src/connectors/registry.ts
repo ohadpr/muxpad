@@ -117,7 +117,9 @@ const MSGVAULT: Record<string, VerbRule> = {
   // `notifiesOthers: false`, stated rather than left absent: it is the fact
   // that separates a draft from every other write in this table. Nothing
   // leaves, nobody is told, and the owner opens their mailbox to find it.
-  'msgvault.draft': { kind: 'write', timed: false, notifiesOthers: false },
+  //
+  // Replying is the only draft verb there is — a Gmail source refuses
+  // `draft-compose` with `draft_disabled`, so muxpad never offers it.
   'msgvault.draft-reply': { kind: 'write', timed: false, notifiesOthers: false },
 };
 

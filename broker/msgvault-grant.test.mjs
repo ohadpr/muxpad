@@ -242,7 +242,14 @@ test('every msgvault verb is a read, so a duration is offered for all of them', 
 test('an unregistered action never reaches a validator or an executor', async () => {
   const f = fixture();
   f.pair(); // or the pairing check answers first and proves nothing
-  for (const action of ['msgvault.query', 'msgvault.export-messages', 'msgvault.draft-compose'])
+  // `msgvault.draft` is in this list because composing a new email is not a
+  // verb muxpad has: a Gmail source refuses `draft-compose` outright.
+  for (const action of [
+    'msgvault.query',
+    'msgvault.export-messages',
+    'msgvault.draft-compose',
+    'msgvault.draft',
+  ])
     await assert.rejects(f.broker.create({ action, payload: {} }), /Unsupported action/, action);
   assert.deepEqual(f.ran, []);
 });
@@ -383,8 +390,8 @@ test('a draft can only ever be approved once, with its text in front of you', as
   const f = fixture();
   const session = f.pair();
   const draft = await f.broker.create({
-    action: 'msgvault.draft',
-    payload: { to: ['a@b.com'], subject: 'Dinner', body: 'Thursday?' },
+    action: 'msgvault.draft-reply',
+    payload: { id: '150889', body: 'Thursday?' },
     origin: 'local',
   });
   assert.equal(draft.state, 'pending');
@@ -404,7 +411,7 @@ test('a draft can only ever be approved once, with its text in front of you', as
     'complete',
   );
   assert.deepEqual(f.ran, [
-    ['msgvault.draft', { to: ['a@b.com'], cc: [], bcc: [], subject: 'Dinner', body: 'Thursday?' }],
+    ['msgvault.draft-reply', { id: '150889', body: 'Thursday?', all: false }],
   ]);
 });
 
@@ -425,8 +432,8 @@ test('a live READ grant does not buy a draft', async () => {
   assert.equal(f.ran.length, 2);
   // …and a draft does not.
   const draft = await f.broker.create({
-    action: 'msgvault.draft',
-    payload: { to: ['a@b.com'], subject: 's', body: 'b' },
+    action: 'msgvault.draft-reply',
+    payload: { id: '1', body: 'b' },
     origin: 'local',
   });
   assert.equal(draft.state, 'pending');

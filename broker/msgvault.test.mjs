@@ -117,7 +117,17 @@ test('only verbs that work against 0.22.0 are offered', () => {
   // parent commands with no positional and no --json. An action the broker
   // accepts and the tool refuses is a dialog asking for something that cannot
   // happen.
-  for (const dead of ['msgvault.list-senders', 'msgvault.meetings', 'msgvault.person']) {
+  for (const dead of [
+    'msgvault.list-senders',
+    'msgvault.meetings',
+    'msgvault.person',
+    // Composing a new email. Measured 2026-11-10 against msgvault 0.22.0,
+    // locally as `_msgvault` so the agent layer was not in the way: a Gmail
+    // source answers `draft-compose` with `draft_disabled`, while
+    // `draft-reply` created a real Gmail draft in the thread. A verb that
+    // raises a dialog and then fails is worse than no verb.
+    'msgvault.draft',
+  ]) {
     assert.ok(!CAPABILITIES.msgvault.actions.includes(dead), dead);
     assert.throws(() => validateMsgvault(dead, {}), /Unsupported action/, dead);
   }
@@ -128,7 +138,6 @@ test('only verbs that work against 0.22.0 are offered', () => {
       'msgvault.show-message',
       'msgvault.show-thread',
       'msgvault.stats',
-      'msgvault.draft',
       'msgvault.draft-reply',
     ],
   );
@@ -152,47 +161,39 @@ test('the dialog names the thing being asked for, not just the verb', () => {
   // EVERY action, including the writes — one payload that satisfies all of
   // them, so adding a verb without a description fails here rather than
   // showing a human the raw action name in a dialog.
-  const anything = { query: 'q', id: 'i', to: ['a@b.com'], subject: 's', body: 'b' };
+  const anything = { query: 'q', id: 'i', body: 'b' };
   for (const a of CAPABILITIES.msgvault.actions) {
     const d = describeMsgvault(a, validateMsgvault(a, anything));
     assert.ok(d.length > 10 && !d.startsWith('msgvault.'), `${a} -> ${d}`);
   }
-  // A draft's description carries the two things you are agreeing to: who it
-  // is addressed to, and what it is about.
-  const draft = describeMsgvault('msgvault.draft', validateMsgvault('msgvault.draft', anything));
-  assert.match(draft, /a@b\.com/);
-  assert.match(draft, /"s"/);
+  // A draft's description carries what you are agreeing to: which message it
+  // answers, and whether it answers one person or all of them.
+  const draft = describeMsgvault(
+    'msgvault.draft-reply',
+    validateMsgvault('msgvault.draft-reply', anything),
+  );
+  assert.match(draft, /message i/);
 });
 
 /**
- * THE TWO WRITES.
+ * THE ONE WRITE.
  *
  * A draft puts text an agent wrote into the owner's mailbox under their name.
  * These assertions are about the two things that keeps honest: every argument
- * is composed rather than forwarded, and neither verb can become a send.
+ * is composed rather than forwarded, and the verb cannot become a send.
  */
-test('a draft is composed from checked fields, never from the caller’s flags', () => {
-  const p = validateMsgvault('msgvault.draft', {
-    to: ['a@b.com', 'c@d.com'],
-    cc: ['e@f.com'],
-    subject: 'Dinner',
-    body: 'Are you free Thursday?',
-  });
-  const { args } = msgvaultArgv('msgvault.draft', p, INSTALL);
-  assert.deepEqual(args.slice(6), [
-    'draft-compose',
-    '--json',
-    '--to',
-    'a@b.com',
-    '--to',
-    'c@d.com',
-    '--cc',
-    'e@f.com',
-    '--subject',
-    'Dinner',
-    '--body',
-    'Are you free Thursday?',
-  ]);
+test('there is no verb for composing a new email', () => {
+  // Not "refused" — ABSENT. `draft-compose` must not appear in any command
+  // line this module can build, for any action it accepts.
+  assert.throws(() => validateMsgvault('msgvault.draft', { to: ['a@b.com'], subject: 's', body: 'b' }), /Unsupported action/);
+  for (const a of CAPABILITIES.msgvault.actions) {
+    const p = validateMsgvault(a, { query: 'q', id: '1', body: 'b' });
+    const { args } = msgvaultArgv(a, p, INSTALL);
+    assert.ok(!args.includes('draft-compose'), `${a} -> ${args.join(' ')}`);
+    // …and no recipient flags anywhere: with compose gone, nothing this
+    // module builds addresses a new message to anybody.
+    assert.ok(!args.some((x) => ['--to', '--cc', '--bcc', '--subject'].includes(x)), a);
+  }
 });
 
 test('a reply names the message it answers, and says who it goes to', () => {
@@ -220,13 +221,9 @@ test('a reply names the message it answers, and says who it goes to', () => {
     );
 });
 
-test('neither verb can be turned into a send, or into another flag', () => {
-  for (const action of ['msgvault.draft', 'msgvault.draft-reply']) {
-    const p =
-      action === 'msgvault.draft'
-        ? { to: ['a@b.com'], subject: 's', body: 'b' }
-        : { id: '1', body: 'b' };
-    const { args } = msgvaultArgv(action, validateMsgvault(action, p), INSTALL);
+test('the write cannot be turned into a send, or into another flag', () => {
+  for (const action of ['msgvault.draft-reply']) {
+    const { args } = msgvaultArgv(action, validateMsgvault(action, { id: '1', body: 'b' }), INSTALL);
     assert.ok(!args.some((a) => /send/i.test(a)), args.join(' '));
     // The verb is a constant and the only flags present are the ones this
     // module wrote — there is no slot for a caller's.
@@ -234,37 +231,14 @@ test('neither verb can be turned into a send, or into another flag', () => {
   }
 });
 
-test('a draft refuses a recipient that is not an address', () => {
-  for (const to of [[], ['nope'], ['a@b'], ['-x@b.com'], 'a@b.com '.repeat(1), [1]])
-    assert.throws(
-      () => validateMsgvault('msgvault.draft', { to, subject: 's', body: 'b' }),
-      /recipient|address/i,
-      JSON.stringify(to),
-    );
-  // …and a flag-shaped subject or body, for the reason the whole file exists.
+test('a reply refuses a flag-shaped or oversized body', () => {
+  // The reason the whole file exists: msgvault is cobra/pflag, so free text
+  // that begins with `-` is parsed as a flag at the binary however tidy the
+  // argv array looks from here.
+  assert.throws(() => validateMsgvault('msgvault.draft-reply', { id: '1', body: '--local' }), /body/i);
+  assert.throws(() => validateMsgvault('msgvault.draft-reply', { id: '1', body: '' }), /body/i);
   assert.throws(
-    () => validateMsgvault('msgvault.draft', { to: ['a@b.com'], subject: '--local', body: 'b' }),
-    /subject/i,
-  );
-  assert.throws(
-    () => validateMsgvault('msgvault.draft', { to: ['a@b.com'], subject: 's', body: '--local' }),
-    /body/i,
-  );
-});
-
-test('a draft is bounded — a caller cannot mail a hundred people a novel', () => {
-  const many = Array.from({ length: 21 }, (_, i) => `a${i}@b.com`);
-  assert.throws(
-    () => validateMsgvault('msgvault.draft', { to: many, subject: 's', body: 'b' }),
-    /Too many/,
-  );
-  assert.throws(
-    () =>
-      validateMsgvault('msgvault.draft', {
-        to: ['a@b.com'],
-        subject: 's',
-        body: 'x'.repeat(20001),
-      }),
+    () => validateMsgvault('msgvault.draft-reply', { id: '1', body: 'x'.repeat(20001) }),
     /body/i,
   );
 });

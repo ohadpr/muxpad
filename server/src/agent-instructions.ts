@@ -203,10 +203,16 @@ Capabilities worth knowing:
 
   READS: \`search '<gmail-like query>' [--limit=N]\` (max 200),
   \`show-message <id>\`, \`show-thread <id>\`, \`stats\`.
-  WRITES: \`draft --to=a@b.com [--cc=] [--bcc=] --subject="…" --body="…"\` and
-  \`draft-reply <message-id> --body="…" [--all]\`. A draft lands in the
+  WRITE: \`draft-reply <message-id> --body="…" [--all]\`. It lands in the
   mailbox unsent; \`--all\` answers everyone on the thread instead of the
   sender. **Nothing here can send.**
+
+  **A DRAFT IS ALWAYS A REPLY.** There is no verb for a new email, and no
+  flag that makes one: msgvault's Gmail path refuses \`draft-compose\`
+  outright. So "email X about Y" is only doable as an answer to something in
+  the archive — find the thread with \`search\`, then reply to its id. If
+  there is no thread to reply to, say so instead of looking for another
+  route; there isn't one.
 
   **WHAT A SEARCH ACTUALLY RETURNS, because this costs an agent ten minutes
   if nobody says it.** One result set holds MAIL AND CALENDAR EVENTS
@@ -271,9 +277,9 @@ Capabilities worth knowing:
   Quote a query that contains spaces, exactly as you would for msgvault
   itself: \`muxpad msgvault search 'from:x@y.com newer_than:30d'\`.
 
-  **WHAT DOES NOT EXIST.** No send verb, no calendar writes, no invites, no
-  SQL, no bulk export, no \`list-accounts\`, no sender list, no meetings
-  verb — and **no contact lookup**: the archive holds the user's contacts,
+  **WHAT DOES NOT EXIST.** No send verb, no new-email draft, no calendar
+  writes, no invites, no SQL, no bulk export, no \`list-accounts\`, no sender
+  list, no meetings verb — and **no contact lookup**: the archive holds the user's contacts,
   but every \`person\` verb is refused to a delegated agent and no contacts
   permission exists, so an agent cannot read them at all. Say that plainly
   when asked for someone's details rather than implying the data is missing.

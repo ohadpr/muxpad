@@ -725,43 +725,24 @@ export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
       return c.json(await brokerAction(action, payload(q), auth), 202);
     });
   /**
-   * ── THE TWO WRITES ────────────────────────────────────────────────────
+   * ── THE ONE WRITE ─────────────────────────────────────────────────────
    *
    * POST, not GET, and not in the table above: a draft carries a body that
    * does not belong in a URL, and the difference between a verb that reads
    * and one that writes into the owner's mailbox should be visible in this
    * file without reading a payload builder.
    *
-   * The shapes are checked HERE as well as in the broker. The broker's check
+   * There is no `/draft` to compose a new email. A Gmail source refuses
+   * `draft-compose` with `draft_disabled` while `draft-reply` creates a real
+   * draft in the thread, so composing was a route that could only 502 after
+   * somebody had approved it. See broker/msgvault.mjs for the measurement.
+   *
+   * The shape is checked HERE as well as in the broker. The broker's check
    * is the one that matters — it is what stands between an agent and the
    * tool — and this one exists so a mistake gets a 400 with a sentence
    * instead of an approval dialog for a request that will fail after the
    * person approves it.
    */
-  archive.post('/draft', async (c) => {
-    const b = z
-      .object({
-        pane: z.string(),
-        key: z.string(),
-        to: z.array(z.string().email()).min(1).max(20),
-        cc: z.array(z.string().email()).max(20).optional(),
-        bcc: z.array(z.string().email()).max(20).optional(),
-        subject: z.string().min(1).max(300),
-        body: z.string().min(1).max(20000),
-      })
-      .parse(await c.req.json());
-    const auth = await authorize(b.pane, b.key, callerOf(c));
-    if (!auth.ok) return c.json(auth.body, auth.status);
-    return c.json(
-      await brokerAction(
-        'msgvault.draft',
-        { to: b.to, cc: b.cc ?? [], bcc: b.bcc ?? [], subject: b.subject, body: b.body },
-        auth,
-      ),
-      202,
-    );
-  });
-
   archive.post('/draft-reply', async (c) => {
     const b = z
       .object({
