@@ -87,3 +87,60 @@ describe('the recently-active strip keeps up with a chat that finished', () => {
     expect(seen).toHaveLength(0);
   });
 });
+
+/**
+ * A DELETED CHAT LEAVES THE STRIP.
+ *
+ * This is why "delete doesn't work, only archive works" was a reasonable
+ * belief. Both actions really ran; they differed on screen by one event.
+ *
+ *   ARCHIVE emits `tab.updated` — the patch above runs, the row visibly
+ *     becomes done, and the action looks like it landed.
+ *   DELETE emits `tab.removed`, which this store ignored entirely. The chat
+ *     was destroyed server-side (rows gone, panes gone, verified against the
+ *     database) and its row sat in Recently Active with the name and status
+ *     it had when it died.
+ *
+ * So the one action that really did destroy a chat was the one that appeared
+ * to do nothing.
+ */
+describe('the recently-active strip lets go of a chat that was deleted', () => {
+  const remove = (tabId: string) => {
+    for (const h of handlers)
+      h({ type: 'tab.removed', tab_id: tabId, workspace_id: 'w1' } as unknown as MuxpadEvent);
+  };
+
+  beforeEach(async () => {
+    slots.length = 0;
+    slots.push({ at: 1, tab: tab(), workspace: { id: 'w1', slug: 'w', name: 'W' } });
+    slots.push({
+      at: 2,
+      tab: tab({ id: 't2', name: 'Investing' }),
+      workspace: { id: 'w1', slug: 'w', name: 'W' },
+    });
+    await refreshWorkingSet();
+  });
+
+  it('drops the row, and only that row', () => {
+    expect(cachedWorkingSet()).toHaveLength(2);
+    remove('t1');
+    const left = cachedWorkingSet();
+    expect(left).toHaveLength(1);
+    expect(left[0]?.tab.id).toBe('t2');
+  });
+
+  it('does not reorder or re-time what survives', () => {
+    // `at` is the strip's own ordering key and belongs to the SET. A removal
+    // must not become a reshuffle of the chats you were reading.
+    const before = cachedWorkingSet().find((s) => s.tab.id === 't2');
+    remove('t1');
+    expect(cachedWorkingSet()[0]).toEqual(before);
+  });
+
+  it('ignores a removal for a chat the strip is not showing', () => {
+    const before = cachedWorkingSet();
+    remove('someone-elses-tab');
+    // Same array identity: no publish, so nothing re-renders.
+    expect(cachedWorkingSet()).toBe(before);
+  });
+});
