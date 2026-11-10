@@ -391,6 +391,13 @@ export class ReportDelivery {
       state: round.report_state ?? (round.report ? null : 'failed'),
       report: round.report,
       artifacts: round.artifacts,
+      // The handle for sending this worker back. Same lookup the parent's own
+      // delivery uses, pointed at the child — absent only for a worker whose
+      // pane has gone, where there is nothing to resume anyway.
+      ...(() => {
+        const pane = this.agentPaneOf(round.tab_id);
+        return pane ? { paneId: pane.id } : {};
+      })(),
     };
   }
 }
