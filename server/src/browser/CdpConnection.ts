@@ -136,11 +136,36 @@ export class CdpConnection implements CdpTransport {
    */
   async attachToPage(targetId?: string): Promise<PageTarget> {
     const targets = await this.listTargets();
-    const page = targetId
+    let page = targetId
       ? targets.find(
           (t) => t.targetId === targetId && t.type === 'page' && !t.url.startsWith('devtools://'),
         )
       : targetToAttach(null, targets);
+    /**
+     * ── A BROWSER WITH NO TAB GETS ONE ────────────────────────────────────
+     *
+     * `chrome-headless-shell` launched with no URL opens NO page, where full
+     * Chrome would have given us a new-tab page. So every start threw
+     * "no page target" the instant it connected, the host died, and the
+     * supervisor restarted it for ever. That is the bug under the one that
+     * flooded this machine with orphaned browsers: the orphans were the
+     * symptom, this was the thing failing.
+     *
+     * Asked of CDP rather than fixed with an `about:blank` argument on the
+     * command line, because the invariant wanted is "there is a page to
+     * attach to" — which must also hold when the last tab is closed later,
+     * long after argv stopped being relevant.
+     *
+     * Only when the caller did not NAME a target: an explicit handoff target
+     * that has gone is a real error, and inventing a blank page in its place
+     * would hand somebody a different browser than they asked for.
+     */
+    if (!page && !targetId) {
+      const { targetId: made } = (await this.sendOn(null, 'Target.createTarget', {
+        url: 'about:blank',
+      })) as unknown as { targetId: string };
+      page = (await this.listTargets()).find((t) => t.targetId === made);
+    }
     if (!page) throw new Error(`no page target at ${this.opts.endpoint}`);
     if (page.targetId !== this.attachedTargetId) await this.attachTo(page.targetId);
     return { targetId: page.targetId, url: page.url };
