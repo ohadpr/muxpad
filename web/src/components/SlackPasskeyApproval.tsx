@@ -46,6 +46,35 @@ const connectorOf = (action: string | undefined) =>
 const connectorOfGrant = (g: { action?: string; actions?: string[] }) =>
   connectorOf(g.actions?.[0] ?? g.action);
 /**
+ * WHAT A CHOICE OF DURATION ACTUALLY BUYS — all three answers, always.
+ *
+ * Kept as data rather than inline conditionals because the dialog renders
+ * every one of them on every open (see the scope slot below): the slot is
+ * sized by the browser to the tallest, so picking a duration cannot move the
+ * buttons. A variant that is only ever constructed when it is shown cannot do
+ * that, which is how the jump got in.
+ */
+const SCOPE_VARIANTS = ['once', 'timed', 'until-revoked'] as const;
+type ScopeVariant = (typeof SCOPE_VARIANTS)[number];
+const scopeVariant = (duration: string): ScopeVariant =>
+  duration === 'once' ? 'once' : duration === 'until-revoked' ? 'until-revoked' : 'timed';
+const scopeCopy = (variant: ScopeVariant, slack: boolean): string => {
+  // THE `once` LINE IS NOT FILLER. The slot has to hold something at this
+  // size anyway, and "nothing is remembered" is the fact a person most wants
+  // confirmed before approving a one-off — it used to be implied by an empty
+  // space, which is not the same as being said.
+  if (variant === 'once')
+    return 'This call only. Nothing is remembered, and the next request asks again.';
+  const covers = slack
+    ? 'All agents can read, search, send, edit, delete, react, open DMs and upload files in this Slack workspace.'
+    : 'All agents on this machine can search and read your mail. Drafting is never covered by a duration — each draft is approved on its own, with its text in front of you — and nothing here can send.';
+  const ends =
+    variant === 'until-revoked'
+      ? ' Ends when you revoke it in Settings, when the broker restarts, or when this approval session expires — it is not stored on disk.'
+      : ' Ends within the selected period, on restart or when revoked in Settings.';
+  return `${covers} ${ends}`;
+};
+/**
  * WHAT WENT WRONG, in a sentence a person can act on.
  *
  * A cancelled or timed-out passkey prompt throws a `NotAllowedError` whose
@@ -515,17 +544,32 @@ export function SlackPasskeyApproval({
             {/* WHAT A DURATION ACTUALLY COVERS, for THIS capability. It said
                 "read, search, send, edit, delete, react, open DMs and upload
                 files in this Slack workspace" above an archive read — a
-                description of a grant that was not being made. */}
-            {duration !== 'once' && (
-              <p className="slack-passkey-scope">
-                {connectorOf(request.action) === SLACK
-                  ? 'All agents can read, search, send, edit, delete, react, open DMs and upload files in this Slack workspace.'
-                  : 'All agents on this machine can search and read your mail. Drafting is never covered by a duration — each draft is approved on its own, with its text in front of you — and nothing here can send.'}{' '}
-                {duration === 'until-revoked'
-                  ? ' Ends when you revoke it in Settings, when the broker restarts, or when this approval session expires — it is not stored on disk.'
-                  : ' Ends within the selected period, on restart or when revoked in Settings.'}
-              </p>
-            )}
+                description of a grant that was not being made.
+                ── AND THE SLOT DOES NOT RESIZE ──────────────────────────────
+                This used to render only for a duration, so choosing one made
+                four lines appear and shoved Deny and Approve down the dialog
+                — under a cursor already on its way to a button. A dialog that
+                moves its buttons while you are deciding is a dialog that can
+                collect a click you did not mean.
+                So every variant is always in the DOM, stacked in one grid
+                cell; the inactive ones are `visibility: hidden` and hidden
+                from assistive tech. The cell is therefore as tall as the
+                LONGEST copy at this width, measured by the browser rather
+                than guessed at with a min-height, and nothing moves — not on
+                first choice, and not between `1 day` and the longer
+                `until I revoke it` sentence either. */}
+            <div className="slack-passkey-scope-slot">
+              {SCOPE_VARIANTS.map((key) => (
+                <p
+                  key={key}
+                  className="slack-passkey-scope"
+                  aria-hidden={key !== scopeVariant(duration)}
+                  data-shown={key === scopeVariant(duration)}
+                >
+                  {scopeCopy(key, connectorOf(request.action) === SLACK)}
+                </p>
+              ))}
+            </div>
             {/* …and only for the SAME capability. "Timed Slack access is
                 already active" appeared whenever any grant existed, archive
                 grants included. */}

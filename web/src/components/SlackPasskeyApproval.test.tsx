@@ -676,3 +676,58 @@ it('a LIVE request is untouched — the guard is about expiry, not about writes'
   await click('Approve');
   expect(vi.mocked(passkeyCeremony)).toHaveBeenCalled();
 });
+
+/**
+ * THE DIALOG MUST NOT MOVE ITS BUTTONS WHILE YOU ARE DECIDING.
+ *
+ * Reported from a real approval: choosing a duration made four lines of scope
+ * copy appear and pushed Deny and Approve down the dialog, under a cursor
+ * already travelling towards a button. That is how a dialog collects a click
+ * nobody meant — and this one signs a passkey ceremony with it.
+ *
+ * jsdom does not lay out, so height cannot be asserted here. What CAN be
+ * asserted is the property the fix rests on, and it is the one that would be
+ * undone by a careless edit: every variant is present in the DOM at every
+ * moment, so the browser sizes the slot to the tallest once and never resizes
+ * it. A variant rendered only when selected is the bug, whatever it looks
+ * like.
+ */
+it('keeps every scope variant mounted, so choosing a duration cannot move the buttons', async () => {
+  await render();
+  const slot = () => host.querySelector('.slack-passkey-scope-slot')!;
+  const variants = () => [...slot().querySelectorAll('.slack-passkey-scope')];
+  const shown = () => variants().filter((p) => p.getAttribute('data-shown') === 'true');
+
+  // Three answers — once, a period, until revoked — present before anything
+  // is chosen, which is the moment the old markup rendered none of them.
+  expect(variants()).toHaveLength(3);
+  expect(shown()).toHaveLength(1);
+  expect(shown()[0]?.textContent).toContain('This call only');
+
+  const pick = async (value: string) => {
+    await act(async () => {
+      const select = host.querySelector('select')!;
+      select.value = value;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  };
+
+  for (const [value, needle] of [
+    ['1d', 'Ends within the selected period'],
+    ['until-revoked', 'not stored on disk'],
+    ['10m', 'Ends within the selected period'],
+    ['once', 'Nothing is remembered'],
+  ] as const) {
+    await pick(value);
+    // The count never changes — only which one is visible.
+    expect(variants(), value).toHaveLength(3);
+    expect(shown(), value).toHaveLength(1);
+    expect(shown()[0]?.textContent, value).toContain(needle);
+    // …and the hidden ones are hidden from assistive tech too, so a screen
+    // reader hears one sentence rather than three contradictory ones.
+    for (const p of variants())
+      expect(p.getAttribute('aria-hidden'), value).toBe(
+        p.getAttribute('data-shown') === 'true' ? 'false' : 'true',
+      );
+  }
+});
