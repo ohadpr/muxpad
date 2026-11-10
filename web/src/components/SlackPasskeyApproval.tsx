@@ -497,7 +497,7 @@ export function SlackPasskeyApproval({
               <p className="slack-passkey-scope">
                 {connectorOf(request.action) === SLACK
                   ? 'All agents can read, search, send, edit, delete, react, open DMs and upload files in this Slack workspace.'
-                  : 'All agents on this machine can search and read your mail. They cannot send, draft or change anything.'}{' '}
+                  : 'All agents on this machine can search and read your mail. Drafting is never covered by a duration — each draft is approved on its own, with its text in front of you — and nothing here can send.'}{' '}
                 {duration === 'until-revoked'
                   ? ' Ends when you revoke it in Settings, when the broker restarts, or when this approval session expires — it is not stored on disk.'
                   : ' Ends within the selected period, on restart or when revoked in Settings.'}

@@ -95,19 +95,30 @@ const SLACK: Record<string, VerbRule> = {
  * will classify and the tool will refuse is a prompt asking for something
  * that cannot happen.
  *
- * EVERY ACTION IS A READ. The write verbs that used to be listed here
- * (`draft.*`, `calendar.write`, and `calendar.invite`, refused outright
- * because mailing attendees is sending mail under another name) are not
- * refused by this table any more — they are ABSENT FROM THE BROKER, which is
- * stronger: there is no action name to request, no validator to reach and no
- * argv template to fill. msgvault's own delegated mode refuses them a third
- * time.
+ * ── IT IS NOT ALL READS ANY MORE ────────────────────────────────────────
+ * It was, and this note said so. Drafting is the exception, and it is listed
+ * as what it is: `kind: 'write'`, `timed: false`. A draft may never ride an
+ * existing grant, so every one of them is approved on its own with its text
+ * on screen — enforced in the broker (capabilities' `timedReadOnly`) and said
+ * again here, because this table is what muxpad uses to describe an approval
+ * before the broker ever sees it.
+ *
+ * `calendar.write` and `calendar.invite` are still absent, and that is still
+ * stronger than refusing them: no action name to request, no validator to
+ * reach, no argv template to fill. Inviting attendees is sending mail under
+ * somebody's name, which is the line drafting deliberately does not cross —
+ * the grant carries draft permissions and no send permission at all.
  */
 const MSGVAULT: Record<string, VerbRule> = {
   'msgvault.search': { kind: 'read', timed: true },
   'msgvault.show-message': { kind: 'read', timed: true },
   'msgvault.show-thread': { kind: 'read', timed: true },
   'msgvault.stats': { kind: 'read', timed: true },
+  // `notifiesOthers: false`, stated rather than left absent: it is the fact
+  // that separates a draft from every other write in this table. Nothing
+  // leaves, nobody is told, and the owner opens their mailbox to find it.
+  'msgvault.draft': { kind: 'write', timed: false, notifiesOthers: false },
+  'msgvault.draft-reply': { kind: 'write', timed: false, notifiesOthers: false },
 };
 
 export const VERBS: Record<string, VerbRule> = { ...SLACK, ...MSGVAULT };
@@ -144,7 +155,11 @@ export function classify(verb: string): Classification {
     kind: rule.kind,
     // Belt and braces: a write is never timed even if the table says so.
     timed: rule.kind === 'read' && rule.timed,
-    ...(rule.notifiesOthers ? { notifiesOthers: true } : {}),
+    // ALWAYS present for a verb that will run. "Does this reach other
+    // people?" is a question that must not be answered by a missing field:
+    // absent reads as false at a call site that forgot to think about it, and
+    // reads as "nobody asked" at one that did. It is a boolean now.
+    notifiesOthers: rule.notifiesOthers === true,
   };
 }
 

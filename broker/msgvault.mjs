@@ -80,6 +80,24 @@ const fail = (m) => {
  * the archive deliberately closes. Four verbs that work beat seven that are
  * three-sevenths fiction.
  */
+/** An email address, as a value this module will place on a command line.
+ *  Deliberately plainer than RFC 5322: muxpad is not a mail client, and a
+ *  shape this file can state in one line is a shape it can defend. */
+const ADDRESS = /^(?!-)[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
+
+/** Recipients: one or more addresses, repeatable at the binary as --to a --to b. */
+const addresses = (v, what, max) => {
+  const list = Array.isArray(v) ? v : v === undefined ? [] : [v];
+  if (list.length === 0) return [];
+  if (list.length > max) fail(`Too many ${what} addresses`);
+  for (const a of list)
+    if (typeof a !== 'string' || !ADDRESS.test(a)) fail(`Invalid ${what} address`);
+  return list;
+};
+
+/** `--to a --to b`, the repeatable-flag shape msgvault takes. */
+const repeat = (flag, list) => list.flatMap((v) => [flag, v]);
+
 const SPEC = {
   'msgvault.search': {
     validate: (p) => {
@@ -104,7 +122,69 @@ const SPEC = {
   'msgvault.stats': {
     validate: () => ({}),
     argv: () => ['stats'],
-    describe: () => 'read archive totals (no message content)',
+    describe: () => 'count your mail, calendar and contacts (no message content)',
+  },
+  /**
+   * ── THE TWO WRITES ────────────────────────────────────────────────────
+   *
+   * A draft puts text an agent wrote into the owner's mailbox, under their
+   * name, where it sits next to things they wrote themselves. That is worth
+   * a dialog of its own every time, and it gets one: `writeActions` is not in
+   * `readScope`, and core.mjs offers a duration only for the read scope.
+   *
+   * NEITHER CAN SEND. muxpad asks for no send verb and the grant carries no
+   * send permission — the agent-token permissions are search.read,
+   * message.read, attachment.read, stats.read, draft.create/edit/delete and
+   * the calendar set. "It can never send" is a property of the grant, not a
+   * promise this file makes.
+   *
+   * `--json` on both, so the result is a draft id the owner can open rather
+   * than prose about having done it.
+   */
+  'msgvault.draft': {
+    validate: (p) => {
+      const to = addresses(p.to, 'to', 20);
+      if (to.length === 0) fail('Give at least one recipient');
+      const cc = addresses(p.cc, 'cc', 20);
+      const bcc = addresses(p.bcc, 'bcc', 20);
+      if (!str(p.subject, 300)) fail('Give a subject');
+      if (!str(p.body, 20000)) fail('Give a body');
+      return { to, cc, bcc, subject: p.subject, body: p.body };
+    },
+    argv: (p) => [
+      'draft-compose',
+      '--json',
+      ...repeat('--to', p.to),
+      ...repeat('--cc', p.cc),
+      ...repeat('--bcc', p.bcc),
+      '--subject',
+      p.subject,
+      '--body',
+      p.body,
+    ],
+    describe: (p) => `draft an email to ${p.to.join(', ')} — "${p.subject}"`,
+  },
+  'msgvault.draft-reply': {
+    validate: (p) => {
+      if (!ID.test(String(p.id ?? ''))) fail('Give the message id to reply to');
+      if (!str(p.body, 20000)) fail('Give a body');
+      // `--all` is reply-to-everyone. Opt IN, because the difference between
+      // answering one person and answering a thread of nine is exactly the
+      // kind of thing a person must approve knowingly — and the dialog says
+      // which it is.
+      return { id: p.id, body: p.body, all: p.all === true };
+    },
+    argv: (p) => [
+      'draft-reply',
+      '--json',
+      '--body',
+      p.body,
+      ...(p.all ? ['--all'] : []),
+      '--',
+      p.id,
+    ],
+    describe: (p) =>
+      `draft a reply ${p.all ? 'to everyone on' : 'to the sender of'} message ${p.id}`,
   },
 };
 

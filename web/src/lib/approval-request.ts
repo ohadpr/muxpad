@@ -35,6 +35,11 @@ const MARKS: Record<string, readonly SourceMark[]> = {
   // The only verb that genuinely spans the archive — and the only one allowed
   // to light three marks. It reads counts, which is why the card says so.
   'msgvault.stats': ['gmail', 'calendar', 'contacts'],
+  // A draft lands in mail, like the reads — the mark says WHICH of your data
+  // is involved, not whether the verb reads or writes. The heading and the
+  // qualifier carry that, and the duration menu's absence proves it.
+  'msgvault.draft': ['gmail'],
+  'msgvault.draft-reply': ['gmail'],
 };
 
 export const marksFor = (action: string): readonly SourceMark[] =>
@@ -62,6 +67,16 @@ const channel = (value: unknown): string => {
   const raw = text(value);
   if (!raw) return 'Slack';
   return /^[a-z0-9][a-z0-9._-]*$/.test(raw) ? `#${raw}` : raw;
+};
+
+/** `a@b.com`, or `a@b.com and 2 others` — a heading names who without
+ *  becoming the recipient list, which is in the fields below it anyway. */
+const recipients = (value: unknown): string => {
+  const list = Array.isArray(value) ? value.filter((v) => typeof v === 'string') : [];
+  if (list.length === 0) return 'nobody';
+  return list.length === 1
+    ? (list[0] as string)
+    : `${list[0]} and ${list.length - 1} other${list.length === 2 ? '' : 's'}`;
 };
 
 const count = (value: unknown): string | undefined => {
@@ -148,6 +163,21 @@ const RULES: Record<string, Rule> = {
     title: () => 'Read an email thread',
     qualifier: () => 'read-only · one thread',
     primary: 'id',
+  },
+  /**
+   * THE TWO WRITES. The body is the primary field for both — it is the thing
+   * going into the mailbox, and a dialog that showed the recipient but not
+   * the text would be asking for consent to something it had not shown.
+   */
+  'msgvault.draft': {
+    title: (p) => `Draft an email to ${recipients(p.to)}`,
+    qualifier: () => 'saved as a draft — it cannot be sent',
+    primary: 'body',
+  },
+  'msgvault.draft-reply': {
+    title: (p) => (p.all ? 'Draft a reply to everyone on the thread' : 'Draft a reply'),
+    qualifier: () => 'saved as a draft — it cannot be sent',
+    primary: 'body',
   },
   'msgvault.stats': {
     title: () => 'Count your mail, calendar and contacts',

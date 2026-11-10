@@ -479,19 +479,29 @@ describe('msgvault goes through the broker, holding nothing', () => {
     expect(body).not.toMatch(/"\$@"/);
   });
 
-  it('calls exactly four endpoints, all of them reads', () => {
+  it('calls exactly these endpoints — four reads and two drafts', () => {
     // Asserted as a SET rather than by searching for forbidden words, because
     // `senders` contains "send" and a test that fails on a reading verb is a
-    // test somebody edits away. The writes are not missing from this list by
-    // omission — there is no action name for them anywhere in the broker.
+    // test somebody edits away.
     const called = new Set([...body.matchAll(/\/api\/msgvault\/([a-z-]+)/g)].map((m) => m[1]));
-    // FOUR. `senders`, `meetings` and `person` were advertised and cannot
-    // work against msgvault 0.22.0 — verified against the real binary:
-    // delegated mode refuses `list-senders`, and `meetings`/`person` are
-    // parent command trees with no positional and no `--json`. A verb the CLI
+    // `senders`, `meetings` and `person` were advertised and cannot work
+    // against agent-delegated msgvault — verified against the real binary:
+    // delegated mode refuses `list-senders` and `person get`, and the
+    // agent-token permission set has no contacts scope at all. A verb the CLI
     // offers and the tool refuses is a dialog asking for something that
     // cannot happen.
-    expect([...called].sort()).toEqual(['message', 'search', 'stats', 'thread']);
+    expect([...called].sort()).toEqual([
+      'draft',
+      'draft-reply',
+      'message',
+      'search',
+      'stats',
+      'thread',
+    ]);
+    // AND THE THING THAT MUST STAY TRUE: nothing here sends. A draft lands in
+    // the owner's own mailbox; the grant carries draft permissions and no
+    // send permission, and muxpad asks for no send verb.
+    expect([...called].filter((v) => /^(send|post|invite)/.test(v as string))).toEqual([]);
   });
 
   it('says in its own help that each call is approved', () => {

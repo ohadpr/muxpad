@@ -111,7 +111,14 @@ describe('the card describes the grant it is actually making', () => {
   it('describes a duration per capability, not always as Slack', () => {
     expect(CODE).toMatch(/connectorOf\(request\.action\) === SLACK\s*\?\s*'All agents can read/);
     expect(CODE).toMatch(/search and read your mail/);
-    expect(CODE).toMatch(/cannot send, draft or change anything/);
+    // Drafting exists now, so "cannot draft" would be false. What a DURATION
+    // covers is still reading only, and the sentence has to say which of the
+    // two it is promising — a timed grant that silently covered writing into
+    // the mailbox is exactly the thing `timedReadOnly` prevents in the
+    // broker, and this is the same promise in the owner's language.
+    expect(CODE).toMatch(/Drafting is never covered by a duration/);
+    expect(CODE).toMatch(/nothing here can send/);
+    expect(CODE).not.toMatch(/cannot send, draft or change anything/);
   });
 
   it('shows the machine that asked, and says when it is unverified', () => {
