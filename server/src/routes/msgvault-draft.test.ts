@@ -63,27 +63,22 @@ const sentTo = async () => {
 };
 
 describe('a draft reaches the approval funnel with what you will be shown', () => {
-  it('composes one, carrying every recipient field', async () => {
+  it('has no route for composing a new email', async () => {
+    // Measured against msgvault 0.22.0: a Gmail source answers
+    // `draft-compose` with `draft_disabled` while `draft-reply` creates a
+    // real draft in the thread. A route for composing could only ever 502
+    // after a human had approved it, so there is none — and nothing reaches
+    // the broker from the attempt.
     const h = harness();
     const res = await post(h.archive, '/draft', {
       pane: h.pane.id,
       key: h.key,
-      to: ['a@b.com', 'c@d.com'],
-      cc: ['e@f.com'],
+      to: ['a@b.com'],
       subject: 'Dinner',
       body: 'Thursday?',
     });
-    expect(res.status).toBe(202);
-    expect(await sentTo()).toMatchObject({
-      action: 'msgvault.draft',
-      payload: {
-        to: ['a@b.com', 'c@d.com'],
-        cc: ['e@f.com'],
-        bcc: [],
-        subject: 'Dinner',
-        body: 'Thursday?',
-      },
-    });
+    expect(res.status).toBe(404);
+    expect(await sentTo()).toBeUndefined();
   });
 
   it('replies to a thread, and reply-all is opt in', async () => {
@@ -108,33 +103,32 @@ describe('a draft reaches the approval funnel with what you will be shown', () =
     expect((await sentTo()).payload.all).toBe(true);
   });
 
-  it('leaves a card naming who it is to, not just that a draft happened', async () => {
+  it('leaves a card naming what it answers, not just that a draft happened', async () => {
     const h = harness();
-    await post(h.archive, '/draft', {
+    await post(h.archive, '/draft-reply', {
       pane: h.pane.id,
       key: h.key,
-      to: ['a@b.com', 'c@d.com'],
-      subject: 's',
+      id: '150889',
       body: 'b',
     });
     const card = h.db.prepare('SELECT kind, title FROM chat_actions').get() as {
       kind: string;
       title: string;
     };
-    expect(card.kind).toBe('msgvault.draft');
-    expect(card.title).toBe('Drafted an email to a@b.com +1');
+    expect(card.kind).toBe('msgvault.draft-reply');
+    expect(card.title).toBe('Drafted a reply to message 150889');
   });
 
   it('refuses a malformed draft here, rather than at the dialog', async () => {
     const h = harness();
     const bad = [
-      { to: [], subject: 's', body: 'b' },
-      { to: ['not-an-address'], subject: 's', body: 'b' },
-      { to: ['a@b.com'], subject: '', body: 'b' },
-      { to: ['a@b.com'], subject: 's', body: '' },
+      { id: '', body: 'b' },
+      { id: '150889', body: '' },
+      { id: 'x'.repeat(129), body: 'b' },
+      { id: '150889', body: 'x'.repeat(20001) },
     ];
     for (const b of bad) {
-      const res = await post(h.archive, '/draft', { pane: h.pane.id, key: h.key, ...b });
+      const res = await post(h.archive, '/draft-reply', { pane: h.pane.id, key: h.key, ...b });
       expect(res.status, JSON.stringify(b)).toBeGreaterThanOrEqual(400);
     }
   });
@@ -142,11 +136,10 @@ describe('a draft reaches the approval funnel with what you will be shown', () =
   it('is refused from a machine the archive is not scoped to', async () => {
     // Same gate as every read: the write path must not have its own door.
     const h = harness({ enforce: true, allow: { msgvault: ['other'] } });
-    const res = await post(h.archive, '/draft', {
+    const res = await post(h.archive, '/draft-reply', {
       pane: h.pane.id,
       key: h.key,
-      to: ['a@b.com'],
-      subject: 's',
+      id: '150889',
       body: 'b',
     });
     expect(res.status).toBe(403);

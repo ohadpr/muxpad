@@ -241,12 +241,23 @@ export class LinkServer {
    *     so a server cannot upgrade a read it is relaying into a write.
    */
   private signOrigin(id: string, callId: string, action: string, payload: unknown): void {
-    const refuse = (reason: string) => this.up({ ch: 'origin', op: 'unavailable', id, reason });
+    const refuse = (reason: string): void => {
+      this.up({ ch: 'origin', op: 'unavailable', id, reason });
+    };
     const identity = this.deps.originKey?.() ?? null;
-    if (!identity) return refuse('no origin key on this host');
+    if (!identity) {
+      refuse('no origin key on this host');
+      return;
+    }
     const declared = this.apiActions.get(callId);
-    if (!declared) return refuse('no such call in flight');
-    if (declared !== action) return refuse(`call is for ${declared}, not ${action}`);
+    if (!declared) {
+      refuse('no such call in flight');
+      return;
+    }
+    if (declared !== action) {
+      refuse(`call is for ${declared}, not ${action}`);
+      return;
+    }
     const ts = Date.now();
     const nonce = randomUUID();
     const sig = sign(identity.key, { origin: identity.origin, action, payload, ts, nonce });

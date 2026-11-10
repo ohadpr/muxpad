@@ -909,9 +909,12 @@ json_string() {
 # written here becomes a flag over there. That is also why there is no
 # `--anything` escape: an escape would be the pass-through again.
 #
-# WRITES DO NOT EXIST. Not refused — absent. There is no action name for a
-# draft, a calendar write, an invite, SQL or a bulk export, so there is
-# nothing here to ask for and nothing there to answer.
+# THERE IS ONE WRITE, AND IT IS A DRAFT REPLY. No send verb, no calendar
+# write, no invite, no SQL, no bulk export — not refused, absent: there is no
+# action name for them, so there is nothing here to ask for and nothing there
+# to answer. Composing a NEW email has no action name either, for a different
+# reason: msgvault's own Gmail path refuses `draft-compose` (`draft_disabled`)
+# while `draft-reply` creates a real draft in the thread.
 #
 # AND THREE READS DO NOT EXIST EITHER. `list-senders`, `meetings` and
 # `person` were advertised here and cannot work against msgvault 0.22.0 —
@@ -930,13 +933,15 @@ read:
   show-thread <id>                          the thread around a message
   stats                                     totals only, no content
 
-write (a draft; it can never send):
-  draft --to=a@b.com [--cc=…] [--bcc=…] --subject="…" --body="…"
+write (a draft reply; it can never send):
   draft-reply <message-id> --body="…" [--all]
 
 Each call asks you to approve it. A READ may be approved for a stretch of
 time; a draft is approved one at a time, with its text in front of you, and
 --all means the reply goes to everyone on the thread rather than the sender.
+
+There is no verb for a NEW email. A Gmail source refuses msgvault's
+draft-compose outright, so replying is the only drafting there is.
 EOF
   exit 1
 }
@@ -975,35 +980,15 @@ cmd_msgvault() {
       slack_call GET "/api/msgvault/thread?$q&id=$enc" ;;
     stats)
       slack_call GET "/api/msgvault/stats?$q" ;;
-    # ── THE TWO WRITES ──────────────────────────────────────────────────
+    # ── THE ONE WRITE ───────────────────────────────────────────────────
     # A draft is the only thing here that leaves something behind, and it
     # still cannot send: the grant carries draft permissions and no send
-    # permission at all. Both go through the same approval as every read,
-    # and neither can be approved for a duration — see the broker.
-    draft)
-      local to=() cc=() bcc=() subject="" body=""
-      while [ $# -gt 0 ]; do
-        case "$1" in
-          --to=*) to+=("${1#*=}") ;;
-          --cc=*) cc+=("${1#*=}") ;;
-          --bcc=*) bcc+=("${1#*=}") ;;
-          --subject=*) subject="${1#*=}" ;;
-          --body=*) body="${1#*=}" ;;
-          -*) echo "muxpad: unknown option: $1" >&2; return 1 ;;
-          *) echo "muxpad: unexpected argument: $1" >&2; return 1 ;;
-        esac
-        shift
-      done
-      [ ${#to[@]} -gt 0 ] || { echo 'muxpad: draft needs --to=' >&2; return 1; }
-      [ -n "$subject" ] || { echo 'muxpad: draft needs --subject=' >&2; return 1; }
-      [ -n "$body" ] || { echo 'muxpad: draft needs --body=' >&2; return 1; }
-      # Built by jq so an address list, a subject with quotes and a body with
-      # newlines all survive as data rather than as shell.
-      slack_call POST /api/msgvault/draft "$(jq -nc \
-        --arg pane "$MUXPAD_PANE_ID" --arg key "$MUXPAD_PANE_KEY" \
-        --arg subject "$subject" --arg body "$body" \
-        --args '{pane:$pane,key:$key,subject:$subject,body:$body,to:$ARGS.positional[0:'"${#to[@]}"'],cc:[],bcc:[]}' \
-        ${to[@]+"${to[@]}"})" ;;
+    # permission at all. It goes through the same approval as every read and
+    # cannot be approved for a duration — see the broker.
+    #
+    # There is no `draft` verb for a new email: msgvault's draft-compose is
+    # refused by a Gmail source (`draft_disabled`), so it would be a verb
+    # that asks for approval and then fails.
     draft-reply)
       [ -n "${1:-}" ] || msgvault_usage
       local id="$1"; shift
@@ -1109,7 +1094,6 @@ connector_action() {
   case "$path" in
     /api/msgvault/message) printf 'msgvault.show-message' ;;
     /api/msgvault/thread) printf 'msgvault.show-thread' ;;
-    /api/msgvault/draft) printf 'msgvault.draft' ;;
     /api/msgvault/draft-reply) printf 'msgvault.draft-reply' ;;
     /api/slack/*) printf 'slack.%s' "${path##*/}" ;;
     /api/msgvault/*) printf 'msgvault.%s' "${path##*/}" ;;

@@ -112,30 +112,28 @@ describe('the whole payload is on screen', () => {
 });
 
 describe('a draft is described by what goes into the mailbox', () => {
-  it('leads with who it is to, and makes the BODY the thing you read', () => {
-    const d = describeRequest('msgvault.draft', {
-      to: ['a@b.com'],
-      subject: 'Dinner',
+  it('makes the BODY the thing you read', () => {
+    const d = describeRequest('msgvault.draft-reply', {
+      id: '150889',
       body: 'Are you free Thursday?',
     });
-    expect(d.title).toBe('Draft an email to a@b.com');
-    // The body is the primary field: a dialog that showed the recipient but
-    // not the text would be asking for consent to something it had not shown.
+    // The body is the primary field: a dialog that named the thread but not
+    // the text would be asking for consent to something it had not shown.
     expect(d.primary).toEqual({ key: 'body', value: 'Are you free Thursday?' });
     expect(d.qualifier).toBe('saved as a draft — it cannot be sent');
     // …and the rest is still all on screen.
-    expect(d.rest.map(([k]) => k)).toEqual(['to', 'subject']);
+    expect(d.rest.map(([k]) => k)).toEqual(['id']);
   });
 
-  it('names a crowd without listing it in the heading', () => {
-    const many = describeRequest('msgvault.draft', {
-      to: ['a@b.com', 'c@d.com', 'e@f.com'],
-      subject: 's',
-      body: 'b',
-    });
-    expect(many.title).toBe('Draft an email to a@b.com and 2 others');
-    // The full list is a field, so nothing is hidden.
-    expect(many.rest.find(([k]) => k === 'to')?.[1]).toContain('e@f.com');
+  it('has nothing to say about composing a new email, because there is no such verb', () => {
+    // A Gmail source refuses `draft-compose` outright, so muxpad does not
+    // offer it. An unknown action must still render something a human can
+    // read rather than the raw action name — but it gets no bespoke copy,
+    // and in particular no "it cannot be sent" reassurance about a request
+    // this table knows nothing about.
+    const d = describeRequest('msgvault.draft', { to: ['a@b.com'], subject: 's', body: 'b' });
+    expect(d.title).not.toContain('msgvault.draft');
+    expect(d.qualifier).toBeUndefined();
   });
 
   it('says out loud when a reply goes to everyone', () => {
@@ -148,7 +146,9 @@ describe('a draft is described by what goes into the mailbox', () => {
   });
 
   it('marks a draft as mail — the mark is about your data, not about reading', () => {
-    expect(marksFor('msgvault.draft')).toEqual(['gmail']);
     expect(marksFor('msgvault.draft-reply')).toEqual(['gmail']);
+    // And no mark for the verb that does not exist: an unknown msgvault
+    // action lights nothing rather than guessing at mail.
+    expect(marksFor('msgvault.draft')).toEqual([]);
   });
 });

@@ -77,6 +77,10 @@ export const SLACK = Object.freeze({
  * be sitting there next to things you wrote" is a different promise from "it
  * read your mail", and the two must not be approvable by one gesture.
  *
+ * The write set is one verb, not two: replying is all a Gmail source permits
+ * (see msgvault.mjs for the measurement). A single-element list is still a
+ * set that must not ride a duration.
+ *
  * So `readScope` keeps the four reads and `fullScope` names everything. The
  * rule in core.mjs does the rest: a duration is offered only when the scope
  * being asked for is the READ scope, so a draft is always approve-once, with
@@ -99,9 +103,12 @@ export const MSGVAULT = Object.freeze({
     'msgvault.show-thread',
     'msgvault.stats',
   ]),
-  /** Writes. `draft.create` is a real agent-token permission, and both of
-   *  these reach the tool in delegated mode — verified against the binary. */
-  writeActions: Object.freeze(['msgvault.draft', 'msgvault.draft-reply']),
+  /** ONE WRITE. `draft.create` is a real agent-token permission and
+   *  `draft-reply` reaches the tool in delegated mode — verified against a
+   *  live Gmail draft. There is no compose verb: a Gmail source answers
+   *  `draft-compose` with `draft_disabled` no matter who asks, so offering it
+   *  would only ever raise a dialog for an action the archive then refuses. */
+  writeActions: Object.freeze(['msgvault.draft-reply']),
   /**
    * A DURATION NEVER COVERS THE WRITES, whatever the owner's `timedGrants`
    * switch says. "Full Slack access for an hour" is a bargain somebody may

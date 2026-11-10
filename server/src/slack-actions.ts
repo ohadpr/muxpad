@@ -44,19 +44,10 @@ const TITLES: Record<string, (p: Payload) => string> = {
   'msgvault.show-message': (p) => `Read one email (${String(p.id ?? '')})`,
   'msgvault.show-thread': (p) => `Read an email thread (${String(p.id ?? '')})`,
   'msgvault.stats': () => 'Counted your mail, calendar and contacts',
-  // The WRITES say who it is to and what it is about: a card reading
-  // "drafted an email" is a card you would have to open your mailbox to
-  // understand.
-  'msgvault.draft': (p) => `Drafted an email to ${recipients(p)}`,
+  // The WRITE says what it is about: a card reading "drafted a reply" is a
+  // card you would have to open your mailbox to understand.
   'msgvault.draft-reply': (p) => `Drafted a reply to message ${String(p.id ?? '')}`,
 };
-
-/** `a@b.com`, or `a@b.com +2` — a card names who, without becoming a list. */
-function recipients(p: Payload): string {
-  const to = Array.isArray(p.to) ? p.to.filter((x): x is string => typeof x === 'string') : [];
-  if (to.length === 0) return 'nobody';
-  return to.length === 1 ? (to[0] as string) : `${to[0]} +${to.length - 1}`;
-}
 
 interface Payload {
   ref?: unknown;
@@ -67,8 +58,6 @@ interface Payload {
   /** msgvault reads: the message id, or the query that was run. */
   id?: unknown;
   query?: unknown;
-  /** msgvault drafts: who it is addressed to. */
-  to?: unknown;
 }
 
 /**
