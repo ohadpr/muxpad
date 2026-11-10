@@ -167,9 +167,18 @@ export function renderSpawnDelivery(entries: readonly SpawnDeliveryEntry[]): str
       const links = e.artifacts?.length ? `\n\nArtifacts: ${e.artifacts.join(' ')}` : '';
       // The handle, under the result it belongs to — so "send it back" is one
       // line away from the thing being judged, not a lookup.
+      //
+      // A CRASHED worker has none, and is told so explicitly rather than
+      // silently: its runner exhausted its restarts, so a send to it is
+      // refused outright, and a parent that tried would spend a turn finding
+      // that out. The alternative is named because "no handle" on its own
+      // reads as "nothing to do here", which is not true — the work still
+      // needs doing, by somebody new.
       const back = e.paneId
         ? `\n\nSend back: \`muxpad agent send ${e.paneId} "<what to change>"\``
-        : '';
+        : e.state === 'crashed'
+          ? '\n\nThis worker cannot be resumed — its agent died. Spawn a fresh one with `muxpad agent new` if the work still needs doing.'
+          : '';
       return `${head}\n\n${text}${links}${back}`;
     })
     .join('\n\n');

@@ -160,21 +160,49 @@ describe('a delivery is work to review, not news to relay', () => {
     ...over,
   });
 
-  it('puts the send-back command under the result it belongs to', () => {
-    const out = renderSpawnDelivery([entry()]);
-    expect(out).toContain('muxpad agent send p1');
-    // Under its own heading, not in a footer: the handle has to sit beside
-    // the thing being judged.
-    expect(out.indexOf('build the importer')).toBeLessThan(out.indexOf('muxpad agent send p1'));
-  });
+  /** The text under one heading, up to the next — what a reader attributes
+   *  to that worker. Both assertions below are about ATTRIBUTION, which a
+   *  `toContain` over the whole message cannot see. */
+  const sectionFor = (out: string, name: string): string => {
+    const start = out.indexOf(`## ${name}`);
+    const rest = out.slice(start + 1);
+    const next = rest.indexOf('\n## ');
+    return next === -1 ? rest : rest.slice(0, next);
+  };
 
-  it('gives each worker in a batch its own handle', () => {
+  it('puts the send-back command inside the section it belongs to', () => {
+    // An earlier version asserted only that the command appeared AFTER the
+    // heading, which a footer at the end of the whole message also satisfies.
     const out = renderSpawnDelivery([
       entry(),
       entry({ tabId: 't2', paneId: 'p2', name: 'write the docs' }),
     ]);
-    expect(out).toContain('muxpad agent send p1');
-    expect(out).toContain('muxpad agent send p2');
+    expect(sectionFor(out, 'build the importer')).toContain('muxpad agent send p1');
+  });
+
+  it('gives each worker its OWN handle, not merely a handle each', () => {
+    // The version of this test that shipped checked both strings were
+    // present somewhere, so swapping the two handles between workers passed
+    // it — and a parent following the wrong one sends corrections for the
+    // importer to the worker writing the docs.
+    const out = renderSpawnDelivery([
+      entry(),
+      entry({ tabId: 't2', paneId: 'p2', name: 'write the docs' }),
+    ]);
+    expect(sectionFor(out, 'build the importer')).toContain('muxpad agent send p1');
+    expect(sectionFor(out, 'build the importer')).not.toContain('p2');
+    expect(sectionFor(out, 'write the docs')).toContain('muxpad agent send p2');
+    expect(sectionFor(out, 'write the docs')).not.toContain('p1');
+  });
+
+  it('names the alternative for a worker that cannot be resumed', () => {
+    const { paneId: _none, ...crashed } = entry({ state: 'crashed', report: null });
+    const out = renderSpawnDelivery([crashed]);
+    expect(out).not.toContain('muxpad agent send');
+    // "No handle" alone reads as "nothing to do here", which is false — the
+    // work still needs doing, by somebody new.
+    expect(out).toMatch(/cannot be resumed/);
+    expect(out).toContain('muxpad agent new');
   });
 
   it('tells the parent to review before it says anything to the human', () => {
