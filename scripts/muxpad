@@ -2345,7 +2345,7 @@ cmd_serve() {
   local cmdv=("${POSITIONAL[@]}")
   local stopped=0
   trap 'stopped=1' INT TERM
-  local backoff=2
+  local backoff=2 fails=0
   while :; do
     # (Re)declare the app URL each round — idempotent server-side, and it
     # only flips the face when the URL is NEW to this pane, so a user who
@@ -2364,12 +2364,40 @@ cmd_serve() {
       echo "muxpad serve: stopped"
       break
     fi
-    # Crash-loop backoff: a server that dies within 10s of starting doubles
-    # the wait (max 30s); a healthy long run resets it.
+    # ── CRASH-LOOP BACKOFF, WITH A CEILING THAT MEANS SOMETHING ───────────
+    # A server that dies within 10s of starting doubles the wait; a healthy
+    # long run resets it to 2s.
+    #
+    # THE CEILING WAS 30s, AND 30s IS NOT A CEILING FOR A COMMAND THAT CAN
+    # NEVER START. It is a promise to retry it 120 times an hour for ever. A
+    # browser host whose Chrome could not be attached to was restarted for TEN
+    # HOURS at that cadence — about 1,200 times — and each attempt leaked a
+    # process, which is how this machine reached 3,014 of them. The leak is
+    # fixed where it belongs (server/src/browser/host/run.ts), and the retry
+    # rate was the other half: a doomed command should go quiet, not drum.
+    #
+    # 300s, reached by ordinary doubling, so nothing changes for a service
+    # that is merely slow to bind — the first seven retries still happen
+    # inside nine minutes (4+8+16+32+64+128+256 = 508s), before the ceiling
+    # is reached at all. What changes is the steady state of a permanent
+    # failure: 12 attempts an hour instead of 120.
+    #
+    # NOT a give-up. `muxpad serve` has never had a terminal state and adding
+    # one is a product decision (an app that stays down until a human returns,
+    # versus one that is still trying when they do). Slowing down is the part
+    # that needs no decision.
     if [ "$ran" -lt 10 ]; then
-      backoff=$((backoff * 2)); [ "$backoff" -gt 30 ] && backoff=30
+      fails=$((fails + 1))
+      backoff=$((backoff * 2)); [ "$backoff" -gt 300 ] && backoff=300
     else
+      fails=0
       backoff=2
+    fi
+    # Said once, when the pattern becomes a verdict rather than a hiccup: the
+    # line above scrolls past, and somebody reading this pane later needs to
+    # know it has been failing since long before they looked.
+    if [ "$fails" = "10" ]; then
+      echo "muxpad serve: 10 failures in a row — this command is not starting. Backing off to ${backoff}s between tries; fix it and it will pick up on the next one."
     fi
     echo "muxpad serve: command exited (code $code, ran ${ran}s) — restarting in ${backoff}s (Ctrl-C to stop)"
     sleep "$backoff" || break
