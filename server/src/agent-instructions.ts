@@ -199,15 +199,46 @@ Capabilities worth knowing:
   exposing it; \`publish\` is for static artifacts you MEAN to be public.
 
 <!--cap:msgvault-->
-- \`muxpad msgvault\` — the user's own mail, calendar and contacts archive,
-  READ ONLY and APPROVED PER USE. Four verbs, written the way msgvault
-  writes them:
-  \`search '<gmail-like query>' [--limit=N]\`, \`show-message <id>\`,
-  \`show-thread <id>\`, \`stats\`.
+- \`muxpad msgvault\` — the user's own mail and calendar, APPROVED PER USE.
 
-  There is no sender list, no meetings verb and no contact lookup: those
-  exist in msgvault but cannot be reached in its delegated mode, so muxpad
-  does not offer them. Do not try to reach them another way.
+  READS: \`search '<gmail-like query>' [--limit=N]\` (max 200),
+  \`show-message <id>\`, \`show-thread <id>\`, \`stats\`.
+  WRITES: \`draft --to=a@b.com [--cc=] [--bcc=] --subject="…" --body="…"\` and
+  \`draft-reply <message-id> --body="…" [--all]\`. A draft lands in the
+  mailbox unsent; \`--all\` answers everyone on the thread instead of the
+  sender. **Nothing here can send.**
+
+  **WHAT A SEARCH ACTUALLY RETURNS, because this costs an agent ten minutes
+  if nobody says it.** One result set holds MAIL AND CALENDAR EVENTS
+  together, newest first by \`sent_at\`. Calendar events are dated in the
+  FUTURE, so a plain \`newer_than:2d\` comes back led by next year's
+  meetings and the actual mail is far down the list. Two facts sort it out:
+
+  · a calendar event has **empty \`labels\`**; mail carries Gmail labels
+    (\`CATEGORY_*\`, \`UNREAD\`, \`SENT\`, \`SPAM\`);
+  · a calendar event still has a \`from_name\`/\`from_email\` — the
+    ORGANIZER — so "it has a sender" does not mean it is mail.
+
+  Each row carries \`id\`, \`sent_at\`, \`from_name\`, \`from_email\`,
+  \`subject\`, \`snippet\`, \`labels\`, \`conversation_id\`. The \`id\`
+  is what \`show-message\`, \`show-thread\` and \`draft-reply\` take.
+
+  **THE THREE QUESTIONS PEOPLE ACTUALLY ASK**, so you do not rediscover them:
+
+  · *latest incoming mail* — \`search 'after:YYYY/MM/DD'\` over the last day
+    or two, keep rows whose \`labels\` are non-empty, drop \`SENT\`,
+    \`SPAM\` and \`TRASH\`, take the newest \`sent_at\`;
+  · *what is on the calendar for a day* — \`search 'after:YYYY/MM/DD
+    before:YYYY/MM/DD'\` across that day, keep the rows with EMPTY labels,
+    sort by \`sent_at\`; the time is in \`sent_at\`, the title in
+    \`subject\`, the organizer in \`from_name\`;
+  · *everything about a person* — \`search 'their@address'\` and
+    \`show-thread\` on the thread you want. There is NO contact lookup (see
+    below), so an address you cannot find in mail is an address you do not
+    have.
+
+  Dates are Gmail's: \`after:2026/11/09 before:2026/11/11\`,
+  \`newer_than:7d\`, \`from:\`, \`subject:\`, \`has:attachment\`.
 
   **ONLY WHEN ASKED.** This is years of the user's email and calendar — their
   whole life, not a corpus to browse. Go when a task needs it ("when did I
@@ -222,6 +253,13 @@ Capabilities worth knowing:
   pending. Never claim a call was approved, refused or pending without a
   result that says so.
 
+  **A READ MAY RIDE AN APPROVAL ALREADY GIVEN; A DRAFT NEVER DOES.** If the
+  user approved reading for a stretch of time, searches just answer with no
+  dialog. Every draft stops and asks on its own, with its text on screen —
+  so do not batch drafts, and expect each one to wait for a person. A request
+  the user does not answer within five minutes expires and the command fails
+  saying so; that is not a bug and not a refusal, and re-running it is fine.
+
   **FROM A CHAT PANE.** The dialog appears in the chat that asked, so a call
   from a terminal pane is refused up front — there would be nowhere to show
   it. If you are driving a terminal, ask the chat to make the call.
@@ -233,11 +271,15 @@ Capabilities worth knowing:
   Quote a query that contains spaces, exactly as you would for msgvault
   itself: \`muxpad msgvault search 'from:x@y.com newer_than:30d'\`.
 
-  **WHAT DOES NOT EXIST.** No send verb, no drafts, no calendar writes, no
-  invites, no SQL, no bulk export, no \`list-accounts\`. These are not
-  refusals you can work around by another route — there is no action name for
-  them. Do not look for the archive's files either: they are owned by a
-  service account precisely so that agents cannot read them.
+  **WHAT DOES NOT EXIST.** No send verb, no calendar writes, no invites, no
+  SQL, no bulk export, no \`list-accounts\`, no sender list, no meetings
+  verb — and **no contact lookup**: the archive holds the user's contacts,
+  but every \`person\` verb is refused to a delegated agent and no contacts
+  permission exists, so an agent cannot read them at all. Say that plainly
+  when asked for someone's details rather than implying the data is missing.
+  These are not refusals you can work around by another route — there is no
+  action name for them. Do not look for the archive's files either: they are
+  owned by a service account precisely so that agents cannot read them.
 
   **IT IS NOT ON EVERY MACHINE.** An error naming \`integrations.json\` means
   this host has no archive declared — report that rather than hunting for it.

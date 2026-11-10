@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -628,4 +630,49 @@ it('dismissing decides nothing — no decision is ever sent', async () => {
   // Walking away is not "deny": the request stays pending at the broker and
   // expires on its own. Saying no is a decision, and a decision is signed.
   expect(vi.mocked(passkeyAPI).mock.calls.filter(([p]) => p === 'decision')).toHaveLength(before);
+});
+
+/**
+ * AN EXPIRED REQUEST NEVER REACHES THE PLATFORM PROMPT.
+ *
+ * A broker request lives five minutes. The dialog stayed live past that:
+ * Approve started a WebAuthn ceremony, the broker refused the stale intent,
+ * and on a phone it surfaced as the system's own "Unable to use passkey —
+ * This passkey could not be used to sign in". The reasonable conclusion was
+ * that the passkey was broken. It was not; the request had expired.
+ */
+it('an expired request cannot be approved, and says why', async () => {
+  pending = [{ ...request, expires: Date.now() - 1000 }];
+  await render();
+  const approve = [...host.querySelectorAll('dialog button')].find((b) =>
+    /Approve|Expired/.test(b.textContent ?? ''),
+  ) as HTMLButtonElement;
+  // The control stops looking ready…
+  expect(approve.textContent).toBe('Expired');
+  expect(approve.disabled).toBe(true);
+  // …and pressing it anyway reaches no platform prompt.
+  await act(async () => approve.click());
+  expect(vi.mocked(passkeyCeremony)).not.toHaveBeenCalled();
+  expect(vi.mocked(passkeyAPI).mock.calls.filter(([p]) => p === 'options')).toHaveLength(0);
+  // The poll explains it in the words a person needs.
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(2500);
+  });
+  expect(host.textContent).toMatch(/expired/i);
+});
+
+it('the guard is in `decide` too, not only on the button', () => {
+  // The button is the primary defence; this is the race — a tap already in
+  // flight when expiry crosses must not reach the ceremony either. Asserted
+  // on the source, the way this suite already pins rules that have no
+  // reachable behaviour from outside.
+  const src = readFileSync(join(import.meta.dirname, 'SlackPasskeyApproval.tsx'), 'utf8');
+  const decide = src.slice(src.indexOf('const decide = async'));
+  expect(decide.slice(0, 1400)).toMatch(/request\.expires <= Date\.now\(\)/);
+});
+
+it('a LIVE request is untouched — the guard is about expiry, not about writes', async () => {
+  await render();
+  await click('Approve');
+  expect(vi.mocked(passkeyCeremony)).toHaveBeenCalled();
 });

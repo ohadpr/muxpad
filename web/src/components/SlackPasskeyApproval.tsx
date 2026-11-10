@@ -195,6 +195,26 @@ export function SlackPasskeyApproval({
   const [outcomeConnector, setOutcomeConnector] = useState<(typeof CONNECTORS)[number]>(SLACK);
   const decide = async (decision: 'approve' | 'reject') => {
     if (!request || busyRef.current) return;
+    /**
+     * ── DO NOT SPEND A PASSKEY ON A DEAD REQUEST ──────────────────────────
+     *
+     * A broker request lives five minutes. The dialog stayed fully live past
+     * that: Approve still started a WebAuthn ceremony, the broker refused the
+     * stale intent, and on a phone the whole thing surfaced as the system's
+     * own "Unable to use passkey — This passkey could not be used to sign
+     * in." Reported exactly that way, by somebody who then reasonably
+     * concluded their passkey was broken — it was not; the request had
+     * expired four minutes earlier.
+     *
+     * Checked HERE rather than only on the poll tick, because the poll is
+     * what writes the message and the button is what the person presses: a
+     * tap arriving between ticks must not get as far as the platform prompt.
+     */
+    if (request.expires <= Date.now()) {
+      setError('This request expired before it was approved. Nothing happened — ask again.');
+      blocked.current = true;
+      return;
+    }
     const epoch = ++generation.current;
     const selected = request;
     const live = () => alive.current && generation.current === epoch;
@@ -291,6 +311,9 @@ export function SlackPasskeyApproval({
   const described = request
     ? describeRequest(request.action, request.payload)
     : { title: '', rest: [] as Array<[string, string]> };
+  /** A request the broker will no longer honour. Recomputed every render —
+   *  the poll ticks at 2s, which is finer than this needs to be. */
+  const expired = !!request && request.expires <= Date.now();
   const close = () => {
     dialog.current?.close();
     setDismissed(true);
@@ -522,13 +545,16 @@ export function SlackPasskeyApproval({
               <button type="button" disabled={busy} onClick={() => void decide('reject')}>
                 Deny
               </button>
+              {/* An expired request cannot be approved by anyone, so the
+                  control says that instead of looking ready. The poll's own
+                  message explains it; this is the half that stops a tap. */}
               <button
                 type="button"
                 className="slack-passkey-approve"
-                disabled={busy}
+                disabled={busy || expired}
                 onClick={() => void decide('approve')}
               >
-                {busy ? 'Confirming…' : 'Approve'}
+                {busy ? 'Confirming…' : expired ? 'Expired' : 'Approve'}
               </button>
             </div>
             {error && (
