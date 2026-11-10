@@ -457,4 +457,26 @@ export class SpawnRoundStore {
     }
     return out;
   }
+  /**
+   * How many rounds this worker has had, including the one being reported.
+   *
+   * A round is one dispatch: the first brief, then one per send-back. So this
+   * is the number of times a parent has asked this worker to do the work —
+   * and nothing anywhere BOUNDS that. An adversarial review checked for a cap
+   * and found none: open rounds are serialised (`openRound`) but successive
+   * ones are unlimited, `MAX_QUEUED_SENDS` counts pending messages and never
+   * fills on a sequential exchange, and retirement explicitly accommodates
+   * revival.
+   *
+   * The count is surfaced in the delivery rather than enforced, because a
+   * hard cap would break the long iteration this feature exists to enable.
+   * What it removes is the excuse: an orchestrator cannot lose track of how
+   * many times it has been round this loop when the number is in front of it.
+   */
+  roundCount(tabId: string): number {
+    const row = this.db
+      .prepare('SELECT COUNT(*) AS n FROM spawn_rounds WHERE tab_id = ?')
+      .get(tabId) as { n: number } | undefined;
+    return row?.n ?? 0;
+  }
 }

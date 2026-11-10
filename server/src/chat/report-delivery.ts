@@ -470,6 +470,7 @@ export class ReportDelivery {
       state: round.report_state ?? (round.report ? null : 'failed'),
       report: round.report,
       artifacts: round.artifacts,
+      rounds: new SpawnRoundStore(this.db).roundCount(round.tab_id),
       // Only when it will actually be clipped — a path beside a report you
       // have read in full is noise, and teaches a parent to open the file
       // every time.
