@@ -459,3 +459,59 @@ test('a reply draft names the message it answers, all the way through', async ()
     ['msgvault.draft-reply', { id: '150889', body: 'Yes — Thursday works.', all: true }],
   ]);
 });
+
+/**
+ * THE SECOND LOCK ON A READ GRANT.
+ *
+ * `grantScope` is derived from `timedScope`, and msgvault's timed scope is
+ * ALWAYS its read scope. So a draft's scope string is byte-identical to a read
+ * grant's: the scope equality this broker leans on everywhere else does not
+ * separate a read from a write here. What separates them is the grant's
+ * `actions` list — and a list is one edit away from being wrong in the
+ * direction nobody notices, because the failure is a write that never asked.
+ *
+ * So the rule is stated about the ACTION too, and this test is the proof: a
+ * grant whose action list has been widened to include the draft — exactly the
+ * mistake the guard exists for — still does not buy one.
+ */
+test('a read grant cannot buy a draft even if its action list says it can', async () => {
+  const f = fixture();
+  const session = f.pair();
+  const read = await ask(f, 'msgvault.search', { query: 'dinner' });
+  await f.broker.decideSession(read.id, read.fingerprint, 'approve', {
+    duration: '1h',
+    scope: 'msgvault-read-v1',
+    session,
+  });
+  assert.equal(f.ran.length, 1);
+
+  // The grant the broker actually minted carries the four reads…
+  const [id, minted] = [...f.broker.grants.entries()][0];
+  assert.ok(!minted.actions.includes('msgvault.draft-reply'));
+  // …and here is the sabotage: widen it, in place, the way a future edit to
+  // `actions:` at the mint site would. Taken from the internal map, not from
+  // `listGrants()` — that view strips `owner` and `elapsedExpires`, and a
+  // copy without them is a grant `activeGrants()` reaps on sight, which
+  // would have made this test pass for the wrong reason.
+  f.broker.grants.set(
+    id,
+    Object.freeze({ ...minted, actions: [...minted.actions, 'msgvault.draft-reply'] }),
+  );
+  assert.deepEqual(
+    f.broker.grantScope({ teamID: 'T123', origin: 'local', action: 'msgvault.draft-reply' }),
+    f.broker.grantScope({ teamID: 'T123', origin: 'local', action: 'msgvault.search' }),
+    'the scope strings are identical — this is why the action rule is needed',
+  );
+
+  // A read still rides it, so the grant is genuinely live…
+  assert.equal((await ask(f, 'msgvault.search', { query: 'again' })).state, 'complete');
+  assert.equal(f.ran.length, 2);
+  // …and the draft still stops at a human.
+  const draft = await f.broker.create({
+    action: 'msgvault.draft-reply',
+    payload: { id: '150889', body: 'b' },
+    origin: 'local',
+  });
+  assert.equal(draft.state, 'pending');
+  assert.equal(f.ran.length, 2);
+});
