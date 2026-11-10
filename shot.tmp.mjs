@@ -2,8 +2,12 @@ import { chromium } from '/Users/ohadpr/Dropbox/Computer/MyDev/2026/muxpad/node_
 const b = await chromium.connectOverCDP(`http://127.0.0.1:7777/api/browsers/s-${process.env.MUXPAD_TAB_ID}/cdp`, { timeout: 60000 });
 const ctx = b.contexts()[0] ?? (await b.newContext());
 const page = await ctx.newPage();
-await page.setViewportSize({ width: 1180, height: 1400 });
-await page.goto('http://127.0.0.1:8911/index.html', { waitUntil: 'networkidle' });
-await page.screenshot({ path: '/tmp/rt-shot.png', fullPage: true });
+await page.setViewportSize({ width: 1120, height: 1200 });
+await page.goto('http://127.0.0.1:8913/index.html', { waitUntil: 'networkidle' });
+for (const t of ['riso', 'memphis']) {
+  await page.click(`[data-t="${t}"]`);
+  await page.waitForTimeout(200);
+  await (await page.$$('.opt'))[1].screenshot({ path: `/tmp/theme-${t}.png` });
+}
 await page.close();
-console.log('screenshot taken');
+console.log('ok');
