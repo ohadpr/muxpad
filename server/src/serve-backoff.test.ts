@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -72,16 +73,75 @@ describe('the serve supervisor backs off far enough to matter', () => {
     // The spell is what is timed, not the process: a command that works all
     // week and breaks on Friday gets its own full term from Friday.
     expect(script).toMatch(/first_fail=\$SECONDS/);
-    expect(script).toMatch(/first_fail=0/);
     expect(script).toMatch(/giving up/);
     // …and forever is still available for the command that must never stop.
     expect(script).toMatch(/retry_for" != "0"/);
+
+    // ── THE DEFECT THIS LINE EXISTS FOR ─────────────────────────────────
+    // The spell was cleared by any run lasting 10s — the BACKOFF heuristic,
+    // reused as the definition of recovery. A command that waits 15s on a
+    // dependency that never arrives and exits nonzero therefore reset the
+    // deadline every time: it retried for ever and the seven days never came.
+    // Recovery is now a run that genuinely served.
+    expect(script).toMatch(/if \[ "\$ran" -ge 600 \]; then\n\s*first_fail=-1/);
+    // -1, not 0: 0 is a real value of $SECONDS (an immediate first failure)
+    // and read as "no spell in progress" for one whole round.
+    expect(script).toMatch(/first_fail=-1/);
+    expect(script).toMatch(/first_fail" != "-1"/);
+    // NOTE: the seven-day expiry itself is not executed here — it needs a
+    // week of wall clock. What is executed is the parser below; what is
+    // asserted here is the arithmetic that was wrong.
   });
 
-  it('refuses a malformed term instead of guessing one', () => {
-    // `bogus` ends in `s`, so a loose parser read it as seconds, kept "bogu",
-    // and a typo silently configured a retry term of nothing at all.
-    expect(script).toMatch(/\*\[!0-9dhms\]\*/);
+  /**
+   * ── RUN IT, DO NOT READ IT ──────────────────────────────────────────────
+   *
+   * The first version of these asserted that certain TEXT appeared in the
+   * script, which a review called out correctly: a pattern can be present and
+   * wrong, and none of them would have caught the three defects below. The
+   * parser is a shell function, so the test extracts it and executes it.
+   */
+  const parse = (value: string): { ok: boolean; out: string } => {
+    const fn = /^parse_duration_days\(\) \{[\s\S]*?^\}/m.exec(script)?.[0];
+    if (!fn) throw new Error('parse_duration_days has moved — this test is about nothing');
+    const r = spawnSync('bash', ['-c', `${fn}\nparse_duration_days "$1"`, '_', value], {
+      encoding: 'utf8',
+    });
+    return { ok: r.status === 0, out: r.stdout.trim() };
+  };
+
+  it('reads the durations a person would actually type', () => {
+    expect(parse('7d')).toEqual({ ok: true, out: String(7 * 86400) });
+    expect(parse('36h')).toEqual({ ok: true, out: String(36 * 3600) });
+    expect(parse('90m')).toEqual({ ok: true, out: '5400' });
+    expect(parse('45s')).toEqual({ ok: true, out: '45' });
+  });
+
+  it('refuses a number too wide to be arithmetic, rather than WRAPPING it to zero', () => {
+    // The dangerous one. `18446744073709551616` overflowed to 0, and 0 is
+    // this script's sentinel for "retry for ever" — so a fat-fingered
+    // duration silently removed the bound it was being asked to set.
+    expect(parse('18446744073709551616').ok).toBe(false);
+    expect(parse('99999999999999999999d').ok).toBe(false);
+    // …and a plausible large-but-sane value still works.
+    expect(parse('3650d')).toEqual({ ok: true, out: '315360000' });
+  });
+
+  it('reads a leading zero as a decimal, not as a broken octal literal', () => {
+    // `08` is a good digit string and an invalid octal literal, so bare
+    // arithmetic ERRORED on it instead of reading it.
+    expect(parse('08')).toEqual({ ok: true, out: '8' });
+    expect(parse('08d')).toEqual({ ok: true, out: String(8 * 86400) });
+    // And every spelling of zero is the one sentinel, not a 0-second term
+    // that would give up on the first failure.
+    expect(parse('00s').out).toBe('0');
+    expect(parse('0').out).toBe('0');
+  });
+
+  it('refuses what it cannot read instead of guessing', () => {
+    // `bogus` ends in `s`, so a loose `*s)` branch read it as "bogu" seconds.
+    for (const bad of ['bogus', '', '7dd', 'd', '3x', '-5d'])
+      expect(parse(bad).ok, bad || '(empty)').toBe(false);
   });
 
   it('says once, out loud, that the command is not starting', () => {

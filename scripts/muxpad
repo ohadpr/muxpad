@@ -2332,25 +2332,39 @@ cmd_app_url() {
 # `7d` / `36h` / `90m` / `0` → seconds. Empty or malformed returns non-zero so
 # the caller can say what it wanted rather than silently choosing for them.
 parse_duration_days() {
-  local v="${1:-}"
-  # DIGITS FIRST, and that is not pedantry: without it `bogus` matched the
-  # `*s` branch, became "bogu", and a typo silently configured a retry term
-  # of nothing at all.
+  local v="${1:-}" n unit
   case "$v" in
     *[!0-9dhms]*|'') return 1 ;;
-    *[0-9]) printf '%s' $(( v )); return 0 ;;
+    *[dhms]) n="${v%?}"; unit="${v##*[0-9]}" ;;
+    *) n="$v"; unit=s ;;
   esac
-  local n="${v%[dhms]}"
   case "$n" in ''|*[!0-9]*) return 1 ;; esac
-  case "$v" in
-    *d) printf '%s' $(( n * 86400 )) ;;
-    *h) printf '%s' $(( n * 3600 )) ;;
-    *m) printf '%s' $(( n * 60 )) ;;
-    *s) printf '%s' "$n" ;;
+  # ── DIGITS ARE NOT ENOUGH, AND BOTH WAYS COST THE GUARANTEE ────────────
+  #
+  # `08` is a perfectly good digit string and an invalid OCTAL literal, so
+  # bare `$(( ))` errors on it — a leading zero is a plausible way to write a
+  # duration and it blew up rather than being read.
+  #
+  # Worse in the other direction: a number wider than 64 bits WRAPS.
+  # `18446744073709551616` evaluated to 0, and 0 is this script's sentinel
+  # for "retry for ever" — so a fat-fingered duration silently removed the
+  # bound it was being asked to set. Width is checked BEFORE any arithmetic,
+  # because the wrap is the thing arithmetic cannot report.
+  [ "${#n}" -le 9 ] || return 1
+  n=$((10#$n))
+  case "$unit" in
+    d) n=$((n * 86400)) ;;
+    h) n=$((n * 3600)) ;;
+    m) n=$((n * 60)) ;;
+    s) ;;
     *) return 1 ;;
   esac
-  return 0
+  # Ten years. Anything past it is a typo, and the sentinel for "for ever"
+  # already exists and is spelled `0`.
+  [ "$n" -le 315360000 ] || return 1
+  printf '%s' "$n"
 }
+
 
 cmd_serve() {
   if [ -z "${MUXPAD_PANE_ID:-}" ]; then
@@ -2381,7 +2395,9 @@ cmd_serve() {
   local cmdv=("${POSITIONAL[@]}")
   local stopped=0
   trap 'stopped=1' INT TERM
-  local backoff=2 fails=0 first_fail=0
+  # -1 is 'no spell in progress'. NOT 0, which is a real value of $SECONDS
+  # (an immediate first failure) and read as 'unset' for one whole round.
+  local backoff=2 fails=0 first_fail=-1
   while :; do
     # (Re)declare the app URL each round — idempotent server-side, and it
     # only flips the face when the URL is NEW to this pane, so a user who
@@ -2437,9 +2453,30 @@ cmd_serve() {
     # that lived. So a command that works all week and breaks on Friday gets
     # its own full term from Friday, not the remainder of one that started in
     # January.
-    if [ "$ran" -lt 10 ] && [ "$first_fail" = "0" ]; then first_fail=$SECONDS; fi
-    if [ "$ran" -ge 10 ]; then first_fail=0; fi
-    if [ "$retry_for" != "0" ] && [ "$first_fail" != "0" ] \
+    # ── WHAT COUNTS AS RECOVERY IS NOT WHAT COUNTS AS A SLOW DEATH ────────
+    #
+    # This cleared the spell on any run lasting 10s, which is the BACKOFF
+    # heuristic — "that was not an instant crash, retry sooner". Reusing it
+    # here made it the definition of recovery for the termination guarantee,
+    # and that is a different question with a damaging answer: a command that
+    # waits 15s on a dependency that never arrives and exits nonzero reset the
+    # deadline on every attempt, so it retried every ~17s FOR EVER and the
+    # seven days never came. That is the most ordinary failure there is.
+    #
+    # So the spell is cleared only by a run that genuinely SERVED — ten
+    # minutes up. A process that stays up that long was working; one that
+    # dies every fifteen seconds for a week was not, however long each
+    # individual attempt took.
+    #
+    # `started_at` rather than `$SECONDS == 0`: an immediate first failure
+    # left `first_fail` reading as unset, so the clock only began at the
+    # SECOND failure.
+    if [ "$ran" -ge 600 ]; then
+      first_fail=-1
+    elif [ "$first_fail" = "-1" ]; then
+      first_fail=$SECONDS
+    fi
+    if [ "$retry_for" != "0" ] && [ "$first_fail" != "-1" ] \
        && [ $((SECONDS - first_fail)) -ge "$retry_for" ]; then
       echo "muxpad serve: giving up — this command has not started successfully for $((retry_for / 86400))d. Fix it and run 'muxpad app start' (or pass --retry-for=0 to keep trying for ever)."
       break

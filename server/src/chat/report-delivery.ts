@@ -377,6 +377,42 @@ export class ReportDelivery {
     });
   }
 
+  /**
+   * The pane a correction can actually be sent to, or null.
+   *
+   * NOT `agentPaneOf`, and the difference is the point. That one answers
+   * "where does a message for this tab go", which is right for DELIVERING to
+   * a parent and wrong for advertising a handle, because a handle that is
+   * refused is worse than no handle: the parent spends a turn on a command
+   * this file promised would work.
+   *
+   * Two refusals:
+   *
+   *   A CRASHED WORKER IS NOT RESUMABLE. `submitSend` rejects a pane whose
+   *     runner exhausted its restarts (ws.ts, `respawns.get(paneId)?.gaveUp`)
+   *     — the send returns 409 and the CLI exits 1. `crashed` is precisely
+   *     that worker reporting, so the delivery says to spawn a fresh one
+   *     instead of handing over a command that cannot work.
+   *   A PICKER PANE IS NOT AN AGENT YET. `muxpad agent --pick` is sitting on
+   *     a menu waiting for somebody to choose a backend. It matches a naive
+   *     `startsWith('muxpad agent')` and the dead-runner sweep skips it for
+   *     the same reason, so a message aimed at it queues against a session
+   *     that has not started.
+   *
+   * The NEWEST qualifying pane, not the first: `listByTab` is creation order,
+   * so a child that has an old dead pane and a new working one advertised the
+   * dead one.
+   */
+  private resumablePaneOf(tabId: string, state: string | null): string | null {
+    if (state === 'crashed') return null;
+    const usable = new PaneStore(this.db)
+      .listByTab(tabId)
+      .filter(
+        (p) => p.startup_cmd?.startsWith('muxpad agent') && !p.startup_cmd.includes('--pick'),
+      );
+    return usable.length ? (usable[usable.length - 1]?.id ?? null) : null;
+  }
+
   private entryFor(round: SpawnRound): SpawnDeliveryEntry {
     const tab = new TabStore(this.db).getById(round.tab_id);
     return {
@@ -391,12 +427,11 @@ export class ReportDelivery {
       state: round.report_state ?? (round.report ? null : 'failed'),
       report: round.report,
       artifacts: round.artifacts,
-      // The handle for sending this worker back. Same lookup the parent's own
-      // delivery uses, pointed at the child — absent only for a worker whose
-      // pane has gone, where there is nothing to resume anyway.
+      // The handle for sending this worker back — see `resumablePaneOf` for
+      // the two cases where there is deliberately none.
       ...(() => {
-        const pane = this.agentPaneOf(round.tab_id);
-        return pane ? { paneId: pane.id } : {};
+        const pane = this.resumablePaneOf(round.tab_id, round.report_state);
+        return pane ? { paneId: pane } : {};
       })(),
     };
   }
