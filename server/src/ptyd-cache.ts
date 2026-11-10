@@ -870,6 +870,12 @@ export function decorateTab(
     ? liveChildTabs(clocks.index, tab.id, clocks.now)
     : tabLiveChildTabs(db, tab.id, Date.now());
   const childWork: PaneStatus[] = [];
+  // ONE query for every child, or none at all — not `listByTab` per child.
+  // See PaneStore.byTabs: the list path has the workspace map already, and
+  // the single-row path is an event handler that fires whenever anything
+  // moves, which is the worst place to put a round trip per sub-chat.
+  const childPanesByTab =
+    panesByTabId ?? (childTabs.length ? new PaneStore(db).byTabs(childTabs) : null);
   for (const childId of childTabs) {
     // …AND THE ONE THAT STOPPED TO ASK YOU SOMETHING. A worker ends its turn
     // with a question, so its pane is `ready` and nothing about its STATE
@@ -877,7 +883,7 @@ export function decorateTab(
     // Without this the signal reaches only the drawer, which you have to open
     // to read, and a sub-chat is not a row anywhere else.
     if (clocks?.index.get(childId)?.spawn_report_state === 'awaiting') childWork.push('blocked');
-    const childPanes = panesByTabId?.get(childId) ?? new PaneStore(db).listByTab(childId);
+    const childPanes = childPanesByTab?.get(childId) ?? [];
     for (const p of childPanes) {
       const s = cache.getStatus(p.id, p.unread === true);
       if (s === 'working' || s === 'blocked') childWork.push(s);

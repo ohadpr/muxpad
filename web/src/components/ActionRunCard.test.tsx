@@ -27,8 +27,8 @@ function mount(actions: ChatAction[]) {
 
 describe('a run of reads is one row until you open it', () => {
   const reads = [
-    act_('msgvault.search', 'Searched your mail for "Dan Barak"'),
-    act_('msgvault.search', 'Searched your mail for "Barak dinner"'),
+    act_('msgvault.search', 'Searched your mail for "Ada Lovelace"'),
+    act_('msgvault.search', 'Searched your mail for "dinner plans"'),
     act_('msgvault.show-message', 'Read one email (150889)'),
   ];
 
@@ -36,14 +36,14 @@ describe('a run of reads is one row until you open it', () => {
     const h = mount(reads);
     expect(h.textContent).toContain('3 reads · your mail');
     // The wall this removes: the individual lines are not on screen.
-    expect(h.textContent).not.toContain('Dan Barak');
+    expect(h.textContent).not.toContain('Ada Lovelace');
     expect(h.querySelector('[aria-expanded="false"]')).toBeTruthy();
   });
 
   it('opens in place to the ordinary cards', () => {
     const h = mount(reads);
     act(() => (h.querySelector('button') as HTMLButtonElement).click());
-    expect(h.textContent).toContain('Dan Barak');
+    expect(h.textContent).toContain('Ada Lovelace');
     expect(h.textContent).toContain('Read one email (150889)');
   });
 
