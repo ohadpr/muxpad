@@ -89,9 +89,7 @@ export const visible = (raw: string): string =>
   );
 
 const text = (value: unknown): string =>
-  visible(
-    typeof value === 'string' ? value : value === undefined ? '' : JSON.stringify(value),
-  );
+  visible(typeof value === 'string' ? value : value === undefined ? '' : JSON.stringify(value));
 
 /** Slack channel names get a `#`; ids (C123, D123…) and anything already
  *  prefixed are left exactly as they are, so the card never invents a name. */
