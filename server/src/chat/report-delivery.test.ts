@@ -196,6 +196,64 @@ describe('report delivery — the join', () => {
     });
   });
 
+  /**
+   * INSTANT DELIVERY — the caller decides, because only the caller knows.
+   *
+   * The barrier is right for a SURVEY (twenty independent answers wanted as
+   * one message) and wrong for a PIPELINE (each result feeds the next step).
+   * Measured before this existed: a worker that finished in 30s sat behind a
+   * sibling for nine minutes while its parent had nothing to do, and the
+   * ceiling that eventually released it is TEN MINUTES.
+   */
+  describe('a worker can ask not to be held for its siblings', () => {
+    const instant = (id: string) =>
+      db.prepare("UPDATE tabs SET spawn_deliver = 'instant' WHERE id = ?").run(id);
+
+    it('goes out while a sibling from the same dispatch is still working', () => {
+      const p = parent('P');
+      child('slow', p, { ended: null, turn: 7 });
+      const fast = child('fast', p, { turn: 7 });
+      instant(fast);
+      expect(make().sweep().delivered).toBe(1);
+      expect(sent).toHaveLength(1);
+      // The heading is the worker's task label — `child()` stamps `task <id>`.
+      expect(sent[0]?.text).toContain('task fast');
+      expect(sent[0]?.text).not.toContain('task slow');
+    });
+
+    it('still holds the siblings that did NOT ask', () => {
+      // Both kinds in one dispatch: each gets what it asked for, and the
+      // batched one is still waiting afterwards.
+      const p = parent('P');
+      child('slow', p, { ended: null, turn: 7 });
+      const fast = child('fast', p, { turn: 7 });
+      const patient = child('patient', p, { turn: 7 });
+      instant(fast);
+      const out = make().sweep();
+      expect(out.delivered).toBe(1);
+      expect(out.held).toBe(1);
+      expect(delivered(fast)).not.toBeNull();
+      expect(delivered(patient)).toBeNull();
+    });
+
+    it('is NOT the default — an ordinary worker still waits for its batch', () => {
+      // The regression that would quietly turn every fan-out into N turns.
+      const p = parent('P');
+      child('slow', p, { ended: null, turn: 7 });
+      const ordinary = child('ordinary', p, { turn: 7 });
+      expect(make().sweep().delivered).toBe(0);
+      expect(delivered(ordinary)).toBeNull();
+    });
+
+    it('delivers a lone instant worker in its own message, barrier untouched', () => {
+      const p = parent('P');
+      const only = child('only', p, { turn: 7 });
+      instant(only);
+      expect(make().sweep().delivered).toBe(1);
+      expect(sent).toHaveLength(1);
+    });
+  });
+
   afterEach(() => {
     db.close();
     rmSync(dir, { recursive: true, force: true });
