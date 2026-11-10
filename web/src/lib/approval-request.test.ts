@@ -152,3 +152,49 @@ describe('a draft is described by what goes into the mailbox', () => {
     expect(marksFor('msgvault.draft')).toEqual([]);
   });
 });
+
+/**
+ * A DIALOG THAT CAN BE MADE TO LIE IS WORSE THAN NO DIALOG.
+ *
+ * Everything here rests on "you approve what you see". A bidi override
+ * reorders the glyphs around it without changing a byte of what is sent, so
+ * the same payload can READ as one thing in this dialog and ARRIVE as
+ * another. Zero-width characters are the same trick, more bluntly: text that
+ * is present, approved, and invisible.
+ *
+ * Made visible rather than refused — Hebrew and Arabic carry LRM/RLM
+ * legitimately, and an approval dialog has no business rejecting somebody's
+ * draft for being written in their own language.
+ */
+describe('the dialog shows what is actually there', () => {
+  it('escapes a bidi override instead of obeying it', () => {
+    const d = describeRequest('msgvault.draft-reply', {
+      id: '1',
+      body: 'approve this‮ dangerous thing',
+    });
+    expect(d.primary?.value).toContain('\\u202E');
+    expect(d.primary?.value).not.toContain('‮');
+  });
+
+  it('reveals zero-width and control characters hiding in a payload', () => {
+    const d = describeRequest('msgvault.draft-reply', {
+      id: '1',
+      body: 'pay​ment to a\u0000ttacker﻿',
+    });
+    expect(d.primary?.value).toBe('pay\\u200Bment to a\\u0000ttacker\\uFEFF');
+  });
+
+  it('leaves real text alone, including right-to-left and whitespace', () => {
+    // Hebrew letters are not control characters and must survive untouched;
+    // so must the newlines and tabs a message body is made of.
+    const body = 'שלום\nיש פגישה מחר\tב-10';
+    const d = describeRequest('msgvault.draft-reply', { id: '1', body });
+    expect(d.primary?.value).toBe(body);
+  });
+
+  it('escapes in the secondary fields too, not only the one being read', () => {
+    // `ref` is where a Slack post says which channel it is going to.
+    const d = describeRequest('slack.post', { ref: 'genera‮l', text: 'hi' });
+    expect(d.rest.find(([k]) => k === 'ref')?.[1]).toContain('\\u202E');
+  });
+});

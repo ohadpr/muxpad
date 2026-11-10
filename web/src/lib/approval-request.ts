@@ -57,8 +57,41 @@ export type Described = {
   rest: Array<[string, string]>;
 };
 
+/**
+ * CHARACTERS THAT MAKE A DIALOG LIE.
+ *
+ * This dialog's whole premise is that you approve what you see. A bidi
+ * override (U+202E and friends) reorders the glyphs around it without
+ * changing a byte of what gets sent, so a Slack message or a draft reply can
+ * READ as one thing here and ARRIVE as another — Trojan Source, pointed at a
+ * consent dialog instead of at a code review. Zero-width and C0 control
+ * characters are the same trick with a simpler mechanism: text that is
+ * present, approved, and invisible.
+ *
+ * They are made VISIBLE rather than refused. Refusing would be wrong for
+ * ordinary text — Hebrew and Arabic carry LRM/RLM legitimately, and a person
+ * writing in them should not have their drafts rejected by an approval
+ * dialog. An escape says exactly what is there and costs a reader nothing
+ * when the text is honest.
+ *
+ * `\t`, `\n` and `\r` are deliberately NOT in here: they are what a message
+ * body is made of, and the payload box renders them as the whitespace they
+ * are.
+ */
+const DECEPTIVE =
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: that is the point
+  /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g;
+
+export const visible = (raw: string): string =>
+  raw.replace(
+    DECEPTIVE,
+    (c) => `\\u${(c.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, '0')}`,
+  );
+
 const text = (value: unknown): string =>
-  typeof value === 'string' ? value : value === undefined ? '' : JSON.stringify(value);
+  visible(
+    typeof value === 'string' ? value : value === undefined ? '' : JSON.stringify(value),
+  );
 
 /** Slack channel names get a `#`; ids (C123, D123…) and anything already
  *  prefixed are left exactly as they are, so the card never invents a name. */
