@@ -247,7 +247,7 @@ export class ReportDelivery {
    */
   private flushParent(parentTabId: string): Flushed {
     const rounds = new SpawnRoundStore(this.db);
-    const pending = rounds.undeliveredByParent(parentTabId, this.orphanedBefore());
+    let pending = rounds.undeliveredByParent(parentTabId, this.orphanedBefore());
     if (pending.length === 0) return nothing();
 
     // ─── IS THERE ANYBODY TO TELL? ──────────────────────────────────────────
@@ -296,6 +296,27 @@ export class ReportDelivery {
     // The window survives as the FALLBACK, for rounds opened before the
     // column existed: an unknown turn on either side is not evidence that
     // they are unrelated, and the old behaviour is the safer default there.
+    // ─── …UNLESS THIS WORKER WAS SENT OUT FOR AN INSTANT RESULT ───────────
+    //
+    // The barrier below is right for a SURVEY — twenty independent answers
+    // wanted as one message — and wrong for a PIPELINE, where each result
+    // feeds the next step and a worker that finished in thirty seconds sat
+    // nine minutes behind its slowest sibling while the parent had nothing to
+    // do. The server cannot tell those two shapes apart; the orchestrator
+    // can, and says so at spawn time (`muxpad agent new --deliver=instant`).
+    //
+    // Split rather than switched: a parent may dispatch both kinds in one
+    // turn. The instant ones go now, as their own message, and the batched
+    // ones stay pending for the barrier — which is what each was asked for.
+    const instant = pending.filter((r) => tabs.spawnDeliver(r.tab_id) === 'instant');
+    let deliveredNow = 0;
+    if (instant.length > 0) {
+      deliveredNow = this.send(rounds, parentTabId, pane.id, instant).delivered;
+      pending = pending.filter((r) => !instant.includes(r));
+      // Nothing left that wants to wait — done, and no barrier was consulted.
+      if (pending.length === 0) return { delivered: deliveredNow, abandoned: 0, held: 0 };
+    }
+
     const stillWorking = rounds
       .openRoundsByParent(parentTabId)
       .filter((open) =>
@@ -308,7 +329,7 @@ export class ReportDelivery {
     if (stillWorking > 0) {
       const oldest = pending[0]?.ended_at ?? this.now();
       if (this.now() - oldest < BATCH_MAX_HOLD_MS)
-        return { delivered: 0, abandoned: 0, held: pending.length };
+        return { delivered: deliveredNow, abandoned: 0, held: pending.length };
       // Past the ceiling: go out incomplete rather than wait on a worker that
       // may never close its round. See BATCH_MAX_HOLD_MS.
       console.warn(
@@ -320,6 +341,25 @@ export class ReportDelivery {
       );
     }
 
+    const batched = this.send(rounds, parentTabId, pane.id, pending);
+    return { ...batched, delivered: batched.delivered + deliveredNow };
+  }
+
+  /**
+   * Stamp, send, and revert if it was refused.
+   *
+   * Pulled out of `flushParent` when instant delivery arrived: a parent can
+   * now produce two messages from one flush — the workers that asked not to
+   * wait, and the batch behind them — and the stamp-then-send sequence has to
+   * be identical for both or the one that was not the original path is the
+   * one that delivers twice.
+   */
+  private send(
+    rounds: SpawnRoundStore,
+    parentTabId: string,
+    paneId: string,
+    pending: SpawnRound[],
+  ): Flushed {
     const entries = this.entriesFor(pending);
     const text = renderSpawnDelivery(entries);
     const ids = pending.map((r) => r.id);
@@ -332,7 +372,7 @@ export class ReportDelivery {
     rounds.markDelivered(ids, stampedAt);
     let res: SubmitSendResult;
     try {
-      res = this.submitSend(pane.id, text);
+      res = this.submitSend(paneId, text);
     } catch (err) {
       rounds.undeliver(ids, stampedAt);
       console.error('[report-delivery] send threw', err);

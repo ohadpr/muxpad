@@ -80,6 +80,13 @@ export function tabsRoutes(deps: {
         // Allowlisted enum → safe to bake into the startup_cmd shell string.
         // 'pick' = created pending, harness chosen later in the chat page.
         backend: z.enum(['claude', 'codex', 'cursor', 'pick']).optional(),
+        // WHEN THIS WORKER'S RESULT COMES BACK to the chat that spawned it.
+        // `batch` (the default, and what every row before this did) holds a
+        // finished worker until its siblings from the same dispatch are done,
+        // so a fan-out lands as one message. `instant` says do not hold this
+        // one — right when each result feeds the next step. Only the caller
+        // knows which shape the job is, so only the caller can say.
+        deliver: z.enum(['batch', 'instant']).optional(),
         // Agent mode for an 'agent' bootstrap (Chat / Agent). Omitted →
         // DEFAULT_AGENT_MODE (Chat), applied in bootstrapTab so every door
         // into "make me an agent tab" agrees. Rides the pane row AND the
@@ -205,6 +212,12 @@ export function tabsRoutes(deps: {
       // either, so its first accepted label is by definition a change.)
     });
     // `workspace_id` rides the CREATE response (and only this one) because the
+    // Written AFTER the bootstrap rather than threaded through it: this is a
+    // fact about how the worker's RESULT is joined, which nothing in
+    // provisioning a pane needs to know. `setSpawnDeliver` ignores anything
+    // but the two values, so a request cannot invent a third delivery mode
+    // that the barrier would then fall through on.
+    if (body.deliver) tabs.setSpawnDeliver(created.tab.id, body.deliver);
     // caller no longer decides it: a spawn is told where it landed. The CLI
     // needs it to print a URL, and a launcher that wants to look at its worker
     // should not have to guess the answer it just delegated.

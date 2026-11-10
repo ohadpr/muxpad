@@ -799,6 +799,27 @@ export class TabStore {
     this.db.prepare('UPDATE tabs SET spawn_task = ? WHERE id = ?').run(task, id);
   }
 
+  /**
+   * How this worker's result should come back: `instant` or `batch`.
+   *
+   * Only those two are stored — an unknown string is dropped rather than
+   * written, so a typo at the CLI cannot invent a third delivery mode that
+   * the barrier then falls through on.
+   */
+  setSpawnDeliver(id: string, mode: string): void {
+    if (mode !== 'instant' && mode !== 'batch') return;
+    this.db.prepare('UPDATE tabs SET spawn_deliver = ? WHERE id = ?').run(mode, id);
+  }
+
+  /** `instant` only when it was explicitly asked for. NULL is `batch`, which
+   *  is what every row predating the column has always done. */
+  spawnDeliver(id: string): 'instant' | 'batch' {
+    const row = this.db.prepare('SELECT spawn_deliver AS d FROM tabs WHERE id = ?').get(id) as
+      | { d: string | null }
+      | undefined;
+    return row?.d === 'instant' ? 'instant' : 'batch';
+  }
+
   /** When a spawn report was last ATTEMPTED for this chat; null if never. */
   spawnReportAt(id: string): number | null {
     const r = this.db.prepare('SELECT spawn_report_at FROM tabs WHERE id = ?').get(id) as

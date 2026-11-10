@@ -3055,7 +3055,7 @@ printable_base() {
 # processing immediately, and prints the tab's URL. The runner needs a couple
 # of seconds to boot inside the fresh pane, so the send polls until accepted.
 cmd_agent_new() {
-  reset_flags workspace cwd name model mode backend
+  reset_flags workspace cwd name model mode backend deliver
   # `--detached` is BARE — parse_flags only knows --k=v and --k v, and would
   # reject a valueless flag — so strip it here, the same way the mode flags are
   # pre-stripped further down.
@@ -3064,10 +3064,10 @@ cmd_agent_new() {
   for _a in "$@"; do
     if [ "$_a" = "--detached" ]; then FLAG_detached=1; else _argv+=("$_a"); fi
   done
-  parse_flags workspace cwd name model mode backend -- ${_argv+"${_argv[@]}"}
+  parse_flags workspace cwd name model mode backend deliver -- ${_argv+"${_argv[@]}"}
   local message="${POSITIONAL[0]:-}"
   if [ -z "$message" ]; then
-    echo 'usage: muxpad agent new [--workspace=<id>] [--cwd=<dir>] [--name=<tab name>] [--model=<model>] [--mode=chat|agent] [--backend=claude|codex|cursor|pick] [--detached] "first message"' >&2
+    echo 'usage: muxpad agent new [--workspace=<id>] [--cwd=<dir>] [--name=<tab name>] [--model=<model>] [--mode=chat|agent] [--backend=claude|codex|cursor|pick] [--deliver=batch|instant] [--detached] "first message"' >&2
     exit 1
   fi
   # Agent mode (see agent-modes.ts): 'chat' overlays muxpad's terse, decisive
@@ -3084,6 +3084,21 @@ cmd_agent_new() {
     chat|agent|do|deep) ;;
     *) echo "muxpad: --mode must be 'chat' or 'agent' (got '$FLAG_mode')" >&2; exit 1 ;;
   esac
+  # WHEN THIS WORKER'S RESULT COMES BACK.
+  #
+  # `batch` (the default) holds a finished worker until its siblings from the
+  # same dispatch are done, so a fan-out lands as ONE message instead of
+  # twenty turns. `instant` says do not hold this one — right when each result
+  # feeds the next step, where waiting for a slow sibling leaves the parent
+  # with nothing to do.
+  #
+  # The caller picks because only the caller knows which shape the job is.
+  if [ -n "${FLAG_deliver:-}" ]; then
+    case "$FLAG_deliver" in
+      batch|instant) ;;
+      *) echo "muxpad: --deliver must be 'batch' or 'instant' (got '$FLAG_deliver')" >&2; exit 1 ;;
+    esac
+  fi
   # Which harness the worker runs. POST /api/tabs has always accepted this; the
   # CLI just never passed it, so every scripted spawn was a Claude one and
   # fleets of mixed harnesses had to be built by hand against the HTTP API.
@@ -3159,6 +3174,9 @@ cmd_agent_new() {
   # Backend rides the pane's startup command too (`muxpad agent --backend <b>`),
   # so a respawn keeps the harness it was launched with.
   [ -n "${FLAG_backend:-}" ] && body+=",\"backend\":$(json_string "$FLAG_backend")"
+  # Rides the TAB row, not the startup command: it is a fact about how this
+  # worker's result should be joined, which nothing on the pane needs to know.
+  [ -n "${FLAG_deliver:-}" ] && body+=",\"deliver\":$(json_string "$FLAG_deliver")"
   # HIERARCHY. Spawned from inside a pane — which is nearly every scripted
   # spawn, since the caller is an agent delegating work — the new chat records
   # which chat asked for it. That is what makes it nest in the sidebar and

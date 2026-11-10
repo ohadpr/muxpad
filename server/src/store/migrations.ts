@@ -1687,6 +1687,36 @@ const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    /**
+     * HOW A WORKER'S RESULT SHOULD COME BACK — `batch` or `instant`.
+     *
+     *   tabs.spawn_deliver
+     *
+     * The delivery barrier holds a finished worker while siblings from the
+     * same parent turn are still running, so a fan-out lands as ONE message
+     * rather than twenty turns. That is right for a survey and wrong for a
+     * pipeline: a worker that finishes in 30s sat undelivered for nine
+     * minutes behind a slow sibling, and its parent could not start on work
+     * that was already done.
+     *
+     * The server cannot tell those two shapes apart. The orchestrator can —
+     * it knows whether the results are independent or feed each other — so
+     * it says at spawn time and this column carries the answer.
+     *
+     * NULL means `batch`, which is the behaviour every existing row has had.
+     * No backfill: absent is already correct.
+     */
+    version: 53,
+    // Guarded rather than a bare ALTER: the migration tests re-run the list
+    // against an already-migrated database to prove each step is idempotent,
+    // and `ADD COLUMN` throws on the second pass.
+    apply: (db) => {
+      const cols = db.prepare('PRAGMA table_info(tabs)').all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === 'spawn_deliver'))
+        db.exec('ALTER TABLE tabs ADD COLUMN spawn_deliver TEXT');
+    },
+  },
 ];
 
 /** Highest version in the migration list. Exported so a test can assert the
