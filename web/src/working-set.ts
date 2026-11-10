@@ -30,6 +30,12 @@ let cache: WorkingRow[] = [];
 const listeners = new Set<(s: WorkingRow[]) => void>();
 let inflight: Promise<WorkingRow[]> | null = null;
 
+/** What the strip is holding right now. For tests, and for any caller that
+ *  wants the band without subscribing to it. */
+export function cachedWorkingSet(): WorkingRow[] {
+  return cache;
+}
+
 function publish(next: WorkingRow[]): void {
   cache = next;
   for (const fn of listeners) fn(next);
@@ -55,6 +61,41 @@ export async function refreshWorkingSet(): Promise<WorkingRow[]> {
   })();
   return inflight;
 }
+
+/**
+ * ── THE ROW IS A SNAPSHOT, AND IT HAS TO KEEP UP ────────────────────────────
+ *
+ * The server announces only SHAPE changes — a chat entering or leaving the
+ * band — which is right: a push per message would be a churn feed. But the
+ * slot carries the whole `Tab`, including its rolled-up `status`, and that
+ * went stale the moment the set stopped changing. A chat that was working
+ * when it entered the band kept a spinner in Recently Active for hours after
+ * it finished, beside its own sidebar row showing idle. Same truth, two
+ * clocks — the second time this exact shape has been fixed in this app (see
+ * the corpus note in tabs.ts).
+ *
+ * So the strip listens for the push that everything else already acts on and
+ * patches the row it holds. No fetch, no new event, and the SET is still
+ * owned by the server: this only ever replaces a tab the strip is already
+ * showing, never adds or reorders one.
+ */
+subscribe((e) => {
+  if (e.type !== 'tab.updated') return;
+  const i = cache.findIndex((s) => s.tab.id === e.tab.id);
+  if (i === -1) return;
+  const held = cache[i];
+  if (!held) return;
+  // Identity check on the fields a row actually draws, so an event that
+  // changed nothing visible does not re-render six rows.
+  const before = `${held.tab.status ?? ''}|${held.tab.agents ?? 0}|${held.tab.unread ?? false}|${held.tab.name}`;
+  const after = `${e.tab.status ?? ''}|${e.tab.agents ?? 0}|${e.tab.unread ?? false}|${e.tab.name}`;
+  if (before === after) return;
+  const next = [...cache];
+  // `at` is the strip's own ordering key and belongs to the SET, not to the
+  // tab — taking it from the event would let a push reorder the band.
+  next[i] = { ...held, tab: e.tab };
+  publish(next);
+});
 
 /** "Not now" — free the slot. Optimistic, because the answer is a foregone
  *  conclusion and a row that lingers after you dismissed it reads as broken. */
