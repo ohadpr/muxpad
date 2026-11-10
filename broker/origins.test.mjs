@@ -149,3 +149,75 @@ test('a flood of distinct nonces is refused rather than remembered forever', () 
   assert.ok(ok <= 4096, `remembered ${ok}`);
   assert.ok(ok >= 4000, `refused too early at ${ok}`);
 });
+
+/**
+ * A KEY FILE IS RE-READ, EVENTUALLY.
+ *
+ * The cache used to be forever, and both directions failed silently. A key
+ * installed while the broker ran was remembered as ABSENT, so the install
+ * looked complete and nothing was ever proven — and `muxpad restart` does not
+ * restart the broker, so "restart and it works" was not advice anybody would
+ * stumble into. A key rotated on the host side kept being checked against the
+ * old bytes, so every proof failed and the symptom was a dialog that would
+ * not stop appearing.
+ */
+test('a key installed after the broker started is picked up without a restart', () => {
+  let now = 1_000_000;
+  const keys = {};
+  const o = new Origins({ dir: '/x', now: () => now, io: io(keys) });
+  const f = req();
+  // No key yet: unproven, which is correct and must not be remembered forever.
+  assert.equal(o.verify({ ...f, proof: proof(f) }), false);
+
+  keys.trayo = KEY;
+  // Still inside the cached minute, the absence stands…
+  assert.equal(o.verify({ ...f, nonce: 'a'.repeat(24), proof: proof({ ...f, nonce: 'a'.repeat(24) }) }), false);
+  // …and after it, the install takes effect on its own.
+  now += 61_000;
+  const g = req({ ts: now, nonce: 'b'.repeat(24) });
+  assert.equal(o.verify({ ...g, proof: proof(g) }), true);
+});
+
+test('a rotated key stops honouring proofs made with the old one', () => {
+  let now = 1_000_000;
+  const keys = { trayo: KEY };
+  const o = new Origins({ dir: '/x', now: () => now, io: io(keys) });
+  const f = req();
+  assert.equal(o.verify({ ...f, proof: proof(f) }), true);
+
+  const NEW = 'r'.repeat(48);
+  keys.trayo = NEW;
+  now += 61_000;
+  // The old key is no longer the key, so a proof made with it is not a proof.
+  const stale = req({ ts: now, nonce: 'c'.repeat(24) });
+  assert.equal(o.verify({ ...stale, proof: proof(stale, KEY) }), false);
+  // …and the new one is honoured without a restart.
+  const fresh = req({ ts: now, nonce: 'd'.repeat(24) });
+  assert.equal(o.verify({ ...fresh, proof: proof(fresh, NEW) }), true);
+});
+
+test('the key file is not read on every request — the cache is real', () => {
+  let reads = 0;
+  let now = 1_000_000;
+  const base = io({ trayo: KEY });
+  const o = new Origins({
+    dir: '/x',
+    now: () => now,
+    io: {
+      ...base,
+      readFileSync: (p) => {
+        reads++;
+        return base.readFileSync(p);
+      },
+    },
+  });
+  for (let i = 0; i < 20; i++) {
+    const f = req({ nonce: `n${i}`.padEnd(24, 'x') });
+    assert.equal(o.verify({ ...f, proof: proof(f) }), true);
+  }
+  assert.equal(reads, 1, 'twenty proofs should not be twenty filesystem reads');
+  now += 61_000;
+  const f = req({ ts: now, nonce: 'z'.repeat(24) });
+  assert.equal(o.verify({ ...f, proof: proof(f) }), true);
+  assert.equal(reads, 2);
+});
