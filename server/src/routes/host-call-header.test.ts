@@ -64,10 +64,9 @@ describe('a forged host-call header cannot relabel which machine is asking', () 
     // msgvault is scoped to `local` here and Slack to `trayo` — the real
     // arrangement on this machine.
     const h = harness({ enforce: true, allow: { msgvault: ['local'], slack: ['trayo'] } });
-    const res = await h.archive.request(
-      `/stats?pane=${h.pane.id}&key=${h.key}`,
-      { headers: { 'x-muxpad-host-call': 'trayo some-call-id' } },
-    );
+    const res = await h.archive.request(`/stats?pane=${h.pane.id}&key=${h.key}`, {
+      headers: { 'x-muxpad-host-call': 'trayo some-call-id' },
+    });
     // The read still runs, because the pane really is local and msgvault is
     // scoped to local. The header changed nothing about who is asking.
     expect(res.status).toBe(202);
@@ -76,10 +75,9 @@ describe('a forged host-call header cannot relabel which machine is asking', () 
 
   it('cannot turn a local chat into trayo to reach a connector scoped away from it', async () => {
     const h = harness({ enforce: true, allow: { msgvault: ['trayo'] } });
-    const res = await h.archive.request(
-      `/stats?pane=${h.pane.id}&key=${h.key}`,
-      { headers: { 'x-muxpad-host-call': 'trayo some-call-id' } },
-    );
+    const res = await h.archive.request(`/stats?pane=${h.pane.id}&key=${h.key}`, {
+      headers: { 'x-muxpad-host-call': 'trayo some-call-id' },
+    });
     // Refused on the pane's real machine, not on the one the header names.
     expect(res.status).toBe(403);
   });
