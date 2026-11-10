@@ -811,13 +811,27 @@ export class TabStore {
     this.db.prepare('UPDATE tabs SET spawn_deliver = ? WHERE id = ?').run(mode, id);
   }
 
-  /** `instant` only when it was explicitly asked for. NULL is `batch`, which
-   *  is what every row predating the column has always done. */
+  /**
+   * `batch` only when it was explicitly asked for. NULL is `instant`.
+   *
+   * THE DEFAULT IS ZERO LATENCY, which is a deliberate reversal. It shipped
+   * the other way round for one bad reason — it preserved existing behaviour
+   * — and the owner named the problem: "batch is default but that's weird
+   * no?" It is. Holding a finished worker is the SPECIAL case: it is worth
+   * doing for a survey, where twenty independent answers are wanted
+   * together, and it costs the common case a parent sitting idle while work
+   * it could act on is already done.
+   *
+   * So waiting is now something a caller asks for, and not waiting is what
+   * happens if nobody thought about it — which is the right way round for a
+   * default, because the failure of forgetting is then a few extra turns
+   * rather than a result nobody sees for nine minutes.
+   */
   spawnDeliver(id: string): 'instant' | 'batch' {
     const row = this.db.prepare('SELECT spawn_deliver AS d FROM tabs WHERE id = ?').get(id) as
       | { d: string | null }
       | undefined;
-    return row?.d === 'instant' ? 'instant' : 'batch';
+    return row?.d === 'batch' ? 'batch' : 'instant';
   }
 
   /** When a spawn report was last ATTEMPTED for this chat; null if never. */

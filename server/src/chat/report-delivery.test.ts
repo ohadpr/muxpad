@@ -97,6 +97,20 @@ describe('report delivery — the join', () => {
     return id;
   }
 
+  /**
+   * A child that asked to be joined to its batch.
+   *
+   * The barrier only engages for these now: the default is instant, so a test
+   * about HOLDING has to say that is what it wants. Written as a helper
+   * rather than two lines per test so the tests below still read as
+   * statements about the barrier rather than about a column.
+   */
+  function batchChild(...args: Parameters<typeof child>): string {
+    const id = child(...args);
+    db.prepare("UPDATE tabs SET spawn_deliver = 'batch' WHERE id = ?").run(id);
+    return id;
+  }
+
   const delivered = (id: string) =>
     (
       db.prepare('SELECT delivered_at FROM spawn_rounds WHERE id = ?').get(`r-${id}`) as {
@@ -208,6 +222,8 @@ describe('report delivery — the join', () => {
   describe('a worker can ask not to be held for its siblings', () => {
     const instant = (id: string) =>
       db.prepare("UPDATE tabs SET spawn_deliver = 'instant' WHERE id = ?").run(id);
+    const batched = (id: string) =>
+      db.prepare("UPDATE tabs SET spawn_deliver = 'batch' WHERE id = ?").run(id);
 
     it('goes out while a sibling from the same dispatch is still working', () => {
       const p = parent('P');
@@ -229,6 +245,7 @@ describe('report delivery — the join', () => {
       const fast = child('fast', p, { turn: 7 });
       const patient = child('patient', p, { turn: 7 });
       instant(fast);
+      batched(patient);
       const out = make().sweep();
       expect(out.delivered).toBe(1);
       expect(out.held).toBe(1);
@@ -236,13 +253,26 @@ describe('report delivery — the join', () => {
       expect(delivered(patient)).toBeNull();
     });
 
-    it('is NOT the default — an ordinary worker still waits for its batch', () => {
-      // The regression that would quietly turn every fan-out into N turns.
+    it('IS the default — a worker nobody thought about does not wait', () => {
+      // Reversed deliberately. Waiting is the special case: it is worth it
+      // for a survey and costs the common case a parent sitting idle while
+      // work it could act on is already finished.
       const p = parent('P');
       child('slow', p, { ended: null, turn: 7 });
       const ordinary = child('ordinary', p, { turn: 7 });
+      expect(make().sweep().delivered).toBe(1);
+      expect(delivered(ordinary)).not.toBeNull();
+    });
+
+    it('still joins the batch when a caller ASKS to wait', () => {
+      // The survey case, which is the whole reason the barrier exists: two
+      // workers that want reading together, held until the slow one lands.
+      const p = parent('P');
+      child('slow', p, { ended: null, turn: 7 });
+      const a = child('a', p, { turn: 7 });
+      batched(a);
       expect(make().sweep().delivered).toBe(0);
-      expect(delivered(ordinary)).toBeNull();
+      expect(delivered(a)).toBeNull();
     });
 
     it('delivers a lone instant worker in its own message, barrier untouched', () => {
@@ -289,8 +319,8 @@ describe('report delivery — the join', () => {
 
   it('HOLDS a finished child while a sibling is still mid-round', () => {
     const p = parent('P');
-    child('done', p);
-    child('working', p, { ended: null, report: null, state: null });
+    batchChild('done', p);
+    batchChild('working', p, { ended: null, report: null, state: null });
 
     const r = make().sweep();
     expect(r).toEqual({ delivered: 0, abandoned: 0, held: 1 });
@@ -300,8 +330,8 @@ describe('report delivery — the join', () => {
 
   it('…and delivers the batch once that sibling lands', () => {
     const p = parent('P');
-    child('done', p);
-    child('working', p, { ended: null, report: null, state: null });
+    batchChild('done', p);
+    batchChild('working', p, { ended: null, report: null, state: null });
     const d = make();
     d.sweep();
     expect(sent).toHaveLength(0);
@@ -333,8 +363,8 @@ describe('report delivery — the join', () => {
 
   it('still holds for a sibling spawned in the same burst', () => {
     const p = parent('P');
-    child('done', p, { started: NOW });
-    child('working', p, {
+    batchChild('done', p, { started: NOW });
+    batchChild('working', p, {
       started: NOW + BATCH_SPAWN_WINDOW_MS,
       ended: null,
       report: null,
@@ -348,8 +378,8 @@ describe('report delivery — the join', () => {
     // worker whose runner died leaves its round open forever, and a barrier
     // with no ceiling waits on it forever.
     const p = parent('P');
-    child('done', p);
-    child('wedged', p, { ended: null, report: null, state: null });
+    batchChild('done', p);
+    batchChild('wedged', p, { ended: null, report: null, state: null });
     const d = make();
     expect(d.sweep().held).toBe(1);
 
@@ -378,7 +408,7 @@ describe('report delivery — the join', () => {
     // Stamp-first is what makes double delivery impossible; this is the other
     // half of that trade — a refusal must not silently eat the report.
     const p = parent('P');
-    child('c1', p);
+    batchChild('c1', p);
     result = { status: 'rejected', reason: 'too many queued messages' };
     const d = make();
 
@@ -628,8 +658,8 @@ describe('report delivery — the join', () => {
       // as a dribble the parent has to reconcile. Spawned far enough apart that
       // the old window would have let them go.
       const p = parent('P');
-      child('one', p, { started: NOW, turn: 7_000 });
-      child('two', p, {
+      batchChild('one', p, { started: NOW, turn: 7_000 });
+      batchChild('two', p, {
         started: NOW + 9 * 60_000,
         turn: 7_000,
         ended: null,
@@ -643,8 +673,8 @@ describe('report delivery — the join', () => {
       // An unknown turn is not evidence that two rounds are unrelated, and the
       // old behaviour is the safer default for rows written before v48.
       const p = parent('P');
-      child('old-done', p, { started: NOW });
-      child('old-open', p, { started: NOW + 60_000, ended: null, report: null, state: null });
+      batchChild('old-done', p, { started: NOW });
+      batchChild('old-open', p, { started: NOW + 60_000, ended: null, report: null, state: null });
       expect(make().sweep().held).toBe(1);
     });
   });

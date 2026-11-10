@@ -81,11 +81,11 @@ export function tabsRoutes(deps: {
         // 'pick' = created pending, harness chosen later in the chat page.
         backend: z.enum(['claude', 'codex', 'cursor', 'pick']).optional(),
         // WHEN THIS WORKER'S RESULT COMES BACK to the chat that spawned it.
-        // `batch` (the default, and what every row before this did) holds a
-        // finished worker until its siblings from the same dispatch are done,
-        // so a fan-out lands as one message. `instant` says do not hold this
-        // one — right when each result feeds the next step. Only the caller
-        // knows which shape the job is, so only the caller can say.
+        // `instant` is the default. `batch` holds this worker until its
+        // siblings from the same dispatch are done, so a fan-out arrives as
+        // one message instead of N turns. Only the caller knows which shape
+        // the job is, so only the caller can say — and waiting is the thing
+        // it asks for rather than the thing it gets by not thinking.
         deliver: z.enum(['batch', 'instant']).optional(),
         // Agent mode for an 'agent' bootstrap (Chat / Agent). Omitted →
         // DEFAULT_AGENT_MODE (Chat), applied in bootstrapTab so every door

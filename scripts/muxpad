@@ -3086,13 +3086,15 @@ cmd_agent_new() {
   esac
   # WHEN THIS WORKER'S RESULT COMES BACK.
   #
-  # `batch` (the default) holds a finished worker until its siblings from the
-  # same dispatch are done, so a fan-out lands as ONE message instead of
-  # twenty turns. `instant` says do not hold this one — right when each result
-  # feeds the next step, where waiting for a slow sibling leaves the parent
-  # with nothing to do.
+  # `instant` is the DEFAULT: the result goes to the parent the moment it
+  # lands. `batch` holds this worker until its siblings from the same dispatch
+  # are done, so a fan-out arrives as ONE message instead of N turns — worth
+  # asking for when twenty independent answers want reading together, and
+  # wrong when each result feeds the next step.
   #
-  # The caller picks because only the caller knows which shape the job is.
+  # Waiting is the thing you ask for, not the thing you get by forgetting:
+  # the cost of forgetting is then a few extra turns, rather than a finished
+  # result nobody sees until the slowest sibling lands.
   if [ -n "${FLAG_deliver:-}" ]; then
     case "$FLAG_deliver" in
       batch|instant) ;;
