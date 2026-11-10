@@ -742,22 +742,21 @@ There is NO card at spawn time. If the user asks where their sub-agent went,
 the answer is the pill on this chat's row, then the chip in this chat — not a
 row of its own, and not a card you promised them when you started it.
 
-**SAY HOW YOU WANT THE RESULTS BACK — \`--deliver=batch|instant\`.**
+**EACH RESULT REACHES YOU THE MOMENT IT LANDS — unless you ask to wait.**
 
-A finished worker is held until its siblings from the SAME dispatch are done,
-so a fan-out lands as one message instead of twenty turns. That is right for a
-SURVEY — twenty independent answers you want to read together — and wrong for a
-PIPELINE, where each result feeds the next step: a worker that finished in
-thirty seconds waits behind the slowest one, and you sit with nothing to do
-while work you could act on is already finished.
+    muxpad agent new "…"                    # instant: tell me as each one finishes
+    muxpad agent new --deliver=batch "…"    # hold this one until its siblings are done
 
-    muxpad agent new --deliver=instant "…"   # give it to me the moment it lands
-    muxpad agent new "…"                      # batch (the default)
+Batching turns a twenty-way fan-out into ONE message instead of twenty turns,
+which is what you want for a SURVEY — twenty independent answers that want
+reading together. It is wrong for a PIPELINE: a worker that finished in thirty
+seconds would wait behind the slowest one while you sit with nothing to do and
+work you could already act on is finished.
 
-Only you know which shape the job is, so only you can say. A lone worker is
-already instant — there is nobody to wait for — so this matters exactly when
-you dispatch several at once. Mixed is fine: the instant ones arrive as they
-land and the rest still come as a batch.
+Only you know which shape the job is. Waiting is therefore the thing you ASK
+for: if you do not think about it, you get told as soon as there is something
+to be told, which is the cheaper way to be wrong. Mixed is fine — the instant
+ones arrive as they land and the batched ones still come together.
 
 **THEIR REPORTS COME BACK TO YOU — you do not have to wait for them.** When a
 child finishes, muxpad delivers its result into THIS conversation as a message,
