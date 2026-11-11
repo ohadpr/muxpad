@@ -154,10 +154,6 @@ const TRAILING_REMINDER =
  * person said is left, and the caller drops it.
  */
 export function cleanUserText(text: string, stats: RebaseStats): string {
-  if (isCompactionText(text)) {
-    stats.compactions += 1;
-    return '';
-  }
   let t = text;
   for (;;) {
     const r = t.match(LEADING_REMINDER);
