@@ -136,10 +136,28 @@ describe('the row is one line, and the mark is beside the name', () => {
     expect(rule('.chat-drawer__row')).toMatch(/padding:\s*8px 9px/);
   });
 
-  it('puts the running state in a word, in the accent', () => {
+  it('puts the state in a LABEL, not another word in the row', () => {
+    // It shipped as plain text at the row's own size and 153 rows of it read
+    // as "word soup" — `done` competing with the name beside it. A plate, a
+    // smaller size and uppercase tracking make it a mark the eye can skip.
     const live = rule('.chat-drawer__row-live');
-    expect(live).toMatch(/color:\s*var\(--d-accent\)/);
+    expect(live).toMatch(/border-radius:\s*999px/);
+    expect(live).toMatch(/text-transform:\s*uppercase/);
+    expect(live).toMatch(/background:\s*var\(--state-plate/);
     expect(live).toMatch(/margin-inline-start:\s*auto/);
+    // Smaller than the name, or it is still competing with it.
+    expect(live).toMatch(/font-size:\s*0\.625rem/);
+  });
+
+  it('keeps DONE the quiet one and the exceptions loud', () => {
+    // Almost every row in a work log is done, so the common case is furniture
+    // and the exceptions are the news. A label every row wears at full
+    // strength cannot point at anything.
+    const done = rule('.chat-drawer__row-live[data-state="delivered"]');
+    const working = rule('.chat-drawer__row-live[data-state="working"]');
+    expect(done).toContain('--status-ready');
+    const pct = (r: string) => Number(/(\d+)%/.exec(r)?.[1] ?? 0);
+    expect(pct(done), 'done must not be as loud as a running row').toBeLessThan(pct(working));
   });
 
   it('keeps the name as the thing that truncates', () => {
