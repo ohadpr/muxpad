@@ -882,6 +882,28 @@ backend, mode, status).
   LIVE terminal. Never inject into a terminal a human may be typing in —
   check \`foreground_cmd\` / recent activity (\`pane read\`) first.
 
+## Round trips are what make a turn slow
+
+Measured on this machine (10 sessions, 37,941 tool calls): the median command
+finished in 0.15 s, but every call then waits 2–4 s for the next one to be
+written, plus ~0.3 s per 100k tokens of context. A 30-call turn is two minutes
+of that, however fast the commands are. Only 0.8% of steps made more than one
+call; about 15% were follow-up reads that did not depend on the previous result.
+
+- **Ask for everything you already know you need in ONE call** — several files
+  or ranges in one \`sed -n\`, several patterns in one \`grep -e … -e …\`, or
+  several independent tool calls in the same message.
+- **Never poll a background job** with \`until …; sleep\`. Run it in the
+  background and you are woken when it exits. 290 such loops were measured;
+  13 burned the whole 10-minute tool timeout.
+- **One question about a page is ONE call**: \`muxpad browser probe <url>
+  --until=<js> --eval=<js> --eval=<js> [--shot=PATH]\` — your warm browser, a
+  condition instead of a sleep, ~2 s. Not navigate, sleep, evaluate, screenshot.
+- **Several independent investigations, each more than a handful of reads**:
+  give each a sub-chat with \`--deliver=batch\`. They run at once and start with
+  a small context, so their calls are cheaper than yours. A question you can
+  answer in three reads is not one: a sub-chat takes minutes to report.
+
 ## Waiting without burning tokens
 
 - **A sub-agent you spawned needs no waiting at all** — its result is delivered
@@ -898,12 +920,8 @@ backend, mode, status).
   \`working\` (a turn or a background subagent is running),
   \`ready\` (finished, waiting for you), \`dead\` (the runner gave up), \`idle\`.
   \`agents\` alongside it counts live background subagents.
-  (A \`busy\` boolean used to shadow this; it is gone.)
-- For a RUNNER-OWNED pane, \`working\` is the runner registry — a turn or the
-  durable subagent roster — so it is trustworthy: tailing a dev server on its
-  terminal face no longer reads busy, and a silently-thinking agent no longer
-  reads idle. For a pane with NO runner it is still the PTY-output heuristic,
-  where both of those caveats DO apply.
+- For a RUNNER-OWNED pane \`working\` comes from the runner and is exact. For a
+  pane with NO runner it is a guess from terminal output.
 - To block on one specific turn, still prefer \`agent wait\` / \`turn_active\`:
   \`working\` deliberately stays true while a background subagent outlives the
   turn that launched it.
@@ -938,6 +956,8 @@ export const SHIPPED_INSTRUCTIONS_DEFAULTS: readonly string[] = [
   '423da5969cfd0a4cfc24c0bb8a2a156f291699a37e860988885afa9bbfca324c',
   'c0e9d3b51218b971cad82fde696445ad07999e4280883a551891c9cdc0f2a571',
   '961728f1599ca6a80ffae036d6d09767751be447d552b40dd232d8e3c0779200',
+  '4ab834cac4cfa9d77c86d3af9c7347cbec1c52421ad90b9a97c935b9f793c7f1',
+  '8e02903da12ecb63447568a15054087a689f3b7427ee6707c1b1220ba56693c5',
 ];
 
 /** What the one-shot migration needs to know about this file: anything on
