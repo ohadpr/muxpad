@@ -182,11 +182,19 @@ describe('the drawer says something is going on in there', () => {
     // An orbiting ring around the control was the first answer and the wrong
     // one: "replace the '1' with a spinner don't spin the whole thing". The
     // badge is already the corner the eye checks.
-    const badge = rule('.chat-drawer-open__count.-spinning');
-    expect(badge, 'the badge does not spin').not.toBe('');
-    expect(badge).toMatch(/animation:\s*chat-drawer-spin/);
-    expect(badge).toMatch(/border-top-color/);
-    expect(badge).toContain('--status-working');
+    // A REAL BADGE: the filled dot stays, and the spinner is INSIDE it in
+    // the badge's own ink — the iPhone shape, with motion where the number
+    // goes. A hollow ring in place of the dot stopped looking like a badge.
+    const dot = rule('.chat-drawer-open__count.-spinning');
+    const spin = rule('.chat-drawer-open__count.-spinning::after');
+    expect(dot, 'the badge is gone').not.toBe('');
+    expect(spin, 'nothing spins inside the badge').not.toBe('');
+    expect(spin).toMatch(/animation:\s*chat-drawer-spin/);
+    expect(spin).toMatch(/border-top-color/);
+    // The badge's ink, not a status hue: it sits ON the accent fill.
+    expect(spin).toContain('--d-accent-ink');
+    // The dot keeps its fill — it must not become a hollow ring.
+    expect(dot).not.toMatch(/background:\s*transparent/);
     // …and nothing orbits the button any more.
     expect(rule('.chat-drawer-open[data-running="true"]::after')).toBe('');
   });
@@ -221,7 +229,7 @@ describe('the drawer says something is going on in there', () => {
     expect(at, 'no reduced-motion guard at all').toBeGreaterThan(-1);
     const block = css.slice(at, css.indexOf('}\n}', at));
     expect(block).toContain('.chat-drawer__spin');
-    expect(block).toContain('.chat-drawer-open__count.-spinning');
+    expect(block).toContain('.chat-drawer-open__count.-spinning::after');
     expect(block).toContain('animation: none');
   });
 });
