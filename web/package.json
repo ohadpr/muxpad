@@ -6,7 +6,7 @@
     "build": "tsc -b && vite build",
     "dev": "vite --host",
     "preview": "vite preview",
-    "test": "NODE_OPTIONS=\"--no-experimental-webstorage --no-warnings\" vitest run --passWithNoTests",
+    "test": "NODE_OPTIONS=\"--no-experimental-webstorage --no-warnings\" node ../scripts/vitest-run.mjs --phase=--passWithNoTests",
     "lint": "biome check ."
   },
   "dependencies": {
