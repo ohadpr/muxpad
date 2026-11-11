@@ -136,12 +136,86 @@ test('the runner passes no mode', () => {
   assert.ok(!/assertProtectedPath\([^)]*mode:/.test(src), 'the runner pins an exact mode again');
 });
 
-test('an attachment gets room for a scanned PDF; everything else keeps the small buffer', async () => {
+test('a non-attachment action keeps the small execFile buffer', async () => {
+  // The attachment half of this test is gone with the argv path it measured:
+  // an attachment is fetched over HTTP now, so there is no child process and
+  // no maxBuffer. Its cap is asserted below, on the bytes themselves.
   const h = harness();
   await h.runner('msgvault.stats', {});
-  await h.runner('msgvault.export-attachment', { hash: 'a'.repeat(64) });
-  const [small, big] = h.ran.map((r) => r.opts.maxBuffer);
-  assert.equal(small, 4 * 1024 * 1024);
-  // base64 inside JSON: 32 MiB of output is a ~24 MiB file.
-  assert.ok(big >= 32 * 1024 * 1024, String(big));
+  assert.equal(h.ran[0].opts.maxBuffer, 4 * 1024 * 1024);
+});
+
+/**
+ * ── ATTACHMENTS DO NOT GO THROUGH THE BINARY ──────────────────────────────
+ *
+ * msgvault's CLI refuses every export verb in agent-delegated mode, and it
+ * refuses CLIENT-SIDE — before the daemon is contacted — so the argv path
+ * could never deliver an attachment however the broker was updated. The
+ * daemon's own `/api/v1/cli/attachment` is on the same surface the allowed
+ * verbs use and answers with the bytes.
+ */
+const HASH = 'a'.repeat(64);
+
+function httpHarness({ status = 200, body = Buffer.from('%PDF-1.4 hello'), headers = {} } = {}) {
+  const calls = [];
+  const ran = [];
+  const runner = msgvaultRunner({
+    io: {
+      readFileSync: (p) => (String(p).includes('token') ? 'SECRET-KEY\n' : DECL),
+      assertProtectedPath: () => {},
+    },
+    run: (binary, args, opts, done) => {
+      ran.push({ binary, args });
+      done(null, '{}', '');
+    },
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      return {
+        ok: status >= 200 && status < 300,
+        status,
+        headers: { get: (k) => headers[k.toLowerCase()] ?? null },
+        arrayBuffer: async () =>
+          body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength),
+        text: async () => 'refused',
+      };
+    },
+  });
+  return { runner, calls, ran };
+}
+
+test('an attachment is fetched from the daemon, never shelled through the CLI', async () => {
+  const h = httpHarness({
+    headers: {
+      'content-disposition': 'attachment; filename="2026-11-04_tax.pdf"',
+      'content-type': 'application/pdf; charset=binary',
+    },
+  });
+  const out = await h.runner('msgvault.export-attachment', { hash: HASH });
+  assert.equal(h.ran.length, 0, 'the binary must not be run for an attachment');
+  assert.equal(h.calls[0].url, `http://127.0.0.1:8787/api/v1/cli/attachment?content_hash=${HASH}`);
+  // The grant is a header here rather than a path, because there is no argv.
+  assert.equal(h.calls[0].init.headers['X-Api-Key'], 'SECRET-KEY');
+  assert.equal(out.result.content_hash, HASH);
+  assert.equal(Buffer.from(out.result.data_base64, 'base64').toString(), '%PDF-1.4 hello');
+  assert.equal(out.result.filename, '2026-11-04_tax.pdf');
+  assert.equal(out.result.mime_type, 'application/pdf');
+  assert.equal(out.result.size, 14);
+});
+
+test("the daemon's own refusal is passed through, not retried", async () => {
+  // A 401 means the agent key is not accepted for attachments — a
+  // msgvault-side decision the agent must be told plainly.
+  const h = httpHarness({ status: 401 });
+  await assert.rejects(() => h.runner('msgvault.export-attachment', { hash: HASH }), /401/);
+});
+
+test('an attachment larger than the cap is refused, not silently truncated', async () => {
+  const h = httpHarness({ body: Buffer.alloc(40 * 1024 * 1024, 1) });
+  await assert.rejects(() => h.runner('msgvault.export-attachment', { hash: HASH }), /cap/);
+});
+
+test('a bad hash never reaches the network', async () => {
+  const h = httpHarness();
+  await assert.rejects(() => h.runner('msgvault.export-attachment', { hash: 'nope' }), /64-hex/);
+  assert.equal(h.calls.length, 0);
 });
