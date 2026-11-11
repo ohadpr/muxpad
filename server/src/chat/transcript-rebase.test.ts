@@ -205,6 +205,29 @@ describe('compactions are UNDONE, not just dropped', () => {
     expect(checkTranscript(out, 'new-sid')).toEqual([]);
   });
 
+  it('drops a summary by its FLAG even when the wording is new, and by its WORDING when unflagged', () => {
+    // Two independent signals, because each fails alone: the opener sentence is
+    // the harness's prose and can change; `isCompactSummary` is absent from
+    // older transcripts and from a /compact pasted back in.
+    const { out } = rebase([
+      user('u1', null, 'ask'),
+      text('a1', 'u1', 'answer'),
+      {
+        ...user('s1', 'a1', 'Résumé of the earlier conversation: OLD RULES'),
+        isCompactSummary: true,
+      },
+      user(
+        's2',
+        's1',
+        'This session is being continued from a previous conversation that ran out of context. MORE OLD RULES',
+      ),
+      user('u2', 's2', 'next'),
+      text('a2', 'u2', 'ok'),
+    ]);
+    expect(out).not.toContain('OLD RULES');
+    expect(checkTranscript(out, 'new-sid')).toEqual([]);
+  });
+
   it('survives the re-appended preserved turns without a cycle or a duplicate', () => {
     // Measured shape: after a partial compaction the harness RE-APPENDS the
     // turns it kept, re-parented onto the summary, so the newest copy of the
