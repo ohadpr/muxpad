@@ -874,3 +874,51 @@ describe('the older-build cell’s colour', () => {
     expect(themed, 'every theme tunes it').toBeGreaterThan(5);
   });
 });
+
+/**
+ * A PANEL NOBODY COULD SEE.
+ *
+ * `overflow: hidden` sat on `.chat-status-seg-wrap` — which is also the
+ * positioning context for the popover each of these cells opens. A 230×275
+ * panel absolutely positioned inside a 16px box with hidden overflow is
+ * clipped to nothing: in the DOM, correct geometry, `visibility: visible`,
+ * and not one pixel painted.
+ *
+ * It took a measurement to find — `elementFromPoint` over the panel's own
+ * centre returned a chat bubble — and it had been true of EVERY panel on
+ * this bar (model, folder, mode, host), not just the new one. Reported as
+ * "clicking that doesn't indicate any action".
+ */
+describe('the status cells can actually open', () => {
+  const body = (sel: string): string => {
+    const flat = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    const at = flat.indexOf(`${sel} {`);
+    expect(at, `${sel} is gone — this test is about nothing`).toBeGreaterThan(-1);
+    return flat.slice(at, flat.indexOf('}', at));
+  };
+
+  it('does not clip the wrapper the popovers are positioned inside', () => {
+    // Anchored to a line start: `.chat-status-seg-wrap {` also occurs inside
+    // `.chat-status-seg + .chat-status-seg-wrap {`, and matching that one
+    // made this pass against the wrong rule.
+    const flatCss = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    expect(
+      /\n\.chat-status-seg-wrap \{[^}]*overflow:\s*visible/.test(flatCss),
+      'the wrapper must not clip — it is what every status popover is positioned inside',
+    ).toBe(true);
+    // …and no later rule may put the clip back on the wrapper itself.
+    const flat = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    expect(
+      /\.chat-status-seg-wrap:not\(\.-live\)\s*\{[^}]*overflow:\s*hidden/.test(flat),
+      'the clip is back on the wrapper — every status popover is invisible again',
+    ).toBe(false);
+  });
+
+  it('still clips the CHIP, which is the thing whose contents overflow', () => {
+    // The icon has a 12px floor, so a narrower cell paints outside itself and
+    // a logo lands on its neighbour's spinner.
+    expect(body('.chat-status-seg-wrap:not(.-live) > .chat-status-seg')).toContain(
+      'overflow: hidden',
+    );
+  });
+});

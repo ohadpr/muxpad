@@ -1064,33 +1064,13 @@ export function SessionBar({
             // biome-ignore lint/a11y/useSemanticElements: an anchored popover, not a modal that owns the screen.
             <div className="chat-status-menu chat-session-menu" role="dialog">
               <div className="chat-session-head">Running an older build</div>
-              <div className="chat-session-item -static">
-                <span className="chat-session-item-desc">
-                  This agent’s process started on a different build of muxpad from the one running
-                  now. It keeps the code — and the instructions — it was born with, so anything
-                  added since is missing from it: it may not know about tools or rules that exist
-                  today, and will say so honestly rather than guess.
-                </span>
-              </div>
-              <div className="chat-session-item -static">
-                <span className="chat-session-item-desc">
-                  {/* ── ONE BUTTON, AND IT IS THE WHOLE ANSWER ─────────────
-                      This panel used to end with a paragraph and no control:
-                      it named a real problem and offered nothing, which is a
-                      sign with no door. The objection that kept it that way —
-                      that this ends background work — is a reason to make the
-                      act DELIBERATE, which a button someone has to find,
-                      open and press already is.
-
-                      One button, not two. "Any sign of old instructions / old
-                      agent / old whatever — REBASE." Keeping the conversation
-                      and refreshing the instructions is a single act from
-                      where the reader sits, so it is a single control. */}
-                  Rebasing keeps this conversation exactly as it is and starts its agent again on
-                  today’s instructions. It ends any background work and scheduled wake-ups this pane
-                  is holding, so do it when the pane is quiet.
-                </span>
-              </div>
+              {/* ── THE DOOR, BEFORE THE SIGN ──────────────────────────────
+                  It sat under two paragraphs, which on a short window or a
+                  phone put it below the fold of a popover nobody scrolls:
+                  "clicking that doesn't indicate any action". A panel that
+                  exists because something is wrong leads with the fix; the
+                  explanation is for the reader who wants it, and it reads
+                  just as well after. */}{' '}
               <button
                 type="button"
                 className="chat-session-item -action"
@@ -1108,6 +1088,21 @@ export function SessionBar({
               >
                 {rebasing ? 'Rebasing…' : 'Rebase this chat'}
               </button>
+              <div className="chat-session-item -static">
+                <span className="chat-session-item-desc">
+                  Rebasing keeps this conversation exactly as it is and starts its agent again on
+                  today’s instructions. It ends any background work and scheduled wake-ups this pane
+                  is holding, so do it when the pane is quiet.
+                </span>
+              </div>
+              <div className="chat-session-item -static">
+                <span className="chat-session-item-desc">
+                  This agent’s process started on a different build of muxpad from the one running
+                  now. It keeps the code — and the instructions — it was born with, so anything
+                  added since is missing from it: it may not know about tools or rules that exist
+                  today, and will say so honestly rather than guess.
+                </span>
+              </div>
             </div>
           ) : null}
         </div>
