@@ -178,15 +178,17 @@ describe('the row is one line, and the mark is beside the name', () => {
  * right."
  */
 describe('the drawer says something is going on in there', () => {
-  it('spins a real arc on the closed button while a worker is running', () => {
-    // A breathing border was the first attempt and was too quiet to answer
-    // the question asked of this control. The arc is a pseudo-element so it
-    // can sit OUTSIDE the 28px target without crowding the glyph or count.
-    const arc = rule('.chat-drawer-open[data-running="true"]::after');
-    expect(arc, 'no spinner on the drawer button').not.toBe('');
-    expect(arc).toMatch(/animation:\s*chat-drawer-spin/);
-    expect(arc).toMatch(/border-top-color/);
-    expect(arc).toContain('--status-working');
+  it('spins the BADGE, not the whole button', () => {
+    // An orbiting ring around the control was the first answer and the wrong
+    // one: "replace the '1' with a spinner don't spin the whole thing". The
+    // badge is already the corner the eye checks.
+    const badge = rule('.chat-drawer-open__count.-spinning');
+    expect(badge, 'the badge does not spin').not.toBe('');
+    expect(badge).toMatch(/animation:\s*chat-drawer-spin/);
+    expect(badge).toMatch(/border-top-color/);
+    expect(badge).toContain('--status-working');
+    // …and nothing orbits the button any more.
+    expect(rule('.chat-drawer-open[data-running="true"]::after')).toBe('');
   });
 
   it('paints a running row in the WORKING hue, never the accent', () => {
@@ -219,7 +221,7 @@ describe('the drawer says something is going on in there', () => {
     expect(at, 'no reduced-motion guard at all').toBeGreaterThan(-1);
     const block = css.slice(at, css.indexOf('}\n}', at));
     expect(block).toContain('.chat-drawer__spin');
-    expect(block).toContain('.chat-drawer-open[data-running="true"]');
+    expect(block).toContain('.chat-drawer-open__count.-spinning');
     expect(block).toContain('animation: none');
   });
 });

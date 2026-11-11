@@ -339,34 +339,23 @@
   color: var(--d-accent);
   border-color: color-mix(in srgb, var(--d-accent) 40%, transparent);
 }
-/* …AND IT SPINS. A breathing border was the first attempt and it was too
-   subtle to answer the question being asked of this control — "show spinner
-   on top right chat icon too as to indicate working". So: a real arc, in the
-   status channel's working hue, orbiting the button. `inset: -4px` puts it
-   outside the 28px target so it never crowds the glyph or the count, and
-   `border-top-color` alone is what makes a full circle read as a spinner. */
-.chat-drawer-open[data-running="true"]::after {
-  content: "";
-  position: absolute;
-  /* −6px makes a 40px circle, which just contains the 28px square's 39.6px
-     diagonal — any tighter and the corners poke through the ring. */
-  inset: -6px;
-  border-radius: 50%;
-  /* A FULL faint ring with one bright quarter, not a lone arc. The first
-     version was `transparent` all round with a single coloured edge, and
-     against a rounded square — with the count badge sitting on the corner
-     where the arc is brightest — it read as a stray stroke rather than
-     motion. A complete ring is unmistakably a spinner even when a quarter of
-     it is covered. */
-  border: 1.5px solid color-mix(in srgb, var(--status-working, var(--d-accent)) 28%, transparent);
+/* ── THE BADGE, SPINNING ───────────────────────────────────────────────────
+   Same 14px corner the count occupied, so nothing moves when work starts: a
+   ring in the status channel's working hue with one bright quarter, turning.
+   No number — how many is the drawer's own job, and a closed drawer only has
+   to answer "is anything happening". */
+.chat-drawer-open__count.-spinning {
+  background: transparent;
+  border: 1.5px solid color-mix(in srgb, var(--status-working, var(--d-accent)) 30%, transparent);
   border-top-color: var(--status-working, var(--d-accent));
-  animation: chat-drawer-spin 900ms linear infinite;
-  pointer-events: none;
+  border-radius: 50%;
+  width: 13px;
+  height: 13px;
+  min-width: 0;
+  padding: 0;
+  animation: chat-drawer-spin 800ms linear infinite;
 }
-/* The count stays on top of the ring: it is a fact, the ring is a state. */
-.chat-drawer-open__count {
-  z-index: 1;
-}
+
 .chat-drawer-open__count {
   position: absolute;
   top: -3px;
@@ -558,7 +547,7 @@
    The colour and the count still carry every fact. */
 @media (prefers-reduced-motion: reduce) {
   .chat-drawer__spin,
-  .chat-drawer-open[data-running="true"]::after {
+  .chat-drawer-open__count.-spinning {
     animation: none;
   }
 }
