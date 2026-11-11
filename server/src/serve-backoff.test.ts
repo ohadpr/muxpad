@@ -153,6 +153,25 @@ describe('the serve supervisor backs off far enough to matter', () => {
       expect(parse(bad).ok, bad || '(empty)').toBe(false);
   });
 
+  it('STAYS down when it gives up, instead of being respawned into a new term', () => {
+    /**
+     * The loop between two supervisors, which made the seven-day term nearly
+     * inert: this one gives up and exits, the SERVER's serve-supervisor sees
+     * a pane with no pty, respawns it, and the fresh process starts a brand
+     * new term. A broken app would retry for ever at seven-day granularity
+     * and never once say so.
+     *
+     * `stopped` is the one state AppHeal refuses to touch — "the user's own
+     * decision and outranks any observation" — so stopping the app is what
+     * makes the decision stick.
+     */
+    expect(script).toMatch(/api\/apps\/\$own\/stop/);
+    expect(script).toMatch(/select\(\.pane_id==\$p\)/);
+    // Best effort, always: a plain `muxpad serve` in a pane is not a
+    // registered app and must still just exit.
+    expect(script).toMatch(/\|\| true/);
+  });
+
   it('says once, out loud, that the command is not starting', () => {
     // The per-restart line scrolls past. Somebody opening this pane an hour
     // later needs to know it has been failing since long before they looked.

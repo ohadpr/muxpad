@@ -2495,7 +2495,32 @@ cmd_serve() {
     fi
     if [ "$retry_for" != "0" ] && [ "$first_fail" != "-1" ] \
        && [ $((SECONDS - first_fail)) -ge "$retry_for" ]; then
-      echo "muxpad serve: giving up — this command has not started successfully for $((retry_for / 86400))d. Fix it and run 'muxpad app start' (or pass --retry=0 to keep trying for ever)."
+      echo "muxpad serve: giving up — this command has not started successfully for $((retry_for / 86400))d. Fix it, then 'muxpad app start' (or pass --retry=0 to keep trying for ever)."
+      # ── AND STAY DOWN ────────────────────────────────────────────────────
+      #
+      # Exiting is not enough on its own, and the reason is a loop between two
+      # supervisors. THIS one gives up; the SERVER's serve-supervisor then
+      # sees a pane with no pty, respawns it (RESPAWN_MAX_ATTEMPTS), and the
+      # fresh process starts a brand new term. A broken app would retry for
+      # ever at seven-day granularity and never once say so.
+      #
+      # So the app is stopped deliberately. `stopped` is the one state
+      # AppHeal refuses to touch — "the user's own decision and outranks any
+      # observation" — which is exactly the property needed: nothing
+      # resurrects it, and it is found stopped with the reason in its log
+      # rather than mysteriously down.
+      #
+      # Best effort. A plain `muxpad serve` in a pane is not a registered app
+      # and has no slug; it simply exits, which is all it can do anyway.
+      if [ -n "${MUXPAD_PANE_ID:-}" ]; then
+        local own
+        own="$(http_request GET /api/apps 2>/dev/null \
+          | jq -r --arg p "$MUXPAD_PANE_ID" '.apps[]? | select(.pane_id==$p) | .slug' 2>/dev/null | head -1)"
+        if [ -n "$own" ]; then
+          echo "muxpad serve: stopping app '$own' so nothing restarts it behind this decision"
+          http_request POST "/api/apps/$own/stop" '{}' >/dev/null 2>&1 || true
+        fi
+      fi
       break
     fi
     if [ "$fails" = "10" ]; then
