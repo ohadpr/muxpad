@@ -883,28 +883,24 @@ describe('the status cells can actually open', () => {
     return flat.slice(at, flat.indexOf('}', at));
   };
 
-  it('does not clip the wrapper the popovers are positioned inside', () => {
-    // Anchored to a line start: `.chat-status-seg-wrap {` also occurs inside
-    // `.chat-status-seg + .chat-status-seg-wrap {`, and matching that one
-    // made this pass against the wrong rule.
+  it('clips the cell — or one cell paints onto its neighbour', () => {
+    // `Ch♦t 1 bg command`, `rebase2 agents`: what removing this looks like.
     const flatCss = css.replace(/\/\*[\s\S]*?\*\//g, '');
     expect(
-      /\n\.chat-status-seg-wrap \{[^}]*overflow:\s*visible/.test(flatCss),
-      'the wrapper must not clip — it is what every status popover is positioned inside',
+      /\n\.chat-status-seg-wrap:not\(\.-live\) \{[^}]*overflow:\s*hidden/.test(flatCss),
+      'a shrinking cell must stay inside its own box',
     ).toBe(true);
-    // …and no later rule may put the clip back on the wrapper itself.
-    const flat = css.replace(/\/\*[\s\S]*?\*\//g, '');
-    expect(
-      /\.chat-status-seg-wrap:not\(\.-live\)\s*\{[^}]*overflow:\s*hidden/.test(flat),
-      'the clip is back on the wrapper — every status popover is invisible again',
-    ).toBe(false);
   });
 
-  it('still clips the CHIP, which is the thing whose contents overflow', () => {
-    // The icon has a 12px floor, so a narrower cell paints outside itself and
-    // a logo lands on its neighbour's spinner.
-    expect(body('.chat-status-seg-wrap:not(.-live) > .chat-status-seg')).toContain(
-      'overflow: hidden',
-    );
+  it('…but lifts the clip for the cell holding an open panel', () => {
+    // Without this every popover on the bar is clipped to nothing: present,
+    // correctly sized, `visibility: visible`, and invisible.
+    const flat2 = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    expect(
+      /\.chat-status-seg-wrap:not\(\.-live\):has\(> \.chat-status-menu\) \{[^}]*overflow:\s*visible/.test(
+        flat2,
+      ),
+      'an open panel is clipped away again',
+    ).toBe(true);
   });
 });

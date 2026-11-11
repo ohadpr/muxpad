@@ -2887,25 +2887,29 @@
    label is "O…" and the chip has stopped being identity and started being
    decoration. The model is still one tap away in the session menu, which is
    where its full id has always lived. */
-/* ── THE CLIP BELONGS TO THE CHIP, NOT TO THE WRAPPER ──────────────────────
-   The cell has to clip its OWN contents: the icon is `flex: 0 0 auto` with a
-   12px floor, so once it is narrower than that it paints outside itself, and
-   a logo sitting on its neighbour's spinner reads as a second spinner.
+/* ── THE CELL CLIPS ITSELF, EXCEPT WHEN IT IS HOLDING A PANEL ──────────────
+   Two true things that fought, and the record of getting it wrong in both
+   directions:
+   · THE CELL MUST CLIP. The icon is `flex: 0 0 auto` with a 12px floor, so a
+     wrapper narrower than that paints outside itself and onto its
+     neighbour — reported as `Ch♦t 1 bg command` and `rebase2 agents`
+     overprinted in one composer row.
+   · THE PANEL MUST NOT BE CLIPPED. The wrapper is also the positioning
+     context for the popover these cells open, and a 230×275 panel inside a
+     16px box with hidden overflow is clipped to nothing: in the DOM, correct
+     geometry, `visibility: visible`, and not one pixel painted.
+   Moving the clip to the button fixed the second and broke the first.
 
-   That `overflow: hidden` was on the WRAPPER — which is also the positioning
-   context for the popover each of these cells opens. A 230×275 panel
-   absolutely positioned inside a 16px box with hidden overflow is clipped to
-   nothing: present in the DOM, correct geometry, `visibility: visible`, and
-   not a pixel of it painted. Reported as "clicking that doesn't indicate any
-   action, no rebase command whats' going on" — about the Rebase button, which
-   had been there, invisible, the whole time. Every other panel on this bar
-   (model, folder, mode, host) was clipped by the same line.
-
-   So the clip moves to the BUTTON, which is the thing whose contents can
-   overflow. The wrapper keeps `overflow: visible` from its base rule and the
-   panels paint. */
-.chat-status-seg-wrap:not(.-live) > .chat-status-seg {
+   So the clip stays on the wrapper — where it has to be, because the wrapper
+   is the flex item that shrinks — and lifts only for the cell that currently
+   has a panel open. One cell stops clipping for as long as something is open
+   in front of it, which is exactly when its own label being clipped does not
+   matter. */
+.chat-status-seg-wrap:not(.-live) {
   overflow: hidden;
+}
+.chat-status-seg-wrap:not(.-live):has(> .chat-status-menu) {
+  overflow: visible;
 }
 
 /* Where the truncation actually happens. `min-width: 0` is what lets a flex item
@@ -3116,11 +3120,31 @@
 
    `min-width: max-content` for the same reason the context cell has it — this
    cell is two short words and must not be the one the line clips to `1 sh…`. */
+/* ── WHAT GIVES WAY FIRST ON A FULL BAR ────────────────────────────────────
+   This strip shares the composer row with Attach, Review a screen and the
+   commands menu, so it is routinely handed ~320px for four cells. Something
+   has to lose, and the order was backwards: `1 bg command` held 180px at
+   `flex-shrink: 0` while the two cells beside it were squeezed to 26 and
+   31px — `Chat` rendered as `(` and `rebase` as `r(`, which is a control
+   nobody can read or aim at.
+
+   A COUNT CAN ELLIPSIZE; AN ACTION CANNOT. This one is a fact you read in
+   passing, and its icon still says what it is when the words go. */
 .chat-status-seg.-bg {
-  flex-shrink: 0;
-  min-width: max-content;
+  flex: 0 1 auto;
+  min-width: 0;
   gap: 5px;
   color: var(--chat-dim);
+}
+/* …and the cell you PRESS keeps its whole label. `min-width: max-content` on
+   the button alone was not enough: the wrapper is the flex item, so it
+   shrank and clipped the button inside it. */
+.chat-status-seg-wrap:has(> .chat-status-seg.-stale),
+/* The mode chip too: it is one short word, and half a clipped word beside an
+   icon reads as a rendering fault rather than as a chip running out of room.
+   With the count absorbing all the shrink there is room for both. */
+  .chat-status-seg-wrap:has(> .chat-status-seg.-mode) {
+  flex: 0 0 auto;
 }
 .chat-status-seg.-bg svg {
   color: inherit;
