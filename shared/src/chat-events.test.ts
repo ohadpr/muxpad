@@ -8,6 +8,7 @@ import {
   blockText,
   expandChatEvent,
   expandCompaction,
+  expandHistory,
   expandSpawnDelivery,
   isAgentLaunchTool,
   isInterruptMarker,
@@ -747,5 +748,32 @@ describe('the compaction match is the harness’s sentence, not a fragment', () 
       const text = `This session is being continued from a previous conversation that ${tail}\n\nSummary:\nthings`;
       expect(expandCompaction(text, 'u1', MS), tail).not.toBeNull();
     }
+  });
+});
+
+/**
+ * A rebased chat opens with the summary of what was too old to replay. It is
+ * a summary, like a compaction's, and is drawn the same way: a mark, with the
+ * text one disclosure away — never a wall in the user's own voice.
+ */
+describe('a rebased chat', () => {
+  const text =
+    '<muxpad-history>\nThe EARLIER part of this conversation…\n\nGOAL: ship it\n</muxpad-history>';
+
+  it('draws its history as a mark plus a folded body, on the real transcript path', () => {
+    const out = normalizeTranscriptLine({
+      type: 'user',
+      uuid: 'u1',
+      timestamp: new Date(MS).toISOString(),
+      message: { content: text },
+    });
+    expect(out.map((e) => e.kind)).toEqual(['notice', 'user']);
+    expect(out[0]).toMatchObject({ variant: 'compacted' });
+    expect(out[1]).toMatchObject({ folded: true });
+    expect((out[1] as { text: string }).text).toContain('GOAL: ship it');
+  });
+
+  it('leaves a message that only mentions the tag alone', () => {
+    expect(expandHistory('what is a <muxpad-history> block?', 'u1', MS)).toBeNull();
   });
 });
