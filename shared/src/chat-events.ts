@@ -790,6 +790,26 @@ export function expandCompaction(text: string, id: string, ts: number | null): C
 }
 
 /**
+ * The history a transcript rebase puts in front of the turns it replays
+ * (server/src/chat/rebase.ts `wrapHistory`). Same treatment as a compaction,
+ * which it replaces: a mark that says the earlier part is summarised, with the
+ * summary one disclosure away. Same notice variant on purpose — to a reader
+ * both mean "what is above this line is a summary, not the conversation".
+ */
+export function expandHistory(text: string, id: string, ts: number | null): ChatEvent[] | null {
+  const t = text.trimStart();
+  if (!t.startsWith('<muxpad-history>')) return null;
+  const notice: NoticeEvent = {
+    kind: 'notice',
+    id: `${id}:history`,
+    ts,
+    variant: 'compacted',
+    text: 'Rebased — the earlier part of this chat is summarised',
+  };
+  return [notice, { kind: 'user', id, ts, text: t, folded: true }];
+}
+
+/**
  * A batch of finished sub-chat reports arrives as `<muxpad-delivery …>…</…>` +
  * the reports themselves. Same split as `expandCronFire`, for the same reason:
  * the parent's transcript should read "⇤ 3 sub-agents reported" followed by what
@@ -983,6 +1003,9 @@ export function normalizeTranscriptLine(line: unknown): ChatEvent[] {
       // …and so is the summary the harness reopens a compacted session with.
       const compacted = expandCompaction(content, id, ts);
       if (compacted) return compacted;
+      // …and so is the history a transcript rebase leads with.
+      const history = expandHistory(content, id, ts);
+      if (history) return history;
       // An `@mention`'s handles are for the agent, not the reader — see
       // `forDisplay`.
       return [{ kind: 'user', id, ts, text: stripMentionContext(content) }];
