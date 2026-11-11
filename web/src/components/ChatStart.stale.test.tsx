@@ -19,28 +19,38 @@ import { describe, expect, it } from 'vitest';
 const SRC = readFileSync(join(__dirname, 'ChatStart.tsx'), 'utf8');
 const API = readFileSync(join(__dirname, '..', 'api.ts'), 'utf8');
 
-/** The stale popover's own markup, so a button elsewhere cannot satisfy this. */
-const panel = (): string => {
-  const at = SRC.indexOf('Running an older build');
-  expect(at, 'the stale panel is gone — this test is about nothing').toBeGreaterThan(-1);
-  return SRC.slice(at, SRC.indexOf('chat-status-seg-wrap', at));
+/** The stale CELL's own markup, so a control elsewhere cannot satisfy this. */
+const cell = (): string => {
+  const at = SRC.indexOf('data-testid="chat-status-stale"');
+  expect(at, 'the stale cell is gone — this test is about nothing').toBeGreaterThan(-1);
+  return SRC.slice(at, SRC.indexOf('</button>', at));
 };
 
-describe('the older-build panel offers the way out', () => {
-  it('has exactly ONE button', () => {
-    const buttons = panel().match(/<button/g) ?? [];
-    expect(buttons).toHaveLength(1);
+describe('the older-build cell IS the button', () => {
+  it('rebases on press — no panel in between', () => {
+    // It used to be a label that opened a panel that held the control:
+    // three steps to one act. "i need a single rebase button… i only see
+    // 'older build' label which i thought we dropped."
+    expect(cell()).toMatch(/rebasePane\(paneId\)/);
+    // …and the panel is gone, not merely bypassed.
+    expect(SRC).not.toContain("panel === 'stale'");
   });
 
-  it('and it rebases, rather than respawning behind the user’s back', () => {
-    expect(panel()).toMatch(/rebasePane\(paneId\)/);
-    expect(panel()).toMatch(/Rebase this chat/);
+  it('says what you can DO, not what is wrong', () => {
+    expect(cell()).toMatch(/'rebasing…' : 'rebase'/);
+    expect(cell()).not.toMatch(/>older build</);
   });
 
-  it('says the cost before the press — background work ends', () => {
-    // The whole reason this was a paragraph for months. It still has to be
-    // said; it just no longer has to be the only thing said.
-    expect(panel()).toMatch(/background work and scheduled wake-ups/);
+  it('keeps the diagnosis and the cost in the title', () => {
+    // The question "why is this here" is asked once; the action is taken
+    // every time. But the cost must still be readable before the press.
+    expect(cell()).toMatch(/older build of muxpad/);
+    expect(cell()).toMatch(/background work and scheduled wake-ups/);
+  });
+
+  it('cannot be double-fired while it is running', () => {
+    expect(cell()).toMatch(/if \(rebasing\) return;/);
+    expect(cell()).toMatch(/disabled=\{rebasing\}/);
   });
 
   it('sends NO mode — the server picks the best it can do for this chat', () => {

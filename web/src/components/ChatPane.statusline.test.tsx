@@ -711,38 +711,24 @@ describe('the older-build cell', () => {
   });
 
   it('appears when the runner is on another build, in either mode', () => {
-    expect(cell(bar({ stale: true }))?.textContent).toBe('older build');
+    // It says the ACT now, not the fault — see ChatStart.stale.test.tsx.
+    expect(cell(bar({ stale: true }))?.textContent).toBe('rebase');
     expect(cell(bar({ stale: true, mode: 'chat' }))).not.toBeNull();
   });
 
-  it('opens a panel that says what is missing and what restarting costs', () => {
+  it('rebases on press, with no panel in between', () => {
+    // It was a label that opened a panel that held the control. The panel is
+    // gone: the cell is the button. What it costs — background work and
+    // wake-ups — lives in its title, which is where a thing you read once
+    // and act on many times belongs.
     const box = bar({ stale: true });
+    const btn = cell(box) as HTMLButtonElement;
+    expect(btn.getAttribute('title')).toMatch(/background work and scheduled wake-ups/i);
+    expect(btn.getAttribute('title')).toMatch(/older build/i);
     act(() => {
-      cell(box)?.click();
+      btn.click();
     });
-    const text = box.querySelector('.chat-status-menu')?.textContent ?? '';
-    // The consequence, not the mechanism: the agent is missing what shipped
-    // since it started.
-    expect(text).toMatch(/instructions/i);
-    // …and the cost of the fix, because respawning kills background work.
-    expect(text).toMatch(/background work/i);
-    expect(text).toMatch(/wake-ups/i);
-  });
-
-  it('offers exactly ONE control, and it is Rebase', () => {
-    // This asserted NO button for months, on the argument that a control
-    // here would respawn the pane in passing and end background subagents
-    // and wake-ups it may be holding. That cost is real and is still stated
-    // right above the button — but it argues for making the act DELIBERATE,
-    // which a control you have to find, open and press already is. A panel
-    // that names a problem and offers nothing is a sign with no door.
-    const box = bar({ stale: true });
-    act(() => {
-      cell(box)?.click();
-    });
-    const buttons = box.querySelector('.chat-status-menu')?.querySelectorAll('button') ?? [];
-    expect(buttons).toHaveLength(1);
-    expect(buttons[0]?.textContent).toContain('Rebase');
+    expect(box.querySelector('.chat-session-menu'), 'no panel should open').toBeNull();
   });
 
   it('is a warning tone, never the danger colour — nothing is broken', () => {
