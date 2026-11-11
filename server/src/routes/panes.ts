@@ -804,6 +804,8 @@ export function panesScopedRoutes(deps: {
       );
     }
     const workspaceId = tabs.getWorkspaceId(p.tab_id);
+    // `keep` unless the caller explicitly asks to drop the history.
+    const mode = (await c.req.json().catch(() => ({})))?.mode === 'fresh' ? 'fresh' : 'keep';
     const result = await runRebase(
       {
         db: deps.db,
@@ -828,6 +830,7 @@ export function panesScopedRoutes(deps: {
         submit: (paneId, text) => bridge.submitSend(paneId, text),
       },
       id,
+      mode,
     );
     if (!result.ok) {
       const status = result.code === 'not_found' ? 404 : result.code === 'no_briefing' ? 503 : 400;
