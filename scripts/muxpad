@@ -1470,11 +1470,17 @@ cmd_browser() {
   case "${1:-}" in
     needs-you) cmd_browser_needs_you "${@:2}" ;;
     resolved) cmd_browser_resolved "${@:2}" ;;
+    probe) node "$ROOT/scripts/browser-probe.mjs" "${@:2}" ;;
     *)
       cat >&2 <<'EOF'
 usage:
   muxpad browser needs-you "<five words>" [--selector=<css>] [--target=<id>]
   muxpad browser resolved
+  muxpad browser probe <url> [--eval=JS]... [--until=JS] [--shot=PATH] [--size=WxH]
+
+  probe asks a page every question in ONE call, in this pane's warm browser:
+  it waits for --until (a condition, not a sleep), runs each --eval, prints
+  JSON. `muxpad browser probe --help` has the details.
 
   needs-you summons a person to the browser THIS pane is driving, and rings
   the thing that needs them. Walk to the wall first — the login form, the
