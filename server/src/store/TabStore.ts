@@ -109,7 +109,7 @@ export interface SpawnReportWrite {
  * would not.
  */
 const CLOCK_COLUMNS = `tabs.id, tabs.spawned_by, tabs.pinned, tabs.clock_started_at,
-    tabs.retired_at, tabs.retired_reason,
+    tabs.retired_at, tabs.retired_reason, tabs.spawn_report_state,
     EXISTS (SELECT 1 FROM panes p
              WHERE p.tab_id = tabs.id AND p.startup_cmd LIKE 'muxpad agent%') AS has_agent`;
 
@@ -120,6 +120,7 @@ interface RawClockRow {
   clock_started_at: number | null;
   retired_at: number | null;
   retired_reason: string | null;
+  spawn_report_state: string | null;
   has_agent: number;
 }
 
@@ -130,6 +131,7 @@ function toClockRow(r: RawClockRow): TabClockRow {
     pinned: !!r.pinned,
     clock_started_at: r.clock_started_at,
     retired_at: r.retired_at,
+    spawn_report_state: r.spawn_report_state,
     // Anything unrecognised reads as a hand archive: it is the conservative
     // one (it claims only that a person did this), and the alternative would
     // be a row that is retired for no stated reason at all.
@@ -160,6 +162,16 @@ export interface TabClockRow {
   clock_started_at: number | null;
   retired_at: number | null;
   retired_reason: RetireReason | null;
+  /**
+   * `awaiting` when this worker stopped to ask something.
+   *
+   * Carried on the CLOCK row, which is the one whole-table read the sidebar
+   * already does, so a parent can say that a child needs a human without a
+   * query per child. A sub-chat is not a row on the rail, so if this does not
+   * climb to its parent, "it asked you a question" reaches nothing but the
+   * drawer — which you have to open to see.
+   */
+  spawn_report_state: string | null;
   /**
    * Is there an AGENT in this tab — something a message could be sent to?
    *
@@ -785,6 +797,41 @@ export class TabStore {
    */
   setSpawnTask(id: string, task: string): void {
     this.db.prepare('UPDATE tabs SET spawn_task = ? WHERE id = ?').run(task, id);
+  }
+
+  /**
+   * How this worker's result should come back: `instant` or `batch`.
+   *
+   * Only those two are stored — an unknown string is dropped rather than
+   * written, so a typo at the CLI cannot invent a third delivery mode that
+   * the barrier then falls through on.
+   */
+  setSpawnDeliver(id: string, mode: string): void {
+    if (mode !== 'instant' && mode !== 'batch') return;
+    this.db.prepare('UPDATE tabs SET spawn_deliver = ? WHERE id = ?').run(mode, id);
+  }
+
+  /**
+   * `batch` only when it was explicitly asked for. NULL is `instant`.
+   *
+   * THE DEFAULT IS ZERO LATENCY, which is a deliberate reversal. It shipped
+   * the other way round for one bad reason — it preserved existing behaviour
+   * — and the owner named the problem: "batch is default but that's weird
+   * no?" It is. Holding a finished worker is the SPECIAL case: it is worth
+   * doing for a survey, where twenty independent answers are wanted
+   * together, and it costs the common case a parent sitting idle while work
+   * it could act on is already done.
+   *
+   * So waiting is now something a caller asks for, and not waiting is what
+   * happens if nobody thought about it — which is the right way round for a
+   * default, because the failure of forgetting is then a few extra turns
+   * rather than a result nobody sees for nine minutes.
+   */
+  spawnDeliver(id: string): 'instant' | 'batch' {
+    const row = this.db.prepare('SELECT spawn_deliver AS d FROM tabs WHERE id = ?').get(id) as
+      | { d: string | null }
+      | undefined;
+    return row?.d === 'batch' ? 'batch' : 'instant';
   }
 
   /** When a spawn report was last ATTEMPTED for this chat; null if never. */

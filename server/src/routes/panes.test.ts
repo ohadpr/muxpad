@@ -109,7 +109,17 @@ describe('panes routes', () => {
     expect(after.layout).toBe(p1.id);
   });
 
-  it('append_to_layout with split_from splits right of the source pane', async () => {
+  /**
+   * THE SPLIT IS GONE, AND THIS IS WHERE IT IS REFUSED.
+   *
+   * This test used to assert that a second pane split right of the first.
+   * The primitive was removed because every "which pane is this tab's chat"
+   * question had no answer and the code guessed the first one created — which
+   * delivered a sub-chat's 77KB report into the left half of a split while
+   * its owner read the right half, leaving a chat with no record of work it
+   * had dispatched.
+   */
+  it('refuses a SECOND pane in a tab layout — one chat, one pane', async () => {
     const tab2 = (await (
       await test.app.request('/api/tabs', {
         method: 'POST',
@@ -124,17 +134,49 @@ describe('panes routes', () => {
         body: JSON.stringify({ append_to_layout: true }),
       })
     ).json()) as { id: string };
-    const p2 = (await (
-      await test.app.request(`/api/tabs/${tab2.id}/panes`, {
+
+    for (const body of [
+      { append_to_layout: true },
+      { append_to_layout: true, split_from: p1.id },
+    ]) {
+      const res = await test.app.request(`/api/tabs/${tab2.id}/panes`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ append_to_layout: true, split_from: p1.id }),
+        body: JSON.stringify(body),
+      });
+      expect(res.status, JSON.stringify(body)).toBe(409);
+    }
+    // …and the layout still names exactly the one pane that got there first.
+    const after = (await (await test.app.request(`/api/tabs/${tab2.id}`)).json()) as {
+      layout: unknown;
+    };
+    expect(after.layout).toBe(p1.id);
+  });
+
+  it('still allows a pane that asks for NO layout placement — documents need it', async () => {
+    // A document's backing tab holds one pane per agent block and never
+    // renders a mosaic. Refusing those would break documents, so the rule is
+    // about layout placement, not about how many panes a tab may own.
+    const tab3 = (await (
+      await test.app.request('/api/tabs', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'D', workspace_id: wsId }),
       })
     ).json()) as { id: string };
-    const after = (await (await test.app.request(`/api/tabs/${tab2.id}`)).json()) as {
-      layout: { direction: string; first: string; second: string };
-    };
-    expect(after.layout).toMatchObject({ direction: 'row', first: p1.id, second: p2.id });
+    await test.app.request(`/api/tabs/${tab3.id}/panes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ append_to_layout: true }),
+    });
+    for (let i = 0; i < 3; i++) {
+      const res = await test.app.request(`/api/tabs/${tab3.id}/panes`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      expect(res.status).toBe(201);
+    }
   });
 
   it('omitting append_to_layout leaves the tab layout untouched (UI behavior)', async () => {
@@ -1037,15 +1079,20 @@ describe('flat pane enumeration (GET /api/panes)', () => {
           await local.app.request(`/api/tabs/${t.id}/panes`, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
-              kind: 'url',
-              url: 'https://x.example.com',
-              append_to_layout: true,
-            }),
+            body: JSON.stringify({ kind: 'url', url: 'https://x.example.com' }),
           })
         ).json()) as { id: string };
       const keep = await mkPane();
       const doomed = await mkPane();
+      // A SPLIT LAYOUT, WRITTEN DIRECTLY — the API will not build one any
+      // more (one pane per layout), but pruning still has to work for the
+      // ones that already exist: migration 54 is rewriting two of them on
+      // this machine, and any layout can come to name a pane that is gone.
+      await local.app.request(`/api/tabs/${t.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ layout: { direction: 'row', first: keep.id, second: doomed.id } }),
+      });
 
       const received: MuxpadEvent[] = [];
       events.subscribe((e) => received.push(e));

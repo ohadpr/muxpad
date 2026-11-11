@@ -26,13 +26,27 @@ const TITLES: Record<string, (p: Payload) => string> = {
   'slack.upload': (p) => `Uploaded a file to ${channel(p)}`,
   'slack.react': (p) => `Reacted in ${channel(p)}`,
   'slack.unpost': (p) => `Deleted a message in ${channel(p)}`,
-  // The archive's reads get titles too, or the card shows a bare action name.
-  // Each says WHAT WAS READ: a card that says "search" is a card that tells
-  // you nothing about what left the archive.
-  'msgvault.search': (p) => `Searched the archive for ${JSON.stringify(p.query ?? '')}`,
-  'msgvault.show-message': (p) => `Read archived message ${String(p.id ?? '')}`,
-  'msgvault.show-thread': (p) => `Read an archived thread (${String(p.id ?? '')})`,
-  'msgvault.stats': () => 'Read archive totals',
+  // ── SAY WHAT IT IS, NOT WHAT WE CALL IT ───────────────────────────────
+  //
+  // These read "Searched the archive", "Read archived message 150889", "Read
+  // archive totals". `archive` is muxpad's own word for the component — it is
+  // what the store is called in this codebase — and it tells a reader nothing
+  // about what was touched. Asked directly: "what does the word archive mean
+  // here? we need something more fitting."
+  //
+  // What was touched is MAIL. The vault holds other sources too, which is
+  // exactly why `stats` names all three rather than claiming to have read
+  // messages: it counts, across everything.
+  //
+  // Each still says WHAT WAS READ — a card that says "search" is a card that
+  // tells you nothing about what left the machine.
+  'msgvault.search': (p) => `Searched your mail for ${JSON.stringify(p.query ?? '')}`,
+  'msgvault.show-message': (p) => `Read one email (${String(p.id ?? '')})`,
+  'msgvault.show-thread': (p) => `Read an email thread (${String(p.id ?? '')})`,
+  'msgvault.stats': () => 'Counted your mail, calendar and contacts',
+  // The WRITE says what it is about: a card reading "drafted a reply" is a
+  // card you would have to open your mailbox to understand.
+  'msgvault.draft-reply': (p) => `Drafted a reply to message ${String(p.id ?? '')}`,
 };
 
 interface Payload {
@@ -78,14 +92,36 @@ export function stateFromBroker(state: unknown): ChatActionState {
   }
 }
 
-/** The line under the title, for a state that needs explaining. */
-function detailFor(state: ChatActionState, result: Record<string, unknown>): string | null {
+/**
+ * The line under the title, for a state that needs explaining.
+ *
+ * The fallback used to say "Slack refused it" whatever had been asked, so a
+ * mail draft that failed without an error string told you Slack had refused
+ * it. This file stopped being Slack-only when the archive arrived; the card
+ * is a permanent record, and a record that names the wrong system is worse
+ * than one that names none.
+ */
+function detailFor(
+  state: ChatActionState,
+  result: Record<string, unknown>,
+  action?: string,
+): string | null {
   if (state === 'declined') return 'You declined it';
   if (state === 'failed') {
     const why = typeof result.error === 'string' ? result.error : null;
-    return why ?? (String(result.state) === 'expired' ? 'The request expired' : 'Slack refused it');
+    if (why) return why;
+    if (String(result.state) === 'expired') return 'The request expired';
+    return refusedBy(action ?? (typeof result.action === 'string' ? result.action : undefined));
   }
   return null;
+}
+
+/** Who refused, named only when the action says so. */
+function refusedBy(action: string | undefined): string {
+  const connector = String(action ?? '').split('.')[0];
+  if (connector === 'slack') return 'Slack refused it';
+  if (connector === 'msgvault') return 'The mail archive refused it';
+  return 'It was refused';
 }
 
 /**
@@ -143,7 +179,7 @@ export function recordSlackAction(
       title: title(p),
       state,
       body: bodyOf(input.action, p),
-      detail: detailFor(state, input.result),
+      detail: detailFor(state, input.result, input.action),
       url: typeof input.result.permalink === 'string' ? input.result.permalink : null,
       ref,
     });

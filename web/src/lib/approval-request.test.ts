@@ -93,8 +93,8 @@ describe('the whole payload is on screen', () => {
   });
 
   it('never shows the same value twice', () => {
-    const d = describeRequest('msgvault.search', { query: 'from:vuori', limit: 50 });
-    expect(d.primary?.value).toBe('from:vuori');
+    const d = describeRequest('msgvault.search', { query: 'from:acme', limit: 50 });
+    expect(d.primary?.value).toBe('from:acme');
     expect(d.rest.map(([k]) => k)).not.toContain('query');
   });
 
@@ -108,5 +108,93 @@ describe('the whole payload is on screen', () => {
     expect(() =>
       describeRequest('msgvault.stats', undefined as unknown as Record<string, unknown>),
     ).not.toThrow();
+  });
+});
+
+describe('a draft is described by what goes into the mailbox', () => {
+  it('makes the BODY the thing you read', () => {
+    const d = describeRequest('msgvault.draft-reply', {
+      id: '150889',
+      body: 'Are you free Thursday?',
+    });
+    // The body is the primary field: a dialog that named the thread but not
+    // the text would be asking for consent to something it had not shown.
+    expect(d.primary).toEqual({ key: 'body', value: 'Are you free Thursday?' });
+    expect(d.qualifier).toBe('saved as a draft — it cannot be sent');
+    // …and the rest is still all on screen.
+    expect(d.rest.map(([k]) => k)).toEqual(['id']);
+  });
+
+  it('has nothing to say about composing a new email, because there is no such verb', () => {
+    // A Gmail source refuses `draft-compose` outright, so muxpad does not
+    // offer it. An unknown action must still render something a human can
+    // read rather than the raw action name — but it gets no bespoke copy,
+    // and in particular no "it cannot be sent" reassurance about a request
+    // this table knows nothing about.
+    const d = describeRequest('msgvault.draft', { to: ['a@b.com'], subject: 's', body: 'b' });
+    expect(d.title).not.toContain('msgvault.draft');
+    expect(d.qualifier).toBeUndefined();
+  });
+
+  it('says out loud when a reply goes to everyone', () => {
+    expect(describeRequest('msgvault.draft-reply', { id: '1', body: 'ok' }).title).toBe(
+      'Draft a reply',
+    );
+    expect(describeRequest('msgvault.draft-reply', { id: '1', body: 'ok', all: true }).title).toBe(
+      'Draft a reply to everyone on the thread',
+    );
+  });
+
+  it('marks a draft as mail — the mark is about your data, not about reading', () => {
+    expect(marksFor('msgvault.draft-reply')).toEqual(['gmail']);
+    // And no mark for the verb that does not exist: an unknown msgvault
+    // action lights nothing rather than guessing at mail.
+    expect(marksFor('msgvault.draft')).toEqual([]);
+  });
+});
+
+/**
+ * A DIALOG THAT CAN BE MADE TO LIE IS WORSE THAN NO DIALOG.
+ *
+ * Everything here rests on "you approve what you see". A bidi override
+ * reorders the glyphs around it without changing a byte of what is sent, so
+ * the same payload can READ as one thing in this dialog and ARRIVE as
+ * another. Zero-width characters are the same trick, more bluntly: text that
+ * is present, approved, and invisible.
+ *
+ * Made visible rather than refused — Hebrew and Arabic carry LRM/RLM
+ * legitimately, and an approval dialog has no business rejecting somebody's
+ * draft for being written in their own language.
+ */
+describe('the dialog shows what is actually there', () => {
+  it('escapes a bidi override instead of obeying it', () => {
+    const d = describeRequest('msgvault.draft-reply', {
+      id: '1',
+      body: 'approve this‮ dangerous thing',
+    });
+    expect(d.primary?.value).toContain('\\u202E');
+    expect(d.primary?.value).not.toContain('‮');
+  });
+
+  it('reveals zero-width and control characters hiding in a payload', () => {
+    const d = describeRequest('msgvault.draft-reply', {
+      id: '1',
+      body: 'pay​ment to a\u0000ttacker﻿',
+    });
+    expect(d.primary?.value).toBe('pay\\u200Bment to a\\u0000ttacker\\uFEFF');
+  });
+
+  it('leaves real text alone, including right-to-left and whitespace', () => {
+    // Hebrew letters are not control characters and must survive untouched;
+    // so must the newlines and tabs a message body is made of.
+    const body = 'שלום\nיש פגישה מחר\tב-10';
+    const d = describeRequest('msgvault.draft-reply', { id: '1', body });
+    expect(d.primary?.value).toBe(body);
+  });
+
+  it('escapes in the secondary fields too, not only the one being read', () => {
+    // `ref` is where a Slack post says which channel it is going to.
+    const d = describeRequest('slack.post', { ref: 'genera‮l', text: 'hi' });
+    expect(d.rest.find(([k]) => k === 'ref')?.[1]).toContain('\\u202E');
   });
 });

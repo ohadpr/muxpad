@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseSpawnDelivery } from '@muxpad/shared';
@@ -97,6 +97,20 @@ describe('report delivery — the join', () => {
     return id;
   }
 
+  /**
+   * A child that asked to be joined to its batch.
+   *
+   * The barrier only engages for these now: the default is instant, so a test
+   * about HOLDING has to say that is what it wants. Written as a helper
+   * rather than two lines per test so the tests below still read as
+   * statements about the barrier rather than about a column.
+   */
+  function batchChild(...args: Parameters<typeof child>): string {
+    const id = child(...args);
+    db.prepare("UPDATE tabs SET spawn_deliver = 'batch' WHERE id = ?").run(id);
+    return id;
+  }
+
   const delivered = (id: string) =>
     (
       db.prepare('SELECT delivered_at FROM spawn_rounds WHERE id = ?').get(`r-${id}`) as {
@@ -113,6 +127,161 @@ describe('report delivery — the join', () => {
     sent = [];
     result = { status: 'sent' };
     clock = NOW + 2000;
+  });
+
+  /**
+   * THE HANDLE REACHES THE PARENT, FROM THE REAL LOOKUP.
+   *
+   * The owner's report: "the moment the chat yields, it's back at me — and 99%
+   * of the time I need to send it back to do something." Part of why was that
+   * the message carried TAB ids while sending a worker back needs a PANE id,
+   * so the one action an orchestrator most needs after reading a report took a
+   * lookup it had no reason to know how to do.
+   *
+   * shared/spawn-delivery.test.ts proves the message RENDERS the command when
+   * given a pane. This proves the server finds the right one: the CHILD's
+   * agent pane, not the parent's — the mistake available here, since both go
+   * through the same helper.
+   */
+  it('carries the command to send that worker back, naming the CHILD’s pane', () => {
+    const p = parent('P');
+    const c = child('C', p);
+    make().onReport(c);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.paneId, 'delivered to the parent').toBe(`p-${p}`);
+    expect(sent[0]?.text).toContain(`muxpad agent send p-${c}`);
+    expect(sent[0]?.text).not.toContain(`muxpad agent send p-${p}`);
+  });
+
+  it('tells the parent to review it rather than relay it', () => {
+    const p = parent('P');
+    make().onReport(child('C', p));
+    expect(sent[0]?.text).toMatch(/REVIEW each result against what you asked for/);
+    expect(sent[0]?.text).not.toMatch(/carry on if nothing is needed/);
+  });
+
+  /**
+   * THE FILE IS WRITTEN, AND IT HOLDS THE WHOLE REPORT.
+   *
+   * shared/ proves the message NAMES a path when one is supplied. This proves
+   * the server writes it, with the untruncated text in it — the half that makes
+   * "nothing is lost" true rather than merely promised.
+   */
+  describe('a long report is written in full beside the delivery', () => {
+    it('writes the whole thing and hands the parent its path', () => {
+      const long = `${'y'.repeat(4_000)} END-SENTINEL`;
+      const p = parent('P');
+      const c = child('C', p, { report: long });
+      new ReportDelivery({
+        db,
+        dataDir: dir,
+        submitSend: (paneId, text) => {
+          sent.push({ paneId, text });
+          return result;
+        },
+        now: () => clock,
+      }).onReport(c);
+
+      const m = /Full report: `([^`]+)`/.exec(sent[0]?.text ?? '');
+      expect(m, 'no path in the delivery').toBeTruthy();
+      const onDisk = readFileSync(m?.[1] as string, 'utf8');
+      // The END of the report, which is exactly what truncation ate.
+      expect(onDisk).toContain('END-SENTINEL');
+      expect(onDisk.length).toBeGreaterThan(4_000);
+      // …and the message itself stayed a message.
+      expect((sent[0]?.text ?? '').length).toBeLessThan(long.length);
+    });
+
+    it('delivers anyway when there is nowhere to write', () => {
+      // A failure to write costs the PATH, never the delivery.
+      const p = parent('P');
+      const c = child('C', p, { report: 'z'.repeat(4_000) });
+      new ReportDelivery({
+        db,
+        submitSend: (paneId, text) => {
+          sent.push({ paneId, text });
+          return result;
+        },
+        now: () => clock,
+      }).onReport(c);
+      expect(sent).toHaveLength(1);
+      expect(sent[0]?.text).toContain('[report truncated]');
+      expect(sent[0]?.text).not.toContain('Full report');
+    });
+  });
+
+  /**
+   * INSTANT DELIVERY — the caller decides, because only the caller knows.
+   *
+   * The barrier is right for a SURVEY (twenty independent answers wanted as
+   * one message) and wrong for a PIPELINE (each result feeds the next step).
+   * Measured before this existed: a worker that finished in 30s sat behind a
+   * sibling for nine minutes while its parent had nothing to do, and the
+   * ceiling that eventually released it is TEN MINUTES.
+   */
+  describe('a worker can ask not to be held for its siblings', () => {
+    const instant = (id: string) =>
+      db.prepare("UPDATE tabs SET spawn_deliver = 'instant' WHERE id = ?").run(id);
+    const batched = (id: string) =>
+      db.prepare("UPDATE tabs SET spawn_deliver = 'batch' WHERE id = ?").run(id);
+
+    it('goes out while a sibling from the same dispatch is still working', () => {
+      const p = parent('P');
+      child('slow', p, { ended: null, turn: 7 });
+      const fast = child('fast', p, { turn: 7 });
+      instant(fast);
+      expect(make().sweep().delivered).toBe(1);
+      expect(sent).toHaveLength(1);
+      // The heading is the worker's task label — `child()` stamps `task <id>`.
+      expect(sent[0]?.text).toContain('task fast');
+      expect(sent[0]?.text).not.toContain('task slow');
+    });
+
+    it('still holds the siblings that did NOT ask', () => {
+      // Both kinds in one dispatch: each gets what it asked for, and the
+      // batched one is still waiting afterwards.
+      const p = parent('P');
+      child('slow', p, { ended: null, turn: 7 });
+      const fast = child('fast', p, { turn: 7 });
+      const patient = child('patient', p, { turn: 7 });
+      instant(fast);
+      batched(patient);
+      const out = make().sweep();
+      expect(out.delivered).toBe(1);
+      expect(out.held).toBe(1);
+      expect(delivered(fast)).not.toBeNull();
+      expect(delivered(patient)).toBeNull();
+    });
+
+    it('IS the default — a worker nobody thought about does not wait', () => {
+      // Reversed deliberately. Waiting is the special case: it is worth it
+      // for a survey and costs the common case a parent sitting idle while
+      // work it could act on is already finished.
+      const p = parent('P');
+      child('slow', p, { ended: null, turn: 7 });
+      const ordinary = child('ordinary', p, { turn: 7 });
+      expect(make().sweep().delivered).toBe(1);
+      expect(delivered(ordinary)).not.toBeNull();
+    });
+
+    it('still joins the batch when a caller ASKS to wait', () => {
+      // The survey case, which is the whole reason the barrier exists: two
+      // workers that want reading together, held until the slow one lands.
+      const p = parent('P');
+      child('slow', p, { ended: null, turn: 7 });
+      const a = child('a', p, { turn: 7 });
+      batched(a);
+      expect(make().sweep().delivered).toBe(0);
+      expect(delivered(a)).toBeNull();
+    });
+
+    it('delivers a lone instant worker in its own message, barrier untouched', () => {
+      const p = parent('P');
+      const only = child('only', p, { turn: 7 });
+      instant(only);
+      expect(make().sweep().delivered).toBe(1);
+      expect(sent).toHaveLength(1);
+    });
   });
 
   afterEach(() => {
@@ -150,8 +319,8 @@ describe('report delivery — the join', () => {
 
   it('HOLDS a finished child while a sibling is still mid-round', () => {
     const p = parent('P');
-    child('done', p);
-    child('working', p, { ended: null, report: null, state: null });
+    batchChild('done', p);
+    batchChild('working', p, { ended: null, report: null, state: null });
 
     const r = make().sweep();
     expect(r).toEqual({ delivered: 0, abandoned: 0, held: 1 });
@@ -161,8 +330,8 @@ describe('report delivery — the join', () => {
 
   it('…and delivers the batch once that sibling lands', () => {
     const p = parent('P');
-    child('done', p);
-    child('working', p, { ended: null, report: null, state: null });
+    batchChild('done', p);
+    batchChild('working', p, { ended: null, report: null, state: null });
     const d = make();
     d.sweep();
     expect(sent).toHaveLength(0);
@@ -194,8 +363,8 @@ describe('report delivery — the join', () => {
 
   it('still holds for a sibling spawned in the same burst', () => {
     const p = parent('P');
-    child('done', p, { started: NOW });
-    child('working', p, {
+    batchChild('done', p, { started: NOW });
+    batchChild('working', p, {
       started: NOW + BATCH_SPAWN_WINDOW_MS,
       ended: null,
       report: null,
@@ -209,8 +378,8 @@ describe('report delivery — the join', () => {
     // worker whose runner died leaves its round open forever, and a barrier
     // with no ceiling waits on it forever.
     const p = parent('P');
-    child('done', p);
-    child('wedged', p, { ended: null, report: null, state: null });
+    batchChild('done', p);
+    batchChild('wedged', p, { ended: null, report: null, state: null });
     const d = make();
     expect(d.sweep().held).toBe(1);
 
@@ -239,7 +408,7 @@ describe('report delivery — the join', () => {
     // Stamp-first is what makes double delivery impossible; this is the other
     // half of that trade — a refusal must not silently eat the report.
     const p = parent('P');
-    child('c1', p);
+    batchChild('c1', p);
     result = { status: 'rejected', reason: 'too many queued messages' };
     const d = make();
 
@@ -489,8 +658,8 @@ describe('report delivery — the join', () => {
       // as a dribble the parent has to reconcile. Spawned far enough apart that
       // the old window would have let them go.
       const p = parent('P');
-      child('one', p, { started: NOW, turn: 7_000 });
-      child('two', p, {
+      batchChild('one', p, { started: NOW, turn: 7_000 });
+      batchChild('two', p, {
         started: NOW + 9 * 60_000,
         turn: 7_000,
         ended: null,
@@ -504,8 +673,8 @@ describe('report delivery — the join', () => {
       // An unknown turn is not evidence that two rounds are unrelated, and the
       // old behaviour is the safer default for rows written before v48.
       const p = parent('P');
-      child('old-done', p, { started: NOW });
-      child('old-open', p, { started: NOW + 60_000, ended: null, report: null, state: null });
+      batchChild('old-done', p, { started: NOW });
+      batchChild('old-open', p, { started: NOW + 60_000, ended: null, report: null, state: null });
       expect(make().sweep().held).toBe(1);
     });
   });

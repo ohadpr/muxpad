@@ -47,6 +47,38 @@ export interface SpawnDeliveryEntry {
   report: string | null;
   /** Published urls the child produced. */
   artifacts?: string[];
+  /**
+   * How many times this worker has been asked to do the work — the first
+   * brief plus every send-back since.
+   *
+   * Surfaced, not enforced. Nothing in muxpad bounds this loop (verified: no
+   * round cap, and the queue limit counts pending messages so a sequential
+   * exchange never reaches it), and a hard cap would break the long iteration
+   * the feature exists to enable. What a count removes is the excuse — an
+   * orchestrator cannot lose track of how many times it has been round a loop
+   * when the number is in front of it.
+   */
+  rounds?: number;
+  /**
+   * Where the FULL report was written, when it was too long to inline.
+   *
+   * The inline text is a preview in that case; this is the whole thing. A
+   * parent reviewing work needs all of it — truncation is exactly the wrong
+   * economy for the one message whose job is to be acted on — but a 65-way
+   * fan-out of unabridged reports is a context window, not a message. A file
+   * is both: small to mention, complete to read.
+   */
+  reportPath?: string;
+  /**
+   * The child's agent PANE — the handle `muxpad agent send` takes.
+   *
+   * Without it the parent could read a result and not act on it: the message
+   * carried tab ids, and sending a worker back needs a pane. So the one thing
+   * an orchestrator most needs after reading a report — "go and fix this" —
+   * required a lookup it had no reason to know how to do, and the path of
+   * least resistance was to hand the whole thing to the human instead.
+   */
+  paneId?: string;
 }
 
 export interface SpawnDeliveryMarker {
@@ -84,7 +116,16 @@ function attr(attrs: string, name: string): string | null {
 export const DELIVERY_BODY_BUDGET = 24_000;
 /** No child's report is cut below this, however many siblings there are. */
 export const DELIVERY_MIN_PER_CHILD = 240;
-/** …and none gets more than this even when it is the only one. */
+/**
+ * …and none gets more than this inline, even when it is the only one.
+ *
+ * NOT a limit on what the parent can read — see `reportPath`. A report longer
+ * than this is written to a file in full and the path travels with it, so the
+ * message stays a message and nothing is lost. Before that existed this cap
+ * was a hard ceiling on a worker's output: a 6,000-character code review
+ * arrived as its first 1,200 characters, cut mid-word, and the parent
+ * reviewed a fragment while believing it had the report.
+ */
 export const DELIVERY_MAX_PER_CHILD = 1_200;
 
 /** Per-child character budget for `n` children. */
@@ -102,6 +143,21 @@ function clip(text: string, budget: number): string {
   const head = t.slice(0, budget);
   const sp = head.lastIndexOf(' ');
   return `${(sp > budget * 0.6 ? head.slice(0, sp) : head).trimEnd()}… [report truncated]`;
+}
+
+/**
+ * "You have been round this loop N times."
+ *
+ * Silent for the first two, which are ordinary: a brief and one correction is
+ * the loop working. From the third it says so, and from the fifth it says to
+ * stop — the point at which "not converging" has stopped being a risk and
+ * become an observation.
+ */
+function roundNote(rounds: number | undefined): string {
+  if (!rounds || rounds < 3) return '';
+  if (rounds >= 5)
+    return `\n\nYou have sent this worker back ${rounds - 1} times and it is not converging. Stop iterating and bring it to the person, with what you have and what is still wrong.`;
+  return `\n\nThis is attempt ${rounds} for this worker. If the next one does not land it, take it to the person rather than going round again.`;
 }
 
 /** `ok` is the uninteresting case and says nothing a reader needs. */
@@ -127,17 +183,55 @@ export function renderSpawnDelivery(entries: readonly SpawnDeliveryEntry[]): str
   const budget = perChildBudget(n);
   const ids = entries.map((e) => e.tabId).join(',');
   const subject = n === 1 ? 'sub-chat' : 'sub-chats';
+  /**
+   * ── THIS IS WORK TO REVIEW, NOT NEWS TO RELAY ──────────────────────────
+   *
+   * The note used to end "act on them, or carry on if nothing is needed",
+   * which reads as permission to do nothing. The observed result: a parent
+   * read the report, summarised it to the human, and ENDED ITS TURN — and
+   * the human then sent it back with the correction the parent could have
+   * made itself. "99% of the time I need to send it back to do something,
+   * and an agent can surely do a better job at that than me."
+   *
+   * So the note names the loop instead, and the per-child line below carries
+   * the handle that makes the loop possible.
+   */
   const note = [
     `Delivered by muxpad: ${n} ${subject} you spawned ${n === 1 ? 'has' : 'have'} finished.`,
     'This is muxpad reporting a result, not a human asking a question.',
-    'You do not need to poll or wait for these — act on them, or carry on if nothing is needed.',
+    'You do not need to poll or wait for these.',
+    'REVIEW each result against what you asked for before you say anything to the human:',
+    'if it is incomplete, wrong, or not what you briefed, send that worker back with',
+    'specific corrections using the command under its heading — it keeps its context,',
+    'so you are resuming the job, not restarting it.',
+    'Come back to the person when the work is right, or when it needs a decision only they can make.',
   ].join(' ');
   const body = entries
     .map((e) => {
       const head = `## ${e.name}${stateNote(e.state)}`;
+      const full = e.report ?? '';
+      const clipped = full.trim().length > budget;
       const text = e.report ? clip(e.report, budget) : '(no report)';
+      // Only when it was actually cut: a path on a report you have read in
+      // full is noise, and it would teach a parent to go and read the file
+      // every time.
+      const whole = clipped && e.reportPath ? `\n\nFull report: \`${e.reportPath}\`` : '';
       const links = e.artifacts?.length ? `\n\nArtifacts: ${e.artifacts.join(' ')}` : '';
-      return `${head}\n\n${text}${links}`;
+      // The handle, under the result it belongs to — so "send it back" is one
+      // line away from the thing being judged, not a lookup.
+      //
+      // A CRASHED worker has none, and is told so explicitly rather than
+      // silently: its runner exhausted its restarts, so a send to it is
+      // refused outright, and a parent that tried would spend a turn finding
+      // that out. The alternative is named because "no handle" on its own
+      // reads as "nothing to do here", which is not true — the work still
+      // needs doing, by somebody new.
+      const back = e.paneId
+        ? `\n\nSend back: \`muxpad agent send ${e.paneId} "<what to change>"\``
+        : e.state === 'crashed'
+          ? '\n\nThis worker cannot be resumed — its agent died. Spawn a fresh one with `muxpad agent new` if the work still needs doing.'
+          : '';
+      return `${head}\n\n${text}${whole}${links}${back}${roundNote(e.rounds)}`;
     })
     .join('\n\n');
   return `<muxpad-delivery count="${n}" from="${ids}">\n${note}\n</muxpad-delivery>\n\n${body}`;

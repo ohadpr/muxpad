@@ -345,3 +345,48 @@ describe('what a card should be made OF', () => {
     expect(policy).toContain('Clear a card when its work is over.');
   });
 });
+
+/**
+ * THE MSGVAULT SECTION HAS TO SET AN AGENT UP, NOT JUST FENCE IT IN.
+ *
+ * Asked for "my latest email, a draft reply, a contact card and tomorrow's
+ * first meeting", an agent spent ten minutes rediscovering by trial that one
+ * search returns mail AND calendar together, that calendar events are dated
+ * in the future so they lead the results, and that empty `labels` is what
+ * tells the two apart. None of that was written down. Fencing was.
+ */
+describe('the archive section teaches the shape of the data', () => {
+  const policy = AGENT_INSTRUCTIONS_SEED;
+
+  it('says that one search returns mail AND calendar, and how to tell them apart', () => {
+    expect(policy).toMatch(/MAIL AND CALENDAR EVENTS/i);
+    expect(policy).toMatch(/empty `labels`/);
+    // …and warns that a calendar row still has a sender, which is the trap.
+    expect(policy).toMatch(/ORGANIZER/);
+  });
+
+  it('gives the recipe for the questions people actually ask', () => {
+    expect(policy).toMatch(/latest incoming mail/i);
+    expect(policy).toMatch(/what is on the calendar for a day/i);
+    expect(policy).toMatch(/after:2026\/11\/09 before:2026\/11\/11/);
+  });
+
+  it('is honest that drafts exist and that nothing can send', () => {
+    // It said "no drafts" after drafting shipped — an instruction that is
+    // wrong about a capability costs more than one that is silent.
+    expect(policy).toMatch(/draft-reply <message-id>/);
+    expect(policy).toMatch(/Nothing here can send/);
+    expect(policy).not.toMatch(/No send verb, no drafts/);
+  });
+
+  it('says a read may ride an approval and a draft never does', () => {
+    expect(policy).toMatch(/A READ MAY RIDE AN APPROVAL ALREADY GIVEN; A DRAFT NEVER DOES/);
+    // And that an unanswered request expiring is normal, not a refusal.
+    expect(policy).toMatch(/five minutes/);
+  });
+
+  it('says contacts cannot be read AT ALL, rather than implying they are missing', () => {
+    expect(policy).toMatch(/no contact lookup/i);
+    expect(policy).toMatch(/the archive holds the user's contacts/i);
+  });
+});

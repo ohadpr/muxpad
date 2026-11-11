@@ -249,6 +249,35 @@ export function panesTabScopedRoutes(deps: {
       );
     const body = parsed.data;
 
+    /**
+     * ── NO SECOND PANE IN A LAYOUT ────────────────────────────────────────
+     *
+     * The split is gone. A tab holds ONE pane in its mosaic, because every
+     * question of the form "which pane is this tab's chat" had no answer and
+     * the code guessed — and the guess was "the first one created". The
+     * measured cost: a sub-chat's 77KB report delivered into the left half of
+     * a split while its owner was reading the right half, leaving a chat with
+     * no record of work it had itself dispatched.
+     *
+     * Refused HERE, where a pane is PLACED, rather than where one is created:
+     * a document's backing tab deliberately holds one pane per agent block
+     * and never renders a mosaic (web/src/lib/doc-store.ts). Those ask for no
+     * layout placement, so they are untouched.
+     */
+    if (body.append_to_layout || body.split_from) {
+      const taken = t.layout !== null && t.layout !== undefined && t.layout !== '';
+      if (taken)
+        return c.json(
+          {
+            error: {
+              code: 'conflict',
+              message: 'a chat holds one pane — the split was removed. Open another chat instead.',
+            },
+          },
+          409,
+        );
+    }
+
     const kind = body.kind ?? 'shell';
     if (kind === 'url') {
       if (!body.url) {

@@ -113,7 +113,11 @@ describe('the working hint cannot become a paragraph', () => {
   };
 
   it('clamps to one line, with an ellipsis', () => {
-    const r = rule('.chat-working-hint');
+    // `.chat-working-say` is what `.chat-working-hint` became: the agent's own
+    // sentence is the LINE now rather than a faint footnote after the tool
+    // name. The clamp matters more than ever, because the row occupies the
+    // same pixels on every tool call.
+    const r = rule('.chat-working-say');
     expect(r).toMatch(/white-space:\s*nowrap/);
     expect(r).toMatch(/text-overflow:\s*ellipsis/);
     expect(r).toMatch(/overflow:\s*hidden/);
@@ -122,14 +126,13 @@ describe('the working hint cannot become a paragraph', () => {
   it('is allowed to shrink — without this the ellipsis never appears', () => {
     // A flex item will not go below its content width unless told to, so the
     // row grows instead of truncating. Both the item and its container.
-    expect(rule('.chat-working-hint')).toMatch(/min-width:\s*0/);
+    expect(rule('.chat-working-say')).toMatch(/min-width:\s*0/);
     expect(rule('.chat-working')).toMatch(/min-width:\s*0/);
   });
 
-  it('gives way before the tool name does', () => {
-    // The tool name is the one thing only this row can say; the hint is the
-    // nicety beside it.
+  it('the tool name does not shrink, because it is the fallback', () => {
+    // It only renders when there is NO sentence — a silent pane still has to
+    // say something — so there is nothing beside it to give way to.
     expect(rule('.chat-working-label')).toMatch(/flex:\s*0 0 auto/);
-    expect(rule('.chat-working-hint')).toMatch(/flex:\s*0 1 auto/);
   });
 });

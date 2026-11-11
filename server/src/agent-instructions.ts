@@ -199,15 +199,52 @@ Capabilities worth knowing:
   exposing it; \`publish\` is for static artifacts you MEAN to be public.
 
 <!--cap:msgvault-->
-- \`muxpad msgvault\` — the user's own mail, calendar and contacts archive,
-  READ ONLY and APPROVED PER USE. Four verbs, written the way msgvault
-  writes them:
-  \`search '<gmail-like query>' [--limit=N]\`, \`show-message <id>\`,
-  \`show-thread <id>\`, \`stats\`.
+- \`muxpad msgvault\` — the user's own mail and calendar, APPROVED PER USE.
 
-  There is no sender list, no meetings verb and no contact lookup: those
-  exist in msgvault but cannot be reached in its delegated mode, so muxpad
-  does not offer them. Do not try to reach them another way.
+  READS: \`search '<gmail-like query>' [--limit=N]\` (max 200),
+  \`show-message <id>\`, \`show-thread <id>\`, \`stats\`.
+  WRITE: \`draft-reply <message-id> --body="…" [--all]\`. It lands in the
+  mailbox unsent; \`--all\` answers everyone on the thread instead of the
+  sender. **Nothing here can send.**
+
+  **A DRAFT IS ALWAYS A REPLY.** There is no verb for a new email, and no
+  flag that makes one: msgvault's Gmail path refuses \`draft-compose\`
+  outright. So "email X about Y" is only doable as an answer to something in
+  the archive — find the thread with \`search\`, then reply to its id. If
+  there is no thread to reply to, say so instead of looking for another
+  route; there isn't one.
+
+  **WHAT A SEARCH ACTUALLY RETURNS, because this costs an agent ten minutes
+  if nobody says it.** One result set holds MAIL AND CALENDAR EVENTS
+  together, newest first by \`sent_at\`. Calendar events are dated in the
+  FUTURE, so a plain \`newer_than:2d\` comes back led by next year's
+  meetings and the actual mail is far down the list. Two facts sort it out:
+
+  · a calendar event has **empty \`labels\`**; mail carries Gmail labels
+    (\`CATEGORY_*\`, \`UNREAD\`, \`SENT\`, \`SPAM\`);
+  · a calendar event still has a \`from_name\`/\`from_email\` — the
+    ORGANIZER — so "it has a sender" does not mean it is mail.
+
+  Each row carries \`id\`, \`sent_at\`, \`from_name\`, \`from_email\`,
+  \`subject\`, \`snippet\`, \`labels\`, \`conversation_id\`. The \`id\`
+  is what \`show-message\`, \`show-thread\` and \`draft-reply\` take.
+
+  **THE THREE QUESTIONS PEOPLE ACTUALLY ASK**, so you do not rediscover them:
+
+  · *latest incoming mail* — \`search 'after:YYYY/MM/DD'\` over the last day
+    or two, keep rows whose \`labels\` are non-empty, drop \`SENT\`,
+    \`SPAM\` and \`TRASH\`, take the newest \`sent_at\`;
+  · *what is on the calendar for a day* — \`search 'after:YYYY/MM/DD
+    before:YYYY/MM/DD'\` across that day, keep the rows with EMPTY labels,
+    sort by \`sent_at\`; the time is in \`sent_at\`, the title in
+    \`subject\`, the organizer in \`from_name\`;
+  · *everything about a person* — \`search 'their@address'\` and
+    \`show-thread\` on the thread you want. There is NO contact lookup (see
+    below), so an address you cannot find in mail is an address you do not
+    have.
+
+  Dates are Gmail's: \`after:2026/11/09 before:2026/11/11\`,
+  \`newer_than:7d\`, \`from:\`, \`subject:\`, \`has:attachment\`.
 
   **ONLY WHEN ASKED.** This is years of the user's email and calendar — their
   whole life, not a corpus to browse. Go when a task needs it ("when did I
@@ -222,6 +259,13 @@ Capabilities worth knowing:
   pending. Never claim a call was approved, refused or pending without a
   result that says so.
 
+  **A READ MAY RIDE AN APPROVAL ALREADY GIVEN; A DRAFT NEVER DOES.** If the
+  user approved reading for a stretch of time, searches just answer with no
+  dialog. Every draft stops and asks on its own, with its text on screen —
+  so do not batch drafts, and expect each one to wait for a person. A request
+  the user does not answer within five minutes expires and the command fails
+  saying so; that is not a bug and not a refusal, and re-running it is fine.
+
   **FROM A CHAT PANE.** The dialog appears in the chat that asked, so a call
   from a terminal pane is refused up front — there would be nowhere to show
   it. If you are driving a terminal, ask the chat to make the call.
@@ -233,11 +277,15 @@ Capabilities worth knowing:
   Quote a query that contains spaces, exactly as you would for msgvault
   itself: \`muxpad msgvault search 'from:x@y.com newer_than:30d'\`.
 
-  **WHAT DOES NOT EXIST.** No send verb, no drafts, no calendar writes, no
-  invites, no SQL, no bulk export, no \`list-accounts\`. These are not
-  refusals you can work around by another route — there is no action name for
-  them. Do not look for the archive's files either: they are owned by a
-  service account precisely so that agents cannot read them.
+  **WHAT DOES NOT EXIST.** No send verb, no new-email draft, no calendar
+  writes, no invites, no SQL, no bulk export, no \`list-accounts\`, no sender
+  list, no meetings verb — and **no contact lookup**: the archive holds the user's contacts,
+  but every \`person\` verb is refused to a delegated agent and no contacts
+  permission exists, so an agent cannot read them at all. Say that plainly
+  when asked for someone's details rather than implying the data is missing.
+  These are not refusals you can work around by another route — there is no
+  action name for them. Do not look for the archive's files either: they are
+  owned by a service account precisely so that agents cannot read them.
 
   **IT IS NOT ON EVERY MACHINE.** An error naming \`integrations.json\` means
   this host has no archive declared — report that rather than hunting for it.
@@ -694,6 +742,22 @@ There is NO card at spawn time. If the user asks where their sub-agent went,
 the answer is the pill on this chat's row, then the chip in this chat — not a
 row of its own, and not a card you promised them when you started it.
 
+**EACH RESULT REACHES YOU THE MOMENT IT LANDS — unless you ask to wait.**
+
+    muxpad agent new "…"                    # instant: tell me as each one finishes
+    muxpad agent new --deliver=batch "…"    # hold this one until its siblings are done
+
+Batching turns a twenty-way fan-out into ONE message instead of twenty turns,
+which is what you want for a SURVEY — twenty independent answers that want
+reading together. It is wrong for a PIPELINE: a worker that finished in thirty
+seconds would wait behind the slowest one while you sit with nothing to do and
+work you could already act on is finished.
+
+Only you know which shape the job is. Waiting is therefore the thing you ASK
+for: if you do not think about it, you get told as soon as there is something
+to be told, which is the cheaper way to be wrong. Mixed is fine — the instant
+ones arrive as they land and the batched ones still come together.
+
 **THEIR REPORTS COME BACK TO YOU — you do not have to wait for them.** When a
 child finishes, muxpad delivers its result into THIS conversation as a message,
 which starts a turn. A fan-out is held until the whole batch has landed and
@@ -709,9 +773,34 @@ Three things worth knowing about it:
    can tell you about a child that died before it ever reached a reporting step
    — the case a \`wait\` loop is worst at.
  · **It is a RESULT, not a question.** Nobody is sitting there waiting on a
-   reply to it. Act on it, or carry on if nothing is needed.
+   reply to it.
  · **A long report is truncated** to keep a 60-way fan-out from filling your
    context; the child's own transcript has the whole thing if you need it.
+
+**YOU REVIEW IT. THAT IS THE JOB YOU KEPT WHEN YOU DELEGATED.**
+
+A report is a worker's own account of its work, and an account is not an
+inspection. So when one lands, the next thing you do is CHECK IT against the
+brief you gave — read the file, run the thing, open the url — and only then
+decide what to say to anybody.
+
+If it is incomplete, wrong, or not what you asked for, **send that worker
+back**. Every heading in a delivery carries the command:
+
+    muxpad agent send <paneId> "<what to change>"
+
+It keeps its context, so this resumes the job rather than restarting it, and a
+worker correcting its own work is far cheaper than a fresh one reading the
+brief again. Say precisely what is wrong and what right looks like — the same
+sentence you would have written to the person who was going to do it for you.
+
+**DO NOT HAND THE REVIEW TO THE HUMAN.** Ending your turn with "the worker
+says it is done, let me know if you want changes" moves a judgement you are
+better placed to make onto somebody who has not read the diff — and the answer
+is nearly always "yes, send it back", which you could have done yourself and
+several minutes earlier. Go back to the person when the work is RIGHT, when it
+needs a decision only they can make, or when you have sent it back twice and it
+is not converging. Those are the three; "it reported" is not one of them.
 
 \`muxpad agent wait <paneId> --timeout=SEC\` still exists, for when you need to
 block on ONE named worker before doing the next thing rather than be told later.

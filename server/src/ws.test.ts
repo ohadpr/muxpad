@@ -264,4 +264,56 @@ describe('WS server', () => {
     await new Promise((r) => setTimeout(r, 500));
     sock.terminate();
   });
+
+  /**
+   * A BUSY PEER IS NOT A DEAD PEER.
+   *
+   * The sweep counted pongs and killed anything that missed ONE round. A
+   * runner mid-turn — streaming output, event loop saturated by the work it
+   * is reporting — cannot always pong inside the window, so it was terminated
+   * while actively sending frames, reconnected, and (its turn still open) made
+   * every chat client say `agent disconnected`. 382 times in one pane in a day.
+   */
+  it('does not terminate a socket that is sending, even if it never pongs', async () => {
+    const { port, paneId } = await bootServer({ heartbeatMs: 40 });
+    // `autoPong: false` is the whole point: the ws client answers protocol
+    // pings INTERNALLY, so a test that merely removes the 'ping' listener is
+    // still ponging and proves nothing. (It passed against pong-only liveness
+    // until a sabotage pass caught it.)
+    const sock = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-runner/${paneId}`, {
+      autoPong: false,
+    });
+    await new Promise<void>((r) => sock.once('open', () => r()));
+    let closed = false;
+    sock.on('close', () => {
+      closed = true;
+    });
+    // …but keep sending, the way a runner streaming a turn does.
+    const pump = setInterval(() => {
+      if (sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify({ t: 'status', text: 'x' }));
+    }, 20);
+    await new Promise((r) => setTimeout(r, 400)); // ~10 heartbeat rounds
+    clearInterval(pump);
+    expect(closed, 'a socket that was sending the whole time got terminated').toBe(false);
+    expect(sock.readyState).toBe(WebSocket.OPEN);
+    sock.terminate();
+  });
+
+  it('still collects a genuine ghost, one round later than before', async () => {
+    // Two strikes, not one: a single missed round is a GC pause or a burst of
+    // output. The ghost is still collected — this asserts it dies, and that it
+    // survives the FIRST missed round.
+    const { port, paneId } = await bootServer({ heartbeatMs: 50 });
+    const sock = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-runner/${paneId}`);
+    await new Promise<void>((r) => sock.once('open', () => r()));
+    let closed = false;
+    sock.on('close', () => {
+      closed = true;
+    });
+    (sock as unknown as { _socket: { pause(): void } })._socket.pause();
+    await new Promise((r) => setTimeout(r, 60)); // one round
+    expect(closed, 'killed on the first missed round').toBe(false);
+    await new Promise((r) => setTimeout(r, 400)); // several more
+    sock.terminate();
+  });
 });

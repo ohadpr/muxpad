@@ -1,4 +1,10 @@
-import { type SpawnDeliveryEntry, renderSpawnDelivery } from '@muxpad/shared';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import {
+  DELIVERY_MAX_PER_CHILD,
+  type SpawnDeliveryEntry,
+  renderSpawnDelivery,
+} from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { PaneStore } from '../store/PaneStore.js';
 import { type SpawnRound, SpawnRoundStore } from '../store/SpawnRoundStore.js';
@@ -92,6 +98,12 @@ export interface SubmitSendResult {
 export interface ReportDeliveryDeps {
   db: Database.Database;
   /**
+   * Where a report too long to inline is written in full. Optional: without
+   * it a long report is still delivered, just clipped — the old behaviour,
+   * and the right failure for a server that has nowhere to put a file.
+   */
+  dataDir?: string;
+  /**
    * The ONE injection primitive — ws.ts `submitSend`. Synchronous, and this
    * file depends on that: see `flushParent` for why the read-decide-stamp-send
    * sequence must not be interleaved with another flush of the same parent.
@@ -117,6 +129,7 @@ export class ReportDelivery {
   private readonly db: Database.Database;
   private readonly submitSend: ReportDeliveryDeps['submitSend'];
   private readonly now: () => number;
+  private readonly dataDir: string | null;
   private timer: ReturnType<typeof setInterval> | null = null;
   /**
    * Parents whose refusal we have already reported, this process.
@@ -136,6 +149,36 @@ export class ReportDelivery {
     this.db = deps.db;
     this.submitSend = deps.submitSend;
     this.now = deps.now ?? (() => Date.now());
+    this.dataDir = deps.dataDir ?? null;
+  }
+
+  /**
+   * Write a long report in full, and answer with the path — or null.
+   *
+   * A parent reviewing work needs all of it, and truncation is exactly the
+   * wrong economy for the one message whose job is to be acted on. But 65
+   * unabridged reports is a context window rather than a message. A file is
+   * both: cheap to mention, complete to read.
+   *
+   * BEST EFFORT, ALWAYS. A failure here costs the PATH, never the delivery —
+   * the report still goes out clipped, which is where this started. So every
+   * error is swallowed deliberately: there is no outcome worth failing a
+   * delivery over.
+   */
+  private writeFullReport(round: SpawnRound, report: string): string | null {
+    if (!this.dataDir) return null;
+    try {
+      const dir = join(this.dataDir, 'spawn-reports');
+      mkdirSync(dir, { recursive: true });
+      // Named for the ROUND, not the tab: a worker sent back produces another
+      // round and another report, and the earlier one must stay readable —
+      // that is the whole shape of the review loop.
+      const path = join(dir, `${round.id}.md`);
+      writeFileSync(path, report.endsWith('\n') ? report : `${report}\n`, 'utf8');
+      return path;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -204,7 +247,7 @@ export class ReportDelivery {
    */
   private flushParent(parentTabId: string): Flushed {
     const rounds = new SpawnRoundStore(this.db);
-    const pending = rounds.undeliveredByParent(parentTabId, this.orphanedBefore());
+    let pending = rounds.undeliveredByParent(parentTabId, this.orphanedBefore());
     if (pending.length === 0) return nothing();
 
     // ─── IS THERE ANYBODY TO TELL? ──────────────────────────────────────────
@@ -253,6 +296,27 @@ export class ReportDelivery {
     // The window survives as the FALLBACK, for rounds opened before the
     // column existed: an unknown turn on either side is not evidence that
     // they are unrelated, and the old behaviour is the safer default there.
+    // ─── …UNLESS THIS WORKER WAS SENT OUT FOR AN INSTANT RESULT ───────────
+    //
+    // The barrier below is right for a SURVEY — twenty independent answers
+    // wanted as one message — and wrong for a PIPELINE, where each result
+    // feeds the next step and a worker that finished in thirty seconds sat
+    // nine minutes behind its slowest sibling while the parent had nothing to
+    // do. The server cannot tell those two shapes apart; the orchestrator
+    // can, and says so at spawn time (`muxpad agent new --deliver=instant`).
+    //
+    // Split rather than switched: a parent may dispatch both kinds in one
+    // turn. The instant ones go now, as their own message, and the batched
+    // ones stay pending for the barrier — which is what each was asked for.
+    const instant = pending.filter((r) => tabs.spawnDeliver(r.tab_id) === 'instant');
+    let deliveredNow = 0;
+    if (instant.length > 0) {
+      deliveredNow = this.send(rounds, parentTabId, pane.id, instant).delivered;
+      pending = pending.filter((r) => !instant.includes(r));
+      // Nothing left that wants to wait — done, and no barrier was consulted.
+      if (pending.length === 0) return { delivered: deliveredNow, abandoned: 0, held: 0 };
+    }
+
     const stillWorking = rounds
       .openRoundsByParent(parentTabId)
       .filter((open) =>
@@ -265,7 +329,7 @@ export class ReportDelivery {
     if (stillWorking > 0) {
       const oldest = pending[0]?.ended_at ?? this.now();
       if (this.now() - oldest < BATCH_MAX_HOLD_MS)
-        return { delivered: 0, abandoned: 0, held: pending.length };
+        return { delivered: deliveredNow, abandoned: 0, held: pending.length };
       // Past the ceiling: go out incomplete rather than wait on a worker that
       // may never close its round. See BATCH_MAX_HOLD_MS.
       console.warn(
@@ -277,6 +341,25 @@ export class ReportDelivery {
       );
     }
 
+    const batched = this.send(rounds, parentTabId, pane.id, pending);
+    return { ...batched, delivered: batched.delivered + deliveredNow };
+  }
+
+  /**
+   * Stamp, send, and revert if it was refused.
+   *
+   * Pulled out of `flushParent` when instant delivery arrived: a parent can
+   * now produce two messages from one flush — the workers that asked not to
+   * wait, and the batch behind them — and the stamp-then-send sequence has to
+   * be identical for both or the one that was not the original path is the
+   * one that delivers twice.
+   */
+  private send(
+    rounds: SpawnRoundStore,
+    parentTabId: string,
+    paneId: string,
+    pending: SpawnRound[],
+  ): Flushed {
     const entries = this.entriesFor(pending);
     const text = renderSpawnDelivery(entries);
     const ids = pending.map((r) => r.id);
@@ -289,7 +372,7 @@ export class ReportDelivery {
     rounds.markDelivered(ids, stampedAt);
     let res: SubmitSendResult;
     try {
-      res = this.submitSend(pane.id, text);
+      res = this.submitSend(paneId, text);
     } catch (err) {
       rounds.undeliver(ids, stampedAt);
       console.error('[report-delivery] send threw', err);
@@ -377,6 +460,42 @@ export class ReportDelivery {
     });
   }
 
+  /**
+   * The pane a correction can actually be sent to, or null.
+   *
+   * NOT `agentPaneOf`, and the difference is the point. That one answers
+   * "where does a message for this tab go", which is right for DELIVERING to
+   * a parent and wrong for advertising a handle, because a handle that is
+   * refused is worse than no handle: the parent spends a turn on a command
+   * this file promised would work.
+   *
+   * Two refusals:
+   *
+   *   A CRASHED WORKER IS NOT RESUMABLE. `submitSend` rejects a pane whose
+   *     runner exhausted its restarts (ws.ts, `respawns.get(paneId)?.gaveUp`)
+   *     — the send returns 409 and the CLI exits 1. `crashed` is precisely
+   *     that worker reporting, so the delivery says to spawn a fresh one
+   *     instead of handing over a command that cannot work.
+   *   A PICKER PANE IS NOT AN AGENT YET. `muxpad agent --pick` is sitting on
+   *     a menu waiting for somebody to choose a backend. It matches a naive
+   *     `startsWith('muxpad agent')` and the dead-runner sweep skips it for
+   *     the same reason, so a message aimed at it queues against a session
+   *     that has not started.
+   *
+   * The NEWEST qualifying pane, not the first: `listByTab` is creation order,
+   * so a child that has an old dead pane and a new working one advertised the
+   * dead one.
+   */
+  private resumablePaneOf(tabId: string, state: string | null): string | null {
+    if (state === 'crashed') return null;
+    const usable = new PaneStore(this.db)
+      .listByTab(tabId)
+      .filter(
+        (p) => p.startup_cmd?.startsWith('muxpad agent') && !p.startup_cmd.includes('--pick'),
+      );
+    return usable.length ? (usable[usable.length - 1]?.id ?? null) : null;
+  }
+
   private entryFor(round: SpawnRound): SpawnDeliveryEntry {
     const tab = new TabStore(this.db).getById(round.tab_id);
     return {
@@ -391,6 +510,22 @@ export class ReportDelivery {
       state: round.report_state ?? (round.report ? null : 'failed'),
       report: round.report,
       artifacts: round.artifacts,
+      rounds: new SpawnRoundStore(this.db).roundCount(round.tab_id),
+      // Only when it will actually be clipped — a path beside a report you
+      // have read in full is noise, and teaches a parent to open the file
+      // every time.
+      ...(() => {
+        const text = round.report?.trim();
+        if (!text || text.length <= DELIVERY_MAX_PER_CHILD) return {};
+        const path = this.writeFullReport(round, text);
+        return path ? { reportPath: path } : {};
+      })(),
+      // The handle for sending this worker back — see `resumablePaneOf` for
+      // the two cases where there is deliberately none.
+      ...(() => {
+        const pane = this.resumablePaneOf(round.tab_id, round.report_state);
+        return pane ? { paneId: pane } : {};
+      })(),
     };
   }
 }

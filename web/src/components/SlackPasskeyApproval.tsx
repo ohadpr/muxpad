@@ -35,7 +35,9 @@ type RequestView = {
 /** Which system a request belongs to, from the action's own prefix — so what
  *  the card says can never disagree with what is about to run. */
 const SLACK = { id: 'slack', name: 'Slack' } as const;
-const CONNECTORS = [SLACK, { id: 'msgvault', name: 'your archive' } as const];
+/* `your archive` was muxpad's word for the component, and it told a reader
+   nothing about what was being touched. It is mail. */
+const CONNECTORS = [SLACK, { id: 'msgvault', name: 'your mail' } as const];
 const connectorOf = (action: string | undefined) =>
   CONNECTORS.find((c) => c.id === String(action ?? '').split('.')[0]) ?? SLACK;
 /** Which connector a live grant belongs to. A grant names its own actions, so
@@ -43,6 +45,56 @@ const connectorOf = (action: string | undefined) =>
  *  appear for the capability being asked about. */
 const connectorOfGrant = (g: { action?: string; actions?: string[] }) =>
   connectorOf(g.actions?.[0] ?? g.action);
+/**
+ * WHAT A CHOICE OF DURATION ACTUALLY BUYS — all three answers, always.
+ *
+ * Kept as data rather than inline conditionals because the dialog renders
+ * every one of them on every open (see the scope slot below): the slot is
+ * sized by the browser to the tallest, so picking a duration cannot move the
+ * buttons. A variant that is only ever constructed when it is shown cannot do
+ * that, which is how the jump got in.
+ */
+const SCOPE_VARIANTS = ['once', 'timed', 'until-revoked'] as const;
+type ScopeVariant = (typeof SCOPE_VARIANTS)[number];
+const scopeVariant = (duration: string): ScopeVariant =>
+  duration === 'once' ? 'once' : duration === 'until-revoked' ? 'until-revoked' : 'timed';
+const scopeCopy = (variant: ScopeVariant, slack: boolean): string => {
+  // THE `once` LINE IS NOT FILLER. The slot has to hold something at this
+  // size anyway, and "nothing is remembered" is the fact a person most wants
+  // confirmed before approving a one-off — it used to be implied by an empty
+  // space, which is not the same as being said.
+  if (variant === 'once')
+    return 'This call only. Nothing is remembered, and the next request asks again.';
+  const covers = slack
+    ? 'All agents can read, search, send, edit, delete, react, open DMs and upload files in this Slack workspace.'
+    : 'All agents on this machine can search and read your mail. Drafting is never covered by a duration — each draft is approved on its own, with its text in front of you — and nothing here can send.';
+  const ends =
+    variant === 'until-revoked'
+      ? ' Ends when you revoke it in Settings, when the broker restarts, or when this approval session expires — it is not stored on disk.'
+      : ' Ends within the selected period, on restart or when revoked in Settings.';
+  return `${covers} ${ends}`;
+};
+/**
+ * WHAT WENT WRONG, in a sentence a person can act on.
+ *
+ * A cancelled or timed-out passkey prompt throws a `NotAllowedError` whose
+ * message is written for implementers — "The operation either timed out or
+ * was not allowed. See: https://www.w3.org/TR/webauthn-2/#sctn-privacy-
+ * considerations-client." That landed verbatim in the dialog and in the bar
+ * above the composer, where it reads as a system fault rather than as "you
+ * dismissed the Touch ID prompt", which is what it usually is.
+ *
+ * Everything else is passed through unchanged: a message nobody wrote for a
+ * human is still better than a reassuring one that hides the cause.
+ */
+const humanError = (e: unknown): string => {
+  const name = (e as { name?: unknown })?.name;
+  const message = e instanceof Error ? e.message : '';
+  if (name === 'NotAllowedError' || /timed out or was not allowed/i.test(message))
+    return 'The passkey prompt was cancelled or timed out. Nothing was approved — Approve to try again, or Dismiss to leave the request alone.';
+  return message || 'Approval unavailable. No automatic retry.';
+};
+
 export function SlackPasskeyApproval({
   paneId,
   diagnosticID,
@@ -70,6 +122,16 @@ export function SlackPasskeyApproval({
   const generation = useRef(0);
   const blocked = useRef(false);
   const finished = useRef(new Set<string>());
+  /**
+   * Requests the human has waved away WITHOUT deciding them.
+   *
+   * Distinct from `finished`, which means the broker gave a terminal answer.
+   * This one means "stop showing me this": the request is still pending over
+   * there and expires on its own. Kept so the poll below does not put the
+   * same card back a second later — which is what made the bar impossible to
+   * dismiss, since every dismissal was undone by the next tick.
+   */
+  const hidden = useRef(new Set<string>());
   const refresh = async () => {
     const result = await passkeyAPI(
       diagnosticID
@@ -92,6 +154,7 @@ export function SlackPasskeyApproval({
   useEffect(() => {
     generation.current++;
     finished.current.clear();
+    hidden.current.clear();
     blocked.current = false;
     busyRef.current = false;
     setBusy(false);
@@ -112,7 +175,7 @@ export function SlackPasskeyApproval({
           if (active && !busyRef.current && generation.current === pollEpoch) {
             setStatus(r.status);
             const waiting = r.requests.filter(
-              (item: RequestView) => !finished.current.has(item.id),
+              (item: RequestView) => !finished.current.has(item.id) && !hidden.current.has(item.id),
             );
             const next = (waiting.find((item: RequestView) => item.id === current.current?.id) ??
               waiting[0]) as RequestView | undefined;
@@ -161,6 +224,26 @@ export function SlackPasskeyApproval({
   const [outcomeConnector, setOutcomeConnector] = useState<(typeof CONNECTORS)[number]>(SLACK);
   const decide = async (decision: 'approve' | 'reject') => {
     if (!request || busyRef.current) return;
+    /**
+     * ── DO NOT SPEND A PASSKEY ON A DEAD REQUEST ──────────────────────────
+     *
+     * A broker request lives five minutes. The dialog stayed fully live past
+     * that: Approve still started a WebAuthn ceremony, the broker refused the
+     * stale intent, and on a phone the whole thing surfaced as the system's
+     * own "Unable to use passkey — This passkey could not be used to sign
+     * in." Reported exactly that way, by somebody who then reasonably
+     * concluded their passkey was broken — it was not; the request had
+     * expired four minutes earlier.
+     *
+     * Checked HERE rather than only on the poll tick, because the poll is
+     * what writes the message and the button is what the person presses: a
+     * tap arriving between ticks must not get as far as the platform prompt.
+     */
+    if (request.expires <= Date.now()) {
+      setError('This request expired before it was approved. Nothing happened — ask again.');
+      blocked.current = true;
+      return;
+    }
     const epoch = ++generation.current;
     const selected = request;
     const live = () => alive.current && generation.current === epoch;
@@ -240,7 +323,7 @@ export function SlackPasskeyApproval({
       if (live()) {
         if (current.current) {
           blocked.current = true;
-          setError(e instanceof Error ? e.message : 'Approval unavailable. No automatic retry.');
+          setError(humanError(e));
           const target = (e as { secureURL?: unknown })?.secureURL;
           if (typeof target === 'string' && target.startsWith('https://')) setSecureURL(target);
         }
@@ -257,6 +340,9 @@ export function SlackPasskeyApproval({
   const described = request
     ? describeRequest(request.action, request.payload)
     : { title: '', rest: [] as Array<[string, string]> };
+  /** A request the broker will no longer honour. Recomputed every render —
+   *  the poll ticks at 2s, which is finer than this needs to be. */
+  const expired = !!request && request.expires <= Date.now();
   const close = () => {
     dialog.current?.close();
     setDismissed(true);
@@ -290,15 +376,43 @@ export function SlackPasskeyApproval({
               : error || `${connectorOf(request.action).name} approval`}
           </output>
           {!busy && (
-            <button
-              type="button"
-              onClick={() => {
-                setDismissed(false);
-                dialog.current?.showModal();
-              }}
-            >
-              Review
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  setDismissed(false);
+                  dialog.current?.showModal();
+                }}
+              >
+                Review
+              </button>
+              {/* ── IT HAS TO BE POSSIBLE TO PUT THIS DOWN ──────────────────
+                  This bar had no way out. Closing the dialog set `dismissed`,
+                  which rendered the bar; the bar offered only "Review", which
+                  reopened the dialog; and the poll put the card straight back
+                  if you closed it again. The only exit was waiting five
+                  minutes for the request to expire, with a WebAuthn error
+                  pinned above the composer the whole time.
+
+                  Dismissing decides NOTHING. The request stays pending at the
+                  broker and expires on its own — which is the honest meaning
+                  of walking away, and the reason this is not spelled "Deny".
+                  Saying no is a decision, and a decision is signed. */}
+              <button
+                type="button"
+                onClick={() => {
+                  hidden.current.add(request.id);
+                  current.current = null;
+                  setRequest(null);
+                  setError('');
+                  blocked.current = false;
+                  setDismissed(false);
+                  dialog.current?.close();
+                }}
+              >
+                Dismiss
+              </button>
+            </>
           )}
         </div>
       )}
@@ -339,16 +453,22 @@ export function SlackPasskeyApproval({
             {/* …AND THE REST OF THE PAYLOAD, VISIBLE. Not a <details>: a
                 security prompt that hides part of what it is about is asking
                 for approval of something it did not show. */}
-            {described.rest.length > 0 && (
-              <dl className="slack-passkey-rest">
-                {described.rest.map(([key, value]) => (
-                  <div key={key}>
-                    <dt>{key}</dt>
-                    <dd>{value}</dd>
-                  </div>
-                ))}
-              </dl>
-            )}
+            {(() => {
+              const fields =
+                connectorOf(request.action) === SLACK
+                  ? [...described.rest, ['workspace', request.teamID] as [string, string]]
+                  : described.rest;
+              return fields.length > 0 ? (
+                <dl className="slack-passkey-rest">
+                  {fields.map(([key, value]) => (
+                    <div key={key}>
+                      <dt>{key}</dt>
+                      <dd>{value}</dd>
+                    </div>
+                  ))}
+                </dl>
+              ) : null;
+            })()}
             {/* WHO ASKED, AND FOR HOW LONG — one row, because they are one
                 question: this machine, this once. */}
             <div className="slack-passkey-foot">
@@ -359,10 +479,30 @@ export function SlackPasskeyApproval({
                   refused for any origin the broker cannot attribute. */}
               <p className="slack-passkey-note">
                 asked by <strong>{request.origin ?? 'unknown'}</strong>
-                {/* The Slack workspace belongs with WHO ASKED, not on a line of
-                    its own — and it means nothing at all on an archive read. */}
-                {connectorOf(request.action) === SLACK ? ` · ${request.teamID}` : ''}
-                {request.origin === 'local' ? '' : ' — unverified, so approve-once only'}
+                {/* The workspace id used to sit here, between the machine
+                    name and the verdict — three facts of different weight in
+                    one 0.75rem line, which then wrapped and shoved the
+                    duration picker onto a row of its own. It is a DETAIL, so
+                    it sits with the details below; still Slack-only, because
+                    it means nothing on an archive read. */}
+                {/* ── WHETHER THAT NAME IS EVIDENCE ──────────────────────
+                    This said "unverified, so approve-once only" for ANY
+                    remote origin, which was true when no remote machine could
+                    prove anything. It is not any more, and the first proven
+                    request showed the contradiction immediately: a full
+                    duration menu under a line insisting the opposite. A
+                    dialog that argues with itself is worse than one that says
+                    nothing at all.
+
+                    The broker is the only thing that knows — it holds the key
+                    — so the answer comes from `timedAllowed`, its verdict on
+                    THIS request, rather than from a guess about what the
+                    origin's name implies. */}
+                {request.origin === 'local'
+                  ? ''
+                  : request.timedAllowed === false
+                    ? ' — unverified, so approve-once only'
+                    : ' — verified'}
               </p>
               {/* ── ONLY OFFER WHAT THE BROKER WOULD ACCEPT ──────────────────
                   `timedAllowed: false` means a duration will be REFUSED at the
@@ -404,17 +544,32 @@ export function SlackPasskeyApproval({
             {/* WHAT A DURATION ACTUALLY COVERS, for THIS capability. It said
                 "read, search, send, edit, delete, react, open DMs and upload
                 files in this Slack workspace" above an archive read — a
-                description of a grant that was not being made. */}
-            {duration !== 'once' && (
-              <p className="slack-passkey-scope">
-                {connectorOf(request.action) === SLACK
-                  ? 'All agents can read, search, send, edit, delete, react, open DMs and upload files in this Slack workspace.'
-                  : 'All agents on this machine can search and read your mail archive. It cannot send, draft or change anything.'}{' '}
-                {duration === 'until-revoked'
-                  ? ' Ends when you revoke it in Settings, when the broker restarts, or when this approval session expires — it is not stored on disk.'
-                  : ' Ends within the selected period, on restart or when revoked in Settings.'}
-              </p>
-            )}
+                description of a grant that was not being made.
+                ── AND THE SLOT DOES NOT RESIZE ──────────────────────────────
+                This used to render only for a duration, so choosing one made
+                four lines appear and shoved Deny and Approve down the dialog
+                — under a cursor already on its way to a button. A dialog that
+                moves its buttons while you are deciding is a dialog that can
+                collect a click you did not mean.
+                So every variant is always in the DOM, stacked in one grid
+                cell; the inactive ones are `visibility: hidden` and hidden
+                from assistive tech. The cell is therefore as tall as the
+                LONGEST copy at this width, measured by the browser rather
+                than guessed at with a min-height, and nothing moves — not on
+                first choice, and not between `1 day` and the longer
+                `until I revoke it` sentence either. */}
+            <div className="slack-passkey-scope-slot">
+              {SCOPE_VARIANTS.map((key) => (
+                <p
+                  key={key}
+                  className="slack-passkey-scope"
+                  aria-hidden={key !== scopeVariant(duration)}
+                  data-shown={key === scopeVariant(duration)}
+                >
+                  {scopeCopy(key, connectorOf(request.action) === SLACK)}
+                </p>
+              ))}
+            </div>
             {/* …and only for the SAME capability. "Timed Slack access is
                 already active" appeared whenever any grant existed, archive
                 grants included. */}
@@ -434,13 +589,16 @@ export function SlackPasskeyApproval({
               <button type="button" disabled={busy} onClick={() => void decide('reject')}>
                 Deny
               </button>
+              {/* An expired request cannot be approved by anyone, so the
+                  control says that instead of looking ready. The poll's own
+                  message explains it; this is the half that stops a tap. */}
               <button
                 type="button"
                 className="slack-passkey-approve"
-                disabled={busy}
+                disabled={busy || expired}
                 onClick={() => void decide('approve')}
               >
-                {busy ? 'Confirming…' : 'Approve'}
+                {busy ? 'Confirming…' : expired ? 'Expired' : 'Approve'}
               </button>
             </div>
             {error && (

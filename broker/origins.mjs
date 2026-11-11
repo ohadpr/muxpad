@@ -49,6 +49,10 @@ export const ORIGINS_DIR = '/Library/muxpad/origins';
  *  anyway, so this is the second of two locks, not the only one. */
 export const SKEW_MS = 120_000;
 
+/** How long a key file's contents are trusted without re-reading it. See
+ *  `Origins#key` for why this is not Infinity. */
+export const KEY_TTL_MS = 60_000;
+
 /** `local` is the one origin with no key and no proof: believing a request
  *  that came from this machine when it says it came from this machine adds
  *  nothing to what the socket already told us. */
@@ -105,12 +109,28 @@ export class Origins {
     this.#io = io;
   }
 
-  /** The key for an origin, or null. Read once and cached: these files are
-   *  placed by an install and a broker that re-read them per request would
-   *  make a filesystem check part of every Slack call. */
+  /**
+   * The key for an origin, or null. Cached for a minute, not forever.
+   *
+   * Forever was wrong in both directions and the failures were silent ones.
+   * A key INSTALLED while the broker is running was remembered as absent, so
+   * the install looked complete and nothing was ever proven until somebody
+   * restarted the broker — and `muxpad restart` does not restart it. A key
+   * ROTATED on the host side kept being checked against the old bytes here,
+   * so every proof failed and the only symptom was a dialog that would not
+   * stop appearing.
+   *
+   * A minute is short enough that neither outlives a cup of coffee and long
+   * enough that a filesystem check is not part of every Slack call. The path
+   * is re-asserted on every re-read, so a key that becomes readable by the
+   * user's agents stops being used within the same minute — which is the one
+   * direction where staleness would be dangerous rather than merely
+   * annoying.
+   */
   key(origin) {
     if (!NAME.test(String(origin ?? ''))) return null;
-    if (this.#keys.has(origin)) return this.#keys.get(origin);
+    const cached = this.#keys.get(origin);
+    if (cached && cached.until > this.#now()) return cached.key;
     let key = null;
     try {
       const path = join(this.#dir, `${origin}.key`);
@@ -122,7 +142,7 @@ export class Origins {
     } catch {
       key = null;
     }
-    this.#keys.set(origin, key);
+    this.#keys.set(origin, { key, until: this.#now() + KEY_TTL_MS });
     return key;
   }
 

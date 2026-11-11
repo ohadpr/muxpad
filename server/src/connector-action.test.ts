@@ -65,6 +65,21 @@ describe('what the CLI declares is what the server asks the broker for', () => {
     expect(table.some(([p, a]) => `msgvault${p.replace('/', '.')}` !== a)).toBe(true);
   });
 
+  it('names the write verb, whose path is not in the read table', () => {
+    // It is a POST route with a body, so it is declared by hand in
+    // routes/slack.ts rather than in ARCHIVE_ROUTES — and a hand-written
+    // route is exactly the kind that gets forgotten in the CLI's table.
+    expect(ROUTES).toMatch(/brokerAction\(\s*'msgvault\.draft-reply'/);
+    // …and there is no compose route to forget: a Gmail source refuses
+    // `draft-compose`, so muxpad never asks for it.
+    expect(ROUTES).not.toMatch(/brokerAction\(\s*'msgvault\.draft'/);
+    expect(ask('/api/msgvault/draft-reply')).toBe('msgvault.draft-reply');
+    // No compose route, so no mapping for one: `/draft` falls through to the
+    // generic last-segment rule and names an action the broker refuses,
+    // rather than quietly asking for a verb that does not exist.
+    expect(ask('/api/msgvault/draft')).toBe('msgvault.draft');
+  });
+
   it('declares nothing for a path that is not a connector call', () => {
     for (const p of ['/api/tabs', '/api/panes/x', '/api/publish']) expect(ask(p)).toBe('');
   });

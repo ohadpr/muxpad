@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { test } from 'node:test';
-import { Origins, sign } from './origins.mjs';
 import { Broker } from './core.mjs';
 import { HumanSessions, SESSION_COOKIE } from './human-session.mjs';
+import { Origins, sign } from './origins.mjs';
 
 /**
  * ONE APPROVAL MECHANISM, APPLIED TO A SECOND THING.
@@ -71,8 +71,7 @@ function fixture({ timedGrants, origins } = {}) {
 // `local` by default: the broker only grants a DURATION to an origin whose
 // claim adds nothing, because the field is caller-chosen on an endpoint with
 // no caller authentication. See policy.mjs and the test below.
-const ask = (f, action, payload, origin = 'local') =>
-  f.broker.create({ action, payload, origin });
+const ask = (f, action, payload, origin = 'local') => f.broker.create({ action, payload, origin });
 
 test('nothing runs until a human approves it', async () => {
   const f = fixture();
@@ -191,7 +190,7 @@ test('a Slack grant buys nothing on the archive, and the reverse', async () => {
   );
 });
 
-test('the scope it advertises is its own, not Slack\'s', async () => {
+test("the scope it advertises is its own, not Slack's", async () => {
   // `timedScope` is what the approval page DISPLAYS and what the client sends
   // back when you pick a duration. It sat one line above `timedAllowed`, which
   // was made capability-aware while this was left alone — so an archive read
@@ -243,7 +242,14 @@ test('every msgvault verb is a read, so a duration is offered for all of them', 
 test('an unregistered action never reaches a validator or an executor', async () => {
   const f = fixture();
   f.pair(); // or the pairing check answers first and proves nothing
-  for (const action of ['msgvault.query', 'msgvault.export-messages', 'msgvault.draft-compose'])
+  // `msgvault.draft` is in this list because composing a new email is not a
+  // verb muxpad has: a Gmail source refuses `draft-compose` outright.
+  for (const action of [
+    'msgvault.query',
+    'msgvault.export-messages',
+    'msgvault.draft-compose',
+    'msgvault.draft',
+  ])
     await assert.rejects(f.broker.create({ action, payload: {} }), /Unsupported action/, action);
   assert.deepEqual(f.ran, []);
 });
@@ -265,7 +271,10 @@ const knowing = (keys, now) =>
     now,
     io: {
       readFileSync: (path) => {
-        const name = String(path).split('/').pop().replace(/\.key$/, '');
+        const name = String(path)
+          .split('/')
+          .pop()
+          .replace(/\.key$/, '');
         if (!(name in keys)) throw Object.assign(new Error('nope'), { code: 'ENOENT' });
         return keys[name];
       },
@@ -284,7 +293,7 @@ const signed = (action, payload, origin, ts, key = KEY) => {
 };
 
 test('a remote host that PROVES it asked may hold a timed grant', async () => {
-  let now = 1000;
+  const now = 1000;
   const f = fixture({ origins: knowing({ trayo: KEY }, () => now) });
   const session = f.pair();
   const r = await f.broker.create(signed('msgvault.stats', {}, 'trayo', now));
@@ -307,7 +316,7 @@ test('a remote host that PROVES it asked may hold a timed grant', async () => {
 });
 
 test('the hosting machine cannot forge the proof, so it cannot spend the grant', async () => {
-  let now = 1000;
+  const now = 1000;
   const f = fixture({ origins: knowing({ trayo: KEY }, () => now) });
   const session = f.pair();
   const r = await f.broker.create(signed('msgvault.stats', {}, 'trayo', now));
@@ -326,12 +335,15 @@ test('the hosting machine cannot forge the proof, so it cannot spend the grant',
   assert.equal(liar.timedAllowed, false);
   assert.equal(f.ran.length, 1);
   // …and a bare claim with no proof at all, likewise.
-  assert.equal((await f.broker.create({ action: 'msgvault.stats', payload: {}, origin: 'trayo' })).state, 'pending');
+  assert.equal(
+    (await f.broker.create({ action: 'msgvault.stats', payload: {}, origin: 'trayo' })).state,
+    'pending',
+  );
   assert.equal(f.ran.length, 1);
 });
 
 test('a proof is spent once, so a captured request cannot be replayed into the grant', async () => {
-  let now = 1000;
+  const now = 1000;
   const f = fixture({ origins: knowing({ trayo: KEY }, () => now) });
   f.pair();
   const body = signed('msgvault.stats', {}, 'trayo', now);
@@ -362,5 +374,144 @@ test('until-revoked outlives the clock, and dies with the session that minted it
   f.broker.revokeGrants('all');
   const after = await f.broker.create(signed('msgvault.stats', {}, 'trayo', now));
   assert.equal(after.state, 'pending');
+  assert.equal(f.ran.length, 2);
+});
+
+/**
+ * A DRAFT IS NEVER A STANDING PERMISSION.
+ *
+ * Reading someone's mail for an hour is a bargain they may want. Writing into
+ * their mailbox for an hour, unattended, under their name, is the thing the
+ * dialog exists to prevent — and before `timedReadOnly` it would have been
+ * bought with one click on a search, because msgvault's full scope now
+ * contains the drafts.
+ */
+test('a draft can only ever be approved once, with its text in front of you', async () => {
+  const f = fixture();
+  const session = f.pair();
+  const draft = await f.broker.create({
+    action: 'msgvault.draft-reply',
+    payload: { id: '150889', body: 'Thursday?' },
+    origin: 'local',
+  });
+  assert.equal(draft.state, 'pending');
+  // Offered as approve-once: the verb is outside the read set.
+  await assert.rejects(
+    f.broker.decideSession(draft.id, draft.fingerprint, 'approve', {
+      duration: '1h',
+      scope: draft.timedScope,
+      session,
+    }),
+    /only reading can/,
+  );
+  assert.equal(f.ran.length, 0);
+  // …and once works, with the whole payload in the request the human saw.
+  assert.equal(
+    (await f.broker.decideSession(draft.id, draft.fingerprint, 'approve', { session })).state,
+    'complete',
+  );
+  assert.deepEqual(f.ran, [
+    ['msgvault.draft-reply', { id: '150889', body: 'Thursday?', all: false }],
+  ]);
+});
+
+test('a live READ grant does not buy a draft', async () => {
+  // The failure this guards is quiet: a timed read grant whose scope had
+  // widened to msgvault-all-v1 would have dispatched a draft with no dialog.
+  const f = fixture();
+  const session = f.pair();
+  const read = await ask(f, 'msgvault.search', { query: 'dinner' });
+  await f.broker.decideSession(read.id, read.fingerprint, 'approve', {
+    duration: '1h',
+    scope: 'msgvault-read-v1',
+    session,
+  });
+  assert.equal(f.ran.length, 1);
+  // Another read rides it…
+  assert.equal((await ask(f, 'msgvault.search', { query: 'again' })).state, 'complete');
+  assert.equal(f.ran.length, 2);
+  // …and a draft does not.
+  const draft = await f.broker.create({
+    action: 'msgvault.draft-reply',
+    payload: { id: '1', body: 'b' },
+    origin: 'local',
+  });
+  assert.equal(draft.state, 'pending');
+  assert.equal(f.ran.length, 2);
+});
+
+test('a reply draft names the message it answers, all the way through', async () => {
+  const f = fixture();
+  const session = f.pair();
+  const r = await f.broker.create({
+    action: 'msgvault.draft-reply',
+    payload: { id: '150889', body: 'Yes — Thursday works.', all: true },
+    origin: 'local',
+  });
+  // The dialog says WHICH rule refused: it is a write, not an unverifiable
+  // machine. Both sentences are true of different requests and only one is
+  // true of this one.
+  assert.equal(r.timedAllowed, false);
+  assert.match(r.timedRefusedReason, /writes, and a duration covers reading only/);
+  assert.doesNotMatch(r.timedRefusedReason, /which machine|did not prove/);
+  await f.broker.decideSession(r.id, r.fingerprint, 'approve', { session });
+  assert.deepEqual(f.ran, [
+    ['msgvault.draft-reply', { id: '150889', body: 'Yes — Thursday works.', all: true }],
+  ]);
+});
+
+/**
+ * THE SECOND LOCK ON A READ GRANT.
+ *
+ * `grantScope` is derived from `timedScope`, and msgvault's timed scope is
+ * ALWAYS its read scope. So a draft's scope string is byte-identical to a read
+ * grant's: the scope equality this broker leans on everywhere else does not
+ * separate a read from a write here. What separates them is the grant's
+ * `actions` list — and a list is one edit away from being wrong in the
+ * direction nobody notices, because the failure is a write that never asked.
+ *
+ * So the rule is stated about the ACTION too, and this test is the proof: a
+ * grant whose action list has been widened to include the draft — exactly the
+ * mistake the guard exists for — still does not buy one.
+ */
+test('a read grant cannot buy a draft even if its action list says it can', async () => {
+  const f = fixture();
+  const session = f.pair();
+  const read = await ask(f, 'msgvault.search', { query: 'dinner' });
+  await f.broker.decideSession(read.id, read.fingerprint, 'approve', {
+    duration: '1h',
+    scope: 'msgvault-read-v1',
+    session,
+  });
+  assert.equal(f.ran.length, 1);
+
+  // The grant the broker actually minted carries the four reads…
+  const [id, minted] = [...f.broker.grants.entries()][0];
+  assert.ok(!minted.actions.includes('msgvault.draft-reply'));
+  // …and here is the sabotage: widen it, in place, the way a future edit to
+  // `actions:` at the mint site would. Taken from the internal map, not from
+  // `listGrants()` — that view strips `owner` and `elapsedExpires`, and a
+  // copy without them is a grant `activeGrants()` reaps on sight, which
+  // would have made this test pass for the wrong reason.
+  f.broker.grants.set(
+    id,
+    Object.freeze({ ...minted, actions: [...minted.actions, 'msgvault.draft-reply'] }),
+  );
+  assert.deepEqual(
+    f.broker.grantScope({ teamID: 'T123', origin: 'local', action: 'msgvault.draft-reply' }),
+    f.broker.grantScope({ teamID: 'T123', origin: 'local', action: 'msgvault.search' }),
+    'the scope strings are identical — this is why the action rule is needed',
+  );
+
+  // A read still rides it, so the grant is genuinely live…
+  assert.equal((await ask(f, 'msgvault.search', { query: 'again' })).state, 'complete');
+  assert.equal(f.ran.length, 2);
+  // …and the draft still stops at a human.
+  const draft = await f.broker.create({
+    action: 'msgvault.draft-reply',
+    payload: { id: '150889', body: 'b' },
+    origin: 'local',
+  });
+  assert.equal(draft.state, 'pending');
   assert.equal(f.ran.length, 2);
 });

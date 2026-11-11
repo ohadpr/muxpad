@@ -140,6 +140,37 @@ export class PaneStore {
    * (`unreadIdsByWorkspace`, `cronsByTab`, `clockSnapshot`) and for the same
    * reason: a list is one snapshot, not N lookups.
    */
+  /**
+   * The panes of a NAMED set of tabs, in one query.
+   *
+   * The sibling of {@link byTabForWorkspace}, for the path that has no
+   * workspace in hand: decorating ONE row still has to look at that chat's
+   * live sub-chats, and doing it with `listByTab` per child is the same
+   * mistake that note describes, one scale down — a handful of round trips
+   * per `tab.updated`, on an event that fires whenever anything moves.
+   *
+   * An empty list is an empty map and no query at all, which is the common
+   * case: most chats have spawned nothing.
+   */
+  byTabs(tabIds: readonly string[]): Map<string, PaneSpec[]> {
+    const out = new Map<string, PaneSpec[]>();
+    if (tabIds.length === 0) return out;
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM panes
+          WHERE tab_id IN (${tabIds.map(() => '?').join(',')})
+          ORDER BY tab_id, created_at`,
+      )
+      .all(...tabIds) as PaneRow[];
+    for (const r of rows) {
+      const spec = this.row(r) as PaneSpec;
+      const list = out.get(r.tab_id);
+      if (list) list.push(spec);
+      else out.set(r.tab_id, [spec]);
+    }
+    return out;
+  }
+
   byTabForWorkspace(workspaceId: string): Map<string, PaneSpec[]> {
     const rows = this.db
       .prepare(

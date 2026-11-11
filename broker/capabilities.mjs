@@ -64,31 +64,61 @@ export const SLACK = Object.freeze({
 });
 
 /**
- * msgvault: the user's mail, calendar and contacts archive.
+ * msgvault: the owner's mail.
  *
- * EVERY VERB IS A READ, and that is not a reason to skip the dialog — the
- * dialog is what stops an agent reading years of someone's life unattended.
- * It is the reason there is no `fullScope` separate from `readScope`: there is
- * no write set to hold back, so the two are the same list and a timed grant
- * covers exactly what a single approval would have.
+ * ── IT IS NOT ALL READS ANY MORE ─────────────────────────────────────────
+ * It used to be, and this note used to say so: no write set to hold back, so
+ * `readScope` and `fullScope` were one list and a timed grant covered exactly
+ * what a single approval would have.
+ *
+ * Drafting breaks that, and the split is the point. A draft puts text written
+ * by an agent into the owner's mailbox under their name. It cannot send — the
+ * tool has no send verb at this grant and muxpad asks for none — but "it will
+ * be sitting there next to things you wrote" is a different promise from "it
+ * read your mail", and the two must not be approvable by one gesture.
+ *
+ * The write set is one verb, not two: replying is all a Gmail source permits
+ * (see msgvault.mjs for the measurement). A single-element list is still a
+ * set that must not ride a duration.
+ *
+ * So `readScope` keeps the four reads and `fullScope` names everything. The
+ * rule in core.mjs does the rest: a duration is offered only when the scope
+ * being asked for is the READ scope, so a draft is always approve-once, with
+ * its text in front of the person approving it.
  */
 export const MSGVAULT = Object.freeze({
   id: 'msgvault',
-  label: 'your mail archive',
+  label: 'your mail',
   readScope: 'msgvault-read-v1',
-  fullScope: 'msgvault-read-v1',
-  // FOUR, not seven. `list-senders`, `meetings` and `person` cannot work
-  // against msgvault 0.22.0 — see the note in msgvault.mjs, verified against
-  // the real binary. An action name the broker accepts and the tool refuses
-  // is a dialog that asks for something that cannot happen.
+  fullScope: 'msgvault-all-v1',
+  // FOUR READS. `list-senders`, `meetings` and `person` cannot work against
+  // agent-delegated msgvault — `person get` answers "not available in
+  // agent-delegated mode", and the agent-token permission list has no
+  // contacts scope at all (search.read, message.read, attachment.read,
+  // stats.read, draft.*, calendar.*). An action name the broker accepts and
+  // the tool refuses is a dialog that asks for something that cannot happen.
   readActions: Object.freeze([
     'msgvault.search',
     'msgvault.show-message',
     'msgvault.show-thread',
     'msgvault.stats',
   ]),
+  /** ONE WRITE. `draft.create` is a real agent-token permission and
+   *  `draft-reply` reaches the tool in delegated mode — verified against a
+   *  live Gmail draft. There is no compose verb: a Gmail source answers
+   *  `draft-compose` with `draft_disabled` no matter who asks, so offering it
+   *  would only ever raise a dialog for an action the archive then refuses. */
+  writeActions: Object.freeze(['msgvault.draft-reply']),
+  /**
+   * A DURATION NEVER COVERS THE WRITES, whatever the owner's `timedGrants`
+   * switch says. "Full Slack access for an hour" is a bargain somebody may
+   * reasonably want; "anything may put mail in your mailbox for an hour" is
+   * the thing this whole mechanism exists to prevent, and without this it
+   * would be bought with one click on a search. See Broker#timedScope.
+   */
+  timedReadOnly: true,
   get actions() {
-    return this.readActions;
+    return Object.freeze([...this.readActions, ...this.writeActions]);
   },
 });
 

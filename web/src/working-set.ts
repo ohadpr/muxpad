@@ -30,6 +30,12 @@ let cache: WorkingRow[] = [];
 const listeners = new Set<(s: WorkingRow[]) => void>();
 let inflight: Promise<WorkingRow[]> | null = null;
 
+/** What the strip is holding right now. For tests, and for any caller that
+ *  wants the band without subscribing to it. */
+export function cachedWorkingSet(): WorkingRow[] {
+  return cache;
+}
+
 function publish(next: WorkingRow[]): void {
   cache = next;
   for (const fn of listeners) fn(next);
@@ -55,6 +61,66 @@ export async function refreshWorkingSet(): Promise<WorkingRow[]> {
   })();
   return inflight;
 }
+
+/**
+ * ── THE ROW IS A SNAPSHOT, AND IT HAS TO KEEP UP ────────────────────────────
+ *
+ * The server announces only SHAPE changes — a chat entering or leaving the
+ * band — which is right: a push per message would be a churn feed. But the
+ * slot carries the whole `Tab`, including its rolled-up `status`, and that
+ * went stale the moment the set stopped changing. A chat that was working
+ * when it entered the band kept a spinner in Recently Active for hours after
+ * it finished, beside its own sidebar row showing idle. Same truth, two
+ * clocks — the second time this exact shape has been fixed in this app (see
+ * the corpus note in tabs.ts).
+ *
+ * So the strip listens for the push that everything else already acts on and
+ * patches the row it holds. No fetch, no new event, and the SET is still
+ * owned by the server: this only ever replaces a tab the strip is already
+ * showing, never adds or reorders one.
+ */
+subscribe((e) => {
+  /**
+   * ── AND A CHAT THAT NO LONGER EXISTS HAS TO GO ────────────────────────
+   *
+   * This listener handled `tab.updated` and returned on everything else, so
+   * a DELETED chat kept its slot: the row sat in Recently Active with the
+   * name and status it had when it died, and clicking it opened nothing.
+   *
+   * It is also the whole reason "delete doesn't work, only archive works"
+   * was a reasonable thing to believe. Archive emits `tab.updated` — the
+   * patch below runs, the row visibly becomes done, the action looks like it
+   * landed. Delete emits `tab.removed` and NOTHING here listened, so the one
+   * action that really did destroy the chat was the one that appeared to do
+   * nothing. The two actions differed on screen by exactly the event this
+   * function ignored.
+   *
+   * Dropping a row is the one shape change the strip may make on its own.
+   * The SET is still the server's: this never adds a chat and never reorders
+   * one, it only stops drawing something that is gone — and the server's
+   * next `working_set.changed` refills the slot.
+   */
+  if (e.type === 'tab.removed') {
+    const without = cache.filter((s) => s.tab.id !== e.tab_id);
+    if (without.length !== cache.length) publish(without);
+    return;
+  }
+  if (e.type !== 'tab.updated') return;
+  const i = cache.findIndex((s) => s.tab.id === e.tab.id);
+  if (i === -1) return;
+  const held = cache[i];
+  if (!held) return;
+  // Identity check on the fields a row actually draws, so an event that
+  // changed nothing visible does not re-render six rows.
+  const before = `${held.tab.status ?? ''}|${held.tab.agents ?? 0}|${held.tab.unread ?? false}|${held.tab.name}`;
+  const after = `${e.tab.status ?? ''}|${e.tab.agents ?? 0}|${e.tab.unread ?? false}|${e.tab.name}`;
+  if (before === after) return;
+  const next = [...cache];
+  // `at` is the strip's own ordering key and belongs to the SET, not to the
+  // tab — taking it from the event would let a push reorder the band.
+  next[i] = { ...held, tab: e.tab };
+  publish(next);
+});
 
 /** "Not now" — free the slot. Optimistic, because the answer is a foregone
  *  conclusion and a row that lingers after you dismissed it reads as broken. */

@@ -136,3 +136,196 @@ describe('it does not collide with the directed-mention report', () => {
     expect(parseSpawnDelivery(theirs)).toBeNull();
   });
 });
+
+/**
+ * A DELIVERY HANDS BACK THE MEANS TO ACT ON IT.
+ *
+ * The owner's report: "the moment the chat yields, it's back at me — and 99%
+ * of the time I need to send it back to do something, and an agent can surely
+ * do a better job at that than me."
+ *
+ * Two things made that the path of least resistance. The note ended "act on
+ * them, or carry on if nothing is needed", which reads as permission to do
+ * nothing; and the message carried TAB ids while sending a worker back needs a
+ * PANE id — so the one action an orchestrator most needs after reading a
+ * report required a lookup it had no reason to know how to do.
+ */
+describe('a delivery is work to review, not news to relay', () => {
+  const entry = (over: Partial<SpawnDeliveryEntry> = {}): SpawnDeliveryEntry => ({
+    tabId: 't1',
+    paneId: 'p1',
+    name: 'build the importer',
+    state: 'ok',
+    report: 'Added the CSV importer and a test.',
+    ...over,
+  });
+
+  /** The text under one heading, up to the next — what a reader attributes
+   *  to that worker. Both assertions below are about ATTRIBUTION, which a
+   *  `toContain` over the whole message cannot see. */
+  const sectionFor = (out: string, name: string): string => {
+    const start = out.indexOf(`## ${name}`);
+    const rest = out.slice(start + 1);
+    const next = rest.indexOf('\n## ');
+    return next === -1 ? rest : rest.slice(0, next);
+  };
+
+  it('puts the send-back command inside the section it belongs to', () => {
+    // An earlier version asserted only that the command appeared AFTER the
+    // heading, which a footer at the end of the whole message also satisfies.
+    const out = renderSpawnDelivery([
+      entry(),
+      entry({ tabId: 't2', paneId: 'p2', name: 'write the docs' }),
+    ]);
+    expect(sectionFor(out, 'build the importer')).toContain('muxpad agent send p1');
+  });
+
+  it('gives each worker its OWN handle, not merely a handle each', () => {
+    // The version of this test that shipped checked both strings were
+    // present somewhere, so swapping the two handles between workers passed
+    // it — and a parent following the wrong one sends corrections for the
+    // importer to the worker writing the docs.
+    const out = renderSpawnDelivery([
+      entry(),
+      entry({ tabId: 't2', paneId: 'p2', name: 'write the docs' }),
+    ]);
+    expect(sectionFor(out, 'build the importer')).toContain('muxpad agent send p1');
+    expect(sectionFor(out, 'build the importer')).not.toContain('p2');
+    expect(sectionFor(out, 'write the docs')).toContain('muxpad agent send p2');
+    expect(sectionFor(out, 'write the docs')).not.toContain('p1');
+  });
+
+  it('names the alternative for a worker that cannot be resumed', () => {
+    const { paneId: _none, ...crashed } = entry({ state: 'crashed', report: null });
+    const out = renderSpawnDelivery([crashed]);
+    expect(out).not.toContain('muxpad agent send');
+    // "No handle" alone reads as "nothing to do here", which is false — the
+    // work still needs doing, by somebody new.
+    expect(out).toMatch(/cannot be resumed/);
+    expect(out).toContain('muxpad agent new');
+  });
+
+  it('tells the parent to review before it says anything to the human', () => {
+    const out = renderSpawnDelivery([entry()]);
+    expect(out).toMatch(/REVIEW each result against what you asked for/);
+    expect(out).toMatch(/send that worker back/);
+    // The sentence that made doing nothing a legitimate reading is gone.
+    expect(out).not.toMatch(/carry on if nothing is needed/);
+  });
+
+  it('says the worker keeps its context, so sending back is resuming', () => {
+    // An orchestrator that thinks a send-back costs a fresh briefing will
+    // weigh it against bothering the human and pick wrong.
+    expect(renderSpawnDelivery([entry()])).toMatch(/keeps its context/);
+  });
+
+  it('omits the handle rather than inventing one for a worker that has no pane', () => {
+    const { paneId: _dropped, ...noPane } = entry();
+    const out = renderSpawnDelivery([noPane]);
+    expect(out).toContain('build the importer');
+    expect(out).not.toContain('muxpad agent send');
+  });
+});
+
+/**
+ * NOTHING A WORKER SAID IS LOST.
+ *
+ * A single child's report was capped at 1,200 characters, so a 6,000-character
+ * code review arrived as its first fifth, cut mid-word — and the parent
+ * reviewed a fragment while believing it had the report. Truncation is exactly
+ * the wrong economy for the one message whose job is to be acted on.
+ *
+ * But 65 unabridged reports is a context window, not a message. So the inline
+ * text stays bounded and the whole thing goes to a file whose path travels
+ * with it.
+ */
+describe('a report too long to inline is still readable in full', () => {
+  const long = 'x'.repeat(5_000);
+
+  it('names the file when the text was cut', () => {
+    const out = renderSpawnDelivery([
+      {
+        tabId: 't1',
+        name: 'review',
+        state: 'ok',
+        report: long,
+        reportPath: '/Users/me/.muxpad/spawn-reports/r-1.md',
+      },
+    ]);
+    expect(out).toContain('[report truncated]');
+    expect(out).toContain('Full report: `/Users/me/.muxpad/spawn-reports/r-1.md`');
+  });
+
+  it('does NOT name a file for a report that arrived whole', () => {
+    // A path beside something you have already read in full is noise, and it
+    // teaches a parent to open the file every time.
+    const out = renderSpawnDelivery([
+      {
+        tabId: 't1',
+        name: 'review',
+        state: 'ok',
+        report: 'short and complete',
+        reportPath: '/Users/me/.muxpad/spawn-reports/r-1.md',
+      },
+    ]);
+    expect(out).toContain('short and complete');
+    expect(out).not.toContain('Full report');
+    expect(out).not.toContain('[report truncated]');
+  });
+
+  it('still says it was cut when there is no file to point at', () => {
+    // A server with nowhere to write degrades to the old behaviour rather
+    // than losing the delivery.
+    const out = renderSpawnDelivery([{ tabId: 't1', name: 'review', state: 'ok', report: long }]);
+    expect(out).toContain('[report truncated]');
+    expect(out).not.toContain('Full report');
+  });
+});
+
+/**
+ * THE LOOP COUNTS ITSELF.
+ *
+ * An adversarial review checked for anything that bounds parent↔worker
+ * send-backs and found nothing: open rounds are serialised but successive
+ * ones are unlimited, `MAX_QUEUED_SENDS` counts PENDING messages so a
+ * sequential exchange never reaches it, and retirement explicitly
+ * accommodates revival. "Send it back twice if it is not converging" was
+ * prose and nothing else.
+ *
+ * A hard cap would break the long iteration this feature exists to enable.
+ * A count removes the excuse instead.
+ */
+describe('a delivery says how many times round the loop it is', () => {
+  const at = (rounds: number) =>
+    renderSpawnDelivery([
+      { tabId: 't1', paneId: 'p1', name: 'build it', state: 'ok', report: 'done', rounds },
+    ]);
+
+  it('says nothing for the ordinary first attempts', () => {
+    // A brief and one correction is the loop WORKING. Narrating it would
+    // teach an orchestrator to treat its own normal behaviour as a problem.
+    expect(at(1)).not.toMatch(/attempt|not converging/);
+    expect(at(2)).not.toMatch(/attempt|not converging/);
+  });
+
+  it('names the attempt once it is the third', () => {
+    expect(at(3)).toMatch(/This is attempt 3 for this worker/);
+    expect(at(3)).toMatch(/take it to the person/);
+  });
+
+  it('stops asking and tells it to go to the person', () => {
+    // By five the risk has stopped being a risk and become an observation.
+    expect(at(5)).toMatch(/sent this worker back 4 times and it is not converging/);
+    expect(at(5)).toMatch(/Stop iterating/);
+    expect(at(9)).toMatch(/sent this worker back 8 times/);
+  });
+
+  it('is silent when the count is unknown', () => {
+    // An older server, or a path that does not carry it: say nothing rather
+    // than guess at a number the reader would act on.
+    const out = renderSpawnDelivery([
+      { tabId: 't1', paneId: 'p1', name: 'build it', state: 'ok', report: 'done' },
+    ]);
+    expect(out).not.toMatch(/attempt|not converging/);
+  });
+});

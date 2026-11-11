@@ -296,12 +296,25 @@ export function childrenOf(index: ClockIndex, tabId: string): string[] {
  * child (never done) has to keep counting.
  */
 export function liveChildCount(index: ClockIndex, tabId: string, now: number): number {
-  let n = 0;
+  return liveChildTabs(index, tabId, now).length;
+}
+
+/**
+ * WHICH children are live, not just how many.
+ *
+ * The count answers "is anything running under this chat"; the ids answer
+ * "what is it doing", which is what a parent row needs in order to show that
+ * its workers are busy. Sub-chats are not rows on the rail, so a parent that
+ * reports only its own pane's state is a chat with two agents working under
+ * it and no indication anywhere on screen.
+ */
+export function liveChildTabs(index: ClockIndex, tabId: string, now: number): string[] {
+  const out: string[] = [];
   for (const row of index.values()) {
     if (row.spawned_by !== tabId) continue;
-    if (!resolveTabClock(index, row.id, now).done) n += 1;
+    if (!resolveTabClock(index, row.id, now).done) out.push(row.id);
   }
-  return n;
+  return out;
 }
 
 /**
@@ -326,6 +339,22 @@ export function tabLiveChildCount(
   if (kids.length === 0) return 0;
   const index: ClockIndex = new Map([[self.id, self], ...kids.map((k) => [k.id, k] as const)]);
   return liveChildCount(index, tabId, now);
+}
+
+/** {@link liveChildTabs} for a caller decorating ONE row — same two indexed
+ *  reads as {@link tabLiveChildCount}, which is now its only other caller. */
+export function tabLiveChildTabs(
+  db: Database.Database,
+  tabId: string,
+  now: number = Date.now(),
+): string[] {
+  const tabs = new TabStore(db);
+  const self = tabs.clockRow(tabId);
+  if (!self) return [];
+  const kids = tabs.childClockRows(tabId);
+  if (kids.length === 0) return [];
+  const index: ClockIndex = new Map([[self.id, self], ...kids.map((k) => [k.id, k] as const)]);
+  return liveChildTabs(index, tabId, now);
 }
 
 /**
