@@ -14,7 +14,7 @@
   "scripts": {
     "build": "tsc -b",
     "dev": "tsc -b --watch --preserveWatchOutput",
-    "test": "vitest run",
+    "test": "node ../scripts/vitest-run.mjs",
     "test:watch": "vitest",
     "lint": "biome check ."
   },
