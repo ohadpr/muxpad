@@ -226,8 +226,8 @@ describe('the sub-chat list has shape', () => {
 
   it('says the state in a word, not in a second dot', () => {
     // Twenty-one identical dots say nothing, so STATE left the mark. Every row
-    // keeps its identity tile — a row without one is a word — and the one
-    // block whose state is news says so at the end of its line.
+    // keeps its identity tile — a row without one is a word — and every row
+    // now says where it got to at the end of its line.
     const box = mount({
       corpus: corpusOf([
         tab('parent'),
@@ -239,7 +239,12 @@ describe('the sub-chat list has shape', () => {
     const rowFor = (name: string) =>
       rows.find((r) => r.querySelector('.chat-drawer__row-name')?.textContent === name);
     expect(rowFor('going')?.querySelector('.chat-drawer__row-live')).not.toBeNull();
-    expect(rowFor('reported')?.querySelector('.chat-drawer__row-live')).toBeNull();
+    // A FINISHED ROW SAYS SO TOO, which is the opposite of what this asserted
+    // until it was asked for directly: "in sub-chat list put a 'done' green
+    // label on chats that are done". Leaving the end of the line empty made
+    // the panel's one question — did this finish — something you inferred
+    // from which block the row fell into.
+    expect(rowFor('reported')?.querySelector('.chat-drawer__row-live')?.textContent).toBe('done');
   });
 
   it('shows how long ago on EVERY finished row, not only in Earlier', () => {
@@ -288,19 +293,34 @@ describe('a row reads as a chat, not a word', () => {
     expect(box.querySelector('.chat-drawer__row .chatchip')).toBeNull();
   });
 
-  it('says "working" at the end of a running row, and nothing on a finished one', () => {
+  it('spins beside "working", and marks a finished row done', () => {
     const box = mount({
       corpus: corpusOf([
         tab('parent'),
         tab('going', { spawned_by: 'parent', status: 'working' }),
-        tab('reported', { spawned_by: 'parent', done: true }),
+        tab('reported', { spawned_by: 'parent', done: true, done_reason: 'delivered' }),
+        tab('stopped', { spawned_by: 'parent', done: true }),
       ]),
     });
     const rows = [...box.querySelectorAll('.chat-drawer__row')];
     const rowFor = (name: string) =>
       rows.find((r) => r.querySelector('.chat-drawer__row-name')?.textContent === name);
     expect(rowFor('going')?.querySelector('.chat-drawer__row-live')?.textContent).toBe('working');
-    expect(rowFor('reported')?.querySelector('.chat-drawer__row-live')).toBeNull();
+    // The spinner is the part that reads as "right now" at a glance — a word
+    // alone looks the same whether the worker is going or stopped.
+    expect(rowFor('going')?.querySelector('.chat-drawer__spin')).not.toBeNull();
+    const done = rowFor('reported')?.querySelector('.chat-drawer__row-live');
+    expect(done?.textContent).toBe('done');
+    // …and it is NOT spinning. A finished row with motion on it is a lie.
+    expect(rowFor('reported')?.querySelector('.chat-drawer__spin')).toBeNull();
+    // Green comes from the status channel, by state, in the stylesheet — and
+    // only a worker that DELIVERED gets it. A chat that was archived or
+    // decayed says "done" too, in grey: both are over, but only one of them
+    // handed anything back.
+    expect(done?.getAttribute('data-state')).toBe('delivered');
+    const stopped = rowFor('stopped')?.querySelector('.chat-drawer__row-live');
+    expect(stopped?.textContent).toBe('done');
+    expect(stopped?.getAttribute('data-state')).toBe('done');
   });
 });
 

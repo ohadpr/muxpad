@@ -146,3 +146,44 @@ describe('the row is one line, and the mark is beside the name', () => {
     expect(rule('.chat-drawer__row-name')).toMatch(/text-overflow:\s*ellipsis/);
   });
 });
+
+/**
+ * MOTION IS THE PART THAT READS AS "RIGHT NOW".
+ *
+ * The closed drawer's button already turned accent-coloured with a count on
+ * it — but that is a STATE, and it looks identical whether the workers are
+ * running or merely sitting there open. Asked for directly: "when sub-chat is
+ * working show some working indicator on the subchat drawer icon in the top
+ * right."
+ */
+describe('the drawer says something is going on in there', () => {
+  it('animates the closed button while a worker is running', () => {
+    expect(rule('.chat-drawer-open[data-running="true"]')).toMatch(/animation:/);
+  });
+
+  it('does not animate it when nothing is running', () => {
+    // The breath is the whole signal. A button that always breathes says
+    // nothing, which is where this started.
+    expect(rule('.chat-drawer-open')).not.toMatch(/animation:/);
+  });
+
+  it('spins the running row’s mark, since the arc itself is static', () => {
+    expect(rule('.chat-drawer__spin')).toMatch(/animation:/);
+  });
+
+  it('takes its finished hue from the STATUS channel, never the accent', () => {
+    // The accent is re-tuned per theme; "did this finish" must not be.
+    expect(rule('.chat-drawer__row-live[data-state="delivered"]')).toContain('--status-ready');
+    expect(rule('.chat-drawer__row-live[data-state="failed"]')).toContain('--status-dead');
+  });
+
+  it('stops every one of them for a reader who asked for no motion', () => {
+    const css = readFileSync(join(__dirname, 'ChatDrawer.css'), 'utf8');
+    const at = css.indexOf('prefers-reduced-motion');
+    expect(at, 'no reduced-motion guard at all').toBeGreaterThan(-1);
+    const block = css.slice(at, css.indexOf('}\n}', at));
+    expect(block).toContain('.chat-drawer__spin');
+    expect(block).toContain('.chat-drawer-open[data-running="true"]');
+    expect(block).toContain('animation: none');
+  });
+});
