@@ -97,6 +97,34 @@ describe('the fold header', () => {
     expect(label([report(), prompt()])).toBe('2 prompts');
   });
 
+  it('names the tool ONCE when the whole run is one tool', () => {
+    // `7 actions · Bash ×7` said seven twice and Bash once more than needed,
+    // and with the live line beside it the row read `7 actions · Bash ×7 ·
+    // Running Bash…`. One kind, one cell.
+    expect(label([tool(), tool(), tool()])).toBe('3 Bash');
+    expect(label([tool()])).toBe('1 Bash');
+  });
+
+  it('drops the summary too, so the name is not repeated beside itself', () => {
+    const host = document.createElement('div');
+    document.body.append(host);
+    act(() => {
+      createRoot(host).render(
+        <ActionGroup
+          events={[tool(), tool()]}
+          expanded={false}
+          onToggle={() => {}}
+          renderEvent={() => null}
+        />,
+      );
+    });
+    expect(host.querySelector('.chat-action-group-summary')).toBeNull();
+  });
+
+  it('keeps count and summary apart for a MIXED run, where the total is its own fact', () => {
+    expect(label([tool(), prose()])).toBe('2 actions');
+  });
+
   it('counts ACTIONS the moment real work joins the run', () => {
     // The "nothing was done" rule is narrow on purpose — one tool call and the
     // header goes back to announcing work.

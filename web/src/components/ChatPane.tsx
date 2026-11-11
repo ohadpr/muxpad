@@ -223,6 +223,7 @@ import {
   liveStatusLabel,
   runningChildren,
   sessionModelLabel,
+  workingRowDetail,
   workingRowLabel,
 } from '../lib/live-status';
 import { isMobileLayout } from '../lib/mobile-layout';
@@ -4881,7 +4882,11 @@ export function ChatPane({
   // composer owns the word. Two surfaces said `Working…` a hundred pixels
   // apart until the decision moved next to the bar's own.
   const unresolvedTool = agentWorking ? (toolIndex.unresolvedTools[0] ?? null) : null;
-  const workingLabel = workingRowLabel(unresolvedTool?.name);
+  // The ARGUMENT first — see workingRowDetail. `Running Bash…` beside a fold
+  // that already counts Bash calls is the one word in the row nobody needed.
+  const workingLabel =
+    workingRowDetail(unresolvedTool?.name, unresolvedTool?.input) ??
+    workingRowLabel(unresolvedTool?.name);
   // ── AND WHAT IT LAST SAID IT WAS DOING ────────────────────────────────
   // One line, from text the chat is HIDING, replaced rather than appended,
   // gone when the turn ends. See lib/working-hint for why this is not the

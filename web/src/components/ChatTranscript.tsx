@@ -300,9 +300,18 @@ export function ActionGroup({
   // Read unconditionally — a hook cannot be conditional — and `tail` gates
   // only whether it is USED.
   const live = useContext(ChatLiveContext);
+  // ── ONE KIND NEEDS ONE WORD, NOT THREE ────────────────────────────────
+  // `7 actions · Bash ×7` says seven twice and Bash once more than anybody
+  // needs — and with the live line beside it the row read `7 actions · Bash
+  // ×7 · Running Bash…`. When the whole run is ONE tool the count and the
+  // name are the same fact, so they become one cell: `7 Bash`. A mixed run
+  // keeps both, because there the count is the only thing that totals it.
+  const singleKind = !notesOnly && top.length === 1 && (top[0]?.[1] ?? 0) === actions;
   const countLabel = notesOnly
     ? `${actions === 1 ? noun : `${actions} ${noun}s`}`
-    : `${actions} action${actions === 1 ? '' : 's'}`;
+    : singleKind
+      ? `${actions} ${top[0]?.[0] ?? ''}`
+      : `${actions} action${actions === 1 ? '' : 's'}`;
   return (
     <div className="chat-turn chat-turn-assistant" data-eid={anchorId}>
       <div className="chat-msg chat-action-group">
@@ -319,7 +328,9 @@ export function ActionGroup({
             ›
           </span>
           <span className="chat-action-group-count">{countLabel}</span>
-          {notesOnly ? null : <span className="chat-action-group-summary">{summary}</span>}
+          {notesOnly || singleKind ? null : (
+            <span className="chat-action-group-summary">{summary}</span>
+          )}
           {failed > 0 ? <span className="chat-action-group-failed">{failed} failed</span> : null}
           {/* ── THE RUNNING TURN SPEAKS ON ITS OWN FOLD ──────────────────
               Not a second row beneath it. The fold counts what this turn has

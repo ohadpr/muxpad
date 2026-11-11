@@ -6,6 +6,7 @@
  * is longer than it needs to be does not overflow any more — it truncates the
  * cell beside it.
  */
+import { summarizeToolInput } from '@muxpad/shared';
 
 /**
  * Collapsed label for the live cell of the composer status bar.
@@ -110,6 +111,50 @@ export function liveStatusLabel(opts: {
  */
 export function workingRowLabel(toolName: string | null | undefined): string | null {
   return toolName ? `Running ${toolName}…` : null;
+}
+
+/** How much of the argument the row shows. Long enough for a real command,
+ *  short enough that the fold's own count and name are never squeezed off. */
+const DETAIL_MAX = 72;
+
+/**
+ * WHAT the running tool is working ON — the argument, not the tool's name.
+ *
+ * `Bash` three times in one row is what this replaces: the fold said
+ * `7 actions · Bash ×7` and the live line next to it said `Running Bash…`,
+ * so the only word in the row was one nobody needed twice. "The word bash
+ * repeats itself a lot, try to think of something more useful."
+ *
+ * The useful thing is in the call itself. `summarizeToolInput` already picks
+ * the one field that identifies a tool call, and every expanded row in the
+ * transcript is labelled with it — this is the same fact, one line earlier,
+ * while it is still the answer to "what is it doing right now".
+ *
+ * DESCRIPTION BEATS COMMAND here, which is the one place this differs from
+ * the expanded row. A row the reader has opened wants the exact command; a
+ * single glanceable line wants the sentence a person can read without
+ * parsing — `Run the ChatPane test suite` over
+ * `cd /Users/… && pnpm --filter web test -- --run ChatPane 2>&1 | tail -20`.
+ * Where there is no description the command is still far better than the
+ * tool's name.
+ *
+ * Null when nothing can be derived, which is when the caller falls back to
+ * {@link workingRowLabel} — a silent pane must still say something.
+ */
+export function workingRowDetail(
+  toolName: string | null | undefined,
+  input: unknown,
+): string | null {
+  if (!toolName) return null;
+  const o = input && typeof input === 'object' ? (input as Record<string, unknown>) : null;
+  const pick = (k: string): string | null => {
+    const v = o?.[k];
+    return typeof v === 'string' && v.trim() ? v.replace(/\s+/g, ' ').trim() : null;
+  };
+  const raw = pick('description') ?? summarizeToolInput(toolName, input);
+  const text = raw.trim();
+  if (!text || text.startsWith('{')) return null;
+  return text.length > DETAIL_MAX ? `${text.slice(0, DETAIL_MAX - 1)}…` : text;
 }
 
 /**
