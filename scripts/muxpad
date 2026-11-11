@@ -3725,7 +3725,7 @@ cmd_agent_rebase() {
     echo 'usage: muxpad agent rebase <paneId>   (defaults to this pane)' >&2
     exit 1
   fi
-  echo "rebasing $pane — writing a briefing from the transcript first, this takes a moment…" >&2
+  echo "rebasing $pane — rewriting its transcript first, this takes a moment…" >&2
   local out
   out="$(http_request POST "/api/panes/$pane/rebase" '{}' 2>/dev/null)" || true
   if [ -z "$out" ]; then
@@ -3738,7 +3738,17 @@ cmd_agent_rebase() {
     echo "muxpad: $err" >&2
     exit 1
   fi
-  printf '%s' "$out" | jq -r '"✓ rebased — briefing " + (if .queued then "queued for" else "sent to" end) + " the fresh session (\(.chars) chars)"'
+  # The server answers with WHICH rebase it managed — they are different acts
+  # and a line that says "briefing" for a transcript replay is a lie about
+  # where the conversation went.
+  printf '%s' "$out" | jq -r '
+    if .mode == "transcript" then
+      "✓ rebased — \(.kept) turns replayed onto today'"'"'s instructions"
+        + (if .briefed then ", older turns summarised to fit" else "" end)
+    else
+      "✓ restarted on today'"'"'s instructions — the conversation came along unchanged"
+        + (if .fallback then " (transcript rebase refused: \(.fallback))" else "" end)
+    end'
 }
 
 cmd_agent() {
