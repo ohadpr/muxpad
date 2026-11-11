@@ -44,22 +44,40 @@ export function stripResume(cmd: string): string {
 }
 
 /**
- * WHAT A REBASE DOES TO THE CONVERSATION.
+ * WHAT THE REBASE BUTTON MEANS, AND THE ORDER IT TRIES THINGS IN.
  *
- *   'keep'   the session is RESUMED. Same history in the agent's context and
- *            on screen; only the process — and with it the system prompt,
- *            rebuilt from today's agent-instructions.md at every runner start
- *            — is new. This is the default, and it is what "rebase" means:
- *            same commits, new base.
- *   'fresh'  the session is replaced and seeded with a briefing. The history
- *            stays on disk and searchable but leaves the agent's context.
- *            The FALLBACK, for a conversation too large to replay.
+ * There is ONE control and it promises ONE thing: **this conversation, on
+ * today's instructions.** Everything below is how far muxpad can go toward
+ * that for a given chat — never a different promise.
  *
- * The default used to be 'fresh', which was the wrong reading of the ask:
- * "i want the history but I WANT IT REBASED ON THE NEW INSTRUCTIONS". A
- * briefing is a compaction wearing a nicer name.
+ *   'auto'   what the button sends, and what every caller should want.
+ *            Best available, in this order:
+ *              1. TRANSCRIPT REBASE — the same turns replayed from a rewritten
+ *                 session file with the stale instructions stripped out of
+ *                 them. The only option that fixes rules quoted INSIDE the
+ *                 history by old compactions. (Lands with transcript-rebase.ts;
+ *                 until then `auto` is step 2.)
+ *              2. RESUME — leave `--resume` exactly as it is and replace only
+ *                 the process. The system prompt is rebuilt from today's
+ *                 agent-instructions.md at every runner start, so this is a
+ *                 real rebase of the base; what it cannot do is touch what the
+ *                 conversation itself says about old rules.
+ *            If neither is possible it REFUSES and changes nothing.
+ *
+ *   'keep'   force step 2.
+ *
+ *   'fresh'  the escape hatch, and NOT reachable from the button: replace the
+ *            session and seed it with a briefing. The history stays on disk
+ *            and searchable but leaves the agent's window.
+ *
+ * WHY `fresh` IS NOT A FALLBACK. It answers a different question. Every other
+ * mode keeps the conversation; that one summarises it away, and a button that
+ * silently degrades from "keep your history" to "replace it with a summary"
+ * would break its own promise at exactly the moment the user could not see it
+ * happening. "i want the history but I WANT IT REBASED ON THE NEW
+ * INSTRUCTIONS." A briefing is a compaction wearing a nicer name.
  */
-export type RebaseMode = 'keep' | 'fresh';
+export type RebaseMode = 'auto' | 'keep' | 'fresh';
 
 export interface RebaseDeps {
   db: Database.Database;
@@ -85,7 +103,7 @@ export type RebaseResult =
 export async function runRebase(
   deps: RebaseDeps,
   paneId: string,
-  mode: RebaseMode = 'keep',
+  mode: RebaseMode = 'auto',
 ): Promise<RebaseResult> {
   const panes = new PaneStore(deps.db);
   const pane = panes.getById(paneId);
@@ -99,12 +117,17 @@ export async function runRebase(
     };
   }
 
-  // ── KEEP: the history rides along, and only the process is new ────────
+  // ── AUTO / KEEP: the history rides along, and only the process is new ──
+  //
+  // `auto` is this today. The transcript rebase slots in AHEAD of it — same
+  // promise, further toward it — and this stays as the fallback for a chat it
+  // cannot replay (a codex/cursor session, a file that fails its integrity
+  // check, one turn too large to keep whole).
   // Nothing is summarised, nothing is dropped, and the `--resume` stays
   // exactly as it is. The instructions are current the moment the runner
   // boots because the SDK's systemPrompt is built then, from a file the
   // server rewrites from source on every start.
-  if (mode === 'keep') {
+  if (mode === 'auto' || mode === 'keep') {
     await deps.respawn(paneId);
     return { ok: true, queued: false, chars: 0 };
   }

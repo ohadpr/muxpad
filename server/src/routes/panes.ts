@@ -804,8 +804,10 @@ export function panesScopedRoutes(deps: {
       );
     }
     const workspaceId = tabs.getWorkspaceId(p.tab_id);
-    // `keep` unless the caller explicitly asks to drop the history.
-    const mode = (await c.req.json().catch(() => ({})))?.mode === 'fresh' ? 'fresh' : 'keep';
+    // BEST AVAILABLE unless the caller explicitly asks for the history to
+    // leave the window. The button sends no mode at all — see RebaseMode.
+    const body = (await c.req.json().catch(() => ({}))) as { mode?: unknown };
+    const mode = body?.mode === 'fresh' ? 'fresh' : body?.mode === 'keep' ? 'keep' : 'auto';
     const result = await runRebase(
       {
         db: deps.db,

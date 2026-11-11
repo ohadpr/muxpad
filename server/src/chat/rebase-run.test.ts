@@ -53,6 +53,7 @@ describe('runRebase', () => {
   const ok = { status: 'queued' as const };
 
   it('KEEPS the history by default — it rebases, it does not compact', () => {
+    // `auto` is this today; the transcript rebase slots in ahead of it later.
     // "i want the history but I WANT IT REBASED ON THE NEW INSTRUCTIONS."
     // Nothing is summarised and the `--resume` is left exactly as it is: the
     // process is new, so the system prompt is rebuilt from today's
@@ -116,6 +117,29 @@ describe('runRebase', () => {
     // history is not in its window and its own instructions are the current ones.
     expect(delivered).toContain('<muxpad-rebase>');
     expect(delivered).toContain('goal: ship the broker');
+  });
+
+  it('never degrades to a briefing on its own', async () => {
+    // A button promising "keep your history" must not quietly become
+    // "replace it with a summary" — that is a different answer, delivered at
+    // the one moment the user cannot see it happening.
+    const { db, paneId } = fixture('muxpad agent --resume old-sid');
+    let briefed = false;
+    const r = await runRebase(
+      {
+        db,
+        respawn: async () => {},
+        submit: () => ok,
+        brief: async () => {
+          briefed = true;
+          return 'a summary';
+        },
+      },
+      paneId,
+      'auto',
+    );
+    expect(r.ok).toBe(true);
+    expect(briefed, 'auto must never reach the briefing path').toBe(false);
   });
 
   it('REFUSES rather than destroying a chat it could not summarise', async () => {
