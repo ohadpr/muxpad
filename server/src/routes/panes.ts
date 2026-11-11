@@ -17,6 +17,7 @@ import type { AgentBridge } from '../agent-bridge.js';
 import { applyModeToStartupCmd, modeFromStartupCmd } from '../agent-modes.js';
 import { agentStartupCmd } from '../agent-tab.js';
 import { agentPaneHasMessages } from '../chat/has-messages.js';
+import { runRebase } from '../chat/rebase-run.js';
 import type { EventBus } from '../events.js';
 import type { PaneOps } from '../node-link/PaneRouter.js';
 import { withPaneKey } from '../pane-key.js';
@@ -774,6 +775,65 @@ export function panesScopedRoutes(deps: {
       deps.events.emit({ type: 'tab.updated', tab: decorateTab(deps.cache, deps.db, tabRow) });
     }
     return c.body(null, 204);
+  });
+
+  /**
+   * REBASE: same chat, fresh context, today's instructions.
+   *
+   * "We have a ton of these 'older build' chats and it's not helpful and I
+   * keep creating new chats asking them to look at the old chat and try to
+   * continue my work there."
+   *
+   * The two faults in such a chat want opposite fixes — stale INSTRUCTIONS
+   * are cured by a fresh runner, compaction DECAY is made worse by compacting
+   * again — and rebase.ts does both at once by summarising from the
+   * transcript on disk rather than from the degraded chain in the window.
+   *
+   * A POST and never automatic: it ends background subagents, wake-ups and
+   * any running turn, so the moment is the user's to pick.
+   */
+  app.post('/:id/rebase', async (c) => {
+    const id = c.req.param('id');
+    const p = panes.getById(id);
+    if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    const bridge = deps.agentBridge;
+    if (!bridge) {
+      return c.json(
+        { error: { code: 'unavailable', message: 'no agent bridge — server still starting' } },
+        503,
+      );
+    }
+    const workspaceId = tabs.getWorkspaceId(p.tab_id);
+    const result = await runRebase(
+      {
+        db: deps.db,
+        respawn: async (paneId) => {
+          try {
+            await deps.ptyd.killPane(paneId);
+          } catch {
+            // Same as respawn: ensurePane below is what actually has to work.
+          }
+          deps.cache.forget(paneId);
+          await deps.ptyd.ensurePane({
+            id: p.id,
+            shell: p.shell ?? defaultShell,
+            // Re-read: runRebase has just rewritten it without `--resume`.
+            startup_cmd: panes.getById(paneId)?.startup_cmd ?? p.startup_cmd,
+            cwd: safeCwd(p.cwd),
+            env: withPaneKey(p.env, p.id),
+            tab_id: p.tab_id,
+            ...(workspaceId !== undefined ? { workspace_id: workspaceId } : {}),
+          });
+        },
+        submit: (paneId, text) => bridge.submitSend(paneId, text),
+      },
+      id,
+    );
+    if (!result.ok) {
+      const status = result.code === 'not_found' ? 404 : result.code === 'no_briefing' ? 503 : 400;
+      return c.json({ error: { code: result.code, message: result.message } }, status);
+    }
+    return c.json({ ok: true, queued: result.queued, chars: result.chars });
   });
 
   app.post('/:id/respawn', async (c) => {
