@@ -33,3 +33,7 @@ broker/node_modules
 # already returns [] when the file is absent, so a fresh checkout simply
 # offers no setup commands until it has its own.
 server/assets/slack-setup-releases.json
+
+# Throwaway scripts used to drive the headless browser from the repo root
+# (they need to resolve playwright from node_modules). Never part of a commit.
+*.tmp.mjs
