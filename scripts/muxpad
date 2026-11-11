@@ -948,6 +948,7 @@ read:
   search "<gmail-like query>" [--limit=N]   search your mail
   show-message <id>                         one message in full
   show-thread <id>                          the thread around a message
+  attachment <content_hash> [--out=PATH]    save one attachment (hash from show-message)
   stats                                     totals only, no content
 
 write (a draft reply; it can never send):
@@ -995,6 +996,48 @@ cmd_msgvault() {
       [ -n "${1:-}" ] || msgvault_usage
       enc="$(printf '%s' "$1" | jq -sRr @uri)"
       slack_call GET "/api/msgvault/thread?$q&id=$enc" ;;
+    # ── AN ATTACHMENT, AS A FILE ────────────────────────────────────────
+    # By the `content_hash` show-message lists. The broker runs
+    # `export-attachment --json` and hands back base64; THIS process writes
+    # the file, as the caller, so the broker never writes anywhere. The
+    # sender-chosen filename is sanitised to one plain path component, an
+    # existing file is never overwritten, and the bytes are checked against
+    # the hash before the file is kept.
+    attachment)
+      [ -n "${1:-}" ] || msgvault_usage
+      local hash="$1"; shift
+      case "$hash" in
+        *[!a-f0-9]*|'') echo 'muxpad: attachment wants the 64-hex content_hash from show-message' >&2; return 1 ;;
+      esac
+      [ "${#hash}" -eq 64 ] || { echo 'muxpad: attachment wants the 64-hex content_hash from show-message' >&2; return 1; }
+      local out=""
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --out=*) out="${1#*=}" ;;
+          *) echo "muxpad: unknown option: $1" >&2; return 1 ;;
+        esac
+        shift
+      done
+      local resp; resp="$(mktemp)"
+      slack_call GET "/api/msgvault/attachment?$q&hash=$hash" > "$resp" || { rm -f "$resp"; return 1; }
+      if [ -z "$out" ]; then
+        local name
+        name="$(jq -j '.filename // empty' "$resp" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_' | sed 's/^[._]*//' | cut -c1-120)"
+        [ -n "$name" ] || name="attachment-${hash:0:12}"
+        out="$PWD/$name"
+      fi
+      [ ! -e "$out" ] || { echo "muxpad: $out already exists; pass --out=<path>" >&2; rm -f "$resp"; return 1; }
+      jq -r '.data_base64 // empty' "$resp" | base64 --decode > "$out" 2>/dev/null || true
+      local got; got="$(shasum -a 256 "$out" | cut -d' ' -f1)"
+      if [ ! -s "$out" ] || [ "$got" != "$hash" ]; then
+        rm -f "$out"
+        echo "muxpad: msgvault: attachment did not come back intact (hash mismatch); nothing saved" >&2
+        jq -c 'del(.data_base64)' "$resp" >&2 2>/dev/null || true
+        rm -f "$resp"; return 1
+      fi
+      jq -n --arg path "$out" --slurpfile r "$resp" \
+        '{path:$path, filename:$r[0].filename, mime_type:$r[0].mime_type, size:$r[0].size}'
+      rm -f "$resp" ;;
     stats)
       slack_call GET "/api/msgvault/stats?$q" ;;
     # ── THE ONE WRITE ───────────────────────────────────────────────────
@@ -1111,6 +1154,7 @@ connector_action() {
   case "$path" in
     /api/msgvault/message) printf 'msgvault.show-message' ;;
     /api/msgvault/thread) printf 'msgvault.show-thread' ;;
+    /api/msgvault/attachment) printf 'msgvault.export-attachment' ;;
     /api/msgvault/draft-reply) printf 'msgvault.draft-reply' ;;
     /api/slack/*) printf 'slack.%s' "${path##*/}" ;;
     /api/msgvault/*) printf 'msgvault.%s' "${path##*/}" ;;

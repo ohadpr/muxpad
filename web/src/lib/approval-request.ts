@@ -32,6 +32,7 @@ const MARKS: Record<string, readonly SourceMark[]> = {
   'msgvault.search': ['gmail'],
   'msgvault.show-message': ['gmail'],
   'msgvault.show-thread': ['gmail'],
+  'msgvault.export-attachment': ['gmail'],
   // The only verb that genuinely spans the archive — and the only one allowed
   // to light three marks. It reads counts, which is why the card says so.
   'msgvault.stats': ['gmail', 'calendar', 'contacts'],
@@ -183,6 +184,11 @@ const RULES: Record<string, Rule> = {
     title: () => 'Read an email thread',
     qualifier: () => 'read-only · one thread',
     primary: 'id',
+  },
+  'msgvault.export-attachment': {
+    title: () => 'Download an email attachment',
+    qualifier: () => 'read-only · one file',
+    primary: 'hash',
   },
   /**
    * THE ONE WRITE. The body is the primary field — it is the thing going into

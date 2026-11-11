@@ -715,6 +715,7 @@ export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
     ['/search', 'msgvault.search', (q) => ({ query: q.q, limit: count(q.limit) })],
     ['/message', 'msgvault.show-message', (q) => ({ id: q.id })],
     ['/thread', 'msgvault.show-thread', (q) => ({ id: q.id })],
+    ['/attachment', 'msgvault.export-attachment', (q) => ({ hash: q.hash })],
     ['/stats', 'msgvault.stats', () => ({})],
   ];
   for (const [path, action, payload] of ARCHIVE_ROUTES)

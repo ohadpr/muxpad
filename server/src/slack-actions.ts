@@ -43,6 +43,8 @@ const TITLES: Record<string, (p: Payload) => string> = {
   'msgvault.search': (p) => `Searched your mail for ${JSON.stringify(p.query ?? '')}`,
   'msgvault.show-message': (p) => `Read one email (${String(p.id ?? '')})`,
   'msgvault.show-thread': (p) => `Read an email thread (${String(p.id ?? '')})`,
+  'msgvault.export-attachment': (p) =>
+    `Downloaded an email attachment (${String(p.hash ?? '').slice(0, 12)})`,
   'msgvault.stats': () => 'Counted your mail, calendar and contacts',
   // The WRITE says what it is about: a card reading "drafted a reply" is a
   // card you would have to open your mailbox to understand.
@@ -58,6 +60,8 @@ interface Payload {
   /** msgvault reads: the message id, or the query that was run. */
   id?: unknown;
   query?: unknown;
+  /** msgvault attachment: the content hash that was fetched. */
+  hash?: unknown;
 }
 
 /**

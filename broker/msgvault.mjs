@@ -101,6 +101,29 @@ const SPEC = {
     argv: (p) => ['show-thread', '--json', '--', p.id],
     describe: (p) => `read the thread around message ${p.id}`,
   },
+  /**
+   * ── ATTACHMENTS, BY CONTENT HASH ──────────────────────────────────────
+   *
+   * `show-message` lists a message's attachments with a `content_hash`; this
+   * fetches one. The hash is the only input, and it is checked as exactly 64
+   * hex characters — it is learnable only from an approved read, like an id.
+   *
+   * `--json`, never `-o`. `-o` writes a file AS THE BROKER'S ACCOUNT, which
+   * is a write primitive the agent would be choosing the path of; `--json`
+   * puts `data_base64` on stdout and the CLI writes the file as the caller.
+   * The sender-chosen filename never reaches a path on this side either.
+   *
+   * A READ, and in the read scope: it is the body of a message the owner
+   * already lets an agent read, delivered as bytes instead of text.
+   */
+  'msgvault.export-attachment': {
+    validate: (p) =>
+      /^[a-f0-9]{64}$/.test(String(p.hash ?? ''))
+        ? { hash: p.hash }
+        : fail('Give an attachment content_hash (64 hex characters, from show-message)'),
+    argv: (p) => ['export-attachment', '--json', '--', p.hash],
+    describe: (p) => `download one attachment (${p.hash.slice(0, 12)}…)`,
+  },
   'msgvault.stats': {
     validate: () => ({}),
     argv: () => ['stats'],

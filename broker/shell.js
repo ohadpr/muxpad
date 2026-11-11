@@ -198,6 +198,7 @@ function show(request) {
     'msgvault.search': 'Search your mail archive',
     'msgvault.show-message': 'Read one message',
     'msgvault.show-thread': 'Read a whole thread',
+    'msgvault.export-attachment': 'Download one attachment',
     'msgvault.list-senders': 'List who emails you most',
     'msgvault.stats': 'Read archive totals',
     'msgvault.meetings': 'Read meeting notes',

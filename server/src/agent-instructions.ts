@@ -203,6 +203,9 @@ Capabilities worth knowing:
 
   READS: \`search '<gmail-like query>' [--limit=N]\` (max 200),
   \`show-message <id>\`, \`show-thread <id>\`, \`stats\`.
+  ATTACHMENTS: \`attachment <content_hash> [--out=PATH]\` saves one file
+  (default: the current directory) — the hash is in \`show-message\`'s
+  \`attachments\` list. Read the saved file with your own tools.
   WRITE: \`draft-reply <message-id> --body="…" [--all]\`. It lands in the
   mailbox unsent; \`--all\` answers everyone on the thread instead of the
   sender. **Nothing here can send.**

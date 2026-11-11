@@ -137,6 +137,7 @@ test('only verbs that work against 0.22.0 are offered', () => {
       'msgvault.search',
       'msgvault.show-message',
       'msgvault.show-thread',
+      'msgvault.export-attachment',
       'msgvault.stats',
       'msgvault.draft-reply',
     ],
@@ -149,7 +150,13 @@ test('only verbs that work against 0.22.0 are offered', () => {
   // delegated at this version, so muxpad does not pretend otherwise.
   assert.deepEqual(
     [...CAPABILITIES.msgvault.readActions],
-    ['msgvault.search', 'msgvault.show-message', 'msgvault.show-thread', 'msgvault.stats'],
+    [
+      'msgvault.search',
+      'msgvault.show-message',
+      'msgvault.show-thread',
+      'msgvault.export-attachment',
+      'msgvault.stats',
+    ],
   );
 });
 
@@ -161,7 +168,7 @@ test('the dialog names the thing being asked for, not just the verb', () => {
   // EVERY action, including the writes — one payload that satisfies all of
   // them, so adding a verb without a description fails here rather than
   // showing a human the raw action name in a dialog.
-  const anything = { query: 'q', id: 'i', body: 'b' };
+  const anything = { query: 'q', id: 'i', body: 'b', hash: 'a'.repeat(64) };
   for (const a of CAPABILITIES.msgvault.actions) {
     const d = describeMsgvault(a, validateMsgvault(a, anything));
     assert.ok(d.length > 10 && !d.startsWith('msgvault.'), `${a} -> ${d}`);
@@ -185,9 +192,12 @@ test('the dialog names the thing being asked for, not just the verb', () => {
 test('there is no verb for composing a new email', () => {
   // Not "refused" — ABSENT. `draft-compose` must not appear in any command
   // line this module can build, for any action it accepts.
-  assert.throws(() => validateMsgvault('msgvault.draft', { to: ['a@b.com'], subject: 's', body: 'b' }), /Unsupported action/);
+  assert.throws(
+    () => validateMsgvault('msgvault.draft', { to: ['a@b.com'], subject: 's', body: 'b' }),
+    /Unsupported action/,
+  );
   for (const a of CAPABILITIES.msgvault.actions) {
-    const p = validateMsgvault(a, { query: 'q', id: '1', body: 'b' });
+    const p = validateMsgvault(a, { query: 'q', id: '1', body: 'b', hash: 'a'.repeat(64) });
     const { args } = msgvaultArgv(a, p, INSTALL);
     assert.ok(!args.includes('draft-compose'), `${a} -> ${args.join(' ')}`);
     // …and no recipient flags anywhere: with compose gone, nothing this
@@ -223,7 +233,11 @@ test('a reply names the message it answers, and says who it goes to', () => {
 
 test('the write cannot be turned into a send, or into another flag', () => {
   for (const action of ['msgvault.draft-reply']) {
-    const { args } = msgvaultArgv(action, validateMsgvault(action, { id: '1', body: 'b' }), INSTALL);
+    const { args } = msgvaultArgv(
+      action,
+      validateMsgvault(action, { id: '1', body: 'b' }),
+      INSTALL,
+    );
     assert.ok(!args.some((a) => /send/i.test(a)), args.join(' '));
     // The verb is a constant and the only flags present are the ones this
     // module wrote — there is no slot for a caller's.
@@ -235,7 +249,10 @@ test('a reply refuses a flag-shaped or oversized body', () => {
   // The reason the whole file exists: msgvault is cobra/pflag, so free text
   // that begins with `-` is parsed as a flag at the binary however tidy the
   // argv array looks from here.
-  assert.throws(() => validateMsgvault('msgvault.draft-reply', { id: '1', body: '--local' }), /body/i);
+  assert.throws(
+    () => validateMsgvault('msgvault.draft-reply', { id: '1', body: '--local' }),
+    /body/i,
+  );
   assert.throws(() => validateMsgvault('msgvault.draft-reply', { id: '1', body: '' }), /body/i);
   assert.throws(
     () => validateMsgvault('msgvault.draft-reply', { id: '1', body: 'x'.repeat(20001) }),
@@ -250,4 +267,29 @@ test('a reply refuses a message id it could not have learned', () => {
       /message id/i,
       JSON.stringify(id),
     );
+});
+
+test('an attachment is fetched by content hash, to stdout, and never written by the broker', () => {
+  const hash = '1a059e3ac41eb3743928854fc0ba8d0f9131a30903e548e46c46325caef749df';
+  const { args } = msgvaultArgv(
+    'msgvault.export-attachment',
+    validateMsgvault('msgvault.export-attachment', { hash }),
+    { binary: '/bin/msgvault', agentUrl: 'http://127.0.0.1:1', tokenFile: '/t' },
+  );
+  assert.deepEqual(args.slice(-4), ['export-attachment', '--json', '--', hash]);
+  // `-o` would be a file written as the broker's account, at a path the agent chose.
+  assert.ok(!args.includes('-o') && !args.includes('--output'));
+  for (const bad of ['', 'ABC', '-'.repeat(64), `${hash}x`, hash.slice(1), '../../etc/passwd', 7])
+    assert.throws(
+      () => validateMsgvault('msgvault.export-attachment', { hash: bad }),
+      /content_hash/,
+    );
+  // Only the checked field survives into the payload.
+  assert.deepEqual(validateMsgvault('msgvault.export-attachment', { hash, out: '/tmp/x' }), {
+    hash,
+  });
+  assert.match(
+    describeMsgvault('msgvault.export-attachment', { hash }),
+    /attachment \(1a059e3ac41e/,
+  );
 });
