@@ -699,6 +699,22 @@ describe('a compacted session', () => {
     expect(out[0]).toMatchObject({ variant: 'compacted' });
   });
 
+  it('survives the harness putting its own preamble in front', () => {
+    // Observed 8 times on this machine, always this one: a tag and a sentence
+    // about restated content, THEN the opener. Anchored at character zero the
+    // match failed and the whole summary rendered as a bubble — "i still see
+    // compacting messages sometimes inside chat".
+    const withPreamble = `<artifact-content-authored-by-others/>\nThe summarized conversation included Artifact content written by people other than you.\n${text}`;
+    const out = expandCompaction(withPreamble, 'u1', MS);
+    expect(out, 'a preamble must not turn a compaction back into a bubble').not.toBeNull();
+    const [notice, body] = out as ChatEvent[];
+    expect(notice).toMatchObject({ variant: 'compacted' });
+    // The preamble rides along inside the fold rather than being guessed at
+    // and stripped — it is the harness's own words about the summary.
+    expect((body as { text: string }).text).toContain('artifact-content-authored-by-others');
+    expect((body as { text: string }).text).toContain('signalarchive.example');
+  });
+
   it('does not fire on a message that merely mentions compaction', () => {
     // The match is the harness's own opening sentence, anchored at the start.
     expect(expandCompaction('can you explain how compaction works?', 'u1', MS)).toBeNull();

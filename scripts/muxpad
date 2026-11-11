@@ -3652,6 +3652,7 @@ agent_subcommand_usage() {
   case "$1" in
     new) echo 'usage: muxpad agent new [--workspace=<id>] [--cwd=<dir>] [--name=<tab name>] [--model=<model>] [--mode=chat|agent] [--backend=claude|codex|cursor|pick] [--detached] "first message"' ;;
     list) echo 'usage: muxpad agent list' ;;
+    rebase) echo 'usage: muxpad agent rebase [<paneId>]   — same chat, fresh context, current instructions' ;;
     respawn) echo 'usage: muxpad agent respawn <paneId> | --all [--backend=<id>]' ;;
     send) echo 'usage: muxpad agent send <paneId> "message"' ;;
     stop) echo 'usage: muxpad agent stop <paneId>' ;;
@@ -3660,13 +3661,49 @@ agent_subcommand_usage() {
   esac
 }
 
+cmd_agent_rebase() {
+  # SAME CHAT, FRESH CONTEXT, TODAY'S INSTRUCTIONS.
+  #
+  # A long-lived chat carries two different kinds of rot and they want
+  # opposite cures: its INSTRUCTIONS are stale (fixed by a fresh runner, which
+  # re-reads the generated ones on boot) and its CONTEXT has been compacted
+  # down a chain of summaries (made worse by compacting again). A rebase
+  # summarises from the transcript ON DISK — detail the chain already dropped
+  # is still there — and boots the pane without `--resume`, so the new session
+  # starts current and is handed the briefing as its first message.
+  #
+  # It ends background subagents, wake-ups and any running turn. That is why
+  # it is typed, never automatic.
+  require_api_url
+  require_jq
+  local pane="${1:-${MUXPAD_PANE_ID:-}}"
+  if [ -z "$pane" ]; then
+    echo 'usage: muxpad agent rebase <paneId>   (defaults to this pane)' >&2
+    exit 1
+  fi
+  echo "rebasing $pane — writing a briefing from the transcript first, this takes a moment…" >&2
+  local out
+  out="$(http_request POST "/api/panes/$pane/rebase" '{}' 2>/dev/null)" || true
+  if [ -z "$out" ]; then
+    echo 'muxpad: no answer from the server' >&2
+    exit 1
+  fi
+  local err
+  err="$(printf '%s' "$out" | jq -r '.error.message // empty')"
+  if [ -n "$err" ]; then
+    echo "muxpad: $err" >&2
+    exit 1
+  fi
+  printf '%s' "$out" | jq -r '"✓ rebased — briefing " + (if .queued then "queued for" else "sent to" end) + " the fresh session (\(.chars) chars)"'
+}
+
 cmd_agent() {
-  # `muxpad agent new|list|respawn|send|transcript|wait …` are HTTP verbs;
+  # `muxpad agent new|list|rebase|respawn|send|transcript|wait …` are HTTP verbs;
   # anything else is the in-pane runner itself (including the server-written
   # `muxpad agent --resume <sid>`).
   local _sub="${1:-}" _a
   case "$_sub" in
-    new|list|respawn|send|stop|transcript|wait)
+    new|list|rebase|respawn|send|stop|transcript|wait)
       # STOPS AT `--`, like every other argv scan should. Past the separator a
       # token is DATA, and `muxpad agent send <pane> -- "--help"` is someone
       # sending the literal text `--help` to a worker — printing usage and
@@ -3681,6 +3718,7 @@ cmd_agent() {
   case "$_sub" in
     new) shift; cmd_agent_new "$@"; return ;;
     list) shift; require_jq; cmd_agent_list "$@"; return ;;
+    rebase) shift; cmd_agent_rebase "$@"; return ;;
     respawn) shift; cmd_agent_respawn "$@"; return ;;
     send) shift; require_jq; cmd_agent_send "$@"; return ;;
     stop) shift; require_jq; cmd_agent_stop "$@"; return ;;

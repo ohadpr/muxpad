@@ -742,11 +742,29 @@ export function expandCronFire(text: string, id: string, ts: number | null): Cha
  * the only guard there is, and it has to be the whole sentence.
  */
 const COMPACTION_OPENER =
-  /^this session is being continued from a previous conversation that (?:ran out of context|is being summarized)\b/i;
+  /^this session is being continued from a previous conversation that (?:ran out of context|is being summarized)\b/im;
+
+/**
+ * How far in the opener may be, and why it is allowed to be anywhere at all.
+ *
+ * The harness sometimes puts its OWN preamble in front — observed 8 times on
+ * this machine, every one of them led by
+ * `<artifact-content-authored-by-others/>` and a sentence about treating
+ * restated content as data. `^`-anchored at character zero, the match failed
+ * and the whole summary rendered as a bubble in the voice of someone who
+ * never typed it: the exact defect the notice exists to prevent, reported
+ * again as "i still see compacting messages sometimes inside chat".
+ *
+ * So the opener is matched at the start of a LINE within the first stretch of
+ * the message. That is still the whole sentence, verbatim, on a line of its
+ * own — a human would have to type it exactly to collide — and the preamble
+ * stays inside the folded copy rather than being guessed at and stripped.
+ */
+const COMPACTION_PREAMBLE_CHARS = 1500;
 
 export function expandCompaction(text: string, id: string, ts: number | null): ChatEvent[] | null {
   const t = text.trimStart();
-  if (!COMPACTION_OPENER.test(t)) return null;
+  if (!COMPACTION_OPENER.test(t.slice(0, COMPACTION_PREAMBLE_CHARS))) return null;
   const notice: NoticeEvent = {
     kind: 'notice',
     // Distinct id from the bubble's — they are two React rows.
