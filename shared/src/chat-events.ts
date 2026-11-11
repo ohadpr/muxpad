@@ -517,7 +517,7 @@ function tsOf(raw: Record<string, unknown>): number | null {
 // User string content that is muxpad/CLI plumbing, not something a human typed:
 // the injected caveat preamble and slash-command wrappers. Rendering these as
 // chat bubbles is pure noise (opcode/claude-code-webui filter the same).
-function isPlumbingUserText(text: string): boolean {
+export function isPlumbingUserText(text: string): boolean {
   const t = text.trimStart();
   return (
     t.startsWith('Caveat: The messages below') ||
@@ -762,9 +762,19 @@ const COMPACTION_OPENER =
  */
 const COMPACTION_PREAMBLE_CHARS = 1500;
 
+/**
+ * Is this user text the summary a compacted session reopens with? Exported for
+ * the transcript rebase (server/src/chat/transcript-rebase.ts), which DROPS
+ * these — the same match that folds one here is what removes one there, so a
+ * summary can never be hidden on screen and still replayed to the model.
+ */
+export function isCompactionText(text: string): boolean {
+  return COMPACTION_OPENER.test(text.trimStart().slice(0, COMPACTION_PREAMBLE_CHARS));
+}
+
 export function expandCompaction(text: string, id: string, ts: number | null): ChatEvent[] | null {
   const t = text.trimStart();
-  if (!COMPACTION_OPENER.test(t.slice(0, COMPACTION_PREAMBLE_CHARS))) return null;
+  if (!isCompactionText(t)) return null;
   const notice: NoticeEvent = {
     kind: 'notice',
     // Distinct id from the bubble's — they are two React rows.
@@ -776,6 +786,26 @@ export function expandCompaction(text: string, id: string, ts: number | null): C
   // FOLDED, like a cron's injected prompt. Kept rather than dropped: what a
   // compaction decided to keep is occasionally the thing you need, and it is
   // the only copy — the turns it replaced are gone from the agent's context.
+  return [notice, { kind: 'user', id, ts, text: t, folded: true }];
+}
+
+/**
+ * The history a transcript rebase puts in front of the turns it replays
+ * (server/src/chat/rebase.ts `wrapHistory`). Same treatment as a compaction,
+ * which it replaces: a mark that says the earlier part is summarised, with the
+ * summary one disclosure away. Same notice variant on purpose — to a reader
+ * both mean "what is above this line is a summary, not the conversation".
+ */
+export function expandHistory(text: string, id: string, ts: number | null): ChatEvent[] | null {
+  const t = text.trimStart();
+  if (!t.startsWith('<muxpad-history>')) return null;
+  const notice: NoticeEvent = {
+    kind: 'notice',
+    id: `${id}:history`,
+    ts,
+    variant: 'compacted',
+    text: 'Rebased — the earlier part of this chat is summarised',
+  };
   return [notice, { kind: 'user', id, ts, text: t, folded: true }];
 }
 
@@ -973,6 +1003,9 @@ export function normalizeTranscriptLine(line: unknown): ChatEvent[] {
       // …and so is the summary the harness reopens a compacted session with.
       const compacted = expandCompaction(content, id, ts);
       if (compacted) return compacted;
+      // …and so is the history a transcript rebase leads with.
+      const history = expandHistory(content, id, ts);
+      if (history) return history;
       // An `@mention`'s handles are for the agent, not the reader — see
       // `forDisplay`.
       return [{ kind: 'user', id, ts, text: stripMentionContext(content) }];
