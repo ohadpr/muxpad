@@ -145,8 +145,11 @@ describe('the row is one line, and the mark is beside the name', () => {
     expect(live).toMatch(/text-transform:\s*uppercase/);
     expect(live).toMatch(/background:\s*var\(--state-plate/);
     expect(live).toMatch(/margin-inline-start:\s*auto/);
-    // Smaller than the name, or it is still competing with it.
-    expect(live).toMatch(/font-size:\s*0\.625rem/);
+    // PETITE. It shipped at 0.625rem/700 and read as a shouting label on a
+    // row whose subject is the name beside it. Small, and light: a thing that
+    // repeats 153 times must not be bold.
+    expect(live).toMatch(/font-size:\s*0\.5625rem/);
+    expect(live).toMatch(/font-weight:\s*500/);
   });
 
   it('keeps DONE the quiet one and the exceptions loud', () => {
@@ -175,8 +178,23 @@ describe('the row is one line, and the mark is beside the name', () => {
  * right."
  */
 describe('the drawer says something is going on in there', () => {
-  it('animates the closed button while a worker is running', () => {
-    expect(rule('.chat-drawer-open[data-running="true"]')).toMatch(/animation:/);
+  it('spins a real arc on the closed button while a worker is running', () => {
+    // A breathing border was the first attempt and was too quiet to answer
+    // the question asked of this control. The arc is a pseudo-element so it
+    // can sit OUTSIDE the 28px target without crowding the glyph or count.
+    const arc = rule('.chat-drawer-open[data-running="true"]::after');
+    expect(arc, 'no spinner on the drawer button').not.toBe('');
+    expect(arc).toMatch(/animation:\s*chat-drawer-spin/);
+    expect(arc).toMatch(/border-top-color/);
+    expect(arc).toContain('--status-working');
+  });
+
+  it('paints a running row in the WORKING hue, never the accent', () => {
+    // This theme's accent is a crimson, and a crimson label on a healthy
+    // running row reads as an error — "working is red, red feels error".
+    const working = rule('.chat-drawer__row-live[data-state="working"]');
+    expect(working).toContain('--status-working');
+    expect(working).not.toMatch(/--state-ink:\s*var\(--d-accent\)/);
   });
 
   it('does not animate it when nothing is running', () => {

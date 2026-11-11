@@ -338,13 +338,34 @@
 .chat-drawer-open[data-running="true"] {
   color: var(--d-accent);
   border-color: color-mix(in srgb, var(--d-accent) 40%, transparent);
-  /* …AND IT BREATHES. The colour above is a state — it looks identical
-     whether those workers are running or just sitting there open. Motion is
-     the part that reads as "right now" at a glance, and a breath rather than
-     a spin because this control is furniture at the top of every chat: it has
-     to be noticeable from the corner of the eye without demanding to be
-     watched. Keyframes below, beside the row spinner's. */
-  animation: chat-drawer-breathe 2.4s ease-in-out infinite;
+}
+/* …AND IT SPINS. A breathing border was the first attempt and it was too
+   subtle to answer the question being asked of this control — "show spinner
+   on top right chat icon too as to indicate working". So: a real arc, in the
+   status channel's working hue, orbiting the button. `inset: -4px` puts it
+   outside the 28px target so it never crowds the glyph or the count, and
+   `border-top-color` alone is what makes a full circle read as a spinner. */
+.chat-drawer-open[data-running="true"]::after {
+  content: "";
+  position: absolute;
+  /* −6px makes a 40px circle, which just contains the 28px square's 39.6px
+     diagonal — any tighter and the corners poke through the ring. */
+  inset: -6px;
+  border-radius: 50%;
+  /* A FULL faint ring with one bright quarter, not a lone arc. The first
+     version was `transparent` all round with a single coloured edge, and
+     against a rounded square — with the count badge sitting on the corner
+     where the arc is brightest — it read as a stray stroke rather than
+     motion. A complete ring is unmistakably a spinner even when a quarter of
+     it is covered. */
+  border: 1.5px solid color-mix(in srgb, var(--status-working, var(--d-accent)) 28%, transparent);
+  border-top-color: var(--status-working, var(--d-accent));
+  animation: chat-drawer-spin 900ms linear infinite;
+  pointer-events: none;
+}
+/* The count stays on top of the ring: it is a fact, the ring is a state. */
+.chat-drawer-open__count {
+  z-index: 1;
 }
 .chat-drawer-open__count {
   position: absolute;
@@ -447,13 +468,17 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 2px 6px;
+  padding: 1px 6px;
   border-radius: 999px;
   background: var(--state-plate, transparent);
   color: var(--state-ink, var(--d-accent));
-  font-size: 0.625rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
+  /* PETITE. It came out at 0.625rem/700 with wide tracking, which is a
+     shouting label on a row whose actual subject is the name beside it —
+     "the done label is thick and ugly". Small, light, and only as loud as a
+     thing that repeats 153 times should ever be. */
+  font-size: 0.5625rem;
+  font-weight: 500;
+  letter-spacing: 0.055em;
   text-transform: uppercase;
   /* A label never shrinks the name's room further than this. */
   white-space: nowrap;
@@ -470,7 +495,7 @@
    and that is what a delivered worker's report is. Just not shouting. */
 .chat-drawer__row-live[data-state="delivered"] {
   --state-ink: var(--status-ready, var(--d-accent));
-  --state-plate: color-mix(in srgb, var(--status-ready, var(--d-accent)) 13%, transparent);
+  --state-plate: color-mix(in srgb, var(--status-ready, var(--d-accent)) 11%, transparent);
 }
 /* Archived, or decayed without ever delivering. Both say DONE to a reader
    scanning the list, which is honest — the hue is what separates a result
@@ -479,11 +504,16 @@
   --state-ink: var(--d-faint);
   --state-plate: color-mix(in srgb, var(--d-ink) 7%, transparent);
 }
-/* THE EXCEPTIONS, at full strength, because they are the rows you might act
-   on. A worker still going. */
+/* THE EXCEPTIONS, a step louder, because they are the rows you might act on.
+   A worker still going — in the status channel's WORKING hue, not the
+   accent. This theme's accent is a crimson, and a crimson label on a healthy
+   running row reads as an error: "working is red, red feels error". The
+   channel has a colour for exactly this and it does not move with the
+   theme. */
 .chat-drawer__row-live[data-state="working"] {
-  --state-ink: var(--d-accent);
-  --state-plate: color-mix(in srgb, var(--d-accent) 15%, transparent);
+  --state-ink: var(--status-working, var(--d-accent));
+  --state-plate: color-mix(in srgb, var(--status-working, var(--d-accent)) 16%, transparent);
+  font-weight: 600;
 }
 /* One that stopped to ask you something — the only row here that is waiting
    on a human. */
@@ -491,11 +521,13 @@
 .chat-drawer__row-live[data-state="awaiting"] {
   --state-ink: var(--status-blocked, var(--danger, var(--d-accent)));
   --state-plate: color-mix(in srgb, var(--status-blocked, var(--d-accent)) 15%, transparent);
+  font-weight: 600;
 }
 /* And one that crashed. */
 .chat-drawer__row-live[data-state="failed"] {
   --state-ink: var(--status-dead, var(--danger, var(--d-accent)));
   --state-plate: color-mix(in srgb, var(--status-dead, var(--d-accent)) 15%, transparent);
+  font-weight: 600;
 }
 /* The age already took the free space; the label sits right after it. Without
    this both carry `margin-inline-start: auto` and the browser SPLITS the
@@ -522,22 +554,11 @@
    breath rather than a spin because this control is furniture at the top of
    every chat — it must be noticeable from the corner of the eye and must not
    demand to be watched. */
-@keyframes chat-drawer-breathe {
-  0%,
-  100% {
-    border-color: color-mix(in srgb, var(--d-accent) 30%, transparent);
-  }
-  50% {
-    border-color: color-mix(in srgb, var(--d-accent) 95%, transparent);
-    background: color-mix(in srgb, var(--d-accent) 12%, var(--d-surface));
-  }
-}
-
 /* Motion is the one thing here somebody may have asked the system not to do.
    The colour and the count still carry every fact. */
 @media (prefers-reduced-motion: reduce) {
   .chat-drawer__spin,
-  .chat-drawer-open[data-running="true"] {
+  .chat-drawer-open[data-running="true"]::after {
     animation: none;
   }
 }
