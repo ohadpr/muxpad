@@ -887,7 +887,7 @@ backend, mode, status).
 Measured on this machine (10 sessions, 37,941 tool calls): the median command
 finished in 0.15 s, but every call then waits 2–4 s for the next one to be
 written, plus ~0.3 s per 100k tokens of context. A 30-call turn is two minutes
-of that, however fast the commands are. Only 0.7% of steps made more than one
+of that, however fast the commands are. Only 0.8% of steps made more than one
 call; about 15% were follow-up reads that did not depend on the previous result.
 
 - **Ask for everything you already know you need in ONE call** — several files
