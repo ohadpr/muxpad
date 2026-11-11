@@ -593,6 +593,92 @@ describe('CronScheduler', () => {
     s.stop();
   });
 
+  /**
+   * A RESTART USED TO KILL THE SCHEDULE, SILENTLY AND FOREVER.
+   *
+   * `closeOnDone` is in memory. A fire records "close this tab when its turn
+   * ends" and nothing else knows, so a deploy, a `muxpad restart` or a crash
+   * between the fire and the turn ending orphans the tab — and `open_tabs`
+   * only ever drops ids whose TAB WAS DELETED, so it counted against
+   * `max_open` for the rest of time.
+   *
+   * Measured on this machine 2026-11-11: four crons wedged, `a health-check cron`
+   * skipping every three hours since 09 Nov with `max_open 1 reached`, its
+   * fire predating the running server process. Eleven lost runs, no error
+   * anywhere.
+   */
+  it('unwedges itself when a restart lost the close it was owed', async () => {
+    const first = scheduler();
+    first.start();
+    const cron = makeCron(first, {
+      target_kind: 'new-tab',
+      target_pane: null,
+      workspace_id: wsId,
+      max_open: 1,
+      close_when_done: true,
+    });
+    runAt(cron);
+    await first.tick();
+    const orphan = first.store.runs(cron.id)[0]?.target_tab as string;
+    expect(new TabStore(db).getById(orphan)).not.toBeNull();
+    // THE RESTART: the turn-done event never arrives, and the map dies with
+    // the process. Everything the next process knows is in SQLite.
+    first.stop();
+    expect(first.store.openTabs(cron.id)).toEqual([orphan]);
+
+    const second = scheduler();
+    second.start();
+    // Past the NEW process's own boot grace, and past the cron's next slot.
+    now =
+      Math.max(second.store.getById(cron.id)?.next_due_at ?? now, now + CRON_STARTUP_GRACE_MS) +
+      1000;
+    await second.tick();
+    second.stop();
+    // The orphan is closed and the schedule fires again, instead of skipping
+    // on a tab whose work finished two days ago.
+    expect(new TabStore(db).getById(orphan)).toBeNull();
+    expect(sent).toHaveLength(2);
+    expect(
+      second.store.runs(cron.id).some((r) => r.outcome === 'closed'),
+      'the close is recorded, so the history says what happened to the tab',
+    ).toBe(true);
+  });
+
+  it('does NOT close a tab that was kept on purpose', async () => {
+    // The reconcile and `onTurnEnded` must apply the same predicate — the two
+    // drifting is how a tab held open for a good reason gets deleted by the
+    // other path. A `kept` run row is the durable record of that decision.
+    const first = scheduler({ blocked: () => true });
+    first.start();
+    const cron = makeCron(first, {
+      target_kind: 'new-tab',
+      target_pane: null,
+      workspace_id: wsId,
+      max_open: 1,
+      close_when_done: true,
+    });
+    runAt(cron);
+    await first.tick();
+    const tabId = first.store.runs(cron.id)[0]?.target_tab as string;
+    const firedPane = sent[0]?.paneId as string;
+    events.emit({ type: 'agent_turn', pane_id: firedPane, phase: 'done', sid: null, backend: 'x' });
+    await new Promise((r) => setImmediate(r));
+    first.stop();
+    expect(first.store.runs(cron.id).some((r) => r.outcome === 'kept')).toBe(true);
+
+    // A fresh process — no blocked() this time, so only the durable `kept`
+    // row can save the tab.
+    const second = scheduler();
+    second.start();
+    now =
+      Math.max(second.store.getById(cron.id)?.next_due_at ?? now, now + CRON_STARTUP_GRACE_MS) +
+      1000;
+    await second.tick();
+    second.stop();
+    expect(new TabStore(db).getById(tabId), 'a question is still waiting in there').not.toBeNull();
+    expect(sent).toHaveLength(1);
+  });
+
   it('close_when_done KEEPS the tab when the agent left a question pending', async () => {
     const s = scheduler({ blocked: () => true });
     s.start();

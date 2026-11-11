@@ -517,8 +517,9 @@ export class CronScheduler {
     const workspaceId = workspaceOverride ?? cron.workspace_id;
     if (!workspaceId) return { outcome: 'error', detail: 'no target workspace' };
     // Guardrail: a nightly cron must not leave 30 tabs after a month. Prune
-    // the recorded tabs to those that still exist, then honour max_open.
-    const open = this.store.openTabs(cron.id).filter((id) => this.tabs.getById(id) !== null);
+    // the recorded tabs to those that still exist AND are still owed a close,
+    // then honour max_open.
+    const open = await this.reconcileOpenTabs(cron);
     if (open.length >= cron.max_open) {
       this.store.setOpenTabs(cron.id, open);
       return {
@@ -666,6 +667,85 @@ export class CronScheduler {
       pending.cronId,
       this.store.openTabs(pending.cronId).filter((id) => id !== pending.tabId),
     );
+  }
+
+  /**
+   * THE CLOSE THAT WAS OWED, AFTER A RESTART THAT FORGOT IT.
+   *
+   * `closeOnDone` is an in-memory map: a `--new-tab` fire records "when this
+   * pane's turn ends, delete its tab" and nothing else knows. If the server
+   * restarts between the fire and the turn ending — which is every deploy,
+   * every `muxpad restart`, every crash — that intent is gone. The tab stays
+   * forever, and because `open_tabs` only ever drops ids whose TAB WAS
+   * DELETED, it counts against `max_open` for the rest of time.
+   *
+   * The schedule is then dead, silently. Measured on this machine
+   * 2026-11-11: four crons wedged this way, `a health-check cron` skipping every
+   * three hours since 09 Nov with `max_open 1 reached (1 still open)` — its
+   * fire predated the running server process, so the close died with the old
+   * one. Eleven lost runs, no error anywhere, the row in the rail looking
+   * like an ordinary chat.
+   *
+   * So the question is asked again from DURABLE state instead: for each tab
+   * still recorded open, is it owed a close right now? The predicate is
+   * deliberately the same one {@link onTurnEnded} applies, because the two
+   * drifting is how a tab kept for a good reason gets deleted by the other
+   * path — and a `kept` run row is the durable record of that decision, which
+   * is why the tabs held open on purpose survive this.
+   *
+   * Returns the ids that are still legitimately open.
+   */
+  private async reconcileOpenTabs(cron: Cron): Promise<string[]> {
+    const recorded = this.store.openTabs(cron.id);
+    const kept = new Set(
+      this.store
+        .runs(cron.id)
+        .filter((r) => r.outcome === 'kept' && r.target_tab)
+        .map((r) => r.target_tab as string),
+    );
+    const survivors: string[] = [];
+    let closed = 0;
+    for (const tabId of recorded) {
+      if (this.tabs.getById(tabId) === null) continue; // already gone
+      const paneId = this.panes.listByTab(tabId)[0]?.id;
+      // A tab we cannot see a pane for is not ours to delete: it may be a
+      // multi-pane tab a person has since made their own.
+      if (!paneId || !cron.close_when_done || kept.has(tabId)) {
+        survivors.push(tabId);
+        continue;
+      }
+      // STILL WORKING, in any of the senses that hold a tab open at turn end.
+      // `turnActive` is the runner registry, not the pty heuristic.
+      if (
+        this.deps.turnActive?.(paneId) === true ||
+        this.queue.count(paneId) > 0 ||
+        this.deps.blocked?.(paneId) === true ||
+        this.deps.cache.getSubagentCount(paneId) > 0 ||
+        this.paneHasArtifact(paneId)
+      ) {
+        survivors.push(tabId);
+        // Re-arm, so the close happens the ordinary way when this turn ends
+        // rather than waiting for the next fire to come round.
+        if (!this.closeOnDone.has(paneId)) {
+          this.closeOnDone.set(paneId, { cronId: cron.id, tabId });
+        }
+        continue;
+      }
+      await deleteTabCascade(this.deps, tabId);
+      closed++;
+      this.store.addRun({
+        cron_id: cron.id,
+        due_at: this.now(),
+        fired_at: this.now(),
+        target_tab: tabId,
+        outcome: 'closed',
+        detail: 'closed on reconcile — its close was lost (server restart)',
+      });
+    }
+    if (closed > 0 || survivors.length !== recorded.length) {
+      this.store.setOpenTabs(cron.id, survivors);
+    }
+    return survivors;
   }
 
   private noteTabKept(cronId: string, tabId: string, why: string): void {
