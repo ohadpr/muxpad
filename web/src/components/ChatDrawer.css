@@ -427,52 +427,79 @@
    panel wearing it. The tile carries IDENTITY now, so state had to move
    somewhere, and a word is unambiguous where a second coloured dot would just
    be another dot. */
+/* ── THE STATE IS A LABEL, NOT A WORD ──────────────────────────────────────
+   It shipped as plain green text at the row's own size, and 153 rows of it
+   read exactly as reported: "it's all just word soup". Set in the same face
+   and weight as the name beside it, `done` is another word competing with the
+   one thing the row is actually for.
+
+   So it wears a plate: small, uppercase, tracked, enclosed. That does two
+   things at once — it stops being a word and starts being a mark, and the
+   eye can skip a column of identical marks in a way it cannot skip a column
+   of identical words.
+
+   The hues come from the status channel, never the accent: the accent is
+   re-tuned per theme and "did this finish" must read the same in all of them.
+   Plate and ink are set per state below; this rule is only the shape. */
 .chat-drawer__row-live {
   flex: 0 0 auto;
   margin-inline-start: auto;
-  color: var(--d-accent);
-  font-size: 0.75rem;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-}
-/* …and "needs you" is a different fact from "working", so it does not wear
-   the same ink. A worker waiting on a human is the one row on this panel you
-   might act on, and the accent is already spoken for by the ones that are
-   simply busy. */
-.chat-drawer__row-live[data-state="blocked"],
-.chat-drawer__row-live[data-state="awaiting"] {
-  color: var(--status-blocked, var(--danger, var(--d-accent)));
-}
-
-/* ── THE STATE CHANNEL, NOT THE ACCENT ─────────────────────────────────────
-   Every row now carries its state as a word, and the hues come from the
-   status channel for the reason the mention card already records: the accent
-   changes with the theme, and "did this finish" must read the same in all of
-   them. Green is the rail's own "finished, waiting for you", which is exactly
-   what a delivered worker's report is.
-
-   `done` — archived, or decayed without ever delivering — stays grey on
-   purpose. Both words are "done" to a reader scanning the list, and that is
-   honest; the hue is what separates a result that arrived from a chat that
-   simply stopped. */
-.chat-drawer__row-live {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--state-plate, transparent);
+  color: var(--state-ink, var(--d-accent));
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  /* A label never shrinks the name's room further than this. */
+  white-space: nowrap;
 }
+
+/* ── AND `DONE` IS THE QUIET ONE ───────────────────────────────────────────
+   Almost every row in this list is done — that is what a work log looks like
+   — so the common case is furniture and the exceptions are the news. A label
+   every row wears at full strength cannot point at anything, which is the
+   same argument the block headings already won: only the RUNNING block is
+   accented.
+
+   Still green, because green is the rail's own "finished, waiting for you"
+   and that is what a delivered worker's report is. Just not shouting. */
 .chat-drawer__row-live[data-state="delivered"] {
-  color: var(--status-ready, var(--d-accent));
+  --state-ink: var(--status-ready, var(--d-accent));
+  --state-plate: color-mix(in srgb, var(--status-ready, var(--d-accent)) 13%, transparent);
 }
-.chat-drawer__row-live[data-state="failed"] {
-  color: var(--status-dead, var(--danger, var(--d-accent)));
-}
+/* Archived, or decayed without ever delivering. Both say DONE to a reader
+   scanning the list, which is honest — the hue is what separates a result
+   that arrived from a chat that merely stopped. */
 .chat-drawer__row-live[data-state="done"] {
-  color: var(--d-faint);
-  font-weight: 500;
+  --state-ink: var(--d-faint);
+  --state-plate: color-mix(in srgb, var(--d-ink) 7%, transparent);
 }
-/* The age already took the free space; the word sits right after it. Without
-   this both carry `margin-inline-start: auto` and the browser SPLITS the slack
-   between them, parking the age in the middle of the row. */
+/* THE EXCEPTIONS, at full strength, because they are the rows you might act
+   on. A worker still going. */
+.chat-drawer__row-live[data-state="working"] {
+  --state-ink: var(--d-accent);
+  --state-plate: color-mix(in srgb, var(--d-accent) 15%, transparent);
+}
+/* One that stopped to ask you something — the only row here that is waiting
+   on a human. */
+.chat-drawer__row-live[data-state="blocked"],
+.chat-drawer__row-live[data-state="awaiting"] {
+  --state-ink: var(--status-blocked, var(--danger, var(--d-accent)));
+  --state-plate: color-mix(in srgb, var(--status-blocked, var(--d-accent)) 15%, transparent);
+}
+/* And one that crashed. */
+.chat-drawer__row-live[data-state="failed"] {
+  --state-ink: var(--status-dead, var(--danger, var(--d-accent)));
+  --state-plate: color-mix(in srgb, var(--status-dead, var(--d-accent)) 15%, transparent);
+}
+/* The age already took the free space; the label sits right after it. Without
+   this both carry `margin-inline-start: auto` and the browser SPLITS the
+   slack between them, parking the age in the middle of the row. */
 .chat-drawer__row-sub + .chat-drawer__row-live {
   margin-inline-start: 0;
 }
