@@ -2837,7 +2837,44 @@ export function ChatPane({
    * ENABLED over an empty composer and then does nothing, because the guard
    * refuses it. One function answers for both now (lib/upload-queue).
    */
-  const canSend = canSendDraft(input, chips);
+  /**
+   * ── A REBASE IS NOT A BACKGROUND CHORE ────────────────────────────────
+   *
+   * It replaces the agent under this conversation. Anything typed while it
+   * runs would be sent into a session that is about to stop existing, so the
+   * composer is shut for the duration — "i wouldn't want new messages to be
+   * sent in at that time".
+   *
+   * And it is REFUSED outright while this chat has work running. A rebase
+   * kills background subagents and the sub-chats this pane started; offering
+   * it at that moment is offering to throw away work the user can see
+   * happening in the drawer.
+   */
+  const [rebasing, setRebasing] = useState(false);
+  const rebaseBlocked = runningSubs > 0 || backgroundLive > 0;
+  const rebase = useCallback(() => {
+    if (rebasing || rebaseBlocked) return;
+    setRebasing(true);
+    api
+      .rebasePane(paneId)
+      .then(() => {
+        // The new runner's hello re-renders this pane from the rebased
+        // session. Nothing to do here but let go of the lock.
+        setNotice({
+          text: 'Rebased — this chat is running on today’s instructions.',
+          tone: 'info',
+        });
+      })
+      .catch((e: unknown) => {
+        setNotice({
+          text: `Rebase failed, nothing was changed: ${e instanceof Error ? e.message : 'unknown'}`,
+          tone: 'danger',
+        });
+      })
+      .finally(() => setRebasing(false));
+  }, [paneId, rebasing, rebaseBlocked]);
+
+  const canSend = canSendDraft(input, chips) && !rebasing;
   /**
    * WHAT WENT WRONG, IN WORDS, STILL ON SCREEN.
    *
@@ -5165,6 +5202,9 @@ export function ChatPane({
       mode={mode}
       stale={staleRunner}
       host={remoteHost}
+      rebasing={rebasing}
+      rebaseBlocked={rebaseBlocked}
+      onRebase={rebase}
       send={(obj) => {
         const sock = wsRef.current;
         if (!sock || sock.readyState !== WebSocket.OPEN) {
@@ -5974,6 +6014,9 @@ export function ChatPane({
                 <ChatDraft
                   ref={inputRef}
                   className="chat-input"
+                  // Shut while the agent under this conversation is being
+                  // replaced — see `rebase`.
+                  disabled={rebasing}
                   value={input}
                   // The SAME corpus the log resolves a sent message against, so
                   // the draft and the message cannot disagree about which `@Name`

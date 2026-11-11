@@ -746,6 +746,9 @@ export function SessionBar({
   mode,
   stale = false,
   host = null,
+  rebasing = false,
+  rebaseBlocked = false,
+  onRebase,
 }: {
   paneId: string;
   folder: { cwd: string; hasProject: boolean } | null;
@@ -764,6 +767,13 @@ export function SessionBar({
    *  server would start now (server/src/runner-build.ts). Rare; no cell at
    *  all when false. */
   stale?: boolean;
+  /** A rebase is in flight: the cell says so and refuses a second press. The
+   *  state lives in ChatPane because the COMPOSER has to be blocked too. */
+  rebasing?: boolean;
+  /** This pane has work that a rebase would kill — a sub-chat still running,
+   *  or a background subagent. The cell is inert and says why. */
+  rebaseBlocked?: boolean;
+  onRebase?: (() => void) | undefined;
   /**
    * THE MACHINE THIS CHAT RUNS ON, when it is not this one.
    *
@@ -779,7 +789,6 @@ export function SessionBar({
    *  The authoritative value still arrives on the next session frame. */
 }) {
   const [panel, setPanel] = useState<StatusPanel>(null);
-  const [rebasing, setRebasing] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   useDismissable(panel !== null, wrapRef, () => setPanel(null));
   const toggle = (p: Exclude<StatusPanel, null>) => setPanel((cur) => (cur === p ? null : p));
@@ -1061,22 +1070,16 @@ export function SessionBar({
             // pressing it does it. The diagnosis survives as the title —
             // the question "why is this here" is asked once, the action is
             // taken every time.
-            onClick={() => {
-              if (rebasing) return;
-              setRebasing(true);
-              api
-                .rebasePane(paneId)
-                // The pane reloads itself from the session frame the new
-                // runner sends on hello; nothing to do here but stop
-                // spinning if that never arrives.
-                .catch(() => undefined)
-                .finally(() => setRebasing(false));
-            }}
-            disabled={rebasing}
+            onClick={() => onRebase?.()}
+            disabled={rebasing || rebaseBlocked}
             title={
-              'This agent is running an older build of muxpad than the server — it keeps the ' +
-              'instructions it was born with. Rebase keeps this conversation and starts it again ' +
-              'on today’s. It ends background work and scheduled wake-ups this pane is holding.'
+              rebaseBlocked
+                ? 'This chat has work running — a sub-chat or a background agent. A rebase ' +
+                  'would kill it. Wait for it to finish, then rebase.'
+                : 'This agent is running an older build of muxpad than the server — it keeps the ' +
+                  'instructions it was born with. Rebase keeps this conversation and starts it ' +
+                  'again on today’s. It ends background work and scheduled wake-ups this pane is ' +
+                  'holding.'
             }
           >
             <SvgStaleGlyph />
