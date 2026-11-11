@@ -107,7 +107,7 @@ describe('the table itself', () => {
     // against msgvault 0.22.0 and were removed rather than repaired, and a
     // compose verb went the same way once a Gmail source was measured
     // refusing it — see the note on MSGVAULT.
-    expect(verbsOf('msgvault')).toHaveLength(5);
+    expect(verbsOf('msgvault')).toHaveLength(6);
     expect(verbsOf('slack').every((v) => v.startsWith('slack.'))).toBe(true);
     // A prefix that is not a connector gets nothing, rather than everything.
     expect(verbsOf('')).toEqual([]);
@@ -162,6 +162,7 @@ describe('the table is the policy, so the table is pinned', () => {
     'msgvault.search': { kind: 'read', timed: true },
     'msgvault.show-message': { kind: 'read', timed: true },
     'msgvault.show-thread': { kind: 'read', timed: true },
+    'msgvault.export-attachment': { kind: 'read', timed: true },
     'msgvault.stats': { kind: 'read', timed: true },
     // THE ONE WRITE. `others: false` is the point of listing it beside
     // Slack's: a draft lands in the owner's own mailbox and nobody else

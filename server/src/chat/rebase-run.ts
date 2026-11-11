@@ -3,6 +3,7 @@ import { rewriteResumeCmd } from '../agent-resume-repair.js';
 import { AgentSessionStore } from '../store/AgentSessionStore.js';
 import { PaneStore } from '../store/PaneStore.js';
 import { rebaseBriefing, wrapRebase } from './rebase.js';
+import { transcriptIsLocal } from './transcript-access.js';
 import {
   type TranscriptRebaseResult,
   discardRebasedTranscript,
@@ -12,21 +13,29 @@ import {
 /**
  * PERFORM a rebase.
  *
- * ── THE DEFAULT: SAME TURNS, NEW BASE ────────────────────────────────────
- * "i want the history but I WANT IT REBASED ON THE NEW INSTRUCTIONS." The
- * default is the TRANSCRIPT rebase (transcript-rebase.ts): a new session file
- * holding the same real turns minus every stale instruction that leaked into
- * them, resumed by a fresh runner whose system prompt is today's. The order is
- * the same refuse-before-destroy order as below — the new transcript is
- * written and verified FIRST, the pane is pointed at it only then, and a
- * respawn that throws puts the old `--resume` back and deletes the new file.
+ * There is ONE control and it promises ONE thing: **this conversation, on
+ * today's instructions.** See {@link RebaseMode} for the order it tries things
+ * in. Every path keeps the conversation except `fresh`, which is reachable only
+ * by asking for it by name.
  *
- * It falls back to the BRIEFING path — everything below — when a transcript
- * cannot be replayed: a codex/cursor chat, a single turn too large to keep
- * whole, a file that fails the integrity check. A pane on another machine is
- * refused outright; the briefing could not read it either.
+ * ── STEP 1: THE TRANSCRIPT REBASE ────────────────────────────────────────
+ * A new session file holding the same real turns minus every stale
+ * instruction that leaked into them (transcript-rebase.ts), resumed by a fresh
+ * runner whose system prompt is today's. Refuse-before-destroy: the new
+ * transcript is written and verified FIRST, the pane is pointed at it only
+ * then, and a respawn that throws puts the old `--resume` back and deletes the
+ * new file.
  *
- * ── THE FALLBACK: brief, then boot the chat fresh and hand it the briefing ─
+ * ── STEP 2: RESUME ───────────────────────────────────────────────────────
+ * When the transcript cannot be replayed — a codex/cursor chat, one turn too
+ * large to keep whole, a file that fails its integrity check — the `--resume`
+ * stays exactly as it is and only the process is replaced. Still a rebase of
+ * the base: the system prompt is rebuilt at every runner start. Still every
+ * message.
+ *
+ * A pane on another machine is refused outright, by both steps.
+ *
+ * ── `fresh`: brief, then boot the chat fresh and hand it the briefing ────
  *
  * {@link rebaseBriefing} writes the briefing; this is the part that acts on
  * it, and the order is the whole design:
@@ -84,11 +93,35 @@ export interface RebaseDeps {
 }
 
 /**
- * `transcript` — the default: keep the turns, drop the stale instructions.
- * `fresh` — skip straight to the briefing: a new, empty session seeded with a
- *           summary. For when the user WANTS the history out of the window.
+ * WHAT THE REBASE BUTTON MEANS, AND THE ORDER IT TRIES THINGS IN.
+ *
+ *   'auto'   what the button sends, and what every caller should want.
+ *            Best available, in this order:
+ *              1. TRANSCRIPT REBASE — the same turns replayed from a rewritten
+ *                 session file with the stale instructions stripped out of
+ *                 them. The only option that fixes rules quoted INSIDE the
+ *                 history by old compactions.
+ *              2. RESUME — leave `--resume` exactly as it is and replace only
+ *                 the process. The system prompt is rebuilt from today's
+ *                 agent-instructions.md at every runner start, so this is a
+ *                 real rebase of the base; what it cannot do is touch what the
+ *                 conversation itself says about old rules.
+ *            If neither is possible it REFUSES and changes nothing.
+ *
+ *   'keep'   force step 2.
+ *
+ *   'fresh'  the escape hatch, and NOT reachable from the button: replace the
+ *            session and seed it with a briefing. The history stays on disk
+ *            and searchable but leaves the agent's window.
+ *
+ * WHY `fresh` IS NOT A FALLBACK. It answers a different question. Every other
+ * mode keeps the conversation; that one summarises it away, and a button that
+ * silently degrades from "keep your history" to "replace it with a summary"
+ * would break its own promise at exactly the moment the user could not see it
+ * happening. "i want the history but I WANT IT REBASED ON THE NEW
+ * INSTRUCTIONS." A briefing is a compaction wearing a nicer name.
  */
-export type RebaseMode = 'transcript' | 'fresh';
+export type RebaseMode = 'auto' | 'keep' | 'fresh';
 
 export type RebaseResult =
   | {
@@ -101,12 +134,11 @@ export type RebaseResult =
     }
   | {
       ok: true;
-      mode: 'fresh';
-      queued: boolean;
-      chars: number;
-      /** Why the transcript rebase was not used, when it was tried. */
+      mode: 'keep';
+      /** Why the transcript rebase was not used, when `auto` tried it. */
       fallback?: string;
     }
+  | { ok: true; mode: 'fresh'; queued: boolean; chars: number }
   | {
       ok: false;
       code:
@@ -122,7 +154,7 @@ export type RebaseResult =
 export async function runRebase(
   deps: RebaseDeps,
   paneId: string,
-  mode: RebaseMode = 'transcript',
+  mode: RebaseMode = 'auto',
 ): Promise<RebaseResult> {
   const panes = new PaneStore(deps.db);
   const pane = panes.getById(paneId);
@@ -136,8 +168,16 @@ export async function runRebase(
     };
   }
 
+  if (mode !== 'fresh' && !transcriptIsLocal(deps.db, paneId)) {
+    return {
+      ok: false,
+      code: 'elsewhere',
+      message: 'this chat runs on another machine; it has to be rebased there',
+    };
+  }
+
   let fallback: string | undefined;
-  if (mode === 'transcript') {
+  if (mode === 'auto') {
     const t = await (deps.transcript ?? transcriptRebase)(deps.db, paneId);
     if (!t.ok && t.reason === 'elsewhere') {
       return { ok: false, code: 'elsewhere', message: t.detail };
@@ -173,6 +213,23 @@ export async function runRebase(
     fallback = `${t.reason}: ${t.detail}`;
   }
 
+  // ── STEP 2 (and `keep`): the history rides along, only the process is new.
+  // NEVER the briefing: `auto` falling through to `fresh` would turn "keep my
+  // history" into "summarise it away" with nobody watching. The `--resume`
+  // is not touched, so a respawn that throws has changed nothing.
+  if (mode === 'auto' || mode === 'keep') {
+    try {
+      await deps.respawn(paneId);
+    } catch (e) {
+      return {
+        ok: false,
+        code: 'respawn_failed',
+        message: `the chat could not be restarted: ${(e as Error).message}`,
+      };
+    }
+    return { ok: true, mode: 'keep', ...(fallback ? { fallback } : {}) };
+  }
+
   const briefing = await (deps.brief ?? rebaseBriefing)(deps.db, paneId);
   if (!briefing) {
     // Deliberately BEFORE anything destructive. "Could not summarise" must
@@ -180,9 +237,7 @@ export async function runRebase(
     return {
       ok: false,
       code: 'no_briefing',
-      message: `could not write a briefing from this chat — nothing was changed${
-        fallback ? ` (transcript rebase refused: ${fallback})` : ''
-      }`,
+      message: 'could not write a briefing from this chat — nothing was changed',
     };
   }
 
@@ -203,6 +258,5 @@ export async function runRebase(
     mode: 'fresh',
     queued: sent.status === 'queued',
     chars: briefing.length,
-    ...(fallback ? { fallback } : {}),
   };
 }

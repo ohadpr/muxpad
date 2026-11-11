@@ -96,6 +96,7 @@ const READ_ACTIONS = new Set([
   'msgvault.search',
   'msgvault.show-message',
   'msgvault.show-thread',
+  'msgvault.export-attachment',
   'msgvault.stats',
   'slack.read',
   'slack.search',

@@ -5406,8 +5406,23 @@ export function ChatPane({
               onClick={() => setDrawerOpen((o) => !o)}
             >
               <SvgWorkDrawer />
+              {/* ── THE BADGE IS A SPINNER WHILE ANYTHING RUNS ──────────
+                  It was the count, and the count alone looks the same
+                  whether those workers are going or sitting there open. An
+                  orbiting ring around the whole button was the first answer
+                  and the wrong one — "replace the '1' with a spinner don't
+                  spin the whole thing". The badge is already the corner the
+                  eye checks, so the motion belongs in it.
+
+                  The number goes while it spins. How MANY is the drawer's
+                  own job, one tap away, and it is almost always one; whether
+                  work is happening at all is the thing a closed drawer has
+                  to be able to say. */}
               {runningSubs > 0 ? (
-                <span className="chat-drawer-open__count">{runningSubs}</span>
+                <span
+                  className="chat-drawer-open__count -spinning"
+                  aria-label={`${runningSubs} running`}
+                />
               ) : null}
             </button>
             {drawerOpen ? (

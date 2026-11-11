@@ -101,6 +101,7 @@ export const MSGVAULT = Object.freeze({
     'msgvault.search',
     'msgvault.show-message',
     'msgvault.show-thread',
+    'msgvault.export-attachment',
     'msgvault.stats',
   ]),
   /** ONE WRITE. `draft.create` is a real agent-token permission and
