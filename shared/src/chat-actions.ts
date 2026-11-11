@@ -74,3 +74,36 @@ export function actionIntegration(kind: string): string {
 export function actionIsOpen(a: ChatAction): boolean {
   return a.state === 'pending';
 }
+
+/**
+ * Did this act only LOOK at something?
+ *
+ * The card exists because an outbound effect needs a durable record: the
+ * transcript holds the agent saying it posted to Slack, written before the
+ * approval was answered, so "did that actually go?" had no surface. That
+ * argument is entirely about WRITES.
+ *
+ * A read has no effect to record. Fifteen of them — one question to the mail
+ * vault became fifteen full-width cards — is a wall that buries the answer
+ * underneath it, and the reader was right to call it overwhelming. Reads fold
+ * into one row; writes never do.
+ *
+ * Listed rather than derived from the verb's name: `slack.search` and
+ * `slack.post` differ by nothing a pattern can see, and guessing wrong in the
+ * direction of "this is a read" would quietly hide a message that was sent.
+ */
+const READ_ACTIONS = new Set([
+  'msgvault.search',
+  'msgvault.show-message',
+  'msgvault.show-thread',
+  'msgvault.stats',
+  'slack.read',
+  'slack.search',
+  'slack.channels',
+  'slack.users',
+  'slack.thread',
+]);
+
+export function actionIsRead(a: ChatAction): boolean {
+  return READ_ACTIONS.has(a.kind);
+}

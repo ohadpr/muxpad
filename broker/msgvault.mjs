@@ -104,7 +104,55 @@ const SPEC = {
   'msgvault.stats': {
     validate: () => ({}),
     argv: () => ['stats'],
-    describe: () => 'read archive totals (no message content)',
+    describe: () => 'count your mail, calendar and contacts (no message content)',
+  },
+  /**
+   * ── THE ONE WRITE ─────────────────────────────────────────────────────
+   *
+   * A draft puts text an agent wrote into the owner's mailbox, under their
+   * name, where it sits next to things they wrote themselves. That is worth
+   * a dialog of its own every time, and it gets one: `writeActions` is not in
+   * `readScope`, and core.mjs offers a duration only for the read scope.
+   *
+   * IT CANNOT SEND. muxpad asks for no send verb and the grant carries no
+   * send permission — the agent-token permissions are search.read,
+   * message.read, attachment.read, stats.read, draft.create/edit/delete and
+   * the calendar set. "It can never send" is a property of the grant, not a
+   * promise this file makes.
+   *
+   * THERE IS NO COMPOSE VERB, and that is msgvault's limit rather than a
+   * choice made here: a Gmail source refuses `draft-compose` outright with
+   * `draft_disabled`, while `draft-reply` creates a real Gmail draft in the
+   * thread. Measured 2026-11-10 against msgvault 0.22.0, both run locally as
+   * `_msgvault` so the agent layer was not in the way. A compose verb would
+   * only ever raise a dialog for an action the archive then refuses, so there
+   * is none. `[[imap.drafts]]` grants exist for IMAP sources; this archive has
+   * no IMAP source, so nothing here depends on them.
+   *
+   * `--json`, so the result is a draft id the owner can open rather than
+   * prose about having done it.
+   */
+  'msgvault.draft-reply': {
+    validate: (p) => {
+      if (!ID.test(String(p.id ?? ''))) fail('Give the message id to reply to');
+      if (!str(p.body, 20000)) fail('Give a body');
+      // `--all` is reply-to-everyone. Opt IN, because the difference between
+      // answering one person and answering a thread of nine is exactly the
+      // kind of thing a person must approve knowingly — and the dialog says
+      // which it is.
+      return { id: p.id, body: p.body, all: p.all === true };
+    },
+    argv: (p) => [
+      'draft-reply',
+      '--json',
+      '--body',
+      p.body,
+      ...(p.all ? ['--all'] : []),
+      '--',
+      p.id,
+    ],
+    describe: (p) =>
+      `draft a reply ${p.all ? 'to everyone on' : 'to the sender of'} message ${p.id}`,
   },
 };
 

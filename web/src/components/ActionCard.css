@@ -148,3 +148,26 @@
 .action-card__link:hover {
   text-decoration: underline;
 }
+
+/* ── A RUN OF READS ─────────────────────────────────────────────────────────
+   Borrows the tool-call fold's shape on purpose (see ActionRunCard) — one
+   fold idiom in the log, not two. The mark is the only thing added, and it is
+   there to say these left the machine. */
+.action-run__mark {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  color: var(--fg-dim);
+}
+.chat-action-group-head:hover .action-run__mark {
+  color: var(--fg);
+}
+/* The cards keep their own spacing when opened; the fold adds the indent that
+   says they belong to the row above. */
+.action-run__list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+  padding-inline-start: 18px;
+}

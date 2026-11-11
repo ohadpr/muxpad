@@ -15,9 +15,9 @@ const equal = (a, b) =>
   Buffer.byteLength(a) === Buffer.byteLength(b) &&
   timingSafeEqual(Buffer.from(a), Buffer.from(b));
 import { CAPABILITIES, capabilityOf } from './capabilities.mjs';
+import { describeMsgvault, msgvaultArgv, validateMsgvault } from './msgvault.mjs';
 import { Origins } from './origins.mjs';
 import { loadPolicy, policyAllows, timedOriginTrusted } from './policy.mjs';
-import { describeMsgvault, msgvaultArgv, validateMsgvault } from './msgvault.mjs';
 
 const TEAM_SCOPE = 'slack-team-all-v2';
 /**
@@ -425,14 +425,34 @@ export class Broker {
      *
      * So the spend is gated by the same rule as the offer: `local`, or a
      * machine that proved this request.
+     *
+     * ── AND A `timedReadOnly` WRITE IS REFUSED TWICE ──────────────────────
+     *
+     * `grantScope` is built from `timedScope`, which for a `timedReadOnly`
+     * capability is ALWAYS the read scope. So a draft's scope string is
+     * byte-identical to the scope of a read grant, and scope equality — the
+     * thing this block leans on everywhere else — does not separate them.
+     * What separates them today is one list: a read grant carries
+     * `readActions`, which has no draft in it.
+     *
+     * That is true and it is one edit away from not being true, in the
+     * direction where the failure is silent: a write dispatched against a
+     * grant somebody approved for reading. So the rule is also stated here,
+     * about the ACTION rather than about the list that happens to hold it. A
+     * capability that declares `timedReadOnly` has no standing permission for
+     * anything outside its read set, whatever a grant says it covers.
      */
+    const spendable = (g) => {
+      const cap = this.capabilityOfRequest(request);
+      if (cap.timedReadOnly && !cap.readActions.includes(request.action)) return false;
+      return (
+        g.teamID === request.teamID &&
+        g.actions.includes(request.action) &&
+        equal(g.scope, this.grantScope(request))
+      );
+    };
     const grant = timedOriginTrusted(origin, originVerified)
-      ? this.activeGrants().find(
-          (g) =>
-            g.teamID === request.teamID &&
-            g.actions.includes(request.action) &&
-            equal(g.scope, this.grantScope(request)),
-        )
+      ? this.activeGrants().find(spendable)
       : undefined;
     if (grant) {
       // Consume before audit or asynchronous identity checks: manual approval
@@ -515,15 +535,21 @@ export class Broker {
       // anything on this one willing to claim that name. `local` is believed
       // only because believing it adds nothing — the request did come from
       // here. Everything else is approve-once. See policy.mjs.
-      timedAllowed:
-        timedOriginTrusted(r.origin, r.originVerified) &&
-        (this.timedScope(this.capabilityOfRequest(r)) !==
-          this.capabilityOfRequest(r).readScope ||
-          this.capabilityOfRequest(r).readActions.includes(r.action)),
-      /** Why a duration is not on offer, for the dialog to say out loud. */
-      timedRefusedReason: timedOriginTrusted(r.origin, r.originVerified)
+      timedAllowed: this.#timedAllowed(r),
+      /**
+       * Why a duration is not on offer, for the dialog to say out loud.
+       *
+       * TWO RULES CAN REFUSE, and they are not the same sentence. This used
+       * to answer only the origin one, so the first write capability made the
+       * dialog say "the broker cannot verify which machine asked" about a
+       * draft from THIS machine — a true sentence about the wrong rule, which
+       * is worse than silence in the one place a person is deciding.
+       */
+      timedRefusedReason: this.#timedAllowed(r)
         ? undefined
-        : `approve-once only: this request says it is from "${r.origin ?? 'unknown'}" and did not prove it, so a lasting permission would rest on a claim anything on this machine could make`,
+        : !timedOriginTrusted(r.origin, r.originVerified)
+          ? `approve-once only: this request says it is from "${r.origin ?? 'unknown'}" and did not prove it, so a lasting permission would rest on a claim anything on this machine could make`
+          : `approve-once only: ${r.action} writes, and a duration covers reading only — a standing permission to write would be approved without the thing being written in front of you`,
       payload: r.payload,
       state: r.state,
       expires: r.expires,
@@ -593,7 +619,29 @@ export class Broker {
     // scope IS its full scope and the owner's `timedGrants` switch does not
     // apply to it — there is no wider thing it could accidentally mean.
     if (capability.readScope === capability.fullScope) return capability.readScope;
+    // ── SOME WRITES ARE NEVER STANDING PERMISSIONS ──────────────────────
+    //
+    // The owner's `timedGrants` switch chooses how wide a DURATION may be,
+    // and for Slack "full access for an hour" is a thing they may reasonably
+    // want. Drafting is not the same bargain: a standing grant to put text
+    // into their mailbox, under their name, unattended, is precisely the
+    // thing the dialog exists to prevent — and it would be bought with one
+    // click on a read.
+    //
+    // So a capability may declare that its timed scope is the READ scope
+    // whatever the switch says. The existing rule in `#decideAuthorized` then
+    // does the rest: a verb outside the read set cannot be approved for a
+    // duration at all, so every draft is approve-once with its text in front
+    // of the person approving it.
+    if (capability.timedReadOnly) return capability.readScope;
     return this.config.timedGrants === 'read' ? capability.readScope : capability.fullScope;
+  }
+  /** May THIS request be approved for a duration at all? The offer and the
+   *  reason beside it must come from one answer, or they disagree. */
+  #timedAllowed(r) {
+    const cap = this.capabilityOfRequest(r);
+    if (!timedOriginTrusted(r.origin, r.originVerified)) return false;
+    return this.timedScope(cap) !== cap.readScope || cap.readActions.includes(r.action);
   }
   /** The capability a pending request belongs to. */
   capabilityOfRequest(r) {
@@ -777,8 +825,7 @@ export class Broker {
               scope: this.grantScope(r),
               action:
                 this.timedScope(rCap) === rCap.readScope ? `${rCap.id}.read-all` : `${rCap.id}.all`,
-              actions:
-                this.timedScope(rCap) === rCap.readScope ? rCap.readActions : rCap.actions,
+              actions: this.timedScope(rCap) === rCap.readScope ? rCap.readActions : rCap.actions,
               permissionScope: this.timedScope(rCap),
               origin: r.origin ?? 'unknown',
               teamID: r.teamID,

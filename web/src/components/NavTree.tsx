@@ -2609,17 +2609,22 @@ function TabRow({
     { label: 'Rename', onSelect: () => setEditing({ kind: 'tab', id: tab.id }) },
     // "New pane" only for a tab that takes panes (terminals, web views, an
     // empty tab). A chat's second pane was never a second chat — no parent, no
-    // clock, no card — and on touch this menu is the only route to it, so
-    // leaving it here would leave the whole affordance alive on mobile.
-    // `takes_panes` is the SERVER's answer (decorateTab), because this row does
-    // not know its own panes; absent — an older server — reads as "show it".
-    // "Another chat here", not "New pane". A pane is the thing that holds one
-    // process — a pty, a chat, a web view — and it is the right word INSIDE
-    // this codebase and jargon everywhere else. What this does is put a second
-    // chat in the tab you are looking at.
-    ...(tab.takes_panes === false
-      ? []
-      : [{ label: 'Another chat here', onSelect: () => onAddPane() }]),
+    // ── "Another chat here" IS GONE, AND SO IS THE SPLIT ──────────────────
+    //
+    // It put a SECOND chat inside the tab you were looking at, and that was
+    // the whole trouble: with two chats in one tab, every question of the
+    // form "which one is this tab's chat" had no answer and the server
+    // guessed the first one created. A sub-chat's 77KB report was delivered
+    // into the left half of a split while its owner was reading the right
+    // half, so a chat had no record of work it had itself dispatched.
+    //
+    // A new chat is a NEW CHAT now — the `+` on a workspace row, or
+    // `muxpad agent new`. The server refuses a second pane in a layout
+    // (routes/panes.ts) and migration 54 split the two that existed, so this
+    // entry had nothing left to do but fail.
+    //
+    // `onAddPane` is kept on the props for now rather than threaded out of
+    // four components in the same change; it has no caller.
     // "Move to workspace ▸" with the workspaces in a hover flyout, so the main
     // menu stays short. Omitted entirely when there's nowhere to move to.
     // (Dragging the tab onto a workspace row also works, on desktop.)

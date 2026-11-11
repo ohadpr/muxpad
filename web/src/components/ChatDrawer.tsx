@@ -1,13 +1,15 @@
 import type { ChatAction } from '@muxpad/shared';
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import type { MentionChat } from '../lib/chat-mention';
 import { spawnLabel, spawnState, spawnStateLabel } from '../lib/chat-mention';
+import { isOutsideDismiss } from '../lib/dismiss-outside';
 import { shortAge } from '../lib/short-age';
 import {
   type SubChat,
   artifactsOf,
   subChatGroups,
   subChatIsOpen,
+  subChatLiveWord,
   subChatsOf,
 } from '../lib/sub-chats';
 import { ChatChip } from './ChatChip';
@@ -81,9 +83,38 @@ export function ChatDrawer({
   const artifacts = useMemo(() => artifactsOf(actions), [actions]);
   const open = openPaneId ? subs.find((s) => s.paneId === openPaneId) : undefined;
   const running = subs.filter(subChatIsOpen).length;
+  const panel = useRef<HTMLElement>(null);
+
+  /**
+   * CLICKING AWAY CLOSES IT.
+   *
+   * A panel that covers a third of the screen and can only be dismissed by
+   * its own × is a panel people leave open. What counts as "away" is the
+   * interesting part and lives in lib/dismiss-outside — the toggle, a modal
+   * above the panel and a detached target all look outside and are not.
+   *
+   * `pointerdown`, not `click`: a click fires after the mouse comes back up,
+   * so a drag that starts in the panel and ends outside it would close the
+   * thing you were dragging from. CAPTURE, so a row that stops propagation
+   * cannot leave the panel un-dismissable from its own neighbourhood.
+   */
+  useEffect(() => {
+    const away = (e: PointerEvent) => {
+      if (
+        isOutsideDismiss({
+          target: e.target,
+          panel: panel.current,
+          toggle: document.querySelector('.chat-drawer-open'),
+        })
+      )
+        onClose();
+    };
+    document.addEventListener('pointerdown', away, true);
+    return () => document.removeEventListener('pointerdown', away, true);
+  }, [onClose]);
 
   return (
-    <aside className="chat-drawer" aria-label="This chat’s work">
+    <aside className="chat-drawer" ref={panel} aria-label="This chat’s work">
       <div className="chat-drawer__head">
         {/* ONE BACK AFFORDANCE, and it is not the close button. A drawer
             showing a sub-chat has two different exits — back to the list, and
@@ -220,7 +251,7 @@ function SubChatList({
           <ul className="chat-drawer__list">
             {g.subs.map((s) => {
               const state = spawnState(s.chat);
-              const live = g.key === 'running';
+              const liveWord = subChatLiveWord(s);
               return (
                 <li key={s.chat.tabId}>
                   <button
@@ -276,8 +307,19 @@ function SubChatList({
                       {/* EVERY ROW SAYS HOW LONG AGO. A running one says what it is
                           doing instead, which is the more useful fact and the
                           only one that changes while you look at it. */}
-                      {live ? (
-                        <span className="chat-drawer__row-live">working</span>
+                      {/* THE WORD COMES FROM `spawnState`, not from "is it
+                          retired". A worker that stopped to ask you something
+                          does not retire, so `!done` read it as working and
+                          this said so — while its own card in the log said
+                          AWAITING. One worker, two surfaces, two different
+                          claims about whether it needs you. */}
+                      {liveWord ? (
+                        <span
+                          className="chat-drawer__row-live"
+                          data-state={liveWord === 'needs you' ? 'blocked' : 'working'}
+                        >
+                          {liveWord}
+                        </span>
                       ) : s.chat.createdAt ? (
                         <span className="chat-drawer__row-sub">
                           {shortAge(now - s.chat.createdAt)}

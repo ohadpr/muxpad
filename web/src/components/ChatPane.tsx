@@ -154,6 +154,7 @@ import { workingHint } from '../lib/working-hint';
 import { workingVariantFor } from '../lib/working-variant';
 import { insertTabRow } from '../tabs';
 import { ActionCard } from './ActionCard';
+import { ActionRunCard } from './ActionRunCard';
 import { AgentBackendLogo, backendFromAssistant } from './AgentLogos';
 import { BrowserCard } from './BrowserCard';
 import { useBrowsers } from './BrowserCards';
@@ -4598,7 +4599,17 @@ export function ChatPane({
                 ),
                 chatActions,
                 (action) => <ActionCard key={`action:${action.id}`} action={action} />,
-                { floor: items.find((e) => e.at !== null)?.at ?? null },
+                {
+                  floor: items.find((e) => e.at !== null)?.at ?? null,
+                  // A run of READS folds to one row. Fifteen cards saying what
+                  // was searched, with the answer below all of them, is the
+                  // wall this removes — and the fold it borrows is the one
+                  // already above it on the tool calls. Writes never fold:
+                  // see lib/action-runs.
+                  renderRun: (run) => (
+                    <ActionRunCard key={`run:${run.actions[0]?.id ?? ''}`} run={run} />
+                  ),
+                },
               ),
               spawnedCards,
               // The window's lower edge, taken from the TRANSCRIPT rather than from
@@ -5531,38 +5542,48 @@ export function ChatPane({
                       aria-label={`${assistantLabel(session?.assistant)} is working`}
                     >
                       <ChatWorking variant={workingVariant} />
-                      {workingLabel ? (
+                      {/* ── WHAT IT IS DOING, NOT WHAT IT IS RUNNING ─────────
+                          This row used to lead with the TOOL — "Running
+                          Bash…" — and put the agent's own sentence after it in
+                          faint italic. Both halves were wrong.
+
+                          The tool name is the one thing already on screen: the
+                          fold directly above says `Bash ×49`. So the line
+                          spent its prominence restating the known thing and
+                          its smallest, faintest type on the only new one.
+                          "The thought is much more helpful 99% of the time…
+                          I prefer to see a sentence saying what it's doing
+                          more than seeing that it did 22 steps and 44 bash
+                          somethings."
+
+                          So the SENTENCE is the line. The tool name survives
+                          only as the fallback for a turn that has not thought
+                          anything yet — a silent pane still has to say
+                          something, and "Running Bash…" is better than a bare
+                          spinner.
+
+                          One line either way, clamped by CSS as well as by the
+                          derivation: a long sentence must never wrap this row
+                          into a paragraph, because it occupies the same pixels
+                          on every tool call and a growing row is the verbose
+                          log this exists to avoid. */}
+                      {hint ? (
+                        <span className="chat-working-say">{hint}</span>
+                      ) : workingLabel ? (
                         <span className="chat-working-label">{workingLabel}</span>
                       ) : null}
-                      {/* The clue, if there is one. One line, clamped by CSS
-                          as well as by the derivation — a long sentence must
-                          never wrap this row into a paragraph. */}
-                      {hint ? <span className="chat-working-hint">{hint}</span> : null}
                     </div>
                   )}
-                  {/* ── STOP LIVES WITH THE TURN IT STOPS ─────────────────────
-                    It was a second circle in the composer, beside Queue — two
-                    buttons on one edge acting on two different subjects. Here
-                    it is attached to the thing it acts on: the foot of the
-                    running turn, which is also where the eye already is while
-                    waiting.
+                  {/* ── STOP IS NOT HERE ANY MORE ────────────────────────────
+                      It was a pill at the foot of the running turn, which on a
+                      phone meant the fold on the left, a Stop floating alone on
+                      the right attached to nothing, and the composer beneath
+                      both — three rows of chrome for one running turn.
 
-                    OUTSIDE the streaming/working ternary on purpose. The
-                    indicator block only renders while there is nothing to
-                    stream; a turn that IS streaming prose had no indicator at
-                    all, so hanging Stop off the indicator would have left the
-                    longest turns — the ones you actually want to stop —
-                    without a stop. */}
-                  <button
-                    type="button"
-                    className="chat-turn-stop"
-                    onClick={stop}
-                    aria-label="Stop this turn"
-                    title="Stop this turn"
-                  >
-                    <span className="chat-turn-stop-glyph" aria-hidden="true" />
-                    Stop
-                  </button>
+                      It is the composer's own button now, in the one state
+                      where that slot has nothing else to do (a running turn
+                      with nothing typed). One place to look, one thing to
+                      press, and the log goes back to being a record. */}
                 </div>
               </div>
             ) : null}
@@ -6008,26 +6029,41 @@ export function ChatPane({
                         `Message ${mode === 'chat' ? 'Chat' : assistantLabel(session?.assistant)}…`
                   }
                 />
-                {sending && !question ? (
-                  /* ── ONE BUTTON, IN EVERY STATE ────────────────────────────
-                     This used to be TWO circles side by side — Queue and Stop
-                     — whenever a turn was running and you had typed something.
-                     Reported as "you have both a send and a stop button and
-                     they're both horizontally presented".
+                {sending && !question && !canSend ? (
+                  /* ── A RUNNING TURN WITH NOTHING TYPED: THE SLOT IS STOP ───
+                     Still ONE button — never two circles, which is the defect
+                     that moved Stop out of here in the first place ("you have
+                     both a send and a stop button and they're both
+                     horizontally presented").
 
-                     The fix is a category one rather than a layout one. This
-                     button has always acted on YOUR DRAFT: send it, or queue
-                     it. Stopping acts on THE AGENT'S TURN, which is a
-                     different subject that already has its own indicator — so
-                     Stop moved onto the working block in the log (see
-                     `chat-working-stop`), where the turn is being reported,
-                     and the composer's right side is one button again.
+                     What moving it out produced was worse, and a photo of a
+                     phone settled it: the fold on the left, a Stop pill
+                     floating alone on the right attached to nothing, and the
+                     composer under both — three rows of chrome for one
+                     running turn. "Look at this soup especially on mobile."
 
-                     Busy + composed text → Queue (the server holds it and
-                     feeds it when the agent frees up). Busy + nothing typed →
-                     the same button, disabled, exactly as Send is when there
-                     is nothing to send: the slot does not change shape under
-                     the thumb depending on whether you have started typing. */
+                     The resolution is that the slot is EMPTY of its usual
+                     job. This button acts on your draft — send it, queue it —
+                     and with nothing typed there is no draft, so it rendered
+                     a DISABLED Queue: a dead target in the most valuable
+                     36px of the composer, in the one state where there is
+                     exactly one thing a person wants to do. Now it is that
+                     thing.
+
+                     Type anything and it becomes Queue again (below), which
+                     is the draft's own action returning to its own slot. */
+                  <button
+                    type="button"
+                    className="chat-send is-stop"
+                    onClick={stop}
+                    aria-label="Stop this turn"
+                    title="Stop this turn"
+                  >
+                    <span className="chat-stop-glyph" aria-hidden="true" />
+                  </button>
+                ) : sending && !question ? (
+                  /* Busy + composed text → Queue: the server holds it and
+                     feeds it when the agent frees up. */
                   <button
                     type="button"
                     className="chat-send is-queue"

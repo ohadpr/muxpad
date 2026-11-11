@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PaneStore } from './PaneStore.js';
 import { TabStore } from './TabStore.js';
 import { WorkspaceStore } from './WorkspaceStore.js';
@@ -204,5 +204,49 @@ describe('PaneStore', () => {
     // Clear.
     store.setUnread(a.id, false);
     expect(store.getById(a.id)!.unread).toBe(false);
+  });
+});
+
+describe('byTabs — the panes of a named set of tabs', () => {
+  it('returns one group per tab, in creation order, in a single query', () => {
+    const db = openDb(':memory:');
+    const ws = new WorkspaceStore(db).create({ name: 'W' });
+    const tabs = new TabStore(db);
+    const panes = new PaneStore(db);
+    const a = tabs.create({ workspace_id: ws.id, name: 'a', layout: '' });
+    const b = tabs.create({ workspace_id: ws.id, name: 'b', layout: '' });
+    const c = tabs.create({ workspace_id: ws.id, name: 'c', layout: '' });
+    const a1 = panes.create({ tab_id: a.id });
+    const a2 = panes.create({ tab_id: a.id });
+    const b1 = panes.create({ tab_id: b.id });
+    panes.create({ tab_id: c.id });
+
+    const got = panes.byTabs([a.id, b.id]);
+    expect([...got.keys()].sort()).toEqual([a.id, b.id].sort());
+    expect(got.get(a.id)?.map((p) => p.id)).toEqual([a1.id, a2.id]);
+    expect(got.get(b.id)?.map((p) => p.id)).toEqual([b1.id]);
+    // A tab that was not asked for is not in the answer.
+    expect(got.has(c.id)).toBe(false);
+    db.close();
+  });
+
+  it('asks nothing of the database for an empty list', () => {
+    // The common case: most chats have spawned nothing, and this runs on an
+    // event that fires whenever anything moves.
+    const db = openDb(':memory:');
+    const panes = new PaneStore(db);
+    const prepare = vi.spyOn(db, 'prepare');
+    expect(panes.byTabs([]).size).toBe(0);
+    expect(prepare).not.toHaveBeenCalled();
+    prepare.mockRestore();
+    db.close();
+  });
+
+  it('a tab with no panes is absent, not an empty list', () => {
+    const db = openDb(':memory:');
+    const ws = new WorkspaceStore(db).create({ name: 'W' });
+    const t = new TabStore(db).create({ workspace_id: ws.id, name: 't', layout: '' });
+    expect(new PaneStore(db).byTabs([t.id]).has(t.id)).toBe(false);
+    db.close();
   });
 });

@@ -13,9 +13,11 @@ import {
   type ClockSnapshot,
   clockSnapshot,
   liveChildCount,
+  liveChildTabs,
   resolveTabClock,
   tabLifecycle,
   tabLiveChildCount,
+  tabLiveChildTabs,
 } from './tab-clock.js';
 
 /**
@@ -842,19 +844,81 @@ export function decorateTab(
   // The tab's status is the highest-precedence status among its panes, and a
   // manual "mark unread" counts as a ready pane. One rollup primitive for every
   // level, so the tab strip and the sidebar can't drift apart.
+  /**
+   * ── A CHAT SPEAKS FOR THE WORK IT STARTED ──────────────────────────────
+   *
+   * Sub-chats are not rows on the rail — they live in the parent's own drawer
+   * — so a chat whose own pane is idle while two sub-chats grind away showed
+   * NOTHING anywhere on screen. Reported exactly that way: "the main chat
+   * shows no activity but it has two active sub-chats".
+   *
+   * Only `working` and `blocked` climb. Those are the two states that mean
+   * something is happening or something wants you, and neither has any other
+   * way to reach the glance. `ready` deliberately does NOT: a finished child
+   * reports back as a message, which already marks the parent unread, and a
+   * ✓ that outlives the reading of that message is a mark nobody can clear.
+   * `idle` and `dead` say nothing about the parent at all.
+   *
+   * Children are read from the SAME snapshot the row already has — the clock
+   * index for parentage, the workspace's pane map for state — so this costs
+   * no query on the list path. Sub-chats are created in their parent's
+   * workspace (722 of them on this machine, none anywhere else), which is
+   * what makes that map sufficient; the single-row path falls back to the
+   * same two indexed reads `agents` already does.
+   */
+  const childTabs = clocks
+    ? liveChildTabs(clocks.index, tab.id, clocks.now)
+    : tabLiveChildTabs(db, tab.id, Date.now());
+  const childWork: PaneStatus[] = [];
+  // ONE query for every child, or none at all — not `listByTab` per child.
+  // See PaneStore.byTabs: the list path has the workspace map already, and
+  // the single-row path is an event handler that fires whenever anything
+  // moves, which is the worst place to put a round trip per sub-chat.
+  const childPanesByTab =
+    panesByTabId ?? (childTabs.length ? new PaneStore(db).byTabs(childTabs) : null);
+  for (const childId of childTabs) {
+    // …AND THE ONE THAT STOPPED TO ASK YOU SOMETHING. A worker ends its turn
+    // with a question, so its pane is `ready` and nothing about its STATE
+    // says it is stuck — the fact lives on the tab, as `spawn_report_state`.
+    // Without this the signal reaches only the drawer, which you have to open
+    // to read, and a sub-chat is not a row anywhere else.
+    if (clocks?.index.get(childId)?.spawn_report_state === 'awaiting') childWork.push('blocked');
+    const childPanes = childPanesByTab?.get(childId) ?? [];
+    for (const p of childPanes) {
+      const s = cache.getStatus(p.id, p.unread === true);
+      if (s === 'working' || s === 'blocked') childWork.push(s);
+      // ── …AND THE ONE WHOSE AGENT GAVE UP ───────────────────────────────
+      //
+      // `dead` used to be dropped here, which contradicted this app's own
+      // precedence table one file over: STATUS_ORDER ranks `dead` ABOVE
+      // `ready` precisely so that "it finished" cannot mask "it crashed".
+      // A child's crash was then the one thing a parent's row never showed —
+      // it read as a chat with nothing going on, and the only way to find out
+      // was to open the drawer.
+      //
+      // It is pushed as `blocked`, NOT as `dead`. The parent's own agent is
+      // fine, and `dead` on its row would say otherwise. What is true is that
+      // something under this chat has stopped for good and will never report:
+      // that wants a human, which is exactly what `blocked` means here.
+      //
+      // The delivery card still arrives when the crash report lands — this is
+      // the signal for the gap before it, and for the case where the report
+      // never comes at all.
+      else if (s === 'dead') childWork.push('blocked');
+    }
+  }
   const status = rollupStatus([
     ...tabPanes.map((p) => cache.getStatus(p.id, p.unread === true)),
     ...(manualUnread ? (['ready'] as const) : []),
+    ...childWork,
   ]);
   // PARALLEL WORK, both kinds. The harness roster (subagents, which die with
   // their turn) PLUS the chats this one spawned (which do not) — see
   // liveChildCount. Counting only the first is why a chat with a dozen working
   // children published `agents: 0`.
-  const agents =
-    tabPanes.reduce((n, p) => n + cache.getSubagentCount(p.id), 0) +
-    (clocks
-      ? liveChildCount(clocks.index, tab.id, clocks.now)
-      : tabLiveChildCount(db, tab.id, Date.now()));
+  // The same children the status rollup above just resolved — counted here
+  // rather than resolved twice.
+  const agents = tabPanes.reduce((n, p) => n + cache.getSubagentCount(p.id), 0) + childTabs.length;
   // A SCHEDULE, not a status: folded in here (rather than queried per row in
   // the client or the renderer) so the sidebar costs ONE cron query per list,
   // not one per tab. Absent when the tab has none, so the payload — and the

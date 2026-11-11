@@ -1,5 +1,5 @@
 import type { ChatAction } from '@muxpad/shared';
-import type { MentionChat } from './chat-mention';
+import { type MentionChat, spawnState } from './chat-mention';
 
 /**
  * WHAT A CHAT HAS GOING ON BESIDE ITSELF — the drawer's two lists.
@@ -60,7 +60,27 @@ export function subChatsOf(corpus: readonly MentionChat[], parentTabId: string):
  * log is where the crash is said out loud.
  */
 export function subChatIsOpen(s: SubChat): boolean {
-  return !s.chat.done;
+  const state = spawnState(s.chat);
+  return state === 'working' || state === 'awaiting';
+}
+
+/**
+ * The word for a live sub-chat's row, or null when it is finished.
+ *
+ * `!done` was being read as "working" and printed as that word, so a worker
+ * that had stopped to ask you something sat in the live block saying
+ * `working` — while its own card in the log, which goes through
+ * {@link spawnState}, correctly said AWAITING. Two surfaces, one worker, two
+ * different claims about whether it needs you.
+ *
+ * `spawnState` is the one answer, and it already knew. This is just the
+ * drawer's word for it: a worker waiting on a human is not working, and
+ * saying so is the whole reason to put a word there at all.
+ */
+export function subChatLiveWord(s: SubChat): 'working' | 'needs you' | null {
+  const state = spawnState(s.chat);
+  if (state === 'awaiting') return 'needs you';
+  return state === 'working' ? 'working' : null;
 }
 
 /** One row of the artifacts list. */

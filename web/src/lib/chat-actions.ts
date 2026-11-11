@@ -1,5 +1,6 @@
 import type { ChatAction } from '@muxpad/shared';
 import { useEffect, useState } from 'react';
+import { type ActionRun, actionRuns } from './action-runs';
 import { injectByTime } from './log-window';
 
 /**
@@ -74,7 +75,34 @@ export function injectActionCards<T>(
   entries: readonly { at: number | null; node: T }[],
   actions: readonly ChatAction[],
   render: (action: ChatAction) => T,
-  opts?: { floor?: number | null },
+  opts?: { floor?: number | null; renderRun?: (run: ActionRun) => T },
 ): { at: number | null; node: T }[] {
+  // ── A RUN OF READS IS ONE ENTRY ───────────────────────────────────────
+  //
+  // Grouped HERE, before placement, because a run has to be placed as one
+  // thing: injecting fifteen cards and folding them afterwards would need
+  // the renderer to know which of its neighbours came from this list.
+  //
+  // The run is placed at its FIRST action's time, which is where the work
+  // started and where the reader was already looking. See lib/action-runs
+  // for which acts may fold at all — writes never do.
+  const runs = opts?.renderRun ? actionRuns(actions) : [];
+  if (opts?.renderRun && runs.some((r) => r.folded)) {
+    const renderRun = opts.renderRun;
+    const placed = runs.map((run) => ({
+      ...(run.actions[0] as ChatAction),
+      __run: run,
+    }));
+    return injectByTime(
+      entries,
+      placed,
+      (a) => {
+        const run = (a as { __run: ActionRun }).__run;
+        return run.folded ? renderRun(run) : render(run.actions[0] as ChatAction);
+      },
+      (e) => e.node,
+      opts?.floor ?? null,
+    );
+  }
   return injectByTime(entries, actions, render, (e) => e.node, opts?.floor ?? null);
 }

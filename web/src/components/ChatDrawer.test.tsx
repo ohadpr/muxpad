@@ -303,3 +303,71 @@ describe('a row reads as a chat, not a word', () => {
     expect(rowFor('reported')?.querySelector('.chat-drawer__row-live')).toBeNull();
   });
 });
+
+describe('clicking away closes the panel', () => {
+  const down = (el: Element | null) =>
+    act(() => {
+      el?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    });
+
+  it('closes on a pointerdown in the page behind it', () => {
+    const onClose = vi.fn();
+    mount({ onClose });
+    const behind = document.createElement('button');
+    document.body.appendChild(behind);
+    down(behind);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    behind.remove();
+  });
+
+  it('does not close on a pointerdown inside itself', () => {
+    const onClose = vi.fn();
+    const h = mount({
+      onClose,
+      corpus: corpusOf([tab('parent'), tab('kid', { spawned_by: 'parent' })]),
+    });
+    down(h.querySelector('.chat-drawer__row'));
+    down(h.querySelector('.chat-drawer'));
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('does not close on the toggle, which would make it reopen itself', () => {
+    const onClose = vi.fn();
+    mount({ onClose });
+    // The button that opens the panel has its own handler; treating its click
+    // as "outside" closes the panel and then the toggle reopens it, so the
+    // panel looks like it is ignoring you.
+    const toggle = document.createElement('button');
+    toggle.className = 'chat-drawer-open';
+    document.body.appendChild(toggle);
+    down(toggle);
+    expect(onClose).not.toHaveBeenCalled();
+    toggle.remove();
+  });
+
+  it('does not close for a dialog opened above it', () => {
+    const onClose = vi.fn();
+    mount({ onClose });
+    const dlg = document.createElement('dialog');
+    dlg.innerHTML = '<button>Approve</button>';
+    document.body.appendChild(dlg);
+    down(dlg.querySelector('button'));
+    expect(onClose).not.toHaveBeenCalled();
+    dlg.remove();
+  });
+
+  it('stops listening once it is gone', () => {
+    // Asserted on the LISTENER, not on the callback: after unmount the panel
+    // ref is null, so a leaked listener would still call nothing and a test
+    // watching `onClose` would pass while the leak grew one entry per open.
+    const remove = vi.spyOn(document, 'removeEventListener');
+    const onClose = vi.fn();
+    mount({ onClose });
+    act(() => root?.unmount());
+    root = null;
+    expect(
+      remove.mock.calls.some(([type, , opts]) => type === 'pointerdown' && opts === true),
+    ).toBe(true);
+    remove.mockRestore();
+  });
+});

@@ -57,9 +57,39 @@ dialog.slack-passkey-dialog button {
   background: var(--bg-hover);
   border: 1px solid var(--border);
 }
+
+/* ── THE DURATION PICKER IS NOT A BUTTON ────────────────────────────────────
+   It inherited the 44px floor above, which is a TOUCH TARGET rule written for
+   the two things you actually hit — Deny and Approve. On a secondary control
+   that sits beside a line of 0.75rem text it reads as a second primary
+   action, and the card came out top-heavy: reported as "the drop-down is very
+   tall before expanded".
+   38px keeps it comfortably tappable (the native menu is a full-screen sheet
+   on a phone either way) while letting it sit as what it is — a choice you
+   make occasionally, next to the ones you make every time. */
+dialog.slack-passkey-dialog select {
+  min-height: 38px;
+  padding: 6px 10px;
+  font-size: 0.8125rem;
+}
 .slack-passkey-actions {
   justify-content: flex-end;
-  margin: 12px 0;
+  margin: 12px 0 0;
+  /* ── DENY AND APPROVE ARE ALWAYS REACHABLE ──────────────────────────────
+     The dialog scrolls (`max-height: 100dvh - 24px`), and its contents are
+     not bounded by anything this component controls: a draft body may be
+     20,000 characters and the scope slot is now sized to its tallest copy.
+     On a short window that put the buttons below the fold, where a person
+     has to scroll an approval dialog to find out how to refuse it.
+
+     Sticky to the bottom of the scroll box, with the dialog's own background
+     under it so text does not show through as it passes beneath. The padding
+     matches the dialog's, so the buttons sit where they would have anyway
+     when everything fits. */
+  position: sticky;
+  bottom: 0;
+  padding: 12px 0 0;
+  background: var(--bg-elev);
 }
 
 .slack-passkey-scope {
@@ -295,6 +325,17 @@ dialog.slack-passkey-dialog button:disabled {
   gap: 8px 12px;
   margin: 16px 0 0;
 }
+/* The note gives way, the control does not. Without this the origin line —
+   which carries a machine name, a workspace id and a verdict — wrapped to two
+   lines and shoved the picker onto a third, which is what made the row look
+   unbalanced rather than merely tall. */
+.slack-passkey-foot > .slack-passkey-note {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+.slack-passkey-foot > .slack-passkey-duration {
+  flex: 0 0 auto;
+}
 .slack-passkey-foot .slack-passkey-note {
   margin: 0;
 }
@@ -306,4 +347,36 @@ dialog.slack-passkey-dialog button:disabled {
 .slack-passkey-foot > .slack-passkey-note:only-child,
 .slack-passkey-foot > .slack-passkey-note + .slack-passkey-note {
   flex: 1 1 100%;
+}
+
+/* ── THE SCOPE SLOT DOES NOT RESIZE ─────────────────────────────────────────
+   Every variant of "what this duration buys" is in the DOM at once, stacked
+   in a single grid cell. The cell is as tall as the tallest of them AT THIS
+   WIDTH — measured by the browser, not guessed at with a min-height that
+   would be wrong the first time the copy or the font changed.
+
+   `visibility: hidden` rather than `display: none`: a hidden box still takes
+   part in sizing the grid, which is the entire point. The inactive ones also
+   carry aria-hidden, so a screen reader hears one sentence, not three. */
+.slack-passkey-scope-slot {
+  display: grid;
+}
+.slack-passkey-scope-slot > .slack-passkey-scope {
+  grid-area: 1 / 1;
+  margin: 0;
+}
+.slack-passkey-scope-slot > .slack-passkey-scope[data-shown="false"] {
+  visibility: hidden;
+}
+
+/* ── AND THE TEXT CANNOT REORDER THE DIALOG AROUND IT ───────────────────────
+   Making deceptive characters visible (see approval-request.ts) handles the
+   payload's own contents. This handles the other half: ordinary right-to-left
+   text is perfectly legitimate and must not be allowed to drag the labels,
+   the buttons or the punctuation beside it into a different order. `isolate`
+   gives each value its own bidi context, so a Hebrew draft body reads
+   correctly inside its box and changes nothing outside it. */
+.slack-passkey-payload,
+.slack-passkey-dialog dd {
+  unicode-bidi: isolate;
 }

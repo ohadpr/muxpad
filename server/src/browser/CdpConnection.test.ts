@@ -110,14 +110,64 @@ describe('attaching', () => {
     expect((socket.sent[1]?.params as { targetId: string }).targetId).not.toBe('dt');
   });
 
-  it('fails loudly when the browser has no page at all', async () => {
+  /**
+   * A BROWSER WITH NO TAB GETS ONE.
+   *
+   * This test used to assert the opposite — that a browser with no page is an
+   * error — and that assertion was the bug, not the guard. `chrome-headless-
+   * shell` launched with no URL opens NO page, where full Chrome gives you a
+   * new-tab page. So every host start threw "no page target" the moment it
+   * connected, died, and was restarted for ever by its supervisor. On this
+   * machine that loop left 1,001 orphaned browsers and 3,014 processes.
+   */
+  it('makes a page when the browser has none, instead of giving up', async () => {
     const { conn } = connection();
     await conn.connect();
     const socket = FakeSocket.last as FakeSocket;
     const attaching = conn.attachToPage();
+
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1));
+    expect(socket.sent[0]).toMatchObject({ method: 'Target.getTargets' });
+    socket.reply(socket.sent[0]?.id as number, { targetInfos: [] });
+
+    // A blank page, asked for over CDP rather than arranged on the command
+    // line — the invariant has to hold when the last tab closes too.
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(2));
+    expect(socket.sent[1]).toMatchObject({
+      method: 'Target.createTarget',
+      params: { url: 'about:blank' },
+    });
+    socket.reply(socket.sent[1]?.id as number, { targetId: 'fresh' });
+
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(3));
+    expect(socket.sent[2]).toMatchObject({ method: 'Target.getTargets' });
+    socket.reply(socket.sent[2]?.id as number, {
+      targetInfos: [{ targetId: 'fresh', type: 'page', url: 'about:blank' }],
+    });
+
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(4));
+    expect(socket.sent[3]).toMatchObject({
+      method: 'Target.attachToTarget',
+      params: { targetId: 'fresh', flatten: true },
+    });
+    socket.reply(socket.sent[3]?.id as number, { sessionId: 'S1' });
+
+    await expect(attaching).resolves.toMatchObject({ targetId: 'fresh' });
+  });
+
+  it('still fails loudly when a NAMED target is gone', async () => {
+    // A handoff names the page a person is being sent to. Inventing a blank
+    // one in its place would hand them a different browser than they asked
+    // for and call it success.
+    const { conn } = connection();
+    await conn.connect();
+    const socket = FakeSocket.last as FakeSocket;
+    const attaching = conn.attachToPage('vanished');
     await vi.waitFor(() => expect(socket.sent).toHaveLength(1));
     socket.reply(socket.sent[0]?.id as number, { targetInfos: [] });
     await expect(attaching).rejects.toThrow(/no page target/i);
+    // …and nothing was created on the way to that refusal.
+    expect(socket.sent.some((m) => m.method === 'Target.createTarget')).toBe(false);
   });
 });
 

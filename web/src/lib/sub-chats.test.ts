@@ -1,7 +1,8 @@
 import type { ChatAction } from '@muxpad/shared';
 import { describe, expect, it } from 'vitest';
 import type { MentionChat } from './chat-mention';
-import { artifactsOf, subChatIsOpen, subChatsOf } from './sub-chats';
+import type { SubChat } from './sub-chats';
+import { artifactsOf, subChatIsOpen, subChatLiveWord, subChatsOf } from './sub-chats';
 
 /**
  * THE DRAWER'S TWO LISTS, as rules rather than as a rendered panel.
@@ -124,5 +125,53 @@ describe('artifactsOf', () => {
     expect(
       artifactsOf([act({ kind: 'slack.post' }), act({ url: null }), act({ url: undefined })]),
     ).toEqual([]);
+  });
+});
+
+describe('a worker that stopped to ask you something is not "working"', () => {
+  const sub = (over: Partial<MentionChat>): SubChat => ({
+    paneId: 'p',
+    chat: {
+      tabId: 't',
+      name: 'worker',
+      workspaceId: 'w',
+      workspaceName: 'W',
+      ...over,
+    } as MentionChat,
+  });
+
+  it('says "needs you", where it used to say "working"', () => {
+    // Its card in the log says AWAITING — through `spawnState`. The drawer
+    // read `!done` instead and printed "working", so one worker made two
+    // different claims about whether it needed a human.
+    const asking = sub({ report: { state: 'awaiting' } as MentionChat['report'] });
+    expect(subChatLiveWord(asking)).toBe('needs you');
+    // …and it stays in the live block: it is not finished.
+    expect(subChatIsOpen(asking)).toBe(true);
+  });
+
+  it('a genuinely busy worker still says working', () => {
+    expect(subChatLiveWord(sub({ status: 'working' }))).toBe('working');
+    expect(subChatLiveWord(sub({}))).toBe('working');
+  });
+
+  it('a delivered worker says nothing, and leaves the live block', () => {
+    const done = sub({ done: true, doneReason: 'delivered' });
+    expect(subChatLiveWord(done)).toBeNull();
+    expect(subChatIsOpen(done)).toBe(false);
+  });
+
+  it('RIGHT NOW still outranks the row: an awaiting worker that is busy again is working', () => {
+    const revived = sub({
+      status: 'working',
+      report: { state: 'awaiting' } as MentionChat['report'],
+    });
+    expect(subChatLiveWord(revived)).toBe('working');
+  });
+
+  it('a crashed worker is not in the live block and claims nothing', () => {
+    const crashed = sub({ done: true, report: { state: 'crashed' } as MentionChat['report'] });
+    expect(subChatLiveWord(crashed)).toBeNull();
+    expect(subChatIsOpen(crashed)).toBe(false);
   });
 });

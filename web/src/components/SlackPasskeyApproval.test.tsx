@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -372,7 +374,9 @@ it('leads with the ask and shows the whole payload without a disclosure', async 
   // asking for approval of something it did not show.
   expect(host.querySelector('details')).toBeNull();
   const rest = [...host.querySelectorAll('.slack-passkey-rest dt')].map((d) => d.textContent);
-  expect(rest).toEqual(['channel', 'metadata']);
+  // The workspace id rides with the other details rather than in the origin
+  // line, where it was one fact too many for a 0.75rem row.
+  expect(rest).toEqual(['channel', 'metadata', 'workspace']);
   expect(host.querySelector('.slack-passkey-rest')!.textContent).toContain('"keep":"exact"');
   expect([...host.querySelectorAll('dialog button')].map((b) => b.textContent)).toEqual([
     'Deny',
@@ -391,7 +395,7 @@ it('puts the mark that says what is read beside the verb, and the Slack workspac
     } as unknown as typeof request,
   ];
   await render();
-  expect(host.querySelector('h2')!.textContent).toBe('Read archive totals');
+  expect(host.querySelector('h2')!.textContent).toBe('Count your mail, calendar and contacts');
   // stats is the one verb that spans the archive — and it must say the
   // totals are not content, or three lit marks read worse than the truth.
   expect(
@@ -543,4 +547,229 @@ it('offers an approval that lasts until revoked, and says what that actually mea
   expect(host.textContent).not.toMatch(/forever/i);
   expect(host.textContent).toContain('when the broker restarts');
   expect(host.textContent).toContain('not stored on disk');
+});
+
+it('never argues with itself about whether the asking machine is verified', async () => {
+  // The first proven request from the VM showed a full duration menu under a
+  // line reading "unverified, so approve-once only". The caveat belonged to a
+  // world where no remote machine could prove anything; the broker's own
+  // verdict is the only thing that knows.
+  pending = [{ ...request, origin: 'trayo', timedAllowed: true } as unknown as typeof request];
+  await render();
+  expect(host.textContent).toContain('asked by');
+  expect(host.textContent).not.toContain('unverified');
+  expect(host.textContent).toContain('verified');
+  expect(host.querySelector('select')).toBeTruthy();
+});
+
+it('still says approve-once when the broker refuses a duration', async () => {
+  pending = [
+    {
+      ...request,
+      origin: 'trayo',
+      timedAllowed: false,
+      timedRefusedReason: 'did not prove it',
+    } as unknown as typeof request,
+  ];
+  await render();
+  expect(host.textContent).toContain('unverified, so approve-once only');
+  // …and the control that would contradict it is not there at all.
+  expect(host.querySelector('select')).toBeNull();
+});
+
+it('lets a stuck approval be put down, and does not put it straight back', async () => {
+  // The bar had no exit: closing the dialog rendered it, it offered only
+  // "Review", and the poll re-opened the card if you closed that too. The
+  // only way out was waiting five minutes for the request to expire.
+  vi.mocked(passkeyCeremony).mockRejectedValue(
+    Object.assign(Error('The operation either timed out or was not allowed. See: https://…'), {
+      name: 'NotAllowedError',
+    }),
+  );
+  await render();
+  await click('Approve');
+  // The ceremony threw, so the dialog stays open with the error — exactly
+  // what a cancelled Touch ID prompt looks like. Closing it is what puts the
+  // bar above the composer, and the bar is what had no way out.
+  expect(host.querySelector('dialog')!.open).toBe(true);
+  await click('Close');
+  const bar = host.querySelector('.slack-passkey-inline')!;
+  // The implementer-facing WebAuthn string never reaches the person.
+  expect(bar.textContent).not.toContain('w3.org');
+  expect(bar.textContent).toContain('cancelled or timed out');
+  const dismiss = [...host.querySelectorAll('.slack-passkey-inline button')].find(
+    (b) => b.textContent === 'Dismiss',
+  ) as HTMLButtonElement;
+  expect(dismiss, 'no way to dismiss the bar').toBeTruthy();
+  await act(async () => dismiss.click());
+  expect(host.querySelector('.slack-passkey-inline')).toBeNull();
+  expect(host.querySelector('dialog')!.open).toBe(false);
+  // …and the poll does not resurrect it while the request is still pending.
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(6000);
+  });
+  expect(host.querySelector('.slack-passkey-inline')).toBeNull();
+  expect(host.querySelector('dialog')!.open).toBe(false);
+});
+
+it('dismissing decides nothing — no decision is ever sent', async () => {
+  vi.mocked(passkeyCeremony).mockRejectedValue(
+    Object.assign(Error('cancelled'), { name: 'NotAllowedError' }),
+  );
+  await render();
+  await click('Approve');
+  await click('Close');
+  const before = vi.mocked(passkeyAPI).mock.calls.filter(([p]) => p === 'decision').length;
+  const dismiss = [...host.querySelectorAll('.slack-passkey-inline button')].find(
+    (b) => b.textContent === 'Dismiss',
+  ) as HTMLButtonElement;
+  await act(async () => dismiss.click());
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(6000);
+  });
+  // Walking away is not "deny": the request stays pending at the broker and
+  // expires on its own. Saying no is a decision, and a decision is signed.
+  expect(vi.mocked(passkeyAPI).mock.calls.filter(([p]) => p === 'decision')).toHaveLength(before);
+});
+
+/**
+ * AN EXPIRED REQUEST NEVER REACHES THE PLATFORM PROMPT.
+ *
+ * A broker request lives five minutes. The dialog stayed live past that:
+ * Approve started a WebAuthn ceremony, the broker refused the stale intent,
+ * and on a phone it surfaced as the system's own "Unable to use passkey —
+ * This passkey could not be used to sign in". The reasonable conclusion was
+ * that the passkey was broken. It was not; the request had expired.
+ */
+it('an expired request cannot be approved, and says why', async () => {
+  pending = [{ ...request, expires: Date.now() - 1000 }];
+  await render();
+  const approve = [...host.querySelectorAll('dialog button')].find((b) =>
+    /Approve|Expired/.test(b.textContent ?? ''),
+  ) as HTMLButtonElement;
+  // The control stops looking ready…
+  expect(approve.textContent).toBe('Expired');
+  expect(approve.disabled).toBe(true);
+  // …and pressing it anyway reaches no platform prompt.
+  await act(async () => approve.click());
+  expect(vi.mocked(passkeyCeremony)).not.toHaveBeenCalled();
+  expect(vi.mocked(passkeyAPI).mock.calls.filter(([p]) => p === 'options')).toHaveLength(0);
+  // The poll explains it in the words a person needs.
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(2500);
+  });
+  expect(host.textContent).toMatch(/expired/i);
+});
+
+it('the guard is in `decide` too, not only on the button', () => {
+  // The button is the primary defence; this is the race — a tap already in
+  // flight when expiry crosses must not reach the ceremony either. Asserted
+  // on the source, the way this suite already pins rules that have no
+  // reachable behaviour from outside.
+  const src = readFileSync(join(import.meta.dirname, 'SlackPasskeyApproval.tsx'), 'utf8');
+  const decide = src.slice(src.indexOf('const decide = async'));
+  expect(decide.slice(0, 1400)).toMatch(/request\.expires <= Date\.now\(\)/);
+});
+
+it('a LIVE request is untouched — the guard is about expiry, not about writes', async () => {
+  await render();
+  await click('Approve');
+  expect(vi.mocked(passkeyCeremony)).toHaveBeenCalled();
+});
+
+/**
+ * THE DIALOG MUST NOT MOVE ITS BUTTONS WHILE YOU ARE DECIDING.
+ *
+ * Reported from a real approval: choosing a duration made four lines of scope
+ * copy appear and pushed Deny and Approve down the dialog, under a cursor
+ * already travelling towards a button. That is how a dialog collects a click
+ * nobody meant — and this one signs a passkey ceremony with it.
+ *
+ * jsdom does not lay out, so height cannot be asserted here. What CAN be
+ * asserted is the property the fix rests on, and it is the one that would be
+ * undone by a careless edit: every variant is present in the DOM at every
+ * moment, so the browser sizes the slot to the tallest once and never resizes
+ * it. A variant rendered only when selected is the bug, whatever it looks
+ * like.
+ */
+it('keeps every scope variant mounted, so choosing a duration cannot move the buttons', async () => {
+  await render();
+  const slot = () => host.querySelector('.slack-passkey-scope-slot')!;
+  const variants = () => [...slot().querySelectorAll('.slack-passkey-scope')];
+  const shown = () => variants().filter((p) => p.getAttribute('data-shown') === 'true');
+
+  // Three answers — once, a period, until revoked — present before anything
+  // is chosen, which is the moment the old markup rendered none of them.
+  expect(variants()).toHaveLength(3);
+  expect(shown()).toHaveLength(1);
+  expect(shown()[0]?.textContent).toContain('This call only');
+
+  const pick = async (value: string) => {
+    await act(async () => {
+      const select = host.querySelector('select')!;
+      select.value = value;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  };
+
+  for (const [value, needle] of [
+    ['1d', 'Ends within the selected period'],
+    ['until-revoked', 'not stored on disk'],
+    ['10m', 'Ends within the selected period'],
+    ['once', 'Nothing is remembered'],
+  ] as const) {
+    await pick(value);
+    // The count never changes — only which one is visible.
+    expect(variants(), value).toHaveLength(3);
+    expect(shown(), value).toHaveLength(1);
+    expect(shown()[0]?.textContent, value).toContain(needle);
+    // …and the hidden ones are hidden from assistive tech too, so a screen
+    // reader hears one sentence rather than three contradictory ones.
+    for (const p of variants())
+      expect(p.getAttribute('aria-hidden'), value).toBe(
+        p.getAttribute('data-shown') === 'true' ? 'false' : 'true',
+      );
+  }
+});
+
+/**
+ * WHAT A DURATION BUYS IS DIFFERENT PER CAPABILITY, AND THE DIALOG SAYS SO.
+ *
+ * This used to be asserted by matching the component's source for a ternary,
+ * which pinned the arrangement rather than the promise and broke the moment
+ * the copy moved into a helper. What actually matters is what a person reads
+ * before they approve, so read it.
+ *
+ * The msgvault sentence is the owner-facing half of `timedReadOnly` in the
+ * broker: a duration covers reading, drafting is approved on its own every
+ * time, and nothing here can send. If the dialog and the broker ever stop
+ * agreeing, the dialog is the one telling somebody a falsehood.
+ */
+it('promises mail things for mail and Slack things for Slack', async () => {
+  const shown = () =>
+    [...host.querySelectorAll('.slack-passkey-scope')].find(
+      (p) => p.getAttribute('data-shown') === 'true',
+    )?.textContent ?? '';
+  const pickADuration = async () => {
+    await act(async () => {
+      const select = host.querySelector('select')!;
+      select.value = '1h';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  };
+
+  pending = [
+    {
+      ...request,
+      action: 'msgvault.search',
+      payload: { query: 'dinner' },
+    } as unknown as typeof request,
+  ];
+  await render();
+  await pickADuration();
+  expect(shown()).toContain('search and read your mail');
+  expect(shown()).toContain('Drafting is never covered by a duration');
+  expect(shown()).toContain('nothing here can send');
+  // The Slack sentence must not appear on an archive request.
+  expect(shown()).not.toContain('Slack workspace');
 });
