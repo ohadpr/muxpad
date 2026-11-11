@@ -58,6 +58,40 @@ function fixture(startupCmd: string | null) {
 describe('runRebase', () => {
   const ok = { status: 'queued' as const };
 
+  it('KEEPS the history by default — it rebases, it does not compact', () => {
+    // `auto` is this today; the transcript rebase slots in ahead of it later.
+    // "i want the history but I WANT IT REBASED ON THE NEW INSTRUCTIONS."
+    // Nothing is summarised and the `--resume` is left exactly as it is: the
+    // process is new, so the system prompt is rebuilt from today's
+    // agent-instructions.md, and the conversation rides along untouched.
+    const { db, paneId } = fixture('muxpad agent --resume old-sid');
+    const calls: string[] = [];
+    return runRebase(
+      {
+        db,
+        respawn: async () => {
+          calls.push('respawn');
+        },
+        submit: () => {
+          calls.push('submit');
+          return ok;
+        },
+        brief: async () => {
+          calls.push('brief');
+          return 'goal: ship it';
+        },
+      },
+      paneId,
+    ).then((r) => {
+      expect(r.ok).toBe(true);
+      // No summary written, nothing injected — just a new process.
+      expect(calls).toEqual(['respawn']);
+      // AND THE RESUME SURVIVES. Stripping it here would silently turn the
+      // default into the thing it replaced.
+      expect(new PaneStore(db).getById(paneId)?.startup_cmd).toBe('muxpad agent --resume old-sid');
+    });
+  });
+
   it('briefs, strips the resume, respawns, and hands the briefing over', async () => {
     const { db, paneId } = fixture('muxpad agent --resume old-sid');
     const calls: string[] = [];
@@ -89,6 +123,29 @@ describe('runRebase', () => {
     // history is not in its window and its own instructions are the current ones.
     expect(delivered).toContain('<muxpad-rebase>');
     expect(delivered).toContain('goal: ship the broker');
+  });
+
+  it('never degrades to a briefing on its own', async () => {
+    // A button promising "keep your history" must not quietly become
+    // "replace it with a summary" — that is a different answer, delivered at
+    // the one moment the user cannot see it happening.
+    const { db, paneId } = fixture('muxpad agent --resume old-sid');
+    let briefed = false;
+    const r = await runRebase(
+      {
+        db,
+        respawn: async () => {},
+        submit: () => ok,
+        brief: async () => {
+          briefed = true;
+          return 'a summary';
+        },
+      },
+      paneId,
+      'auto',
+    );
+    expect(r.ok).toBe(true);
+    expect(briefed, 'auto must never reach the briefing path').toBe(false);
   });
 
   it('REFUSES rather than destroying a chat it could not summarise', async () => {
@@ -127,6 +184,7 @@ describe('runRebase', () => {
         },
       },
       paneId,
+      'fresh',
     );
     expect(r).toMatchObject({ ok: false, code: 'not_an_agent' });
     // Not even summarised: a terminal has no conversation to summarise.
@@ -217,7 +275,10 @@ describe('runRebase — the transcript rebase is the default', () => {
     );
   });
 
-  it('falls back to the briefing when the transcript cannot be replayed', async () => {
+  it('falls through to RESUME — never the briefing — when the transcript cannot be replayed', async () => {
+    // The decision this guards: `fresh` is not a fallback. A button promising
+    // "keep your history" that quietly became "replace it with a summary"
+    // would break its promise exactly when nobody could see it.
     const { db, paneId } = fixture('muxpad agent --resume old-sid');
     const calls: string[] = [];
     const r = await runRebase(
@@ -242,9 +303,86 @@ describe('runRebase — the transcript rebase is the default', () => {
       },
       paneId,
     );
-    expect(r).toMatchObject({ ok: true, mode: 'fresh' });
+    expect(r).toMatchObject({ ok: true, mode: 'keep' });
     expect((r as { fallback?: string }).fallback).toMatch(/last_turn_too_large/);
-    expect(calls).toEqual(['brief', 'respawn', 'submit']);
+    expect(calls).toEqual(['respawn']);
+    // Every message kept: the pane still resumes the conversation it had.
+    expect(new PaneStore(db).getById(paneId)?.startup_cmd).toBe('muxpad agent --resume old-sid');
+  });
+
+  it('keep skips the transcript rebase and only replaces the process', async () => {
+    const { db, paneId } = fixture('muxpad agent --resume old-sid');
+    const calls: string[] = [];
+    const r = await runRebase(
+      {
+        db,
+        transcript: async () => {
+          calls.push('transcript');
+          return rebased;
+        },
+        respawn: async () => {
+          calls.push('respawn');
+        },
+        submit: () => ok,
+      },
+      paneId,
+      'keep',
+    );
+    expect(r).toMatchObject({ ok: true, mode: 'keep' });
+    expect(calls).toEqual(['respawn']);
+    expect(new PaneStore(db).getById(paneId)?.startup_cmd).toBe('muxpad agent --resume old-sid');
+  });
+
+  it('refuses, changing nothing, when even the resume restart throws', async () => {
+    const { db, paneId } = fixture('muxpad agent --resume old-sid');
+    let briefed = false;
+    const r = await runRebase(
+      {
+        db,
+        transcript: async () => ({ ok: false, reason: 'not_claude', detail: 'codex' }),
+        respawn: async () => {
+          throw new Error('ptyd unreachable');
+        },
+        submit: () => ok,
+        brief: async () => {
+          briefed = true;
+          return 'x';
+        },
+      },
+      paneId,
+    );
+    expect(r).toMatchObject({ ok: false, code: 'respawn_failed' });
+    expect(briefed).toBe(false);
+    expect(new PaneStore(db).getById(paneId)?.startup_cmd).toBe('muxpad agent --resume old-sid');
+  });
+
+  it('refuses a pane that lives on another machine, in auto and keep alike', async () => {
+    for (const mode of ['auto', 'keep'] as const) {
+      const { db, paneId } = fixture('muxpad agent --resume old-sid');
+      db.prepare('UPDATE panes SET node_id = ? WHERE id = ?').run('trayo', paneId);
+      let touched = false;
+      const r = await runRebase(
+        {
+          db,
+          transcript: async () => {
+            touched = true;
+            return rebased;
+          },
+          respawn: async () => {
+            touched = true;
+          },
+          submit: () => ok,
+          brief: async () => {
+            touched = true;
+            return 'x';
+          },
+        },
+        paneId,
+        mode,
+      );
+      expect(r).toMatchObject({ ok: false, code: 'elsewhere' });
+      expect(touched).toBe(false);
+    }
   });
 
   it('refuses a chat on another machine outright — no briefing, no restart', async () => {

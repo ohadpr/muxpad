@@ -3164,6 +3164,30 @@
 .chat-session-item.-static:hover {
   background: transparent;
 }
+/* ── THE ONE ACTION A STATUS PANEL OFFERS ──────────────────────────────────
+   Every other row in these popovers either states a fact or switches a
+   setting. This one DOES something irreversible-ish — it ends the pane's
+   background work — so it is the one row that looks like a button: its own
+   plate, centred, with room above it so it cannot be hit while reading the
+   sentence that explains it. */
+.chat-session-item.-action {
+  align-items: center;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.14));
+  background: var(--bg-elev, rgba(255, 255, 255, 0.04));
+  font-weight: 600;
+}
+.chat-session-item.-action:hover:not(:disabled) {
+  border-color: var(--accent, #4a9eff);
+  color: var(--accent, #4a9eff);
+  background: color-mix(in srgb, var(--accent, #4a9eff) 10%, transparent);
+}
+.chat-session-item.-action:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .chat-session-item.is-active .chat-session-item-label {
   color: var(--accent, #4a9eff);
 }

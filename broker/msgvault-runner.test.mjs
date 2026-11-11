@@ -64,7 +64,11 @@ test('checks the BINARY too, not only the file that names it', async () => {
 });
 
 test('refuses a declaration that points the grant off this machine', async () => {
-  for (const agentUrl of ['http://10.0.0.5:8787', 'https://evil.test', 'http://127.0.0.1.evil.test']) {
+  for (const agentUrl of [
+    'http://10.0.0.5:8787',
+    'https://evil.test',
+    'http://127.0.0.1.evil.test',
+  ]) {
     const h = harness({
       decl: JSON.stringify({ msgvault: { binary: '/b', agentUrl, tokenFile: '/t' } }),
     });
@@ -80,7 +84,8 @@ test('an absent declaration refuses rather than guessing', async () => {
 
 test("passes msgvault's own refusal back, and never the grant", async () => {
   const h = harness({
-    cb: (done) => done(new Error('exit 1'), '', 'Error: query is not available in agent-delegated mode\nmore'),
+    cb: (done) =>
+      done(new Error('exit 1'), '', 'Error: query is not available in agent-delegated mode\nmore'),
   });
   await assert.rejects(h.runner('msgvault.stats', {}), (e) => {
     assert.match(e.message, /not available in agent-delegated mode/);
@@ -119,11 +124,24 @@ test('the real guard accepts the files this actually runs against', () => {
 test('passing a mode makes it reject the very files it guards', () => {
   const path = '/Library/muxpad/integrations.json';
   if (!existsSync(path)) return;
-  assert.throws(() => assertProtectedPath(path, [0], { mode: 0o022 }), /Incorrect protected file mode/);
+  assert.throws(
+    () => assertProtectedPath(path, [0], { mode: 0o022 }),
+    /Incorrect protected file mode/,
+  );
   assert.doesNotThrow(() => assertProtectedPath(path, [0]));
 });
 
 test('the runner passes no mode', () => {
   const src = readFileSync(new URL('./msgvault-runner.mjs', import.meta.url), 'utf8');
   assert.ok(!/assertProtectedPath\([^)]*mode:/.test(src), 'the runner pins an exact mode again');
+});
+
+test('an attachment gets room for a scanned PDF; everything else keeps the small buffer', async () => {
+  const h = harness();
+  await h.runner('msgvault.stats', {});
+  await h.runner('msgvault.export-attachment', { hash: 'a'.repeat(64) });
+  const [small, big] = h.ran.map((r) => r.opts.maxBuffer);
+  assert.equal(small, 4 * 1024 * 1024);
+  // base64 inside JSON: 32 MiB of output is a ~24 MiB file.
+  assert.ok(big >= 32 * 1024 * 1024, String(big));
 });

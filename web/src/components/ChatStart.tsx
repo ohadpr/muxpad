@@ -779,6 +779,7 @@ export function SessionBar({
    *  The authoritative value still arrives on the next session frame. */
 }) {
   const [panel, setPanel] = useState<StatusPanel>(null);
+  const [rebasing, setRebasing] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   useDismissable(panel !== null, wrapRef, () => setPanel(null));
   const toggle = (p: Exclude<StatusPanel, null>) => setPanel((cur) => (cur === p ? null : p));
@@ -1073,15 +1074,40 @@ export function SessionBar({
               </div>
               <div className="chat-session-item -static">
                 <span className="chat-session-item-desc">
-                  {/* No button. Respawning kills whatever the pane has in
-                      flight — background subagents, wakeups, a running turn —
-                      so the moment is the user's to pick, not a control's to
-                      offer in passing. */}
-                  Restarting this agent picks up the current build. It also ends any background work
-                  and scheduled wake-ups this pane is holding, so do it when the pane is quiet — or
-                  just open a new chat, which starts current.
+                  {/* ── ONE BUTTON, AND IT IS THE WHOLE ANSWER ─────────────
+                      This panel used to end with a paragraph and no control:
+                      it named a real problem and offered nothing, which is a
+                      sign with no door. The objection that kept it that way —
+                      that this ends background work — is a reason to make the
+                      act DELIBERATE, which a button someone has to find,
+                      open and press already is.
+
+                      One button, not two. "Any sign of old instructions / old
+                      agent / old whatever — REBASE." Keeping the conversation
+                      and refreshing the instructions is a single act from
+                      where the reader sits, so it is a single control. */}
+                  Rebasing keeps this conversation exactly as it is and starts its agent again on
+                  today’s instructions. It ends any background work and scheduled wake-ups this pane
+                  is holding, so do it when the pane is quiet.
                 </span>
               </div>
+              <button
+                type="button"
+                className="chat-session-item -action"
+                disabled={rebasing}
+                onClick={() => {
+                  setRebasing(true);
+                  api
+                    .rebasePane(paneId)
+                    // The pane reloads itself from the session frame the new
+                    // runner sends on hello; nothing to do here but stop
+                    // spinning if it never arrives.
+                    .catch(() => undefined)
+                    .finally(() => setRebasing(false));
+                }}
+              >
+                {rebasing ? 'Rebasing…' : 'Rebase this chat'}
+              </button>
             </div>
           ) : null}
         </div>

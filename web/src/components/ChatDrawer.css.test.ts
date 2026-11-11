@@ -136,10 +136,31 @@ describe('the row is one line, and the mark is beside the name', () => {
     expect(rule('.chat-drawer__row')).toMatch(/padding:\s*8px 9px/);
   });
 
-  it('puts the running state in a word, in the accent', () => {
+  it('puts the state in a LABEL, not another word in the row', () => {
+    // It shipped as plain text at the row's own size and 153 rows of it read
+    // as "word soup" — `done` competing with the name beside it. A plate, a
+    // smaller size and uppercase tracking make it a mark the eye can skip.
     const live = rule('.chat-drawer__row-live');
-    expect(live).toMatch(/color:\s*var\(--d-accent\)/);
+    expect(live).toMatch(/border-radius:\s*999px/);
+    expect(live).toMatch(/text-transform:\s*uppercase/);
+    expect(live).toMatch(/background:\s*var\(--state-plate/);
     expect(live).toMatch(/margin-inline-start:\s*auto/);
+    // PETITE. It shipped at 0.625rem/700 and read as a shouting label on a
+    // row whose subject is the name beside it. Small, and light: a thing that
+    // repeats 153 times must not be bold.
+    expect(live).toMatch(/font-size:\s*0\.5625rem/);
+    expect(live).toMatch(/font-weight:\s*500/);
+  });
+
+  it('keeps DONE the quiet one and the exceptions loud', () => {
+    // Almost every row in a work log is done, so the common case is furniture
+    // and the exceptions are the news. A label every row wears at full
+    // strength cannot point at anything.
+    const done = rule('.chat-drawer__row-live[data-state="delivered"]');
+    const working = rule('.chat-drawer__row-live[data-state="working"]');
+    expect(done).toContain('--status-ready');
+    const pct = (r: string) => Number(/(\d+)%/.exec(r)?.[1] ?? 0);
+    expect(pct(done), 'done must not be as loud as a running row').toBeLessThan(pct(working));
   });
 
   it('keeps the name as the thing that truncates', () => {
@@ -157,8 +178,33 @@ describe('the row is one line, and the mark is beside the name', () => {
  * right."
  */
 describe('the drawer says something is going on in there', () => {
-  it('animates the closed button while a worker is running', () => {
-    expect(rule('.chat-drawer-open[data-running="true"]')).toMatch(/animation:/);
+  it('spins the BADGE, not the whole button', () => {
+    // An orbiting ring around the control was the first answer and the wrong
+    // one: "replace the '1' with a spinner don't spin the whole thing". The
+    // badge is already the corner the eye checks.
+    // A REAL BADGE: the filled dot stays, and the spinner is INSIDE it in
+    // the badge's own ink — the iPhone shape, with motion where the number
+    // goes. A hollow ring in place of the dot stopped looking like a badge.
+    const dot = rule('.chat-drawer-open__count.-spinning');
+    const spin = rule('.chat-drawer-open__count.-spinning::after');
+    expect(dot, 'the badge is gone').not.toBe('');
+    expect(spin, 'nothing spins inside the badge').not.toBe('');
+    expect(spin).toMatch(/animation:\s*chat-drawer-spin/);
+    expect(spin).toMatch(/border-top-color/);
+    // The badge's ink, not a status hue: it sits ON the accent fill.
+    expect(spin).toContain('--d-accent-ink');
+    // The dot keeps its fill — it must not become a hollow ring.
+    expect(dot).not.toMatch(/background:\s*transparent/);
+    // …and nothing orbits the button any more.
+    expect(rule('.chat-drawer-open[data-running="true"]::after')).toBe('');
+  });
+
+  it('paints a running row in the WORKING hue, never the accent', () => {
+    // This theme's accent is a crimson, and a crimson label on a healthy
+    // running row reads as an error — "working is red, red feels error".
+    const working = rule('.chat-drawer__row-live[data-state="working"]');
+    expect(working).toContain('--status-working');
+    expect(working).not.toMatch(/--state-ink:\s*var\(--d-accent\)/);
   });
 
   it('does not animate it when nothing is running', () => {
@@ -183,7 +229,7 @@ describe('the drawer says something is going on in there', () => {
     expect(at, 'no reduced-motion guard at all').toBeGreaterThan(-1);
     const block = css.slice(at, css.indexOf('}\n}', at));
     expect(block).toContain('.chat-drawer__spin');
-    expect(block).toContain('.chat-drawer-open[data-running="true"]');
+    expect(block).toContain('.chat-drawer-open__count.-spinning::after');
     expect(block).toContain('animation: none');
   });
 });

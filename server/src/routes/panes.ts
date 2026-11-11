@@ -787,9 +787,10 @@ export function panesScopedRoutes(deps: {
    * By default it is a TRANSCRIPT rebase (chat/transcript-rebase.ts): the
    * same turns, with the stale instructions that leaked into them removed and
    * the compactions undone, resumed by a fresh runner on today's system
-   * prompt. `{"mode":"fresh"}` — and any chat that cannot be replayed — gets
-   * the briefing instead (chat/rebase.ts): a new session seeded with a summary
-   * written from the transcript on disk. See chat/rebase-run.ts.
+   * prompt. A chat that cannot be replayed is RESUMED as it is — a new
+   * process, so a new system prompt, and every message kept. Only an explicit
+   * `{"mode":"fresh"}` replaces the history with a briefing (chat/rebase.ts).
+   * See RebaseMode in chat/rebase-run.ts.
    *
    * A POST and never automatic: it ends background subagents, wake-ups and
    * any running turn, so the moment is the user's to pick.
@@ -806,10 +807,10 @@ export function panesScopedRoutes(deps: {
       );
     }
     const workspaceId = tabs.getWorkspaceId(p.tab_id);
-    // The transcript rebase unless the caller explicitly asks for the history
-    // to leave the window (`{"mode":"fresh"}`).
+    // BEST AVAILABLE unless the caller explicitly asks otherwise. The button
+    // sends no mode at all — see RebaseMode; `fresh` is API/CLI only.
     const body = (await c.req.json().catch(() => ({}))) as { mode?: unknown };
-    const mode = body?.mode === 'fresh' ? 'fresh' : 'transcript';
+    const mode = body?.mode === 'fresh' ? 'fresh' : body?.mode === 'keep' ? 'keep' : 'auto';
     const result = await runRebase(
       {
         db: deps.db,
