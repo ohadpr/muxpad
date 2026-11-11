@@ -49,8 +49,8 @@ import { transcriptForPane } from './transcript-access.js';
  *  a beginning that set the goal and an end that holds the state; the middle is
  *  where the compaction chain already lives, and reading all of a 130 MB
  *  transcript is neither affordable nor more informative. */
-const HEAD_LINES = 400;
-const TAIL_LINES = 2400;
+export const HEAD_LINES = 400;
+export const TAIL_LINES = 2400;
 /** Model input ceiling per end, in characters. */
 const HEAD_CHARS = 12_000;
 const TAIL_CHARS = 40_000;
@@ -65,6 +65,11 @@ export interface RebaseCorpus {
   /** Did the two ends meet? A short chat has no gap, and saying so stops the
    *  model inventing a bridge over a middle that does not exist. */
   whole: boolean;
+  /** The conversation goes on, VERBATIM, after this text. Set by the
+   *  transcript rebase, which briefs only the span too old to replay and keeps
+   *  the recent turns whole — so "where things stand" is the recent turns'
+   *  job, not the briefing's. */
+  continues?: boolean;
 }
 
 /**
@@ -75,8 +80,24 @@ export interface RebaseCorpus {
  * than against a live model.
  */
 export function rebaseCorpus(raw: string, assistant: string): RebaseCorpus {
+  return rebaseCorpusOfLines(
+    raw.split('\n').filter((l) => l.trim()),
+    assistant,
+  );
+}
+
+/**
+ * The same, from lines already in hand. `total` is how many lines the
+ * conversation really has when the caller passes only its two ends — the
+ * transcript rebase reads just the first HEAD_LINES and last TAIL_LINES of a
+ * span that can be hundreds of megabytes, and the gap must still be reported.
+ */
+export function rebaseCorpusOfLines(
+  lines: string[],
+  assistant: string,
+  total = lines.length,
+): RebaseCorpus {
   const normalize = assistant === 'claude' ? normalizeTranscriptLine : identityNormalize;
-  const lines = raw.split('\n').filter((l) => l.trim());
   const turnsIn = (slice: string[]): string[] => {
     const out: string[] = [];
     for (const line of slice) {
@@ -94,7 +115,7 @@ export function rebaseCorpus(raw: string, assistant: string): RebaseCorpus {
     return out;
   };
 
-  const whole = lines.length <= HEAD_LINES + TAIL_LINES;
+  const whole = total <= HEAD_LINES + TAIL_LINES;
   const headTurns = turnsIn(lines.slice(0, HEAD_LINES));
   // A whole transcript is NOT read twice: with no gap the tail already contains
   // the head, and a model shown the same turns under two headings reports the
@@ -136,6 +157,15 @@ export function rebasePrompt(c: RebaseCorpus): string {
     'Write for someone who will act on it immediately and cannot ask follow-ups. No',
     'preamble, no sign-off. Under 500 words.',
     '',
+    ...(c.continues
+      ? [
+          'This is only the EARLIER part of a conversation. The turns after it are kept',
+          'verbatim and the reader will see them right after your briefing, so do not',
+          'describe them, and treat "state" as of the end of this part — later turns may',
+          'have changed it.',
+          '',
+        ]
+      : []),
     c.whole
       ? 'The complete conversation follows.'
       : 'The conversation is long, so you are given its OPENING and its MOST RECENT part, with a gap between them. Do not invent what happened in the gap; where the two ends disagree, the recent part is current.',
@@ -173,7 +203,20 @@ export async function rebaseBriefing(
   }
   const corpus = rebaseCorpus(raw, sess.assistant);
   if (!corpus.tail) return null;
+  const text = await writeBriefing(corpus);
+  if (!text) return null;
+  return corpus.title ? `Ongoing thread: ${corpus.title}\n\n${text}` : text;
+}
 
+/**
+ * The model call alone: corpus in, briefing out, null on any failure.
+ *
+ * Split out of {@link rebaseBriefing} so the transcript rebase can brief the
+ * span it is dropping without re-reading the file or re-deciding which pane it
+ * is — it already holds both.
+ */
+export async function writeBriefing(corpus: RebaseCorpus): Promise<string | null> {
+  if (!corpus.tail) return null;
   const abort = new AbortController();
   // Longer than the deliverable summary's 30s: this reads both ends of a long
   // conversation and is user-initiated, so it is allowed to take a moment.
@@ -203,8 +246,7 @@ export async function rebaseBriefing(
     clearTimeout(timeout);
   }
   text = text.trim();
-  if (!text) return null;
-  return corpus.title ? `Ongoing thread: ${corpus.title}\n\n${text}` : text;
+  return text || null;
 }
 
 /**
@@ -216,18 +258,59 @@ export async function rebaseBriefing(
  * feature is a fresh agent that half-remembers the old build.
  */
 export function wrapRebase(text: string): string {
+  return ['<muxpad-rebase>', REBASE_PREAMBLE, '', text.trim(), '</muxpad-rebase>'].join('\n');
+}
+
+/** The fixed text around a briefing-only rebase's briefing. One constant, so
+ *  {@link briefingOf} strips exactly what {@link wrapRebase} wrote. */
+export const REBASE_PREAMBLE = [
+  'This chat has been REBASED at the user’s request: same conversation, fresh context.',
+  'The earlier history is NOT in your window — it is on disk and searchable, and the',
+  'briefing below was written from it. Treat the briefing as established background and',
+  'say so plainly if you need detail it does not cover; do not guess at what came before.',
+  '',
+  'Your tools, rules and environment are whatever your CURRENT instructions say. The',
+  'old session was running an older build of muxpad and anything it believed about',
+  'tooling was deliberately left out of the briefing.',
+].join('\n');
+
+/**
+ * The HISTORY a transcript rebase puts in front of the turns it kept.
+ *
+ * A different tag from `<muxpad-rebase>` on purpose. A rebase strips every
+ * muxpad-authored block because those are instructions, and instructions go
+ * stale — but this one is not an instruction, it is the only remaining copy of
+ * the older half of the conversation. A second rebase that stripped it would
+ * delete history, so it is the one muxpad tag the transform keeps.
+ */
+export function wrapHistory(text: string): string {
   return [
-    '<muxpad-rebase>',
-    'This chat has been REBASED at the user’s request: same conversation, fresh context.',
-    'The earlier history is NOT in your window — it is on disk and searchable, and the',
-    'briefing below was written from it. Treat the briefing as established background and',
-    'say so plainly if you need detail it does not cover; do not guess at what came before.',
-    '',
-    'Your tools, rules and environment are whatever your CURRENT instructions say. The',
-    'old session was running an older build of muxpad and anything it believed about',
-    'tooling was deliberately left out of the briefing.',
+    '<muxpad-history>',
+    'The EARLIER part of this conversation, summarised from its transcript when the chat',
+    'was rebased onto current instructions. Everything after this message is verbatim.',
     '',
     text.trim(),
-    '</muxpad-rebase>',
+    '</muxpad-history>',
   ].join('\n');
+}
+
+/**
+ * The briefing inside an earlier rebase or carryover block, without the
+ * instruction prose around it — or null when the block is not one of those.
+ *
+ * Those blocks hold the only copy of the history before them, so the transform
+ * keeps the briefing (re-wrapped as `<muxpad-history>`) and drops only the
+ * paragraphs about tools and windows, which are exactly the stale part.
+ */
+export function briefingOf(tag: string, inner: string): string | null {
+  const t = inner.trim();
+  if (tag === 'muxpad-rebase') {
+    return (t.startsWith(REBASE_PREAMBLE) ? t.slice(REBASE_PREAMBLE.length) : t).trim() || null;
+  }
+  if (tag === 'muxpad-carryover') {
+    // summarize.ts: one fixed paragraph, then the briefing.
+    const gap = t.indexOf('\n\n');
+    return (gap >= 0 && t.startsWith('You are continuing work') ? t.slice(gap) : t).trim() || null;
+  }
+  return null;
 }
