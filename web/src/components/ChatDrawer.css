@@ -340,20 +340,39 @@
   border-color: color-mix(in srgb, var(--d-accent) 40%, transparent);
 }
 /* ── THE BADGE, SPINNING ───────────────────────────────────────────────────
-   Same 14px corner the count occupied, so nothing moves when work starts: a
-   ring in the status channel's working hue with one bright quarter, turning.
-   No number — how many is the drawer's own job, and a closed drawer only has
-   to answer "is anything happening". */
+   A REAL BADGE, the iOS kind: the filled dot stays exactly as it is — same
+   size, same accent fill, same corner — and the spinner goes INSIDE it in the
+   badge's own ink. "make real badge like iphone just instead of red dot do
+   red dot with white spinner inside."
+
+   The two earlier attempts both failed by taking something away: a ring
+   orbiting the whole button moved the wrong object, and a hollow ring in
+   place of the dot stopped looking like a badge at all. A badge is a filled
+   dot with something in it. The something is usually a number; here it turns.
+
+   No number while it spins — how many is the drawer's own job, one tap away,
+   and it is almost always one. Whether work is happening at all is the only
+   thing a closed drawer has to be able to say. */
 .chat-drawer-open__count.-spinning {
-  background: transparent;
-  border: 1.5px solid color-mix(in srgb, var(--status-working, var(--d-accent)) 30%, transparent);
-  border-top-color: var(--status-working, var(--d-accent));
-  border-radius: 50%;
-  width: 13px;
-  height: 13px;
-  min-width: 0;
+  display: grid;
+  place-items: center;
+  min-width: 15px;
+  width: 15px;
+  height: 15px;
   padding: 0;
-  animation: chat-drawer-spin 800ms linear infinite;
+}
+.chat-drawer-open__count.-spinning::after {
+  content: "";
+  width: 9px;
+  height: 9px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  /* The badge's own ink, at two strengths: a faint complete ring so it reads
+     as a circle rather than a stray tick, and one bright quarter that makes
+     the rotation legible at 9px. */
+  border: 1.5px solid color-mix(in srgb, var(--d-accent-ink) 38%, transparent);
+  border-top-color: var(--d-accent-ink);
+  animation: chat-drawer-spin 750ms linear infinite;
 }
 
 .chat-drawer-open__count {
@@ -547,7 +566,7 @@
    The colour and the count still carry every fact. */
 @media (prefers-reduced-motion: reduce) {
   .chat-drawer__spin,
-  .chat-drawer-open__count.-spinning {
+  .chat-drawer-open__count.-spinning::after {
     animation: none;
   }
 }
