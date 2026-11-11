@@ -584,33 +584,42 @@
   margin-left: 10px;
   /* em — see .chat-md pre code */
   font-size: 0.775em;
-  color: var(--chat-faint);
+  /* --chat-dim, NOT --chat-faint. Measured across the ten themes that ship,
+     faint sits at 2.1–3.3:1 on the chat's own ground — under AA everywhere,
+     on 12px text. This row is the only account of what a silent pane is
+     doing, so it is the last place to spend legibility on quietness. The
+     quiet is carried by the SIZE and by the spinner beside it. The same call
+     `.chat-tool-btn` and the rail search already made. */
+  color: var(--chat-dim);
   /* Does not shrink: the tool name is the one thing only this row can say,
      so the hint beside it gives way first. */
   flex: 0 0 auto;
 }
 
-/* ── WHAT IT LAST SAID IT WAS DOING ─────────────────────────────────────────
-   One line, and it must STAY one line. The whole point of putting this in the
-   indicator rather than the log is that it occupies the same pixels every
-   time — a hint that wrapped to three lines would push the conversation up on
-   every tool call, which is the growing verbose log this exists to avoid.
+/* ── WHAT IT IS DOING, IN ITS OWN WORDS ───────────────────────────────────
+   The agent's own sentence, and the LINE rather than a footnote to it. It
+   used to trail the tool name in faint italic at 0.75em — the smallest,
+   faintest type in the pane spent on the only thing the pane had not already
+   said, while the row led with a tool the fold above it was already naming.
+
+   One line, and it must STAY one line. The whole point of putting this in
+   the indicator rather than the log is that it occupies the same pixels every
+   time — a sentence that wrapped to three lines would push the conversation
+   up on every tool call, which is the growing verbose log this exists to
+   avoid.
 
    `min-width: 0` is load-bearing: a flex item will not shrink below its
    content without it, so the ellipsis never appears and the row grows
-   instead. Quieter than the tool name on purpose — it is a clue, not a
-   label. */
-.chat-working-hint {
-  margin-left: 8px;
+   instead. */
+.chat-working-say {
+  margin-left: 10px;
   min-width: 0;
   flex: 0 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.75em;
-  font-style: italic;
-  color: var(--chat-faint);
-  opacity: 0.85;
+  font-size: 0.8125em;
+  color: var(--chat-dim);
 }
 
 /* Running-subagents indicator — one row per live Task, visible even after
