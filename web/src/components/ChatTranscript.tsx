@@ -203,6 +203,21 @@ function MentionedText({ text, hl }: { text: string; hl?: readonly string[] | un
 }
 
 /**
+ * THE LIVE STATE OF THE RUNNING TURN, handed to whichever fold is last.
+ *
+ * A context rather than a prop because of WHERE the two live: the transcript
+ * is built in a memo that runs before the turn's live state is derived, so the
+ * list cannot be handed a spinner without reordering half of ChatPane. What
+ * the list CAN say is structural and cheap — "this run is the last thing in
+ * the log" — and the live value finds it from here, re-rendering the one fold
+ * that wants it instead of rebuilding the transcript on every frame.
+ *
+ * Null whenever no turn is running, which is also what makes the fold go quiet
+ * the moment the turn ends.
+ */
+export const ChatLiveContext = createContext<React.ReactNode>(null);
+
+/**
  * A folded run of consecutive actions (tool calls + thinking) — long
  * agentic stretches read as one summarizable step, not a wall of rows.
  * The header names the mix ("14 actions · Bash ×6 · Edit ×4"), flags
@@ -214,9 +229,13 @@ export function ActionGroup({
   anchorId,
   onToggle,
   renderEvent,
+  tail,
 }: {
   events: ChatEvent[];
   expanded: boolean;
+  /** Is this run the LAST thing in the log? Only the last one can be the
+   *  running turn's own actions, and only it may wear the live indicator. */
+  tail?: boolean | undefined;
   /** See ANCHOR_ATTR — the scroll memory's handle on this row. */
   anchorId?: string | undefined;
   onToggle: () => void;
@@ -278,6 +297,9 @@ export function ActionGroup({
   // and it was not addressed to the agent as one.
   const reportsOnly = promptsOnly && events.every((e) => e.kind === 'user' && e.fold === 'report');
   const noun = reportsOnly ? 'report' : promptsOnly ? 'prompt' : 'note';
+  // Read unconditionally — a hook cannot be conditional — and `tail` gates
+  // only whether it is USED.
+  const live = useContext(ChatLiveContext);
   const countLabel = notesOnly
     ? `${actions === 1 ? noun : `${actions} ${noun}s`}`
     : `${actions} action${actions === 1 ? '' : 's'}`;
@@ -299,6 +321,14 @@ export function ActionGroup({
           <span className="chat-action-group-count">{countLabel}</span>
           {notesOnly ? null : <span className="chat-action-group-summary">{summary}</span>}
           {failed > 0 ? <span className="chat-action-group-failed">{failed} failed</span> : null}
+          {/* ── THE RUNNING TURN SPEAKS ON ITS OWN FOLD ──────────────────
+              Not a second row beneath it. The fold counts what this turn has
+              DONE; the live line says what it is doing right now; stacked,
+              they were two lines of chrome for one turn, the top one
+              restating the tool the bottom one named. Same row, and the
+              sentence ellipsises rather than wrapping — see
+              `.chat-action-group-live`. */}
+          {tail && live ? <span className="chat-action-group-live">{live}</span> : null}
         </button>
         {expanded ? (
           // Explicit arrow, NOT `.map(renderEvent)`: Array#map passes the index
