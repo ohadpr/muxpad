@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { assertProtectedPath } from './protected-path.mjs';
 import { msgvaultArgv } from './msgvault.mjs';
+import { assertProtectedPath } from './protected-path.mjs';
 
 /**
  * RUNNING msgvault, FROM THE SIDE THE AGENT CANNOT REACH.
@@ -28,6 +28,10 @@ export function msgvaultRunner({
   run = execFile,
   timeoutMs = 30_000,
   maxBytes = 4 * 1024 * 1024,
+  // An attachment comes back base64'd inside JSON, so 4 MiB of output is a
+  // 3 MiB file — smaller than a scanned PDF. Past this, execFile fails with
+  // "maxBuffer exceeded" rather than truncating, so the cap is loud.
+  attachmentMaxBytes = 32 * 1024 * 1024,
 } = {}) {
   return async (action, payload) => {
     // NO `mode` OPTION. It is an EXACT expected mode, not a mask — passing
@@ -46,6 +50,7 @@ export function msgvaultRunner({
     // The binary must be as protected as the declaration that names it.
     io.assertProtectedPath(declared.binary, [0]);
     const { binary, args } = msgvaultArgv(action, payload, declared);
+    const limit = action === 'msgvault.export-attachment' ? attachmentMaxBytes : maxBytes;
     return await new Promise((resolve, reject) => {
       run(
         binary,
@@ -53,14 +58,16 @@ export function msgvaultRunner({
         // NO SHELL, and an empty environment: msgvault reads MSGVAULT_HOME and
         // friends, and inheriting the broker's would be a second way to
         // re-point it that nobody approved.
-        { timeout: timeoutMs, maxBuffer: maxBytes, env: {}, shell: false },
+        { timeout: timeoutMs, maxBuffer: limit, env: {}, shell: false },
         (err, stdout, stderr) => {
           if (err) {
             // msgvault's own refusals are the useful half of this — "query is
             // not available in agent-delegated mode" tells the agent what to
             // do instead. The grant itself is never in this text: it was
             // passed as a path.
-            const detail = String(stderr || err.message).trim().split('\n')[0];
+            const detail = String(stderr || err.message)
+              .trim()
+              .split('\n')[0];
             reject(new Error(detail.slice(0, 300) || 'msgvault failed'));
             return;
           }
@@ -68,7 +75,7 @@ export function msgvaultRunner({
           try {
             resolve({ action, result: JSON.parse(text) });
           } catch {
-            resolve({ action, text: text.slice(0, maxBytes) });
+            resolve({ action, text: text.slice(0, limit) });
           }
         },
       );

@@ -113,6 +113,7 @@ const MSGVAULT: Record<string, VerbRule> = {
   'msgvault.search': { kind: 'read', timed: true },
   'msgvault.show-message': { kind: 'read', timed: true },
   'msgvault.show-thread': { kind: 'read', timed: true },
+  'msgvault.export-attachment': { kind: 'read', timed: true },
   'msgvault.stats': { kind: 'read', timed: true },
   // `notifiesOthers: false`, stated rather than left absent: it is the fact
   // that separates a draft from every other write in this table. Nothing

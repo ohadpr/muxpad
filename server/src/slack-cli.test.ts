@@ -473,7 +473,7 @@ describe('msgvault goes through the broker, holding nothing', () => {
   it('offers a FIXED set of verbs, with no escape to arbitrary arguments', () => {
     // An escape would be the pass-through again, and the pass-through is the
     // thing that had no dialog in front of it.
-    const verbs = ['search', 'show-message', 'show-thread', 'stats'];
+    const verbs = ['search', 'show-message', 'show-thread', 'attachment', 'stats'];
     for (const v of verbs) expect(body, v).toContain(v);
     // Nothing forwards the caller's remaining words wholesale.
     expect(body).not.toMatch(/"\$@"/);
@@ -494,7 +494,14 @@ describe('msgvault goes through the broker, holding nothing', () => {
     // reason, measured rather than assumed: a Gmail source answers
     // msgvault's `draft-compose` with `draft_disabled` while `draft-reply`
     // creates a real draft in the thread.
-    expect([...called].sort()).toEqual(['draft-reply', 'message', 'search', 'stats', 'thread']);
+    expect([...called].sort()).toEqual([
+      'attachment',
+      'draft-reply',
+      'message',
+      'search',
+      'stats',
+      'thread',
+    ]);
     // AND THE THING THAT MUST STAY TRUE: nothing here sends. A draft lands in
     // the owner's own mailbox; the grant carries draft permissions and no
     // send permission, and muxpad asks for no send verb.
