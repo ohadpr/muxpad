@@ -13,6 +13,7 @@ import {
   subChatsOf,
 } from '../lib/sub-chats';
 import { ChatChip } from './ChatChip';
+import { RosterSpinner } from './ChatTranscript';
 import './ChatDrawer.css';
 
 /**
@@ -313,18 +314,37 @@ function SubChatList({
                           this said so — while its own card in the log said
                           AWAITING. One worker, two surfaces, two different
                           claims about whether it needs you. */}
-                      {liveWord ? (
-                        <span
-                          className="chat-drawer__row-live"
-                          data-state={liveWord === 'needs you' ? 'blocked' : 'working'}
-                        >
-                          {liveWord}
-                        </span>
-                      ) : s.chat.createdAt ? (
+                      {/* ── EVERY ROW SAYS WHERE IT GOT TO ────────────────
+                          It used to say so only while RUNNING, and a finished
+                          worker was a name and an age — which is the one
+                          question the panel exists to answer, left to be
+                          inferred from which block the row fell into.
+
+                          So the state is a word on every row, in the status
+                          channel's own hue: green for a worker that delivered,
+                          the blocked colour for one that stopped to ask you
+                          something, the dead colour for a crash. The channel
+                          and not the accent, because the accent changes with
+                          the theme and "did this finish" must not.
+
+                          The age stays for everything that is over — that is
+                          when "how long ago" is the useful fact. A running row
+                          spends the width on the spinner instead, because what
+                          it is doing NOW is the thing that changes while you
+                          look at it. */}
+                      {state !== 'working' && s.chat.createdAt ? (
                         <span className="chat-drawer__row-sub">
                           {shortAge(now - s.chat.createdAt)}
                         </span>
                       ) : null}
+                      <span className="chat-drawer__row-live" data-state={state}>
+                        {state === 'working' ? (
+                          <span className="chat-drawer__spin" aria-hidden="true">
+                            <RosterSpinner />
+                          </span>
+                        ) : null}
+                        {liveWord ?? spawnStateLabel(state)}
+                      </span>
                     </span>
                   </button>
                 </li>

@@ -338,6 +338,13 @@
 .chat-drawer-open[data-running="true"] {
   color: var(--d-accent);
   border-color: color-mix(in srgb, var(--d-accent) 40%, transparent);
+  /* …AND IT BREATHES. The colour above is a state — it looks identical
+     whether those workers are running or just sitting there open. Motion is
+     the part that reads as "right now" at a glance, and a breath rather than
+     a spin because this control is furniture at the top of every chat: it has
+     to be noticeable from the corner of the eye without demanding to be
+     watched. Keyframes below, beside the row spinner's. */
+  animation: chat-drawer-breathe 2.4s ease-in-out infinite;
 }
 .chat-drawer-open__count {
   position: absolute;
@@ -432,6 +439,78 @@
    the same ink. A worker waiting on a human is the one row on this panel you
    might act on, and the accent is already spoken for by the ones that are
    simply busy. */
-.chat-drawer__row-live[data-state="blocked"] {
+.chat-drawer__row-live[data-state="blocked"],
+.chat-drawer__row-live[data-state="awaiting"] {
   color: var(--status-blocked, var(--danger, var(--d-accent)));
+}
+
+/* ── THE STATE CHANNEL, NOT THE ACCENT ─────────────────────────────────────
+   Every row now carries its state as a word, and the hues come from the
+   status channel for the reason the mention card already records: the accent
+   changes with the theme, and "did this finish" must read the same in all of
+   them. Green is the rail's own "finished, waiting for you", which is exactly
+   what a delivered worker's report is.
+
+   `done` — archived, or decayed without ever delivering — stays grey on
+   purpose. Both words are "done" to a reader scanning the list, and that is
+   honest; the hue is what separates a result that arrived from a chat that
+   simply stopped. */
+.chat-drawer__row-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.chat-drawer__row-live[data-state="delivered"] {
+  color: var(--status-ready, var(--d-accent));
+}
+.chat-drawer__row-live[data-state="failed"] {
+  color: var(--status-dead, var(--danger, var(--d-accent)));
+}
+.chat-drawer__row-live[data-state="done"] {
+  color: var(--d-faint);
+  font-weight: 500;
+}
+/* The age already took the free space; the word sits right after it. Without
+   this both carry `margin-inline-start: auto` and the browser SPLITS the slack
+   between them, parking the age in the middle of the row. */
+.chat-drawer__row-sub + .chat-drawer__row-live {
+  margin-inline-start: 0;
+}
+/* The arc is a static SVG — the motion is here, so one spinner serves the
+   transcript (where it does not spin) and this list (where it must). */
+.chat-drawer__spin {
+  display: inline-flex;
+  animation: chat-drawer-spin 900ms linear infinite;
+}
+@keyframes chat-drawer-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ── AND THE CLOSED DRAWER SAYS SOMETHING IS GOING ON IN THERE ─────────────
+   The button already turned accent-coloured with a count on it, which is a
+   STATE: it looks identical whether the workers are running or just sitting
+   there open. Motion is the part that reads as "right now" at a glance, and a
+   breath rather than a spin because this control is furniture at the top of
+   every chat — it must be noticeable from the corner of the eye and must not
+   demand to be watched. */
+@keyframes chat-drawer-breathe {
+  0%,
+  100% {
+    border-color: color-mix(in srgb, var(--d-accent) 30%, transparent);
+  }
+  50% {
+    border-color: color-mix(in srgb, var(--d-accent) 95%, transparent);
+    background: color-mix(in srgb, var(--d-accent) 12%, var(--d-surface));
+  }
+}
+
+/* Motion is the one thing here somebody may have asked the system not to do.
+   The colour and the count still carry every fact. */
+@media (prefers-reduced-motion: reduce) {
+  .chat-drawer__spin,
+  .chat-drawer-open[data-running="true"] {
+    animation: none;
+  }
 }
