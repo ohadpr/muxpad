@@ -2887,13 +2887,24 @@
    label is "O…" and the chip has stopped being identity and started being
    decoration. The model is still one tap away in the session menu, which is
    where its full id has always lived. */
-.chat-status-seg-wrap:not(.-live) {
-  /* The cell clips its OWN contents. The icon is `flex: 0 0 auto` with a 12px
-     floor, so once the wrapper is narrower than that it simply painted
-     outside itself — this is the one line that keeps a shrinking cell inside
-     its own box instead of on its neighbour. A clipped logo reads as a logo
-     running out of room, which is what is happening; a logo sitting on the
-     spinner reads as a second spinner. */
+/* ── THE CLIP BELONGS TO THE CHIP, NOT TO THE WRAPPER ──────────────────────
+   The cell has to clip its OWN contents: the icon is `flex: 0 0 auto` with a
+   12px floor, so once it is narrower than that it paints outside itself, and
+   a logo sitting on its neighbour's spinner reads as a second spinner.
+
+   That `overflow: hidden` was on the WRAPPER — which is also the positioning
+   context for the popover each of these cells opens. A 230×275 panel
+   absolutely positioned inside a 16px box with hidden overflow is clipped to
+   nothing: present in the DOM, correct geometry, `visibility: visible`, and
+   not a pixel of it painted. Reported as "clicking that doesn't indicate any
+   action, no rebase command whats' going on" — about the Rebase button, which
+   had been there, invisible, the whole time. Every other panel on this bar
+   (model, folder, mode, host) was clipped by the same line.
+
+   So the clip moves to the BUTTON, which is the thing whose contents can
+   overflow. The wrapper keeps `overflow: visible` from its base rule and the
+   panels paint. */
+.chat-status-seg-wrap:not(.-live) > .chat-status-seg {
   overflow: hidden;
 }
 
