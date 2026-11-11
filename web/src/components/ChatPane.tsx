@@ -5542,13 +5542,36 @@ export function ChatPane({
                       aria-label={`${assistantLabel(session?.assistant)} is working`}
                     >
                       <ChatWorking variant={workingVariant} />
-                      {workingLabel ? (
+                      {/* ── WHAT IT IS DOING, NOT WHAT IT IS RUNNING ─────────
+                          This row used to lead with the TOOL — "Running
+                          Bash…" — and put the agent's own sentence after it in
+                          faint italic. Both halves were wrong.
+
+                          The tool name is the one thing already on screen: the
+                          fold directly above says `Bash ×49`. So the line
+                          spent its prominence restating the known thing and
+                          its smallest, faintest type on the only new one.
+                          "The thought is much more helpful 99% of the time…
+                          I prefer to see a sentence saying what it's doing
+                          more than seeing that it did 22 steps and 44 bash
+                          somethings."
+
+                          So the SENTENCE is the line. The tool name survives
+                          only as the fallback for a turn that has not thought
+                          anything yet — a silent pane still has to say
+                          something, and "Running Bash…" is better than a bare
+                          spinner.
+
+                          One line either way, clamped by CSS as well as by the
+                          derivation: a long sentence must never wrap this row
+                          into a paragraph, because it occupies the same pixels
+                          on every tool call and a growing row is the verbose
+                          log this exists to avoid. */}
+                      {hint ? (
+                        <span className="chat-working-say">{hint}</span>
+                      ) : workingLabel ? (
                         <span className="chat-working-label">{workingLabel}</span>
                       ) : null}
-                      {/* The clue, if there is one. One line, clamped by CSS
-                          as well as by the derivation — a long sentence must
-                          never wrap this row into a paragraph. */}
-                      {hint ? <span className="chat-working-hint">{hint}</span> : null}
                     </div>
                   )}
                   {/* ── STOP IS NOT HERE ANY MORE ────────────────────────────
