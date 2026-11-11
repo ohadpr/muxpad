@@ -109,15 +109,34 @@ export const MSGVAULT = Object.freeze({
    *  live Gmail draft. There is no compose verb: a Gmail source answers
    *  `draft-compose` with `draft_disabled` no matter who asks, so offering it
    *  would only ever raise a dialog for an action the archive then refuses. */
-  writeActions: Object.freeze(['msgvault.draft-reply']),
+  writeActions: Object.freeze([
+    'msgvault.draft-reply',
+    'msgvault.draft-get',
+    'msgvault.draft-edit',
+    'msgvault.draft-delete',
+  ]),
   /**
-   * A DURATION NEVER COVERS THE WRITES, whatever the owner's `timedGrants`
-   * switch says. "Full Slack access for an hour" is a bargain somebody may
-   * reasonably want; "anything may put mail in your mailbox for an hour" is
-   * the thing this whole mechanism exists to prevent, and without this it
-   * would be bought with one click on a search. See Broker#timedScope.
+   * ── A DURATION DOES COVER THE DRAFTS, AND THAT IS THE OWNER'S CALL ──────
+   *
+   * This was `true`, and the note here argued it: "anything may put mail in
+   * your mailbox for an hour" is a different bargain from reading. The owner
+   * overruled it, in these words: "drop the requirement to reapprove drafts.
+   * CRUD for drafts should fall under the blanket msgvault approval, these
+   * are just drafts they are not sent automatically."
+   *
+   * The argument holds, because the premise it rests on is checked
+   * elsewhere and still true: THERE IS NO SEND. msgvault's agent grant
+   * carries `draft.*` and no send permission, muxpad asks for none, and the
+   * one verb that could reach a provider's outbox does not exist at this
+   * grant. So the worst a duration now buys is drafts the owner finds
+   * sitting in their mailbox — visible, editable, deletable, and never on
+   * their way to anyone.
+   *
+   * What it costs is real and worth stating once: an approval given for a
+   * search now also covers writing, editing and deleting drafts until it
+   * expires. The dialog says so.
    */
-  timedReadOnly: true,
+  timedReadOnly: false,
   get actions() {
     return Object.freeze([...this.readActions, ...this.writeActions]);
   },

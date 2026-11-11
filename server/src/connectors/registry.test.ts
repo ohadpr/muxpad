@@ -28,13 +28,31 @@ describe('classification fails closed', () => {
 });
 
 describe('no write may ride a grant approved earlier', () => {
-  it('holds for every write in the table', () => {
+  it('holds for every write in the table but the ones that name themselves', () => {
     // The payload is what you consent to, and a grant issued before the
-    // payload existed cannot have consented to it.
+    // payload existed cannot have consented to it. That is still the rule —
+    // and `timedWrite` is the only way out of it, written one verb at a
+    // time, so an exception is always a deliberate line somebody added
+    // rather than a `timed: true` that drifted in.
     for (const [verb, rule] of Object.entries(VERBS)) {
       if (rule.kind !== 'write') continue;
-      expect(classify(verb).timed, verb).toBe(false);
+      expect(classify(verb).timed, verb).toBe(rule.timedWrite === true);
     }
+    // …and the exception is msgvault's drafts and nothing else. If this list
+    // ever grows a verb that reaches another person, the premise the owner's
+    // decision rests on — nothing here can send — has quietly stopped being
+    // true.
+    expect(
+      Object.entries(VERBS)
+        .filter(([, r]) => r.timedWrite)
+        .map(([v]) => v)
+        .sort(),
+    ).toEqual([
+      'msgvault.draft-delete',
+      'msgvault.draft-edit',
+      'msgvault.draft-get',
+      'msgvault.draft-reply',
+    ]);
   });
 
   it('holds even if the table itself says otherwise', async () => {
@@ -89,12 +107,13 @@ describe('the verbs that reach other people', () => {
     const verbs = verbsOf('msgvault');
     expect(verbs.length).toBeGreaterThan(0);
     expect(verbs.filter((v) => /\.(send|post|invite)/.test(v))).toEqual([]);
-    // Every READ may ride a grant; every WRITE is approved on its own, so a
-    // draft can never be dispatched by an approval given for something else.
+    // Reads and drafts alike may ride a grant now — the owner's call, on the
+    // ground asserted directly above: nothing here leaves. A draft is still
+    // a WRITE, because it changes the mailbox, and the dialog still says so.
     for (const v of verbs) {
       const c = classify(v);
       expect(c.ok, v).toBe(true);
-      if (/draft/.test(v)) expect(c, v).toMatchObject({ kind: 'write', timed: false });
+      if (/draft/.test(v)) expect(c, v).toMatchObject({ kind: 'write', timed: true });
       else expect(c, v).toMatchObject({ kind: 'read', timed: true });
     }
   });
@@ -103,11 +122,12 @@ describe('the verbs that reach other people', () => {
 describe('the table itself', () => {
   it('groups by connector', () => {
     expect(verbsOf('slack').length).toBeGreaterThan(5);
-    // FIVE: four reads and one write. Three advertised verbs could not work
-    // against msgvault 0.22.0 and were removed rather than repaired, and a
+    // NINE: five reads (search, message, thread, attachment, stats) and the
+    // four draft verbs. Three advertised verbs could not work against
+    // agent-delegated msgvault and were removed rather than repaired, and a
     // compose verb went the same way once a Gmail source was measured
     // refusing it — see the note on MSGVAULT.
-    expect(verbsOf('msgvault')).toHaveLength(6);
+    expect(verbsOf('msgvault')).toHaveLength(9);
     expect(verbsOf('slack').every((v) => v.startsWith('slack.'))).toBe(true);
     // A prefix that is not a connector gets nothing, rather than everything.
     expect(verbsOf('')).toEqual([]);
@@ -171,7 +191,14 @@ describe('the table is the policy, so the table is pinned', () => {
     //
     // There is no `msgvault.draft`: composing a new email is refused by a
     // Gmail source itself (`draft_disabled`), so muxpad never offers it.
-    'msgvault.draft-reply': { kind: 'write', timed: false, others: false },
+    // `timed: true` on all four: the owner's call that drafts ride the
+    // blanket msgvault approval, which rests on there being no send verb at
+    // this grant. They stay `kind: 'write'` — they DO change the mailbox —
+    // and `others: false`, because nothing leaves and nobody is told.
+    'msgvault.draft-reply': { kind: 'write', timed: true, others: false },
+    'msgvault.draft-get': { kind: 'write', timed: true, others: false },
+    'msgvault.draft-edit': { kind: 'write', timed: true, others: false },
+    'msgvault.draft-delete': { kind: 'write', timed: true, others: false },
   };
 
   it('has exactly these verbs, no more and no fewer', () => {

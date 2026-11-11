@@ -444,7 +444,31 @@ export class Broker {
      */
     const spendable = (g) => {
       const cap = this.capabilityOfRequest(request);
-      if (cap.timedReadOnly && !cap.readActions.includes(request.action)) return false;
+      // ── A READ-SCOPED GRANT NEVER AUTHORISES A WRITE ──────────────────
+      //
+      // This used to read `cap.timedReadOnly && …`, which made it dead the
+      // moment msgvault stopped being read-only for durations (the owner's
+      // call: drafts ride the blanket approval, because nothing here can
+      // send). The property worth keeping is not about the capability at
+      // all — it is about THIS grant: whatever its action list says, a grant
+      // somebody approved for READING must not dispatch a write.
+      //
+      // Stated about the scope the owner actually agreed to, so it survives
+      // the `timedGrants` switch, a wider capability, and an action list
+      // that is one edit away from being wrong in the silent direction.
+      // Read the grant's OWN permissionScope out of its scope JSON
+      // ({teamID, origin, permissionScope}). Comparing `g.scope` to a bare
+      // `cap.readScope` never matched — different shapes — and the guard was
+      // dead; comparing it to `grantScope(a read)` matched everything,
+      // because that function keys on the capability and not on the action.
+      // The field is the only thing that actually says what was agreed to.
+      let agreed = null;
+      try {
+        agreed = JSON.parse(g.scope)?.permissionScope ?? null;
+      } catch {
+        agreed = null;
+      }
+      if (agreed === cap.readScope && !cap.readActions.includes(request.action)) return false;
       return (
         g.teamID === request.teamID &&
         g.actions.includes(request.action) &&

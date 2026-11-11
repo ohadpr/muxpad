@@ -206,9 +206,11 @@ Capabilities worth knowing:
   ATTACHMENTS: \`attachment <content_hash> [--out=PATH]\` saves one file
   (default: the current directory) — the hash is in \`show-message\`'s
   \`attachments\` list. Read the saved file with your own tools.
-  WRITE: \`draft-reply <message-id> --body="…" [--all]\`. It lands in the
-  mailbox unsent; \`--all\` answers everyone on the thread instead of the
-  sender. **Nothing here can send.**
+  DRAFTS: \`draft-reply <message-id> --body="…" [--all]\` creates one;
+  \`draft-get <id>\`, \`draft-edit <id> --body="…"\` and \`draft-delete <id>\`
+  work on it afterwards. \`--all\` answers everyone on the thread instead of
+  the sender. **Nothing here can send** — which is why drafts ride the same
+  msgvault approval as the reads rather than stopping for one of their own.
 
   **A DRAFT IS ALWAYS A REPLY.** There is no verb for a new email, and no
   flag that makes one: msgvault's Gmail path refuses \`draft-compose\`
@@ -262,10 +264,11 @@ Capabilities worth knowing:
   pending. Never claim a call was approved, refused or pending without a
   result that says so.
 
-  **A READ MAY RIDE AN APPROVAL ALREADY GIVEN; A DRAFT NEVER DOES.** If the
-  user approved reading for a stretch of time, searches just answer with no
-  dialog. Every draft stops and asks on its own, with its text on screen —
-  so do not batch drafts, and expect each one to wait for a person. A request
+  **EVERYTHING RIDES AN APPROVAL ALREADY GIVEN, DRAFTS INCLUDED.** If the
+  user approved msgvault for a stretch of time, searches AND draft work just
+  answer with no dialog: \"these are just drafts they are not sent
+  automatically\". With no approval in force, the first call still stops and
+  asks, and a draft still shows its text. A request
   the user does not answer within five minutes expires and the command fails
   saying so; that is not a bug and not a refusal, and re-running it is fine.
 

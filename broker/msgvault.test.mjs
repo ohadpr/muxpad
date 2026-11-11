@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { CAPABILITIES, capabilityOf } from './capabilities.mjs';
+import { CAPABILITIES, MSGVAULT, capabilityOf } from './capabilities.mjs';
 import { describeMsgvault, msgvaultArgv, validateMsgvault } from './msgvault.mjs';
 
 const INSTALL = {
@@ -140,6 +140,9 @@ test('only verbs that work against 0.22.0 are offered', () => {
       'msgvault.export-attachment',
       'msgvault.stats',
       'msgvault.draft-reply',
+      'msgvault.draft-get',
+      'msgvault.draft-edit',
+      'msgvault.draft-delete',
     ],
   );
   // The dead list again, this time as the SHAPE of the fix: `person` is
@@ -292,4 +295,55 @@ test('an attachment is fetched by content hash, to stdout, and never written by 
     describeMsgvault('msgvault.export-attachment', { hash }),
     /attachment \(1a059e3ac41e/,
   );
+});
+
+/**
+ * ── DRAFT CRUD, UNDER ONE APPROVAL ────────────────────────────────────────
+ *
+ * "drop the requirement to reapprove drafts. CRUD for drafts should fall
+ * under the blanket msgvault approval, these are just drafts they are not
+ * sent automatically." The premise is checked here: there is still no send.
+ */
+test('the draft verbs build the argv msgvault documents', () => {
+  const decl = { binary: '/bin/true', agentUrl: 'http://127.0.0.1:1', tokenFile: '/t' };
+  const argvOf = (action, payload) =>
+    msgvaultArgv(action, validateMsgvault(action, payload), decl).args.slice(6);
+  assert.deepEqual(argvOf('msgvault.draft-get', { id: 'd1' }), ['draft-get', '--json', '--', 'd1']);
+  assert.deepEqual(argvOf('msgvault.draft-delete', { id: 'd1' }), [
+    'draft-delete',
+    '--json',
+    '--',
+    'd1',
+  ]);
+  assert.deepEqual(argvOf('msgvault.draft-edit', { id: 'd1', body: 'new text' }), [
+    'draft-edit',
+    '--json',
+    '--body',
+    'new text',
+    '--',
+    'd1',
+  ]);
+});
+
+test('a draft verb still refuses a missing id or body', () => {
+  assert.throws(() => validateMsgvault('msgvault.draft-get', {}), /draft id/);
+  assert.throws(() => validateMsgvault('msgvault.draft-edit', { id: 'd1' }), /body/);
+  assert.throws(() => validateMsgvault('msgvault.draft-delete', { id: '--oops' }), /draft id/);
+});
+
+test('there is STILL no send verb — the whole premise of the blanket approval', () => {
+  for (const name of ['msgvault.send', 'msgvault.draft-send', 'msgvault.draft-compose'])
+    assert.throws(() => validateMsgvault(name, {}), /Unsupported action/);
+});
+
+test('a duration now covers drafts, and the write set names all four', () => {
+  assert.equal(MSGVAULT.timedReadOnly, false);
+  assert.deepEqual([...MSGVAULT.writeActions].sort(), [
+    'msgvault.draft-delete',
+    'msgvault.draft-edit',
+    'msgvault.draft-get',
+    'msgvault.draft-reply',
+  ]);
+  // …and the reads are untouched by any of this.
+  assert.ok(MSGVAULT.readActions.includes('msgvault.export-attachment'));
 });

@@ -953,10 +953,14 @@ read:
 
 write (a draft reply; it can never send):
   draft-reply <message-id> --body="…" [--all]
+  draft-get <draft-id>                      read a managed draft
+  draft-edit <draft-id> --body="…"          replace its body
+  draft-delete <draft-id>                   delete it
 
 Each call asks you to approve it. A READ may be approved for a stretch of
-time; a draft is approved one at a time, with its text in front of you, and
---all means the reply goes to everyone on the thread rather than the sender.
+time. Drafts ride the same msgvault approval as the reads — nothing here can
+send, so the worst one buys is a draft sitting in your mailbox — and --all
+means the reply goes to everyone on the thread rather than the sender.
 
 There is no verb for a NEW email. A Gmail source refuses msgvault's
 draft-compose outright, so replying is the only drafting there is.
@@ -1069,6 +1073,38 @@ cmd_msgvault() {
         --arg pane "$MUXPAD_PANE_ID" --arg key "$MUXPAD_PANE_KEY" \
         --arg id "$id" --arg body "$rbody" --argjson all "$all" \
         '{pane:$pane,key:$key,id:$id,body:$body,all:$all}')" ;;
+    # ── THE REST OF THE DRAFT LIFECYCLE ─────────────────────────────────
+    # Read, replace, delete. Still nothing that sends: there is no send verb
+    # at this grant, which is the whole reason these may ride one approval.
+    # Two branches rather than one with "$verb" in the path: the endpoint set
+    # this CLI may call is pinned by a test that READS these literals, and a
+    # path built from a variable is a verb that test cannot see.
+    draft-get)
+      [ -n "${1:-}" ] || msgvault_usage
+      slack_call POST /api/msgvault/draft-get "$(jq -nc \
+        --arg pane "$MUXPAD_PANE_ID" --arg key "$MUXPAD_PANE_KEY" --arg id "$1" \
+        '{pane:$pane,key:$key,id:$id}')" ;;
+    draft-delete)
+      [ -n "${1:-}" ] || msgvault_usage
+      slack_call POST /api/msgvault/draft-delete "$(jq -nc \
+        --arg pane "$MUXPAD_PANE_ID" --arg key "$MUXPAD_PANE_KEY" --arg id "$1" \
+        '{pane:$pane,key:$key,id:$id}')" ;;
+    draft-edit)
+      [ -n "${1:-}" ] || msgvault_usage
+      local did="$1"; shift
+      local ebody=""
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --body=*) ebody="${1#*=}" ;;
+          *) echo "muxpad: unknown option: $1" >&2; return 1 ;;
+        esac
+        shift
+      done
+      [ -n "$ebody" ] || { echo 'muxpad: draft-edit needs --body=' >&2; return 1; }
+      slack_call POST /api/msgvault/draft-edit "$(jq -nc \
+        --arg pane "$MUXPAD_PANE_ID" --arg key "$MUXPAD_PANE_KEY" \
+        --arg id "$did" --arg body "$ebody" \
+        '{pane:$pane,key:$key,id:$id,body:$body}')" ;;
     *) msgvault_usage ;;
   esac
 }

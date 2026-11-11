@@ -479,7 +479,7 @@ describe('msgvault goes through the broker, holding nothing', () => {
     expect(body).not.toMatch(/"\$@"/);
   });
 
-  it('calls exactly these endpoints — four reads and one draft', () => {
+  it('calls exactly these endpoints — four reads and the draft lifecycle', () => {
     // Asserted as a SET rather than by searching for forbidden words, because
     // `senders` contains "send" and a test that fails on a reading verb is a
     // test somebody edits away.
@@ -494,8 +494,14 @@ describe('msgvault goes through the broker, holding nothing', () => {
     // reason, measured rather than assumed: a Gmail source answers
     // msgvault's `draft-compose` with `draft_disabled` while `draft-reply`
     // creates a real draft in the thread.
+    // The draft verbs are four now — create, read, update, delete — and they
+    // ride the same msgvault approval as the reads, because none of them can
+    // send. `draft-compose` is still absent for the reason above.
     expect([...called].sort()).toEqual([
       'attachment',
+      'draft-delete',
+      'draft-edit',
+      'draft-get',
       'draft-reply',
       'message',
       'search',

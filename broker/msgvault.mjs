@@ -177,6 +177,45 @@ const SPEC = {
     describe: (p) =>
       `draft a reply ${p.all ? 'to everyone on' : 'to the sender of'} message ${p.id}`,
   },
+  /**
+   * ── AND THE REST OF THE DRAFT LIFECYCLE ───────────────────────────────
+   *
+   * Read, replace, delete — the three that make a draft something an agent
+   * can work ON rather than only produce. Asked for directly: "CRUD for
+   * drafts should fall under the blanket msgvault approval, these are just
+   * drafts they are not sent automatically."
+   *
+   * `draft-compose` is still absent and still not an oversight: a Gmail
+   * source answers it `draft_disabled` whoever asks, so offering it would
+   * raise a dialog for something the archive then refuses. Create is
+   * `draft-reply`; there is no other create.
+   *
+   * `--revision` is deliberately NOT exposed. msgvault uses it for optimistic
+   * concurrency, and a wrong guess from an agent would clobber an edit the
+   * owner made in their mail client between the read and the write. Without
+   * it the tool applies its own rule.
+   */
+  'msgvault.draft-get': {
+    validate: (p) =>
+      ID.test(String(p.id ?? '')) ? { id: p.id } : fail('Give the draft id to read'),
+    argv: (p) => ['draft-get', '--json', '--', p.id],
+    describe: (p) => `read draft ${p.id}`,
+  },
+  'msgvault.draft-edit': {
+    validate: (p) => {
+      if (!ID.test(String(p.id ?? ''))) fail('Give the draft id to edit');
+      if (!str(p.body, 20000)) fail('Give a body');
+      return { id: p.id, body: p.body };
+    },
+    argv: (p) => ['draft-edit', '--json', '--body', p.body, '--', p.id],
+    describe: (p) => `replace the body of draft ${p.id}`,
+  },
+  'msgvault.draft-delete': {
+    validate: (p) =>
+      ID.test(String(p.id ?? '')) ? { id: p.id } : fail('Give the draft id to delete'),
+    argv: (p) => ['draft-delete', '--json', '--', p.id],
+    describe: (p) => `delete draft ${p.id}`,
+  },
 };
 
 export function validateMsgvault(action, raw) {
