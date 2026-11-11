@@ -110,7 +110,7 @@ test('an isolated broker runs nothing until a human decides, per capability', as
     assert.deepEqual(b.ran, [], 'the archive was read before anybody approved');
 
     // The scope it ADVERTISES is the archive's, not Slack's.
-    assert.equal(stats.body.timedScope, 'msgvault-read-v1');
+    assert.equal(stats.body.timedScope, 'msgvault-all-v1');
     assert.equal(stats.body.origin, 'local');
 
     // ── A human approves it, for an hour ────────────────────────────────
@@ -134,7 +134,7 @@ test('an isolated broker runs nothing until a human decides, per capability', as
       grant.actions.every((a) => a.startsWith('msgvault.')),
       `a timed archive grant covers ${grant.actions.filter((a) => !a.startsWith('msgvault.'))}`,
     );
-    assert.equal(grant.permissionScope, 'msgvault-read-v1');
+    assert.equal(grant.permissionScope, 'msgvault-all-v1');
     assert.equal(grant.origin, 'local');
 
     // ── Inside the window, the same capability from the same machine runs

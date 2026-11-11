@@ -767,6 +767,47 @@ export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
     );
   });
 
+  /**
+   * ── THE REST OF THE DRAFT LIFECYCLE ───────────────────────────────────
+   *
+   * Read, replace and delete a draft the agent (or the owner) already has.
+   * POST for all three, like the reply above: these carry a draft id and, for
+   * an edit, a body that has no business in a URL — and the difference
+   * between a verb that reads your mail and one that changes something in
+   * your mailbox should be visible in the method.
+   *
+   * `draft-get` is a READ of a draft and still sits here rather than in the
+   * GET table, because what it reads is the write surface: the table above
+   * is the archive, this is the mailbox.
+   */
+  for (const [path, action] of [
+    ['/draft-get', 'msgvault.draft-get'],
+    ['/draft-delete', 'msgvault.draft-delete'],
+  ] as const) {
+    archive.post(path, async (c) => {
+      const b = z
+        .object({ pane: z.string(), key: z.string(), id: z.string().min(1).max(128) })
+        .parse(await c.req.json());
+      const auth = await authorize(b.pane, b.key, callerOf(c));
+      if (!auth.ok) return c.json(auth.body, auth.status);
+      return c.json(await brokerAction(action, { id: b.id }, auth), 202);
+    });
+  }
+
+  archive.post('/draft-edit', async (c) => {
+    const b = z
+      .object({
+        pane: z.string(),
+        key: z.string(),
+        id: z.string().min(1).max(128),
+        body: z.string().min(1).max(20000),
+      })
+      .parse(await c.req.json());
+    const auth = await authorize(b.pane, b.key, callerOf(c));
+    if (!auth.ok) return c.json(auth.body, auth.status);
+    return c.json(await brokerAction('msgvault.draft-edit', { id: b.id, body: b.body }, auth), 202);
+  });
+
   archive.onError(onError('msgvault'));
   return { slack: app, archive };
 }

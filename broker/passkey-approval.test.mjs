@@ -545,10 +545,10 @@ test('inline mode accepts the request’s own scope, per capability', async () =
 
   // The archive, for an hour, with the scope the web client actually sends.
   const archive = await f.request('msgvault.search', { query: 'tax 2025' });
-  assert.equal(archive.timedScope, 'msgvault-read-v1');
+  assert.equal(archive.timedScope, 'msgvault-all-v1');
   const ok = await f.approve(archive, '1h');
   assert.equal(ok.state, 'complete');
-  assert.equal(f.broker.listGrants()[0].permissionScope, 'msgvault-read-v1');
+  assert.equal(f.broker.listGrants()[0].permissionScope, 'msgvault-all-v1');
 
   // And Slack's scope is NOT accepted for an archive request — the mistake
   // the old constant made mandatory.
@@ -573,6 +573,9 @@ test('inline mode refuses a duration it cannot attribute', async () => {
 test('inline mode still refuses a scope that is not the request’s', async () => {
   const f = fixture();
   const r = await f.request('slack.read', { ref: 'C123' });
+  // `msgvault-read-v1` is a real scope — for msgvault, and for an owner who
+  // narrowed `timedGrants`. It is bogus HERE because this request is not
+  // that, and the rule is that the scope sent must be the one displayed.
   for (const bogus of ['msgvault-read-v1', 'slack-team-read-v1', 'anything'])
     await assert.rejects(f.options(r, '1h', 'approve', bogus), /Invalid approval scope/, bogus);
   assert.equal((await f.approve(r, '1h')).state, 'complete');

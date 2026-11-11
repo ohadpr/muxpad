@@ -45,6 +45,16 @@ export interface VerbRule {
   kind: VerbKind;
   /** May this run on a grant approved earlier? Writes: never. */
   timed: boolean;
+  /**
+   * A WRITE THAT MAY RIDE A DURATION, named one verb at a time.
+   *
+   * `classify` refuses to time any write by default, so that a stray
+   * `timed: true` on a Slack post can never become a standing permission to
+   * speak as the owner. msgvault's drafts are the exception the owner asked
+   * for — "these are just drafts they are not sent automatically" — and it
+   * holds only while the premise does: there is no send verb at that grant.
+   */
+  timedWrite?: boolean;
   /** Does it reach people other than the owner? Shown in the prompt. */
   notifiesOthers?: boolean;
   /** Refused outright, with this reason. */
@@ -121,7 +131,22 @@ const MSGVAULT: Record<string, VerbRule> = {
   //
   // Replying is the only draft verb there is — a Gmail source refuses
   // `draft-compose` with `draft_disabled`, so muxpad never offers it.
-  'msgvault.draft-reply': { kind: 'write', timed: false, notifiesOthers: false },
+  //
+  // `timed: true` on all four, which `msgvault.draft-reply` did not have.
+  // The owner's call: "drop the requirement to reapprove drafts. CRUD for
+  // drafts should fall under the blanket msgvault approval, these are just
+  // drafts they are not sent automatically." It rests on a fact checked in
+  // the broker and still true — there is no send verb at this grant — so a
+  // duration buys drafts in the mailbox, never mail on its way out.
+  'msgvault.draft-reply': { kind: 'write', timed: true, timedWrite: true, notifiesOthers: false },
+  'msgvault.draft-get': { kind: 'write', timed: true, timedWrite: true, notifiesOthers: false },
+  'msgvault.draft-edit': { kind: 'write', timed: true, timedWrite: true, notifiesOthers: false },
+  'msgvault.draft-delete': {
+    kind: 'write',
+    timed: true,
+    timedWrite: true,
+    notifiesOthers: false,
+  },
 };
 
 export const VERBS: Record<string, VerbRule> = { ...SLACK, ...MSGVAULT };
@@ -156,8 +181,14 @@ export function classify(verb: string): Classification {
   return {
     ok: true,
     kind: rule.kind,
-    // Belt and braces: a write is never timed even if the table says so.
-    timed: rule.kind === 'read' && rule.timed,
+    // Belt and braces: a write is never timed even if the table says so —
+    // UNLESS it names itself `timedWrite`. The blanket rule exists so that a
+    // stray `timed: true` on a Slack post can never hand out a standing
+    // permission to speak as the owner; the exception exists because the
+    // owner decided msgvault's drafts may ride one, on the stated ground
+    // that nothing at that grant can send. An exception that has to be
+    // written per verb is the kind this guard can live with.
+    timed: rule.timed === true && (rule.kind === 'read' || rule.timedWrite === true),
     // ALWAYS present for a verb that will run. "Does this reach other
     // people?" is a question that must not be answered by a missing field:
     // absent reads as false at a call site that forgot to think about it, and

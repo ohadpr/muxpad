@@ -49,6 +49,9 @@ const TITLES: Record<string, (p: Payload) => string> = {
   // The WRITE says what it is about: a card reading "drafted a reply" is a
   // card you would have to open your mailbox to understand.
   'msgvault.draft-reply': (p) => `Drafted a reply to message ${String(p.id ?? '')}`,
+  'msgvault.draft-get': (p) => `Read draft ${String(p.id ?? '')}`,
+  'msgvault.draft-edit': (p) => `Rewrote draft ${String(p.id ?? '')}`,
+  'msgvault.draft-delete': (p) => `Deleted draft ${String(p.id ?? '')}`,
 };
 
 interface Payload {

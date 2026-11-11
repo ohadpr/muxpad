@@ -379,10 +379,24 @@ describe('the archive section teaches the shape of the data', () => {
     expect(policy).not.toMatch(/No send verb, no drafts/);
   });
 
-  it('says a read may ride an approval and a draft never does', () => {
-    expect(policy).toMatch(/A READ MAY RIDE AN APPROVAL ALREADY GIVEN; A DRAFT NEVER DOES/);
+  it('says drafts ride the same approval as the reads — and why', () => {
+    // This asserted the opposite for months, and correctly: a draft used to
+    // stop for its own dialog every time. The owner changed the rule — "CRUD
+    // for drafts should fall under the blanket msgvault approval, these are
+    // just drafts they are not sent automatically" — and the instructions
+    // must carry the REASON, because that is what stops the rule drifting
+    // into "and sending too".
+    expect(policy).toMatch(/EVERYTHING RIDES AN APPROVAL ALREADY GIVEN, DRAFTS INCLUDED/);
+    expect(policy).toMatch(/not sent\s+automatically/);
+    expect(policy).toMatch(/Nothing here can send/);
     // And that an unanswered request expiring is normal, not a refusal.
     expect(policy).toMatch(/five minutes/);
+  });
+
+  it('names the whole draft lifecycle, not just the reply', () => {
+    expect(policy).toMatch(/draft-get/);
+    expect(policy).toMatch(/draft-edit/);
+    expect(policy).toMatch(/draft-delete/);
   });
 
   it('says contacts cannot be read AT ALL, rather than implying they are missing', () => {
