@@ -517,7 +517,7 @@ function tsOf(raw: Record<string, unknown>): number | null {
 // User string content that is muxpad/CLI plumbing, not something a human typed:
 // the injected caveat preamble and slash-command wrappers. Rendering these as
 // chat bubbles is pure noise (opcode/claude-code-webui filter the same).
-function isPlumbingUserText(text: string): boolean {
+export function isPlumbingUserText(text: string): boolean {
   const t = text.trimStart();
   return (
     t.startsWith('Caveat: The messages below') ||
@@ -762,9 +762,19 @@ const COMPACTION_OPENER =
  */
 const COMPACTION_PREAMBLE_CHARS = 1500;
 
+/**
+ * Is this user text the summary a compacted session reopens with? Exported for
+ * the transcript rebase (server/src/chat/transcript-rebase.ts), which DROPS
+ * these — the same match that folds one here is what removes one there, so a
+ * summary can never be hidden on screen and still replayed to the model.
+ */
+export function isCompactionText(text: string): boolean {
+  return COMPACTION_OPENER.test(text.trimStart().slice(0, COMPACTION_PREAMBLE_CHARS));
+}
+
 export function expandCompaction(text: string, id: string, ts: number | null): ChatEvent[] | null {
   const t = text.trimStart();
-  if (!COMPACTION_OPENER.test(t.slice(0, COMPACTION_PREAMBLE_CHARS))) return null;
+  if (!isCompactionText(t)) return null;
   const notice: NoticeEvent = {
     kind: 'notice',
     // Distinct id from the bubble's — they are two React rows.
