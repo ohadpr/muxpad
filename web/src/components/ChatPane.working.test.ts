@@ -16,6 +16,9 @@ import { describe, expect, it } from 'vitest';
  * thing and its faintest type on the only new one.
  */
 const SRC = readFileSync(join(__dirname, 'ChatPane.tsx'), 'utf8');
+/** The row's markup moved HERE when the fold learnt to carry it: one
+ *  component, two homes. See ChatWorkingLine. */
+const LINE = readFileSync(join(__dirname, 'ChatWorking.tsx'), 'utf8');
 const CSS = readFileSync(join(__dirname, 'ChatPane.css'), 'utf8');
 
 /** A rule's body, so a colour assertion cannot be satisfied by a comment. */
@@ -28,15 +31,15 @@ function rule(selector: string): string {
 
 describe('the running row leads with the sentence', () => {
   it('shows the agent’s own words when there are any', () => {
-    expect(SRC).toMatch(/\{hint \? \(\s*<span className="chat-working-say">\{hint\}<\/span>/);
+    expect(LINE).toMatch(/\{hint \? \(\s*<span className="chat-working-say">\{hint\}<\/span>/);
   });
 
   it('falls back to the tool name only when nothing has been thought yet', () => {
     // A silent pane still has to say something: "Running Bash…" beats a bare
     // spinner. But it is the FALLBACK, not the lead.
-    const branch = SRC.slice(SRC.indexOf('{hint ? ('));
-    const tail = branch.slice(0, branch.indexOf('</div>'));
-    expect(tail).toMatch(/\) : workingLabel \? \(/);
+    const branch = LINE.slice(LINE.indexOf('{hint ? ('));
+    const tail = branch.slice(0, branch.indexOf('</>'));
+    expect(tail).toMatch(/\) : label \? \(/);
     expect(tail).toMatch(/className="chat-working-label"/);
   });
 
@@ -64,6 +67,7 @@ describe('the running row leads with the sentence', () => {
 
   it('leaves no trace of the old faint-italic hint', () => {
     expect(SRC).not.toMatch(/chat-working-hint/);
+    expect(LINE).not.toMatch(/chat-working-hint/);
     expect(CSS).not.toMatch(/chat-working-hint/);
   });
 });

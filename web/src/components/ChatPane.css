@@ -669,6 +669,34 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* ── THE LIVE LINE, ON THE FOLD'S OWN HEAD ──────────────────────────────────
+   One row for the running turn instead of two: the fold counts what the turn
+   has done, this says what it is doing. It comes LAST in the row and is the
+   only part allowed to give way — `min-width: 0` plus the clamp below, so a
+   long sentence ellipsises instead of wrapping the header into a second line,
+   which is the exact thing this change removes.
+
+   The spinner inside it is baseline-aligned by the head's own `align-items`,
+   and the gap is the head's. Nothing here re-states what ChatWorkingLine's
+   two spans already style — `.chat-working-say` and `.chat-working-label`
+   keep their colour and size, so the live line reads the same wherever it
+   renders. */
+.chat-action-group-live {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+  /* The count and the summary are the fold's own identity and must not be
+     squeezed by a sentence that arrives a second later. */
+  flex: 0 1 auto;
+}
+.chat-action-group-live .chat-working-say,
+.chat-action-group-live .chat-working-label {
+  /* They carry their own left margin for the standalone row, where the
+     spinner is the row's first child. Here the head's gap does that job. */
+  margin-left: 0;
+}
 .chat-action-group-failed {
   color: var(--chat-danger);
   white-space: nowrap;

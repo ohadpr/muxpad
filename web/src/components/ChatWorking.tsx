@@ -31,6 +31,41 @@ export function ChatWorking({ variant }: { variant: WorkingVariant }) {
   );
 }
 
+/**
+ * THE LIVE STATE OF A TURN, as one line: spinner, then what the agent says it
+ * is doing.
+ *
+ * Extracted because it now has TWO homes and they must stay identical. While a
+ * turn is running the log already ends in a fold of that turn's actions — `27
+ * actions · Bash ×26` — and a second row underneath it saying `Running Bash…`
+ * spent a whole line restating what the fold above had just counted. The two
+ * are one row now: the live state rides the fold's own head, and this
+ * component is what both call sites render. The standalone row survives for
+ * the turn that has no fold yet, where there is nothing to ride.
+ */
+export function ChatWorkingLine({
+  variant,
+  hint,
+  label,
+}: {
+  variant: WorkingVariant;
+  /** What the agent last said it was doing. Wins — see ChatPane. */
+  hint?: string | null | undefined;
+  /** `Running Bash…`, the fallback for a turn that has not spoken yet. */
+  label?: string | null | undefined;
+}) {
+  return (
+    <>
+      <ChatWorking variant={variant} />
+      {hint ? (
+        <span className="chat-working-say">{hint}</span>
+      ) : label ? (
+        <span className="chat-working-label">{label}</span>
+      ) : null}
+    </>
+  );
+}
+
 function body(v: WorkingVariant) {
   switch (v) {
     // The canonical CLI spinner, and the densest 8 frames Unicode has: braille

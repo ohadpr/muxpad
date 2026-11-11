@@ -180,6 +180,7 @@ import {
 import {
   ActionGroup,
   AgentLaunchCard,
+  ChatLiveContext,
   ChatMentionContext,
   ChatRow,
   ImageModal,
@@ -194,7 +195,7 @@ import {
   ToolRow,
   UserText,
 } from './ChatTranscript';
-import { ChatWorking } from './ChatWorking';
+import { ChatWorking, ChatWorkingLine } from './ChatWorking';
 import { CopyablePre } from './CopyablePre';
 import { FromAgentMessage } from './FromAgentMessage';
 import { SvgAgentGlyph, SvgGlobe, SvgTerminalGlyph } from './PaneWebSwitch';
@@ -4529,6 +4530,9 @@ export function ChatPane({
             <ActionGroup
               key={`group-${anchorId}`}
               events={run}
+              // Structural only: the live indicator itself arrives through
+              // ChatLiveContext, which is derived far below this memo.
+              tail={j >= renderable.length}
               expanded={actionRunExpanded(run, expandedGroups) || holdsHit}
               anchorId={anchorId}
               onToggle={() => {
@@ -4887,6 +4891,33 @@ export function ChatPane({
   // actually sees, so "is this already on screen" is asked of the same thing
   // that answers it.
   const hint = useMemo(() => (agentWorking ? workingHint(voiced) : null), [agentWorking, voiced]);
+
+  // ── DOES THE LOG ALREADY END IN A FOLD? ───────────────────────────────
+  //
+  // If it does, that fold is this turn's own actions, and the live line goes
+  // on its head instead of on a second row beneath it. Computed here rather
+  // than inside the transcript memo because the ANSWER is needed out here —
+  // it decides whether the standalone row draws at all — and it is cheap: the
+  // trailing run is the maximal suffix of actions, which is the same run the
+  // memo folds last.
+  const tailFolded = useMemo(() => {
+    const renderable = voiced.filter(
+      (e) => !(e.kind === 'tool_result' && toolIndex.consumed.has(e.id)),
+    );
+    let i = renderable.length;
+    while (i > 0 && isAction(renderable[i - 1] as ChatEvent)) i--;
+    const run = renderable.slice(i) as ChatEvent[];
+    return run.length > 0 && foldsAsActionRun(run);
+  }, [voiced, toolIndex]);
+  // The live line itself — one object, two possible homes. Null the instant
+  // the turn ends, which is what takes it off the fold.
+  const liveLine = useMemo(
+    () =>
+      agentWorking && !streamingText ? (
+        <ChatWorkingLine variant={workingVariant} hint={hint} label={workingLabel} />
+      ) : null,
+    [agentWorking, streamingText, workingVariant, hint, workingLabel],
+  );
 
   // The live roster is the union of two sources, and they cover each other's
   // blind spot:
@@ -5485,7 +5516,7 @@ export function ChatPane({
                 </button>
               </div>
             ) : null}
-            {body}
+            <ChatLiveContext.Provider value={liveLine}>{body}</ChatLiveContext.Provider>
             {/* A DELIVERY IS NOT AN OUTGOING MESSAGE. muxpad hands a worker's
               result to this chat as a user-role message because that is the
               only door into a harness transcript, and echoing it drew a
@@ -5531,47 +5562,26 @@ export function ChatPane({
                   screen live and then take it back at turn end. The working
                   indicator is what a Chat-mode turn shows instead, and it names
                   the running tool so a silent pane never reads as stuck. */}
+                  {/* ── AND NOTHING AT ALL WHEN THE FOLD IS SAYING IT ──────
+                      `tailFolded` means the log already ends in this turn's
+                      own actions, so the live line is riding that fold's head
+                      and drawing it again here is the second line this whole
+                      change exists to remove. */}
                   {streamingText && !voiceOn ? (
                     <div className="chat-msg">
                       <Markdown text={streamingText} />
                       <span className="chat-cursor" aria-hidden="true" />
                     </div>
-                  ) : (
+                  ) : tailFolded ? null : (
                     <div
                       className="chat-msg chat-working"
                       aria-label={`${assistantLabel(session?.assistant)} is working`}
                     >
-                      <ChatWorking variant={workingVariant} />
-                      {/* ── WHAT IT IS DOING, NOT WHAT IT IS RUNNING ─────────
-                          This row used to lead with the TOOL — "Running
-                          Bash…" — and put the agent's own sentence after it in
-                          faint italic. Both halves were wrong.
-
-                          The tool name is the one thing already on screen: the
-                          fold directly above says `Bash ×49`. So the line
-                          spent its prominence restating the known thing and
-                          its smallest, faintest type on the only new one.
-                          "The thought is much more helpful 99% of the time…
-                          I prefer to see a sentence saying what it's doing
-                          more than seeing that it did 22 steps and 44 bash
-                          somethings."
-
-                          So the SENTENCE is the line. The tool name survives
-                          only as the fallback for a turn that has not thought
-                          anything yet — a silent pane still has to say
-                          something, and "Running Bash…" is better than a bare
-                          spinner.
-
-                          One line either way, clamped by CSS as well as by the
-                          derivation: a long sentence must never wrap this row
-                          into a paragraph, because it occupies the same pixels
-                          on every tool call and a growing row is the verbose
-                          log this exists to avoid. */}
-                      {hint ? (
-                        <span className="chat-working-say">{hint}</span>
-                      ) : workingLabel ? (
-                        <span className="chat-working-label">{workingLabel}</span>
-                      ) : null}
+                      {/* THE TURN WITH NO FOLD YET. Everything about what
+                          this line says — the sentence over the tool name, one
+                          line, clamped — is in ChatWorkingLine, which the
+                          trailing fold renders too. */}
+                      <ChatWorkingLine variant={workingVariant} hint={hint} label={workingLabel} />
                     </div>
                   )}
                   {/* ── STOP IS NOT HERE ANY MORE ────────────────────────────
