@@ -52,6 +52,39 @@ function fixture(startupCmd: string | null) {
 describe('runRebase', () => {
   const ok = { status: 'queued' as const };
 
+  it('KEEPS the history by default — it rebases, it does not compact', () => {
+    // "i want the history but I WANT IT REBASED ON THE NEW INSTRUCTIONS."
+    // Nothing is summarised and the `--resume` is left exactly as it is: the
+    // process is new, so the system prompt is rebuilt from today's
+    // agent-instructions.md, and the conversation rides along untouched.
+    const { db, paneId } = fixture('muxpad agent --resume old-sid');
+    const calls: string[] = [];
+    return runRebase(
+      {
+        db,
+        respawn: async () => {
+          calls.push('respawn');
+        },
+        submit: () => {
+          calls.push('submit');
+          return ok;
+        },
+        brief: async () => {
+          calls.push('brief');
+          return 'goal: ship it';
+        },
+      },
+      paneId,
+    ).then((r) => {
+      expect(r.ok).toBe(true);
+      // No summary written, nothing injected — just a new process.
+      expect(calls).toEqual(['respawn']);
+      // AND THE RESUME SURVIVES. Stripping it here would silently turn the
+      // default into the thing it replaced.
+      expect(new PaneStore(db).getById(paneId)?.startup_cmd).toBe('muxpad agent --resume old-sid');
+    });
+  });
+
   it('briefs, strips the resume, respawns, and hands the briefing over', async () => {
     const { db, paneId } = fixture('muxpad agent --resume old-sid');
     const calls: string[] = [];
@@ -73,6 +106,7 @@ describe('runRebase', () => {
         },
       },
       paneId,
+      'fresh',
     );
     expect(r.ok).toBe(true);
     // The briefing is written BEFORE the runner dies — see below for why.
@@ -99,6 +133,7 @@ describe('runRebase', () => {
         brief: async () => null,
       },
       paneId,
+      'fresh',
     );
     expect(r).toMatchObject({ ok: false, code: 'no_briefing' });
     expect(respawned).toBe(false);
@@ -119,6 +154,7 @@ describe('runRebase', () => {
         },
       },
       paneId,
+      'fresh',
     );
     expect(r).toMatchObject({ ok: false, code: 'not_an_agent' });
     // Not even summarised: a terminal has no conversation to summarise.
@@ -137,6 +173,7 @@ describe('runRebase', () => {
         brief: async () => 'goal: ship it',
       },
       paneId,
+      'fresh',
     );
     expect(r).toMatchObject({ ok: false, code: 'not_delivered' });
     expect((r as { message: string }).message).toContain('agent exited');

@@ -43,6 +43,24 @@ export function stripResume(cmd: string): string {
     .trim();
 }
 
+/**
+ * WHAT A REBASE DOES TO THE CONVERSATION.
+ *
+ *   'keep'   the session is RESUMED. Same history in the agent's context and
+ *            on screen; only the process — and with it the system prompt,
+ *            rebuilt from today's agent-instructions.md at every runner start
+ *            — is new. This is the default, and it is what "rebase" means:
+ *            same commits, new base.
+ *   'fresh'  the session is replaced and seeded with a briefing. The history
+ *            stays on disk and searchable but leaves the agent's context.
+ *            The FALLBACK, for a conversation too large to replay.
+ *
+ * The default used to be 'fresh', which was the wrong reading of the ask:
+ * "i want the history but I WANT IT REBASED ON THE NEW INSTRUCTIONS". A
+ * briefing is a compaction wearing a nicer name.
+ */
+export type RebaseMode = 'keep' | 'fresh';
+
 export interface RebaseDeps {
   db: Database.Database;
   /** `killPane` then `ensurePane` — the respawn route's own two calls. */
@@ -64,7 +82,11 @@ export type RebaseResult =
       message: string;
     };
 
-export async function runRebase(deps: RebaseDeps, paneId: string): Promise<RebaseResult> {
+export async function runRebase(
+  deps: RebaseDeps,
+  paneId: string,
+  mode: RebaseMode = 'keep',
+): Promise<RebaseResult> {
   const panes = new PaneStore(deps.db);
   const pane = panes.getById(paneId);
   if (!pane) return { ok: false, code: 'not_found', message: 'pane not found' };
@@ -75,6 +97,16 @@ export async function runRebase(deps: RebaseDeps, paneId: string): Promise<Rebas
       code: 'not_an_agent',
       message: 'only an agent chat can be rebased — this pane runs no agent',
     };
+  }
+
+  // ── KEEP: the history rides along, and only the process is new ────────
+  // Nothing is summarised, nothing is dropped, and the `--resume` stays
+  // exactly as it is. The instructions are current the moment the runner
+  // boots because the SDK's systemPrompt is built then, from a file the
+  // server rewrites from source on every start.
+  if (mode === 'keep') {
+    await deps.respawn(paneId);
+    return { ok: true, queued: false, chars: 0 };
   }
 
   const briefing = await (deps.brief ?? rebaseBriefing)(deps.db, paneId);

@@ -479,6 +479,18 @@ export const api = {
 
   respawnPane: (id: string) => req<void>(`/api/panes/${id}/respawn`, { method: 'POST' }),
 
+  /** SAME CHAT, SAME HISTORY, TODAY'S INSTRUCTIONS. The agent's process is
+   *  replaced — which is what rebuilds its system prompt from the generated
+   *  instructions — and the conversation is resumed into it untouched. The
+   *  `fresh` mode (history out of context, a briefing in) is the fallback and
+   *  is not offered from the UI. */
+  rebasePane: (id: string) =>
+    req<{ ok: boolean }>(`/api/panes/${id}/rebase`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mode: 'keep' }),
+    }),
+
   /**
    * Ask the SERVER whether this pane's web-face URL is actually serving.
    *
