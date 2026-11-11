@@ -784,10 +784,12 @@ export function panesScopedRoutes(deps: {
    * keep creating new chats asking them to look at the old chat and try to
    * continue my work there."
    *
-   * The two faults in such a chat want opposite fixes — stale INSTRUCTIONS
-   * are cured by a fresh runner, compaction DECAY is made worse by compacting
-   * again — and rebase.ts does both at once by summarising from the
-   * transcript on disk rather than from the degraded chain in the window.
+   * By default it is a TRANSCRIPT rebase (chat/transcript-rebase.ts): the
+   * same turns, with the stale instructions that leaked into them removed and
+   * the compactions undone, resumed by a fresh runner on today's system
+   * prompt. `{"mode":"fresh"}` — and any chat that cannot be replayed — gets
+   * the briefing instead (chat/rebase.ts): a new session seeded with a summary
+   * written from the transcript on disk. See chat/rebase-run.ts.
    *
    * A POST and never automatic: it ends background subagents, wake-ups and
    * any running turn, so the moment is the user's to pick.
@@ -804,6 +806,10 @@ export function panesScopedRoutes(deps: {
       );
     }
     const workspaceId = tabs.getWorkspaceId(p.tab_id);
+    // The transcript rebase unless the caller explicitly asks for the history
+    // to leave the window (`{"mode":"fresh"}`).
+    const body = (await c.req.json().catch(() => ({}))) as { mode?: unknown };
+    const mode = body?.mode === 'fresh' ? 'fresh' : 'transcript';
     const result = await runRebase(
       {
         db: deps.db,
@@ -817,7 +823,8 @@ export function panesScopedRoutes(deps: {
           await deps.ptyd.ensurePane({
             id: p.id,
             shell: p.shell ?? defaultShell,
-            // Re-read: runRebase has just rewritten it without `--resume`.
+            // Re-read: runRebase has just rewritten its `--resume` — to the
+            // rebased session, or (the briefing path) away entirely.
             startup_cmd: panes.getById(paneId)?.startup_cmd ?? p.startup_cmd,
             cwd: safeCwd(p.cwd),
             env: withPaneKey(p.env, p.id),
@@ -828,12 +835,18 @@ export function panesScopedRoutes(deps: {
         submit: (paneId, text) => bridge.submitSend(paneId, text),
       },
       id,
+      mode,
     );
     if (!result.ok) {
-      const status = result.code === 'not_found' ? 404 : result.code === 'no_briefing' ? 503 : 400;
+      const status =
+        result.code === 'not_found'
+          ? 404
+          : result.code === 'no_briefing' || result.code === 'respawn_failed'
+            ? 503
+            : 400;
       return c.json({ error: { code: result.code, message: result.message } }, status);
     }
-    return c.json({ ok: true, queued: result.queued, chars: result.chars });
+    return c.json(result);
   });
 
   app.post('/:id/respawn', async (c) => {

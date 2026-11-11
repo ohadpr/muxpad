@@ -1,9 +1,32 @@
 import type Database from 'better-sqlite3';
+import { rewriteResumeCmd } from '../agent-resume-repair.js';
+import { AgentSessionStore } from '../store/AgentSessionStore.js';
 import { PaneStore } from '../store/PaneStore.js';
 import { rebaseBriefing, wrapRebase } from './rebase.js';
+import {
+  type TranscriptRebaseResult,
+  discardRebasedTranscript,
+  transcriptRebase,
+} from './transcript-rebase.js';
 
 /**
- * PERFORM a rebase: brief, then boot the chat fresh and hand it the briefing.
+ * PERFORM a rebase.
+ *
+ * ── THE DEFAULT: SAME TURNS, NEW BASE ────────────────────────────────────
+ * "i want the history but I WANT IT REBASED ON THE NEW INSTRUCTIONS." The
+ * default is the TRANSCRIPT rebase (transcript-rebase.ts): a new session file
+ * holding the same real turns minus every stale instruction that leaked into
+ * them, resumed by a fresh runner whose system prompt is today's. The order is
+ * the same refuse-before-destroy order as below — the new transcript is
+ * written and verified FIRST, the pane is pointed at it only then, and a
+ * respawn that throws puts the old `--resume` back and deletes the new file.
+ *
+ * It falls back to the BRIEFING path — everything below — when a transcript
+ * cannot be replayed: a codex/cursor chat, a single turn too large to keep
+ * whole, a file that fails the integrity check. A pane on another machine is
+ * refused outright; the briefing could not read it either.
+ *
+ * ── THE FALLBACK: brief, then boot the chat fresh and hand it the briefing ─
  *
  * {@link rebaseBriefing} writes the briefing; this is the part that acts on
  * it, and the order is the whole design:
@@ -54,17 +77,53 @@ export interface RebaseDeps {
   ) => { status: 'sent' | 'queued' | 'rejected'; reason?: string | undefined };
   /** Injected in tests. */
   brief?: (db: Database.Database, paneId: string) => Promise<string | null>;
+  /** Injected in tests; defaults to {@link transcriptRebase}. */
+  transcript?: (db: Database.Database, paneId: string) => Promise<TranscriptRebaseResult>;
+  /** Injected in tests; defaults to deleting the file. */
+  discard?: (path: string) => void;
 }
 
+/**
+ * `transcript` — the default: keep the turns, drop the stale instructions.
+ * `fresh` — skip straight to the briefing: a new, empty session seeded with a
+ *           summary. For when the user WANTS the history out of the window.
+ */
+export type RebaseMode = 'transcript' | 'fresh';
+
 export type RebaseResult =
-  | { ok: true; queued: boolean; chars: number }
+  | {
+      ok: true;
+      mode: 'transcript';
+      sid: string;
+      /** Entries replayed verbatim, and whether an older span was briefed. */
+      kept: number;
+      briefed: boolean;
+    }
+  | {
+      ok: true;
+      mode: 'fresh';
+      queued: boolean;
+      chars: number;
+      /** Why the transcript rebase was not used, when it was tried. */
+      fallback?: string;
+    }
   | {
       ok: false;
-      code: 'not_found' | 'not_an_agent' | 'no_briefing' | 'not_delivered';
+      code:
+        | 'not_found'
+        | 'not_an_agent'
+        | 'elsewhere'
+        | 'no_briefing'
+        | 'not_delivered'
+        | 'respawn_failed';
       message: string;
     };
 
-export async function runRebase(deps: RebaseDeps, paneId: string): Promise<RebaseResult> {
+export async function runRebase(
+  deps: RebaseDeps,
+  paneId: string,
+  mode: RebaseMode = 'transcript',
+): Promise<RebaseResult> {
   const panes = new PaneStore(deps.db);
   const pane = panes.getById(paneId);
   if (!pane) return { ok: false, code: 'not_found', message: 'pane not found' };
@@ -77,6 +136,40 @@ export async function runRebase(deps: RebaseDeps, paneId: string): Promise<Rebas
     };
   }
 
+  let fallback: string | undefined;
+  if (mode === 'transcript') {
+    const t = await (deps.transcript ?? transcriptRebase)(deps.db, paneId);
+    if (!t.ok && t.reason === 'elsewhere') {
+      return { ok: false, code: 'elsewhere', message: t.detail };
+    }
+    if (t.ok) {
+      // ONLY NOW is anything about the pane changed: the new transcript exists
+      // and has passed checkTranscript. Nothing before this line touched the
+      // pane, the session row or the old file.
+      const next = rewriteResumeCmd(cmd, t.sid, 'claude');
+      panes.setStartupCmd(paneId, next);
+      try {
+        await deps.respawn(paneId);
+      } catch (e) {
+        // Put it back exactly. The old session file was never touched, so the
+        // pane's next start resumes the conversation it had.
+        panes.setStartupCmd(paneId, cmd);
+        (deps.discard ?? discardRebasedTranscript)(t.path);
+        return {
+          ok: false,
+          code: 'respawn_failed',
+          message: `the chat could not be restarted, so it was left as it was: ${(e as Error).message}`,
+        };
+      }
+      // The runner reports the sid on hello as well; recording it here means
+      // every read in the gap (chat history, search, headline) already sees
+      // the rebased conversation. The old sid stays in the lineage.
+      new AgentSessionStore(deps.db).recordSessionId(paneId, t.sid);
+      return { ok: true, mode: 'transcript', sid: t.sid, kept: t.kept, briefed: t.briefed };
+    }
+    fallback = `${t.reason}: ${t.detail}`;
+  }
+
   const briefing = await (deps.brief ?? rebaseBriefing)(deps.db, paneId);
   if (!briefing) {
     // Deliberately BEFORE anything destructive. "Could not summarise" must
@@ -84,7 +177,9 @@ export async function runRebase(deps: RebaseDeps, paneId: string): Promise<Rebas
     return {
       ok: false,
       code: 'no_briefing',
-      message: 'could not write a briefing from this chat — nothing was changed',
+      message: `could not write a briefing from this chat — nothing was changed${
+        fallback ? ` (transcript rebase refused: ${fallback})` : ''
+      }`,
     };
   }
 
@@ -100,5 +195,11 @@ export async function runRebase(deps: RebaseDeps, paneId: string): Promise<Rebas
       message: `the chat restarted but the briefing was refused: ${sent.reason ?? 'unknown'}`,
     };
   }
-  return { ok: true, queued: sent.status === 'queued', chars: briefing.length };
+  return {
+    ok: true,
+    mode: 'fresh',
+    queued: sent.status === 'queued',
+    chars: briefing.length,
+    ...(fallback ? { fallback } : {}),
+  };
 }
