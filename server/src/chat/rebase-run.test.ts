@@ -206,6 +206,17 @@ describe('runRebase — the transcript rebase is the default', () => {
     expect(sess?.lineage).toEqual(['old-sid', 'new-sid']);
   });
 
+  it('replaces an --resume=<sid> too, rather than adding a second one', async () => {
+    const { db, paneId } = fixture('muxpad agent --resume=old-sid --model opus');
+    await runRebase(
+      { db, transcript: async () => rebased, respawn: async () => {}, submit: () => ok },
+      paneId,
+    );
+    expect(new PaneStore(db).getById(paneId)?.startup_cmd).toBe(
+      'muxpad agent --model opus --resume new-sid',
+    );
+  });
+
   it('falls back to the briefing when the transcript cannot be replayed', async () => {
     const { db, paneId } = fixture('muxpad agent --resume old-sid');
     const calls: string[] = [];

@@ -146,7 +146,10 @@ export async function runRebase(
       // ONLY NOW is anything about the pane changed: the new transcript exists
       // and has passed checkTranscript. Nothing before this line touched the
       // pane, the session row or the old file.
-      const next = rewriteResumeCmd(cmd, t.sid, 'claude');
+      // Strip first: rewriteResumeCmd only knows the spaced `--resume <sid>`,
+      // and an `--resume=<sid>` left beside the new one would resume the OLD
+      // conversation or neither.
+      const next = rewriteResumeCmd(stripResume(cmd), t.sid, 'claude');
       panes.setStartupCmd(paneId, next);
       try {
         await deps.respawn(paneId);
