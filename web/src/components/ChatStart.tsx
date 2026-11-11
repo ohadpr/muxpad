@@ -791,7 +791,6 @@ export function SessionBar({
     else if (panel === 'model' && (!status || mode === 'chat')) setPanel(null);
     else if (panel === 'folder' && !folder) setPanel(null);
     else if (panel === 'mode' && !mode) setPanel(null);
-    else if (panel === 'stale' && !stale) setPanel(null);
     else if (panel === 'host' && !host) setPanel(null);
   }, [panel, liveLabel, status, folder, mode, stale, host]);
 
@@ -1050,61 +1049,39 @@ export function SessionBar({
         <div className="chat-status-seg-wrap">
           <button
             type="button"
-            className={`chat-status-seg -stale${panel === 'stale' ? ' is-open' : ''}`}
+            className="chat-status-seg -stale"
             data-testid="chat-status-stale"
-            onClick={() => toggle('stale')}
-            aria-haspopup="dialog"
-            aria-expanded={panel === 'stale'}
-            title="This agent is running an older build of muxpad than the server"
+            // ── THE CELL IS THE BUTTON ──────────────────────────────────
+            // It used to be a LABEL that opened a panel that held the
+            // control: three steps to one act, and the panel was invisible
+            // for most of its life anyway. "i need a single rebase button…
+            // i only see 'older build' label which i thought we dropped."
+            //
+            // So the cell says what you can DO, not what is wrong, and
+            // pressing it does it. The diagnosis survives as the title —
+            // the question "why is this here" is asked once, the action is
+            // taken every time.
+            onClick={() => {
+              if (rebasing) return;
+              setRebasing(true);
+              api
+                .rebasePane(paneId)
+                // The pane reloads itself from the session frame the new
+                // runner sends on hello; nothing to do here but stop
+                // spinning if that never arrives.
+                .catch(() => undefined)
+                .finally(() => setRebasing(false));
+            }}
+            disabled={rebasing}
+            title={
+              'This agent is running an older build of muxpad than the server — it keeps the ' +
+              'instructions it was born with. Rebase keeps this conversation and starts it again ' +
+              'on today’s. It ends background work and scheduled wake-ups this pane is holding.'
+            }
           >
             <SvgStaleGlyph />
-            <span className="chat-status-seg-label">older build</span>
+            <span className="chat-status-seg-label">{rebasing ? 'rebasing…' : 'rebase'}</span>
           </button>
-          {panel === 'stale' ? (
-            // biome-ignore lint/a11y/useSemanticElements: an anchored popover, not a modal that owns the screen.
-            <div className="chat-status-menu chat-session-menu" role="dialog">
-              <div className="chat-session-head">Running an older build</div>
-              {/* ── THE DOOR, BEFORE THE SIGN ──────────────────────────────
-                  It sat under two paragraphs, which on a short window or a
-                  phone put it below the fold of a popover nobody scrolls:
-                  "clicking that doesn't indicate any action". A panel that
-                  exists because something is wrong leads with the fix; the
-                  explanation is for the reader who wants it, and it reads
-                  just as well after. */}{' '}
-              <button
-                type="button"
-                className="chat-session-item -action"
-                disabled={rebasing}
-                onClick={() => {
-                  setRebasing(true);
-                  api
-                    .rebasePane(paneId)
-                    // The pane reloads itself from the session frame the new
-                    // runner sends on hello; nothing to do here but stop
-                    // spinning if it never arrives.
-                    .catch(() => undefined)
-                    .finally(() => setRebasing(false));
-                }}
-              >
-                {rebasing ? 'Rebasing…' : 'Rebase this chat'}
-              </button>
-              <div className="chat-session-item -static">
-                <span className="chat-session-item-desc">
-                  Rebasing keeps this conversation exactly as it is and starts its agent again on
-                  today’s instructions. It ends any background work and scheduled wake-ups this pane
-                  is holding, so do it when the pane is quiet.
-                </span>
-              </div>
-              <div className="chat-session-item -static">
-                <span className="chat-session-item-desc">
-                  This agent’s process started on a different build of muxpad from the one running
-                  now. It keeps the code — and the instructions — it was born with, so anything
-                  added since is missing from it: it may not know about tools or rules that exist
-                  today, and will say so honestly rather than guess.
-                </span>
-              </div>
-            </div>
-          ) : null}
         </div>
       ) : null}
 
