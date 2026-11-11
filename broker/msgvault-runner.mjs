@@ -32,6 +32,9 @@ export function msgvaultRunner({
   // 3 MiB file — smaller than a scanned PDF. Past this, execFile fails with
   // "maxBuffer exceeded" rather than truncating, so the cap is loud.
   attachmentMaxBytes = 32 * 1024 * 1024,
+  // Injected in tests. The attachment path does not shell the binary — see
+  // below — so it needs its own seam.
+  fetchImpl = fetch,
 } = {}) {
   return async (action, payload) => {
     // NO `mode` OPTION. It is an EXACT expected mode, not a mask — passing
@@ -49,6 +52,67 @@ export function msgvaultRunner({
       throw new Error('msgvault agentUrl must be loopback');
     // The binary must be as protected as the declaration that names it.
     io.assertProtectedPath(declared.binary, [0]);
+    // ── ATTACHMENTS GO STRAIGHT TO THE DAEMON ──────────────────────────
+    //
+    // msgvault's CLI refuses every export verb in agent-delegated mode —
+    // `export-attachment`, `export-attachments`, `export-eml` all fail with
+    // "not available in agent-delegated mode", and they fail CLIENT-SIDE,
+    // before the daemon is contacted. So the verb muxpad shipped could never
+    // work through argv, however the broker was updated.
+    //
+    // The daemon itself has no such objection: `/api/v1/cli/attachment` is on
+    // the same `/api/v1/cli/*` surface the ALLOWED verbs already use (search,
+    // message, thread, stats), authenticated by the same `X-Api-Key`, and it
+    // answers with the bytes.
+    //
+    // So this one action skips the binary. That is not a widening: the
+    // broker already names this token file and hands it to a process it
+    // spawns; reading it to set a header is the same privilege, spent the
+    // same way, on a read that was already in the read scope and already
+    // approved per call. The url is loopback (asserted above) and the token
+    // file is protected-path checked like the binary.
+    if (action === 'msgvault.export-attachment') {
+      const hash = String(payload?.hash ?? '');
+      if (!/^[a-f0-9]{64}$/.test(hash)) throw new Error('attachment needs a 64-hex content hash');
+      io.assertProtectedPath(declared.tokenFile, [0]);
+      const token = String(io.readFileSync(declared.tokenFile, 'utf8')).trim();
+      const url = `${String(declared.agentUrl).replace(/\/+$/, '')}/api/v1/cli/attachment?content_hash=${hash}`;
+      const res = await fetchImpl(url, {
+        headers: { 'X-Api-Key': token },
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (!res.ok) {
+        // The daemon's own refusal, kept: a 401 here means the agent key is
+        // not accepted for attachments, which is a msgvault-side decision an
+        // agent must be told plainly rather than left to retry.
+        throw new Error(
+          `msgvault refused the attachment (${res.status}) — ${(await res.text().catch(() => '')).slice(0, 160) || 'no detail'}`,
+        );
+      }
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (buf.byteLength > attachmentMaxBytes)
+        throw new Error(`attachment is larger than the ${attachmentMaxBytes} byte cap`);
+      // `filename*=` first — RFC 5987 is what carries a non-ASCII name — then
+      // the plain form. Absent, muxpad's CLI names the file after the hash.
+      const cd = res.headers.get('content-disposition') ?? '';
+      const name =
+        /filename\*=(?:UTF-8'')?"?([^";]+)/i.exec(cd)?.[1] ??
+        /filename="?([^";]+)/i.exec(cd)?.[1] ??
+        '';
+      return {
+        action,
+        result: {
+          content_hash: hash,
+          data_base64: buf.toString('base64'),
+          size: buf.byteLength,
+          ...(name ? { filename: decodeURIComponent(name) } : {}),
+          ...(res.headers.get('content-type')
+            ? { mime_type: String(res.headers.get('content-type')).split(';')[0] }
+            : {}),
+        },
+      };
+    }
+
     const { binary, args } = msgvaultArgv(action, payload, declared);
     const limit = action === 'msgvault.export-attachment' ? attachmentMaxBytes : maxBytes;
     return await new Promise((resolve, reject) => {

@@ -1020,19 +1020,22 @@ cmd_msgvault() {
       done
       local resp; resp="$(mktemp)"
       slack_call GET "/api/msgvault/attachment?$q&hash=$hash" > "$resp" || { rm -f "$resp"; return 1; }
+      # The broker answers `{action, result:{…}}`, so every field is one level
+      # down. Read at the top level too, so a future flattening of the
+      # envelope does not silently produce an empty file and a hash mismatch.
       if [ -z "$out" ]; then
         local name
-        name="$(jq -j '.filename // empty' "$resp" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_' | sed 's/^[._]*//' | cut -c1-120)"
+        name="$(jq -j '.result.filename // .filename // empty' "$resp" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_' | sed 's/^[._]*//' | cut -c1-120)"
         [ -n "$name" ] || name="attachment-${hash:0:12}"
         out="$PWD/$name"
       fi
       [ ! -e "$out" ] || { echo "muxpad: $out already exists; pass --out=<path>" >&2; rm -f "$resp"; return 1; }
-      jq -r '.data_base64 // empty' "$resp" | base64 --decode > "$out" 2>/dev/null || true
+      jq -r '.result.data_base64 // .data_base64 // empty' "$resp" | base64 --decode > "$out" 2>/dev/null || true
       local got; got="$(shasum -a 256 "$out" | cut -d' ' -f1)"
       if [ ! -s "$out" ] || [ "$got" != "$hash" ]; then
         rm -f "$out"
         echo "muxpad: msgvault: attachment did not come back intact (hash mismatch); nothing saved" >&2
-        jq -c 'del(.data_base64)' "$resp" >&2 2>/dev/null || true
+        jq -c 'del(.data_base64) | del(.result.data_base64)' "$resp" >&2 2>/dev/null || true
         rm -f "$resp"; return 1
       fi
       jq -n --arg path "$out" --slurpfile r "$resp" \
