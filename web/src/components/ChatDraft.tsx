@@ -94,6 +94,11 @@ export interface ChatDraftProps {
   corpus: readonly MentionChat[];
   placeholder: string;
   className?: string | undefined;
+  /** Refuse edits entirely — the caret cannot enter and nothing can be typed.
+   *  Used while the chat is being rebased, which replaces the agent under it:
+   *  anything typed in that window would be sent into a session that is about
+   *  to stop existing. */
+  disabled?: boolean | undefined;
   /** An edit. Both halves, always: the caret is what the `@` grammar keys off. */
   onChange: (text: string, caret: number) => void;
   /** The caret MOVED without an edit — an arrow, a click. Reopens a run. */
@@ -112,7 +117,7 @@ interface DraftChip {
 }
 
 export const ChatDraft = forwardRef<ChatDraftHandle, ChatDraftProps>(function ChatDraft(
-  { value, corpus, placeholder, className, onChange, onCaret, onKeyDown, onPaste, aria },
+  { value, corpus, placeholder, className, disabled, onChange, onCaret, onKeyDown, onPaste, aria },
   ref,
 ) {
   const elRef = useRef<HTMLDivElement | null>(null);
@@ -284,7 +289,8 @@ export const ChatDraft = forwardRef<ChatDraftHandle, ChatDraftProps>(function Ch
         // for the same field on iOS. Measured in Chromium that inert chip hosts
         // survive typing, real keyboard input and deletion in this mode exactly
         // as they do under `true`.
-        contentEditable="plaintext-only"
+        contentEditable={disabled ? 'false' : 'plaintext-only'}
+        aria-disabled={disabled || undefined}
         // The children are ours, not React's — see the header. This is the
         // warning that says so out loud.
         suppressContentEditableWarning

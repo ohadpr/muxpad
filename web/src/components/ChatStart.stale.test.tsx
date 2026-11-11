@@ -26,14 +26,38 @@ const cell = (): string => {
   return SRC.slice(at, SRC.indexOf('</button>', at));
 };
 
+const PANE = readFileSync(join(__dirname, 'ChatPane.tsx'), 'utf8');
+
 describe('the older-build cell IS the button', () => {
   it('rebases on press — no panel in between', () => {
     // It used to be a label that opened a panel that held the control:
     // three steps to one act. "i need a single rebase button… i only see
     // 'older build' label which i thought we dropped."
-    expect(cell()).toMatch(/rebasePane\(paneId\)/);
+    expect(cell()).toMatch(/onRebase\?\.\(\)/);
+    expect(PANE).toMatch(/api\s*\.rebasePane\(paneId\)/);
     // …and the panel is gone, not merely bypassed.
     expect(SRC).not.toContain("panel === 'stale'");
+  });
+
+  it('is REFUSED while this chat has work a rebase would kill', () => {
+    // "it should also only be available when there are no sub-chats active
+    // like doing something actively." A rebase ends background subagents and
+    // the sub-chats this pane started.
+    expect(PANE).toMatch(/const rebaseBlocked = runningSubs > 0 \|\| backgroundLive > 0;/);
+    expect(cell()).toMatch(/disabled=\{rebasing \|\| rebaseBlocked\}/);
+    // …and it says why, rather than being mysteriously dead.
+    expect(cell()).toMatch(/would kill it/);
+  });
+
+  it('shuts the composer while it runs', () => {
+    // Anything typed in that window would be sent into a session that is
+    // about to stop existing: "i wouldn't want new messages to be sent in at
+    // that time."
+    expect(PANE).toMatch(/canSendDraft\(input, chips\) && !rebasing/);
+    expect(PANE).toMatch(/disabled=\{rebasing\}/);
+    // The field itself refuses the caret, not just the send button.
+    const draft = readFileSync(join(__dirname, 'ChatDraft.tsx'), 'utf8');
+    expect(draft).toMatch(/contentEditable=\{disabled \? 'false' : 'plaintext-only'\}/);
   });
 
   it('says what you can DO, not what is wrong', () => {
@@ -49,8 +73,7 @@ describe('the older-build cell IS the button', () => {
   });
 
   it('cannot be double-fired while it is running', () => {
-    expect(cell()).toMatch(/if \(rebasing\) return;/);
-    expect(cell()).toMatch(/disabled=\{rebasing\}/);
+    expect(PANE).toMatch(/if \(rebasing \|\| rebaseBlocked\) return;/);
   });
 
   it('sends NO mode — the server picks the best it can do for this chat', () => {

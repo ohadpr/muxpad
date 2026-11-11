@@ -554,8 +554,12 @@ describe('the background-command cell', () => {
     const css = readFileSync(join(import.meta.dirname, 'ChatPane.css'), 'utf8');
     const rule = /\.chat-status-seg\.-bg\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
     expect(rule).not.toContain('animation');
-    // And it must not be the cell the line clips away.
-    expect(rule).toContain('min-width: max-content');
+    // IT IS NOW THE CELL THAT GIVES WAY, and deliberately: this strip gets
+    // ~320px for four cells, and it used to hold 180px at `flex-shrink: 0`
+    // while `Chat` rendered as `(` and `rebase` as `r(`. A count can
+    // ellipsize — its icon still says what it is — but a control nobody can
+    // read or aim at is not a control.
+    expect(rule).toContain('flex: 0 1 auto');
   });
 
   it('coexists with the other cells rather than replacing them', () => {
