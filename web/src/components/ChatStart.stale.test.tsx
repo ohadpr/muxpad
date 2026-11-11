@@ -43,12 +43,20 @@ describe('the older-build panel offers the way out', () => {
     expect(panel()).toMatch(/background work and scheduled wake-ups/);
   });
 
-  it('keeps the history: the call asks for `keep`, never `fresh`', () => {
-    // `fresh` drops the conversation out of the agent's context and seeds a
-    // briefing — a compaction wearing a nicer name, and the opposite of what
-    // "rebase" was asked for.
-    const call = API.slice(API.indexOf('rebasePane:'), API.indexOf('rebasePane:') + 400);
-    expect(call).toContain("mode: 'keep'");
+  it('sends NO mode — the server picks the best it can do for this chat', () => {
+    // One button, one promise: this conversation, on today's instructions.
+    // How far muxpad can get toward that differs per chat, and that choice
+    // belongs on the server — which is also how the button gets better when
+    // the transcript rebase lands, without a line changing here.
+    // The entry itself, not the 400 characters after it: the next api call
+    // along mentions a mode of its own and made this pass for the wrong
+    // reason the first time.
+    const at = API.indexOf('rebasePane:');
+    const call = API.slice(at, API.indexOf('}),', at) + 3);
+    expect(call).toContain('/rebase');
+    expect(call).not.toContain('mode');
+    // `fresh` summarises the history out of the window. It answers a
+    // different question and must not be reachable by pressing this.
     expect(call).not.toContain('fresh');
   });
 });
