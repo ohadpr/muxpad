@@ -76,7 +76,7 @@ describe('the runner harness argv guard', () => {
     }).catch((err: unknown) => err)) as Error & { code?: number; stderr?: string };
     expect(e).toBeInstanceOf(Error);
     expect(e.code).toBe(2);
-    expect(e.stderr).not.toMatch(/must run inside a muxpad pane/);
+    expect(e.stderr).not.toMatch(/must run inside a muxpad terminal/);
     expect(e.stderr).toMatch(/unrecognised option --resme/);
     // …and it says what it would have accepted.
     expect(e.stderr).toContain('usage: muxpad agent');
@@ -99,7 +99,7 @@ describe('the runner harness argv guard', () => {
       { env, timeout: 15_000 },
     ).catch((err: unknown) => err)) as Error & { code?: number; stderr?: string };
     expect(e.code).toBe(1);
-    expect(e.stderr).toMatch(/must run inside a muxpad pane/);
+    expect(e.stderr).toMatch(/must run inside a muxpad terminal/);
   });
 
   it.skipIf(!built)('still refuses to run outside a pane', async () => {
@@ -111,6 +111,6 @@ describe('the runner harness argv guard', () => {
     delete env.MUXPAD_API_URL;
     await expect(
       execFileAsync(process.execPath, [RUNNER, '--model', 'x'], { env, timeout: 15_000 }),
-    ).rejects.toThrow(/must run inside a muxpad pane/);
+    ).rejects.toThrow(/must run inside a muxpad terminal/);
   });
 });

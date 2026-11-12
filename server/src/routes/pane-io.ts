@@ -231,9 +231,14 @@ export function paneIoRoutes(deps: {
     id: string,
   ): Promise<{ status: 400 | 404 | 503; code: string; message: string } | null> => {
     const p = panes.getById(id);
-    if (!p) return { status: 404, code: 'not_found', message: 'pane not found' };
+    if (!p)
+      return { status: 404, code: 'not_found', message: 'that chat or terminal no longer exists' };
     if (p.kind !== 'shell')
-      return { status: 400, code: 'bad_request', message: 'not a terminal pane' };
+      return {
+        status: 400,
+        code: 'bad_request',
+        message: 'that is a web view, not a terminal — it has no pty to read or type into',
+      };
     let running = false;
     try {
       running = await deps.ptyd.hasPane(id);
@@ -243,7 +248,8 @@ export function paneIoRoutes(deps: {
       // because "unreachable" was the word that misdirected a whole day.
       return { status: 503, code: 'ptyd_unavailable', message: whyNot('reach ptyd', err) };
     }
-    if (!running) return { status: 400, code: 'bad_request', message: 'pane has no live pty' };
+    if (!running)
+      return { status: 400, code: 'bad_request', message: 'nothing is running in that terminal' };
     return null;
   };
 

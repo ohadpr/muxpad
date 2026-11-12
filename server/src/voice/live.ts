@@ -51,7 +51,7 @@ export const INTERRUPTION_POLICY =
  * ways to make a sound are this instruction and the client's own appends.
  */
 export const DELEGATION_POLICY = [
-  'Anything that asks for NEW work on this user’s code, repos, files, panes or running',
+  'Anything that asks for NEW work on this user’s code, repos, files, chats, terminals or running',
   'processes goes to the agent — delegate it rather than guessing. The agent takes',
   'MINUTES, not seconds. The moment you hand something over, say one short line so the',
   'user knows you heard them ("on it", "let me check") — never hand off in silence.',
@@ -132,7 +132,7 @@ export type VoiceErrorCode =
   | 'voice_budget'
   /** A session is already live; one per install. */
   | 'voice_busy'
-  /** Malformed request (no paneId, no sdp, unknown pane, oversized offer). */
+  /** Malformed request (no paneId, no sdp, a paneId that names nothing, oversized offer). */
   | 'bad_request'
   /** OpenAI refused or could not be reached. */
   | 'voice_upstream';
@@ -183,8 +183,8 @@ export function redact(text: string, secret: string | undefined): string {
 export function buildVoiceInstructions(glossary: readonly string[]): string {
   const terms = glossary.length > 0 ? glossary.join(', ') : '(none)';
   return [
-    'You are muxpad’s voice. muxpad is the user’s development cockpit: workspaces of',
-    'tabs, tabs of panes, panes running terminals, coding agents, or web views.',
+    'You are muxpad’s voice. muxpad is the user’s development cockpit: workspaces, and in',
+    'each a sidebar of chats, coding agents and terminals, any of which can show a web view.',
     'You are talking to its owner, hands-free, usually from a phone.',
     '',
     'Speak the way a sharp colleague talks, not the way a document reads: short sentences,',

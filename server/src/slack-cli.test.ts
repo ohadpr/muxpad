@@ -69,7 +69,7 @@ describe('the Slack CLI cannot simply assert which pane it is', () => {
     const fn = body.slice(0, body.indexOf('\n}\n'));
     expect(fn).toContain('MUXPAD_PANE_KEY');
     expect(fn).toMatch(/exit 1/);
-    expect(SRC).toMatch(/Restart this pane, or open a new/);
+    expect(SRC).toMatch(/Restart this\s+chat, or open a new/);
   });
 
   it('uses the server-issued alias when the shell filters KEY names, still failing closed without proof', () => {

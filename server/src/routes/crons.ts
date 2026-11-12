@@ -115,15 +115,19 @@ export function cronsRoutes(deps: {
       );
 
     if (body.target_kind === 'pane') {
-      if (!body.target_pane) return c.json(bad('target_pane required for a pane cron'), 400);
+      if (!body.target_pane)
+        return c.json(
+          bad('target_pane (the pane id of the chat to run in) is required for a --pane cron'),
+          400,
+        );
       const pane = panes.getById(body.target_pane);
-      if (!pane) return c.json(bad(`pane ${body.target_pane} not found`), 400);
+      if (!pane) return c.json(bad(`no chat with pane id ${body.target_pane}`), 400);
       // `pane_id` is the durable handle (the sid rotates on /clear and on
       // resume-drift), but only a RUNNER-OWNED pane has a drainer at all — a
       // read-only TUI pane would reject every fire forever. Refuse at creation.
       if (!pane.startup_cmd?.startsWith('muxpad agent'))
         return c.json(
-          bad('target pane has no agent runner — crons can only drive `muxpad agent` panes'),
+          bad('that is not a chat — a cron can only drive a chat or agent, not a terminal'),
           400,
         );
     } else {
