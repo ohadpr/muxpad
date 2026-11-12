@@ -204,6 +204,23 @@ export type RunnerFrame =
    * itself rather than be held to its first answer.
    */
   | { t: 'report'; text: string }
+  | {
+      /**
+       * ASK FOR AN ATTACHMENT'S BYTES. A message names an attachment by the
+       * SERVER's absolute path (the composer appends it), and a runner on
+       * another machine has no such file. It asks over this socket — the one
+       * link already proven both ways — rather than dialling the server, and
+       * only for what a message actually references.
+       *
+       * Answered by `attachment-data` or `attachment-missing` carrying the
+       * same `id`. A server too old to know this frame ignores it; the runner
+       * times out and tells the agent the file could not be loaded.
+       */
+      t: 'attachment';
+      id: string;
+      /** Bare filename in the server's attachments dir. Untrusted on arrival. */
+      name: string;
+    }
   | { t: 'subagent'; progress: SubagentProgress }
   | {
       /**
@@ -257,6 +274,10 @@ export type NotifyStatus =
 /** server → runner */
 export type ServerFrame =
   | { t: 'send'; text: string }
+  /** The answer to an `attachment` frame: the whole file, base64. */
+  | { t: 'attachment-data'; id: string; name: string; b64: string }
+  /** …or why it is not coming (bad name, not found, too large). */
+  | { t: 'attachment-missing'; id: string; name: string; reason: string }
   | {
       /** What became of the `notify` frame carrying `nid`. */
       t: 'notify-result';

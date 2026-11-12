@@ -670,6 +670,8 @@ const notifyPane = createPaneNotifier(db, push, presence, (id) => ({
 const wsServer = attachWsServer({
   http: httpServer,
   db,
+  // Runners on other machines fetch the attachments they are sent from here.
+  dataDir: config.dataDir,
   ptyd,
   // The spawn inside the attach path must go to the pane's MACHINE; `ptyd`
   // above stays the local client for the pty socket. See ws.ts on why both.
