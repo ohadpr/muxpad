@@ -284,9 +284,15 @@ Capabilities worth knowing:
   Quote a query that contains spaces, exactly as you would for msgvault
   itself: \`muxpad msgvault search 'from:x@y.com newer_than:30d'\`.
 
-  **WHAT DOES NOT EXIST.** No send verb, no new-email draft, no calendar
-  writes, no invites, no SQL, no bulk export, no \`list-accounts\`, no sender
-  list, no meetings verb — and **no contact lookup**: the archive holds the user's contacts,
+  CALENDAR: \`calendar-create --account=<email> --summary="…"
+  --start=<YYYY-MM-DDTHH:MM> --end=<…> --tz=<IANA> [--calendar=<id>]
+  [--location=…]\` puts an event in the owner's own calendar. **No guests and
+  no reminders** — both flags are refused, so it notifies nobody; inviting
+  people stays something the owner does themselves.
+
+  **WHAT DOES NOT EXIST.** No send verb, no calendar INVITES, no SQL, no bulk
+  export, no \`list-accounts\`, no sender list, no meetings verb — and **no
+  contact lookup**: the archive holds the user's contacts,
   but every \`person\` verb is refused to a delegated agent and no contacts
   permission exists, so an agent cannot read them at all. Say that plainly
   when asked for someone's details rather than implying the data is missing.

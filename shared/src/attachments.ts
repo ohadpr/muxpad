@@ -55,6 +55,15 @@ export const FILE_MIME_BY_EXT = {
   '.yml': 'text/yaml',
   '.html': 'text/html',
   '.zip': 'application/zip',
+  // A CALENDAR EVENT IS A FILE PEOPLE HAND EACH OTHER. muxpad refused it —
+  // `unsupported file type: .ics` — at the exact moment a chat that could not
+  // write to the calendar fell back to offering the event as a file. The one
+  // escape hatch from a missing capability was itself closed.
+  '.ics': 'text/calendar',
+  // The two that travel with it, for the same reason: a `.vcf` is how a
+  // contact is handed over, and both open natively on every platform muxpad
+  // runs on.
+  '.vcf': 'text/vcard',
 } as const;
 
 /** Every attachment type the tool accepts, the serve route serves, and the
