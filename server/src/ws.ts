@@ -46,6 +46,7 @@ import {
   throttleRefusal,
   verifyCredential,
 } from './api-auth.js';
+import { readAttachmentForRelay } from './attachment-files.js';
 import { TranscriptTail, identityNormalize, muxpadLocate } from './chat/TranscriptReader.js';
 import { agentPaneHasMessages } from './chat/has-messages.js';
 import { remoteHostName } from './chat/transcript-access.js';
@@ -518,6 +519,12 @@ export function attachWsServer(deps: {
    * socket layer.
    */
   onChatPresence?: (paneId: string, clients: number) => void;
+  /**
+   * Where attachments live (`<dataDir>/attachments`), so a runner on another
+   * machine can ask for one it was sent a path to. Absent = every such request
+   * is answered "missing", which the runner tells its agent.
+   */
+  dataDir?: string;
   /**
    * The dead-runner sweep has GIVEN UP on this pane — three respawns spent, no
    * runner, and the foreground probe answered (a ptyd outage skips the pane
@@ -2750,6 +2757,25 @@ export function attachWsServer(deps: {
             // next, genuinely urgent call its window.
             if (outcome === 'sent') conn.lastExplicitNotifyAt = now;
             ack(outcome);
+          } else if (frame.t === 'attachment') {
+            // A RUNNER ASKING FOR AN ATTACHMENT IT CANNOT SEE. A message names
+            // the file by this machine's path, and a runner on a remote host
+            // has no such file — it asks here, on the socket it already has,
+            // and gets the bytes back on the same one. See protocol.ts.
+            //
+            // The name is untrusted (a remote host sent it): the same
+            // basename-and-extension guard as the HTTP serve route.
+            if (typeof frame.id !== 'string' || !frame.id) return;
+            const name = typeof frame.name === 'string' ? frame.name : '';
+            const got = deps.dataDir
+              ? readAttachmentForRelay(deps.dataDir, frame.name)
+              : ({ ok: false, reason: 'this server keeps no attachments' } as const);
+            sendToRunner(
+              paneId,
+              got.ok
+                ? { t: 'attachment-data', id: frame.id, name, b64: got.b64 }
+                : { t: 'attachment-missing', id: frame.id, name, reason: got.reason },
+            );
           } else if (frame.t === 'report') {
             // THE WORKER'S OWN SENTENCE, for the round it is in. Not written
             // and not delivered here: a report belongs to a ROUND, the round
