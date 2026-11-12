@@ -773,3 +773,36 @@ it('promises mail things for mail and Slack things for Slack', async () => {
   // The Slack sentence must not appear on an archive request.
   expect(shown()).not.toContain('Slack workspace');
 });
+
+/**
+ * ── THE PASSKEY PICKER IS PAGE DOM, AND THIS DIALOG IS NOT ────────────────
+ *
+ * `showModal()` puts the card in the TOP LAYER, which paints above every
+ * stacking context on the page. A password manager's picker (1Password,
+ * Dashlane) is an injected overlay in ordinary DOM, so it rendered UNDER the
+ * darkened backdrop — visible, and impossible to click. No z-index can fix
+ * that; the dialog has to leave the top layer while the ceremony runs.
+ */
+it('is closed BEFORE the native ceremony, not after it', async () => {
+  let openDuringCeremony: boolean | null = null;
+  vi.mocked(passkeyCeremony).mockImplementation(async () => {
+    openDuringCeremony = host.querySelector('dialog')?.open ?? null;
+    return { id: 'cred' } as never;
+  });
+  await render();
+  await click('Approve');
+  expect(openDuringCeremony, 'the picker would be under the backdrop').toBe(false);
+});
+
+it('brings the card back when an APPROVAL ceremony is cancelled', async () => {
+  // Closing early must not also delete the thing being decided: before this,
+  // the dialog stayed open through the ceremony, so a cancel left it there.
+  vi.mocked(passkeyCeremony).mockRejectedValue(new Error('Confirmation cancelled'));
+  await render();
+  await click('Approve');
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(10);
+  });
+  expect(host.querySelector('dialog')!.open).toBe(true);
+  expect(vi.mocked(passkeyAPI).mock.calls.some(([path]) => path === 'decision')).toBe(false);
+});
