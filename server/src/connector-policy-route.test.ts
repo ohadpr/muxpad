@@ -178,8 +178,8 @@ describe('a pane that cannot be asked is told so', () => {
     expect(r.status).toBe(403);
     const why = ((await r.json()) as { error: { message: string } }).error.message;
     expect(why).toMatch(/approvals appear in a chat/);
-    expect(why).toMatch(/terminal pane/);
-    expect(why).toMatch(/Run it from a chat pane/);
+    expect(why).toMatch(/showing its terminal view, not a chat/);
+    expect(why).toMatch(/Run it from a chat,/);
     // …and nothing was created that could expire unseen.
     expect(broker.count()).toBe(0);
   });

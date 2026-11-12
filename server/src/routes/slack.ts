@@ -110,7 +110,7 @@ export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
       return {
         ok: false,
         status: 400,
-        body: refusal('no caller pane — this works only from inside a muxpad pane'),
+        body: refusal('no caller — this works only from inside a muxpad chat'),
       };
 
     // Pane keys route ordinary requests; they are not
@@ -120,8 +120,8 @@ export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
         ok: false,
         status: 403,
         body: refusal(
-          'this pane cannot prove which workspace it is in',
-          'A pane started before muxpad issued per-pane keys has none, and nothing can put one into a running process. Restart this pane (or open a new one) and try again. Setting MUXPAD_PANE_ID by hand will not help — the key is what is checked.',
+          'this chat cannot prove which workspace it is in',
+          'A chat started before muxpad issued per-chat keys (MUXPAD_PANE_KEY) has none, and nothing can put one into a running process. Restart this chat (or open a new one) and try again. Setting MUXPAD_PANE_ID by hand will not help — the key is what is checked.',
         ),
       };
 
@@ -129,7 +129,7 @@ export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
     const tab = pane ? tabs.getById(pane.tab_id) : null;
     const ws = tab ? workspaces.getById(tabs.getWorkspaceId(tab.id) ?? '') : null;
     if (!ws)
-      return { ok: false, status: 403, body: refusal('cannot resolve this pane’s workspace') };
+      return { ok: false, status: 403, body: refusal('cannot resolve this chat’s workspace') };
 
     if (!slackBrokerURL())
       return {
@@ -313,7 +313,7 @@ export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
         action,
         payload,
         pane,
-        `${connector} needs your approval, and approvals appear in a chat — this is a ${asking.face} pane, so the request would wait for a dialog nobody can see. Run it from a chat pane, or ask that chat to run it.`,
+        `${connector} needs your approval, and approvals appear in a chat — this is showing its ${asking.face} view, not a chat, so the request would wait for a dialog nobody can see. Run it from a chat, or ask that chat to run it.`,
       );
 
     // ── WHICH MACHINE IS ASKING ──────────────────────────────────────────
@@ -387,8 +387,13 @@ export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
   app.get('/approvals', (c) => {
     c.header('Cache-Control', 'no-store');
     const pane = c.req.query('pane');
-    if (!pane) return c.json(refusal('Approval status requires a caller pane'), 400);
-    if (!panes.getById(pane)) return c.json(refusal('Unknown caller pane'), 404);
+    if (!pane)
+      return c.json(
+        refusal('Approval status requires a caller (the pane id of the asking chat)'),
+        400,
+      );
+    if (!panes.getById(pane))
+      return c.json(refusal('Unknown caller — no chat has that pane id'), 404);
     prune();
     if (!refreshing && pending.size && Date.now() >= nextRefresh) {
       const ids = [...pending.keys()];
