@@ -195,6 +195,49 @@ const SPEC = {
    * owner made in their mail client between the read and the write. Without
    * it the tool applies its own rule.
    */
+  /**
+   * ── A NEW EMAIL, AND WHY IT IS HERE AFTER ALL ─────────────────────────
+   *
+   * This verb was deliberately absent: measured 2026-11-10 against msgvault
+   * 0.22, a Gmail source answered `draft-compose` with `draft_disabled`, and
+   * a verb that raises a dialog and then fails is worse than no verb.
+   *
+   * The owner asked for it anyway, after a chat could not write to someone
+   * there was no prior thread with — which is the case reply-only cannot
+   * serve at all, and the one people actually hit. So it is offered, and the
+   * refusal (if the source still refuses) is passed back verbatim rather
+   * than dressed up: msgvault's `draft_disabled` is a better answer than
+   * muxpad pretending the capability does not exist.
+   *
+   * STILL NO SEND. This creates a draft in the mailbox exactly like
+   * `draft-reply`; nothing at this grant can put it on the wire.
+   *
+   * `--account`, `--from` and `--source-id` are NOT exposed. Choosing which
+   * identity a mail appears to come from is the owner's, not an agent's, and
+   * msgvault picks the source itself when it is not told.
+   */
+  'msgvault.draft-compose': {
+    validate: (p) => {
+      const to = Array.isArray(p.to) ? p.to : p.to ? [p.to] : [];
+      if (!to.length) fail('Give at least one recipient');
+      if (to.length > 20) fail('Too many recipients for one draft');
+      for (const a of to)
+        if (!/^[^\s@]{1,128}@[^\s@]{1,128}$/.test(String(a))) fail(`Not an address: ${a}`);
+      if (!str(p.subject, 500)) fail('Give a subject');
+      if (!str(p.body, 20000)) fail('Give a body');
+      return { to: to.map(String), subject: p.subject, body: p.body };
+    },
+    argv: (p) => [
+      'draft-compose',
+      '--json',
+      '--subject',
+      p.subject,
+      '--body',
+      p.body,
+      ...p.to.flatMap((a) => ['--to', a]),
+    ],
+    describe: (p) => `draft a NEW email to ${p.to.join(', ')} — "${p.subject}"`,
+  },
   'msgvault.draft-get': {
     validate: (p) =>
       ID.test(String(p.id ?? '')) ? { id: p.id } : fail('Give the draft id to read'),

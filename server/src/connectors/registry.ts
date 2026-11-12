@@ -139,6 +139,14 @@ const MSGVAULT: Record<string, VerbRule> = {
   // the broker and still true — there is no send verb at this grant — so a
   // duration buys drafts in the mailbox, never mail on its way out.
   'msgvault.draft-reply': { kind: 'write', timed: true, timedWrite: true, notifiesOthers: false },
+  // A NEW email, to somebody there may be no thread with. Still a draft:
+  // `notifiesOthers: false` because nothing leaves until the owner sends it.
+  'msgvault.draft-compose': {
+    kind: 'write',
+    timed: true,
+    timedWrite: true,
+    notifiesOthers: false,
+  },
   'msgvault.draft-get': { kind: 'write', timed: true, timedWrite: true, notifiesOthers: false },
   'msgvault.draft-edit': { kind: 'write', timed: true, timedWrite: true, notifiesOthers: false },
   'msgvault.draft-delete': {

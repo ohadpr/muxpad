@@ -255,8 +255,7 @@ test('an unregistered action never reaches a validator or an executor', async ()
   for (const action of [
     'msgvault.query',
     'msgvault.export-messages',
-    'msgvault.draft-compose',
-    'msgvault.draft',
+        'msgvault.draft',
   ])
     await assert.rejects(f.broker.create({ action, payload: {} }), /Unsupported action/, action);
   assert.deepEqual(f.ran, []);

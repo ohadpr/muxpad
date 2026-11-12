@@ -48,6 +48,7 @@ describe('no write may ride a grant approved earlier', () => {
         .map(([v]) => v)
         .sort(),
     ).toEqual([
+      'msgvault.draft-compose',
       'msgvault.draft-delete',
       'msgvault.draft-edit',
       'msgvault.draft-get',
@@ -122,12 +123,12 @@ describe('the verbs that reach other people', () => {
 describe('the table itself', () => {
   it('groups by connector', () => {
     expect(verbsOf('slack').length).toBeGreaterThan(5);
-    // NINE: five reads (search, message, thread, attachment, stats) and the
-    // four draft verbs. Three advertised verbs could not work against
+    // TEN: five reads (search, message, thread, attachment, stats) and the
+    // five draft verbs — compose, reply, get, edit, delete. Three advertised verbs could not work against
     // agent-delegated msgvault and were removed rather than repaired, and a
     // compose verb went the same way once a Gmail source was measured
     // refusing it — see the note on MSGVAULT.
-    expect(verbsOf('msgvault')).toHaveLength(9);
+    expect(verbsOf('msgvault')).toHaveLength(10);
     expect(verbsOf('slack').every((v) => v.startsWith('slack.'))).toBe(true);
     // A prefix that is not a connector gets nothing, rather than everything.
     expect(verbsOf('')).toEqual([]);
@@ -196,6 +197,7 @@ describe('the table is the policy, so the table is pinned', () => {
     // this grant. They stay `kind: 'write'` — they DO change the mailbox —
     // and `others: false`, because nothing leaves and nobody is told.
     'msgvault.draft-reply': { kind: 'write', timed: true, others: false },
+    'msgvault.draft-compose': { kind: 'write', timed: true, others: false },
     'msgvault.draft-get': { kind: 'write', timed: true, others: false },
     'msgvault.draft-edit': { kind: 'write', timed: true, others: false },
     'msgvault.draft-delete': { kind: 'write', timed: true, others: false },

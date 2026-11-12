@@ -111,6 +111,7 @@ export const MSGVAULT = Object.freeze({
    *  would only ever raise a dialog for an action the archive then refuses. */
   writeActions: Object.freeze([
     'msgvault.draft-reply',
+    'msgvault.draft-compose',
     'msgvault.draft-get',
     'msgvault.draft-edit',
     'msgvault.draft-delete',

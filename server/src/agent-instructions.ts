@@ -206,18 +206,19 @@ Capabilities worth knowing:
   ATTACHMENTS: \`attachment <content_hash> [--out=PATH]\` saves one file
   (default: the current directory) — the hash is in \`show-message\`'s
   \`attachments\` list. Read the saved file with your own tools.
-  DRAFTS: \`draft-reply <message-id> --body="…" [--all]\` creates one;
+  DRAFTS: \`draft-compose --to=<addr> --subject="…" --body="…"\` writes a NEW
+  email; \`draft-reply <message-id> --body="…" [--all]\` answers an archived one;
   \`draft-get <id>\`, \`draft-edit <id> --body="…"\` and \`draft-delete <id>\`
   work on it afterwards. \`--all\` answers everyone on the thread instead of
   the sender. **Nothing here can send** — which is why drafts ride the same
   msgvault approval as the reads rather than stopping for one of their own.
 
-  **A DRAFT IS ALWAYS A REPLY.** There is no verb for a new email, and no
-  flag that makes one: msgvault's Gmail path refuses \`draft-compose\`
-  outright. So "email X about Y" is only doable as an answer to something in
-  the archive — find the thread with \`search\`, then reply to its id. If
-  there is no thread to reply to, say so instead of looking for another
-  route; there isn't one.
+  **A NEW EMAIL IS \`draft-compose\`; A REPLY IS \`draft-reply\`.** Compose was
+  absent for a while because a Gmail source was measured refusing it
+  (\`draft_disabled\`); it is offered now, and if the source still refuses,
+  that refusal comes back verbatim rather than being hidden. Prefer
+  \`draft-reply\` when there IS a thread — it keeps the conversation
+  threaded — and compose when there is not.
 
   **WHAT A SEARCH ACTUALLY RETURNS, because this costs an agent ten minutes
   if nobody says it.** One result set holds MAIL AND CALENDAR EVENTS

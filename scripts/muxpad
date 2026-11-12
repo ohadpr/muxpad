@@ -952,6 +952,7 @@ read:
   stats                                     totals only, no content
 
 write (a draft reply; it can never send):
+  draft-compose --to=<addr> [--to=…] --subject="…" --body="…"
   draft-reply <message-id> --body="…" [--all]
   draft-get <draft-id>                      read a managed draft
   draft-edit <draft-id> --body="…"          replace its body
@@ -962,8 +963,9 @@ time. Drafts ride the same msgvault approval as the reads — nothing here can
 send, so the worst one buys is a draft sitting in your mailbox — and --all
 means the reply goes to everyone on the thread rather than the sender.
 
-There is no verb for a NEW email. A Gmail source refuses msgvault's
-draft-compose outright, so replying is the only drafting there is.
+draft-compose writes a NEW email to someone you may have no thread with. A
+Gmail source was once measured refusing it (draft_disabled); if yours still
+does, the refusal comes back verbatim rather than being hidden.
 EOF
   exit 1
 }
@@ -1079,6 +1081,26 @@ cmd_msgvault() {
     # Two branches rather than one with "$verb" in the path: the endpoint set
     # this CLI may call is pinned by a test that READS these literals, and a
     # path built from a variable is a verb that test cannot see.
+    # A NEW email. May come back refused by the source — msgvault's own
+    # `draft_disabled` — and that answer is passed through rather than hidden.
+    draft-compose)
+      local csubj="" cbody="" cto=()
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --to=*) cto+=("${1#*=}") ;;
+          --subject=*) csubj="${1#*=}" ;;
+          --body=*) cbody="${1#*=}" ;;
+          *) echo "muxpad: unknown option: $1" >&2; return 1 ;;
+        esac
+        shift
+      done
+      [ "${#cto[@]}" -gt 0 ] || { echo 'muxpad: draft-compose needs --to=' >&2; return 1; }
+      [ -n "$csubj" ] || { echo 'muxpad: draft-compose needs --subject=' >&2; return 1; }
+      [ -n "$cbody" ] || { echo 'muxpad: draft-compose needs --body=' >&2; return 1; }
+      slack_call POST /api/msgvault/draft-compose "$(printf '%s\n' "${cto[@]}" | jq -Rn \
+        --arg pane "$MUXPAD_PANE_ID" --arg key "$MUXPAD_PANE_KEY" \
+        --arg subject "$csubj" --arg body "$cbody" \
+        '{pane:$pane,key:$key,to:[inputs|select(length>0)],subject:$subject,body:$body}')" ;;
     draft-get)
       [ -n "${1:-}" ] || msgvault_usage
       slack_call POST /api/msgvault/draft-get "$(jq -nc \

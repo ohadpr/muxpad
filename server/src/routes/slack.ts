@@ -794,6 +794,33 @@ export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
     });
   }
 
+  /**
+   * A NEW email. See the broker for why this exists despite a Gmail source
+   * having been measured refusing it: reply-only cannot serve the case
+   * people actually hit, which is writing to somebody with no prior thread.
+   */
+  archive.post('/draft-compose', async (c) => {
+    const b = z
+      .object({
+        pane: z.string(),
+        key: z.string(),
+        to: z.array(z.string().min(3).max(256)).min(1).max(20),
+        subject: z.string().min(1).max(500),
+        body: z.string().min(1).max(20000),
+      })
+      .parse(await c.req.json());
+    const auth = await authorize(b.pane, b.key, callerOf(c));
+    if (!auth.ok) return c.json(auth.body, auth.status);
+    return c.json(
+      await brokerAction(
+        'msgvault.draft-compose',
+        { to: b.to, subject: b.subject, body: b.body },
+        auth,
+      ),
+      202,
+    );
+  });
+
   archive.post('/draft-edit', async (c) => {
     const b = z
       .object({
