@@ -390,6 +390,37 @@ export class ReportDelivery {
     paneId: string,
     pending: SpawnRound[],
   ): Flushed {
+    // ── NEVER THE SAME WORDS TWICE ──────────────────────────────────────────
+    //
+    // A round reopened by a late wakeup or a background-task notice is now a
+    // NEW round (SpawnRoundStore.reopen), which stopped `delivered_at` being
+    // cleared — but not the thing that actually hurt. The summary is written
+    // from the session's whole transcript tail, so a round in which the
+    // worker said nothing new is summarised as the PREVIOUS job, and the
+    // parent is handed a result it has already acted on. An orchestrator then
+    // does the follow-up work twice.
+    //
+    // Scoping the summary to its own round is the real fix and a bigger one
+    // (see the note in spawn-report.ts). This is the guarantee the parent
+    // actually needs, and it is cheap: a round whose report repeats one this
+    // child has already delivered is settled silently instead of sent. The
+    // round is still closed and stamped, so nothing retries it; what does not
+    // happen is a second message about one piece of work.
+    const fresh = pending.filter((r) => !this.alreadyToldAbout(r));
+    const repeats = pending.filter((r) => !fresh.includes(r));
+    if (repeats.length > 0) {
+      rounds.markDelivered(
+        repeats.map((r) => r.id),
+        this.now(),
+      );
+      console.log(
+        `[report-delivery] held back ${repeats.length} round(s) repeating a report ` +
+          `${parentTabId} already has`,
+      );
+    }
+    if (fresh.length === 0) return { delivered: 0, abandoned: repeats.length, held: 0 };
+    pending = fresh;
+
     const entries = this.entriesFor(pending);
     const text = renderSpawnDelivery(entries);
     const ids = pending.map((r) => r.id);
@@ -440,6 +471,25 @@ export class ReportDelivery {
     // A parent that accepts again is worth hearing about next time it does not.
     this.refusalLogged.delete(parentTabId);
     return { delivered: pending.length, abandoned: 0, held: 0 };
+  }
+
+  /**
+   * Has this child already DELIVERED a report with these exact words?
+   *
+   * Compared on the report text alone, trimmed. A worker that genuinely does
+   * the same job twice and writes the same sentences about it is reporting
+   * one piece of work twice, which is the thing being prevented — and a
+   * summary of genuinely new work is never byte-identical to an old one.
+   *
+   * A round with no report is never a repeat: "(no report)" twice is two real
+   * failures, and silently swallowing the second would hide one.
+   */
+  private alreadyToldAbout(round: SpawnRound): boolean {
+    const text = round.report?.trim();
+    if (!text) return false;
+    return new SpawnRoundStore(this.db)
+      .listByTab(round.tab_id)
+      .some((r) => r.id !== round.id && r.delivered_at !== null && r.report?.trim() === text);
   }
 
   /** Remember a queued delivery, and keep the table from growing for ever. */

@@ -599,8 +599,23 @@ export async function maybeWriteSpawnReport(
     return write;
   };
 
+  // WHICH ROUND IS BEING REPORTED ON, read before the transcript because it
+  // decides HOW MUCH of the transcript belongs to it. (The round is closed by
+  // now — the turn-end closes it synchronously, ahead of this call, which is
+  // the whole reason retirement never waits on a model.)
+  const rounds = new SpawnRoundStore(db);
+  const round = rounds.openRound(tabId) ?? rounds.lastEnded(tabId);
   // A bounded tail read, not a model call — the expensive thing is still behind
   // the gate. The turn count the gate needs is only knowable from it.
+  //
+  // NOT SCOPED TO THIS ROUND, and that is a known limitation rather than an
+  // oversight: the tail holds every round of a re-tasked worker's session, so
+  // a later round's summary can re-describe an earlier job. Scoping it by the
+  // round's start is the right fix and it is not a small one — it changes how
+  // every summary is produced and interacts with the stated-answer path
+  // below. What stops the HARM in the meantime is the delivery's own
+  // duplicate check (report-delivery.ts): the same words are never sent to a
+  // parent twice.
   const { conversation, turns, said } = readRecentTurns(db, paneId);
   // A WORKER THAT FINISHED AND LEFT NO TRANSCRIPT IS A FAILURE, NOT A SUCCESS.
   //
@@ -691,8 +706,6 @@ export async function maybeWriteSpawnReport(
   // synchronously, ahead of this call, which is the whole reason retirement
   // never waits on a model), so the one that just ended is the one being
   // reported on. The writer captures its identity before awaiting the model.
-  const rounds = new SpawnRoundStore(db);
-  const round = rounds.openRound(tabId) ?? rounds.lastEnded(tabId);
   // A worker's own answer is already a report. Deliver it without spending
   // another provider's quota or subjecting it to generated-summary validators.
   const answer = readWorkerAnswer(db, paneId, round);

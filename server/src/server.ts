@@ -124,6 +124,13 @@ export interface AppDeps {
    */
   tabActivity?: TabActivity;
   /**
+   * Queue rows destroyed without being relayed — see the same dep on
+   * `panesScopedRoutes` and on the ws layer. Optional: without it a worker
+   * report dropped by a folder change is lost, which is the pre-existing
+   * behaviour.
+   */
+  onQueueDropped?: (queueIds: readonly string[]) => void;
+  /**
    * Web Push subscriptions + delivery (see push.ts). Optional so tests
    * that don't exercise notifications can omit it — the /api/push routes
    * simply aren't mounted then.

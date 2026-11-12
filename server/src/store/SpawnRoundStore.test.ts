@@ -154,6 +154,35 @@ describe('SpawnRoundStore', () => {
    * that already reported — overwriting a card the user had and drawing no new
    * one.
    */
+  /**
+   * A LATE SUMMARY MUST NOT CONTRADICT WHAT THE PARENT WAS TOLD.
+   *
+   * Past the result grace the round is delivered as "(no report)" and stamped
+   * `failed`. A generation landing afterwards overwrote that with `ok` and
+   * sentences, so the card read "done" with a summary the parent had been
+   * told did not exist.
+   */
+  it('refuses a result for a round the parent has already been told about', () => {
+    rounds.open(child, 100);
+    rounds.close(child, 200);
+    const id = rounds.listByTab(child)[0]?.id as string;
+    rounds.markStateIfSilent([id], 'failed');
+    rounds.markDelivered([id], 250);
+
+    expect(rounds.writeResult(child, { report: 'late sentences', state: 'ok' })).toBe(false);
+
+    const only = rounds.listByTab(child)[0];
+    expect(only?.report_state).toBe('failed');
+    expect(only?.report).toBeNull();
+  });
+
+  it('but writes it normally before the delivery, which is the usual order', () => {
+    rounds.open(child, 100);
+    rounds.close(child, 200);
+    expect(rounds.writeResult(child, { report: 'the summary', state: 'ok' })).toBe(true);
+    expect(rounds.listByTab(child)[0]?.report).toBe('the summary');
+  });
+
   describe('reopen — the job was not over after all', () => {
     it('unshuts the last round instead of opening a second one', () => {
       rounds.open(child, 100);

@@ -113,6 +113,8 @@ export interface RebaseDeps {
   queued?: (paneId: string) => number;
   /** How many workers this chat is still waiting on. */
   openRounds?: (tabId: string) => number;
+  /** How many finished workers' results have not reached this chat yet. */
+  undeliveredRounds?: (tabId: string) => number;
 }
 
 /**
@@ -179,6 +181,20 @@ export async function runRebase(
   deps: RebaseDeps,
   paneId: string,
   mode: RebaseMode = 'auto',
+  /**
+   * The pane that ASKED, when the request came from inside one.
+   *
+   * A chat rebasing ITSELF (`muxpad agent rebase` with no argument, which is
+   * the documented spelling) is always mid-turn: the turn running the command
+   * is the turn the quiesce check sees, so the refusal below made the verb
+   * permanently impossible. It is also the one turn there is nothing to
+   * protect in — its answer is "I rebased", and ending it is the act that was
+   * asked for. "It ends … any running turn. That is why it is typed."
+   *
+   * Only the TURN check is waived. A queued message and a working sub-chat
+   * are still lost by a rebase whoever asked for it, so they still refuse.
+   */
+  askedBy?: string,
 ): Promise<RebaseResult> {
   const panes = new PaneStore(deps.db);
   const pane = panes.getById(paneId);
@@ -198,7 +214,7 @@ export async function runRebase(
   // whole fix: there is nothing to do with a turn that is half-answered except
   // let it finish, and a rebase is a deliberate act whose moment the user is
   // choosing anyway.
-  const busy = whyBusy(deps, pane.tab_id, paneId);
+  const busy = whyBusy(deps, pane.tab_id, paneId, askedBy === paneId);
   if (busy) return { ok: false, code: 'busy', message: busy };
 
   // …AND ONE AT A TIME. Two rebases of one chat each mint a transcript and
@@ -224,8 +240,8 @@ const inFlight = new Set<string>();
  * Phrased for a person, because this reaches the user as the button's error:
  * what is in the way, and therefore what they can do about it.
  */
-function whyBusy(deps: RebaseDeps, tabId: string, paneId: string): string | null {
-  if (deps.turnActive?.(paneId) === true) {
+function whyBusy(deps: RebaseDeps, tabId: string, paneId: string, isSelf: boolean): string | null {
+  if (!isSelf && deps.turnActive?.(paneId) === true) {
     return 'this chat is in the middle of a turn — its answer would be lost. Wait for it to finish, or stop it first';
   }
   const queued = deps.queued?.(paneId) ?? 0;
@@ -235,6 +251,18 @@ function whyBusy(deps: RebaseDeps, tabId: string, paneId: string): string | null
   const rounds = deps.openRounds?.(tabId) ?? 0;
   if (rounds > 0) {
     return `${rounds} sub-chat${rounds === 1 ? ' is' : 's are'} still working — their results would arrive in a session that no longer exists`;
+  }
+  // …AND A WORKER THAT HAS FINISHED BUT NOT YET REPORTED. `openRounds` counts
+  // `ended_at IS NULL` only, so it misses the gap between a worker's last turn
+  // and its summary landing — up to RESULT_GRACE_MS, three minutes. A rebase
+  // inside that window relays the report to the OLD runner during the
+  // briefing call, stamps the round delivered, and then kills the session that
+  // received it. The result is gone AND marked as read, which is the exact
+  // loss this check exists to prevent; it was simply looking at the wrong
+  // half of the round's life.
+  const undelivered = deps.undeliveredRounds?.(tabId) ?? 0;
+  if (undelivered > 0) {
+    return `${undelivered} worker result${undelivered === 1 ? ' has' : 's have'} not reached this chat yet — a moment`;
   }
   return null;
 }

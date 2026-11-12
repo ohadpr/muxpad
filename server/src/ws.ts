@@ -480,6 +480,9 @@ export function attachWsServer(deps: {
   events: EventBus;
   /** Liveness ping interval in ms. Defaults to 15s; tests pass a small value. */
   heartbeatMs?: number;
+  /** How long a cut-off turn waits for its runner to come back before it is
+   *  called a crash (see `partedTurns`). Defaults to 20s; tests shorten it. */
+  reconnectGraceMs?: number;
   /** When provided, gets its `send` bound to the live runner registry. */
   agentBridge?: AgentBridge;
   /**
@@ -985,6 +988,74 @@ export function attachWsServer(deps: {
   const isHumanMessage = (text: string) => !isMachineMessage(text);
   const agentRunners = new Map<string, AgentRunnerConn>();
   /**
+   * TURN ENDS WAITING TO SEE WHETHER THE RUNNER COMES BACK.
+   *
+   * A socket that dies mid-turn tells us the turn did not reach its own end;
+   * it does not tell us whether the WORK did. The runner retries every 2 s, so
+   * the pane's own next move is the evidence — see the teardown for the two
+   * cases and what each one costs when guessed wrong.
+   *
+   * Keyed by pane: a replacement runner for the same pane is exactly the
+   * answer this is waiting for, and there is only ever one in flight.
+   */
+  const partedTurns = new Map<
+    string,
+    { timer: ReturnType<typeof setTimeout>; sid: string | null; backend: string }
+  >();
+
+  /**
+   * How long to wait for a reconnect before calling a cut-off turn a crash.
+   *
+   * The runner's own retry is 2 s (agent-runner/index.ts), and a ws blip
+   * resolves in one or two of those. Long enough to cover a slow one; short
+   * enough that a genuine death is reported while anybody still cares, and far
+   * inside the respawn sweep's 135 s to its give-up — which is the OTHER,
+   * stronger path to the same verdict (`onRunnerDead`).
+   */
+  const RECONNECT_GRACE_MS = deps.reconnectGraceMs ?? 20_000;
+
+  /** Hold this pane's cut-off turn end; `fatal` if nothing comes back. */
+  function parkTurnEnd(paneId: string, sid: string | null, backend: string): void {
+    clearTimeout(partedTurns.get(paneId)?.timer);
+    const timer = setTimeout(() => {
+      partedTurns.delete(paneId);
+      // Nothing came back. The turn is over and it did not finish — which is
+      // what `fatal` says, and what the retirement settle, the crashed mark on
+      // the card and `holdOpen` all already handle.
+      deps.events.emit({ type: 'agent_turn', pane_id: paneId, phase: 'fatal', sid, backend });
+    }, RECONNECT_GRACE_MS);
+    // Never hold the process open for a socket that is not coming back.
+    timer.unref?.();
+    partedTurns.set(paneId, { timer, sid, backend });
+  }
+
+  /**
+   * A runner for this pane said hello — settle its parked turn end.
+   *
+   * `stillMidTurn` is the whole question. Back mid-turn means the turn NEVER
+   * ENDED: the parked end is dropped and the caller must not emit a duplicate
+   * `start` either, or the bus sees two starts for one turn. Back idle means
+   * it ended while we were not looking, and badly.
+   *
+   * Returns whether a parked end was resolved by a mid-turn return, which is
+   * the caller's signal to stay quiet.
+   */
+  function resumeParkedTurn(paneId: string, stillMidTurn: boolean): boolean {
+    const parked = partedTurns.get(paneId);
+    if (!parked) return false;
+    clearTimeout(parked.timer);
+    partedTurns.delete(paneId);
+    if (stillMidTurn) return true;
+    deps.events.emit({
+      type: 'agent_turn',
+      pane_id: paneId,
+      phase: 'fatal',
+      sid: parked.sid,
+      backend: parked.backend,
+    });
+    return false;
+  }
+  /**
    * Is this pane's runner executing a different build from the one the server
    * would start for it now? (runner-build.ts has the definition and the
    * reasoning about what it deliberately is NOT.)
@@ -1078,6 +1149,7 @@ export function attachWsServer(deps: {
     // Real turn state for the HTTP layer (`agent wait`): the registry's
     // turnActive, not pty-output `busy`.
     deps.agentBridge.turnActive = (paneId) => agentRunners.get(paneId)?.turnActive ?? null;
+    deps.agentBridge.backgroundLive = (paneId) => agentRunners.get(paneId)?.backgroundLive ?? 0;
     // Mode switches from PATCH /api/panes/:id reach the live runner here.
     // False just means "no runner right now" — the row + startup_cmd already
     // carry the mode, so the next respawn is correct either way.
@@ -2211,9 +2283,21 @@ export function attachWsServer(deps: {
             // this IS the start of the turn they can observe. Without it a
             // waiter that attached across the reconnect blocks to timeout on
             // a turn that will only ever emit `done`.
+            // Did this pane leave a cut-off turn parked (see `partedTurns`)?
+            // Settling it here is what makes a ws blip cost nothing: back
+            // mid-turn and the turn simply never ended.
+            const resumed = resumeParkedTurn(paneId, conn.turnActive);
             if (conn.turnActive) {
               bcast({ t: 'turn-start' });
-              emitTurn('start');
+              // …and that is why the bus may hear NOTHING here. A resumed
+              // turn was never ended on the bus, so announcing a second
+              // `start` for it would leave the pair unbalanced the other way
+              // — two starts, one end — and `muxpad agent wait` would return
+              // on the first end of a turn it had already been told about.
+              // The chat clients still get their `turn-start` above: their
+              // state WAS reset by the disconnect banner, and theirs is a
+              // statement about this moment rather than a lifecycle pair.
+              if (!resumed) emitTurn('start');
             } else {
               // AN IDLE RECONNECT CAN BE THE END OF A JOB NOBODY WILL REPORT.
               //
@@ -2823,23 +2907,33 @@ export function attachWsServer(deps: {
           if (conn.turnActive) {
             conn.turnActive = false;
             bcast({ t: 'turn-done', ok: false, error: 'agent disconnected' });
-            // Balance the pair on the GLOBAL bus too. A SIGKILLed runner used
-            // to emit `start` and never `done`, so `muxpad agent wait` blocked
-            // to timeout and the Archiver missed its realtime enqueue.
+            // ── THE BUS IS TOLD LATE, BECAUSE THIS LAYER DOES NOT YET KNOW ──
             //
-            // ── AND IT IS `fatal`, NOT `done` ───────────────────────────────
-            // A turn was IN FLIGHT when the socket died, so the work it was
-            // doing was cut off: a resume starts a fresh turn, it does not
-            // continue this one. Reported as `done` — which it was until an
-            // adversarial review of the sub-chat lifecycle found this — a
-            // worker killed mid-job reconnected idle, the retirement settle
-            // read "connected and idle", and the parent got a green "finished"
-            // card plus a confident summary of half-done work. The one thing
-            // this layer knows is that the turn did not reach its own end;
-            // `fatal` is how that fact is spelled on the bus, and everything
-            // downstream (the crashed mark on the card, `holdOpen` keeping the
-            // row) already handles it.
-            emitTurn('fatal');
+            // A turn was in flight when the SOCKET died, and that is all we
+            // have observed. Two very different things produce it:
+            //
+            //   · the runner died — the turn's work is lost, and the pair has
+            //     to be balanced or `muxpad agent wait` blocks to timeout and
+            //     the Archiver misses its realtime enqueue;
+            //   · the SOCKET died and the runner is fine. It retries every 2 s
+            //     (agent-runner/index.ts) and hellos back mid-turn, still
+            //     working. The heartbeat note below measured 382 of these in
+            //     one pane in a day.
+            //
+            // Emitting `done` called the first case a success: a worker killed
+            // mid-job reconnected idle, the settle read "connected and idle",
+            // and the parent got a green card over half-done work. Emitting
+            // `fatal` immediately called the SECOND case a crash, which is
+            // worse — a cron `--new-tab` schedule writes a durable `kept` row
+            // and wedges on max_open for ever, and `agent wait` exits 2 for a
+            // worker that is still working, which an orchestrator reads as
+            // "respawn it".
+            //
+            // So neither is emitted yet. The end is PARKED for a reconnect
+            // grace, and the pane's own next move answers the question: back
+            // mid-turn and the turn never ended, back idle (or never back at
+            // all) and it ended badly.
+            parkTurnEnd(paneId, conn.sid, conn.backend);
           }
           emitChange();
         };

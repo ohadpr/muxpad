@@ -158,6 +158,21 @@ export interface RetireDeps {
    * evidence it has rather than refusing to decide at all.
    */
   turnActive?: ((paneId: string) => boolean | null) | undefined;
+  /**
+   * Live BACKGROUND COMMANDS on this pane, asked at the moment of the settle.
+   *
+   * A turn ending already carries this (`onTurnEnded` refuses to arm when it
+   * is non-zero, because a backgrounded Bash call outlives the turn that
+   * started it and its completion starts another). But a settle armed by
+   * something other than a turn ending — the boot sweep, an idle reconnect —
+   * has no event to read it from, and `stillWorking` had no way to ask. A
+   * worker parked on a 40-minute build therefore retired on the first quiet
+   * moment, and its parent got a green summary of half-done work.
+   *
+   * Undefined means no probe is wired, which reads as zero: the behaviour
+   * before this existed.
+   */
+  backgroundLive?: ((paneId: string) => number) | undefined;
 }
 
 /**
@@ -631,12 +646,19 @@ export class ChatRetirer {
       // server restart, for every worker whose respawn took longer than one
       // settle window. So ask again, a window later.
       //
-      // Bounded, because the question has to stop being asked: the respawn
-      // sweep spends at most three attempts and then gives up, and
-      // `onRunnerDead` closes the round with a crash. These re-arms only have
-      // to outlive that, and if they somehow outlive it too, the last one
-      // decides rather than leaving the round open — a report of a crash is
-      // worth more than a spinner that never ends.
+      // ── BUT ONLY A SETTLE A CRASH ARMED MAY EVER DECIDE WITHOUT ONE ───────
+      //
+      // `fatal` means ws.ts watched a turn be cut off and then watched the
+      // runner fail to come back inside its reconnect grace. That is evidence.
+      // A settle armed `done` has none: the boot sweep arms every live worker
+      // at a moment when EVERY runner is absent, and an idle reconnect arms a
+      // pane that was fine a second ago. Letting those decide meant a node
+      // that was offline at boot had its workers' already-delivered reports
+      // overwritten with "crashed" and their summaries erased — the card for
+      // a job that went perfectly. They drop, as they always did; the
+      // give-up sweep (`onRunnerDead`) is the answer for them, and it has
+      // spent three respawns and a ptyd probe earning it.
+      if (phase !== 'fatal') return false;
       const tries = (this.absentRearms.get(paneId) ?? 0) + 1;
       if (tries <= ABSENT_REARM_MAX) {
         this.absentRearms.set(paneId, tries);
@@ -644,6 +666,10 @@ export class ChatRetirer {
         return false;
       }
       this.absentRearms.delete(paneId);
+      // And never speak for a round that is not open: with none, `close` is a
+      // no-op and the report lands on `lastEnded` — the round that already
+      // reported — replacing its summary with a crash.
+      if (!new SpawnRoundStore(this.deps.db).openRound(pane.tab_id)) return false;
       return this.finish(pane.tab_id, paneId, 'fatal');
     }
     this.absentRearms.delete(paneId);
@@ -853,6 +879,11 @@ export class ChatRetirer {
     // mirrors it from the ws layer precisely because a background subagent
     // parked in one long tool call emits nothing for minutes.
     if (this.deps.cache.getSubagentCount(e.pane_id) > 0) return true;
+    // A BACKGROUND COMMAND is still running. Same rule as the roster above and
+    // the same reason — the work outlives the turn — but reachable at any
+    // moment rather than only from a turn-end event, which is what a settle
+    // armed by the boot sweep or an idle reconnect needs.
+    if ((this.deps.backgroundLive?.(e.pane_id) ?? 0) > 0) return true;
     // More of its work is already queued — let the LAST turn retire it.
     if (new AgentQueueStore(this.deps.db).count(e.pane_id) > 0) return true;
     // A multi-pane tab is not a single unit of work: one agent finishing says

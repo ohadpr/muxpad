@@ -222,7 +222,16 @@ describe('a runner that dies mid-turn', () => {
       if (e.type === 'agent_turn') phases.push(e.phase);
     });
     const http = createServer();
-    const wsServer = attachWsServer({ http, db, ptyd: stubPtyd(), cache, events });
+    const wsServer = attachWsServer({
+      http,
+      db,
+      ptyd: stubPtyd(),
+      cache,
+      events,
+      // The real grace is 20 s. Only its LENGTH is shortened — what is under
+      // test is which way the question is answered, not how long it waits.
+      reconnectGraceMs: 120,
+    });
     await new Promise<void>((r) => http.listen(0, r));
     const port = (http.address() as AddressInfo).port;
     cleanup = async () => {
@@ -240,6 +249,132 @@ describe('a runner that dies mid-turn', () => {
 
     await waitUntil(() => phases.length > 1);
     expect(phases).toEqual(['start', 'fatal']);
+  });
+
+  /**
+   * …AND A BLIP IS NOT A DEATH. THIS IS THE EXPENSIVE HALF.
+   *
+   * The runner survives its socket: it retries every 2 s and hellos back
+   * mid-turn, still working. The heartbeat note in ws.ts measured 382 of these
+   * in ONE pane in a day. Calling each of them a crash is worse than the bug
+   * `fatal` was added to fix — a cron `--new-tab` schedule writes a durable
+   * `kept` row and wedges on max_open for ever, and `muxpad agent wait` exits
+   * 2 for a worker that is still working, which an orchestrator reads as
+   * "respawn it".
+   *
+   * So the bus must hear NOTHING at all here: no `fatal`, and no second
+   * `start` either — the turn never ended, and two starts for one turn
+   * unbalances the pair the other way.
+   */
+  it('says nothing at all when the runner comes back mid-turn', async () => {
+    const db = openDb(':memory:');
+    const tabs = new TabStore(db);
+    const panes = new PaneStore(db);
+    const events = new EventBus();
+    const cache = new PtydCache();
+    const w = new WorkspaceStore(db).create({ name: 'W' });
+    const top = tabs.create({ name: 'top', layout: 'p1', workspace_id: w.id });
+    const pane = panes.create({
+      tab_id: top.id,
+      shell: '/bin/cat',
+      cwd: '/tmp',
+      startup_cmd: 'muxpad agent',
+      face: 'chat',
+    });
+    const phases: string[] = [];
+    events.subscribe((e) => {
+      if (e.type === 'agent_turn') phases.push(e.phase);
+    });
+    const http = createServer();
+    const wsServer = attachWsServer({
+      http,
+      db,
+      ptyd: stubPtyd(),
+      cache,
+      events,
+      reconnectGraceMs: 400,
+    });
+    await new Promise<void>((r) => http.listen(0, r));
+    const port = (http.address() as AddressInfo).port;
+    cleanup = async () => {
+      await wsServer.close();
+      await new Promise<void>((r) => http.close(() => r()));
+    };
+
+    const runner = await openSock(`ws://127.0.0.1:${port}/ws/agent-runner/${pane.id}`);
+    runner.send(hello);
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    await waitUntil(() => phases.includes('start'));
+    runner.terminate();
+
+    // Back inside the grace, STILL MID-TURN — which is what a reconnecting
+    // runner reports, because its turn really is still running.
+    const back = await openSock(`ws://127.0.0.1:${port}/ws/agent-runner/${pane.id}`);
+    back.send(JSON.stringify({ t: 'hello', sid: SID, cwd: '/tmp', pid: 4242, turnActive: true }));
+
+    // Long enough that a parked `fatal` would have fired.
+    await new Promise((r) => setTimeout(r, 700));
+    expect(phases).toEqual(['start']);
+
+    // …and the turn still ends exactly once, when it really ends.
+    back.send(JSON.stringify({ t: 'turn-done', ok: true }));
+    await waitUntil(() => phases.length > 1);
+    expect(phases).toEqual(['start', 'done']);
+    back.close();
+  });
+
+  it('calls it a crash when the runner comes back IDLE — the turn did end', async () => {
+    // The case `fatal` exists for, reached the other way: the process was
+    // killed and restarted, so it is back, but its turn is gone. A resume
+    // starts a fresh turn; it never continues the one that was cut off.
+    const db = openDb(':memory:');
+    const tabs = new TabStore(db);
+    const panes = new PaneStore(db);
+    const events = new EventBus();
+    const cache = new PtydCache();
+    const w = new WorkspaceStore(db).create({ name: 'W' });
+    const top = tabs.create({ name: 'top', layout: 'p1', workspace_id: w.id });
+    const pane = panes.create({
+      tab_id: top.id,
+      shell: '/bin/cat',
+      cwd: '/tmp',
+      startup_cmd: 'muxpad agent',
+      face: 'chat',
+    });
+    const phases: string[] = [];
+    events.subscribe((e) => {
+      if (e.type === 'agent_turn') phases.push(e.phase);
+    });
+    const http = createServer();
+    const wsServer = attachWsServer({
+      http,
+      db,
+      ptyd: stubPtyd(),
+      cache,
+      events,
+      // Deliberately long: the verdict must come from the IDLE hello, not
+      // from the grace running out.
+      reconnectGraceMs: 30_000,
+    });
+    await new Promise<void>((r) => http.listen(0, r));
+    const port = (http.address() as AddressInfo).port;
+    cleanup = async () => {
+      await wsServer.close();
+      await new Promise<void>((r) => http.close(() => r()));
+    };
+
+    const runner = await openSock(`ws://127.0.0.1:${port}/ws/agent-runner/${pane.id}`);
+    runner.send(hello);
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    await waitUntil(() => phases.includes('start'));
+    runner.terminate();
+
+    const back = await openSock(`ws://127.0.0.1:${port}/ws/agent-runner/${pane.id}`);
+    back.send(hello); // turnActive: false
+
+    await waitUntil(() => phases.length > 1);
+    expect(phases).toEqual(['start', 'fatal']);
+    back.close();
   });
 });
 

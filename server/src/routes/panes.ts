@@ -446,10 +446,23 @@ export function panesScopedRoutes(deps: {
   agentBridge?: AgentBridge;
   /** Only used to drop a deleted/moved pane's activity memo. */
   tabActivity?: TabActivity;
+  /**
+   * These queue rows were destroyed without being relayed — wired to
+   * `ReportDelivery.noteQueueDropped`, exactly as ws.ts's own clears are.
+   * Changing a chat's FOLDER drops its queue, and a worker's report sitting in
+   * there is stamped delivered to a session that never read it.
+   */
+  onQueueDropped?: (queueIds: readonly string[]) => void;
 }): Hono {
   const app = new Hono();
   const panes = new PaneStore(deps.db);
   const tabs = new TabStore(deps.db);
+  /** Drop this pane's queue and give back any worker report riding in it. */
+  const clearQueue = (paneId: string): void => {
+    const queue = new AgentQueueStore(deps.db);
+    const dropped = queue.list(paneId).map((row) => row.id);
+    if (queue.clear(paneId) > 0) deps.onQueueDropped?.(dropped);
+  };
   // Only for validating a `new_tab` move's destination workspace (below).
   const workspaces = new WorkspaceStore(deps.db);
 
@@ -782,8 +795,13 @@ export function panesScopedRoutes(deps: {
     const workspaceId = tabs.getWorkspaceId(p.tab_id);
     // BEST AVAILABLE unless the caller explicitly asks otherwise. The button
     // sends no mode at all — see RebaseMode; `fresh` is API/CLI only.
-    const body = (await c.req.json().catch(() => ({}))) as { mode?: unknown };
+    const body = (await c.req.json().catch(() => ({}))) as { mode?: unknown; from_pane?: unknown };
     const mode = body?.mode === 'fresh' ? 'fresh' : body?.mode === 'keep' ? 'keep' : 'auto';
+    // WHO ASKED, when a pane asked about itself — see `askedBy`. The CLI sends
+    // its own MUXPAD_PANE_ID here. Not authenticated, and it does not need to
+    // be: the only thing it buys is permission to end YOUR OWN turn, which is
+    // what pressing the button in that chat does anyway.
+    const askedBy = typeof body?.from_pane === 'string' ? body.from_pane : undefined;
     const result = await runRebase(
       {
         db: deps.db,
@@ -812,9 +830,12 @@ export function panesScopedRoutes(deps: {
         turnActive: (paneId) => bridge.turnActive(paneId),
         queued: (paneId) => new AgentQueueStore(deps.db).count(paneId),
         openRounds: (tabId) => new SpawnRoundStore(deps.db).openRoundsByParent(tabId).length,
+        undeliveredRounds: (tabId) =>
+          new SpawnRoundStore(deps.db).undeliveredByParent(tabId).length,
       },
       id,
       mode,
+      askedBy,
     );
     if (!result.ok) {
       const status =
@@ -1133,7 +1154,7 @@ export function panesScopedRoutes(deps: {
         // A different folder is a different project: anything queued against
         // the old one must not drain into the new session. Same reasoning as
         // POST /:id/cwd, which is the other way a pane changes folder.
-        new AgentQueueStore(deps.db).clear(id);
+        clearQueue(id);
       }
     })();
     const refreshed = panes.getById(id);
@@ -1289,7 +1310,7 @@ export function panesScopedRoutes(deps: {
       // messages queued against the old folder must not drain into it. Drop
       // them; the respawn's re-hello re-broadcasts the (now empty) queue to
       // open chat views via the refreshed session frame.
-      new AgentQueueStore(deps.db).clear(id);
+      clearQueue(id);
     }
     panes.updateCwd(id, dir);
     const workspaceId = tabs.getWorkspaceId(p.tab_id);
