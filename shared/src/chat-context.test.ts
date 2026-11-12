@@ -35,7 +35,7 @@ describe('mention context', () => {
   it('carries ids, not just a name', () => {
     // A name is guesswork the moment two chats are called "Main".
     const out = withMentionContext('x', [chat()]);
-    expect(out).toContain('tab T1');
+    expect(out).toContain('tabId T1');
     expect(out).toContain('P1 P2');
     expect(out).toContain('@Investing');
   });
@@ -53,10 +53,19 @@ describe('mention context', () => {
     expect(out.indexOf('pane summarize')).toBeLessThan(out.indexOf('agent transcript'));
   });
 
-  it('handles several mentions, and a chat with no panes', () => {
+  it('handles several mentions, and a chat that has ended', () => {
     const out = withMentionContext('x', [chat(), chat({ name: 'Main', tabId: 'T2', paneIds: [] })]);
     expect(out).toContain('count="2"');
-    expect(out).toContain('(no panes)');
+    expect(out).toContain('@Main — tabId T2, no paneId (it has ended');
+  });
+
+  it('labels the ids as identifiers, not as things the user has', () => {
+    // The literal ids are untouched — they are what `muxpad agent send` takes.
+    // The words around them are what an agent repeats to a person.
+    const out = withMentionContext('x', [chat()]);
+    const line = out.split('\n').find((l) => l.startsWith('- @'));
+    expect(line).toMatch(/— tabId \S+, paneIds? \S+/);
+    expect(line).not.toMatch(/\bpanes?\b|pane\(s\)/);
   });
 
   it('round-trips — the block can be removed to get the typed text back', () => {

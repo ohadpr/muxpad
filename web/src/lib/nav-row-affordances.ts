@@ -32,12 +32,11 @@
  * exactly like a one-pane chat.
  *
  * Tapping the row therefore OPENS it, on every row, with no exceptions to
- * learn — which is what a one-line list of chats should do. The pane list is
- * still reachable, and is still the only route to a second pane on mobile
- * (TabView's mobile branch has no pane switcher of its own), so the expander
- * survives as a small trailing chevron on multi-pane rows. It is COLLAPSED by
- * default now: the sheet opens on a flat list of chats, not on one chat's
- * children.
+ * learn — which is what a one-line list of chats should do.
+ *
+ * `paneExpander` went next, with the pane list it opened. A row holds one
+ * chat, agent or terminal, so there is no list under it to expand into; the
+ * server refuses the second pane that list existed to reach.
  */
 export type NavTreeVariantName = 'sidebar' | 'sheet';
 
@@ -53,33 +52,26 @@ export interface TabRowAffordances {
    *
    * Nothing is lost by collapsing them. The context menu (right-click on
    * desktop, long-press on touch) has carried Pin, Archive, Mark as read,
-   * Rename, Change icon, New pane and Move to workspace all along — the two
+   * Rename, Change icon and Move to workspace all along — the two
    * buttons were a shortcut to two of its seven entries, charged to every
    * hovered row's title. One button costs ~18px instead of 44 and is the
    * affordance that says a menu exists at all, which the hidden right-click
    * never did.
    */
   menuButton: boolean;
-  /** Trailing chevron that expands the row into its pane list (touch only). */
-  paneExpander: boolean;
 }
 
 export function tabRowAffordances(opts: {
   variant: NavTreeVariantName;
-  paneCount: number;
   /** The row is showing its inline rename input — all controls stand down. */
   isEditing: boolean;
 }): TabRowAffordances {
-  const { variant, paneCount, isEditing } = opts;
-  // A single-pane tab has nothing to pick between, so it never expands — it
-  // just opens, which is the behavior that felt right all along.
-  const picksPane = variant === 'sheet' && paneCount > 1;
+  const { variant, isEditing } = opts;
   return {
     // Touch rows carry NO permanent controls at all — see the swipe note
     // above: pin, mark-unread and close live under the row, revealed by a left
     // swipe, and the long-press menu holds the rest.
     menuButton: variant === 'sidebar' && !isEditing,
-    paneExpander: picksPane && !isEditing,
   };
 }
 

@@ -2,7 +2,7 @@ import type { EventEmitter } from 'node:events';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { MuxpadEvent } from '@muxpad/shared';
+import { type MuxpadEvent, ONE_THING_PER_TAB } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EventBus } from '../events.js';
@@ -111,16 +111,84 @@ describe('tabs routes', () => {
     expect(got2?.attention).toBe(false);
   });
 
-  it('updates a tab layout', async () => {
+  it('updates a tab layout to the one thing it holds', async () => {
     const created = (await (await postTab({ name: 'Dev' })).json()) as { id: string };
     const res = await test.app.request(`/api/tabs/${created.id}`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        layout: { direction: 'row', first: 'a', second: 'b' },
-      }),
+      body: JSON.stringify({ layout: 'a' }),
     });
     expect(res.status).toBe(200);
+  });
+
+  it('refuses a SPLIT layout, on create and on PATCH, and applies nothing else', async () => {
+    // The web's split was a plain layout PATCH; this is where it stops.
+    const split = { direction: 'row', first: 'a', second: 'b' };
+    const born = await postTab({ name: 'Split', layout: split });
+    expect(born.status).toBe(409);
+    expect(((await born.json()) as { error: { code: string } }).error.code).toBe('conflict');
+
+    const created = (await (await postTab({ name: 'Dev' })).json()) as { id: string };
+    const res = await test.app.request(`/api/tabs/${created.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Renamed', layout: split }),
+    });
+    expect(res.status).toBe(409);
+    const { error } = (await res.json()) as { error: { code: string; message: string } };
+    expect(error.code).toBe('conflict');
+    expect(error.message).toBe(ONE_THING_PER_TAB);
+    // Refused before the transaction: the rename beside it did not land.
+    const after = (await (await test.app.request(`/api/tabs/${created.id}`)).json()) as {
+      name: string;
+    };
+    expect(after.name).toBe('Dev');
+  });
+
+  it('refuses a MERGE that would leave two things in one tab', async () => {
+    const term = async (name: string) =>
+      (await (await postTab({ name, bootstrap: 'shell' })).json()) as {
+        id: string;
+        layout: string;
+      };
+    const a = await term('A');
+    const b = await term('B');
+    const res = await test.app.request(`/api/tabs/${a.id}/merge`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ into_tab_id: b.id }),
+    });
+    expect(res.status).toBe(409);
+    const { error } = (await res.json()) as { error: { code: string; message: string } };
+    expect(error.code).toBe('conflict');
+    expect(error.message).toBe(ONE_THING_PER_TAB);
+    // Both tabs are exactly as they were.
+    for (const t of [a, b]) {
+      const got = (await (await test.app.request(`/api/tabs/${t.id}`)).json()) as {
+        layout: unknown;
+        panes: { id: string }[];
+      };
+      expect(got.layout).toBe(t.layout);
+      expect(got.panes.map((p) => p.id)).toEqual([t.layout]);
+    }
+  });
+
+  it('still merges ONE thing into an EMPTY tab', async () => {
+    const a = (await (await postTab({ name: 'A', bootstrap: 'shell' })).json()) as {
+      id: string;
+      layout: string;
+    };
+    const empty = (await (await postTab({ name: 'E' })).json()) as { id: string };
+    const res = await test.app.request(`/api/tabs/${a.id}/merge`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ into_tab_id: empty.id }),
+    });
+    expect(res.status).toBe(200);
+    const got = (await (await test.app.request(`/api/tabs/${empty.id}`)).json()) as {
+      layout: unknown;
+    };
+    expect(got.layout).toBe(a.layout);
   });
 
   it('persists view_mode via PATCH and rejects junk values', async () => {

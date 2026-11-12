@@ -2110,14 +2110,14 @@ guard_hidden_default_tab() {
     jq -r --arg id "$MUXPAD_WORKSPACE_ID" \
       '[.[] | select(.id == $id)] | (.[0].hidden // false) | tostring' 2>/dev/null || echo false)"
   if [ "$hidden" = "true" ]; then
-    echo "muxpad: you're in the hidden system tab — a pane created here would be invisible; pass --tab=<id> (and --target=<paneId>) to place it in a visible tab" >&2
+    echo "muxpad: you're in the hidden system tab — a pane created here would be invisible; pass --tab=<id> to place it in a visible tab" >&2
     exit 1
   fi
 }
 
 cmd_pane_new() {
-  reset_flags tab cmd cwd direction target name
-  parse_flags tab cmd cwd direction target name -- "$@"
+  reset_flags tab cmd cwd name
+  parse_flags tab cmd cwd name -- "$@"
   local tab_id="${FLAG_tab:-}"
   if [ -z "$tab_id" ]; then
     tab_id="${MUXPAD_TAB_ID:-}"
@@ -2127,29 +2127,12 @@ cmd_pane_new() {
     fi
     guard_hidden_default_tab
   fi
-  # Map the spatial direction to the server's (direction, position) wire
-  # format. Server thinks in (row/column axis, before/after target);
-  # users/agents think in screen geometry, so the CLI does the translation.
-  local axis position
-  case "${FLAG_direction:-right}" in
-    right) axis='row'    ; position='after'  ;;
-    left)  axis='row'    ; position='before' ;;
-    below) axis='column' ; position='after'  ;;
-    above) axis='column' ; position='before' ;;
-    *)
-      echo "muxpad: --direction must be one of: right, left, above, below (got '${FLAG_direction}')" >&2
-      exit 1 ;;
-  esac
-  # --target=<id> wins over MUXPAD_PANE_ID. Outside a pane with no
-  # --target, the body's split_from is omitted entirely and the server
-  # appends at the root.
-  local split_from="${FLAG_target:-${MUXPAD_PANE_ID:-}}"
+  # No --direction or --target: they placed the new pane in a SPLIT beside
+  # another one, and a tab holds one thing now — the server refuses a second
+  # on every route. A flag that is gone answers "unknown flag", which is the
+  # truth; accepting it only to collect a 409 for it was not. The pane lands
+  # in an EMPTY tab (pass --tab), and the server says so plainly otherwise.
   local body='{"append_to_layout":true'
-  if [ -n "$split_from" ]; then
-    body+=",\"split_from\":$(json_string "$split_from")"
-  fi
-  body+=",\"direction\":$(json_string "$axis")"
-  body+=",\"position\":$(json_string "$position")"
   if [ -n "${FLAG_cmd:-}" ]; then
     body+=",\"startup_cmd\":$(json_string "$FLAG_cmd")"
   fi
@@ -2270,47 +2253,6 @@ cmd_pane_delete() {
   fi
 }
 
-cmd_pane_open() {
-  reset_flags tab direction target
-  parse_flags tab direction target -- "$@"
-  if [ "${#POSITIONAL[@]}" -lt 1 ]; then
-    echo "usage: muxpad pane open [--tab=<id>] [--direction=right|left|above|below] [--target=<id>] <url>" >&2
-    exit 1
-  fi
-  local url="${POSITIONAL[0]}"
-  local tab_id="${FLAG_tab:-}"
-  if [ -z "$tab_id" ]; then
-    tab_id="${MUXPAD_TAB_ID:-}"
-    if [ -z "$tab_id" ]; then
-      echo "muxpad: --tab=<id> required (no MUXPAD_TAB_ID in env)" >&2
-      exit 1
-    fi
-    guard_hidden_default_tab
-  fi
-  # Same direction → (axis, position) translation as cmd_pane_new.
-  local axis position
-  case "${FLAG_direction:-right}" in
-    right) axis='row'    ; position='after'  ;;
-    left)  axis='row'    ; position='before' ;;
-    below) axis='column' ; position='after'  ;;
-    above) axis='column' ; position='before' ;;
-    *)
-      echo "muxpad: --direction must be one of: right, left, above, below (got '${FLAG_direction}')" >&2
-      exit 1 ;;
-  esac
-  local split_from="${FLAG_target:-${MUXPAD_PANE_ID:-}}"
-  local body="{\"kind\":\"url\",\"url\":$(json_string "$url"),\"append_to_layout\":true"
-  if [ -n "$split_from" ]; then
-    body+=",\"split_from\":$(json_string "$split_from")"
-  fi
-  body+=",\"direction\":$(json_string "$axis")"
-  body+=",\"position\":$(json_string "$position")"
-  body+='}'
-  local res
-  res="$(http_request POST "/api/tabs/$tab_id/panes" "$body")"
-  print_created pane "$res"
-}
-
 # `muxpad pane read [<id>]` — print a terminal pane's scrollback (the ring
 # buffer a fresh attach would replay), ANSI-stripped so it's grep-able.
 # --raw keeps the escape sequences; --lines=N trims to the last N lines.
@@ -2429,7 +2371,7 @@ cmd_pane_summarize() {
 cmd_pane() {
   local verb="${1:-}"
   if [ -z "$verb" ]; then
-    echo "usage: muxpad pane {new|list|read|send|delete|open|rename|summarize}" >&2
+    echo "usage: muxpad pane {new|list|read|send|delete|rename|summarize}" >&2
     exit 1
   fi
   shift
@@ -2439,12 +2381,18 @@ cmd_pane() {
     read) cmd_pane_read "$@" ;;
     send) cmd_pane_send "$@" ;;
     delete) cmd_pane_delete "$@" ;;
-    open) cmd_pane_open "$@" ;;
+    open)
+      # Retired with the split. It opened a bare web page BESIDE you; a tab
+      # holds one chat, agent or terminal now, and a page is none of those.
+      # A terminal that serves a page shows it in its own web view.
+      echo "muxpad: 'pane open' is gone — a tab holds one chat, agent or terminal, and a bare web page is none of them" >&2
+      exit 1
+      ;;
     rename) cmd_pane_rename "$@" ;;
     summarize) cmd_pane_summarize "$@" ;;
     *)
       echo "muxpad: unknown pane verb '$verb'" >&2
-      echo "usage: muxpad pane {new|list|read|send|delete|open|rename|summarize}" >&2
+      echo "usage: muxpad pane {new|list|read|send|delete|rename|summarize}" >&2
       exit 1
       ;;
   esac

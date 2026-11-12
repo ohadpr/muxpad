@@ -1,10 +1,11 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { type MuxpadEvent, ROW_NOT_FOUND } from '@muxpad/shared';
+import { type MuxpadEvent, ONE_THING_PER_TAB, ROW_NOT_FOUND } from '@muxpad/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EventBus } from '../events.js';
 import { PaneStore } from '../store/PaneStore.js';
+import { TabStore } from '../store/TabStore.js';
 import { openDb } from '../store/db.js';
 import { type TestApp, createTestApp } from '../test-helpers/createTestApp.js';
 
@@ -178,10 +179,103 @@ describe('panes routes', () => {
     expect(after.layout).toBe(p1.id);
   });
 
+  /**
+   * THE HOLE: how a terminal tab was still split, and the two refusals that
+   * close it.
+   *
+   * The web never asked the server to place a pane. Its `+` made one with a
+   * plain create, then wrote `{first, second}` itself as an ordinary layout
+   * PATCH — so the refusal above, which only looked at `append_to_layout`,
+   * never saw it. Both halves of that gesture are refused now, each on its own.
+   */
+  it('refuses the web’s own split — a plain create, then a split layout PATCH', async () => {
+    const tab2 = (await (
+      await test.app.request('/api/tabs', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'term', workspace_id: wsId, bootstrap: 'shell' }),
+      })
+    ).json()) as { id: string; layout: string };
+    const term = tab2.layout;
+    expect(typeof term).toBe('string');
+
+    // Half one: the create the web sent, which asked for no placement.
+    const created = await test.app.request(`/api/tabs/${tab2.id}/panes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ inherit_cwd_from: term }),
+    });
+    expect(created.status).toBe(409);
+    const { error } = (await created.json()) as { error: { code: string; message: string } };
+    expect(error.code).toBe('conflict');
+    expect(error.message).toBe(ONE_THING_PER_TAB);
+
+    // Half two: the layout write, naming a real pane from another tab.
+    const other = (await (
+      await test.app.request(`/api/tabs/${tabId}/panes`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ append_to_layout: true }),
+      })
+    ).json()) as { id: string };
+    const split = await test.app.request(`/api/tabs/${tab2.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ layout: { direction: 'row', first: term, second: other.id } }),
+    });
+    expect(split.status).toBe(409);
+
+    // Nothing moved: one row, one leaf.
+    const after = (await (await test.app.request(`/api/tabs/${tab2.id}`)).json()) as {
+      layout: unknown;
+      panes: { id: string }[];
+    };
+    expect(after.layout).toBe(term);
+    expect(after.panes.map((p) => p.id)).toEqual([term]);
+  });
+
+  it('still lets an EMPTY tab get its first thing, even from an old CLI', async () => {
+    // The empty state's "Start a chat" is the one create a tab view still
+    // sends, and it must land. `split_from` is old vocabulary: accepted,
+    // ignored, because there is nothing to split.
+    const empty = (await (
+      await test.app.request('/api/tabs', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'E', workspace_id: wsId }),
+      })
+    ).json()) as { id: string };
+    const res = await test.app.request(`/api/tabs/${empty.id}/panes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ append_to_layout: true, split_from: 'an-old-cli-flag' }),
+    });
+    expect(res.status).toBe(201);
+    const p = (await res.json()) as { id: string };
+    const after = (await (await test.app.request(`/api/tabs/${empty.id}`)).json()) as {
+      layout: unknown;
+    };
+    expect(after.layout).toBe(p.id);
+  });
+
+  it('a leaf naming a pane that is GONE does not lock a tab out of its first chat', async () => {
+    const t = new TabStore(db).create({
+      name: 'ghost',
+      layout: 'deleted-pane',
+      workspace_id: wsId,
+    });
+    const res = await test.app.request(`/api/tabs/${t.id}/panes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ append_to_layout: true }),
+    });
+    expect(res.status).toBe(201);
+  });
+
   it('still allows a pane that asks for NO layout placement — documents need it', async () => {
-    // A document's backing tab holds one pane per agent block and never
-    // renders a mosaic. Refusing those would break documents, so the rule is
-    // about layout placement, not about how many panes a tab may own.
+    // A document's backing tab holds one pane per agent block and NO layout:
+    // it is never shown as a tab, so it is not two things on one screen.
+    // Refusing those would break documents, so the rule reads the layout.
     const tab3 = (await (
       await test.app.request('/api/tabs', {
         method: 'POST',
@@ -189,11 +283,6 @@ describe('panes routes', () => {
         body: JSON.stringify({ name: 'D', workspace_id: wsId }),
       })
     ).json()) as { id: string };
-    await test.app.request(`/api/tabs/${tab3.id}/panes`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ append_to_layout: true }),
-    });
     for (let i = 0; i < 3; i++) {
       const res = await test.app.request(`/api/tabs/${tab3.id}/panes`, {
         method: 'POST',
@@ -666,6 +755,19 @@ describe('panes routes', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ layout }),
     });
+  /**
+   * A tab holding TWO panes, the way only an old row can: the API refuses to
+   * build one, so it is written to the store directly. The move routes must
+   * still take such a tab apart cleanly — that is how a leftover split gets
+   * undone.
+   */
+  const legacySplit = async (tab: string): Promise<[string, string]> => {
+    const store = new PaneStore(db);
+    const a = store.create({ tab_id: tab, shell: '/bin/sh', cwd: '/tmp' }).id;
+    const b = store.create({ tab_id: tab, shell: '/bin/sh', cwd: '/tmp' }).id;
+    new TabStore(db).update(tab, { layout: { direction: 'row', first: a, second: b } });
+    return [a, b];
+  };
   const move = (paneId: string, body: unknown) =>
     test.app.request(`/api/panes/${paneId}/move`, {
       method: 'POST',
@@ -683,35 +785,43 @@ describe('panes routes', () => {
       ).json()) as { id: string }
     ).id;
 
-  it('moves a pane to an existing tab: source loses it, dest gains it', async () => {
-    const a = await makePane(tabId);
-    const b = await makePane(tabId);
-    await setLayout(tabId, { direction: 'row', first: a, second: b });
+  it('refuses a move INTO a tab that already holds its thing — the split by another route', async () => {
+    const [a, b] = await legacySplit(tabId);
     const dest = await mkTab('Dest');
     const d1 = await makePane(dest);
     await setLayout(dest, d1);
+
+    const res = await move(a, { to_tab_id: dest });
+    expect(res.status).toBe(409);
+    const { error } = (await res.json()) as { error: { code: string; message: string } };
+    expect(error.code).toBe('conflict');
+    expect(error.message).toBe(ONE_THING_PER_TAB);
+    // Nothing moved on either side.
+    expect(await getLayout(dest)).toBe(d1);
+    expect(await getLayout(tabId)).toMatchObject({ direction: 'row', first: a, second: b });
+  });
+
+  it('moves a pane into an EMPTY tab: source loses it, dest holds just it', async () => {
+    const [a, b] = await legacySplit(tabId);
+    const dest = await mkTab('Dest');
 
     const res = await move(a, { to_tab_id: dest });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { from_tab_removed: boolean; to_tab: { id: string } };
     expect(body.from_tab_removed).toBe(false);
     expect(body.to_tab.id).toBe(dest);
-
-    // Source collapsed to just b; dest now a split holding d1 + a.
     expect(await getLayout(tabId)).toBe(b);
-    expect(await getLayout(dest)).toMatchObject({ direction: 'row', first: d1, second: a });
-    // The pane row really reparented.
+    expect(await getLayout(dest)).toBe(a);
     const detail = (await (await test.app.request(`/api/tabs/${dest}`)).json()) as {
       panes: { id: string }[];
     };
-    expect(detail.panes.map((p) => p.id).sort()).toEqual([a, d1].sort());
+    expect(detail.panes.map((p) => p.id)).toEqual([a]);
   });
 
   it('moving the last pane out deletes the now-empty source tab', async () => {
     const only = await makePane(tabId);
     await setLayout(tabId, only);
     const dest = await mkTab('Dest');
-    await setLayout(dest, await makePane(dest));
 
     const res = await move(only, { to_tab_id: dest });
     const body = (await res.json()) as { from_tab_removed: boolean };
@@ -720,9 +830,7 @@ describe('panes routes', () => {
   });
 
   it('extracts a pane into a fresh tab (new_tab)', async () => {
-    const a = await makePane(tabId);
-    const b = await makePane(tabId);
-    await setLayout(tabId, { direction: 'row', first: a, second: b });
+    const [a, b] = await legacySplit(tabId);
 
     const res = await move(a, { new_tab: true });
     expect(res.status).toBe(200);
@@ -776,9 +884,7 @@ describe('panes routes', () => {
   });
 
   it('new_tab lands in to_workspace_id — the drag-a-pane-onto-a-workspace drop', async () => {
-    const a = await makePane(tabId);
-    const b = await makePane(tabId);
-    await setLayout(tabId, { direction: 'row', first: a, second: b });
+    const [a, b] = await legacySplit(tabId);
     const otherWs = (await (
       await test.app.request('/api/workspaces', {
         method: 'POST',
@@ -832,9 +938,7 @@ describe('panes routes', () => {
   });
 
   it('rejects new_tab into a workspace that does not exist', async () => {
-    const a = await makePane(tabId);
-    const b = await makePane(tabId);
-    await setLayout(tabId, { direction: 'row', first: a, second: b });
+    const [a, b] = await legacySplit(tabId);
     const res = await move(a, { new_tab: true, to_workspace_id: 'nope' });
     expect(res.status).toBe(404);
     // Nothing moved.
@@ -843,7 +947,8 @@ describe('panes routes', () => {
 
   it('move emits dest pane.added + source pane.removed', async () => {
     const events = new EventBus();
-    const local = await createTestApp({ db: openDb(':memory:'), dataDir: tmp, events });
+    const localDb = openDb(':memory:');
+    const local = await createTestApp({ db: localDb, dataDir: tmp, events });
     try {
       const ws = (await (
         await local.app.request('/api/workspaces', {
@@ -876,15 +981,9 @@ describe('panes routes', () => {
         ).id;
       const keep = await mkP(src);
       const moving = await mkP(src);
-      await local.app.request(`/api/tabs/${src}`, {
-        method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ layout: { direction: 'row', first: keep, second: moving } }),
-      });
-      await local.app.request(`/api/tabs/${dst}`, {
-        method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ layout: await mkP(dst) }),
+      // An old split, written to the store: the API will not build one.
+      new TabStore(localDb).update(src, {
+        layout: { direction: 'row', first: keep, second: moving },
       });
 
       const received: MuxpadEvent[] = [];
@@ -1086,7 +1185,8 @@ describe('flat pane enumeration (GET /api/panes)', () => {
     // LIST endpoint never runs. The result is a phantom mosaic tile / a header
     // that opens blank, until a remount or a socket reconnect.
     const events = new EventBus();
-    const local = await createTestApp({ db: openDb(':memory:'), dataDir: tmp, events });
+    const localDb = openDb(':memory:');
+    const local = await createTestApp({ db: localDb, dataDir: tmp, events });
     try {
       const ws = (await (
         await local.app.request('/api/workspaces', {
@@ -1116,10 +1216,8 @@ describe('flat pane enumeration (GET /api/panes)', () => {
       // more (one pane per layout), but pruning still has to work for the
       // ones that already exist: migration 54 is rewriting two of them on
       // this machine, and any layout can come to name a pane that is gone.
-      await local.app.request(`/api/tabs/${t.id}`, {
-        method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ layout: { direction: 'row', first: keep.id, second: doomed.id } }),
+      new TabStore(localDb).update(t.id, {
+        layout: { direction: 'row', first: keep.id, second: doomed.id },
       });
 
       const received: MuxpadEvent[] = [];
