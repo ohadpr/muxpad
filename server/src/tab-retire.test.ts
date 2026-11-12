@@ -1206,13 +1206,17 @@ describe('retiring a sub-chat when it delivers', () => {
       it('ASKS AGAIN, and then decides as a CRASH rather than waiting for ever', () => {
         const parent = chat('parent');
         const child = chat('child', parent.tab);
+        new SpawnRoundStore(db).open(child.tab);
         const finished: Array<{ crashed: boolean }> = [];
         const retirer = new ChatRetirer({
           ...deps,
           turnActive: () => null,
           onFinished: (_t, _p, o) => finished.push(o),
         });
-        retirer.onTurnEnded({ pane_id: child.pane, phase: 'done' });
+        // `fatal`: ws.ts watched the turn be cut off AND the runner fail to
+        // come back inside its reconnect grace. That is the only arming this
+        // path accepts — see the two below.
+        retirer.onTurnEnded({ pane_id: child.pane, phase: 'fatal' });
         // Five windows of no runner, then the sixth decides without one.
         for (let i = 0; i < 6; i += 1) retirer.settleNow(child.pane);
 
@@ -1220,6 +1224,46 @@ describe('retiring a sub-chat when it delivers', () => {
         // A crashed run keeps its row, by `holdOpen` — what the parent gets is
         // a report saying so, not a silently archived worker.
         expect(isDone(child.tab)).toBe(false);
+      });
+
+      it('but a settle armed by a NORMAL turn-end never decides without one', () => {
+        // The boot sweep arms every live worker at a moment when every runner
+        // is absent, and an idle reconnect arms a pane that was fine a second
+        // ago. Neither has watched anything die. Letting them decide meant a
+        // node offline at boot had its workers' delivered reports overwritten
+        // with "crashed" and their summaries erased.
+        const parent = chat('parent');
+        const child = chat('child', parent.tab);
+        new SpawnRoundStore(db).open(child.tab);
+        const finished: unknown[] = [];
+        const retirer = new ChatRetirer({
+          ...deps,
+          turnActive: () => null,
+          onFinished: (_t, _p, o) => finished.push(o),
+        });
+        retirer.onTurnEnded({ pane_id: child.pane, phase: 'done' });
+        for (let i = 0; i < 8; i += 1) retirer.settleNow(child.pane);
+
+        expect(finished).toEqual([]);
+        expect(isDone(child.tab)).toBe(false);
+      });
+
+      it('and never speaks for a round that is not open', () => {
+        // With no round open, `close` is a no-op and the report lands on
+        // `lastEnded` — the round that already reported — replacing a good
+        // summary with a crash.
+        const parent = chat('parent');
+        const child = chat('child', parent.tab);
+        const finished: unknown[] = [];
+        const retirer = new ChatRetirer({
+          ...deps,
+          turnActive: () => null,
+          onFinished: (_t, _p, o) => finished.push(o),
+        });
+        retirer.onTurnEnded({ pane_id: child.pane, phase: 'fatal' });
+        for (let i = 0; i < 8; i += 1) retirer.settleNow(child.pane);
+
+        expect(finished).toEqual([]);
       });
 
       it('and a runner that comes back idle re-arms it too', () => {
@@ -1236,6 +1280,26 @@ describe('retiring a sub-chat when it delivers', () => {
         expect(resolveTabClock(clockIndex(db), child.tab, Date.now()).done_reason).toBe(
           'delivered',
         );
+      });
+
+      it('does not retire a worker parked on a BACKGROUND COMMAND', () => {
+        // A turn ending with background work deliberately does not arm
+        // (`onTurnEnded`). But a settle armed some OTHER way — the boot sweep,
+        // an idle reconnect — had no way to ask, and `stillWorking` let it
+        // through: the worker retired on the first quiet moment and its parent
+        // got a green summary of a 40-minute build that was still running.
+        const parent = chat('parent');
+        const child = chat('child', parent.tab);
+        new SpawnRoundStore(db).open(child.tab);
+        const retirer = new ChatRetirer({
+          ...deps,
+          turnActive: () => false,
+          backgroundLive: () => 2,
+        });
+
+        expect(retirer.armIfIdleSubChat(child.pane)).toBe(true);
+        expect(retirer.settleNow(child.pane)).toBe(false);
+        expect(isDone(child.tab)).toBe(false);
       });
 
       it('but an idle hello with no open round arms nothing', () => {

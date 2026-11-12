@@ -219,6 +219,70 @@ describe('report delivery — the join', () => {
   });
 
   /**
+   * THE PARENT IS NEVER HANDED THE SAME WORDS TWICE.
+   *
+   * A late wakeup or a background-task notice starts a turn in a worker whose
+   * result was already delivered. That turn opens a round of its own, and the
+   * summary — written from the session's whole transcript tail — describes
+   * the job the parent has already acted on. An orchestrator then does the
+   * follow-up work a second time, which is precisely the harm.
+   */
+  describe('a round repeating a report the parent already has', () => {
+    it('is settled silently instead of sent', () => {
+      const p = parent('P');
+      const c = child('C', p);
+      make().onReport(c);
+      expect(sent).toHaveLength(1);
+
+      // A second round of the same worker, with the same words.
+      db.prepare(
+        `INSERT INTO spawn_rounds (id, tab_id, started_at, ended_at, report, report_state)
+         VALUES (?,?,?,?,?,?)`,
+      ).run(`r2-${c}`, c, NOW + 5000, NOW + 6000, `report from ${c}`, 'ok');
+      clock = NOW + 7000;
+      make().sweep();
+
+      expect(sent, 'still just the one message').toHaveLength(1);
+      // …and it is settled, so the sweep does not retry it every minute.
+      const second = rounds().listByTab(c)[1];
+      expect(second?.delivered_at).not.toBeNull();
+    });
+
+    it('but genuinely new words still go', () => {
+      const p = parent('P');
+      const c = child('C', p);
+      make().onReport(c);
+      db.prepare(
+        `INSERT INTO spawn_rounds (id, tab_id, started_at, ended_at, report, report_state)
+         VALUES (?,?,?,?,?,?)`,
+      ).run(`r2-${c}`, c, NOW + 5000, NOW + 6000, 'and then I did the other thing', 'ok');
+      clock = NOW + 7000;
+      make().sweep();
+
+      expect(sent).toHaveLength(2);
+      expect(sent[1]?.text).toContain('and then I did the other thing');
+    });
+
+    it('and two real failures are still two failures', () => {
+      // "(no report)" twice is two things that went wrong. Swallowing the
+      // second as a duplicate would hide one.
+      const p = parent('P');
+      const c = child('C', p, { report: null, state: null });
+      clock = NOW + RESULT_GRACE_MS + 10_000;
+      make().sweep();
+      expect(sent).toHaveLength(1);
+
+      db.prepare(
+        `INSERT INTO spawn_rounds (id, tab_id, started_at, ended_at, report, report_state)
+         VALUES (?,?,?,?,?,?)`,
+      ).run(`r2-${c}`, c, NOW + 5000, NOW + 6000, null, null);
+      clock += RESULT_GRACE_MS + 10_000;
+      make().sweep();
+      expect(sent).toHaveLength(2);
+    });
+  });
+
+  /**
    * A QUEUED DELIVERY IS NOT AN ARRIVED ONE.
    *
    * The round is stamped `delivered_at` before the send, because a batch
@@ -291,8 +355,9 @@ describe('report delivery — the join', () => {
 
     it('leaves a delivery that was actually RELAYED alone', () => {
       // The ordinary case, and the one that must not regress: a queue row that
-      // ran is removed by the drain, so its id never reaches here. An unknown
-      // id is somebody's own cancelled message.
+      // RAN is removed by the drain in the same tick as the send, so its id can
+      // never appear in a later clear. Driven as the sequence rather than with
+      // a made-up id — an unknown id proves only that unknown ids are ignored.
       const p = parent('P');
       const c = child('C', p);
       result = { status: 'queued', id: 'q1' };
@@ -300,8 +365,14 @@ describe('report delivery — the join', () => {
       delivery.onReport(c);
       const stamp = delivered(c);
 
-      expect(delivery.noteQueueDropped(['q-someone-elses-message'])).toBe(0);
-      expect(delivered(c)).toBe(stamp);
+      // The queue drains: q1 is relayed and gone. What a later clear carries
+      // is whatever is left, which is everything EXCEPT q1.
+      expect(delivery.noteQueueDropped(['q2', 'q3'])).toBe(0);
+      expect(delivered(c), 'the delivered report stays delivered').toBe(stamp);
+
+      // And the id it does know is still honoured, so the test above is not
+      // passing merely because nothing is ever un-stamped.
+      expect(delivery.noteQueueDropped(['q1'])).toBe(1);
     });
 
     it('cannot resurrect a round delivered at some earlier moment', () => {

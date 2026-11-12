@@ -276,6 +276,21 @@ export class SpawnRoundStore {
    * they find each other again: async callers pass the captured id and end stamp.
    * A reopened or reclosed round rejects the stale write. `close` does not wait: retirement
    * must never sit behind a model.
+   *
+   * ── AND A ROUND THE PARENT HAS ALREADY BEEN TOLD ABOUT IS CLOSED TO IT ───
+   *
+   * `delivered_at IS NULL` is the last clause, and it is about honesty rather
+   * than races. The ordinary order is close → summarise → deliver, so this
+   * costs the normal path nothing. What it stops is the LATE summary: a round
+   * that ran past `RESULT_GRACE_MS` is delivered as "(no report)" and stamped
+   * `failed`, and a generation landing afterwards used to overwrite that with
+   * `ok` and sentences — leaving the card reading "done", with a summary, that
+   * the parent was told did not exist. One worker, described two opposite
+   * ways, which is the contradiction the `failed` stamp exists to remove.
+   *
+   * The late sentences are dropped, not shown. They are still in the
+   * transcript, and a card that agrees with the message is worth more than a
+   * card that is first to speak.
    */
   writeResult(tabId: string, write: SpawnReportWrite, closure?: SpawnRound): boolean {
     const last = closure ?? this.lastEnded(tabId);
@@ -283,7 +298,8 @@ export class SpawnRoundStore {
     const result = this.db
       .prepare(
         `UPDATE spawn_rounds SET report = ?, report_state = ?,
-            artifacts = COALESCE(?, artifacts) WHERE id = ? AND tab_id = ? AND ended_at = ?`,
+            artifacts = COALESCE(?, artifacts)
+          WHERE id = ? AND tab_id = ? AND ended_at = ? AND delivered_at IS NULL`,
       )
       .run(
         write.report,

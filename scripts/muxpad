@@ -3891,7 +3891,14 @@ cmd_agent_rebase() {
   fi
   echo "rebasing $pane — rewriting its transcript first, this takes a moment…" >&2
   local out
-  out="$(http_request POST "/api/panes/$pane/rebase" '{}' 2>/dev/null)" || true
+  # `from_pane` says a chat is rebasing ITSELF, which is the only case where a
+  # turn in flight is not a reason to refuse: the turn in flight is this
+  # command, and ending it is the act being asked for.
+  local body='{}'
+  if [ -n "${MUXPAD_PANE_ID:-}" ]; then
+    body="{\"from_pane\":$(json_string "$MUXPAD_PANE_ID")}"
+  fi
+  out="$(http_request POST "/api/panes/$pane/rebase" "$body" 2>/dev/null)" || true
   if [ -z "$out" ]; then
     echo 'muxpad: no answer from the server' >&2
     exit 1

@@ -281,6 +281,8 @@ const retireDeps = {
   // otherwise be retired as a delivery ninety seconds before the dead-runner
   // sweep could say `died`. See the dep's note.
   turnActive: (paneId: string) => agentBridge.turnActive(paneId),
+  // A backgrounded command outlives the turn that started it — see the dep.
+  backgroundLive: (paneId: string) => agentBridge.backgroundLive(paneId),
   // Called when a sub-chat's WORK ends — which is not the same moment as its row
   // leaving the live list (a crashed worker keeps its row and still has plenty
   // to report). Fire-and-forget; retirement never waits on a model call.
@@ -616,6 +618,8 @@ const app = createApp({
     ...(voiceKey ? { transcribe: openAiTranscriber(voiceKey) } : {}),
     glossary: voiceGlossary,
   },
+  // A folder change drops a chat's queue; give back any worker report in it.
+  onQueueDropped: (ids) => reportDelivery.noteQueueDropped(ids),
 });
 
 // Static asset serving (CSS, JS, fonts, images) from the built web bundle,

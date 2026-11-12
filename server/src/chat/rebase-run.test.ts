@@ -485,6 +485,61 @@ describe('runRebase refuses while the chat is busy', () => {
     expect(r.message).toMatch(/1 sub-chat is still working/);
   });
 
+  it('refuses while a finished worker’s result is still in flight', async () => {
+    // `openRounds` sees only a round that is still RUNNING. The three minutes
+    // between a worker's last turn and its summary landing is the window
+    // where a rebase relays the report to the old runner, stamps it
+    // delivered, and then kills the session that received it.
+    const { db, paneId } = fixture('muxpad agent --resume old-sid');
+    const r = await runRebase({ ...base(db), undeliveredRounds: () => 1 }, paneId);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.code).toBe('busy');
+    expect(r.message).toMatch(/has not reached this chat yet/);
+  });
+
+  it('lets a chat rebase ITSELF, whose own turn is the one running the command', async () => {
+    // `muxpad agent rebase` with no argument is the documented spelling, and
+    // the turn the quiesce check sees is the command itself — so the refusal
+    // made the verb permanently impossible. Ending that turn is the act being
+    // asked for.
+    const { db, paneId } = fixture('muxpad agent --resume old-sid');
+    const r = await runRebase(
+      { db, respawn: async () => {}, submit: () => ok, turnActive: () => true },
+      paneId,
+      'auto',
+      paneId,
+    );
+    expect(r.ok).toBe(true);
+  });
+
+  it('…but a self-rebase still refuses for a queued message or a live worker', async () => {
+    // Only the TURN check is waived. These two are lost by a rebase whoever
+    // asked for it.
+    const { db, paneId } = fixture('muxpad agent --resume old-sid');
+    const queued = await runRebase(
+      { ...base(db), turnActive: () => true, queued: () => 1 },
+      paneId,
+      'auto',
+      paneId,
+    );
+    expect(queued.ok).toBe(false);
+    const working = await runRebase(
+      { ...base(db), turnActive: () => true, openRounds: () => 1 },
+      paneId,
+      'auto',
+      paneId,
+    );
+    expect(working.ok).toBe(false);
+  });
+
+  it('and somebody ELSE’s request is still refused mid-turn', async () => {
+    const { db, paneId } = fixture('muxpad agent --resume old-sid');
+    const r = await runRebase({ ...base(db), turnActive: () => true }, paneId, 'auto', 'other');
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe('busy');
+  });
+
   it('runs when everything is quiet', async () => {
     const { db, paneId } = fixture('muxpad agent --resume old-sid');
     const r = await runRebase(

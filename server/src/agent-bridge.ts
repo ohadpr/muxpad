@@ -31,6 +31,18 @@ export interface AgentBridge {
    */
   turnActive: (paneId: string) => boolean | null;
   /**
+   * How many BACKGROUND COMMANDS this pane's runner still has running, or 0
+   * with no runner.
+   *
+   * A turn ending is not the work ending: the model can background a Bash
+   * call that outlives the turn, and its completion starts another one. The
+   * turn-end path already carries this (AgentTurnEventSchema.background); this
+   * is the same fact asked at an arbitrary moment, which is what the
+   * retirement settle needs when it was armed by something OTHER than a turn
+   * ending.
+   */
+  backgroundLive: (paneId: string) => number;
+  /**
    * Tell the pane's connected runner its agent mode changed (⚡ do / 🧠 deep).
    * Returns false when no runner is connected — NOT an error: the pane row is
    * already authoritative and its startup_cmd carries the mode, so the next
@@ -83,6 +95,7 @@ export function createAgentBridge(): AgentBridge {
   return {
     send: () => ({ ok: false, reason: 'server starting — try again' }),
     turnActive: () => null,
+    backgroundLive: () => 0,
     setMode: () => false,
     submitSend: () => ({ status: 'rejected', reason: 'server starting — try again' }),
     contextPct: () => null,

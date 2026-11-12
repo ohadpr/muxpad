@@ -22,7 +22,7 @@ afterEach(async () => {
   cleanup = null;
 });
 
-async function boot(extra: { notifyPane?: PaneNotifier } = {}) {
+async function boot(extra: { notifyPane?: PaneNotifier; reconnectGraceMs?: number } = {}) {
   const db = openDb(':memory:');
   const ptyd = await spawnPtyd();
   const workspaces = new WorkspaceStore(db);
@@ -655,7 +655,13 @@ describe('agent-runner relay', () => {
     // sockets without emitting `done`. So a supervisor (or `muxpad agent wait`)
     // saw a start with no done on a SIGKILLed runner, and a done with no start
     // after a server restart mid-turn.
-    const { port, paneId } = await boot();
+    //
+    // The BALANCE is the invariant and it is unchanged. What changed is the
+    // end's PHASE and its timing: a turn cut off by a dead socket ends
+    // `fatal`, once the runner has failed to come back inside the reconnect
+    // grace (ws.ts `partedTurns`). `done` claimed the work finished, and the
+    // retirement settle believed it.
+    const { port, paneId } = await boot({ reconnectGraceMs: 120 });
     const { sock: evSock, rx: fromEvents } = await openSock(`ws://127.0.0.1:${port}/ws/events`);
 
     // 1) A runner that (re)hellos MID-TURN is an observable turn START.
@@ -666,14 +672,14 @@ describe('agent-runner relay', () => {
 
     // 2) …and its death closes that turn on the bus, not just on chat.
     runner.terminate();
-    const done = await fromEvents.next((f) => f.type === 'agent_turn' && f.phase === 'done');
-    expect(done).toMatchObject({ pane_id: paneId, phase: 'done', sid: SID });
+    const end = await fromEvents.next((f) => f.type === 'agent_turn' && f.phase === 'fatal');
+    expect(end).toMatchObject({ pane_id: paneId, phase: 'fatal', sid: SID });
 
     // Exactly one of each — teardown must not double-fire.
     const phases = fromEvents.frames
       .filter((f) => f.type === 'agent_turn')
       .map((f) => f.phase as string);
-    expect(phases).toEqual(['start', 'done']);
+    expect(phases).toEqual(['start', 'fatal']);
 
     evSock.close();
   });

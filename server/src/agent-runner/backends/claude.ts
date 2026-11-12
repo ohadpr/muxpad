@@ -2208,6 +2208,16 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
     // so a background subagent working through a server restart became
     // permanently invisible — nothing would ever re-announce it.
     subagents.announceAll();
+    // …and the BACKGROUND COMMAND count, for exactly the same reason and with
+    // a worse ending. The server zeroes `backgroundLive` when a connection is
+    // born, and `reportBackground` dedupes on the last value it SENT — so
+    // after a blip the runner believed the server knew about 2 live commands
+    // and the server believed there were none. A turn that ends with
+    // background work deliberately does not arm the retirement settle; with
+    // the count lost, the worker retired on the next quiet moment and its
+    // parent got a green summary of half-done work.
+    lastBackgroundLive = -1;
+    reportBackground();
   }
 
   async function start(): Promise<void> {
