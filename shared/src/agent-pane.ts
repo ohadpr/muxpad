@@ -1,4 +1,5 @@
-import { BASELINE_AGENT_MODE, coerceAgentMode } from './types.js';
+import { collectLayoutLeaves } from './layout.js';
+import { BASELINE_AGENT_MODE, type LayoutNode, coerceAgentMode } from './types.js';
 
 /**
  * IS THIS PANE AN AGENT — one rule, for the server and the chrome alike.
@@ -86,46 +87,50 @@ export function rowNounTitle(pane: RowNounLike | null | undefined): string {
 export const ROW_NOT_FOUND = 'that chat or terminal no longer exists';
 
 /**
- * Does this tab offer PANES — i.e. should its chrome show a `+` at all?
+ * Does this tab offer a SECOND thing — should any surface show a `+` in it?
  *
- * ANY non-agent pane is enough. A tab holding a chat and a terminal is still a
- * tab you can put another terminal in, and taking the `+` away from it would be
- * hiding a working tool because of something else in the room. What loses the
- * `+` is the tab that is nothing but agents, which is every chat.
+ * No, never, for any tab. It used to say yes for a tab holding a terminal (two
+ * shells side by side was a real layout) and for an empty one, and that was the
+ * last door into a two-pane tab: the web created the pane, then wrote the split
+ * layout itself, and the server's refusal only covered the CLI's path. A tab is
+ * one chat, agent or terminal now, and the server refuses the second one on
+ * every route (routes/panes.ts, routes/tabs.ts). An empty tab gets its first
+ * thing from its own empty state, not from a `+`.
  *
- * An EMPTY tab keeps it: with nothing in it there is no chat to protect, and
- * "this tab has no panes" needs a way out.
+ * Kept as a function rather than deleted because the server still publishes it
+ * as `takes_panes` on every tab, and a client that reads that field should be
+ * told the truth rather than nothing.
  */
-export function tabTakesPanes(panes: readonly AgentPaneLike[]): boolean {
-  return panes.length === 0 || panes.some((p) => !isAgentPane(p));
+export function tabTakesPanes(_panes: readonly AgentPaneLike[]): boolean {
+  return false;
 }
 
 /**
- * Should this tab paint a PANE STRIP at all?
+ * ONE THING PER TAB — the refusal every "add a second thing here" route gives.
  *
- * Removing the `+` was only half of "one pane per tab, except terminals". The
- * strip itself still painted unconditionally, so a one-pane chat — which is
- * every chat — carried a whole row of chrome for a concept that no longer
- * applied to it:
- *
- *   · a label naming the pane you are already looking at, under a sidebar row
- *     that already names the chat
- *   · a status mark that is a SECOND copy of the sidebar row's, which is the
- *     two-surfaces-deriving-one-value bug this branch is organised against
- *   · a × labelled "Close pane" whose only effect on a single-pane tab is to
- *     leave you an empty one (archive, on the sidebar row, is the real gesture)
- *   · "Expand to split" — of what? `tabTakesPanes` is already false, so there
- *     is no second pane to be had
- *
- * So the strip paints when it has a JOB: something to switch between, or
- * somewhere to add. A tab that takes panes keeps it even at one pane (that is
- * where the `+` lives), and an agent-only tab keeps it the moment it holds two,
- * because then the strip is the only way to get from one to the other.
- *
- * Stated here rather than in TabView so the desktop strip, the mobile bar and
- * any future surface cannot drift on it — the same reason `tabTakesPanes` is
- * here and not inlined at its two call sites.
+ * Code `conflict` (409), unchanged from when only the CLI's placement path
+ * refused; the sentence is what a person reads.
  */
-export function tabShowsPaneStrip(panes: readonly AgentPaneLike[]): boolean {
-  return tabTakesPanes(panes) || panes.length > 1;
+export const ONE_THING_PER_TAB =
+  'a tab holds one chat or terminal — the split was removed. Open a new one instead.';
+
+/**
+ * Does this tab already hold its one thing?
+ *
+ * Read off the LAYOUT, filtered to pane rows that still exist in the tab, not
+ * off the row count, for two reasons. A leaf naming a pane that is gone (a row
+ * deleted while its layout write was pending) holds nothing, and must not lock
+ * the tab out of ever getting its first chat back. And a document's backing
+ * tab deliberately keeps one agent row per block with NO layout at all
+ * (web/src/lib/doc-store.ts) — it never renders as a tab, so it is not one
+ * thing on screen pretending to be two.
+ */
+export function tabIsOccupied(layout: LayoutNode, paneIdsInTab: readonly string[]): boolean {
+  const rows = new Set(paneIdsInTab);
+  return collectLayoutLeaves(layout).some((id) => rows.has(id));
+}
+
+/** A layout that puts two things side by side. Never written any more. */
+export function isSplitLayout(layout: LayoutNode): boolean {
+  return typeof layout === 'object' && layout !== null;
 }

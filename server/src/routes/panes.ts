@@ -4,13 +4,14 @@ import type { AgentMode, LayoutNode, PaneSpec } from '@muxpad/shared';
 import {
   AgentModeInputSchema,
   DEFAULT_AGENT_MODE,
+  ONE_THING_PER_TAB,
   ROW_NOT_FOUND,
   appendLeafToLayout,
   modeForBackend,
   removeLeafFromLayout,
   rowNoun,
-  spliceLayoutAtTarget,
   splitLeadingEmoji,
+  tabIsOccupied,
 } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
@@ -152,43 +153,6 @@ const httpUrl = z
   .refine((u) => /^https?:\/\//i.test(u), { message: 'url must be http(s)' });
 
 /**
- * Place `newId` in the layout as a `direction`-split of `sourceId`. If
- * `sourceId` isn't in the tree (CLI run outside a pane, or stale id),
- * fall back to appending at the root. Empty layout → new pane becomes
- * the root.
- *
- * Used by POST /api/tabs/:id/panes when the caller asks for an atomic
- * create-and-place via `append_to_layout` (CLI, agents). The UI patches
- * layout in a separate request and doesn't go through here.
- */
-function appendPaneToLayout(
-  layout: LayoutNode,
-  sourceId: string | null,
-  newId: string,
-  direction: 'row' | 'column',
-  position: 'after' | 'before',
-): LayoutNode {
-  if (sourceId !== null) {
-    const { layout: next, placed } = spliceLayoutAtTarget(
-      layout,
-      sourceId,
-      newId,
-      direction,
-      position,
-    );
-    if (placed) return next;
-  }
-  // No source, or source not anywhere in the tree → append at root so
-  // the new pane is at least visible. Honor `position` here too: a CLI
-  // call that says "above" with no resolvable target should still land
-  // the new pane on top of the existing layout, not below it.
-  if (layout === '' || layout == null) return newId;
-  return position === 'before'
-    ? { direction, first: newId, second: layout }
-    : { direction, first: layout, second: newId };
-}
-
-/**
  * Panes are spawned under a specific tab — `POST /api/tabs/:id/panes`.
  */
 export function panesTabScopedRoutes(deps: {
@@ -223,12 +187,11 @@ export function panesTabScopedRoutes(deps: {
         // `--mode` flag, and failing that DEFAULT_AGENT_MODE. Accepts the
         // pre-rename 'do'/'deep' from a version-skewed caller.
         mode: AgentModeInputSchema.optional(),
-        // Layout placement controls. Off by default — the UI patches the
-        // tab's layout in a separate request after creating the pane. When
-        // `append_to_layout` is true the server places the new pane atomically:
-        // split-right of `split_from` if given, else appended at root.
-        // This is what the CLI uses; without it a CLI-created pane would
-        // be invisible in the mosaic (row exists, not in layout tree).
+        // Layout placement. `append_to_layout` makes the new pane the tab's
+        // layout atomically — into an EMPTY tab, the only kind that takes one.
+        // `split_from`, `direction` and `position` are older CLI vocabulary
+        // for where a split went; accepted so an old caller is not a 400, and
+        // ignored, because there is no split to place.
         append_to_layout: z.boolean().optional(),
         split_from: z.string().optional(),
         // WHICH MACHINE to create this pane on. Omitted means "the
@@ -254,34 +217,33 @@ export function panesTabScopedRoutes(deps: {
     const body = parsed.data;
 
     /**
-     * ── NO SECOND PANE IN A LAYOUT ────────────────────────────────────────
+     * ── NO SECOND THING IN A TAB, WHOEVER ASKS ───────────────────────────
      *
-     * The split is gone. A tab holds ONE pane in its mosaic, because every
-     * question of the form "which pane is this tab's chat" had no answer and
-     * the code guessed — and the guess was "the first one created". The
-     * measured cost: a sub-chat's 77KB report delivered into the left half of
-     * a split while its owner was reading the right half, leaving a chat with
-     * no record of work it had itself dispatched.
+     * The split is gone. A tab holds ONE chat, agent or terminal, because
+     * every question of the form "which pane is this tab's chat" had no
+     * answer and the code guessed — and the guess was "the first one
+     * created". The measured cost: a sub-chat's 77KB report delivered into
+     * the left half of a split while its owner was reading the right half,
+     * leaving a chat with no record of work it had itself dispatched.
      *
-     * Refused HERE, where a pane is PLACED, rather than where one is created:
-     * a document's backing tab deliberately holds one pane per agent block
-     * and never renders a mosaic (web/src/lib/doc-store.ts). Those ask for no
-     * layout placement, so they are untouched.
+     * This used to refuse only a caller that asked the SERVER to place the
+     * pane (`append_to_layout` / `split_from` — the CLI). The web never asked:
+     * it created the pane, then PATCHed the split layout itself, so a terminal
+     * tab could still be split from its `+`. The refusal is now about the TAB,
+     * not the request: an occupied tab takes no new row on any path, and the
+     * tab PATCH refuses a split layout on its own (routes/tabs.ts).
+     *
+     * "Occupied" is read off the layout (tabIsOccupied), which is what keeps a
+     * document's backing tab — rows with no layout, never shown as a tab —
+     * working, and keeps an EMPTY tab able to get its first chat.
      */
-    if (body.append_to_layout || body.split_from) {
-      const taken = t.layout !== null && t.layout !== undefined && t.layout !== '';
-      if (taken)
-        return c.json(
-          {
-            error: {
-              code: 'conflict',
-              message:
-                'a tab holds one chat or terminal — the split was removed. Open a new one instead.',
-            },
-          },
-          409,
-        );
-    }
+    if (
+      tabIsOccupied(
+        t.layout,
+        panes.listByTab(tabId).map((p) => p.id),
+      )
+    )
+      return c.json({ error: { code: 'conflict', message: ONE_THING_PER_TAB } }, 409);
 
     const kind = body.kind ?? 'shell';
     if (kind === 'url') {
@@ -309,13 +271,10 @@ export function panesTabScopedRoutes(deps: {
         pane: decoratePane(deps.cache, pane, deps.db),
       });
       if (body.append_to_layout) {
-        const nextLayout = appendPaneToLayout(
-          t.layout,
-          body.split_from ?? null,
-          pane.id,
-          body.direction ?? 'row',
-          body.position ?? 'after',
-        );
+        // The tab was empty (anything else was refused above), so placing the
+        // pane IS the whole layout. `split_from` / `direction` / `position`
+        // are still accepted from an older CLI and mean nothing now.
+        const nextLayout: LayoutNode = pane.id;
         const updated = tabs.update(tabId, { layout: nextLayout });
         if (updated)
           deps.events.emit({ type: 'tab.updated', tab: decorateTab(deps.cache, deps.db, updated) });
@@ -440,13 +399,8 @@ export function panesTabScopedRoutes(deps: {
       pane: decoratePane(deps.cache, pane, deps.db),
     });
     if (body.append_to_layout) {
-      const nextLayout = appendPaneToLayout(
-        t.layout,
-        body.split_from ?? null,
-        pane.id,
-        body.direction ?? 'row',
-        body.position ?? 'after',
-      );
+      // Empty tab (see the refusal above): the new pane is the whole layout.
+      const nextLayout: LayoutNode = pane.id;
       const updated = tabs.update(tabId, { layout: nextLayout });
       if (updated)
         deps.events.emit({ type: 'tab.updated', tab: decorateTab(deps.cache, deps.db, updated) });
@@ -1582,6 +1536,18 @@ export function panesScopedRoutes(deps: {
         from_tab_removed: false,
       });
     }
+
+    // Moving INTO a tab that already holds its thing is the split by another
+    // name — the destination would show two. A new tab, or an empty one, is
+    // still a fine place to go.
+    if (
+      destTab &&
+      tabIsOccupied(
+        destTab.layout,
+        panes.listByTab(destTab.id).map((p) => p.id),
+      )
+    )
+      return c.json({ error: { code: 'conflict', message: ONE_THING_PER_TAB } }, 409);
 
     // ── ONE TRANSACTION FOR THE WHOLE MOVE ──────────────────────────────────
     // Reparenting the pane, repairing the destination layout and repairing (or

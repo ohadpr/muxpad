@@ -13,7 +13,7 @@ import { type TestApp, createTestApp } from './test-helpers/createTestApp.js';
  * WHAT A TAB ROW SAYS ABOUT ITSELF — the two fields the chrome and the rail read
  * off it, resolved server-side so every surface reads one answer.
  *
- *   `takes_panes` — does this tab offer a `+` at all (tabTakesPanes).
+ *   `takes_panes` — does this tab offer a `+` at all (tabTakesPanes: never).
  *   `agents`      — how much parallel work is running under it, which in muxpad
  *                   is mostly CHILD CHATS and not harness subagents.
  */
@@ -90,21 +90,17 @@ describe('the tab row’s rollups', () => {
       expect((await row(tab.id)).takes_panes).toBe(false);
     });
 
-    it('is true for a terminal, where splitting is a real layout tool', async () => {
-      expect((await row((await newTerminal('term')).id)).takes_panes).toBe(true);
+    it('is false for a terminal too — a tab holds one thing', async () => {
+      // The terminal was the last tab that offered a `+`, and the `+` was the
+      // web's door into a two-pane tab.
+      expect((await row((await newTerminal('term')).id)).takes_panes).toBe(false);
     });
 
-    it('is true for a MIXED tab — one working tool is enough to keep the `+`', async () => {
-      const tab = await newChat('mixed');
-      panes.create({ tab_id: tab.id, shell: '/bin/zsh', cwd: '/tmp' });
-      expect((await row(tab.id)).takes_panes).toBe(true);
-    });
-
-    it('is true for an empty tab, which needs a way out', async () => {
+    it('is false for an empty tab, whose way back is its own empty state', async () => {
       const tab = (await (
         await post('/api/tabs', { name: 'empty', workspace_id: wsId })
       ).json()) as Tab;
-      expect((await row(tab.id)).takes_panes).toBe(true);
+      expect((await row(tab.id)).takes_panes).toBe(false);
     });
   });
 

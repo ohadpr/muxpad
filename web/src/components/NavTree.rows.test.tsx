@@ -230,7 +230,7 @@ describe('the pinned edge', () => {
  * with the behaviour rather than loosened to pass, and the rule that replaces
  * them is asserted once, below.
  */
-describe('the sheet’s rows, and the split control that belongs to them', () => {
+describe('the sheet’s rows', () => {
   const sheetHtml = (tabs: Tab[]): string => {
     TABS = tabs;
     return renderToStaticMarkup(
@@ -260,28 +260,18 @@ describe('the sheet’s rows, and the split control that belongs to them', () =>
     expect(html).toContain('data-pinned="true"');
   });
 
-  it('a MULTI-PANE chat opens with the same pill, a different glyph', () => {
-    // The rail has two hierarchies: panes inside a chat, and chats under a
-    // chat. Both were bare carets until the sub-chat one became a counted
-    // pill, which left this one looking like a bug — "the chat named Main has
-    // a caret which you click and you see three things under it but it's
-    // rendered differently, what's going on?".
-    // Same shape, different noun. The old chevron must not come back.
+  it('an old SPLIT row gets no pane pill either — a row holds one thing', () => {
+    // The pill opened a list of the panes under a chat. There is no such list
+    // any more (the server refuses the second pane), so even a row left over
+    // from before migration 54 opens like every other row.
     const split = {
       direction: 'row',
       first: { direction: 'row', first: 'p1', second: 'p2' },
       second: 'p3',
     } as unknown as Tab['layout'];
     const out = sheetHtml([tab('main', { layout: split })]);
-    expect(out).toContain('navtree-row-pill navtree-pane-pill');
-    expect(out).not.toContain('navtree-pane-expander');
-    // THE COUNT is the gain: how many are under there, before you tap.
-    expect(out).toContain('3 open');
-    // The words on it are the reader's, not the storage's.
-    expect(out).not.toMatch(/(title|aria-label)="[^"]*\bpanes?\b/);
-    // …and it is never a status object. The row's own mark one cell along is
-    // already saying what the chat is doing.
-    expect(out).not.toMatch(/navtree-pane-pill[^>]*data-state=/);
+    expect(out).not.toContain('navtree-pane-pill');
+    expect(out).not.toContain('navtree-pane-list');
   });
 
   it('a single-pane chat gets no pill at all — there is nothing to pick', () => {

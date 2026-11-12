@@ -100,8 +100,6 @@ interface Instance {
   tabs: Array<{ id: string; slug: string; paneId: string }>;
   /** A SECOND workspace, one tab, so cross-workspace taps are testable. */
   other: { ws: string; tab: string; paneId: string };
-  /** A second pane added to tabs[0], for the "same tab, other pane" case. */
-  secondPaneInFirstTab: string;
   stop(): Promise<void>;
 }
 
@@ -151,11 +149,8 @@ async function startInstance(): Promise<Instance> {
     tabs.push({ id: tab.id, slug: tab.slug, paneId: tab.layout });
   }
 
-  // A second pane in the first tab: the reported scenario is three agent panes
-  // in ONE tab, where the tab is already on screen showing the wrong one.
-  const extra = (await post(`/api/tabs/${tabs[0]?.id}/panes`, {
-    append_to_layout: true,
-  })) as { id: string };
+  // No second pane in a tab: the server refuses one on every route, so the
+  // scenario a person now has is the one these tests use — another TAB.
 
   const otherWs = await post('/api/workspaces', { name: 'Beta' });
   const otherTab = (await post('/api/tabs', {
@@ -169,7 +164,6 @@ async function startInstance(): Promise<Instance> {
     ws: workspace.slug as string,
     tabs,
     other: { ws: otherWs.slug as string, tab: otherTab.slug, paneId: otherTab.layout },
-    secondPaneInFirstTab: extra.id,
     async stop() {
       await wsHandle.close();
       server.closeAllConnections?.();
@@ -280,28 +274,6 @@ describe('a notification tap on an app that is ALREADY OPEN', () => {
     expect(await page.evaluate(() => performance.getEntriesByType('navigation').length)).toBe(1);
   }, 90_000);
 
-  it('switches panes INSIDE the tab already on screen', async (t) => {
-    if (noBrowser) return t.skip();
-    // The literal report: three agent panes in one tab, one of them wants you.
-    // The tab is already mounted with a different active pane, which is exactly
-    // the case where the `?pane` URL seed is ignored by design (TabView only
-    // seeds from the URL when it has no active pane yet). Only the show-pane
-    // broadcast / focus store can move it.
-    const inst = instance!;
-    const context = ctx!;
-    const one = inst.tabs[0]!;
-    const page = await context.newPage();
-    await page.goto(`${inst.origin}/w/${inst.ws}/t/${one.slug}`);
-    await landedOn(page, inst.ws, one.slug, one.paneId);
-
-    await tapNotification(context, page, {
-      url: `/w/${inst.ws}/t/${one.slug}?ptab=${one.id}&pane=${inst.secondPaneInFirstTab}`,
-      tab_id: one.id,
-      pane_id: inst.secondPaneInFirstTab,
-    });
-    await landedOn(page, inst.ws, one.slug, inst.secondPaneInFirstTab);
-  }, 90_000);
-
   it('crosses WORKSPACES, whose tab list only loads after the navigation', async (t) => {
     if (noBrowser) return t.skip();
     // A cross-workspace deep link mounts a WorkspaceShell that has no tabs yet,
@@ -324,8 +296,8 @@ describe('a notification tap on an app that is ALREADY OPEN', () => {
 
   it('lands the same tap on a DESKTOP window', async (t) => {
     if (noBrowser) return t.skip();
-    // Desktop tabs default to the `tabbed` view mode, which is single-pane too
-    // — so the pane switch has to work there, not just on the phone.
+    // Desktop shows one thing per tab exactly like the phone does, so the
+    // same tap has to land there too.
     const inst = instance!;
     const desktop = await browser!.newContext({ viewport: { width: 1440, height: 900 } });
     try {
