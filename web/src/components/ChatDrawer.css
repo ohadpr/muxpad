@@ -570,3 +570,49 @@
     animation: none;
   }
 }
+
+/* ── A PUBLISHED LINK CARRIES ITS OWN TERM AND ITS OWN TWO ACTS ───────────
+   `publish.create` is the most-used action muxpad has, and this panel used
+   to list the links and nothing else — no term, no warning, no way to keep
+   one alive. The row is a link (copyable, middle-clickable) with the
+   controls OUTSIDE it, because a button inside an anchor is a button that
+   sometimes navigates. */
+.chat-drawer__artifact {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.chat-drawer__artifact > .chat-drawer__row {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.chat-drawer__artifact-acts {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
+  padding-inline-end: 10px;
+}
+.chat-drawer__artifact-acts button {
+  border: 1px solid var(--d-border);
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: transparent;
+  color: var(--d-dim);
+  font: inherit;
+  font-size: 0.6875rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.chat-drawer__artifact-acts button:hover:not(:disabled) {
+  border-color: var(--d-accent);
+  color: var(--d-accent);
+}
+.chat-drawer__artifact-acts button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+/* Armed take-down wears the danger colour, like every other armed control. */
+.chat-drawer__artifact-acts button.-armed {
+  border-color: var(--status-dead, var(--danger));
+  color: var(--status-dead, var(--danger));
+}

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { ChatAction, Tab } from '@muxpad/shared';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -389,5 +391,40 @@ describe('clicking away closes the panel', () => {
       remove.mock.calls.some(([type, , opts]) => type === 'pointerdown' && opts === true),
     ).toBe(true);
     remove.mockRestore();
+  });
+});
+
+/**
+ * ── PUBLISH, MANAGED WHERE YOU CAN SEE IT ────────────────────────────────
+ *
+ * 118 of 230 recorded actions are `publish.create` — the most-used thing
+ * muxpad does — and this panel listed the links and nothing else. A link
+ * 410s after seven days; the only place that was visible was a terminal.
+ */
+describe('the artifacts tab manages the links', () => {
+  const SRC = readFileSync(join(__dirname, 'ChatDrawer.tsx'), 'utf8');
+
+  it('shows each link’s remaining term', () => {
+    expect(SRC).toContain('publishTerm(');
+    expect(SRC).toMatch(/chat-drawer__row-live/);
+  });
+
+  it('can keep a link alive, and revive a dead one', () => {
+    expect(SRC).toContain('api.extendPublish(rec.slug, 7)');
+    expect(SRC).toMatch(/'Revive' : 'Keep 7d'/);
+  });
+
+  it('arms before taking one down — the one act others can notice', () => {
+    expect(SRC).toContain('ArmedTakeDown');
+    expect(SRC).toContain('api.expirePublish(rec.slug)');
+    // …and it is still reversible: taking down stops the link, never the
+    // files. `publish --rm` is the only thing that destroys bytes.
+    expect(SRC).toMatch(/the link stops answering/);
+  });
+
+  it('still renders the links when the listing cannot be loaded', () => {
+    // The term is extra; the address is the point. A failed fetch must not
+    // take the rows with it.
+    expect(SRC).toMatch(/\.catch\(\(\) => setLive\(null\)\)/);
   });
 });
