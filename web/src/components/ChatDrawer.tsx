@@ -388,8 +388,16 @@ function ArtifactList({ artifacts }: { artifacts: ReturnType<typeof artifactsOf>
   useEffect(load, [load]);
 
   /** The published record for a row, matched on the slug inside its url. */
+  // `?? []` as well as `live?.` — the optional chain only covers a missing
+  // LISTING, and what actually broke was a listing that arrived with a
+  // different shape: one unexpected payload took the whole drawer down with
+  // "Cannot read properties of undefined (reading 'find')". A link you can
+  // still click is worth more than a term, so a shape this does not
+  // understand costs the badge and nothing else.
   const recordFor = (url: string) =>
-    live?.items.find((i) => i.url === url || (i.slug && url.includes(`/${i.slug}/`)));
+    (live?.publishes ?? []).find(
+      (i) => i.url === url || (i.slug && url.includes(`/${i.slug}/`)),
+    );
 
   const act = async (slug: string, run: () => Promise<unknown>) => {
     setBusy(slug);
