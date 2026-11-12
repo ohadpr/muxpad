@@ -140,6 +140,7 @@ test('only verbs that work against 0.22.0 are offered', () => {
       'msgvault.export-attachment',
       'msgvault.stats',
       'msgvault.draft-reply',
+      'msgvault.draft-compose',
       'msgvault.draft-get',
       'msgvault.draft-edit',
       'msgvault.draft-delete',
@@ -171,7 +172,14 @@ test('the dialog names the thing being asked for, not just the verb', () => {
   // EVERY action, including the writes — one payload that satisfies all of
   // them, so adding a verb without a description fails here rather than
   // showing a human the raw action name in a dialog.
-  const anything = { query: 'q', id: 'i', body: 'b', hash: 'a'.repeat(64) };
+  const anything = {
+    query: 'q',
+    id: 'i',
+    body: 'b',
+    hash: 'a'.repeat(64),
+    to: ['a@b.com'],
+    subject: 's',
+  };
   for (const a of CAPABILITIES.msgvault.actions) {
     const d = describeMsgvault(a, validateMsgvault(a, anything));
     assert.ok(d.length > 10 && !d.startsWith('msgvault.'), `${a} -> ${d}`);
@@ -192,20 +200,53 @@ test('the dialog names the thing being asked for, not just the verb', () => {
  * These assertions are about the two things that keeps honest: every argument
  * is composed rather than forwarded, and the verb cannot become a send.
  */
-test('there is no verb for composing a new email', () => {
-  // Not "refused" — ABSENT. `draft-compose` must not appear in any command
-  // line this module can build, for any action it accepts.
-  assert.throws(
-    () => validateMsgvault('msgvault.draft', { to: ['a@b.com'], subject: 's', body: 'b' }),
-    /Unsupported action/,
-  );
+test('composing a new email names its recipients, and still cannot send', () => {
+  // This test asserted the OPPOSITE — that `draft-compose` appeared in no
+  // command line this module could build — and it was right while
+  // reply-only was the rule. The owner changed that after a chat could not
+  // write to somebody there was no prior thread with, which is the case
+  // reply-only cannot serve at all.
+  //
+  // What must still hold is the premise the whole approval model rests on:
+  // a draft is created, never sent.
+  const p = validateMsgvault('msgvault.draft-compose', {
+    to: ['a@b.com', 'c@d.com'],
+    subject: 'Hello',
+    body: 'Text',
+  });
+  const { args } = msgvaultArgv('msgvault.draft-compose', p, INSTALL);
+  assert.deepEqual(args.slice(6), [
+    'draft-compose',
+    '--json',
+    '--subject',
+    'Hello',
+    '--body',
+    'Text',
+    '--to',
+    'a@b.com',
+    '--to',
+    'c@d.com',
+  ]);
+  // The identity a mail appears to come FROM is the owner's choice, never an
+  // agent's: msgvault picks the source when it is not told.
+  assert.ok(!args.some((x) => ['--from', '--account', '--source-id'].includes(x)));
+  // `draft` (the bare name) is still not a verb at all.
+  assert.throws(() => validateMsgvault('msgvault.draft', { body: 'b' }), /Unsupported action/);
+  // And NOTHING this module builds sends anything.
   for (const a of CAPABILITIES.msgvault.actions) {
-    const p = validateMsgvault(a, { query: 'q', id: '1', body: 'b', hash: 'a'.repeat(64) });
-    const { args } = msgvaultArgv(a, p, INSTALL);
-    assert.ok(!args.includes('draft-compose'), `${a} -> ${args.join(' ')}`);
-    // …and no recipient flags anywhere: with compose gone, nothing this
-    // module builds addresses a new message to anybody.
-    assert.ok(!args.some((x) => ['--to', '--cc', '--bcc', '--subject'].includes(x)), a);
+    const { args: built } = msgvaultArgv(
+      a,
+      validateMsgvault(a, {
+        query: 'q',
+        id: '1',
+        body: 'b',
+        hash: 'a'.repeat(64),
+        to: ['a@b.com'],
+        subject: 's',
+      }),
+      INSTALL,
+    );
+    assert.ok(!built.some((x) => /^send|^--send/.test(String(x))), `${a} -> ${built.join(' ')}`);
   }
 });
 
@@ -332,13 +373,14 @@ test('a draft verb still refuses a missing id or body', () => {
 });
 
 test('there is STILL no send verb — the whole premise of the blanket approval', () => {
-  for (const name of ['msgvault.send', 'msgvault.draft-send', 'msgvault.draft-compose'])
+  for (const name of ['msgvault.send', 'msgvault.draft-send', 'msgvault.draft-forward'])
     assert.throws(() => validateMsgvault(name, {}), /Unsupported action/);
 });
 
 test('a duration now covers drafts, and the write set names all four', () => {
   assert.equal(MSGVAULT.timedReadOnly, false);
   assert.deepEqual([...MSGVAULT.writeActions].sort(), [
+    'msgvault.draft-compose',
     'msgvault.draft-delete',
     'msgvault.draft-edit',
     'msgvault.draft-get',
