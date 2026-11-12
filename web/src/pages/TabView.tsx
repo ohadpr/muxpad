@@ -46,6 +46,7 @@ import { usePaneFace } from '../lib/pane-face';
 import { consumePushFocusPane } from '../lib/push-focus';
 import { documentVisible, seenAckTarget, useDocumentVisible } from '../lib/seen-ack';
 import { applyTabUpdated, fetchUnsuperseded, mergePaneUpdated } from '../lib/tab-detail-events';
+import { takePrimedTabDetail } from '../lib/tab-detail-prime';
 import { setTabViewMode, useTabViewMode } from '../lib/tab-view-mode';
 import { useDismissable } from '../lib/use-dismissable';
 import { cachedTabsFor, freshTabs, refreshTabs, useTabs } from '../tabs';
@@ -703,6 +704,14 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
         // rolled back by the older answer. Null = every answer was overtaken
         // and the held tab is newer; only possible once a tab is held, since
         // nothing moves the generation before then.
+        // A tab this client just created arrives with its detail (see
+        // lib/tab-detail-prime): render it now, and let the GET below correct
+        // it. Only on a first load — a reload already holds a newer tab.
+        const primed = takePrimedTabDetail(found.id);
+        if (primed && !tab) {
+          setTab(primed);
+          layoutRef.current = toMosaic(primed.layout);
+        }
         let detail: Awaited<ReturnType<typeof api.getTab>> | null;
         try {
           detail = await fetchUnsuperseded(
