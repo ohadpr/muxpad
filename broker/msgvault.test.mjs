@@ -139,9 +139,13 @@ test('only verbs that work against 0.22.0 are offered', () => {
       'msgvault.show-thread',
       'msgvault.export-attachment',
       'msgvault.stats',
+      'msgvault.calendar-freebusy',
+      'msgvault.calendar-conflicts',
       'msgvault.draft-reply',
       'msgvault.draft-compose',
       'msgvault.calendar-create',
+    'msgvault.calendar-update',
+    'msgvault.calendar-delete',
       'msgvault.draft-get',
       'msgvault.draft-edit',
       'msgvault.draft-delete',
@@ -161,6 +165,11 @@ test('only verbs that work against 0.22.0 are offered', () => {
       'msgvault.show-thread',
       'msgvault.export-attachment',
       'msgvault.stats',
+      // The calendar QUERIES. `calendar.*` is in the agent-token permission
+      // list above, and these two only ask questions of it — the tool is
+      // passed `--read-only` as well, so it refuses a mutation itself.
+      'msgvault.calendar-freebusy',
+      'msgvault.calendar-conflicts',
     ],
   );
 });
@@ -185,7 +194,8 @@ test('the dialog names the thing being asked for, not just the verb', () => {
     start: '2026-11-29T13:30',
     end: '2026-11-29T15:00',
     tz: 'America/Los_Angeles',
-  };
+        event: 'evt1',
+    };
   for (const a of CAPABILITIES.msgvault.actions) {
     const d = describeMsgvault(a, validateMsgvault(a, anything));
     assert.ok(d.length > 10 && !d.startsWith('msgvault.'), `${a} -> ${d}`);
@@ -254,7 +264,8 @@ test('composing a new email names its recipients, and still cannot send', () => 
         start: '2026-11-29T13:30',
         end: '2026-11-29T15:00',
         tz: 'America/Los_Angeles',
-      }),
+            event: 'evt1',
+    }),
       INSTALL,
     );
     assert.ok(!built.some((x) => /^send|^--send/.test(String(x))), `${a} -> ${built.join(' ')}`);
@@ -392,6 +403,8 @@ test('a duration now covers drafts, and the write set names every write', () => 
   assert.equal(MSGVAULT.timedReadOnly, false);
   assert.deepEqual([...MSGVAULT.writeActions].sort(), [
     'msgvault.calendar-create',
+    'msgvault.calendar-delete',
+    'msgvault.calendar-update',
     'msgvault.draft-compose',
     'msgvault.draft-delete',
     'msgvault.draft-edit',
@@ -400,6 +413,9 @@ test('a duration now covers drafts, and the write set names every write', () => 
   ]);
   // …and the reads are untouched by any of this.
   assert.ok(MSGVAULT.readActions.includes('msgvault.export-attachment'));
+  // The two calendar QUERIES are reads: they answer "when are you busy" and
+  // "what overlaps", and the tool is told `--read-only` as well.
+  assert.ok(MSGVAULT.readActions.includes('msgvault.calendar-freebusy'));
 });
 
 /**

@@ -103,6 +103,8 @@ export const MSGVAULT = Object.freeze({
     'msgvault.show-thread',
     'msgvault.export-attachment',
     'msgvault.stats',
+    'msgvault.calendar-freebusy',
+    'msgvault.calendar-conflicts',
   ]),
   /** ONE WRITE. `draft.create` is a real agent-token permission and
    *  `draft-reply` reaches the tool in delegated mode — verified against a
@@ -113,6 +115,8 @@ export const MSGVAULT = Object.freeze({
     'msgvault.draft-reply',
     'msgvault.draft-compose',
     'msgvault.calendar-create',
+    'msgvault.calendar-update',
+    'msgvault.calendar-delete',
     'msgvault.draft-get',
     'msgvault.draft-edit',
     'msgvault.draft-delete',

@@ -284,11 +284,14 @@ Capabilities worth knowing:
   Quote a query that contains spaces, exactly as you would for msgvault
   itself: \`muxpad msgvault search 'from:x@y.com newer_than:30d'\`.
 
-  CALENDAR: \`calendar-create --account=<email> --summary="…"
-  --start=<YYYY-MM-DDTHH:MM> --end=<…> --tz=<IANA> [--calendar=<id>]
-  [--location=…]\` puts an event in the owner's own calendar. **No guests and
-  no reminders** — both flags are refused, so it notifies nobody; inviting
-  people stays something the owner does themselves.
+  CALENDAR: \`calendar-freebusy\` and \`calendar-conflicts\` ask when the owner
+  is busy and what overlaps (\`--account --start --end --tz\`);
+  \`calendar-create --summary="…"\` puts an event in their own calendar, and
+  \`calendar-update --event=<id>\` / \`calendar-delete --event=<id>\` fix or
+  remove one. **No guests, no reminders, no notifications** — every flag that
+  would email somebody is refused, so none of this reaches another person.
+  Inviting people stays something the owner does themselves. A delete removes
+  ONE occurrence, never a series.
 
   **WHAT DOES NOT EXIST.** No send verb, no calendar INVITES, no SQL, no bulk
   export, no \`list-accounts\`, no sender list, no meetings verb — and **no

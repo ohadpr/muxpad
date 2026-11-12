@@ -499,7 +499,11 @@ describe('msgvault goes through the broker, holding nothing', () => {
     // send. `draft-compose` is still absent for the reason above.
     expect([...called].sort()).toEqual([
       'attachment',
+      'calendar-conflicts',
       'calendar-create',
+      'calendar-delete',
+      'calendar-freebusy',
+      'calendar-update',
       'draft-compose',
       'draft-delete',
       'draft-edit',

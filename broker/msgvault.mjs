@@ -80,6 +80,49 @@ const fail = (m) => {
  * the archive deliberately closes. Four verbs that work beat seven that are
  * three-sevenths fiction.
  */
+
+/** RFC3339, or a local `YYYY-MM-DDTHH:MM` paired with a zone. */
+const CAL_WHEN = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?([.+-][\d:.]+|Z)?)?$/;
+/** The account + calendar every calendar verb needs, validated once. */
+function calendarAccount(p) {
+  if (!str(p.account, 256) || !/^[^\s@]+@[^\s@]+$/.test(String(p.account)))
+    fail('Give the calendar account (an email address)');
+  return { account: p.account, calendar: str(p.calendar, 256) ? p.calendar : 'primary' };
+}
+/** …plus a time window, for the two reads. */
+function calendarWindow(p) {
+  const base = calendarAccount(p);
+  if (!CAL_WHEN.test(String(p.start ?? ''))) fail('Give a start time (YYYY-MM-DDTHH:MM)');
+  if (!CAL_WHEN.test(String(p.end ?? ''))) fail('Give an end time (YYYY-MM-DDTHH:MM)');
+  if (!str(p.tz, 64)) fail('Give an IANA time zone, e.g. America/Los_Angeles');
+  return { ...base, start: p.start, end: p.end, tz: p.tz };
+}
+function calendarRangeArgv(sub, p) {
+  return [
+    'calendar',
+    sub,
+    p.calendar,
+    '--json',
+    '--read-only',
+    '--account',
+    p.account,
+    '--from',
+    p.start,
+    '--to',
+    p.end,
+    '--tz',
+    p.tz,
+  ];
+}
+/** Guests are the line between "your calendar changed" and "people were
+ *  emailed". An agent never crosses it — refused, never dropped. */
+function refuseGuests(p) {
+  if (p.attendees !== undefined || p.addAttendee !== undefined)
+    fail('Guests are not something an agent adds — invite people yourself');
+  if (p.reminder !== undefined) fail('Reminders are not something an agent sets');
+  if (p.sendUpdates !== undefined) fail('Guest notifications are not an agent’s to send');
+}
+
 const SPEC = {
   'msgvault.search': {
     validate: (p) => {
@@ -245,9 +288,7 @@ const SPEC = {
       if (!when.test(String(p.start ?? ''))) fail('Give a start time (YYYY-MM-DDTHH:MM)');
       if (!when.test(String(p.end ?? ''))) fail('Give an end time (YYYY-MM-DDTHH:MM)');
       if (!str(p.tz, 64)) fail('Give an IANA time zone, e.g. America/Los_Angeles');
-      if (p.attendees !== undefined)
-        fail('Guests are not something an agent adds — invite people yourself');
-      if (p.reminder !== undefined) fail('Reminders are not something an agent sets');
+      refuseGuests(p);
       return {
         account: p.account,
         calendar: str(p.calendar, 256) ? p.calendar : 'primary',
@@ -279,6 +320,87 @@ const SPEC = {
     ],
     describe: (p) =>
       `put "${p.summary}" in the ${p.calendar} calendar of ${p.account}, ${p.start} to ${p.end} (${p.tz}) — no guests, no reminders`,
+  },
+  /**
+   * ── THE READS THAT MAKE THE CALENDAR USABLE ───────────────────────────
+   *
+   * Creating an event without being able to ask "is that slot free" is half
+   * a capability, and the half that comes back for another admin install.
+   * Both are reads of the owner's own calendar; `--read-only` is passed so
+   * the tool itself forbids a mutation even if something later changes.
+   */
+  'msgvault.calendar-freebusy': {
+    validate: (p) => calendarWindow(p),
+    argv: (p) => calendarRangeArgv('freebusy', p),
+    describe: (p) => `check busy times in ${p.calendar} for ${p.account}, ${p.start} to ${p.end}`,
+  },
+  'msgvault.calendar-conflicts': {
+    validate: (p) => calendarWindow(p),
+    argv: (p) => calendarRangeArgv('conflicts', p),
+    describe: (p) => `find overlapping events in ${p.calendar} for ${p.account}, ${p.start} to ${p.end}`,
+  },
+  /**
+   * ── AND FIXING ONE AFTER THE FACT ─────────────────────────────────────
+   *
+   * Same guest rule as create, and for the same reason: `--attendees` and
+   * `--add-attendee` turn a calendar edit into mail somebody else receives.
+   * `--send-updates` defaults to none and is never raised from here.
+   */
+  'msgvault.calendar-update': {
+    validate: (p) => {
+      const base = calendarAccount(p);
+      if (!str(p.event, 256)) fail('Give the event id to update');
+      refuseGuests(p);
+      const when = CAL_WHEN;
+      if (p.start !== undefined && !when.test(String(p.start))) fail('Bad start time');
+      if (p.end !== undefined && !when.test(String(p.end))) fail('Bad end time');
+      if (p.start !== undefined && !str(p.tz, 64)) fail('A new time needs its IANA zone');
+      return {
+        ...base,
+        event: p.event,
+        ...(p.summary !== undefined ? { summary: p.summary } : {}),
+        ...(p.start !== undefined ? { start: p.start } : {}),
+        ...(p.end !== undefined ? { end: p.end } : {}),
+        ...(p.tz !== undefined ? { tz: p.tz } : {}),
+        ...(p.location !== undefined ? { location: p.location } : {}),
+      };
+    },
+    argv: (p) => [
+      'calendar',
+      'update',
+      p.calendar,
+      p.event,
+      '--json',
+      '--account',
+      p.account,
+      ...(p.summary ? ['--summary', p.summary] : []),
+      ...(p.start ? ['--from', p.start] : []),
+      ...(p.end ? ['--to', p.end] : []),
+      ...(p.tz ? ['--tz', p.tz] : []),
+      ...(p.location ? ['--location', p.location] : []),
+    ],
+    describe: (p) => `change event ${p.event} in ${p.calendar} (${p.account}) — no guest changes`,
+  },
+  'msgvault.calendar-delete': {
+    validate: (p) => {
+      const base = calendarAccount(p);
+      if (!str(p.event, 256)) fail('Give the event id to delete');
+      return { ...base, event: p.event };
+    },
+    argv: (p) => [
+      'calendar',
+      'delete',
+      p.calendar,
+      p.event,
+      '--json',
+      '--account',
+      p.account,
+      // A recurring series is never removed wholesale by an agent: one
+      // occurrence is recoverable by hand, a year of them is not.
+      '--scope',
+      'single',
+    ],
+    describe: (p) => `delete event ${p.event} from ${p.calendar} (${p.account}) — this occurrence only`,
   },
   'msgvault.draft-compose': {
     validate: (p) => {

@@ -144,6 +144,25 @@ const MSGVAULT: Record<string, VerbRule> = {
   // A live calendar event, with no guests and no reminders — the broker
   // refuses both flags, so nothing is sent to anybody and this stays
   // draft-shaped. Inviting people remains the owner's own act.
+  // Two READS of the owner's own calendar, passed `--read-only` at the tool
+  // as well: "is that slot free" is half of what makes creating an event
+  // usable, and the half that otherwise comes back as another admin install.
+  'msgvault.calendar-freebusy': { kind: 'read', timed: true, notifiesOthers: false },
+  'msgvault.calendar-conflicts': { kind: 'read', timed: true, notifiesOthers: false },
+  // …and fixing or removing one afterwards. Same guest rule as create: the
+  // broker refuses every flag that would email somebody.
+  'msgvault.calendar-update': {
+    kind: 'write',
+    timed: true,
+    timedWrite: true,
+    notifiesOthers: false,
+  },
+  'msgvault.calendar-delete': {
+    kind: 'write',
+    timed: true,
+    timedWrite: true,
+    notifiesOthers: false,
+  },
   'msgvault.calendar-create': {
     kind: 'write',
     timed: true,

@@ -49,6 +49,8 @@ describe('no write may ride a grant approved earlier', () => {
         .sort(),
     ).toEqual([
       'msgvault.calendar-create',
+      'msgvault.calendar-delete',
+      'msgvault.calendar-update',
       'msgvault.draft-compose',
       'msgvault.draft-delete',
       'msgvault.draft-edit',
@@ -117,8 +119,11 @@ describe('the verbs that reach other people', () => {
       expect(c.ok, v).toBe(true);
       // The writes — drafts and the guest-free calendar event — ride a
       // duration too; the reads always did.
-      if (/draft|calendar/.test(v)) expect(c, v).toMatchObject({ kind: 'write', timed: true });
-      else expect(c, v).toMatchObject({ kind: 'read', timed: true });
+      // The calendar QUERIES are reads; its mutations and every draft verb
+      // are writes. Both ride a duration — nothing in this connector
+      // reaches another person, which is asserted directly above.
+      const isWrite = /\.draft(-|$)/.test(v) || /calendar-(create|update|delete)/.test(v);
+      expect(c, v).toMatchObject({ kind: isWrite ? 'write' : 'read', timed: true });
     }
   });
 });
@@ -126,13 +131,14 @@ describe('the verbs that reach other people', () => {
 describe('the table itself', () => {
   it('groups by connector', () => {
     expect(verbsOf('slack').length).toBeGreaterThan(5);
-    // ELEVEN: five reads (search, message, thread, attachment, stats), the
+    // FIFTEEN: seven reads (search, message, thread, attachment, stats and
+    // two calendar queries), the
     // five draft verbs — compose, reply, get, edit, delete — and one
     // calendar write that notifies nobody. Three advertised verbs could not work against
     // agent-delegated msgvault and were removed rather than repaired, and a
     // compose verb went the same way once a Gmail source was measured
     // refusing it — see the note on MSGVAULT.
-    expect(verbsOf('msgvault')).toHaveLength(11);
+    expect(verbsOf('msgvault')).toHaveLength(15);
     expect(verbsOf('slack').every((v) => v.startsWith('slack.'))).toBe(true);
     // A prefix that is not a connector gets nothing, rather than everything.
     expect(verbsOf('')).toEqual([]);
@@ -203,6 +209,10 @@ describe('the table is the policy, so the table is pinned', () => {
     'msgvault.draft-reply': { kind: 'write', timed: true, others: false },
     'msgvault.draft-compose': { kind: 'write', timed: true, others: false },
     'msgvault.calendar-create': { kind: 'write', timed: true, others: false },
+    'msgvault.calendar-update': { kind: 'write', timed: true, others: false },
+    'msgvault.calendar-delete': { kind: 'write', timed: true, others: false },
+    'msgvault.calendar-freebusy': { kind: 'read', timed: true, others: false },
+    'msgvault.calendar-conflicts': { kind: 'read', timed: true, others: false },
     'msgvault.draft-get': { kind: 'write', timed: true, others: false },
     'msgvault.draft-edit': { kind: 'write', timed: true, others: false },
     'msgvault.draft-delete': { kind: 'write', timed: true, others: false },
@@ -253,7 +263,7 @@ describe('the table is the policy, so the table is pinned', () => {
       // does reach somebody. Matched on the verb's own name, not on
       // `.draft.`, which was the shape of a naming that never shipped and
       // silently matched nothing once the real verb arrived.
-      const reachesNobody = /\.draft(-|$)/.test(verb) || verb === 'msgvault.calendar-create';
+      const reachesNobody = /\.draft(-|$)/.test(verb) || /^msgvault\.calendar-/.test(verb);
       expect(r.notifiesOthers === true, verb).toBe(!reachesNobody);
     }
   });
