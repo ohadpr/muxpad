@@ -51,6 +51,8 @@ const TITLES: Record<string, (p: Payload) => string> = {
   'msgvault.draft-reply': (p) => `Drafted a reply to message ${String(p.id ?? '')}`,
   'msgvault.draft-compose': (p) =>
     `Drafted a new email to ${(Array.isArray(p.to) ? p.to : [p.to]).map(String).join(', ')} — ${JSON.stringify(String(p.subject ?? ''))}`,
+  'msgvault.run': (p) =>
+    `Ran msgvault ${(Array.isArray(p.args) ? p.args : []).map(String).join(' ')}`,
   'msgvault.calendar-freebusy': (p) =>
     `Checked the calendar for free time (${String(p.start ?? '')})`,
   'msgvault.calendar-conflicts': (p) => `Looked for calendar conflicts (${String(p.start ?? '')})`,
@@ -82,6 +84,8 @@ interface Payload {
   start?: unknown;
   /** msgvault calendar: which event an update or delete acts on. */
   event?: unknown;
+  /** msgvault run: the argv the agent asked for, reviewed by the broker. */
+  args?: unknown;
 }
 
 /**

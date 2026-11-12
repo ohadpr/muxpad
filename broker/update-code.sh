@@ -102,7 +102,7 @@ fi
 for tree in "$SOURCE" "$DEST/code"; do
  check_tree "$tree" || exit 1
 done
-FILES=(broker-paths.mjs capabilities.mjs client.js core.mjs device-auth.mjs device-client.mjs http.mjs human-session.mjs main.mjs msgvault-runner.mjs msgvault.mjs node-policy.mjs node-session.mjs origins.mjs page.html passkey-admin-socket.mjs passkey-approval.mjs passkey-http.mjs policy.mjs protected-path.mjs shell.css shell.html shell.js slack.mjs socket-listener.mjs state-store.mjs)
+FILES=(broker-paths.mjs capabilities.mjs client.js core.mjs device-auth.mjs device-client.mjs http.mjs human-session.mjs main.mjs msgvault-argv.mjs msgvault-runner.mjs msgvault.mjs node-policy.mjs node-session.mjs origins.mjs page.html passkey-admin-socket.mjs passkey-approval.mjs passkey-http.mjs policy.mjs protected-path.mjs shell.css shell.html shell.js slack.mjs socket-listener.mjs state-store.mjs)
 for file in "${FILES[@]}"; do
  [[ -f $SOURCE/$file ]] || { echo "Missing release file: $file"; exit 1; }
 done

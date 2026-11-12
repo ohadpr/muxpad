@@ -117,6 +117,13 @@ export const MSGVAULT = Object.freeze({
     'msgvault.calendar-create',
     'msgvault.calendar-update',
     'msgvault.calendar-delete',
+    // THE ARGV PATH, and a write by definition: what it does depends on the
+    // arguments, so it is classified by the worst thing it could be. It is
+    // deliberately NOT in `timedWrite` — the curated verbs ride a duration
+    // because what they do is fixed and described; free-form argv is
+    // approved once, with the exact command in front of the person
+    // approving it. "u just review them."
+    'msgvault.run',
     'msgvault.draft-get',
     'msgvault.draft-edit',
     'msgvault.draft-delete',

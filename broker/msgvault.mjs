@@ -40,6 +40,10 @@
  * reaches the daemon with the string intact, while `search '--account=x'`
  * does not.
  */
+import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { reviewArgv } from './msgvault-argv.mjs';
+
 const str = (v, max) =>
   typeof v === 'string' && v.length > 0 && v.length <= max && !v.startsWith('-');
 /** An id as msgvault prints it. Deliberately narrow: ids come back from a
@@ -329,6 +333,20 @@ const SPEC = {
    * Both are reads of the owner's own calendar; `--read-only` is passed so
    * the tool itself forbids a mutation even if something later changes.
    */
+  /**
+   * THE ARGV PATH. No flags of our own, no shape to keep in step with
+   * msgvault's: what the agent sends is what runs, if the review lets it.
+   */
+  'msgvault.run': {
+    validate: (p) => {
+      const args = Array.isArray(p.args) ? p.args.map(String) : [];
+      const verdict = reviewArgv(args, msgvaultHelp);
+      if (!verdict.ok) fail(verdict.why);
+      return { args };
+    },
+    argv: (p) => p.args,
+    describe: (p) => `run msgvault ${p.args.join(' ')}`,
+  },
   'msgvault.calendar-freebusy': {
     validate: (p) => calendarWindow(p),
     argv: (p) => calendarRangeArgv('freebusy', p),
@@ -446,6 +464,51 @@ const SPEC = {
     describe: (p) => `delete draft ${p.id}`,
   },
 };
+
+/**
+ * ── THE ARGV PATH ────────────────────────────────────────────────────────
+ *
+ * One action instead of a verb per capability: the agent sends the arguments
+ * it wants msgvault to run, and {@link reviewArgv} decides whether they may.
+ * See msgvault-argv.mjs for the three gates and why only one of them is
+ * written by hand.
+ *
+ * The help text comes from the binary named in the same declaration the
+ * runner validates, and is cached per command: a review that shelled out on
+ * every keystroke would be a new cost on a path whose whole point is to be
+ * cheap to extend.
+ */
+const helpCache = new Map();
+function declaredBinary() {
+  try {
+    const d = JSON.parse(readFileSync('/Library/muxpad/integrations.json', 'utf8'))?.msgvault;
+    return typeof d?.binary === 'string' ? d.binary : null;
+  } catch {
+    return null;
+  }
+}
+export function msgvaultHelp(command) {
+  if (helpCache.has(command)) return helpCache.get(command);
+  const binary = declaredBinary();
+  let help = null;
+  if (binary) {
+    try {
+      help = execFileSync(binary, [...command.split(' '), '--help'], {
+        encoding: 'utf8',
+        timeout: 15_000,
+        stdio: 'pipe',
+        env: {},
+      });
+    } catch (e) {
+      // A command that does not exist exits non-zero with its usage on
+      // stderr; that output is still the answer to "what flags has it".
+      const out = String(e.stdout || e.stderr || '');
+      help = /unknown command|unknown shorthand/i.test(out) ? null : out || null;
+    }
+  }
+  helpCache.set(command, help);
+  return help;
+}
 
 export function validateMsgvault(action, raw) {
   const spec = SPEC[action];

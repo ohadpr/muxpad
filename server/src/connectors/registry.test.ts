@@ -123,6 +123,13 @@ describe('the verbs that reach other people', () => {
       // are writes. Both ride a duration — nothing in this connector
       // reaches another person, which is asserted directly above.
       const isWrite = /\.draft(-|$)/.test(v) || /calendar-(create|update|delete)/.test(v);
+      if (v === 'msgvault.run') {
+        // The argv path is a write by definition and is never timed: what it
+        // does depends on its arguments, so it is approved once with the
+        // command in front of the person approving it.
+        expect(c, v).toMatchObject({ kind: 'write', timed: false });
+        continue;
+      }
       expect(c, v).toMatchObject({ kind: isWrite ? 'write' : 'read', timed: true });
     }
   });
@@ -138,7 +145,7 @@ describe('the table itself', () => {
     // agent-delegated msgvault and were removed rather than repaired, and a
     // compose verb went the same way once a Gmail source was measured
     // refusing it — see the note on MSGVAULT.
-    expect(verbsOf('msgvault')).toHaveLength(15);
+    expect(verbsOf('msgvault')).toHaveLength(16);
     expect(verbsOf('slack').every((v) => v.startsWith('slack.'))).toBe(true);
     // A prefix that is not a connector gets nothing, rather than everything.
     expect(verbsOf('')).toEqual([]);
@@ -213,6 +220,7 @@ describe('the table is the policy, so the table is pinned', () => {
     'msgvault.calendar-delete': { kind: 'write', timed: true, others: false },
     'msgvault.calendar-freebusy': { kind: 'read', timed: true, others: false },
     'msgvault.calendar-conflicts': { kind: 'read', timed: true, others: false },
+    'msgvault.run': { kind: 'write', timed: false, others: false },
     'msgvault.draft-get': { kind: 'write', timed: true, others: false },
     'msgvault.draft-edit': { kind: 'write', timed: true, others: false },
     'msgvault.draft-delete': { kind: 'write', timed: true, others: false },
@@ -263,7 +271,12 @@ describe('the table is the policy, so the table is pinned', () => {
       // does reach somebody. Matched on the verb's own name, not on
       // `.draft.`, which was the shape of a naming that never shipped and
       // silently matched nothing once the real verb arrived.
-      const reachesNobody = /\.draft(-|$)/.test(verb) || /^msgvault\.calendar-/.test(verb);
+      const reachesNobody =
+        /\.draft(-|$)/.test(verb) ||
+        /^msgvault\.calendar-/.test(verb) ||
+        // The argv path cannot reach anybody either: every flag that would
+        // email a person is refused by the review (msgvault-argv.mjs).
+        verb === 'msgvault.run';
       expect(r.notifiesOthers === true, verb).toBe(!reachesNobody);
     }
   });

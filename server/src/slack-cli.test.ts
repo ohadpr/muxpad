@@ -470,13 +470,27 @@ describe('msgvault goes through the broker, holding nothing', () => {
     expect(body).toMatch(/pane=\$MUXPAD_PANE_ID&key=\$MUXPAD_PANE_KEY/);
   });
 
-  it('offers a FIXED set of verbs, with no escape to arbitrary arguments', () => {
-    // An escape would be the pass-through again, and the pass-through is the
-    // thing that had no dialog in front of it.
+  it('forwards argv ONLY through `run`, never from a named verb', () => {
+    // This used to say "no escape to arbitrary arguments" and forbade `"$@"`
+    // outright. There is an escape now, deliberately: the owner asked for an
+    // argv path — "the agent produces a list of args and u just review them"
+    // — and the review is in the broker, against msgvault's own `--help`
+    // (broker/msgvault-argv.mjs).
+    //
+    // The property that still matters is narrower: a NAMED verb must keep
+    // composing its own payload, so nobody can inject a flag into `search`
+    // by trailing it with words.
     const verbs = ['search', 'show-message', 'show-thread', 'attachment', 'stats'];
     for (const v of verbs) expect(body, v).toContain(v);
-    // Nothing forwards the caller's remaining words wholesale.
-    expect(body).not.toMatch(/"\$@"/);
+    const forwards = [...body.matchAll(/"\$@"/g)];
+    expect(forwards).toHaveLength(1);
+    // …and the one that does is inside the `run` branch.
+    const runBranch = body.slice(
+      body.indexOf('    run)'),
+      body.indexOf('    # THE CALENDAR READS'),
+    );
+    expect(runBranch).toMatch(/"\$@"/);
+    expect(runBranch).toContain('/api/msgvault/run');
   });
 
   it('calls exactly these endpoints — four reads and the draft lifecycle', () => {
@@ -510,6 +524,7 @@ describe('msgvault goes through the broker, holding nothing', () => {
       'draft-get',
       'draft-reply',
       'message',
+      'run',
       'search',
       'stats',
       'thread',

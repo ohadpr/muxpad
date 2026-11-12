@@ -147,6 +147,9 @@ const MSGVAULT: Record<string, VerbRule> = {
   // Two READS of the owner's own calendar, passed `--read-only` at the tool
   // as well: "is that slot free" is half of what makes creating an event
   // usable, and the half that otherwise comes back as another admin install.
+  // The argv path: a write by definition (what it does depends on the args)
+  // and never timed — the command is approved once, as read.
+  'msgvault.run': { kind: 'write', timed: false, notifiesOthers: false },
   'msgvault.calendar-freebusy': { kind: 'read', timed: true, notifiesOthers: false },
   'msgvault.calendar-conflicts': { kind: 'read', timed: true, notifiesOthers: false },
   // …and fixing or removing one afterwards. Same guest rule as create: the

@@ -144,8 +144,9 @@ test('only verbs that work against 0.22.0 are offered', () => {
       'msgvault.draft-reply',
       'msgvault.draft-compose',
       'msgvault.calendar-create',
-    'msgvault.calendar-update',
-    'msgvault.calendar-delete',
+      'msgvault.calendar-update',
+      'msgvault.calendar-delete',
+      'msgvault.run',
       'msgvault.draft-get',
       'msgvault.draft-edit',
       'msgvault.draft-delete',
@@ -183,6 +184,11 @@ test('the dialog names the thing being asked for, not just the verb', () => {
   // them, so adding a verb without a description fails here rather than
   // showing a human the raw action name in a dialog.
   const anything = {
+    // msgvault.run's payload IS the argv; the rest of the keys are ignored
+    // by it, and it is ignored by the verbs that do not take args.
+    // `stats` takes no --json: the review caught that in this very fixture,
+    // which is the gate doing its job on the people who wrote it.
+    args: ['stats'],
     query: 'q',
     id: 'i',
     body: 'b',
@@ -194,8 +200,8 @@ test('the dialog names the thing being asked for, not just the verb', () => {
     start: '2026-11-29T13:30',
     end: '2026-11-29T15:00',
     tz: 'America/Los_Angeles',
-        event: 'evt1',
-    };
+    event: 'evt1',
+  };
   for (const a of CAPABILITIES.msgvault.actions) {
     const d = describeMsgvault(a, validateMsgvault(a, anything));
     assert.ok(d.length > 10 && !d.startsWith('msgvault.'), `${a} -> ${d}`);
@@ -253,6 +259,9 @@ test('composing a new email names its recipients, and still cannot send', () => 
     const { args: built } = msgvaultArgv(
       a,
       validateMsgvault(a, {
+        // `stats` takes no --json: the review caught that in this very fixture,
+        // which is the gate doing its job on the people who wrote it.
+        args: ['stats'],
         query: 'q',
         id: '1',
         body: 'b',
@@ -264,8 +273,8 @@ test('composing a new email names its recipients, and still cannot send', () => 
         start: '2026-11-29T13:30',
         end: '2026-11-29T15:00',
         tz: 'America/Los_Angeles',
-            event: 'evt1',
-    }),
+        event: 'evt1',
+      }),
       INSTALL,
     );
     assert.ok(!built.some((x) => /^send|^--send/.test(String(x))), `${a} -> ${built.join(' ')}`);
@@ -410,6 +419,7 @@ test('a duration now covers drafts, and the write set names every write', () => 
     'msgvault.draft-edit',
     'msgvault.draft-get',
     'msgvault.draft-reply',
+    'msgvault.run',
   ]);
   // …and the reads are untouched by any of this.
   assert.ok(MSGVAULT.readActions.includes('msgvault.export-attachment'));
@@ -475,7 +485,7 @@ test('a calendar event needs an account, a title, both ends and a zone', () => {
   for (const missing of ['account', 'summary', 'start', 'end', 'tz']) {
     const bad = { ...EVENT };
     delete bad[missing];
-    assert.throws(() => validateMsgvault('msgvault.calendar-create', bad), new RegExp('.'), missing);
+    assert.throws(() => validateMsgvault('msgvault.calendar-create', bad), /./, missing);
   }
   // A date that is not a date never reaches the tool.
   assert.throws(
