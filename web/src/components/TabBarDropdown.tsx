@@ -141,22 +141,31 @@ function TabDropdownItem({
     onLongPress: () =>
       openInNewTab(`/w/${encodeURIComponent(workspaceSlug)}/t/${encodeURIComponent(tab.slug)}`),
   });
-  // ASKED IN PLACE, not in a system dialog. Closing a tab kills its running
-  // panes, so it still asks — but the question is the × itself going red and
-  // saying so, which costs no modal, matches the sidebar's × exactly, and
-  // works on the one surface where `window.confirm` silently does nothing (an
-  // installed iOS PWA). Disarms on a timer and on leaving the row.
+  // ── THE × ARCHIVES, LIKE EVERY OTHER × ────────────────────────────────────
+  //
+  // It DELETED, permanently, behind one armed tap — while the sidebar's × and
+  // the sheet's swipe tray archive. Same glyph, opposite outcomes, and only
+  // one of them can be undone: the chat, its queue, its cards and its
+  // attachments were gone, from the control that looks most like tidying up.
+  //
+  // One rule across the app now: × archives (reversible, the chat drops into
+  // the done group with its transcript intact and a message revives it), and
+  // DELETE lives in the context menu where it says what it is.
+  //
+  // Still armed, to match the sidebar's × exactly — asked in place rather than
+  // in a system dialog, which costs no modal and works on the one surface
+  // where `window.confirm` silently does nothing (an installed iOS PWA).
   const { armed, press, disarm } = useArmed();
   const onClose = async (e: React.MouseEvent | React.KeyboardEvent) => {
     e.stopPropagation();
     e.preventDefault();
     if (!press()) return;
     try {
-      await api.deleteTab(tab.id);
+      await api.archiveTab(tab.id);
       await refreshTabs(workspaceId);
     } catch (err) {
-      console.error('deleteTab failed', err);
-      noticeFromError(`Couldn't close "${tab.name}".`, err);
+      console.error('archiveTab failed', err);
+      noticeFromError(`Couldn't archive "${tab.name}".`, err);
     }
   };
   return (
@@ -196,8 +205,8 @@ function TabDropdownItem({
         onMouseLeave={disarm}
         onBlur={disarm}
         aria-pressed={armed}
-        title={armed ? 'Click again — anything running here will be killed' : 'Close tab'}
-        aria-label={armed ? `Click again to close ${tab.name}` : `Close tab ${tab.name}`}
+        title={armed ? 'Click again to archive it — a message brings it back' : 'Archive'}
+        aria-label={armed ? `Click again to archive ${tab.name}` : `Archive ${tab.name}`}
       >
         <SvgClose />
       </span>
