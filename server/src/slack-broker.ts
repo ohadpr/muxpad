@@ -50,9 +50,31 @@ export async function slackBrokerRequest(
     signal: AbortSignal.timeout(timeoutMS),
     redirect: 'error',
   });
-  if (!response.ok)
-    throw Object.assign(new Error('Protected Slack broker refused the request'), {
+  if (!response.ok) {
+    // ── KEEP THE BROKER'S OWN SENTENCE ──────────────────────────────────
+    //
+    // This used to throw the status and nothing else, so every refusal
+    // reached the caller as "request failed; protected broker mode never
+    // falls back to local credentials" — a line about CREDENTIALS, for a
+    // review that had said something exact and useful: "search has no
+    // --deep", "add-account administers the archive itself".
+    //
+    // That is the difference between an agent that corrects itself and one
+    // that reports your mail as broken, which is a complaint this repo has
+    // actually received. A 4xx is a DECISION and its reason is safe to
+    // repeat; a 5xx is a fault and keeps the generic line.
+    const detail = await response
+      .json()
+      .then((b) => {
+        const e = (b as { error?: { message?: unknown }; detail?: unknown })?.error;
+        const m = typeof e?.message === 'string' ? e.message : (b as { detail?: unknown })?.detail;
+        return typeof m === 'string' && m.trim() ? m.trim().slice(0, 300) : null;
+      })
+      .catch(() => null);
+    throw Object.assign(new Error(detail ?? 'Protected Slack broker refused the request'), {
       status: response.status,
+      ...(detail ? { brokerReason: detail } : {}),
     });
+  }
   return (await response.json()) as Record<string, unknown>;
 }

@@ -342,8 +342,19 @@ export function handler(broker, origin, { config = {}, sessions } = {}) {
         return;
       }
       json(404, { error: 'Unknown endpoint' });
-    } catch {
+    } catch (e) {
       if (!res.headersSent) {
+        // A TAGGED refusal is repeated verbatim; everything else keeps the
+        // fixed sentence, because an unexpected exception may carry a path,
+        // a stack or a value nobody approved crossing this wall.
+        const refusal =
+          e && typeof e === 'object' && e.refusal === true && typeof e.message === 'string'
+            ? e.message.slice(0, 300)
+            : null;
+        if (refusal) {
+          json(400, { error: refusal });
+          return;
+        }
         if (peerMode && sessions.storageFault)
           json(503, {
             storageFault: true,

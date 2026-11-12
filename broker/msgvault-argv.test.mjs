@@ -97,3 +97,29 @@ test('parseHelpFlags reads the real binary’s help, not a shape we imagined', (
   assert.ok(flags.has('--limit'), [...flags].join(' '));
   assert.ok(!flags.has('--deep'));
 });
+
+/**
+ * ── A REFUSAL IS ONLY USEFUL IF IT SURVIVES THE WALL ─────────────────────
+ *
+ * The broker answers every exception with a fixed `Request refused or
+ * invalid`, and that is right for a fault: a stack or a path must not cross
+ * it. But the review's own sentences — "search has no --deep" — are the
+ * whole value of the review, and without them every refusal reads as
+ * "msgvault is broken". So they are TAGGED, and only tagged errors repeat.
+ */
+test('the review refuses through fail(), which marks the error safe to repeat', async () => {
+  const { validateMsgvault } = await import('./msgvault.mjs');
+  for (const [args, expected] of [
+    [['search', '--deep'], /search has no --deep/],
+    [['add-account'], /administers the archive/],
+    [['search', '--home', '/tmp'], /not something an agent sets/],
+  ]) {
+    try {
+      validateMsgvault('msgvault.run', { args });
+      assert.fail(`expected a refusal for ${args.join(' ')}`);
+    } catch (e) {
+      assert.match(e.message, expected);
+      assert.equal(e.refusal, true, `${args.join(' ')} must be repeatable`);
+    }
+  }
+});

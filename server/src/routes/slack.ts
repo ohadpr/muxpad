@@ -493,6 +493,14 @@ export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
         });
         return c.json(refusal(error.why), 403);
       }
+      // THE BROKER SAID WHY. A 4xx from it is a decision — a review verdict,
+      // a validation failure — and its sentence is the only thing that tells
+      // the caller how to fix the call. A 5xx is a fault, and keeps the
+      // generic line rather than leaking internals.
+      const reason = (error as { brokerReason?: string }).brokerReason;
+      const status = (error as { status?: number }).status;
+      if (reason && typeof status === 'number' && status >= 400 && status < 500)
+        return c.json(refusal(reason), 400);
       // Names the capability that failed rather than always saying Slack.
       return c.json(
         refusal(
