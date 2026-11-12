@@ -123,3 +123,15 @@ test('the review refuses through fail(), which marks the error safe to repeat', 
     }
   }
 });
+
+test('a positional is not mistaken for a subcommand in the refusal', () => {
+  // `search x --deep` refused with "search x has no --deep", naming the
+  // user's own search term as if it were a verb. A subcommand is told apart
+  // from a positional by ASKING: only a subcommand has its own help.
+  assert.equal(reviewArgv(['search', 'dinner', '--deep'], helpFor).why, 'search has no --deep');
+  // …and a real subcommand is still named in full.
+  assert.equal(
+    reviewArgv(['calendar', 'create', 'primary', '--nope'], helpFor).why,
+    'calendar create has no --nope',
+  );
+});

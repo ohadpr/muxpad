@@ -90,8 +90,14 @@ export function reviewArgv(args, helpFor) {
       why: `${command} administers the archive itself — that is the owner's own work, not an agent's`,
     };
   // A subcommand (`calendar create`) gets its own help, so its own flags.
-  const sub = words[1] && /^[a-z][a-z0-9-]*$/.test(words[1]) ? `${command} ${words[1]}` : command;
-  const help = helpFor(sub) || helpFor(command);
+  // `calendar create` is a subcommand; `search dinner` is a command and a
+  // query. Tell them apart by ASKING: a subcommand has its own help. Without
+  // this the refusal read "search x has no --deep", naming the user's own
+  // search term as if it were a verb.
+  const pair = words[1] && /^[a-z][a-z0-9-]*$/.test(words[1]) ? `${command} ${words[1]}` : null;
+  const pairHelp = pair ? helpFor(pair) : null;
+  const sub = pairHelp ? pair : command;
+  const help = pairHelp || helpFor(command);
   if (!help) return { ok: false, why: `msgvault has no command ${command}` };
   const allowed = parseHelpFlags(help);
   const exceptions = FLAG_EXCEPTIONS[command] ?? [];
