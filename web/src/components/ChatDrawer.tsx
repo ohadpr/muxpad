@@ -1,8 +1,10 @@
 import type { ChatAction } from '@muxpad/shared';
-import { useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { api } from '../api';
 import type { MentionChat } from '../lib/chat-mention';
 import { spawnLabel, spawnState, spawnStateLabel } from '../lib/chat-mention';
 import { isOutsideDismiss } from '../lib/dismiss-outside';
+import { publishTerm } from '../lib/publish-term';
 import { shortAge } from '../lib/short-age';
 import {
   type SubChat,
@@ -12,6 +14,7 @@ import {
   subChatLiveWord,
   subChatsOf,
 } from '../lib/sub-chats';
+import { useArmed } from '../lib/use-armed';
 import { ChatChip } from './ChatChip';
 import { RosterSpinner } from './ChatTranscript';
 import './ChatDrawer.css';
@@ -357,7 +360,47 @@ function SubChatList({
   );
 }
 
+/**
+ * ── A LINK YOU CAN SEE THE SHELF LIFE OF, AND ACT ON ─────────────────────
+ *
+ * `publish.create` is the most-used action muxpad has — 118 of 230 recorded
+ * acts, more than every msgvault call combined. Until now this panel listed
+ * the links and nothing else: no term, no warning, no way to keep one alive.
+ * A link quietly 410s after seven days and the only place that fact existed
+ * was `muxpad publish --list` in a terminal.
+ *
+ * So each row carries its own term and the two acts that matter. KEEP is
+ * reversible and one click. TAKE DOWN arms first, because it is the only
+ * thing here anybody else can notice — and it still destroys nothing: the
+ * bytes stay and the link can be revived.
+ */
 function ArtifactList({ artifacts }: { artifacts: ReturnType<typeof artifactsOf> }) {
+  const [live, setLive] = useState<Awaited<ReturnType<typeof api.listPublished>> | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const load = useCallback(() => {
+    api
+      .listPublished()
+      .then(setLive)
+      // A listing that will not load must not take the links with it: the
+      // rows below still render from the chat's own actions.
+      .catch(() => setLive(null));
+  }, []);
+  useEffect(load, [load]);
+
+  /** The published record for a row, matched on the slug inside its url. */
+  const recordFor = (url: string) =>
+    live?.items.find((i) => i.url === url || (i.slug && url.includes(`/${i.slug}/`)));
+
+  const act = async (slug: string, run: () => Promise<unknown>) => {
+    setBusy(slug);
+    try {
+      await run();
+      load();
+    } finally {
+      setBusy(null);
+    }
+  };
+
   if (artifacts.length === 0)
     return (
       <p className="chat-drawer__empty">
@@ -367,27 +410,77 @@ function ArtifactList({ artifacts }: { artifacts: ReturnType<typeof artifactsOf>
     );
   return (
     <ul className="chat-drawer__list">
-      {artifacts.map((a) => (
-        <li key={a.id}>
-          {/* A LINK, not a button that opens one: this is an address, and a
-              person expects to be able to copy it, middle-click it and see
-              where it goes before committing. */}
-          <a
-            className="chat-drawer__row chat-drawer__row--artifact"
-            href={a.url}
-            target="_blank"
-            rel="noreferrer noopener"
-          >
-            <span className="chat-drawer__row-text">
-              <span className="chat-drawer__row-name" dir="auto">
-                {a.title}
-              </span>
-              <span className="chat-drawer__row-sub">{a.detail ?? a.url}</span>
-            </span>
-          </a>
-        </li>
-      ))}
+      {artifacts.map((a) => {
+        const rec = recordFor(a.url);
+        const term = publishTerm(rec, Date.now());
+        return (
+          <li key={a.id}>
+            <div className="chat-drawer__artifact">
+              {/* A LINK, not a button that opens one: this is an address, and
+                  a person expects to be able to copy it, middle-click it and
+                  see where it goes before committing. */}
+              <a
+                className="chat-drawer__row chat-drawer__row--artifact"
+                href={a.url}
+                target="_blank"
+                rel="noreferrer noopener"
+              >
+                <span className="chat-drawer__row-text">
+                  <span className="chat-drawer__row-name" dir="auto">
+                    {a.title}
+                  </span>
+                  <span className="chat-drawer__row-sub">{a.detail ?? a.url}</span>
+                </span>
+                {term ? (
+                  <span className="chat-drawer__row-live" data-state={term.state}>
+                    {term.label}
+                  </span>
+                ) : null}
+              </a>
+              {rec ? (
+                <div className="chat-drawer__artifact-acts">
+                  <button
+                    type="button"
+                    disabled={busy === rec.slug}
+                    onClick={() => void act(rec.slug, () => api.extendPublish(rec.slug, 7))}
+                    title="Another 7 days from now"
+                  >
+                    {term?.state === 'done' ? 'Revive' : 'Keep 7d'}
+                  </button>
+                  {term?.state === 'done' ? null : (
+                    <ArmedTakeDown
+                      busy={busy === rec.slug}
+                      onConfirm={() => void act(rec.slug, () => api.expirePublish(rec.slug))}
+                    />
+                  )}
+                </div>
+              ) : null}
+            </div>
+          </li>
+        );
+      })}
     </ul>
+  );
+}
+
+/** Take down arms first — the one act here anybody outside can notice. It
+ *  still destroys nothing: the files stay and Revive brings the link back. */
+function ArmedTakeDown({ busy, onConfirm }: { busy: boolean; onConfirm: () => void }) {
+  const { armed, press, disarm } = useArmed();
+  return (
+    <button
+      type="button"
+      className={armed ? '-armed' : undefined}
+      disabled={busy}
+      onClick={() => {
+        if (press()) onConfirm();
+      }}
+      onMouseLeave={disarm}
+      onBlur={disarm}
+      title={armed ? 'Click again — the link stops answering' : 'Stop serving this link'}
+    >
+      {armed ? 'Sure?' : 'Take down'}
+    </button>
   );
 }
 

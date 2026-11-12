@@ -485,6 +485,51 @@ export const api = {
    *  transcript rebase lands without anything here changing. The `fresh`
    *  escape hatch — history summarised out of the window — is deliberately
    *  not reachable from the UI. */
+  /**
+   * WHAT THIS MACHINE HAS ON THE INTERNET, with each link's shelf life.
+   *
+   * `publish.create` is the most-used action muxpad has (118 of 230 recorded
+   * acts) and until now the only way to see what was out there, or that a
+   * link had three days left, was `muxpad publish --list` in a terminal.
+   */
+  listPublished: () =>
+    req<{
+      items: {
+        slug: string;
+        name: string;
+        url: string | null;
+        files: number;
+        bytes: number;
+        created: number;
+        expires: number | null;
+        expired: boolean;
+      }[];
+    }>('/api/publish'),
+
+  /** Another `days` from now — the link's own term is replaced, not added to.
+   *  `days: 0` means never expires; the server owns the ceiling. */
+  extendPublish: (slug: string, days: number) =>
+    req<{ slug: string; expires: number | null; expired: boolean }>(
+      `/api/publish/${encodeURIComponent(slug)}/lifespan`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ days }),
+      },
+    ),
+
+  /** Take the link down. The BYTES stay — this is the reversible half; only
+   *  `muxpad publish --rm` destroys anything. */
+  expirePublish: (slug: string) =>
+    req<{ slug: string; expires: number | null; expired: boolean }>(
+      `/api/publish/${encodeURIComponent(slug)}/lifespan`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ expire: true }),
+      },
+    ),
+
   rebasePane: (id: string) => req<{ ok: boolean }>(`/api/panes/${id}/rebase`, { method: 'POST' }),
 
   /**
