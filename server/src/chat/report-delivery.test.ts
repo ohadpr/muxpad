@@ -6,6 +6,7 @@ import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SpawnRoundStore } from '../store/SpawnRoundStore.js';
 import { openDb } from '../store/db.js';
+import { reviveChat } from '../tab-clock.js';
 import {
   BATCH_MAX_HOLD_MS,
   BATCH_SPAWN_WINDOW_MS,
@@ -154,6 +155,70 @@ describe('report delivery — the join', () => {
   });
 
   /**
+   * ARCHIVING A PARENT MUST NOT THROW ITS WORKERS' RESULTS AWAY FOR GOOD.
+   *
+   * The reports are settled undelivered, which is right — waking a chat
+   * somebody deliberately cleared would be the app arguing with them. But
+   * they were stamped delivered with nothing to say they had never arrived,
+   * so un-archiving the chat and messaging it again still produced nothing:
+   * the sweep only looks at unstamped rounds. 21 rounds on this machine went
+   * that way.
+   */
+  describe('a parent archived with results outstanding', () => {
+    const archive = (id: string) =>
+      db
+        .prepare("UPDATE tabs SET retired_at = ?, retired_reason = 'archived' WHERE id = ?")
+        .run(NOW + 500, id);
+
+    it('records that nobody was there, as well as that it is settled', () => {
+      const p = parent('P');
+      const c = child('C', p);
+      archive(p);
+      make().sweep();
+
+      const row = rounds().listByTab(c)[0];
+      // Out of the queue — the sweep must not retry it once a minute for ever…
+      expect(row?.delivered_at).not.toBeNull();
+      // …and on the record as never read.
+      expect(row?.abandoned_at).not.toBeNull();
+      expect(sent).toEqual([]);
+    });
+
+    it('hands them over when the parent is revived', () => {
+      const p = parent('P');
+      const c = child('C', p);
+      archive(p);
+      make().sweep();
+      expect(sent).toEqual([]);
+
+      // The chat is back, so the reason to withhold them is gone.
+      expect(reviveChat(db, p, NOW + 9000)).toBe(true);
+      clock = NOW + 9000;
+      make().sweep();
+
+      expect(sent).toHaveLength(1);
+      expect(sent[0]?.text).toContain('report from C');
+      expect(rounds().listByTab(c)[0]?.abandoned_at).toBeNull();
+    });
+
+    it('never re-sends a result the parent actually read', () => {
+      // The one failure this must not have. A genuine delivery carries no
+      // `abandoned_at`, so reviving the chat leaves it alone.
+      const p = parent('P');
+      const c = child('C', p);
+      make().onReport(c);
+      expect(sent).toHaveLength(1);
+
+      reviveChat(db, p, NOW + 9000);
+      clock = NOW + 9000;
+      make().sweep();
+
+      expect(sent, 'still just the one').toHaveLength(1);
+      expect(rounds().listByTab(c)[0]?.delivered_at).not.toBeNull();
+    });
+  });
+
+  /**
    * A QUEUED DELIVERY IS NOT AN ARRIVED ONE.
    *
    * The round is stamped `delivered_at` before the send, because a batch
@@ -163,6 +228,20 @@ describe('report delivery — the join', () => {
    * hand. The stamp then said "delivered" about a report nobody would ever
    * read, and the sweep only retries rounds with no stamp.
    */
+  it('delivers to the parent’s NEWEST agent pane, not its oldest', () => {
+    // `listByTab` is creation order. A parent with an old dead pane and a new
+    // working one advertised the dead one — and `submitSend` rejects a pane
+    // whose respawns are exhausted, so every delivery to that parent was
+    // refused and retried once a minute, for ever. The child side
+    // (`resumablePaneOf`) already picks the newest.
+    const p = parent('P');
+    db.prepare(
+      'INSERT INTO panes (id, tab_id, shell, startup_cmd, created_at) VALUES (?,?,?,?,?)',
+    ).run('p-P-new', p, '/bin/zsh', 'muxpad agent', NOW + 5000);
+    make().onReport(child('C', p));
+    expect(sent[0]?.paneId).toBe('p-P-new');
+  });
+
   /**
    * THE ROW MUST NOT SAY `done` ABOUT WHAT THE MESSAGE CALLS `failed`.
    *
@@ -703,16 +782,34 @@ describe('report delivery — the join', () => {
     expect(() => make().onReport('nope')).not.toThrow();
   });
 
-  it('a reopened round is owed a FRESH delivery', () => {
-    // `reopen` means the job was not over after all; it discards the premature
-    // report, and the real one lands at the real end.
+  it('work after a DELIVERED result is a new round, owed its own delivery', () => {
+    // `reopen` means "the job was not over after all", and it discards the
+    // premature report. But a result the parent has READ refutes that premise
+    // — it has acted on it, possibly by merging — so the delivered round is
+    // left exactly as it is and the new work gets a round of its own.
+    // Reopening it instead cleared `delivered_at` and delivered the same job a
+    // second time as if it were new.
     const p = parent('P');
-    child('c1', p);
+    const c = child('c1', p);
     make().sweep();
     expect(delivered('c1')).toBe(clock);
 
-    rounds().reopen('c1');
-    expect(delivered('c1')).toBeNull();
+    rounds().reopen(c, clock + 1000);
+
+    const all = rounds().listByTab(c);
+    expect(all).toHaveLength(2);
+    expect(all[0]?.delivered_at, 'the one the parent read stays read').toBe(clock);
+    expect(all[1]?.ended_at, 'and the new work is running').toBeNull();
+  });
+
+  it('but an UNDELIVERED round is still reopened, as it always was', () => {
+    // The case reopen exists for: the settle closed the round early, nothing
+    // has reached the parent, and the real end of the job is still to come.
+    const p = parent('P');
+    const c = child('c1', p);
+    expect(rounds().reopen(c, clock + 1000)).toBe(true);
+    expect(rounds().listByTab(c)).toHaveLength(1);
+    expect(rounds().openRound(c)).not.toBeNull();
   });
   /**
    * ── THE BARRIER JOINED TWO JOBS NOBODY ASKED TO JOIN ─────────────────────

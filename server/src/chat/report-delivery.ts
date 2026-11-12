@@ -487,7 +487,13 @@ export class ReportDelivery {
 
   /** Settle rounds there is nobody to deliver. */
   private abandon(rounds: SpawnRoundStore, pending: SpawnRound[], why: string): Flushed {
-    rounds.markDelivered(
+    // STAMPED DELIVERED *AND* ABANDONED. The first half takes these out of the
+    // delivery queue, which they have to be — the sweep retries unstamped
+    // rounds once a minute, for ever. The second half is the fact that the
+    // parent never read them, which is what lets a REVIVED parent be handed
+    // them (`undeliverAbandoned`). Without it, archiving a parent threw its
+    // workers' results away for good: 21 rounds on this machine.
+    rounds.markAbandoned(
       pending.map((r) => r.id),
       this.now(),
     );
@@ -505,9 +511,16 @@ export class ReportDelivery {
    * nowhere to put a message.
    */
   private agentPaneOf(tabId: string): { id: string } | null {
-    const pane = new PaneStore(this.db)
+    const usable = new PaneStore(this.db)
       .listByTab(tabId)
-      .find((p) => p.startup_cmd?.startsWith('muxpad agent'));
+      .filter((p) => p.startup_cmd?.startsWith('muxpad agent'));
+    // THE NEWEST, not the first. `listByTab` is creation order, so a parent
+    // that has an old dead pane and a new working one advertised the dead one
+    // — and `submitSend` rejects a pane whose respawns are exhausted, so every
+    // delivery to that parent was refused and retried once a minute, for ever.
+    // `resumablePaneOf` already picks this way on the child side; the same
+    // reasoning applies to the parent, which is the end that has to RECEIVE.
+    const pane = usable.at(-1);
     return pane ? { id: pane.id } : null;
   }
 

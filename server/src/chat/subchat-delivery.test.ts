@@ -155,10 +155,10 @@ describe('sub-chat delivery — a finished worker reaches its parent', () => {
     expect(sent[0]?.text).toContain(REPORT_ONE);
 
     // ── 2. Background commands finish: turns with no message ───────────────
-    // TWICE, because the first is masked: the writer's one forced retry per
-    // worker per process pushes it past the gate. The second is where every
-    // live case was — the retry spent, the round closed empty, and the parent
-    // told nothing until the next restart.
+    // TWICE, because one pass proves less than it looks: both of these have to
+    // get past the report gate's interval on their own. This is where every
+    // live case was — the round closed empty and the parent was told nothing
+    // until the next restart.
     for (const [i, report] of [REPORT_TWO, REPORT_THREE].entries()) {
       await tick();
       retirer.onTurnStart(kid.paneId);
@@ -172,7 +172,18 @@ describe('sub-chat delivery — a finished worker reaches its parent', () => {
       expect(delivered?.marker).toEqual({ count: 1, from: [kid.tabId] });
       expect(delivered?.body).toContain(report);
     }
-    expect(rounds.listByTab(kid.tabId).map((r) => r.delivered_at !== null)).toEqual([true]);
+    // THREE ROUNDS, each delivered exactly once. It was one round for a while,
+    // because a turn after a closed round REOPENED it — and that is right only
+    // while the result is still ours to revise. Once the parent has READ one,
+    // reopening would clear `delivered_at` and send the same job again as if
+    // it were new, so work after a delivered result opens a round of its own
+    // (SpawnRoundStore.reopen). The log now shows three jobs, which is what
+    // happened: the worker was handed work three times.
+    expect(rounds.listByTab(kid.tabId).map((r) => r.delivered_at !== null)).toEqual([
+      true,
+      true,
+      true,
+    ]);
     retirer.stop();
   });
 });

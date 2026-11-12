@@ -436,6 +436,27 @@ export class TabStore {
    */
   delete(id: string, at: number = Date.now()): void {
     this.db.transaction(() => {
+      // ── AND THEIR OPEN ROUNDS END WITH THE PARENT ────────────────────────
+      //
+      // A spawn round is a question — "what did this worker produce for the
+      // chat that asked?" — and deleting the asker unasks it. The row kept
+      // `ended_at IS NULL` for ever instead: nothing closes a round but the
+      // sub-chat lifecycle, and a promoted orphan is not a sub-chat any more,
+      // so no turn of its will ever reach that code again. One round on this
+      // machine ("a long-running worker") had been open for 945 hours.
+      //
+      // Nothing is lost by closing it. The report, if one was ever written,
+      // stays on the row; what ends is the claim that somebody is waiting for
+      // it. Marked delivered for the same reason — there is nobody left to
+      // deliver to, and an undelivered round is what the delivery sweep looks
+      // for every minute.
+      this.db
+        .prepare(
+          `UPDATE spawn_rounds SET ended_at = ?, delivered_at = COALESCE(delivered_at, ?)
+            WHERE ended_at IS NULL
+              AND tab_id IN (SELECT id FROM tabs WHERE spawned_by = ?)`,
+        )
+        .run(at, at, id);
       this.db.prepare('UPDATE tabs SET clock_started_at = ? WHERE spawned_by = ?').run(at, id);
       this.db.prepare('DELETE FROM tabs WHERE id = ?').run(id);
     })();
