@@ -853,6 +853,25 @@ export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
     });
   }
 
+  /**
+   * THE ARGV PATH. muxpad adds no flags of its own here: the broker reviews
+   * what the agent sent against msgvault's own `--help` and refuses the
+   * shapes that change whose call it is, or who hears about it. See
+   * broker/msgvault-argv.mjs.
+   */
+  archive.post('/run', async (c) => {
+    const b = z
+      .object({
+        pane: z.string(),
+        key: z.string(),
+        args: z.array(z.string().max(20000)).min(1).max(60),
+      })
+      .parse(await c.req.json());
+    const auth = await authorize(b.pane, b.key, callerOf(c));
+    if (!auth.ok) return c.json(auth.body, auth.status);
+    return c.json(await brokerAction('msgvault.run', { args: b.args }, auth), 202);
+  });
+
   archive.post('/calendar-update', async (c) => {
     const b = z
       .object({

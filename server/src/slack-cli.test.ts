@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
@@ -593,5 +593,43 @@ describe('a failure always says why', () => {
     const call = CODE.slice(CODE.indexOf('slack_call() {'));
     const branch = call.slice(0, call.indexOf('\n}\n'));
     expect(branch).toMatch(/\[ -n "\$structured" \] \|\| printf ' {2}while calling/);
+  });
+});
+
+/**
+ * ── EVERY ENDPOINT THE CLI CALLS MUST EXIST ──────────────────────────────
+ *
+ * `/api/msgvault/run` shipped with a CLI verb, a broker action, a registry
+ * entry, a label, instructions and a pinned endpoint list — and no route.
+ * The edit that was meant to add it anchored on text that was not there and
+ * silently did nothing. 3,808 tests passed; the first real call answered
+ * `route not found`.
+ *
+ * Each half was tested against itself and nothing tested the seam. This is
+ * the seam.
+ */
+describe('the CLI and the server agree on what exists', () => {
+  const routes = readFileSync(
+    resolve(dirname(fileURLToPath(import.meta.url)), 'routes/slack.ts'),
+    'utf8',
+  );
+  // The msgvault half of the CLI, sliced the same way its own suite does.
+  const cliBody = (() => {
+    const fn = CODE.slice(CODE.indexOf('cmd_msgvault() {'));
+    return fn.slice(0, fn.indexOf('\n}\n'));
+  })();
+  it('serves every /api/msgvault path the CLI can call', () => {
+    const cli = new Set(
+      [...cliBody.matchAll(/\/api\/msgvault\/([a-z-]+)/g)].map((m) => m[1] as string),
+    );
+    // Routes are registered as `archive.post('/x'`, `archive.get('/x'` or
+    // from a table of `['/x', 'msgvault.x']` pairs — all three spellings.
+    const served = new Set(
+      [...routes.matchAll(/archive\.(?:post|get)\('\/([a-z-]+)'/g)]
+        .map((m) => m[1] as string)
+        .concat([...routes.matchAll(/\['\/([a-z-]+)',\s*'msgvault\./g)].map((m) => m[1] as string)),
+    );
+    const missing = [...cli].filter((p) => !served.has(p)).sort();
+    expect(missing, 'the CLI calls these and the server does not serve them').toEqual([]);
   });
 });
