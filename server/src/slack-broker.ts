@@ -63,11 +63,20 @@ export async function slackBrokerRequest(
     // that reports your mail as broken, which is a complaint this repo has
     // actually received. A 4xx is a DECISION and its reason is safe to
     // repeat; a 5xx is a fault and keeps the generic line.
+    // THE BROKER ANSWERS `{error: "<sentence>"}`, a STRING — muxpad's own
+    // routes answer `{error: {message}}`, an object. Reading only the object
+    // shape is why the first cut of this changed nothing: the reason was
+    // there, in the body, and the parser looked straight past it.
     const detail = await response
       .json()
       .then((b) => {
-        const e = (b as { error?: { message?: unknown }; detail?: unknown })?.error;
-        const m = typeof e?.message === 'string' ? e.message : (b as { detail?: unknown })?.detail;
+        const raw = b as { error?: unknown; detail?: unknown };
+        const m =
+          typeof raw?.error === 'string'
+            ? raw.error
+            : typeof (raw?.error as { message?: unknown })?.message === 'string'
+              ? (raw.error as { message: string }).message
+              : raw?.detail;
         return typeof m === 'string' && m.trim() ? m.trim().slice(0, 300) : null;
       })
       .catch(() => null);
