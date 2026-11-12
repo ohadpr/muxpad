@@ -1844,6 +1844,25 @@ export function ChatPane({
    * would flash a failure over every healthy new chat.
    */
   const [provisionError, setProvisionError] = useState<string | null>(null);
+
+  // ── THE COMPOSER DOES NOT WAIT FOR THE AGENT ─────────────────────────────
+  // It used to mount on `session.current_sid` — the runner's hello — so a new
+  // chat showed a spinner and no field for the whole boot. Measured on the live
+  // install: click → composer 3.2–3.9 s, of which ~2.2 s was the runner booting
+  // behind a chat the user could already have been typing into.
+  //
+  // The server has never needed the runner to accept a message: `submitSend`
+  // parks it in the pane's queue when no runner is attached and `hello` drains
+  // it (ws.ts). So an agent pane that is STARTING — connecting, or bound with no
+  // sid yet, inside the grace and with no recorded provisioning failure — gets
+  // its composer now, and the send rides the queue (see `deliver`). The cost of
+  // the boot moves to the first message, which is where the owner asked for it.
+  //
+  // Not for a pane the server has already called dead (`provisionError`) or one
+  // past the grace (`stale`): those render ChatNoRunner, whose answer is a
+  // Start button, not a field that would queue into nothing.
+  const agentStarting = agentNative && !session?.current_sid && !stale && !provisionError;
+  const composerOpen = Boolean(session?.current_sid) || agentStarting;
   // The pane's agent mode (Chat / Agent), from the session frame. NULL means
   // "not told yet" and is rendered as NO chip at all — an older server omits
   // the field, and drawing "Agent" for it would put a confident claim about
@@ -2609,8 +2628,9 @@ export function ChatPane({
       reconnectNow.current();
       return false;
     }
-    if (sending) {
-      // Agent busy → hand it to the server to queue. No optimistic turn state;
+    if (sending || !session?.current_sid) {
+      // Agent busy — or not booted yet (see `composerOpen`) → hand it to the
+      // server to queue. No optimistic turn state;
       // the server's `queue` broadcast renders the pending bubble. The message
       // is persisted server-side, so it's safe even if we close the tab now.
       // Track it as the pending send so BOTH the watchdog and a hard `onclose`
@@ -2996,7 +3016,7 @@ export function ChatPane({
   // Track the floating composer's height so the scroll area can reserve exactly
   // that much bottom padding (see composerH usage on .chat-list). Re-attaches
   // when the composer mounts (session appears) and follows multi-line growth.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: current_sid gates when the composer (and its ref) mounts.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: composerOpen gates when the composer (and its ref) mounts.
   useEffect(() => {
     const el = composerRef.current;
     if (!el) {
@@ -3068,7 +3088,7 @@ export function ChatPane({
       vv?.removeEventListener('scroll', measure);
       window.removeEventListener('resize', measure);
     };
-  }, [session?.current_sid]);
+  }, [composerOpen]);
 
   // ── Lift the composer off the software keyboard ───────────────────────────
   // MOBILE ONLY, and a no-op everywhere else: `--chat-keyboard-inset` defaults
@@ -3077,12 +3097,12 @@ export function ChatPane({
   // composer needs this at all, why the installed PWA is the case that matters,
   // and why a value that was right once has to be re-asserted rather than
   // latched — is in lib/keyboard-inset.ts.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: pendingPick/current_sid gate when the pane box and its composer exist.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: pendingPick/composerOpen gate when the pane box and its composer exist.
   useEffect(() => {
     const pane = paneRef.current;
     if (!active || !pane || !isMobileLayout()) return;
     return trackKeyboardInset(pane, { viewport: window.visualViewport ?? null });
-  }, [active, pendingPick, session?.current_sid]);
+  }, [active, pendingPick, composerOpen]);
 
   /**
    * ── ARRIVING AT A CHAT PUTS THE CARET IN IT ────────────────────────────
@@ -5502,7 +5522,7 @@ export function ChatPane({
           </>
         ) : null}
         {/* Keep approval reachable while the chat transport is still connecting. */}
-        {active && !session?.current_sid && <SlackApprovalAlert paneId={paneId} />}
+        {active && !composerOpen && <SlackApprovalAlert paneId={paneId} />}
         {/* Fixed-position, draws nothing until you take the wheel. Mounted here
           rather than beside a card because the card that opened it may scroll
           away — or be unmounted by a poll — while the modal is still open. */}
@@ -5899,7 +5919,7 @@ export function ChatPane({
             onClose={() => setOpenImage(null)}
           />
         ) : null}
-        {session?.current_sid ? (
+        {composerOpen ? (
           <div
             className="chat-composer-wrap"
             ref={composerRef}

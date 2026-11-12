@@ -493,6 +493,24 @@ describe('tabs routes', () => {
     expect(new TabStore(db).getById(tab.id)?.icon).toBeUndefined();
   });
 
+  it('the create answers with its bootstrapped pane, as the detail GET would', async () => {
+    // The web app opens the new chat from this answer instead of waiting for
+    // GET /api/tabs/:id — see web/src/lib/tab-detail-prime.ts.
+    const res = await postTab({ name: 'A', bootstrap: 'agent' });
+    const tab = (await res.json()) as { id: string; layout: string; panes: { id: string }[] };
+    expect(tab.panes).toHaveLength(1);
+    expect(tab.panes[0]?.id).toBe(tab.layout);
+    const detail = (await (await test.app.request(`/api/tabs/${tab.id}`)).json()) as {
+      panes: { id: string; face: string; startup_cmd: string }[];
+    };
+    expect(tab.panes).toEqual(detail.panes);
+  });
+
+  it('a create with no bootstrap answers with no panes', async () => {
+    const res = await postTab({ name: 'B' });
+    expect(((await res.json()) as { panes: unknown[] }).panes).toEqual([]);
+  });
+
   // ── event coverage: the manual unread mark, and the mutating GET ─────────
 
   describe('read-state marks announce themselves', () => {

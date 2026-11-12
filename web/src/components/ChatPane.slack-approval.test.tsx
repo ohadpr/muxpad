@@ -200,10 +200,14 @@ it('keeps one active notice inside the legacy pending-picker chat without a comp
   expect(host.querySelectorAll('.slack-approval-alert')).toHaveLength(0);
 });
 
-it('keeps approval reachable before the chat session connects, then moves it to the composer without duplication', async () => {
+// An agent pane's composer is open while the chat is still connecting (see
+// `composerOpen` in ChatPane), so the approval rides the composer from the
+// first frame — and must stay single when the session lands.
+it('keeps approval reachable before the chat session connects, in the composer and without duplication', async () => {
   setup(false);
   await render(true);
-  expect(host.querySelector('.chat-pane > .slack-approval-alert')).not.toBeNull();
+  expect(host.querySelector('.chat-pane > .slack-approval-alert')).toBeNull();
+  expect(host.querySelector('.chat-composer-wrap > .slack-approval-alert')).not.toBeNull();
   expect(host.querySelectorAll('.slack-approval-alert')).toHaveLength(1);
   const socket = Socket.instances.find((s) => s.url.endsWith('/ws/chat/chat-approval-pane'))!;
   await act(async () =>
