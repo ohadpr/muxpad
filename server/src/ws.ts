@@ -37,6 +37,7 @@ import {
   isBackendId,
   parseFrame,
 } from './agent-runner/protocol.js';
+import { sessionHadTurn } from './agent-runner/session-marks.js';
 import {
   authMode,
   isExempt,
@@ -3157,7 +3158,24 @@ export function attachWsServer(deps: {
             if (repaired) {
               announceRepairs([repaired], 'chat-bind');
               session2 = agents.getByPane(chatPaneId);
-            } else {
+            } else if (sessionHadTurn(bound)) {
+              // ── ONLY A SESSION THAT HAS SPOKEN CAN HAVE LOST ITS HISTORY ──
+              //
+              // The CLI writes a transcript at the FIRST PROMPT, not at launch,
+              // so a brand-new chat binds here every time: its runner has said
+              // hello under a fresh sid and there is no file yet, because there
+              // is nothing in it yet. This branch used to fire for every one of
+              // them — 6,648 times in the live server.log — and the user saw
+              // "No transcript found … could not be recovered" seconds into a
+              // chat they had just made. That is the claim agent-resume-repair
+              // warns against ("cry wolf at every new pane").
+              //
+              // The runner's turn mark (session-marks.ts) is the fact that
+              // separates the two: written the first time a session takes a
+              // turn, so "missing transcript AND a mark" is a conversation that
+              // existed and is gone, and "missing transcript, no mark" is a
+              // session nobody has talked to yet. Only the first is news.
+              //
               // NOTHING TO RECOVER, and this is the case that cost hours: the
               // pane renders an empty chat that is indistinguishable from a new
               // one, with no toast, no error and no log line. Say it once, here,

@@ -1,5 +1,6 @@
 import type { AgentMode, LayoutNode, PaneSpec, Tab, UrlHealth, Workspace } from '@muxpad/shared';
 import type { WorkspaceTabs } from './lib/nav-search';
+import { primeTabDetail } from './lib/tab-detail-prime';
 
 /**
  * Turn a failed response into something a human can read.
@@ -288,9 +289,14 @@ export const api = {
       mode?: AgentMode;
     } = {},
   ) =>
-    req<Tab>('/api/tabs', {
+    req<Tab & { panes?: TabWithPanes['panes'] }>('/api/tabs', {
       method: 'POST',
       body: JSON.stringify({ workspace_id: workspaceId, ...body }),
+    }).then((t) => {
+      // The create answers with its bootstrapped pane; hand it to the TabView
+      // about to open this tab so it need not wait for a detail GET.
+      if (Array.isArray(t.panes)) primeTabDetail(t as TabWithPanes);
+      return t;
     }),
 
   getTab: (id: string) => req<TabWithPanes>(`/api/tabs/${id}`),

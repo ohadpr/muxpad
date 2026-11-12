@@ -1,7 +1,7 @@
 import type { MuxpadEvent } from '@muxpad/shared';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { TabView } from './TabView';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -9,6 +9,8 @@ const mock = vi.hoisted(() => ({
   markTabSeen: vi.fn(async () => {}),
   markPaneSeen: vi.fn(async () => {}),
   getTab: vi.fn(),
+  freshTabs: vi.fn(),
+  cached: [] as unknown[],
   events: new Set<(e: MuxpadEvent) => void>(),
   resync: new Set<() => void>(),
   tab: {
@@ -27,6 +29,14 @@ vi.mock('@tanstack/react-router', () => ({
     select({ location: { search: {}, pathname: '/w/work/t/chat' } }),
 }));
 vi.mock('../api', () => ({
+  ApiError: class ApiError extends Error {
+    constructor(
+      message: string,
+      readonly status: number,
+    ) {
+      super(message);
+    }
+  },
   api: {
     getTab: mock.getTab,
     markTabSeen: mock.markTabSeen,
@@ -39,7 +49,8 @@ vi.mock('../workspaces', () => ({
 }));
 vi.mock('../tabs', () => ({
   useTabs: () => ({ tabs: [mock.tab] }),
-  freshTabs: async () => [mock.tab],
+  freshTabs: mock.freshTabs,
+  cachedTabsFor: () => mock.cached,
   refreshTabs: async () => {},
 }));
 vi.mock('../events', () => ({
@@ -60,7 +71,67 @@ vi.mock('../lib/tab-view-mode', () => ({
 vi.mock('../components/ShellPaneBody', () => ({ ShellPaneBody: () => null }));
 vi.mock('../components/UrlPane', () => ({ UrlPane: () => null }));
 
+beforeEach(() => {
+  mock.cached = [];
+  mock.freshTabs.mockReset();
+  mock.freshTabs.mockResolvedValue([mock.tab]);
+});
 afterEach(() => vi.restoreAllMocks());
+
+// Opening a chat from the rail: the slug is already in the cached list, so the
+// detail GET goes out at once instead of waiting behind a refetch of the whole
+// workspace list (measured 35–490ms on a 505-tab workspace).
+it('a slug the cache already holds skips the list refetch', async () => {
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+  mock.cached = [mock.tab];
+  mock.getTab.mockResolvedValue(mock.tab);
+  const host = document.createElement('div');
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<TabView tabSlug="chat" isActive={true} />));
+    expect(mock.freshTabs).not.toHaveBeenCalled();
+    expect(mock.getTab).toHaveBeenCalledWith('t');
+    expect(host.textContent).toContain('vim');
+  } finally {
+    await act(async () => root.unmount());
+  }
+});
+
+// A chat this client just created: the create answered with its pane, so the
+// view renders without waiting for the detail GET (which still corrects it).
+it('a just-created tab renders from the primed detail before the GET answers', async () => {
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+  mock.cached = [mock.tab];
+  const { primeTabDetail } = await import('../lib/tab-detail-prime');
+  primeTabDetail(mock.tab as never);
+  mock.getTab.mockImplementationOnce(() => new Promise(() => {}));
+  const host = document.createElement('div');
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<TabView tabSlug="chat" isActive={true} />));
+    expect(host.textContent).toContain('vim');
+    expect(mock.getTab).toHaveBeenCalledWith('t');
+  } finally {
+    await act(async () => root.unmount());
+  }
+});
+
+it('a cached slug whose tab is gone (404) gets the not-found recovery', async () => {
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+  mock.cached = [mock.tab];
+  const { ApiError } = (await import('../api')) as unknown as {
+    ApiError: new (m: string, s: number) => Error;
+  };
+  mock.getTab.mockRejectedValueOnce(new ApiError('tab not found', 404));
+  const host = document.createElement('div');
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<TabView tabSlug="chat" isActive={true} />));
+    expect(host.textContent).toContain('tab not found');
+  } finally {
+    await act(async () => root.unmount());
+  }
+});
 
 it('unmounting a background tab does not bulk-acknowledge unseen replies', async () => {
   vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
