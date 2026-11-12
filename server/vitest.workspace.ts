@@ -32,6 +32,7 @@ import { defineWorkspace } from 'vitest/config';
  */
 const SERIAL = [
   'src/integration/**/*.test.ts',
+  'src/agent-runner/attachment-relay.test.ts',
   'src/agent-runner/auth-recovery.test.ts',
   'src/agent-runner/notify.test.ts',
   'src/agent-runner/relay.test.ts',

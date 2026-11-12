@@ -13,6 +13,7 @@ import {
 import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { ulid } from 'ulid';
+import { attachmentNameProblem } from '../attachment-files.js';
 import { PaneStore } from '../store/PaneStore.js';
 
 export function attachmentsRoutes(deps: {
@@ -170,10 +171,10 @@ export function attachmentsRoutes(deps: {
   // honors Range so <video> can seek and only fetch the bytes it plays.
   app.get('/attachments/:name', (c) => {
     const name = c.req.param('name');
-    if (name !== basename(name) || name.includes('\0'))
-      return c.json({ error: { code: 'bad_request', message: 'bad name' } }, 400);
-    const mime = attachmentMime(name);
-    if (!mime) return c.json({ error: { code: 'bad_request', message: 'unsupported type' } }, 400);
+    // The same guard the runner socket applies to an `attachment` frame.
+    const problem = attachmentNameProblem(name);
+    if (problem) return c.json({ error: { code: 'bad_request', message: problem } }, 400);
+    const mime = attachmentMime(name) as string;
     const path = join(deps.dataDir, 'attachments', name);
     let size: number;
     try {

@@ -14,7 +14,7 @@
 // AgentBackend (backends/*.ts) — Claude today, dispatched on `--backend`. The
 // harness never learns which backend runs; it only relays frames.
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import WebSocket from 'ws';
@@ -31,6 +31,11 @@ import {
   parseAgentMode,
   parseFrame,
 } from './protocol.js';
+import {
+  AttachmentRequester,
+  findAttachmentRefs,
+  localizeAttachments,
+} from './remote-attachments.js';
 
 // ARGV IS PARSED BEFORE ANYTHING ELSE HAPPENS — before the pane-env guard, so
 // `muxpad agent --help` answers from an ordinary shell too, and before a single
@@ -232,6 +237,51 @@ const host: RunnerHost = {
   apiUrl,
 };
 
+// ── ATTACHMENTS THIS MACHINE DOES NOT HAVE ──────────────────────────────────
+// A message names its attachments by the SERVER's paths. On a remote host those
+// name nothing, so each one is fetched over this socket and rewritten to a local
+// copy before the backend sees the text (see remote-attachments.ts). A local
+// pane's paths exist and are passed through untouched, with nothing fetched.
+const attachments = new AttachmentRequester({
+  send: (frame) => {
+    if (ws?.readyState !== WebSocket.OPEN) return false;
+    sendFrame(frame);
+    return true;
+  },
+});
+const runnerDataDir = process.env.MUXPAD_DATA_DIR ?? join(homedir(), '.muxpad');
+// Sends stay in ORDER: one waiting on a fetch must not be overtaken by the next.
+let sendChain: Promise<void> = Promise.resolve();
+// A Stop cancels queued sends — including one still waiting on its attachment.
+let stopGen = 0;
+let sendsInFlight = 0;
+function deliverSend(b: AgentBackend, text: string): void {
+  // The common case — no attachment, or only ones already on this machine (any
+  // local pane) — stays synchronous, exactly as before. Unless an earlier send
+  // is still fetching: then it queues behind it.
+  if (!sendsInFlight && findAttachmentRefs(text).every((r) => existsSync(r.path))) {
+    b.send(text);
+    return;
+  }
+  const gen = stopGen;
+  sendsInFlight++;
+  sendChain = sendChain
+    .then(() => localizeAttachments(text, { dataDir: runnerDataDir, fetch: attachments.fetch }))
+    .then(
+      (out) => {
+        if (gen === stopGen) b.send(out);
+      },
+      (err) => {
+        // localizeAttachments settles every path itself; this is belt and braces.
+        log(`attachment rewrite failed: ${(err as Error).message}`);
+        if (gen === stopGen) b.send(text);
+      },
+    )
+    .finally(() => {
+      sendsInFlight--;
+    });
+}
+
 const backend: AgentBackend | null = pickMode
   ? null
   : createBackend(requestedBackend, host, { requestedSid, requestedModel, mode: requestedMode });
@@ -281,13 +331,18 @@ function connect(): void {
     const frame = parseFrame<ServerFrame>(data);
     if (!frame) return;
     if (frame.t === 'send' && typeof frame.text === 'string' && frame.text.trim()) {
-      b.send(frame.text);
+      deliverSend(b, frame.text);
+    } else if (frame.t === 'attachment-data') {
+      attachments.onData(frame.id, frame.b64);
+    } else if (frame.t === 'attachment-missing') {
+      attachments.onMissing(frame.id, frame.reason);
     } else if (frame.t === 'set-model') {
       if (typeof frame.model === 'string' && frame.model) b.setModel(frame.model);
     } else if (frame.t === 'slash') {
       if (frame.cmd === 'compact' || frame.cmd === 'clear')
         b.slash(frame.cmd, typeof frame.args === 'string' ? frame.args : undefined);
     } else if (frame.t === 'stop') {
+      stopGen++;
       b.stop();
     } else if (frame.t === 'mode') {
       // Validated here (not trusted off the wire) — the same value can end up
