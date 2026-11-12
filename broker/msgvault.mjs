@@ -216,6 +216,70 @@ const SPEC = {
    * identity a mail appears to come from is the owner's, not an agent's, and
    * msgvault picks the source itself when it is not told.
    */
+  /**
+   * ── A CALENDAR EVENT, AND THE ONE LINE THAT KEEPS IT A DRAFT-SHAPED ACT ─
+   *
+   * msgvault can write live Google Calendar events; muxpad never offered it,
+   * so a chat asked to put a birthday party in the calendar could only hand
+   * back an .ics file — and muxpad then refused to display that too.
+   *
+   * NO GUESTS AND NO REMINDERS FROM AN AGENT. `--attendees` is the flag that
+   * turns this from "something appeared in your calendar" into "nine people
+   * got an invitation from you", and that is a different act with a
+   * different blast radius; `--reminder` likewise reaches your devices
+   * later. Neither is accepted here, so an event created this way notifies
+   * nobody — which is what lets it ride the same approval as a draft.
+   * Inviting people stays a thing the owner does themselves.
+   *
+   * The ACCOUNT is required by msgvault and is not guessed: it is the source
+   * that owns the calendar, and picking one for the owner is the same class
+   * of decision as picking which identity a mail comes from.
+   */
+  'msgvault.calendar-create': {
+    validate: (p) => {
+      if (!str(p.account, 256) || !/^[^\s@]+@[^\s@]+$/.test(String(p.account)))
+        fail('Give the calendar account (an email address)');
+      if (!str(p.summary, 500)) fail('Give the event a title');
+      // RFC3339, or a local `YYYY-MM-DDTHH:MM` paired with a zone.
+      const when = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?([.+-][\d:.]+|Z)?)?$/;
+      if (!when.test(String(p.start ?? ''))) fail('Give a start time (YYYY-MM-DDTHH:MM)');
+      if (!when.test(String(p.end ?? ''))) fail('Give an end time (YYYY-MM-DDTHH:MM)');
+      if (!str(p.tz, 64)) fail('Give an IANA time zone, e.g. America/Los_Angeles');
+      if (p.attendees !== undefined)
+        fail('Guests are not something an agent adds — invite people yourself');
+      if (p.reminder !== undefined) fail('Reminders are not something an agent sets');
+      return {
+        account: p.account,
+        calendar: str(p.calendar, 256) ? p.calendar : 'primary',
+        summary: p.summary,
+        start: p.start,
+        end: p.end,
+        tz: p.tz,
+        ...(str(p.location, 500) ? { location: p.location } : {}),
+        ...(str(p.description, 5000) ? { description: p.description } : {}),
+      };
+    },
+    argv: (p) => [
+      'calendar',
+      'create',
+      p.calendar,
+      '--json',
+      '--account',
+      p.account,
+      '--summary',
+      p.summary,
+      '--from',
+      p.start,
+      '--to',
+      p.end,
+      '--tz',
+      p.tz,
+      ...(p.location ? ['--location', p.location] : []),
+      ...(p.description ? ['--description', p.description] : []),
+    ],
+    describe: (p) =>
+      `put "${p.summary}" in the ${p.calendar} calendar of ${p.account}, ${p.start} to ${p.end} (${p.tz}) — no guests, no reminders`,
+  },
   'msgvault.draft-compose': {
     validate: (p) => {
       const to = Array.isArray(p.to) ? p.to : p.to ? [p.to] : [];

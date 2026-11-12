@@ -141,6 +141,15 @@ const MSGVAULT: Record<string, VerbRule> = {
   'msgvault.draft-reply': { kind: 'write', timed: true, timedWrite: true, notifiesOthers: false },
   // A NEW email, to somebody there may be no thread with. Still a draft:
   // `notifiesOthers: false` because nothing leaves until the owner sends it.
+  // A live calendar event, with no guests and no reminders — the broker
+  // refuses both flags, so nothing is sent to anybody and this stays
+  // draft-shaped. Inviting people remains the owner's own act.
+  'msgvault.calendar-create': {
+    kind: 'write',
+    timed: true,
+    timedWrite: true,
+    notifiesOthers: false,
+  },
   'msgvault.draft-compose': {
     kind: 'write',
     timed: true,

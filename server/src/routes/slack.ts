@@ -821,6 +821,31 @@ export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
     );
   });
 
+  /**
+   * A CALENDAR EVENT. No guests and no reminders — the broker refuses both,
+   * so this reaches nobody but the owner's own calendar.
+   */
+  archive.post('/calendar-create', async (c) => {
+    const b = z
+      .object({
+        pane: z.string(),
+        key: z.string(),
+        account: z.string().min(3).max(256),
+        calendar: z.string().min(1).max(256).optional(),
+        summary: z.string().min(1).max(500),
+        start: z.string().min(10).max(40),
+        end: z.string().min(10).max(40),
+        tz: z.string().min(1).max(64),
+        location: z.string().max(500).optional(),
+        description: z.string().max(5000).optional(),
+      })
+      .parse(await c.req.json());
+    const auth = await authorize(b.pane, b.key, callerOf(c));
+    if (!auth.ok) return c.json(auth.body, auth.status);
+    const { pane: _p, key: _k, ...event } = b;
+    return c.json(await brokerAction('msgvault.calendar-create', event, auth), 202);
+  });
+
   archive.post('/draft-edit', async (c) => {
     const b = z
       .object({

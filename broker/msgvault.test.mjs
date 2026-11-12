@@ -141,6 +141,7 @@ test('only verbs that work against 0.22.0 are offered', () => {
       'msgvault.stats',
       'msgvault.draft-reply',
       'msgvault.draft-compose',
+      'msgvault.calendar-create',
       'msgvault.draft-get',
       'msgvault.draft-edit',
       'msgvault.draft-delete',
@@ -179,6 +180,11 @@ test('the dialog names the thing being asked for, not just the verb', () => {
     hash: 'a'.repeat(64),
     to: ['a@b.com'],
     subject: 's',
+    account: 'o@e.com',
+    summary: 'Party',
+    start: '2026-11-29T13:30',
+    end: '2026-11-29T15:00',
+    tz: 'America/Los_Angeles',
   };
   for (const a of CAPABILITIES.msgvault.actions) {
     const d = describeMsgvault(a, validateMsgvault(a, anything));
@@ -243,6 +249,11 @@ test('composing a new email names its recipients, and still cannot send', () => 
         hash: 'a'.repeat(64),
         to: ['a@b.com'],
         subject: 's',
+        account: 'o@e.com',
+        summary: 'Party',
+        start: '2026-11-29T13:30',
+        end: '2026-11-29T15:00',
+        tz: 'America/Los_Angeles',
       }),
       INSTALL,
     );
@@ -377,9 +388,10 @@ test('there is STILL no send verb — the whole premise of the blanket approval'
     assert.throws(() => validateMsgvault(name, {}), /Unsupported action/);
 });
 
-test('a duration now covers drafts, and the write set names all four', () => {
+test('a duration now covers drafts, and the write set names every write', () => {
   assert.equal(MSGVAULT.timedReadOnly, false);
   assert.deepEqual([...MSGVAULT.writeActions].sort(), [
+    'msgvault.calendar-create',
     'msgvault.draft-compose',
     'msgvault.draft-delete',
     'msgvault.draft-edit',
@@ -388,4 +400,79 @@ test('a duration now covers drafts, and the write set names all four', () => {
   ]);
   // …and the reads are untouched by any of this.
   assert.ok(MSGVAULT.readActions.includes('msgvault.export-attachment'));
+});
+
+/**
+ * ── A CALENDAR EVENT THAT REACHES NOBODY ──────────────────────────────────
+ *
+ * msgvault can write live Google Calendar events. The flag that changes what
+ * KIND of act that is — `--attendees` — is refused here, so an event created
+ * through muxpad notifies no one and stays draft-shaped. Inviting people
+ * remains something the owner does themselves.
+ */
+const EVENT = {
+  account: 'ohad@example.com',
+  summary: "Avery's 9th Birthday Party",
+  start: '2026-11-29T13:30',
+  end: '2026-11-29T15:00',
+  tz: 'America/Los_Angeles',
+};
+
+test('a calendar event is created with no guests and no reminders', () => {
+  const p = validateMsgvault('msgvault.calendar-create', { ...EVENT, location: 'The park' });
+  const { args } = msgvaultArgv('msgvault.calendar-create', p, INSTALL);
+  assert.deepEqual(args.slice(6), [
+    'calendar',
+    'create',
+    'primary',
+    '--json',
+    '--account',
+    'ohad@example.com',
+    '--summary',
+    "Avery's 9th Birthday Party",
+    '--from',
+    '2026-11-29T13:30',
+    '--to',
+    '2026-11-29T15:00',
+    '--tz',
+    'America/Los_Angeles',
+    '--location',
+    'The park',
+  ]);
+  assert.ok(!args.some((x) => ['--attendees', '--reminder', '--rrule'].includes(x)));
+});
+
+test('asking for guests is REFUSED, not quietly dropped', () => {
+  // Dropping them silently would create the event and leave the agent
+  // reporting that nine people were invited.
+  assert.throws(
+    () => validateMsgvault('msgvault.calendar-create', { ...EVENT, attendees: ['a@b.com'] }),
+    /invite people yourself/,
+  );
+  assert.throws(
+    () => validateMsgvault('msgvault.calendar-create', { ...EVENT, reminder: ['popup:10'] }),
+    /Reminders/,
+  );
+});
+
+test('a calendar event needs an account, a title, both ends and a zone', () => {
+  for (const missing of ['account', 'summary', 'start', 'end', 'tz']) {
+    const bad = { ...EVENT };
+    delete bad[missing];
+    assert.throws(() => validateMsgvault('msgvault.calendar-create', bad), new RegExp('.'), missing);
+  }
+  // A date that is not a date never reaches the tool.
+  assert.throws(
+    () => validateMsgvault('msgvault.calendar-create', { ...EVENT, start: 'next tuesday' }),
+    /start time/,
+  );
+});
+
+test('the dialog says what will appear in the calendar, and that nobody is told', () => {
+  const d = describeMsgvault(
+    'msgvault.calendar-create',
+    validateMsgvault('msgvault.calendar-create', EVENT),
+  );
+  assert.match(d, /Avery/);
+  assert.match(d, /no guests, no reminders/);
 });

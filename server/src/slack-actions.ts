@@ -51,6 +51,8 @@ const TITLES: Record<string, (p: Payload) => string> = {
   'msgvault.draft-reply': (p) => `Drafted a reply to message ${String(p.id ?? '')}`,
   'msgvault.draft-compose': (p) =>
     `Drafted a new email to ${(Array.isArray(p.to) ? p.to : [p.to]).map(String).join(', ')} — ${JSON.stringify(String(p.subject ?? ''))}`,
+  'msgvault.calendar-create': (p) =>
+    `Added ${JSON.stringify(String(p.summary ?? ''))} to the calendar (${String(p.start ?? '')})`,
   'msgvault.draft-get': (p) => `Read draft ${String(p.id ?? '')}`,
   'msgvault.draft-edit': (p) => `Rewrote draft ${String(p.id ?? '')}`,
   'msgvault.draft-delete': (p) => `Deleted draft ${String(p.id ?? '')}`,
@@ -70,6 +72,9 @@ interface Payload {
   /** msgvault compose: who a NEW email was drafted to, and its subject. */
   to?: unknown;
   subject?: unknown;
+  /** msgvault calendar: the event's title and when it starts. */
+  summary?: unknown;
+  start?: unknown;
 }
 
 /**

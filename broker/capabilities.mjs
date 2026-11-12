@@ -112,6 +112,7 @@ export const MSGVAULT = Object.freeze({
   writeActions: Object.freeze([
     'msgvault.draft-reply',
     'msgvault.draft-compose',
+    'msgvault.calendar-create',
     'msgvault.draft-get',
     'msgvault.draft-edit',
     'msgvault.draft-delete',
