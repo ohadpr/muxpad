@@ -374,6 +374,10 @@ export function reviveChat(db: Database.Database, tabId: string, at: number = Da
   if (!tabs.getById(tabId)) return false;
   tabs.unretire(tabId);
   tabs.resetClock(tabId, at);
+  // `resetClock` writes `last_user_at` in the same statement — see its own
+  // note on why the sidebar's sort key rides with the decay clock. Nothing
+  // extra is needed here, and a second write would be a second thing to
+  // forget.
   return true;
 }
 

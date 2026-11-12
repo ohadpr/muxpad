@@ -348,10 +348,18 @@ export function tabsRoutes(deps: {
     // recent one, and `canReorder` suppresses the emit for a row that is
     // already maximal. So the repeats cost one UPDATE and wake nobody.
     deps.tabActivity?.touchTab(id, { force: true });
-    // …and the column the sidebar actually SORTS on. See TabStore.noteUserTouch:
-    // `touchTab` above writes `last_activity_at`, which machine output also
-    // writes and which the order stopped reading.
-    tabs.noteUserTouch(id);
+    // ── LOOKING AT A CHAT IS NOT USING IT ────────────────────────────
+    //
+    // `noteUserTouch` wrote the column the sidebar SORTS on, so opening a
+    // chat promoted it above everything you had actually worked in — and
+    // the row you left promoted itself the moment you clicked away.
+    // Clicking through three chats reshuffled the rail three times:
+    // "sidebar reorders too aggressively when just clicking a chat".
+    //
+    // The order's own docstring already said what belongs here — acts that
+    // restart the decay clock, "a message you sent, an unarchive", and
+    // nothing the machine does on its own. A glance is neither. It still
+    // marks the tab SEEN (below); it just no longer claims you used it.
     // Viewing the tab clears the read-state flags — seeing it is the read
     // action: the manual tab "unread" mark AND every pane's "done, unreviewed"
     // bold. Synchronous DB writes, independent of ptyd.
