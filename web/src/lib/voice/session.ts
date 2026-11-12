@@ -275,11 +275,11 @@ export const DELIVERY_WATCH_MS = 20 * 60_000;
  *  and says why the call is ending — a hang-up with no reason reads as a
  *  crash. */
 export const MUTE_RUNNER_LINE =
-  'Say this to the user, then stop: the agent finished, but this pane cannot send its answers to voice — its agent session is too old to have the reply tool. The answer is written in the chat. Ending the voice session so it does not keep costing money; restart the agent pane and voice will work.';
+  'Say this to the user, then stop: the agent finished, but this chat cannot send its answers to voice — its agent session is too old to have the reply tool. The answer is written in the chat. Ending the voice session so it does not keep costing money; rebase this chat and voice will work.';
 
 /** The detail the UI shows once it has. */
 export const MUTE_RUNNER_DETAIL =
-  'Voice ended — this pane’s agent can’t send answers to voice (it started before the reply tool existed). Restart the agent pane, then try again.';
+  'Voice ended — this chat can’t send answers to voice (it started before the reply tool existed). Rebase this chat, then try again.';
 /**
  * After an explicit cancel, ignore further cancels for this long.
  *

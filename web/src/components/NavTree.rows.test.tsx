@@ -276,7 +276,9 @@ describe('the sheet’s rows, and the split control that belongs to them', () =>
     expect(out).toContain('navtree-row-pill navtree-pane-pill');
     expect(out).not.toContain('navtree-pane-expander');
     // THE COUNT is the gain: how many are under there, before you tap.
-    expect(out).toContain('3 panes');
+    expect(out).toContain('3 open');
+    // The words on it are the reader's, not the storage's.
+    expect(out).not.toMatch(/(title|aria-label)="[^"]*\bpanes?\b/);
     // …and it is never a status object. The row's own mark one cell along is
     // already saying what the chat is doing.
     expect(out).not.toMatch(/navtree-pane-pill[^>]*data-state=/);

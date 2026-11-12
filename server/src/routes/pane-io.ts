@@ -1,4 +1,4 @@
-import { decodeServerMessage, encodeInput } from '@muxpad/shared';
+import { ROW_NOT_FOUND, decodeServerMessage, encodeInput } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import WebSocket from 'ws';
@@ -165,7 +165,7 @@ function captureReplay(opts: {
     ws.on('close', (code: number, reason: Buffer) => {
       // 4404 = pane not found on ptyd (raced a kill); anything else mid-read
       // just ends the capture with what we have.
-      if (!settled && code === 4404) finish(new Error(reason.toString('utf8') || 'pane not found'));
+      if (!settled && code === 4404) finish(new Error(reason.toString('utf8') || ROW_NOT_FOUND));
       else finish();
     });
     ws.on('error', (err: Error) => finish(err));
@@ -198,7 +198,7 @@ function writeInput(opts: { socketPath: string; paneId: string; data: string }):
         finish(
           new Error(
             code === 4404
-              ? reason.toString('utf8') || 'pane not found'
+              ? reason.toString('utf8') || ROW_NOT_FOUND
               : 'pty socket closed before write',
           ),
         );
@@ -231,7 +231,7 @@ export function paneIoRoutes(deps: {
     id: string,
   ): Promise<{ status: 400 | 404 | 503; code: string; message: string } | null> => {
     const p = panes.getById(id);
-    if (!p) return { status: 404, code: 'not_found', message: 'pane not found' };
+    if (!p) return { status: 404, code: 'not_found', message: ROW_NOT_FOUND };
     if (p.kind !== 'shell')
       return { status: 400, code: 'bad_request', message: 'not a terminal pane' };
     let running = false;

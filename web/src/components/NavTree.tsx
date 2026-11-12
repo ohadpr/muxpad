@@ -5,6 +5,7 @@ import {
   type Workspace,
   collectLayoutLeaves,
   fallbackTabIcon,
+  rowNounTitle,
 } from '@muxpad/shared';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { Fragment, Suspense, lazy, useEffect, useRef, useState } from 'react';
@@ -1135,7 +1136,7 @@ function WorkspacePickRow({
       <ArmedClose
         onConfirm={onClose}
         title="Close workspace"
-        armedTitle="Tap again — this kills every tab and pane in it"
+        armedTitle="Tap again — this ends every chat and terminal in it"
         label={`Close workspace ${workspace.name}`}
         armedLabel={`Tap again to close ${workspace.name} and all its tabs`}
       />
@@ -1450,7 +1451,7 @@ function WorkspaceNode({
               title="Close workspace"
               armedTitle={`Click again — ${workspace.tab_count} ${
                 workspace.tab_count === 1 ? 'tab' : 'tabs'
-              } and their panes will be killed`}
+              } and everything running in them will be ended`}
               label={`Close workspace ${workspace.name}`}
               armedLabel={`Click again to close ${workspace.name} and all its tabs`}
             />
@@ -1856,7 +1857,7 @@ function sheetPaneLabel(p: PaneSpec, i: number): string {
       return p.url;
     }
   }
-  return p.title?.trim() || p.foreground_cmd?.trim() || `Pane ${i + 1}`;
+  return p.title?.trim() || p.foreground_cmd?.trim() || `${rowNounTitle(p)} ${i + 1}`;
 }
 
 /**
@@ -1954,7 +1955,7 @@ function SheetPaneList({
       if (wasLast) await api.deleteTab(tab.id);
     } catch (err) {
       console.error('deletePane failed', err);
-      noticeFromError(`Couldn't close the pane ${label}.`, err);
+      noticeFromError(`Couldn't close ${label}.`, err);
       api
         .getTab(tab.id)
         .then((d) => setPanes(d.panes))
@@ -2949,10 +2950,10 @@ function TabRow({
               aria-expanded={panesOpen}
               aria-label={
                 panesOpen
-                  ? `Hide ${paneCount} panes of ${tab.name}`
-                  : `Show ${paneCount} panes of ${tab.name}`
+                  ? `Hide the ${paneCount} things open in ${tab.name}`
+                  : `Show the ${paneCount} things open in ${tab.name}`
               }
-              title={`${paneCount} panes`}
+              title={`${paneCount} open`}
             >
               <span className="navtree-row-pill-glyph" aria-hidden="true">
                 <SvgPanesGlyph />

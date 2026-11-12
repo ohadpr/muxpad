@@ -3,6 +3,7 @@ import type { Duplex } from 'node:stream';
 import {
   type AgentMode,
   BASELINE_AGENT_MODE,
+  ROW_NOT_FOUND,
   isBootstrapTabName,
   isMachineMessage,
   modeForBackend,
@@ -1665,7 +1666,7 @@ export function attachWsServer(deps: {
     const t = text.trim();
     if (!t) return { status: 'rejected', reason: 'empty message' };
     const pane = panes.getById(paneId);
-    if (!pane) return { status: 'rejected', reason: 'pane not found' };
+    if (!pane) return { status: 'rejected', reason: ROW_NOT_FOUND };
     // An attempted send is attention even when rejected, but only accepted
     // work may revive the chat or open a worker round. Record recency here;
     // noteUserMessage below runs after relay/enqueue, before turn-start.

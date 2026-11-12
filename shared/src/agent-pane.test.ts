@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { isAgentPane, tabShowsPaneStrip, tabTakesPanes } from './agent-pane.js';
+import {
+  isAgentPane,
+  rowNoun,
+  rowNounTitle,
+  tabShowsPaneStrip,
+  tabTakesPanes,
+} from './agent-pane.js';
 
 describe('isAgentPane', () => {
   it('reads the durable startup marker', () => {
@@ -70,5 +76,42 @@ describe('tabShowsPaneStrip', () => {
   it('is true for a one-pane tab that TAKES panes — that is where the + lives', () => {
     expect(tabShowsPaneStrip([{ face: 'terminal' }])).toBe(true);
     expect(tabShowsPaneStrip([])).toBe(true);
+  });
+});
+
+describe('rowNoun — what a person calls the row', () => {
+  it('names an agent row by its mode, which is fixed at creation', () => {
+    expect(rowNoun({ startup_cmd: 'muxpad agent --mode chat', mode: 'chat' })).toBe('chat');
+    expect(rowNoun({ startup_cmd: 'muxpad agent', mode: 'agent' })).toBe('agent');
+    // The pre-rename spellings are still on old rows.
+    expect(rowNoun({ startup_cmd: 'muxpad agent', mode: 'do' })).toBe('chat');
+    expect(rowNoun({ startup_cmd: 'muxpad agent', mode: 'deep' })).toBe('agent');
+  });
+
+  it('reads a row with no recorded mode as Agent, never as Chat', () => {
+    // Claiming Chat would assert a contract nobody put in front of the model.
+    expect(rowNoun({ startup_cmd: 'muxpad agent' })).toBe('agent');
+  });
+
+  it('calls a shell a terminal, whatever mode its row happens to carry', () => {
+    // The live install's one terminal row has `mode: 'chat'` stored — a column
+    // default, not a fact about it.
+    expect(rowNoun({ startup_cmd: null, face: 'terminal', mode: 'chat' })).toBe('terminal');
+    expect(rowNoun({ startup_cmd: 'npm run dev', face: 'web' })).toBe('terminal');
+    expect(rowNoun(undefined)).toBe('terminal');
+  });
+
+  it('calls a converted pane by what it now is', () => {
+    expect(rowNoun({ startup_cmd: '/bin/zsh', face: 'chat', mode: 'chat' })).toBe('chat');
+  });
+
+  it('does not call a page with no terminal behind it a terminal', () => {
+    expect(rowNoun({ kind: 'url', face: 'web' })).toBe('web view');
+  });
+
+  it('capitalises for a label', () => {
+    expect(rowNounTitle({ startup_cmd: 'muxpad agent', mode: 'chat' })).toBe('Chat');
+    expect(rowNounTitle({ startup_cmd: null })).toBe('Terminal');
+    expect(rowNounTitle({ kind: 'url' })).toBe('Web view');
   });
 });

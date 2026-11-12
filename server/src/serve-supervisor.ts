@@ -116,7 +116,7 @@ export interface ServeSupervisor {
 }
 
 function serveGaveUpMessage(paneName: string | null | undefined): string {
-  return `${paneName ?? 'app server'} could not be restarted after ${RESPAWN_MAX_ATTEMPTS} attempts — open the pane's terminal face and run its command by hand`;
+  return `${paneName ?? 'app server'} could not be restarted after ${RESPAWN_MAX_ATTEMPTS} attempts — open its terminal and run the command by hand`;
 }
 
 export function createServeSupervisor(deps: ServeSupervisorDeps): ServeSupervisor {

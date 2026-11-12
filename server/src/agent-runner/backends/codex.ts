@@ -516,7 +516,7 @@ export function createCodexBackend(
         emit({
           t: 'turn-done',
           ok: false,
-          error: 'codex is not logged in — run `codex login` in this pane’s terminal face',
+          error: 'codex is not logged in — switch this agent to Agent log and run `codex login`',
         });
         if (!closed && queue.length > 0) void runTurn(); // drain the rest
         return;
@@ -628,7 +628,7 @@ export function createCodexBackend(
     log(dim(`pane ${host.paneId} · ${process.cwd()}`));
     authOk = await checkAuth();
     if (!authOk) {
-      log(dim('codex not logged in — run `codex login` in this pane’s terminal face'));
+      log(dim('codex not logged in — switch this agent to Agent log and run `codex login`'));
     }
     try {
       const { models, defaultModel } = await listModels();

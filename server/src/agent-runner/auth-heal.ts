@@ -229,5 +229,5 @@ export class AuthHealPolicy {
  * user exactly where the incident left them.
  */
 export function authGiveUpNotice(paneName: string, message: string): string {
-  return `${paneName}: the agent cannot authenticate (${message}). Run /login on this machine — the pane retries on its own once you have.`;
+  return `${paneName}: the agent cannot authenticate (${message}). Run /login on this machine — it retries on its own once you have.`;
 }
