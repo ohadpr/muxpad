@@ -2877,11 +2877,21 @@ export function ChatPane({
     setRebasing(true);
     api
       .rebasePane(paneId)
-      .then(() => {
+      .then((r) => {
         // The new runner's hello re-renders this pane from the rebased
         // session. Nothing to do here but let go of the lock.
+        //
+        // …AND SAY WHICH REBASE IT WAS. `auto` promises the best available
+        // and there are two, so a flat "Rebased" is a claim the server did
+        // not always make: a chat on another machine gets its PROCESS
+        // replaced (today's instructions, history intact) but not its
+        // transcript rewritten, because that file is on the other host. The
+        // CLI has reported this since the beginning; the button said nothing,
+        // which is how a partial result reads as a complete one.
         setNotice({
-          text: 'Rebased — this chat is running on today’s instructions.',
+          text: r?.fallback
+            ? `Restarted on today’s instructions — ${r.fallback}.`
+            : 'Rebased — this chat is running on today’s instructions.',
           tone: 'info',
         });
       })

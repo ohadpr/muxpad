@@ -546,7 +546,14 @@ export const api = {
       },
     ),
 
-  rebasePane: (id: string) => req<{ ok: boolean }>(`/api/panes/${id}/rebase`, { method: 'POST' }),
+  rebasePane: (id: string) =>
+    req<{
+      ok: boolean;
+      /** Which rebase it managed — they are different acts (see RebaseMode). */
+      mode?: 'transcript' | 'keep' | 'fresh';
+      /** Why the transcript rebase was not the one used, when `auto` tried. */
+      fallback?: string;
+    }>(`/api/panes/${id}/rebase`, { method: 'POST' }),
 
   /**
    * Ask the SERVER whether this pane's web-face URL is actually serving.

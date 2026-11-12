@@ -356,55 +356,90 @@ describe('runRebase — the transcript rebase is the default', () => {
     expect(new PaneStore(db).getById(paneId)?.startup_cmd).toBe('muxpad agent --resume old-sid');
   });
 
-  it('refuses a pane that lives on another machine, in auto and keep alike', async () => {
-    for (const mode of ['auto', 'keep'] as const) {
-      const { db, paneId } = fixture('muxpad agent --resume old-sid');
-      db.prepare('UPDATE panes SET node_id = ? WHERE id = ?').run('trayo', paneId);
-      let touched = false;
-      const r = await runRebase(
-        {
-          db,
-          transcript: async () => {
-            touched = true;
-            return rebased;
-          },
-          respawn: async () => {
-            touched = true;
-          },
-          submit: () => ok,
-          brief: async () => {
-            touched = true;
-            return 'x';
-          },
-        },
-        paneId,
-        mode,
-      );
-      expect(r).toMatchObject({ ok: false, code: 'elsewhere' });
-      expect(touched).toBe(false);
-    }
-  });
-
-  it('refuses a chat on another machine outright — no briefing, no restart', async () => {
+  /**
+   * A CHAT ON ANOTHER MACHINE IS REBASED, NOT REFUSED.
+   *
+   * This refused outright, telling the owner it "has to be rebased there" —
+   * and there is no muxpad UI there, so what it meant was never. He pressed
+   * the button on a VM chat running stale instructions and got a red line.
+   *
+   * Only the TRANSCRIPT rebase needs local files. `keep` leaves `--resume`
+   * alone and replaces the PROCESS, and a new process reads today's
+   * instructions at boot; `killPane`/`ensurePane` resolve the node from the
+   * pane, so that works remotely exactly as it does here. The history rides
+   * along either way — what is lost is the rewrite of rules quoted INSIDE it,
+   * and the answer says so.
+   */
+  it('restarts a chat on another machine, and says what it could not do', async () => {
     const { db, paneId } = fixture('muxpad agent --resume old-sid');
-    let touched = false;
+    db.prepare('UPDATE panes SET node_id = ? WHERE id = ?').run('trayo', paneId);
+    let respawned = false;
+    let touchedTranscript = false;
     const r = await runRebase(
       {
         db,
-        transcript: async () => ({ ok: false, reason: 'elsewhere', detail: 'runs on trayo' }),
+        transcript: async () => {
+          touchedTranscript = true;
+          return rebased;
+        },
         respawn: async () => {
-          touched = true;
+          respawned = true;
         },
         submit: () => ok,
-        brief: async () => {
-          touched = true;
-          return 'x';
-        },
       },
       paneId,
     );
-    expect(r).toMatchObject({ ok: false, code: 'elsewhere' });
-    expect(touched).toBe(false);
+    expect(r.ok).toBe(true);
+    if (!r.ok || r.mode !== 'keep') throw new Error('expected a keep rebase');
+    expect(respawned, 'the process is replaced — that is the rebase').toBe(true);
+    expect(r.fallback).toMatch(/another machine/);
+    // The remote transcript is never even opened: it is not reachable, and
+    // asking would be a round trip to be told so.
+    expect(touchedTranscript).toBe(false);
+    // …and the conversation rides along: `--resume` is untouched.
+    expect(new PaneStore(db).getById(paneId)?.startup_cmd).toBe('muxpad agent --resume old-sid');
+  });
+
+  it('and an explicit `keep` on a remote chat is an ordinary keep', async () => {
+    const { db, paneId } = fixture('muxpad agent --resume old-sid');
+    db.prepare('UPDATE panes SET node_id = ? WHERE id = ?').run('trayo', paneId);
+    let respawned = false;
+    const r = await runRebase(
+      {
+        db,
+        respawn: async () => {
+          respawned = true;
+        },
+        submit: () => ok,
+      },
+      paneId,
+      'keep',
+    );
+    expect(r).toMatchObject({ ok: true, mode: 'keep' });
+    expect(respawned).toBe(true);
+    // No fallback line: nothing was attempted and refused, `keep` is what was
+    // asked for.
+    if (r.ok && r.mode === 'keep') expect(r.fallback).toBeUndefined();
+  });
+
+  it('still reports a LOCAL transcript rebase that refuses, as a fallback', async () => {
+    // The remote path must not swallow the local one's reporting.
+    const { db, paneId } = fixture('muxpad agent --resume old-sid');
+    const r = await runRebase(
+      {
+        db,
+        transcript: async () => ({
+          ok: false as const,
+          reason: 'last_turn_too_large' as const,
+          detail: 'one turn is 90% of it',
+        }),
+        respawn: async () => {},
+        submit: () => ok,
+      },
+      paneId,
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok && r.mode === 'keep') expect(r.fallback).toContain('last_turn_too_large');
   });
 
   it('puts everything back when the restart fails', async () => {

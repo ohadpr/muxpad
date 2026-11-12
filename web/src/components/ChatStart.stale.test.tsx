@@ -87,9 +87,20 @@ describe('the older-build cell IS the button', () => {
     const at = API.indexOf('rebasePane:');
     const call = API.slice(at, API.indexOf('}),', at) + 3);
     expect(call).toContain('/rebase');
-    expect(call).not.toContain('mode');
+    // WHAT IS SENT, not what is mentioned. This asserted that the word `mode`
+    // appeared nowhere in the entry, which also forbade DESCRIBING the
+    // server's answer — the response type names the mode it managed, so that
+    // the button can say "restarted, history not rewritten" for a chat on
+    // another machine instead of a flat "Rebased". The rule is about the
+    // REQUEST: no body, no mode, the server picks.
+    const body = call.slice(call.indexOf('{', call.indexOf('/rebase')));
+    expect(body).toContain("method: 'POST'");
+    expect(body).not.toMatch(/\bbody\b/);
+    expect(body).not.toMatch(/\bmode\b/);
     // `fresh` summarises the history out of the window. It answers a
-    // different question and must not be reachable by pressing this.
-    expect(call).not.toContain('fresh');
+    // different question and must not be reachable by pressing this — again
+    // in the REQUEST: the response type names `fresh` as one of the modes the
+    // server may report having used.
+    expect(body).not.toContain('fresh');
   });
 });

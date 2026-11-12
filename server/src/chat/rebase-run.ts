@@ -275,19 +275,34 @@ async function rebase(
   cmd: string,
   mode: RebaseMode,
 ): Promise<RebaseResult> {
-  if (mode !== 'fresh' && !transcriptIsLocal(deps.db, paneId)) {
-    return {
-      ok: false,
-      code: 'elsewhere',
-      message: 'this chat runs on another machine; it has to be rebased there',
-    };
-  }
+  // ── A CHAT ON ANOTHER MACHINE CAN STILL BE REBASED ───────────────────────
+  //
+  // This refused outright: "this chat runs on another machine; it has to be
+  // rebased there". There is no muxpad UI on that machine, so what it really
+  // said was that a remote chat can never be rebased — and the owner hit
+  // exactly that, pressing the button on a VM chat running stale
+  // instructions.
+  //
+  // Only ONE of the two rebases needs local files. The TRANSCRIPT rebase
+  // rewrites the session JSONL, which lives on the other host. `keep` does
+  // not touch it at all: it leaves `--resume` alone and replaces the PROCESS,
+  // and a new process reads today's agent-instructions.md at boot. That works
+  // remotely exactly as it does here, because `killPane`/`ensurePane` resolve
+  // the node from the pane (PaneRouter).
+  //
+  // So a remote chat falls back to `keep` and SAYS SO, rather than being told
+  // no. What it loses is the rewrite of rules quoted inside the history; what
+  // it gets is the thing it was asking for.
+  const remote = !transcriptIsLocal(deps.db, paneId);
+  const ELSEWHERE = 'the transcript is on another machine, so its history could not be rewritten';
 
-  let fallback: string | undefined;
-  if (mode === 'auto') {
+  // Told, not silently dropped: `auto` promises the best available, so when
+  // the best is not available the answer has to say which one it gave.
+  let fallback: string | undefined = mode === 'auto' && remote ? ELSEWHERE : undefined;
+  if (mode === 'auto' && !remote) {
     const t = await (deps.transcript ?? transcriptRebase)(deps.db, paneId);
     if (!t.ok && t.reason === 'elsewhere') {
-      return { ok: false, code: 'elsewhere', message: t.detail };
+      fallback = ELSEWHERE;
     }
     if (t.ok) {
       // ONLY NOW is anything about the pane changed: the new transcript exists
