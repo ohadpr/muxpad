@@ -274,21 +274,56 @@ export function SlackPasskeyApproval({
         ...(chosen === 'once' ? {} : { scope: request.timedScope ?? 'slack-team-all-v2' }),
       });
       if (!intentLive()) return;
-      const response = await passkeyCeremony(ceremony, false, {
-        purpose: 'slack-decision',
-        requestID: request.id,
-        fingerprint: request.fingerprint,
-        action: request.action,
-        teamID: request.teamID,
-        payload: request.payload,
-        decision,
-        duration: chosen,
-        scope: chosen === 'once' ? null : (request.timedScope ?? 'slack-team-all-v2'),
-      });
+      /**
+       * ── LEAVE THE TOP LAYER BEFORE THE NATIVE PROMPT ──────────────────
+       *
+       * `showModal()` puts this dialog in the TOP LAYER, which paints above
+       * every element on the page — and a password manager's passkey picker
+       * (1Password, Dashlane) is an ordinary injected DOM overlay, not an OS
+       * sheet. So it appeared UNDER the darkened backdrop, visible and
+       * unclickable: "the 1password one somehow pops up before the modal and
+       * shows underneath the darkened view area so i can't click it".
+       *
+       * Nothing about z-index can fix that — the top layer is above any
+       * stacking context — so the dialog closes for the duration of the
+       * ceremony and comes back if it fails. The invariant that mattered
+       * when this close lived AFTER the ceremony still holds: closing is
+       * never evidence of approval, and the decision is submitted below on
+       * the strength of the signed response alone.
+       */
+      dialog.current?.close();
+      let response: Awaited<ReturnType<typeof passkeyCeremony>>;
+      try {
+        response = await passkeyCeremony(ceremony, false, {
+          purpose: 'slack-decision',
+          requestID: request.id,
+          fingerprint: request.fingerprint,
+          action: request.action,
+          teamID: request.teamID,
+          payload: request.payload,
+          decision,
+          duration: chosen,
+          scope: chosen === 'once' ? null : (request.timedScope ?? 'slack-team-all-v2'),
+        });
+      } catch (e) {
+        // Cancelled, or no passkey offered.
+        //
+        // APPROVE brings the card back, because before this change the dialog
+        // stayed open through the ceremony and a cancelled approval left it
+        // on screen. Closing early must not also delete the thing the person
+        // was deciding about.
+        //
+        // DENY does not, and that is deliberate and older than this change:
+        // `Deny closes before authentication and stays closed when
+        // authentication is cancelled`. A denied request that keeps
+        // reappearing is nagging about an answer already given.
+        if (decision === 'approve' && intentLive() && !dialog.current?.open)
+          dialog.current?.showModal();
+        throw e;
+      }
       if (!intentLive()) return;
       // The native confirmation is finished. Return to chat while the single
       // signed submission completes; closing is never evidence of approval.
-      dialog.current?.close();
       setDismissed(true);
       // Signed decisions are submitted ONCE. Lost/uncertain responses are never retried.
       const result = await passkeyAPI('decision', { ceremonyID: ceremony.ceremonyID, response });
