@@ -952,6 +952,9 @@ read:
   stats                                     totals only, no content
 
 write (a draft reply; it can never send):
+  run <args…>                               send argv straight to msgvault (reviewed, approved once)
+                                            (for usage, run `msgvault <command> --help` directly:
+                                             it opens no database and needs no approval)
   calendar-freebusy|calendar-conflicts --account=<email> --start=<…> --end=<…> --tz=<IANA>
   calendar-update --account=<email> --event=<id> [--summary=…] [--start=…] [--end=…] [--tz=…]
   calendar-delete --account=<email> --event=<id>
@@ -1086,6 +1089,20 @@ cmd_msgvault() {
     # Two branches rather than one with "$verb" in the path: the endpoint set
     # this CLI may call is pinned by a test that READS these literals, and a
     # path built from a variable is a verb that test cannot see.
+    # ── THE ARGV PATH ───────────────────────────────────────────────────
+    # Everything after `run` goes to msgvault as-is. The broker reviews it
+    # against that subcommand's own `--help` and refuses the shapes that
+    # change whose call it is (--home/--config/--agent-*) or that reach
+    # another person (--attendees/--send-updates). Approved once, with the
+    # command in front of you — a duration covers the named verbs, not this.
+    #
+    # `help` is the other half: an agent that can read the tool's own usage
+    # stops guessing at flags.
+    run)
+      [ -n "${1:-}" ] || { echo 'muxpad: run needs the msgvault arguments' >&2; return 1; }
+      slack_call POST /api/msgvault/run "$(printf '%s\n' "$@" | jq -Rn \
+        --arg pane "$MUXPAD_PANE_ID" --arg key "$MUXPAD_PANE_KEY" \
+        '{pane:$pane,key:$key,args:[inputs]}')" ;;
     # THE CALENDAR READS. Same window for both; `freebusy` answers "when are
     # you busy", `conflicts` "what overlaps".
     calendar-freebusy|calendar-conflicts)

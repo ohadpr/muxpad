@@ -36,7 +36,12 @@ import { msgvaultArgv, validateMsgvault } from './msgvault.mjs';
 const BINARY = '/usr/local/libexec/msgvault/msgvault';
 /** Actions the runner performs over HTTP instead of argv — see
  *  msgvault-runner.mjs. They have a spec for validation only. */
-const NOT_ARGV = new Set(['msgvault.export-attachment']);
+const NOT_ARGV = new Set([
+  'msgvault.export-attachment',
+  // Its payload IS the argv, reviewed against msgvault's own help — see
+  // msgvault-argv.test.mjs, which checks that gate against the real binary.
+  'msgvault.run',
+]);
 /** One payload that satisfies every validator; each verb takes what it needs. */
 const ANY = {
   query: 'dinner',

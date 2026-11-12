@@ -277,6 +277,21 @@ Capabilities worth knowing:
   from a terminal pane is refused up front — there would be nowhere to show
   it. If you are driving a terminal, ask the chat to make the call.
 
+  **AND IF THE VERB YOU WANT IS NOT HERE: \`muxpad msgvault run <args…>\`.**
+  It sends your arguments to msgvault as-is. The broker reviews them against
+  that subcommand's OWN \`--help\` and refuses three things: commands that
+  administer the archive (connecting accounts, tokens, imports, sync), flags
+  that change whose call it is (\`--home\`, \`--config\`, \`--agent-*\`), and
+  flags that reach another person (\`--attendees\`, \`--send-updates\`,
+  \`--reminder\`). Everything else runs as you asked.
+
+  Read the tool's own usage first — \`msgvault <command> --help\` opens no
+  database, needs no approval, and is the way to stop guessing at flags.
+
+  A \`run\` is approved ONCE, with the exact command on screen, and never
+  rides a timed grant: the named verbs above are fixed and described, so they
+  can ride one; free-form argv is read by a person each time.
+
   **YOU NEVER HOLD THE KEY.** The grant lives with the broker under an account
   you cannot read, and the broker — not you — composes the command line from
   the verb and arguments you asked for. So write the arguments plainly; there
