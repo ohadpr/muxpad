@@ -191,6 +191,34 @@ describe('SpawnRoundStore', () => {
       expect(rounds.listByTab(child)[0]?.artifacts).toEqual(['https://example.test/p']);
     });
 
+    /**
+     * A RESULT THE PARENT HAS READ IS NOT A MISTAKE TO UNDO.
+     *
+     * Reopening cleared `delivered_at`, so the next close delivered the same
+     * job a second time as if it were new — and an orchestrator acts on it
+     * again, which can mean doing the follow-up work twice. The turn that
+     * triggered this (a late background-task notification, a wakeup) is the
+     * NEXT job, and gets a round of its own.
+     */
+    it('opens a NEW round instead of reopening a DELIVERED one', () => {
+      rounds.open(child, 100);
+      rounds.close(child, 200, { report: 'job one', state: 'ok' });
+      const first = rounds.listByTab(child)[0]?.id;
+      rounds.markDelivered([first as string], 250);
+
+      expect(rounds.reopen(child, 300)).toBe(true);
+
+      const all = rounds.listByTab(child);
+      expect(all).toHaveLength(2);
+      // The delivered round is untouched: its report, its end and its stamp.
+      expect(all[0]?.report).toBe('job one');
+      expect(all[0]?.ended_at).toBe(200);
+      expect(all[0]?.delivered_at).toBe(250);
+      // …and the new work has somewhere to belong.
+      expect(all[1]?.started_at).toBe(300);
+      expect(all[1]?.ended_at).toBeNull();
+    });
+
     it('does nothing when a round is already open — there is no mistake to undo', () => {
       rounds.open(child, 100);
       expect(rounds.reopen(child)).toBe(false);

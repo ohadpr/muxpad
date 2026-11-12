@@ -1,15 +1,17 @@
 import Database from 'better-sqlite3';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { SpawnRoundStore } from './SpawnRoundStore.js';
 import { TabStore } from './TabStore.js';
 import { WorkspaceStore } from './WorkspaceStore.js';
 import { runMigrations } from './migrations.js';
 
 describe('TabStore', () => {
   let store: TabStore;
+  let db: Database.Database;
   let workspaceId: string;
 
   beforeEach(() => {
-    const db = new Database(':memory:');
+    db = new Database(':memory:');
     runMigrations(db);
     store = new TabStore(db);
     const workspaces = new WorkspaceStore(db);
@@ -139,6 +141,55 @@ describe('TabStore', () => {
       spawned_by: parent.id,
     });
     expect(store.clockRows().find((r) => r.id === child.id)?.clock_started_at).toBeGreaterThan(0);
+  });
+
+  /**
+   * DELETING THE ASKER UNASKS THE QUESTION.
+   *
+   * A spawn round is "what did this worker produce for the chat that asked?".
+   * Nothing closes a round but the sub-chat lifecycle, and a promoted orphan
+   * is not a sub-chat any more — so no turn of its will ever reach that code
+   * again and the round stayed open for ever, with the row reading `working`.
+   * One on this machine had been open for 945 hours.
+   */
+  it('closes a promoted orphan’s open round, instead of leaving it for ever', () => {
+    const parent = store.create({ name: 'P', layout: 'p', workspace_id: workspaceId });
+    const child = store.create({
+      name: 'C',
+      layout: 'c',
+      workspace_id: workspaceId,
+      spawned_by: parent.id,
+    });
+    const rounds = new SpawnRoundStore(db);
+    rounds.open(child.id, 100);
+
+    store.delete(parent.id, 5_000);
+
+    expect(rounds.openRound(child.id)).toBeNull();
+    const only = rounds.listByTab(child.id)[0];
+    expect(only?.ended_at).toBe(5_000);
+    // Marked delivered too: there is nobody left to deliver to, and an
+    // undelivered round is what the delivery sweep looks for every minute.
+    expect(only?.delivered_at).toBe(5_000);
+  });
+
+  it('leaves a round that already reported exactly as it was', () => {
+    const parent = store.create({ name: 'P', layout: 'p', workspace_id: workspaceId });
+    const child = store.create({
+      name: 'C',
+      layout: 'c',
+      workspace_id: workspaceId,
+      spawned_by: parent.id,
+    });
+    const rounds = new SpawnRoundStore(db);
+    rounds.open(child.id, 100);
+    rounds.close(child.id, 200, { report: 'did the thing', state: 'ok' });
+
+    store.delete(parent.id, 5_000);
+
+    const only = rounds.listByTab(child.id)[0];
+    expect(only?.ended_at).toBe(200);
+    expect(only?.report).toBe('did the thing');
   });
 
   it('resetClock moves the clock without bumping updated_at', () => {

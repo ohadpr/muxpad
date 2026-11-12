@@ -1817,6 +1817,28 @@ const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    /**
+     * A RESULT ABANDONED BECAUSE YOU TIDIED UP IS NOT A RESULT YOU REFUSED.
+     *
+     * When a parent chat is archived, its workers' pending reports are
+     * settled undelivered — right, because waking a chat somebody
+     * deliberately cleared would be the app arguing with them. But they were
+     * stamped `delivered_at` with nothing to say they had never arrived, so
+     * un-archiving the parent and messaging it again still never produced
+     * them: the delivery sweep only looks at unstamped rounds. Twenty-one
+     * rounds on this machine went that way.
+     *
+     * This column is the difference between "delivered" and "nobody was
+     * there", so reviving the parent can hand them over.
+     */
+    version: 55,
+    apply: (db) => {
+      const cols = db.prepare('PRAGMA table_info(spawn_rounds)').all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === 'abandoned_at'))
+        db.exec('ALTER TABLE spawn_rounds ADD COLUMN abandoned_at INTEGER');
+    },
+  },
 ];
 
 /** Highest version in the migration list. Exported so a test can assert the

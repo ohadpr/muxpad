@@ -63,6 +63,18 @@ export interface SpawnRound {
    * `shouldConsiderSpawnReport`.
    */
   reopened_at: number | null;
+  /**
+   * When this round was settled WITH NOBODY TO TELL, or null.
+   *
+   * `delivered_at` says the parent has it; this says the round is finished
+   * with and the parent never did. They are stamped together, because an
+   * abandoned round must leave the delivery queue — the sweep looks at
+   * unstamped rounds every minute — and the distinction is what lets a
+   * REVIVED parent be handed the results it missed (`undeliverAbandoned`).
+   * Before this column existed, archiving a parent threw its workers'
+   * results away for good: 21 rounds on this machine.
+   */
+  abandoned_at: number | null;
 }
 
 interface RawRound {
@@ -76,6 +88,7 @@ interface RawRound {
   delivered_at: number | null;
   reopened_at: number | null;
   parent_turn: number | null;
+  abandoned_at: number | null;
 }
 
 function toRound(r: RawRound): SpawnRound {
@@ -98,11 +111,12 @@ function toRound(r: RawRound): SpawnRound {
     artifacts,
     delivered_at: r.delivered_at,
     reopened_at: r.reopened_at,
+    abandoned_at: r.abandoned_at ?? null,
   };
 }
 
 const COLUMNS =
-  'id, tab_id, started_at, ended_at, report, report_state, artifacts, delivered_at, reopened_at, parent_turn';
+  'id, tab_id, started_at, ended_at, report, report_state, artifacts, delivered_at, reopened_at, parent_turn, abandoned_at';
 /**
  * The same list, qualified for the joined queries below.
  *
@@ -219,6 +233,19 @@ export class SpawnRoundStore {
    *
    * Does nothing when a round is already open (there is no mistake to undo) or
    * when this child has never had one.
+   *
+   * ── AND NOTHING WHEN THE RESULT WAS ALREADY DELIVERED ────────────────────
+   *
+   * The whole premise of a reopen is "we closed this job too early". A round
+   * whose report has REACHED THE PARENT refutes that premise: the parent has
+   * read it and acted on it, possibly by merging the work. Reopening it anyway
+   * clears `delivered_at`, so the next close delivered the same job a second
+   * time as if it were new — and an orchestrator that acts on a result it has
+   * already acted on does the follow-up work twice. Five rounds in this
+   * install carry `reopened_at`.
+   *
+   * So a delivered round is left closed and a NEW round is opened instead,
+   * which is what a turn after a delivered result actually is: the next job.
    */
   reopen(tabId: string, at: number = Date.now()): boolean {
     if (this.openRound(tabId)) return false;
@@ -230,6 +257,7 @@ export class SpawnRoundStore {
       )
       .get(tabId) as RawRound | undefined;
     if (!last) return false;
+    if (last.delivered_at !== null) return this.open(tabId, at) !== null;
     this.db
       .prepare(
         `UPDATE spawn_rounds SET ended_at = NULL, report = NULL, report_state = NULL,
@@ -409,6 +437,49 @@ export class SpawnRoundStore {
       for (const id of ids) n += stmt.run(at, id).changes;
       return n;
     })();
+  }
+
+  /**
+   * SETTLED WITH NOBODY TO TELL — stamped delivered AND abandoned, together.
+   *
+   * The pair is the point. `delivered_at` takes the round out of the delivery
+   * queue, which it has to be (the sweep retries unstamped rounds once a
+   * minute, for ever); `abandoned_at` records that the parent never actually
+   * read it, so `undeliverAbandoned` can hand it over if the parent comes
+   * back. Before the second half existed, archiving a parent lost its
+   * workers' results permanently.
+   */
+  markAbandoned(ids: readonly string[], at: number): number {
+    if (ids.length === 0) return 0;
+    const stmt = this.db.prepare(
+      `UPDATE spawn_rounds SET delivered_at = COALESCE(delivered_at, ?), abandoned_at = ?
+        WHERE id = ? AND abandoned_at IS NULL`,
+    );
+    return this.db.transaction(() => {
+      let n = 0;
+      for (const id of ids) n += stmt.run(at, at, id).changes;
+      return n;
+    })();
+  }
+
+  /**
+   * THE PARENT CAME BACK — put its abandoned results back in the queue.
+   *
+   * Called when an archived chat is revived. Only rounds this code abandoned
+   * are touched (`abandoned_at IS NOT NULL`), so a result the parent genuinely
+   * read is never re-sent — the one failure this feature must not have.
+   *
+   * Returns how many went back, which is 0 for every chat that was archived
+   * with nothing outstanding.
+   */
+  undeliverAbandoned(parentTabId: string): number {
+    return this.db
+      .prepare(
+        `UPDATE spawn_rounds SET delivered_at = NULL, abandoned_at = NULL
+          WHERE abandoned_at IS NOT NULL
+            AND tab_id IN (SELECT id FROM tabs WHERE spawned_by = ?)`,
+      )
+      .run(parentTabId).changes;
   }
 
   /**

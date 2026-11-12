@@ -50,6 +50,7 @@
 import type { ChatClock } from '@muxpad/shared';
 import { chatClock, chatClockDone } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
+import { SpawnRoundStore } from './store/SpawnRoundStore.js';
 import { type RetireReason, type TabClockRow, TabStore } from './store/TabStore.js';
 
 /** All tabs' lifecycle inputs, by id. Build ONCE per list (see
@@ -378,6 +379,22 @@ export function reviveChat(db: Database.Database, tabId: string, at: number = Da
   // note on why the sidebar's sort key rides with the decay clock. Nothing
   // extra is needed here, and a second write would be a second thing to
   // forget.
+  //
+  // ── AND THE RESULTS IT MISSED WHILE IT WAS AWAY COME BACK ────────────────
+  //
+  // Archiving a parent settles its workers' pending reports undelivered —
+  // right, because waking a chat somebody deliberately cleared would be the
+  // app arguing with them. But they were lost PERMANENTLY: un-archiving and
+  // messaging the chat again still produced nothing, because the delivery
+  // sweep only looks at unstamped rounds. 21 rounds on this machine.
+  //
+  // The chat is back, so the reason to withhold them is gone. Only rounds
+  // this code abandoned are touched, so a result the parent genuinely read is
+  // never re-sent.
+  const back = new SpawnRoundStore(db).undeliverAbandoned(tabId);
+  if (back > 0) {
+    console.log(`[tab-clock] ${tabId} revived — ${back} worker report(s) back in the queue`);
+  }
   return true;
 }
 
