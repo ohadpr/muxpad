@@ -681,11 +681,11 @@ export class CronScheduler {
    * DELETED, it counts against `max_open` for the rest of time.
    *
    * The schedule is then dead, silently. Measured on this machine
-   * 2026-11-11: four crons wedged this way, `a health-check cron` skipping every
-   * three hours since 09 Nov with `max_open 1 reached (1 still open)` — its
-   * fire predated the running server process, so the close died with the old
-   * one. Eleven lost runs, no error anywhere, the row in the rail looking
-   * like an ordinary chat.
+   * 2026-11-11: four crons wedged this way, one of them skipping every three
+   * hours for two days with `max_open 1 reached (1 still open)` — its fire
+   * predated the running server process, so the close died with the old one.
+   * Eleven lost runs, no error anywhere, the row in the rail looking like an
+   * ordinary chat.
    *
    * So the question is asked again from DURABLE state instead: for each tab
    * still recorded open, is it owed a close right now? The predicate is

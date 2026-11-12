@@ -443,7 +443,7 @@ export class TabStore {
       // `ended_at IS NULL` for ever instead: nothing closes a round but the
       // sub-chat lifecycle, and a promoted orphan is not a sub-chat any more,
       // so no turn of its will ever reach that code again. One round on this
-      // machine ("a long-running worker") had been open for 945 hours.
+      // machine had been open for 945 hours.
       //
       // Nothing is lost by closing it. The report, if one was ever written,
       // stays on the row; what ends is the claim that somebody is waiting for

@@ -602,8 +602,8 @@ describe('CronScheduler', () => {
    * only ever drops ids whose TAB WAS DELETED, so it counted against
    * `max_open` for the rest of time.
    *
-   * Measured on this machine 2026-11-11: four crons wedged, `a health-check cron`
-   * skipping every three hours since 09 Nov with `max_open 1 reached`, its
+   * Measured on this machine 2026-11-11: four crons wedged, one of them
+   * skipping every three hours for two days with `max_open 1 reached`, its
    * fire predating the running server process. Eleven lost runs, no error
    * anywhere.
    */
