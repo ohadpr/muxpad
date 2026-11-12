@@ -1356,10 +1356,18 @@ export function panesScopedRoutes(deps: {
     // same bounded-fan-out reason given on the tab route (`canReorder`
     // suppresses the emit for a row that is already the most recent).
     deps.tabActivity?.touchTab(pane.tab_id, { force: true });
-    // …and the column the sidebar actually SORTS on. See TabStore.noteUserTouch:
-    // `touchTab` above writes `last_activity_at`, which machine output also
-    // writes and which the order stopped reading.
-    tabs.noteUserTouch(pane.tab_id);
+    // ── LOOKING AT A CHAT IS NOT USING IT ────────────────────────────
+    //
+    // `noteUserTouch` wrote the column the sidebar SORTS on, so opening a
+    // chat promoted it above everything you had actually worked in — and
+    // the row you left promoted itself the moment you clicked away.
+    // Clicking through three chats reshuffled the rail three times:
+    // "sidebar reorders too aggressively when just clicking a chat".
+    //
+    // The order's own docstring already said what belongs here — acts that
+    // restart the decay clock, "a message you sent, an unarchive", and
+    // nothing the machine does on its own. A glance is neither. It still
+    // marks the tab SEEN (below); it just no longer claims you used it.
     // Viewing clears both read-state flags: the "done, unreviewed" bold
     // (persisted) and the BEL red dot (ptyd runtime). Emit pane.updated so the
     // bold drops immediately instead of waiting for the next nav poll.

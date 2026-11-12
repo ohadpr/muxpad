@@ -2657,11 +2657,18 @@ function TabRow({
     },
     // PERMANENT, and this menu is the only way to reach it. It used to be the
     // row's ×, one click from every row in the rail — which is exactly why the
-    // rail never got tidied. Its own confirm lives in the handler.
+    // rail never got tidied.
+    //
+    // IT NO LONGER ASKS AGAIN. Reaching this costs a right-click or a long
+    // press, then choosing the one red item in the list: two deliberate acts
+    // already, on a control nobody lands on by accident. A third — "click
+    // again" on the item you just chose — was the one the owner met and
+    // called a double confirmation, and a confirmation people learn to
+    // click through protects nothing. The rail's × keeps ITS arming,
+    // because that one IS one click from every row.
     {
-      label: 'Delete permanently…',
+      label: 'Delete permanently',
       danger: true,
-      confirm: 'Click again — this cannot be undone',
       onSelect: () => onDelete(),
     },
   ];
