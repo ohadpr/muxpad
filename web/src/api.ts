@@ -500,7 +500,17 @@ export const api = {
    */
   listPublished: () =>
     req<{
-      items: {
+      /**
+       * `publishes`, which is what the route actually answers with
+       * (routes/publish.ts). This said `items` for its first day — a field
+       * name invented at the client and never checked against the server, so
+       * `live.items` was undefined and `.find` took the whole drawer down
+       * with "Cannot read properties of undefined". `req<T>` casts, it does
+       * not validate, so TypeScript had nothing to disagree with and the
+       * drawer's own tests mocked this function. publish-api.test.ts now pins
+       * the two together.
+       */
+      publishes: {
         slug: string;
         name: string;
         url: string | null;
