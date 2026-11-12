@@ -92,6 +92,21 @@ export const DELIVERY_SWEEP_MS = 60_000;
 
 export interface SubmitSendResult {
   status: 'sent' | 'queued' | 'rejected';
+  /**
+   * The durable queue row this send became, on `queued` only.
+   *
+   * A QUEUED DELIVERY HAS NOT ARRIVED YET, and the round is already stamped
+   * `delivered_at` by then (see `send`). Normally that is fine — the queue
+   * drains and the parent reads it. But a queue can also be THROWN AWAY: the
+   * respawn sweep wipes it when it gives up on the runner, and the user can
+   * clear or cancel entries by hand. The stamp then says delivered about a
+   * report nobody will ever see, and the sweep only retries rounds with no
+   * stamp, so the result is lost for good.
+   *
+   * So the id comes back, and `noteQueueDropped` is the inverse: it is what
+   * lets the round be un-stamped when its queue row dies unspent.
+   */
+  id?: string | undefined;
   reason?: string | undefined;
 }
 
@@ -144,6 +159,21 @@ export class ReportDelivery {
    * that a minute-by-minute retry does not become the log.
    */
   private readonly refusalLogged = new Set<string>();
+  /**
+   * Deliveries sitting in a pane's send queue: queue row id → the rounds it
+   * carries and the exact stamp they were given.
+   *
+   * In memory, deliberately. The loss this closes is entirely in-process — a
+   * queue row that OUTLIVES the process is relayed after the restart like any
+   * other, and the only things that destroy one unspent (the give-up wipe, a
+   * hand clear or cancel) are themselves in-process events. A durable column
+   * would buy nothing and cost a migration.
+   *
+   * Entries for rows that were relayed are never looked up again (queue ids are
+   * unique and a relayed row's id can never appear in a later drop), so they
+   * are only pruned for size — see `rememberQueued`.
+   */
+  private readonly queuedDeliveries = new Map<string, { ids: string[]; at: number }>();
 
   constructor(deps: ReportDeliveryDeps) {
     this.db = deps.db;
@@ -370,6 +400,16 @@ export class ReportDelivery {
     // an orchestrator that can mean doing the work twice.
     const stampedAt = this.now();
     rounds.markDelivered(ids, stampedAt);
+    // A ROUND THE MESSAGE CALLS `failed` MUST SAY SO ON THE ROW TOO. `entryFor`
+    // renders a round with no result as failed — it got past RESULT_GRACE_MS,
+    // so the summary was lost — but nothing wrote that anywhere, and the card
+    // and the drawer read a silent-but-delivered round as a green `done`. One
+    // worker, described two opposite ways, with the reassuring version on the
+    // thing the user actually looks at.
+    rounds.markStateIfSilent(
+      pending.filter((r) => !r.report_state && !r.report).map((r) => r.id),
+      'failed',
+    );
     let res: SubmitSendResult;
     try {
       res = this.submitSend(paneId, text);
@@ -377,6 +417,9 @@ export class ReportDelivery {
       rounds.undeliver(ids, stampedAt);
       console.error('[report-delivery] send threw', err);
       return { delivered: 0, abandoned: 0, held: pending.length };
+    }
+    if (res.status === 'queued' && typeof res.id === 'string') {
+      this.rememberQueued(res.id, ids, stampedAt);
     }
     if (res.status === 'rejected') {
       // Not settled — a refusal is usually transient (a full queue, a runner
@@ -397,6 +440,49 @@ export class ReportDelivery {
     // A parent that accepts again is worth hearing about next time it does not.
     this.refusalLogged.delete(parentTabId);
     return { delivered: pending.length, abandoned: 0, held: 0 };
+  }
+
+  /** Remember a queued delivery, and keep the table from growing for ever. */
+  private rememberQueued(queueId: string, ids: string[], at: number): void {
+    // An hour is far longer than any queue entry lives in practice (the whole
+    // point of a queue here is the gap between two turns), and short enough
+    // that a long-running server does not accumulate them. A pruned entry can
+    // only cost what the bug cost before: one lost report, in the case where a
+    // delivery sat queued for over an hour AND its queue was then wiped.
+    const cutoff = at - 60 * 60_000;
+    for (const [k, v] of this.queuedDeliveries) if (v.at < cutoff) this.queuedDeliveries.delete(k);
+    this.queuedDeliveries.set(queueId, { ids, at });
+  }
+
+  /**
+   * THESE QUEUE ROWS DIED WITHOUT BEING RELAYED — un-stamp whatever they were
+   * carrying, so the sweep delivers it again.
+   *
+   * Wired to every path that removes a queue entry other than by running it:
+   * the respawn sweep's give-up wipe, and the user's own clear and cancel.
+   * Returns how many rounds went back to undelivered, which is 0 for every
+   * ordinary message a person cancels.
+   *
+   * The un-stamp is scoped to the stamp this delivery wrote (`undeliver`'s own
+   * rule), so it cannot resurrect a round that was genuinely delivered earlier.
+   */
+  noteQueueDropped(queueIds: readonly string[]): number {
+    if (queueIds.length === 0) return 0;
+    const rounds = new SpawnRoundStore(this.db);
+    let n = 0;
+    for (const qid of queueIds) {
+      const held = this.queuedDeliveries.get(qid);
+      if (!held) continue;
+      this.queuedDeliveries.delete(qid);
+      n += rounds.undeliver(held.ids, held.at);
+    }
+    if (n > 0) {
+      console.warn(
+        `[report-delivery] ${n} worker report(s) went back in the queue: ` +
+          'their send was dropped before the parent read it',
+      );
+    }
+    return n;
   }
 
   /** Settle rounds there is nobody to deliver. */

@@ -1192,6 +1192,62 @@ describe('retiring a sub-chat when it delivers', () => {
         retirer.onTurnEnded({ pane_id: child.pane, phase: 'done' });
         expect(retirer.settleNow(child.pane)).toBe(false);
       });
+
+      /**
+       * …BUT THE QUESTION HAS TO KEEP BEING ASKED.
+       *
+       * Dropping the settle was only half an answer. The sweep's give-up
+       * (`onRunnerDead`, tested above) is the good ending, but it is not
+       * reached when the pane is skipped — a ptyd outage, a respawn that
+       * succeeds on the second attempt minutes later. Before this, nothing
+       * re-armed: the round stayed open, the row read `working`, and only a
+       * server restart recovered it.
+       */
+      it('ASKS AGAIN, and then decides as a CRASH rather than waiting for ever', () => {
+        const parent = chat('parent');
+        const child = chat('child', parent.tab);
+        const finished: Array<{ crashed: boolean }> = [];
+        const retirer = new ChatRetirer({
+          ...deps,
+          turnActive: () => null,
+          onFinished: (_t, _p, o) => finished.push(o),
+        });
+        retirer.onTurnEnded({ pane_id: child.pane, phase: 'done' });
+        // Five windows of no runner, then the sixth decides without one.
+        for (let i = 0; i < 6; i += 1) retirer.settleNow(child.pane);
+
+        expect(finished).toEqual([{ crashed: true, awaiting: false }]);
+        // A crashed run keeps its row, by `holdOpen` — what the parent gets is
+        // a report saying so, not a silently archived worker.
+        expect(isDone(child.tab)).toBe(false);
+      });
+
+      it('and a runner that comes back idle re-arms it too', () => {
+        // The other end of the same hole: the settle armed by the death found
+        // no runner, and the runner arrived afterwards. No turn of its will
+        // ever end again, so the idle `hello` is the only edge left.
+        const parent = chat('parent');
+        const child = chat('child', parent.tab);
+        new SpawnRoundStore(db).open(child.tab);
+        const retirer = new ChatRetirer({ ...deps, turnActive: () => false });
+
+        expect(retirer.armIfIdleSubChat(child.pane)).toBe(true);
+        expect(retirer.settleNow(child.pane)).toBe(true);
+        expect(resolveTabClock(clockIndex(db), child.tab, Date.now()).done_reason).toBe(
+          'delivered',
+        );
+      });
+
+      it('but an idle hello with no open round arms nothing', () => {
+        // Nearly every hello on the machine. A worker with no round open has
+        // no job outstanding, and arming for it would mean a timer per
+        // reconnect for every pane.
+        const parent = chat('parent');
+        const child = chat('child', parent.tab);
+        const retirer = new ChatRetirer({ ...deps, turnActive: () => false });
+        expect(retirer.armIfIdleSubChat(child.pane)).toBe(false);
+        expect(retirer.armIfIdleSubChat(chat('top').pane)).toBe(false);
+      });
     });
 
     it('a FATAL turn the worker recovers from produces no crash card', () => {

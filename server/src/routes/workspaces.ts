@@ -154,7 +154,8 @@ export function workspacesRoutes(deps: {
     // client hit when issuing parallel tab-deletes before the
     // workspace-delete.
     for (const t of tabs.listByWorkspace(id)) {
-      for (const p of panes.listByTab(t.id)) {
+      const doomed = panes.listByTab(t.id);
+      for (const p of doomed) {
         try {
           await deps.ptyd.killPane(p.id);
         } catch {
@@ -164,6 +165,12 @@ export function workspacesRoutes(deps: {
         deps.cache.forget(p.id);
       }
       tabs.delete(t.id);
+      // The server-side subscribers key on `pane.removed`, and a voice call is
+      // BILLED by the wall clock — see the same emission in `deleteTabCascade`
+      // for the three that otherwise keep a dead pane for ever.
+      for (const p of doomed) {
+        deps.events.emit({ type: 'pane.removed', tab_id: t.id, pane_id: p.id });
+      }
       deps.events.emit({ type: 'tab.removed', workspace_id: id, tab_id: t.id });
     }
     workspaces.delete(id);

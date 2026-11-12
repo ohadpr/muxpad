@@ -316,7 +316,8 @@ export async function bootstrapTab(
 }
 
 /**
- * Delete a tab, its panes' ptys, and their rows; emit `tab.removed`. ptyd
+ * Delete a tab, its panes' ptys, and their rows; emit a `pane.removed` per
+ * pane and then `tab.removed`. ptyd
  * holds runtime state, SQLite is the source of truth — if ptyd is unreachable
  * the DB cascade must still proceed, so a kill lost in transit is queued for
  * the reaper rather than abandoning the delete (which would leave a pty
@@ -364,6 +365,24 @@ export async function deleteTabCascade(
     clearProvisionError(p.id);
   }
   deps.tabActivity?.forget(tabId);
+  // ── A PANE THAT STOPPED EXISTING SAYS SO ─────────────────────────────────
+  //
+  // This path emitted only `tab.removed`, on the reasoning that clients infer
+  // the pane removals from it. They do — but the SERVER-SIDE subscribers do
+  // not infer anything, and three of them key on `pane.removed`:
+  //
+  //   · VoiceSessionManager.notePaneRemoved — a wall-clock-BILLED voice call
+  //     on a chat you deleted kept running until its own TTL, spending the
+  //     daily cap on a conversation that no longer exists. That is the one
+  //     that costs money, and it is why this is a fix rather than tidying.
+  //   · push.ts's `lastAttention`, and CronScheduler's `inflight`/`closeOnDone`
+  //     — process-lived maps that otherwise keep their entry for good.
+  //
+  // Emitted BEFORE `tab.removed` and after the rows are gone, the same order
+  // the tab-move route uses.
+  for (const p of doomed) {
+    deps.events.emit({ type: 'pane.removed', tab_id: tabId, pane_id: p.id });
+  }
   if (workspaceId) {
     deps.events.emit({ type: 'tab.removed', workspace_id: workspaceId, tab_id: tabId });
   }

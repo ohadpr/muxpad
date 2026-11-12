@@ -685,6 +685,14 @@ const wsServer = attachWsServer({
   onRunnerDead: (paneId) => chatRetirer.onRunnerDead(paneId),
   // A worker stated its own result; the writer holds it for the round's close.
   onReportStated: (tabId, text) => spawnReports.state(tabId, text),
+  // A runner came back idle: re-ask whether the job it was cut off mid-way
+  // through is over. The settle armed by its death had no runner to decide
+  // with, so without this the round stays open until the next restart.
+  onRunnerIdle: (paneId) => chatRetirer.armIfIdleSubChat(paneId),
+  // A send queue was thrown away unspent: give back any worker report that was
+  // riding in it, so the delivery sweep tries again instead of counting it
+  // delivered to a runner that never read it.
+  onQueueDropped: (ids) => reportDelivery.noteQueueDropped(ids),
   // Resolve /browser/<profile>/ws to the host's loopback socket, so the viewer
   // stream rides muxpad's tailnet origin and its upgrade guard.
   browserViewerSocket: (pathname) => {

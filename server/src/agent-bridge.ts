@@ -47,7 +47,12 @@ export interface AgentBridge {
   submitSend: (
     paneId: string,
     text: string,
-  ) => { status: 'sent' | 'queued' | 'rejected'; reason?: string | undefined };
+  ) => {
+    status: 'sent' | 'queued' | 'rejected';
+    /** The durable queue row, on `queued` — see SubmitSendResult.id. */
+    id?: string | undefined;
+    reason?: string | undefined;
+  };
   /**
    * Context-window fill (0-100) for the pane's connected runner, or null when
    * unknown — no runner yet, or a backend that streams no window (codex,

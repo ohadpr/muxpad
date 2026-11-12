@@ -544,11 +544,11 @@ describe('SpawnReportWriter — a finished worker becomes a card', () => {
     });
 
     it('summarises a THIRD job too — the one-shot retry cannot cover for the gate', async () => {
-      // The second round survives a per-tab interval by accident: the writer's
-      // one retry per worker per process pushes it through with `force`. That
-      // budget is spent afterwards, so the THIRD job inside the half hour is
-      // where a tab-wide interval shows through — and a worker being handed jobs
-      // back to back is exactly what `muxpad agent send` does.
+      // A per-tab interval would bite from the second round on, and the
+      // writer's retry is no cover for it: the retry only fires on a
+      // generation that produced NOTHING, and these all produce sentences. A
+      // worker being handed jobs back to back is exactly what `muxpad agent
+      // send` does, so the third one inside the half hour is the test.
       const answers = [GOOD, SECOND, THIRD];
       let calls = 0;
       const { retirer, writer } = wire(async () => answers[calls++] ?? THIRD);
@@ -586,6 +586,43 @@ describe('SpawnReportWriter — a finished worker becomes a card', () => {
       await writer.idle();
       expect(new TabStore(db).getById(kid.tabId)?.spawn_report_state).toBe('ok');
     });
+  });
+
+  /**
+   * THE RETRY BELONGS TO THE JOB, NOT TO THE WORKER.
+   *
+   * It was a `Set` of tab ids for the life of the process, so a worker sent
+   * back to do more work had already spent its only retry on round 1. Measured
+   * in this install: 3 of 330 first rounds ended `failed`, against 29 of 224
+   * later rounds — 13%. Each of those is a parent told "(no report)" about
+   * work that was done, on the second job, which is the one an orchestrator is
+   * usually waiting for.
+   */
+  it('retries a LATER round too, after round one already used a retry', async () => {
+    // Every generation fails once and succeeds on the retry. Round one proves
+    // the retry exists; round two is the one that had none.
+    let calls = 0;
+    const { retirer, writer } = wire(async () => {
+      calls++;
+      if (calls % 2 === 1) throw new Error('transient');
+      return calls === 2 ? GOOD : SECOND;
+    });
+    const kid = worker(parentChat());
+    const rounds = new SpawnRoundStore(db);
+
+    finishJob(retirer, kid.paneId);
+    await writer.idle();
+    expect(new TabStore(db).getById(kid.tabId)?.spawn_report).toBe(GOOD);
+
+    rounds.open(kid.tabId, Date.now() + 1);
+    retirer.onTurnStart(kid.paneId);
+    finishJob(retirer, kid.paneId);
+    await writer.idle();
+
+    expect(calls, 'two attempts per round, not one and then none').toBe(4);
+    const tab = new TabStore(db).getById(kid.tabId);
+    expect(tab?.spawn_report).toBe(SECOND);
+    expect(tab?.spawn_report_state).toBe('ok');
   });
 
   it('does not retry a worker that simply had nothing to report', async () => {
