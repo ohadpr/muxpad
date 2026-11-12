@@ -19,15 +19,15 @@ describe('how long a link has left', () => {
   it('counts the days while there is no hurry', () => {
     expect(publishTerm({ expires: NOW + 6 * DAY, expired: false }, NOW)).toEqual({
       label: '6d',
-      state: 'delivered',
+      state: 'live',
     });
   });
 
   it('warns inside two days, which is when keeping it is worth doing NOW', () => {
-    expect(publishTerm({ expires: NOW + 2 * DAY - 1, expired: false }, NOW)?.state).toBe('blocked');
+    expect(publishTerm({ expires: NOW + 2 * DAY - 1, expired: false }, NOW)?.state).toBe('soon');
     expect(publishTerm({ expires: NOW + 30 * 60 * 1000, expired: false }, NOW)).toEqual({
       label: 'today',
-      state: 'blocked',
+      state: 'soon',
     });
   });
 
@@ -36,7 +36,7 @@ describe('how long a link has left', () => {
     // link is a row with an action, not an absence.
     expect(publishTerm({ expires: NOW - DAY, expired: true }, NOW)).toEqual({
       label: 'expired',
-      state: 'done',
+      state: 'expired',
     });
     // …and trusts the clock as well as the flag, for a listing fetched a
     // while ago and still on screen.

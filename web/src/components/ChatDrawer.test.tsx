@@ -9,6 +9,28 @@ import { artifactsOf, subChatsOf } from '../lib/sub-chats';
 import { ChatDrawer } from './ChatDrawer';
 
 /**
+ * The publish LISTING, which the artifacts tab fetches on mount.
+ *
+ * Mocked because jsdom has no server: unmocked it rejects, the tab catches it
+ * and renders no term at all — so every assertion about a link's shelf life
+ * would have been passing on an empty render. (That is the same shape as the
+ * bug this tab shipped with: a mock agreeing with the code while the real
+ * route disagreed with both. server/src/routes/publish-api.test.ts is what
+ * holds this mock honest about the field names.)
+ */
+const listing = vi.hoisted(() => ({
+  value: null as { publishes: unknown[] } | null,
+}));
+vi.mock('../api', () => ({
+  api: {
+    listPublished: async () => listing.value ?? { publishes: [] },
+    extendPublish: async () => ({}),
+    expirePublish: async () => ({}),
+  },
+  ApiError: class extends Error {},
+}));
+
+/**
  * THE WORK DRAWER — what a chat has going on beside itself.
  *
  * Two properties carry the whole feature, and both are about FINDING things:
@@ -156,8 +178,81 @@ describe('the artifacts list', () => {
     const box = mount({ tab: 'artifacts', actions: [published()] });
     const link = box.querySelector('.chat-drawer__row--artifact') as HTMLAnchorElement;
     expect(link.getAttribute('href')).toBe('https://pub.example/weekly-report-ab12/');
-    expect(box.textContent).toContain('Published weekly-report');
+    expect(box.textContent).toContain('weekly-report');
     expect(box.textContent).toContain('3 files');
+  });
+
+  /**
+   * THE NAME IS THE ONLY THING THAT TELLS TWO ROWS APART.
+   *
+   * Reported with a screenshot of 31 rows: "no way to really know what each
+   * one of these is". Every row opened with `Published` — the one word they
+   * all share, and the tab is already called Artifacts — and the name was
+   * then cut at about twelve characters, so four different links all read
+   * `Published muxpad-run…`.
+   */
+  it('drops the `Published` verb, which every row repeated', () => {
+    const box = mount({ tab: 'artifacts', actions: [published()] });
+    const name = box.querySelector('.chat-drawer__row-name') as HTMLElement;
+    expect(name.textContent).toBe('weekly-report');
+    expect(box.textContent).not.toContain('Published');
+    // The whole name is reachable even when the column clips it.
+    expect(name.getAttribute('title')).toBe('weekly-report');
+  });
+
+  it('collapses republishes of one url into one row', () => {
+    // `--update` keeps the slug so an existing link keeps working, and every
+    // republish wrote another row: a real list came back with seven rows
+    // reading `muxpad-work-drawer`. They are one artifact at one address.
+    const box = mount({
+      tab: 'artifacts',
+      actions: [
+        published({ id: 'a1', at: NOW }),
+        published({ id: 'a2', at: NOW - 1000 }),
+        published({ id: 'a3', at: NOW - 2000 }),
+      ],
+    });
+    expect(box.querySelectorAll('.chat-drawer__artifact')).toHaveLength(1);
+    // …and the row says it has been published more than once.
+    expect(box.textContent).toContain('×3');
+  });
+
+  it('keeps genuinely different artifacts apart', () => {
+    const box = mount({
+      tab: 'artifacts',
+      actions: [
+        published({ id: 'a1', url: 'https://pub.example/one-ab12/' }),
+        published({ id: 'a2', url: 'https://pub.example/two-cd34/' }),
+      ],
+    });
+    expect(box.querySelectorAll('.chat-drawer__artifact')).toHaveLength(2);
+    // Scoped to the ROWS: the panel's close button is an × too.
+    const subs = [...box.querySelectorAll('.chat-drawer__row-sub')].map((e) => e.textContent);
+    expect(subs.some((t) => t?.startsWith('×'))).toBe(false);
+  });
+
+  it('says when a link is gone, rather than showing a bare row', async () => {
+    // `publishTerm` answers null both for a link with no expiry and for one
+    // the server has never heard of, so a taken-down artifact looked exactly
+    // like a healthy permanent one. The listing having loaded is what tells
+    // them apart.
+    listing.value = { publishes: [] };
+    const box = mount({ tab: 'artifacts', actions: [published()] });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const term = box.querySelector('.chat-drawer__term');
+    expect(term?.textContent).toBe('removed');
+    expect(term?.getAttribute('data-state')).toBe('expired');
+  });
+
+  it('drops `1 file`, which is not information', () => {
+    // It was the same value on 29 of 31 rows. A count earns its place only
+    // when there is more than one.
+    const box = mount({ tab: 'artifacts', actions: [published({ detail: '1 file' })] });
+    expect(box.textContent).not.toContain('1 file');
+    const many = mount({ tab: 'artifacts', actions: [published({ detail: '4 files' })] });
+    expect(many.textContent).toContain('4 files');
   });
 
   it('is a LINK, so it can be copied and middle-clicked', () => {
@@ -168,9 +263,16 @@ describe('the artifacts list', () => {
   });
 
   it('shows the NEWEST first — this is a place you come to fetch a link', () => {
+    // Two DIFFERENT artifacts: same-url republishes collapse into one row
+    // (see artifactsOf), so ordering has to be shown on distinct ones.
     const rows = artifactsOf([
-      published({ id: 'old', title: 'old one', at: NOW - 1000 }),
-      published({ id: 'new', title: 'new one', at: NOW }),
+      published({
+        id: 'old',
+        title: 'old one',
+        url: 'https://pub.example/old-aa/',
+        at: NOW - 1000,
+      }),
+      published({ id: 'new', title: 'new one', url: 'https://pub.example/new-bb/', at: NOW }),
     ]);
     expect(rows.map((r) => r.id)).toEqual(['new', 'old']);
   });

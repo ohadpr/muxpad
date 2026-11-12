@@ -16,8 +16,22 @@ export interface PublishRecord {
 }
 export interface PublishTerm {
   label: string;
-  /** Reuses the drawer's state channel: delivered=green, blocked=amber, done=grey. */
-  state: 'delivered' | 'blocked' | 'done';
+  /**
+   * ITS OWN CHANNEL, not the worker one.
+   *
+   * This borrowed the drawer's worker states — and the comment claimed
+   * "blocked=amber" when `blocked` is the hue for a worker WAITING ON A
+   * HUMAN, which this theme renders in the danger red. So every link inside
+   * two days shouted `2D LEFT` in red, and every healthy link wore a green
+   * plate: 31 rows of alarm and reassurance about a thing that was simply
+   * fine. A link's shelf life is not a worker's state and now says so.
+   *
+   *   live    — plenty of time. Drawn as quiet grey text, no plate.
+   *   soon    — inside two days. The one that is allowed to be loud.
+   *   expired — the link 410s. Grey, because nothing is wrong: the files
+   *             are still there and one click brings it back.
+   */
+  state: 'live' | 'soon' | 'expired';
 }
 
 /** Below this, the row says so in the warning colour. */
@@ -32,9 +46,9 @@ export function publishTerm(
   // purpose. Saying "live" on every such row would be noise on most of them.
   if (rec.expires === null) return null;
   const left = rec.expires - now;
-  if (rec.expired || left <= 0) return { label: 'expired', state: 'done' };
+  if (rec.expired || left <= 0) return { label: 'expired', state: 'expired' };
   const days = Math.ceil(left / 86_400_000);
   return left <= SOON_MS
-    ? { label: days <= 1 ? 'today' : `${days}d left`, state: 'blocked' }
-    : { label: `${days}d`, state: 'delivered' };
+    ? { label: days <= 1 ? 'today' : `${days}d left`, state: 'soon' }
+    : { label: `${days}d`, state: 'live' };
 }

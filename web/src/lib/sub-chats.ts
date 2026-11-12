@@ -92,6 +92,14 @@ export interface ChatArtifact {
   at: number;
   /** `3 files`, when the producer said. */
   detail: string | null;
+  /**
+   * How many times this url was published — 1 for most.
+   *
+   * Republishing keeps the slug (that is the point: the link you handed out
+   * keeps working), so the older entries are the same artifact at the same
+   * address. The count is all they carried that the newest one does not.
+   */
+  times: number;
 }
 
 /**
@@ -111,7 +119,7 @@ export interface ChatArtifact {
  * was updated.
  */
 export function artifactsOf(actions: readonly ChatAction[]): ChatArtifact[] {
-  return actions
+  const rows = actions
     .filter((a) => a.kind.startsWith('publish.') && !!a.url)
     .map((a) => ({
       id: a.id,
@@ -119,8 +127,28 @@ export function artifactsOf(actions: readonly ChatAction[]): ChatArtifact[] {
       url: a.url as string,
       at: a.at,
       detail: a.detail ?? null,
+      times: 1,
     }))
     .sort((a, b) => b.at - a.at);
+  // ── ONE ROW PER ARTIFACT, NOT PER PUBLISH ────────────────────────────────
+  //
+  // Republishing is the normal way to fix a page — `--update` keeps the slug
+  // so the link you already handed out keeps working — and every one of those
+  // wrote another row here. A real list came back with seven rows reading
+  // `muxpad-work-drawer` and four reading `muxpad-running-turn-options`,
+  // which is the other half of "no way to really know what each one of these
+  // is": the names were not just clipped, several were genuinely identical.
+  //
+  // They are one artifact at one url, so they are one row, dated by the most
+  // recent and carrying how many times it was published — which is the only
+  // thing the older entries ever added.
+  const byUrl = new Map<string, ChatArtifact>();
+  for (const r of rows) {
+    const seen = byUrl.get(r.url);
+    if (seen) seen.times += 1;
+    else byUrl.set(r.url, r);
+  }
+  return [...byUrl.values()];
 }
 
 /**

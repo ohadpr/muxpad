@@ -586,11 +586,70 @@
   flex: 1 1 auto;
   min-width: 0;
 }
+/* ── THE SHELF LIFE, IN ITS OWN CHANNEL ───────────────────────────────────
+   It borrowed the WORKER states, so a link with six days left wore the green
+   plate of a delivered report and one inside two days wore `blocked` — the
+   hue for a worker waiting on a human, which this theme draws in the danger
+   red. Thirty-one rows of alarm and reassurance about links that were simply
+   fine, and the loudest thing on screen was the least important.
+
+   So: plain text, no plate, and only the row that is RUNNING OUT is allowed
+   any colour at all. */
+.chat-drawer__term {
+  flex: 0 0 auto;
+  margin-inline-start: auto;
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--d-faint);
+  white-space: nowrap;
+}
+.chat-drawer__row-sub + .chat-drawer__term {
+  margin-inline-start: 0;
+}
+/* Inside two days — the one state worth a colour, and it is the WARNING hue,
+   not danger: nothing has gone wrong, there is just a deadline. */
+.chat-drawer__term[data-state="soon"] {
+  color: var(--status-warn, var(--warning, #b8860b));
+  font-weight: 600;
+}
+/* The link 410s. Grey, deliberately: the FILES are still there and `Revive`
+   is one click, so this is a state, not a loss. */
+.chat-drawer__term[data-state="expired"] {
+  color: var(--d-faint);
+  font-style: italic;
+}
+
+/* ── THE ACTIONS ARE NOT FURNITURE ────────────────────────────────────────
+   Two buttons on every row is sixty buttons, and they took the width the
+   NAME needed — the complaint was "no way to really know what each one of
+   these is". They are revealed by hover and focus, which keeps them
+   keyboard-reachable, and the rows that are actually running out keep theirs
+   on screen, because those are the ones there is a decision to make about.
+
+   Touch has no hover: `:focus-within` covers a tap, and coarse pointers get
+   them permanently below. */
 .chat-drawer__artifact-acts {
   display: flex;
   flex: 0 0 auto;
   gap: 4px;
   padding-inline-end: 10px;
+  opacity: 0;
+  transition: opacity 90ms ease-out;
+}
+.chat-drawer__artifact:hover .chat-drawer__artifact-acts,
+.chat-drawer__artifact:focus-within .chat-drawer__artifact-acts,
+.chat-drawer__artifact[data-urgent="true"] .chat-drawer__artifact-acts {
+  opacity: 1;
+}
+@media (hover: none) {
+  .chat-drawer__artifact-acts {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-drawer__artifact-acts {
+    transition: none;
+  }
 }
 .chat-drawer__artifact-acts button {
   border: 1px solid var(--d-border);
