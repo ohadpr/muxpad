@@ -825,6 +825,71 @@ export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
    * A CALENDAR EVENT. No guests and no reminders — the broker refuses both,
    * so this reaches nobody but the owner's own calendar.
    */
+  /**
+   * The calendar READS, and the two writes that fix an event afterwards.
+   * POST for all of them: a calendar id, an account and a window do not
+   * belong in a URL, and an id in a querystring ends up in logs.
+   */
+  for (const [path, action] of [
+    ['/calendar-freebusy', 'msgvault.calendar-freebusy'],
+    ['/calendar-conflicts', 'msgvault.calendar-conflicts'],
+  ] as const) {
+    archive.post(path, async (c) => {
+      const b = z
+        .object({
+          pane: z.string(),
+          key: z.string(),
+          account: z.string().min(3).max(256),
+          calendar: z.string().min(1).max(256).optional(),
+          start: z.string().min(10).max(40),
+          end: z.string().min(10).max(40),
+          tz: z.string().min(1).max(64),
+        })
+        .parse(await c.req.json());
+      const auth = await authorize(b.pane, b.key, callerOf(c));
+      if (!auth.ok) return c.json(auth.body, auth.status);
+      const { pane: _p, key: _k, ...window } = b;
+      return c.json(await brokerAction(action, window, auth), 202);
+    });
+  }
+
+  archive.post('/calendar-update', async (c) => {
+    const b = z
+      .object({
+        pane: z.string(),
+        key: z.string(),
+        account: z.string().min(3).max(256),
+        calendar: z.string().min(1).max(256).optional(),
+        event: z.string().min(1).max(256),
+        summary: z.string().min(1).max(500).optional(),
+        start: z.string().min(10).max(40).optional(),
+        end: z.string().min(10).max(40).optional(),
+        tz: z.string().min(1).max(64).optional(),
+        location: z.string().max(500).optional(),
+      })
+      .parse(await c.req.json());
+    const auth = await authorize(b.pane, b.key, callerOf(c));
+    if (!auth.ok) return c.json(auth.body, auth.status);
+    const { pane: _p, key: _k, ...change } = b;
+    return c.json(await brokerAction('msgvault.calendar-update', change, auth), 202);
+  });
+
+  archive.post('/calendar-delete', async (c) => {
+    const b = z
+      .object({
+        pane: z.string(),
+        key: z.string(),
+        account: z.string().min(3).max(256),
+        calendar: z.string().min(1).max(256).optional(),
+        event: z.string().min(1).max(256),
+      })
+      .parse(await c.req.json());
+    const auth = await authorize(b.pane, b.key, callerOf(c));
+    if (!auth.ok) return c.json(auth.body, auth.status);
+    const { pane: _p, key: _k, ...target } = b;
+    return c.json(await brokerAction('msgvault.calendar-delete', target, auth), 202);
+  });
+
   archive.post('/calendar-create', async (c) => {
     const b = z
       .object({
