@@ -378,7 +378,7 @@ export class CronScheduler {
     marker: CronMarker,
   ): Promise<CronFireResult> {
     const paneId = cron.target_pane;
-    if (!paneId) return { outcome: 'error', detail: 'no target pane' };
+    if (!paneId) return { outcome: 'error', detail: 'no target chat' };
     const pane = this.panes.getById(paneId);
     if (!pane) {
       // The pane is GONE (deleted, or its tab was). A cron that spins on
@@ -387,10 +387,10 @@ export class CronScheduler {
       this.store.setEnabled(cron.id, false);
       this.deps.notify?.(
         `cron ${cron.name} disabled`,
-        'its target pane no longer exists — recreate it and point the cron at the new pane.',
+        'the chat it runs in no longer exists — point the cron at another chat, or make it --new-tab.',
       );
       console.error(`[cron] ${cron.name} (${cron.id}) disabled — target pane ${paneId} is gone`);
-      return { outcome: 'error', detail: 'target pane no longer exists' };
+      return { outcome: 'error', detail: 'target chat no longer exists' };
     }
     // FAIL FAST on a dead runner. `dead` means automatic restarts were
     // exhausted — submitSend would reject anyway, but reading it first makes
@@ -559,7 +559,8 @@ export class CronScheduler {
       // on a schedule is editable and the mode is only read at fire time.
       mode: coerceAgentMode(cron.mode) ?? DEFAULT_AGENT_MODE,
     });
-    if (!created.pane) return { outcome: 'error', detail: 'tab bootstrap produced no pane' };
+    if (!created.pane)
+      return { outcome: 'error', detail: 'the new tab came up with no chat in it' };
     const paneId = created.pane.id;
     this.store.setOpenTabs(cron.id, [...open, created.tab.id]);
     // The runner needs a second or two to register. We do NOT poll for it:

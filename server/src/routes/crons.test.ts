@@ -156,7 +156,7 @@ describe('/api/crons', () => {
     const { status, body } = await create({ target_pane: detail.panes[0]?.id });
     expect(status).toBe(400);
     expect((body as unknown as { error: { message: string } }).error.message).toContain(
-      'no agent runner',
+      'not a chat',
     );
   });
 

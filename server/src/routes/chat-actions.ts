@@ -24,7 +24,7 @@ export function chatActionsRoutes(deps: { db: Database.Database }): Hono {
     // A pane that is gone has no chat to draw into; 404 rather than an empty
     // list, so a client can tell "nothing happened here" from "no such chat".
     if (!new PaneStore(deps.db).getById(paneId))
-      return c.json({ error: { code: 'not_found', message: 'no such pane' } }, 404);
+      return c.json({ error: { code: 'not_found', message: 'no chat with that pane id' } }, 404);
     c.header('Cache-Control', 'no-store');
     return c.json({ actions: new ChatActionStore(deps.db).listForPane(paneId) });
   });

@@ -420,7 +420,7 @@ cmd_stop() {
     echo "muxpad: launchd job $LAUNCHD_MAIN — booting out"
     launchctl bootout "gui/$UID/$LAUNCHD_MAIN" 2>/dev/null || true
     if [ "$stop_all" = "1" ] && launchd_loaded "$LAUNCHD_PTYD"; then
-      echo "ptyd: launchd job $LAUNCHD_PTYD — booting out (this kills every pane)"
+      echo "ptyd: launchd job $LAUNCHD_PTYD — booting out (this kills every chat and terminal)"
       launchctl bootout "gui/$UID/$LAUNCHD_PTYD" 2>/dev/null || true
       [ -S "$PTYD_SOCKET" ] && rm -f "$PTYD_SOCKET"
     elif is_ptyd_running; then
@@ -457,7 +457,7 @@ cmd_restart() {
   # rule as by hand: main only, unless --all — bouncing ptyd kills every pane.
   if launchd_loaded "$LAUNCHD_MAIN"; then
     if [ "$restart_all" = "1" ] && launchd_loaded "$LAUNCHD_PTYD"; then
-      echo "restarting $LAUNCHD_PTYD (kills every pane)"
+      echo "restarting $LAUNCHD_PTYD (kills every chat and terminal)"
       launchctl kickstart -k "gui/$UID/$LAUNCHD_PTYD" >/dev/null
     fi
     echo "restarting $LAUNCHD_MAIN"
@@ -595,7 +595,7 @@ require_jq() {
 
 require_api_url() {
   if [ -z "${MUXPAD_API_URL:-}" ]; then
-    echo "muxpad: MUXPAD_API_URL not set (are you inside a muxpad pane?)" >&2
+    echo "muxpad: MUXPAD_API_URL not set (are you inside a muxpad chat or terminal?)" >&2
     exit 1
   fi
 }
@@ -696,15 +696,15 @@ print_created() {
       printf '  %sid:%s        %s\n' "$C_DIM" "$C_RESET" "$(printf '%s' "$json" | jq -r '.id')"
       printf '  %sname:%s      %s\n' "$C_DIM" "$C_RESET" "$(printf '%s' "$json" | jq -r '.name')"
       ;;
-    pane)
+    terminal | 'web view')
       local kind url tab
       kind="$(printf '%s' "$json" | jq -r '.kind')"
       url="$(printf '%s' "$json" | jq -r '.url // empty')"
       tab="$(printf '%s' "$json" | jq -r '.tab_id')"
-      printf '  %sid:%s   %s\n' "$C_DIM" "$C_RESET" "$(printf '%s' "$json" | jq -r '.id')"
-      printf '  %skind:%s %s\n' "$C_DIM" "$C_RESET" "$kind"
-      [ -n "$url" ] && printf '  %surl:%s  %s\n' "$C_DIM" "$C_RESET" "$url"
-      printf '  %stab:%s  %s\n' "$C_DIM" "$C_RESET" "$tab"
+      printf '  %spane id:%s %s\n' "$C_DIM" "$C_RESET" "$(printf '%s' "$json" | jq -r '.id')"
+      printf '  %skind:%s    %s\n' "$C_DIM" "$C_RESET" "$kind"
+      [ -n "$url" ] && printf '  %surl:%s     %s\n' "$C_DIM" "$C_RESET" "$url"
+      printf '  %stab:%s     %s\n' "$C_DIM" "$C_RESET" "$tab"
       ;;
   esac
 }
@@ -1294,11 +1294,11 @@ slack_ident() {
   MUXPAD_PANE_KEY="${MUXPAD_PANE_KEY:-${MUXPAD_PANE_PROOF:-}}"
   [ -n "${MUXPAD_PANE_ID:-}" ] && [ -n "${MUXPAD_PANE_KEY:-}" ] && return 0
   cat >&2 <<EOF
-muxpad: $BROKER_LABEL: this pane cannot prove which chat it is.
+muxpad: $BROKER_LABEL: this chat cannot prove which chat it is.
 
-Panes started before muxpad issued per-pane keys have none, and one cannot be
-added to a process that is already running. Restart this pane, or open a new
-one, and try again.
+Chats started before muxpad issued per-chat keys (MUXPAD_PANE_KEY) have none,
+and one cannot be added to a process that is already running. Restart this
+chat, or open a new one, and try again.
 EOF
   exit 1
 }
@@ -1419,7 +1419,7 @@ slack_call() {
 
 slack_require_pane() {
   [ -n "${MUXPAD_API_URL:-}" ] || {
-    echo "muxpad: $BROKER_LABEL: works only from inside a muxpad pane (no \$MUXPAD_API_URL)" >&2; exit 1; }
+    echo "muxpad: $BROKER_LABEL: works only from inside a muxpad chat (no \$MUXPAD_API_URL)" >&2; exit 1; }
   slack_ident
 }
 
@@ -1619,7 +1619,7 @@ cmd_browser_needs_you() {
   # YOUR browser, the one you are stuck in. Summoning a person to any other
   # profile asks them to log in somewhere the caller cannot see.
   [ -n "$profile" ] || profile="s-${MUXPAD_TAB_ID:-}"
-  [ "$profile" != "s-" ] || { echo "muxpad: no MUXPAD_TAB_ID — run this from inside a muxpad pane, or pass --profile" >&2; return 1; }
+  [ "$profile" != "s-" ] || { echo "muxpad: no MUXPAD_TAB_ID — run this from inside a muxpad chat or terminal, or pass --profile" >&2; return 1; }
   require_jq
   local body
   body="$(jq -nc \
@@ -1638,7 +1638,7 @@ cmd_browser_needs_you() {
 # The agent got past it on its own; put the hand down.
 cmd_browser_resolved() {
   local profile="${1:-s-${MUXPAD_TAB_ID:-}}"
-  [ "$profile" != "s-" ] || { echo "muxpad: no MUXPAD_TAB_ID — run this from inside a muxpad pane" >&2; return 1; }
+  [ "$profile" != "s-" ] || { echo "muxpad: no MUXPAD_TAB_ID — run this from inside a muxpad chat or terminal" >&2; return 1; }
   http_request DELETE "/api/browsers/$profile/needs-you" >/dev/null
   printf 'hand down\n'
 }
@@ -1655,11 +1655,11 @@ usage:
   muxpad browser resolved
   muxpad browser probe <url> [--eval=JS]... [--until=JS] [--shot=PATH] [--size=WxH]
 
-  probe asks a page every question in ONE call, in this pane's warm browser:
+  probe asks a page every question in ONE call, in this chat's warm browser:
   it waits for --until (a condition, not a sleep), runs each --eval, prints
   JSON. `muxpad browser probe --help` has the details.
 
-  needs-you summons a person to the browser THIS pane is driving, and rings
+  needs-you summons a person to the browser THIS chat is driving, and rings
   the thing that needs them. Walk to the wall first — the login form, the
   captcha, the payment step — then call it, say what you are waiting for and
   STOP. Do not poll and do not retry.
@@ -1714,9 +1714,9 @@ log — there is no bot identity, because a bot DM lands in the recipient's
 separate conversation with "muxpad", which you cannot see. Each one is
 prefixed 🤖 by the server so the reader knows a machine composed it.
 
-ORDINARY REQUESTS ARE ROUTED BY PANE AND WORKSPACE. The server checks the
-pane's key to identify the requesting chat. This routing is not an isolation boundary
-against an agent sharing the server OS account. Human approval and token
+ORDINARY REQUESTS ARE ROUTED BY CHAT AND WORKSPACE. The server checks the
+chat's key (MUXPAD_PANE_KEY) to identify the requesting chat. This routing is
+not an isolation boundary against an agent sharing the server OS account. Human approval and token
 isolation belong to the separate protected broker.
 
 'post' prints the conversation id and the ts; the ts is the only way to
@@ -2110,7 +2110,7 @@ guard_hidden_default_tab() {
     jq -r --arg id "$MUXPAD_WORKSPACE_ID" \
       '[.[] | select(.id == $id)] | (.[0].hidden // false) | tostring' 2>/dev/null || echo false)"
   if [ "$hidden" = "true" ]; then
-    echo "muxpad: you're in the hidden system tab — a pane created here would be invisible; pass --tab=<id> (and --target=<paneId>) to place it in a visible tab" >&2
+    echo "muxpad: you're in the hidden system tab — anything created here would be invisible; pass --tab=<id> to name a visible, empty tab" >&2
     exit 1
   fi
 }
@@ -2166,7 +2166,7 @@ cmd_pane_new() {
     id="$(printf '%s' "$res" | jq -r .id)"
     res="$(http_request PATCH "/api/panes/$id" "{\"name\":$(json_string "$FLAG_name")}")"
   fi
-  print_created pane "$res"
+  print_created terminal "$res"
 }
 
 cmd_pane_rename() {
@@ -2189,7 +2189,7 @@ cmd_pane_rename() {
   if [ "$JSON_OUTPUT" = "1" ]; then
     printf '%s\n' "$res"
   else
-    printf '%s✓%s pane renamed (%s → %s)\n' "$C_GREEN" "$C_RESET" "$id" "$name"
+    printf '%s✓%s renamed (%s → %s)\n' "$C_GREEN" "$C_RESET" "$id" "$name"
   fi
 }
 
@@ -2266,7 +2266,7 @@ cmd_pane_delete() {
   if [ "$JSON_OUTPUT" = "1" ]; then
     printf '{"deleted":"%s"}\n' "$id"
   else
-    printf '%s✓%s pane deleted (%s)\n' "$C_GREEN" "$C_RESET" "$id"
+    printf '%s✓%s deleted (%s)\n' "$C_GREEN" "$C_RESET" "$id"
   fi
 }
 
@@ -2274,7 +2274,7 @@ cmd_pane_open() {
   reset_flags tab direction target
   parse_flags tab direction target -- "$@"
   if [ "${#POSITIONAL[@]}" -lt 1 ]; then
-    echo "usage: muxpad pane open [--tab=<id>] [--direction=right|left|above|below] [--target=<id>] <url>" >&2
+    echo "usage: muxpad pane open [--tab=<id>] <url>   (into an empty tab)" >&2
     exit 1
   fi
   local url="${POSITIONAL[0]}"
@@ -2308,7 +2308,7 @@ cmd_pane_open() {
   body+='}'
   local res
   res="$(http_request POST "/api/tabs/$tab_id/panes" "$body")"
-  print_created pane "$res"
+  print_created 'web view' "$res"
 }
 
 # `muxpad pane read [<id>]` — print a terminal pane's scrollback (the ring
@@ -2421,7 +2421,7 @@ cmd_pane_summarize() {
   if [ -n "$summary" ]; then
     printf '%s\n' "$summary"
   else
-    printf '%s(no summary — pane has no agent conversation yet)%s\n' "$C_DIM" "$C_RESET"
+    printf '%s(no summary — no agent conversation there yet)%s\n' "$C_DIM" "$C_RESET"
   fi
   printf '%s' "$res" | jq -r '.artifacts[]? | "  artifact: \(.)"'
 }
@@ -2536,7 +2536,7 @@ cmd_watch() {
 # field separator).
 cmd_app_url() {
   if [ -z "${MUXPAD_PANE_ID:-}" ]; then
-    echo "muxpad app-url: must be run inside a muxpad pane" >&2
+    echo "muxpad app-url: must be run inside a muxpad terminal" >&2
     exit 1
   fi
   reset_flags label
@@ -2612,7 +2612,7 @@ parse_duration_days() {
 
 cmd_serve() {
   if [ -z "${MUXPAD_PANE_ID:-}" ]; then
-    echo "muxpad serve: must be run inside a muxpad pane" >&2
+    echo "muxpad serve: must be run inside a muxpad terminal" >&2
     exit 1
   fi
   reset_flags url label retry
@@ -3149,7 +3149,7 @@ EOF
 # See docs/plans/2026-07-01-web-chat-session-switching.md.
 cmd_claude() {
   if [ -z "${MUXPAD_PANE_ID:-}" ]; then
-    echo "muxpad claude: must be run inside a muxpad pane (no MUXPAD_PANE_ID)" >&2
+    echo "muxpad claude: must be run inside a muxpad terminal (no MUXPAD_PANE_ID)" >&2
     exit 1
   fi
 
@@ -3399,14 +3399,14 @@ cmd_agent_new() {
       # Ignored, not refused, and SAID OUT LOUD — a launcher that passed it was
       # working around exactly the bug this now fixes, and it must not silently
       # keep putting children somewhere other than their parent.
-      echo "muxpad: --workspace is ignored for a spawn from inside a pane — the worker goes where its parent chat lives" >&2
+      echo "muxpad: --workspace is ignored for a spawn from inside a chat — the worker goes where its parent chat lives" >&2
     fi
   elif [ -n "${FLAG_workspace:-}" ]; then
     workspace_id="$FLAG_workspace"
   else
     workspace_id="${MUXPAD_WORKSPACE_ID:-}"
     if [ -z "$workspace_id" ]; then
-      echo "muxpad: --workspace=<id> required (no parent pane and no MUXPAD_WORKSPACE_ID in env)" >&2
+      echo "muxpad: --workspace=<id> required (no parent chat and no MUXPAD_WORKSPACE_ID in env)" >&2
       exit 1
     fi
     # A pane living in a hidden system workspace inherits a hidden
@@ -3796,7 +3796,7 @@ cmd_agent_wait() {
             exit 0
             ;;
           fatal)
-            echo "muxpad: agent in pane $pane_id reported fatal" >&2
+            echo "muxpad: agent $pane_id reported fatal" >&2
             exit 2
             ;;
         esac
@@ -3812,7 +3812,7 @@ cmd_agent_wait() {
       state_status="$(curl -sS -o "$state_tmp" -w '%{http_code}' \
         "${MUXPAD_API_URL%/}/api/agent-sessions/by-pane/$pane_id" || echo 000)"
       if [ "$state_status" = "404" ]; then
-        echo "muxpad: no agent session for pane $pane_id — agent wait only works on agent panes" >&2
+        echo "muxpad: no agent session for $pane_id — agent wait only works on chats and agents" >&2
         exit 1
       fi
       if [ "$state_status" != "200" ]; then
@@ -3905,7 +3905,7 @@ cmd_agent_rebase() {
   require_jq
   local pane="${1:-${MUXPAD_PANE_ID:-}}"
   if [ -z "$pane" ]; then
-    echo 'usage: muxpad agent rebase <paneId>   (defaults to this pane)' >&2
+    echo 'usage: muxpad agent rebase <paneId>   (defaults to this chat)' >&2
     exit 1
   fi
   echo "rebasing $pane — rewriting its transcript first, this takes a moment…" >&2
@@ -3977,7 +3977,7 @@ cmd_agent() {
     esac
   done
   if [ -z "${MUXPAD_PANE_ID:-}" ]; then
-    echo "muxpad agent: must be run inside a muxpad pane (no MUXPAD_PANE_ID)" >&2
+    echo "muxpad agent: must be run inside a muxpad terminal (no MUXPAD_PANE_ID)" >&2
     exit 1
   fi
   # A BARE `muxpad agent` INSIDE A PANE THAT ALREADY HAS A SESSION IS NOT A
@@ -4034,13 +4034,13 @@ cmd_agent() {
         case "$_cmd" in
           *--resume*)
             {
-              echo "muxpad agent: this pane already has a running agent session."
+              echo "muxpad agent: this chat already has a running agent session."
               echo "Starting another one here would strand the conversation you are in."
               echo
               echo "  To see what this command does:   muxpad agent --help"
-              echo "  To RESTART this pane's agent:    muxpad agent respawn $MUXPAD_PANE_ID"
+              echo "  To RESTART this chat's agent:    muxpad agent respawn $MUXPAD_PANE_ID"
               echo "  To start a NEW agent elsewhere:  muxpad agent new \"first message\""
-              echo "  To talk to another pane:         muxpad agent send <paneId> \"message\""
+              echo "  To talk to another chat:         muxpad agent send <paneId> \"message\""
             } >&2
             exit 1 ;;
         esac
@@ -4085,7 +4085,7 @@ cron_resolve_pane() {
   local ref="$1"
   if [ -z "$ref" ]; then
     if [ -z "${MUXPAD_PANE_ID:-}" ]; then
-      echo "muxpad: --pane with no value means THIS pane, but MUXPAD_PANE_ID is unset (not inside a muxpad pane)" >&2
+      echo "muxpad: --pane with no value means THIS chat, but MUXPAD_PANE_ID is unset (not inside a muxpad chat)" >&2
       exit 1
     fi
     printf '%s' "$MUXPAD_PANE_ID"
@@ -4100,7 +4100,7 @@ cron_resolve_pane() {
       '[.[] | select((.name // "") == $r)] | .[0].id // empty')"
   fi
   if [ -z "$match" ]; then
-    echo "muxpad: no pane with id or name '$ref' (try: muxpad pane list --all)" >&2
+    echo "muxpad: no chat with pane id or name '$ref' (try: muxpad pane list --all)" >&2
     exit 1
   fi
   printf '%s' "$match"
@@ -4142,7 +4142,7 @@ usage: muxpad cron new --name=<name> --at='<cron expr | daily at 09:00 | every 3
          [--max-open=<n>] [--no-close] [--once | --repeat] "prompt"
 
   Default: --new-tab (fresh context per run). Use --pane only when the live
-  conversation is essential; --pane with no value targets THIS pane.
+  conversation is essential; --pane with no value targets THIS chat.
   --new-tab spawns a fresh agent tab per fire (clean context, no drift) and
   closes it when the run finishes cleanly; --no-close keeps it.
 
@@ -4236,7 +4236,7 @@ cmd_cron_list() {
     'NAME:.name' \
     'SCHEDULE:.schedule' \
     'TZ:.tz' \
-    'TARGET:(if .target_kind == "pane" then "pane " + (.target_pane // "?") else "new-tab" end)' \
+    'TARGET:(if .target_kind == "pane" then "chat " + (.target_pane // "?") else "new-tab" end)' \
     'ON:(if .enabled then "yes" elif .once then "done" else "no" end)' \
     'NEXT:(if .enabled then (.next_due_at / 1000 | strflocaltime("%a %d %b %H:%M")) elif .once then "once \u00b7 fired" else "-" end)' \
     'LAST:(if .last_fire_at then (.last_fire_at / 1000 | strflocaltime("%d %b %H:%M")) else "-" end)' \
@@ -4261,7 +4261,7 @@ cmd_cron_show() {
     "name:      \(.name)",
     "id:        \(.id)",
     "schedule:  \(.schedule)  (\(.tz))",
-    "target:    \(if .target_kind == "pane" then "pane " + (.target_pane // "?") else "new-tab in workspace " + (.workspace_id // "?") end)",
+    "target:    \(if .target_kind == "pane" then "chat " + (.target_pane // "?") else "new-tab in workspace " + (.workspace_id // "?") end)",
     "enabled:   \(.enabled)",
     "policies:  catchup=\(.catchup) overlap=\(.overlap) on_context=\(.on_context) quiet=\(.quiet_mins)m" +
       (if .target_kind == "new-tab" then " max_open=\(.max_open) close_when_done=\(.close_when_done)" else "" end),
@@ -5324,7 +5324,7 @@ usage: muxpad app <command>
   start    bring it up (and keep it up)
   stop     take it down and leave it down
   restart  stop then start
-  logs     the app's pane scrollback — an app IS a pane underneath
+  logs     the app's terminal scrollback — an app IS a terminal underneath
   rm       unregister it and take it down
 
 `muxpad publish` is the other verb: static bytes at a PUBLIC url. An app is a
@@ -5358,14 +5358,16 @@ usage() {
 muxpad — a personal multi-workspace terminal-and-browser mosaic.
 
 structure:
-  workspace   top-level container, has many tabs
-  tab         single mosaic, has many panes laid out as splits
-  pane        a shell PTY (kind=shell) or an iframe URL (kind=url)
+  workspace   top-level container; its sidebar lists tabs
+  tab         one sidebar row, and ONE thing: a chat, an agent, or a terminal
+  pane        the handle under a tab — its pty (kind=shell) or a bare web
+              view (kind=url). Never something the user sees; its id is what
+              <paneId>, --pane, MUXPAD_PANE_ID and the `pane …` verbs take.
 
-env (set automatically inside a muxpad pane):
-  MUXPAD_BIN              path to this CLI — its presence means you're in a pane
+env (set automatically in every muxpad chat, agent and terminal):
+  MUXPAD_BIN              path to this CLI — its presence means you're in muxpad
   MUXPAD_API_URL          daemon base URL (HTTP)
-  MUXPAD_PANE_ID          current pane id
+  MUXPAD_PANE_ID          current pane id (the handle of this chat or terminal)
   MUXPAD_TAB_ID           current tab id          (default for --tab)
   MUXPAD_WORKSPACE_ID     current workspace id    (default for --workspace)
 
@@ -5389,40 +5391,41 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
   tab delete    <id>
 
   pane new      [--tab=<id>] [--cmd=<cmd>] [--cwd=<cwd>] [--name=<name>]
-                [--direction=right|left|above|below] [--target=<id>]
-                                              shell pane. Placement is
-                                              spatial: direction defaults to
-                                              `right`; target defaults to
-                                              the calling pane (MUXPAD_PANE_ID)
-                                              or — outside a pane — appends
-                                              at the root.
-  pane open     [--tab=<id>] [--direction=…] [--target=<id>] <url>
-                                              iframe pane, same placement rules
-  pane list     [--tab=<id>] | --all          --all: every pane across all
-                                              workspaces, one line each:
+                                              put a terminal into an EMPTY tab
+                                              (`tab new` with no --bootstrap).
+                                              A tab holds one thing, so a tab
+                                              that already has one refuses it —
+                                              including this one, which --tab
+                                              defaults to. A plain terminal in
+                                              one step: `tab new --bootstrap=shell`.
+  pane open     [--tab=<id>] <url>            a bare web view, into an empty tab
+                                              the same way
+  pane list     [--tab=<id>] | --all          --all: every chat, agent and
+                                              terminal across all workspaces,
+                                              one line each, by pane id:
                                               <id> <ws>/<tab> <face> <status> <title>
-  pane read     [<id>] [--lines=N] [--raw]    print a terminal pane's scrollback,
+  pane read     [<id>] [--lines=N] [--raw]    print a terminal's scrollback,
                                               ANSI-stripped (grep-able); --raw
                                               keeps escapes, --lines trims to the
                                               last N lines. id defaults to
                                               MUXPAD_PANE_ID.
-  pane send     <id> "text" [--no-enter]      type into a terminal pane's live
-                                              pty; appends Enter unless
-                                              --no-enter. Refused if the pane
-                                              has no running pty. Use `--` before
-                                              text that starts with a dash.
+  pane send     <id> "text" [--no-enter]      type into a terminal's live pty;
+                                              appends Enter unless --no-enter.
+                                              Refused if nothing is running in
+                                              it. Use `--` before text that
+                                              starts with a dash.
   pane send     <id> --key=<name> [...]       send named keys instead of text
                                               (repeatable): enter esc tab up
                                               down left right ctrl-a…ctrl-z
                                               e.g. --key=ctrl-c
   pane summarize [<id>]                       1–2 sentence deliverable summary
-                                              of an agent pane's conversation
+                                              of a chat's or agent's conversation
   pane delete   <id>
   pane rename   [<id>] <name>                 id defaults to MUXPAD_PANE_ID
 
   watch [--types=a,b]                stream the daemon's event bus to stdout,
                                      one event per line, until killed —
-                                     pane/tab/workspace changes plus
+                                     chat/terminal/tab/workspace changes plus
                                      agent_turn start/done/fatal. --types
                                      filters (e.g. --types=agent_turn);
                                      --json prints raw MuxpadEvent JSON.
@@ -5430,14 +5433,14 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
   open <url>                         open <url> in a new real browser tab
                                      (like macOS `open` / Linux `xdg-open`).
                                      The web UI surfaces a click-to-open toast
-                                     so the popup isn't blocked. For an iframe
-                                     pane in the mosaic, use `pane open` above.
+                                     so the popup isn't blocked. For a web
+                                     view inside muxpad, use `pane open` above.
 
   serve [--url=<url>] [--label=<text>] -- <command...>
-                                     run a local web server in THIS pane under
-                                     muxpad supervision: auto-restart on crash
-                                     (with backoff; Ctrl-C stops for real) and
-                                     the pane flips to the app's web view,
+                                     run a local web server in THIS terminal
+                                     under muxpad supervision: auto-restart on
+                                     crash (with backoff; Ctrl-C stops for real)
+                                     and the terminal flips to the app's web view,
                                      with Terminal always in the face menu.
                                      e.g. muxpad serve --url=http://host:4321 \
                                             --label=Notes -- ./start
@@ -5469,19 +5472,20 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                      `muxpad app logs tunnel` to watch it,
                                      `muxpad app stop tunnel` to close the door.
 
-  app-url <url> [--label=<text>]     declare the web app THIS pane serves.
-                                     The pane chrome then offers a "switch to
+  app-url <url> [--label=<text>]     declare the web app THIS terminal serves.
+                                     Its header then offers a "switch to
                                      web view" of it. Run from your dev script
                                      once the server is listening, e.g.
                                      `muxpad app-url http://localhost:5173 --label Web`.
 
   agent [--resume <sid>]             run a persistent chat-native Claude session
-                                     in THIS pane: drive it from the pane's web
-                                     chat face; the terminal shows an activity
-                                     log. Auto-resumes across ptyd restarts via
-                                     the pane's saved startup command.
+                                     in THIS terminal, which becomes a chat:
+                                     drive it from the chat view; the terminal
+                                     view shows an activity log. Auto-resumes
+                                     across ptyd restarts via its saved
+                                     startup command.
   claude-account [status|add <id>|remove <id>|use <id|auto>|reset <id>]
-                                     run Claude panes across more than one
+                                     run Claude chats across more than one
                                      subscription. One account needs no setup;
                                      `add` creates a second profile, shares the
                                      transcript history with the first and turns
@@ -5503,18 +5507,18 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
   agent list                         every tracked agent session (pane id,
                                      backend, mode, TURN, view, session id).
                                      TURN is the session's running|idle turn
-                                     state — NOT the five-state pane/tab
-                                     `status` the list commands above print.
+                                     state — NOT the five-state `status` the
+                                     pane/tab list commands above print.
   agent respawn <paneId> | --all [--backend=<id>]
-                                     re-exec a pane's agent runner in place.
+                                     re-exec an agent's runner in place.
                                      startup_cmd carries --resume <sid>, so the
                                      conversation comes back from its transcript
                                      and ptyd is never touched (no terminal
                                      dies). --all covers every tracked agent
                                      session; --backend narrows it to one
-                                     harness. Per-pane result, exit 1 if any
+                                     harness. One result per agent, exit 1 if any
                                      failed.
-  agent send <paneId> "message"      deliver a message to a pane's agent via
+  agent send <paneId> "message"      deliver a message to a chat or agent via
                                      the server queue. exit 0 = sent/queued
                                      (queued noted on stderr), 1 = rejected
                                      (reason printed).
@@ -5523,12 +5527,14 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                      JSONL (role, text, tool-use summaries) —
                                      same shape for every backend.
   agent wait <paneId> [--timeout=SEC]
-                                     block until that pane's agent finishes
-                                     its turn (run in the background to wait
+                                     block until that agent finishes its
+                                     turn (run in the background to wait
                                      tokenlessly). Keyed on real turn state,
                                      not pty output. exit 0 = done or already
-                                     idle, 1 = not an agent pane, 2 = agent
-                                     fatal, 3 = timeout.
+                                     idle, 2 = agent fatal, 3 = timeout; 1 is
+                                     a bad id, a usage error, OR a worker whose
+                                     runner has not registered yet — normal for
+                                     a second or two after `agent new`.
   cron new --name=<n> --at='<schedule>' (--pane[=<id|name>] | --new-tab)
            [--tz=<IANA>] [--cwd=<dir>] [--model=<m>] [--backend=<b>]
            [--mode=chat|agent] [--catchup=once|skip|all] [--overlap=skip|queue]
@@ -5541,7 +5547,7 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                      --at takes a cron expression ('0 9 * * 1-5')
                                      or a phrase ('daily at 09:00', 'weekdays
                                      at 09:00', 'every 30m'). --pane with no
-                                     value = THIS pane. --new-tab spawns a
+                                     value = THIS chat. --new-tab spawns a
                                      fresh agent tab per fire (clean context)
                                      and closes it when the run finishes.
   cron new … --card=<name>           THIS JOB'S OUTPUT IS THAT CARD. A fire that
@@ -5585,7 +5591,7 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
           [--no-start] [--no-autostart] -- <command...>
                                      register a local web server muxpad keeps
                                      running WITHOUT it occupying a tab. It runs
-                                     as a supervised pane in a hidden workspace:
+                                     as a supervised terminal in a hidden workspace:
                                      ptyd owns the process (survives a server
                                      restart), the command is restarted on
                                      crash, and the pty is rebuilt after a ptyd
@@ -5600,8 +5606,8 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                      health signals behind its state
   app start|stop|restart <slug>      stop leaves it down until you start it
   app logs <slug> [--lines=N] [--raw]
-                                     the app's pane scrollback — an app IS a
-                                     pane underneath
+                                     the app's terminal scrollback — an app IS
+                                     a terminal underneath
   app rm <slug>                      unregister and take it down
 
   publish <file-or-dir> [--name=slug]
@@ -5670,8 +5676,8 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                      back to a phrase match on bad syntax)
   search --sessions [--cwd=X] [--limit=N]
                                      list archived sessions (sid, backend,
-                                     pane, cwd, last activity)
-  claude [claude args...]            launch Claude Code in THIS pane as a
+                                     pane id, cwd, last activity)
+  claude [claude args...]            launch Claude Code in THIS terminal as a
                                      muxpad-tracked session so it can be viewed
                                      and driven from the web chat (and switched
                                      between terminal and chat). Passes your
@@ -5684,16 +5690,11 @@ global flags:
                                      (place BEFORE the subcommand)
 
 examples:
-  muxpad pane new --cmd='pnpm dev'                       # sibling to the right
-  muxpad pane new --direction=below --cmd='tail -f log'  # below this pane
-  muxpad pane open https://grafana.local                 # iframe to the right
+  muxpad tab new --bootstrap=shell --name=scratch        # a new terminal
   muxpad open https://grafana.local                      # real new browser tab
   muxpad --json workspace list | jq -r '.[].id'
-  ws=$(muxpad --json workspace new --name=foo | jq -r .id) \
-    && tab=$(muxpad --json tab new --workspace="$ws" | jq -r .id) \
-    && p1=$(muxpad --json pane new --tab="$tab" --cmd='pnpm dev' | jq -r .id) \
-    && muxpad pane new --tab="$tab" --target="$p1" --direction=below \
-         --cmd='tail -f log'
+  tab=$(muxpad --json tab new --name=dev | jq -r .id) \
+    && muxpad pane new --tab="$tab" --cmd='pnpm dev'     # a terminal running a command
 USAGE
 }
 

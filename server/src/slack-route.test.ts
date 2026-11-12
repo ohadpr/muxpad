@@ -106,7 +106,7 @@ describe('authorizing a Slack call', () => {
     // pane", not "you are not allowed".
     const { app, pane } = harness({ slack: true });
     const r = await post(app, { pane: pane.id, key: '', ref: '#x', text: 'hi' });
-    expect((await r.json()).error.detail).toMatch(/Restart this pane/);
+    expect((await r.json()).error.detail).toMatch(/Restart this chat/);
   });
 
   it('refuses when there is no pane at all', async () => {
