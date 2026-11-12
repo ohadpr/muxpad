@@ -47,7 +47,7 @@ const json = flags.has('--json');
 const dir = accountDataDir();
 const configPath = join(dir, 'claude-accounts.json');
 
-const USAGE = `muxpad claude-account — run Claude Code panes across more than one subscription
+const USAGE = `muxpad claude-account — run Claude Code chats across more than one subscription
 
   status [--json]          what accounts exist, how full each one is, what is cooling off
   add <id> [--label=…] [--dir=…]
@@ -239,7 +239,7 @@ function add(): void {
     console.log(`  ${loginLine(configDir)}`);
     console.log('');
     console.log(
-      `Then: muxpad claude-account status. New Claude panes prefer "${existing?.preferred ?? first.id}"`,
+      `Then: muxpad claude-account status. New Claude chats prefer "${existing?.preferred ?? first.id}"`,
     );
     console.log('and fall back to this one when a usage window is refused.');
   });
@@ -434,8 +434,8 @@ try {
         const revived = pool.db.prepare('DELETE FROM credentials WHERE account = ?').run(id);
         console.log(
           revived.changes > 0
-            ? `Cleared cooldown and the signed-out mark for ${id}. Blocked panes can use /retry.`
-            : `Cleared cooldown for ${id}. Blocked panes can use /retry.`,
+            ? `Cleared cooldown and the signed-out mark for ${id}. Blocked chats can use /retry.`
+            : `Cleared cooldown for ${id}. Blocked chats can use /retry.`,
         );
       } else throw new Error(USAGE);
     } finally {

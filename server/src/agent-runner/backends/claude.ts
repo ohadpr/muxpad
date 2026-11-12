@@ -189,9 +189,9 @@ export function reportToolDescription(): string {
  */
 export function notifyToolDescription(): string {
   return [
-    "Buzz the user on their phone and their desktop — a real push notification on the lock screen, wherever they are. Tapping it opens THIS pane. It is the only way you can reach someone who isn't looking at the screen.",
+    "Buzz the user on their phone and their desktop — a real push notification on the lock screen, wherever they are. Tapping it opens THIS chat. It is the only way you can reach someone who isn't looking at the screen.",
     'Call it when something cannot wait for the end of the turn: a long run hit a blocker only they can clear, a deploy or a suite failed, a watch they asked you to keep just fired, or you are about to spend a long time on something they should know about now. Also call it once, with the result, at the end of a long autonomous run (a cron, a wakeup, an overnight batch) they are actually waiting on.',
-    'Do NOT call it to announce an ordinary finished turn. A turn that ends more than two minutes after the user last typed already notifies them on its own, so a notify next to your final reply just buzzes them twice, the second time with less news. Do not use it for progress updates, for anything that can wait until they next look at the screen, or twice in a minute — this pane sends at most one notification per minute and the rest are dropped.',
+    'Do NOT call it to announce an ordinary finished turn. A turn that ends more than two minutes after the user last typed already notifies them on its own, so a notify next to your final reply just buzzes them twice, the second time with less news. Do not use it for progress updates, for anything that can wait until they next look at the screen, or twice in a minute — this chat sends at most one notification per minute and the rest are dropped.',
     'The `text` IS the notification: one sentence, on a lock screen, all they get until they tap. Name what happened and what it needs — "staging deploy failed: migration 0042 timed out" or "the 40-file rename is done, 3 conflicts need you" — never "check muxpad" or "I have an update".',
     'If you are a SUB-CHAT, the bar is higher still: your work was asked for by another chat and your result is delivered there, so the automatic paths (a question, the end of your turn, a BEL) deliberately do not buzz anybody. Call this only when the user asked you to reach them, or when you have hit something that stops the work and only they can clear.',
     'The result tells you what happened: sent, held because the user is already at a device, no subscribed device on this server, or dropped by the rate limit. None of those is an error and none is a reason to call again — if it was not sent, say the thing in your reply instead.',
@@ -897,13 +897,13 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
   const NOTIFY_RESULT_TEXT: Record<NotifyStatus | 'no-ack', string> = {
     sent: "Sent — it is on the user's devices now.",
     'held-active':
-      'Not sent: the user is actively using a device right now, so they can already see this pane. Nothing more to do — this is normal, do not call again.',
+      'Not sent: the user is actively using a device right now, so they can already see this chat. Nothing more to do — this is normal, do not call again.',
     'no-devices':
       'Not sent: no device is subscribed to push on this server, so notifications are a no-op here. Say it in your reply instead; do not call again.',
     'held-subchat':
       "Not sent: this is a sub-agent, and a sub-agent does not ring the user's phone for its ordinary work. Your result reaches the chat that spawned you — put it there. Do not call again.",
     'rate-limited':
-      'Dropped: this pane already sent a notification within the last minute. Put this in your reply instead; do not call again.',
+      'Dropped: this chat already sent a notification within the last minute. Put this in your reply instead; do not call again.',
     unavailable:
       'Not sent: this server has no push configured. Say it in your reply instead; do not call again.',
     'no-ack':
@@ -938,7 +938,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
           content: [
             {
               type: 'text' as const,
-              text: 'Not recorded: this pane is not connected to muxpad right now. Carry on — muxpad will summarise your transcript instead.',
+              text: 'Not recorded: this chat is not connected to muxpad right now. Carry on — muxpad will summarise your transcript instead.',
             },
           ],
         };
@@ -996,7 +996,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
           content: [
             {
               type: 'text' as const,
-              text: 'Not sent: this pane is not connected to muxpad right now. Say it in your reply instead.',
+              text: 'Not sent: this chat is not connected to muxpad right now. Say it in your reply instead.',
             },
           ],
         };
@@ -2225,11 +2225,11 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
     // persistent NAME gets the session's AI title via the transcript tail.
     process.stdout.write('\x1b]0;✳ agent\x07');
     log(`${bold('muxpad agent')} — session ${sid}${resumeSid ? ' (resumed)' : ''}`);
-    log(dim(`pane ${host.paneId} · ${process.cwd()}`));
+    log(dim(`pane id ${host.paneId} · ${process.cwd()}`));
     // Only announced for Chat mode: an Agent-mode pane's log stays
     // byte-identical to the pre-modes output.
     if (currentMode === 'chat') log(dim('chat mode — decisive, terse, result-first'));
-    log(dim('drive this session from the pane’s Chat face; this log is the terminal face'));
+    log(dim('drive this session from its chat; this log is the raw terminal view of it'));
 
     // A turn can also start WITHOUT a user send: scheduled wakeups and crons
     // fire autonomously inside the persistent session (live-verified). Emit

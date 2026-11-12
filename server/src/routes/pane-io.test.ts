@@ -160,7 +160,7 @@ describe('pane io routes', () => {
     const res = await sendInput(p.id, { text: 'rm -rf /', enter: true });
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: { message: string } };
-    expect(body.error.message).toContain('no live pty');
+    expect(body.error.message).toContain('nothing is running');
   });
 
   it('400s input for a url pane, 404s for a missing pane', async () => {

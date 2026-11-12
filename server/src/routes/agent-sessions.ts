@@ -120,7 +120,10 @@ export function agentSessionsRoutes(deps: {
     // exited 0 — a recovery script would have reported success at stopping
     // something it never reached.
     if (!store.getByPane(paneId) && !new PaneStore(deps.db).getById(paneId))
-      return c.json({ error: { code: 'not_found', message: 'no such pane' } }, 404);
+      return c.json(
+        { error: { code: 'not_found', message: 'no chat or agent with that pane id' } },
+        404,
+      );
     const stopped = deps.agentBridge?.stop(paneId) ?? false;
     return c.json({ stopped });
   });
@@ -169,7 +172,7 @@ export function agentSessionsRoutes(deps: {
     const session = store.recordSessionId(body.pane_id, body.session_id);
     // Unknown pane = a session muxpad didn't launch. Out of scope; ack softly
     // so the hook (which runs inside Claude) never surfaces an error.
-    if (!session) return c.json({ ok: false, reason: 'no agent session for pane' }, 202);
+    if (!session) return c.json({ ok: false, reason: 'no agent session for that pane id' }, 202);
     emitChange(body.pane_id);
     return c.json(session);
   });
@@ -204,7 +207,7 @@ export function agentSessionsRoutes(deps: {
   app.get('/:paneId/transcript', (c) => {
     const paneId = c.req.param('paneId');
     const sess = store.getByPane(paneId);
-    if (!sess) return c.json({ error: 'no agent session for pane' }, 404);
+    if (!sess) return c.json({ error: 'no agent session for that pane id' }, 404);
     const sid = sess.current_sid;
     if (!sid) return c.json({ error: 'session has no transcript yet' }, 404);
     // ── A REMOTE PANE'S HISTORY IS NOT ON THIS DISK ────────────────────
@@ -222,7 +225,7 @@ export function agentSessionsRoutes(deps: {
     // host over the link; until that exists, 404 is the honest answer.
     if (new NodeStore(deps.db).nodeForPane(paneId) !== LOCAL_NODE_ID)
       return c.json(
-        { error: 'this pane runs on another machine; its history is not available here' },
+        { error: 'this agent runs on another machine; its history is not available here' },
         409,
       );
     // Claude writes ~/.claude/projects/**/<sid>.jsonl; codex/cursor write the

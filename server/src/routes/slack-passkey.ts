@@ -33,7 +33,8 @@ export function slackPasskeyRoutes(deps: {
   });
   app.get('/pending', async (c) => {
     const pane = c.req.query('pane');
-    if (!pane || !deps.paneExists(pane)) return c.json({ error: 'Unknown pane' }, 404);
+    if (!pane || !deps.paneExists(pane))
+      return c.json({ error: 'Unknown caller — no chat has that pane id' }, 404);
     const status = await slackBrokerRequest('/inline/status', undefined, 3000);
     if (status.mode !== 'passkey-inline') return c.json({ error: 'Unavailable' }, 409);
     const ids = deps.owned(pane);

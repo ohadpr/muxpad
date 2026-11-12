@@ -55,7 +55,7 @@ const paneId = process.env.MUXPAD_PANE_ID;
 const apiUrl = process.env.MUXPAD_API_URL;
 if (!paneId || !apiUrl) {
   console.error(
-    'muxpad agent: must run inside a muxpad pane (missing MUXPAD_PANE_ID/MUXPAD_API_URL)',
+    'muxpad agent: must run inside a muxpad terminal (missing MUXPAD_PANE_ID/MUXPAD_API_URL)',
   );
   process.exit(1);
 }
