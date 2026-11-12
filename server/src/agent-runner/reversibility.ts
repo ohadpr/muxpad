@@ -285,8 +285,8 @@ const BASH_MATCHERS: readonly BashMatcher[] = [
   // ── send: speaks as the user ──────────────────────────────────────────────
   {
     verb: 'send',
-    header: 'Type into pane',
-    why: 'types a command straight into another pane’s shell, as you. It runs there immediately.',
+    header: 'Type into terminal',
+    why: 'types a command straight into another terminal, as you. It runs there immediately.',
     match: (b, s) => b === 'muxpad' && s[0] === 'pane' && (s[1] === 'send' || s[1] === 'keys'),
   },
   {

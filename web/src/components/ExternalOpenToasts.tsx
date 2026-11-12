@@ -97,7 +97,9 @@ function ExternalOpenToast({
     // biome-ignore lint/a11y/useSemanticElements: <fieldset> is for grouped form controls; this groups a URL and two buttons in a toast.
     <div className="external-open-toast" role="group">
       <div className="external-open-toast-body">
-        <div className="external-open-toast-origin">{label ?? 'A pane'} requested to open:</div>
+        <div className="external-open-toast-origin">
+          {label ?? 'Something in this tab'} requested to open:
+        </div>
         <div className="external-open-toast-url" title={open.url}>
           {host}
         </div>

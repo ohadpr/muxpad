@@ -11,6 +11,7 @@ const mock = vi.hoisted(() => ({
   getTab: vi.fn(),
   freshTabs: vi.fn(),
   cached: [] as unknown[],
+  createPane: vi.fn(),
   events: new Set<(e: MuxpadEvent) => void>(),
   resync: new Set<() => void>(),
   tab: {
@@ -19,7 +20,6 @@ const mock = vi.hoisted(() => ({
     name: 'Chat',
     layout: 'p',
     panes: [{ id: 'p', tab_id: 't', kind: 'shell', title: 'vim', foreground_cmd: 'vim' }],
-    view_mode: 'tabbed',
   },
 }));
 vi.mock('@tanstack/react-router', () => ({
@@ -41,6 +41,7 @@ vi.mock('../api', () => ({
     getTab: mock.getTab,
     markTabSeen: mock.markTabSeen,
     markPaneSeen: mock.markPaneSeen,
+    createPane: mock.createPane,
   },
 }));
 vi.mock('../workspaces', () => ({
@@ -64,11 +65,12 @@ vi.mock('../events', () => ({
   },
 }));
 vi.mock('../use-media-query', () => ({ useMediaQuery: () => false }));
-vi.mock('../lib/tab-view-mode', () => ({
-  useTabViewMode: () => 'tabbed',
-  setTabViewMode: vi.fn(),
+// The body shows the pane's title, so these tests can read pane STATE off the
+// page. They used to read it off the pane strip's label, which is gone: a tab
+// holds one thing and no longer paints a strip naming it.
+vi.mock('../components/ShellPaneBody', () => ({
+  ShellPaneBody: ({ pane }: { pane: { title?: string | null } }) => pane.title ?? null,
 }));
-vi.mock('../components/ShellPaneBody', () => ({ ShellPaneBody: () => null }));
 vi.mock('../components/UrlPane', () => ({ UrlPane: () => null }));
 
 beforeEach(() => {
@@ -248,3 +250,62 @@ it.each(['visible', 'hidden'] as const)(
     }
   },
 );
+
+/**
+ * A TAB HOLDS ONE THING, AND THE VIEW OFFERS NO WAY TO ADD A SECOND.
+ *
+ * The fixture's pane is a plain shell — a terminal, the one kind of tab that
+ * still painted a strip with a `+`, a "Close pane" and an "Expand to split".
+ * That `+` was the web half of the hole: it created a second pane and wrote
+ * the split layout itself.
+ */
+it('paints no pane strip, no `+` and no split control on a terminal tab', async () => {
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+  const host = document.createElement('div');
+  const root = createRoot(host);
+  mock.getTab.mockResolvedValue(mock.tab);
+  try {
+    await act(async () => root.render(<TabView tabSlug="chat" isActive={true} />));
+    // The terminal itself is on screen…
+    expect(host.textContent).toContain('vim');
+    // …and nothing around it adds, splits or names a second thing.
+    expect(host.querySelector('.desktop-tab-strip')).toBeNull();
+    expect(host.querySelector('.mosaic')).toBeNull();
+    const controls = [...host.querySelectorAll('button')].map(
+      (b) => `${b.textContent}|${b.title}|${b.getAttribute('aria-label') ?? ''}`,
+    );
+    expect(controls).toEqual([]);
+  } finally {
+    await act(async () => root.unmount());
+  }
+});
+
+it('an EMPTY tab offers a chat, and asks the SERVER to place it', async () => {
+  // The server refuses a second thing in an occupied tab on every route, and
+  // places a first one only when asked to. So the empty state's create must
+  // say `append_to_layout`, or the chat would exist in no layout at all.
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+  const host = document.createElement('div');
+  const root = createRoot(host);
+  const empty = { ...mock.tab, layout: '', panes: [] };
+  mock.getTab.mockResolvedValue(empty);
+  mock.createPane.mockReset();
+  mock.createPane.mockResolvedValue({ id: 'n', tab_id: 't', kind: 'shell', title: 'fresh chat' });
+  try {
+    await act(async () => root.render(<TabView tabSlug="chat" isActive={true} />));
+    expect(host.textContent).toContain('Nothing is open here.');
+    const start = [...host.querySelectorAll('button')].find(
+      (b) => b.textContent === 'Start a chat',
+    );
+    expect(start).toBeTruthy();
+    await act(async () => start?.click());
+    expect(mock.createPane).toHaveBeenCalledWith(
+      't',
+      expect.objectContaining({ append_to_layout: true }),
+    );
+    // And it is on screen straight away, not after a round trip.
+    expect(host.textContent).toContain('fresh chat');
+  } finally {
+    await act(async () => root.unmount());
+  }
+});

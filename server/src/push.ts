@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { MuxpadEvent } from '@muxpad/shared';
+import { type MuxpadEvent, rowNounTitle } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import webpush from 'web-push';
 import type { EventBus } from './events.js';
@@ -261,25 +261,30 @@ export function paneLabel(
 }
 
 /**
- * The notification title: "<pane> · <tab>", or just "<tab>".
+ * The notification title: "<label> · <tab>", or just "<tab>".
  *
  * Pulled out as a pure function because the rule is the whole point and it is
- * easy to get subtly wrong. Qualify with the pane when it says something the
+ * easy to get subtly wrong. Qualify with the label when it says something the
  * tab name doesn't; fall back to a position ONLY when there are siblings to
- * disambiguate from (a lone "Pane 1 · muxpad" is noise on a phone's one line).
+ * disambiguate from (a lone "Terminal 1 · muxpad" is noise on a phone's one
+ * line). The position is spoken in the row's own noun — "Chat 2", "Terminal 2"
+ * — because this line lands on a lock screen, the one place a person reads it
+ * with nothing around it to translate "Pane 2" into what that is.
  */
 export function notificationTitle(input: {
   tabName: string | null;
   label: string | null;
   position: number;
   siblings: number;
+  /** {@link rowNounTitle} of the row that rang. Absent reads as a terminal. */
+  noun?: string;
 }): string {
-  const { tabName, label, position, siblings } = input;
+  const { tabName, label, position, siblings, noun = 'Terminal' } = input;
   if (!tabName) return 'muxpad';
   // A negative position means "not in its own tab's list" — a row read while it
-  // was being deleted. Printing "Pane <siblings+1>" there names a pane that
+  // was being deleted. Printing "<noun> <siblings+1>" there names a row that
   // cannot exist; say nothing instead.
-  const named = label?.trim() || (siblings > 1 && position >= 0 ? `Pane ${position + 1}` : null);
+  const named = label?.trim() || (siblings > 1 && position >= 0 ? `${noun} ${position + 1}` : null);
   if (!named) return tabName;
   if (named.toLowerCase() === tabName.trim().toLowerCase()) return tabName;
   return `${named} · ${tabName}`;
@@ -409,9 +414,10 @@ export function createPaneNotifier(
         label: pane ? opts?.label?.trim() || paneLabel(pane, liveLabel?.(paneId)) : null,
         // Negative when the pane is not in its own tab list (a row read mid-
         // delete). notificationTitle reads that as "no position" rather than
-        // inventing a "Pane N+1" that cannot exist.
+        // inventing a "Terminal N+1" that cannot exist.
         position: idx,
         siblings: siblings.length,
+        noun: rowNounTitle(pane),
       }),
       body,
       ...target,

@@ -580,7 +580,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
           '  (the transcript lives in <CLAUDE_CONFIG_DIR|~/.claude>/projects/<cwd>/<sid>.jsonl — a pruned dir, a moved config or a changed HOME all land here)',
         ),
       );
-      lostHistoryNotice = `${basename(process.cwd())}: an agent pane lost its conversation — session ${requestedSid.slice(0, 8)} had history but no transcript on disk, so it restarted empty.`;
+      lostHistoryNotice = `${basename(process.cwd())}: the agent lost its conversation — session ${requestedSid.slice(0, 8)} had history but no transcript on disk, so it restarted empty.`;
     } else {
       log(`no transcript yet for ${requestedSid} — starting the session fresh under that id`);
     }
@@ -2660,7 +2660,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
             log(`${bold('✗ auth')} ${message} ${dim(`(${detail})`)}`);
             if (decision.kind === 'give-up') {
               log(
-                `${bold('⚠')} giving up on self-heal — run ${bold('/login')} on this machine; this pane retries on its own afterwards`,
+                `${bold('⚠')} giving up on self-heal — run ${bold('/login')} on this machine; it retries on its own afterwards`,
               );
               notifyUser(authGiveUpNotice(basename(process.cwd()), message));
             }

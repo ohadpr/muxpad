@@ -5,21 +5,13 @@ import { folderSurface, showFolderChip, tabRowAffordances } from './nav-row-affo
 const row = (o: Partial<Parameters<typeof tabRowAffordances>[0]> = {}) =>
   tabRowAffordances({
     variant: 'sidebar',
-    paneCount: 1,
     isEditing: false,
     ...o,
   });
 
 describe('tab row affordances — desktop sidebar', () => {
-  it('offers the hover-revealed pin, and none of the touch controls', () => {
-    expect(row({ variant: 'sidebar', paneCount: 3 })).toEqual({
-      menuButton: true,
-      paneExpander: false,
-    });
-  });
-
-  it('never expands into a pane list — the mosaic already shows every pane', () => {
-    expect(row({ variant: 'sidebar', paneCount: 9 }).paneExpander).toBe(false);
+  it('offers the hover-revealed menu button', () => {
+    expect(row({ variant: 'sidebar' })).toEqual({ menuButton: true });
   });
 });
 
@@ -30,46 +22,20 @@ describe('tab row affordances — mobile sheet', () => {
     // "closed a chat I meant to open" and "opened a menu I meant to scroll
     // past". Both controls moved under the row, behind a deliberate left
     // swipe (see swipe-axis). Desktop is untouched.
-    const a = row({ variant: 'sheet', paneCount: 1 });
-    expect(a.menuButton).toBe(false);
+    expect(row({ variant: 'sheet' })).toEqual({ menuButton: false });
   });
 
-  it('a SINGLE-pane tab is a plain row: emoji, name, nothing else', () => {
-    expect(row({ variant: 'sheet', paneCount: 1 })).toEqual({
-      menuButton: false,
-      paneExpander: false,
-    });
-  });
-
-  it('a MULTI-pane tab gets ONE extra thing: the chevron that opens its panes', () => {
-    expect(row({ variant: 'sheet', paneCount: 4 })).toEqual({
-      menuButton: false,
-      paneExpander: true,
-    });
-  });
-
-  it('the pane-count CHIP is gone — a 2-pane chat looks like a 1-pane chat', () => {
-    // An accepted loss of the rail rebuild, recorded here so re-adding it is a
-    // decision rather than a drift. The rail spends its marks on one question
-    // ("does this want you?"); a pane count does not answer it, and a chip on
-    // every multi-pane row competed with the one mark that does.
-    expect(row({ variant: 'sheet', paneCount: 4 })).not.toHaveProperty('paneCountChip');
-  });
-
-  it('TAP always opens the chat now — the expand-instead-of-navigate case is gone', () => {
-    // One rule for every row, with no exception to learn. The chevron is what
-    // opens the pane list.
-    expect(row({ variant: 'sheet', paneCount: 4 })).not.toHaveProperty('tapExpandsPanes');
+  it('has no pane expander — a row holds one thing, so there is no list under it', () => {
+    expect(row({ variant: 'sheet' })).not.toHaveProperty('paneExpander');
+    expect(row({ variant: 'sheet' })).not.toHaveProperty('paneCountChip');
+    expect(row({ variant: 'sheet' })).not.toHaveProperty('tapExpandsPanes');
   });
 
   it('an inline rename stands every row control down', () => {
-    const a = row({ variant: 'sheet', paneCount: 4, isEditing: true });
-    expect(a.menuButton).toBe(false);
-    expect(a.paneExpander).toBe(false);
-    // Desktop too: the × and pin would otherwise sit beside the input and
-    // steal the width the name needs while you're typing into it.
-    const d = row({ variant: 'sidebar', paneCount: 1, isEditing: true });
-    expect(d.menuButton).toBe(false);
+    expect(row({ variant: 'sheet', isEditing: true }).menuButton).toBe(false);
+    // Desktop too: the button would otherwise sit beside the input and steal
+    // the width the name needs while you're typing into it.
+    expect(row({ variant: 'sidebar', isEditing: true }).menuButton).toBe(false);
   });
 });
 

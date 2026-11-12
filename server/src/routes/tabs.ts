@@ -3,9 +3,12 @@ import {
   AgentModeInputSchema,
   BOOTSTRAP_TAB_NAME,
   LayoutNodeSchema,
+  ONE_THING_PER_TAB,
   appendLeafToLayout,
   collectLayoutLeaves,
+  isSplitLayout,
   rollupStatus,
+  tabIsOccupied,
 } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
@@ -117,6 +120,10 @@ export function tabsRoutes(deps: {
         node_id: z.string().optional(),
       })
       .parse(await c.req.json().catch(() => ({})));
+    // A tab holds one thing, so it cannot be BORN split either — the same
+    // refusal the PATCH below gives.
+    if (body.layout !== undefined && isSplitLayout(body.layout))
+      return c.json({ error: { code: 'conflict', message: ONE_THING_PER_TAB } }, 409);
     // Resolve the parent, and DROP it if it doesn't exist rather than
     // rejecting: a worker being spawned must not fail to exist because the
     // chat that asked for it has since been deleted. An unresolvable parent
@@ -589,6 +596,16 @@ export function tabsRoutes(deps: {
     const body = parsed.data;
     const id = c.req.param('id');
 
+    // ── NO SPLIT LAYOUT, FROM ANYONE ────────────────────────────────────────
+    // This is the half of the hole the create route could not see. The web
+    // made a second pane with a plain create (no placement asked for), then
+    // wrote the split here as an ordinary layout PATCH — so refusing placement
+    // at create time alone left every terminal tab splittable from its `+`.
+    // A layout names one thing or nothing; a tree is refused before anything
+    // in this request is applied.
+    if (body.layout !== undefined && isSplitLayout(body.layout))
+      return c.json({ error: { code: 'conflict', message: ONE_THING_PER_TAB } }, 409);
+
     // ── VALIDATE, THEN MUTATE, IN ONE TRANSACTION ───────────────────────────
     // This used to pin (and reposition) the tab, then call tabs.update(), then
     // report 404 from a bare catch if that threw. So `{pinned:true, slug:'…'}`
@@ -730,8 +747,9 @@ export function tabsRoutes(deps: {
   });
 
   // Merge this tab's panes into another tab, then delete the (now empty)
-  // source. The gather inverse of the pane-move "pop out" — turns N
-  // single-pane tabs into one tab with N pane-tabs. Pure metadata: ptys and
+  // source. Since a tab holds one thing, this only still succeeds for one
+  // thing moving into an empty tab; anything that would leave two is refused
+  // below. No surface offers it any more. Pure metadata: ptys and
   // agent runners key by pane id, so nothing running notices the move.
   // Cross-workspace merges are allowed (the sidebar drop targets span
   // workspaces).
@@ -765,6 +783,17 @@ export function tabsRoutes(deps: {
     // ON DELETE CASCADE when the source tab is deleted below — silent pane
     // loss. Layout order first (keeps strip order), stragglers appended.
     const rows = panes.listByTab(id).map((p) => p.id);
+    // A merge puts the source's things into the destination, so it ends with
+    // two in one tab unless the destination is empty and the source holds
+    // exactly one. That is the split by another route; refuse it the same way.
+    if (
+      rows.length > 1 ||
+      tabIsOccupied(
+        dest.layout,
+        panes.listByTab(dest.id).map((p) => p.id),
+      )
+    )
+      return c.json({ error: { code: 'conflict', message: ONE_THING_PER_TAB } }, 409);
     const rowSet = new Set(rows);
     const inLayout = collectLayoutLeaves(source.layout).filter((pid) => rowSet.has(pid));
     const inLayoutSet = new Set(inLayout);

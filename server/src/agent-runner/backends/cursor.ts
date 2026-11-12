@@ -369,7 +369,7 @@ export function createCursorBackend(
           t: 'turn-done',
           ok: false,
           error:
-            'cursor-agent is not logged in — run `cursor-agent login` in this pane’s terminal face',
+            'cursor-agent is not logged in — switch this agent to Agent log and run `cursor-agent login`',
         });
         if (!closed && queue.length > 0) void runTurn();
         return;
@@ -471,7 +471,11 @@ export function createCursorBackend(
     log(dim(`pane ${host.paneId} · ${process.cwd()}`));
     authOk = await checkAuth();
     if (!authOk)
-      log(dim('cursor-agent not logged in — run `cursor-agent login` in the terminal face'));
+      log(
+        dim(
+          'cursor-agent not logged in — switch this agent to Agent log and run `cursor-agent login`',
+        ),
+      );
     try {
       const { models, defaultModel } = await listModels();
       modelList = models;

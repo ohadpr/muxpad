@@ -1943,8 +1943,8 @@ select:focus {
 .ws-tabbar-spacer {
   flex: 1;
 }
-/* Mobile: the active tab's pane controls (face switch + new-pane +) portal
-   here (TabView → MobilePaneChrome), so mobile chrome is ONE row. Sits right,
+/* Mobile: the active terminal's face switch portals here (TabView →
+   MobilePaneChrome), so mobile chrome is ONE row. Sits right,
    before the gear; the breadcrumb (.mns, flex:1) shrinks to make room. Empty
    until a pane fills it — collapse so it steals no width. */
 .mobile-pane-chrome {

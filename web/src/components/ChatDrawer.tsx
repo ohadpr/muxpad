@@ -266,7 +266,7 @@ function SubChatList({
                     // the list — it is part of the record — and says why
                     // rather than being a control that does nothing.
                     disabled={!s.paneId}
-                    title={s.paneId ? undefined : 'This chat’s pane is gone'}
+                    title={s.paneId ? undefined : 'This chat has ended — nothing is left to open'}
                     onClick={() => onOpen(s)}
                   >
                     {/* ── ONE MARK, NOT TWENTY-ONE ───────────────────────

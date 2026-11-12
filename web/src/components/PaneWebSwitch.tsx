@@ -352,8 +352,8 @@ export function PaneWebSwitch({
         ref={triggerRef}
         type="button"
         className={`pane-web-switch-main${showWeb || showChat ? ' is-web' : ''}${available ? ' is-available' : ''}`}
-        title="Pane view — terminal, chat, or web"
-        aria-label="Pane view — terminal, chat, or web"
+        title="View — terminal, chat, or web"
+        aria-label="View — terminal, chat, or web"
         aria-haspopup="menu"
         aria-expanded={menuAt !== null}
         onClick={toggle}
