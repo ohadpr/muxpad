@@ -17,7 +17,7 @@ import {
   tabShowsPaneStrip,
   tabTakesPanes,
 } from '@muxpad/shared';
-import { type TabWithPanes, api } from '../api';
+import { ApiError, type TabWithPanes, api } from '../api';
 import { ExternalOpenToasts } from '../components/ExternalOpenToasts';
 import { MobileInputBar } from '../components/MobileInputBar';
 import { NewTabButton } from '../components/NewTabButton';
@@ -48,7 +48,7 @@ import { documentVisible, seenAckTarget, useDocumentVisible } from '../lib/seen-
 import { applyTabUpdated, fetchUnsuperseded, mergePaneUpdated } from '../lib/tab-detail-events';
 import { setTabViewMode, useTabViewMode } from '../lib/tab-view-mode';
 import { useDismissable } from '../lib/use-dismissable';
-import { freshTabs, refreshTabs, useTabs } from '../tabs';
+import { cachedTabsFor, freshTabs, refreshTabs, useTabs } from '../tabs';
 import { useMediaQuery } from '../use-media-query';
 import { refreshWorkspaces, useWorkspaces } from '../workspaces';
 
@@ -656,14 +656,25 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     let cancelled = false;
     (async () => {
       try {
-        // Go through the shared cache, not a raw api.listTabs(): this effect
-        // runs one mount-tick after useTabs() above already fetched the very
-        // same list, so a direct call was a guaranteed duplicate GET on every
-        // cold load. freshTabs() joins that request (or reuses its result if
-        // it just landed) and refetches otherwise.
-        const tabs = await freshTabs(workspace.id);
-        const found = tabs.find((t) => t.slug === tabSlug);
-        if (!found) {
+        // ── THE SLUG IS RESOLVED FROM THE CACHE WHEN THE CACHE HAS IT ──────
+        // This awaited `freshTabs()` unconditionally, and freshTabs refetches
+        // the WHOLE workspace list whenever the cache is more than 2s old —
+        // which, for a click in the rail, is nearly always. So every chat open
+        // waited for a 500-row list it already held, and only then asked for
+        // the tab itself. Measured on the live install (505 tabs): that list
+        // was 35–490ms of serial wait in front of `getTab`, more under load.
+        //
+        // The list was only ever here to turn a slug into an id, and to notice
+        // a tab deleted out from under us. The detail GET below answers the
+        // second question authoritatively (404), so a cached hit goes straight
+        // to it; a 404 on that path falls into the same recovery a missing
+        // slug always had. A slug the cache does NOT know (a deep link, a
+        // cold boot) still waits for the fresh list, exactly as before —
+        // freshTabs joins the mount request rather than duplicating it.
+        const cachedHit = cachedTabsFor(workspace.id).find((t) => t.slug === tabSlug);
+        const found = cachedHit ?? (await freshTabs(workspace.id)).find((t) => t.slug === tabSlug);
+        if (cancelled) return;
+        const notFound = async () => {
           // The shared tabs cache said this slug exists but the fresh list
           // disagrees — the tab was deleted out from under us (another
           // device, server-side cascade). Don't dead-end on an error
@@ -680,6 +691,9 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
           if (isActiveRef.current) {
             void navigate({ to: '/w/$wsSlug', params: { wsSlug }, replace: true });
           }
+        };
+        if (!found) {
+          await notFound();
           return;
         }
         // Fenced like the resync below. On a RELOAD (loadNonce — most often
@@ -689,10 +703,21 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
         // rolled back by the older answer. Null = every answer was overtaken
         // and the held tab is newer; only possible once a tab is held, since
         // nothing moves the generation before then.
-        const detail = await fetchUnsuperseded(
-          () => api.getTab(found.id),
-          () => detailGeneration.current,
-        );
+        let detail: Awaited<ReturnType<typeof api.getTab>> | null;
+        try {
+          detail = await fetchUnsuperseded(
+            () => api.getTab(found.id),
+            () => detailGeneration.current,
+          );
+        } catch (e) {
+          // A cached slug whose tab is gone: the case the fresh list used to
+          // catch first. Same recovery, reached one request later.
+          if (cachedHit && e instanceof ApiError && e.status === 404) {
+            if (!cancelled) await notFound();
+            return;
+          }
+          throw e;
+        }
         if (cancelled) return;
         if (detail) {
           setTab(detail);
