@@ -51,8 +51,21 @@ const str = (v, max) =>
  *  could have learned legitimately — and it may not begin with `-`. */
 const ID = /^(?!-)[A-Za-z0-9_.:@+-]{1,128}$/;
 
+/**
+ * A DELIBERATE REFUSAL, tagged so it can be repeated to the caller.
+ *
+ * The broker's HTTP layer answers every exception with a fixed `Request
+ * refused or invalid`, which is right for an unexpected fault — a stack or a
+ * path must never cross that wall — and wrong for these: "search has no
+ * --deep" and "add-account administers the archive itself" are the whole
+ * value of the review, and the only thing that tells an agent how to fix its
+ * call. Without them every refusal reads as "msgvault is broken", which is a
+ * complaint this repo has actually received.
+ *
+ * So these say they are safe to repeat; nothing else does.
+ */
 const fail = (m) => {
-  throw new Error(m);
+  throw Object.assign(new Error(m), { refusal: true });
 };
 
 /**
