@@ -97,6 +97,25 @@ it('a slug the cache already holds skips the list refetch', async () => {
   }
 });
 
+// A chat this client just created: the create answered with its pane, so the
+// view renders without waiting for the detail GET (which still corrects it).
+it('a just-created tab renders from the primed detail before the GET answers', async () => {
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+  mock.cached = [mock.tab];
+  const { primeTabDetail } = await import('../lib/tab-detail-prime');
+  primeTabDetail(mock.tab as never);
+  mock.getTab.mockImplementationOnce(() => new Promise(() => {}));
+  const host = document.createElement('div');
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<TabView tabSlug="chat" isActive={true} />));
+    expect(host.textContent).toContain('vim');
+    expect(mock.getTab).toHaveBeenCalledWith('t');
+  } finally {
+    await act(async () => root.unmount());
+  }
+});
+
 it('a cached slug whose tab is gone (404) gets the not-found recovery', async () => {
   vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
   mock.cached = [mock.tab];

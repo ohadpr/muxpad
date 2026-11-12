@@ -221,7 +221,12 @@ export function tabsRoutes(deps: {
     // caller no longer decides it: a spawn is told where it landed. The CLI
     // needs it to print a URL, and a launcher that wants to look at its worker
     // should not have to guess the answer it just delegated.
-    return c.json({ ...created.tab, workspace_id }, 201);
+    // AND ITS PANE, decorated exactly as the detail GET would. The web app
+    // opens the new chat straight from this answer instead of a second round
+    // trip that, measured, cost 200–330ms in front of the composer — it lands
+    // in the refresh storm `tab.added` sets off on every client.
+    const createdPanes = created.pane ? [decoratePane(deps.cache, created.pane, deps.db)] : [];
+    return c.json({ ...created.tab, workspace_id, panes: createdPanes }, 201);
   });
 
   /**
