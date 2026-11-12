@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { MuxpadEvent } from '@muxpad/shared';
+import { type MuxpadEvent, ROW_NOT_FOUND } from '@muxpad/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EventBus } from '../events.js';
 import { PaneStore } from '../store/PaneStore.js';
@@ -84,6 +84,31 @@ describe('panes routes', () => {
       body: '{}',
     });
     expect(res.status).toBe(404);
+  });
+
+  it('a missing row answers in words a person uses, under the same code', async () => {
+    // The web shows an error's MESSAGE as written and branches on its CODE.
+    // So the sentence may change and the code may not: every route below
+    // still says `not_found`, and none of them says "pane".
+    const routes: Array<[string, string]> = [
+      ['GET', '/api/panes/nope'],
+      ['PATCH', '/api/panes/nope'],
+      ['POST', '/api/panes/nope/respawn'],
+      ['GET', '/api/panes/nope/url-health?url=http://127.0.0.1:1/'],
+      ['POST', '/api/panes/nope/cwd'],
+    ];
+    for (const [method, path] of routes) {
+      const res = await test.app.request(path, {
+        method,
+        headers: { 'content-type': 'application/json' },
+        ...(method === 'GET' ? {} : { body: JSON.stringify({ cwd: '/tmp', name: 'x' }) }),
+      });
+      expect(res.status, `${method} ${path}`).toBe(404);
+      const { error } = (await res.json()) as { error: { code: string; message: string } };
+      expect(error.code, `${method} ${path}`).toBe('not_found');
+      expect(error.message, `${method} ${path}`).toBe(ROW_NOT_FOUND);
+      expect(error.message).not.toMatch(/\bpane\b/i);
+    }
   });
 
   it('append_to_layout splices new pane at the layout root when no source', async () => {
@@ -907,6 +932,9 @@ describe('panes routes', () => {
         method: 'POST',
       });
       expect(res.status).toBe(400);
+      const { error } = (await res.json()) as { error: { code: string; message: string } };
+      expect(error.code).toBe('bad_request');
+      expect(error.message).toBe('a web view has nothing running to restart');
     } finally {
       await local.cleanup();
     }

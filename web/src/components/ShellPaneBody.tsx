@@ -252,7 +252,7 @@ export function ShellPaneBody({
         // on. main.tsx has a boot-time backstop too.)
         <div className="shell-pane-face" hidden={!showWeb}>
           <div className="shell-pane-web-blocked">
-            muxpad can’t embed itself — pick a different URL for this pane’s web view.
+            muxpad can’t embed itself — pick a different URL for this terminal’s web view.
           </div>
         </div>
       ) : null}

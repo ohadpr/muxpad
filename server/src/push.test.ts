@@ -192,7 +192,22 @@ describe('createPaneNotifier', () => {
     const sent: PushPayload[] = [];
     const push = fakePush(sent);
     createPaneNotifier(db, push)(b.id, 'wants your attention');
-    expect(sent[0]?.title).toBe('Pane 2 · muxpad');
+    // In the row's own word: a lock screen has nothing around it to explain
+    // what a "pane" is.
+    expect(sent[0]?.title).toBe('Terminal 2 · muxpad');
+  });
+
+  it('calls an agent row by its noun, not by what the server stores it as', () => {
+    const db = openDb(':memory:');
+    const ws = new WorkspaceStore(db).create({ name: 'Dev' });
+    const tab = new TabStore(db).create({ name: 'muxpad', layout: '', workspace_id: ws.id });
+    const panes = new PaneStore(db);
+    const chat = { shell: '/bin/zsh', cwd: '/tmp', startup_cmd: 'muxpad agent --mode chat' };
+    panes.create({ tab_id: tab.id, ...chat, mode: 'chat' });
+    const b = panes.create({ tab_id: tab.id, ...chat, mode: 'chat' });
+    const sent: PushPayload[] = [];
+    createPaneNotifier(db, fakePush(sent))(b.id, 'wants your attention');
+    expect(sent[0]?.title).toBe('Chat 2 · muxpad');
   });
 
   it('percent-encodes slugs in the deep link', () => {
@@ -333,7 +348,12 @@ describe('notificationTitle', () => {
   });
   it('does NOT invent a position for a lone pane', () => {
     expect(notificationTitle({ ...base, siblings: 1 })).toBe('muxpad');
-    expect(notificationTitle({ ...base, siblings: 2, position: 1 })).toBe('Pane 2 · muxpad');
+    expect(notificationTitle({ ...base, siblings: 2, position: 1 })).toBe('Terminal 2 · muxpad');
+  });
+  it('names the position in the noun of the row that rang', () => {
+    expect(notificationTitle({ ...base, siblings: 2, position: 1, noun: 'Chat' })).toBe(
+      'Chat 2 · muxpad',
+    );
   });
   it('never stutters when the pane label equals the tab name', () => {
     expect(notificationTitle({ ...base, label: 'MuxPad ' })).toBe('muxpad');

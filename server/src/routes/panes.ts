@@ -4,9 +4,11 @@ import type { AgentMode, LayoutNode, PaneSpec } from '@muxpad/shared';
 import {
   AgentModeInputSchema,
   DEFAULT_AGENT_MODE,
+  ROW_NOT_FOUND,
   appendLeafToLayout,
   modeForBackend,
   removeLeafFromLayout,
+  rowNoun,
   spliceLayoutAtTarget,
   splitLeadingEmoji,
 } from '@muxpad/shared';
@@ -273,7 +275,8 @@ export function panesTabScopedRoutes(deps: {
           {
             error: {
               code: 'conflict',
-              message: 'a chat holds one pane — the split was removed. Open another chat instead.',
+              message:
+                'a tab holds one chat or terminal — the split was removed. Open a new one instead.',
             },
           },
           409,
@@ -340,7 +343,12 @@ export function panesTabScopedRoutes(deps: {
     // the legacy rows once — this keeps them swept).
     if (body.face === 'chat' && !body.startup_cmd?.startsWith('muxpad agent')) {
       return c.json(
-        { error: { code: 'bad_request', message: 'the chat face requires an agent pane' } },
+        {
+          error: {
+            code: 'bad_request',
+            message: 'only a chat or an agent can show the chat view — this is a terminal',
+          },
+        },
         400,
       );
     }
@@ -552,7 +560,7 @@ export function panesScopedRoutes(deps: {
 
   app.get('/:id', async (c) => {
     const p = panes.getById(c.req.param('id'));
-    if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    if (!p) return c.json({ error: { code: 'not_found', message: ROW_NOT_FOUND } }, 404);
     // hasPane is an async RPC; this handler is rare (single-pane GET).
     // Fall back to false if ptyd is disconnected — the row is still
     // useful for the caller.
@@ -570,7 +578,7 @@ export function panesScopedRoutes(deps: {
   app.patch('/:id', async (c) => {
     const id = c.req.param('id');
     const p = panes.getById(id);
-    if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    if (!p) return c.json({ error: { code: 'not_found', message: ROW_NOT_FOUND } }, 404);
     const body = z
       .object({
         kind: z.enum(['shell', 'url']).optional(),
@@ -619,21 +627,31 @@ export function panesScopedRoutes(deps: {
     const modeChanged = patch.mode !== undefined && patch.mode !== p.mode;
     if (modeChanged && !isAgentPane) {
       return c.json(
-        { error: { code: 'bad_request', message: 'mode applies to agent panes only' } },
+        {
+          error: {
+            code: 'bad_request',
+            message: 'only a chat or an agent has a mode — this is a terminal',
+          },
+        },
         400,
       );
     }
     if (patch.face === 'chat' && !p.startup_cmd?.startsWith('muxpad agent')) {
       // Chat face is agent-pane-only — see the create-path guard above.
       return c.json(
-        { error: { code: 'bad_request', message: 'the chat face requires an agent pane' } },
+        {
+          error: {
+            code: 'bad_request',
+            message: 'only a chat or an agent can show the chat view — this is a terminal',
+          },
+        },
         400,
       );
     }
     const kindFlip = patch.kind !== undefined && patch.kind !== p.kind;
     if (!kindFlip && patch.url !== undefined && p.kind !== 'url') {
       return c.json(
-        { error: { code: 'bad_request', message: 'url can only be set on kind=url panes' } },
+        { error: { code: 'bad_request', message: 'only a web view has a url of its own' } },
         400,
       );
     }
@@ -728,7 +746,7 @@ export function panesScopedRoutes(deps: {
   app.delete('/:id', async (c) => {
     const id = c.req.param('id');
     const p = panes.getById(id);
-    if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    if (!p) return c.json({ error: { code: 'not_found', message: ROW_NOT_FOUND } }, 404);
     // Capture tab_id BEFORE the delete so the event still carries it.
     const tabId = p.tab_id;
     // ptyd holds runtime state; SQLite is the source of truth. If ptyd
@@ -799,7 +817,7 @@ export function panesScopedRoutes(deps: {
   app.post('/:id/rebase', async (c) => {
     const id = c.req.param('id');
     const p = panes.getById(id);
-    if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    if (!p) return c.json({ error: { code: 'not_found', message: ROW_NOT_FOUND } }, 404);
     const bridge = deps.agentBridge;
     if (!bridge) {
       return c.json(
@@ -864,9 +882,12 @@ export function panesScopedRoutes(deps: {
   app.post('/:id/respawn', async (c) => {
     const id = c.req.param('id');
     const p = panes.getById(id);
-    if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    if (!p) return c.json({ error: { code: 'not_found', message: ROW_NOT_FOUND } }, 404);
     if (p.kind === 'url') {
-      return c.json({ error: { code: 'bad_request', message: 'cannot respawn a url pane' } }, 400);
+      return c.json(
+        { error: { code: 'bad_request', message: 'a web view has nothing running to restart' } },
+        400,
+      );
     }
     // ptyd holds runtime state; SQLite is the source of truth. If ptyd
     // is unreachable, swallow the kill — the second call (ensurePane)
@@ -906,7 +927,7 @@ export function panesScopedRoutes(deps: {
       // from the row (the button owns its own local error string, the row does
       // not), so a reload came back to the neutral "no agent yet" and the
       // diagnosis was lost.
-      const why = whyNot('respawn pane', err);
+      const why = whyNot(`restart this ${rowNoun(p)}`, err);
       setProvisionError(id, { error: why, at: Date.now(), attempts: 1 });
       announceProvision(deps, id);
       return c.json({ error: { code: 'ptyd_unavailable', message: why } }, 503);
@@ -998,10 +1019,13 @@ export function panesScopedRoutes(deps: {
   app.get('/:id/url-health', async (c) => {
     const id = c.req.param('id');
     const p = panes.getById(id);
-    if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    if (!p) return c.json({ error: { code: 'not_found', message: ROW_NOT_FOUND } }, 404);
     const requested = c.req.query('url') ?? p.face_url ?? p.url;
     if (!requested) {
-      return c.json({ error: { code: 'bad_request', message: 'pane has no url to probe' } }, 400);
+      return c.json(
+        { error: { code: 'bad_request', message: 'there is no web address here to check' } },
+        400,
+      );
     }
     const hostClass = classifyUrlHost(requested);
     if (hostClass === null || hostClass === 'link_local') {
@@ -1023,7 +1047,7 @@ export function panesScopedRoutes(deps: {
     }
     if (target === null) {
       return c.json(
-        { error: { code: 'forbidden', message: 'url is not one of this pane’s urls' } },
+        { error: { code: 'forbidden', message: 'that url is not one of the addresses open here' } },
         403,
       );
     }
@@ -1037,7 +1061,7 @@ export function panesScopedRoutes(deps: {
   app.post('/:id/agent-backend', async (c) => {
     const id = c.req.param('id');
     const p = panes.getById(id);
-    if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    if (!p) return c.json({ error: { code: 'not_found', message: ROW_NOT_FOUND } }, 404);
     // Any EMPTY agent chat can be (re)assigned a harness — see
     // conversionRefusal for the two conditions and why the zero-message one
     // is enforced server-side rather than trusted from the UI.
@@ -1186,7 +1210,7 @@ export function panesScopedRoutes(deps: {
   app.post('/:id/as-terminal', async (c) => {
     const id = c.req.param('id');
     const p = panes.getById(id);
-    if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    if (!p) return c.json({ error: { code: 'not_found', message: ROW_NOT_FOUND } }, 404);
     const refusal = conversionRefusal(deps.db, p, deps.agentBridge);
     if (refusal) return c.json({ error: refusal }, 409);
     const workspaceId = tabs.getWorkspaceId(p.tab_id);
@@ -1235,7 +1259,7 @@ export function panesScopedRoutes(deps: {
   app.post('/:id/as-web', async (c) => {
     const id = c.req.param('id');
     const p = panes.getById(id);
-    if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    if (!p) return c.json({ error: { code: 'not_found', message: ROW_NOT_FOUND } }, 404);
     const refusal = conversionRefusal(deps.db, p, deps.agentBridge);
     if (refusal) return c.json({ error: refusal }, 409);
     try {
@@ -1266,9 +1290,12 @@ export function panesScopedRoutes(deps: {
   app.post('/:id/cwd', async (c) => {
     const id = c.req.param('id');
     const p = panes.getById(id);
-    if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    if (!p) return c.json({ error: { code: 'not_found', message: ROW_NOT_FOUND } }, 404);
     if (p.kind !== 'shell')
-      return c.json({ error: { code: 'bad_request', message: 'not a shell pane' } }, 400);
+      return c.json(
+        { error: { code: 'bad_request', message: 'only a terminal has a folder to switch' } },
+        400,
+      );
     const body = z
       .object({ cwd: z.string().min(1) })
       .safeParse(await c.req.json().catch(() => ({})));
@@ -1353,7 +1380,7 @@ export function panesScopedRoutes(deps: {
   app.post('/:id/seen', async (c) => {
     const id = c.req.param('id');
     const pane = panes.getById(id);
-    if (!pane) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    if (!pane) return c.json({ error: { code: 'not_found', message: ROW_NOT_FOUND } }, 404);
     // ─── READING A CHAT IS ACTIVITY, ON THE PHONE TOO ───────────────────────
     // The tab route stamps `last_activity_at` here for the same reason, and
     // stamping it THERE ONLY is a bug with a surface attached: desktop clears
@@ -1441,7 +1468,7 @@ export function panesScopedRoutes(deps: {
   app.post('/:id/move', async (c) => {
     const id = c.req.param('id');
     const pane = panes.getById(id);
-    if (!pane) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    if (!pane) return c.json({ error: { code: 'not_found', message: ROW_NOT_FOUND } }, 404);
     const body = z
       .object({
         to_tab_id: z.string().optional(),

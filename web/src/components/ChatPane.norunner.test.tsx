@@ -45,7 +45,7 @@ describe('a chat with no runner', () => {
 
   it("surfaces the server's reason verbatim when the start fails", () => {
     // What POST /api/panes/:id/respawn actually answers when ptyd is down.
-    const reason = 'cannot respawn pane: ptyd is not connected';
+    const reason = 'cannot restart this chat: ptyd is not connected';
     const out = html(<ChatNoRunner busy={false} error={reason} onStart={() => {}} />);
     expect(out).toContain(reason);
     // A live region, so it is announced without stealing composer focus.

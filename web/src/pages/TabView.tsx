@@ -13,6 +13,7 @@ import type { AppUrl, LayoutNode, PaneSpec, Tab } from '@muxpad/shared';
 import {
   collectLayoutLeaves,
   isAgentPane,
+  rowNounTitle,
   spliceLayoutAtTarget,
   tabShowsPaneStrip,
   tabTakesPanes,
@@ -1185,8 +1186,6 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     return ids[0] ?? null;
   })();
 
-  const paneNumber = (paneId: string): number => tab.panes.findIndex((p) => p.id === paneId) + 1;
-
   const paneLabel = (paneId: string): string => {
     const p = tab.panes.find((x) => x.id === paneId);
     // A user-set name wins over everything — that's the whole point of the
@@ -1205,7 +1204,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     if (title) return title;
     const cmd = p?.foreground_cmd?.trim();
     if (cmd) return cmd;
-    return `Pane ${paneNumber(paneId)}`;
+    return rowNounTitle(p);
   };
 
   // ── Pane-header rename (tab strip) ───────────────────────────────────────
@@ -1378,7 +1377,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
               const plus = tabTakesPanes(tab.panes) ? (
                 <NewTabButton
                   idleLabel="+"
-                  idleTitle="New pane"
+                  idleTitle="Open another chat or terminal here"
                   idleClassName="mobile-strip-add"
                   onCreate={() => void addPane()}
                 />
@@ -1489,7 +1488,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
             with nothing to split. The mobile branch above already refuses to
             paint an empty bar; this is the same rule on the other surface. */}
         {tabShowsPaneStrip(tab.panes) ? (
-          <nav className="desktop-tab-strip" aria-label="Panes">
+          <nav className="desktop-tab-strip" aria-label="Open in this tab">
             <div className="desktop-tab-strip-tabs" role="tablist">
               {paneIds.map((paneId) => {
                 const p = tab.panes.find((x) => x.id === paneId);
@@ -1558,8 +1557,8 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                           <button
                             type="button"
                             className="desktop-tab-close"
-                            title="Close pane"
-                            aria-label="Close pane"
+                            title="Close"
+                            aria-label={`Close ${paneLabel(paneId)}`}
                             onClick={() => closePane(paneId)}
                           >
                             {/* 13 → ~8px drawn X with a light stroke — reads
@@ -1582,7 +1581,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
               {tabTakesPanes(tab.panes) ? (
                 <NewTabButton
                   idleLabel="+"
-                  idleTitle="New pane"
+                  idleTitle="Open another chat or terminal here"
                   idleClassName="desktop-tab-add desktop-tab-add-plus"
                   onCreate={() => void addPane()}
                 />
@@ -1647,7 +1646,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
           just the mirror of the tabbed strip's mode toggle, in the same
           right-hand slot, to collapse the whole split into a tabbed view. */}
       {!isEmpty && (
-        <nav className="desktop-tab-strip -split" aria-label="Panes">
+        <nav className="desktop-tab-strip -split" aria-label="Open in this tab">
           <div className="desktop-tab-strip-tabs" />
           <div className="desktop-tab-strip-actions">
             <button
@@ -1665,13 +1664,13 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
       <main className="workspace-body">
         {isEmpty ? (
           <div className="workspace-empty">
-            <p>This tab has no panes.</p>
+            <p>Nothing is open here.</p>
             <button
               type="button"
               className="btn btn-primary"
               onClick={() => void splitFromPane(null, 'row')}
             >
-              New pane
+              Start a chat
             </button>
             <button type="button" className="workspace-empty-close" onClick={() => void closeTab()}>
               or close this tab
@@ -1771,8 +1770,8 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                       <button
                         type="button"
                         className="pane-chrome-btn pane-chrome-close"
-                        title="Close pane"
-                        aria-label="Close pane"
+                        title="Close"
+                        aria-label={`Close ${label}`}
                         onClick={() => void killPane(paneId)}
                       >
                         <SvgClose size={12} />
@@ -1800,9 +1799,9 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
       <ExternalOpenToasts
         currentTabId={tab.id}
         // Return null for ids that aren't in this tab's pane list so the
-        // toast can show the generic "A pane requested..." fallback
-        // instead of paneLabel's "Pane 1" position-based fallback (which
-        // would be misleading for an unknown id).
+        // toast can show its generic "Something in this tab requested..."
+        // fallback instead of paneLabel's "Terminal"-style one (which would
+        // name a thing this tab does not hold).
         paneLabel={(id) => (tab.panes.some((p) => p.id === id) ? paneLabel(id) : null)}
       />
     </div>
@@ -1921,8 +1920,8 @@ function PaneSurfaceSwitch({
         ref={triggerRef}
         type="button"
         className={`pane-surface-trigger${available ? ' is-available' : ''}`}
-        title={`Showing ${surfaceWord} — pane options`}
-        aria-label={`Showing ${surfaceWord} — pane options`}
+        title={`Showing ${surfaceWord} — view options`}
+        aria-label={`Showing ${surfaceWord} — view options`}
         aria-haspopup="menu"
         aria-expanded={menuAt !== null}
         onClick={(e) => {
@@ -1950,14 +1949,14 @@ function PaneSurfaceSwitch({
               type="button"
               role="menuitem"
               className="pane-web-switch-item pane-web-switch-convert"
-              title="Replace this terminal with a standalone web pane — the terminal (and anything running in it) is closed."
+              title="Replace this terminal with a web page of its own — the terminal (and anything running in it) is closed."
               onClick={() => {
                 close();
                 onSelect('url');
               }}
             >
               <SvgGlobe />
-              <span className="pane-web-switch-item-label">Convert to web pane</span>
+              <span className="pane-web-switch-item-label">Convert to web view</span>
               <span className="pane-web-switch-note">closes terminal</span>
             </button>
           </PaneFaceMenuList>

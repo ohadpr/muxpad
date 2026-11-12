@@ -1,3 +1,5 @@
+import { BASELINE_AGENT_MODE, coerceAgentMode } from './types.js';
+
 /**
  * IS THIS PANE AN AGENT — one rule, for the server and the chrome alike.
  *
@@ -37,6 +39,51 @@ export function isAgentPane(pane: AgentPaneLike | null | undefined): boolean {
   if (!pane) return false;
   return (pane.startup_cmd?.startsWith('muxpad agent') ?? false) || pane.face === 'chat';
 }
+
+/**
+ * WHAT A PERSON CALLS THIS ROW — the one place that decides it.
+ *
+ * A sidebar row holds one thing, and the owner's own words for the three are
+ * the vocabulary: "a chat, an agent or a terminal". "Pane" is how the server
+ * stores the thing, not what it is, and every sentence that reached a person
+ * with that word in it was the storage leaking into the product.
+ *
+ * Chat and Agent are the agent MODE, which is fixed at creation (no harness can
+ * rewrite a live session's instructions), so it is a stable identity and not a
+ * passing state. A row with no recorded mode reads as Agent for the reason
+ * {@link BASELINE_AGENT_MODE} gives.
+ *
+ * `web view` is the honest fourth answer for a `kind: 'url'` row, a page with
+ * no terminal behind it. None exist on the live install and the plan retires
+ * them, but calling one a terminal would be the same kind of lie this replaces.
+ */
+export type RowNoun = 'chat' | 'agent' | 'terminal' | 'web view';
+
+export interface RowNounLike extends AgentPaneLike {
+  kind?: string | null | undefined;
+  mode?: string | null | undefined;
+}
+
+export function rowNoun(pane: RowNounLike | null | undefined): RowNoun {
+  if (pane?.kind === 'url') return 'web view';
+  if (!isAgentPane(pane)) return 'terminal';
+  return (coerceAgentMode(pane?.mode) ?? BASELINE_AGENT_MODE) === 'chat' ? 'chat' : 'agent';
+}
+
+/** {@link rowNoun} at the start of a sentence or as a stand-alone label. */
+export function rowNounTitle(pane: RowNounLike | null | undefined): string {
+  const noun = rowNoun(pane);
+  return noun.charAt(0).toUpperCase() + noun.slice(1);
+}
+
+/**
+ * The answer to "act on this row" when the row is not there.
+ *
+ * Seventeen routes said `pane not found`, and the web shows an error's message
+ * as written. They now share this one sentence; the `code` beside it is what
+ * any caller branches on, and that is untouched.
+ */
+export const ROW_NOT_FOUND = 'that chat or terminal no longer exists';
 
 /**
  * Does this tab offer PANES — i.e. should its chrome show a `+` at all?

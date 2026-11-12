@@ -322,5 +322,5 @@ export function repairAllResumeTargets(
 export function describeRepair(repair: ResumeRepair, paneLabel?: string | null): string {
   const where = paneLabel ? `${paneLabel}: ` : '';
   const others = repair.candidates > 1 ? ` (${repair.candidates} had one; took the newest)` : '';
-  return `${where}recovered a stranded conversation — session ${repair.from?.slice(0, 8) ?? '?'} has no transcript, so this pane resumes ${repair.to.slice(0, 8)} instead${others}.`;
+  return `${where}recovered a stranded conversation — session ${repair.from?.slice(0, 8) ?? '?'} has no transcript, so it resumes ${repair.to.slice(0, 8)} instead${others}.`;
 }

@@ -1,3 +1,4 @@
+import { ROW_NOT_FOUND } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { rewriteResumeCmd } from '../agent-resume-repair.js';
 import { AgentSessionStore } from '../store/AgentSessionStore.js';
@@ -181,13 +182,13 @@ export async function runRebase(
 ): Promise<RebaseResult> {
   const panes = new PaneStore(deps.db);
   const pane = panes.getById(paneId);
-  if (!pane) return { ok: false, code: 'not_found', message: 'pane not found' };
+  if (!pane) return { ok: false, code: 'not_found', message: ROW_NOT_FOUND };
   const cmd = pane.startup_cmd ?? '';
   if (!cmd.startsWith('muxpad agent')) {
     return {
       ok: false,
       code: 'not_an_agent',
-      message: 'only an agent chat can be rebased — this pane runs no agent',
+      message: 'only a chat or an agent can be rebased — this is a terminal',
     };
   }
 
