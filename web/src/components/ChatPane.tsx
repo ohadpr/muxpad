@@ -43,7 +43,7 @@ import {
 } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { type AgentLaunchOptions, type RecentFolder, api } from '../api';
+import { type AgentLaunchOptions, ApiError, type RecentFolder, api } from '../api';
 import {
   AGENT_BACKENDS,
   type AgentBackendId,
@@ -2866,6 +2866,15 @@ export function ChatPane({
         });
       })
       .catch((e: unknown) => {
+        // NOT NOW IS NOT A FAILURE. The server refuses a rebase while a turn
+        // is in flight, messages are queued, or a sub-chat is still working —
+        // each of those would be lost inside the rebase, and each clears on its
+        // own in a moment. Its sentence already says which one it is and what
+        // to do, so it is shown as it is, as a warning rather than an error.
+        if (e instanceof ApiError && e.code === 'busy') {
+          setNotice({ text: `Not yet — ${e.message}.`, tone: 'info' });
+          return;
+        }
         setNotice({
           text: `Rebase failed, nothing was changed: ${e instanceof Error ? e.message : 'unknown'}`,
           tone: 'danger',

@@ -320,6 +320,14 @@ export function retireChat(deps: RetireDeps, tabId: string, reason: RetireReason
 export const JOB_SETTLE_MS = 90_000;
 
 /**
+ * How many settle windows to wait for a runner that is not connected, before
+ * deciding without it. 90 s apiece, so ~7.5 min — comfortably longer than the
+ * respawn sweep's three attempts (which end in `onRunnerDead`, a better answer
+ * than this one), and short enough that a round cannot sit open all day.
+ */
+const ABSENT_REARM_MAX = 5;
+
+/**
  * THE FLOOR UNDER EVERY HOLD.
  *
  * `holdOpen` is three reasons to keep a finished worker's row, and two of them
@@ -393,6 +401,13 @@ export class ChatRetirer {
     string,
     { timer: ReturnType<typeof setTimeout>; phase: 'done' | 'fatal' }
   >();
+  /**
+   * How many times a settle has been re-armed because NO RUNNER was connected
+   * to decide it, keyed by pane. See the `runner === null` branch in `settle`:
+   * the re-arm is what stops a round staying open for ever, and the count is
+   * what stops it re-arming for ever.
+   */
+  private readonly absentRearms = new Map<string, number>();
 
   constructor(
     private readonly deps: RetireDeps,
@@ -608,18 +623,88 @@ export class ChatRetirer {
     // cache has not caught up with. `undefined` is no probe wired at all, and
     // only `false` — connected and idle — is a worker that finished.
     const runner = this.deps.turnActive?.(paneId);
-    if (runner !== undefined && runner !== false) return false;
+    if (runner === true) return false;
+    if (runner === null) {
+      // NO RUNNER IS CONNECTED, so this turn-end was a disconnect and there is
+      // nothing here that can report. Dropping the settle — which is what this
+      // did — left the round open and the row reading `working` until the next
+      // server restart, for every worker whose respawn took longer than one
+      // settle window. So ask again, a window later.
+      //
+      // Bounded, because the question has to stop being asked: the respawn
+      // sweep spends at most three attempts and then gives up, and
+      // `onRunnerDead` closes the round with a crash. These re-arms only have
+      // to outlive that, and if they somehow outlive it too, the last one
+      // decides rather than leaving the round open — a report of a crash is
+      // worth more than a spinner that never ends.
+      const tries = (this.absentRearms.get(paneId) ?? 0) + 1;
+      if (tries <= ABSENT_REARM_MAX) {
+        this.absentRearms.set(paneId, tries);
+        this.arm(paneId, phase);
+        return false;
+      }
+      this.absentRearms.delete(paneId);
+      return this.finish(pane.tab_id, paneId, 'fatal');
+    }
+    this.absentRearms.delete(paneId);
+    // Read ONCE and passed both ways: the card has to say "awaiting you" using
+    // the same judgement that decided not to retire, or the row and its card
+    // would be free to disagree about the same worker.
+    return this.finish(pane.tab_id, paneId, phase);
+  }
+
+  /**
+   * THE DECISION ITSELF — report the job, then retire the row if nothing wants
+   * it kept. Reached once every condition in `settle` has been re-read.
+   *
+   * Its own method only so the no-runner path above can reach it with a
+   * `fatal` phase after it has stopped waiting for a runner that is not
+   * coming. Everything it reads it reads NOW, by the same rule as `settle`.
+   */
+  private finish(tabId: string, paneId: string, phase: 'done' | 'fatal'): boolean {
+    const index = clockIndex(this.deps.db);
     // Read ONCE and passed both ways: the card has to say "awaiting you" using
     // the same judgement that decided not to retire, or the row and its card
     // would be free to disagree about the same worker.
     const awaiting = this.deps.awaitingUser?.(paneId) === true;
     // NOW the transcript is complete, and only now is it worth summarising.
-    this.deps.onFinished?.(pane.tab_id, paneId, { crashed: phase === 'fatal', awaiting });
+    this.deps.onFinished?.(tabId, paneId, { crashed: phase === 'fatal', awaiting });
     // Retirement proper: pinning outranks it, and so does anything the agent
     // still has FOR YOU that retiring would bury.
-    if (index.get(pane.tab_id)?.pinned) return false;
-    if (this.holdOpen(e, awaiting)) return false;
-    return retireChat(this.deps, pane.tab_id, 'delivered');
+    if (index.get(tabId)?.pinned) return false;
+    if (this.holdOpen({ pane_id: paneId, phase }, awaiting)) return false;
+    return retireChat(this.deps, tabId, 'delivered');
+  }
+
+  /**
+   * A RUNNER CAME BACK IDLE — re-ask whether its job is over.
+   *
+   * Wired to ws.ts's idle `hello` (see `onRunnerIdle` there for the hole this
+   * closes). A worker that was killed mid-turn emitted `fatal`, which armed a
+   * settle; if the respawn took longer than the settle window, that settle
+   * found no runner and the question stopped being asked. This is the other
+   * end of it: the runner is here, it is idle, and the round is still open, so
+   * the job plausibly ended and nobody said so.
+   *
+   * Only arms. Every condition is re-read a window later, and a real
+   * turn-start cancels it — so a worker that came back to keep working is not
+   * touched. Silent (and cheap) for every pane that is not a quiet sub-chat
+   * with an open round, which is nearly all of them.
+   */
+  armIfIdleSubChat(paneId: string): boolean {
+    if (this.settling.has(paneId)) return false;
+    const pane = new PaneStore(this.deps.db).getById(paneId);
+    if (!pane) return false;
+    const index = clockIndex(this.deps.db);
+    const row = index.get(pane.tab_id);
+    if (!row || row.retired_at !== null || row.pinned) return false;
+    if (!isSubChat(index, pane.tab_id)) return false;
+    if (!new SpawnRoundStore(this.deps.db).openRound(pane.tab_id)) return false;
+    // `fatal` is not assumed here: this path cannot tell a worker that crashed
+    // from one that simply reconnected after a quiet finish, and claiming a
+    // crash muxpad was not told about is the one wrong answer.
+    this.arm(paneId, 'done');
+    return true;
   }
 
   /**

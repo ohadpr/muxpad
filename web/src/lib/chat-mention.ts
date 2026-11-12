@@ -196,7 +196,7 @@ type TabWithLifecycle = {
   /** The spawn report's three columns. All three absent together, always. */
   spawn_report?: string | null;
   spawn_report_at?: number | null;
-  spawn_report_state?: 'ok' | 'none' | 'crashed' | 'awaiting' | null;
+  spawn_report_state?: 'ok' | 'none' | 'crashed' | 'awaiting' | 'failed' | null;
 };
 
 /**
@@ -588,6 +588,11 @@ export function spawnState(chat: MentionChat): SpawnState {
   // revived and is working again is working.
   if (chat.status === 'working' || chat.status === 'blocked') return 'working';
   if (chat.report?.state === 'crashed') return 'failed';
+  // WE TRIED TO SUMMARISE IT AND LOST IT. The parent's delivery already says
+  // `failed` for this round, and the card used to fall through to the green
+  // `done` below — the same worker described two opposite ways in two places,
+  // with the reassuring one on the thing you actually look at.
+  if (chat.report?.state === 'failed') return 'failed';
   // IT STOPPED TO ASK YOU SOMETHING. Ahead of the `done` check, because an
   // awaiting worker deliberately does NOT retire — so `!chat.done` would read it
   // as still working, and a spinner is as wrong here as the green tick was.

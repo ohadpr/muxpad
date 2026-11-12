@@ -33,6 +33,7 @@ import { AgentQueueStore } from '../store/AgentQueueStore.js';
 import { AgentSessionStore } from '../store/AgentSessionStore.js';
 import { LOCAL_NODE_ID, NodeStore } from '../store/NodeStore.js';
 import { PaneStore } from '../store/PaneStore.js';
+import { SpawnRoundStore } from '../store/SpawnRoundStore.js';
 import { TabStore } from '../store/TabStore.js';
 import { WorkspaceStore } from '../store/WorkspaceStore.js';
 import type { TabActivity } from '../tab-activity.js';
@@ -834,6 +835,11 @@ export function panesScopedRoutes(deps: {
           });
         },
         submit: (paneId, text) => bridge.submitSend(paneId, text),
+        // The quiesce probes — see RebaseDeps. A rebase replaces the
+        // conversation file, so anything in flight when it runs is lost.
+        turnActive: (paneId) => bridge.turnActive(paneId),
+        queued: (paneId) => new AgentQueueStore(deps.db).count(paneId),
+        openRounds: (tabId) => new SpawnRoundStore(deps.db).openRoundsByParent(tabId).length,
       },
       id,
       mode,
@@ -844,7 +850,12 @@ export function panesScopedRoutes(deps: {
           ? 404
           : result.code === 'no_briefing' || result.code === 'respawn_failed'
             ? 503
-            : 400;
+            : // 409: nothing is wrong with the request, the chat is just not
+              // quiet. The web turns this one into "try again in a moment"
+              // rather than an error about the chat.
+              result.code === 'busy'
+              ? 409
+              : 400;
       return c.json({ error: { code: result.code, message: result.message } }, status);
     }
     return c.json(result);

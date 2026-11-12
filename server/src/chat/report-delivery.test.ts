@@ -153,6 +153,99 @@ describe('report delivery — the join', () => {
     expect(sent[0]?.text).not.toContain(`muxpad agent send p-${p}`);
   });
 
+  /**
+   * A QUEUED DELIVERY IS NOT AN ARRIVED ONE.
+   *
+   * The round is stamped `delivered_at` before the send, because a batch
+   * delivered twice is much the worse failure. That is safe for a message the
+   * queue will drain — but a queue also gets WIPED: the respawn sweep clears
+   * it when it gives up on the runner, and the user can clear or cancel by
+   * hand. The stamp then said "delivered" about a report nobody would ever
+   * read, and the sweep only retries rounds with no stamp.
+   */
+  /**
+   * THE ROW MUST NOT SAY `done` ABOUT WHAT THE MESSAGE CALLS `failed`.
+   *
+   * A round whose summary never arrived is delivered as `failed` in the
+   * parent's message — it is past the result grace, so the generation was
+   * lost. Nothing wrote that verdict anywhere, so the drawer and the card read
+   * a silent-but-delivered round as a green "done": the same worker described
+   * two opposite ways, with the reassuring version on the thing you look at.
+   */
+  it('writes the FAILED verdict it just told the parent about', () => {
+    const p = parent('P');
+    const c = child('C', p, { report: null, state: null });
+    // Past the grace: the summary is not merely late, it was lost.
+    clock = NOW + RESULT_GRACE_MS + 10_000;
+    make().sweep();
+    expect(sent[0]?.text).toContain('(no report)');
+    const row = rounds().listByTab(c)[0];
+    expect(row?.report_state).toBe('failed');
+  });
+
+  it('but never over a result that beat it', () => {
+    const p = parent('P');
+    const c = child('C', p);
+    make().onReport(c);
+    expect(rounds().listByTab(c)[0]?.report_state).toBe('ok');
+  });
+
+  describe('a delivery whose queue row dies unspent', () => {
+    it('goes back to undelivered, so the sweep can try again', () => {
+      const p = parent('P');
+      const c = child('C', p);
+      result = { status: 'queued', id: 'q1' };
+      const delivery = make();
+      delivery.onReport(c);
+      expect(delivered(c), 'stamped on the way into the queue').not.toBeNull();
+
+      // The parent's runner was given up on, and its queue wiped.
+      expect(delivery.noteQueueDropped(['q1'])).toBe(1);
+      expect(delivered(c)).toBeNull();
+
+      // …and the sweep now sees it again.
+      sent = [];
+      result = { status: 'sent' };
+      delivery.sweep();
+      expect(sent).toHaveLength(1);
+    });
+
+    it('leaves a delivery that was actually RELAYED alone', () => {
+      // The ordinary case, and the one that must not regress: a queue row that
+      // ran is removed by the drain, so its id never reaches here. An unknown
+      // id is somebody's own cancelled message.
+      const p = parent('P');
+      const c = child('C', p);
+      result = { status: 'queued', id: 'q1' };
+      const delivery = make();
+      delivery.onReport(c);
+      const stamp = delivered(c);
+
+      expect(delivery.noteQueueDropped(['q-someone-elses-message'])).toBe(0);
+      expect(delivered(c)).toBe(stamp);
+    });
+
+    it('cannot resurrect a round delivered at some earlier moment', () => {
+      // `undeliver` is scoped to the stamp it is undoing. Two drops of the
+      // same queue id must not un-stamp a LATER, real delivery.
+      const p = parent('P');
+      const c = child('C', p);
+      result = { status: 'queued', id: 'q1' };
+      const delivery = make();
+      delivery.onReport(c);
+      delivery.noteQueueDropped(['q1']);
+
+      clock += 5000;
+      result = { status: 'sent' };
+      delivery.sweep();
+      const real = delivered(c);
+      expect(real).not.toBeNull();
+
+      expect(delivery.noteQueueDropped(['q1'])).toBe(0);
+      expect(delivered(c)).toBe(real);
+    });
+  });
+
   it('tells the parent to review it rather than relay it', () => {
     const p = parent('P');
     make().onReport(child('C', p));

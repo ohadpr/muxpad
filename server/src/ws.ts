@@ -539,6 +539,30 @@ export function attachWsServer(deps: {
    * Called synchronously from the frame handler, so it must never throw.
    */
   onReportStated?: (tabId: string, text: string) => void;
+  /**
+   * A runner said hello and is NOT mid-turn — wired to
+   * `ChatRetirer.armIfIdleSubChat`, which re-arms a retirement settle for a
+   * worker whose last turn ended while no runner was connected to decide it.
+   *
+   * Same seam shape and same reason as `onRunnerDead` above. Called
+   * synchronously from the frame handler, so it must never throw.
+   */
+  onRunnerIdle?: (paneId: string) => void;
+  /**
+   * These queue rows were destroyed WITHOUT being relayed — the give-up wipe,
+   * or the user's own clear/cancel. Wired to
+   * `ReportDelivery.noteQueueDropped`, which un-stamps any worker report that
+   * was riding one of them so the sweep delivers it again.
+   *
+   * A queued delivery is stamped `delivered_at` the moment it is accepted, and
+   * before this nothing told the delivery layer that its message had been
+   * thrown away: the round read delivered and the sweep (which only retries
+   * unstamped rounds) never looked at it again. One lost worker result per
+   * parent that died with a report in its queue.
+   *
+   * Called synchronously, so it must never throw.
+   */
+  onQueueDropped?: (queueIds: readonly string[]) => void;
 }): WsServerHandle {
   /**
    * Count this socket as alive on anything it sends.
@@ -1443,7 +1467,14 @@ export function attachWsServer(deps: {
           // The agent is dead for good — drop its orphaned queue so the pending
           // bubbles don't linger, and a much-later hand-restart (a fresh session)
           // doesn't suddenly flood them all in. New sends are already rejected.
-          if (queue.clear(pane.id) > 0) broadcastQueue(pane.id);
+          // Read the rows BEFORE wiping them: a worker's report may be
+          // sitting in there, already stamped delivered, and the stamp has to
+          // be taken back or the result is lost (see `onQueueDropped`).
+          const dropped = queue.list(pane.id).map((row) => row.id);
+          if (queue.clear(pane.id) > 0) {
+            broadcastQueue(pane.id);
+            deps.onQueueDropped?.(dropped);
+          }
           // …AND ITS TAB'S LIFECYCLE ENDS TOO, if it is a sub-chat. This is the
           // only place that knows a runner is gone FOR GOOD rather than for the
           // moment, and until it said so the tab kept `retired_at IS NULL` for
@@ -2181,6 +2212,24 @@ export function attachWsServer(deps: {
             if (conn.turnActive) {
               bcast({ t: 'turn-start' });
               emitTurn('start');
+            } else {
+              // AN IDLE RECONNECT CAN BE THE END OF A JOB NOBODY WILL REPORT.
+              //
+              // Every sub-chat's lifecycle hangs off a turn ENDING. A worker
+              // killed mid-turn emits its `fatal` above, which arms a settle —
+              // but a settle only decides once the runner is back, and a
+              // respawn that takes longer than the settle window (a failed
+              // first attempt, a ptyd outage) finds nothing left to decide
+              // with and drops. The runner then comes back HERE, idle, and no
+              // turn of its will ever end again: the round stays open, the row
+              // reads `working` for ever, and only the next server restart
+              // recovers it.
+              //
+              // So an idle hello re-asks the ordinary question. Arming is not
+              // deciding — every condition is re-read a window later, and a
+              // real turn-start disarms it — so this is safe for a worker that
+              // came back to keep going.
+              deps.onRunnerIdle?.(paneId);
             }
             emitChange();
             // Converge the runner on the DB's mode. A runner that booted from
@@ -2775,7 +2824,20 @@ export function attachWsServer(deps: {
             // Balance the pair on the GLOBAL bus too. A SIGKILLed runner used
             // to emit `start` and never `done`, so `muxpad agent wait` blocked
             // to timeout and the Archiver missed its realtime enqueue.
-            emitTurn('done');
+            //
+            // ── AND IT IS `fatal`, NOT `done` ───────────────────────────────
+            // A turn was IN FLIGHT when the socket died, so the work it was
+            // doing was cut off: a resume starts a fresh turn, it does not
+            // continue this one. Reported as `done` — which it was until an
+            // adversarial review of the sub-chat lifecycle found this — a
+            // worker killed mid-job reconnected idle, the retirement settle
+            // read "connected and idle", and the parent got a green "finished"
+            // card plus a confident summary of half-done work. The one thing
+            // this layer knows is that the turn did not reach its own end;
+            // `fatal` is how that fact is spelled on the bus, and everything
+            // downstream (the crashed mark on the card, `holdOpen` keeping the
+            // row) already handles it.
+            emitTurn('fatal');
           }
           emitChange();
         };
@@ -3324,12 +3386,21 @@ export function attachWsServer(deps: {
           if (msg.t === 'queue-cancel') {
             // Drop a still-pending message before it runs. Broadcast the new
             // queue to every view (this cancel followed the user across devices).
-            if (typeof msg.id === 'string' && queue.remove(msg.id, chatPaneId))
+            if (typeof msg.id === 'string' && queue.remove(msg.id, chatPaneId)) {
               broadcastQueue(chatPaneId);
+              // Cancelling a worker's report is allowed — it is a message in
+              // the queue like any other — but it must not leave the round
+              // marked delivered, or the result is gone for good.
+              deps.onQueueDropped?.([msg.id]);
+            }
             return;
           }
           if (msg.t === 'queue-clear') {
-            if (queue.clear(chatPaneId) > 0) broadcastQueue(chatPaneId);
+            const dropped = queue.list(chatPaneId).map((row) => row.id);
+            if (queue.clear(chatPaneId) > 0) {
+              broadcastQueue(chatPaneId);
+              deps.onQueueDropped?.(dropped);
+            }
             return;
           }
           if (msg.t !== 'send' || typeof msg.text !== 'string' || !msg.text.trim()) return;

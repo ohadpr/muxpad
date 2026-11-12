@@ -1229,6 +1229,16 @@ describe('spawnState — the live status outranks a stale retirement', () => {
     expect(spawnState(retired())).toBe('delivered');
   });
 
+  it('is FAILED when the report was lost, not a green done', () => {
+    // `failed` means "we tried to summarise it and lost it". The parent's
+    // delivery message already says so for that round; the card fell through
+    // to the green `done` below it, so one worker was described two opposite
+    // ways and the reassuring version was the one on screen.
+    expect(
+      spawnState(retired({ report: { text: null, state: 'failed', at: 1 }, status: 'idle' })),
+    ).toBe('failed');
+  });
+
   it('and draws NO completion entry while it is working', () => {
     // Nothing arrives at the bottom of the conversation for work that is still
     // going on — which is the whole rule the two-card split rests on.

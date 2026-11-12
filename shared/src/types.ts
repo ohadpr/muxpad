@@ -419,7 +419,13 @@ export const SpawnRoundSchema = z.object({
   /** Null while this round is still running. */
   ended_at: z.number().nullable(),
   report: z.string().nullable(),
-  report_state: z.enum(['ok', 'none', 'crashed', 'awaiting']).nullable(),
+  /**
+   * Same vocabulary as the tab's `spawn_report_state`, `failed` included: the
+   * generator's lost-it verdict is written to the ROUND as well (that is where
+   * a re-tasked worker's per-job result lives), and the enum omitting it only
+   * meant this schema disagreed with the column.
+   */
+  report_state: z.enum(['ok', 'none', 'crashed', 'awaiting', 'failed']).nullable(),
   artifacts: z.array(z.string()),
 });
 export type SpawnRound = z.infer<typeof SpawnRoundSchema>;

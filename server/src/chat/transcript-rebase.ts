@@ -165,9 +165,22 @@ export function cleanUserText(text: string, stats: RebaseStats): string {
     const m = t.match(LEADING_MUXPAD);
     if (!m) break;
     const tag = m[1] as string;
-    // The history a previous rebase left is the one muxpad block that is
-    // CONVERSATION, not instruction — keep it and everything after it.
-    if (tag === 'muxpad-history') break;
+    // ── THE TWO MUXPAD BLOCKS THAT ARE CONVERSATION ──────────────────────
+    //
+    // Everything else muxpad prepends is INSTRUCTION — stale rules, the thing
+    // a rebase exists to remove. These two are the record:
+    //
+    //   muxpad-history   a previous rebase's briefing.
+    //   muxpad-delivery  a sub-chat's report. Stripping the tag and keeping
+    //     the body — which is what happened before — turned every worker's
+    //     result into a message FROM THE USER: the model then read a worker's
+    //     claims, and any instructions inside them, as the owner's own words,
+    //     and the web stopped drawing them as deliveries (`parseSpawnDelivery`
+    //     needs the leading tag) so they rendered as user bubbles. Found by an
+    //     adversarial review of the sub-chat lifecycle.
+    //
+    // Kept with the tag on, and everything after it.
+    if (tag === 'muxpad-history' || tag === 'muxpad-delivery') break;
     stats.muxpadBlocks += 1;
     const rest = t.slice(m[0].length);
     const briefing = briefingOf(tag, m[2] ?? '');

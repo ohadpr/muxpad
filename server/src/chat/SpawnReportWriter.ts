@@ -70,14 +70,25 @@ export class SpawnReportWriter {
   /** Tabs whose task label has been ATTEMPTED this process — see `start`. */
   private readonly taskTried = new Set<string>();
   /**
-   * Tabs whose report has already been RETRIED this process.
+   * ROUNDS whose report has already been RETRIED this process, keyed
+   * `tab:round`.
    *
-   * One retry, ever, per worker per boot. The gate in spawn-report.ts assumes
+   * One retry, ever, per JOB per boot. The gate in spawn-report.ts assumes
    * another turn-end will come along to try again on; a RETIRED worker never
    * finishes another turn, so without this a transient failure was permanent —
    * three of six children in one afternoon, each with the attempt stamped and no
    * state at all. In memory rather than a column because what it bounds is a
    * BROKEN INSTALL spinning, and a restart is a fine moment to try once more.
+   *
+   * ── WHY IT IS KEYED BY ROUND AND NOT BY TAB ──────────────────────────────
+   * It was keyed by tab, which meant one retry per WORKER for the life of the
+   * process — so a worker sent back to do more work had spent its only retry
+   * on round 1, and every later round got a single attempt. Measured in this
+   * install: 3 of 330 first rounds ended `failed`, against 29 of 224 later
+   * rounds (13%). The parent was told "(no report)" for real work, and the
+   * second job of a re-tasked worker is exactly the work an orchestrator is
+   * waiting on. What the bound is FOR is a broken install spinning, and that
+   * is still bounded: one retry per job, not per process.
    */
   private readonly retried = new Set<string>();
   private unsubscribe: (() => void) | null = null;
@@ -282,10 +293,11 @@ export class SpawnReportWriter {
         // describe a lost generation to the user, not to settle it.
         if (!current()) return null;
         if (first && first.state !== 'failed') return first;
-        if (this.retried.has(tabId)) return first;
+        const retryKey = `${tabId}:${round?.id ?? 'no-round'}`;
+        if (this.retried.has(retryKey)) return first;
         const row = new TabStore(this.db).getById(tabId);
         if (!row || (row.spawn_report_state && row.spawn_report_state !== 'failed')) return first;
-        this.retried.add(tabId);
+        this.retried.add(retryKey);
         return (await attempt(true)) ?? first;
       })
       .then((write) => {
@@ -440,15 +452,16 @@ export class SpawnReportWriter {
     if (rows.length === 0) return;
     console.log(`[spawn-report] boot sweep: retrying ${rows.length} worker(s) with no summary`);
     for (const { tab_id: tabId, pane_id: paneId } of rows) {
-      if (this.retried.has(tabId)) continue;
-      this.retried.add(tabId);
+      const round = new SpawnRoundStore(this.db).lastEnded(tabId);
+      const retryKey = `${tabId}:${round?.id ?? 'no-round'}`;
+      if (this.retried.has(retryKey)) continue;
+      this.retried.add(retryKey);
       // `force`, for the same reason the turn-end retry needs it: the failed
       // attempt already charged the interval, and the gate would refuse.
       //
       // crashed/awaiting are NOT re-asserted here. They are facts about a turn
       // this process never saw, and a row that carries either one is excluded by
       // the query anyway — only a NULL or `failed` state gets this far.
-      const round = new SpawnRoundStore(this.db).lastEnded(tabId);
       const run = maybeWriteSpawnReport(this.db, tabId, paneId, this.model, {
         crashed: false,
         awaiting: false,

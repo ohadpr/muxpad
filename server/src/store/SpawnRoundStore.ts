@@ -412,6 +412,32 @@ export class SpawnRoundStore {
   }
 
   /**
+   * WRITE A VERDICT ON A ROUND THAT HAS NONE — by id, with no closure check.
+   *
+   * `writeResult` is for the summariser: it carries sentences and refuses a
+   * round that has been reopened since. This is for the DELIVERY, which has
+   * just told the parent `failed` about a round that said nothing, and has to
+   * leave that same verdict where every card reads it. Without it the message
+   * said failed and the drawer said done, about one worker, at the same time —
+   * and the reassuring one was on the thing you look at.
+   *
+   * Scoped to rounds that are still silent (`report_state IS NULL AND report IS
+   * NULL`), so a late result that beat this write is never overwritten.
+   */
+  markStateIfSilent(ids: readonly string[], state: 'failed'): number {
+    if (ids.length === 0) return 0;
+    const stmt = this.db.prepare(
+      `UPDATE spawn_rounds SET report_state = ?
+        WHERE id = ? AND report_state IS NULL AND report IS NULL`,
+    );
+    return this.db.transaction(() => {
+      let n = 0;
+      for (const id of ids) n += stmt.run(state, id).changes;
+      return n;
+    })();
+  }
+
+  /**
    * Undo `markDelivered` — the send was refused, so it never arrived.
    *
    * SCOPED TO THE STAMP IT IS UNDOING (`at`), not a blanket clear by id. A bare

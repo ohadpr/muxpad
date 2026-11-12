@@ -428,3 +428,102 @@ describe('runRebase — the transcript rebase is the default', () => {
     expect(discarded).toEqual(['/x/new-sid.jsonl']);
   });
 });
+
+/**
+ * A REBASE REPLACES THE CONVERSATION FILE, SO NOTHING MAY BE IN FLIGHT.
+ *
+ * Found by an adversarial review of the chat lifecycle, and the repro is one
+ * click: send a long task, press Rebase. The transcript is snapshotted, the
+ * briefing may then wait on a model call, and only then is the runner killed —
+ * so anything arriving in that window goes to the OLD runner and lands only in
+ * the OLD file. A turn loses its answer. A queued message loses itself. A
+ * sub-chat's report is stamped delivered into a session that no longer exists.
+ *
+ * The fix is a refusal, because there is nothing else to do with a
+ * half-answered turn except let it finish — and the user is choosing the
+ * moment anyway.
+ */
+describe('runRebase refuses while the chat is busy', () => {
+  const ok = { status: 'queued' as const };
+  const base = (db: Database.Database) => ({
+    db,
+    respawn: async () => {
+      throw new Error('must not respawn');
+    },
+    submit: () => ok,
+    transcript: async () => {
+      throw new Error('must not touch the transcript');
+    },
+  });
+
+  it('refuses a turn in flight, naming what would be lost', async () => {
+    const { db, paneId } = fixture('muxpad agent --resume old-sid');
+    const r = await runRebase({ ...base(db), turnActive: () => true }, paneId);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.code).toBe('busy');
+    expect(r.message).toMatch(/middle of a turn/);
+  });
+
+  it('refuses while messages are queued', async () => {
+    const { db, paneId } = fixture('muxpad agent --resume old-sid');
+    const r = await runRebase({ ...base(db), queued: () => 2 }, paneId);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.code).toBe('busy');
+    expect(r.message).toMatch(/2 messages/);
+  });
+
+  it('refuses while a sub-chat is still working', async () => {
+    // Its report would be delivered into a session that no longer exists, and
+    // the round is stamped delivered either way — the result is simply gone.
+    const { db, paneId } = fixture('muxpad agent --resume old-sid');
+    const r = await runRebase({ ...base(db), openRounds: () => 1 }, paneId);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.code).toBe('busy');
+    expect(r.message).toMatch(/1 sub-chat is still working/);
+  });
+
+  it('runs when everything is quiet', async () => {
+    const { db, paneId } = fixture('muxpad agent --resume old-sid');
+    const r = await runRebase(
+      {
+        db,
+        respawn: async () => {},
+        submit: () => ok,
+        turnActive: () => false,
+        queued: () => 0,
+        openRounds: () => 0,
+      },
+      paneId,
+    );
+    expect(r.ok).toBe(true);
+  });
+
+  it('and a second rebase of the same chat is refused, not raced', async () => {
+    // A double-click. Two rebases each mint a transcript and respawn; the last
+    // `setStartupCmd` wins and the other file is orphaned on disk and in the
+    // archive.
+    const { db, paneId } = fixture('muxpad agent --resume old-sid');
+    let release = () => {};
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    const first = runRebase(
+      {
+        db,
+        respawn: async () => {
+          await held;
+        },
+        submit: () => ok,
+      },
+      paneId,
+    );
+    const second = await runRebase({ ...base(db) }, paneId);
+    expect(second.ok).toBe(false);
+    if (!second.ok) expect(second.code).toBe('busy');
+    release();
+    expect((await first).ok).toBe(true);
+  });
+});

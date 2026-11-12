@@ -90,6 +90,28 @@ export interface RebaseDeps {
   transcript?: (db: Database.Database, paneId: string) => Promise<TranscriptRebaseResult>;
   /** Injected in tests; defaults to deleting the file. */
   discard?: (path: string) => void;
+  /**
+   * ── THE QUIESCE PROBES ───────────────────────────────────────────────────
+   *
+   * A rebase REPLACES THE CONVERSATION FILE and then kills the runner. Between
+   * the snapshot and the kill it may wait on a model call (the briefing), and
+   * anything that arrives in that window goes to the OLD runner and lands only
+   * in the OLD file: a turn in flight loses its answer, a message loses itself,
+   * and a sub-chat's report is marked delivered to a session that no longer
+   * exists. Found by an adversarial review of the chat lifecycle, and the
+   * repro is one click: send a long task, press Rebase.
+   *
+   * So the facts that say "not now" are asked for before anything is touched.
+   * Each is optional and `undefined` means "nobody wired a probe", which reads
+   * as quiet — the pre-existing behaviour, and what every test that does not
+   * care about this gets.
+   */
+  /** Is a turn in flight? (the runner registry's own answer) */
+  turnActive?: (paneId: string) => boolean | null;
+  /** How many messages are waiting in this pane's send queue. */
+  queued?: (paneId: string) => number;
+  /** How many workers this chat is still waiting on. */
+  openRounds?: (tabId: string) => number;
 }
 
 /**
@@ -147,7 +169,8 @@ export type RebaseResult =
         | 'elsewhere'
         | 'no_briefing'
         | 'not_delivered'
-        | 'respawn_failed';
+        | 'respawn_failed'
+        | 'busy';
       message: string;
     };
 
@@ -168,6 +191,61 @@ export async function runRebase(
     };
   }
 
+  // ── NOT WHILE SOMETHING IS IN FLIGHT ──────────────────────────────────────
+  //
+  // See the quiesce probes on RebaseDeps for what is lost. The refusal is the
+  // whole fix: there is nothing to do with a turn that is half-answered except
+  // let it finish, and a rebase is a deliberate act whose moment the user is
+  // choosing anyway.
+  const busy = whyBusy(deps, pane.tab_id, paneId);
+  if (busy) return { ok: false, code: 'busy', message: busy };
+
+  // …AND ONE AT A TIME. Two rebases of one chat each mint a transcript and
+  // respawn; the last `setStartupCmd` wins and the other file is orphaned on
+  // disk and in the archive. A double-click is the way in.
+  if (inFlight.has(paneId)) {
+    return { ok: false, code: 'busy', message: 'this chat is already being rebased' };
+  }
+  inFlight.add(paneId);
+  try {
+    return await rebase(deps, panes, pane, paneId, cmd, mode);
+  } finally {
+    inFlight.delete(paneId);
+  }
+}
+
+/** Rebases in flight, by pane — see the double-click note in `runRebase`. */
+const inFlight = new Set<string>();
+
+/**
+ * Why a rebase must not run right now, or null.
+ *
+ * Phrased for a person, because this reaches the user as the button's error:
+ * what is in the way, and therefore what they can do about it.
+ */
+function whyBusy(deps: RebaseDeps, tabId: string, paneId: string): string | null {
+  if (deps.turnActive?.(paneId) === true) {
+    return 'this chat is in the middle of a turn — its answer would be lost. Wait for it to finish, or stop it first';
+  }
+  const queued = deps.queued?.(paneId) ?? 0;
+  if (queued > 0) {
+    return `${queued} message${queued === 1 ? '' : 's'} are still queued here — they would not survive the rebase`;
+  }
+  const rounds = deps.openRounds?.(tabId) ?? 0;
+  if (rounds > 0) {
+    return `${rounds} sub-chat${rounds === 1 ? ' is' : 's are'} still working — their results would arrive in a session that no longer exists`;
+  }
+  return null;
+}
+
+async function rebase(
+  deps: RebaseDeps,
+  panes: PaneStore,
+  pane: NonNullable<ReturnType<PaneStore['getById']>>,
+  paneId: string,
+  cmd: string,
+  mode: RebaseMode,
+): Promise<RebaseResult> {
   if (mode !== 'fresh' && !transcriptIsLocal(deps.db, paneId)) {
     return {
       ok: false,

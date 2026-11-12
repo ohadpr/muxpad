@@ -239,6 +239,62 @@ describe('tabs routes', () => {
     }
   });
 
+  /**
+   * DELETING A CHAT SAYS ITS PANES ARE GONE.
+   *
+   * This path emitted only `tab.removed`, because clients infer the pane
+   * removals from it. The SERVER-SIDE subscribers do not infer: voice keys on
+   * `pane.removed` to hang up, and a voice call is billed by the wall clock —
+   * so a call on a chat you deleted kept running on the daily cap until its
+   * own TTL. (push's `lastAttention` and cron's `inflight` leaked their entries
+   * the same way, more cheaply.)
+   */
+  it('DELETE /tabs emits pane.removed for each pane, before tab.removed', async () => {
+    const events = new EventBus();
+    const local = await createTestApp({ db: openDb(':memory:'), dataDir: tmp, events });
+    try {
+      const ws = (await (
+        await local.app.request('/api/workspaces', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name: 'W' }),
+        })
+      ).json()) as { id: string };
+      const created = (await (
+        await local.app.request('/api/tabs', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name: 'T', workspace_id: ws.id }),
+        })
+      ).json()) as { id: string };
+      const paneId = (await (
+        await local.app.request(`/api/tabs/${created.id}/panes`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ kind: 'url', url: 'https://x.example.com' }),
+        })
+      ).json()) as { id: string };
+      expect(paneId.id, 'the fixture needs a pane to lose').toBeTruthy();
+
+      const received: MuxpadEvent[] = [];
+      events.subscribe((e) => received.push(e));
+      await local.app.request(`/api/tabs/${created.id}`, { method: 'DELETE' });
+
+      const kinds = received.map((e) => e.type);
+      const gone = received.find((e) => e.type === 'pane.removed');
+      expect(gone, 'the pane said it was gone').toBeDefined();
+      if (gone?.type === 'pane.removed') {
+        expect(gone.pane_id).toBe(paneId.id);
+        expect(gone.tab_id).toBe(created.id);
+      }
+      // Order matters for a subscriber that drops a tab's whole bookkeeping on
+      // `tab.removed`: the pane fact has to land while the tab is still known.
+      expect(kinds.indexOf('pane.removed')).toBeLessThan(kinds.indexOf('tab.removed'));
+    } finally {
+      await local.cleanup();
+    }
+  });
+
   // ── tab → workspace move (POST /api/tabs/:id/move) ────────────────────
 
   const mkWorkspace = async (name: string): Promise<string> =>

@@ -188,6 +188,62 @@ describe('a retired sub-chat does not come back wearing a READY dot', () => {
 });
 
 /**
+ * A WORKER KILLED MID-TURN IS A CRASH, NOT A DELIVERY.
+ *
+ * Found by an adversarial review of the sub-chat lifecycle. The teardown
+ * balanced its turn pair with `done`, which is true of the PAIR and false
+ * about the work: a resume starts a fresh turn, it never continues the one
+ * that was cut off. So the retirement settle saw a worker that had ended a
+ * turn and come back idle, retired it as `delivered`, and the parent got a
+ * green "finished" card and a confident summary of half-done work.
+ *
+ * Driven here rather than in the unit file because the thing under test IS the
+ * phase ws.ts puts on the bus when a socket dies — the retirer only believes
+ * what it is told.
+ */
+describe('a runner that dies mid-turn', () => {
+  it('ends its turn FATAL, so the job is reported as crashed', async () => {
+    const db = openDb(':memory:');
+    const tabs = new TabStore(db);
+    const panes = new PaneStore(db);
+    const events = new EventBus();
+    const cache = new PtydCache();
+    const w = new WorkspaceStore(db).create({ name: 'W' });
+    const top = tabs.create({ name: 'top', layout: 'p1', workspace_id: w.id });
+    const pane = panes.create({
+      tab_id: top.id,
+      shell: '/bin/cat',
+      cwd: '/tmp',
+      startup_cmd: 'muxpad agent',
+      face: 'chat',
+    });
+    const phases: string[] = [];
+    events.subscribe((e) => {
+      if (e.type === 'agent_turn') phases.push(e.phase);
+    });
+    const http = createServer();
+    const wsServer = attachWsServer({ http, db, ptyd: stubPtyd(), cache, events });
+    await new Promise<void>((r) => http.listen(0, r));
+    const port = (http.address() as AddressInfo).port;
+    cleanup = async () => {
+      await wsServer.close();
+      await new Promise<void>((r) => http.close(() => r()));
+    };
+
+    const runner = await openSock(`ws://127.0.0.1:${port}/ws/agent-runner/${pane.id}`);
+    runner.send(hello);
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    await waitUntil(() => phases.includes('start'));
+    // The runner dies with the turn still open — a SIGKILL, an OOM, a ptyd
+    // bounce. No `turn-done` is ever sent.
+    runner.terminate();
+
+    await waitUntil(() => phases.length > 1);
+    expect(phases).toEqual(['start', 'fatal']);
+  });
+});
+
+/**
  * WHETHER A ROW GOES BOLD MUST NOT DEPEND ON HOW LONG THE TURN TOOK.
  *
  * Reported as "the sidebar isn't consistent in marking tabs that have new
