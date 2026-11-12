@@ -31,6 +31,46 @@ describe('findAttachmentRefs', () => {
     ]);
   });
 
+  // What the composer writes is a FILESYSTEM path. A URL that happens to
+  // contain /attachments/ is the user's own words and must never be touched.
+  it.each([
+    ['an https URL', 'see https://pub.octarine.org/attachments/report.pdf for the writeup'],
+    ['an http URL', 'http://host/attachments/x.png'],
+    ['a protocol-relative URL', 'src=//host/attachments/x.png'],
+    ['a relative path with no leading slash', 'look in attachments/x.png'],
+    ['a path glued to a word', 'foo/tmp/attachments/x.png'],
+    ['an attachment name followed by another extension', '/tmp/md/attachments/x.png.bak'],
+  ])('does NOT match %s', (_label, text) => {
+    expect(findAttachmentRefs(text)).toEqual([]);
+  });
+
+  it.each([
+    [
+      'the default data dir',
+      'what is /Users/ohadpr/.muxpad/attachments/08951e42.png',
+      '/Users/ohadpr/.muxpad/attachments/08951e42.png',
+    ],
+    ['a custom data dir', '/tmp/md/attachments/x.png', '/tmp/md/attachments/x.png'],
+    ['a trailing comma', 'see /tmp/md/attachments/x.png, then', '/tmp/md/attachments/x.png'],
+    ['a trailing full stop', 'see /tmp/md/attachments/x.png.', '/tmp/md/attachments/x.png'],
+    ['inside parentheses', '(see /tmp/md/attachments/x.png)', '/tmp/md/attachments/x.png'],
+    ['on its own line', 'prose\n/tmp/md/attachments/x.png', '/tmp/md/attachments/x.png'],
+  ])('matches %s', (_label, text, path) => {
+    expect(findAttachmentRefs(text)).toEqual([{ path, name: path.split('/').pop() }]);
+  });
+
+  it('leaves a pasted URL in the message alone while still localizing the real attachment', async () => {
+    const fetch = vi.fn(async (): Promise<FetchResult> => ({ ok: true, bytes: Buffer.from('x') }));
+    const url = 'https://pub.octarine.org/attachments/report.pdf';
+    const out = await localizeAttachments(`read ${url}, and ${MAC}/3f2a9c1e.png.`, {
+      dataDir: dir,
+      fetch,
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledWith('3f2a9c1e.png');
+    expect(out).toBe(`read ${url}, and ${join(dir, 'attachments', '3f2a9c1e.png')}.`);
+  });
+
   it('finds nothing in text with no attachment', () => {
     expect(findAttachmentRefs('fix the build, see /tmp/log.txt')).toEqual([]);
   });
