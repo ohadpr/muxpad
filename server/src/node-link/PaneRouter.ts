@@ -62,7 +62,7 @@ export class NodeUnavailableError extends Error {
 export class UnknownNodeError extends Error {
   readonly nodeId: string;
   constructor(nodeId: string) {
-    super(`pane names node ${nodeId}, which is not configured`);
+    super(`this lives on machine ${nodeId}, which is not configured`);
     this.name = 'UnknownNodeError';
     this.nodeId = nodeId;
   }
@@ -145,12 +145,12 @@ export class PaneRouter implements PaneOps {
   /** Create a pane ON A NAMED NODE. The node is explicit because at creation
    *  there is no row yet to read it from — the caller has just decided it. */
   async ensurePaneOn(nodeId: string, spec: PaneRuntimeSpec): Promise<void> {
-    return this.transportForNode(nodeId, 'create a pane').ensurePane(this.localize(nodeId, spec));
+    return this.transportForNode(nodeId, 'start it').ensurePane(this.localize(nodeId, spec));
   }
 
   async ensurePane(spec: PaneRuntimeSpec): Promise<void> {
     const nodeId = this.deps.nodes.nodeForPane(spec.id);
-    return this.transportFor(spec.id, 'create a pane').ensurePane(this.localize(nodeId, spec));
+    return this.transportFor(spec.id, 'start it').ensurePane(this.localize(nodeId, spec));
   }
 
   /**
@@ -232,11 +232,11 @@ export class PaneRouter implements PaneOps {
    * would be cleared with the real process still running.
    */
   async killPaneOn(nodeId: string, id: string): Promise<void> {
-    return this.transportForNode(nodeId, 'kill a pane').killPane(id);
+    return this.transportForNode(nodeId, 'stop it').killPane(id);
   }
 
   async killPane(id: string): Promise<void> {
-    return this.transportFor(id, 'kill a pane').killPane(id);
+    return this.transportFor(id, 'stop it').killPane(id);
   }
 
   /**
@@ -247,7 +247,7 @@ export class PaneRouter implements PaneOps {
    * `false` is the answer that authorises destruction.
    */
   async hasPane(id: string): Promise<boolean> {
-    return this.transportFor(id, 'check a pane').hasPane(id);
+    return this.transportFor(id, 'check on it').hasPane(id);
   }
 
   async getCurrentCwd(id: string): Promise<string | null> {
@@ -259,7 +259,7 @@ export class PaneRouter implements PaneOps {
   }
 
   async markSeen(id: string): Promise<void> {
-    return this.transportFor(id, 'mark a pane seen').markSeen(id);
+    return this.transportFor(id, 'mark it seen').markSeen(id);
   }
 
   async closePtyClients(id: string): Promise<void> {
@@ -281,7 +281,7 @@ export class PaneRouter implements PaneOps {
   async listPanes(): Promise<string[]> {
     const { value, unreachable } = await this.listPanesBestEffort();
     if (unreachable.length)
-      throw new NodeUnavailableError(unreachable[0] as string, 'enumerate panes');
+      throw new NodeUnavailableError(unreachable[0] as string, 'list what is running there');
     return value;
   }
 

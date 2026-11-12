@@ -247,7 +247,7 @@ function scheduleLiveRefresh(): void {
  * Left alone deliberately. It is self-correcting — `setTabUnread` refetches,
  * and the server's answer is right — so the visible cost is a bold name
  * flickering once, where the fix is a local-intent map with its own lifetime
- * and expiry (lib/tab-view-mode has one, and it is not small). Recorded so
+ * and expiry (the retired lib/tab-view-mode had one, and it was not small). Recorded so
  * that if it is ever actually seen, it is a known trade rather than a mystery.
  */
 function applyTabRow(next: Tab): void {

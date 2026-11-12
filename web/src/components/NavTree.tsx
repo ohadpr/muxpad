@@ -1,20 +1,12 @@
-import {
-  type PaneSpec,
-  type PaneStatus,
-  type Tab,
-  type Workspace,
-  collectLayoutLeaves,
-  fallbackTabIcon,
-} from '@muxpad/shared';
+import { type PaneStatus, type Tab, type Workspace, fallbackTabIcon } from '@muxpad/shared';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { Fragment, Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '../api';
-import { HOUSE_CHAT_CREATE, HOUSE_CHAT_PANE_CREATE } from '../lib/agent-backend';
+import { HOUSE_CHAT_CREATE } from '../lib/agent-backend';
 import { openCommandPalette, paletteChordLabel } from '../lib/command-palette';
 import { createDragOrigin } from '../lib/drag-origin';
 import { clearFollowTarget, setFollowTarget } from '../lib/follow-tab';
-import { getLastPaneId, setLastPaneId } from '../lib/last-visited';
 import { pushUndo } from '../lib/move-undo-store';
 import { isExpanded, toggleExpanded, useNavExpansion } from '../lib/nav-expansion';
 import { tabRowAffordances } from '../lib/nav-row-affordances';
@@ -1135,7 +1127,7 @@ function WorkspacePickRow({
       <ArmedClose
         onConfirm={onClose}
         title="Close workspace"
-        armedTitle="Tap again — this kills every tab and pane in it"
+        armedTitle="Tap again — this ends every chat and terminal in it"
         label={`Close workspace ${workspace.name}`}
         armedLabel={`Tap again to close ${workspace.name} and all its tabs`}
       />
@@ -1450,7 +1442,7 @@ function WorkspaceNode({
               title="Close workspace"
               armedTitle={`Click again — ${workspace.tab_count} ${
                 workspace.tab_count === 1 ? 'tab' : 'tabs'
-              } and their panes will be killed`}
+              } and everything running in them will be ended`}
               label={`Close workspace ${workspace.name}`}
               armedLabel={`Click again to close ${workspace.name} and all its tabs`}
             />
@@ -1533,7 +1525,6 @@ export function TabList({
   setEditing,
   onNavigate,
 }: TabListProps) {
-  const navigate = useNavigate();
   const { tabs: serverTabs } = useTabs(workspace.id);
   // Archive / delete / unread / icon / pin, shared verbatim with the flat
   // 'recent' list (lib/tab-row-actions) so the two lists cannot drift about
@@ -1663,30 +1654,6 @@ export function TabList({
     ...(movingTabId === id ? { 'data-dragging': 'true' as const } : {}),
   });
 
-  // Create a pane in `t` and land on it. Shared by the sheet pane list's
-  // chooser and the tab context menu. Always opens the harness picker
-  // (Claude / Codex / Cursor + Terminal / Web view below).
-  const addPaneToTab = async (t: Tab) => {
-    try {
-      const created = await api.createPane(t.id, {
-        append_to_layout: true,
-        ...HOUSE_CHAT_PANE_CREATE,
-      });
-      await refreshTabs(workspace.id);
-      setLastPaneId(t.id, created.id);
-      window.dispatchEvent(
-        new CustomEvent('muxpad:select-pane', { detail: { tabId: t.id, paneId: created.id } }),
-      );
-      onNavigate?.();
-      void navigate({
-        to: '/w/$wsSlug/t/$tabSlug',
-        params: { wsSlug: workspace.slug, tabSlug: t.slug },
-      });
-    } catch (err) {
-      console.error('add pane failed', err);
-    }
-  };
-
   /**
    * The event is OPTIONAL because three surfaces archive and only one of them
    * has a click to stop: the desktop ×, the long-press menu, and the sheet's
@@ -1741,7 +1708,6 @@ export function TabList({
       onSetUnread={(want) => actions.setUnread(t, want)}
       onSetIcon={(icon) => void actions.setIcon(t, icon)}
       onSetPinned={(want) => void actions.setPinned(t, want)}
-      onAddPane={() => void addPaneToTab(t)}
       // A CHILD is not draggable: its place in the list is its parent, not an
       // order you arranged, so there is nothing for a drop to mean.
       rowDnd={
@@ -1846,183 +1812,6 @@ export function TabList({
   );
 }
 
-function sheetPaneLabel(p: PaneSpec, i: number): string {
-  const custom = p.name?.trim();
-  if (custom) return custom;
-  if (p.kind === 'url' && p.url) {
-    try {
-      return new URL(p.url).hostname;
-    } catch {
-      return p.url;
-    }
-  }
-  return p.title?.trim() || p.foreground_cmd?.trim() || `Pane ${i + 1}`;
-}
-
-/**
- * Sheet-only: a tab's pane list, expanded in place under its row — PURE
- * pane navigation (tap = open that pane). Creation lives in the row's ⋯
- * menu, the one home for tab actions on every tab regardless of pane
- * count.
- */
-function SheetPaneList({
-  tab,
-  workspace,
-  onNavigate,
-  isActiveTab,
-}: {
-  tab: Tab;
-  workspace: Workspace;
-  onNavigate?: (() => void) | undefined;
-  isActiveTab: boolean;
-}) {
-  const navigate = useNavigate();
-  const [panes, setPanes] = useState<PaneSpec[] | null>(null);
-  // D16: this list used to FREEZE on a failing poll — the catch kept the
-  // previous panes forever with no timeout, so a persistently failing fetch
-  // left working marks spinning on a snapshot that could be minutes old, and
-  // the "…" loading ellipsis span forever if it never loaded at all. Keeping
-  // the last good list through a BLIP is right; presenting stale state
-  // indefinitely as if it were live is not. Count consecutive failures and say
-  // so once we've clearly lost the server.
-  const [staleAfter, setStaleAfter] = useState(0);
-  useEffect(() => {
-    let alive = true;
-    let fails = 0;
-    const load = () => {
-      // Don't poll into a hidden document. Unlike the tab/workspace polls this
-      // one has no visibility gate of its own, so a sheet left open in a
-      // backgrounded browser tab hit /tabs/:id every 2.5s indefinitely.
-      if (typeof document !== 'undefined' && document.visibilityState === 'hidden')
-        return Promise.resolve();
-      return api
-        .getTab(tab.id)
-        .then((detail) => {
-          if (!alive) return;
-          fails = 0;
-          setStaleAfter(0);
-          setPanes(detail.panes);
-        })
-        .catch(() => {
-          if (!alive) return;
-          fails += 1;
-          // Two consecutive misses (~5s) is past a blip. Below that, ride it
-          // out silently rather than flashing an error at every hiccup.
-          if (fails >= 2) setStaleAfter(fails);
-          setPanes((prev) => prev ?? []);
-        });
-    };
-    void load();
-    // Poll while the list is open so each pane's status mark stays live (the
-    // tab list has its own poll; this fetch is separate).
-    const t = window.setInterval(load, 2500);
-    return () => {
-      alive = false;
-      window.clearInterval(t);
-    };
-  }, [tab.id]);
-
-  const openPane = (paneId: string) => {
-    // Persist first: a not-yet-mounted TabView reads the stored pane on
-    // mount; a mounted one reacts to the event below.
-    setLastPaneId(tab.id, paneId);
-    window.dispatchEvent(
-      new CustomEvent('muxpad:select-pane', { detail: { tabId: tab.id, paneId } }),
-    );
-    onNavigate?.();
-    void navigate({
-      to: '/w/$wsSlug/t/$tabSlug',
-      params: { wsSlug: workspace.slug, tabSlug: tab.slug },
-    });
-  };
-
-  // The pane you're currently looking at — same resolution TabView uses
-  // (stored last pane, else the first). Only meaningful for the active tab.
-  const activePaneId = isActiveTab ? (getLastPaneId(tab.id) ?? panes?.[0]?.id) : undefined;
-
-  // Close a pane from the list — parity with the tab × (tap = delete, no
-  // confirm). Optimistic removal; the 2.5s poll reconciles on failure.
-  const closePane = async (e: React.MouseEvent, pane: PaneSpec, label: string) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const wasLast = (panes?.length ?? 0) <= 1;
-    setPanes((prev) => (prev ? prev.filter((x) => x.id !== pane.id) : prev));
-    try {
-      await api.deletePane(pane.id);
-      // Server doesn't cascade; the client does (mirrors TabView's last-pane
-      // → closeTab). An emptied tab would otherwise linger with no panes.
-      if (wasLast) await api.deleteTab(tab.id);
-    } catch (err) {
-      console.error('deletePane failed', err);
-      noticeFromError(`Couldn't close the pane ${label}.`, err);
-      api
-        .getTab(tab.id)
-        .then((d) => setPanes(d.panes))
-        .catch(() => {});
-    }
-  };
-
-  return (
-    <div className="navtree-pane-list">
-      {staleAfter > 0 ? (
-        // Say it plainly rather than let stale marks keep spinning. The list
-        // below (if we ever had one) stays visible underneath — it is still the
-        // best guess at the truth, it just isn't live any more.
-        // biome-ignore lint/a11y/useSemanticElements: <output> is for a form's computed result; this is a transient connectivity notice, which is what role="status" is for.
-        <div className="navtree-pane-error" role="status">
-          can’t reach muxpad — retrying…
-        </div>
-      ) : null}
-      {panes === null ? (
-        <div className="navtree-pane-loading">…</div>
-      ) : (
-        panes.map((p, i) => {
-          const label = sheetPaneLabel(p, i);
-          const active = p.id === activePaneId;
-          return (
-            <div
-              key={p.id}
-              className="navtree-pane-row-wrap"
-              data-active={active ? 'true' : undefined}
-              data-state={p.status ?? 'idle'}
-            >
-              <button
-                type="button"
-                className="navtree-pane-row"
-                data-active={active ? 'true' : undefined}
-                data-unread={p.unread ? 'true' : undefined}
-                onClick={() => openPane(p.id)}
-              >
-                <span className="navtree-pane-label">{label}</span>
-              </button>
-              {/* Per-pane state, in the same language as the tabs above. The
-                  tab level only aggregates; a glance at the list should say
-                  WHICH pane is running (or blocked).
-                  OUTSIDE the button, exactly as the tab rows keep it outside
-                  their link: the chip carries visually-hidden state text, and
-                  inside the button that text joins the button's ACCESSIBLE
-                  NAME — so a screen-reader user would hear the name change
-                  ("claude · api refactor" → "…, Ready for you") every time the
-                  agent started or stopped. As a sibling it is still read, just
-                  not as part of the control's name. */}
-              <StateChip status={p.status} />
-              <button
-                type="button"
-                className="navtree-close"
-                onClick={(e) => void closePane(e, p, label)}
-                title="Close this one"
-                aria-label={`Close ${label}`}
-              >
-                <SvgClose size={13} />
-              </button>
-            </div>
-          );
-        })
-      )}
-    </div>
-  );
-}
-
 interface TabRowProps {
   /**
    * A worker some chat spawned, still running.
@@ -2087,11 +1876,6 @@ interface TabRowProps {
   /** Pin/unpin — hold this tab at the top of its workspace block in the
    *  manual order, instead of letting it be auto-sorted. */
   onSetPinned: (pinned: boolean) => void;
-  onAddPane: () => void;
-  /** A dragged TAB was dropped on this row's merge band — absorb its panes. */
-  /** Create a pane in this tab and land on it (opens the harness picker). */
-  /** A pane dragged from the strip was dropped here — move it into this tab.
-   *  sourceTabId (from the drag mirror) feeds the follow-navigation hint. */
   rowDnd?: DragItemProps | undefined;
 }
 
@@ -2440,24 +2224,6 @@ function CronMark({ tab }: { tab: Tab }) {
  * glyph the sub-chat pill wears: the two pills are the same object and the
  * glyph is the only thing saying which hierarchy you are about to open.
  */
-function SvgPanesGlyph() {
-  return (
-    <svg width="11" height="11" viewBox="0 0 14 14" aria-hidden="true">
-      <rect
-        x="1.3"
-        y="2.3"
-        width="11.4"
-        height="9.4"
-        rx="1.8"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.2"
-      />
-      <path d="M7 2.8v8.4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-    </svg>
-  );
-}
-
 /**
  * THE GROUP CONTROL, as the parent row receives it.
  *
@@ -2503,7 +2269,6 @@ function TabRow({
   onSetUnread,
   onSetIcon,
   onSetPinned,
-  onAddPane,
 }: TabRowProps) {
   // Right-click context menu (desktop sidebar). Anchored at the cursor.
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
@@ -2532,20 +2297,10 @@ function TabRow({
   const { workspaces } = useWorkspaces();
   const otherWorkspaces = visibleWorkspaces(workspaces).filter((w) => w.id !== workspace.id);
 
-  // Sheet-only: expand the row into its pane list (direct pane nav + the
-  // mobile "New pane" home). Single-pane tabs skip all of it — tapping
-  // them just opens the tab (there's nothing to pick), so no chevron.
-  const paneCount = collectLayoutLeaves(tab.layout).length;
-  // COLLAPSED by default, always. The sheet used to auto-expand the active
-  // multi-pane tab and to remember every toggle across reopens, so opening the
-  // navigator could greet you with one chat's children instead of a list of
-  // chats. The rail's job is the list; a pane list is a detour you ask for.
-  const [panesOpen, setPanesOpen] = useState(false);
   // Which controls this row offers — one pure, unit-tested rule set rather
   // than variant checks scattered across the JSX (see lib/nav-row-affordances).
-  const affords = tabRowAffordances({ variant, paneCount, isEditing });
+  const affords = tabRowAffordances({ variant, isEditing });
   const sheet = variant === 'sheet';
-  const togglePanes = () => setPanesOpen((o) => !o);
 
   // ─── A TAB ROW IS A DRAG SOURCE, AND NOTHING LANDS ON IT ─────────────────
   // It used to accept two drops: a PANE dragged off the tab strip (which became
@@ -2622,9 +2377,6 @@ function TabRow({
     // `muxpad agent new`. The server refuses a second pane in a layout
     // (routes/panes.ts) and migration 54 split the two that existed, so this
     // entry had nothing left to do but fail.
-    //
-    // `onAddPane` is kept on the props for now rather than threaded out of
-    // four components in the same change; it has no caller.
     // "Move to workspace ▸" with the workspaces in a hover flyout, so the main
     // menu stays short. Omitted entirely when there's nowhere to move to.
     // (Dragging the tab onto a workspace row also works, on desktop.)
@@ -2901,11 +2653,10 @@ function TabRow({
         </Link>
       )}
       {/* THE trailing group, and it renders only when it has something in it —
-          an idle single-pane row has no element here at all. One wrapper
+          an idle row has no element here at all. One wrapper
           rather than an auto margin per mark: two auto margins on one flex
           line share the free space between them and the marks drift apart. */}
-      {!isEditing &&
-      (workspaceLabel || affords.paneExpander || (tab.status && tab.status !== 'idle')) ? (
+      {!isEditing && (workspaceLabel || (tab.status && tab.status !== 'idle')) ? (
         <span className="navtree-rail-tail">
           {/* WHERE THIS ROW GOES, when it is not where you already are. It sits
               INSIDE the trailing group rather than after the name, which is
@@ -2922,44 +2673,6 @@ function TabRow({
             <span className="navtree-rail-ws" dir="auto" aria-hidden="true">
               {workspaceLabel}
             </span>
-          ) : null}
-          {/* ─── THE SAME OBJECT, A DIFFERENT NOUN ────────────────────────
-              This expands a chat into its own PANES; the pill beside it on
-              another row expands a chat into its SUB-CHATS. Two hierarchies —
-              panes inside a chat, chats under a chat — and they were both bare
-              carets until the sub-chat one became a counted, state-coloured
-              pill. That left this as the odd one out, which read as a bug:
-              "the chat named Main has a caret which you click and you see
-              three things under it but it's rendered differently, what's going
-              on?"
-              Same shape and same grammar now, so the rail has one kind of
-              disclosure; a different GLYPH and no state hue, because it is a
-              different thing and panes have no rollup to report. The count is
-              the gain: how many are under there, before you tap. */}
-          {affords.paneExpander ? (
-            <button
-              type="button"
-              className="navtree-row-pill navtree-pane-pill"
-              data-open={panesOpen ? 'true' : undefined}
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                togglePanes();
-              }}
-              aria-expanded={panesOpen}
-              aria-label={
-                panesOpen
-                  ? `Hide ${paneCount} panes of ${tab.name}`
-                  : `Show ${paneCount} panes of ${tab.name}`
-              }
-              title={`${paneCount} panes`}
-            >
-              <span className="navtree-row-pill-glyph" aria-hidden="true">
-                <SvgPanesGlyph />
-              </span>
-              <span className="navtree-row-pill-n">{paneCount}</span>
-              <SvgCaret open={panesOpen} />
-            </button>
           ) : null}
           {/* The same plain-language child count on desktop and mobile. */}
           {/* Outside the link, as everywhere else: its visually-hidden state
@@ -3005,14 +2718,6 @@ function TabRow({
             {sheetRow}
           </SwipeRow>
         )}
-        {panesOpen ? (
-          <SheetPaneList
-            tab={tab}
-            workspace={workspace}
-            onNavigate={onNavigate}
-            isActiveTab={isActiveTab}
-          />
-        ) : null}
       </>
     );
   }

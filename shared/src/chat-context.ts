@@ -33,7 +33,7 @@ export interface MentionedChat {
   /** The name as it appeared in the draft — what the user actually typed. */
   name: string;
   tabId: string;
-  /** Its panes, in layout order. The agent one is usually the first. */
+  /** The ids the CLI addresses it by — one, for a chat that is running. */
   paneIds: string[];
 }
 
@@ -51,9 +51,16 @@ const CONTEXT_OPEN = /\n*<muxpad-context\b[^>]*>[\s\S]*?<\/muxpad-context>\s*$/;
  */
 export function withMentionContext(text: string, chats: readonly MentionedChat[]): string {
   if (chats.length === 0) return text;
+  // The ids are labelled by their CLI names (`tabId`, `paneId`) — identifiers
+  // the commands below take, not things the user has. A chat is one thing; its
+  // paneId is just the handle to it. Read aloud as "pane(s) …" the line taught
+  // agents to tell people about panes.
   const lines = chats.map((c) => {
-    const panes = c.paneIds.length > 0 ? c.paneIds.join(' ') : '(no panes)';
-    return `- @${c.name} — tab ${c.tabId}, pane(s) ${panes}`;
+    const ids =
+      c.paneIds.length === 0
+        ? 'no paneId (it has ended — nothing is running to ask)'
+        : `${c.paneIds.length === 1 ? 'paneId' : 'paneIds'} ${c.paneIds.join(' ')}`;
+    return `- @${c.name} — tabId ${c.tabId}, ${ids}`;
   });
   return `${text}
 

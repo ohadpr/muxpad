@@ -13,7 +13,6 @@
  *     re-home it. Dropping it anywhere in its own list does nothing at all.
  *   - Pinning stays explicit (the row's pin affordance / ⋯ menu).
  */
-import type { PaneDragOrigin } from './pane-drag';
 import { reorderByDrop } from './reorder';
 
 export interface DraggableTab {

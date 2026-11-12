@@ -5,6 +5,7 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import {
   ATTACHMENT_MIME_BY_EXT,
+  ROW_NOT_FOUND,
   attachmentExtForMime,
   attachmentKind,
   attachmentMime,
@@ -25,7 +26,7 @@ export function attachmentsRoutes(deps: {
   app.post('/:paneId/attachments', async (c) => {
     const paneId = c.req.param('paneId');
     const pane = panes.getById(paneId);
-    if (!pane) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    if (!pane) return c.json({ error: { code: 'not_found', message: ROW_NOT_FOUND } }, 404);
 
     // REFUSE BEFORE READING, NOT AFTER. `formData()` consumes the entire
     // multipart body into memory before anything can look at it, so the 512 MB
@@ -123,7 +124,7 @@ export function attachmentsRoutes(deps: {
   app.post('/:paneId/attachments/by-path', async (c) => {
     const paneId = c.req.param('paneId');
     if (!panes.getById(paneId))
-      return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+      return c.json({ error: { code: 'not_found', message: ROW_NOT_FOUND } }, 404);
     const body = (await c.req.json().catch(() => null)) as { path?: string } | null;
     const src = body?.path;
     if (!src || typeof src !== 'string')

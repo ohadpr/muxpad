@@ -2116,8 +2116,8 @@ guard_hidden_default_tab() {
 }
 
 cmd_pane_new() {
-  reset_flags tab cmd cwd direction target name
-  parse_flags tab cmd cwd direction target name -- "$@"
+  reset_flags tab cmd cwd name
+  parse_flags tab cmd cwd name -- "$@"
   local tab_id="${FLAG_tab:-}"
   if [ -z "$tab_id" ]; then
     tab_id="${MUXPAD_TAB_ID:-}"
@@ -2127,29 +2127,12 @@ cmd_pane_new() {
     fi
     guard_hidden_default_tab
   fi
-  # Map the spatial direction to the server's (direction, position) wire
-  # format. Server thinks in (row/column axis, before/after target);
-  # users/agents think in screen geometry, so the CLI does the translation.
-  local axis position
-  case "${FLAG_direction:-right}" in
-    right) axis='row'    ; position='after'  ;;
-    left)  axis='row'    ; position='before' ;;
-    below) axis='column' ; position='after'  ;;
-    above) axis='column' ; position='before' ;;
-    *)
-      echo "muxpad: --direction must be one of: right, left, above, below (got '${FLAG_direction}')" >&2
-      exit 1 ;;
-  esac
-  # --target=<id> wins over MUXPAD_PANE_ID. Outside a pane with no
-  # --target, the body's split_from is omitted entirely and the server
-  # appends at the root.
-  local split_from="${FLAG_target:-${MUXPAD_PANE_ID:-}}"
+  # No --direction or --target: they placed the new pane in a SPLIT beside
+  # another one, and a tab holds one thing now — the server refuses a second
+  # on every route. A flag that is gone answers "unknown flag", which is the
+  # truth; accepting it only to collect a 409 for it was not. The pane lands
+  # in an EMPTY tab (pass --tab), and the server says so plainly otherwise.
   local body='{"append_to_layout":true'
-  if [ -n "$split_from" ]; then
-    body+=",\"split_from\":$(json_string "$split_from")"
-  fi
-  body+=",\"direction\":$(json_string "$axis")"
-  body+=",\"position\":$(json_string "$position")"
   if [ -n "${FLAG_cmd:-}" ]; then
     body+=",\"startup_cmd\":$(json_string "$FLAG_cmd")"
   fi
@@ -2270,9 +2253,26 @@ cmd_pane_delete() {
   fi
 }
 
+# `muxpad pane open [--tab=<id>] <url>` — a web view, into an EMPTY tab.
+#
+# ── WHY THIS VERB SURVIVED THE SPLIT REMOVAL ────────────────────────────────
+# The no-panes audit recommended retiring it, on the grounds that a page is
+# not a chat, an agent or a terminal and that zero of them existed live. The
+# first half is a NAMING problem — the row's noun is "web view", which
+# `rowNoun` already answers — and the second is weak evidence: zero right now,
+# in a cockpit whose own description is terminal-AND-browser.
+#
+# It is also the ONLY way to put a page inside muxpad. `muxpad open <url>`
+# throws it to a real browser outside; `muxpad serve` needs a command to run;
+# `muxpad app` needs one too. Removing a capability was not what "a tab holds
+# one thing" asked for, and one url row in an empty tab is still one thing.
+#
+# What it lost is the PLACEMENT: no `--direction`, no `--target`, no
+# `split_from`. There is no "beside" to open into any more, so a page goes
+# into an empty tab like everything else does.
 cmd_pane_open() {
-  reset_flags tab direction target
-  parse_flags tab direction target -- "$@"
+  reset_flags tab
+  parse_flags tab -- "$@"
   if [ "${#POSITIONAL[@]}" -lt 1 ]; then
     echo "usage: muxpad pane open [--tab=<id>] <url>   (into an empty tab)" >&2
     exit 1
@@ -2287,27 +2287,8 @@ cmd_pane_open() {
     fi
     guard_hidden_default_tab
   fi
-  # Same direction → (axis, position) translation as cmd_pane_new.
-  local axis position
-  case "${FLAG_direction:-right}" in
-    right) axis='row'    ; position='after'  ;;
-    left)  axis='row'    ; position='before' ;;
-    below) axis='column' ; position='after'  ;;
-    above) axis='column' ; position='before' ;;
-    *)
-      echo "muxpad: --direction must be one of: right, left, above, below (got '${FLAG_direction}')" >&2
-      exit 1 ;;
-  esac
-  local split_from="${FLAG_target:-${MUXPAD_PANE_ID:-}}"
-  local body="{\"kind\":\"url\",\"url\":$(json_string "$url"),\"append_to_layout\":true"
-  if [ -n "$split_from" ]; then
-    body+=",\"split_from\":$(json_string "$split_from")"
-  fi
-  body+=",\"direction\":$(json_string "$axis")"
-  body+=",\"position\":$(json_string "$position")"
-  body+='}'
   local res
-  res="$(http_request POST "/api/tabs/$tab_id/panes" "$body")"
+  res="$(http_request POST "/api/tabs/$tab_id/panes" "{\"kind\":\"url\",\"url\":$(json_string "$url")}")"
   print_created 'web view' "$res"
 }
 
@@ -2429,7 +2410,7 @@ cmd_pane_summarize() {
 cmd_pane() {
   local verb="${1:-}"
   if [ -z "$verb" ]; then
-    echo "usage: muxpad pane {new|list|read|send|delete|open|rename|summarize}" >&2
+    echo "usage: muxpad pane {new|list|read|send|delete|rename|summarize}" >&2
     exit 1
   fi
   shift
@@ -2444,7 +2425,7 @@ cmd_pane() {
     summarize) cmd_pane_summarize "$@" ;;
     *)
       echo "muxpad: unknown pane verb '$verb'" >&2
-      echo "usage: muxpad pane {new|list|read|send|delete|open|rename|summarize}" >&2
+      echo "usage: muxpad pane {new|open|list|read|send|delete|rename|summarize}" >&2
       exit 1
       ;;
   esac

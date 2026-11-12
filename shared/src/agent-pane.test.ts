@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { isAgentPane, tabShowsPaneStrip, tabTakesPanes } from './agent-pane.js';
+import {
+  isAgentPane,
+  isSplitLayout,
+  rowNoun,
+  rowNounTitle,
+  tabIsOccupied,
+  tabTakesPanes,
+} from './agent-pane.js';
 
 describe('isAgentPane', () => {
   it('reads the durable startup marker', () => {
@@ -31,44 +38,82 @@ describe('isAgentPane', () => {
 });
 
 describe('tabTakesPanes', () => {
-  it('is false for a tab that is nothing but agents — every chat', () => {
+  it('is false for every tab — a tab holds one thing', () => {
+    // A chat, as before.
     expect(tabTakesPanes([{ startup_cmd: 'muxpad agent' }])).toBe(false);
-    expect(
-      tabTakesPanes([{ startup_cmd: 'muxpad agent' }, { startup_cmd: 'muxpad agent --mode chat' }]),
-    ).toBe(false);
-  });
-
-  it('is true when ANY pane is a surface you can split', () => {
-    expect(tabTakesPanes([{ startup_cmd: 'muxpad agent' }, { face: 'terminal' }])).toBe(true);
-  });
-
-  it('is true for an empty tab — there is no chat to protect', () => {
-    expect(tabTakesPanes([])).toBe(true);
+    // A terminal: this was the last tab that offered a `+`, and the `+` was
+    // how a second pane got in.
+    expect(tabTakesPanes([{ face: 'terminal' }])).toBe(false);
+    expect(tabTakesPanes([{ startup_cmd: 'muxpad agent' }, { face: 'terminal' }])).toBe(false);
+    // An empty tab gets its first thing from its empty state, not a `+`.
+    expect(tabTakesPanes([])).toBe(false);
   });
 });
 
-describe('tabShowsPaneStrip', () => {
-  it('is false for a ONE-PANE chat — the case that was painting a strip anyway', () => {
-    // Removing the `+` was only half of "one pane per tab, except terminals".
-    // The strip still painted, so every chat carried a row naming the pane it
-    // was already showing, a duplicate of the sidebar's status mark, a × that
-    // only empties the tab, and an "Expand to split" with nothing to split.
-    expect(tabShowsPaneStrip([{ startup_cmd: 'muxpad agent' }])).toBe(false);
-    // The CONVERTED pane counts too — face, not just the startup command.
-    expect(tabShowsPaneStrip([{ startup_cmd: 'zsh', face: 'chat' }])).toBe(false);
+describe('rowNoun — what a person calls the row', () => {
+  it('names an agent row by its mode, which is fixed at creation', () => {
+    expect(rowNoun({ startup_cmd: 'muxpad agent --mode chat', mode: 'chat' })).toBe('chat');
+    expect(rowNoun({ startup_cmd: 'muxpad agent', mode: 'agent' })).toBe('agent');
+    // The pre-rename spellings are still on old rows.
+    expect(rowNoun({ startup_cmd: 'muxpad agent', mode: 'do' })).toBe('chat');
+    expect(rowNoun({ startup_cmd: 'muxpad agent', mode: 'deep' })).toBe('agent');
   });
 
-  it('is true once an agent-only tab holds TWO — the strip is the only way across', () => {
-    expect(
-      tabShowsPaneStrip([
-        { startup_cmd: 'muxpad agent' },
-        { startup_cmd: 'muxpad agent --mode chat' },
-      ]),
-    ).toBe(true);
+  it('reads a row with no recorded mode as Agent, never as Chat', () => {
+    // Claiming Chat would assert a contract nobody put in front of the model.
+    expect(rowNoun({ startup_cmd: 'muxpad agent' })).toBe('agent');
   });
 
-  it('is true for a one-pane tab that TAKES panes — that is where the + lives', () => {
-    expect(tabShowsPaneStrip([{ face: 'terminal' }])).toBe(true);
-    expect(tabShowsPaneStrip([])).toBe(true);
+  it('calls a shell a terminal, whatever mode its row happens to carry', () => {
+    // The live install's one terminal row has `mode: 'chat'` stored — a column
+    // default, not a fact about it.
+    expect(rowNoun({ startup_cmd: null, face: 'terminal', mode: 'chat' })).toBe('terminal');
+    expect(rowNoun({ startup_cmd: 'npm run dev', face: 'web' })).toBe('terminal');
+    expect(rowNoun(undefined)).toBe('terminal');
+  });
+
+  it('calls a converted pane by what it now is', () => {
+    expect(rowNoun({ startup_cmd: '/bin/zsh', face: 'chat', mode: 'chat' })).toBe('chat');
+  });
+
+  it('does not call a page with no terminal behind it a terminal', () => {
+    expect(rowNoun({ kind: 'url', face: 'web' })).toBe('web view');
+  });
+
+  it('capitalises for a label', () => {
+    expect(rowNounTitle({ startup_cmd: 'muxpad agent', mode: 'chat' })).toBe('Chat');
+    expect(rowNounTitle({ startup_cmd: null })).toBe('Terminal');
+    expect(rowNounTitle({ kind: 'url' })).toBe('Web view');
+  });
+});
+
+describe('tabIsOccupied — does this tab already hold its one thing?', () => {
+  it('is true when the layout names a pane that is really in the tab', () => {
+    expect(tabIsOccupied('p', ['p'])).toBe(true);
+  });
+
+  it('is false for an empty tab — it may still get its first chat', () => {
+    expect(tabIsOccupied('', [])).toBe(false);
+  });
+
+  it('is false for a leaf naming a pane that is gone', () => {
+    // Otherwise a deleted row would lock its tab out of ever holding anything.
+    expect(tabIsOccupied('gone', ['other'])).toBe(false);
+  });
+
+  it('is false for a document tab: rows, but no layout', () => {
+    expect(tabIsOccupied('', ['block-1', 'block-2'])).toBe(false);
+  });
+
+  it('reads an old split too', () => {
+    expect(tabIsOccupied({ direction: 'row', first: 'a', second: 'b' }, ['b'])).toBe(true);
+  });
+});
+
+describe('isSplitLayout', () => {
+  it('is a tree, never a leaf or nothing', () => {
+    expect(isSplitLayout({ direction: 'row', first: 'a', second: 'b' })).toBe(true);
+    expect(isSplitLayout('a')).toBe(false);
+    expect(isSplitLayout('')).toBe(false);
   });
 });

@@ -986,7 +986,7 @@ export function SessionBar({
                 <span className="chat-session-item-desc">
                   {/* The one thing a reader asks next, answered before they
                       have to find out the hard way. */}
-                  A pane keeps the mode it was created in — no harness can rewrite a running
+                  A chat keeps the mode it was created in — no harness can rewrite a running
                   session’s instructions. To work the other way, open a new chat in{' '}
                   {AGENT_MODE_LABELS[mode === 'chat' ? 'agent' : 'chat']} mode.
                 </span>
@@ -1078,7 +1078,7 @@ export function SessionBar({
                   'would kill it. Wait for it to finish, then rebase.'
                 : 'This agent is running an older build of muxpad than the server — it keeps the ' +
                   'instructions it was born with. Rebase keeps this conversation and starts it ' +
-                  'again on today’s. It ends background work and scheduled wake-ups this pane is ' +
+                  'again on today’s. It ends background work and scheduled wake-ups this chat is ' +
                   'holding.'
             }
           >

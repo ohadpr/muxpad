@@ -468,13 +468,12 @@ export const TabSchema = z.object({
   status: PaneStatusSchema.optional(),
   // Sum of live background subagents across this tab's panes.
   agents: z.number().int().nonnegative().optional(),
-  // Does this tab offer PANES — the `+` in its chrome and the "New pane" item in
-  // its row menu (see tabTakesPanes). False for a tab that is nothing but
-  // agents, which is every chat: a chat's parallel work is a CHILD CHAT, and a
-  // second agent in the same tab is that relationship with its provenance
-  // thrown away. Runtime-only, decorated at the route layer from the tab's
-  // panes. Absent (an older server) reads as "show it", which is the behaviour
-  // that predates the field.
+  // Does this tab offer a SECOND thing — a `+` in its chrome? False for every
+  // tab now (see tabTakesPanes): a tab holds one chat, agent or terminal, and
+  // the server refuses a second. Still published so a client that reads it is
+  // told the truth. Runtime-only, decorated at the route layer. Absent (an
+  // older server) reads as "show it", which is the behaviour that predates
+  // the field.
   takes_panes: z.boolean().optional(),
   // "Done, unreviewed" rollup (bold name). True iff this tab was manually
   // marked unread OR any of its panes is unread (an agent finished a turn

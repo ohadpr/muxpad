@@ -4,11 +4,14 @@ import type { AgentMode, LayoutNode, PaneSpec } from '@muxpad/shared';
 import {
   AgentModeInputSchema,
   DEFAULT_AGENT_MODE,
+  ONE_THING_PER_TAB,
+  ROW_NOT_FOUND,
   appendLeafToLayout,
   modeForBackend,
   removeLeafFromLayout,
-  spliceLayoutAtTarget,
+  rowNoun,
   splitLeadingEmoji,
+  tabIsOccupied,
 } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
@@ -150,43 +153,6 @@ const httpUrl = z
   .refine((u) => /^https?:\/\//i.test(u), { message: 'url must be http(s)' });
 
 /**
- * Place `newId` in the layout as a `direction`-split of `sourceId`. If
- * `sourceId` isn't in the tree (CLI run outside a pane, or stale id),
- * fall back to appending at the root. Empty layout → new pane becomes
- * the root.
- *
- * Used by POST /api/tabs/:id/panes when the caller asks for an atomic
- * create-and-place via `append_to_layout` (CLI, agents). The UI patches
- * layout in a separate request and doesn't go through here.
- */
-function appendPaneToLayout(
-  layout: LayoutNode,
-  sourceId: string | null,
-  newId: string,
-  direction: 'row' | 'column',
-  position: 'after' | 'before',
-): LayoutNode {
-  if (sourceId !== null) {
-    const { layout: next, placed } = spliceLayoutAtTarget(
-      layout,
-      sourceId,
-      newId,
-      direction,
-      position,
-    );
-    if (placed) return next;
-  }
-  // No source, or source not anywhere in the tree → append at root so
-  // the new pane is at least visible. Honor `position` here too: a CLI
-  // call that says "above" with no resolvable target should still land
-  // the new pane on top of the existing layout, not below it.
-  if (layout === '' || layout == null) return newId;
-  return position === 'before'
-    ? { direction, first: newId, second: layout }
-    : { direction, first: layout, second: newId };
-}
-
-/**
  * Panes are spawned under a specific tab — `POST /api/tabs/:id/panes`.
  */
 export function panesTabScopedRoutes(deps: {
@@ -221,12 +187,11 @@ export function panesTabScopedRoutes(deps: {
         // `--mode` flag, and failing that DEFAULT_AGENT_MODE. Accepts the
         // pre-rename 'do'/'deep' from a version-skewed caller.
         mode: AgentModeInputSchema.optional(),
-        // Layout placement controls. Off by default — the UI patches the
-        // tab's layout in a separate request after creating the pane. When
-        // `append_to_layout` is true the server places the new pane atomically:
-        // split-right of `split_from` if given, else appended at root.
-        // This is what the CLI uses; without it a CLI-created pane would
-        // be invisible in the mosaic (row exists, not in layout tree).
+        // Layout placement. `append_to_layout` makes the new pane the tab's
+        // layout atomically — into an EMPTY tab, the only kind that takes one.
+        // `split_from`, `direction` and `position` are older CLI vocabulary
+        // for where a split went; accepted so an old caller is not a 400, and
+        // ignored, because there is no split to place.
         append_to_layout: z.boolean().optional(),
         split_from: z.string().optional(),
         // WHICH MACHINE to create this pane on. Omitted means "the
@@ -252,33 +217,33 @@ export function panesTabScopedRoutes(deps: {
     const body = parsed.data;
 
     /**
-     * ── NO SECOND PANE IN A LAYOUT ────────────────────────────────────────
+     * ── NO SECOND THING IN A TAB, WHOEVER ASKS ───────────────────────────
      *
-     * The split is gone. A tab holds ONE pane in its mosaic, because every
-     * question of the form "which pane is this tab's chat" had no answer and
-     * the code guessed — and the guess was "the first one created". The
-     * measured cost: a sub-chat's 77KB report delivered into the left half of
-     * a split while its owner was reading the right half, leaving a chat with
-     * no record of work it had itself dispatched.
+     * The split is gone. A tab holds ONE chat, agent or terminal, because
+     * every question of the form "which pane is this tab's chat" had no
+     * answer and the code guessed — and the guess was "the first one
+     * created". The measured cost: a sub-chat's 77KB report delivered into
+     * the left half of a split while its owner was reading the right half,
+     * leaving a chat with no record of work it had itself dispatched.
      *
-     * Refused HERE, where a pane is PLACED, rather than where one is created:
-     * a document's backing tab deliberately holds one pane per agent block
-     * and never renders a mosaic (web/src/lib/doc-store.ts). Those ask for no
-     * layout placement, so they are untouched.
+     * This used to refuse only a caller that asked the SERVER to place the
+     * pane (`append_to_layout` / `split_from` — the CLI). The web never asked:
+     * it created the pane, then PATCHed the split layout itself, so a terminal
+     * tab could still be split from its `+`. The refusal is now about the TAB,
+     * not the request: an occupied tab takes no new row on any path, and the
+     * tab PATCH refuses a split layout on its own (routes/tabs.ts).
+     *
+     * "Occupied" is read off the layout (tabIsOccupied), which is what keeps a
+     * document's backing tab — rows with no layout, never shown as a tab —
+     * working, and keeps an EMPTY tab able to get its first chat.
      */
-    if (body.append_to_layout || body.split_from) {
-      const taken = t.layout !== null && t.layout !== undefined && t.layout !== '';
-      if (taken)
-        return c.json(
-          {
-            error: {
-              code: 'conflict',
-              message: 'a chat holds one pane — the split was removed. Open another chat instead.',
-            },
-          },
-          409,
-        );
-    }
+    if (
+      tabIsOccupied(
+        t.layout,
+        panes.listByTab(tabId).map((p) => p.id),
+      )
+    )
+      return c.json({ error: { code: 'conflict', message: ONE_THING_PER_TAB } }, 409);
 
     const kind = body.kind ?? 'shell';
     if (kind === 'url') {
@@ -306,13 +271,10 @@ export function panesTabScopedRoutes(deps: {
         pane: decoratePane(deps.cache, pane, deps.db),
       });
       if (body.append_to_layout) {
-        const nextLayout = appendPaneToLayout(
-          t.layout,
-          body.split_from ?? null,
-          pane.id,
-          body.direction ?? 'row',
-          body.position ?? 'after',
-        );
+        // The tab was empty (anything else was refused above), so placing the
+        // pane IS the whole layout. `split_from` / `direction` / `position`
+        // are still accepted from an older CLI and mean nothing now.
+        const nextLayout: LayoutNode = pane.id;
         const updated = tabs.update(tabId, { layout: nextLayout });
         if (updated)
           deps.events.emit({ type: 'tab.updated', tab: decorateTab(deps.cache, deps.db, updated) });
@@ -340,7 +302,12 @@ export function panesTabScopedRoutes(deps: {
     // the legacy rows once — this keeps them swept).
     if (body.face === 'chat' && !body.startup_cmd?.startsWith('muxpad agent')) {
       return c.json(
-        { error: { code: 'bad_request', message: 'the chat face requires an agent pane' } },
+        {
+          error: {
+            code: 'bad_request',
+            message: 'only a chat or an agent can show the chat view — this is a terminal',
+          },
+        },
         400,
       );
     }
@@ -432,13 +399,8 @@ export function panesTabScopedRoutes(deps: {
       pane: decoratePane(deps.cache, pane, deps.db),
     });
     if (body.append_to_layout) {
-      const nextLayout = appendPaneToLayout(
-        t.layout,
-        body.split_from ?? null,
-        pane.id,
-        body.direction ?? 'row',
-        body.position ?? 'after',
-      );
+      // Empty tab (see the refusal above): the new pane is the whole layout.
+      const nextLayout: LayoutNode = pane.id;
       const updated = tabs.update(tabId, { layout: nextLayout });
       if (updated)
         deps.events.emit({ type: 'tab.updated', tab: decorateTab(deps.cache, deps.db, updated) });
@@ -552,7 +514,7 @@ export function panesScopedRoutes(deps: {
 
   app.get('/:id', async (c) => {
     const p = panes.getById(c.req.param('id'));
-    if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    if (!p) return c.json({ error: { code: 'not_found', message: ROW_NOT_FOUND } }, 404);
     // hasPane is an async RPC; this handler is rare (single-pane GET).
     // Fall back to false if ptyd is disconnected — the row is still
     // useful for the caller.
@@ -570,7 +532,7 @@ export function panesScopedRoutes(deps: {
   app.patch('/:id', async (c) => {
     const id = c.req.param('id');
     const p = panes.getById(id);
-    if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    if (!p) return c.json({ error: { code: 'not_found', message: ROW_NOT_FOUND } }, 404);
     const body = z
       .object({
         kind: z.enum(['shell', 'url']).optional(),
@@ -619,21 +581,31 @@ export function panesScopedRoutes(deps: {
     const modeChanged = patch.mode !== undefined && patch.mode !== p.mode;
     if (modeChanged && !isAgentPane) {
       return c.json(
-        { error: { code: 'bad_request', message: 'mode applies to agent panes only' } },
+        {
+          error: {
+            code: 'bad_request',
+            message: 'only a chat or an agent has a mode — this is a terminal',
+          },
+        },
         400,
       );
     }
     if (patch.face === 'chat' && !p.startup_cmd?.startsWith('muxpad agent')) {
       // Chat face is agent-pane-only — see the create-path guard above.
       return c.json(
-        { error: { code: 'bad_request', message: 'the chat face requires an agent pane' } },
+        {
+          error: {
+            code: 'bad_request',
+            message: 'only a chat or an agent can show the chat view — this is a terminal',
+          },
+        },
         400,
       );
     }
     const kindFlip = patch.kind !== undefined && patch.kind !== p.kind;
     if (!kindFlip && patch.url !== undefined && p.kind !== 'url') {
       return c.json(
-        { error: { code: 'bad_request', message: 'url can only be set on kind=url panes' } },
+        { error: { code: 'bad_request', message: 'only a web view has a url of its own' } },
         400,
       );
     }
@@ -728,7 +700,7 @@ export function panesScopedRoutes(deps: {
   app.delete('/:id', async (c) => {
     const id = c.req.param('id');
     const p = panes.getById(id);
-    if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    if (!p) return c.json({ error: { code: 'not_found', message: ROW_NOT_FOUND } }, 404);
     // Capture tab_id BEFORE the delete so the event still carries it.
     const tabId = p.tab_id;
     // ptyd holds runtime state; SQLite is the source of truth. If ptyd
@@ -799,7 +771,7 @@ export function panesScopedRoutes(deps: {
   app.post('/:id/rebase', async (c) => {
     const id = c.req.param('id');
     const p = panes.getById(id);
-    if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    if (!p) return c.json({ error: { code: 'not_found', message: ROW_NOT_FOUND } }, 404);
     const bridge = deps.agentBridge;
     if (!bridge) {
       return c.json(
@@ -864,9 +836,12 @@ export function panesScopedRoutes(deps: {
   app.post('/:id/respawn', async (c) => {
     const id = c.req.param('id');
     const p = panes.getById(id);
-    if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    if (!p) return c.json({ error: { code: 'not_found', message: ROW_NOT_FOUND } }, 404);
     if (p.kind === 'url') {
-      return c.json({ error: { code: 'bad_request', message: 'cannot respawn a url pane' } }, 400);
+      return c.json(
+        { error: { code: 'bad_request', message: 'a web view has nothing running to restart' } },
+        400,
+      );
     }
     // ptyd holds runtime state; SQLite is the source of truth. If ptyd
     // is unreachable, swallow the kill — the second call (ensurePane)
@@ -906,7 +881,7 @@ export function panesScopedRoutes(deps: {
       // from the row (the button owns its own local error string, the row does
       // not), so a reload came back to the neutral "no agent yet" and the
       // diagnosis was lost.
-      const why = whyNot('respawn pane', err);
+      const why = whyNot(`restart this ${rowNoun(p)}`, err);
       setProvisionError(id, { error: why, at: Date.now(), attempts: 1 });
       announceProvision(deps, id);
       return c.json({ error: { code: 'ptyd_unavailable', message: why } }, 503);
@@ -998,10 +973,13 @@ export function panesScopedRoutes(deps: {
   app.get('/:id/url-health', async (c) => {
     const id = c.req.param('id');
     const p = panes.getById(id);
-    if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    if (!p) return c.json({ error: { code: 'not_found', message: ROW_NOT_FOUND } }, 404);
     const requested = c.req.query('url') ?? p.face_url ?? p.url;
     if (!requested) {
-      return c.json({ error: { code: 'bad_request', message: 'pane has no url to probe' } }, 400);
+      return c.json(
+        { error: { code: 'bad_request', message: 'there is no web address here to check' } },
+        400,
+      );
     }
     const hostClass = classifyUrlHost(requested);
     if (hostClass === null || hostClass === 'link_local') {
@@ -1023,7 +1001,7 @@ export function panesScopedRoutes(deps: {
     }
     if (target === null) {
       return c.json(
-        { error: { code: 'forbidden', message: 'url is not one of this pane’s urls' } },
+        { error: { code: 'forbidden', message: 'that url is not one of the addresses open here' } },
         403,
       );
     }
@@ -1037,7 +1015,7 @@ export function panesScopedRoutes(deps: {
   app.post('/:id/agent-backend', async (c) => {
     const id = c.req.param('id');
     const p = panes.getById(id);
-    if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    if (!p) return c.json({ error: { code: 'not_found', message: ROW_NOT_FOUND } }, 404);
     // Any EMPTY agent chat can be (re)assigned a harness — see
     // conversionRefusal for the two conditions and why the zero-message one
     // is enforced server-side rather than trusted from the UI.
@@ -1186,7 +1164,7 @@ export function panesScopedRoutes(deps: {
   app.post('/:id/as-terminal', async (c) => {
     const id = c.req.param('id');
     const p = panes.getById(id);
-    if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    if (!p) return c.json({ error: { code: 'not_found', message: ROW_NOT_FOUND } }, 404);
     const refusal = conversionRefusal(deps.db, p, deps.agentBridge);
     if (refusal) return c.json({ error: refusal }, 409);
     const workspaceId = tabs.getWorkspaceId(p.tab_id);
@@ -1235,7 +1213,7 @@ export function panesScopedRoutes(deps: {
   app.post('/:id/as-web', async (c) => {
     const id = c.req.param('id');
     const p = panes.getById(id);
-    if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    if (!p) return c.json({ error: { code: 'not_found', message: ROW_NOT_FOUND } }, 404);
     const refusal = conversionRefusal(deps.db, p, deps.agentBridge);
     if (refusal) return c.json({ error: refusal }, 409);
     try {
@@ -1266,9 +1244,12 @@ export function panesScopedRoutes(deps: {
   app.post('/:id/cwd', async (c) => {
     const id = c.req.param('id');
     const p = panes.getById(id);
-    if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    if (!p) return c.json({ error: { code: 'not_found', message: ROW_NOT_FOUND } }, 404);
     if (p.kind !== 'shell')
-      return c.json({ error: { code: 'bad_request', message: 'not a shell pane' } }, 400);
+      return c.json(
+        { error: { code: 'bad_request', message: 'only a terminal has a folder to switch' } },
+        400,
+      );
     const body = z
       .object({ cwd: z.string().min(1) })
       .safeParse(await c.req.json().catch(() => ({})));
@@ -1353,7 +1334,7 @@ export function panesScopedRoutes(deps: {
   app.post('/:id/seen', async (c) => {
     const id = c.req.param('id');
     const pane = panes.getById(id);
-    if (!pane) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    if (!pane) return c.json({ error: { code: 'not_found', message: ROW_NOT_FOUND } }, 404);
     // ─── READING A CHAT IS ACTIVITY, ON THE PHONE TOO ───────────────────────
     // The tab route stamps `last_activity_at` here for the same reason, and
     // stamping it THERE ONLY is a bug with a surface attached: desktop clears
@@ -1441,7 +1422,7 @@ export function panesScopedRoutes(deps: {
   app.post('/:id/move', async (c) => {
     const id = c.req.param('id');
     const pane = panes.getById(id);
-    if (!pane) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    if (!pane) return c.json({ error: { code: 'not_found', message: ROW_NOT_FOUND } }, 404);
     const body = z
       .object({
         to_tab_id: z.string().optional(),
@@ -1555,6 +1536,18 @@ export function panesScopedRoutes(deps: {
         from_tab_removed: false,
       });
     }
+
+    // Moving INTO a tab that already holds its thing is the split by another
+    // name — the destination would show two. A new tab, or an empty one, is
+    // still a fine place to go.
+    if (
+      destTab &&
+      tabIsOccupied(
+        destTab.layout,
+        panes.listByTab(destTab.id).map((p) => p.id),
+      )
+    )
+      return c.json({ error: { code: 'conflict', message: ONE_THING_PER_TAB } }, 409);
 
     // ── ONE TRANSACTION FOR THE WHOLE MOVE ──────────────────────────────────
     // Reparenting the pane, repairing the destination layout and repairing (or
