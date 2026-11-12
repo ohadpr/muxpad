@@ -395,9 +395,7 @@ function ArtifactList({ artifacts }: { artifacts: ReturnType<typeof artifactsOf>
   // still click is worth more than a term, so a shape this does not
   // understand costs the badge and nothing else.
   const recordFor = (url: string) =>
-    (live?.publishes ?? []).find(
-      (i) => i.url === url || (i.slug && url.includes(`/${i.slug}/`)),
-    );
+    (live?.publishes ?? []).find((i) => i.url === url || (i.slug && url.includes(`/${i.slug}/`)));
 
   const act = async (slug: string, run: () => Promise<unknown>) => {
     setBusy(slug);
@@ -420,10 +418,41 @@ function ArtifactList({ artifacts }: { artifacts: ReturnType<typeof artifactsOf>
     <ul className="chat-drawer__list">
       {artifacts.map((a) => {
         const rec = recordFor(a.url);
-        const term = publishTerm(rec, Date.now());
+        // A LINK THAT IS NOT THERE ANY MORE SAYS SO.
+        //
+        // `publishTerm` answers null for two unrelated things — a link with
+        // no expiry, and a link the server has never heard of — so a row for
+        // something taken down looked exactly like a healthy permanent one.
+        // The listing having LOADED is what tells them apart: if it came back
+        // and this url is not in it, the artifact is gone. (Before the
+        // listing loads, `live` is null and we say nothing, which is right:
+        // not knowing yet is not the same as knowing it is gone.)
+        const gone = live !== null && !rec;
+        const term = gone
+          ? ({ label: 'removed', state: 'expired' } as const)
+          : publishTerm(rec, Date.now());
+        // ── THE NAME IS THE ROW'S SUBJECT, AND IT HAD THE LEAST ROOM ────────
+        //
+        // Reported with a screenshot of 31 rows: "no way to really know what
+        // each one of these is". Every one of them opened with the word
+        // `Published`, which is the one thing they all have in common and the
+        // tab's own title already says; then the actual name was cut at about
+        // twelve characters, so four different links all read
+        // `Published muxpad-run…`. The card's title is written for a
+        // conversation, where the verb is the news. In a list OF publishes it
+        // is furniture, and it was eating the only part that identifies the
+        // row.
+        const name = a.title.replace(/^published\s+/i, '');
+        // `1 file` on every row is not information — it was the same value 29
+        // times. A count only earns its place when there is more than one.
+        const detail = a.detail && !/^1 files?$/i.test(a.detail) ? a.detail : null;
+        // The rows you might ACT on are the ones running out. Those keep their
+        // buttons visible; the rest reveal them on hover (CSS), so 60 buttons
+        // stop competing with 31 names.
+        const urgent = term?.state === 'soon' || term?.state === 'expired';
         return (
           <li key={a.id}>
-            <div className="chat-drawer__artifact">
+            <div className="chat-drawer__artifact" data-urgent={urgent ? 'true' : undefined}>
               {/* A LINK, not a button that opens one: this is an address, and
                   a person expects to be able to copy it, middle-click it and
                   see where it goes before committing. */}
@@ -434,13 +463,18 @@ function ArtifactList({ artifacts }: { artifacts: ReturnType<typeof artifactsOf>
                 rel="noreferrer noopener"
               >
                 <span className="chat-drawer__row-text">
-                  <span className="chat-drawer__row-name" dir="auto">
-                    {a.title}
+                  <span className="chat-drawer__row-name" dir="auto" title={name}>
+                    {name}
                   </span>
-                  <span className="chat-drawer__row-sub">{a.detail ?? a.url}</span>
+                  {detail ? <span className="chat-drawer__row-sub">{detail}</span> : null}
+                  {a.times > 1 ? (
+                    <span className="chat-drawer__row-sub" title={`published ${a.times} times`}>
+                      ×{a.times}
+                    </span>
+                  ) : null}
                 </span>
                 {term ? (
-                  <span className="chat-drawer__row-live" data-state={term.state}>
+                  <span className="chat-drawer__term" data-state={term.state}>
                     {term.label}
                   </span>
                 ) : null}
@@ -453,9 +487,9 @@ function ArtifactList({ artifacts }: { artifacts: ReturnType<typeof artifactsOf>
                     onClick={() => void act(rec.slug, () => api.extendPublish(rec.slug, 7))}
                     title="Another 7 days from now"
                   >
-                    {term?.state === 'done' ? 'Revive' : 'Keep 7d'}
+                    {term?.state === 'expired' ? 'Revive' : 'Keep 7d'}
                   </button>
-                  {term?.state === 'done' ? null : (
+                  {term?.state === 'expired' ? null : (
                     <ArmedTakeDown
                       busy={busy === rec.slug}
                       onConfirm={() => void act(rec.slug, () => api.expirePublish(rec.slug))}

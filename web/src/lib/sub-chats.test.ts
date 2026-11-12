@@ -114,11 +114,38 @@ describe('artifactsOf', () => {
     ...over,
   });
 
-  it('keeps both of a republished name — they are two events', () => {
-    // The older link is what somebody may already have pasted somewhere, and
-    // collapsing them would hide that the thing was updated.
+  /**
+   * ONE URL IS ONE ARTIFACT, however many times it was published.
+   *
+   * This kept both, reasoning that "the older link is what somebody may
+   * already have pasted somewhere". That concern is real and this honours it
+   * EXACTLY — by collapsing on the URL. `--update` keeps the slug precisely
+   * so the link already handed out goes on working, so two republishes are
+   * the same address twice: the older row pointed at the same place and told
+   * the reader nothing the newer one did not.
+   *
+   * What it cost: a real list came back with seven rows reading
+   * `muxpad-work-drawer` and four reading `muxpad-running-turn-options`.
+   * "No way to really know what each one of these is" — and for those, there
+   * was nothing to know.
+   *
+   * A republish that mints a NEW slug is a new url, and still a new row.
+   */
+  it('collapses republishes of one url, and counts them', () => {
     const rows = artifactsOf([act({ id: 'v1', at: 1_000 }), act({ id: 'v2', at: 2_000 })]);
-    expect(rows.map((r) => r.id)).toEqual(['v2', 'v1']);
+    expect(rows.map((r) => r.id)).toEqual(['v2']);
+    expect(rows[0]?.times).toBe(2);
+    // Dated by the most recent publish, not the first.
+    expect(rows[0]?.at).toBe(2_000);
+  });
+
+  it('keeps two DIFFERENT urls apart, even under one name', () => {
+    const rows = artifactsOf([
+      act({ id: 'a', url: 'https://pub.example/thing-aaaaaaaa/' }),
+      act({ id: 'b', url: 'https://pub.example/thing-bbbbbbbb/' }),
+    ]);
+    expect(rows).toHaveLength(2);
+    expect(rows.every((r) => r.times === 1)).toBe(true);
   });
 
   it('ignores everything that is not a publish with a link', () => {
