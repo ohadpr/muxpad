@@ -23,9 +23,26 @@ import { join } from 'node:path';
 import { ATTACHMENT_EXT_ALTERNATION } from '@muxpad/shared';
 import { attachmentNameProblem } from '../attachment-files.js';
 
-/** The same token the web client renders as an attachment (web/src/lib/attachments.ts). */
+/**
+ * A FILESYSTEM path into an attachments dir — what the composer writes, and
+ * nothing else.
+ *
+ * Not a URL. `\S*` alone also matched `https://host/attachments/report.pdf`,
+ * so a link the user pasted was treated as a file reference and, on a remote
+ * pane, edited out of their message: rewritten to an unrelated local file that
+ * shared the basename, or replaced with a "could not be loaded" note.
+ *
+ *   · the token starts at the start of the text, after whitespace, or after an
+ *     opening bracket/quote — so the `/` inside `https://` (preceded by `:`)
+ *     can never begin one;
+ *   · it starts with a single `/` (absolute, not `//host`) and holds no `:`;
+ *   · the extension ends the name: a trailing `,` or `.` in prose is left out,
+ *     and `x.png.bak` is not `x.png`.
+ *
+ * Any data dir is accepted, since MUXPAD_DATA_DIR can move it from ~/.muxpad.
+ */
 const ATTACHMENT_PATH_RE = new RegExp(
-  `\\S*/attachments/([\\w.-]+\\.(?:${ATTACHMENT_EXT_ALTERNATION}))`,
+  `(?<=^|[\\s(\\[<"'\`])/(?!/)[^\\s:]*?/attachments/([\\w.-]+\\.(?:${ATTACHMENT_EXT_ALTERNATION}))(?![\\w-]|\\.\\w)`,
   'gi',
 );
 
