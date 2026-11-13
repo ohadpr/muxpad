@@ -119,6 +119,35 @@ describe('a draft reaches the approval funnel with what you will be shown', () =
     expect(card.title).toBe('Drafted a reply to message 150889');
   });
 
+  it('forwards the revision msgvault requires to edit or delete a draft', async () => {
+    // msgvault refuses both without it ("draft-edit requires --revision and
+    // --body"), so a route that dropped it could only ever fail after approval.
+    const h = harness();
+    await post(h.archive, '/draft-edit', {
+      pane: h.pane.id,
+      key: h.key,
+      id: 'd9',
+      body: 'later',
+      revision: 2,
+    });
+    expect(await sentTo()).toMatchObject({
+      action: 'msgvault.draft-edit',
+      payload: { id: 'd9', body: 'later', revision: 2 },
+    });
+    await post(h.archive, '/draft-delete', { pane: h.pane.id, key: h.key, id: 'd9', revision: 3 });
+    expect(await sentTo()).toMatchObject({
+      action: 'msgvault.draft-delete',
+      payload: { id: 'd9', revision: 3 },
+    });
+    const res = await post(h.archive, '/draft-delete', {
+      pane: h.pane.id,
+      key: h.key,
+      id: 'd9',
+      revision: 0,
+    });
+    expect(res.status).toBeGreaterThanOrEqual(400);
+  });
+
   it('refuses a malformed draft here, rather than at the dialog', async () => {
     const h = harness();
     const bad = [

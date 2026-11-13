@@ -793,19 +793,29 @@ export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
    * GET table, because what it reads is the write surface: the table above
    * is the archive, this is the mailbox.
    */
-  for (const [path, action] of [
-    ['/draft-get', 'msgvault.draft-get'],
-    ['/draft-delete', 'msgvault.draft-delete'],
-  ] as const) {
-    archive.post(path, async (c) => {
-      const b = z
-        .object({ pane: z.string(), key: z.string(), id: z.string().min(1).max(128) })
-        .parse(await c.req.json());
-      const auth = await authorize(b.pane, b.key, callerOf(c));
-      if (!auth.ok) return c.json(auth.body, auth.status);
-      return c.json(await brokerAction(action, { id: b.id }, auth), 202);
-    });
-  }
+  archive.post('/draft-get', async (c) => {
+    const b = z
+      .object({ pane: z.string(), key: z.string(), id: z.string().min(1).max(128) })
+      .parse(await c.req.json());
+    const auth = await authorize(b.pane, b.key, callerOf(c));
+    if (!auth.ok) return c.json(auth.body, auth.status);
+    return c.json(await brokerAction('msgvault.draft-get', { id: b.id }, auth), 202);
+  });
+  // msgvault REQUIRES the draft's current revision for an edit or delete
+  // (optimistic concurrency: a stale one is refused, never applied). It is
+  // optional here only so the broker, not this route, says what is missing.
+  const revision = z.number().int().positive().optional();
+  archive.post('/draft-delete', async (c) => {
+    const b = z
+      .object({ pane: z.string(), key: z.string(), id: z.string().min(1).max(128), revision })
+      .parse(await c.req.json());
+    const auth = await authorize(b.pane, b.key, callerOf(c));
+    if (!auth.ok) return c.json(auth.body, auth.status);
+    return c.json(
+      await brokerAction('msgvault.draft-delete', { id: b.id, revision: b.revision }, auth),
+      202,
+    );
+  });
 
   /**
    * A NEW email. See the broker for why this exists despite a Gmail source
@@ -950,11 +960,19 @@ export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
         key: z.string(),
         id: z.string().min(1).max(128),
         body: z.string().min(1).max(20000),
+        revision,
       })
       .parse(await c.req.json());
     const auth = await authorize(b.pane, b.key, callerOf(c));
     if (!auth.ok) return c.json(auth.body, auth.status);
-    return c.json(await brokerAction('msgvault.draft-edit', { id: b.id, body: b.body }, auth), 202);
+    return c.json(
+      await brokerAction(
+        'msgvault.draft-edit',
+        { id: b.id, body: b.body, revision: b.revision },
+        auth,
+      ),
+      202,
+    );
   });
 
   archive.onError(onError('msgvault'));
