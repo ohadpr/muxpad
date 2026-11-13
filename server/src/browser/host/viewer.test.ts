@@ -853,6 +853,14 @@ describe('the controls nothing had ever pressed', () => {
     expect(VIEWER_HTML).toMatch(/id="mobile"[^>]*aria-pressed="false"/);
   });
 
+  it('in the desktop LINK SHEET, undoes a phone layout the last viewer left behind', () => {
+    // One links browser serves every device; without this, a link read on the
+    // phone and then opened at a desk shows a 390px column in a wide sheet.
+    const h = run({ width: 1280, search: '?embed=sheet&by=pane-7', framed: true });
+    h.open();
+    expect(h.sent.filter((m) => m.t === 'emulate').at(-1)).toMatchObject({ mobile: false });
+  });
+
   it('and the toggle turns it on there', () => {
     const h = run({ width: 1280 });
     h.el('mobile').fire('click');

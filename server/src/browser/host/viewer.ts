@@ -1118,6 +1118,11 @@ if (window.innerWidth < 700) {
   // sending only the take left a viewer opened in DRIVE mode never asking at
   // all, because takeTheWheel short-circuits when the wheel is already ours.
   whenOpen(() => { if (watching) takeTheWheel(); else setMobile(true) })
+} else if (document.body.classList.contains('embed-sheet')) {
+  // THE LINKS BROWSER IS ONE BROWSER FOR EVERY DEVICE. A link read on the phone
+  // leaves it in phone mode, and the next link opened at a desk arrived as a
+  // 390px column in a black 1100px sheet. The desktop sheet says what it is.
+  whenOpen(() => { if (!watching) setMobile(false) })
 }
 
 // Everything is wired; dial. Last rather than first so no handler can fire
