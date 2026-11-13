@@ -950,6 +950,9 @@ read:
   show-thread <id>                          the thread around a message
   attachment <content_hash> [--out=PATH]    save one attachment (hash from show-message)
   stats                                     totals only, no content
+      Any other flag `msgvault <verb> --help` lists (search --offset=N,
+      --mode=hybrid; show-thread --offset=N) is sent through the reviewed
+      argv path rather than dropped. Write it joined: --flag=value.
 
 write (a draft reply; it can never send):
   run <args…>                               send argv straight to msgvault (reviewed, approved once)
@@ -1034,22 +1037,39 @@ cmd_msgvault() {
   # the whole way to the broker.
   local enc
   case "$verb" in
+    # ── A FLAG THE TYPED READ DOES NOT CARRY GOES THROUGH THE ARGV PATH ──
+    # These verbs used to read their positional and drop everything else
+    # without a word: `search x --offset=50` returned page one again,
+    # `show-thread <id> --offset=100` the same hundred messages, and nothing
+    # said the flag had not been sent. msgvault's own `--help` is the
+    # authority on what each takes, and the argv path checks against it, so
+    # anything beyond the typed shape goes there and is accepted or refused
+    # by name.
     search)
-      [ -n "${1:-}" ] || msgvault_usage
-      enc="$(printf '%s' "$1" | jq -sRr @uri)"; shift
-      local limit=""
-      case "${1:-}" in --limit=*) limit="&limit=${1#--limit=}";; esac
-      slack_call GET "/api/msgvault/search?$q&q=$enc$limit" ;;
+      local squery="" slimit="" sother=false
+      for a in "$@"; do
+        case "$a" in
+          --limit=*) slimit="&limit=${a#--limit=}" ;;
+          -*) sother=true ;;
+          *) [ -z "$squery" ] && squery="$a" || sother=true ;;
+        esac
+      done
+      [ -n "$squery" ] || msgvault_usage
+      if $sother; then msgvault_run_argv search "$@"; return; fi
+      enc="$(printf '%s' "$squery" | jq -sRr @uri)"
+      slack_call GET "/api/msgvault/search?$q&q=$enc$slimit" ;;
     # SPELLED OUT, not computed. `${verb#show-}` built the path from the word
     # the caller typed, which is one `case` arm away from being the caller's
     # choice of endpoint — and it made the route set unreadable to anything
     # checking what this command can reach.
     show-message)
       [ -n "${1:-}" ] || msgvault_usage
+      if [ $# -gt 1 ]; then msgvault_run_argv show-message "$@"; return; fi
       enc="$(printf '%s' "$1" | jq -sRr @uri)"
       slack_call GET "/api/msgvault/message?$q&id=$enc" ;;
     show-thread)
       [ -n "${1:-}" ] || msgvault_usage
+      if [ $# -gt 1 ]; then msgvault_run_argv show-thread "$@"; return; fi
       enc="$(printf '%s' "$1" | jq -sRr @uri)"
       slack_call GET "/api/msgvault/thread?$q&id=$enc" ;;
     # ── AN ATTACHMENT, AS A FILE ────────────────────────────────────────
@@ -1098,6 +1118,10 @@ cmd_msgvault() {
         '{path:$path, filename:$r[0].filename, mime_type:$r[0].mime_type, size:$r[0].size}'
       rm -f "$resp" ;;
     stats)
+      # msgvault's `stats` has no `--json`, which the argv path always adds,
+      # and its one other flag (`--account`) is refused there anyway. So say
+      # so rather than quietly answering for the whole archive.
+      [ $# -eq 0 ] || { echo "muxpad: stats takes no options (got $1); for --collection use: muxpad msgvault run stats --collection=<name>" >&2; return 1; }
       slack_call GET "/api/msgvault/stats?$q" ;;
     # ── THE ONE WRITE ───────────────────────────────────────────────────
     # A draft is the only thing here that leaves something behind, and it
@@ -1241,6 +1265,8 @@ cmd_msgvault() {
          + (if $description == "" then {} else {description:$description} end)')" ;;
     draft-get)
       [ -n "${1:-}" ] || msgvault_usage
+      # `--conversation <id>` and anything msgvault adds later.
+      if [ $# -gt 1 ] || [ "${1#-}" != "$1" ]; then msgvault_run_argv draft-get "$@"; return; fi
       slack_call POST /api/msgvault/draft-get "$(jq -nc \
         --arg pane "$MUXPAD_PANE_ID" --arg key "$MUXPAD_PANE_KEY" --arg id "$1" \
         '{pane:$pane,key:$key,id:$id}')" ;;

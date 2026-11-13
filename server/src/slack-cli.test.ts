@@ -480,17 +480,24 @@ describe('msgvault goes through the broker, holding nothing', () => {
     // The property that still matters is narrower: a NAMED verb must keep
     // composing its own payload, so nobody can inject a flag into `search`
     // by trailing it with words.
+    //
+    // Since #53 the draft writes, and any read given a flag its typed route
+    // does not carry, forward argv too — but ONLY into `msgvault_run_argv`,
+    // which posts to the same reviewed `/run` endpoint. So the property is:
+    // every forward lands at `/run`, and a typed route never carries one.
     const verbs = ['search', 'show-message', 'show-thread', 'attachment', 'stats'];
     for (const v of verbs) expect(body, v).toContain(v);
-    const forwards = [...body.matchAll(/"\$@"/g)];
-    expect(forwards).toHaveLength(1);
-    // …and the one that does is inside the `run` branch.
-    const runBranch = body.slice(
-      body.indexOf('    run)'),
-      body.indexOf('    # THE CALENDAR READS'),
-    );
-    expect(runBranch).toMatch(/"\$@"/);
-    expect(runBranch).toContain('/api/msgvault/run');
+    const lines = body.split('\n').filter((l) => l.includes('"$@"'));
+    expect(lines.length).toBeGreaterThan(0);
+    for (const l of lines) {
+      if (l.includes('for a in "$@"')) continue; // reading, not forwarding
+      expect(l, l).toMatch(/msgvault_run_argv |slack_call POST \/api\/msgvault\/run /);
+    }
+    const helper = CODE.slice(CODE.indexOf('msgvault_run_argv() {'));
+    const helperBody = helper.slice(0, helper.indexOf('\n}\n'));
+    expect([...helperBody.matchAll(/\/api\/msgvault\/([a-z-]+)/g)].map((m) => m[1])).toEqual([
+      'run',
+    ]);
   });
 
   it('calls exactly these endpoints — four reads and the draft lifecycle', () => {
@@ -518,9 +525,7 @@ describe('msgvault goes through the broker, holding nothing', () => {
       'calendar-delete',
       'calendar-freebusy',
       'calendar-update',
-      'draft-compose',
-      'draft-delete',
-      'draft-edit',
+      // draft-compose/-edit/-delete go through `run` (msgvault_run_argv).
       'draft-get',
       'draft-reply',
       'message',
