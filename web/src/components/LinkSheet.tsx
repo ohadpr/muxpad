@@ -1,10 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
-import { LINKS_PROFILE, linkHost, linkSheetViewerPath } from '../lib/link-sheet';
+import { LINKS_PROFILE, followTrail, linkHost, linkSheetViewerPath } from '../lib/link-sheet';
 import './LinkSheet.css';
 
 /**
  * A tapped link, opened in a sheet over the conversation — the way the native
  * X/Twitter app does it — instead of being handed to the OS.
+ *
+ * ONE SLIM BAR: ✕, Back (only once there is somewhere to go back to), the site
+ * you are on, and the way out to a real browser. The viewer's own toolbar is
+ * hidden in here — Phone and Paste are for driving an agent's browser, and a
+ * second address row repeats the site this bar already names.
  *
  * BOTTOM-ANCHORED, ~72% of the height. On a phone the bottom is where the thumb
  * is: the X, the grabber and "open in browser" sit in the sheet's top bar, a
@@ -41,6 +46,9 @@ export function LinkSheet({ url, by, onClose, fetchImpl, renewMs = 60_000 }: Lin
   const [state, setState] = useState<'opening' | 'ready' | { error: string }>('opening');
   const [drag, setDrag] = useState(0);
   const dragFrom = useRef<number | null>(null);
+  const frameRef = useRef<HTMLIFrameElement>(null);
+  // The pages visited since this link was opened; see followTrail.
+  const [trail, setTrail] = useState<readonly string[]>([]);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
 
@@ -48,6 +56,7 @@ export function LinkSheet({ url, by, onClose, fetchImpl, renewMs = 60_000 }: Lin
   useEffect(() => {
     let live = true;
     setState('opening');
+    setTrail([]);
     (async () => {
       try {
         const res = await doFetch(`/api/browsers/${LINKS_PROFILE}/open`, {
@@ -94,6 +103,15 @@ export function LinkSheet({ url, by, onClose, fetchImpl, renewMs = 60_000 }: Lin
     const onMessage = (e: MessageEvent) => {
       if (e.origin !== window.location.origin) return;
       if ((e.data as { muxpad?: string } | null)?.muxpad === 'handback') closeRef.current();
+      const data = e.data as { muxpad?: string; url?: unknown } | null;
+      if (
+        data?.muxpad === 'url' &&
+        typeof data.url === 'string' &&
+        e.source === frameRef.current?.contentWindow
+      ) {
+        const next = data.url;
+        setTrail((t) => followTrail(t, next));
+      }
     };
     document.addEventListener('keydown', onKey);
     window.addEventListener('message', onMessage);
@@ -103,7 +121,10 @@ export function LinkSheet({ url, by, onClose, fetchImpl, renewMs = 60_000 }: Lin
     };
   }, []);
 
-  const host = linkHost(url);
+  // The site you are ON — which a page that links elsewhere can change.
+  const current = trail[trail.length - 1] ?? url;
+  const host = linkHost(current);
+  const canGoBack = trail.length > 1;
   const label = `link · ${host}`;
   const dragStyle =
     drag > 0 ? { transform: `translateY(${drag}px)`, transition: 'none' } : undefined;
@@ -147,14 +168,30 @@ export function LinkSheet({ url, by, onClose, fetchImpl, renewMs = 60_000 }: Lin
           >
             ✕
           </button>
-          <span className="link-sheet__host" title={url}>
+          {canGoBack ? (
+            <button
+              type="button"
+              className="link-sheet__back"
+              aria-label="Back"
+              title="Back"
+              onClick={() =>
+                frameRef.current?.contentWindow?.postMessage(
+                  { muxpad: 'back' },
+                  window.location.origin,
+                )
+              }
+            >
+              ‹
+            </button>
+          ) : null}
+          <span className="link-sheet__host" title={current}>
             {host}
           </span>
           {/* The way out to a REAL browser: logging in somewhere, or a page you
               mean to keep. Opted out of the chat's link interception. */}
           <a
             className="link-sheet__out"
-            href={url}
+            href={current}
             target="_blank"
             rel="noreferrer noopener"
             data-native-link=""
@@ -166,6 +203,7 @@ export function LinkSheet({ url, by, onClose, fetchImpl, renewMs = 60_000 }: Lin
         {state === 'ready' ? (
           <iframe
             className="link-sheet__frame"
+            ref={frameRef}
             title={`page · ${host}`}
             src={linkSheetViewerPath(by)}
             allow="clipboard-read; clipboard-write"

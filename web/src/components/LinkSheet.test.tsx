@@ -187,6 +187,48 @@ describe('LinkSheet', () => {
     }
   });
 
+  it('is ONE bar: no Back until there is somewhere to go back to, then Back drives the page', async () => {
+    const f = fakeFetch();
+    const { host } = mount(
+      <LinkSheet url="https://a.example/1" by="p" onClose={() => {}} fetchImpl={f.impl} />,
+    );
+    await settle();
+    const frame = host.querySelector('iframe') as HTMLIFrameElement;
+    const win = frame.contentWindow as Window;
+    const posted: unknown[] = [];
+    vi.spyOn(win, 'postMessage').mockImplementation((m: unknown) => {
+      posted.push(m);
+    });
+    const hear = (url: string, source: Window | null = win) =>
+      act(() => {
+        window.dispatchEvent(
+          new MessageEvent('message', {
+            data: { muxpad: 'url', url },
+            origin: window.location.origin,
+            source,
+          }),
+        );
+      });
+    const back = () => host.querySelector<HTMLButtonElement>('[aria-label=Back]');
+    const site = () => host.querySelector('.link-sheet__host')?.textContent;
+
+    hear('https://a.example/1');
+    expect(back()).toBeNull();
+    // A page that is not this frame does not get to rename the site.
+    hear('https://evil.example/', null);
+    expect(site()).toBe('a.example');
+    hear('https://b.example/2');
+    // The bar names the site you are ON, and the way out goes there too.
+    expect(site()).toBe('b.example');
+    expect(host.querySelector('.link-sheet__out')?.getAttribute('href')).toBe(
+      'https://b.example/2',
+    );
+    act(() => back()?.click());
+    expect(posted).toEqual([{ muxpad: 'back' }]);
+    hear('https://a.example/1');
+    expect(back()).toBeNull();
+  });
+
   it('is a SHEET from the bottom, not the full-screen shape it replaces', () => {
     const css = readFileSync(join(__dirname, 'LinkSheet.css'), 'utf8');
     const panel = css.slice(css.indexOf('.link-sheet__panel {'));

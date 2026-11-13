@@ -47,8 +47,8 @@
   flex: none;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 14px 10px 8px;
+  gap: 8px;
+  padding: 12px 10px 6px;
   background: var(--bg-elev, #f4f4f8);
   border-bottom: 1px solid var(--chat-border, #d6d6e0);
   font-size: 0.8125rem;
@@ -69,7 +69,8 @@
   background: color-mix(in srgb, var(--chat-fg, #1c1c22) 25%, transparent);
 }
 
-.link-sheet__close {
+.link-sheet__close,
+.link-sheet__back {
   flex: none;
   width: 32px;
   height: 32px;
@@ -84,7 +85,14 @@
   cursor: pointer;
 }
 
-.link-sheet__close:hover {
+.link-sheet__back {
+  font-size: 1.25rem;
+  line-height: 1;
+  padding-bottom: 2px;
+}
+
+.link-sheet__close:hover,
+.link-sheet__back:hover {
   background: color-mix(in srgb, var(--chat-fg, #1c1c22) 16%, transparent);
 }
 

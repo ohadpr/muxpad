@@ -75,6 +75,8 @@ interface Harness {
   sent: Array<Record<string, unknown>>;
   /** Push a message from the host to the page. */
   receive(msg: Record<string, unknown>): void;
+  /** A postMessage arriving on the page's window, from `source`. */
+  fromWindow(data: unknown, source?: 'parent' | 'stranger'): void;
   clipboard: { text: string; reads: number };
 }
 
@@ -238,6 +240,7 @@ function run(opts: RunOpts | string = {}): Harness {
     return sock;
   };
 
+  const windowMessage: Array<(e: unknown) => void> = [];
   const globals = {
     document: {
       getElementById: el,
@@ -251,6 +254,7 @@ function run(opts: RunOpts | string = {}): Harness {
       pathname: '/browser/default/',
       host: 'h',
       protocol: 'https:',
+      origin: 'https://h',
       search,
       reload: () => {
         reloaded = true;
@@ -293,7 +297,9 @@ function run(opts: RunOpts | string = {}): Harness {
     },
     requestAnimationFrame: () => 0,
     URL: { createObjectURL: () => 'blob:', revokeObjectURL: () => {} },
-    addEventListener: () => {},
+    addEventListener: (type: string, fn: (e: unknown) => void) => {
+      if (type === 'message') windowMessage.push(fn);
+    },
     matchMedia: () => ({ matches: false, addEventListener() {} }),
     console: { log() {}, warn() {}, error() {} },
     innerWidth: width,
@@ -343,6 +349,14 @@ function run(opts: RunOpts | string = {}): Harness {
       for (const t of timers.splice(0)) t.fn();
     },
     timers,
+    fromWindow(data, source = 'parent') {
+      const e = {
+        origin: 'https://h',
+        source: source === 'parent' ? globals.parent : {},
+        data,
+      };
+      for (const fn of windowMessage) fn(e);
+    },
     receive(msg) {
       // The script assigns `ws.onmessage` rather than adding a listener. Getting
       // this wrong made a passing harness that delivered nothing — every
@@ -859,6 +873,30 @@ describe('the controls nothing had ever pressed', () => {
     const h = run({ width: 1280, search: '?embed=sheet&by=pane-7', framed: true });
     h.open();
     expect(h.sent.filter((m) => m.t === 'emulate').at(-1)).toMatchObject({ mobile: false });
+  });
+
+  it('in the link sheet, takes Back from the sheet’s bar, and only from its parent', () => {
+    const h = run({ width: 390, search: '?embed=sheet&by=pane-7', framed: true });
+    h.fromWindow({ muxpad: 'back' }, 'stranger');
+    expect(h.sent.some((m) => m.t === 'nav')).toBe(false);
+    h.fromWindow({ muxpad: 'back' });
+    expect(h.sent.at(-1)).toMatchObject({ t: 'nav', action: 'back' });
+  });
+
+  it('in the link sheet, tells the sheet which site it is on', () => {
+    const h = run({ width: 390, search: '?embed=sheet&by=pane-7', framed: true });
+    h.receive({ t: 'url', url: 'https://elsewhere.example/page' });
+    expect(h.posted).toContainEqual({ muxpad: 'url', url: 'https://elsewhere.example/page' });
+  });
+
+  it('outside the sheet, ignores a Back from its parent', () => {
+    const h = run({ width: 390, search: '?by=pane-7', framed: true });
+    h.fromWindow({ muxpad: 'back' });
+    expect(h.sent.some((m) => m.t === 'nav')).toBe(false);
+  });
+
+  it('hides its whole bar in the link sheet — the sheet has ONE bar of its own', () => {
+    expect(VIEWER_HTML).toMatch(/body\.embed-sheet #bar\{display:none!important\}/);
   });
 
   it('and the toggle turns it on there', () => {

@@ -60,3 +60,22 @@ export function linkHost(url: string): string {
 export function linkSheetViewerPath(by: string): string {
   return `/browser/${LINKS_PROFILE}/?embed=sheet&by=${encodeURIComponent(by)}`;
 }
+
+/**
+ * Where the reader has been since the sheet opened, for the sheet's Back.
+ *
+ * Kept HERE rather than asked of the browser, because the links browser is one
+ * browser for every link: its own history runs back through every link you
+ * ever opened, and Back in a sheet should stop at the page you tapped.
+ *
+ * The first page heard REPLACES rather than extends — the link you tapped may
+ * land somewhere else (a shortener, a redirect), and that is not somewhere to
+ * go back to. A page that is the one before the current one is a Back, so the
+ * trail shrinks; anything else is a step forward.
+ */
+export function followTrail(trail: readonly string[], url: string): readonly string[] {
+  if (trail.length === 0) return [url];
+  if (trail[trail.length - 1] === url) return trail;
+  if (trail.length > 1 && trail[trail.length - 2] === url) return trail.slice(0, -1);
+  return [...trail, url];
+}

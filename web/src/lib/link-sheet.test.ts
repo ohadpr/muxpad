@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { type LinkClick, linkHost, linkSheetViewerPath, sheetLinkFor } from './link-sheet';
+import {
+  type LinkClick,
+  followTrail,
+  linkHost,
+  linkSheetViewerPath,
+  sheetLinkFor,
+} from './link-sheet';
 
 /**
  * Which clicks open the sheet. The rule is narrow on purpose: a plain click on
@@ -79,5 +85,21 @@ describe('labels and paths', () => {
 
   it('frames the LINKS browser, never a session one', () => {
     expect(linkSheetViewerPath('pane 1')).toBe('/browser/links/?embed=sheet&by=pane%201');
+  });
+});
+
+describe('followTrail — what the sheet’s Back can go back to', () => {
+  it('the first page heard is the start, even when it is a redirect of the link', () => {
+    expect(followTrail([], 'https://final.example/')).toEqual(['https://final.example/']);
+  });
+
+  it('a new page is a step forward; hearing the same page again is not', () => {
+    const t = followTrail(['https://a/'], 'https://b/');
+    expect(t).toEqual(['https://a/', 'https://b/']);
+    expect(followTrail(t, 'https://b/')).toBe(t);
+  });
+
+  it('arriving at the page before this one is a Back, so the trail shrinks', () => {
+    expect(followTrail(['https://a/', 'https://b/'], 'https://a/')).toEqual(['https://a/']);
   });
 });
