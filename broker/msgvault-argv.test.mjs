@@ -135,3 +135,64 @@ test('a positional is not mistaken for a subcommand in the refusal', () => {
     'calendar create has no --nope',
   );
 });
+
+/**
+ * THE SHAPE A FLAG VALUE MUST ARRIVE IN.
+ *
+ * `--body hello` and `--body=hello` are the same thing to msgvault and NOT
+ * the same thing to this gate: it derives the subcommand from the non-flag
+ * tokens, so a split value becomes part of the command name. `--body hello`
+ * was reviewed as the command `draft-edit hello`, and the help it fetched was
+ * for a verb that does not exist.
+ *
+ * muxpad's CLI therefore forwards `--k=v` untouched (msgvault_run_argv), and
+ * this is the test that says why.
+ */
+test('a JOINED flag value leaves the command alone', () => {
+  const help = (cmd) => (cmd === 'draft-edit' ? '--body string\n--revision int\n--json' : '');
+  const joined = reviewArgv(
+    ['draft-edit', '--json', '--body=hello', '--revision=2', '--', 'draft-abc'],
+    help,
+  );
+  assert.equal(joined.ok, true);
+  // The command is the VERB, with no flag value dragged into it.
+  assert.ok(!joined.command.includes('hello'), joined.command);
+});
+
+test('a SPLIT flag value is swallowed into the command, which is the bug', () => {
+  // Documented rather than fixed here: the gate is the broker's and changing
+  // how it parses is a root install. The CLI avoids the shape instead.
+  const seen = [];
+  const help = (cmd) => {
+    seen.push(cmd);
+    return '--body string\n--json';
+  };
+  reviewArgv(['draft-edit', '--json', '--body', 'hello', '--', 'draft-abc'], help);
+  assert.ok(
+    seen.some((c) => c.includes('hello')),
+    'the value ended up in the command name',
+  );
+});
+
+/** The two flags the drafts bug needed, and the three the gate refuses. */
+test('draft-delete and draft-edit may carry --revision', () => {
+  const help = () => '--revision int\n--body string\n--json';
+  for (const a of [
+    ['draft-delete', '--json', '--revision=1', '--', 'd1'],
+    ['draft-edit', '--json', '--body=x', '--revision=2', '--', 'd1'],
+  ])
+    assert.equal(reviewArgv(a, help).ok, true, a[0]);
+});
+
+test('but an agent still may not choose the mailbox', () => {
+  // `--account`, `--source-id` and `--from` change WHICH IDENTITY sends, and
+  // the gate refuses all three whatever help says. That is deliberate, and it
+  // is also why a misdirected draft cannot be steered from here — see the
+  // report on the OceanWP draft.
+  const help = () => '--account string\n--source-id int\n--from string\n--json';
+  for (const f of ['--account=me@x.com', '--source-id=3', '--from=me@x.com']) {
+    const r = reviewArgv(['draft-reply', '--json', f, '--', '1'], help);
+    assert.equal(r.ok, false, f);
+    assert.match(r.why, /not something an agent sets/);
+  }
+});
