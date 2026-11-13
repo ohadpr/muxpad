@@ -133,3 +133,22 @@ describe('a drained message is on screen in the same frame its pending row leave
     );
   });
 });
+
+/**
+ * SCROLL ANCHORING STAYS OFF.
+ *
+ * Chromium's anchoring was a second scroll writer that stamped nothing: when
+ * the queue strip or the working row changed height it moved `scrollTop`
+ * itself, and the controller read that as the reader leaving the bottom. With
+ * it on, following was lost in 8/10 desktop and 4/4 mobile drains, measured on
+ * the real ChatPane; off, 0 of either. The image-above case it was kept for is
+ * covered by the controller's `place()`, and was measured that way. See the
+ * comment on `.chat-scroll` in ChatPane.css before changing this.
+ */
+describe('the chat scroller has one scroll writer', () => {
+  it('turns off the engine’s scroll anchoring', () => {
+    const css = readFileSync(join(process.cwd(), 'src/components/ChatPane.css'), 'utf8');
+    const rule = /\.chat-scroll\s*\{\s*overflow-anchor:\s*([a-z]+);\s*\}/.exec(css);
+    expect(rule?.[1]).toBe('none');
+  });
+});
