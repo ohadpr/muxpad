@@ -62,6 +62,9 @@ export const VIEWER_HTML = String.raw`<!doctype html>
      Done hands the browser to an agent that never drives this one. Back is
      driven from the sheet's bar — see the 'back' message below. */
   body.embed-sheet #bar{display:none!important}
+  /* If the frame ever does have to scroll in the sheet, a thin quiet bar rather
+     than a desktop gutter — the page's own scroll indicator lives in the stream. */
+  body.embed-sheet #wrap{scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.3) transparent}
   /* The address, truncated from the LEFT: the end of a url is the part that
      says which page you are on. */
   /* The address is the one thing here that is information rather than a control,
@@ -81,11 +84,20 @@ export const VIEWER_HTML = String.raw`<!doctype html>
      scroll the FRAME — while one finger still reaches the listeners below and
      becomes a tap or a drag inside the page. */
   #wrap{flex:1;overflow:auto;background:#000;touch-action:pinch-zoom;-webkit-overflow-scrolling:touch}
-  #stage{position:relative;display:inline-block;line-height:0}
+  /* vertical-align:top: an inline-block sits on the text BASELINE, and the line
+     box under it added 3px below the picture. Same two-scrollbar cascade as the
+     ring below; both had to go before a frame that fits stopped scrolling. */
+  #stage{position:relative;display:inline-block;line-height:0;vertical-align:top}
   #screen{display:block;background:#000;outline:none;transform-origin:0 0}
   /* A ring around the thing that needs you — see the host's reveal handler for
      why this is a highlight and not a crop. Fades out; a pointer, not a mode. */
-  #ring{position:absolute;border:2px solid #f0943f;border-radius:6px;pointer-events:none;
+  /* top:0;left:0 UNTIL IT IS PLACED. Left at its static position it sat just
+     below the picture — 4px of invisible border hanging off the bottom of the
+     stage. Measured in the link sheet: a 388x554 stream in a 388x554 frame
+     scrolled to 558, those 4px pulled in a vertical scrollbar, and its width
+     then made the stream wider than what was left, pulling in a horizontal one.
+     Two scrollbars around a page that fit exactly. (See #stage for the other 3px.) */
+  #ring{position:absolute;top:0;left:0;border:2px solid #f0943f;border-radius:6px;pointer-events:none;
         box-shadow:0 0 0 3px rgba(240,148,63,.25);opacity:0;transition:opacity .5s ease}
   #ring.on{opacity:1}
   /* Desktop has room to fit the whole page; a phone does not, and shrinking it
