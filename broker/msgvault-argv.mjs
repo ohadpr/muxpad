@@ -66,6 +66,15 @@ const FLAG_EXCEPTIONS = { calendar: [/^--account$/, /^--from$/] };
 /** `--scope all` deletes a whole recurring series; `single` is recoverable. */
 const FORBIDDEN_VALUES = [{ flag: '--scope', bad: /^(all|future)$/ }];
 
+/** `-n, --limit int` → `n` ↦ `--limit`: a short flag is reviewed as the
+ *  long flag it stands for, or refused if help lists no such short. */
+export function parseHelpShorts(help) {
+  const shorts = new Map();
+  for (const m of String(help).matchAll(/(^|\s)-([A-Za-z]), (--[a-z][a-z0-9-]*)/g))
+    shorts.set(m[2], m[3]);
+  return shorts;
+}
+
 export function parseHelpFlags(help) {
   const flags = new Set();
   for (const m of String(help).matchAll(/(^|\s)(--[a-z][a-z0-9-]*)/g)) flags.add(m[2]);
@@ -78,12 +87,15 @@ export function parseHelpFlags(help) {
  * @returns {{ok: true, command: string}|{ok: false, why: string}}
  */
 export function reviewArgv(args, helpFor) {
-  if (!Array.isArray(args) || !args.length) return { ok: false, why: 'Give the msgvault arguments' };
-  if (args.some((a) => typeof a !== 'string')) return { ok: false, why: 'Arguments must be strings' };
+  if (!Array.isArray(args) || !args.length)
+    return { ok: false, why: 'Give the msgvault arguments' };
+  if (args.some((a) => typeof a !== 'string'))
+    return { ok: false, why: 'Arguments must be strings' };
   if (args.length > 60) return { ok: false, why: 'Too many arguments' };
   const words = args.filter((a) => !a.startsWith('-'));
   const command = String(args[0] ?? '');
-  if (!/^[a-z][a-z0-9-]*$/.test(command)) return { ok: false, why: 'The first argument must be a command' };
+  if (!/^[a-z][a-z0-9-]*$/.test(command))
+    return { ok: false, why: 'The first argument must be a command' };
   if (ADMIN.test(command))
     return {
       ok: false,
@@ -100,11 +112,26 @@ export function reviewArgv(args, helpFor) {
   const help = pairHelp || helpFor(command);
   if (!help) return { ok: false, why: `msgvault has no command ${command}` };
   const allowed = parseHelpFlags(help);
+  const shorts = parseHelpShorts(help);
   const exceptions = FLAG_EXCEPTIONS[command] ?? [];
+  let ended = false;
   for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (a === '--' || !a.startsWith('--')) continue;
-    const [flag, inlineValue] = a.includes('=') ? [a.slice(0, a.indexOf('=')), a.slice(a.indexOf('=') + 1)] : [a, null];
+    let a = args[i];
+    if (a === '--') ended = true;
+    if (a === '--' || a === '-' || !a.startsWith('-')) continue;
+    // A SHORT FLAG WAS NEVER REVIEWED. `-x` skipped every gate, so a short
+    // alias of any refused flag would have walked straight through. It is
+    // now reviewed as the long flag help says it stands for — and one help
+    // does not list is refused. After `--` it is a positional, not a flag.
+    if (!a.startsWith('--')) {
+      if (ended) continue;
+      const long = shorts.get(a[1]);
+      if (!long) return { ok: false, why: `${sub} has no ${a.slice(0, 2)}` };
+      a = a.length > 2 ? `${long}=${a.slice(a[2] === '=' ? 3 : 2)}` : long;
+    }
+    const [flag, inlineValue] = a.includes('=')
+      ? [a.slice(0, a.indexOf('=')), a.slice(a.indexOf('=') + 1)]
+      : [a, null];
     if (FORBIDDEN_FLAGS.some((re) => re.test(flag)) && !exceptions.some((re) => re.test(flag)))
       return { ok: false, why: `${flag} is not something an agent sets` };
     if (!allowed.has(flag)) return { ok: false, why: `${sub} has no ${flag}` };

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { msgvaultRunner } from './msgvault-runner.mjs';
 
@@ -131,9 +131,23 @@ test('passing a mode makes it reject the very files it guards', () => {
   assert.doesNotThrow(() => assertProtectedPath(path, [0]));
 });
 
-test('the runner passes no mode', () => {
+test('the runner pins no mode — except 0600 on the token, which is its real mode', () => {
   const src = readFileSync(new URL('./msgvault-runner.mjs', import.meta.url), 'utf8');
-  assert.ok(!/assertProtectedPath\([^)]*mode:/.test(src), 'the runner pins an exact mode again');
+  const calls = src.split('\n').filter((l) => l.includes('io.assertProtectedPath('));
+  for (const l of calls)
+    if (/mode:/.test(l)) assert.match(l, /declared\.tokenFile.*mode: 0o600 \}/, l);
+});
+
+test('the real guard accepts the real token at 0600, owned by the broker', () => {
+  // lstat needs no read permission, so this checks the INSTALLED layout from
+  // an unprivileged test: the file's owner (the broker's account), its exact
+  // mode, and every ancestor root-owned with no group/other write.
+  const path = '/Library/muxpad-broker/msgvault-agent-token';
+  if (!existsSync(path)) return;
+  const owner = lstatSync(path).uid;
+  assert.notEqual(owner, 0, 'the token is the broker account’s, not root’s');
+  assert.throws(() => assertProtectedPath(path, [0]), /Unprotected/);
+  assert.doesNotThrow(() => assertProtectedPath(path, [0, owner], { mode: 0o600 }));
 });
 
 test('a non-attachment action keeps the small execFile buffer', async () => {
@@ -342,4 +356,50 @@ test('a mailbox that cannot be read back leaves the receipt untouched', async ()
   });
   const { result } = await h.runner('msgvault.draft-reply', { id: '1', body: 'b', all: false });
   assert.deepEqual(result, { status: 'created', message_id: 5, source_id: 1 });
+});
+
+/**
+ * ── THE TOKEN IS THE BROKER'S, NOT ROOT'S ──────────────────────────────────
+ *
+ * Every attachment test above injects an `assertProtectedPath` that passes
+ * everything, and that is how this shipped dead: the runner demanded the
+ * token file be ROOT-owned, while the installed file is 0600 and owned by
+ * the broker's own account — the only account that can read it, which is
+ * the point. Live, every `muxpad msgvault attachment` answered "Unprotected
+ * file or ancestor" before a byte was fetched.
+ *
+ * So this harness enforces OWNERSHIP the way the real check does, with the
+ * real layout: root owns the declaration and the binary, the broker owns the
+ * token.
+ */
+test('an attachment works when the token is owned by the broker itself', async () => {
+  const BROKER = process.getuid();
+  const owner = (p) => (String(p).includes('agent-token') ? BROKER : 0);
+  const checked = [];
+  const runner = msgvaultRunner({
+    io: {
+      readFileSync: (p) => (String(p).includes('token') ? 'K\n' : DECL),
+      assertProtectedPath: (path, owners, opts) => {
+        checked.push({ path, owners, opts });
+        if (!owners.includes(owner(path))) throw new Error('Unprotected file or ancestor');
+      },
+    },
+    run: () => assert.fail('the binary must not be run for an attachment'),
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
+      text: async () => '',
+    }),
+  });
+  const out = await runner('msgvault.export-attachment', { hash: HASH });
+  assert.equal(out.result.size, 3);
+  // And it is still a TIGHT check: only root or this process, and 0600.
+  const token = checked.find((c) => String(c.path).includes('agent-token'));
+  assert.deepEqual(token.owners, [0, BROKER]);
+  assert.equal(token.opts?.mode, 0o600);
+  // The declaration and the binary stay root-only.
+  for (const c of checked.filter((c) => !String(c.path).includes('agent-token')))
+    assert.deepEqual(c.owners, [0], c.path);
 });
