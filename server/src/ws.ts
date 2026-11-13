@@ -1677,10 +1677,21 @@ export function attachWsServer(deps: {
   // every browser tab is closed. Chat clients render the pending bubbles from
   // this queue (broadcastQueue), so the view survives reloads and follows the
   // user across devices.
-  const broadcastQueue = (paneId: string) => {
+  //
+  // `started` names the item a DRAIN just relayed, so the client can put the
+  // message and the working line on screen in the same commit that removes
+  // its pending row. Without it the only thing that did so was the runner's
+  // own `turn-start`, a round trip later (50-200ms to a runner on another
+  // machine): between `turn-done` and that echo the tail had neither the
+  // pending row nor the turn replacing it, so the chat got SHORTER, and a
+  // scroll landing in the gap was measured missing by 300-440px when the tail
+  // regrew. A field on this frame rather than an early `turn-start`, because
+  // a dozen consumers (voice, retire, the runner relay tests) count those.
+  const broadcastQueue = (paneId: string, started?: { id: string; text: string }) => {
     bcastToPane(paneId, {
       t: 'queue',
       items: queue.list(paneId).map((r) => ({ id: r.id, text: r.text })),
+      ...(started ? { started } : {}),
     });
   };
   // Relay the oldest queued message to the runner if it's idle and connected.
@@ -1707,7 +1718,7 @@ export function attachWsServer(deps: {
       deps.cache.setAgentBusy(paneId, true);
       emitOptimisticTurnStart(paneId, next.id);
       queue.remove(next.id, paneId);
-      broadcastQueue(paneId);
+      broadcastQueue(paneId, { id: next.id, text: next.text });
     }
     // ─── A RELAY THAT FAILS MUST RELEASE THE PANE ───────────────────────────
     // "Leave it queued; hello/turn-done retry" is true only if one of those

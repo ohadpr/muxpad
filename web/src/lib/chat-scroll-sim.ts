@@ -141,8 +141,11 @@ export class SimScroller implements ScrollSurface {
       if (top + r.height > viewportTop) return { id: r.id, offset: top - viewportTop };
       top += r.height;
     }
-    // Every row is above the line: only reachable transiently mid-relayout. The
-    // last row is the best available description of where the reader is.
+    // Every row is above the line. NOT a transient: it is the steady state
+    // whenever the unanchored furniture below the last row — a long reply still
+    // streaming, a stack of queued messages — is taller than the viewport and
+    // the reader is inside it. The last row, at its honest (large, negative)
+    // offset, is the best available description of where the reader is.
     const last = this.rows[this.rows.length - 1] as SimRow;
     return { id: last.id, offset: this.contentHeight - last.height - viewportTop };
   }
@@ -314,6 +317,61 @@ export class SimScroller implements ScrollSurface {
     return this;
   }
 
+  /**
+   * ── INPUT AND MOTION ARE TWO EVENTS, NOT ONE ─────────────────────────────
+   * `readerScrollsTo` below records the reader's input and moves `scrollTop`
+   * in one atomic step, so in it the input always equals the motion and always
+   * arrives with it. A browser promises neither. Measured in Chromium with real
+   * compositor wheel input, a `wheel` event reaches the page sometimes BEFORE
+   * the scroll it causes reaches `scrollTop` and sometimes AFTER, and a commit
+   * can land in between:
+   *
+   *     wheel -30 at 6464 → place() writes 6433.5 → scroll event at 6404
+   *
+   * The engine applies its delta to whatever `scrollTop` is when it gets
+   * there — including on top of a write the app made in the gap. Nothing in
+   * the old model could say that, so a mechanism that counted the gesture
+   * twice (300px of wheel moving 390–450px while a reply streamed) and one
+   * that threw it away (1px trackpad deltas moving the page 0px over 79
+   * writes) both passed every test.
+   *
+   * So the two halves are separate verbs:
+   *   · `wheel(delta)` — the input event arrives; the motion it will cause is
+   *     queued in the "compositor" and `scrollTop` has NOT moved yet;
+   *   · `compositorApplies()` — the engine applies the queued motion on top of
+   *     whatever `scrollTop` now is, clamped, and fires a scroll event;
+   *   · `inputOnly(delta)` — an input whose motion is already in `scrollTop`
+   *     (it arrived after its own scroll), or that will never move this
+   *     scroller at all (an edge, a nested scroller).
+   *
+   * Deltas may be fractional. A macOS trackpad opens a slow gesture at about
+   * 1px per event and Chromium scrolls by sub-pixel amounts, so `assign` does
+   * not round.
+   */
+  wheel(delta: number): this {
+    this.readerIntent += delta;
+    this.queuedMotion += delta;
+    return this;
+  }
+
+  compositorApplies(): this {
+    const d = this.queuedMotion;
+    this.queuedMotion = 0;
+    if (d === 0) return this;
+    const from = this.scrollTop;
+    this.assign(this.scrollTop + d);
+    if (this.scrollTop !== from) this.pending++;
+    return this;
+  }
+
+  inputOnly(delta: number): this {
+    this.readerIntent += delta;
+    return this;
+  }
+
+  /** Motion the compositor has been asked for and has not applied yet. */
+  private queuedMotion = 0;
+
   /** The reader, by any device. Produces a scroll event, like a real one. */
   readerScrollsTo(value: number): this {
     this.readerIntent += value - this.scrollTop;
@@ -393,9 +451,16 @@ export class SimScroller implements ScrollSurface {
     return this;
   }
 
-  /** Browsers clamp an assignment to the scrollable range. So does this. */
+  /**
+   * Browsers clamp an assignment to the scrollable range. So does this.
+   *
+   * It does NOT round. It used to, and that hid every sub-pixel failure: a
+   * 0.5px trackpad delta became 0 or 1, a fractional maximum became an integer
+   * one, and the mechanism's thresholds were never tested against a number
+   * they could not see.
+   */
   private assign(value: number): void {
-    this.scrollTop = Math.min(Math.max(0, Math.round(value)), this.maxScrollTop);
+    this.scrollTop = Math.min(Math.max(0, value), this.maxScrollTop);
   }
 }
 

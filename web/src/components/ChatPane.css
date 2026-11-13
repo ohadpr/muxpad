@@ -83,27 +83,49 @@
   scrollbar-width: thin;
   scrollbar-color: var(--chat-border-strong) transparent;
 }
-/* Scroll anchoring — the engine holding the reader's place when content ABOVE
-   them changes height — is ON, unconditionally.
+/* Scroll anchoring — the engine moving `scrollTop` itself to hold the reader's
+   place when content above its chosen anchor node changes height — is OFF.
 
-   It was off for the whole pane, then off only while pinned. Both were wrong,
-   and the second was wrong in a way you could see: `setPinned` runs on EVERY
-   scroll event (a 40px threshold), so while output streamed the class flickered
-   and anchoring switched on and off frame to frame. In the frames it was off, a
-   pasted screenshot decoding higher up grew the document above the reader with
-   nobody paying for it — they jumped BACK by that growth and were snapped
-   forward again when the follow-bottom observer caught up. Reported as
-   "sometimes it just jumps back randomly a bit". The randomness was an image
-   finishing; the smallness was one image's worth.
+   It was ON, with a comment arguing "there is no conflict to avoid". That
+   argument was never tested, and it was wrong. Measured on the real ChatPane in
+   headless Chromium (/tmp/scrollrepro, Nov 2026), queue four messages and let
+   them drain with the reader at the bottom:
 
-   There is no conflict to avoid. Appending below the reader does not trigger
-   anchoring at all, so live output still follows. When content grows ABOVE a
-   pinned reader the engine holds their row — which IS the bottom — and the
-   follow-bottom ResizeObserver re-asserts `maxScrollTop` after layout anyway,
-   so it has the last word. The two agree; the engine just removes the backward
-   flash in between. */
+     overflow-anchor: auto   following lost  8/10 desktop, 4/4 mobile, and a
+                             2,000px jump with no input while streaming
+     overflow-anchor: none   0/10, 0/4, no jump
+
+   The engine picks its anchor node itself, and at the bottom it picks one in
+   the furniture below the last message (queued bubbles, working row, composer
+   reserve). When that furniture changes height (a message queued, a drain, the
+   working row coming back after the turn-done clamp), the engine moves
+   `scrollTop` with nobody touching anything. That is a second writer that
+   stamps nothing, and the controller read its move as the reader scrolling
+   away, so following stopped. (`none` on only the furniture was also measured
+   and was worse, 10/10: the engine then anchors on the last real message and
+   makes the same move on every run.)
+
+   WHAT `auto` WAS KEPT FOR, AND WHY THAT DOES NOT NEED IT. The bug it was
+   written against is real: an image finishing above the reader grew the
+   document under them ("sometimes it just jumps back randomly a bit"). The
+   protection against it is the CONTROLLER, not the engine: a ResizeObserver
+   runs `place()`, whose `shift` re-seats the reader's row before paint.
+   Measured, post-paint, a 400px image finishing above the reader:
+
+     controller on,  anchoring auto or none    0px, pinned / mid / streaming
+     controller off, anchoring auto or none    407px for 25-28 frames
+
+   Chromium paid 0px for growth INSIDE a row. It does pay for a SIBLING
+   inserted between rows (+322px), which is the one case turning it off gives
+   up, and `place()` covers that too: a 300px sibling and a 242px row inserted
+   above a reader parked mid-history moved them 0px on every post-paint frame,
+   desktop and mobile, and 322px with `place()` disabled.
+
+   So there is exactly one writer. iOS 26 and earlier have no scroll anchoring
+   at all, so the controller already had to be right without it. Before
+   turning this back on, re-run those measurements. */
 .chat-scroll {
-  overflow-anchor: auto;
+  overflow-anchor: none;
 }
 .chat-scroll::-webkit-scrollbar {
   width: 9px;
