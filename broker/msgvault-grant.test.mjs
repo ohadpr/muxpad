@@ -252,11 +252,7 @@ test('an unregistered action never reaches a validator or an executor', async ()
   f.pair(); // or the pairing check answers first and proves nothing
   // `msgvault.draft` is in this list because composing a new email is not a
   // verb muxpad has: a Gmail source refuses `draft-compose` outright.
-  for (const action of [
-    'msgvault.query',
-    'msgvault.export-messages',
-        'msgvault.draft',
-  ])
+  for (const action of ['msgvault.query', 'msgvault.export-messages', 'msgvault.draft'])
     await assert.rejects(f.broker.create({ action, payload: {} }), /Unsupported action/, action);
   assert.deepEqual(f.ran, []);
 });
@@ -420,8 +416,8 @@ test('a draft rides the msgvault grant — it is not re-approved every time', as
   // So does editing and deleting it: the whole lifecycle, one approval.
   for (const [action, payload] of [
     ['msgvault.draft-get', { id: 'd9' }],
-    ['msgvault.draft-edit', { id: 'd9', body: 'later' }],
-    ['msgvault.draft-delete', { id: 'd9' }],
+    ['msgvault.draft-edit', { id: 'd9', body: 'later', revision: 2 }],
+    ['msgvault.draft-delete', { id: 'd9', revision: 3 }],
   ]) {
     assert.equal((await f.broker.create({ action, payload, origin: 'local' })).state, 'complete');
   }
