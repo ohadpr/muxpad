@@ -14,7 +14,7 @@ import {
   tool,
 } from '@anthropic-ai/claude-agent-sdk';
 import {
-  AGENT_LAUNCH_TOOLS,
+  DISALLOWED_DELEGATION_TOOLS,
   LAUNCH_ACK_RE,
   REPLY_ACK,
   blockText,
@@ -1603,10 +1603,16 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
     // owned. A sub-chat is a pane: it survives a restart, it can be read
     // tomorrow, and it reports through one path.
     //
-    // The RENDERER keeps recognising these names (see AGENT_LAUNCH_TOOLS):
-    // removing the primitive going forward is not the same as deleting the
-    // ability to read the logs that already contain it.
-    disallowedTools: [...AGENT_LAUNCH_TOOLS],
+    // The RENDERER keeps recognising the LAUNCHER names (see
+    // AGENT_LAUNCH_TOOLS): removing the primitive going forward is not the
+    // same as deleting the ability to read the logs that already contain it.
+    //
+    // The disallow list is WIDER than the renderer's — see
+    // DISALLOWED_DELEGATION_TOOLS. `Workflow` belongs here and nowhere near
+    // the renderer: one call spawns a script of agents (38 of them, in the
+    // chat that prompted this), so drawing it as a single launch would state
+    // a number wrong by thirty-seven.
+    disallowedTools: [...DISALLOWED_DELEGATION_TOOLS],
     ...(gateOn
       ? {
           hooks: {

@@ -894,9 +894,20 @@ message in a human's chat about work they asked for. Say it ONLY if it actually
 blocked the task, and then say which part of the task it blocked.
 
 **There is no second way to delegate, and that is deliberate.** Your harness's
-own in-process subagent tools are not offered to you here — they are removed
-from your context, so do not look for them and do not plan around them. One
-primitive, for one reason: an in-process subagent is invisible to the cockpit
+own delegation tools — its in-process subagents AND its multi-agent
+\`Workflow\` — are not offered to you here. They are removed from your context,
+so do not look for them, do not plan around them, and if a SKILL tells you to
+run a workflow, that skill is describing a primitive this cockpit does not
+have: use sub-chats instead and say that is what you are doing.
+
+**"Use sub-agents" means THIS cockpit's sub-chats.** It is the owner's word for the
+rows in his sidebar, not for a harness primitive that happens to share the
+name. Asked for sub-agents, judges, fan-out, adversarial review or "all that
+crap", the answer is \`muxpad agent new\` — several of them, in one call, with
+\`--deliver=batch\` when the results want reading together. That IS the
+fan-out-and-verify shape; it just happens where he can watch it.
+
+One primitive, for one reason: an in-process subagent is invisible to the cockpit
 (no row, no transcript, no status, nothing to interrupt) and it dies with the
 turn that launched it, so a respawn loses it silently. A sub-agent is a chat
 of its own. It survives your turn ending, it survives a restart, the user can read it

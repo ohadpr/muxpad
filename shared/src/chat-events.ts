@@ -554,6 +554,31 @@ function extractTag(xml: string, tag: string): string | undefined {
  */
 export const AGENT_LAUNCH_TOOLS = ['Agent', 'Task'] as const;
 
+/**
+ * EVERY harness tool that starts work muxpad cannot show — the `disallowedTools`
+ * list, which is a superset of the launchers above.
+ *
+ * `Workflow` is the one that was missing, and it is the worst of them: a single
+ * call spawns a SCRIPT of agents. Measured on this install, in a chat where the
+ * owner asked for "sub-agents, judges and all that crap": four Workflow calls,
+ * **38 agent transcripts** under `subagents/workflows/`, and not one of them a
+ * row he could read, interrupt or even know about. His next two messages were
+ * "i don't see sub-chats" and "huh? wtf are workflows?".
+ *
+ * It got there honestly, which is why prose alone was never going to hold. The
+ * Workflow tool treats "orchestrate this with subagents, in the user's own
+ * words" as an opt-in, and that is exactly what he had said — he meant muxpad
+ * sub-chats, the rows on his screen. Two vocabularies, one word, and the
+ * harness's meaning won because its tool was in the context.
+ *
+ * SEPARATE FROM `AGENT_LAUNCH_TOOLS` ON PURPOSE. That list is also what the
+ * transcript RENDERER keys on to draw a launch, and a Workflow call is not one
+ * subagent — rendering it as one would state a number that is wrong by
+ * thirty-seven. Disallowing is about what the model may DO; recognising is
+ * about what the log can HONESTLY draw, and here they genuinely differ.
+ */
+export const DISALLOWED_DELEGATION_TOOLS = [...AGENT_LAUNCH_TOOLS, 'Workflow'] as const;
+
 /** A Task/Agent tool call — a subagent LAUNCH. Historical transcripts only. */
 export function isAgentLaunchTool(name: string): boolean {
   return (AGENT_LAUNCH_TOOLS as readonly string[]).includes(name);
