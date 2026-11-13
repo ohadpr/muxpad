@@ -5,7 +5,12 @@
 // spreads into the SDK query() Options.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { AGENT_LAUNCH_TOOLS, type SubagentProgress, isAgentLaunchTool } from '@muxpad/shared';
+import {
+  AGENT_LAUNCH_TOOLS,
+  DISALLOWED_DELEGATION_TOOLS,
+  type SubagentProgress,
+  isAgentLaunchTool,
+} from '@muxpad/shared';
 import { describe, expect, it } from 'vitest';
 import { SubagentRoster } from '../subagent-roster.js';
 import {
@@ -201,7 +206,7 @@ describe('claude backend — one delegation primitive', () => {
   const SRC = readFileSync(join(__dirname, 'claude.ts'), 'utf8');
 
   it('hands the SDK the shared launch-tool list, not a second copy', () => {
-    expect(SRC).toContain('disallowedTools: [...AGENT_LAUNCH_TOOLS]');
+    expect(SRC).toContain('disallowedTools: [...DISALLOWED_DELEGATION_TOOLS]');
     expect(AGENT_LAUNCH_TOOLS).toEqual(['Agent', 'Task']);
   });
 
@@ -272,5 +277,35 @@ describe('the report tool says what it is for', () => {
     // read at the moment of relevance; an instruction is read by everyone.
     const instructions = readFileSync(join(__dirname, '..', '..', 'agent-instructions.ts'), 'utf8');
     expect(instructions).not.toMatch(/muxpad report|`report` tool/);
+  });
+});
+
+/**
+ * THE HOLE THE OWNER FELL INTO.
+ *
+ * `Workflow` spawns a SCRIPT of agents, and it was not on the disallow list —
+ * only `Agent` and `Task` were. Measured in a chat where he asked for
+ * "sub-agents, judges and all that crap": four Workflow calls, 38 agent
+ * transcripts under `subagents/workflows/`, none of them a row he could read
+ * or interrupt. He said "i don't see sub-chats", then "huh? wtf are
+ * workflows?".
+ *
+ * The model was not misbehaving: the Workflow tool counts "orchestrate this
+ * with subagents, in the user's own words" as an opt-in, and that is what he
+ * had said — meaning muxpad's sub-chats. Two vocabularies, one word. Prose in
+ * the instructions cannot settle that; removing the tool can.
+ */
+describe('Workflow is not a second delegation primitive', () => {
+  it('is disallowed, with Agent and Task', () => {
+    expect(DISALLOWED_DELEGATION_TOOLS).toContain('Workflow');
+    for (const t of AGENT_LAUNCH_TOOLS) expect(DISALLOWED_DELEGATION_TOOLS).toContain(t);
+  });
+
+  it('is NOT in the renderer list, which would misdraw it as one subagent', () => {
+    // A Workflow call is not a launch of one worker; calling it one would
+    // state a number wrong by thirty-seven. Disallowing and recognising are
+    // different questions and this is where they come apart.
+    expect(AGENT_LAUNCH_TOOLS).not.toContain('Workflow');
+    expect(isAgentLaunchTool('Workflow')).toBe(false);
   });
 });
