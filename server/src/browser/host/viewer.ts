@@ -55,6 +55,10 @@ export const VIEWER_HTML = String.raw`<!doctype html>
   /* Watching: the stream is a picture. Say so rather than letting somebody
      press things that quietly go nowhere. */
   body.watching #screen{cursor:default}
+  /* FRAMED IN THE LINK SHEET: the sheet has its own X and its own way out, and
+     "‹ muxpad" in here would load muxpad inside its own frame. Done hands the
+     browser back to an agent, and no agent drives the links browser. */
+  body.embed-sheet #home,body.embed-sheet #handback,body.embed-sheet #takeover{display:none!important}
   /* The address, truncated from the LEFT: the end of a url is the part that
      says which page you are on. */
   /* The address is the one thing here that is information rather than a control,
@@ -396,6 +400,7 @@ const mods = (e) => (e.altKey?1:0) | (e.ctrlKey?2:0) | (e.metaKey?4:0) | (e.shif
 // leaves this tab. The wheel is not held and not requested; the stream is a
 // picture until somebody says otherwise.
 let watching = new URLSearchParams(location.search).get('mode') === 'watch'
+if (new URLSearchParams(location.search).get('embed') === 'sheet') document.body.classList.add('embed-sheet')
 const INPUT = new Set(['mouse', 'key', 'text', 'nav', 'emulate', 'fillLogin'])
 const send = (o) => {
   // RETURNS WHETHER IT WENT. Input is dropped while watching, and a caller that
