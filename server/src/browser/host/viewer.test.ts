@@ -895,6 +895,19 @@ describe('the controls nothing had ever pressed', () => {
     expect(h.sent.some((m) => m.t === 'nav')).toBe(false);
   });
 
+  it('parks the attention ring INSIDE the stage until it is placed — 4px below it meant two scrollbars', () => {
+    // Layout cannot be measured in this harness; the measurement is in the
+    // rule's comment. Pinned because the two properties look like no-ops.
+    const rule = /#ring\{([^}]*)\}/.exec(VIEWER_HTML)?.[1] ?? '';
+    expect(rule).toMatch(/position:absolute/);
+    expect(rule).toMatch(/top:0/);
+    expect(rule).toMatch(/left:0/);
+  });
+
+  it('and does not hang the stage on the text baseline — the other 3px', () => {
+    expect(VIEWER_HTML).toMatch(/#stage\{[^}]*vertical-align:top[^}]*\}/);
+  });
+
   it('hides its whole bar in the link sheet — the sheet has ONE bar of its own', () => {
     expect(VIEWER_HTML).toMatch(/body\.embed-sheet #bar\{display:none!important\}/);
   });
