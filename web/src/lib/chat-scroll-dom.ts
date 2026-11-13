@@ -140,7 +140,15 @@ export function domScrollSurface(getEl: () => HTMLElement | null): ScrollSurface
     el.addEventListener(
       'wheel',
       (e) => {
-        readerIntent += (e as WheelEvent).deltaY;
+        const w = e as WheelEvent;
+        // ── NOT EVERY WHEEL IS A VERTICAL GESTURE ──────────────────────────
+        // Any nonzero input now counts as the reader (see `place()`), so what
+        // is let in here matters more than when a 1px floor ate the noise. A
+        // sideways swipe across a code block carries a pixel or two of deltaY,
+        // and a pinch-zoom arrives as a ctrl-wheel. Neither is the reader
+        // leaving the tail, and reading them as that ends following mid-reply.
+        if (w.ctrlKey || Math.abs(w.deltaX) > Math.abs(w.deltaY)) return;
+        readerIntent += w.deltaY;
       },
       { passive: true },
     );

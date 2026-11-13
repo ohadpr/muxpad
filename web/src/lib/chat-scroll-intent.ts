@@ -570,10 +570,15 @@ export function scrollEventIsTheReader(opts: {
   // believing it wrote the oldest on-screen row over the reader's parked message,
   // which the restore then faithfully reproduced.
   if (!opts.placed) return false;
+  // Input is direct evidence and outranks every inference below it — including
+  // "this is our own write arriving". That test has a 1px tolerance for the
+  // engine rounding what we assigned, so a 1px trackpad step away from a
+  // position we had just written (which, while following a streaming reply, is
+  // every position) read as our own echo and was never heard. A person having
+  // touched the scroller since we last looked is never explained by our write.
+  if (opts.inputMoved) return true;
   // Our own write arriving.
   if (opts.wrote !== null && Math.abs(opts.scrollTop - opts.wrote) <= TARGET_EPSILON) return false;
-  // Input is direct evidence and outranks every inference below it.
-  if (opts.inputMoved) return true;
   // Nothing anchorable to compare — only reachable transiently mid-relayout.
   // Don't guess; the next event will have geometry.
   if (!opts.here) return false;
