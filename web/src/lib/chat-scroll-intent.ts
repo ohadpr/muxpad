@@ -63,7 +63,18 @@ export interface Anchor {
  */
 export type ScrollIntent =
   | { at: 'end' }
-  | { at: 'row'; id: string; offset: number }
+  | {
+      at: 'row';
+      id: string;
+      offset: number;
+      /**
+       * The reader chose this offset just now, on the page as it is — as
+       * opposed to an offset REMEMBERED and replayed against a document that
+       * may have changed since (a restore). See `targetFor` for the one rule
+       * that tells the two apart.
+       */
+      live?: true;
+    }
   | { at: 'hit' }
   | { at: 'nothing' };
 
@@ -272,7 +283,7 @@ export function next(state: ScrollState, input: ScrollInput): ScrollState {
         intent: input.atEnd
           ? { at: 'end' }
           : input.here
-            ? { at: 'row', id: input.here.id, offset: input.here.offset }
+            ? { at: 'row', id: input.here.id, offset: input.here.offset, live: true }
             : // Nothing anchorable and not at the end: only reachable transiently
               // mid-relayout. Don't invent a target.
               { at: 'nothing' },
@@ -459,7 +470,17 @@ export function targetFor(
         anchorOffset: intent.offset,
         scrollHeight: geo.scrollHeight,
         clientHeight: geo.clientHeight,
-        rowHeight: row.height,
+        // ── THE STALE-OFFSET CLAMP IS FOR RESTORES ONLY ─────────────────────
+        // It answers "does a REMEMBERED offset still fit the row it names?",
+        // which matters because a row can come back shorter than it was
+        // measured (an expanded run collapses on every remount). A live offset
+        // asks no such question: the reader is looking at it now. And it
+        // routinely does not fit, honestly — the streaming reply and the
+        // queued rows carry no `data-eid`, so a reader inside a tail taller
+        // than the viewport is anchored to the last FINISHED row at -2300px.
+        // Clamping that threw them up to the top of that row, their own
+        // message, and walled them there for as long as the reply streamed.
+        rowHeight: intent.live ? undefined : row.height,
       });
     case 'hit':
       // `row` here is the HIT's box — the mark inside the matched message, not

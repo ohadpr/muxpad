@@ -283,9 +283,13 @@ export function domScrollSurface(getEl: () => HTMLElement | null): ScrollSurface
         // which is what "still on screen" has to mean at the clip edge.
         top + 1,
       );
-      // `firstVisibleRow` returns `count` when every row is above the line, which
-      // only happens transiently mid-relayout — the last row is still the best
-      // available description of where the reader is.
+      // `firstVisibleRow` returns `count` when every row is above the line. That
+      // is NOT only a transient: the streaming reply and the queued rows carry
+      // no `data-eid`, so it is the steady state whenever that tail is taller
+      // than the viewport and the reader is inside it. The last row, at its
+      // true (large, negative) offset, is still the best available description
+      // of where the reader is — and a live intent honours it as measured (see
+      // the stale-offset rule in `targetFor`, which is for restores only).
       const row = rows[Math.min(i, rows.length - 1)];
       const id = row?.getAttribute(ANCHOR_ATTR);
       if (!row || !id) return null;
