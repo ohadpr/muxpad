@@ -74,7 +74,12 @@ export function msgvaultRunner({
     if (action === 'msgvault.export-attachment') {
       const hash = String(payload?.hash ?? '');
       if (!/^[a-f0-9]{64}$/.test(hash)) throw new Error('attachment needs a 64-hex content hash');
-      io.assertProtectedPath(declared.tokenFile, [0]);
+      // Root OR THIS PROCESS, at exactly 0600. The installed token is owned
+      // by the broker's own account — it is the one account that may read it
+      // — so a root-only check refused every attachment ("Unprotected file
+      // or ancestor"). Ancestors still have to be root's: the walk applies
+      // the same owner list, and /Library/muxpad-broker is root-owned.
+      io.assertProtectedPath(declared.tokenFile, [0, process.getuid?.() ?? 0], { mode: 0o600 });
       const token = String(io.readFileSync(declared.tokenFile, 'utf8')).trim();
       const url = `${String(declared.agentUrl).replace(/\/+$/, '')}/api/v1/cli/attachment?content_hash=${hash}`;
       const res = await fetchImpl(url, {

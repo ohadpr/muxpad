@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { test } from 'node:test';
-import { argvIsRead, parseHelpFlags, reviewArgv } from './msgvault-argv.mjs';
+import { argvIsRead, parseHelpFlags, parseHelpShorts, reviewArgv } from './msgvault-argv.mjs';
 
 /**
  * THE REVIEW IS THE WHOLE SECURITY SURFACE of the argv path, so it is tested
@@ -12,7 +12,8 @@ import { argvIsRead, parseHelpFlags, reviewArgv } from './msgvault-argv.mjs';
 const HELP = {
   search: '--limit int\n--json\n--since string',
   'draft-reply': '--body string\n--all\n--json',
-  'calendar create': '--summary string\n--from string\n--to string\n--tz string\n--attendees strings\n--account string\n--json',
+  'calendar create':
+    '--summary string\n--from string\n--to string\n--tz string\n--attendees strings\n--account string\n--json',
   'calendar freebusy': '--from string\n--to string\n--tz string\n--account string\n--json',
   'calendar delete': '--scope string\n--account string\n--json',
   'add-account': '--json',
@@ -23,7 +24,10 @@ const helpFor = (c) => HELP[c] ?? null;
 test('a flag the subcommand does not have is refused', () => {
   // The gate that needs no maintenance, and the one the old verb table never
   // had: nothing checked that muxpad's hand-written flags existed.
-  assert.deepEqual(reviewArgv(['search', '--limit', '5'], helpFor), { ok: true, command: 'search' });
+  assert.deepEqual(reviewArgv(['search', '--limit', '5'], helpFor), {
+    ok: true,
+    command: 'search',
+  });
   assert.match(reviewArgv(['search', '--deep'], helpFor).why, /search has no --deep/);
 });
 
@@ -37,7 +41,11 @@ test('flags that change WHO THIS IS are refused even when help lists them', () =
   // `--home` and `--config` re-point the whole archive; `--agent-*` overrides
   // the grant itself. A help text that lists them is not permission.
   for (const flag of ['--home', '--config', '--agent-url', '--local'])
-    assert.match(reviewArgv(['search', flag, 'x'], helpFor).why, /not something an agent sets/, flag);
+    assert.match(
+      reviewArgv(['search', flag, 'x'], helpFor).why,
+      /not something an agent sets/,
+      flag,
+    );
 });
 
 test('flags that reach another person are refused', () => {
@@ -60,7 +68,10 @@ test('…but a calendar still gets its --account and its --from TIME', () => {
 });
 
 test('a recurring series is never deleted wholesale', () => {
-  assert.equal(reviewArgv(['calendar', 'delete', 'primary', '--scope', 'single'], helpFor).ok, true);
+  assert.equal(
+    reviewArgv(['calendar', 'delete', 'primary', '--scope', 'single'], helpFor).ok,
+    true,
+  );
   assert.match(
     reviewArgv(['calendar', 'delete', 'primary', '--scope', 'all'], helpFor).why,
     /too broad/,
@@ -134,4 +145,97 @@ test('a positional is not mistaken for a subcommand in the refusal', () => {
     reviewArgv(['calendar', 'create', 'primary', '--nope'], helpFor).why,
     'calendar create has no --nope',
   );
+});
+
+/**
+ * THE SHAPE A FLAG VALUE MUST ARRIVE IN.
+ *
+ * `--body hello` and `--body=hello` are the same thing to msgvault and NOT
+ * the same thing to this gate: it derives the subcommand from the non-flag
+ * tokens, so a split value becomes part of the command name. `--body hello`
+ * was reviewed as the command `draft-edit hello`, and the help it fetched was
+ * for a verb that does not exist.
+ *
+ * muxpad's CLI therefore forwards `--k=v` untouched (msgvault_run_argv), and
+ * this is the test that says why.
+ */
+test('a JOINED flag value leaves the command alone', () => {
+  const help = (cmd) => (cmd === 'draft-edit' ? '--body string\n--revision int\n--json' : '');
+  const joined = reviewArgv(
+    ['draft-edit', '--json', '--body=hello', '--revision=2', '--', 'draft-abc'],
+    help,
+  );
+  assert.equal(joined.ok, true);
+  // The command is the VERB, with no flag value dragged into it.
+  assert.ok(!joined.command.includes('hello'), joined.command);
+});
+
+test('a SPLIT flag value is swallowed into the command, which is the bug', () => {
+  // Documented rather than fixed here: the gate is the broker's and changing
+  // how it parses is a root install. The CLI avoids the shape instead.
+  const seen = [];
+  const help = (cmd) => {
+    seen.push(cmd);
+    return '--body string\n--json';
+  };
+  reviewArgv(['draft-edit', '--json', '--body', 'hello', '--', 'draft-abc'], help);
+  assert.ok(
+    seen.some((c) => c.includes('hello')),
+    'the value ended up in the command name',
+  );
+});
+
+/** The two flags the drafts bug needed, and the three the gate refuses. */
+test('draft-delete and draft-edit may carry --revision', () => {
+  const help = () => '--revision int\n--body string\n--json';
+  for (const a of [
+    ['draft-delete', '--json', '--revision=1', '--', 'd1'],
+    ['draft-edit', '--json', '--body=x', '--revision=2', '--', 'd1'],
+  ])
+    assert.equal(reviewArgv(a, help).ok, true, a[0]);
+});
+
+test('but an agent still may not choose the mailbox', () => {
+  // `--account`, `--source-id` and `--from` change WHICH IDENTITY sends, and
+  // the gate refuses all three whatever help says. That is deliberate, and it
+  // is also why a misdirected draft cannot be steered from here — see the
+  // report on the OceanWP draft.
+  const help = () => '--account string\n--source-id int\n--from string\n--json';
+  for (const f of ['--account=me@x.com', '--source-id=3', '--from=me@x.com']) {
+    const r = reviewArgv(['draft-reply', '--json', f, '--', '1'], help);
+    assert.equal(r.ok, false, f);
+    assert.match(r.why, /not something an agent sets/);
+  }
+});
+
+/**
+ * ── A SHORT FLAG WAS NEVER REVIEWED ─────────────────────────────────────
+ *
+ * The loop skipped anything not starting with `--`, so `-x` passed every
+ * gate: not checked against help, not checked against the refused list.
+ * Nothing in msgvault 0.22 gives a refused flag a short alias, which is the
+ * only reason it was not a hole yet. Now a short flag is reviewed as the
+ * long flag its help says it stands for.
+ */
+test('a short flag is reviewed as the long flag it stands for', () => {
+  const help = (c) =>
+    c === 'search'
+      ? '  -n, --limit int   Maximum\n  -a, --account string   Limit\n      --json\n  -h, --help'
+      : null;
+  assert.equal(reviewArgv(['search', '-n', '5', '--json', '--', 'x'], help).ok, true);
+  assert.equal(reviewArgv(['search', '-n5', '--', 'x'], help).ok, true);
+  // A short alias of a refused flag is refused like the flag.
+  assert.match(reviewArgv(['search', '-a', 'me@x.com', '--', 'x'], help).why, /--account is not/);
+  assert.match(reviewArgv(['search', '-ame@x.com', '--', 'x'], help).why, /--account is not/);
+  // A short flag help does not list is refused by name.
+  assert.match(reviewArgv(['search', '-z', '--', 'x'], help).why, /search has no -z/);
+  // After `--` it is a positional, as msgvault will read it.
+  assert.equal(reviewArgv(['search', '--json', '--', '-z'], help).ok, true);
+});
+
+test('parseHelpShorts reads the real binary’s short flags', (t) => {
+  const BIN = '/usr/local/libexec/msgvault/msgvault';
+  if (!existsSync(BIN)) return t.skip('msgvault is not installed on this machine');
+  const help = execFileSync(BIN, ['search', '--help'], { encoding: 'utf8' });
+  assert.equal(parseHelpShorts(help).get('n'), '--limit');
 });
