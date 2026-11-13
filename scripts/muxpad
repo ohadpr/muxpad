@@ -963,8 +963,13 @@ write (a draft reply; it can never send):
   draft-compose --to=<addr> [--to=…] --subject="…" --body="…"
   draft-reply <message-id> --body="…" [--all]
   draft-get <draft-id>                      read a managed draft
-  draft-edit <draft-id> --body="…"          replace its body
-  draft-delete <draft-id>                   delete it
+  draft-edit <draft-id> --body="…" [--revision=N]   replace its body
+  draft-delete <draft-id> [--revision=N]           delete it
+      Both take msgvault's own flags: whatever `msgvault <verb> --help`
+      lists is accepted, so a flag it gains works here the same day.
+      `--revision` is REQUIRED by msgvault for both — read it from
+      `draft-get` first. An agent still may not choose the mailbox
+      (`--account`, `--source-id`, `--from` are refused).
 
 Each call asks you to approve it. A READ may be approved for a stretch of
 time. Drafts ride the same msgvault approval as the reads — nothing here can
@@ -976,6 +981,33 @@ Gmail source was once measured refusing it (draft_disabled); if yours still
 does, the refusal comes back verbatim rather than being hidden.
 EOF
   exit 1
+}
+
+# `muxpad msgvault <write-verb> …` → the argv path, with `--k=v` spelled the
+# way a shell user types it and `--k v` the way msgvault wants it.
+#
+# Everything after the verb is forwarded. muxpad does not decide which flags
+# exist: the broker checks each one against that subcommand's own `--help`,
+# so a flag msgvault gains is usable the day it ships, with no root install.
+msgvault_run_argv() {
+  local verb="$1"; shift
+  local args=("$verb" "--json")
+  # `--k=v` STAYS JOINED. Splitting it into `--k v` looks equivalent and is
+  # not: the broker's gate derives the subcommand from the non-flag tokens,
+  # so a split value becomes part of the command name — `--body hello` was
+  # reviewed as the command `draft-edit hello`, against help for a verb that
+  # does not exist. Joined, every value stays attached to its flag and the
+  # only bare token left is the id.
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --*) args+=("$1") ;;
+      *) args+=("--" "$1") ;;
+    esac
+    shift
+  done
+  slack_call POST /api/msgvault/run "$(printf '%s\n' "${args[@]}" | jq -Rn \
+    --arg pane "$MUXPAD_PANE_ID" --arg key "$MUXPAD_PANE_KEY" \
+    '{pane:$pane,key:$key,args:[inputs]}')"
 }
 
 cmd_msgvault() {
@@ -1197,52 +1229,38 @@ cmd_msgvault() {
         '{pane:$pane,key:$key,account:$account,calendar:$calendar,summary:$summary,start:$start,end:$end,tz:$tz}
          + (if $location == "" then {} else {location:$location} end)
          + (if $description == "" then {} else {description:$description} end)')" ;;
-    # A NEW email. May come back refused by the source — msgvault's own
-    # `draft_disabled` — and that answer is passed through rather than hidden.
-    draft-compose)
-      local csubj="" cbody="" cto=()
-      while [ $# -gt 0 ]; do
-        case "$1" in
-          --to=*) cto+=("${1#*=}") ;;
-          --subject=*) csubj="${1#*=}" ;;
-          --body=*) cbody="${1#*=}" ;;
-          *) echo "muxpad: unknown option: $1" >&2; return 1 ;;
-        esac
-        shift
-      done
-      [ "${#cto[@]}" -gt 0 ] || { echo 'muxpad: draft-compose needs --to=' >&2; return 1; }
-      [ -n "$csubj" ] || { echo 'muxpad: draft-compose needs --subject=' >&2; return 1; }
-      [ -n "$cbody" ] || { echo 'muxpad: draft-compose needs --body=' >&2; return 1; }
-      slack_call POST /api/msgvault/draft-compose "$(printf '%s\n' "${cto[@]}" | jq -Rn \
-        --arg pane "$MUXPAD_PANE_ID" --arg key "$MUXPAD_PANE_KEY" \
-        --arg subject "$csubj" --arg body "$cbody" \
-        '{pane:$pane,key:$key,to:[inputs|select(length>0)],subject:$subject,body:$body}')" ;;
     draft-get)
       [ -n "${1:-}" ] || msgvault_usage
       slack_call POST /api/msgvault/draft-get "$(jq -nc \
         --arg pane "$MUXPAD_PANE_ID" --arg key "$MUXPAD_PANE_KEY" --arg id "$1" \
         '{pane:$pane,key:$key,id:$id}')" ;;
-    draft-delete)
-      [ -n "${1:-}" ] || msgvault_usage
-      slack_call POST /api/msgvault/draft-delete "$(jq -nc \
-        --arg pane "$MUXPAD_PANE_ID" --arg key "$MUXPAD_PANE_KEY" --arg id "$1" \
-        '{pane:$pane,key:$key,id:$id}')" ;;
-    draft-edit)
-      [ -n "${1:-}" ] || msgvault_usage
-      local did="$1"; shift
-      local ebody=""
-      while [ $# -gt 0 ]; do
-        case "$1" in
-          --body=*) ebody="${1#*=}" ;;
-          *) echo "muxpad: unknown option: $1" >&2; return 1 ;;
-        esac
-        shift
-      done
-      [ -n "$ebody" ] || { echo 'muxpad: draft-edit needs --body=' >&2; return 1; }
-      slack_call POST /api/msgvault/draft-edit "$(jq -nc \
-        --arg pane "$MUXPAD_PANE_ID" --arg key "$MUXPAD_PANE_KEY" \
-        --arg id "$did" --arg body "$ebody" \
-        '{pane:$pane,key:$key,id:$id,body:$body}')" ;;
+    # ── THE WRITE VERBS GO THROUGH THE ARGV PATH ────────────────────────
+    #
+    # They used to post to a hand-written action per verb, and each of those
+    # spelled out its own argv — so a flag msgvault requires but muxpad had
+    # not thought of was simply unreachable. Two were, and both were found by
+    # a chat failing in front of the owner:
+    #
+    #   · `draft-delete` and `draft-edit` take `--revision int`, and neither
+    #     typed verb forwarded it: "required flag(s) \"revision\" not set",
+    #     with no way to supply it.
+    #   · `draft-reply` takes `--account` and `--source-id`, and the typed
+    #     verb sent NEITHER — so msgvault chose the destination, a reply
+    #     landed in a mailbox the owner was not looking at, and the only clue
+    #     was `source_id 1` in the result.
+    #
+    # The argv path already solves this class: the agent hands over the
+    # arguments and the broker checks every flag against that subcommand's
+    # own `--help` (msgvault-argv.mjs). It needs no root install to learn a
+    # new flag, which is the whole reason it exists — "each time it requires
+    # me to go run stuff". So these forward whatever they are given, and
+    # msgvault's own usage is the authority on what is valid.
+    #
+    # The approval dialog shows the literal argv, which is BETTER here, not
+    # worse: `--source-id 3` on screen is exactly the thing that would have
+    # caught the misdirected draft before it was written.
+    draft-delete|draft-edit|draft-reply|draft-compose)
+      msgvault_run_argv "$verb" "$@" ;;
     *) msgvault_usage ;;
   esac
 }
