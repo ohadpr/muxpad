@@ -48,6 +48,20 @@ describe('what it says', () => {
     expect(box.textContent).toContain('sent');
   });
 
+  it('says what a finished act WAS — a read or a draft is not a send', () => {
+    const word = (kind: string) =>
+      mount(action({ kind, title: 't', body: null })).querySelector('.action-card__state')
+        ?.textContent;
+    expect(word('msgvault.search')).toBe('done');
+    expect(word('msgvault.show-message')).toBe('done');
+    expect(word('msgvault.draft-reply')).toBe('drafted');
+    expect(word('msgvault.draft-compose')).toBe('drafted');
+    expect(word('msgvault.draft-delete')).toBe('deleted');
+    expect(word('msgvault.calendar-create')).toBe('added');
+    // An actual send still says so.
+    expect(word('slack.post')).toBe('sent');
+  });
+
   it('says WAITING rather than showing a spinner', () => {
     // Every outbound integration goes through an approval, so this is a real
     // and usually long-lived state — not a load.
