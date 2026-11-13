@@ -1000,3 +1000,62 @@ it('cannot retarget the human viewer through needs-you while a human is typing',
   expect(response.status).toBe(409);
   expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).endsWith('/handoff'))).toBe(false);
 });
+
+describe('a link a person taps opens in the links browser, never in an agent’s', () => {
+  /** Every navigation that reached a host, by host url. */
+  let opened: Array<{ url: string; body: unknown }>;
+  beforeEach(() => {
+    opened = [];
+    const passThrough = vi.mocked(globalThis.fetch).getMockImplementation();
+    vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/open')) {
+        opened.push({ url, body: JSON.parse(String(init?.body ?? '{}')) });
+        return new Response('{}');
+      }
+      return passThrough ? passThrough(input, init) : new Response('{}');
+    });
+  });
+
+  it('navigates the links browser and hands the person the wheel', async () => {
+    const res = await post('/api/browsers/links/open', {
+      url: 'https://example.com/article',
+      by: 'pane-7',
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { profile: string; wheel: { holder: string; by: string } };
+    expect(body.profile).toBe('links');
+    expect(body.wheel).toMatchObject({ holder: 'human', by: 'pane-7' });
+    expect(opened).toHaveLength(1);
+    expect(opened[0]?.body).toEqual({ url: 'https://example.com/article' });
+  });
+
+  it('REFUSES to open a link in an agent’s browser, and never touches it', async () => {
+    await ensure({ profile: 's-chat-1', tabId: 'chat-1' });
+    const res = await post('/api/browsers/s-chat-1/open', {
+      url: 'https://example.com/',
+      by: 'pane-7',
+    });
+    expect(res.status).toBe(409);
+    expect(opened).toHaveLength(0);
+    // Nor did it seize the agent's browser on the way.
+    const after = (await (await get('/api/browsers/s-chat-1')).json()) as { wheel: unknown };
+    expect(after.wheel).toBeNull();
+  });
+
+  it('opens only http(s) — a javascript: link is not a page', async () => {
+    const res = await post('/api/browsers/links/open', {
+      url: 'javascript:alert(1)',
+      by: 'pane-7',
+    });
+    expect(res.status).toBe(400);
+    expect(opened).toHaveLength(0);
+  });
+
+  it('is human-only: the agent routes refuse it', async () => {
+    await ensure('links');
+    expect((await get('/api/browsers/links/cdp/json/version')).status).toBe(403);
+    expect((await post('/api/browsers/links/wheel/claim', { by: 'chat-1' })).status).toBe(403);
+    expect((await post('/api/browsers/links/needs-you', { reason: 'login' })).status).toBe(403);
+  });
+});

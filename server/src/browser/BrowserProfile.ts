@@ -83,6 +83,37 @@ export function browserViewerPort(cdpPort: number): number {
  */
 export const DEFAULT_BROWSER_PROFILES: readonly string[] = ['default'];
 
+/**
+ * THE BROWSER A PERSON READS LINKS IN, and no agent ever drives.
+ *
+ * A link tapped in a chat opens in a muxpad browser rather than being handed to
+ * the phone's OS. It must not open in the chat's OWN browser (`s-<tab>`): that
+ * one is the agent's, and navigating it would yank the page out from under a
+ * task in progress — the viewer is shared, so the person and the agent would be
+ * looking at, and fighting over, one tab. So links get a profile of their own.
+ *
+ * It is human-only by RULE, not by convention: the agent routes (CDP, claim,
+ * needs-you) refuse it, and the host's navigate endpoint refuses every OTHER
+ * profile. It still seeds from and writes back to the shared cookie jar, so a
+ * login done here is a login the agents inherit, and vice versa.
+ */
+export const LINKS_PROFILE = 'links';
+
+/**
+ * Whether a link may be opened in the links browser: absolute http(s) and
+ * nothing else. `javascript:`, `file:`, `chrome:` and friends are how a link in
+ * a model's output becomes something other than a page.
+ */
+export function isOpenableLink(raw: unknown): raw is string {
+  if (typeof raw !== 'string' || raw.length > 4096) return false;
+  try {
+    const u = new URL(raw);
+    return u.protocol === 'http:' || u.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 /** Longest profile name. It becomes a slug, a pane title and a path segment. */
 const MAX_PROFILE_NAME = 64;
 

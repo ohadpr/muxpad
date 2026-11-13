@@ -15,7 +15,7 @@ import {
   touchEvent,
 } from '../BrowserInput.js';
 import { browserLaunchSpec } from '../BrowserLaunch.js';
-import { browserViewerPort } from '../BrowserProfile.js';
+import { LINKS_PROFILE, browserViewerPort, isOpenableLink } from '../BrowserProfile.js';
 import { CdpConnection } from '../CdpConnection.js';
 import {
   type CdpCookie,
@@ -916,6 +916,31 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
         res.writeHead(503).end('agent command still running');
       } finally {
         clearTimeout(timer);
+      }
+      return;
+    }
+    // A LINK A PERSON TAPPED IN A CHAT. Only the links browser answers it: on
+    // any other profile this would be a way to navigate an agent's page out
+    // from under it, and the viewer proxy forwards this path from the tailnet.
+    if (path === '/open' && req.method === 'POST') {
+      if (opts.profile !== LINKS_PROFILE) {
+        res.writeHead(403).end('only the links browser opens links');
+        return;
+      }
+      try {
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) chunks.push(Buffer.from(chunk));
+        const url = (JSON.parse(Buffer.concat(chunks).toString()) as { url?: unknown }).url;
+        if (!isOpenableLink(url)) {
+          res.writeHead(400).end('url must be http(s)');
+          return;
+        }
+        await cdp.send('Page.navigate', { url });
+        currentUrl = url;
+        announceUrl();
+        res.writeHead(200, { 'content-type': 'application/json' }).end('{}');
+      } catch (err) {
+        res.writeHead(502).end(err instanceof Error ? err.message : String(err));
       }
       return;
     }
