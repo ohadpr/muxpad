@@ -100,3 +100,67 @@ describe('muxpad msgvault <draft verb> hands msgvault argv it can parse', () => 
     expect(positionals(body.args as string[])).toEqual(['-odd-id']);
   });
 });
+
+/**
+ * THE READS USED TO DROP WHAT THEY DID NOT RECOGNISE, WITHOUT A WORD.
+ *
+ * `search x --offset=50` answered page one again; `show-thread <id>
+ * --offset=100` answered the same hundred messages. Nothing said the flag
+ * was never sent. The typed shape still takes the typed route (it can ride a
+ * read approval and needs nothing new from the broker); anything else goes
+ * through the argv path, where msgvault's own `--help` accepts or refuses it
+ * by name.
+ */
+describe('a read verb never silently drops a flag', () => {
+  it('the plain typed shapes stay on their typed routes', () => {
+    expect(sent('msgvault', 'search', 'from:a', '--limit=5').path).toMatch(
+      /^GET \/api\/msgvault\/search\?.*q=from%3Aa&limit=5$/,
+    );
+    expect(sent('msgvault', 'search', '--limit=5', 'from:a').path).toMatch(/q=from%3Aa&limit=5$/);
+    expect(sent('msgvault', 'show-message', '42').path).toMatch(/^GET \/api\/msgvault\/message\?/);
+    expect(sent('msgvault', 'show-thread', '42').path).toMatch(/^GET \/api\/msgvault\/thread\?/);
+    expect(sent('msgvault', 'draft-get', 'draft-abc').path).toBe('POST /api/msgvault/draft-get');
+  });
+
+  it('search with any other flag is sent as argv, query last', () => {
+    const { path, body } = sent('msgvault', 'search', 'dinner plans', '--offset=50', '--limit=10');
+    expect(path).toBe('POST /api/msgvault/run');
+    expect(body.args).toEqual([
+      'search',
+      '--json',
+      '--offset=50',
+      '--limit=10',
+      '--',
+      'dinner plans',
+    ]);
+  });
+
+  it('show-thread / show-message paging and options are sent, not dropped', () => {
+    expect(sent('msgvault', 'show-thread', '42', '--offset=100').body.args).toEqual([
+      'show-thread',
+      '--json',
+      '--offset=100',
+      '--',
+      '42',
+    ]);
+    expect(sent('msgvault', 'show-message', '42', '--strip-quoted').body.args).toEqual([
+      'show-message',
+      '--json',
+      '--strip-quoted',
+      '--',
+      '42',
+    ]);
+  });
+
+  it('draft-get --conversation=N reaches msgvault', () => {
+    expect(sent('msgvault', 'draft-get', '--conversation=7').body.args).toEqual([
+      'draft-get',
+      '--json',
+      '--conversation=7',
+    ]);
+  });
+
+  it('stats refuses an option out loud instead of answering for everything', () => {
+    expect(() => sent('msgvault', 'stats', '--collection=work')).toThrow(/stats takes no options/);
+  });
+});
