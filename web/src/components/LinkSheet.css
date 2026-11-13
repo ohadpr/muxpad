@@ -1,0 +1,166 @@
+/*
+ * The link sheet: a page over the conversation, not instead of it.
+ *
+ * ~72% of the height, anchored to the bottom, so the top of the chat — the
+ * message the link came from, usually — stays in view and stays tappable as the
+ * way back. Not full-screen on purpose: that is the shape the OS gave it, and
+ * the complaint was losing your place.
+ */
+
+.link-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+}
+
+.link-sheet__scrim {
+  position: absolute;
+  inset: 0;
+  /* Light enough that the conversation is still READABLE behind it. */
+  background: rgba(0, 0, 0, 0.32);
+  animation: link-sheet-fade 160ms ease-out;
+}
+
+.link-sheet__panel {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: min(1100px, 100%);
+  height: 72vh;
+  height: 72dvh;
+  translate: -50% 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--chat-panel, #fff);
+  border: 1px solid var(--chat-border-strong, #c2c2d0);
+  border-bottom: 0;
+  border-radius: 14px 14px 0 0;
+  overflow: hidden;
+  box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.35);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  transition: transform 160ms ease-out;
+  animation: link-sheet-rise 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.link-sheet__bar {
+  position: relative;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 10px 6px;
+  background: var(--bg-elev, #f4f4f8);
+  border-bottom: 1px solid var(--chat-border, #d6d6e0);
+  font-size: 0.8125rem;
+  color: var(--chat-dim, #6b6b7a);
+  touch-action: none;
+  cursor: grab;
+  user-select: none;
+}
+
+.link-sheet__grabber {
+  position: absolute;
+  top: 5px;
+  left: 50%;
+  translate: -50% 0;
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--chat-fg, #1c1c22) 25%, transparent);
+}
+
+.link-sheet__close,
+.link-sheet__back {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 0;
+  background: color-mix(in srgb, var(--chat-fg, #1c1c22) 9%, transparent);
+  color: var(--chat-fg, #1c1c22);
+  font: inherit;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.link-sheet__back {
+  font-size: 1.25rem;
+  line-height: 1;
+  padding-bottom: 2px;
+}
+
+.link-sheet__close:hover,
+.link-sheet__back:hover {
+  background: color-mix(in srgb, var(--chat-fg, #1c1c22) 16%, transparent);
+}
+
+.link-sheet__host {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 560;
+  color: var(--chat-fg, #1c1c22);
+}
+
+.link-sheet__out {
+  flex: none;
+  padding: 6px 11px;
+  border-radius: 8px;
+  border: 1px solid var(--chat-border-strong, #c2c2d0);
+  color: var(--chat-fg, #1c1c22);
+  text-decoration: none;
+  white-space: nowrap;
+  font-size: 0.75rem;
+}
+
+.link-sheet__out:hover {
+  background: color-mix(in srgb, var(--chat-fg, #1c1c22) 8%, transparent);
+}
+
+.link-sheet__frame {
+  flex: 1;
+  width: 100%;
+  border: 0;
+  background: #000;
+  display: block;
+}
+
+.link-sheet__status {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  text-align: center;
+  color: var(--chat-dim, #6b6b7a);
+  font-size: 0.875rem;
+}
+
+.link-sheet__status a {
+  color: var(--chat-accent, #5b5bd6);
+}
+
+@keyframes link-sheet-rise {
+  from {
+    transform: translateY(100%);
+  }
+}
+
+@keyframes link-sheet-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .link-sheet__panel,
+  .link-sheet__scrim {
+    animation: none;
+  }
+}

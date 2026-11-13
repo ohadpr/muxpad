@@ -55,6 +55,16 @@ export const VIEWER_HTML = String.raw`<!doctype html>
   /* Watching: the stream is a picture. Say so rather than letting somebody
      press things that quietly go nowhere. */
   body.watching #screen{cursor:default}
+  /* FRAMED IN THE LINK SHEET, THIS BAR GOES ENTIRELY. The sheet is a reader's,
+     with ONE slim bar of its own (✕, Back, the site, open in browser). Phone and
+     Paste are agent-browser affordances, the address row repeats the site the
+     sheet already names, "‹ muxpad" would load muxpad inside its own frame and
+     Done hands the browser to an agent that never drives this one. Back is
+     driven from the sheet's bar — see the 'back' message below. */
+  body.embed-sheet #bar{display:none!important}
+  /* If the frame ever does have to scroll in the sheet, a thin quiet bar rather
+     than a desktop gutter — the page's own scroll indicator lives in the stream. */
+  body.embed-sheet #wrap{scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.3) transparent}
   /* The address, truncated from the LEFT: the end of a url is the part that
      says which page you are on. */
   /* The address is the one thing here that is information rather than a control,
@@ -74,11 +84,20 @@ export const VIEWER_HTML = String.raw`<!doctype html>
      scroll the FRAME — while one finger still reaches the listeners below and
      becomes a tap or a drag inside the page. */
   #wrap{flex:1;overflow:auto;background:#000;touch-action:pinch-zoom;-webkit-overflow-scrolling:touch}
-  #stage{position:relative;display:inline-block;line-height:0}
+  /* vertical-align:top: an inline-block sits on the text BASELINE, and the line
+     box under it added 3px below the picture. Same two-scrollbar cascade as the
+     ring below; both had to go before a frame that fits stopped scrolling. */
+  #stage{position:relative;display:inline-block;line-height:0;vertical-align:top}
   #screen{display:block;background:#000;outline:none;transform-origin:0 0}
   /* A ring around the thing that needs you — see the host's reveal handler for
      why this is a highlight and not a crop. Fades out; a pointer, not a mode. */
-  #ring{position:absolute;border:2px solid #f0943f;border-radius:6px;pointer-events:none;
+  /* top:0;left:0 UNTIL IT IS PLACED. Left at its static position it sat just
+     below the picture — 4px of invisible border hanging off the bottom of the
+     stage. Measured in the link sheet: a 388x554 stream in a 388x554 frame
+     scrolled to 558, those 4px pulled in a vertical scrollbar, and its width
+     then made the stream wider than what was left, pulling in a horizontal one.
+     Two scrollbars around a page that fit exactly. (See #stage for the other 3px.) */
+  #ring{position:absolute;top:0;left:0;border:2px solid #f0943f;border-radius:6px;pointer-events:none;
         box-shadow:0 0 0 3px rgba(240,148,63,.25);opacity:0;transition:opacity .5s ease}
   #ring.on{opacity:1}
   /* Desktop has room to fit the whole page; a phone does not, and shrinking it
@@ -314,7 +333,15 @@ const showUrl = (u) => {
 function onSocketMessage(e) {
   if (typeof e.data === 'string') {
     const m = JSON.parse(e.data)
-    if (m.t === 'url') { showUrl(m.url); return }
+    if (m.t === 'url') {
+      showUrl(m.url)
+      // The sheet's bar shows the site you are ON, which is not always the one
+      // you tapped — a page can link elsewhere, and the name is the one piece of
+      // security-relevant text on screen.
+      if (embedSheet && window.top !== window)
+        try { window.parent.postMessage({ muxpad: 'url', url: m.url }, location.origin) } catch { /* not ours */ }
+      return
+    }
     // THE HOST HAS BEEN REPLACED UNDER THIS PAGE. Its socket reconnects, frames
     // resume and nothing looks wrong, but the script running here is the one that
     // was served before the restart. A whole evening of testing went into fixes
@@ -396,6 +423,14 @@ const mods = (e) => (e.altKey?1:0) | (e.ctrlKey?2:0) | (e.metaKey?4:0) | (e.shif
 // leaves this tab. The wheel is not held and not requested; the stream is a
 // picture until somebody says otherwise.
 let watching = new URLSearchParams(location.search).get('mode') === 'watch'
+const embedSheet = new URLSearchParams(location.search).get('embed') === 'sheet'
+if (embedSheet) document.body.classList.add('embed-sheet')
+// The sheet's own bar holds Back, and the sheet names the site from what THIS
+// page hears — so the two talk over postMessage, same-origin, parent only.
+if (embedSheet) window.addEventListener('message', (e) => {
+  if (e.origin !== location.origin || e.source !== window.parent) return
+  if (e.data && e.data.muxpad === 'back') send({ t: 'nav', action: 'back' })
+})
 const INPUT = new Set(['mouse', 'key', 'text', 'nav', 'emulate', 'fillLogin'])
 const send = (o) => {
   // RETURNS WHETHER IT WENT. Input is dropped while watching, and a caller that
@@ -1113,6 +1148,11 @@ if (window.innerWidth < 700) {
   // sending only the take left a viewer opened in DRIVE mode never asking at
   // all, because takeTheWheel short-circuits when the wheel is already ours.
   whenOpen(() => { if (watching) takeTheWheel(); else setMobile(true) })
+} else if (embedSheet) {
+  // THE LINKS BROWSER IS ONE BROWSER FOR EVERY DEVICE. A link read on the phone
+  // leaves it in phone mode, and the next link opened at a desk arrived as a
+  // 390px column in a black 1100px sheet. The desktop sheet says what it is.
+  whenOpen(() => { if (!watching) setMobile(false) })
 }
 
 // Everything is wired; dial. Last rather than first so no handler can fire
