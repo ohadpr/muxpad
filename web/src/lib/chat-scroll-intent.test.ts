@@ -242,6 +242,28 @@ describe('targetFor — the one target computation', () => {
     expect(t).toBe(5000);
   });
 
+  it('keeps a LIVE offset that does not fit the row — the reader is inside the tail below it', () => {
+    // The streaming reply carries no anchor id, so a reader 2300px into it is
+    // anchored to the last finished row at -2300. That is a measurement, not a
+    // memory, and it must be honoured exactly.
+    const geo = { ...VIEWPORT, scrollTop: 5000 };
+    const t = targetFor({ at: 'row', id: 'g', offset: -2300, live: true }, geo, {
+      top: -2300,
+      height: 200,
+    });
+    expect(t).toBe(5000);
+  });
+
+  it('a reader gesture records a LIVE row; a restore does not', () => {
+    const moved = next(IDLE_STATE, {
+      t: 'reader-moved',
+      here: { id: 'evt#40', offset: -2300 },
+      atEnd: false,
+    });
+    expect(moved.intent).toEqual({ at: 'row', id: 'evt#40', offset: -2300, live: true });
+    expect(intentFor(parked())).not.toHaveProperty('live');
+  });
+
   it('places a search hit a third of the way down, not at the top', () => {
     const t = targetFor(
       { at: 'hit' },

@@ -221,3 +221,72 @@ describe('a follower nobody touched still follows', () => {
     expect(c.phase(true)).toBe('FOLLOWING');
   });
 });
+
+describe.each([
+  { name: 'a long reply streaming', clientHeight: 800, furnitureBelow: 3000 },
+  { name: 'a phone with a tall queued stack', clientHeight: 500, furnitureBelow: 650 },
+])('reading INSIDE a tail taller than the viewport — $name', ({ clientHeight, furnitureBelow }) => {
+  // The streaming turn and the queued rows carry no `data-eid`, so once the
+  // viewport top is inside them the anchor is the last FINISHED row at a large
+  // negative offset — honestly measured. The stale-offset rule for RESTORES
+  // read that as "this offset no longer fits the row", threw it away, and put
+  // the top of that row (usually the reader's own message) under their eyes.
+  // Measured in the sim on production code: wanted 5900, got 3800.
+  it('a nudge up stays a nudge, and the stream keeps appending below', () => {
+    const { sim, c, token } = streamingChat({ clientHeight, furnitureBelow });
+    const from = sim.scrollTop;
+    const writes = sim.writes.length;
+    sim.wheel(-80);
+    token();
+    sim.compositorApplies();
+    drainScroll(sim, c);
+    for (let i = 0; i < 20; i++) {
+      token();
+      drainScroll(sim, c);
+    }
+    expect(from - sim.scrollTop).toBe(80);
+    expect(sim.writes.length).toBe(writes);
+    expect(c.phase(true)).toBe('ANCHORED');
+  });
+
+  it('and scrolling back down through the reply is not walled at the last row', () => {
+    const { sim, c, token } = streamingChat({ clientHeight, furnitureBelow });
+    const up = Math.min(600, furnitureBelow - clientHeight + 50);
+    const end = sim.maxScrollTop;
+    sim.readerScrollsBy(-up);
+    drainScroll(sim, c);
+    expect(sim.scrollTop).toBe(end - up);
+    const from = sim.scrollTop;
+    for (let i = 0; i < 4; i++) {
+      sim.readerScrollsBy(20);
+      drainScroll(sim, c);
+      token();
+      drainScroll(sim, c);
+    }
+    expect(sim.scrollTop - from).toBe(80);
+  });
+});
+
+describe('…and a RESTORE of that offset still gets the stale-offset clamp', () => {
+  // The other half of the separation, end to end. A REMEMBERED offset that
+  // does not fit its row is discarded exactly as before — the rule that keeps
+  // a run which came back collapsed from pinning the reader to the bottom
+  // (chat-scroll.ts, `scrollTopForAnchor`). Only the live intent changed.
+  it('a remembered offset past its row is replayed as the top of that row', () => {
+    const { sim, c } = streamingChat({ furnitureBelow: 3000 });
+    sim.readerScrollsBy(-500);
+    drainScroll(sim, c);
+    const mem = c.record('s1');
+    expect(mem?.anchorId).toBe('m39');
+    expect(mem?.anchorOffset).toBe(-1900); // honestly past the 200px row's bottom
+    c.dispatch({ t: 'hidden' });
+    sim.hide();
+    // The reply finished and landed as rows of its own; the tail is gone.
+    sim.setFurniture(100);
+    sim.append(simRows(3, 1000, 'reply'));
+    sim.show();
+    c.dispatch({ t: 'shown', mem });
+    drainScroll(sim, c);
+    expect(sim.rowOffset('m39')).toBe(0);
+  });
+});
