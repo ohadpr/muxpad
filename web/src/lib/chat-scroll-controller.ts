@@ -191,6 +191,11 @@ export class ChatScrollController {
    * would be compared against.
    */
   private sawTop: number | null = null;
+  /**
+   * The END as of that same observation — the maximum `scrollTop` the reader
+   * could see when they last moved. See the band in `followingAfter`.
+   */
+  private sawEnd: number | null = null;
   /** Previous anchor's document position, to distinguish motion from relayout. */
   private wasDocumentTop: number | null = null;
   /** A commit observed the gesture before its queued native scroll event. */
@@ -361,16 +366,6 @@ export class ChatScrollController {
      * content rather than about scrolling.
      */
     /**
-     * The reader's half of this frame, OBSERVED rather than inferred — see
-     * `takeReaderIntent` for why the inference is impossible and what it cost.
-     * A shrink clamped to the new maximum is layout, not a gesture.
-     */
-    const clampedShrink =
-      this.sawTop !== null &&
-      before.scrollTop < this.sawTop &&
-      before.scrollTop >= before.scrollHeight - before.clientHeight;
-    const fromInput = this.intentSinceSettle;
-    /**
      * How far the document moved UNDER the reader, which is knowable on every
      * engine because it is a fact about content rather than about scrolling:
      * the anchor row's DOCUMENT coordinate shifts by exactly what was inserted
@@ -383,28 +378,48 @@ export class ChatScrollController {
       oldBox && this.wasDocumentTop !== null
         ? oldBox.top + before.scrollTop - this.wasDocumentTop
         : 0;
+    const stillDocument = Math.abs(shift) <= 1;
+    /** A shrink the engine clamped to the new maximum: layout, by itself. */
+    const clampedShrink =
+      this.sawTop !== null &&
+      before.scrollTop < this.sawTop &&
+      before.scrollTop >= before.scrollHeight - before.clientHeight;
+    const fromGeometry = this.sawTop === null ? 0 : before.scrollTop - this.sawTop;
     /**
+     * ── INPUT IS EVIDENCE OF WHO MOVED, NOT A DISTANCE ───────────────────
+     * The reader's half of this frame is OBSERVED rather than inferred — see
+     * `takeReaderIntent` for why the inference is impossible. But what the
+     * observation can honestly say is WHO and WHICH WAY, not how far:
+     *
+     *   · it is not a quantity that has to clear a noise floor. A macOS
+     *     trackpad opens a slow gesture at about 1px per event. This used to
+     *     require |input| > 1, the settle at the end of every place zeroed
+     *     what fell short, and a streaming chat places every 16–30ms — so a
+     *     slow gesture never accumulated past the floor and every place
+     *     re-wrote the end over the pixel the browser had just scrolled.
+     *     Measured in Chromium: 1px ×80 while streaming moved 0px, 79 writes.
+     *     Any nonzero input is a person.
+     *
+     *   · it is not a distance either: whether `scrollTop` already includes
+     *     it is up to the browser. See the write below.
+     *
+     * A shrink clamped to the new maximum is layout — when nobody touched
+     * anything. A wheel the clamp absorbed is still the reader's.
+     *
      * ── AND THE INPUT IS NOT THE ONLY WAY TO SCROLL ──────────────────────
      * Dragging the SCROLLBAR fires no wheel, no touch and no key — and nor
-     * does a middle-click autoscroll or a click in the scrollbar track. An
-     * input-only rule drops all of them, which the first version of this fix
-     * did: a probe that moved `scrollTop` directly, the way a scrollbar drag
-     * does, recorded no position at all.
-     *
-     * The rule it replaced was not wrong, it was INCOMPLETE: when nothing
-     * arrived above the reader there is nothing for the engine to compensate,
-     * so any movement must be theirs and plain arithmetic settles it. It only
-     * failed when a prepend landed in the same frame — which is exactly the
-     * case the input signal answers.
-     *
-     * So: believe the input when there is some, and fall back to the
-     * arithmetic when the document stood still. Each covers the other's gap.
+     * does a middle-click autoscroll or a click in the scrollbar track. When
+     * nothing arrived above the reader there is nothing for the engine to
+     * compensate, so any movement must be theirs and plain arithmetic settles
+     * it. Its 1px floor stays: with no input behind it, a 1px move is as
+     * likely fractional geometry as a person.
      */
-    const stillDocument = Math.abs(shift) <= 1;
-    const fromGeometry = this.sawTop === null ? 0 : before.scrollTop - this.sawTop;
-    const intentPx = Math.abs(fromInput) > 1 ? fromInput : stillDocument ? fromGeometry : 0;
+    const fromInput = this.intentSinceSettle;
+    const readerTouched = fromInput !== 0;
     const readerMoved =
-      reconcileReader && this.state.placed && Math.abs(intentPx) > 1 && !clampedShrink;
+      reconcileReader &&
+      this.state.placed &&
+      (readerTouched || (stillDocument && Math.abs(fromGeometry) > 1 && !clampedShrink));
 
     // We have looked. Everything below is about what we found; this is true
     // either way, including when the answer is "we do not know where the reader
@@ -436,10 +451,7 @@ export class ChatScrollController {
      * entire prepend: a 2000px jump recorded as intent.
      */
     /**
-     * Where the reader belongs when they have just moved: WHERE THEY WERE,
-     * carried through whatever arrived above them, plus the gesture. Absolute,
-     * so it is the same answer on an engine that pays anchoring in full, one
-     * that pays nothing, and one that pays a fraction.
+     * Where the reader belongs when they have just moved.
      *
      * NOT `target + intentPx`. `target` answers the OLD intent, and while the
      * reader is following the tail that intent is "the end" — so an append of
@@ -447,8 +459,38 @@ export class ChatScrollController {
      * the new end and then back off by the nudge, carrying the reader 200px
      * down the document they were trying to leave. Their position is a fact;
      * only what moved above them is a correction.
+     *
+     * ── AND NOT `sawTop + intentPx` EITHER, WHEN NOTHING MOVED ABOVE ─────
+     * That form assumed the gesture's input and its motion are both visible
+     * here, or both not yet. In Chromium they are independent: the wheel event
+     * often reaches the page BEFORE the compositor's scroll reaches
+     * `scrollTop`, and the engine then applies its delta on top of whatever
+     * `scrollTop` is — including a write we made in the gap. Measured:
+     *
+     *     wheel -30 at 6464 → place() writes 6433.5 → scroll event at 6404
+     *
+     * 300px of wheel moved 390–450px while a reply streamed, and exactly 300
+     * when it did not (no place() ran in the gap).
+     *
+     * When the document stood still there is nothing to correct at all: the
+     * reader's position is wherever the browser has them, and whatever part of
+     * the gesture it has not applied yet it will apply itself. So the answer is
+     * `scrollTop` as it stands — no write — and that is right in every order
+     * the input and the motion can arrive in.
+     *
+     * When something DID move above them, the shift has to be paid and the
+     * order is genuinely ambiguous: `scrollTop - sawTop` is the engine's
+     * payment plus whatever of the gesture the browser has applied, and two
+     * unknowns do not come out of one number. The arithmetic below assumes the
+     * gesture is already in `scrollTop`, which is what a prepend landing
+     * mid-gesture was measured doing (see `takeReaderIntent`); history is held
+     * back during touch motion precisely so this frame stays rare.
      */
-    const want = readerMoved && this.sawTop !== null ? this.sawTop + shift + intentPx : target;
+    const want = !readerMoved
+      ? target
+      : stillDocument || this.sawTop === null
+        ? before.scrollTop
+        : this.sawTop + shift + fromInput;
     if (!alreadyThere(want, geo.scrollTop)) {
       // Not already true, so pay. Where scroll anchoring has already put the
       // row back, the target equals the current position and we stay out of
@@ -463,12 +505,25 @@ export class ChatScrollController {
       // rather than one the engine still owes for.
       this.wrote = null;
       const after = this.surface.geometry();
+      // Measured from where the shift alone would have carried them, so the
+      // direction is the READER's and not the prepend's.
+      const carried = this.sawTop === null ? null : this.sawTop + (stillDocument ? 0 : shift);
       this.state = next(this.state, {
         t: 'reader-moved',
         here: this.surface.anchorHere(),
-        atEnd: this.followingAfter(after, this.sawTop),
+        atEnd: this.followingAfter(after, carried, this.sawEnd, Math.sign(fromInput)),
       });
       this.pendingReader = true;
+      // A reader pushing toward the end while it grows is following, and
+      // following means being AT the end — now, not one commit later. Never
+      // reached by an upward gesture: `followingAfter` says no to those.
+      if (this.state.intent.at === 'end') {
+        const end = targetFor(this.state.intent, after, null);
+        if (end !== null && !alreadyThere(end, after.scrollTop)) {
+          this.wrote = end;
+          this.surface.setScrollTop(end);
+        }
+      }
     }
     this.settled();
   }
@@ -489,7 +544,9 @@ export class ChatScrollController {
     // The reader's travel has been accounted for by whoever just acted on it.
     this.intentSinceSettle = 0;
     this.was = this.surface.anchorHere();
-    this.sawTop = this.surface.geometry().scrollTop;
+    const geo = this.surface.geometry();
+    this.sawTop = geo.scrollTop;
+    this.sawEnd = geo.scrollHeight - geo.clientHeight;
     this.wasDocumentTop = this.was ? this.was.offset + this.sawTop : null;
   }
 
@@ -511,7 +568,9 @@ export class ChatScrollController {
     // gesture to be compared against, and the direction below would be a
     // statement about the engine's move rather than theirs.
     const prevTop = this.sawTop;
+    const prevEnd = this.sawEnd;
     this.sawTop = geo.scrollTop;
+    this.sawEnd = geo.scrollHeight - geo.clientHeight;
     const here = this.surface.anchorHere();
     // The same two facts `place()` weighs, so neither entry point can reach a
     // conclusion the other would not. See `intentSinceSettle`.
@@ -525,7 +584,8 @@ export class ChatScrollController {
       was: this.was,
       placed: this.state.placed,
       documentShifted: Math.abs(shift) > 1,
-      inputMoved: Math.abs(this.intentSinceSettle) > 1,
+      // Any nonzero input is a person — see `readerTouched` in `place()`.
+      inputMoved: this.intentSinceSettle !== 0,
     });
     // `was` is refreshed by `place()`, and only by `place()` — including on the
     // reader path below, which goes through `dispatch`. An earlier draft
@@ -545,7 +605,11 @@ export class ChatScrollController {
     // intent — including "the end", which is how following is regained. Their
     // position is by definition already satisfied, so the `place()` this
     // triggers computes a target equal to where they are and writes nothing.
-    this.dispatch({ t: 'reader-moved', here, atEnd: this.followingAfter(geo, prevTop) });
+    this.dispatch({
+      t: 'reader-moved',
+      here,
+      atEnd: this.followingAfter(geo, prevTop, prevEnd, Math.sign(this.intentSinceSettle)),
+    });
     return true;
   }
 
@@ -597,7 +661,14 @@ export class ChatScrollController {
    * in history tomorrow. Persisting the first as the second is the bug that
    * stranded a reader 5701 px up after a single wheel notch.
    */
-  private followingAfter(geo: ScrollGeometry, prevTop: number | null): boolean {
+  private followingAfter(
+    geo: ScrollGeometry,
+    prevTop: number | null,
+    /** The end as of that observation, before anything since grew the document. */
+    prevEnd: number | null,
+    /** The sign of the reader's input since the last settle, 0 for none. */
+    inputDirection: number,
+  ): boolean {
     // ── A SHRINK IS NOT A GESTURE ───────────────────────────────────────────
     // `place()` has always known this (see `clampedShrink` there); this did
     // not, and the two have to agree or the mechanism decides different things
@@ -621,9 +692,27 @@ export class ChatScrollController {
       prevTop !== null &&
       geo.scrollTop < prevTop &&
       geo.scrollTop >= geo.scrollHeight - geo.clientHeight - 1;
+    //
+    // …unless somebody DID push: a wheel the clamp absorbed is still a wheel.
+    // Which is the general rule — when `scrollTop` says nothing about the
+    // direction (it has not moved yet, or it cannot move), the input does.
+    const moved =
+      prevTop === null || clampedShrink || geo.scrollTop === prevTop
+        ? inputDirection
+        : Math.sign(geo.scrollTop - prevTop);
     // Moved away from the tail. Their intent is the one thing that cannot be
     // overruled by arithmetic about where they happen to have ended up.
-    if (prevTop !== null && geo.scrollTop < prevTop && !clampedShrink) return false;
+    if (moved < 0) return false;
+    // A move TOWARD the end that reached the end they could SEE has caught up,
+    // even if output landed below it in the same frame. Measuring only against
+    // the new end makes a bottom that runs away a bottom nobody can reach: each
+    // drag arrives, an append lands, and they are 150px short again — the
+    // queued-messages "I can't scroll down, only the button works". It is also
+    // what keeps a reader at the bottom pushing DOWN following: a wheel-down
+    // there cannot move `scrollTop`, a trackpad fling that lands there keeps
+    // sending momentum wheel events for a second, and the growth that arrives
+    // meanwhile is not a distance they fell behind by.
+    if (moved > 0 && prevEnd !== null && prevEnd - geo.scrollTop < FOLLOW_THRESHOLD_PX) return true;
     return geo.scrollHeight - geo.scrollTop - geo.clientHeight < FOLLOW_THRESHOLD_PX;
   }
 }
