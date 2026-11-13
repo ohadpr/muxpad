@@ -7,7 +7,12 @@ import { z } from 'zod';
 import { type BrowserAppState, ensureBrowserApp, listBrowserApps } from '../browser/BrowserApps.js';
 import { type BrowserEvent, BrowserEvents } from '../browser/BrowserEvents.js';
 import { BrowserOwner } from '../browser/BrowserOwner.js';
-import { browserJarPath, normalizeProfileName } from '../browser/BrowserProfile.js';
+import {
+  LINKS_PROFILE,
+  browserJarPath,
+  isOpenableLink,
+  normalizeProfileName,
+} from '../browser/BrowserProfile.js';
 import { browserViewerLink, parseBrowserProxyPath } from '../browser/BrowserProxy.js';
 import { browserShotPath, saveBrowserShot } from '../browser/BrowserShots.js';
 import {
@@ -55,6 +60,7 @@ import { findChrome } from '../browser/findChrome.js';
  *   DELETE /api/browsers/:profile/wheel         → BrowserView  (hand it back)
  *   POST   /api/browsers/:profile/needs-you     → BrowserView  (agent asks for a person)
  *   DELETE /api/browsers/:profile/needs-you     → BrowserView  (agent got past it)
+ *   POST   /api/browsers/links/open         → BrowserView  (a person opens a link)
  */
 
 export interface BrowserView extends BrowserAppState {
@@ -88,6 +94,16 @@ const SHOT_COALESCE_MS = 1_000;
  * history, suppressed every launch after it. See the route for what that cost.
  */
 export const OPENED_QUIET_MS = 60 * 60 * 1_000;
+
+const OpenSchema = z.object({
+  url: z.string().refine(isOpenableLink, 'url must be http(s)'),
+  /** The pane the sheet is in — it takes the wheel, as any person does. */
+  by: z.string().min(1).max(200),
+});
+
+/** The agent routes answer this for the links browser. See LINKS_PROFILE. */
+const LINKS_ARE_HUMAN =
+  'the links browser is for a person reading links — use your own session browser';
 
 const TakeSchema = z.object({
   /** Pane or chat id — whatever identifies this specific claimant. */
@@ -556,6 +572,7 @@ export function browsersRoutes(deps: {
   app.get('/:profile/cdp/*', async (c) => {
     const profile = profileParam(c.req.param('profile'));
     if (!profile) return c.json({ error: 'invalid profile name' }, 400);
+    if (profile === LINKS_PROFILE) return c.json({ error: LINKS_ARE_HUMAN }, 403);
     if (!wheel.canDrive(profile, 'agent'))
       return c.json({ error: 'a human has the wheel — wait, do not retry' }, 409);
     // chromeFor, not deps.chromePath: the dependency is optional and falls back
@@ -721,10 +738,71 @@ export function browsersRoutes(deps: {
     return c.json(view(state));
   });
 
+  /**
+   * A PERSON TAPPED A LINK IN A CHAT. Show it in the links browser.
+   *
+   * Only that profile. Opening a link in the chat's own browser would navigate
+   * the agent's page out from under it mid-task — the viewer is shared, so the
+   * two of them would be fighting over one tab — and refusing here is what
+   * makes "links never touch an agent's browser" a rule rather than a habit of
+   * the one client that calls this today.
+   *
+   * Starts the browser if it is cold (a couple of seconds, once), navigates,
+   * then gives the wheel to the person, exactly as answering a summons does.
+   */
+  app.post('/:profile/open', async (c) => {
+    const profile = profileParam(c.req.param('profile'));
+    if (!profile) return c.json({ error: 'invalid profile name' }, 400);
+    if (profile !== LINKS_PROFILE)
+      return c.json(
+        { error: `links open in the '${LINKS_PROFILE}' browser, never in an agent's` },
+        409,
+      );
+    const parsed = OpenSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success)
+      return c.json({ error: 'an http(s) url and a claimant are required' }, 400);
+
+    const chrome = chromeFor();
+    if (!chrome) return c.json({ error: 'no browser muxpad can own' }, 503);
+    const state = await ensureBrowserApp(profile, {
+      db: deps.db,
+      dataDir: deps.dataDir,
+      chromePath: chrome.path,
+      hostEntry: deps.hostEntry,
+      registry: deps.registry,
+      cwd: deps.cwd,
+      ...(deps.apiUrl ? { apiUrl: deps.apiUrl } : {}),
+    });
+
+    // Cold start: the host is not listening yet. Retry the navigation itself
+    // until it is — anything that ANSWERS is final, because a 400 or a 502 from
+    // the host is about the link, not about readiness.
+    const deadline = Date.now() + (deps.cdpReadyTimeoutMs ?? 30_000);
+    for (;;) {
+      try {
+        const res = await fetch(`${state.viewerUrl}/open`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ url: parsed.data.url }),
+          signal: AbortSignal.timeout(15_000),
+        });
+        if (!res.ok)
+          return c.json({ error: (await res.text()) || 'could not open that link' }, 502);
+        break;
+      } catch {
+        if (Date.now() > deadline) return c.json({ error: 'the browser did not start' }, 504);
+        await new Promise((r) => setTimeout(r, 200));
+      }
+    }
+    wheel.take(profile, takeRequest({ by: parsed.data.by }, 'human'));
+    return c.json(view(state));
+  });
+
   /** An AGENT asks. Refused with 409 while a person is driving. */
   app.post('/:profile/wheel/claim', async (c) => {
     const profile = profileParam(c.req.param('profile'));
     if (!profile) return c.json({ error: 'invalid profile name' }, 400);
+    if (profile === LINKS_PROFILE) return c.json({ error: LINKS_ARE_HUMAN }, 403);
     const state = find(profile);
     if (!state) return c.json({ error: 'no such browser' }, 404);
 
@@ -746,6 +824,7 @@ export function browsersRoutes(deps: {
   app.post('/:profile/needs-you', async (c) => {
     const profile = profileParam(c.req.param('profile'));
     if (!profile) return c.json({ error: 'invalid profile name' }, 400);
+    if (profile === LINKS_PROFILE) return c.json({ error: LINKS_ARE_HUMAN }, 403);
     const state = find(profile);
     if (!state) return c.json({ error: 'no such browser' }, 404);
 
