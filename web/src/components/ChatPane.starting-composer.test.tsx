@@ -112,7 +112,14 @@ async function type(text: string) {
 // so the composer opens at once and the first message waits in that queue.
 it('opens the composer while the agent is still starting, and queues the first send', async () => {
   const socket = await setup();
-  expect(host.textContent).toContain('Starting…');
+  // The screen now GREETS instead of spinning: the server has said this pane
+  // has never held a message, and a new chat has nothing to load. What this
+  // test is about is the composer being usable while the agent boots, which
+  // is unchanged — see the `!hasMessages` branch in ChatPane's empty state.
+  expect(host.textContent).toContain('Ready when you are');
+  expect(host.textContent, 'nothing to load, so nothing claims to be loading').not.toContain(
+    'Starting…',
+  );
   expect(draft()).not.toBeNull();
   await type('hello');
   await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click());
@@ -129,6 +136,9 @@ it('is open while the socket is still connecting', async () => {
 });
 
 it('closes again once the grace runs out with no runner (Start agent takes over)', async () => {
+  // The greeting must not swallow this: a runner that NEVER boots has to turn
+  // into an honest "nothing is running here, press to start" rather than
+  // greeting for ever. That is why the early greeting is gated on `!stale`.
   await setup();
   await act(async () => {
     await vi.advanceTimersByTimeAsync(8100);
