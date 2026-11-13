@@ -115,8 +115,44 @@ export function msgvaultRunner({
 
     const out = await exec(action, payload, declared);
     if (action === 'msgvault.draft-get') return await checkDraftLifecycle(out, declared);
+    if (action === 'msgvault.draft-reply' || action === 'msgvault.draft-compose')
+      return await nameMailbox(out, declared);
     return out;
   };
+
+  /**
+   * ── AFTER THE DRAFT EXISTS, SAY WHERE IT WENT ──────────────────────────
+   *
+   * Before approval the dialog can only state the rule ("the mailbox that
+   * message came in to"): resolving the address then would hand any agent an
+   * unapproved oracle for which account holds any message id. AFTER, there is
+   * nothing left to leak — the human approved this act and the receipt is
+   * theirs. msgvault's receipt carries `source_id` but no address, so the
+   * draft's OWN message is read and its sender reported: the identity the
+   * draft was saved under, which is what the owner needs to know to find it.
+   *
+   * Best-effort: a failed read leaves the receipt exactly as msgvault gave it.
+   */
+  async function nameMailbox(out, declared) {
+    const draft = out?.result;
+    const messageID = draft?.message_id;
+    if (!draft || typeof draft !== 'object' || !Number.isSafeInteger(messageID) || messageID < 1)
+      return out;
+    try {
+      const message = (
+        await exec(
+          'msgvault.show-message',
+          validateMsgvault('msgvault.show-message', { id: String(messageID) }),
+          declared,
+        )
+      ).result;
+      const from = message?.id === messageID ? message?.from?.[0]?.email : undefined;
+      if (typeof from !== 'string' || !/^[^\s@]+@[^\s@]+$/.test(from)) return out;
+      return { ...out, result: { ...draft, mailbox: { source_id: draft.source_id, from } } };
+    } catch {
+      return out;
+    }
+  }
 
   /**
    * ── A DRAFT'S LIFECYCLE IS CHECKED, NOT REMEMBERED ─────────────────────

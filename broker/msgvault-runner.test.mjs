@@ -295,3 +295,51 @@ test('only draft-get pays for the extra read', async () => {
   await h.runner('msgvault.stats', {});
   assert.equal(h.ran.length, 1);
 });
+
+test('a created draft says which mailbox it was saved in', async () => {
+  for (const action of ['msgvault.draft-reply', 'msgvault.draft-compose']) {
+    let calls = 0;
+    const h = harness({
+      cb: (done) => {
+        calls++;
+        if (calls === 1)
+          return done(
+            null,
+            JSON.stringify({
+              status: 'created',
+              draft_id: 'draft-1',
+              message_id: 338938,
+              source_id: 1,
+            }),
+            '',
+          );
+        return done(
+          null,
+          JSON.stringify({ id: 338938, from: [{ email: 'me@ohad.com', name: 'Ohad' }] }),
+          '',
+        );
+      },
+    });
+    const payload =
+      action === 'msgvault.draft-reply'
+        ? { id: '339078', body: 'b', all: false }
+        : { to: ['a@b.com'], subject: 's', body: 'b', account: 'me@ohad.com' };
+    const { result } = await h.runner(action, payload);
+    assert.deepEqual(result.mailbox, { source_id: 1, from: 'me@ohad.com' }, action);
+    assert.deepEqual(h.ran[1].args.slice(6), ['show-message', '--json', '--', '338938']);
+  }
+});
+
+test('a mailbox that cannot be read back leaves the receipt untouched', async () => {
+  let calls = 0;
+  const h = harness({
+    cb: (done) => {
+      calls++;
+      if (calls === 1)
+        return done(null, JSON.stringify({ status: 'created', message_id: 5, source_id: 1 }), '');
+      return done(new Error('boom'), '', 'boom');
+    },
+  });
+  const { result } = await h.runner('msgvault.draft-reply', { id: '1', body: 'b', all: false });
+  assert.deepEqual(result, { status: 'created', message_id: 5, source_id: 1 });
+});

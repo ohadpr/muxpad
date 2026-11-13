@@ -135,6 +135,7 @@ function detailFor(
   action?: string,
 ): string | null {
   if (state === 'declined') return 'You declined it';
+  if (state === 'sent') return savedIn(result);
   if (state === 'failed') {
     const why = typeof result.error === 'string' ? result.error : null;
     if (why) return why;
@@ -142,6 +143,26 @@ function detailFor(
     return refusedBy(action ?? (typeof result.action === 'string' ? result.action : undefined));
   }
   return null;
+}
+
+/**
+ * WHERE A DRAFT ACTUALLY WENT, once it exists.
+ *
+ * The approval could only state the rule — naming the address before the act
+ * would let any agent ask which account holds any message. After approval the
+ * broker reads the draft back and reports the identity it was saved under
+ * (`mailbox`), so the card says in one glance what an evening was once spent
+ * finding out by hand. Absent, it says nothing rather than guessing.
+ */
+function savedIn(result: Record<string, unknown>): string | null {
+  const outer = result.result as Record<string, unknown> | undefined;
+  const receipt = outer?.result as Record<string, unknown> | undefined;
+  const mailbox = receipt?.mailbox as { from?: unknown; source_id?: unknown } | undefined;
+  if (typeof mailbox?.from !== 'string' || !mailbox.from) return null;
+  const source = Number.isSafeInteger(mailbox.source_id)
+    ? ` (archive source ${mailbox.source_id})`
+    : '';
+  return `Saved in ${mailbox.from}${source}`;
 }
 
 /** Who refused, named only when the action says so. */
