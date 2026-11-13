@@ -78,6 +78,47 @@ export const ATTACHMENT_EXTENSIONS = Object.keys(ATTACHMENT_MIME_BY_EXT) as Atta
 export const ATTACHMENT_EXT_ALTERNATION = ATTACHMENT_EXTENSIONS.map((e) => e.slice(1)).join('|');
 
 /**
+ * A FILESYSTEM PATH into an attachments dir — the token the composer writes,
+ * and the one thing that should ever be treated as an attachment reference.
+ *
+ * ── WHY IT IS ANCHORED, AND WHY IT LIVES HERE ────────────────────────────
+ *
+ * Two places matched this, and both began with a bare "any run of non-space"
+ * before the directory — which also matches a URL:
+ * `https://host/attachments/report.pdf`. The damage
+ * differed by surface and neither was acceptable —
+ *
+ *   · the RUNNER (remote-attachments.ts) rewrote a pasted link into an
+ *     unrelated local file sharing the basename, or into a "could not be
+ *     loaded" note: the user's own words edited out of their message;
+ *   · the WEB (lib/attachments.ts) drew it as an attachment chip pointing at
+ *     `/api/panes/attachments/report.pdf`, i.e. a broken thumbnail where a
+ *     link should be.
+ *
+ * Both were the same defect, so there is now one pattern and it is here. A
+ * fix on one surface that leaves the other is the shape this corpus keeps
+ * paying for.
+ *
+ *   · the token starts at the start of the text, after whitespace, or after
+ *     an opening bracket or quote — so the `/` inside `https://` (preceded
+ *     by `:`) can never begin one;
+ *   · it starts with a single `/` (absolute, not `//host`) and holds no `:`;
+ *   · the extension ENDS the name: a trailing `,` or `.` in prose is left
+ *     out, and `x.png.bak` is not `x.png`.
+ *
+ * Any data dir is accepted, since MUXPAD_DATA_DIR can move it off ~/.muxpad.
+ *
+ * A FUNCTION, not a shared const: a `g`-flagged RegExp carries `lastIndex`,
+ * so one shared instance would make two callers interfere with each other.
+ */
+export function attachmentPathRe(): RegExp {
+  return new RegExp(
+    `(?<=^|[\\s(\\[<"'\`])/(?!/)[^\\s:]*?/attachments/([\\w.-]+\\.(?:${ATTACHMENT_EXT_ALTERNATION}))(?![\\w-]|\\.\\w)`,
+    'gi',
+  );
+}
+
+/**
  * '.ext' for an accepted attachment mime, or null when nothing here renders it.
  *
  * The attachment-wide sibling of `imageExtForMime`. The composer needs it
