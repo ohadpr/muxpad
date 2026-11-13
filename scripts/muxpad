@@ -991,20 +991,30 @@ EOF
 # so a flag msgvault gains is usable the day it ships, with no root install.
 msgvault_run_argv() {
   local verb="$1"; shift
-  local args=("$verb" "--json")
+  local flags=() pos=()
   # `--k=v` STAYS JOINED. Splitting it into `--k v` looks equivalent and is
   # not: the broker's gate derives the subcommand from the non-flag tokens,
   # so a split value becomes part of the command name — `--body hello` was
   # reviewed as the command `draft-edit hello`, against help for a verb that
   # does not exist. Joined, every value stays attached to its flag and the
   # only bare token left is the id.
+  #
+  # AND THE `--` GOES LAST, before the positionals and after every flag.
+  # It used to be emitted where the id appeared, and the documented shape
+  # puts the id FIRST — `draft-delete <id> --revision=1` became
+  # `draft-delete --json -- <id> --revision=1`, so msgvault read the flag as
+  # a second positional: "accepts 1 arg(s), received 2". Everything after a
+  # `--` is a positional, which is the whole point of it.
   while [ $# -gt 0 ]; do
     case "$1" in
-      --*) args+=("$1") ;;
-      *) args+=("--" "$1") ;;
+      --) shift; pos+=("$@"); break ;;
+      -*) flags+=("$1") ;;
+      *) pos+=("$1") ;;
     esac
     shift
   done
+  local args=("$verb" "--json" ${flags[@]+"${flags[@]}"})
+  [ "${#pos[@]}" -eq 0 ] || args+=("--" "${pos[@]}")
   slack_call POST /api/msgvault/run "$(printf '%s\n' "${args[@]}" | jq -Rn \
     --arg pane "$MUXPAD_PANE_ID" --arg key "$MUXPAD_PANE_KEY" \
     '{pane:$pane,key:$key,args:[inputs]}')"
