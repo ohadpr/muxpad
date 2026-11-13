@@ -504,7 +504,7 @@ type ServerMsg =
   | { t: 'question-done'; qid: string }
   // Server-owned queue: the full pending list broadcast on every change, plus a
   // per-socket ack that THIS send was parked (so it drops its optimistic state).
-  | { t: 'queue'; items: QueuedItem[] }
+  | { t: 'queue'; items: QueuedItem[]; started?: QueuedItem }
   | { t: 'queued'; id: string; text: string }
   | { t: 'subagent'; progress: SubagentProgress }
   | ({ t: 'status' } & AgentStatus)
@@ -2229,6 +2229,18 @@ export function ChatPane({
         // The server-owned pending queue changed (a send parked, drained, or was
         // cancelled — possibly from another device). Render it verbatim.
         setQueue(msg.items);
+        // ── A DRAIN HANDS OVER IN ONE COMMIT ──────────────────────────────────
+        // When the server relays a queued message it says so on this frame, and
+        // the message and the working line go up in the SAME commit that takes
+        // its pending row down. Waiting for the runner's turn-start (below) left
+        // a round trip in which the tail had neither, so the chat got shorter
+        // and then regrew — and a scroll landing in that gap missed by
+        // 300-440px. The turn-start that follows sets the same two values again,
+        // which is a no-op.
+        if (msg.started) {
+          setSending(true);
+          setOptimisticUser(msg.started.text);
+        }
         // A queued send is a message: the server counts it in
         // agentPaneHasMessages, so a chat with a pending bubble WILL 409 any
         // conversion. Only the session frame used to set this, so a send that
