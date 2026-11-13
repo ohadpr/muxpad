@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { test } from 'node:test';
-import { argvIsRead, parseHelpFlags, reviewArgv } from './msgvault-argv.mjs';
+import { argvIsRead, parseHelpFlags, parseHelpShorts, reviewArgv } from './msgvault-argv.mjs';
 
 /**
  * THE REVIEW IS THE WHOLE SECURITY SURFACE of the argv path, so it is tested
@@ -12,7 +12,8 @@ import { argvIsRead, parseHelpFlags, reviewArgv } from './msgvault-argv.mjs';
 const HELP = {
   search: '--limit int\n--json\n--since string',
   'draft-reply': '--body string\n--all\n--json',
-  'calendar create': '--summary string\n--from string\n--to string\n--tz string\n--attendees strings\n--account string\n--json',
+  'calendar create':
+    '--summary string\n--from string\n--to string\n--tz string\n--attendees strings\n--account string\n--json',
   'calendar freebusy': '--from string\n--to string\n--tz string\n--account string\n--json',
   'calendar delete': '--scope string\n--account string\n--json',
   'add-account': '--json',
@@ -23,7 +24,10 @@ const helpFor = (c) => HELP[c] ?? null;
 test('a flag the subcommand does not have is refused', () => {
   // The gate that needs no maintenance, and the one the old verb table never
   // had: nothing checked that muxpad's hand-written flags existed.
-  assert.deepEqual(reviewArgv(['search', '--limit', '5'], helpFor), { ok: true, command: 'search' });
+  assert.deepEqual(reviewArgv(['search', '--limit', '5'], helpFor), {
+    ok: true,
+    command: 'search',
+  });
   assert.match(reviewArgv(['search', '--deep'], helpFor).why, /search has no --deep/);
 });
 
@@ -37,7 +41,11 @@ test('flags that change WHO THIS IS are refused even when help lists them', () =
   // `--home` and `--config` re-point the whole archive; `--agent-*` overrides
   // the grant itself. A help text that lists them is not permission.
   for (const flag of ['--home', '--config', '--agent-url', '--local'])
-    assert.match(reviewArgv(['search', flag, 'x'], helpFor).why, /not something an agent sets/, flag);
+    assert.match(
+      reviewArgv(['search', flag, 'x'], helpFor).why,
+      /not something an agent sets/,
+      flag,
+    );
 });
 
 test('flags that reach another person are refused', () => {
@@ -60,7 +68,10 @@ test('…but a calendar still gets its --account and its --from TIME', () => {
 });
 
 test('a recurring series is never deleted wholesale', () => {
-  assert.equal(reviewArgv(['calendar', 'delete', 'primary', '--scope', 'single'], helpFor).ok, true);
+  assert.equal(
+    reviewArgv(['calendar', 'delete', 'primary', '--scope', 'single'], helpFor).ok,
+    true,
+  );
   assert.match(
     reviewArgv(['calendar', 'delete', 'primary', '--scope', 'all'], helpFor).why,
     /too broad/,
@@ -195,4 +206,36 @@ test('but an agent still may not choose the mailbox', () => {
     assert.equal(r.ok, false, f);
     assert.match(r.why, /not something an agent sets/);
   }
+});
+
+/**
+ * ── A SHORT FLAG WAS NEVER REVIEWED ─────────────────────────────────────
+ *
+ * The loop skipped anything not starting with `--`, so `-x` passed every
+ * gate: not checked against help, not checked against the refused list.
+ * Nothing in msgvault 0.22 gives a refused flag a short alias, which is the
+ * only reason it was not a hole yet. Now a short flag is reviewed as the
+ * long flag its help says it stands for.
+ */
+test('a short flag is reviewed as the long flag it stands for', () => {
+  const help = (c) =>
+    c === 'search'
+      ? '  -n, --limit int   Maximum\n  -a, --account string   Limit\n      --json\n  -h, --help'
+      : null;
+  assert.equal(reviewArgv(['search', '-n', '5', '--json', '--', 'x'], help).ok, true);
+  assert.equal(reviewArgv(['search', '-n5', '--', 'x'], help).ok, true);
+  // A short alias of a refused flag is refused like the flag.
+  assert.match(reviewArgv(['search', '-a', 'me@x.com', '--', 'x'], help).why, /--account is not/);
+  assert.match(reviewArgv(['search', '-ame@x.com', '--', 'x'], help).why, /--account is not/);
+  // A short flag help does not list is refused by name.
+  assert.match(reviewArgv(['search', '-z', '--', 'x'], help).why, /search has no -z/);
+  // After `--` it is a positional, as msgvault will read it.
+  assert.equal(reviewArgv(['search', '--json', '--', '-z'], help).ok, true);
+});
+
+test('parseHelpShorts reads the real binary’s short flags', (t) => {
+  const BIN = '/usr/local/libexec/msgvault/msgvault';
+  if (!existsSync(BIN)) return t.skip('msgvault is not installed on this machine');
+  const help = execFileSync(BIN, ['search', '--help'], { encoding: 'utf8' });
+  assert.equal(parseHelpShorts(help).get('n'), '--limit');
 });
