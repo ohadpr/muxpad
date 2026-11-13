@@ -1,4 +1,4 @@
-import { type ChatAction, actionIntegration } from '@muxpad/shared';
+import { type ChatAction, actionIntegration, finishedWord } from '@muxpad/shared';
 import { useState } from 'react';
 import './ActionCard.css';
 import { SlackLogo } from './SlackLogo';
@@ -35,6 +35,7 @@ export interface ActionCardProps {
  *  usually long-lived state — somebody has to approve it — not a load. */
 const SAYS: Record<ChatAction['state'], string> = {
   pending: 'waiting for you',
+  // Only the fallback: a finished act says what it was — see finishedWord.
   sent: 'sent',
   // Kept apart from `failed` for the same reason `unauthorized` is kept apart
   // from `down` in the machines list: one is a decision and the other is a
@@ -57,7 +58,9 @@ export function ActionCard({ action }: ActionCardProps) {
           {/* The state is a WORD, not a colour alone — the dot beside it is the
               same fact for a glance, and the two together survive both a
               colourblind reader and a greyscale screenshot. */}
-          <span className="action-card__state">{SAYS[action.state]}</span>
+          <span className="action-card__state">
+            {action.state === 'sent' ? finishedWord(action.kind) : SAYS[action.state]}
+          </span>
         </div>
         {action.detail ? <div className="action-card__detail">{action.detail}</div> : null}
         {/* WHAT WAS SENT, folded. A card sits in the log where the reader is

@@ -390,3 +390,57 @@ describe('a failed card says who actually refused', () => {
     expect(card().detail).toBe('It was refused');
   });
 });
+
+describe('a mail draft, once it exists, says where it went', () => {
+  // Before approval the dialog states the rule only — naming the address then
+  // would be an oracle. After, the broker reads the draft back and the card
+  // shows the identity it was saved under.
+  const receipt = {
+    action: 'msgvault.draft-reply',
+    result: {
+      status: 'created',
+      message_id: 338938,
+      source_id: 1,
+      mailbox: { source_id: 1, from: 'me@ohad.com' },
+    },
+  };
+
+  it('names the mailbox when the approval resolves later', () => {
+    recordSlackAction(db, {
+      action: 'msgvault.draft-reply',
+      payload: { id: '339078', body: 'b', all: false },
+      pane,
+      result: { id: REQ, state: 'pending' },
+    });
+    expect(store().listForPane(pane)[0]?.detail ?? null).toBeNull();
+    resolveSlackAction(db, {
+      id: REQ,
+      action: 'msgvault.draft-reply',
+      state: 'complete',
+      result: receipt,
+    });
+    const card = store().listForPane(pane)[0];
+    expect(card?.title).toBe('Drafted a reply to message 339078');
+    expect(card?.detail).toBe('Saved in me@ohad.com (archive source 1)');
+  });
+
+  it('names it when a standing grant completes it at once', () => {
+    recordSlackAction(db, {
+      action: 'msgvault.draft-reply',
+      payload: { id: '339078', body: 'b', all: false },
+      pane,
+      result: { id: REQ, state: 'complete', result: receipt },
+    });
+    expect(store().listForPane(pane)[0]?.detail).toBe('Saved in me@ohad.com (archive source 1)');
+  });
+
+  it('says nothing rather than guessing when the receipt has no mailbox', () => {
+    recordSlackAction(db, {
+      action: 'msgvault.draft-reply',
+      payload: { id: '339078', body: 'b', all: false },
+      pane,
+      result: { id: REQ, state: 'complete', result: { result: { source_id: 1 } } },
+    });
+    expect(store().listForPane(pane)[0]?.detail ?? null).toBeNull();
+  });
+});

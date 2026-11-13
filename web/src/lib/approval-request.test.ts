@@ -120,7 +120,9 @@ describe('a draft is described by what goes into the mailbox', () => {
     // The body is the primary field: a dialog that named the thread but not
     // the text would be asking for consent to something it had not shown.
     expect(d.primary).toEqual({ key: 'body', value: 'Are you free Thursday?' });
-    expect(d.qualifier).toBe('saved as a draft — it cannot be sent');
+    expect(d.qualifier).toBe(
+      'saved as a draft in the mailbox that message came in to — it cannot be sent',
+    );
     // …and the rest is still all on screen.
     expect(d.rest.map(([k]) => k)).toEqual(['id']);
   });
@@ -134,6 +136,19 @@ describe('a draft is described by what goes into the mailbox', () => {
     const d = describeRequest('msgvault.draft', { to: ['a@b.com'], subject: 's', body: 'b' });
     expect(d.title).not.toContain('msgvault.draft');
     expect(d.qualifier).toBeUndefined();
+  });
+
+  it('names the mailbox a new email is drafted in, before it is written', () => {
+    const d = describeRequest('msgvault.draft-compose', {
+      to: ['a@b.com'],
+      subject: 'Hi',
+      body: 'Text',
+      account: 'me@ohad.com',
+    });
+    expect(d.title).toBe('Draft a new email to a@b.com');
+    expect(d.qualifier).toBe('saved as a draft in me@ohad.com — it cannot be sent');
+    expect(d.primary).toEqual({ key: 'body', value: 'Text' });
+    expect(marksFor('msgvault.draft-compose')).toEqual(['gmail']);
   });
 
   it('says out loud when a reply goes to everyone', () => {

@@ -108,3 +108,39 @@ const READ_ACTIONS = new Set([
 export function actionIsRead(a: ChatAction): boolean {
   return READ_ACTIONS.has(a.kind);
 }
+
+/**
+ * WHAT A FINISHED ACT IS CALLED, per verb.
+ *
+ * The stored state for every act that finished is `sent`, and the card used
+ * to print that word for all of them — so the log read "Searched your mail ·
+ * sent" and "Drafted a reply · sent". For someone scanning it for what LEFT
+ * the machine that is false twice over: a read sends nothing, and a draft is
+ * created in the owner's own mailbox, not sent to anyone. (`complete` from the
+ * broker only means the tool exited 0, so the word must not claim more.)
+ *
+ * The state stays `sent` — it is the stored, validated "finished" value and
+ * changing it would rewrite old rows — and only the WORD follows the verb.
+ * Anything not listed is an outbound send and keeps "sent".
+ */
+const DONE_WORDS: Record<string, string> = {
+  'msgvault.draft-reply': 'drafted',
+  'msgvault.draft-compose': 'drafted',
+  'msgvault.draft-get': 'done',
+  'msgvault.draft-edit': 'updated',
+  'msgvault.draft-delete': 'deleted',
+  'msgvault.calendar-create': 'added',
+  'msgvault.calendar-update': 'changed',
+  'msgvault.calendar-delete': 'deleted',
+  'msgvault.calendar-freebusy': 'done',
+  'msgvault.calendar-conflicts': 'done',
+  'msgvault.run': 'done',
+  'slack.edit': 'edited',
+  'slack.react': 'reacted',
+  'slack.unpost': 'deleted',
+};
+
+export function finishedWord(kind: string): string {
+  if (READ_ACTIONS.has(kind)) return 'done';
+  return DONE_WORDS[kind] ?? 'sent';
+}

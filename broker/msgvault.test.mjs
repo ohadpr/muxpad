@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { CAPABILITIES, MSGVAULT, capabilityOf } from './capabilities.mjs';
-import { describeMsgvault, msgvaultArgv, validateMsgvault } from './msgvault.mjs';
+import {
+  OWNER_DRAFT_ACCOUNT,
+  describeMsgvault,
+  msgvaultArgv,
+  validateMsgvault,
+} from './msgvault.mjs';
 
 const INSTALL = {
   binary: '/usr/local/libexec/msgvault/msgvault',
@@ -201,6 +206,7 @@ test('the dialog names the thing being asked for, not just the verb', () => {
     end: '2026-11-29T15:00',
     tz: 'America/Los_Angeles',
     event: 'evt1',
+    revision: 3,
   };
   for (const a of CAPABILITIES.msgvault.actions) {
     const d = describeMsgvault(a, validateMsgvault(a, anything));
@@ -240,6 +246,8 @@ test('composing a new email names its recipients, and still cannot send', () => 
   assert.deepEqual(args.slice(6), [
     'draft-compose',
     '--json',
+    '--account',
+    'me@ohad.com',
     '--subject',
     'Hello',
     '--body',
@@ -250,8 +258,8 @@ test('composing a new email names its recipients, and still cannot send', () => 
     'c@d.com',
   ]);
   // The identity a mail appears to come FROM is the owner's choice, never an
-  // agent's: msgvault picks the source when it is not told.
-  assert.ok(!args.some((x) => ['--from', '--account', '--source-id'].includes(x)));
+  // agent's: the broker names the mailbox, and only that one flag is set.
+  assert.ok(!args.some((x) => ['--from', '--source-id'].includes(x)));
   // `draft` (the bare name) is still not a verb at all.
   assert.throws(() => validateMsgvault('msgvault.draft', { body: 'b' }), /Unsupported action/);
   // And NOTHING this module builds sends anything.
@@ -274,6 +282,7 @@ test('composing a new email names its recipients, and still cannot send', () => 
         end: '2026-11-29T15:00',
         tz: 'America/Los_Angeles',
         event: 'evt1',
+        revision: 3,
       }),
       INSTALL,
     );
@@ -381,15 +390,19 @@ test('the draft verbs build the argv msgvault documents', () => {
   const argvOf = (action, payload) =>
     msgvaultArgv(action, validateMsgvault(action, payload), decl).args.slice(6);
   assert.deepEqual(argvOf('msgvault.draft-get', { id: 'd1' }), ['draft-get', '--json', '--', 'd1']);
-  assert.deepEqual(argvOf('msgvault.draft-delete', { id: 'd1' }), [
+  assert.deepEqual(argvOf('msgvault.draft-delete', { id: 'd1', revision: 2 }), [
     'draft-delete',
     '--json',
+    '--revision',
+    '2',
     '--',
     'd1',
   ]);
-  assert.deepEqual(argvOf('msgvault.draft-edit', { id: 'd1', body: 'new text' }), [
+  assert.deepEqual(argvOf('msgvault.draft-edit', { id: 'd1', body: 'new text', revision: 2 }), [
     'draft-edit',
     '--json',
+    '--revision',
+    '2',
     '--body',
     'new text',
     '--',
@@ -399,7 +412,7 @@ test('the draft verbs build the argv msgvault documents', () => {
 
 test('a draft verb still refuses a missing id or body', () => {
   assert.throws(() => validateMsgvault('msgvault.draft-get', {}), /draft id/);
-  assert.throws(() => validateMsgvault('msgvault.draft-edit', { id: 'd1' }), /body/);
+  assert.throws(() => validateMsgvault('msgvault.draft-edit', { id: 'd1', revision: 1 }), /body/);
   assert.throws(() => validateMsgvault('msgvault.draft-delete', { id: '--oops' }), /draft id/);
 });
 
@@ -501,4 +514,82 @@ test('the dialog says what will appear in the calendar, and that nobody is told'
   );
   assert.match(d, /Avery/);
   assert.match(d, /no guests, no reminders/);
+});
+
+/**
+ * WHICH MAILBOX A DRAFT GOES TO.
+ *
+ * A reply was found in a mailbox the owner had not looked in, and the dialog
+ * that approved it had not named one. The owner's rule: "new emails - default
+ * to me@ohad.com that's it; replies - obviously go on the thread/account the
+ * email we are replying to came in to."
+ */
+test('a new email is drafted in the owner’s default mailbox, and the dialog names it', () => {
+  assert.equal(OWNER_DRAFT_ACCOUNT, 'me@ohad.com');
+  const p = validateMsgvault('msgvault.draft-compose', {
+    to: ['a@b.com'],
+    subject: 'Hi',
+    body: 'Text',
+  });
+  const args = msgvaultArgv('msgvault.draft-compose', p, INSTALL).args;
+  assert.equal(args[args.indexOf('--account') + 1], 'me@ohad.com');
+  assert.match(describeMsgvault('msgvault.draft-compose', p), /in the me@ohad\.com mailbox/);
+});
+
+test('an agent cannot choose the mailbox or identity of a draft', () => {
+  const sneaky = {
+    to: ['a@b.com'],
+    subject: 'Hi',
+    body: 'Text',
+    id: '150889',
+    account: 'someone-else@example.com',
+    from: 'ceo@example.com',
+    sourceId: 7,
+    source_id: 7,
+  };
+  for (const action of ['msgvault.draft-compose', 'msgvault.draft-reply']) {
+    const p = validateMsgvault(action, sneaky);
+    const args = msgvaultArgv(action, p, INSTALL).args;
+    assert.ok(!args.includes('someone-else@example.com'), action);
+    assert.ok(!args.includes('ceo@example.com'), action);
+    assert.ok(!args.some((x) => ['--from', '--source-id'].includes(x)), action);
+    assert.ok(!JSON.stringify(p).includes('someone-else'), action);
+  }
+  const c = validateMsgvault('msgvault.draft-compose', sneaky);
+  assert.equal(c.account, OWNER_DRAFT_ACCOUNT);
+});
+
+test('a reply goes to the mailbox its message came in to — and the dialog says so', () => {
+  // msgvault's own rule with no destination flag: the parent's source, and
+  // for Gmail nothing else is permitted. So none is passed — a flag here
+  // could only ever disagree with that.
+  const p = validateMsgvault('msgvault.draft-reply', { id: '150889', body: 'Yes' });
+  const args = msgvaultArgv('msgvault.draft-reply', p, INSTALL).args;
+  assert.ok(!args.some((x) => ['--account', '--from', '--source-id'].includes(x)));
+  assert.match(
+    describeMsgvault('msgvault.draft-reply', p),
+    /in the mailbox message 150889 came in to/,
+  );
+});
+
+test('editing or deleting a draft forwards the revision msgvault requires', () => {
+  // "draft-edit requires --revision and --body"; "draft-delete requires
+  // --revision and no body" — both strings are in the installed binary.
+  for (const action of ['msgvault.draft-edit', 'msgvault.draft-delete']) {
+    assert.throws(
+      () => validateMsgvault(action, { id: 'd1', body: 'b' }),
+      /revision/,
+      `${action} without a revision`,
+    );
+    for (const bad of [0, -1, 1.5, 'x', '--local', '1; rm'])
+      assert.throws(
+        () => validateMsgvault(action, { id: 'd1', body: 'b', revision: bad }),
+        /revision/,
+      );
+    const p = validateMsgvault(action, { id: 'd1', body: 'b', revision: '4' });
+    assert.equal(p.revision, 4);
+    const args = msgvaultArgv(action, p, INSTALL).args;
+    assert.equal(args[args.indexOf('--revision') + 1], '4');
+    assert.match(describeMsgvault(action, p), /revision 4/);
+  }
 });

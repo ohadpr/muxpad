@@ -52,6 +52,24 @@ const str = (v, max) =>
 const ID = /^(?!-)[A-Za-z0-9_.:@+-]{1,128}$/;
 
 /**
+ * ── THE OWNER'S DEFAULT IDENTITY: WHERE A NEW EMAIL IS DRAFTED ──────────
+ *
+ * The owner's rule, verbatim: "new emails - default to me@ohad.com that's
+ * it". So a compose names this mailbox explicitly instead of leaving msgvault
+ * to choose — and the dialog shows it, so a draft headed for the wrong
+ * mailbox is visible before it is written rather than discovered afterwards.
+ *
+ * It is passed as `--account`, which msgvault matches against a source's
+ * identifier (the address `list-accounts` prints). To change the default,
+ * change this one line and reinstall the broker; nothing else spells it.
+ *
+ * An agent cannot override it: the account, from and source-id flags are not
+ * an agent's to set (the argv gate refuses them for the same reason), and the
+ * typed verbs below never read one from the payload.
+ */
+export const OWNER_DRAFT_ACCOUNT = 'me@ohad.com';
+
+/**
  * A DELIBERATE REFUSAL, tagged so it can be repeated to the caller.
  *
  * The broker's HTTP layer answers every exception with a fixed `Request
@@ -140,6 +158,18 @@ function refuseGuests(p) {
   if (p.sendUpdates !== undefined) fail('Guest notifications are not an agent’s to send');
 }
 
+/** The draft revision msgvault requires for an edit or delete — the one
+ *  `draft-get` printed. A positive integer, as msgvault itself insists. */
+function draftRevision(p) {
+  const r =
+    typeof p.revision === 'string' && /^\d{1,15}$/.test(p.revision)
+      ? Number(p.revision)
+      : p.revision;
+  if (!Number.isSafeInteger(r) || r < 1)
+    fail('Give the draft’s current revision (a positive integer — draft-get prints it)');
+  return r;
+}
+
 const SPEC = {
   'msgvault.search': {
     validate: (p) => {
@@ -214,6 +244,29 @@ const SPEC = {
    *
    * `--json`, so the result is a draft id the owner can open rather than
    * prose about having done it.
+   *
+   * ── WHICH MAILBOX: THE ONE THE MESSAGE CAME IN TO, AND NO FLAG SAYS SO ──
+   *
+   * The owner's rule: "replies - obviously go on the thread/account the
+   * email we are replying to came in to." msgvault already does exactly that
+   * and permits nothing else, so this passes no destination flag:
+   *
+   *   · with no `--account`/`--source-id`, the destination IS the parent
+   *     message's own source (`resolveDraftTarget`: `source = parentSource`);
+   *   · for a Gmail parent, any other destination is refused outright —
+   *     "gmail draft replies must use the parent source" (that string is in
+   *     the installed 0.22.0 binary).
+   *
+   * Restating it explicitly would need the parent's source from a read, and
+   * there is none to read: `show-message --json` carries NO source or account
+   * field (checked on a real message 2026-11-13 — its keys are attachments,
+   * bcc, cc, conversation_id, from, has_attachments, id, labels,
+   * rfc822_message_id, sent_at, size_estimate, snippet, source_conversation_id,
+   * source_message_id, subject, to, web_url; `show-thread` and `search` rows
+   * have none either), and `list-accounts` is refused to a delegated agent.
+   * Guessing it from the To: header would be the guess this exists to remove.
+   * So the dialog states the rule msgvault enforces, and the result's
+   * `source_id` says where the draft actually landed.
    */
   'msgvault.draft-reply': {
     validate: (p) => {
@@ -235,7 +288,7 @@ const SPEC = {
       p.id,
     ],
     describe: (p) =>
-      `draft a reply ${p.all ? 'to everyone on' : 'to the sender of'} message ${p.id}`,
+      `draft a reply ${p.all ? 'to everyone on' : 'to the sender of'} message ${p.id}, in the mailbox message ${p.id} came in to`,
   },
   /**
    * ── AND THE REST OF THE DRAFT LIFECYCLE ───────────────────────────────
@@ -250,10 +303,13 @@ const SPEC = {
    * raise a dialog for something the archive then refuses. Create is
    * `draft-reply`; there is no other create.
    *
-   * `--revision` is deliberately NOT exposed. msgvault uses it for optimistic
-   * concurrency, and a wrong guess from an agent would clobber an edit the
-   * owner made in their mail client between the read and the write. Without
-   * it the tool applies its own rule.
+   * `--revision` IS REQUIRED, and forwarded. This said the opposite — that a
+   * wrong guess would clobber the owner's own edit, so it was left out and
+   * "the tool applies its own rule". Both halves were wrong: msgvault refuses
+   * an edit or delete without it ("draft-edit requires --revision and
+   * --body"), so the typed verbs never worked; and it is optimistic
+   * concurrency, so a STALE revision is refused, never applied. Passing the
+   * revision `draft-get` returned is what protects an edit made in between.
    */
   /**
    * ── A NEW EMAIL, AND WHY IT IS HERE AFTER ALL ─────────────────────────
@@ -272,9 +328,18 @@ const SPEC = {
    * STILL NO SEND. This creates a draft in the mailbox exactly like
    * `draft-reply`; nothing at this grant can put it on the wire.
    *
-   * `--account`, `--from` and `--source-id` are NOT exposed. Choosing which
-   * identity a mail appears to come from is the owner's, not an agent's, and
-   * msgvault picks the source itself when it is not told.
+   * `--account` IS PASSED, BY THE BROKER: {@link OWNER_DRAFT_ACCOUNT}. The
+   * old note here said msgvault picks the source itself when it is not told;
+   * it does not — a compose with no destination is refused, "--account or
+   * --source-id is required". `--from` and `--source-id` stay unset, and none
+   * of the three is ever taken from an agent: which identity a mail appears
+   * to come from is the owner's choice.
+   *
+   * BAD NEWS, measured rather than hoped: msgvault composes only into an IMAP
+   * source ("draft-compose requires an IMAP source", in the installed binary),
+   * and me@ohad.com is a Gmail source. So today this yields msgvault's own
+   * `draft_disabled`, now aimed at the right mailbox, until that mailbox is
+   * also added over IMAP with an `[[imap.drafts]]` grant.
    */
   /**
    * ── A CALENDAR EVENT, AND THE ONE LINE THAT KEEPS IT A DRAFT-SHAPED ACT ─
@@ -368,7 +433,8 @@ const SPEC = {
   'msgvault.calendar-conflicts': {
     validate: (p) => calendarWindow(p),
     argv: (p) => calendarRangeArgv('conflicts', p),
-    describe: (p) => `find overlapping events in ${p.calendar} for ${p.account}, ${p.start} to ${p.end}`,
+    describe: (p) =>
+      `find overlapping events in ${p.calendar} for ${p.account}, ${p.start} to ${p.end}`,
   },
   /**
    * ── AND FIXING ONE AFTER THE FACT ─────────────────────────────────────
@@ -431,7 +497,8 @@ const SPEC = {
       '--scope',
       'single',
     ],
-    describe: (p) => `delete event ${p.event} from ${p.calendar} (${p.account}) — this occurrence only`,
+    describe: (p) =>
+      `delete event ${p.event} from ${p.calendar} (${p.account}) — this occurrence only`,
   },
   'msgvault.draft-compose': {
     validate: (p) => {
@@ -442,18 +509,29 @@ const SPEC = {
         if (!/^[^\s@]{1,128}@[^\s@]{1,128}$/.test(String(a))) fail(`Not an address: ${a}`);
       if (!str(p.subject, 500)) fail('Give a subject');
       if (!str(p.body, 20000)) fail('Give a body');
-      return { to: to.map(String), subject: p.subject, body: p.body };
+      // The mailbox is the BROKER's, never the payload's: an `account` an
+      // agent sent is not read. It rides in the payload only so the dialog
+      // shows it and the fingerprint binds it.
+      return {
+        to: to.map(String),
+        subject: p.subject,
+        body: p.body,
+        account: OWNER_DRAFT_ACCOUNT,
+      };
     },
     argv: (p) => [
       'draft-compose',
       '--json',
+      '--account',
+      p.account,
       '--subject',
       p.subject,
       '--body',
       p.body,
       ...p.to.flatMap((a) => ['--to', a]),
     ],
-    describe: (p) => `draft a NEW email to ${p.to.join(', ')} — "${p.subject}"`,
+    describe: (p) =>
+      `draft a NEW email to ${p.to.join(', ')} — "${p.subject}" — in the ${p.account} mailbox`,
   },
   'msgvault.draft-get': {
     validate: (p) =>
@@ -465,16 +543,27 @@ const SPEC = {
     validate: (p) => {
       if (!ID.test(String(p.id ?? ''))) fail('Give the draft id to edit');
       if (!str(p.body, 20000)) fail('Give a body');
-      return { id: p.id, body: p.body };
+      return { id: p.id, body: p.body, revision: draftRevision(p) };
     },
-    argv: (p) => ['draft-edit', '--json', '--body', p.body, '--', p.id],
-    describe: (p) => `replace the body of draft ${p.id}`,
+    argv: (p) => [
+      'draft-edit',
+      '--json',
+      '--revision',
+      String(p.revision),
+      '--body',
+      p.body,
+      '--',
+      p.id,
+    ],
+    describe: (p) => `replace the body of draft ${p.id} (revision ${p.revision})`,
   },
   'msgvault.draft-delete': {
-    validate: (p) =>
-      ID.test(String(p.id ?? '')) ? { id: p.id } : fail('Give the draft id to delete'),
-    argv: (p) => ['draft-delete', '--json', '--', p.id],
-    describe: (p) => `delete draft ${p.id}`,
+    validate: (p) => {
+      if (!ID.test(String(p.id ?? ''))) fail('Give the draft id to delete');
+      return { id: p.id, revision: draftRevision(p) };
+    },
+    argv: (p) => ['draft-delete', '--json', '--revision', String(p.revision), '--', p.id],
+    describe: (p) => `delete draft ${p.id} (revision ${p.revision})`,
   },
 };
 

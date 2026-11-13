@@ -40,6 +40,7 @@ const MARKS: Record<string, readonly SourceMark[]> = {
   // is involved, not whether the verb reads or writes. The heading and the
   // qualifier carry that, and the duration menu's absence proves it.
   'msgvault.draft-reply': ['gmail'],
+  'msgvault.draft-compose': ['gmail'],
 };
 
 export const marksFor = (action: string): readonly SourceMark[] =>
@@ -195,13 +196,25 @@ const RULES: Record<string, Rule> = {
    * the mailbox, and a dialog that showed the recipient but not the text
    * would be asking for consent to something it had not shown.
    *
-   * There is no compose entry because there is no compose verb: a Gmail
-   * source refuses `draft-compose`, so the dialog for it could only ever
-   * precede a failure.
+   * WHICH MAILBOX is said in the qualifier, before anything is written — a
+   * reply once landed in a mailbox the owner had not thought to look in. A
+   * reply goes to the mailbox its message came in to (msgvault permits no
+   * other); a new email goes to the mailbox the broker names in `account`.
    */
   'msgvault.draft-reply': {
     title: (p) => (p.all ? 'Draft a reply to everyone on the thread' : 'Draft a reply'),
-    qualifier: () => 'saved as a draft — it cannot be sent',
+    qualifier: () => 'saved as a draft in the mailbox that message came in to — it cannot be sent',
+    primary: 'body',
+  },
+  'msgvault.draft-compose': {
+    title: (p) => {
+      const to = Array.isArray(p.to) ? p.to.map(String).join(', ') : text(p.to);
+      return to ? `Draft a new email to ${to}` : 'Draft a new email';
+    },
+    qualifier: (p) =>
+      text(p.account)
+        ? `saved as a draft in ${text(p.account)} — it cannot be sent`
+        : 'saved as a draft — it cannot be sent',
     primary: 'body',
   },
   'msgvault.stats': {
