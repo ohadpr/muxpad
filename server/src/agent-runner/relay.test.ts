@@ -883,6 +883,43 @@ describe('agent-runner relay', () => {
     chat2.close();
   });
 
+  it('a drain names the message it started, in the frame that removes its pending row', async () => {
+    // Before this, the client learned that the drained message had started
+    // only from the runner's own turn-start, a round trip later — and in
+    // between the chat had neither the pending row nor the turn replacing it.
+    const { port, paneId } = await boot();
+    const { sock: runner, rx: fromRunner } = await openSock(
+      `ws://127.0.0.1:${port}/ws/agent-runner/${paneId}`,
+    );
+    runner.send(JSON.stringify({ t: 'hello', sid: SID, cwd: '/tmp', pid: 1, turnActive: false }));
+    const { sock: chat, rx: fromChat } = await openSock(`ws://127.0.0.1:${port}/ws/chat/${paneId}`);
+    await fromChat.next((f) => f.t === 'session');
+
+    chat.send(JSON.stringify({ t: 'send', text: 'one' }));
+    await fromRunner.next((f) => f.t === 'send');
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    await fromChat.next((f) => f.t === 'turn-start');
+    chat.send(JSON.stringify({ t: 'send', text: 'two' }));
+    const parked = await fromChat.next(
+      (f) => f.t === 'queue' && (f.items as unknown[]).length === 1,
+    );
+    // Parking is not starting.
+    expect(parked.started).toBeUndefined();
+    const id = (parked.items as { id: string }[])[0]?.id;
+
+    // Turn 1 ends and NOTHING else is sent by the runner: no turn-start yet.
+    const turnStartsBefore = fromChat.frames.filter((f) => f.t === 'turn-start').length;
+    runner.send(JSON.stringify({ t: 'turn-done', ok: true }));
+    const drained = await fromChat.next(
+      (f) => f.t === 'queue' && (f.items as unknown[]).length === 0,
+    );
+    expect(drained.started).toEqual({ id, text: 'two' });
+    // …and it is the drain frame that says so, not an extra turn-start.
+    expect(fromChat.frames.filter((f) => f.t === 'turn-start')).toHaveLength(turnStartsBefore);
+    runner.close();
+    chat.close();
+  });
+
   it('cancels a queued message before it runs', async () => {
     const { port, paneId } = await boot();
     const { sock: runner, rx: fromRunner } = await openSock(
