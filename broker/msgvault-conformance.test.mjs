@@ -70,6 +70,10 @@ const FATAL = [
   /unknown command/i,
   /unknown shorthand/i,
   /accepts \d+ arg/i,
+  // A flag msgvault REQUIRES that the typed argv never sends. cobra checks
+  // it client-side, before the network — this is the answer
+  // `draft-delete`/`draft-edit` gave for `--revision`, live, after shipping.
+  /required flag\(s\)/i,
 ];
 
 function run(args) {
