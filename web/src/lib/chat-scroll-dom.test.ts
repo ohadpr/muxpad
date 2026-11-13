@@ -241,6 +241,30 @@ describe('setScrollTop — the one writer', () => {
   });
 });
 
+describe('takeReaderIntent — which wheels are the reader', () => {
+  const wheel = (el: HTMLElement, init: WheelEventInit) =>
+    el.dispatchEvent(new WheelEvent('wheel', { bubbles: true, ...init }));
+
+  it('counts a sub-pixel vertical delta — a trackpad opening a slow gesture', () => {
+    const el = scroller({ scrollTop: 500, scrollHeight: 4000, clientHeight: 800 });
+    const s = domScrollSurface(() => el);
+    s.takeReaderIntent(); // wires the listeners
+    wheel(el, { deltaY: -0.5 });
+    wheel(el, { deltaY: -0.5 });
+    expect(s.takeReaderIntent()).toBe(-1);
+    expect(s.takeReaderIntent()).toBe(0);
+  });
+
+  it('ignores a mostly-sideways swipe and a pinch-zoom', () => {
+    const el = scroller({ scrollTop: 500, scrollHeight: 4000, clientHeight: 800 });
+    const s = domScrollSurface(() => el);
+    s.takeReaderIntent();
+    wheel(el, { deltaX: 30, deltaY: -2 });
+    wheel(el, { deltaY: -10, ctrlKey: true });
+    expect(s.takeReaderIntent()).toBe(0);
+  });
+});
+
 describe('beforeEach hygiene', () => {
   beforeEach(() => {
     document.body.innerHTML = '';

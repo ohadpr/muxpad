@@ -102,3 +102,53 @@ describe('the queue tells a scheduled job apart from your own message', () => {
     expect(FLAT).toContain('.filter((q) => !isDeliveryText(q.text))');
   });
 });
+
+/**
+ * A DRAIN HANDS OVER IN ONE COMMIT.
+ *
+ * When a queued message drains, the server removes its pending row and — a
+ * runner round trip later — the runner's turn-start puts the message and the
+ * working line back. In between the tail had neither, so the chat got SHORTER
+ * and a scroll landing in that window missed by 300-440px when it regrew. The
+ * server now names the drained item on the `queue` frame itself
+ * (`started`, see relay.test.ts), and the handler has to put both up in the
+ * same update that takes the row down.
+ *
+ * A source assertion for the reason given at the top of this file. What it pins
+ * is that the `queue` branch — not a later frame — does it.
+ */
+describe('a drained message is on screen in the same frame its pending row leaves', () => {
+  const QUEUE_ARM = (() => {
+    const start = SRC.indexOf("} else if (msg.t === 'queue') {");
+    const end = SRC.indexOf("} else if (msg.t === 'queued') {", start);
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    return SRC.slice(start, end).replace(/\s+/g, ' ');
+  })();
+
+  it('sets the queue, the working state and the echo together', () => {
+    expect(QUEUE_ARM).toContain('setQueue(msg.items)');
+    expect(QUEUE_ARM).toMatch(
+      /if \(msg\.started\) \{ setSending\(true\); setOptimisticUser\(msg\.started\.text\); \}/,
+    );
+  });
+});
+
+/**
+ * SCROLL ANCHORING STAYS OFF.
+ *
+ * Chromium's anchoring was a second scroll writer that stamped nothing: when
+ * the queue strip or the working row changed height it moved `scrollTop`
+ * itself, and the controller read that as the reader leaving the bottom. With
+ * it on, following was lost in 8/10 desktop and 4/4 mobile drains, measured on
+ * the real ChatPane; off, 0 of either. The image-above case it was kept for is
+ * covered by the controller's `place()`, and was measured that way. See the
+ * comment on `.chat-scroll` in ChatPane.css before changing this.
+ */
+describe('the chat scroller has one scroll writer', () => {
+  it('turns off the engine’s scroll anchoring', () => {
+    const css = readFileSync(join(process.cwd(), 'src/components/ChatPane.css'), 'utf8');
+    const rule = /\.chat-scroll\s*\{\s*overflow-anchor:\s*([a-z]+);\s*\}/.exec(css);
+    expect(rule?.[1]).toBe('none');
+  });
+});
