@@ -76,6 +76,26 @@ const FATAL = [
   /required flag\(s\)/i,
 ];
 
+/**
+ * ── OPT-IN, AND IT SAYS SO WHEN IT DOES NOT RUN ──────────────────────────
+ *
+ * This test EXECUTES the msgvault binary (against a dead daemon, but beyond
+ * `--help`). Agent sessions on this machine are blocked from doing that by a
+ * hook, so an agent running the broker suite either goes around the hook by
+ * proxy or never runs this — and a green suite that never ran it read as
+ * proof. So it runs only when a person asks for it, in their own terminal:
+ *
+ *   MSGVAULT_CONFORMANCE=1 node --test broker/msgvault-conformance.test.mjs
+ *
+ * and every other run reports SKIPPED with this reason, not a pass.
+ */
+function skipWhy() {
+  if (process.env.MSGVAULT_CONFORMANCE !== '1')
+    return 'NOT RUN: executes the msgvault binary, which agent sessions may not — run it yourself with MSGVAULT_CONFORMANCE=1';
+  if (!existsSync(BINARY)) return 'NOT RUN: msgvault is not installed on this machine';
+  return null;
+}
+
 function run(args) {
   try {
     execFileSync(BINARY, args, { encoding: 'utf8', timeout: 30_000, stdio: 'pipe' });
@@ -86,7 +106,7 @@ function run(args) {
 }
 
 test('every brokered verb is one this msgvault accepts from an agent', (t) => {
-  if (!existsSync(BINARY)) return t.skip('msgvault is not installed on this machine');
+  if (skipWhy()) return t.skip(skipWhy());
   const broken = [];
   for (const action of CAPABILITIES.msgvault.actions) {
     if (NOT_ARGV.has(action)) continue;
@@ -99,7 +119,7 @@ test('every brokered verb is one this msgvault accepts from an agent', (t) => {
 });
 
 test('the verbs we do NOT offer are the ones that are actually refused', (t) => {
-  if (!existsSync(BINARY)) return t.skip('msgvault is not installed on this machine');
+  if (skipWhy()) return t.skip(skipWhy());
   // The mirror of the test above, so a capability that BECOMES available is
   // noticed rather than staying excluded out of habit. `export-attachment`
   // is here because the CLI refuses it — which is why the broker fetches
