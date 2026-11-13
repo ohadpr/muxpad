@@ -3,16 +3,16 @@
 // via show_files (images, videos, docs). The bytes live on the server host, so
 // every device loads them through the serve route keyed by bare filename.
 
-import { ATTACHMENT_EXT_ALTERNATION, type AttachmentKind, attachmentKind } from '@muxpad/shared';
+import { type AttachmentKind, attachmentKind, attachmentPathRe } from '@muxpad/shared';
 
-// Match an attachments-dir path token: any non-space run ending in
-// `/attachments/<file>.<ext>` for a known attachment type. Absolute paths never
-// contain spaces, so a greedy \S* captures the whole path while the group grabs
-// the name. The extension set is the shared pipeline-wide map — never local.
-const ATTACHMENT_PATH_RE = new RegExp(
-  `\\S*/attachments/([\\w.-]+\\.(?:${ATTACHMENT_EXT_ALTERNATION}))`,
-  'gi',
-);
+// WHICH TOKEN IS AN ATTACHMENT — from shared, so this surface and the runner
+// cannot disagree. This had its own copy that matched a URL as well as a path,
+// which drew `https://host/attachments/report.pdf` as an attachment chip
+// pointing at `/api/panes/attachments/report.pdf`: a broken thumbnail where
+// the user had pasted a link. The runner had the identical defect, doing
+// worse damage, and fixing only that one would have left this. See
+// `attachmentPathRe` for the anchoring and why it is a function.
+const ATTACHMENT_PATH_RE = attachmentPathRe();
 
 export function attachmentUrl(name: string): string {
   return `/api/panes/attachments/${encodeURIComponent(name)}`;

@@ -20,7 +20,7 @@
 
 import { existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { ATTACHMENT_EXT_ALTERNATION } from '@muxpad/shared';
+import { attachmentPathRe } from '@muxpad/shared';
 import { attachmentNameProblem } from '../attachment-files.js';
 
 /**
@@ -41,10 +41,7 @@ import { attachmentNameProblem } from '../attachment-files.js';
  *
  * Any data dir is accepted, since MUXPAD_DATA_DIR can move it from ~/.muxpad.
  */
-const ATTACHMENT_PATH_RE = new RegExp(
-  `(?<=^|[\\s(\\[<"'\`])/(?!/)[^\\s:]*?/attachments/([\\w.-]+\\.(?:${ATTACHMENT_EXT_ALTERNATION}))(?![\\w-]|\\.\\w)`,
-  'gi',
-);
+const ATTACHMENT_PATH_RE = attachmentPathRe();
 
 export type AttachmentRef = { path: string; name: string };
 
