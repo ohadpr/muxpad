@@ -4343,6 +4343,41 @@ export function ChatPane({
       // is a spinner over a known answer, and the honest screen is available
       // now. `provisionError` is only set once every retry is spent, so this
       // cannot pre-empt a provision that is still in progress.
+      // ── A NEW CHAT HAS NOTHING TO LOAD, AND SHOULD NOT SAY IT IS LOADING ──
+      //
+      // Measured on this install, pressing "New chat": `Connecting…` at
+      // 104 ms, `Starting…` at 917 ms, the greeting only at 3402 ms. Three
+      // and a half seconds of spinner on a conversation that does not exist
+      // yet — reported as "new chats show a stuck loading chat; there's
+      // nothing to load, it's a new chat", which is exactly right.
+      //
+      // The spinner was waiting for the RUNNER, and the greeting does not
+      // depend on the runner. The server has already said this pane has never
+      // held a message (`hasMessages` on the session frame, false here even
+      // before a session row exists), and the composer is already open and
+      // accepting text while the agent boots — a send before `hello` rides
+      // the server queue. So everything the screen is for is available; only
+      // the spinner disagreed.
+      //
+      // It still spins when it genuinely does not know: `hasMessages` starts
+      // TRUE and only a server frame clears it, so a chat with history can
+      // never be greeted over.
+      // `!stale` as well: the grace exists so that a runner which NEVER boots
+      // eventually turns into "nothing is running here, press to start"
+      // (ChatNoRunner below). Greeting unconditionally swallowed that — a dead
+      // chat would have greeted you for ever and never offered the button.
+      if (!hasMessages && !stale && !provisionError)
+        return (
+          <div className="chat-empty">
+            <ChatReadyGreeting
+              assistant={session?.assistant}
+              cwd={folder?.cwd ?? null}
+              mode={mode}
+              converted={converted}
+              refusal={convertRefusal}
+            />
+          </div>
+        );
       if (!stale && !provisionError)
         return (
           <div className="chat-empty">
