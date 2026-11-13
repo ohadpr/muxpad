@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { msgvaultArgv } from './msgvault.mjs';
+import { msgvaultArgv, validateMsgvault } from './msgvault.mjs';
 import { assertProtectedPath } from './protected-path.mjs';
 
 /**
@@ -36,7 +36,7 @@ export function msgvaultRunner({
   // below — so it needs its own seam.
   fetchImpl = fetch,
 } = {}) {
-  return async (action, payload) => {
+  const runner = async (action, payload) => {
     // NO `mode` OPTION. It is an EXACT expected mode, not a mask — passing
     // 0o022 asserted "this file is mode ----w--w-", which no readable file
     // ever is, so every call threw 'Incorrect protected file mode' and the
@@ -113,9 +113,100 @@ export function msgvaultRunner({
       };
     }
 
+    const out = await exec(action, payload, declared);
+    if (action === 'msgvault.draft-get') return await checkDraftLifecycle(out, declared);
+    return out;
+  };
+
+  /**
+   * ── A DRAFT'S LIFECYCLE IS CHECKED, NOT REMEMBERED ─────────────────────
+   *
+   * `draft-get` answers from msgvault's own record of the draft, and that
+   * record is not re-checked against Gmail: it said `lifecycle: active`
+   * hours after Gmail had dropped the draft, with `provider_observation`
+   * sitting at `not_checked` throughout. A state nobody confirmed, presented
+   * as the state.
+   *
+   * msgvault has no verb that asks Gmail. What it does have is the archive's
+   * own copy of the draft's message: `show-message` on the draft's
+   * `message_id` carries `deleted_from_source_at` once a sync has seen the
+   * draft leave the mailbox (measured 2026-11-13 on 339084: present and
+   * timestamped for a draft Gmail dropped; absent on a live message). So one
+   * more read, of the draft's own message, turns "remembered" into "checked
+   * as of the last sync" — and the result says which of the three it is:
+   *
+   *   · `gone_from_provider` — the archive saw it leave Gmail (sent or
+   *     discarded; both remove a draft). `lifecycle` is rewritten from
+   *     `active`, and the original is kept as `lifecycle_recorded`.
+   *   · `not_marked_deleted_as_of_last_sync` — the best this archive can
+   *     say. Not proof it is still there; the note says so.
+   *   · `unverified` — the check could not be made. `lifecycle` is then
+   *     `unverified` too, rather than an `active` nobody looked at.
+   *
+   * This runs as the same approved request: it reads only the draft's own
+   * message, which the draft-get already reaches, and nothing of it beyond
+   * the deletion marker is returned.
+   */
+  async function checkDraftLifecycle(out, declared) {
+    const draft = out?.result;
+    if (!draft || typeof draft !== 'object' || Array.isArray(draft)) return out;
+    const recorded = draft.lifecycle;
+    const messageID = draft.message_id;
+    const unverified = (why) => ({
+      ...out,
+      result: {
+        ...draft,
+        ...(recorded === 'active' ? { lifecycle: 'unverified', lifecycle_recorded: recorded } : {}),
+        lifecycle_check: {
+          verdict: 'unverified',
+          note: `muxpad could not check this draft against the archive (${why}); its lifecycle is msgvault's record, not an observation`,
+        },
+      },
+    });
+    if (!Number.isSafeInteger(messageID) || messageID < 1) return unverified('no message_id');
+    let message;
+    try {
+      message = (
+        await exec(
+          'msgvault.show-message',
+          validateMsgvault('msgvault.show-message', { id: String(messageID) }),
+          declared,
+        )
+      ).result;
+    } catch (e) {
+      return unverified(String(e?.message ?? e).slice(0, 120));
+    }
+    if (!message || typeof message !== 'object' || message.id !== messageID)
+      return unverified('the archive answered for a different message');
+    const gone =
+      typeof message.deleted_from_source_at === 'string' && message.deleted_from_source_at;
+    return {
+      ...out,
+      result: {
+        ...draft,
+        ...(gone && recorded === 'active'
+          ? { lifecycle: 'gone_from_provider', lifecycle_recorded: recorded }
+          : {}),
+        lifecycle_check: gone
+          ? {
+              verdict: 'gone_from_provider',
+              message_id: messageID,
+              deleted_from_source_at: message.deleted_from_source_at,
+              note: 'the archive saw this draft leave the mailbox (sent or discarded); it is not in Gmail now',
+            }
+          : {
+              verdict: 'not_marked_deleted_as_of_last_sync',
+              message_id: messageID,
+              note: 'the archive has not seen it leave the mailbox — as of its last sync, not a live check of Gmail',
+            },
+      },
+    };
+  }
+
+  function exec(action, payload, declared) {
     const { binary, args } = msgvaultArgv(action, payload, declared);
     const limit = action === 'msgvault.export-attachment' ? attachmentMaxBytes : maxBytes;
-    return await new Promise((resolve, reject) => {
+    return new Promise((resolve, reject) => {
       run(
         binary,
         args,
@@ -144,5 +235,6 @@ export function msgvaultRunner({
         },
       );
     });
-  };
+  }
+  return runner;
 }

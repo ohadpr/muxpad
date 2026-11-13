@@ -219,3 +219,79 @@ test('a bad hash never reaches the network', async () => {
   await assert.rejects(() => h.runner('msgvault.export-attachment', { hash: 'nope' }), /64-hex/);
   assert.equal(h.calls.length, 0);
 });
+
+/**
+ * A DRAFT'S LIFECYCLE IS CHECKED, NOT REMEMBERED.
+ *
+ * draft-get said `lifecycle: active` for a draft Gmail had dropped hours
+ * earlier, with `provider_observation: not_checked`. The archive's own copy
+ * of the draft's message carries `deleted_from_source_at` once a sync sees it
+ * go (measured on 339084), so the runner reads that and says what it found.
+ */
+function draftHarness(message) {
+  const draft = {
+    status: 'ok',
+    draft_id: 'd9',
+    revision: 2,
+    lifecycle: 'active',
+    message_id: 339084,
+    source_id: 1,
+    provider_observation: { state: 'not_checked', code: 'not_checked' },
+  };
+  return harness({
+    cb: (done) => {
+      // The first call is the draft-get, the second the show-message.
+      draftHarness.calls = (draftHarness.calls ?? 0) + 1;
+      if (draftHarness.calls === 1) return done(null, JSON.stringify(draft), '');
+      if (message instanceof Error) return done(message, '', message.message);
+      return done(null, JSON.stringify(message), '');
+    },
+  });
+}
+
+test('draft-get reports a draft Gmail dropped as gone, not active', async () => {
+  draftHarness.calls = 0;
+  const h = draftHarness({
+    id: 339084,
+    labels: ['DRAFT'],
+    deleted_from_source_at: '2026-11-13T17:20:00Z',
+  });
+  const { result } = await h.runner('msgvault.draft-get', { id: 'd9' });
+  assert.equal(result.lifecycle, 'gone_from_provider');
+  assert.equal(result.lifecycle_recorded, 'active');
+  assert.equal(result.lifecycle_check.verdict, 'gone_from_provider');
+  assert.equal(result.lifecycle_check.deleted_from_source_at, '2026-11-13T17:20:00Z');
+  // The check read the draft's OWN message, through the same composed argv.
+  assert.deepEqual(h.ran[1].args.slice(6), ['show-message', '--json', '--', '339084']);
+});
+
+test('draft-get on a draft the archive still holds says how far that goes', async () => {
+  draftHarness.calls = 0;
+  const h = draftHarness({ id: 339084, labels: ['DRAFT'] });
+  const { result } = await h.runner('msgvault.draft-get', { id: 'd9' });
+  assert.equal(result.lifecycle, 'active');
+  assert.equal(result.lifecycle_check.verdict, 'not_marked_deleted_as_of_last_sync');
+  assert.match(result.lifecycle_check.note, /last sync/);
+});
+
+test('draft-get that cannot be checked says unverified instead of active', async () => {
+  draftHarness.calls = 0;
+  const failed = draftHarness(new Error('not_permitted'));
+  const a = (await failed.runner('msgvault.draft-get', { id: 'd9' })).result;
+  assert.equal(a.lifecycle, 'unverified');
+  assert.equal(a.lifecycle_recorded, 'active');
+  assert.equal(a.lifecycle_check.verdict, 'unverified');
+  // An answer about some other message is not an answer about this draft.
+  draftHarness.calls = 0;
+  const other = draftHarness({ id: 1, deleted_from_source_at: null });
+  assert.equal(
+    (await other.runner('msgvault.draft-get', { id: 'd9' })).result.lifecycle,
+    'unverified',
+  );
+});
+
+test('only draft-get pays for the extra read', async () => {
+  const h = harness();
+  await h.runner('msgvault.stats', {});
+  assert.equal(h.ran.length, 1);
+});
