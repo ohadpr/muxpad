@@ -397,6 +397,21 @@ describe('a recently-active row carries its workspace', () => {
   const row = tsx.slice(tsx.indexOf('function WorkingSetRow'));
   const body = row.slice(0, row.indexOf('\nfunction '));
 
+  it('wears the same weight marks as a row in the tree', () => {
+    // REPORTED: "recently active list doesn't show active chats with unread
+    // treatment visual". The band's row already carries `.navtree-tab-row`
+    // and its name is a `.navtree-name-text`, so the weight rules applied to
+    // it all along — it simply never set the attributes that trigger them.
+    // The same chat was bold in the tree and plain in the band.
+    expect(body).toMatch(/data-unread=\{tab\.unread/);
+    expect(body).toMatch(/data-working=\{tab\.status === 'working'/);
+  });
+
+  it('excludes the row you are on from the working mark, like the tree does', () => {
+    // Bold means "come back to this"; the band's active row is where you are.
+    expect(body).toMatch(/data-working=\{tab\.status === 'working' && !active/);
+  });
+
   it('prints it AFTER the chat name, on the same line', () => {
     // It was a prefix. A rail is scanned down its left edge — the same
     // argument that keeps every status mark on one x — and a leading
