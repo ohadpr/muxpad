@@ -214,6 +214,24 @@ const SPEC = {
     argv: (p) => ['export-attachment', '--json', '--', p.hash],
     describe: (p) => `download one attachment (${p.hash.slice(0, 12)}…)`,
   },
+  /**
+   * ── AND THE WHOLE MESSAGE'S WORTH, IN ONE DIALOG ──────────────────────
+   *
+   * Takes a MESSAGE id, not a hash: the broker does the `show-message`
+   * itself and fetches every `content_hash` the archive lists. The hashes
+   * therefore never pass through the agent, and the approval names the
+   * message rather than a row of hex nobody can read.
+   *
+   * `argv` is kept for shape, and is unreachable: msgvault's CLI refuses
+   * `export-attachments` in agent-delegated mode before it contacts the
+   * daemon, so the runner intercepts this action and goes over HTTP. See the
+   * long note in msgvault-runner.mjs.
+   */
+  'msgvault.export-attachments': {
+    validate: (p) => (ID.test(String(p.id ?? '')) ? { id: p.id } : fail('Give a message id')),
+    argv: (p) => ['export-attachments', '--json', '--', p.id],
+    describe: (p) => `download every attachment on message ${p.id}`,
+  },
   'msgvault.stats': {
     validate: () => ({}),
     argv: () => ['stats'],

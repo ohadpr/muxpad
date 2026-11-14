@@ -36,6 +36,8 @@ export function msgvaultRunner({
   // below — so it needs its own seam.
   fetchImpl = fetch,
 } = {}) {
+  /** Index into the attachment route list that last answered; -1 until one does. */
+  let preferredRoute = -1;
   const runner = async (action, payload) => {
     // NO `mode` OPTION. It is an EXACT expected mode, not a mask — passing
     // 0o022 asserted "this file is mode ----w--w-", which no readable file
@@ -57,15 +59,12 @@ export function msgvaultRunner({
     // msgvault's CLI refuses every export verb in agent-delegated mode —
     // `export-attachment`, `export-attachments`, `export-eml` all fail with
     // "not available in agent-delegated mode", and they fail CLIENT-SIDE,
-    // before the daemon is contacted. So the verb muxpad shipped could never
+    // before the daemon is contacted. So the verbs muxpad shipped could never
     // work through argv, however the broker was updated.
     //
-    // The daemon itself has no such objection: `/api/v1/cli/attachment` is on
-    // the same `/api/v1/cli/*` surface the ALLOWED verbs already use (search,
-    // message, thread, stats), authenticated by the same `X-Api-Key`, and it
-    // answers with the bytes.
+    // The daemon itself has no such objection and answers with the bytes.
     //
-    // So this one action skips the binary. That is not a widening: the
+    // So these two actions skip the binary. That is not a widening: the
     // broker already names this token file and hands it to a process it
     // spawns; reading it to set a header is the same privilege, spent the
     // same way, on a read that was already in the read scope and already
@@ -74,46 +73,71 @@ export function msgvaultRunner({
     if (action === 'msgvault.export-attachment') {
       const hash = String(payload?.hash ?? '');
       if (!/^[a-f0-9]{64}$/.test(hash)) throw new Error('attachment needs a 64-hex content hash');
-      // Root OR THIS PROCESS, at exactly 0600. The installed token is owned
-      // by the broker's own account — it is the one account that may read it
-      // — so a root-only check refused every attachment ("Unprotected file
-      // or ancestor"). Ancestors still have to be root's: the walk applies
-      // the same owner list, and /Library/muxpad-broker is root-owned.
-      io.assertProtectedPath(declared.tokenFile, [0, process.getuid?.() ?? 0], { mode: 0o600 });
-      const token = String(io.readFileSync(declared.tokenFile, 'utf8')).trim();
-      const url = `${String(declared.agentUrl).replace(/\/+$/, '')}/api/v1/cli/attachment?content_hash=${hash}`;
-      const res = await fetchImpl(url, {
-        headers: { 'X-Api-Key': token },
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-      if (!res.ok) {
-        // The daemon's own refusal, kept: a 401 here means the agent key is
-        // not accepted for attachments, which is a msgvault-side decision an
-        // agent must be told plainly rather than left to retry.
-        throw new Error(
-          `msgvault refused the attachment (${res.status}) — ${(await res.text().catch(() => '')).slice(0, 160) || 'no detail'}`,
-        );
+      return { action, result: await fetchAttachment(hash, attachmentKey(declared), declared) };
+    }
+    /**
+     * ── EVERY ATTACHMENT ON ONE MESSAGE, IN ONE APPROVAL ───────────────
+     *
+     * The single-hash verb needs a `content_hash`, which is learnable only
+     * from an approved `show-message`. So "save the attachments on this
+     * email" was two approvals and an agent transcribing hashes between
+     * them — and for a message with five scans, six. This does the read
+     * itself and fetches what it lists: ONE dialog, naming the message.
+     *
+     * The hashes come from the archive's own listing, never from the agent,
+     * so this grants nothing the single verb did not already allow — it is
+     * the same bytes, reached without making the agent hold the hashes.
+     */
+    if (action === 'msgvault.export-attachments') {
+      const id = String(payload?.id ?? '');
+      const message = (
+        await exec(
+          'msgvault.show-message',
+          validateMsgvault('msgvault.show-message', { id }),
+          declared,
+        )
+      ).result;
+      const listed = Array.isArray(message?.attachments) ? message.attachments : [];
+      // Deduped: one content hash is one set of bytes, and a message that
+      // carries the same image twice would otherwise be fetched twice and
+      // counted twice against the cap.
+      const seen = new Set();
+      const wanted = [];
+      for (const a of listed) {
+        const hash = String(a?.content_hash ?? '');
+        if (!/^[a-f0-9]{64}$/.test(hash) || seen.has(hash)) continue;
+        seen.add(hash);
+        wanted.push({ hash, filename: typeof a?.filename === 'string' ? a.filename : '' });
       }
-      const buf = Buffer.from(await res.arrayBuffer());
-      if (buf.byteLength > attachmentMaxBytes)
-        throw new Error(`attachment is larger than the ${attachmentMaxBytes} byte cap`);
-      // `filename*=` first — RFC 5987 is what carries a non-ASCII name — then
-      // the plain form. Absent, muxpad's CLI names the file after the hash.
-      const cd = res.headers.get('content-disposition') ?? '';
-      const name =
-        /filename\*=(?:UTF-8'')?"?([^";]+)/i.exec(cd)?.[1] ??
-        /filename="?([^";]+)/i.exec(cd)?.[1] ??
-        '';
+      // No attachments means no reason to touch the grant file at all.
+      const key = wanted.length ? attachmentKey(declared) : '';
+      const attachments = [];
+      let total = 0;
+      for (const { hash, filename } of wanted) {
+        const one = await fetchAttachment(hash, key, declared);
+        total += one.size;
+        if (total > attachmentMaxBytes)
+          throw new Error(
+            `this message's attachments come to more than the ${attachmentMaxBytes} byte cap — fetch them one at a time by content_hash`,
+          );
+        // msgvault's own listing names the file and is preferred: a
+        // Content-Disposition is the same sender-chosen string arriving by a
+        // worse route. Neither is trusted as a PATH — muxpad's CLI sanitises
+        // it to one plain component on the caller's side.
+        attachments.push({ ...one, ...(filename ? { filename } : {}) });
+      }
       return {
         action,
         result: {
-          content_hash: hash,
-          data_base64: buf.toString('base64'),
-          size: buf.byteLength,
-          ...(name ? { filename: decodeURIComponent(name) } : {}),
-          ...(res.headers.get('content-type')
-            ? { mime_type: String(res.headers.get('content-type')).split(';')[0] }
+          message_id: Number.isSafeInteger(message?.id) ? message.id : id,
+          count: attachments.length,
+          // Said out loud rather than silently dropped: a listing entry with
+          // no usable content hash is an attachment the archive knows about
+          // and cannot hand over.
+          ...(listed.length !== attachments.length
+            ? { not_retrievable: listed.length - attachments.length }
             : {}),
+          attachments,
         },
       };
     }
@@ -242,6 +266,93 @@ export function msgvaultRunner({
             },
       },
     };
+  }
+
+  /**
+   * ── THE GRANT, READ FRESH AND CHECKED FIRST ────────────────────────────
+   *
+   * Root OR THIS PROCESS, at exactly 0600. The installed token is owned by
+   * the broker's own account — it is the one account that may read it — so a
+   * root-only check refused every attachment ("Unprotected file or
+   * ancestor"). Ancestors still have to be root's: the walk applies the same
+   * owner list, and /Library/muxpad-broker is root-owned.
+   */
+  function attachmentKey(declared) {
+    io.assertProtectedPath(declared.tokenFile, [0, process.getuid?.() ?? 0], { mode: 0o600 });
+    return String(io.readFileSync(declared.tokenFile, 'utf8')).trim();
+  }
+
+  /**
+   * ── TWO ROUTES, BECAUSE THE ONE muxpad PICKED IS OWNER-ONLY ────────────
+   *
+   * muxpad shipped `/api/v1/cli/attachment?content_hash=`, reasoning that it
+   * sat on the same `/api/v1/cli/*` surface as the reads that already
+   * worked. It does — and it answered every attachment with
+   *
+   *     401 {"error":"unauthorized","message":"Invalid or missing API key"}
+   *
+   * which is the OWNER key's refusal, not the grant's: the same wall as
+   * `agent-token list`. Five scanned PDFs could not be fetched at all. The
+   * `/cli/*` prefix is not one permission surface, and nothing in the spec
+   * said which half of it a grant reaches.
+   *
+   * `/api/v1/attachments/{hash}/content` is the plain API route for the same
+   * bytes, and `attachment.read` is a real issuable grant permission — so it
+   * is tried FIRST and the owner-only route is kept as a fallback. Both are
+   * attempted because neither could be verified from this side: the grant
+   * file is readable only by the broker's own account, so the hypothesis
+   * could not be tested before shipping, and a guess that silently picks one
+   * route is how this bug shipped the first time.
+   *
+   * The route that works is remembered for the life of the process, so the
+   * whole-message verb does not pay a failed request per attachment.
+   */
+  async function fetchAttachment(hash, key, declared) {
+    const base = String(declared.agentUrl).replace(/\/+$/, '');
+    const routes = [
+      `/api/v1/attachments/${hash}/content`,
+      `/api/v1/cli/attachment?content_hash=${hash}`,
+    ];
+    const order = routes
+      .map((_, i) => i)
+      .sort((a, b) => (a === preferredRoute ? -1 : b === preferredRoute ? 1 : a - b));
+    const refusals = [];
+    for (const i of order) {
+      const res = await fetchImpl(`${base}${routes[i]}`, {
+        headers: { 'X-Api-Key': key },
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (!res.ok) {
+        // The daemon's own refusal, kept verbatim and per route: a 401 on
+        // both means the grant is not accepted for attachments at all, which
+        // is a msgvault-side decision an agent must be told plainly rather
+        // than left to retry.
+        const detail = (await res.text().catch(() => '')).slice(0, 120);
+        refusals.push(`${routes[i].split('?')[0]} → ${res.status}${detail ? ` ${detail}` : ''}`);
+        continue;
+      }
+      preferredRoute = i;
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (buf.byteLength > attachmentMaxBytes)
+        throw new Error(`attachment is larger than the ${attachmentMaxBytes} byte cap`);
+      // `filename*=` first — RFC 5987 is what carries a non-ASCII name — then
+      // the plain form. Absent, muxpad's CLI names the file after the hash.
+      const cd = res.headers.get('content-disposition') ?? '';
+      const name =
+        /filename\*=(?:UTF-8'')?"?([^";]+)/i.exec(cd)?.[1] ??
+        /filename="?([^";]+)/i.exec(cd)?.[1] ??
+        '';
+      return {
+        content_hash: hash,
+        data_base64: buf.toString('base64'),
+        size: buf.byteLength,
+        ...(name ? { filename: decodeURIComponent(name) } : {}),
+        ...(res.headers.get('content-type')
+          ? { mime_type: String(res.headers.get('content-type')).split(';')[0] }
+          : {}),
+      };
+    }
+    throw new Error(`msgvault refused the attachment — ${refusals.join('; ')}`);
   }
 
   function exec(action, payload, declared) {

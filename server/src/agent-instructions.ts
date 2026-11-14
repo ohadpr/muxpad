@@ -214,9 +214,13 @@ Capabilities worth knowing:
 
   READS: \`search '<gmail-like query>' [--limit=N]\` (max 200),
   \`show-message <id>\`, \`show-thread <id>\`, \`stats\`.
-  ATTACHMENTS: \`attachment <content_hash> [--out=PATH]\` saves one file
-  (default: the current directory) — the hash is in \`show-message\`'s
-  \`attachments\` list. Read the saved file with your own tools.
+  ATTACHMENTS: \`attachments <message-id> [--out=DIR]\` saves EVERY attachment
+  on a message, in ONE approval, each under its own name — prefer it, because
+  the per-file verb needs a \`content_hash\` you can only get from a separate
+  approved read. \`attachment <content_hash> [--out=PATH]\` is that per-file
+  verb, for when you want one of several; the hash is in \`show-message\`'s
+  \`attachments\` list, and \`--out\` takes a file path OR a directory.
+  Both save as YOU, not as the broker. Read the saved files with your own tools.
   DRAFTS: \`draft-compose --to=<addr> --subject="…" --body="…"\` writes a NEW
   email; \`draft-reply <message-id> --body="…" [--all]\` answers an archived one;
   \`draft-get <id>\`, \`draft-edit <id> --body="…"\` and \`draft-delete <id>\`

@@ -164,3 +164,52 @@ describe('a read verb never silently drops a flag', () => {
     expect(() => sent('msgvault', 'stats', '--collection=work')).toThrow(/stats takes no options/);
   });
 });
+
+/**
+ * ── EVERY PATH THE CLI CAN CALL MUST MAP TO AN ACTION THE BROKER ACCEPTS ──
+ *
+ * The failure this exists for: a new verb is added to `cmd_msgvault`, it
+ * calls `/api/msgvault/<something>`, and nobody adds the line to the
+ * path→action `case` next to it. The CLI then asks the broker for an action
+ * whose name is derived by the fallthrough rule, the broker answers
+ * "Unsupported action", and the verb has never worked — exactly the shape of
+ * the `--revision` and the owner-only-attachment-route bugs, both of which
+ * shipped green.
+ *
+ * Source text rather than execution, deliberately: the point is to cover the
+ * verbs whose happy path writes FILES and so cannot be driven by the stub
+ * above. It is a weaker test than `sent()` and it catches the one thing
+ * `sent()` structurally cannot.
+ */
+describe('msgvault CLI paths and broker actions agree', () => {
+  const cmd = fn('cmd_msgvault');
+  /** `/api/msgvault/<x>` literals the CLI builds, deduped. */
+  const called = [
+    ...new Set([...cmd.matchAll(/\/api\/msgvault\/([a-z-]+)/g)].map((m) => m[1])),
+  ].sort();
+  /** The path→action `case` arms, wherever they live in the script. */
+  const mapped = new Map(
+    [...SRC.matchAll(/\/api\/msgvault\/([a-z-]+)\) printf '(msgvault\.[a-z-]+)'/g)].map((m) => [
+      m[1],
+      m[2],
+    ]),
+  );
+
+  it('maps every path it calls, or falls through to a real action name', async () => {
+    const { CAPABILITIES } = await import('../../broker/capabilities.mjs');
+    const actions: string[] = [...CAPABILITIES.msgvault.actions];
+    expect(called.length).toBeGreaterThan(5);
+    for (const path of called) {
+      // Unmapped is legal — the script's fallthrough is `msgvault.<last
+      // path segment>` — but the NAME it produces still has to be real.
+      const action = mapped.get(path) ?? `msgvault.${path}`;
+      expect(actions, `${path} → ${action}`).toContain(action);
+    }
+  });
+
+  it('calls the whole-message attachment action, not the per-file one', () => {
+    expect(called).toContain('attachments');
+    expect(mapped.get('attachments')).toBe('msgvault.export-attachments');
+    expect(mapped.get('attachment')).toBe('msgvault.export-attachment');
+  });
+});

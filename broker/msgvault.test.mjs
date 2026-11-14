@@ -143,6 +143,10 @@ test('only verbs that work against 0.22.0 are offered', () => {
       'msgvault.show-message',
       'msgvault.show-thread',
       'msgvault.export-attachment',
+      // The same bytes, reached from a MESSAGE id instead of a hash — the
+      // hash is learnable only from a read, so this grants nothing more and
+      // costs one dialog instead of two.
+      'msgvault.export-attachments',
       'msgvault.stats',
       'msgvault.calendar-freebusy',
       'msgvault.calendar-conflicts',
@@ -170,6 +174,10 @@ test('only verbs that work against 0.22.0 are offered', () => {
       'msgvault.show-message',
       'msgvault.show-thread',
       'msgvault.export-attachment',
+      // The same bytes, reached from a MESSAGE id instead of a hash — the
+      // hash is learnable only from a read, so this grants nothing more and
+      // costs one dialog instead of two.
+      'msgvault.export-attachments',
       'msgvault.stats',
       // The calendar QUERIES. `calendar.*` is in the agent-token permission
       // list above, and these two only ask questions of it — the tool is

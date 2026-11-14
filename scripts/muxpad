@@ -949,6 +949,9 @@ read:
   show-message <id>                         one message in full
   show-thread <id>                          the thread around a message
   attachment <content_hash> [--out=PATH]    save one attachment (hash from show-message)
+                                            --out= takes a file path OR a directory
+  attachments <message-id> [--out=DIR]      save EVERY attachment on a message,
+                                            one approval, each under its own name
   stats                                     totals only, no content
       Any other flag `msgvault <verb> --help` lists (search --offset=N,
       --mode=hybrid; show-thread --offset=N) is sent through the reviewed
@@ -1096,27 +1099,70 @@ cmd_msgvault() {
       done
       local resp; resp="$(mktemp)"
       slack_call GET "/api/msgvault/attachment?$q&hash=$hash" > "$resp" || { rm -f "$resp"; return 1; }
-      # The broker answers `{action, result:{…}}`, so every field is one level
+      # The broker answers `{action, result:{...}}`, so every field is one level
       # down. Read at the top level too, so a future flattening of the
       # envelope does not silently produce an empty file and a hash mismatch.
-      if [ -z "$out" ]; then
-        local name
-        name="$(jq -j '.result.filename // .filename // empty' "$resp" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_' | sed 's/^[._]*//' | cut -c1-120)"
-        [ -n "$name" ] || name="attachment-${hash:0:12}"
-        out="$PWD/$name"
-      fi
-      [ ! -e "$out" ] || { echo "muxpad: $out already exists; pass --out=<path>" >&2; rm -f "$resp"; return 1; }
-      jq -r '.result.data_base64 // .data_base64 // empty' "$resp" | base64 --decode > "$out" 2>/dev/null || true
-      local got; got="$(shasum -a 256 "$out" | cut -d' ' -f1)"
-      if [ ! -s "$out" ] || [ "$got" != "$hash" ]; then
-        rm -f "$out"
-        echo "muxpad: msgvault: attachment did not come back intact (hash mismatch); nothing saved" >&2
+      local b64; b64="$(mktemp)"
+      jq -j '.result.data_base64 // .data_base64 // empty' "$resp" > "$b64"
+      local nm; nm="$(jq -r '.result.filename // .filename // ""' "$resp")"
+      local path
+      if ! path="$(msgvault_save_attachment "$b64" "$nm" "$out" "$hash")"; then
         jq -c 'del(.data_base64) | del(.result.data_base64)' "$resp" >&2 2>/dev/null || true
-        rm -f "$resp"; return 1
+        rm -f "$resp" "$b64"; return 1
       fi
-      jq -n --arg path "$out" --slurpfile r "$resp" \
-        '{path:$path, filename:$r[0].filename, mime_type:$r[0].mime_type, size:$r[0].size}'
+      rm -f "$b64"
+      jq -n --arg path "$path" --slurpfile r "$resp" \
+        '{path:$path, filename:($r[0].result.filename // $r[0].filename), mime_type:($r[0].result.mime_type // $r[0].mime_type), size:($r[0].result.size // $r[0].size)}'
       rm -f "$resp" ;;
+    # ── EVERY ATTACHMENT ON A MESSAGE ───────────────────────────────────
+    # One approval, naming the message. The broker reads the message itself
+    # and fetches what it lists, so no hash has to be carried between two
+    # calls. --out takes a DIRECTORY here; each file keeps its own name.
+    attachments)
+      [ -n "${1:-}" ] || msgvault_usage
+      local mid="$1"; shift
+      local adir=""
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --out=*) adir="${1#*=}" ;;
+          *) echo "muxpad: unknown option: $1" >&2; return 1 ;;
+        esac
+        shift
+      done
+      if [ -n "$adir" ] && [ ! -d "$adir" ]; then
+        echo "muxpad: --out= wants an existing directory (got $adir)" >&2; return 1
+      fi
+      [ -z "$adir" ] || adir="${adir%/}/"
+      local aenc; aenc="$(printf '%s' "$mid" | jq -sRr @uri)"
+      local aresp; aresp="$(mktemp)"
+      slack_call GET "/api/msgvault/attachments?$q&id=$aenc" > "$aresp" || { rm -f "$aresp"; return 1; }
+      local alist='(.result.attachments // .attachments // [])'
+      local n; n="$(jq -r "$alist | length" "$aresp")"
+      if [ "${n:-0}" -eq 0 ]; then
+        jq -n --arg id "$mid" '{message_id:$id, saved:0, failed:0, paths:[], note:"no retrievable attachments on this message"}'
+        rm -f "$aresp"; return 0
+      fi
+      local i=0 nsaved=0 nfailed=0
+      local apaths; apaths="$(mktemp)"
+      while [ "$i" -lt "$n" ]; do
+        local ah anm ab64 apath
+        ah="$(jq -r --argjson i "$i" "$alist[\$i].content_hash // \"\"" "$aresp")"
+        anm="$(jq -r --argjson i "$i" "$alist[\$i].filename // \"\"" "$aresp")"
+        ab64="$(mktemp)"
+        jq -j --argjson i "$i" "$alist[\$i].data_base64 // empty" "$aresp" > "$ab64"
+        if apath="$(msgvault_save_attachment "$ab64" "$anm" "$adir" "$ah")"; then
+          printf '%s\n' "$apath" >> "$apaths"; nsaved=$((nsaved+1))
+        else
+          nfailed=$((nfailed+1))
+        fi
+        rm -f "$ab64"
+        i=$((i+1))
+      done
+      jq -n --arg id "$mid" --argjson saved "$nsaved" --argjson failed "$nfailed" \
+        --rawfile list "$apaths" \
+        '{message_id:$id, saved:$saved, failed:$failed, paths:($list|split("\n")|map(select(length>0)))}'
+      rm -f "$aresp" "$apaths"
+      [ "$nfailed" -eq 0 ] ;;
     stats)
       # msgvault's `stats` has no `--json`, which the argv path always adds,
       # and its one other flag (`--account`) is refused there anyway. So say
@@ -1386,11 +1432,51 @@ connector_action() {
     /api/msgvault/message) printf 'msgvault.show-message' ;;
     /api/msgvault/thread) printf 'msgvault.show-thread' ;;
     /api/msgvault/attachment) printf 'msgvault.export-attachment' ;;
+    /api/msgvault/attachments) printf 'msgvault.export-attachments' ;;
     /api/msgvault/draft-reply) printf 'msgvault.draft-reply' ;;
     /api/slack/*) printf 'slack.%s' "${path##*/}" ;;
     /api/msgvault/*) printf 'msgvault.%s' "${path##*/}" ;;
     *) printf '' ;;
   esac
+}
+
+# ── WRITING ONE ATTACHMENT, AS THE CALLER ─────────────────────────────────
+# The broker hands back base64 and never writes anywhere; this does, under
+# the user running muxpad. $1 base64 file, $2 the sender's filename (may be
+# empty), $3 the --out value (a file path, a directory, or empty), $4 the
+# content hash. Prints the saved path.
+#
+# THE DESTINATION MAY BE A DIRECTORY, and this is the half that was missing:
+# `--out=/tmp/scans/` was read as a FILE path, so an existing directory
+# tripped the "already exists" guard and every download refused. A trailing
+# slash or an existing directory now means "put it in there, under its own
+# name" — which is what anybody typing a directory meant.
+msgvault_save_attachment() {
+  local b64="$1" rawname="$2" out="$3" hash="$4"
+  # The sender chose this string. It is reduced to ONE plain path component —
+  # no separators, no leading dots — so it can name a file and never a place.
+  local name
+  name="$(printf '%s' "$rawname" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_' | sed 's/^[._]*//' | cut -c1-120)"
+  [ -n "$name" ] || name="attachment-${hash:0:12}"
+  local dest
+  case "$out" in
+    '') dest="$PWD/$name" ;;
+    */) dest="${out}${name}" ;;
+    *) if [ -d "$out" ]; then dest="${out%/}/$name"; else dest="$out"; fi ;;
+  esac
+  local dir="${dest%/*}"
+  if [ -n "$dir" ] && [ ! -d "$dir" ]; then
+    echo "muxpad: no such directory: $dir" >&2; return 1
+  fi
+  [ ! -e "$dest" ] || { echo "muxpad: $dest already exists; nothing saved" >&2; return 1; }
+  base64 --decode < "$b64" > "$dest" 2>/dev/null || true
+  local got; got="$(shasum -a 256 "$dest" | cut -d' ' -f1)"
+  if [ ! -s "$dest" ] || [ "$got" != "$hash" ]; then
+    rm -f "$dest"
+    echo "muxpad: msgvault: attachment ${hash:0:12}... did not come back intact (hash mismatch); nothing saved" >&2
+    return 1
+  fi
+  printf '%s\n' "$dest"
 }
 
 slack_call() {
