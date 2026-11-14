@@ -283,7 +283,7 @@ export function msgvaultRunner({
   }
 
   /**
-   * ── TWO ROUTES, BECAUSE THE ONE muxpad PICKED IS OWNER-ONLY ────────────
+   * ── TWO ROUTES, ONE OF THEM BETTER ────────────────────────────────────
    *
    * muxpad shipped `/api/v1/cli/attachment?content_hash=`, reasoning that it
    * sat on the same `/api/v1/cli/*` surface as the reads that already
@@ -296,17 +296,40 @@ export function msgvaultRunner({
    * `/cli/*` prefix is not one permission surface, and nothing in the spec
    * said which half of it a grant reaches.
    *
-   * `/api/v1/attachments/{hash}/content` is the plain API route for the same
-   * bytes, and `attachment.read` is a real issuable grant permission — so it
-   * is tried FIRST and the owner-only route is kept as a fallback. Both are
-   * attempted because neither could be verified from this side: the grant
-   * file is readable only by the broker's own account, so the hypothesis
-   * could not be tested before shipping, and a guess that silently picks one
-   * route is how this bug shipped the first time.
+   * That reasoning was wrong about the cause — see GRANT_HEADER below, the
+   * 401 was a misnamed header and nothing to do with the route — but the
+   * route order is still worth keeping: measured, BOTH routes answer with
+   * the grant header, and `/api/v1/attachments/{hash}/content` reports the
+   * real content type (`application/pdf`) where the cli route reports
+   * `application/octet-stream`. So the plain API route is tried first and
+   * the cli route stays as a working fallback.
    *
    * The route that works is remembered for the life of the process, so the
    * whole-message verb does not pay a failed request per attachment.
    */
+  /**
+   * ── THE GRANT IS NOT AN API KEY, AND THE HEADER NAME SAYS SO ───────────
+   *
+   * muxpad sent the grant as `X-Api-Key`, and every attachment came back
+   *
+   *     401 {"error":"unauthorized","message":"Invalid or missing API key"}
+   *
+   * which reads like a rejected credential and is not. msgvault has TWO
+   * header names — `X-Api-Key` for the OWNER's key and this one for a grant
+   * — and that message is the honest answer to a request carrying no api key
+   * at all. The owner's key is the one thing the broker must never hold, so
+   * the header muxpad was using could only ever fail. Five scanned PDFs went
+   * undownloadable for a day because the error sounded like a permissions
+   * decision about attachments rather than a misnamed header.
+   *
+   * Measured 2026-11-14 against the live daemon, all four combinations:
+   * this header returns 200 and 6,793,706 bytes on BOTH routes;
+   * `X-Api-Key` returns 401 on both. So there is no api-key fallback —
+   * a fallback that cannot succeed only adds a confusing status to an
+   * error message.
+   */
+  const GRANT_HEADER = 'X-Msgvault-Agent-Token';
+
   async function fetchAttachment(hash, key, declared) {
     const base = String(declared.agentUrl).replace(/\/+$/, '');
     const routes = [
@@ -319,7 +342,7 @@ export function msgvaultRunner({
     const refusals = [];
     for (const i of order) {
       const res = await fetchImpl(`${base}${routes[i]}`, {
-        headers: { 'X-Api-Key': key },
+        headers: { [GRANT_HEADER]: key },
         signal: AbortSignal.timeout(timeoutMs),
       });
       if (!res.ok) {

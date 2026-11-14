@@ -229,8 +229,13 @@ test('an attachment is fetched from the daemon, never shelled through the CLI', 
   assert.equal(h.ran.length, 0, 'the binary must not be run for an attachment');
   assert.equal(h.calls.length, 1, 'the route that works is tried first, not after a failure');
   assert.equal(h.calls[0].url, `http://127.0.0.1:8787/api/v1/attachments/${HASH}/content`);
-  // The grant is a header here rather than a path, because there is no argv.
-  assert.equal(h.calls[0].init.headers['X-Api-Key'], 'SECRET-KEY');
+  // The grant is a header here rather than a path, because there is no argv —
+  // and it goes under the GRANT's header name. `X-Api-Key` is the owner
+  // key's, and msgvault answers a request carrying one of those "Invalid or
+  // missing API key": measured 401 on both routes, which is what read as a
+  // permissions decision for a day.
+  assert.equal(h.calls[0].init.headers['X-Msgvault-Agent-Token'], 'SECRET-KEY');
+  assert.equal(h.calls[0].init.headers['X-Api-Key'], undefined);
   assert.equal(out.result.content_hash, HASH);
   assert.equal(Buffer.from(out.result.data_base64, 'base64').toString(), '%PDF-1.4 hello');
   assert.equal(out.result.filename, '2026-11-04_tax.pdf');
