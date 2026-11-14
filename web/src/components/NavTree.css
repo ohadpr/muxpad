@@ -2627,6 +2627,18 @@
    looking, or you marked it. A BOLD name, like unread mail: orthogonal to the
    red attention dot and the active pill, and the ONE thing weight now means. */
 .navtree-tab-row[data-unread="true"] .navtree-name-text,
+/* ── AND A CHAT THAT IS STILL GOING ───────────────────────────────────────
+   Same weight, deliberately, rather than a third treatment. The question the
+   sidebar answers at a glance is "which of these rows has something for me",
+   and a turn still running answers it exactly as a turn that just finished
+   does — the rail's mark beside it is what says which. A chat was running,
+   its name sat at reading weight, and it was indistinguishable at a glance
+   from forty idle ones: "active chats should retain the unread treatment,
+   it's a good indicator."
+
+   NOT the row you are on: `data-working` is already false there (see
+   NavTree.tsx), because bold means "come back to this". */
+.navtree-tab-row[data-working="true"] .navtree-name-text,
 .navtree-pane-row[data-unread="true"] .navtree-pane-label {
   font-weight: 700;
   /* The colour is half the signal — see --nt-ink-read. Weight alone at 13px,
@@ -3653,7 +3665,8 @@ body.sidenav-resizing iframe {
 }
 /* Unread = "done, unreviewed". On this rail it is also how `ready` is told at
    all, which is why the weight step is a big one: 400 → 700, not 500 → 600. */
-.navtree[data-variant="sheet"] .navtree-tab-row[data-unread="true"] .navtree-name-text {
+.navtree[data-variant="sheet"] .navtree-tab-row[data-unread="true"] .navtree-name-text,
+.navtree[data-variant="sheet"] .navtree-tab-row[data-working="true"] .navtree-name-text {
   font-weight: 700;
   color: var(--fg);
 }

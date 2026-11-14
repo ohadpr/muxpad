@@ -661,3 +661,57 @@ describe('the age is not on the row you are in', () => {
     expect(rule(css, '.navtree-slot-age')).not.toMatch(/display:\s*none/);
   });
 });
+
+/**
+ * ── A CHAT THAT IS STILL GOING KEEPS THE WEIGHT ──────────────────────────
+ *
+ * Bold answers one question down a long sidebar: which of these rows has
+ * something for me. A turn that just finished answers it; so does a turn
+ * still running. Before this, a working chat sat at reading weight and was
+ * indistinguishable at a glance from forty idle ones — "active chats should
+ * retain the 'unread' treatment, it's a good indicator".
+ */
+describe('a working chat carries the unread weight', () => {
+  it('marks a chat whose agent is mid-turn', () => {
+    const html = railHtml([tab('busy', { status: 'working' } as Partial<Tab>)]);
+    expect(html).toContain('data-working="true"');
+  });
+
+  it('does not mark the chat you are already looking at', () => {
+    // Bold means "come back to this". You are here.
+    const html = railHtml([tab('busy', { status: 'working' } as Partial<Tab>)], 'busy');
+    expect(html).not.toContain('data-working="true"');
+    expect(html).toContain('data-active="true"');
+  });
+
+  it('leaves every other state at reading weight', () => {
+    for (const status of ['idle', 'ready', 'dead', undefined])
+      expect(railHtml([tab('t', { status } as Partial<Tab>)]), String(status)).not.toContain(
+        'data-working="true"',
+      );
+  });
+
+  it('shares the unread rule rather than inventing a second weight', () => {
+    // The gap a DOM-only test leaves: the attribute can render correctly and
+    // style nothing. Both surfaces have their own weight rule, and the sheet
+    // one was already a separate block — so both are checked.
+    const css = readFileSync(join(__dirname, 'NavTree.css'), 'utf8');
+    // ANCHORED TO THE LINE START. A bare `includes` of the sidebar selector
+    // also matches inside the sheet's, so deleting the sidebar rule left the
+    // test green — which it did, on the first attempt.
+    for (const [label, re] of [
+      ['sidebar', /^\.navtree-tab-row\[data-working="true"\] \.navtree-name-text/m],
+      [
+        'sheet',
+        /^\.navtree\[data-variant="sheet"\] \.navtree-tab-row\[data-working="true"\] \.navtree-name-text/m,
+      ],
+    ] as const)
+      expect(re.test(css), label).toBe(true);
+  });
+
+  it('is independent of the unread mark — a row can be both', () => {
+    const html = railHtml([tab('busy', { status: 'working', unread: true } as Partial<Tab>)]);
+    expect(html).toContain('data-working="true"');
+    expect(html).toContain('data-unread="true"');
+  });
+});
