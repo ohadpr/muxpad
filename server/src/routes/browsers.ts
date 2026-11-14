@@ -721,6 +721,19 @@ export function browsersRoutes(deps: {
     return c.json(view(state));
   });
 
+  /**
+   * RETIRED: links used to open in a streamed 'links' browser (#52). An
+   * installed iOS PWA does not reload on a deploy, so a phone can still be
+   * running that bundle — and it renders this route's `error` as TEXT. The
+   * global 404's `error` is an object, which threw inside the render and took
+   * the whole screen to the router's "Something went wrong". A string keeps an
+   * old client on its own fallback: the message and an "open it in your
+   * browser" link.
+   */
+  app.post('/:profile/open', (c) =>
+    c.json({ error: 'muxpad was updated — reload it, or open the link in your browser' }, 410),
+  );
+
   /** An AGENT asks. Refused with 409 while a person is driving. */
   app.post('/:profile/wheel/claim', async (c) => {
     const profile = profileParam(c.req.param('profile'));

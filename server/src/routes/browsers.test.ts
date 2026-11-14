@@ -1000,3 +1000,10 @@ it('cannot retarget the human viewer through needs-you while a human is typing',
   expect(response.status).toBe(409);
   expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).endsWith('/handoff'))).toBe(false);
 });
+
+it('answers a stale client’s retired link-open with a STRING error — an object crashed its render', async () => {
+  const res = await post('/api/browsers/links/open', { url: 'http://example-host:4760', by: 'p' });
+  expect(res.status).toBe(410);
+  const body = (await res.json()) as { error: unknown };
+  expect(typeof body.error).toBe('string');
+});
