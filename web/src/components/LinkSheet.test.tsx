@@ -110,6 +110,21 @@ describe('LinkSheet', () => {
     expect(status.querySelector('a')?.getAttribute('href')).toBe('https://example.com/a');
   });
 
+  it('survives a server that predates the open route, and still offers the real browser', async () => {
+    // What a server started before this feature answers: the global 404, whose
+    // `error` is an OBJECT. Rendering that as text threw, so the tap did nothing.
+    const f = fakeFetch(() =>
+      Response.json({ error: { code: 'not_found', message: 'route not found' } }, { status: 404 }),
+    );
+    const { host } = mount(
+      <LinkSheet url="http://example-host:4760" by="p" onClose={() => {}} fetchImpl={f.impl} />,
+    );
+    await settle();
+    const status = host.querySelector('[data-testid=link-sheet-status]') as HTMLElement;
+    expect(status.textContent).toContain('route not found');
+    expect(status.querySelector('a')?.getAttribute('href')).toBe('http://example-host:4760');
+  });
+
   it('keeps a one-tap way out to a real browser, opted out of the interception', () => {
     const f = fakeFetch();
     const { host } = mount(

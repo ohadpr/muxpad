@@ -38,6 +38,20 @@ export interface LinkSheetProps {
   renewMs?: number;
 }
 
+/**
+ * The sentence for a refused open — always a STRING, whatever the server sent.
+ *
+ * The open route answers `{error: "…"}`, but a server started before that
+ * route existed answers the global 404, `{error: {code, message}}`. Rendering
+ * that object threw, the sheet never appeared, and the tap did nothing at all.
+ */
+export function openErrorText(error: unknown, status: number): string {
+  if (typeof error === 'string' && error) return error;
+  const message = (error as { message?: unknown } | null)?.message;
+  if (typeof message === 'string' && message) return message;
+  return `could not open (${status})`;
+}
+
 /** How far the bar has to be dragged down to close the sheet. */
 const DISMISS_DRAG_PX = 80;
 
@@ -67,8 +81,8 @@ export function LinkSheet({ url, by, onClose, fetchImpl, renewMs = 60_000 }: Lin
         if (!live) return;
         if (res.ok) setState('ready');
         else {
-          const body = (await res.json().catch(() => ({}))) as { error?: string };
-          setState({ error: body.error ?? `could not open (${res.status})` });
+          const body = (await res.json().catch(() => ({}))) as { error?: unknown };
+          setState({ error: openErrorText(body.error, res.status) });
         }
       } catch {
         if (live) setState({ error: 'could not reach muxpad' });
