@@ -1,9 +1,11 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   type LinkClick,
-  followTrail,
+  checkFrame,
   linkHost,
-  linkSheetViewerPath,
+  linkRoute,
+  markUnframeable,
+  resetFrameVerdicts,
   sheetLinkFor,
 } from './link-sheet';
 
@@ -78,28 +80,68 @@ describe('sheetLinkFor', () => {
   });
 });
 
-describe('labels and paths', () => {
+describe('labels', () => {
   it('names the site, not the whole address', () => {
     expect(linkHost('https://www.nytimes.com/2026/11/13/a.html?x=1')).toBe('nytimes.com');
   });
+});
 
-  it('frames the LINKS browser, never a session one', () => {
-    expect(linkSheetViewerPath('pane 1')).toBe('/browser/links/?embed=sheet&by=pane%201');
+describe('linkRoute — the sheet or the OS browser, decided inside the tap', () => {
+  const HTTPS = 'https://example-host.example-tailnet.ts.net';
+  beforeEach(resetFrameVerdicts);
+
+  it('sends an http link on an https muxpad to the OS — mixed content never frames', () => {
+    expect(linkRoute('http://example-host:4760', HTTPS)).toBe('native');
+  });
+
+  it('gives an https link to the sheet, which checks it', () => {
+    expect(linkRoute('https://example.com/a', HTTPS)).toBe('sheet');
+  });
+
+  it('sends a site already found unframeable straight to the OS', () => {
+    markUnframeable('https://news.example/one');
+    expect(linkRoute('https://news.example/two', HTTPS)).toBe('native');
+  });
+
+  it('remembers what the server said', async () => {
+    const fetchImpl = vi.fn(async () =>
+      Response.json({ frame: false, reason: 'x-frame-options DENY' }),
+    );
+    expect(
+      await checkFrame('https://deny.example/a', HTTPS, fetchImpl as unknown as typeof fetch),
+    ).toBe(false);
+    expect(linkRoute('https://deny.example/b', HTTPS)).toBe('native');
+    await checkFrame('https://deny.example/c', HTTPS, fetchImpl as unknown as typeof fetch);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });
 
-describe('followTrail — what the sheet’s Back can go back to', () => {
-  it('the first page heard is the start, even when it is a redirect of the link', () => {
-    expect(followTrail([], 'https://final.example/')).toEqual(['https://final.example/']);
+describe('checkFrame', () => {
+  const HTTPS = 'https://m.example';
+  beforeEach(resetFrameVerdicts);
+
+  it('asks the server, with the page as the parent', async () => {
+    const fetchImpl = vi.fn(async (_: RequestInfo | URL) => Response.json({ frame: true }));
+    expect(
+      await checkFrame('https://ok.example/a?b=1', HTTPS, fetchImpl as unknown as typeof fetch),
+    ).toBe(true);
+    expect(String(fetchImpl.mock.calls[0]?.[0])).toBe(
+      `/api/open/frame?url=${encodeURIComponent('https://ok.example/a?b=1')}&parent=${encodeURIComponent(HTTPS)}`,
+    );
   });
 
-  it('a new page is a step forward; hearing the same page again is not', () => {
-    const t = followTrail(['https://a/'], 'https://b/');
-    expect(t).toEqual(['https://a/', 'https://b/']);
-    expect(followTrail(t, 'https://b/')).toBe(t);
-  });
-
-  it('arriving at the page before this one is a Back, so the trail shrinks', () => {
-    expect(followTrail(['https://a/', 'https://b/'], 'https://a/')).toEqual(['https://a/']);
+  it('treats a server that cannot answer as a no', async () => {
+    const old = vi.fn(async () =>
+      Response.json({ error: { code: 'not_found', message: 'route not found' } }, { status: 404 }),
+    );
+    expect(await checkFrame('https://a.example/', HTTPS, old as unknown as typeof fetch)).toBe(
+      false,
+    );
+    const down = vi.fn(async () => {
+      throw new TypeError('offline');
+    });
+    expect(await checkFrame('https://b.example/', HTTPS, down as unknown as typeof fetch)).toBe(
+      false,
+    );
   });
 });

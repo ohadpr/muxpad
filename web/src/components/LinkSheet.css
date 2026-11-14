@@ -69,8 +69,7 @@
   background: color-mix(in srgb, var(--chat-fg, #1c1c22) 25%, transparent);
 }
 
-.link-sheet__close,
-.link-sheet__back {
+.link-sheet__close {
   flex: none;
   width: 32px;
   height: 32px;
@@ -85,14 +84,7 @@
   cursor: pointer;
 }
 
-.link-sheet__back {
-  font-size: 1.25rem;
-  line-height: 1;
-  padding-bottom: 2px;
-}
-
-.link-sheet__close:hover,
-.link-sheet__back:hover {
+.link-sheet__close:hover {
   background: color-mix(in srgb, var(--chat-fg, #1c1c22) 16%, transparent);
 }
 
@@ -125,7 +117,7 @@
   flex: 1;
   width: 100%;
   border: 0;
-  background: #000;
+  background: #fff;
   display: block;
 }
 

@@ -125,5 +125,35 @@ it('a link clicked in a message opens the link sheet, not a new tab', async () =
   expect(host.querySelector('[data-testid=link-sheet]')?.getAttribute('data-testid')).toBe(
     'link-sheet',
   );
-  expect(vi.mocked(fetch)).toHaveBeenCalledWith('/api/browsers/links/open', expect.anything());
+  expect(vi.mocked(fetch).mock.calls.some(([u]) => String(u).startsWith('/api/open/frame?'))).toBe(
+    true,
+  );
+});
+
+it('an http link on an https muxpad is left to the OS browser — mixed content never frames', async () => {
+  vi.stubGlobal('location', { ...window.location, origin: 'https://muxpad.example' });
+  const socket = await setup();
+  await act(async () =>
+    socket.frame({
+      t: 'events',
+      events: [
+        {
+          kind: 'assistant',
+          id: 'a2',
+          ts: Date.now(),
+          text: 'open [the app](http://example-host:4760)',
+          voice: 'reply',
+        },
+      ],
+    }),
+  );
+  const a = host.querySelector<HTMLAnchorElement>('.chat-md a[href="http://example-host:4760"]');
+  expect(a).not.toBeNull();
+  expect(a!.getAttribute('target')).toBe('_blank');
+  const ev = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 });
+  await act(async () => {
+    a!.dispatchEvent(ev);
+  });
+  expect(ev.defaultPrevented).toBe(false);
+  expect(host.querySelector('[data-testid=link-sheet]')).toBeNull();
 });
