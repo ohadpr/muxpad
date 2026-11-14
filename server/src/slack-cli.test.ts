@@ -500,7 +500,7 @@ describe('msgvault goes through the broker, holding nothing', () => {
     ]);
   });
 
-  it('calls exactly these endpoints — four reads and the draft lifecycle', () => {
+  it('calls exactly these endpoints — the reads and the draft lifecycle', () => {
     // Asserted as a SET rather than by searching for forbidden words, because
     // `senders` contains "send" and a test that fails on a reading verb is a
     // test somebody edits away.
@@ -520,6 +520,10 @@ describe('msgvault goes through the broker, holding nothing', () => {
     // send. `draft-compose` is still absent for the reason above.
     expect([...called].sort()).toEqual([
       'attachment',
+      // Every attachment on one message, in one approval. A content hash is
+      // learnable only from an approved read, so the per-file verb alone
+      // meant two dialogs and an agent copying hex between them.
+      'attachments',
       'calendar-conflicts',
       'calendar-create',
       'calendar-delete',

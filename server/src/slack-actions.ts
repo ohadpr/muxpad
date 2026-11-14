@@ -43,8 +43,13 @@ const TITLES: Record<string, (p: Payload) => string> = {
   'msgvault.search': (p) => `Searched your mail for ${JSON.stringify(p.query ?? '')}`,
   'msgvault.show-message': (p) => `Read one email (${String(p.id ?? '')})`,
   'msgvault.show-thread': (p) => `Read an email thread (${String(p.id ?? '')})`,
-  'msgvault.export-attachment': (p) =>
-    `Downloaded an email attachment (${String(p.hash ?? '').slice(0, 12)})`,
+  // NO HASH IN THE HEADLINE. It read `Downloaded an email attachment
+  // (3f9c1d7e5b20)` — twelve characters of hex that identify the file to
+  // nobody, in the one line of the card a person actually reads. The hash is
+  // in the folded body, where a handle belongs.
+  'msgvault.export-attachment': () => 'Downloaded an email attachment',
+  'msgvault.export-attachments': (p) =>
+    `Downloaded every attachment on message ${String(p.id ?? '')}`,
   'msgvault.stats': () => 'Counted your mail, calendar and contacts',
   // The WRITE says what it is about: a card reading "drafted a reply" is a
   // card you would have to open your mailbox to understand.
@@ -121,6 +126,70 @@ export function stateFromBroker(state: unknown): ChatActionState {
 }
 
 /**
+ * A FAILURE A PERSON CAN READ, out of one a machine wrote.
+ *
+ * What the card showed, wrapped across four lines and cut mid-token:
+ *
+ *   your mail request failed: msgvault refused the attachment —
+ *   /api/v1/attachments/3f9c1d7e5b204a86c1f0e9d83b7a4652c08f1e94d7b25a63f8c09
+ *   5634b469cd/content → 401 {"error":"unauthorized","message":"Invalid or
+ *   missing API key"}; /a
+ *
+ * Three quarters of that is a url nobody reads, a 64-character hash already
+ * in the body, and a JSON envelope around the only six words that matter —
+ * and the part that got truncated was the second route's result, i.e. the
+ * half that would have told you whether it was systematic.
+ *
+ * So: drop the wrapper muxpad added, drop the paths, lift the status and the
+ * provider's own `message` out of the JSON, and end on a word boundary.
+ * Nothing is invented — every piece of the output was in the input — and an
+ * error that matches none of these shapes is passed through trimmed rather
+ * than mangled into a guess.
+ */
+export function readable(raw: string): string {
+  // muxpad's own framing, which the card's title already says.
+  const t = raw
+    .trim()
+    .replace(/^[a-z ]*request failed:\s*/i, '')
+    .replace(/^Error:\s*/i, '');
+  // The provider's own words, lifted out of the JSON envelope, and the first
+  // HTTP status anywhere in the line.
+  const message = /"message"\s*:\s*"([^"]+)"/.exec(t)?.[1]?.trim();
+  const status = /\b([45]\d{2})\b/.exec(t)?.[1];
+  // The prose, which always comes before the first machine token: a path, a
+  // url, a JSON object, or the arrow muxpad joins an attempt to its result
+  // with. Everything after it is detail for a log, not for a card.
+  const machine = t.search(/[{/\u2192]|https?:/);
+  const what = (machine > 0 ? t.slice(0, machine) : message ? '' : t)
+    .replace(/[\u2014\u2192>;:,\s-]+$/, '')
+    .trim();
+  // Never twice: a message that already says "(403)" does not need "— 403"
+  // bolted on, which is how `API error (403): calendar operation denied`
+  // first came back as `… denied — 403`.
+  const outcome = [status && !what.includes(status) ? status : '', message]
+    .filter(Boolean)
+    .join(' ');
+  // THE TOOL'S NAME IS NOT THE THING. This file's own lesson, applied to the
+  // one string that still leaked it: `msgvault` is what the component is
+  // called in this codebase, and `refusedBy` already says "the mail archive"
+  // for exactly this reason.
+  return cut(
+    [what, outcome]
+      .filter(Boolean)
+      .join(' — ')
+      .replace(/^msgvault\b/, 'The mail archive') || t,
+  );
+}
+
+/** End on a word, never mid-token — the cut is what made `; /a` of a url. */
+function cut(t: string, max = 160): string {
+  if (t.length <= max) return t;
+  const head = t.slice(0, max);
+  const space = head.lastIndexOf(' ');
+  return `${head.slice(0, space > max * 0.6 ? space : max).trimEnd()}…`;
+}
+
+/**
  * The line under the title, for a state that needs explaining.
  *
  * The fallback used to say "Slack refused it" whatever had been asked, so a
@@ -137,7 +206,7 @@ function detailFor(
   if (state === 'declined') return 'You declined it';
   if (state === 'sent') return savedIn(result);
   if (state === 'failed') {
-    const why = typeof result.error === 'string' ? result.error : null;
+    const why = typeof result.error === 'string' ? readable(result.error) : null;
     if (why) return why;
     if (String(result.state) === 'expired') return 'The request expired';
     return refusedBy(action ?? (typeof result.action === 'string' ? result.action : undefined));
@@ -241,6 +310,10 @@ export function recordSlackAction(
 function bodyOf(action: string, p: Payload): string | null {
   if (action === 'slack.react') return typeof p.emoji === 'string' ? `:${p.emoji}:` : null;
   if (action === 'slack.upload') return typeof p.filename === 'string' ? p.filename : null;
+  // The one handle an attachment card has. Out of the title (see above) and
+  // into the fold, so a failed download can still be retried by hand.
+  if (action === 'msgvault.export-attachment')
+    return typeof p.hash === 'string' ? `content_hash ${p.hash}` : null;
   return typeof p.text === 'string' ? p.text : null;
 }
 
