@@ -118,10 +118,42 @@ const fail = (m) => {
 
 /** RFC3339, or a local `YYYY-MM-DDTHH:MM` paired with a zone. */
 const CAL_WHEN = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?([.+-][\d:.]+|Z)?)?$/;
-/** The account + calendar every calendar verb needs, validated once. */
+/**
+ * The account + calendar every calendar verb needs, validated once.
+ *
+ * ── AN EMAIL, OR A SOURCE IDENTIFIER, WHICH IS NOT THE SAME SHAPE ────────
+ *
+ * This was `/^[^\s@]+@[^\s@]+$/` — one address, one `@` — and that regex
+ * cannot express what msgvault calls a calendar source. `list-accounts`
+ * prints them as ACCOUNT SLASH CALENDAR:
+ *
+ *   me@example.com/me@example.com
+ *   me@example.com/work@example.com
+ *   me@example.com/c_family@group.calendar.google.com
+ *
+ * Two `@`, so every one of them was refused here — before the request
+ * reached msgvault at all — with "Give the calendar account (an email
+ * address)". Meanwhile the bare `me@example.com` that this DID accept resolves
+ * to the Gmail source, which is not a calendar, and msgvault answered every
+ * call `403 calendar operation denied: enabled calendar source is
+ * required`. The one string that could name a calendar was the one string
+ * muxpad would not send.
+ *
+ * `--account` is msgvault's own documented input ("configured calendar
+ * source name or OAuth account"), so both forms are accepted now. This is
+ * NOT the draft-side `--account` refusal being loosened: that one is about
+ * an agent choosing which identity SENDS MAIL, and it stays exactly as it
+ * is. Here the account only selects which calendar is being asked about,
+ * the verb is passed `--read-only` for the two queries, and a name the
+ * archive does not hold is refused by msgvault rather than by a guess here.
+ */
 function calendarAccount(p) {
-  if (!str(p.account, 256) || !/^[^\s@]+@[^\s@]+$/.test(String(p.account)))
-    fail('Give the calendar account (an email address)');
+  // `local@host`, optionally followed by `/<calendar-id>` — no whitespace in
+  // either half, so it stays one argv word and cannot smuggle a flag.
+  if (!str(p.account, 256) || !/^[^\s@/]+@[^\s@/]+(\/[^\s]+)?$/.test(String(p.account)))
+    fail(
+      'Give the calendar account — an email address, or the account/calendar-id that list-accounts prints',
+    );
   return { account: p.account, calendar: str(p.calendar, 256) ? p.calendar : 'primary' };
 }
 /** …plus a time window, for the two reads. */

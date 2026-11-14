@@ -195,9 +195,14 @@ describe('msgvault CLI paths and broker actions agree', () => {
     ]),
   );
 
-  it('maps every path it calls, or falls through to a real action name', async () => {
-    const { CAPABILITIES } = await import('../../broker/capabilities.mjs');
-    const actions: string[] = [...CAPABILITIES.msgvault.actions];
+  it('maps every path it calls, or falls through to a real action name', () => {
+    // Read as TEXT, not imported: broker/*.mjs ships no types, and the point
+    // here is the names the two files agree on, which the text carries.
+    const caps = readFileSync(
+      resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'broker', 'capabilities.mjs'),
+      'utf8',
+    );
+    const actions = [...caps.matchAll(/'(msgvault\.[a-z-]+)'/g)].map((m) => m[1]);
     expect(called.length).toBeGreaterThan(5);
     for (const path of called) {
       // Unmapped is legal — the script's fallthrough is `msgvault.<last
