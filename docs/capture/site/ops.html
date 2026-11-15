@@ -1,0 +1,43 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Ledgerkit Ops</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#1c2330;background:#f4f6f9;height:100vh;display:flex;flex-direction:column}
+header{height:52px;display:flex;align-items:center;gap:12px;padding:0 18px;background:#14213d;color:#fff}
+.mark{width:24px;height:24px;border-radius:6px;background:linear-gradient(135deg,#fca311,#ffd166)}
+header b{font-size:15px} nav{display:flex;gap:4px;margin-left:24px}
+nav a{color:#c9d3e6;text-decoration:none;padding:6px 10px;border-radius:6px} nav a.on{background:#24355c;color:#fff}
+.wrap{flex:1;display:grid;grid-template-columns:1fr 470px;gap:16px;padding:16px;min-height:0}
+.main{display:flex;flex-direction:column;gap:14px;min-height:0}
+.kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.kpi{background:#fff;border:1px solid #e1e6ee;border-radius:10px;padding:12px 14px}
+.kpi span{color:#66728a;font-size:12px;text-transform:uppercase;letter-spacing:.04em} .kpi b{display:block;font-size:22px;margin-top:2px}
+.kpi i{font-style:normal;font-size:12px;color:#2b9348} .kpi i.bad{color:#c1121f}
+.card{background:#fff;border:1px solid #e1e6ee;border-radius:10px;padding:12px 14px;flex:1;min-height:0;overflow:hidden}
+.card h3{margin:0 0 8px;font-size:14px}
+table{width:100%;border-collapse:collapse;font-size:13px} td,th{padding:7px 4px;border-bottom:1px solid #eef1f5;text-align:left} th{color:#66728a;font-weight:600}
+.pill{display:inline-block;padding:1px 8px;border-radius:99px;font-size:12px;background:#e9f5ec;color:#2b9348}.pill.w{background:#fff4e0;color:#b26b00}.pill.r{background:#fde8ea;color:#c1121f}
+.side{background:#fff;border:1px solid #e1e6ee;border-radius:10px;display:flex;flex-direction:column;overflow:hidden;min-height:0}
+.side .bar{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid #e1e6ee;font-weight:600}
+.side .bar small{color:#66728a;font-weight:400;margin-left:auto}
+.dot{width:8px;height:8px;border-radius:50%;background:#2b9348}
+iframe{border:0;flex:1;width:100%}
+</style></head><body>
+<header><div class="mark"></div><b>Ledgerkit Ops</b><nav><a class="on">Invoices</a><a>Customers</a><a>Payouts</a><a>Settings</a></nav></header>
+<div class="wrap"><div class="main">
+<div class="kpis"><div class="kpi"><span>Invoiced this month</span><b>$184,220</b><i>+12.4% vs Oct</i></div>
+<div class="kpi"><span>Failed renders</span><b>3</b><i class="bad">€ invoices · fixed in 1.8.2</i></div>
+<div class="kpi"><span>Overdue</span><b>$9,410</b><i>11 invoices</i></div></div>
+<div class="card"><h3>Recent invoices</h3><table>
+<tr><th>Invoice</th><th>Customer</th><th>Amount</th><th>Status</th></tr>
+<tr><td>INV-20418</td><td>Halcyon Freight</td><td>€4,200.00</td><td><span class="pill">Paid</span></td></tr>
+<tr><td>INV-20417</td><td>Marrow &amp; Pike</td><td>$1,180.00</td><td><span class="pill w">Sent</span></td></tr>
+<tr><td>INV-20416</td><td>Quillon Studio</td><td>£860.00</td><td><span class="pill">Paid</span></td></tr>
+<tr><td>INV-20415</td><td>Brasswork Labs</td><td>€12,950.00</td><td><span class="pill r">Render failed</span></td></tr>
+<tr><td>INV-20414</td><td>Tidewell Co.</td><td>$2,400.00</td><td><span class="pill">Paid</span></td></tr>
+<tr><td>INV-20413</td><td>Okapi Analytics</td><td>¥318,000</td><td><span class="pill w">Sent</span></td></tr>
+<tr><td>INV-20412</td><td>Fernhill Dental</td><td>$640.00</td><td><span class="pill">Paid</span></td></tr>
+<tr><td>INV-20411</td><td>Northgate Supply</td><td>€3,075.00</td><td><span class="pill">Paid</span></td></tr>
+</table></div></div>
+<div class="side"><div class="bar"><span class="dot"></span>Ask the invoice agent<small>muxpad</small></div>
+<iframe src="%SRC%"></iframe></div></div>
+</body></html>

@@ -5,6 +5,7 @@ import { bootTheme } from './boot-prefetch';
 import { SlackNoticeDiagnostic } from './components/SlackNoticeDiagnostic';
 import { startEvents, subscribe, subscribeReconnect } from './events';
 import { applyBootTheme, refreshAppTheme } from './lib/app-theme';
+import { isEmbedded } from './lib/embed';
 import { pushOpen } from './lib/external-open-store';
 import { setLastPaneId } from './lib/last-visited';
 import { startPresence } from './lib/presence';
@@ -24,6 +25,11 @@ import { refreshTabs } from './tabs';
 import { refreshWorkspaces, refreshWorkspacesSoon } from './workspaces';
 import './styles.css';
 import { installDemosceneFx } from './lib/demoscene-fx';
+
+// Latch `?embed=1` NOW, before the router mounts: the tab route rewrites the
+// search to `?pane=…` on its first navigation, and AppLayout's first read came
+// after that — so an embed url booted with the full chrome.
+isEmbedded();
 
 /**
  * Self-embed breaker. A pane's web face pointed at muxpad's own origin

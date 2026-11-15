@@ -20,7 +20,7 @@ Half of what runs in here is a codebase. The other half is a market scan, a laun
 One person, one machine. No auth, no accounts, no multi-tenancy.
 
 <p align="center">
-  <img src="docs/tour.gif" alt="a tour: a chat spawning two sub-agents that run in parallel, the rail nesting them under their parent, clicking into one to watch it write, and the workspace rolling their state up when collapsed" width="960" />
+  <img src="docs/tour.gif" alt="a tour: a chat asked to price five vendors spawns two sub-chats, a vendor table and two pinned cards land, the drawer on the chat's right lists both workers running, clicking one shows it writing, then their reports arrive and the chat publishes the teardown and posts to Slack — one post sent, one failed" width="960" />
 </p>
 
 <table align="center">
@@ -62,13 +62,15 @@ A pane can hold a **chat-native agent session** — rendered as HTML, not a TUI 
 
 
 <p align="center">
-  <img src="docs/chat-light.webp" alt="an agent session: a vendor table, two spawned sub-chats reporting back, and two pinned cards along the bottom" width="900" />
+  <img src="docs/chat-light.webp" alt="a chat after its sub-chats reported back: action cards for a published teardown, a Slack post that went and one that failed, two pinned cards above the composer, and the rail's Recently active band on the left" width="900" />
 </p>
 
 - **Universal instructions.** `~/.muxpad/agent-instructions.md` is rewritten on every boot and injected into every session on every backend, so an agent knows muxpad exists and can drive it. Your own standing notes go in `agent-notes.md`, which muxpad creates once and never touches.
 - **Two modes.** *Agent mode* is the harness as it ships. *Chat mode* adds a short house contract and hides the scratchpad — only what the agent deliberately says reaches you.
 - **Questions come back as chips** (claude backend only). `ask_user` is registered by the Claude backend alone — `codex` and `cursor` expose no question tool — and an agent that calls it parks the pane in `blocked` and renders tappable options. Answering resolves the blocked tool call.
 - **Background subagents are tracked.** The roster is server-owned, and an entry leaves when its subagent reports done or its runner dies, not on a decay timer — because a background subagent can sit silent in one tool call for a minute while plainly alive. It lives in memory on the runner's connection (bounded, oldest evicted), so unlike the session itself it does not survive a main-server restart.
+- **Sub-chats and artifacts live in a drawer on the chat's right**, not in the rail: the workers it started, running or done (click one to read it in place), and everything it has published.
+- **What a chat did outside itself is a card in its log** — a Slack post that went, one that failed and why, an artifact it published — drawn where it happened, and still true after a reload.
 - **A terminal Claude session can be adopted.** `muxpad claude [args…]` launches the real CLI in a pane, passes your flags straight through, and registers the session so the same conversation can be read and driven from the web chat.
 
 
@@ -126,7 +128,7 @@ The five are mutually exclusive and ranked in that order. A tab takes the highes
 The rail shows it as a 10px mark per row, and rolls it up to the workspace when a group is collapsed — so an agent working somewhere you cannot see still says so.
 
 <p align="center">
-  <img src="docs/state-rail.webp" alt="the rail: two workspaces with their chats listed under them" width="300" />
+  <img src="docs/state-rail.webp" alt="the rail: a Recently active band on top with a working chat spinning, unread chats in bold and read ones dimmed, then the Market scan workspace, and Ledgerkit collapsed with its working chat rolled up into the header" width="300" />
 </p>
 
 Two honest caveats. For a pane with **no** agent runner attached, `working` is still the old PTY-output heuristic — a `tail -f` will light it. And `working` deliberately stays true while a background subagent outlives the turn that launched it, so "is *this turn* finished?" is `muxpad agent wait`, not `working`.
@@ -156,6 +158,12 @@ muxpad publish --list                            # slug, files, bytes, versions
 ```
 
 `publish` copies the file or directory into `~/.muxpad/public/` and prints the URL. **Republishing a named slug keeps the URL**: the previous copy rotates to `/<slug>@2/`, `@2` to `@3`, and the three most recent previous versions stay live — so the link already sitting in someone's inbox shows the new numbers, and the version you sent last month is still there to diff against. `--update=` refuses to *create*, which is the guard against accumulating near-identical slugs.
+
+A link published from a chat is listed in that chat's drawer with what is left of its term, and *Keep 7d* or *Take down* right there:
+
+<p align="center">
+  <img src="docs/chat-drawer.webp" alt="the drawer open on a chat's Artifacts tab: vendor-teardown with 7 days left and entry-cost-chart expiring today, each with Keep 7d and Take down buttons; the chat's Slack and publish cards behind it" width="900" />
+</p>
 
 
 **What the link is:** a real public URL on a *second* listener, on its own port — the one `tailscale funnel` points at, so the funnel never touches the UI. Anyone with the link can open it, no tailnet, no account. The access control is an unguessable slug, and a named slug is a URL you chose to hand out: publishing something publishes it, so check the directory first.
@@ -218,11 +226,23 @@ muxpad watch --types=agent_turn         # stream the event bus, one line per eve
 
 `agent wait` is the load-bearing one: run it in the background and a supervising agent gets woken when its worker finishes, instead of polling. Messages sent to a busy agent land in a **server-side** queue and drain on turn-done, so a batch runs to completion with no browser open.
 
+### A chat inside your own app
+
+Add `?embed=1` to a chat's url and it renders with no sidebar and no top bar, ready for an iframe in a dashboard you built. `muxpad embed <chat name>` prints that url (with no name, the 20 most recent).
+
+<p align="center">
+  <img src="docs/embed.webp" alt="an invented invoicing dashboard, Ledgerkit Ops, with a muxpad chat embedded in its right-hand panel: the agent reports it re-rendered an invoice and checked the euro total" width="900" />
+</p>
+
 ## Mobile
 
 muxpad runs on phones — iOS Safari and Chrome on Android. The mobile story is two halves and it only works with both: **see what needs you**, and **answer it from there**.
 
-The navigator is the same state rail in a panel that drops down from the chrome bar, so "what wants me?" is one tap from anywhere — including from workspaces you have collapsed. Open the row and you get the full conversation and a real composer, so a decision that arrived while you were out is a decision you can actually make.
+The navigator is the same state rail in a panel that drops down from the chrome bar, so "what wants me?" is one tap from anywhere — including from workspaces you have collapsed. Open the row and you get the full conversation and a real composer, so a decision that arrived while you were out is a decision you can actually make. A link tapped in a message opens in a sheet over the chat when the site allows framing, with a way out to the real browser.
+
+<p align="center">
+  <img src="docs/mobile.webp" alt="two phone screens: the navigator dropped down from the chrome bar with the Recently active band and a workspace's chats, and a tapped link open in a full-height sheet showing an invented vendor's billing docs" width="600" />
+</p>
 
 
 On a terminal pane a **tap** goes through to the TUI, a **drag** scrolls the scrollback, and **two fingers** always scroll.
