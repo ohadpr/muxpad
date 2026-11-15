@@ -245,6 +245,30 @@ describe('the sheet’s rows', () => {
     );
   };
 
+  it('carries the working weight on the sheet, which is a SECOND copy of it', () => {
+    // The sidebar and the sheet are different functions with their own copy
+    // of the row's attributes — that duplication is exactly how the mobile
+    // rail fell behind the desktop one before. The working-weight tests only
+    // ever rendered the SIDEBAR, so the sheet's copy was never executed.
+    const html = sheetHtml([tab('busy', { status: 'working' } as Partial<Tab>)]);
+    expect(html).toContain('data-working="true"');
+  });
+
+  it('leaves the sheet row you are on alone, like the sidebar does', () => {
+    TABS = [tab('busy', { status: 'working' } as Partial<Tab>)];
+    const html = renderToStaticMarkup(
+      <TabList
+        workspace={WS}
+        isActiveWorkspace={true}
+        activeTabSlug="busy"
+        variant="sheet"
+        editing={null}
+        setEditing={() => {}}
+      />,
+    );
+    expect(html).not.toContain('data-working="true"');
+  });
+
   it('draws it ON THE SHEET TOO — the surface that has nothing else to say it', () => {
     // Reported: "mobile sidebar render doesn't include many recent changes to
     // desktop, for example I don't see pinned chat indicators". It was exactly
@@ -395,7 +419,14 @@ describe('a recently-active row carries its workspace', () => {
   const tsx = readFileSync(join(__dirname, 'NavTree.tsx'), 'utf8');
   const css = readFileSync(join(__dirname, 'NavTree.css'), 'utf8');
   const row = tsx.slice(tsx.indexOf('function WorkingSetRow'));
-  const body = row.slice(0, row.indexOf('\nfunction '));
+  // COMMENTS STRIPPED. These matched the raw source, and the attributes they
+  // assert sit directly under a long `//` comment that NAMES them — so
+  // commenting the code out left every assertion green. Stripping first means
+  // the test can only see code.
+  const body = row
+    .slice(0, row.indexOf('\nfunction '))
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
 
   it('wears the same weight marks as a row in the tree', () => {
     // REPORTED: "recently active list doesn't show active chats with unread

@@ -76,3 +76,28 @@ describe('the flag survives the router', () => {
     expect(validate).toMatch(/embed\?:\s*'1' \| undefined/);
   });
 });
+
+describe('AppLayout actually consults it', () => {
+  // `shellChrome` and `isEmbedded` were tested in isolation, and the wiring
+  // between them and the component was not — so deleting the call from
+  // AppLayout left every test here green while the embed rendered the full
+  // cockpit. AppLayout needs a router, a settings provider and a tab list to
+  // mount, so this reads the source; comments are stripped first, because the
+  // lines being asserted sit under a comment that names them.
+  const src = readFileSync(join(__dirname, '..', 'components', 'AppLayout.tsx'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
+
+  it('asks isEmbedded and feeds it to shellChrome', () => {
+    expect(src).toMatch(/const embedded = isEmbedded\(\)/);
+    expect(src).toMatch(/shellChrome\(\{[^}]*embedded[^}]*\}\)/);
+  });
+
+  it('uses BOTH halves of the answer, not just the sidebar', () => {
+    // Turning the sidebar off is what normally brings the top bar back, so a
+    // component that read only `chrome.sidebar` would swap one piece of
+    // chrome for another.
+    expect(src).toMatch(/=\s*chrome\.sidebar/);
+    expect(src).toMatch(/=\s*chrome\.topBar/);
+  });
+});

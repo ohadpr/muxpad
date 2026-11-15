@@ -28,14 +28,27 @@ describe('titleForState', () => {
     // The guard against a new card type quietly landing in the fallback: the
     // same failure mode as publish wearing the "unknown integration" arrow.
     const { readFileSync } = await import('node:fs');
-    const src = readFileSync(new URL('../../server/src/slack-actions.ts', import.meta.url), 'utf8');
+    // EVERY PRODUCER, not just the first one. This read slack-actions.ts
+    // alone, so `Published` — which comes from publish-actions.ts and is the
+    // most common card there is — was never checked.
+    const src = ['slack-actions.ts', 'publish-actions.ts']
+      .map((f) => readFileSync(new URL(`../../server/src/${f}`, import.meta.url), 'utf8'))
+      .join('\n');
     // BOTH QUOTE STYLES. This matched only a template literal, so
     // `() => 'Downloaded an email attachment'` and its single-quoted
     // neighbours — Counted, Ran, Checked, Added — were never checked, and the
     // guard passed with those verbs deleted from the table.
-    const verbs = [...src.matchAll(/=>\s*[`'"]([A-Z][a-z]+) /g)].map((m) => m[1]);
+    const verbs = [...src.matchAll(/(?:=>|title:)\s*[`'"]([A-Z][a-z]+) /g)].map((m) => m[1]);
     expect(new Set(verbs).size).toBeGreaterThan(10);
-    for (const needed of ['Downloaded', 'Counted', 'Ran', 'Checked', 'Added', 'Posted'])
+    for (const needed of [
+      'Downloaded',
+      'Counted',
+      'Ran',
+      'Checked',
+      'Added',
+      'Posted',
+      'Published',
+    ])
       expect(verbs, needed).toContain(needed);
     for (const v of new Set(verbs))
       expect(titleForState(`${v} a thing`, 'failed'), v).toMatch(/^Tried to /);

@@ -510,13 +510,24 @@ describe('a failure a person can read', () => {
       ).toBeLessThanOrEqual(160);
   });
 
-  it('ends on a word, never mid-token', () => {
-    const out = readable(
-      `your mail request failed: ${'a long explanation that keeps going '.repeat(9)}`,
-    );
-    expect(out.length).toBeLessThanOrEqual(161);
+  it('ends on a WHOLE word, not merely on a non-space', () => {
+    // This asserted only that the result ended in an ellipsis with no space
+    // before it — both true of a cut through the middle of a word, so
+    // deleting the word-boundary logic left it green. The last token now has
+    // to be a word that was actually in the input.
+    const words = 'alpha bravo charlie delta echo foxtrot golf hotel india juliet'.split(' ');
+    const body = Array.from({ length: 30 }, (_, i) => words[i % words.length]).join(' ');
+    const out = readable(`your mail request failed: ${body}`);
     expect(out.endsWith('…')).toBe(true);
     expect(out).not.toMatch(/\s…$/);
+    const last = out.slice(0, -1).trim().split(' ').at(-1);
+    expect(words, `cut mid-word: ${JSON.stringify(out.slice(-20))}`).toContain(last);
+  });
+
+  it('still cuts a single unbroken token, because there is nowhere else to cut', () => {
+    const out = readable(`your mail request failed: ${'x'.repeat(400)}`);
+    expect(out.length).toBeLessThanOrEqual(160);
+    expect(out.endsWith('…')).toBe(true);
   });
 
   it('keeps the content hash as a handle, out of the headline', () => {
