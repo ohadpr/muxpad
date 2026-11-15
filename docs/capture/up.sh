@@ -13,5 +13,5 @@ for i in $(seq 1 30); do [ -S /private/tmp/mxd/data/ptyd.sock ] && break; sleep 
 nohup "${MXENV[@]}" node $WT/server/dist/index.js > /private/tmp/mxd/server.log 2>&1 &
 echo $! > /private/tmp/mxd/server.pid
 for i in $(seq 1 30); do curl -s -o /dev/null http://127.0.0.1:17877/ && break; sleep 0.3; done
-curl -s -X PUT http://127.0.0.1:17877/api/prefs/theme -H 'content-type: application/json' -d '{"value":"alucard"}' >/dev/null
+curl -s -X PUT http://127.0.0.1:17877/api/prefs/theme -H 'content-type: application/json' -d '{"value":"riso"}' >/dev/null
 echo up

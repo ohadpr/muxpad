@@ -36,7 +36,7 @@ lines.append(f"file '{D}/{fr[-1]['n']:04d}.png'")
 open(f'{D}/list.txt', 'w').write('\n'.join(lines) + '\n')
 print(f'{total:.1f}s')
 out = sys.argv[1] if len(sys.argv) > 1 else '/private/tmp/mxd/tour.gif'
-vf = f'fps={FPS},scale={W}:-1:flags=lanczos'
+vf = f'fps={FPS},scale={W}:-1:flags={os.environ.get('FLAGS','lanczos')}'
 subprocess.run(['ffmpeg', '-loglevel', 'error', '-y', '-f', 'concat', '-safe', '0', '-i', f'{D}/list.txt',
                 '-vf', f'{vf},palettegen=max_colors={COLORS}:stats_mode={os.environ.get('STATS','diff')}', f'{D}/pal.png'], check=True)
 subprocess.run(['ffmpeg', '-loglevel', 'error', '-y', '-f', 'concat', '-safe', '0', '-i', f'{D}/list.txt', '-i', f'{D}/pal.png',

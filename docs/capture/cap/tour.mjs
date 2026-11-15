@@ -1,7 +1,7 @@
 // Record the tour: send the pricing request, watch sub-chats spawn, open the
 // drawer, click into one, close it, and see the reports and action cards land.
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { open, sleep } from './lib.mjs';
+import { go, open, sleep } from './lib.mjs';
 const ids = Object.fromEntries(
   (await import('node:fs'))
     .readFileSync('/private/tmp/mxd/ids.sh', 'utf8')
@@ -16,10 +16,10 @@ rmSync(OUT, { recursive: true, force: true });
 mkdirSync(OUT, { recursive: true });
 const { b, ctx, page } = await open({ w: 1000, h: 700, scale: 2 });
 for (const k of ['oauth_url', 'rep_url', 'sw_url', 'sl_url']) {
-  await page.goto(ids[k]);
+  await go(page, ids[k]);
   await sleep(1500);
 }
-await page.goto(ids.pt_url);
+await go(page, ids.pt_url);
 await sleep(3000);
 const cdp = await ctx.newCDPSession(page);
 const frames = [];

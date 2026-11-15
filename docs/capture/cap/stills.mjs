@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 // Stills for the README, captured at 2x from the isolated demo instance.
 import { mkdirSync, readFileSync } from 'node:fs';
-import { open, sleep } from './lib.mjs';
+import { go, open, sleep } from './lib.mjs';
 const ids = Object.fromEntries(
   readFileSync('/private/tmp/mxd/ids.sh', 'utf8')
     .split(/[;\n]/)
@@ -19,7 +19,7 @@ const want = (k) => !only || only.split(',').includes(k);
 
 if (want('chat') || want('drawer') || want('rail')) {
   const { b, ctx, page } = await open({ w: 1000, h: 700 });
-  await page.goto(ids.pt_url);
+  await go(page, ids.pt_url);
   await sleep(3000);
   if (want('chat')) await page.screenshot({ path: `${OUT}/chat-light.png` });
   if (want('rail')) {
@@ -46,13 +46,20 @@ if (want('embed')) {
     `http://ops.localhost:17879/?src=${encodeURIComponent(`${ids.inv_url}?embed=1`)}`,
   );
   await sleep(4000);
+  const fr = page.frames().find((f) => f !== page.mainFrame());
+  const t = await fr?.evaluate(() => [
+    document.documentElement.dataset.theme,
+    document.querySelector('.app-layout')?.dataset.embed,
+  ]);
+  if (!t || t[0] !== 'riso' || t[1] !== 'true')
+    throw new Error(`embed frame: ${JSON.stringify(t)}`);
   await page.screenshot({ path: `${OUT}/embed.png` });
   await ctx.close();
   await b.close();
 }
 if (want('mobile')) {
   const { b, ctx, page } = await open({ w: 390, h: 844, mobile: true });
-  await page.goto(ids.pt_url);
+  await go(page, ids.pt_url);
   await sleep(3000);
   await page.click('.mns-trigger');
   await sleep(900);

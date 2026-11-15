@@ -29,6 +29,11 @@ mkdir -p /private/tmp/mxd/cap/node_modules && ln -sfn \
 /private/tmp/mxd/capture-all.sh      # seed, record the tour, take the stills
 ```
 
+The shots use the **riso** theme: `up.sh` sets it as the install's theme
+(`PUT /api/prefs/theme`), `cap/lib.mjs` also seeds `muxpad.settings.v1` in
+localStorage, and every capture refuses to run unless `<html data-theme>` reads
+`riso` (for the embed, inside the iframe).
+
 Captures run headless through the pane's own muxpad browser over CDP
 (`MUXPAD_API_URL` + `MUXPAD_TAB_ID`), at 2x. Then:
 
