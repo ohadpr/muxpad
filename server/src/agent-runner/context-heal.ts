@@ -24,8 +24,30 @@ import { COMPACT_INSTRUCTIONS } from '@muxpad/shared';
  *
  * ─── The distinction this module draws ─────────────────────────────────────
  *
- * muxpad itself still compacts nothing on a percentage. What it does here is
- * recover from a send that has ALREADY failed: exactly once per message, with
+ * muxpad itself still compacts nothing on a percentage — a rule that was
+ * broken once and restored. An `AutoCompactor` fired `/compact` at 90% of the
+ * window between turns, and it went wrong in the three ways a percentage
+ * trigger does:
+ *
+ *  · IT SPENT HISTORY NOTHING NEEDED SPENT. The harness compacts at ~95% on
+ *    its own; firing at 90 compacts earlier and more often, and a compaction
+ *    cannot be undone.
+ *  · IT ARRIVED AS A MESSAGE FROM THE USER. `/compact <instructions>` rides
+ *    the turn queue, so a paragraph the user never typed appeared in their
+ *    chat, and the harness's post-compaction "continue where you left off"
+ *    then made the model re-send the message it had just finished. Observed:
+ *    a duplicate report that read as a crash and a restart.
+ *  · THE MARGIN IT BOUGHT WAS ALREADY COVERED — by this module. Ten points of
+ *    headroom defends against a turn that overshoots the ceiling and fails
+ *    the send, which is the exact failure below.
+ *
+ * What was genuinely lost with it: the harness's own automatic compaction
+ * takes no instructions, so its summary keeps the shape of a conversation and
+ * not the specifics (measured once: 216k in, 4,663 out). `/compact <text>` is
+ * the only way to influence that, and it is now sent only when a PERSON asks
+ * for it, or from here. That is the trade, and it was taken knowingly.
+ *
+ * What it does here is recover from a send that has ALREADY failed: exactly once per message, with
  * the instructions the Compact button uses, and it says so in the chat. That
  * is a recovery from a hard failure rather than a judgement about a
  * conversation that still works, and it is the one thing "never auto compact

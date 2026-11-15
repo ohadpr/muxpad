@@ -753,7 +753,7 @@ export function expandCronFire(text: string, id: string, ts: number | null): Cha
  *
  * Matched on the harness's own opening sentence rather than on a muxpad
  * marker, because muxpad does not write this one — the harness does, on both
- * the automatic path (auto-compact) and `/compact`. A wording change upstream
+ * its own automatic path and `/compact`. A wording change upstream
  * makes this stop firing, which degrades to today's behaviour rather than to
  * a wrong one.
  */

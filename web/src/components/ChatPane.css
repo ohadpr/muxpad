@@ -3183,8 +3183,8 @@
    that compacted nothing by itself: the colour was the only warning before a
    failed send.
 
-   muxpad compacts automatically again (server auto-compact.ts), so a red cell
-   would be an alarm about something already handled — "I don't want the user
+   The harness compacts near the ceiling on its own, so a red cell would be an
+   alarm about something already handled — "I don't want the user
    to be thinking about compaction". The meter survives in the session menu,
    in ONE colour, because there it answers a question somebody went looking
    for rather than raising one they did not ask. */

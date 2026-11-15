@@ -1229,9 +1229,9 @@ export function SessionBar({
       {/* ── THERE IS NO CONTEXT CELL, IN ANY MODE ────────────────────────
           A cell appeared here past 70% and turned the danger colour past 88%,
           because muxpad used to compact nothing by itself and the decision was
-          the reader's. Compaction is automatic again (see auto-compact in the
-          runner), so the cell was asking a person to carry a number that
-          nothing needs them to act on: "I don't want the user to be thinking
+          the reader's. But the HARNESS compacts near the ceiling whether or
+          not muxpad has an opinion, so the cell was asking a person to carry a
+          number that nothing needs them to act on: "I don't want the user to be thinking
           about compaction. Compaction should just happen."
 
           The meter did not disappear with it — it is in the session menu

@@ -2,11 +2,12 @@ import { COMPACT_INSTRUCTIONS } from '@muxpad/shared';
 /**
  * HOW FULL IS THIS CONVERSATION — AND WHO IS SUPPOSED TO CARE.
  *
- * Not the reader, any more. muxpad compacts automatically again (see
- * server/src/agent-runner/auto-compact.ts, which fires at 90% of the model's
- * real window, between turns, with the instructions below), so the chat shows
- * no percentage, no warning cell and no colour change: "I don't want the user
- * to be thinking about compaction. Compaction should just happen."
+ * Not the reader, any more. Compaction is automatic — the HARNESS's own, near
+ * the ceiling, which is the one mechanism that has always worked and needs no
+ * maintenance (muxpad tried triggering it itself at 90% and the reasons that
+ * came back out are in server/src/agent-runner/context-heal.ts). So the chat
+ * shows no percentage, no warning cell and no colour change: "I don't want the
+ * user to be thinking about compaction. Compaction should just happen."
  *
  * The meter did not disappear with the cell — it is in the session menu with
  * the token counts and a Compact button, for the moments somebody does want to

@@ -76,8 +76,7 @@ export interface BackendOptions {
  *  ask_user questions    yes               no                no
  *  notify tool           yes               no                no
  *  names its own chat    yes (`title`)     no                no
- *  /compact, /clear      yes, plus the     no                no
- *                        auto-compactor
+ *  /compact, /clear      yes               no                no
  *  stop mid-turn         yes               yes               yes
  *  streams deltas        yes               yes               yes
  *  model switching       yes               yes               yes

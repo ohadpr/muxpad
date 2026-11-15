@@ -317,9 +317,9 @@ describe('the session line spends its width on what changes', () => {
    * warn and then danger ink, as the only route to Compact.
    *
    * It earned that exception only while muxpad compacted nothing by itself —
-   * with no automatic compaction, the chat had to say the ceiling was coming
-   * or the first news of it would be a failed turn. Compaction is automatic
-   * again (see the runner's auto-compact), so the cell went back to being a
+   * and while that was true the chat had to say the ceiling was coming or the
+   * first news of it would be a failed turn. It is not true: the HARNESS
+   * compacts near the ceiling on its own, so the cell went back to being a
    * number asking to be watched for no action: "I don't want the user to be
    * thinking about compaction. Compaction should just happen."
    *

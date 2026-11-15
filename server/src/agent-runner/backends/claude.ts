@@ -41,7 +41,6 @@ import {
 } from '../../claude-accounts/pool.js';
 import { bold, dim } from '../ansi.js';
 import { AuthHealPolicy, authGiveUpNotice, isAuthFailureText } from '../auth-heal.js';
-import { AutoCompactor } from '../auto-compact.js';
 import { BackgroundCommands } from '../background-commands.js';
 import { compactionOverrideOnDisk } from '../compaction-settings.js';
 import { RECOVERY_COMPACT_INSTRUCTIONS, contextHeal } from '../context-heal.js';
@@ -1807,10 +1806,6 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
   // Bumped when the session id rotates (/clear); an in-flight refresh started
   // against the OLD session must not land its numbers on the new one.
   let statusEpoch = 0;
-  // COMPACTION IS NOT A QUESTION ANY MORE. Every status reading goes through
-  // this; it fires at a percentage, between turns, at most once per climb.
-  // See auto-compact.ts for the threshold argument and the hysteresis.
-  const autoCompactor = new AutoCompactor();
 
   function refreshStatus(refetchModels: boolean): Promise<void> {
     if (statusInFlight) return statusInFlight;
@@ -1869,19 +1864,14 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
           ...(modelList && modelList.length > 0 ? { models: modelList } : {}),
         };
         if (changed) emit(frame);
-        // ── AND THE ONE PLACE THE FILL IS ACTED ON ──────────────────────
-        // Deliberately here rather than at turn-done: this is the only point
-        // in the runner that holds a fresh reading, and turn-done calls it. A
-        // second trigger site would be a second threshold to keep in step.
-        //
-        // No chat notice. The compaction announces itself — `/compact` runs
-        // as a visible turn — and a sentence about a thing that needs no
-        // decision is the stress this replaced. The runner log keeps the
-        // record for anybody asking "why did it compact".
-        if (autoCompactor.consider(frame.context?.pct, inTurn)) {
-          log(`${bold('context')} ${frame.context?.pct}% — compacting automatically`);
-          slash('compact', RECOVERY_COMPACT_INSTRUCTIONS);
-        }
+        // ── AND NOTHING IS ACTED ON ─────────────────────────────────────
+        // THE FILL IS A READING, NOT A TRIGGER. muxpad compacts nothing on a
+        // percentage: the harness already does it near the ceiling, on its
+        // own, 25 times in the last 60 sessions on this machine. A second
+        // trigger ten points below it was a whole policy layer (threshold,
+        // hysteresis, a `/compact` typed into the conversation as if the user
+        // had) buying headroom that context-heal.ts already covers. The note
+        // there has the full argument.
       } catch (e) {
         // Status is decoration — never let it break the session loop.
         log(dim(`status refresh failed: ${e instanceof Error ? e.message : String(e)}`));
