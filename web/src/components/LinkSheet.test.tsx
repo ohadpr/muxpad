@@ -231,13 +231,45 @@ describe('LinkSheet', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('is a SHEET from the bottom, not the full-screen shape it replaces', () => {
+  it('rises from the bottom, which is what the gesture back is anchored to', () => {
+    // The HEIGHT assertion that used to live here demanded 60–80dvh. That was
+    // the bug, not the contract — see "the panel is full height" below. What
+    // survives is the anchoring: the panel is pinned to the bottom edge, which
+    // is what makes swiping DOWN the way out.
     const css = readFileSync(join(__dirname, 'LinkSheet.css'), 'utf8');
     const panel = css.slice(css.indexOf('.link-sheet__panel {'));
     const block = panel.slice(0, panel.indexOf('}'));
     expect(block).toMatch(/bottom: 0;/);
-    const h = Number(/height: (\d+)dvh;/.exec(block)?.[1]);
-    expect(h).toBeGreaterThanOrEqual(60);
-    expect(h).toBeLessThanOrEqual(80);
+  });
+});
+
+/**
+ * ── THE SHEET FILLS THE SCREEN ────────────────────────────────────────────
+ *
+ * It was 72%, leaving a strip of conversation above it. That strip showed
+ * whatever the chat happened to be scrolled to — almost never the message the
+ * link came from — and nothing in it was tappable for anything you would want
+ * while reading a page. So it was neither context nor action, just a smaller
+ * page: "wtf does it help me to keep 20% of the screen above visible."
+ *
+ * A CSS assertion because that is where the height lives. The height is the
+ * whole complaint, so it is worth a test that fails if someone reinstates a
+ * fraction.
+ */
+describe('the panel is full height', () => {
+  const css = readFileSync(join(__dirname, 'LinkSheet.css'), 'utf8');
+  const panel = css.slice(css.indexOf('.link-sheet__panel'));
+  const rule = panel.slice(0, panel.indexOf('}'));
+
+  it('is 100dvh, not a fraction of the viewport', () => {
+    expect(rule).toMatch(/height:\s*100dvh/);
+    expect(rule).not.toMatch(/height:\s*\d{1,2}(\.\d+)?d?vh/);
+  });
+
+  it('clears the status bar as well as the home indicator', () => {
+    // At 72% only the bottom inset mattered. At full height the bar would sit
+    // under the notch without the top one.
+    expect(rule).toMatch(/padding-top:\s*env\(safe-area-inset-top/);
+    expect(rule).toMatch(/padding-bottom:\s*env\(safe-area-inset-bottom/);
   });
 });

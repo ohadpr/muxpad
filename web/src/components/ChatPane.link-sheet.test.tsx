@@ -45,11 +45,10 @@ async function setup() {
   vi.useFakeTimers();
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   vi.stubGlobal('WebSocket', Socket);
-  vi.stubGlobal('matchMedia', () => ({
-    matches: false,
-    addEventListener() {},
-    removeEventListener() {},
-  }));
+  // THE SHEET IS A PHONE AFFORDANCE, so this suite is a phone. A stub that
+  // answered `false` to every query made these tests DESKTOP, where a link is
+  // now a new tab — which is why they are explicit about the layout.
+  setLayout(true);
   vi.stubGlobal(
     'ResizeObserver',
     class {
@@ -98,6 +97,16 @@ async function setup() {
  * THE WIRING: a link in a message, clicked in a real ChatPane, opens the
  * sheet over the conversation rather than leaving muxpad.
  */
+
+/** Answer the mobile media query, and nothing else. */
+function setLayout(mobile: boolean) {
+  vi.stubGlobal('matchMedia', (q: string) => ({
+    matches: mobile && q.includes('max-width'),
+    addEventListener() {},
+    removeEventListener() {},
+  }));
+}
+
 it('a link clicked in a message opens the link sheet, not a new tab', async () => {
   const socket = await setup();
   await act(async () =>
@@ -154,6 +163,47 @@ it('an http link on an https muxpad is left to the OS browser — mixed content 
   await act(async () => {
     a!.dispatchEvent(ev);
   });
+  expect(ev.defaultPrevented).toBe(false);
+  expect(host.querySelector('[data-testid=link-sheet]')).toBeNull();
+});
+
+/**
+ * ── ON DESKTOP, A LINK IS A NEW TAB ───────────────────────────────────────
+ *
+ * The sheet exists so a phone does not feel like it left the app. A desktop
+ * already has tabs, a back button and two windows side by side, and a sheet
+ * over the conversation takes those away to simulate them worse. Asked for
+ * directly: "on desktop links should always open in a new tab."
+ *
+ * Same markup, same framable https url as the passing test above — only the
+ * layout differs, so this fails if the layout stops being consulted.
+ */
+it('leaves a link alone on desktop, so the browser opens its own tab', async () => {
+  setLayout(false);
+  const socket = await setup();
+  await act(async () =>
+    socket.frame({
+      t: 'events',
+      events: [
+        {
+          kind: 'assistant',
+          id: 'a3',
+          ts: Date.now(),
+          text: 'read [the story](https://example.com/story)',
+          voice: 'reply',
+        },
+      ],
+    }),
+  );
+  const a = host.querySelector<HTMLAnchorElement>('.chat-md a[href="https://example.com/story"]');
+  expect(a).not.toBeNull();
+  expect(a!.getAttribute('target')).toBe('_blank');
+  const ev = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 });
+  await act(async () => {
+    a!.dispatchEvent(ev);
+  });
+  // NOT prevented: the anchor's own target=_blank is what opens the tab, from
+  // inside the tap, where no popup blocker objects.
   expect(ev.defaultPrevented).toBe(false);
   expect(host.querySelector('[data-testid=link-sheet]')).toBeNull();
 });

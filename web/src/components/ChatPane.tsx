@@ -1171,14 +1171,14 @@ export function ChatPane({
   const [sheetLink, setSheetLink] = useState<string | null>(null);
   const onLinkClick = useCallback((e: React.MouseEvent) => {
     const url = sheetLinkFor(e, window.location.origin);
-    if (!url || linkRoute(url, window.location.origin) === 'native') return;
+    if (!url || linkRoute(url, window.location.origin, isMobileLayout()) === 'native') return;
     e.preventDefault();
     setSheetLink(url);
   }, []);
   // Ask about framing as the finger lands, so the click usually knows already.
   const onLinkPointerDown = useCallback((e: React.PointerEvent) => {
     const url = sheetLinkFor(e, window.location.origin);
-    if (url && linkRoute(url, window.location.origin) === 'sheet')
+    if (url && linkRoute(url, window.location.origin, isMobileLayout()) === 'sheet')
       void checkFrame(url, window.location.origin);
   }, []);
   // What this chat did to the outside world — a Slack message sent, and

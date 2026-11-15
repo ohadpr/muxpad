@@ -90,17 +90,38 @@ describe('linkRoute — the sheet or the OS browser, decided inside the tap', ()
   const HTTPS = 'https://example-host.example-tailnet.ts.net';
   beforeEach(resetFrameVerdicts);
 
+  /**
+   * ── DESKTOP NEVER GETS THE SHEET ────────────────────────────────────────
+   * It exists so a phone does not feel like it left the app. A desktop
+   * already has tabs, a back button and two windows side by side; a 1100px
+   * iframe over the conversation takes those away to simulate them worse.
+   */
+  it('opens every link in a new tab on desktop, whatever the site allows', async () => {
+    for (const url of ['https://example.com/a', 'http://example-host:4760'])
+      expect(linkRoute(url, HTTPS, false), url).toBe('native');
+    // Even one the server has confirmed IS framable — seeded through the real
+    // path so the verdict cache genuinely holds a yes.
+    const yes = vi.fn(async () => Response.json({ frame: true }));
+    expect(await checkFrame('https://ok.example/a', HTTPS, yes as unknown as typeof fetch)).toBe(
+      true,
+    );
+    expect(linkRoute('https://ok.example/b', HTTPS, false)).toBe('native');
+    // …while the same url on a phone gets the sheet, so it is the LAYOUT
+    // deciding here and not the framing check.
+    expect(linkRoute('https://ok.example/b', HTTPS, true)).toBe('sheet');
+  });
+
   it('sends an http link on an https muxpad to the OS — mixed content never frames', () => {
-    expect(linkRoute('http://example-host:4760', HTTPS)).toBe('native');
+    expect(linkRoute('http://example-host:4760', HTTPS, true)).toBe('native');
   });
 
   it('gives an https link to the sheet, which checks it', () => {
-    expect(linkRoute('https://example.com/a', HTTPS)).toBe('sheet');
+    expect(linkRoute('https://example.com/a', HTTPS, true)).toBe('sheet');
   });
 
   it('sends a site already found unframeable straight to the OS', () => {
     markUnframeable('https://news.example/one');
-    expect(linkRoute('https://news.example/two', HTTPS)).toBe('native');
+    expect(linkRoute('https://news.example/two', HTTPS, true)).toBe('native');
   });
 
   it('remembers what the server said', async () => {
@@ -110,7 +131,7 @@ describe('linkRoute — the sheet or the OS browser, decided inside the tap', ()
     expect(
       await checkFrame('https://deny.example/a', HTTPS, fetchImpl as unknown as typeof fetch),
     ).toBe(false);
-    expect(linkRoute('https://deny.example/b', HTTPS)).toBe('native');
+    expect(linkRoute('https://deny.example/b', HTTPS, true)).toBe('native');
     await checkFrame('https://deny.example/c', HTTPS, fetchImpl as unknown as typeof fetch);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });

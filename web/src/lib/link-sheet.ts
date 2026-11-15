@@ -67,7 +67,23 @@ export function linkHost(url: string): string {
  *  - everything else opens the sheet, which asks the server (frameVerdict) and
  *    hands over to the OS itself if the answer is no.
  */
-export function linkRoute(url: string, pageOrigin: string): 'sheet' | 'native' {
+export function linkRoute(
+  url: string,
+  pageOrigin: string,
+  /** Mobile layout? See the note above — the sheet is a PHONE affordance. */
+  mobile: boolean,
+): 'sheet' | 'native' {
+  // ── ON DESKTOP A LINK IS A NEW TAB, ALWAYS ────────────────────────────
+  //
+  // The sheet exists so a phone does not feel like it left the app. A
+  // desktop already has the thing the sheet imitates — tabs, a back button,
+  // two windows side by side — and putting a 1100px iframe over the
+  // conversation takes those away to simulate them worse. Asked for
+  // directly: "on desktop links should always open in a new tab."
+  //
+  // Checked FIRST, before the framing questions below, because none of them
+  // can change the answer here.
+  if (!mobile) return 'native';
   let target: URL;
   let page: URL;
   try {

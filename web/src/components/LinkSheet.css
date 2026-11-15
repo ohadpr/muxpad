@@ -1,10 +1,23 @@
 /*
- * The link sheet: a page over the conversation, not instead of it.
+ * The link sheet: a page that opens INSIDE the app, on a phone.
  *
- * ~72% of the height, anchored to the bottom, so the top of the chat — the
- * message the link came from, usually — stays in view and stays tappable as the
- * way back. Not full-screen on purpose: that is the shape the OS gave it, and
- * the complaint was losing your place.
+ * ── WHY IT IS FULL HEIGHT ─────────────────────────────────────────────────
+ *
+ * It was 72%, on the argument that leaving the top of the chat visible kept
+ * your place. In use that was wrong twice over. The strip showed whatever the
+ * conversation happened to be scrolled to — almost never the message the link
+ * came from — so it was not context; and nothing in it was tappable for
+ * anything you would want while reading a page, so it was not action either.
+ * Said plainly: "wtf does it help me to keep 20% of the screen above visible…
+ * if u keep any of the app behind visible do it either for context or for
+ * action."
+ *
+ * The feeling being chased — you did not leave the app — comes from the BAR
+ * and the swipe-down, which is how X does it: a full-height page with the
+ * app's own chrome on top of it and one gesture back. Not from a strip of
+ * dead pixels.
+ *
+ * Desktop never gets here at all: a link is a new tab. See lib/link-sheet.
  */
 
 .link-sheet {
@@ -26,17 +39,21 @@
   left: 50%;
   bottom: 0;
   width: min(1100px, 100%);
-  height: 72vh;
-  height: 72dvh;
+  /* dvh, not vh: on iOS the URL bar collapsing changes the viewport, and a
+     sheet measured in vh is cropped by exactly that much until you scroll. */
+  height: 100vh;
+  height: 100dvh;
   translate: -50% 0;
   display: flex;
   flex-direction: column;
   background: var(--chat-panel, #fff);
-  border: 1px solid var(--chat-border-strong, #c2c2d0);
-  border-bottom: 0;
-  border-radius: 14px 14px 0 0;
+  border: 0;
+  border-radius: 0;
   overflow: hidden;
   box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.35);
+  /* BOTH insets. At 72% only the bottom one mattered; at full height the bar
+     would otherwise sit under the status bar / notch. */
+  padding-top: env(safe-area-inset-top, 0px);
   padding-bottom: env(safe-area-inset-bottom, 0px);
   transition: transform 160ms ease-out;
   animation: link-sheet-rise 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
