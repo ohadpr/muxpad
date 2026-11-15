@@ -45,9 +45,24 @@ export declare const EXP_PARTS: PayField[];
 export declare function splitExp(
   exp: string | undefined | null,
 ): { month: string; monthShort: string; year4: string; year2: string } | null;
-/** Is the cardholder name obviously not a name? Empty counts. */
-export declare function looksPlaceholder(name: string | undefined | null): boolean;
 /** Did a field keep only the front of what was typed? Digits only; a prefix. */
 export declare function keptOnlyPart(want: string, got: string | null | undefined): boolean;
 /** Is this button another payment rail (PayPal, Apple Pay, Klarna…)? */
 export declare function isWalletButton(text: string | null | undefined): boolean;
+
+/** Minimal shape clickPay needs — a real Playwright Page satisfies it. */
+export interface PayClickablePage {
+  locator(selector: string): {
+    first(): {
+      count(): Promise<number>;
+      innerText(opts?: { timeout?: number }): Promise<string>;
+      click(opts?: { timeout?: number }): Promise<void>;
+    };
+  };
+}
+/** Click the first pay button that is really the card one. */
+export declare function clickPay(
+  page: PayClickablePage,
+  selectors: string[],
+  opts?: { explicit?: boolean },
+): Promise<{ clicked: string | null; skipped?: string[] }>;

@@ -200,8 +200,8 @@ of the rest of this page.
 The card lives in a plain file:
 
 ```bash
-install -m 700 -d ~/.muxpad
-umask 077 && cat > ~/.muxpad/payment-card.json    # ^D when done
+install -m 700 -d ~/.config/muxpad
+umask 077 && cat > ~/.config/muxpad/payment-card.json    # ^D when done
 {
   "num": "4242424242424242",
   "exp": "07/31",
@@ -210,6 +210,24 @@ umask 077 && cat > ~/.muxpad/payment-card.json    # ^D when done
   "zip": "94110"
 }
 ```
+
+`~/.config/muxpad`, deliberately — **not** `~/.muxpad`, which holds the
+`public/` directory `muxpad publish` serves to the open internet and is a
+plausible thing to publish or archive wholesale. And not any checkout: the
+digits must never be a `git add` away.
+
+That last one has already nearly happened. Writing this very section, an agent
+copied the real card number in as the example, in a public repo, and it was
+caught by eye one command before the commit. So there is a control now:
+
+```bash
+./scripts/install-hooks.sh    # once per clone
+```
+
+`scripts/hooks/pre-commit` reads the stored number and refuses any commit whose
+staged diff contains it, in any spacing. `server/src/card-never-committed.test.ts`
+is the backstop for a clone that never installed the hook. Both no-op when
+there is no card on the machine.
 
 Mode 600, owned by you. **Every agent on this machine also runs as you**, so
 any of them can read it and any of them could spend it. No file permission,
@@ -224,7 +242,7 @@ which is the only place an approval is worth anything here. If your card does
 not work that way, do not store it.
 
 ```bash
-muxpad pay show                         # last 4, and whether the name is real
+muxpad pay show                         # which card is stored, last 4 only
 muxpad pay checkout --shot=/tmp/p.png   # fill the open checkout and click pay
 muxpad pay fill  [--url=URL]            # type the card, click nothing
 muxpad pay submit [--selector=CSS]      # click the button

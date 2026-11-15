@@ -4,9 +4,9 @@ import {
   FIELDS,
   SUBMIT_SELECTORS,
   cdpUrl,
+  clickPay,
   isWalletButton,
   keptOnlyPart,
-  looksPlaceholder,
   parseArgs,
   splitExp,
 } from '../../scripts/browser-pay.mjs';
@@ -118,21 +118,6 @@ describe('the expiry, which pages ask for in two different shapes', () => {
   });
 });
 
-describe('the cardholder name', () => {
-  it('calls a placeholder a placeholder', () => {
-    // `A B` was typed when the card was first stored and survived a green
-    // end-to-end test, because the test page did not check it. A processor
-    // does: the name goes to the issuer, and a mismatch is a decline.
-    for (const n of ['A B', 'X Y Z', '', '  ', 'test', 'John Doe', 'Cardholder'])
-      expect(looksPlaceholder(n), JSON.stringify(n)).toBe(true);
-  });
-
-  it('leaves a real one alone', () => {
-    for (const n of ['Ada Lovelace', 'J Smith', "O'Neill", 'Jean-Luc Picard'])
-      expect(looksPlaceholder(n), n).toBe(false);
-  });
-});
-
 describe('a field that silently kept only part of what was typed', () => {
   it('catches the maxlength truncation that reads as a mystery decline', () => {
     // The four-box card number some banks still use: box one takes four
@@ -172,5 +157,58 @@ describe('the button it clicks', () => {
   it('does not refuse the real one for containing the word pay', () => {
     for (const t of ['Pay $12.34', 'Place order', 'Pay now', 'Confirm payment', '', null])
       expect(isWalletButton(t), String(t)).toBe(false);
+  });
+});
+
+/**
+ * clickPay against a fake page — nine lines of duck typing instead of a
+ * browser, because what is being checked is the DECISION, not Playwright.
+ */
+function fakePage(buttons: Record<string, string>) {
+  const clicks: string[] = [];
+  return {
+    clicks,
+    locator: (sel: string) => ({
+      first: () => ({
+        count: async () => (sel in buttons ? 1 : 0),
+        innerText: async () => buttons[sel] ?? '',
+        click: async () => {
+          clicks.push(sel);
+        },
+      }),
+    }),
+  };
+}
+
+describe('choosing which button to click', () => {
+  it('walks past a wallet button to the real one', async () => {
+    const page = fakePage({
+      'button[type="submit"]:has-text("Pay")': 'Pay with PayPal',
+      'button:has-text("Place order")': 'Place order',
+    });
+    const r = await clickPay(page, [
+      'button[type="submit"]:has-text("Pay")',
+      'button:has-text("Place order")',
+    ]);
+    expect(r.clicked).toBe('button:has-text("Place order")');
+    expect(r.skipped).toEqual(['Pay with PayPal']);
+    expect(page.clicks).toEqual(['button:has-text("Place order")']);
+  });
+
+  it('clicks NOTHING when every candidate is another rail', async () => {
+    const page = fakePage({ 'button:has-text("Pay")': 'Pay with PayPal' });
+    const r = await clickPay(page, ['button:has-text("Pay")']);
+    expect(r.clicked).toBeNull();
+    expect(page.clicks).toEqual([]);
+  });
+
+  it('obeys an explicit --selector even when it IS a wallet', async () => {
+    // The filter is a guess about which of several buttons was meant. A guess
+    // must not override an instruction — `--selector` is how you say "yes,
+    // that PayPal button, I mean it".
+    const page = fakePage({ '#paypal': 'Pay with PayPal' });
+    const r = await clickPay(page, ['#paypal'], { explicit: true });
+    expect(r.clicked).toBe('#paypal');
+    expect(page.clicks).toEqual(['#paypal']);
   });
 });

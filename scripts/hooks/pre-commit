@@ -1,0 +1,41 @@
+#!/bin/sh
+# ── THE STORED CARD NEVER GOES INTO A COMMIT ────────────────────────────────
+#
+# The card lives at ~/.config/muxpad/payment-card.json, outside every checkout
+# on this machine, so it cannot be committed by accident. That is not the way
+# it nearly happened: an agent writing documentation for `muxpad pay` copied
+# the REAL digits in as the example, in a repo that is public. It was caught by
+# eye, one command before the commit. By eye is not a control.
+#
+# So this reads the stored number and refuses any staged content that contains
+# it, in any spacing. There are no false positives — it matches one specific
+# sixteen-digit string that belongs in exactly one file, and that file is not
+# in this tree.
+#
+# Installed by `scripts/install-hooks.sh`; a clone without it is unprotected,
+# which is why the check also exists as a test (card-never-committed.test.ts).
+set -e
+CARD="${MUXPAD_CARD_FILE:-$HOME/.config/muxpad/payment-card.json}"
+[ -r "$CARD" ] || exit 0
+
+NUM=$(sed -n 's/.*"num"[[:space:]]*:[[:space:]]*"\([0-9]*\)".*/\1/p' "$CARD" | head -1)
+[ -n "$NUM" ] || exit 0
+
+# Every spelling a careless paste might take: bare, spaced, hyphenated.
+SPACED=$(echo "$NUM" | sed 's/\(....\)/\1 /g; s/ $//')
+HYPHEN=$(echo "$NUM" | sed 's/\(....\)/\1-/g; s/-$//')
+
+HIT=$(git diff --cached -U0 | grep -c -e "$NUM" -e "$SPACED" -e "$HYPHEN" || true)
+if [ "$HIT" -gt 0 ]; then
+  cat >&2 <<MSG
+✗ refusing this commit: it contains your stored card number.
+
+  Found in the staged diff. The card is $CARD and belongs nowhere else —
+  least of all in this repository, which is public.
+
+  Use a test number in examples: 4242424242424242 (Stripe's).
+  To find it:  git diff --cached | grep -nF "\$(jq -r .num "$CARD")"
+MSG
+  exit 1
+fi
+exit 0

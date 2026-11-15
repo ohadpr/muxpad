@@ -63,10 +63,21 @@ const USAGE = `usage:
   on. A --shot of a filled form is a PICTURE OF THE CARD NUMBER: keep those out
   of chats and off 'muxpad publish'.`;
 
-/** Where the card lives. One place, named once. */
-const CARD = join(homedir(), '.muxpad', 'payment-card.json');
+/**
+ * Where the card lives — NOT in the muxpad data directory, and not in any
+ * repository.
+ *
+ * `~/.muxpad` holds `public/`, which is what `muxpad publish` serves to the
+ * open internet, and the whole directory is a plausible thing for somebody to
+ * publish or archive wholesale. The card has no business sharing a parent with
+ * it. `~/.config/muxpad` is 700, holds nothing muxpad serves, and is outside
+ * every checkout on this machine.
+ */
+const CARD =
+  process.env.MUXPAD_CARD_FILE ?? join(homedir(), '.config', 'muxpad', 'payment-card.json');
 /** Every fill and submit, appended. A record, not a control. */
-const LEDGER = join(homedir(), '.muxpad', 'payment-log.jsonl');
+const LEDGER =
+  process.env.MUXPAD_PAYMENT_LOG ?? join(homedir(), '.config', 'muxpad', 'payment-log.jsonl');
 
 export function parseArgs(argv) {
   const o = { verb: null, shot: null, selector: null, url: null, timeoutMs: 20000 };
@@ -97,9 +108,7 @@ export function readCard(path = CARD) {
   try {
     raw = readFileSync(path, 'utf8');
   } catch {
-    throw new Error(
-      `no card at ${path} — write one with the snippet in docs/connectors.md, or run 'muxpad pay show'`,
-    );
+    throw new Error(`no card at ${path} — write one with the snippet in docs/connectors.md`);
   }
   const c = JSON.parse(raw);
   for (const k of ['num', 'exp', 'cvc']) if (!c[k]) throw new Error(`the card file has no ${k}`);
@@ -208,23 +217,6 @@ export function splitExp(exp) {
   const y = m[2];
   const year4 = y.length === 4 ? y : `20${y}`;
   return { month, monthShort: String(Number(month)), year4, year2: year4.slice(-2) };
-}
-
-/**
- * Is the cardholder name obviously not a name?
- *
- * `A B` was typed as a placeholder when the card was first stored, and it sat
- * there through a working end-to-end test because the test page did not care.
- * A real processor often does — AVS checks the name with the issuer, and a
- * decline at that point looks like a broken script rather than a two-letter
- * string. So it is said out loud, once, where it is cheap to fix.
- */
-export function looksPlaceholder(name) {
-  const n = String(name ?? '').trim();
-  if (!n) return true;
-  if (/^(test|cardholder|card holder|name|your name|john doe|jane doe)$/i.test(n)) return true;
-  // Every word a single letter: "A B", "X Y Z".
-  return n.split(/\s+/).every((w) => w.replace(/[^a-z]/gi, '').length <= 1);
 }
 
 /**
@@ -368,7 +360,6 @@ export async function fillCard(page, card) {
     filled,
     missing,
     ...(truncated.length ? { truncated } : {}),
-    placeholderName: looksPlaceholder(card.name) ? (card.name ?? null) : null,
   };
 }
 
@@ -388,14 +379,21 @@ export function isWalletButton(text) {
   );
 }
 
-/** Click the first pay button that is actually there — and is actually it. */
-export async function clickPay(page, selectors) {
+/**
+ * Click the first pay button that is actually there — and is actually it.
+ *
+ * `explicit` is set when the caller named a selector. The wallet filter is a
+ * guess about which of several buttons was meant, and a guess has no business
+ * overriding an instruction: `--selector` is exactly how you say "yes, that
+ * PayPal button, I mean it".
+ */
+export async function clickPay(page, selectors, { explicit = false } = {}) {
   const skipped = [];
   for (const sel of selectors) {
     try {
       const el = page.locator(sel).first();
       if ((await el.count()) === 0) continue;
-      const text = await el.innerText({ timeout: 2000 }).catch(() => '');
+      const text = explicit ? '' : await el.innerText({ timeout: 2000 }).catch(() => '');
       if (isWalletButton(text)) {
         skipped.push(text.trim().split('\n')[0]);
         continue;
@@ -424,11 +422,6 @@ async function main(argv) {
           card: `•••• ${String(c.num).slice(-4)}`,
           exp: c.exp,
           name: c.name ?? null,
-          // Said here too, because 'show' is where somebody looks before
-          // using it for the first time.
-          ...(looksPlaceholder(c.name)
-            ? { nameWarning: 'placeholder — processors check this' }
-            : {}),
           file: CARD,
         },
         null,
@@ -489,10 +482,6 @@ async function main(argv) {
       const r = await fillCard(page, readCard());
       Object.assign(out, r);
       log({ verb: 'fill', url: out.url, filled: out.filled, missing: out.missing });
-      if (out.placeholderName)
-        console.error(
-          `muxpad pay: the cardholder name is "${out.placeholderName}" — a placeholder. Processors check it with the issuer. Fix it in ${CARD}.`,
-        );
       // ── THE ONE REFUSAL IN HERE ─────────────────────────────────────────
       // A submit on a half-filled form is not a smaller payment: it is a
       // decline, or a page that quietly charges a card it already had.
@@ -503,7 +492,9 @@ async function main(argv) {
       }
     }
     if (o.verb === 'submit' || (o.verb === 'checkout' && !out.error)) {
-      const r = await clickPay(page, o.selector ? [o.selector] : SUBMIT_SELECTORS);
+      const r = await clickPay(page, o.selector ? [o.selector] : SUBMIT_SELECTORS, {
+        explicit: Boolean(o.selector),
+      });
       if (r.skipped?.length) out.skipped = r.skipped;
       if (!r.clicked) {
         out.error = o.selector
@@ -520,8 +511,15 @@ async function main(argv) {
       log({ verb: 'submit', url: out.url, clicked: r.clicked, error: out.error ?? null });
     }
     if (o.shot) {
-      await page.screenshot({ path: o.shot, fullPage: false });
-      out.shot = o.shot;
+      // AFTER the click, and never fatal. A payment that went through and then
+      // threw on an unwritable path would be reported as a failure, and the
+      // next thing anybody does with a failed payment is try it again.
+      try {
+        await page.screenshot({ path: o.shot, fullPage: false });
+        out.shot = o.shot;
+      } catch (e) {
+        out.shotError = String(e?.message ?? e).split('\n')[0];
+      }
     }
     if (o.shot) {
       await page.screenshot({ path: o.shot, fullPage: false });
@@ -535,4 +533,12 @@ async function main(argv) {
 }
 
 if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop()))
-  main(process.argv.slice(2)).then((c) => process.exit(c ?? 0));
+  main(process.argv.slice(2))
+    .then((c) => process.exit(c ?? 0))
+    // No stack traces. Every throw in here is a thing a person can fix — no
+    // card file, an unreachable browser — and a stack buries the sentence that
+    // says which.
+    .catch((e) => {
+      console.error(`muxpad pay: ${e instanceof Error ? e.message : String(e)}`);
+      process.exit(1);
+    });
