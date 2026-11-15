@@ -479,6 +479,37 @@ describe('a failure a person can read', () => {
       expect(readable(plain)).toBe(plain);
   });
 
+  it('keeps a path when the path IS the reason', () => {
+    // It stripped urls and paths from EVERY error and hunted for a status
+    // anywhere in the text. Both deleted the answer when the machine-looking
+    // part was the actual reason.
+    expect(
+      readable('your mail request failed: could not reach the archive at /usr/local/var/msgvault'),
+    ).toBe('could not reach the archive at /usr/local/var/msgvault');
+    expect(
+      readable('your mail request failed: fetching https://api.example/v404/thing failed'),
+    ).toBe('fetching https://api.example/v404/thing failed');
+  });
+
+  it('takes the status next to the body, not digits out of a url', () => {
+    // `/v404/` is a path segment, not an HTTP status.
+    expect(
+      readable(
+        'your mail request failed: GET https://api.example/v404/x → 503 {"message":"upstream down"}',
+      ),
+    ).toBe('GET — 503 upstream down');
+  });
+
+  it('never returns more characters than it promises', () => {
+    // `cut` sliced to max and THEN appended the ellipsis, returning 161 from
+    // a function whose contract is "no longer than max".
+    for (const body of ['x'.repeat(400), 'word '.repeat(80), `${'y'.repeat(150)} tail`])
+      expect(
+        readable(`your mail request failed: ${body}`).length,
+        body.slice(0, 12),
+      ).toBeLessThanOrEqual(160);
+  });
+
   it('ends on a word, never mid-token', () => {
     const out = readable(
       `your mail request failed: ${'a long explanation that keeps going '.repeat(9)}`,

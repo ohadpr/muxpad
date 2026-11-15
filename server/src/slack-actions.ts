@@ -152,29 +152,43 @@ export function readable(raw: string): string {
     .trim()
     .replace(/^[a-z ]*request failed:\s*/i, '')
     .replace(/^Error:\s*/i, '');
-  // The provider's own words, lifted out of the JSON envelope, and the first
-  // HTTP status anywhere in the line.
   const message = /"message"\s*:\s*"([^"]+)"/.exec(t)?.[1]?.trim();
-  const status = /\b([45]\d{2})\b/.exec(t)?.[1];
-  // The prose, which always comes before the first machine token: a path, a
-  // url, a JSON object, or the arrow muxpad joins an attempt to its result
-  // with. Everything after it is detail for a log, not for a card.
-  const machine = t.search(/[{/\u2192]|https?:/);
-  const what = (machine > 0 ? t.slice(0, machine) : message ? '' : t)
+  // ── WITHOUT A PROVIDER MESSAGE, SAY WHAT IT SAID ──────────────────────
+  //
+  // This used to strip urls and paths from EVERY error and hunt for a status
+  // anywhere in the text. Both were wrong when the machine-looking part was
+  // the actual reason:
+  //
+  //   "could not reach the archive at /usr/local/var/msgvault"
+  //        → "could not reach the archive at"      (the reason deleted)
+  //   "fetching https://api.example/v404/thing failed"
+  //        → "fetching"                            (and 404 read as a status)
+  //
+  // So the rewrite only happens when there IS something better to put in its
+  // place. Otherwise the error is returned as the system wrote it.
+  if (!message) return cut(t);
+  const head = t.slice(0, t.indexOf('{'));
+  // The prose ENDS at the first machine token — a path, a url, or the arrow
+  // muxpad joins an attempt to its result with. Deleting those in place left
+  // their punctuation stranded ("refused the attachment —  → 401 — …"); what
+  // is wanted is the sentence before them.
+  const machine = head.search(/[/\u2192]|https?:/);
+  const prose = (machine > 0 ? head.slice(0, machine) : head)
     .replace(/[\u2014\u2192>;:,\s-]+$/, '')
     .trim();
-  // Never twice: a message that already says "(403)" does not need "— 403"
-  // bolted on, which is how `API error (403): calendar operation denied`
-  // first came back as `… denied — 403`.
-  const outcome = [status && !what.includes(status) ? status : '', message]
+  // The LAST status before the JSON, not the first anywhere: a url can carry
+  // digits that look like one (`/v404/`), and the status that matters is the
+  // one next to the body it belongs to.
+  const statuses = [...head.matchAll(/\b([45]\d{2})\b/g)].map((m) => m[1]);
+  const status = statuses.at(-1);
+  // Never twice: a message already naming "(403)" does not need "— 403".
+  const outcome = [status && !prose.includes(status) ? status : '', message]
     .filter(Boolean)
     .join(' ');
-  // THE TOOL'S NAME IS NOT THE THING. This file's own lesson, applied to the
-  // one string that still leaked it: `msgvault` is what the component is
-  // called in this codebase, and `refusedBy` already says "the mail archive"
-  // for exactly this reason.
+  // THE TOOL'S NAME IS NOT THE THING — this file's own lesson, applied to the
+  // one string that still leaked the component's internal name.
   return cut(
-    [what, outcome]
+    [prose, outcome]
       .filter(Boolean)
       .join(' — ')
       .replace(/^msgvault\b/, 'The mail archive') || t,
@@ -184,9 +198,12 @@ export function readable(raw: string): string {
 /** End on a word, never mid-token — the cut is what made `; /a` of a url. */
 function cut(t: string, max = 160): string {
   if (t.length <= max) return t;
-  const head = t.slice(0, max);
+  // `max` is the WHOLE string, ellipsis included. It used to slice to `max`
+  // and then append, returning 161 characters from a function whose contract
+  // was "no longer than max".
+  const head = t.slice(0, max - 1);
   const space = head.lastIndexOf(' ');
-  return `${head.slice(0, space > max * 0.6 ? space : max).trimEnd()}…`;
+  return `${(space > max * 0.6 ? head.slice(0, space) : head).trimEnd()}…`;
 }
 
 /**

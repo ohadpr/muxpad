@@ -29,8 +29,14 @@ describe('titleForState', () => {
     // same failure mode as publish wearing the "unknown integration" arrow.
     const { readFileSync } = await import('node:fs');
     const src = readFileSync(new URL('../../server/src/slack-actions.ts', import.meta.url), 'utf8');
-    const verbs = [...src.matchAll(/=> ?`([A-Z][a-z]+) /g)].map((m) => m[1]);
-    expect(verbs.length).toBeGreaterThan(10);
+    // BOTH QUOTE STYLES. This matched only a template literal, so
+    // `() => 'Downloaded an email attachment'` and its single-quoted
+    // neighbours — Counted, Ran, Checked, Added — were never checked, and the
+    // guard passed with those verbs deleted from the table.
+    const verbs = [...src.matchAll(/=>\s*[`'"]([A-Z][a-z]+) /g)].map((m) => m[1]);
+    expect(new Set(verbs).size).toBeGreaterThan(10);
+    for (const needed of ['Downloaded', 'Counted', 'Ran', 'Checked', 'Added', 'Posted'])
+      expect(verbs, needed).toContain(needed);
     for (const v of new Set(verbs))
       expect(titleForState(`${v} a thing`, 'failed'), v).toMatch(/^Tried to /);
   });

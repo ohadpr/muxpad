@@ -59,3 +59,20 @@ describe('the CLI and the client agree on the flag', () => {
     for (const p of params) expect(embedRequested(`?${p}`), p).toBe(true);
   });
 });
+
+describe('the flag survives the router', () => {
+  it('is kept by the tab route, which drops every param it does not list', () => {
+    // THE BUG: TabView rewrites the search on mount to reflect the active
+    // pane, and `validateSearch` drops anything unlisted. So `?embed=1` lived
+    // until the first render and any RELOAD of the iframe came back as the
+    // full cockpit — sidebar and all — inside somebody else's app. The boot
+    // latch in this module is why the first paint was always right, which is
+    // exactly what made it hard to see.
+    const src = readFileSync(join(__dirname, '..', 'router.tsx'), 'utf8');
+    const tabRoute = src.slice(src.indexOf('const tabRoute'));
+    const validate = tabRoute.slice(0, tabRoute.indexOf('component:'));
+    expect(validate).toMatch(/embed:\s*search\.embed === '1' \? '1' : undefined/);
+    // And the type has to carry it, or the object is silently narrowed away.
+    expect(validate).toMatch(/embed\?:\s*'1' \| undefined/);
+  });
+});

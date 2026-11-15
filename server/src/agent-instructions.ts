@@ -336,7 +336,7 @@ Capabilities worth knowing:
   **IT IS NOT ON EVERY MACHINE.** An error naming \`integrations.json\` means
   this host has no archive declared — report that rather than hunting for it.
   If the owner asks you to SET ONE UP, or asks how any connector or the broker
-  is installed, the answer is \`docs/connectors.md\` in the muxpad repo: it has
+  is installed, the answer is \`docs/connectors.md\` in this repository: it has
   the install, the grant, the verification step for each, and the failures that
   have actually happened with their exact error text. Read it before inferring
   anything from a binary or a config file.
