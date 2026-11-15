@@ -412,8 +412,11 @@ const SPEC = {
    */
   'msgvault.calendar-create': {
     validate: (p) => {
-      if (!str(p.account, 256) || !/^[^\s@]+@[^\s@]+$/.test(String(p.account)))
-        fail('Give the calendar account (an email address)');
+      // THROUGH `calendarAccount`, NOT A SECOND COPY OF THE RULE. This verb
+      // had its own inlined regex, so widening the account form fixed
+      // freebusy, conflicts, update and delete and left CREATE refusing the
+      // only string that can name a calendar source. One rule, one place.
+      const base = calendarAccount(p);
       if (!str(p.summary, 500)) fail('Give the event a title');
       // RFC3339, or a local `YYYY-MM-DDTHH:MM` paired with a zone.
       const when = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?([.+-][\d:.]+|Z)?)?$/;
@@ -422,8 +425,7 @@ const SPEC = {
       if (!str(p.tz, 64)) fail('Give an IANA time zone, e.g. America/Los_Angeles');
       refuseGuests(p);
       return {
-        account: p.account,
-        calendar: str(p.calendar, 256) ? p.calendar : 'primary',
+        ...base,
         summary: p.summary,
         start: p.start,
         end: p.end,

@@ -50,7 +50,22 @@ export function msgvaultRunner({
     if (!declared) throw new Error('msgvault is not declared on this machine');
     // Loopback only, re-asserted here rather than assumed from the writer:
     // this is the step that would send the grant somewhere.
-    if (!/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:|\/|$)/.test(String(declared.agentUrl)))
+    // PARSED, NOT PATTERN-MATCHED. The regex this replaces accepted
+    // `http://127.0.0.1:@evil.example`, where everything before the `@` is
+    // USERINFO and the host is evil.example — so the grant header would have
+    // gone off the machine. Reaching it needs write access to the root-owned
+    // declaration, but this check exists precisely so it does not rest on
+    // that file's author, and as written it did.
+    let agent;
+    try {
+      agent = new URL(String(declared.agentUrl));
+    } catch {
+      throw new Error('msgvault agentUrl must be loopback');
+    }
+    if (
+      !['http:', 'https:'].includes(agent.protocol) ||
+      !['127.0.0.1', 'localhost', '[::1]', '::1'].includes(agent.hostname)
+    )
       throw new Error('msgvault agentUrl must be loopback');
     // The binary must be as protected as the declaration that names it.
     io.assertProtectedPath(declared.binary, [0]);
@@ -103,9 +118,15 @@ export function msgvaultRunner({
       // counted twice against the cap.
       const seen = new Set();
       const wanted = [];
+      // Counted separately from `wanted`, because the two differ for a reason
+      // that matters: a DUPLICATE is dropped from `wanted` and is still
+      // retrievable — the same bytes, handed over once.
+      let usable = 0;
       for (const a of listed) {
         const hash = String(a?.content_hash ?? '');
-        if (!/^[a-f0-9]{64}$/.test(hash) || seen.has(hash)) continue;
+        if (!/^[a-f0-9]{64}$/.test(hash)) continue;
+        usable += 1;
+        if (seen.has(hash)) continue;
         seen.add(hash);
         wanted.push({ hash, filename: typeof a?.filename === 'string' ? a.filename : '' });
       }
@@ -117,8 +138,11 @@ export function msgvaultRunner({
         const one = await fetchAttachment(hash, key, declared);
         total += one.size;
         if (total > attachmentMaxBytes)
+          // THE HASHES ARE IN THE MESSAGE. It said "fetch them one at a time
+          // by content_hash" and returned none, so following the advice took
+          // a second approved show-message to learn them.
           throw new Error(
-            `this message's attachments come to more than the ${attachmentMaxBytes} byte cap — fetch them one at a time by content_hash`,
+            `this message's attachments come to more than the ${attachmentMaxBytes} byte cap — fetch them one at a time: ${wanted.map((w) => w.hash).join(' ')}`,
           );
         // msgvault's own listing names the file and is preferred: a
         // Content-Disposition is the same sender-chosen string arriving by a
@@ -134,9 +158,13 @@ export function msgvaultRunner({
           // Said out loud rather than silently dropped: a listing entry with
           // no usable content hash is an attachment the archive knows about
           // and cannot hand over.
-          ...(listed.length !== attachments.length
-            ? { not_retrievable: listed.length - attachments.length }
-            : {}),
+          //
+          // ENTRIES WITH NO USABLE HASH — not "listed minus delivered". That
+          // older sum counted DUPLICATES as unretrievable: a message listing
+          // the same hash twice had both delivered and was then told one was
+          // missing, sending an agent to look for a file that does not
+          // exist.
+          ...(listed.length !== usable ? { not_retrievable: listed.length - usable } : {}),
           attachments,
         },
       };
@@ -340,11 +368,23 @@ export function msgvaultRunner({
       .map((_, i) => i)
       .sort((a, b) => (a === preferredRoute ? -1 : b === preferredRoute ? 1 : a - b));
     const refusals = [];
+    /** Did a route refuse on PERMISSION? Only then is a fallback worth keeping. */
+    let sticky = false;
     for (const i of order) {
-      const res = await fetchImpl(`${base}${routes[i]}`, {
-        headers: { [GRANT_HEADER]: key },
-        signal: AbortSignal.timeout(timeoutMs),
-      });
+      let res;
+      try {
+        res = await fetchImpl(`${base}${routes[i]}`, {
+          headers: { [GRANT_HEADER]: key },
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+      } catch (e) {
+        // A THROW IS A FAILED ROUTE, NOT A FAILED VERB. `fetch` throws on
+        // ECONNREFUSED and `AbortSignal.timeout` throws TimeoutError; both
+        // escaped this loop, so the second route was never tried and one
+        // blip on the first killed the whole download.
+        refusals.push(`${routes[i].split('?')[0]} → ${String(e?.message ?? e).slice(0, 60)}`);
+        continue;
+      }
       if (!res.ok) {
         // The daemon's own refusal, kept verbatim and per route: a 401 on
         // both means the grant is not accepted for attachments at all, which
@@ -352,9 +392,22 @@ export function msgvaultRunner({
         // than left to retry.
         const detail = (await res.text().catch(() => '')).slice(0, 120);
         refusals.push(`${routes[i].split('?')[0]} → ${res.status}${detail ? ` ${detail}` : ''}`);
+        // ── ONLY AN ANSWER ABOUT PERMISSION IS WORTH REMEMBERING ────────
+        // The preference moved on ANY non-OK. One 503 or 404 during a
+        // daemon restart therefore pinned the process to the cli route —
+        // which keeps working, so it never switched back — and every later
+        // attachment reported `application/octet-stream` instead of its
+        // real type for the life of the broker. 401/403 is a stable
+        // decision about the grant; everything else is weather.
+        if (res.status === 401 || res.status === 403) sticky = true;
         continue;
       }
-      preferredRoute = i;
+      // Remembered only when the route BEFORE it gave a permission answer, or
+      // when it is the first choice anyway. Setting it on any success meant a
+      // single 503 moved the process to the cli route permanently: the
+      // fallback keeps working, so nothing ever moved it back, and every
+      // later attachment reported application/octet-stream.
+      if (i === 0 || sticky) preferredRoute = i;
       const buf = Buffer.from(await res.arrayBuffer());
       if (buf.byteLength > attachmentMaxBytes)
         throw new Error(`attachment is larger than the ${attachmentMaxBytes} byte cap`);

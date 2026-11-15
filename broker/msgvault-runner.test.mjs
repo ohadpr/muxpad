@@ -292,6 +292,64 @@ test('an attachment larger than the cap is refused, not silently truncated', asy
   await assert.rejects(() => h.runner('msgvault.export-attachment', { hash: HASH }), /cap/);
 });
 
+test('an agentUrl that only LOOKS like loopback is refused', async () => {
+  // `http://127.0.0.1:@evil.example` — everything before the `@` is userinfo
+  // and the host is evil.example. The old check was a regex anchored on the
+  // literal text, so it passed, and the grant header would have left the
+  // machine. Reaching it needs write access to the root-owned declaration,
+  // but this check exists so it does not rest on that file's author.
+  for (const agentUrl of [
+    'http://127.0.0.1:@evil.example',
+    'http://evil.example',
+    'https://127.0.0.1.evil.example',
+    'ftp://127.0.0.1',
+    'not a url',
+  ]) {
+    const runner = msgvaultRunner({
+      io: {
+        readFileSync: () =>
+          JSON.stringify({ msgvault: { binary: '/b', agentUrl, tokenFile: '/t' } }),
+        assertProtectedPath: () => {},
+      },
+      run: () => assert.fail('must not run'),
+      fetchImpl: async () => assert.fail('must not fetch'),
+    });
+    await assert.rejects(
+      () => runner('msgvault.export-attachment', { hash: HASH }),
+      /loopback/,
+      agentUrl,
+    );
+  }
+});
+
+test('the loopback forms that are real still work', async () => {
+  for (const agentUrl of ['http://127.0.0.1:8787', 'http://localhost:8787', 'http://[::1]:8787']) {
+    const calls = [];
+    const runner = msgvaultRunner({
+      io: {
+        readFileSync: (p) =>
+          String(p).includes('token')
+            ? 'K'
+            : JSON.stringify({ msgvault: { binary: '/b', agentUrl, tokenFile: '/t' } }),
+        assertProtectedPath: () => {},
+      },
+      run: (_b, _a, _o, done) => done(null, '{}', ''),
+      fetchImpl: async (url) => {
+        calls.push(url);
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          arrayBuffer: async () => new TextEncoder().encode('x').buffer,
+          text: async () => '',
+        };
+      },
+    });
+    await runner('msgvault.export-attachment', { hash: HASH });
+    assert.ok(calls[0].startsWith(agentUrl), `${agentUrl} → ${calls[0]}`);
+  }
+});
+
 test('a bad hash never reaches the network', async () => {
   const h = httpHarness();
   await assert.rejects(() => h.runner('msgvault.export-attachment', { hash: 'nope' }), /64-hex/);
@@ -349,8 +407,12 @@ test('one content hash is fetched once, however often the message lists it', asy
   const out = await h.runner('msgvault.export-attachments', { id: '339110' });
   assert.equal(h.calls.length, 1, 'the same bytes are not fetched twice');
   assert.equal(out.result.count, 1);
-  // The duplicate is not silently forgotten: the listing had two entries.
-  assert.equal(out.result.not_retrievable, 1);
+  // AND IT IS NOT REPORTED AS MISSING. This asserted `not_retrievable: 1`,
+  // which locked in a real bug: a duplicate is the same bytes, already handed
+  // over, and calling it unretrievable sends an agent looking for a file that
+  // does not exist. The field means "the archive lists it and cannot hand it
+  // over" — a duplicate is neither.
+  assert.equal(out.result.not_retrievable, undefined);
 });
 
 test('a listed attachment with no usable hash is counted, not silently dropped', async () => {
@@ -360,6 +422,65 @@ test('a listed attachment with no usable hash is counted, not silently dropped',
   const out = await h.runner('msgvault.export-attachments', { id: '339110' });
   assert.equal(out.result.count, 1);
   assert.equal(out.result.not_retrievable, 1);
+});
+
+test('a route that THROWS falls back instead of killing the download', async () => {
+  // `fetch` throws on ECONNREFUSED and AbortSignal.timeout throws
+  // TimeoutError. Both escaped the route loop, so one blip on the first route
+  // ended the whole verb with a stack rather than trying the second.
+  let first = true;
+  const h = httpHarness({
+    respond: () => ({}),
+  });
+  const runner = msgvaultRunner({
+    io: {
+      readFileSync: (p) => (String(p).includes('token') ? 'SECRET-KEY\n' : DECL),
+      assertProtectedPath: () => {},
+    },
+    run: (_b, _a, _o, done) => done(null, '{}', ''),
+    fetchImpl: async (url) => {
+      if (first) {
+        first = false;
+        throw new Error('ECONNREFUSED');
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        arrayBuffer: async () => new TextEncoder().encode('bytes').buffer,
+        text: async () => '',
+      };
+    },
+  });
+  const out = await runner('msgvault.export-attachment', { hash: HASH });
+  assert.equal(Buffer.from(out.result.data_base64, 'base64').toString(), 'bytes');
+  void h;
+});
+
+test('a transient failure does not pin the process to the worse route', async () => {
+  // A 503 during a daemon restart used to move the preference permanently.
+  // The cli route keeps working, so it never switched back, and every later
+  // attachment reported application/octet-stream instead of its real type.
+  let fail503 = true;
+  const h = httpHarness({
+    respond: (url) => {
+      if (url.includes('/api/v1/attachments/') && fail503) {
+        fail503 = false;
+        return { status: 503 };
+      }
+      return {
+        headers: url.includes('/api/v1/attachments/')
+          ? { 'content-type': 'application/pdf' }
+          : { 'content-type': 'application/octet-stream' },
+      };
+    },
+  });
+  const first = await h.runner('msgvault.export-attachment', { hash: HASH });
+  assert.equal(first.result.mime_type, 'application/octet-stream', 'fell back, as it should');
+  // The NEXT one must try the good route again rather than stay on the
+  // fallback for the life of the process.
+  const second = await h.runner('msgvault.export-attachment', { hash: 'b'.repeat(64) });
+  assert.equal(second.result.mime_type, 'application/pdf');
 });
 
 test('a message whose attachments exceed the cap is refused, not half-delivered', async () => {
