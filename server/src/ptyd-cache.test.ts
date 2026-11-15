@@ -537,6 +537,54 @@ describe('PtydCache', () => {
     expect(decoratePane(cache, pane).status).toBe('working');
   });
 
+  it('a backgrounded command holds WORKING, like a subagent roster does', () => {
+    // REPORTED: "this doesn't cause the chat to show a working indicator in
+    // the sidebar". A Bash call the agent left running outlives the turn, and
+    // the chat drew a "1 bg command" chip while the row beside it read idle.
+    //
+    // The server already believed it was live work everywhere else —
+    // tab-retire refuses to retire a chat while backgroundLive is non-zero —
+    // so one half of the server called it running and the half that draws the
+    // rail did not ask. The owner's rule, verbatim: "an agent could also have
+    // 2 sub chats doing something for hours while it's technically available
+    // but we still show it as busy in the sidebar."
+    const cache = new PtydCache();
+    const events: string[] = [];
+    cache.on('paneChange', (id: string) => events.push(id));
+
+    cache.setBackgroundCount('p1', 1);
+    expect(cache.isWorking('p1')).toBe(true);
+    expect(cache.getBackgroundCount('p1')).toBe(1);
+    expect(events).toEqual(['p1']);
+
+    // The runner re-sends the same level set on every SDK level message —
+    // edge-triggered on the COUNT, so that is not a rail event.
+    cache.setBackgroundCount('p1', 1);
+    expect(events).toEqual(['p1']);
+
+    // A second command is a real change.
+    cache.setBackgroundCount('p1', 2);
+    expect(events).toEqual(['p1', 'p1']);
+
+    // Only the drain clears it.
+    cache.setBackgroundCount('p1', 0);
+    expect(cache.isWorking('p1')).toBe(false);
+    expect(events).toEqual(['p1', 'p1', 'p1']);
+  });
+
+  it('a background command and a subagent roster each hold it independently', () => {
+    // Neither may mask the other going away: a chat with one subagent and one
+    // background command that loses only the subagent is still working.
+    const cache = new PtydCache();
+    cache.setSubagentCount('p1', 1);
+    cache.setBackgroundCount('p1', 1);
+    expect(cache.isWorking('p1')).toBe(true);
+    cache.setSubagentCount('p1', 0);
+    expect(cache.isWorking('p1'), 'the command is still running').toBe(true);
+    cache.setBackgroundCount('p1', 0);
+    expect(cache.isWorking('p1')).toBe(false);
+  });
+
   it('a live subagent roster holds WORKING with no decay window, and is count-edge-triggered', async () => {
     // Replaces the old 15s-decay poke. Measured (P1, 2026-08): a background
     // subagent parked in one tool call goes 44s+ without a frame while alive,

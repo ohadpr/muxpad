@@ -154,7 +154,15 @@ export type RunnerFrame =
    * command had finished: a command that completes without starting a new turn
    * produces no other frame.
    */
-  | { t: 'background'; live: number }
+  | {
+      t: 'background';
+      live: number;
+      /** The live set, so the chat can LIST what is running rather than only
+       *  count it. A command is known by its task id; `toolUseId` is present
+       *  only when the SDK told us which Bash call launched it, which is the
+       *  one thing that ties it to a line in the transcript. */
+      commands?: { taskId: string; toolUseId?: string }[];
+    }
   | {
       /** The session is blocked on the user: render these as tappable chips. */
       t: 'question';

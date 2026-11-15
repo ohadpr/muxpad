@@ -875,6 +875,9 @@ export function attachWsServer(deps: {
      * with an exit code.
      */
     backgroundLive: number;
+    /** The live set itself, so a (re)connecting client can LIST what is
+     *  running rather than only count it. Empty whenever the count is 0. */
+    backgroundCommands: { taskId: string; toolUseId?: string }[];
     /**
      * When each roster entry's payload last CHANGED, by toolUseId. Not when a
      * frame last arrived — the 5s keepalive re-sends ghosts unchanged, so
@@ -2116,6 +2119,7 @@ export function attachWsServer(deps: {
           subagentChangedAt: new Map(),
           subagentReaped: new Map(),
           backgroundLive: 0,
+          backgroundCommands: [],
           lastOverflowWarnAt: 0,
           status: null,
           lastSendAt: 0,
@@ -2135,6 +2139,11 @@ export function attachWsServer(deps: {
         // it buys is that a REPLACED runner can no longer bequeath a phantom
         // `agents: N` / stuck `working` (or a stuck `blocked`) to its successor.
         syncSubagentCount(paneId);
+        // Same rule, same hazard: a replaced runner must not bequeath a
+        // phantom background count and a `working` nothing can clear.
+        conn.backgroundLive = 0;
+        conn.backgroundCommands = [];
+        deps.cache.setBackgroundCount(paneId, 0);
         deps.cache.setBlocked(paneId, false);
         const bcast = (obj: unknown) => bcastToPane(paneId, obj);
         /**
@@ -2822,7 +2831,18 @@ export function attachWsServer(deps: {
             // arrived minutes later. Remembered for (re)connects and
             // broadcast for the open ones.
             conn.backgroundLive = frame.live;
-            bcastToPane(paneId, { t: 'background', live: frame.live });
+            conn.backgroundCommands = Array.isArray(frame.commands) ? frame.commands : [];
+            // AND THE RAIL. The chat showed a chip while the row beside it read
+            // idle — "this doesn't cause the chat to show a working indicator
+            // in the sidebar". Same treatment as the subagent roster, which is
+            // the precedent the owner named: work that outlives a turn still
+            // means the chat is busy.
+            deps.cache.setBackgroundCount(paneId, frame.live);
+            bcastToPane(paneId, {
+              t: 'background',
+              live: frame.live,
+              commands: conn.backgroundCommands,
+            });
             if (frame.live === 0 && !conn.turnActive) emitTurn('done', 0);
           } else if (frame.t === 'subagent') {
             if (!frame.progress || typeof frame.progress.toolUseId !== 'string') return;
@@ -2936,6 +2956,8 @@ export function attachWsServer(deps: {
           // Registry-derived, and this conn has just left the registry — so
           // this is a zero, by the same rule as everywhere else.
           syncSubagentCount(paneId);
+          // Registry-derived too — this conn has just left it.
+          deps.cache.setBackgroundCount(paneId, 0);
           streamBufs.delete(paneId);
           // The dead runner's in-flight send dies with it; its stamp must not
           // outlive it (this conn object is still reachable from a closure
@@ -3222,7 +3244,14 @@ export function attachWsServer(deps: {
                 : {}),
               // Only when there is something to say — absent reads as zero
               // everywhere, and every other backend sends no such field.
-              ...(runner?.backgroundLive ? { background: runner.backgroundLive } : {}),
+              ...(runner?.backgroundLive
+                ? {
+                    background: runner.backgroundLive,
+                    ...(runner.backgroundCommands.length
+                      ? { backgroundCommands: runner.backgroundCommands }
+                      : {}),
+                  }
+                : {}),
               // ── THIS PANE IS RUNNING CODE THE SERVER NO LONGER RUNS ─────
               // Only when true, so a healthy frame is the same bytes it has
               // always been. See runner-build.ts: this is NOT "the runner is

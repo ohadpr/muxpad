@@ -180,7 +180,16 @@ export function assistantLabel(a: string | null | undefined): string {
 /** Session status pushed by the agent runner — shape shared with the server
  * pipeline via @muxpad/shared so the two ends can't drift apart. */
 export type AgentStatus = AgentSessionStatus;
-export type StatusPanel = 'folder' | 'model' | 'live' | 'ctx' | 'mode' | 'stale' | 'host' | null;
+export type StatusPanel =
+  | 'folder'
+  | 'model'
+  | 'live'
+  | 'ctx'
+  | 'mode'
+  | 'stale'
+  | 'host'
+  | 'bg'
+  | null;
 
 export interface RosterAgent {
   id: string;
@@ -742,6 +751,7 @@ export function SessionBar({
   liveLabel,
   agents,
   background = 0,
+  backgroundCommands = [],
   onOpenChat,
   mode,
   stale = false,
@@ -759,6 +769,10 @@ export function SessionBar({
   agents: RosterAgent[];
   /** Background SHELL COMMANDS running right now. Not agents — see the cell. */
   background?: number;
+  /** The live set, so the panel can name them. A command is known by its task
+   *  id; `toolUseId` is present only when the SDK said which Bash call
+   *  launched it. */
+  backgroundCommands?: { taskId: string; toolUseId?: string }[];
   /** Go to a chat — only ever called for a CHILD row (see RosterAgent.chat). */
   onOpenChat?: ((chat: { workspaceSlug: string; tabSlug: string }) => void) | undefined;
   /** The pane's mode, or null when the server hasn't told us — no chip. */
@@ -801,6 +815,7 @@ export function SessionBar({
     else if (panel === 'folder' && !folder) setPanel(null);
     else if (panel === 'mode' && !mode) setPanel(null);
     else if (panel === 'host' && !host) setPanel(null);
+    else if (panel === 'bg' && background === 0) setPanel(null);
     // NO STALE BRANCH, AND THEREFORE NO `stale` DEPENDENCY. The older-build
     // cell IS the rebase button — pressing it rebases, with no panel in
     // between ("i need a single rebase button… i only see 'older build'
@@ -809,7 +824,7 @@ export function SessionBar({
     // linter said: surplus. Adding a branch to justify it was tried first,
     // and that test caught it — including when the branch was only quoted in
     // a comment, which is why this one does not spell it out.
-  }, [panel, liveLabel, status, folder, mode, host]);
+  }, [panel, liveLabel, status, folder, mode, host, background]);
 
   // ── Folder switcher state ────────────────────────────────────────────
   const [draft, setDraft] = useState(folder?.cwd ?? '');
@@ -1021,22 +1036,70 @@ export function SessionBar({
           No menu: there is nothing to show yet. The output lives in a file the
           agent reads; surfacing it is a separate piece of work. */}
       {background > 0 ? (
-        <div
-          className="chat-status-seg -bg -static"
-          data-testid="chat-status-bg"
-          title={`${background} background shell command${
-            background === 1 ? '' : 's'
-          } still running — a Bash call the agent left running after its turn. Not a sub-agent: no transcript and no report, just an exit code when it finishes.`}
-        >
-          <SvgShellGlyph />
-          {/* "bg command", not "shell" and not a bare count. `shell` reads as
+        <div className="chat-status-cell">
+          <button
+            type="button"
+            className={`chat-status-seg -bg${panel === 'bg' ? ' is-open' : ''}`}
+            data-testid="chat-status-bg"
+            onClick={() => toggle('bg')}
+            aria-haspopup="dialog"
+            aria-expanded={panel === 'bg'}
+            title={`${background} background shell command${
+              background === 1 ? '' : 's'
+            } still running — a Bash call the agent left running after its turn. Not a sub-agent: no transcript and no report, just an exit code when it finishes.`}
+          >
+            <SvgShellGlyph />
+            {/* "bg command", not "shell" and not a bare count. `shell` reads as
               a terminal pane — the cockpit is full of those and they are a
               different thing again — and a bare "2 running" beside a rail that
               counts sub-agents merges the two ideas that this cell exists to
               keep apart. */}
-          <span className="chat-status-seg-label">
-            {background} bg command{background === 1 ? '' : 's'}
-          </span>
+            <span className="chat-status-seg-label">
+              {background} bg command{background === 1 ? '' : 's'}
+            </span>
+          </button>
+          {/* ── WHAT IS ACTUALLY RUNNING ──────────────────────────────────────
+            The cell used to be inert because there was nothing to show. There
+            still is not much: muxpad is told a task id, and the tool_use that
+            launched it only when the SDK says so. No command text, because
+            nobody sends it; no output, because it goes to a file the agent
+            reads. So the panel says exactly that much and does not pretend —
+            an honest short list beats a chip you cannot interrogate. */}
+          {panel === 'bg' ? (
+            // biome-ignore lint/a11y/useSemanticElements: an anchored popover, not a modal that owns the screen.
+            <div className="chat-status-menu chat-session-menu" role="dialog">
+              <div className="chat-session-head">
+                {background} background command{background === 1 ? '' : 's'} running
+              </div>
+              {backgroundCommands.length ? (
+                backgroundCommands.map((c) => (
+                  <div className="chat-session-item -static" key={c.taskId}>
+                    <span className="chat-session-item-desc">
+                      <code>{c.taskId.slice(0, 12)}</code>
+                      {c.toolUseId
+                        ? ' · launched by a Bash call in this chat'
+                        : ' · launcher unknown'}
+                    </span>
+                  </div>
+                ))
+              ) : (
+                <div className="chat-session-item -static">
+                  <span className="chat-session-item-desc">
+                    This runner reports only a count — reconnect or wait for the next update to see
+                    them named.
+                  </span>
+                </div>
+              )}
+              <div className="chat-session-item -static">
+                <span className="chat-session-item-desc">
+                  A Bash call the agent backgrounded. It keeps running after the turn ends and the
+                  chat stays <em>working</em> until it finishes. There is no transcript and no
+                  report — its output goes to a file the agent reads, and muxpad is told only that
+                  it is alive.
+                </span>
+              </div>
+            </div>
+          ) : null}
         </div>
       ) : null}
 

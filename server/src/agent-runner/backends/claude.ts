@@ -1186,6 +1186,8 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
    * when the answer to "is anything still running" changes.
    */
   let lastBackgroundLive = 0;
+  /** The last SET reported, as a sorted id key — see reportBackground. */
+  let lastBackgroundKey = '';
   /**
    * The field, only when it says something. Absent already means "nothing
    * running" everywhere that reads it (every other backend sends no such
@@ -1225,10 +1227,28 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
     }),
   });
   const reportBackground = (): void => {
-    const live = backgroundCommands.size;
-    if (live === lastBackgroundLive) return;
+    const commands = backgroundCommands.list();
+    const live = commands.length;
+    // ── DEDUPED ON THE SET, NOT THE COUNT ──────────────────────────────
+    // It compared sizes, which is right for "is anything running" and wrong
+    // the moment the chat LISTS them: one command finishing as another starts
+    // leaves the count identical and every id stale, so the panel would name
+    // work that had already ended.
+    const key = commands
+      .map((c) => c.taskId)
+      .sort()
+      .join(',');
+    if (key === lastBackgroundKey) return;
+    lastBackgroundKey = key;
     lastBackgroundLive = live;
-    emit({ t: 'background', live });
+    emit({
+      t: 'background',
+      live,
+      commands: commands.map((c) => ({
+        taskId: c.taskId,
+        ...(c.toolUseId ? { toolUseId: c.toolUseId } : {}),
+      })),
+    });
   };
   /** How often a live roster entry re-announces itself when the SDK is silent. */
   const SUBAGENT_KEEPALIVE_MS = 5_000;
@@ -2223,6 +2243,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
     // the count lost, the worker retired on the next quiet moment and its
     // parent got a green summary of half-done work.
     lastBackgroundLive = -1;
+    lastBackgroundKey = '\u0000resend';
     reportBackground();
   }
 

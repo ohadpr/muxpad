@@ -460,6 +460,7 @@ type ServerMsg =
       /** Background SHELL COMMANDS running right now — see the `background`
        *  frame below. Absent means none. */
       background?: number;
+      backgroundCommands?: { taskId: string; toolUseId?: string }[];
       status?: AgentStatus;
       /** The pane's working dir + whether it has project context (git/rules/MCP). */
       cwd?: string;
@@ -476,7 +477,7 @@ type ServerMsg =
    * code. The status line says so in those words, because the only thing
    * worse than not showing this is showing it as something it is not.
    */
-  | { t: 'background'; live: number }
+  | { t: 'background'; live: number; commands?: { taskId: string; toolUseId?: string }[] }
   | { t: 'events'; phase: 'history' | 'live' | 'older'; events: ChatEvent[] }
   | { t: 'older-done'; hasMore: boolean }
   | { t: 'send-ack' }
@@ -1775,6 +1776,12 @@ export function ChatPane({
   /** Background shell commands running right now (not sub-agents — see the
    *  `background` frame). Zero is the common case and renders nothing. */
   const [backgroundLive, setBackgroundLive] = useState(0);
+  /** The live set itself, so the chip can LIST what is running. A command is
+   *  known by its task id; `toolUseId` names the Bash call that launched it,
+   *  when the SDK told us — the only thing tying it to the transcript. */
+  const [backgroundCommands, setBackgroundCommands] = useState<
+    { taskId: string; toolUseId?: string }[]
+  >([]);
   // Last progress-frame arrival per task — the staleness horizon for the
   // running-subagents indicator (a background task that's gone silent past
   // it reads as done, not running; its tool_result may never stream here).
@@ -2059,6 +2066,7 @@ export function ChatPane({
         // A snapshot, like the roster above: absent means none, and assigning
         // unconditionally is what lets the last command clear on a resync.
         setBackgroundLive(msg.background ?? 0);
+        setBackgroundCommands(Array.isArray(msg.backgroundCommands) ? msg.backgroundCommands : []);
       } else if (msg.t === 'events') {
         const fresh = msg.events.filter((e) => !byId.current.has(e.id));
         // A subagent's FINISH notice (matched by tool-use-id) ends it — prune
@@ -2288,6 +2296,7 @@ export function ChatPane({
         if (wasOurOptimistic) setOptimisticUser(null);
       } else if (msg.t === 'background') {
         setBackgroundLive(msg.live);
+        setBackgroundCommands(Array.isArray(msg.commands) ? msg.commands : []);
       } else if (msg.t === 'subagent') {
         const { toolUseId, done } = msg.progress;
         if (done) {
@@ -5302,6 +5311,7 @@ export function ChatPane({
       liveLabel={liveLabel}
       agents={rosterAgents}
       background={backgroundLive}
+      backgroundCommands={backgroundCommands}
       onOpenChat={openChat}
       mode={mode}
       stale={staleRunner}

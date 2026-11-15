@@ -155,6 +155,9 @@ export class PtydCache extends EventEmitter {
   // for 44s+, so the window expired under a running agent. The roster has real
   // launch and finish edges — no window can be right, so there is no window.
   private readonly subagentCounts = new Map<string, number>();
+  /** Backgrounded shell commands still running per pane — see
+   *  setBackgroundCount. Same role as subagentCounts: a status SOURCE. */
+  private readonly backgroundCounts = new Map<string, number>();
   // Panes whose agent is BLOCKED on the user: a `question` frame is awaiting an
   // answer. Previously the question frame reached chat sockets and a push
   // notification and touched NOTHING else — so a chat parked on ask_user read
@@ -583,7 +586,8 @@ export class PtydCache extends EventEmitter {
    *   blocked  a question awaits the user, or a BEL rang. Those two only — a
    *            runner that gave up is `dead`, two lines down.
    *   working  a turn is in flight, OR the durable subagent roster is non-empty,
-   *            OR — only for a pane with NO runner — the pty output heuristic
+   *            OR a backgrounded shell command is still running, OR — only for
+   *            a pane with NO runner — the pty output heuristic
    *   dead     the runner gave up (outranks ready: a crash must not be masked
    *            by an unread turn)
    *   ready    `unread` (passed in; it lives on the DB row, not here)
@@ -598,7 +602,23 @@ export class PtydCache extends EventEmitter {
    */
   getStatus(id: string, unread: boolean): PaneStatus {
     if (this.blocked.has(id) || (this.state.get(id)?.attention ?? false)) return 'blocked';
-    const runnerWorking = this.agentBusy.has(id) || (this.subagentCounts.get(id) ?? 0) > 0;
+    // ── A BACKGROUNDED COMMAND IS WORK TOO ──────────────────────────────
+    //
+    // It counts for exactly the reason a subagent roster does, and the owner
+    // put it plainly: "an agent could also have 2 sub chats doing something
+    // for hours while it's technically available but we still show it as busy
+    // in the sidebar." A Bash call the agent left running is the same claim
+    // about the same question — is anything happening in this chat.
+    //
+    // The server already believed this everywhere else: tab-retire refuses to
+    // retire a chat while `backgroundLive` is non-zero, so one half of the
+    // server called it live work while the half that draws the rail did not
+    // ask. The chat's own status bar showed a chip and the row beside it read
+    // idle.
+    const runnerWorking =
+      this.agentBusy.has(id) ||
+      (this.subagentCounts.get(id) ?? 0) > 0 ||
+      (this.backgroundCounts.get(id) ?? 0) > 0;
     const ptyWorking = !this.runnerOwned.has(id) && (this.state.get(id)?.busy ?? false);
     if (runnerWorking || ptyWorking) return 'working';
     if (this.dead.has(id)) return 'dead';
@@ -669,6 +689,26 @@ export class PtydCache extends EventEmitter {
     this.emit('paneChange', id);
   }
 
+  /** How many backgrounded shell commands this pane has still running. */
+  getBackgroundCount(id: string): number {
+    return this.backgroundCounts.get(id) ?? 0;
+  }
+
+  /**
+   * Mirror the runner's live background-command count onto the pane.
+   *
+   * Edge-triggered on the COUNT, like the roster above: the runner re-sends
+   * the same level set on every SDK level message, and a rail event per
+   * message would be a churn feed.
+   */
+  setBackgroundCount(id: string, n: number): void {
+    const prev = this.backgroundCounts.get(id) ?? 0;
+    if (prev === n) return;
+    if (n > 0) this.backgroundCounts.set(id, n);
+    else this.backgroundCounts.delete(id);
+    this.emit('paneChange', id);
+  }
+
   /**
    * Mark a pane busy because a headless (web-chat-driven) agent turn started/
    * finished there. Emits 'paneChange' only when the EFFECTIVE busy value
@@ -710,6 +750,7 @@ export class PtydCache extends EventEmitter {
     this.clearBusyTimer(id);
     this.agentBusy.delete(id);
     this.subagentCounts.delete(id);
+    this.backgroundCounts.delete(id);
     this.blocked.delete(id);
     this.dead.delete(id);
     this.runnerOwned.delete(id);

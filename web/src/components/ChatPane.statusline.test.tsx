@@ -550,6 +550,49 @@ describe('the background-command cell', () => {
     expect(title).toContain('exit code');
   });
 
+  it('OPENS, and names what is running', async () => {
+    // It was inert, "because there is nothing to show yet". There is a
+    // little: a task id per command, and sometimes the Bash call that
+    // launched it. Reported as "it's not clickable" — an honest short list
+    // beats a chip you cannot interrogate.
+    const box = bar({
+      background: 2,
+      backgroundCommands: [
+        { taskId: 'task_aaaaaaaaaaaaaaa', toolUseId: 'toolu_1' },
+        { taskId: 'task_bbbbbbbbbbbbbbb' },
+      ],
+    });
+    const btn = cell(box) as HTMLButtonElement;
+    expect(btn.tagName).toBe('BUTTON');
+    expect(btn.getAttribute('aria-expanded')).toBe('false');
+    await act(async () => {
+      btn.click();
+    });
+    const dialog = box.querySelector('[role="dialog"]');
+    expect(dialog).not.toBeNull();
+    const text = dialog?.textContent ?? '';
+    expect(text).toContain('2 background commands running');
+    // Each one named by its id, and honest about whether we know its launcher.
+    expect(text).toContain('task_aaaaaaa');
+    expect(text).toContain('launched by a Bash call');
+    expect(text).toContain('launcher unknown');
+    // And what it is — the distinction the tooltip carries, where a reader
+    // who opened the panel will actually read it.
+    expect(text.toLowerCase()).toContain('no transcript');
+  });
+
+  it('says so plainly when the runner reports only a count', async () => {
+    // A version-skewed runner sends `live` and no set. The panel must not
+    // render an empty box that looks like nothing is running.
+    const box = bar({ background: 1 });
+    const btn = cell(box) as HTMLButtonElement;
+    await act(async () => {
+      btn.click();
+    });
+    const dialog = box.querySelector('[role="dialog"]');
+    expect(dialog?.textContent ?? '').toContain('reports only a count');
+  });
+
   it('does not animate — a composer strip that pulses for minutes is worse', () => {
     const css = readFileSync(join(import.meta.dirname, 'ChatPane.css'), 'utf8');
     const rule = /\.chat-status-seg\.-bg\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
