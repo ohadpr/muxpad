@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { FIELDS, SUBMIT_SELECTORS, cdpUrl, parseArgs } from '../../scripts/browser-pay.mjs';
+import {
+  EXP_PARTS,
+  FIELDS,
+  SUBMIT_SELECTORS,
+  cdpUrl,
+  isWalletButton,
+  keptOnlyPart,
+  looksPlaceholder,
+  parseArgs,
+  splitExp,
+} from '../../scripts/browser-pay.mjs';
 
 /**
  * `muxpad pay` — the argument surface and the selector tables.
@@ -12,6 +22,7 @@ import { FIELDS, SUBMIT_SELECTORS, cdpUrl, parseArgs } from '../../scripts/brows
 describe('muxpad pay arguments', () => {
   it('refuses a verb it does not know rather than guessing', () => {
     expect(parseArgs(['send']).error).toMatch(/unknown verb/);
+    expect(parseArgs(['pay']).error).toMatch(/unknown verb/);
     expect(parseArgs([]).error).toMatch(/say what to do/);
     expect(parseArgs(['fill', 'submit']).error).toMatch(/one verb/);
   });
@@ -21,6 +32,14 @@ describe('muxpad pay arguments', () => {
     expect(parseArgs(['submit']).verb).toBe('submit');
     // No flag can turn one into the other.
     expect(parseArgs(['fill', '--selector=button']).verb).toBe('fill');
+  });
+
+  it('has a verb that does both, and it is spelled out', () => {
+    // `checkout` fills AND clicks, because the approval that matters is the
+    // issuer's own per-transaction one, in its app, with the real amount. A
+    // muxpad-side pause in front of that approves the same payment twice.
+    expect(parseArgs(['checkout']).verb).toBe('checkout');
+    expect(parseArgs(['checkout', '--url=https://s/c', '--selector=#go']).verb).toBe('checkout');
   });
 
   it('refuses an unknown flag instead of ignoring it', () => {
@@ -65,5 +84,93 @@ describe('the browser it talks to', () => {
 
   it('answers null outside a pane rather than guessing an endpoint', () => {
     expect(cdpUrl({})).toBeNull();
+  });
+});
+
+describe('the expiry, which pages ask for in two different shapes', () => {
+  it('splits MM/YY into every spelling a control might want', () => {
+    // A year `<select>` is labelled 2031 about as often as 31, and a month one
+    // is 7 as often as 07. Guessing one gets a silent non-selection, which is
+    // a decline that looks like a working script.
+    expect(splitExp('07/31')).toEqual({
+      month: '07',
+      monthShort: '7',
+      year4: '2031',
+      year2: '31',
+    });
+    expect(splitExp('7/2031')?.month).toBe('07');
+    expect(splitExp('12 29')?.year4).toBe('2029');
+  });
+
+  it('answers null for something that is not a date, rather than a wrong one', () => {
+    for (const bad of ['', 'soon', '13/29', '00/29', '7', undefined])
+      expect(splitExp(bad), String(bad)).toBeNull();
+  });
+
+  it('keeps the split pair out of the main table', () => {
+    // FIELDS is what a page is scanned for FIRST; the pair is a fallback used
+    // only when the combined box is absent, or a form with both gets the
+    // expiry typed into two places.
+    expect(FIELDS.map((f) => f.key)).not.toContain('expMonth');
+    expect(EXP_PARTS.map((f) => f.key)).toEqual(['expMonth', 'expYear']);
+    // Selects, not inputs — that is the shape this exists for.
+    expect(EXP_PARTS.some((f) => f.selectors.some((s) => s.startsWith('select')))).toBe(true);
+  });
+});
+
+describe('the cardholder name', () => {
+  it('calls a placeholder a placeholder', () => {
+    // `A B` was typed when the card was first stored and survived a green
+    // end-to-end test, because the test page did not check it. A processor
+    // does: the name goes to the issuer, and a mismatch is a decline.
+    for (const n of ['A B', 'X Y Z', '', '  ', 'test', 'John Doe', 'Cardholder'])
+      expect(looksPlaceholder(n), JSON.stringify(n)).toBe(true);
+  });
+
+  it('leaves a real one alone', () => {
+    for (const n of ['Ada Lovelace', 'J Smith', "O'Neill", 'Jean-Luc Picard'])
+      expect(looksPlaceholder(n), n).toBe(false);
+  });
+});
+
+describe('a field that silently kept only part of what was typed', () => {
+  it('catches the maxlength truncation that reads as a mystery decline', () => {
+    // The four-box card number some banks still use: box one takes four
+    // digits and drops the other twelve with no error at all, so the page
+    // looks filled and the payment declines.
+    expect(keptOnlyPart('4242424242424242', '4242')).toBe(true);
+    expect(keptOnlyPart('0731', '07')).toBe(true);
+  });
+
+  it('is not fooled by a field that formats as you type', () => {
+    // Stripe's own input spaces the number out. Digits only, so this is the
+    // same value, not a truncated one.
+    expect(keptOnlyPart('4242424242424242', '4242 4242 4242 4242')).toBe(false);
+    expect(keptOnlyPart('0731', '07 / 31')).toBe(false);
+  });
+
+  it('treats a masked or unreadable field as unknown, never as wrong', () => {
+    // A refusal has to be worth something. A processor input that reads back
+    // as bullets, or not at all, is not evidence of a problem — and refusing
+    // on it would make `checkout` useless on exactly the pages it is for.
+    for (const got of ['••••', '', null, undefined])
+      expect(keptOnlyPart('4242424242424242', got), JSON.stringify(got)).toBe(false);
+    // Different digits entirely: something else is going on, and it is not
+    // this check's business to guess.
+    expect(keptOnlyPart('4242424242424242', '1111')).toBe(false);
+  });
+});
+
+describe('the button it clicks', () => {
+  it('skips the other payment rails, which also say "Pay"', () => {
+    // A checkout's first Pay button is often PayPal's — a different account,
+    // usually a redirect, and nothing to do with the card just typed in.
+    for (const t of ['Pay with PayPal', 'Apple Pay', 'G Pay', 'Pay in 4 with Klarna'])
+      expect(isWalletButton(t), t).toBe(true);
+  });
+
+  it('does not refuse the real one for containing the word pay', () => {
+    for (const t of ['Pay $12.34', 'Place order', 'Pay now', 'Confirm payment', '', null])
+      expect(isWalletButton(t), String(t)).toBe(false);
   });
 });

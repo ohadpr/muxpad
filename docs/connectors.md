@@ -191,6 +191,58 @@ muxpad refuses `--attendees` for the same reason.
 
 ---
 
+## A card for checkout pages (`muxpad pay`)
+
+Unlike everything above, this one has **no broker and no approval** — and the
+reasoning is worth reading before you store a card, because it is the opposite
+of the rest of this page.
+
+The card lives in a plain file:
+
+```bash
+install -m 700 -d ~/.muxpad
+umask 077 && cat > ~/.muxpad/payment-card.json    # ^D when done
+{
+  "num": "4242424242424242",
+  "exp": "07/31",
+  "cvc": "123",
+  "name": "Ada Lovelace",
+  "zip": "94110"
+}
+```
+
+Mode 600, owned by you. **Every agent on this machine also runs as you**, so
+any of them can read it and any of them could spend it. No file permission,
+spend cap or confirmation prompt written next to the card changes that — a
+ceiling enforced by code the agent can edit is a number that feels like a
+control and is not one.
+
+What makes this safe enough to do anyway is the card itself: use a **virtual
+card whose issuer asks you to confirm every transaction in its own app**, with
+the real merchant and the real amount. That approval is outside this machine,
+which is the only place an approval is worth anything here. If your card does
+not work that way, do not store it.
+
+```bash
+muxpad pay show                         # last 4, and whether the name is real
+muxpad pay checkout --shot=/tmp/p.png   # fill the open checkout and click pay
+muxpad pay fill  [--url=URL]            # type the card, click nothing
+muxpad pay submit [--selector=CSS]      # click the button
+```
+
+`checkout` acts on the page the browser is **already on** — a checkout carries
+a basket and a session that a fresh tab does not. It will not click if a field
+was missed, and it says so: a half-filled form is a decline, or a page that
+quietly charges a card it already had.
+
+Two things that bite:
+
+- **`--shot` of a filled form is a picture of the card number.** Keep those
+  out of chats, and never `muxpad publish` one.
+- **`muxpad browser probe` leaves an `about:blank` behind** when it closes its
+  tab. `pay` skips blank pages for that reason, but if nothing is open on a
+  checkout it will tell you rather than fill a card into nothing.
+
 ## Failures that have actually happened
 
 Each of these cost real time. The error text is what you will see.

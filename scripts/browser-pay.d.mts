@@ -9,7 +9,7 @@
 
 /** One card field, and every way a checkout might name it. */
 export interface PayField {
-  key: 'num' | 'exp' | 'cvc' | 'name' | 'zip';
+  key: 'num' | 'exp' | 'cvc' | 'name' | 'zip' | 'expMonth' | 'expYear';
   /** Tried in order, in every frame. The autocomplete attribute leads. */
   selectors: string[];
 }
@@ -17,7 +17,7 @@ export interface PayField {
 export interface PayArgs {
   error?: string;
   help?: boolean;
-  verb?: 'fill' | 'submit' | 'show' | null;
+  verb?: 'checkout' | 'fill' | 'submit' | 'show' | null;
   url?: string | null;
   shot?: string | null;
   selector?: string | null;
@@ -38,3 +38,16 @@ export declare function readCard(path?: string): {
   name?: string;
   zip?: string;
 };
+
+/** The month/year pair, tried only when the combined MM/YY box is absent. */
+export declare const EXP_PARTS: PayField[];
+/** `07/31` → every spelling a control might want. Null if it is not a date. */
+export declare function splitExp(
+  exp: string | undefined | null,
+): { month: string; monthShort: string; year4: string; year2: string } | null;
+/** Is the cardholder name obviously not a name? Empty counts. */
+export declare function looksPlaceholder(name: string | undefined | null): boolean;
+/** Did a field keep only the front of what was typed? Digits only; a prefix. */
+export declare function keptOnlyPart(want: string, got: string | null | undefined): boolean;
+/** Is this button another payment rail (PayPal, Apple Pay, Klarna…)? */
+export declare function isWalletButton(text: string | null | undefined): boolean;
