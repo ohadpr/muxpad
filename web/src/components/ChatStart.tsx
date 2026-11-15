@@ -801,7 +801,15 @@ export function SessionBar({
     else if (panel === 'folder' && !folder) setPanel(null);
     else if (panel === 'mode' && !mode) setPanel(null);
     else if (panel === 'host' && !host) setPanel(null);
-  }, [panel, liveLabel, status, folder, mode, stale, host]);
+    // NO STALE BRANCH, AND THEREFORE NO `stale` DEPENDENCY. The older-build
+    // cell IS the rebase button — pressing it rebases, with no panel in
+    // between ("i need a single rebase button… i only see 'older build'
+    // label"). ChatStart.stale.test.tsx asserts that comparison appears
+    // nowhere in this file, so the leftover dependency was exactly what the
+    // linter said: surplus. Adding a branch to justify it was tried first,
+    // and that test caught it — including when the branch was only quoted in
+    // a comment, which is why this one does not spell it out.
+  }, [panel, liveLabel, status, folder, mode, host]);
 
   // ── Folder switcher state ────────────────────────────────────────────
   const [draft, setDraft] = useState(folder?.cwd ?? '');

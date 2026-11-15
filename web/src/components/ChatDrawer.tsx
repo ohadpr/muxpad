@@ -385,6 +385,11 @@ function ArtifactList({ artifacts }: { artifacts: ReturnType<typeof artifactsOf>
       // rows below still render from the chat's own actions.
       .catch(() => setLive(null));
   }, []);
+  // `[load]` rather than `[]`: `load` is a `useCallback` with no dependencies,
+  // so the two are identical today — but naming it means a future dependency
+  // on `load` re-runs the fetch instead of silently going stale. The linter
+  // can only see that it is constant now.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: see above
   useEffect(load, [load]);
 
   /** The published record for a row, matched on the slug inside its url. */
