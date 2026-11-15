@@ -6015,6 +6015,16 @@ case "$VERB" in
   msgvault) cmd_msgvault "${ARGS[@]:1}" ;;
   card) cmd_card "${ARGS[@]:1}" ;;
   publish) cmd_publish "${ARGS[@]:1}" ;;
+  # ── PAYING FOR SOMETHING, IN THE BROWSER YOU ARE ALREADY IN ───────────
+  # Two verbs with a HUMAN between them: `fill` types the stored card into the
+  # checkout page and screenshots it, `submit` clicks the button. The picture
+  # is the approval — the real page with the real total, which a scraped
+  # number cannot be.
+  #
+  # The card is a 0600 file owned by you, and every agent here runs as you, so
+  # any of them can read it and run this. What stops a bad payment is your card
+  # issuer's per-transaction approval, not muxpad. See scripts/browser-pay.mjs.
+  pay) node "$ROOT/scripts/browser-pay.mjs" "${ARGS[@]:1}" ;;
   embed) cmd_embed "${ARGS[@]:1}" ;;
   node) cmd_node "${ARGS[@]:1}" ;;
   _agent-hook) cmd_agent_hook ;;
