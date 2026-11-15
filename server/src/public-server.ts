@@ -214,7 +214,7 @@ export function createPublicApp(publicDir: string, deps: PublicAppDeps = {}): Ho
     const owner = segs[0] as string;
     const horizon = deps.expiresAt?.(owner) ?? null;
     if (horizon !== null && horizon <= (deps.now?.() ?? Date.now()))
-      return c.text('this link has expired — ask muxpad to extend it', 410);
+      return c.text('This page is no longer available.', 410);
 
     let filePath = join(publicDir, ...segs);
     let st: ReturnType<typeof statSync>;

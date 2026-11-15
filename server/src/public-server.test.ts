@@ -191,7 +191,16 @@ describe('an expired link', () => {
     const app = createPublicApp(root, { expiresAt: () => 1_000, now: () => 2_000 });
     const res = await app.fetch(new Request('http://pub/report-7k3mqp2x/'));
     expect(res.status).toBe(410);
-    expect(await res.text()).toMatch(/expired/i);
+    // ── AND IT SAYS NOTHING ABOUT WHO HOSTS IT ────────────────────────────
+    // This expected /expired/i, matching "this link has expired — ask muxpad
+    // to extend it". That sentence is served to the OPEN INTERNET at an
+    // unauthenticated url, and it tells a stranger two things they had no way
+    // to know: that muxpad is behind it, and that the link is extendable —
+    // i.e. that the bytes are still there and worth coming back for. The 410
+    // already carries the whole fact a visitor is owed.
+    const body = await res.text();
+    expect(body).toBe('This page is no longer available.');
+    expect(body).not.toMatch(/muxpad|extend|expired/i);
   });
 
   it('takes the rotations with it', async () => {
