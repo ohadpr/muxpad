@@ -1458,15 +1458,38 @@ msgvault_save_attachment() {
   local name
   name="$(printf '%s' "$rawname" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_' | sed 's/^[._]*//' | cut -c1-120)"
   [ -n "$name" ] || name="attachment-${hash:0:12}"
-  local dest
+  # `namedir` is set only when WE chose the filename from a directory — the
+  # one case where renaming around a collision is right.
+  local dest namedir=""
   case "$out" in
-    '') dest="$PWD/$name" ;;
-    */) dest="${out}${name}" ;;
-    *) if [ -d "$out" ]; then dest="${out%/}/$name"; else dest="$out"; fi ;;
+    '') namedir="$PWD/"; dest="$PWD/$name" ;;
+    */) namedir="$out"; dest="${out}${name}" ;;
+    *) if [ -d "$out" ]; then namedir="${out%/}/"; dest="${out%/}/$name"; else dest="$out"; fi ;;
   esac
-  local dir="${dest%/*}"
+  # `${dest%/*}` on a path with NO slash returns the path itself, so a plain
+  # `--out=report.pdf` was tested as if it were a directory and refused with
+  # "no such directory: report.pdf". A name with no separator is a file in the
+  # current directory, which is what anyone typing it meant.
+  local dir=""
+  case "$dest" in */*) dir="${dest%/*}" ;; esac
   if [ -n "$dir" ] && [ ! -d "$dir" ]; then
     echo "muxpad: no such directory: $dir" >&2; return 1
+  fi
+  # ── TWO ATTACHMENTS CALLED image.png ──────────────────────────────────
+  # One message can carry several files with the SAME sender-chosen name, and
+  # refusing the second lost it: `attachments` reported `failed: 1` with
+  # nothing to retry by hand. A collision inside a DIRECTORY gets a suffix —
+  # `image.png`, `image-2.png` — which is what every browser does. An explicit
+  # `--out=<file>` still refuses, because there the name was the caller's
+  # choice and silently writing elsewhere would be worse.
+  if [ -e "$dest" ] && [ -n "$namedir" ]; then
+    local stem ext n=2
+    case "$name" in
+      ?*.*) stem="${name%.*}"; ext=".${name##*.}" ;;
+      *) stem="$name"; ext="" ;;
+    esac
+    while [ -e "${namedir}${stem}-${n}${ext}" ] && [ "$n" -lt 50 ]; do n=$((n+1)); done
+    dest="${namedir}${stem}-${n}${ext}"
   fi
   [ ! -e "$dest" ] || { echo "muxpad: $dest already exists; nothing saved" >&2; return 1; }
   base64 --decode < "$b64" > "$dest" 2>/dev/null || true
@@ -4963,10 +4986,25 @@ cmd_embed() {
   # list is a correct-but-useless answer. Then a unique case-insensitive
   # substring. A substring matching several is an ERROR rather than a coin
   # flip: this url gets pasted into an app and left there for months.
-  local slug
-  slug="$(printf '%s' "$tabs" | jq -r --arg q "$want" \
-    '[.[] | select((.slug == $q)
-                   or ((.name | ascii_downcase) == ($q | ascii_downcase)))] | .[0].slug // empty')"
+  # AN EXACT NAME CAN MATCH SEVERAL CHATS. `.[0]` silently picked one of two
+  # chats called "Main" — and this url gets pasted into an app and left there
+  # for months, so the wrong one is found much later by somebody wondering why
+  # their messages go nowhere. A slug is unique and still wins outright.
+  local slug exact
+  slug="$(printf '%s' "$tabs" | jq -r --arg q "$want" '[.[] | select(.slug == $q)] | .[0].slug // empty')"
+  if [ -z "$slug" ]; then
+    exact="$(printf '%s' "$tabs" | jq -r --arg q "$want" \
+      '.[] | select((.name | ascii_downcase) == ($q | ascii_downcase)) | .slug')"
+    local ne; ne="$(printf '%s' "$exact" | grep -c . || true)"
+    if [ "${ne:-0}" -gt 1 ]; then
+      echo "muxpad: $ne chats are called \"$want\"; pick one by its slug:" >&2
+      printf '%s' "$tabs" | jq -r --arg q "$want" \
+        '.[] | select((.name | ascii_downcase) == ($q | ascii_downcase))
+         | "  \(.name)  [\(.slug)]  updated \(.updated_at)"' >&2
+      return 1
+    fi
+    slug="$(printf '%s' "$exact" | head -1)"
+  fi
   if [ -z "$slug" ]; then
     local hits
     hits="$(printf '%s' "$tabs" | jq -r --arg q "$want" \
