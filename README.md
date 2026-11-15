@@ -74,12 +74,23 @@ A pane can hold a **chat-native agent session** — rendered as HTML, not a TUI 
 
 Nothing about any of that is specific to code. The question above is a shipping contract; the agent that asked it has never opened a file in a repo.
 
-## Slack access
+## Connectors: Slack and your mail
 
-All workspaces can request Slack. Configure the connection in **Settings → Integrations → Slack**.
-The isolated approval broker holds credentials and executes Slack calls only after a passkey
-approval or under an active timed grant. Denying a request does not grant access.
+**muxpad needs none of this.** Panes, chats, crons, apps and publishing work with no
+broker and no connector; skip this section until you want a chat to reach something
+outside the machine *on your behalf*.
+
+When you do, credentials live in an isolated root-owned broker running as its own
+account — never in muxpad, and never within reach of an agent. An agent asks for an
+*action*; the broker describes it, waits for a passkey approval (or an active timed
+grant), and executes it. All workspaces can request Slack; configure it in
+**Settings → Integrations → Slack**. Denying a request does not grant access.
 Workspaces organize chats; they have no tool switches or custom agent instructions.
+
+Installing the broker, wiring Slack or the mail archive, verifying each step, and the
+failures that have actually happened — with their exact error text — are in
+**[docs/connectors.md](docs/connectors.md)**. It is written to be followed by a person
+or by an agent setting it up for one.
 
 ## Pinned cards
 
