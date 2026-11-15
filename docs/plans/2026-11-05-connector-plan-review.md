@@ -132,7 +132,7 @@ expiring.
 
 D makes this worse by binding the tailnet interface. Nothing needs that: the broker
 runs on the same Mac (CHECKED: `_muxbroker` and `org.muxpad.broker.plist` are on the
-mini). The tailnet binding adds every example-tailnet device as a client and an attack
+mini). The tailnet binding adds every tailnet device as a client and an attack
 surface.
 
 Fix options:
