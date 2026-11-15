@@ -341,10 +341,30 @@ export function SlackPasskeyApproval({
       // `request` was nulled two lines up when the dialog closed; `selected`
       // is the one this result belongs to.
       setOutcomeConnector(connectorOf(selected.action));
-      const who = connectorOf(selected.action).name;
-      if (result.state === 'failed') setOutcome(`${who} request failed. Nothing was retried.`);
-      else if (result.state === 'expired') setOutcome(`${who} request expired.`);
-      else if (result.grantWarning) setOutcome('Request finished; timed access was not granted.');
+      // ── ONLY WHAT THE CARD CANNOT SAY ─────────────────────────────────
+      //
+      // This used to announce every terminal state. Each act already lands a
+      // card in the chat that carries its own outcome — that is the card's
+      // entire reason to exist — and the card is injected at the BOTTOM of
+      // the log, which is the few pixels directly above this banner. So a
+      // failure was being told twice, in two different wordings, a
+      // centimetre apart:
+      //
+      //   card:   Tried to download an email attachment · failed
+      //           The mail archive refused the attachment — 401 Invalid or
+      //           missing API key
+      //   banner: your mail request failed. Nothing was retried.   [Dismiss]
+      //
+      // The banner is the worse of the two — it names no action, gives no
+      // reason, and has to be dismissed by hand — and it was read as a
+      // separate problem: "visually I don't know if these are real errors".
+      // `expired` is the same story; the card's detail says "The request
+      // expired".
+      //
+      // A grantWarning is the exception and the reason this banner survives
+      // at all: nothing writes it to the card, so dropping it here would
+      // lose the only statement that the duration you chose did not take.
+      if (result.grantWarning) setOutcome('Request finished; timed access was not granted.');
       const snapshot = await refresh();
       if (!live()) return;
       setStatus(snapshot.status);

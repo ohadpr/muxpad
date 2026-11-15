@@ -155,11 +155,44 @@ it.each([
   await render();
   await click('Approve');
   expect(host.querySelector('dialog')!.open).toBe(false);
-  expect(host.querySelector('output.slack-passkey-inline')?.textContent).toBeTruthy();
   await act(async () => {
     await vi.advanceTimersByTimeAsync(4000);
   });
   expect(vi.mocked(passkeyAPI).mock.calls.filter(([p]) => p === 'decision')).toHaveLength(1);
+});
+
+/**
+ * ── THE BANNER SAYS ONLY WHAT THE CARD CANNOT ───────────────────────────
+ *
+ * Every act lands a card in the chat carrying its own outcome, injected at
+ * the BOTTOM of the log — the few pixels directly above this banner. So a
+ * failure was told twice, a centimetre apart, in two wordings, and the
+ * banner was the worse one: it names no action, gives no reason, and has to
+ * be dismissed by hand. Reported as "I don't know if these are real errors…
+ * there's a card above about the connection attempt that also shows failure,
+ * I don't need this."
+ *
+ * A grantWarning is why the banner still exists: nothing writes it to the
+ * card, so dropping it here would lose the only statement that the duration
+ * you picked did not take effect.
+ */
+it.each([{ state: 'failed' }, { state: 'expired' }])(
+  'says nothing the card already says: %j',
+  async (outcome) => {
+    result = { ...result, ...outcome };
+    await render();
+    await click('Approve');
+    expect(host.querySelector('output.slack-passkey-inline')?.textContent ?? '').toBe('');
+  },
+);
+
+it('still announces a duration that did not take — the card never carries it', async () => {
+  result = { ...result, state: 'complete', grantWarning: 'expired owner' };
+  await render();
+  await click('Approve');
+  expect(host.querySelector('output.slack-passkey-inline')?.textContent).toMatch(
+    /timed access was not granted/i,
+  );
 });
 it('mismatched outcome closes but stays unresolved inline and never resubmits a decision', async () => {
   const api = vi.mocked(passkeyAPI).getMockImplementation()!;
