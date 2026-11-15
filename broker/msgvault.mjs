@@ -118,10 +118,42 @@ const fail = (m) => {
 
 /** RFC3339, or a local `YYYY-MM-DDTHH:MM` paired with a zone. */
 const CAL_WHEN = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?([.+-][\d:.]+|Z)?)?$/;
-/** The account + calendar every calendar verb needs, validated once. */
+/**
+ * The account + calendar every calendar verb needs, validated once.
+ *
+ * ── AN EMAIL, OR A SOURCE IDENTIFIER, WHICH IS NOT THE SAME SHAPE ────────
+ *
+ * This was `/^[^\s@]+@[^\s@]+$/` — one address, one `@` — and that regex
+ * cannot express what msgvault calls a calendar source. `list-accounts`
+ * prints them as ACCOUNT SLASH CALENDAR:
+ *
+ *   me@example.com/me@example.com
+ *   me@example.com/work@example.com
+ *   me@example.com/c_family@group.calendar.google.com
+ *
+ * Two `@`, so every one of them was refused here — before the request
+ * reached msgvault at all — with "Give the calendar account (an email
+ * address)". Meanwhile the bare `me@example.com` that this DID accept resolves
+ * to the Gmail source, which is not a calendar, and msgvault answered every
+ * call `403 calendar operation denied: enabled calendar source is
+ * required`. The one string that could name a calendar was the one string
+ * muxpad would not send.
+ *
+ * `--account` is msgvault's own documented input ("configured calendar
+ * source name or OAuth account"), so both forms are accepted now. This is
+ * NOT the draft-side `--account` refusal being loosened: that one is about
+ * an agent choosing which identity SENDS MAIL, and it stays exactly as it
+ * is. Here the account only selects which calendar is being asked about,
+ * the verb is passed `--read-only` for the two queries, and a name the
+ * archive does not hold is refused by msgvault rather than by a guess here.
+ */
 function calendarAccount(p) {
-  if (!str(p.account, 256) || !/^[^\s@]+@[^\s@]+$/.test(String(p.account)))
-    fail('Give the calendar account (an email address)');
+  // `local@host`, optionally followed by `/<calendar-id>` — no whitespace in
+  // either half, so it stays one argv word and cannot smuggle a flag.
+  if (!str(p.account, 256) || !/^[^\s@/]+@[^\s@/]+(\/[^\s]+)?$/.test(String(p.account)))
+    fail(
+      'Give the calendar account — an email address, or the account/calendar-id that list-accounts prints',
+    );
   return { account: p.account, calendar: str(p.calendar, 256) ? p.calendar : 'primary' };
 }
 /** …plus a time window, for the two reads. */
@@ -213,6 +245,24 @@ const SPEC = {
         : fail('Give an attachment content_hash (64 hex characters, from show-message)'),
     argv: (p) => ['export-attachment', '--json', '--', p.hash],
     describe: (p) => `download one attachment (${p.hash.slice(0, 12)}…)`,
+  },
+  /**
+   * ── AND THE WHOLE MESSAGE'S WORTH, IN ONE DIALOG ──────────────────────
+   *
+   * Takes a MESSAGE id, not a hash: the broker does the `show-message`
+   * itself and fetches every `content_hash` the archive lists. The hashes
+   * therefore never pass through the agent, and the approval names the
+   * message rather than a row of hex nobody can read.
+   *
+   * `argv` is kept for shape, and is unreachable: msgvault's CLI refuses
+   * `export-attachments` in agent-delegated mode before it contacts the
+   * daemon, so the runner intercepts this action and goes over HTTP. See the
+   * long note in msgvault-runner.mjs.
+   */
+  'msgvault.export-attachments': {
+    validate: (p) => (ID.test(String(p.id ?? '')) ? { id: p.id } : fail('Give a message id')),
+    argv: (p) => ['export-attachments', '--json', '--', p.id],
+    describe: (p) => `download every attachment on message ${p.id}`,
   },
   'msgvault.stats': {
     validate: () => ({}),
@@ -362,8 +412,11 @@ const SPEC = {
    */
   'msgvault.calendar-create': {
     validate: (p) => {
-      if (!str(p.account, 256) || !/^[^\s@]+@[^\s@]+$/.test(String(p.account)))
-        fail('Give the calendar account (an email address)');
+      // THROUGH `calendarAccount`, NOT A SECOND COPY OF THE RULE. This verb
+      // had its own inlined regex, so widening the account form fixed
+      // freebusy, conflicts, update and delete and left CREATE refusing the
+      // only string that can name a calendar source. One rule, one place.
+      const base = calendarAccount(p);
       if (!str(p.summary, 500)) fail('Give the event a title');
       // RFC3339, or a local `YYYY-MM-DDTHH:MM` paired with a zone.
       const when = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?([.+-][\d:.]+|Z)?)?$/;
@@ -372,8 +425,7 @@ const SPEC = {
       if (!str(p.tz, 64)) fail('Give an IANA time zone, e.g. America/Los_Angeles');
       refuseGuests(p);
       return {
-        account: p.account,
-        calendar: str(p.calendar, 256) ? p.calendar : 'primary',
+        ...base,
         summary: p.summary,
         start: p.start,
         end: p.end,

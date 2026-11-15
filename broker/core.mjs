@@ -825,7 +825,27 @@ export class Broker {
         )
           fail('Permission changed before dispatch');
         await this.execute(r);
-        // A failed/uncertain first operation never creates a reusable grant.
+        // ── A DURATION THE OWNER CHOSE AND DID NOT GET ────────────────────
+        //
+        // A failed first operation never creates a reusable grant, and that
+        // is right: a standing permission minted off an operation nobody has
+        // seen work is a permission to do something unknown. What was wrong
+        // is that it happened SILENTLY.
+        //
+        // Measured: every msgvault attachment call was failing (a misnamed
+        // header, fixed elsewhere) and every calendar call was failing
+        // (missing Google scopes). The owner picked "until I revoke" each
+        // time, the operation failed, no grant was minted, and nothing said
+        // so — so the next identical call asked again. The report was "it
+        // keeps asking for permissions even though I pick approved until I
+        // revoke", which is exactly what it looked like from outside: a
+        // broken dialog rather than a refused operation.
+        //
+        // The inner `else` below covers the OTHER way a grant can fail to
+        // appear (session, expiry, grant limit). This covers the common one.
+        if (duration !== 'once' && r.state !== 'complete') {
+          r.grantWarning = `The ${duration} permission was NOT created: ${r.action} itself did not succeed, and a lasting permission is only minted off an operation that worked. Fix the error above and choose the duration again.`;
+        }
         // Re-check owner lifetime after asynchronous Slack execution: logout
         // or expiry while it was in flight must prevent permission activation.
         if (r.state === 'complete' && duration !== 'once') {

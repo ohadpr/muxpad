@@ -718,7 +718,7 @@ export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
    * Validating here as well would be a second opinion about what is legal,
    * and the one that matters is the one on the far side of the wall.
    */
-  // FOUR VERBS. `list-senders`, `meetings` and `person` were advertised and
+  // THE READ VERBS. `list-senders`, `meetings` and `person` were advertised and
   // cannot work against msgvault 0.22.0 — `list-senders` is refused by
   // delegated mode, the other two are parent commands with no positional and
   // no --json. Verified against the real binary; see broker/msgvault.mjs.
@@ -729,6 +729,10 @@ export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
     ['/message', 'msgvault.show-message', (q) => ({ id: q.id })],
     ['/thread', 'msgvault.show-thread', (q) => ({ id: q.id })],
     ['/attachment', 'msgvault.export-attachment', (q) => ({ hash: q.hash })],
+    // BY MESSAGE, not by hash: a content hash is learnable only from an
+    // approved read, so saving the files on one email cost two approvals and
+    // an agent carrying hex between them. The broker does the read itself.
+    ['/attachments', 'msgvault.export-attachments', (q) => ({ id: q.id })],
     ['/stats', 'msgvault.stats', () => ({})],
   ];
   for (const [path, action, payload] of ARCHIVE_ROUTES)

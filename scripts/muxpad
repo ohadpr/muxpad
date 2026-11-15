@@ -949,6 +949,9 @@ read:
   show-message <id>                         one message in full
   show-thread <id>                          the thread around a message
   attachment <content_hash> [--out=PATH]    save one attachment (hash from show-message)
+                                            --out= takes a file path OR a directory
+  attachments <message-id> [--out=DIR]      save EVERY attachment on a message,
+                                            one approval, each under its own name
   stats                                     totals only, no content
       Any other flag `msgvault <verb> --help` lists (search --offset=N,
       --mode=hybrid; show-thread --offset=N) is sent through the reviewed
@@ -1096,27 +1099,70 @@ cmd_msgvault() {
       done
       local resp; resp="$(mktemp)"
       slack_call GET "/api/msgvault/attachment?$q&hash=$hash" > "$resp" || { rm -f "$resp"; return 1; }
-      # The broker answers `{action, result:{…}}`, so every field is one level
+      # The broker answers `{action, result:{...}}`, so every field is one level
       # down. Read at the top level too, so a future flattening of the
       # envelope does not silently produce an empty file and a hash mismatch.
-      if [ -z "$out" ]; then
-        local name
-        name="$(jq -j '.result.filename // .filename // empty' "$resp" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_' | sed 's/^[._]*//' | cut -c1-120)"
-        [ -n "$name" ] || name="attachment-${hash:0:12}"
-        out="$PWD/$name"
-      fi
-      [ ! -e "$out" ] || { echo "muxpad: $out already exists; pass --out=<path>" >&2; rm -f "$resp"; return 1; }
-      jq -r '.result.data_base64 // .data_base64 // empty' "$resp" | base64 --decode > "$out" 2>/dev/null || true
-      local got; got="$(shasum -a 256 "$out" | cut -d' ' -f1)"
-      if [ ! -s "$out" ] || [ "$got" != "$hash" ]; then
-        rm -f "$out"
-        echo "muxpad: msgvault: attachment did not come back intact (hash mismatch); nothing saved" >&2
+      local b64; b64="$(mktemp)"
+      jq -j '.result.data_base64 // .data_base64 // empty' "$resp" > "$b64"
+      local nm; nm="$(jq -r '.result.filename // .filename // ""' "$resp")"
+      local path
+      if ! path="$(msgvault_save_attachment "$b64" "$nm" "$out" "$hash")"; then
         jq -c 'del(.data_base64) | del(.result.data_base64)' "$resp" >&2 2>/dev/null || true
-        rm -f "$resp"; return 1
+        rm -f "$resp" "$b64"; return 1
       fi
-      jq -n --arg path "$out" --slurpfile r "$resp" \
-        '{path:$path, filename:$r[0].filename, mime_type:$r[0].mime_type, size:$r[0].size}'
+      rm -f "$b64"
+      jq -n --arg path "$path" --slurpfile r "$resp" \
+        '{path:$path, filename:($r[0].result.filename // $r[0].filename), mime_type:($r[0].result.mime_type // $r[0].mime_type), size:($r[0].result.size // $r[0].size)}'
       rm -f "$resp" ;;
+    # ── EVERY ATTACHMENT ON A MESSAGE ───────────────────────────────────
+    # One approval, naming the message. The broker reads the message itself
+    # and fetches what it lists, so no hash has to be carried between two
+    # calls. --out takes a DIRECTORY here; each file keeps its own name.
+    attachments)
+      [ -n "${1:-}" ] || msgvault_usage
+      local mid="$1"; shift
+      local adir=""
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --out=*) adir="${1#*=}" ;;
+          *) echo "muxpad: unknown option: $1" >&2; return 1 ;;
+        esac
+        shift
+      done
+      if [ -n "$adir" ] && [ ! -d "$adir" ]; then
+        echo "muxpad: --out= wants an existing directory (got $adir)" >&2; return 1
+      fi
+      [ -z "$adir" ] || adir="${adir%/}/"
+      local aenc; aenc="$(printf '%s' "$mid" | jq -sRr @uri)"
+      local aresp; aresp="$(mktemp)"
+      slack_call GET "/api/msgvault/attachments?$q&id=$aenc" > "$aresp" || { rm -f "$aresp"; return 1; }
+      local alist='(.result.attachments // .attachments // [])'
+      local n; n="$(jq -r "$alist | length" "$aresp")"
+      if [ "${n:-0}" -eq 0 ]; then
+        jq -n --arg id "$mid" '{message_id:$id, saved:0, failed:0, paths:[], note:"no retrievable attachments on this message"}'
+        rm -f "$aresp"; return 0
+      fi
+      local i=0 nsaved=0 nfailed=0
+      local apaths; apaths="$(mktemp)"
+      while [ "$i" -lt "$n" ]; do
+        local ah anm ab64 apath
+        ah="$(jq -r --argjson i "$i" "$alist[\$i].content_hash // \"\"" "$aresp")"
+        anm="$(jq -r --argjson i "$i" "$alist[\$i].filename // \"\"" "$aresp")"
+        ab64="$(mktemp)"
+        jq -j --argjson i "$i" "$alist[\$i].data_base64 // empty" "$aresp" > "$ab64"
+        if apath="$(msgvault_save_attachment "$ab64" "$anm" "$adir" "$ah")"; then
+          printf '%s\n' "$apath" >> "$apaths"; nsaved=$((nsaved+1))
+        else
+          nfailed=$((nfailed+1))
+        fi
+        rm -f "$ab64"
+        i=$((i+1))
+      done
+      jq -n --arg id "$mid" --argjson saved "$nsaved" --argjson failed "$nfailed" \
+        --rawfile list "$apaths" \
+        '{message_id:$id, saved:$saved, failed:$failed, paths:($list|split("\n")|map(select(length>0)))}'
+      rm -f "$aresp" "$apaths"
+      [ "$nfailed" -eq 0 ] ;;
     stats)
       # msgvault's `stats` has no `--json`, which the argv path always adds,
       # and its one other flag (`--account`) is refused there anyway. So say
@@ -1386,11 +1432,74 @@ connector_action() {
     /api/msgvault/message) printf 'msgvault.show-message' ;;
     /api/msgvault/thread) printf 'msgvault.show-thread' ;;
     /api/msgvault/attachment) printf 'msgvault.export-attachment' ;;
+    /api/msgvault/attachments) printf 'msgvault.export-attachments' ;;
     /api/msgvault/draft-reply) printf 'msgvault.draft-reply' ;;
     /api/slack/*) printf 'slack.%s' "${path##*/}" ;;
     /api/msgvault/*) printf 'msgvault.%s' "${path##*/}" ;;
     *) printf '' ;;
   esac
+}
+
+# ── WRITING ONE ATTACHMENT, AS THE CALLER ─────────────────────────────────
+# The broker hands back base64 and never writes anywhere; this does, under
+# the user running muxpad. $1 base64 file, $2 the sender's filename (may be
+# empty), $3 the --out value (a file path, a directory, or empty), $4 the
+# content hash. Prints the saved path.
+#
+# THE DESTINATION MAY BE A DIRECTORY, and this is the half that was missing:
+# `--out=/tmp/scans/` was read as a FILE path, so an existing directory
+# tripped the "already exists" guard and every download refused. A trailing
+# slash or an existing directory now means "put it in there, under its own
+# name" — which is what anybody typing a directory meant.
+msgvault_save_attachment() {
+  local b64="$1" rawname="$2" out="$3" hash="$4"
+  # The sender chose this string. It is reduced to ONE plain path component —
+  # no separators, no leading dots — so it can name a file and never a place.
+  local name
+  name="$(printf '%s' "$rawname" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_' | sed 's/^[._]*//' | cut -c1-120)"
+  [ -n "$name" ] || name="attachment-${hash:0:12}"
+  # `namedir` is set only when WE chose the filename from a directory — the
+  # one case where renaming around a collision is right.
+  local dest namedir=""
+  case "$out" in
+    '') namedir="$PWD/"; dest="$PWD/$name" ;;
+    */) namedir="$out"; dest="${out}${name}" ;;
+    *) if [ -d "$out" ]; then namedir="${out%/}/"; dest="${out%/}/$name"; else dest="$out"; fi ;;
+  esac
+  # `${dest%/*}` on a path with NO slash returns the path itself, so a plain
+  # `--out=report.pdf` was tested as if it were a directory and refused with
+  # "no such directory: report.pdf". A name with no separator is a file in the
+  # current directory, which is what anyone typing it meant.
+  local dir=""
+  case "$dest" in */*) dir="${dest%/*}" ;; esac
+  if [ -n "$dir" ] && [ ! -d "$dir" ]; then
+    echo "muxpad: no such directory: $dir" >&2; return 1
+  fi
+  # ── TWO ATTACHMENTS CALLED image.png ──────────────────────────────────
+  # One message can carry several files with the SAME sender-chosen name, and
+  # refusing the second lost it: `attachments` reported `failed: 1` with
+  # nothing to retry by hand. A collision inside a DIRECTORY gets a suffix —
+  # `image.png`, `image-2.png` — which is what every browser does. An explicit
+  # `--out=<file>` still refuses, because there the name was the caller's
+  # choice and silently writing elsewhere would be worse.
+  if [ -e "$dest" ] && [ -n "$namedir" ]; then
+    local stem ext n=2
+    case "$name" in
+      ?*.*) stem="${name%.*}"; ext=".${name##*.}" ;;
+      *) stem="$name"; ext="" ;;
+    esac
+    while [ -e "${namedir}${stem}-${n}${ext}" ] && [ "$n" -lt 50 ]; do n=$((n+1)); done
+    dest="${namedir}${stem}-${n}${ext}"
+  fi
+  [ ! -e "$dest" ] || { echo "muxpad: $dest already exists; nothing saved" >&2; return 1; }
+  base64 --decode < "$b64" > "$dest" 2>/dev/null || true
+  local got; got="$(shasum -a 256 "$dest" | cut -d' ' -f1)"
+  if [ ! -s "$dest" ] || [ "$got" != "$hash" ]; then
+    rm -f "$dest"
+    echo "muxpad: msgvault: attachment ${hash:0:12}... did not come back intact (hash mismatch); nothing saved" >&2
+    return 1
+  fi
+  printf '%s\n' "$dest"
 }
 
 slack_call() {
@@ -4822,6 +4931,106 @@ base_note_line() {
   return 0
 }
 
+# ── EMBEDDING A CHAT IN ONE OF YOUR OWN APPS ──────────────────────────────
+#
+# The apps on this machine are each built by a muxpad chat, and the useful
+# place to talk to that chat is the app itself — a tab in Notes that holds
+# the Notes chat, so a change is made from inside the thing being changed.
+#
+# muxpad's side of that is one search param (`?embed=1`, see web/src/lib/
+# embed.ts) and this verb, which answers the only hard question: WHICH URL.
+# Not the loopback one the CLI talks to — an app opened from a phone over the
+# tailnet cannot frame 127.0.0.1, and an https app cannot frame http at all.
+# The tailnet name is derived the same prompt-free way publish derives it.
+cmd_embed() {
+  local want="${1:-}"
+  local base="${FLAG_base:-}"
+  if [ -z "$base" ]; then
+    local host; host="$(tailnet_hostname)"
+    # No port: the cockpit is served at the tailnet root (unlike publish,
+    # which lives behind Funnel on :8443). Loopback only if there is no
+    # tailnet name — which still works for an app on this machine.
+    if [ -n "$host" ]; then base="https://$host"; else base="${MUXPAD_API_URL%/}"; fi
+  fi
+  base="${base%/}"
+
+  local workspace_id="${FLAG_workspace:-${MUXPAD_WORKSPACE_ID:-}}"
+  local ws
+  if [ -n "$workspace_id" ]; then
+    ws="$(http_request GET "/api/workspaces" | jq -r --arg id "$workspace_id" \
+      '.[] | select(.id == $id) | .slug' | head -1)"
+  else
+    ws="$(http_request GET "/api/workspaces" | jq -r '[.[] | select(.hidden | not)][0].slug // empty')"
+    workspace_id="$(http_request GET "/api/workspaces" | jq -r '[.[] | select(.hidden | not)][0].id // empty')"
+  fi
+  [ -n "$ws" ] || { echo 'muxpad: no workspace to embed from' >&2; return 1; }
+
+  local tabs; tabs="$(http_request GET "/api/tabs?workspaceId=$workspace_id")"
+  if [ -z "$want" ]; then
+    # The list IS the picker: a chat with the url to paste beside it, so
+    # choosing one is reading a line rather than looking an id up elsewhere.
+    # CAPPED, because this workspace has 597 tabs and a 597-line answer to
+    # "how do I embed a chat" is not an answer. Most recently touched first,
+    # which is where the chat for an app you are working on will be.
+    printf '%s\n' "$tabs" | jq -r --arg b "$base" --arg w "$ws" \
+      '[.[] | select(.done | not)] | sort_by(-.updated_at) | .[:20][]
+       | "\(.name)\t\($b)/w/\($w)/t/\(.slug)?embed=1"' \
+      | column -t -s "$(printf '\t')"
+    echo
+    echo "20 most recent. For any other: muxpad embed <chat name>" >&2
+    return 0
+  fi
+
+  # Exact slug or name first — CASE-INSENSITIVELY, because `rapaport` refusing
+  # as "matches 5 chats" while a chat called exactly `Rapaport` sits in the
+  # list is a correct-but-useless answer. Then a unique case-insensitive
+  # substring. A substring matching several is an ERROR rather than a coin
+  # flip: this url gets pasted into an app and left there for months.
+  # AN EXACT NAME CAN MATCH SEVERAL CHATS. `.[0]` silently picked one of two
+  # chats called "Main" — and this url gets pasted into an app and left there
+  # for months, so the wrong one is found much later by somebody wondering why
+  # their messages go nowhere. A slug is unique and still wins outright.
+  local slug exact
+  slug="$(printf '%s' "$tabs" | jq -r --arg q "$want" '[.[] | select(.slug == $q)] | .[0].slug // empty')"
+  if [ -z "$slug" ]; then
+    exact="$(printf '%s' "$tabs" | jq -r --arg q "$want" \
+      '.[] | select((.name | ascii_downcase) == ($q | ascii_downcase)) | .slug')"
+    local ne; ne="$(printf '%s' "$exact" | grep -c . || true)"
+    if [ "${ne:-0}" -gt 1 ]; then
+      echo "muxpad: $ne chats are called \"$want\"; pick one by its slug:" >&2
+      printf '%s' "$tabs" | jq -r --arg q "$want" \
+        '.[] | select((.name | ascii_downcase) == ($q | ascii_downcase))
+         | "  \(.name)  [\(.slug)]  updated \(.updated_at)"' >&2
+      return 1
+    fi
+    slug="$(printf '%s' "$exact" | head -1)"
+  fi
+  if [ -z "$slug" ]; then
+    local hits
+    hits="$(printf '%s' "$tabs" | jq -r --arg q "$want" \
+      '[.[] | select(.name | ascii_downcase | contains($q | ascii_downcase))] | .[].slug')"
+    local n; n="$(printf '%s' "$hits" | grep -c . || true)"
+    if [ "${n:-0}" -gt 1 ]; then
+      echo "muxpad: \"$want\" matches $n chats; use the exact name or slug:" >&2
+      printf '%s' "$tabs" | jq -r --arg q "$want" \
+        '.[] | select(.name | ascii_downcase | contains($q | ascii_downcase)) | "  \(.name)  [\(.slug)]"' >&2
+      return 1
+    fi
+    slug="$(printf '%s' "$hits" | head -1)"
+  fi
+  [ -n "$slug" ] || { echo "muxpad: no chat matching \"$want\"" >&2; return 1; }
+
+  local url="$base/w/$ws/t/$slug?embed=1"
+  if [ "${JSON_OUTPUT:-0}" = 1 ]; then
+    jq -n --arg url "$url" --arg slug "$slug" --arg ws "$ws" \
+      '{url:$url, workspace:$ws, chat:$slug}'
+    return 0
+  fi
+  printf '%s\n\n' "$url"
+  # The snippet, because the point of the verb is that the next step is paste.
+  printf '%s\n' "<iframe src=\"$url\" style=\"width:100%;height:100%;border:0\" allow=\"clipboard-write\"></iframe>"
+}
+
 publish_base_url() {
   # probe=0: this is a pure DB question, and the probing variant walks every
   # candidate at up to 2.5s each — a dead tunnel would blow the 2s budget below,
@@ -5652,6 +5861,18 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                      a terminal underneath
   app rm <slug>                      unregister and take it down
 
+  embed [<chat>] [--base=<url>]      print the url that embeds a chat in one
+                                     of your own apps, plus the <iframe> to
+                                     paste. No argument lists the 20 most
+                                     recent chats with their urls. The url is
+                                     the chat's ordinary one with ?embed=1,
+                                     which hides muxpad's sidebar and top bar
+                                     and nothing else — so you can open it
+                                     yourself to check. Uses this machine's
+                                     tailnet name (not loopback), because an
+                                     https app cannot frame http and a phone
+                                     cannot reach 127.0.0.1.
+
   publish <file-or-dir> [--name=slug]
                                      host a copy of the file/dir at a PUBLIC
                                      internet URL (Tailscale Funnel, no
@@ -5794,6 +6015,7 @@ case "$VERB" in
   msgvault) cmd_msgvault "${ARGS[@]:1}" ;;
   card) cmd_card "${ARGS[@]:1}" ;;
   publish) cmd_publish "${ARGS[@]:1}" ;;
+  embed) cmd_embed "${ARGS[@]:1}" ;;
   node) cmd_node "${ARGS[@]:1}" ;;
   _agent-hook) cmd_agent_hook ;;
   # Internal: print which tailscale binary this script would use, or nothing.

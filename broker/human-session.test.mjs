@@ -299,11 +299,18 @@ test('timed approval allows future supported actions across destinations in the 
     'complete',
   );
   assert.equal(
-    (await f.broker.create({ origin: 'local', action: 'slack.unpost', payload: { ref: 'C123', ts: '1.2' } })).state,
+    (
+      await f.broker.create({
+        origin: 'local',
+        action: 'slack.unpost',
+        payload: { ref: 'C123', ts: '1.2' },
+      })
+    ).state,
     'complete',
   );
   assert.equal(
-    (await f.broker.create({ origin: 'local', action: 'slack.read', payload: { ref: 'C123' } })).state,
+    (await f.broker.create({ origin: 'local', action: 'slack.read', payload: { ref: 'C123' } }))
+      .state,
     'complete',
   );
   f.config.teamID = 'T_OTHER';
@@ -477,7 +484,13 @@ test('full-team timed permission includes different queries and result limits', 
     'complete',
   );
   assert.equal(
-    (await f.broker.create({ origin: 'local', action: 'slack.search', payload: { query: 'all', limit: 5 } })).state,
+    (
+      await f.broker.create({
+        origin: 'local',
+        action: 'slack.search',
+        payload: { query: 'all', limit: 5 },
+      })
+    ).state,
     'complete',
   );
 });
@@ -553,7 +566,13 @@ test('full-team scope safely supports different Unicode search queries', async (
     session: f.state.humanSessions[0],
   });
   assert.equal(
-    (await f.broker.create({ origin: 'local', action: 'slack.search', payload: { query: 'a', limit: 5 } })).state,
+    (
+      await f.broker.create({
+        origin: 'local',
+        action: 'slack.search',
+        payload: { query: 'a', limit: 5 },
+      })
+    ).state,
     'complete',
   );
 });
@@ -644,6 +663,48 @@ test('initial in-flight success cannot activate a permission after elapsed deadl
   assert.ok(result.grantWarning);
 });
 
+test('a duration chosen for an operation that FAILS says the permission was not created', async () => {
+  // THE REPORT: "it keeps asking for permissions even though I pick approved
+  // until I revoke". It was not the dialog. Every call was failing — a
+  // misnamed msgvault header, then missing Google calendar scopes — and a
+  // failed operation deliberately mints no grant. The deliberate part was
+  // fine; the SILENT part meant it looked like a broken dialog instead of a
+  // refused operation, and sent the investigation to the wrong place.
+  const f = fixture();
+  f.pair();
+  const r = await request(f);
+  f.broker.slack = async () => {
+    throw new Error('channel_not_found');
+  };
+  const result = await f.broker.decideSession(r.id, r.fingerprint, 'approve', {
+    duration: 'until-revoked',
+    scope: 'slack-team-all-v2',
+    session: f.state.humanSessions[0],
+  });
+  assert.equal(result.state, 'failed');
+  assert.equal(f.broker.listGrants().length, 0, 'a failed operation mints no grant');
+  assert.match(result.grantWarning ?? '', /NOT created/);
+  // It must name the duration the owner actually picked, so the sentence
+  // answers the question they are about to ask.
+  assert.match(result.grantWarning ?? '', /until-revoked/);
+});
+
+test('an approve-once that fails does not claim a permission was withheld', async () => {
+  // There was never a permission to create, so the warning would be noise.
+  const f = fixture();
+  f.pair();
+  const r = await request(f);
+  f.broker.slack = async () => {
+    throw new Error('channel_not_found');
+  };
+  const result = await f.broker.decideSession(r.id, r.fingerprint, 'approve', {
+    duration: 'once',
+    session: f.state.humanSessions[0],
+  });
+  assert.equal(result.state, 'failed');
+  assert.equal(result.grantWarning, undefined);
+});
+
 test('elapsed session cap prevents sparse rollback extending an active one-day grant', async () => {
   const f = fixture();
   f.pair();
@@ -721,10 +782,16 @@ test('explicit timed channel listing permits exactly all five actions for this t
   ]);
   assert.equal(f.broker.listGrants()[0].permissionScope, 'slack-team-all-v2');
   assert.equal(f.broker.listGrants()[0].teamID, 'T123');
-  await assert.rejects(f.broker.create({ origin: 'local', action: 'slack.future-admin-action', payload: {} }));
+  await assert.rejects(
+    f.broker.create({ origin: 'local', action: 'slack.future-admin-action', payload: {} }),
+  );
   f.config.teamID = 'T_OTHER';
   for (const [action, payload] of supportedInputs)
-    assert.equal((await f.broker.create({ origin: 'local', action, payload })).state, 'pending', action);
+    assert.equal(
+      (await f.broker.create({ origin: 'local', action, payload })).state,
+      'pending',
+      action,
+    );
   assert.equal(f.broker.view(queued.id).teamID, 'T123');
   await assert.rejects(f.broker.decideSession(queued.id, queued.fingerprint, 'approve'));
 });
@@ -783,7 +850,11 @@ test('team-wide grants never override channel policy, including changes during t
   await allowTimed(f);
   f.config.channels = ['C123'];
   await assert.rejects(
-    f.broker.create({ origin: 'local', action: 'slack.post', payload: { ref: 'C456', text: 'Forbidden' } }),
+    f.broker.create({
+      origin: 'local',
+      action: 'slack.post',
+      payload: { ref: 'C456', text: 'Forbidden' },
+    }),
   );
   await assert.rejects(
     f.broker.create({ origin: 'local', action: 'slack.search', payload: { query: 'Forbidden' } }),
@@ -810,10 +881,10 @@ for (const boundary of ['expiry', 'revoke', 'logout', 'restart'])
     const broker =
       boundary === 'restart'
         ? new Broker({
-    // UNSCOPED, INJECTED. The broker reads the host policy itself now, and a
-    // test that fell through to the real /Library/muxpad/connectors.json would
-    // pass or fail on the state of the machine it runs on.
-    hostPolicy: () => ({ enforce: false, allow: {} }),
+            // UNSCOPED, INJECTED. The broker reads the host policy itself now, and a
+            // test that fell through to the real /Library/muxpad/connectors.json would
+            // pass or fail on the state of the machine it runs on.
+            hostPolicy: () => ({ enforce: false, allow: {} }),
             config: f.config,
             state: f.state,
             save: () => {},
@@ -823,6 +894,10 @@ for (const boundary of ['expiry', 'revoke', 'logout', 'restart'])
           })
         : f.broker;
     for (const [action, payload] of supportedInputs)
-      assert.equal((await broker.create({ origin: 'local', action, payload })).state, 'pending', action);
+      assert.equal(
+        (await broker.create({ origin: 'local', action, payload })).state,
+        'pending',
+        action,
+      );
     assert.equal(f.calls.length, 1);
   });

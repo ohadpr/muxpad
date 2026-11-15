@@ -91,7 +91,7 @@ export const MSGVAULT = Object.freeze({
   label: 'your mail',
   readScope: 'msgvault-read-v1',
   fullScope: 'msgvault-all-v1',
-  // FOUR READS. `list-senders`, `meetings` and `person` cannot work against
+  // THE READS. `list-senders`, `meetings` and `person` cannot work against
   // agent-delegated msgvault — `person get` answers "not available in
   // agent-delegated mode", and the agent-token permission list has no
   // contacts scope at all (search.read, message.read, attachment.read,
@@ -102,6 +102,7 @@ export const MSGVAULT = Object.freeze({
     'msgvault.show-message',
     'msgvault.show-thread',
     'msgvault.export-attachment',
+    'msgvault.export-attachments',
     'msgvault.stats',
     'msgvault.calendar-freebusy',
     'msgvault.calendar-conflicts',

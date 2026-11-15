@@ -1,4 +1,10 @@
-import { type ChatAction, actionIntegration, finishedWord } from '@muxpad/shared';
+import {
+  type ChatAction,
+  actionIntegration,
+  actionIsRead,
+  finishedWord,
+  titleForState,
+} from '@muxpad/shared';
 import { useState } from 'react';
 import './ActionCard.css';
 import { SlackLogo } from './SlackLogo';
@@ -54,7 +60,11 @@ export function ActionCard({ action }: ActionCardProps) {
       </span>
       <div className="action-card__body">
         <div className="action-card__head">
-          <span className="action-card__title">{action.title}</span>
+          {/* THE VERB FOLLOWS THE STATE. A title is written in the past
+              tense for the common case that it worked; on a failed card that
+              put the false half in bold and the correction in small grey
+              beside it. See titleForState. */}
+          <span className="action-card__title">{titleForState(action.title, action.state)}</span>
           {/* The state is a WORD, not a colour alone — the dot beside it is the
               same fact for a glance, and the two together survive both a
               colourblind reader and a greyscale screenshot. */}
@@ -75,7 +85,9 @@ export function ActionCard({ action }: ActionCardProps) {
               aria-expanded={open}
               onClick={() => setOpen((o) => !o)}
             >
-              {open ? 'Hide message' : 'Show message'}
+              {/* A READ folds its handle, not a message: the attachment card
+                  offered to "Show message" and revealed a content hash. */}
+              {`${open ? 'Hide' : 'Show'} ${actionIsRead(action) ? 'details' : 'message'}`}
             </button>
             {open ? <pre className="action-card__text">{body}</pre> : null}
           </>

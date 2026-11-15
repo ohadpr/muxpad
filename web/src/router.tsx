@@ -44,9 +44,22 @@ const tabRoute = createRoute({
   // pane at once, so it ignores this. TabView owns reading + syncing it.
   validateSearch: (
     search: Record<string, unknown>,
-  ): { pane?: string | undefined; slackNoticeCapture?: string | undefined } => ({
+  ): {
+    pane?: string | undefined;
+    slackNoticeCapture?: string | undefined;
+    embed?: '1' | undefined;
+  } => ({
     pane: typeof search.pane === 'string' && search.pane ? search.pane : undefined,
     slackNoticeCapture: noticeCaptureNonce(search.slackNoticeCapture),
+    // ── `embed` HAS TO SURVIVE THIS FUNCTION ──────────────────────────────
+    // Unlisted params are DROPPED, and TabView rewrites the search on mount
+    // to reflect the active pane. So `?embed=1` lived exactly until the first
+    // render, and any reload of the iframe — a pull-to-refresh, a crash, the
+    // PWA restoring — came back as the FULL COCKPIT inside somebody's app:
+    // sidebar, tab bar and all. lib/embed latches the flag at boot, which is
+    // why the first paint was always right and the bug only showed on the
+    // second load.
+    embed: search.embed === '1' ? '1' : undefined,
   }),
   component: () => null,
 });

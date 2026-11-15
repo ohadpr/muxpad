@@ -143,6 +143,10 @@ test('only verbs that work against 0.22.0 are offered', () => {
       'msgvault.show-message',
       'msgvault.show-thread',
       'msgvault.export-attachment',
+      // The same bytes, reached from a MESSAGE id instead of a hash — the
+      // hash is learnable only from a read, so this grants nothing more and
+      // costs one dialog instead of two.
+      'msgvault.export-attachments',
       'msgvault.stats',
       'msgvault.calendar-freebusy',
       'msgvault.calendar-conflicts',
@@ -170,6 +174,10 @@ test('only verbs that work against 0.22.0 are offered', () => {
       'msgvault.show-message',
       'msgvault.show-thread',
       'msgvault.export-attachment',
+      // The same bytes, reached from a MESSAGE id instead of a hash — the
+      // hash is learnable only from a read, so this grants nothing more and
+      // costs one dialog instead of two.
+      'msgvault.export-attachments',
       'msgvault.stats',
       // The calendar QUERIES. `calendar.*` is in the agent-token permission
       // list above, and these two only ask questions of it — the tool is
@@ -479,6 +487,55 @@ test('a calendar event is created with no guests and no reminders', () => {
     'The park',
   ]);
   assert.ok(!args.some((x) => ['--attendees', '--reminder', '--rrule'].includes(x)));
+});
+
+test('a calendar source identifier is accepted, not only a bare address', () => {
+  // THE BUG: msgvault names a calendar source ACCOUNT/CALENDAR —
+  // `me@example.com/me@example.com` is what list-accounts prints — and the old
+  // one-`@` regex refused every one of them here, before the request left
+  // muxpad. The bare address it did accept resolves to the GMAIL source, so
+  // msgvault answered `403 … enabled calendar source is required`. The only
+  // string that could work was the only string muxpad would not send.
+  for (const account of [
+    'me@example.com',
+    'me@example.com/me@example.com',
+    'me@example.com/work@example.com',
+    'me@example.com/c_family@group.calendar.google.com',
+  ]) {
+    const p = validateMsgvault('msgvault.calendar-freebusy', {
+      account,
+      start: '2026-11-14T09:00',
+      end: '2026-11-14T18:00',
+      tz: 'America/Los_Angeles',
+    });
+    assert.equal(p.account, account, account);
+    // It reaches msgvault as ONE argv word, right after --account.
+    const { args } = msgvaultArgv('msgvault.calendar-freebusy', p, INSTALL);
+    assert.equal(args[args.indexOf('--account') + 1], account);
+  }
+});
+
+test('a calendar account still cannot be a flag, a sentence, or empty', () => {
+  for (const account of [
+    '',
+    'no-at-sign',
+    'a@b c',
+    'a@b/with space',
+    '--from=2026-01-01',
+    'a@b/x --from=y',
+  ]) {
+    assert.throws(
+      () =>
+        validateMsgvault('msgvault.calendar-freebusy', {
+          account,
+          start: '2026-11-14T09:00',
+          end: '2026-11-14T18:00',
+          tz: 'America/Los_Angeles',
+        }),
+      /calendar account/,
+      JSON.stringify(account),
+    );
+  }
 });
 
 test('asking for guests is REFUSED, not quietly dropped', () => {

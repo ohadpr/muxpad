@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { VERBS, classify, verbsOf } from './registry.js';
 
@@ -138,23 +141,46 @@ describe('the verbs that reach other people', () => {
 describe('the table itself', () => {
   it('groups by connector', () => {
     expect(verbsOf('slack').length).toBeGreaterThan(5);
-    // FIFTEEN: seven reads (search, message, thread, attachment, stats and
-    // two calendar queries), the
-    // five draft verbs — compose, reply, get, edit, delete — and one
-    // calendar write that notifies nobody. Three advertised verbs could not work against
-    // agent-delegated msgvault and were removed rather than repaired, and a
-    // compose verb went the same way once a Gmail source was measured
-    // refusing it — see the note on MSGVAULT.
-    expect(verbsOf('msgvault')).toHaveLength(16);
+    // SEVENTEEN: eight reads (search, message, thread, one attachment, ALL
+    // of a message's attachments, stats and two calendar queries), the five
+    // draft verbs — compose, reply, get, edit, delete — and one calendar
+    // write that notifies nobody. Three advertised verbs could not work
+    // against agent-delegated msgvault and were removed rather than
+    // repaired, and a compose verb went the same way once a Gmail source was
+    // measured refusing it — see the note on MSGVAULT.
+    expect(verbsOf('msgvault')).toHaveLength(17);
     expect(verbsOf('slack').every((v) => v.startsWith('slack.'))).toBe(true);
     // A prefix that is not a connector gets nothing, rather than everything.
     expect(verbsOf('')).toEqual([]);
     expect(verbsOf('slac')).toEqual([]);
   });
 
+  /**
+   * ── A VERB THE BROKER CAN DISPATCH AND THIS TABLE CANNOT NAME ──────────
+   *
+   * `classify` fails closed with "muxpad does not know the verb X, so it
+   * cannot say what approving it would allow" — correct, and a dead end for
+   * the caller: the approval dialog has nothing to describe, so the action
+   * can never be approved however many times you ask.
+   *
+   * That is what `msgvault.export-attachments` did on its first outing. It
+   * was added to the broker, the CLI, the server route and the capability
+   * list — four places — and this was a fifth nobody remembered. A
+   * conformance test written in the same commit covered the first three and
+   * missed this one, so it shipped green.
+   *
+   * NOT `.ok`: the table deliberately refuses some verbs it knows about
+   * (see the calendar-invite case above), and a refusal with a reason is a
+   * working answer. The thing being asserted is that the verb is KNOWN.
+   */
+  const known = (v: string) => !/does not know the verb/.test(classify(v).reason ?? '');
+
   it('covers every Slack action the broker knows', () => {
-    // The broker's TEAM_ACTIONS is the live vocabulary; a verb it can dispatch
-    // and muxpad cannot classify would be refused at the wrong end.
+    // The broker's TEAM_ACTIONS is the live vocabulary.
+    //
+    // This used to assert `classify(v).ok || classify(v).reason`, which is
+    // truthy for EVERY string — an unknown verb returns a reason too — so it
+    // passed for anything, including the verbs it exists to catch.
     for (const v of [
       'slack.post',
       'slack.unpost',
@@ -168,7 +194,28 @@ describe('the table itself', () => {
       'slack.edit',
       'slack.upload',
     ])
-      expect(classify(v).ok || classify(v).reason, v).toBeTruthy();
+      expect(known(v), v).toBe(true);
+  });
+
+  it('covers every msgvault action the broker offers', () => {
+    // Read from the broker's own capability list rather than copied here:
+    // a list maintained in two places is the defect this test is about.
+    const caps = readFileSync(
+      resolve(
+        dirname(fileURLToPath(import.meta.url)),
+        '..',
+        '..',
+        '..',
+        'broker',
+        'capabilities.mjs',
+      ),
+      'utf8',
+    );
+    const offered = [
+      ...new Set([...caps.matchAll(/'(msgvault\.[a-z-]+)'/g)].flatMap((m) => m[1] ?? [])),
+    ];
+    expect(offered.length).toBeGreaterThan(10);
+    for (const v of offered) expect(known(v), v).toBe(true);
   });
 });
 
@@ -201,6 +248,7 @@ describe('the table is the policy, so the table is pinned', () => {
     'msgvault.show-message': { kind: 'read', timed: true },
     'msgvault.show-thread': { kind: 'read', timed: true },
     'msgvault.export-attachment': { kind: 'read', timed: true },
+    'msgvault.export-attachments': { kind: 'read', timed: true },
     'msgvault.stats': { kind: 'read', timed: true },
     // THE ONE WRITE. `others: false` is the point of listing it beside
     // Slack's: a draft lands in the owner's own mailbox and nobody else

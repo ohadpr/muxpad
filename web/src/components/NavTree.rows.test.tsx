@@ -245,6 +245,30 @@ describe('the sheet’s rows', () => {
     );
   };
 
+  it('carries the working weight on the sheet, which is a SECOND copy of it', () => {
+    // The sidebar and the sheet are different functions with their own copy
+    // of the row's attributes — that duplication is exactly how the mobile
+    // rail fell behind the desktop one before. The working-weight tests only
+    // ever rendered the SIDEBAR, so the sheet's copy was never executed.
+    const html = sheetHtml([tab('busy', { status: 'working' } as Partial<Tab>)]);
+    expect(html).toContain('data-working="true"');
+  });
+
+  it('leaves the sheet row you are on alone, like the sidebar does', () => {
+    TABS = [tab('busy', { status: 'working' } as Partial<Tab>)];
+    const html = renderToStaticMarkup(
+      <TabList
+        workspace={WS}
+        isActiveWorkspace={true}
+        activeTabSlug="busy"
+        variant="sheet"
+        editing={null}
+        setEditing={() => {}}
+      />,
+    );
+    expect(html).not.toContain('data-working="true"');
+  });
+
   it('draws it ON THE SHEET TOO — the surface that has nothing else to say it', () => {
     // Reported: "mobile sidebar render doesn't include many recent changes to
     // desktop, for example I don't see pinned chat indicators". It was exactly
@@ -395,7 +419,29 @@ describe('a recently-active row carries its workspace', () => {
   const tsx = readFileSync(join(__dirname, 'NavTree.tsx'), 'utf8');
   const css = readFileSync(join(__dirname, 'NavTree.css'), 'utf8');
   const row = tsx.slice(tsx.indexOf('function WorkingSetRow'));
-  const body = row.slice(0, row.indexOf('\nfunction '));
+  // COMMENTS STRIPPED. These matched the raw source, and the attributes they
+  // assert sit directly under a long `//` comment that NAMES them — so
+  // commenting the code out left every assertion green. Stripping first means
+  // the test can only see code.
+  const body = row
+    .slice(0, row.indexOf('\nfunction '))
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
+
+  it('wears the same weight marks as a row in the tree', () => {
+    // REPORTED: "recently active list doesn't show active chats with unread
+    // treatment visual". The band's row already carries `.navtree-tab-row`
+    // and its name is a `.navtree-name-text`, so the weight rules applied to
+    // it all along — it simply never set the attributes that trigger them.
+    // The same chat was bold in the tree and plain in the band.
+    expect(body).toMatch(/data-unread=\{tab\.unread/);
+    expect(body).toMatch(/data-working=\{tab\.status === 'working'/);
+  });
+
+  it('excludes the row you are on from the working mark, like the tree does', () => {
+    // Bold means "come back to this"; the band's active row is where you are.
+    expect(body).toMatch(/data-working=\{tab\.status === 'working' && !active/);
+  });
 
   it('prints it AFTER the chat name, on the same line', () => {
     // It was a prefix. A rail is scanned down its left edge — the same
@@ -659,5 +705,59 @@ describe('the age is not on the row you are in', () => {
 
   it('and nowhere else — every other row still says when', () => {
     expect(rule(css, '.navtree-slot-age')).not.toMatch(/display:\s*none/);
+  });
+});
+
+/**
+ * ── A CHAT THAT IS STILL GOING KEEPS THE WEIGHT ──────────────────────────
+ *
+ * Bold answers one question down a long sidebar: which of these rows has
+ * something for me. A turn that just finished answers it; so does a turn
+ * still running. Before this, a working chat sat at reading weight and was
+ * indistinguishable at a glance from forty idle ones — "active chats should
+ * retain the 'unread' treatment, it's a good indicator".
+ */
+describe('a working chat carries the unread weight', () => {
+  it('marks a chat whose agent is mid-turn', () => {
+    const html = railHtml([tab('busy', { status: 'working' } as Partial<Tab>)]);
+    expect(html).toContain('data-working="true"');
+  });
+
+  it('does not mark the chat you are already looking at', () => {
+    // Bold means "come back to this". You are here.
+    const html = railHtml([tab('busy', { status: 'working' } as Partial<Tab>)], 'busy');
+    expect(html).not.toContain('data-working="true"');
+    expect(html).toContain('data-active="true"');
+  });
+
+  it('leaves every other state at reading weight', () => {
+    for (const status of ['idle', 'ready', 'dead', undefined])
+      expect(railHtml([tab('t', { status } as Partial<Tab>)]), String(status)).not.toContain(
+        'data-working="true"',
+      );
+  });
+
+  it('shares the unread rule rather than inventing a second weight', () => {
+    // The gap a DOM-only test leaves: the attribute can render correctly and
+    // style nothing. Both surfaces have their own weight rule, and the sheet
+    // one was already a separate block — so both are checked.
+    const css = readFileSync(join(__dirname, 'NavTree.css'), 'utf8');
+    // ANCHORED TO THE LINE START. A bare `includes` of the sidebar selector
+    // also matches inside the sheet's, so deleting the sidebar rule left the
+    // test green — which it did, on the first attempt.
+    for (const [label, re] of [
+      ['sidebar', /^\.navtree-tab-row\[data-working="true"\] \.navtree-name-text/m],
+      [
+        'sheet',
+        /^\.navtree\[data-variant="sheet"\] \.navtree-tab-row\[data-working="true"\] \.navtree-name-text/m,
+      ],
+    ] as const)
+      expect(re.test(css), label).toBe(true);
+  });
+
+  it('is independent of the unread mark — a row can be both', () => {
+    const html = railHtml([tab('busy', { status: 'working', unread: true } as Partial<Tab>)]);
+    expect(html).toContain('data-working="true"');
+    expect(html).toContain('data-unread="true"');
   });
 });

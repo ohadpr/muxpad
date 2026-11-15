@@ -119,7 +119,7 @@ import {
 } from '../lib/chat-voice';
 import { canAutoPageHistory, showLoadEarlier } from '../lib/history-budget';
 import { NO_SENDERS, loadInboundSenders, matchInboundSenders } from '../lib/inbound-senders';
-import { sheetLinkFor } from '../lib/link-sheet';
+import { checkFrame, linkRoute, sheetLinkFor } from '../lib/link-sheet';
 import { showFolderChip } from '../lib/nav-row-affordances';
 import { type WorkspaceTabs, paneIndex } from '../lib/nav-search';
 import { type SendGuard, freshGuard, isDoubleFire } from '../lib/one-send';
@@ -1165,14 +1165,21 @@ export function ChatPane({
     open: openBrowser,
     modal: browserModal,
   } = useBrowsers({ by: paneId, tabId: myChat?.tabId ?? '' });
-  // A link tapped in a message opens in a sheet over the chat — muxpad's own
-  // `links` browser, never this chat's agent browser. See lib/link-sheet.
+  // A link tapped in a message opens in a sheet over the chat when the page can
+  // be framed, and otherwise is left to its own target=_blank — the OS browser.
+  // See lib/link-sheet.
   const [sheetLink, setSheetLink] = useState<string | null>(null);
   const onLinkClick = useCallback((e: React.MouseEvent) => {
     const url = sheetLinkFor(e, window.location.origin);
-    if (!url) return;
+    if (!url || linkRoute(url, window.location.origin, isMobileLayout()) === 'native') return;
     e.preventDefault();
     setSheetLink(url);
+  }, []);
+  // Ask about framing as the finger lands, so the click usually knows already.
+  const onLinkPointerDown = useCallback((e: React.PointerEvent) => {
+    const url = sheetLinkFor(e, window.location.origin);
+    if (url && linkRoute(url, window.location.origin, isMobileLayout()) === 'sheet')
+      void checkFrame(url, window.location.origin);
   }, []);
   // What this chat did to the outside world — a Slack message sent, and
   // whatever integrations come next. Same shape as the browsers above: the
@@ -5496,6 +5503,7 @@ export function ChatPane({
         className="chat-pane"
         ref={paneRef}
         onClickCapture={onLinkClick}
+        onPointerDownCapture={onLinkPointerDown}
         data-slack-chat-pane={paneId}
         data-slack-active={active}
         data-slack-session={!!session?.current_sid}
@@ -5596,9 +5604,7 @@ export function ChatPane({
           rather than beside a card because the card that opened it may scroll
           away — or be unmounted by a poll — while the modal is still open. */}
         {browserModal}
-        {sheetLink ? (
-          <LinkSheet url={sheetLink} by={paneId} onClose={() => setSheetLink(null)} />
-        ) : null}
+        {sheetLink ? <LinkSheet url={sheetLink} onClose={() => setSheetLink(null)} /> : null}
         {/* We were asked to show WHERE the term is, and could not — so say so.
           Silently landing on an unchanged chat is the one outcome that reads as
           a broken search. Floats over the transcript rather than sitting in the

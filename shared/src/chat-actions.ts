@@ -144,3 +144,62 @@ export function finishedWord(kind: string): string {
   if (READ_ACTIONS.has(kind)) return 'done';
   return DONE_WORDS[kind] ?? 'sent';
 }
+
+/**
+ * ── A CARD MUST NOT SAY A THING HAPPENED WHEN IT DID NOT ──────────────────
+ *
+ * Every title is written in the past tense, because the common case is an act
+ * that worked: "Posted to #eng", "Downloaded an email attachment". The state
+ * word beside it carries the outcome.
+ *
+ * On a FAILED card that pairing reads as a contradiction, and the bold half
+ * wins. A real one, screenshotted and sent back with "improve these cards":
+ *
+ *     Downloaded an email attachment (3f9c1d7e5b20)   FAILED
+ *
+ * Nothing was downloaded. The assertion is in 15px bold and the correction is
+ * in 10px grey beside it, so the card's loudest element is the false one.
+ *
+ * So the VERB follows the state, exactly as `finishedWord` makes the state
+ * word follow the verb. The transform is deliberately narrow — a lookup of
+ * the first word, nothing clever — and an unlisted verb leaves the title
+ * untouched, because a mangled sentence is worse than a tense that is merely
+ * optimistic.
+ */
+const BASE_VERB: Record<string, string> = {
+  Posted: 'post',
+  Sent: 'send',
+  Edited: 'edit',
+  Uploaded: 'upload',
+  Reacted: 'react',
+  Deleted: 'delete',
+  Searched: 'search',
+  Read: 'read',
+  Downloaded: 'download',
+  Counted: 'count',
+  Drafted: 'draft',
+  Ran: 'run',
+  Checked: 'check',
+  Looked: 'look',
+  Changed: 'change',
+  Added: 'add',
+  Rewrote: 'rewrite',
+  Published: 'publish',
+  Hosted: 'host',
+};
+
+/**
+ * The title as it should read for a given state.
+ *
+ * `failed` → "Tried to download an email attachment": something was attempted
+ * and did not work. `declined` → "Did not download an email attachment": a
+ * person said no, so nothing was even tried, and "tried to" would be its own
+ * small lie. Every other state keeps the title as written.
+ */
+export function titleForState(title: string, state: ChatActionState): string {
+  if (state !== 'failed' && state !== 'declined') return title;
+  const [first, ...rest] = title.split(' ');
+  const base = BASE_VERB[first ?? ''];
+  if (!base) return title;
+  return `${state === 'failed' ? 'Tried to' : 'Did not'} ${[base, ...rest].join(' ')}`;
+}

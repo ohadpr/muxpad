@@ -90,4 +90,17 @@ describe('open routes', () => {
       expect(received).toEqual([{ type: 'external_url.open', url }]);
     },
   );
+
+  it('GET /frame refuses an http link outright — mixed content under https', async () => {
+    const res = await test.app.request(
+      `/api/open/frame?url=${encodeURIComponent('http://example-host:4760')}&parent=${encodeURIComponent('https://muxpad.example')}`,
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ frame: false, reason: 'not https' });
+  });
+
+  it('GET /frame answers no, not an error, for something that is not a url', async () => {
+    const res = await test.app.request('/api/open/frame?url=javascript:alert(1)');
+    expect(await res.json()).toMatchObject({ frame: false });
+  });
 });

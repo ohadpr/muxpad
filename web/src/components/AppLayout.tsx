@@ -1,6 +1,7 @@
 import { Outlet, useRouterState } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
 import { useAppTheme } from '../lib/app-theme';
+import { isEmbedded, shellChrome } from '../lib/embed';
 import { MOBILE_BREAKPOINT } from '../lib/mobile-layout';
 import { SIDENAV_MIN_WIDTH, updateSettings, useSettings } from '../settings';
 import { useMediaQuery } from '../use-media-query';
@@ -57,8 +58,13 @@ export function AppLayout() {
   const activeWorkspace = wsSlug ? workspaces.find((w) => w.slug === wsSlug) : null;
   const isMobile = useMediaQuery(MOBILE_BREAKPOINT);
   const settings = useSettings();
-  // Desktop always uses the persistent left sidebar; mobile never can.
-  const sidebarMode = !isMobile;
+  // Desktop always uses the persistent left sidebar; mobile never can — and
+  // an EMBED never does. Inside somebody else's app the surrounding product
+  // is the navigation; a second sidebar in a 600px iframe would be muxpad's
+  // whole cockpit competing with the app that framed it. See lib/embed.
+  const embedded = isEmbedded();
+  const chrome = shellChrome({ isMobile, inWorkspace: !!wsSlug, embedded });
+  const sidebarMode = chrome.sidebar;
   const sidenavRef = useRef<HTMLElement>(null);
   const [visitedWsSlugs, setVisitedWsSlugs] = useState<Set<string>>(() => new Set());
   useEffect(() => {
@@ -75,10 +81,10 @@ export function AppLayout() {
   // brand moves to the sidebar's head, build + settings to its foot.
   // The bar still renders on the workspace picker ('/'), where there is
   // no sidebar to host them.
-  const showTopBar = !(sidebarMode && wsSlug);
+  const showTopBar = chrome.topBar;
 
   return (
-    <div className="app-layout">
+    <div className="app-layout" data-embed={embedded ? 'true' : undefined}>
       {/* Mounted once, above everything, and deliberately OUTSIDE the
           workspace/sidebar branches below: ⌘K has to work on the workspace
           picker and on mobile too, which is exactly where the rail's own

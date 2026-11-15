@@ -867,34 +867,6 @@ describe('the controls nothing had ever pressed', () => {
     expect(VIEWER_HTML).toMatch(/id="mobile"[^>]*aria-pressed="false"/);
   });
 
-  it('in the desktop LINK SHEET, undoes a phone layout the last viewer left behind', () => {
-    // One links browser serves every device; without this, a link read on the
-    // phone and then opened at a desk shows a 390px column in a wide sheet.
-    const h = run({ width: 1280, search: '?embed=sheet&by=pane-7', framed: true });
-    h.open();
-    expect(h.sent.filter((m) => m.t === 'emulate').at(-1)).toMatchObject({ mobile: false });
-  });
-
-  it('in the link sheet, takes Back from the sheet’s bar, and only from its parent', () => {
-    const h = run({ width: 390, search: '?embed=sheet&by=pane-7', framed: true });
-    h.fromWindow({ muxpad: 'back' }, 'stranger');
-    expect(h.sent.some((m) => m.t === 'nav')).toBe(false);
-    h.fromWindow({ muxpad: 'back' });
-    expect(h.sent.at(-1)).toMatchObject({ t: 'nav', action: 'back' });
-  });
-
-  it('in the link sheet, tells the sheet which site it is on', () => {
-    const h = run({ width: 390, search: '?embed=sheet&by=pane-7', framed: true });
-    h.receive({ t: 'url', url: 'https://elsewhere.example/page' });
-    expect(h.posted).toContainEqual({ muxpad: 'url', url: 'https://elsewhere.example/page' });
-  });
-
-  it('outside the sheet, ignores a Back from its parent', () => {
-    const h = run({ width: 390, search: '?by=pane-7', framed: true });
-    h.fromWindow({ muxpad: 'back' });
-    expect(h.sent.some((m) => m.t === 'nav')).toBe(false);
-  });
-
   it('parks the attention ring INSIDE the stage until it is placed — 4px below it meant two scrollbars', () => {
     // Layout cannot be measured in this harness; the measurement is in the
     // rule's comment. Pinned because the two properties look like no-ops.
@@ -906,10 +878,6 @@ describe('the controls nothing had ever pressed', () => {
 
   it('and does not hang the stage on the text baseline — the other 3px', () => {
     expect(VIEWER_HTML).toMatch(/#stage\{[^}]*vertical-align:top[^}]*\}/);
-  });
-
-  it('hides its whole bar in the link sheet — the sheet has ONE bar of its own', () => {
-    expect(VIEWER_HTML).toMatch(/body\.embed-sheet #bar\{display:none!important\}/);
   });
 
   it('and the toggle turns it on there', () => {

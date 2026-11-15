@@ -81,6 +81,35 @@ describe('what it says', () => {
   });
 });
 
+describe('a card that failed does not say the thing happened', () => {
+  it('rewrites the verb instead of contradicting itself in two sizes', () => {
+    // THE REPORTED CARD. "Downloaded an email attachment" in 15px bold with
+    // FAILED in 10px grey beside it: the loudest element was the false one.
+    const box = mount(
+      action({
+        kind: 'msgvault.export-attachment',
+        title: 'Downloaded an email attachment',
+        state: 'failed',
+        detail: 'The mail archive refused the attachment — 401 Invalid or missing API key',
+      }),
+    );
+    expect(box.textContent).toContain('Tried to download an email attachment');
+    expect(box.textContent).not.toContain('Downloaded an email attachment');
+    expect(box.textContent).toContain('failed');
+    // The reason is still there, and now it is readable.
+    expect(box.textContent).toContain('401 Invalid or missing API key');
+  });
+
+  it('says a declined act was never tried', () => {
+    const box = mount(action({ state: 'declined' }));
+    expect(box.textContent).toContain('Did not post to #general');
+  });
+
+  it('leaves a card that worked exactly as written', () => {
+    expect(mount(action()).textContent).toContain('Posted to #general');
+  });
+});
+
 describe('the message', () => {
   it('is FOLDED, because the card sits in what you are scrolling', () => {
     const box = mount(action());
@@ -93,6 +122,23 @@ describe('the message', () => {
 
   it('has no toggle at all when there is nothing to show', () => {
     expect(mount(action({ body: null })).querySelector('.action-card__toggle')).toBeNull();
+  });
+});
+
+describe('the fold is named after what it holds', () => {
+  it('offers DETAILS for a read, not a message it does not have', () => {
+    const box = mount(
+      action({
+        kind: 'msgvault.export-attachment',
+        title: 'Downloaded an email attachment',
+        body: `content_hash ${'a'.repeat(64)}`,
+      }),
+    );
+    expect(box.querySelector('.action-card__toggle')?.textContent).toBe('Show details');
+  });
+
+  it('still offers the MESSAGE for something that was sent', () => {
+    expect(mount(action()).querySelector('.action-card__toggle')?.textContent).toBe('Show message');
   });
 });
 

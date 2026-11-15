@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { EventBus } from '../events.js';
+import { LinkFrameChecker } from '../link-frame.js';
 
 // Allowlist of URL schemes the toast is willing to hand to window.open.
 // Rejects javascript:, data:, file:, and anything else exotic — those
@@ -45,8 +46,22 @@ const BodySchema = z.object({
  *     in its own pane list and produces a display label via the same
  *     function the chrome uses (single source of truth).
  */
-export function openRoutes(deps: { events: EventBus }): Hono {
+export function openRoutes(deps: { events: EventBus; linkFrames?: LinkFrameChecker }): Hono {
   const app = new Hono();
+  const linkFrames = deps.linkFrames ?? new LinkFrameChecker();
+
+  /**
+   * `GET /api/open/frame?url=…&parent=…` — may the chat's link sheet show this
+   * page in an iframe on `parent` (the page's own origin)? `{frame, reason}`;
+   * a no means "hand it to the OS browser". See link-frame.ts.
+   */
+  app.get('/frame', async (c) => {
+    const url = c.req.query('url') ?? '';
+    const parent = c.req.query('parent') ?? '';
+    if (!UrlSchema.safeParse(url).success || url.length > 4096)
+      return c.json({ frame: false, reason: 'not an http(s) url' });
+    return c.json(await linkFrames.check(url, parent));
+  });
 
   app.post('/external', async (c) => {
     const body = BodySchema.parse(await c.req.json().catch(() => ({})));

@@ -4,7 +4,12 @@ import { join } from 'node:path';
 import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { hostMayPublishAs } from './publish-actions.js';
-import { recordSlackAction, resolveSlackAction, stateFromBroker } from './slack-actions.js';
+import {
+  readable,
+  recordSlackAction,
+  resolveSlackAction,
+  stateFromBroker,
+} from './slack-actions.js';
 import { ChatActionStore } from './store/ChatActionStore.js';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
@@ -442,5 +447,110 @@ describe('a mail draft, once it exists, says where it went', () => {
       result: { id: REQ, state: 'complete', result: { result: { source_id: 1 } } },
     });
     expect(store().listForPane(pane)[0]?.detail ?? null).toBeNull();
+  });
+});
+
+describe('a failure a person can read', () => {
+  it('turns the reported wall of url and JSON into one sentence', () => {
+    // Verbatim, from the card that was screenshotted: four wrapped lines of
+    // which three quarters was a url, a 64-char hash already in the body, and
+    // a JSON envelope — cut mid-token at `; /a`, losing the second route's
+    // result, which was the half that said whether it was systematic.
+    expect(
+      readable(
+        'your mail request failed: msgvault refused the attachment — ' +
+          '/api/v1/attachments/3f9c1d7e5b204a86c1f0e9d83b7a4652c08f1e94d7b25a63f8c0914e2d6b7a85/content' +
+          ' → 401 {"error":"unauthorized","message":"Invalid or missing API key"}; /a',
+      ),
+    ).toBe('The mail archive refused the attachment — 401 Invalid or missing API key');
+  });
+
+  it('does not bolt a status onto a message that already names it', () => {
+    expect(
+      readable('your mail request failed: Error: API error (403): calendar operation denied'),
+    ).toBe('API error (403): calendar operation denied');
+  });
+
+  it('leaves an error that is already a sentence alone', () => {
+    for (const plain of [
+      'Slack request failed (channel_not_found); inspect Slack before retrying',
+      'The request expired',
+    ])
+      expect(readable(plain)).toBe(plain);
+  });
+
+  it('keeps a path when the path IS the reason', () => {
+    // It stripped urls and paths from EVERY error and hunted for a status
+    // anywhere in the text. Both deleted the answer when the machine-looking
+    // part was the actual reason.
+    expect(
+      readable('your mail request failed: could not reach the archive at /usr/local/var/msgvault'),
+    ).toBe('could not reach the archive at /usr/local/var/msgvault');
+    expect(
+      readable('your mail request failed: fetching https://api.example/v404/thing failed'),
+    ).toBe('fetching https://api.example/v404/thing failed');
+  });
+
+  it('takes the status next to the body, not digits out of a url', () => {
+    // `/v404/` is a path segment, not an HTTP status.
+    expect(
+      readable(
+        'your mail request failed: GET https://api.example/v404/x → 503 {"message":"upstream down"}',
+      ),
+    ).toBe('GET — 503 upstream down');
+  });
+
+  it('never returns more characters than it promises', () => {
+    // `cut` sliced to max and THEN appended the ellipsis, returning 161 from
+    // a function whose contract is "no longer than max".
+    for (const body of ['x'.repeat(400), 'word '.repeat(80), `${'y'.repeat(150)} tail`])
+      expect(
+        readable(`your mail request failed: ${body}`).length,
+        body.slice(0, 12),
+      ).toBeLessThanOrEqual(160);
+  });
+
+  it('ends on a WHOLE word, not merely on a non-space', () => {
+    // This asserted only that the result ended in an ellipsis with no space
+    // before it — both true of a cut through the middle of a word, so
+    // deleting the word-boundary logic left it green. The last token now has
+    // to be a word that was actually in the input.
+    const words = 'alpha bravo charlie delta echo foxtrot golf hotel india juliet'.split(' ');
+    const body = Array.from({ length: 30 }, (_, i) => words[i % words.length]).join(' ');
+    const out = readable(`your mail request failed: ${body}`);
+    expect(out.endsWith('…')).toBe(true);
+    expect(out).not.toMatch(/\s…$/);
+    const last = out.slice(0, -1).trim().split(' ').at(-1);
+    expect(words, `cut mid-word: ${JSON.stringify(out.slice(-20))}`).toContain(last);
+  });
+
+  it('still cuts a single unbroken token, because there is nowhere else to cut', () => {
+    const out = readable(`your mail request failed: ${'x'.repeat(400)}`);
+    expect(out.length).toBeLessThanOrEqual(160);
+    expect(out.endsWith('…')).toBe(true);
+  });
+
+  it('keeps the content hash as a handle, out of the headline', () => {
+    recordSlackAction(db, {
+      action: 'msgvault.export-attachment',
+      payload: { hash: 'a'.repeat(64) },
+      pane,
+      result: {
+        id: REQ,
+        state: 'failed',
+        error: `your mail request failed: msgvault refused the attachment — /api/v1/attachments/${'a'.repeat(64)}/content → 401 {"error":"unauthorized","message":"Invalid or missing API key"}; /a`,
+      },
+    });
+    const card = store().listForPane(pane)[0];
+    expect(card?.title).toBe('Downloaded an email attachment');
+    expect(card?.title).not.toContain('aaaa');
+    expect(card?.body).toBe(`content_hash ${'a'.repeat(64)}`);
+    // The card's own detail must be the readable form, not the raw error —
+    // reading it through the producer is what catches `readable` being
+    // dropped from detailFor, which a direct unit test cannot see.
+    expect(card?.detail).toBe(
+      'The mail archive refused the attachment — 401 Invalid or missing API key',
+    );
+    expect(card?.detail).not.toContain('/api/v1');
   });
 });

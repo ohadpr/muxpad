@@ -418,6 +418,15 @@ function WorkingSetRow({
     <div
       className="navtree-tab-row navtree-ws-slot"
       data-active={active ? 'true' : undefined}
+      // ── THE BAND IS A TAB ROW AND MUST READ LIKE ONE ──────────────────
+      // It carries `.navtree-tab-row` and its name is a `.navtree-name-text`,
+      // so the weight rules already apply to it — it simply never set the
+      // attributes that trigger them. A chat with an unread turn, or one
+      // mid-turn, sat at reading weight here while the SAME chat two
+      // sections down in the tree was bold. One truth, two appearances,
+      // which is the thing this band exists to avoid.
+      data-unread={tab.unread ? 'true' : undefined}
+      data-working={tab.status === 'working' && !active ? 'true' : undefined}
       data-touch={touch ? 'true' : undefined}
     >
       <span className="chatchip navtree-tab-chip" data-density="row" data-shape="tile">
@@ -2620,6 +2629,14 @@ function TabRow({
       // the mobile rail has neither. Its state is one bit, drawn by the
       // trailing mark below and by the name's own weight.
       data-unread={tab.unread ? 'true' : undefined}
+      // ── A CHAT THAT IS STILL GOING KEEPS THE WEIGHT ────────────────────
+      // Bold means "this row has something for you". A finished turn you have
+      // not read qualifies; so does a turn still running, because it is about
+      // to. The rail's mark says WHICH of the two, and the weight is what
+      // survives a glance down a long sidebar — "it's a good indicator".
+      // Not on the row you are sitting on: bold reads as "come back to this",
+      // and you are already here.
+      data-working={tab.status === 'working' && !isActiveTab ? 'true' : undefined}
       data-pressing={pressing ? 'true' : undefined}
     >
       {/* THE PINNED MARK, same channel as the desktop row's: a 2px accent bar
@@ -2740,6 +2757,14 @@ function TabRow({
       // became interesting.
       data-pinned={tab.pinned ? 'true' : undefined}
       data-unread={tab.unread ? 'true' : undefined}
+      // ── A CHAT THAT IS STILL GOING KEEPS THE WEIGHT ────────────────────
+      // Bold means "this row has something for you". A finished turn you have
+      // not read qualifies; so does a turn still running, because it is about
+      // to. The rail's mark says WHICH of the two, and the weight is what
+      // survives a glance down a long sidebar — "it's a good indicator".
+      // Not on the row you are sitting on: bold reads as "come back to this",
+      // and you are already here.
+      data-working={tab.status === 'working' && !isActiveTab ? 'true' : undefined}
       data-pressing={pressing ? 'true' : undefined}
       {...(!isEditing
         ? {

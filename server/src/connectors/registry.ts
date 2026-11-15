@@ -124,6 +124,10 @@ const MSGVAULT: Record<string, VerbRule> = {
   'msgvault.show-message': { kind: 'read', timed: true },
   'msgvault.show-thread': { kind: 'read', timed: true },
   'msgvault.export-attachment': { kind: 'read', timed: true },
+  // Same bytes, reached from a MESSAGE id rather than a content hash — the
+  // hash is only learnable from an approved read, so the per-file verb alone
+  // meant two dialogs for one email's attachments. Same kind, same timed.
+  'msgvault.export-attachments': { kind: 'read', timed: true },
   'msgvault.stats': { kind: 'read', timed: true },
   // `notifiesOthers: false`, stated rather than left absent: it is the fact
   // that separates a draft from every other write in this table. Nothing

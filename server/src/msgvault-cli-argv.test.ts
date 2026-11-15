@@ -164,3 +164,126 @@ describe('a read verb never silently drops a flag', () => {
     expect(() => sent('msgvault', 'stats', '--collection=work')).toThrow(/stats takes no options/);
   });
 });
+
+/**
+ * ── EVERY PATH THE CLI CAN CALL MUST MAP TO AN ACTION THE BROKER ACCEPTS ──
+ *
+ * The failure this exists for: a new verb is added to `cmd_msgvault`, it
+ * calls `/api/msgvault/<something>`, and nobody adds the line to the
+ * path→action `case` next to it. The CLI then asks the broker for an action
+ * whose name is derived by the fallthrough rule, the broker answers
+ * "Unsupported action", and the verb has never worked — exactly the shape of
+ * the `--revision` and the owner-only-attachment-route bugs, both of which
+ * shipped green.
+ *
+ * Source text rather than execution, deliberately: the point is to cover the
+ * verbs whose happy path writes FILES and so cannot be driven by the stub
+ * above. It is a weaker test than `sent()` and it catches the one thing
+ * `sent()` structurally cannot.
+ */
+describe('msgvault CLI paths and broker actions agree', () => {
+  const cmd = fn('cmd_msgvault');
+  /** `/api/msgvault/<x>` literals the CLI builds, deduped. */
+  const called = [
+    ...new Set([...cmd.matchAll(/\/api\/msgvault\/([a-z-]+)/g)].map((m) => m[1])),
+  ].sort();
+  /** The path→action `case` arms, wherever they live in the script. */
+  const mapped = new Map(
+    [...SRC.matchAll(/\/api\/msgvault\/([a-z-]+)\) printf '(msgvault\.[a-z-]+)'/g)].map((m) => [
+      m[1],
+      m[2],
+    ]),
+  );
+
+  it('maps every path it calls, or falls through to a real action name', () => {
+    // Read as TEXT, not imported: broker/*.mjs ships no types, and the point
+    // here is the names the two files agree on, which the text carries.
+    const caps = readFileSync(
+      resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'broker', 'capabilities.mjs'),
+      'utf8',
+    );
+    const actions = [...caps.matchAll(/'(msgvault\.[a-z-]+)'/g)].map((m) => m[1]);
+    expect(called.length).toBeGreaterThan(5);
+    for (const path of called) {
+      // Unmapped is legal — the script's fallthrough is `msgvault.<last
+      // path segment>` — but the NAME it produces still has to be real.
+      const action = mapped.get(path) ?? `msgvault.${path}`;
+      expect(actions, `${path} → ${action}`).toContain(action);
+    }
+  });
+
+  it('calls the whole-message attachment action, not the per-file one', () => {
+    expect(called).toContain('attachments');
+    expect(mapped.get('attachments')).toBe('msgvault.export-attachments');
+    expect(mapped.get('attachment')).toBe('msgvault.export-attachment');
+  });
+});
+
+/**
+ * ── THE ATTACHMENT WRITER, RUN FOR REAL ───────────────────────────────────
+ *
+ * Extracted and sourced rather than driven through the whole CLI, because the
+ * happy path WRITES FILES and the stub above cannot. Three bugs an adversarial
+ * review found here, all reproduced before they were fixed.
+ */
+describe('msgvault_save_attachment', () => {
+  const script = (body: string) => {
+    const fn = SRC.slice(SRC.indexOf('\nmsgvault_save_attachment() {') + 1);
+    return spawnSync('bash', ['-c', `${fn.slice(0, fn.indexOf('\n}\n') + 3)}\n${body}`], {
+      encoding: 'utf8',
+    });
+  };
+  const seed = (dir: string) =>
+    `mkdir -p ${dir}; printf x > ${dir}/src; H=$(shasum -a 256 ${dir}/src | cut -d' ' -f1); base64 -i ${dir}/src > ${dir}/b64;`;
+
+  it('treats a bare relative --out as a FILE, not a missing directory', () => {
+    // `${dest%/*}` on a path with no slash returns the path itself, so
+    // `--out=report.pdf` was refused as "no such directory: report.pdf".
+    const d = '/tmp/muxpad-save-rel';
+    const r = script(
+      `rm -rf ${d}; ${seed(d)} cd ${d} && msgvault_save_attachment b64 a.pdf report.pdf "$H"`,
+    );
+    expect(r.stderr).not.toMatch(/no such directory/);
+    expect(r.stdout.trim()).toBe('report.pdf');
+  });
+
+  it('keeps BOTH of two attachments called image.png', () => {
+    // One message can list several files with the same sender-chosen name.
+    // The second was refused, so `attachments` reported failed:1 with nothing
+    // to retry by hand.
+    const d = '/tmp/muxpad-save-dup';
+    const r = script(
+      `rm -rf ${d}; ${seed(d)} msgvault_save_attachment ${d}/b64 image.png ${d}/ "$H"; msgvault_save_attachment ${d}/b64 image.png ${d}/ "$H"`,
+    );
+    expect(r.stdout.trim().split('\n')).toEqual([`${d}/image.png`, `${d}/image-2.png`]);
+  });
+
+  it('still refuses to overwrite a file the CALLER named', () => {
+    // Renaming is right when WE chose the name from a directory. When the
+    // caller spelled the path, writing somewhere else would be worse.
+    const d = '/tmp/muxpad-save-exact';
+    const r = script(
+      `rm -rf ${d}; ${seed(d)} touch ${d}/exact.pdf; msgvault_save_attachment ${d}/b64 a.pdf ${d}/exact.pdf "$H"`,
+    );
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toMatch(/already exists/);
+  });
+
+  it('still refuses a directory that does not exist', () => {
+    const d = '/tmp/muxpad-save-missing';
+    const r = script(
+      `rm -rf ${d}; ${seed(d)} msgvault_save_attachment ${d}/b64 a.pdf /tmp/nope/deeper/ "$H"`,
+    );
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toMatch(/no such directory/);
+  });
+
+  it('still refuses bytes that do not match the hash', () => {
+    const d = '/tmp/muxpad-save-hash';
+    const r = script(
+      `rm -rf ${d}; ${seed(d)} msgvault_save_attachment ${d}/b64 a.pdf ${d}/ ${'0'.repeat(64)}`,
+    );
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toMatch(/did not come back intact/);
+  });
+});
